@@ -65,6 +65,25 @@ describe("AgentIdentityCard escalation timeout", () => {
     expect(update).toHaveBeenCalledWith("escalation_timeout_minutes", 120);
   });
 
+  it("clearing or half-typing the field stores nothing and keeps the draft", () => {
+    // Code review R3: storing on every keystroke clamped "" to 1 and rewrote
+    // the field under the cursor, so typing 3 produced 13.
+    const update = vi.fn();
+    renderCard({ default_mode: "human_then_ai", escalation_timeout_minutes: 90 }, update);
+    const input = screen.getByLabelText("Escalation fallback timeout") as HTMLInputElement;
+
+    fireEvent.change(input, { target: { value: "" } });
+    expect(update).not.toHaveBeenCalled();
+    expect(input.value).toBe("");
+
+    fireEvent.change(input, { target: { value: "3" } });
+    expect(update).toHaveBeenCalledWith("escalation_timeout_minutes", 3);
+    expect(input.value).toBe("3");
+
+    fireEvent.blur(input);
+    expect(input.value).toBe("90");
+  });
+
   it("switching the unit never changes the stored value", async () => {
     for (const { minutes, expectedHours } of [
       { minutes: 1, expectedHours: "0.02" },

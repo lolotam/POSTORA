@@ -72,13 +72,17 @@ muteRegardless?: boolean;
 3. **After assignment** — `decided = escalationOverride(defaultMode, assigned, timeout, now)`. Only when `decided.mode !== first.mode` (that is: `human_then_ai` default and a human was assigned) run one **conditional** update: `update({ mode: "human_first" })` filtered by `user_id, platform, conversation_id` **and** `mode = first.mode` **and** `expires_at = first.expires_at`, with `.select("mode").maybeSingle()`. Inside the post-mute try/catch: an error is logged, never thrown. Zero rows means an operator or a newer escalation changed the row meanwhile; the newer decision wins and is re-read.
 4. `EscalationOutcome.mode` is the **confirmed persisted** mode: the first write's mode when no update ran, the updated row's mode when the update returned one, the re-read row's mode (or `"released"` when the row is gone) when the update matched nothing or failed. `EscalationOutcome.expiresAt` is `first.expires_at`.
 
+**A manual override is never touched.** If the conversation already holds a row with `expires_at` null (only the inbox and the partner API write those), the escalation writes nothing, tightens nothing, and reports the row's mode with `expiresAt: null`; the assignment and admin notifications still run. Expiry can therefore never undo a narrowing an operator chose (AGENTS.md rule 5).
+
+**A repeated escalation inside an active window** (a bounded row whose `expires_at` is still in the future) neither rewrites the row — the window is not extended — nor pages the admins again; it may still tighten `human_then_ai` to `human_first` when a human has come online since. `EscalationOutcome.repeated` says so. Without this an unmuted `human_then_ai` chat could re-notify admins and extend its own window on every customer message (code review, 2026-09-13).
+
 **Interrupted between 1 and 3:** the conversation stays in the first write's mode for at most the window — the assistant answering under `human_then_ai`, muted under the others. Both are bounded; neither is the indefinite silence this design removes.
 
 **Outage floor** (`outage-floor.ts`): passes `{ ...target, muteRegardless: true }`. Its apology-suppression contract depends on the mute, and an assistant whose every model failed must not keep answering.
 
 **Outbox recovery** (`process-pending-replies/index.ts` `handToHuman`): loads `default_mode, escalation_timeout_minutes` for the row's exact account (`social_account_id` + `user_id`), fails the hand-off on a read error instead of guessing, and passes `muteRegardless: true` — an interrupted tool run is ambiguous state, so the window is a human's.
 
-**Expired-row cleanup in the reply path** deletes conditionally: by `id` **and** the `expires_at` it observed. A row an operator has since replaced (new `expires_at`, or null) is left alone and re-read before the gate.
+**One reader for every caller.** `resolveConversationOverride(admin, scope, now)` in the shared module does the read, the expiry check, the conditional cleanup and the re-read; `ai-agent-reply` and `process-pending-replies` both call it, so outbox recovery retires expired rows too. **Expired-row cleanup** deletes conditionally: by `id` **and** the `expires_at` it observed. A row an operator has since replaced (new `expires_at`, or null) is left alone and re-read before the gate.
 
 ### Config: `_shared/agentConfigOps.ts`
 

@@ -1,7 +1,7 @@
 // Tool definitions and executors for the AI agent chat loop.
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { pickEscalationAgent, SIMILARITY_FLOOR, waRecipient } from "./logic.ts";
-import { escalationOverride } from "../_shared/conversationModeOverride.ts";
+import { escalationOverride, isOverrideExpired } from "../_shared/conversationModeOverride.ts";
 import type { KnowledgeChunkMatch } from "../_shared/knowledgeEmbeddings.ts";
 import { composeToolDescription } from "../_shared/composeToolDescription.ts";
 import {
@@ -215,7 +215,10 @@ export interface EscalationOutcome {
   adminsNotified: number;
   /** The mode confirmed in the row when this returned; "released" if the row is gone. */
   mode: string;
-  expiresAt: string;
+  /** Null when the row is a manual override, which escalation never bounds. */
+  expiresAt: string | null;
+  /** True when an active escalation window already covered this conversation. */
+  repeated: boolean;
 }
 
 /**
@@ -242,26 +245,53 @@ export async function escalateConversation(
   const msLeft = () => (deadlineAt === undefined ? undefined : Math.max(0, deadlineAt - Date.now()));
 
   const nowMs = Date.now();
+  // What the conversation already holds decides whether this escalation may
+  // write at all. A manual override (no expiry) is the operator's decision and
+  // outranks the escalation: it is left untouched, so expiry can never undo a
+  // narrowing they chose. An escalation window that is still running is not
+  // extended and not re-announced: under human_then_ai the assistant keeps
+  // answering, so the model may escalate on every message, and each of those
+  // must not push expires_at forward or page the admins again.
+  const { data: existingRow, error: existingError } = await target.admin
+    .from("ai_conversation_modes")
+    .select("id, mode, expires_at")
+    .eq("user_id", target.userId)
+    .eq("platform", target.platform)
+    .eq("conversation_id", target.conversationId)
+    .maybeSingle();
+  if (existingError) throw existingError;
+  const existing = (existingRow ?? null) as { mode: string; expires_at: string | null } | null;
+  const manual = existing !== null && existing.expires_at === null;
+  const repeated = existing !== null && !manual && !isOverrideExpired(existing, nowMs);
+
   // The first write happens before assignment, exactly as before, but bounded
   // by the timeout. Under human_then_ai it deliberately does NOT mute: the
   // exclusive human window is granted only once a human was actually assigned.
-  // The outage floor and recovery ask for the mute regardless.
-  const first = target.muteRegardless
-    ? { mode: "human_first" as const, expires_at: escalationOverride("ai_first", false, target.escalationTimeoutMinutes, nowMs).expires_at }
-    : escalationOverride(target.defaultMode, false, target.escalationTimeoutMinutes, nowMs);
-  const { error: modeError } = await target.admin
-    .from("ai_conversation_modes")
-    .upsert(
-      {
-        user_id: target.userId,
-        platform: target.platform,
-        conversation_id: target.conversationId,
-        mode: first.mode,
-        expires_at: first.expires_at,
-      },
-      { onConflict: "user_id,platform,conversation_id" },
+  // The outage floor and recovery ask for the mute regardless, which is the
+  // same decision as a human_first default.
+  const first: { mode: string; expires_at: string | null } = manual || repeated
+    ? { mode: existing!.mode, expires_at: existing!.expires_at }
+    : escalationOverride(
+      target.muteRegardless ? "human_first" : target.defaultMode,
+      false,
+      target.escalationTimeoutMinutes,
+      nowMs,
     );
-  if (modeError) throw modeError;
+  if (!manual && !repeated) {
+    const { error: modeError } = await target.admin
+      .from("ai_conversation_modes")
+      .upsert(
+        {
+          user_id: target.userId,
+          platform: target.platform,
+          conversation_id: target.conversationId,
+          mode: first.mode,
+          expires_at: first.expires_at,
+        },
+        { onConflict: "user_id,platform,conversation_id" },
+      );
+    if (modeError) throw modeError;
+  }
 
   // Past this point the conversation is muted, which is the part of the escalation
   // the outage floor depends on. So nothing below may throw: a post-mute failure
@@ -363,7 +393,9 @@ export async function escalateConversation(
   }
 
   let persistedMode: string = first.mode;
-  const decided = target.muteRegardless
+  // A manual row is never tightened; a repeated escalation may be, when a
+  // human has come online since the window opened (human_then_ai -> human_first).
+  const decided = target.muteRegardless || manual
     ? first
     : escalationOverride(target.defaultMode, assigned, target.escalationTimeoutMinutes, nowMs);
   if (decided.mode !== first.mode) {
@@ -405,7 +437,9 @@ export async function escalateConversation(
   }
 
   let adminsNotified = 0;
-  for (const phone of target.adminPhoneNumbers) {
+  // Admins were paged when this window opened; a repeat inside it stays quiet.
+  const phonesToNotify = repeated ? [] : target.adminPhoneNumbers;
+  for (const phone of phonesToNotify) {
     // These sends are sequential and admin_phone_numbers has no cap, so an
     // unreachable Graph API here could otherwise run past the caller's budget.
     if (outOfTime()) {
@@ -427,10 +461,10 @@ export async function escalateConversation(
   }
 
   console.log(
-    `[ai-agent-reply] Escalated conversation (assigned: ${assigned}, admins notified: ${adminsNotified}, mode: ${persistedMode}, until: ${first.expires_at})`,
+    `[ai-agent-reply] Escalated conversation (assigned: ${assigned}, admins notified: ${adminsNotified}, mode: ${persistedMode}, until: ${first.expires_at ?? "released by an operator"}, repeated: ${repeated})`,
   );
 
-  return { assigned, assignmentNote, adminsNotified, mode: persistedMode, expiresAt: first.expires_at };
+  return { assigned, assignmentNote, adminsNotified, mode: persistedMode, expiresAt: first.expires_at, repeated };
 }
 
 async function escalateToHuman(context: ToolContext, reason: string): Promise<ToolResult> {
@@ -444,9 +478,14 @@ async function escalateToHuman(context: ToolContext, reason: string): Promise<To
 
   const outcome = await escalateConversation(context, reason);
 
+  // Plain language only: a raw timestamp or an internal mode name handed to
+  // the model tends to be parroted back to the customer.
+  const window = outcome.expiresAt
+    ? ` The team has until ${new Date(outcome.expiresAt).toUTCString()} to take over before the assistant resumes.`
+    : "";
   return {
     output:
-      `Escalation recorded (mode: ${outcome.mode}, until ${outcome.expiresAt}). ${outcome.assignmentNote} Tell the customer briefly that a team member will follow up.`,
+      `${outcome.repeated ? "This conversation was already escalated." : "Escalation recorded."} ${outcome.assignmentNote}${window} Tell the customer briefly that a team member will follow up.`,
     escalated: true,
     // Carried so the outage floor can tell a real handoff from a bare mute. This
     // returns true whenever the mode write succeeded, even with no online agent and

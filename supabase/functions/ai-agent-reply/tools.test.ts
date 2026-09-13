@@ -322,10 +322,16 @@ Deno.test("escalateConversation mutes the conversation before anything else", as
       calls.push(table);
       return {
         upsert: () => Promise.resolve({ error: null }),
-        select: () => ({
-          eq: () => ({ is: () => ({ maybeSingle: () => Promise.resolve({ data: null }) }) }),
-          then: (resolve: (v: unknown) => void) => resolve({ data: [] }),
-        }),
+        // Every filter chains back to the same empty query, whatever the depth.
+        select: () => {
+          const empty: Record<string, unknown> = {};
+          empty.eq = () => empty;
+          empty.is = () => empty;
+          empty.abortSignal = () => empty;
+          empty.maybeSingle = () => Promise.resolve({ data: null, error: null });
+          empty.then = (resolve: (v: unknown) => void) => resolve({ data: [], error: null });
+          return empty;
+        },
         insert: () => Promise.resolve({ error: null }),
         update: () => ({ eq: () => Promise.resolve({ error: null }) }),
       };
@@ -354,10 +360,16 @@ Deno.test("escalateConversation notifies every configured admin number", async (
     from() {
       return {
         upsert: () => Promise.resolve({ error: null }),
-        select: () => ({
-          eq: () => ({ is: () => ({ maybeSingle: () => Promise.resolve({ data: null }) }) }),
-          then: (resolve: (v: unknown) => void) => resolve({ data: [] }),
-        }),
+        // Every filter chains back to the same empty query, whatever the depth.
+        select: () => {
+          const empty: Record<string, unknown> = {};
+          empty.eq = () => empty;
+          empty.is = () => empty;
+          empty.abortSignal = () => empty;
+          empty.maybeSingle = () => Promise.resolve({ data: null, error: null });
+          empty.then = (resolve: (v: unknown) => void) => resolve({ data: [], error: null });
+          return empty;
+        },
         insert: () => Promise.resolve({ error: null }),
         update: () => ({ eq: () => Promise.resolve({ error: null }) }),
       };
@@ -829,4 +841,70 @@ Deno.test("one handoff switch off narrows the tool description to the other trig
 
   // Both on keeps the original wording untouched.
   assertStringIncludes(describe(true, true), "or when the knowledge base cannot answer");
+});
+
+Deno.test("an escalation leaves a manual override untouched, so expiry cannot undo it", async () => {
+  // Code review R1: an operator narrowed this chat to human_then_ai by hand
+  // (no expiry). The escalation must not rewrite it into a bounded row that
+  // expiry would later delete, restoring the wider account default.
+  const db = escalationDatabase();
+  db.tables.ai_conversation_modes.push({
+    id: "m1", user_id: "owner-a", platform: "whatsapp", conversation_id: "shared-key",
+    mode: "human_then_ai", expires_at: null,
+  });
+  const outcome = await escalateConversation(
+    escalationTarget(db.admin, { defaultMode: "ai_first" }),
+    "help",
+  );
+  assertEquals(outcome.assigned, true);
+  assertEquals(db.writes.filter((write) => write.table === "ai_conversation_modes"), []);
+  assertEquals(db.tables.ai_conversation_modes[0].mode, "human_then_ai");
+  assertEquals(db.tables.ai_conversation_modes[0].expires_at, null);
+  assertEquals(outcome.mode, "human_then_ai");
+  assertEquals(outcome.expiresAt, null);
+  assertEquals(outcome.repeated, false);
+});
+
+Deno.test("a repeated escalation inside an active window neither extends it nor pages the admins again", async () => {
+  // Code review R2: under human_then_ai with nobody online the assistant keeps
+  // answering and may escalate on every message.
+  const db = escalationDatabase();
+  db.tables.whatsapp_agents.forEach((agent) => { agent.status = "offline"; });
+  const until = new Date(Date.now() + 10 * 60_000).toISOString();
+  db.tables.ai_conversation_modes.push({
+    id: "m1", user_id: "owner-a", platform: "whatsapp", conversation_id: "shared-key",
+    mode: "human_then_ai", expires_at: until,
+  });
+  let sent = 0;
+  const outcome = await escalateConversation(
+    escalationTarget(db.admin, {
+      defaultMode: "human_then_ai",
+      adminPhoneNumbers: ["+96500000001"],
+      sendWhatsAppText: () => { sent++; return Promise.resolve(); },
+    }),
+    "help again",
+  );
+  assertEquals(db.writes.filter((write) => write.table === "ai_conversation_modes"), []);
+  assertEquals(db.tables.ai_conversation_modes[0].expires_at, until);
+  assertEquals(sent, 0);
+  assertEquals(outcome.adminsNotified, 0);
+  assertEquals(outcome.repeated, true);
+  assertEquals(outcome.expiresAt, until);
+});
+
+Deno.test("a repeated escalation still tightens the window once a human comes online", async () => {
+  const db = escalationDatabase();
+  const until = new Date(Date.now() + 10 * 60_000).toISOString();
+  db.tables.ai_conversation_modes.push({
+    id: "m1", user_id: "owner-a", platform: "whatsapp", conversation_id: "shared-key",
+    mode: "human_then_ai", expires_at: until,
+  });
+  const outcome = await escalateConversation(
+    escalationTarget(db.admin, { defaultMode: "human_then_ai" }),
+    "help again",
+  );
+  assertEquals(outcome.assigned, true);
+  assertEquals(outcome.mode, "human_first");
+  assertEquals(db.tables.ai_conversation_modes[0].mode, "human_first");
+  assertEquals(db.tables.ai_conversation_modes[0].expires_at, until);
 });

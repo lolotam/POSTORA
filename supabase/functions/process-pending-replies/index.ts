@@ -30,7 +30,7 @@ import { MetaMessagingFetcher } from "../_shared/inboundMediaFetchers.ts";
 import type { MediaKind } from "../_shared/inboundMediaUnderstanding.ts";
 import { noteUnreadAttachments } from "../facebook-instagram-webhook/attachments.ts";
 import { escalateConversation, type EscalationTarget } from "../ai-agent-reply/tools.ts";
-import { activeOverrideMode } from "../_shared/conversationModeOverride.ts";
+import { resolveConversationOverride } from "../_shared/conversationModeOverride.ts";
 import {
   canStartAnotherRow,
   decideRecovery,
@@ -201,14 +201,15 @@ async function loadAgentConfig(admin: any, row: OutboxRow): Promise<AgentConfigF
 }
 
 async function loadContext(admin: any, row: OutboxRow) {
-  const [{ data: modeRow, error: modeError }, { count: newer, error: newerError }] = await Promise.all([
-    admin
-      .from("ai_conversation_modes")
-      .select("mode, expires_at")
-      .eq("user_id", row.user_id)
-      .eq("platform", row.platform)
-      .eq("conversation_id", row.conversation_id)
-      .maybeSingle(),
+  // The override reader throws on a failed read (AGENTS.md reviewer rule 3)
+  // and cleans up an expired row on the way, so recovery does not merely
+  // ignore expired escalations but retires them like the reply path does.
+  const [overrideMode, { count: newer, error: newerError }] = await Promise.all([
+    resolveConversationOverride(admin, {
+      userId: row.user_id,
+      platform: row.platform,
+      conversationId: row.conversation_id,
+    }, Date.now()),
     // "Newer" must use the SAME total order the claim uses, or a message that sorts later
     // for claiming can sort as not-newer here and both get answered out of order. WhatsApp's
     // second-resolution timestamps make the tie real, not theoretical.
@@ -224,13 +225,11 @@ async function loadContext(admin: any, row: OutboxRow) {
       .eq("conversation_id", row.conversation_id)
       .or(`inbound_at.gt.${row.inbound_at},and(inbound_at.eq.${row.inbound_at},ingress_seq.gt.${row.ingress_seq})`),
   ]);
-  // A failed read must not look like an absent override (AGENTS.md reviewer
-  // rule 3): that would re-run an agent on a conversation a human has taken.
-  // Thrown, the claim loop's catch logs it and keeps the row for the next tick.
-  if (modeError) throw new Error(`mode read failed: ${modeError.message}`);
+  // A failed read must not look like "no newer message". Thrown, the claim
+  // loop's catch logs it and keeps the row for the next tick.
   if (newerError) throw new Error(`newer-message read failed: ${newerError.message}`);
   return {
-    humanTookOver: activeOverrideMode(modeRow, Date.now()) === "human_first",
+    humanTookOver: overrideMode === "human_first",
     newerPendingInConversation: (newer ?? 0) > 0,
     outsideSendWindow: isOutsideSendWindow(row, Date.now()),
   };

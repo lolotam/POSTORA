@@ -46,6 +46,22 @@
 | 15 | Changing display units silently changes the timeout | P2 | accept | Unit switch preserves stored minutes; hours shown as a decimal with `step="any"`; typed hours round to whole minutes. Tests cover 1, 30 and 90 minutes. |
 | 16 | Acceptance gates can pass without proving fallback | P2 | accept | Release step requires a live escalation on the test chat with a short timeout, an actual expiry, and a verified subsequent reply; the sandbox path performs no escalation writes and does not count. Task 5 adds reader-integration and conflict tests. |
 
+## Code review (requesting-code-review, orchestrator subagent, 2026-09-13) — verdicts
+
+| # | Finding | Sev | Verdict | Reason |
+|---|---------|-----|---------|--------|
+| R1 | An escalation could overwrite a manual override, and expiry then undid the operator's narrowing | Important | accept | Escalation reads the row first; a row with `expires_at` null is left untouched (spec "A manual override is never touched"). Test in `tools.test.ts`. |
+| R2 | Unbounded re-escalation under `human_then_ai` with nobody online: admins re-paged and the window extended on every message | Important | accept | An active bounded row is neither rewritten nor re-announced; `EscalationOutcome.repeated`. Test in `tools.test.ts`. |
+| R3 | The timeout number input could not be cleared or edited naturally | Important | accept | Draft string state; only a finite positive number is committed; blur restores the stored value. Test in `AgentIdentityCard.timeout.test.tsx`. |
+| R4 | Reader-side paths untested; plan inconsistent with verdict row 16 | Important | accept | The read → expiry → conditional delete → re-read block is `resolveConversationOverride` in the shared module, used by the reply path and outbox recovery, with fake-client tests for active, expired-deleted and expired-but-replaced rows. messaging-api get/list filtering stays untested (two one-line filters). |
+| R5 | `muteRegardless` faked the default as `ai_first` | Minor | accept | Passes `"human_first"` as the effective default, which is the actual decision. |
+| R6 | Badge said "Escalated to human" for the `human_then_ai` bounded row | Minor | accept | Label by mode: "Escalation noted · AI answering" for `human_then_ai`. |
+| R7 | OpenAPI missing `expires_at` and `escalation_timeout_minutes` | Minor | accept | Added to `docs/api/openapi.yaml`. |
+| R8 | Remediation join on `conversation_id` alone without a platform filter | Minor | reject | Already applied; the join key is the WhatsApp conversation key, and the 8 rows it bounded were verified as escalation-written. Noted for the record. |
+| R9 | Tool result handed the model a raw timestamp and mode name | Minor | accept | Plain-language sentence with the deadline in words. |
+| R10 | Unit state derived once from `minutes` | Minor | reject | Correct value is shown either way; the unit is a display preference. |
+| R11 | Outage-floor test asserts the stored row rather than driving a second inbound | Minor | reject | Matches Task 5 step 2 as written; the gate's behaviour for `human_first` is covered by `logic.test.ts`. |
+
 ---
 
 ## File structure

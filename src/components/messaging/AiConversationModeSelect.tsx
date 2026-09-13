@@ -62,7 +62,7 @@ export function AiConversationModeSelect({
             title={`Human window until ${new Date(mode.expires_at).toLocaleString()}`}
           >
             <UserRound className="h-3 w-3" />
-            {`Escalated to human · until ${new Date(mode.expires_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`}
+            {`${mode.mode === "human_first" ? "Escalated to human" : "Escalation noted · AI answering"} · until ${new Date(mode.expires_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`}
           </Badge>
           <Button
             type="button" size="sm" variant="outline" className="h-8 text-xs"

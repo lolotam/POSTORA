@@ -8,12 +8,16 @@ function quietAdmin(onTable?: (table: string) => void) {
   return {
     from(table: string) {
       onTable?.(table);
+      // Every filter chains back to the same empty query, whatever the depth.
+      const empty: Record<string, unknown> = {};
+      empty.eq = () => empty;
+      empty.is = () => empty;
+      empty.abortSignal = () => empty;
+      empty.maybeSingle = () => Promise.resolve({ data: null, error: null });
+      empty.then = (resolve: (v: unknown) => void) => resolve({ data: [], error: null });
       return {
         upsert: () => Promise.resolve({ error: null }),
-        select: () => ({
-          eq: () => ({ is: () => ({ maybeSingle: () => Promise.resolve({ data: null }) }) }),
-          then: (resolve: (v: unknown) => void) => resolve({ data: [] }),
-        }),
+        select: () => empty,
         insert: () => Promise.resolve({ error: null }),
         update: () => ({ eq: () => Promise.resolve({ error: null }) }),
       };
@@ -123,7 +127,10 @@ Deno.test("a post-mute assignment failure still counts as escalated", async () =
     from(table: string) {
       tables.push(table);
       if (table === "ai_conversation_modes") {
-        return { upsert: () => Promise.resolve({ error: null }) };
+        const none: Record<string, unknown> = {};
+        none.eq = () => none;
+        none.maybeSingle = () => Promise.resolve({ data: null, error: null });
+        return { select: () => none, upsert: () => Promise.resolve({ error: null }) };
       }
       // Everything after the mute blows up.
       throw new Error("assignment table unavailable");
@@ -150,7 +157,12 @@ Deno.test("the outage floor mutes regardless of the account default", async () =
   const admin = {
     from(table: string) {
       if (table === "ai_conversation_modes") {
+        const none: Record<string, unknown> = {};
+        none.eq = () => none;
+        none.maybeSingle = () => Promise.resolve({ data: null, error: null });
         return {
+          // The pre-read finds no row, so the escalation writes.
+          select: () => none,
           upsert: (payload: Record<string, unknown>) => {
             captured.storedRow = payload;
             return Promise.resolve({ error: null });

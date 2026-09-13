@@ -39,10 +39,24 @@ function EscalationTimeoutField({ minutes, onChange }: { minutes: number; onChan
   // The stored value is always whole minutes; the unit is display state.
   // Switching the unit never changes the stored value (debate finding 15).
   const [unit, setUnit] = useState<TimeoutUnit>(minutes >= 60 && minutes % 60 === 0 ? "hours" : "minutes");
+  // What the user is typing, kept apart from the stored value so an empty or
+  // half-typed field ("", "1.") is not stored as 1 minute and rewritten under
+  // their cursor; only a finite positive number is committed, and blur puts the
+  // stored value back.
+  const [draft, setDraft] = useState<string>(String(displayValue(minutes, unit)));
   const max = unit === "hours" ? MAX_ESCALATION_TIMEOUT_MINUTES / 60 : MAX_ESCALATION_TIMEOUT_MINUTES;
-  const commit = (typed: number) => {
-    const asMinutes = unit === "hours" ? typed * 60 : typed;
+  const commit = (typed: number, inUnit: TimeoutUnit) => {
+    const asMinutes = inUnit === "hours" ? typed * 60 : typed;
     onChange(Math.min(MAX_ESCALATION_TIMEOUT_MINUTES, Math.max(1, Math.round(asMinutes))));
+  };
+  const onDraftChange = (value: string) => {
+    setDraft(value);
+    const typed = Number(value);
+    if (value.trim() !== "" && Number.isFinite(typed) && typed > 0) commit(typed, unit);
+  };
+  const changeUnit = (next: TimeoutUnit) => {
+    setUnit(next);
+    setDraft(String(displayValue(minutes, next)));
   };
   return (
     <div className="space-y-1.5 pt-1">
@@ -67,10 +81,11 @@ function EscalationTimeoutField({ minutes, onChange }: { minutes: number; onChan
           max={max}
           step="any"
           className="w-28"
-          value={displayValue(minutes, unit)}
-          onChange={(event) => commit(Number(event.target.value) || 0)}
+          value={draft}
+          onChange={(event) => onDraftChange(event.target.value)}
+          onBlur={() => setDraft(String(displayValue(minutes, unit)))}
         />
-        <Select value={unit} onValueChange={(value) => setUnit(value as TimeoutUnit)}>
+        <Select value={unit} onValueChange={(value) => changeUnit(value as TimeoutUnit)}>
           <SelectTrigger className="w-28" aria-label="Timeout unit"><SelectValue /></SelectTrigger>
           <SelectContent>
             <SelectItem value="minutes">Minutes</SelectItem>
