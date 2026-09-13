@@ -55,6 +55,16 @@ import {
   type SetSourceVisibilityInput,
   SourceVisibilityError,
 } from "./sourceVisibility.ts";
+import {
+  LEGACY_ACCOUNT_PROFILE_TITLE,
+  legacyAccountProfileFileName,
+  legacyPlatformProfileFileName,
+  parseRenameSourceInput,
+  PROFILE_ACCOUNT_KEY,
+  profileSourceFileName,
+  shouldRetireLegacyPlatformProfile,
+  SourceNameError,
+} from "./profileSource.ts";
 
 const BUCKET = "ai-knowledge";
 const GRAPH_API = "https://graph.facebook.com/v21.0";
@@ -517,6 +527,37 @@ async function handleRequest(req: Request): Promise<Response> {
       });
       return jsonResponse({ url: outcome.url });
     }
+    // Any source, any type: file_name is a label, not an identity. The one
+    // source it used to identify -- an account's profile -- is keyed on
+    // metadata.profile_account_id since 2026-09-13, so renaming it is safe.
+    if (action === "rename_source") {
+      let input;
+      try {
+        input = parseRenameSourceInput(body);
+      } catch (error) {
+        return errorResponse(message(error), error instanceof SourceNameError ? error.status : 400);
+      }
+      const { data: source, error: readError } = await (admin as any)
+        .from("ai_knowledge_sources")
+        .select("id, file_name")
+        .eq("id", input.sourceId)
+        .eq("user_id", user.id)
+        .maybeSingle();
+      if (readError) return errorResponse(message(readError));
+      if (!source) return errorResponse("Knowledge source not found", 404);
+      const { error } = await (admin as any)
+        .from("ai_knowledge_sources")
+        .update({ file_name: input.fileName })
+        .eq("id", source.id)
+        .eq("user_id", user.id);
+      if (error) throw error;
+      await logKnowledgeEvent(admin, user.id, "rename_source", true, {
+        source_id: source.id,
+        from: source.file_name,
+        to: input.fileName,
+      });
+      return jsonResponse({ ok: true, file_name: input.fileName });
+    }
     if (action === "delete_source") {
       const { data: source } = await (admin as any)
         .from("ai_knowledge_sources")
@@ -975,25 +1016,64 @@ async function handleRequest(req: Request): Promise<Response> {
         );
       }
       // The source identity carries the account, not just the platform. Two
-      // Instagram accounts saving their own profile resolved the SAME
+      // Instagram accounts saving their own profile once resolved the SAME
       // "Business profile (instagram)" source, so the second replaced the
-      // first's chunks -- and because the source is shared, the first account
-      // then answered customers out of the second's business description.
-      // A caller naming no account keeps the platform-wide name, which is the
-      // row every existing profile already lives under.
-      // The whole account id, not a prefix: file_name is the lookup key, and
-      // two accounts sharing the first eight UUID characters would resolve the
-      // same source -- one brand's profile silently replacing the other's.
-      const fileName = namedAccount
-        ? `Business profile (${platform} · ${namedAccount})`
-        : `Business profile (${platform})`;
-      const { data: existing } = await (admin as any)
-        .from("ai_knowledge_sources")
-        .select("*")
-        .eq("user_id", user.id)
-        .eq("source_type", "profile_text")
-        .eq("file_name", fileName)
-        .maybeSingle();
+      // first's chunks. The account id is the key, held in
+      // metadata.profile_account_id so the file_name is free to be renamed;
+      // a row from before that key existed is found once by its old name and
+      // stamped, never duplicated. A caller naming no account keeps the
+      // platform-wide row, which is where every pre-account profile lives.
+      let existing: Record<string, any> | null = null;
+      if (namedAccount) {
+        const { data: keyed, error: keyedError } = await (admin as any)
+          .from("ai_knowledge_sources")
+          .select("*")
+          .eq("user_id", user.id)
+          .eq("source_type", "profile_text")
+          .eq(`metadata->>${PROFILE_ACCOUNT_KEY}`, namedAccount)
+          .maybeSingle();
+        if (keyedError) return errorResponse(`Could not read the profile source: ${message(keyedError)}`);
+        existing = keyed;
+        if (!existing) {
+          const { data: legacy, error: legacyError } = await (admin as any)
+            .from("ai_knowledge_sources")
+            .select("*")
+            .eq("user_id", user.id)
+            .eq("source_type", "profile_text")
+            .eq("file_name", legacyAccountProfileFileName(platform, namedAccount))
+            .maybeSingle();
+          if (legacyError) return errorResponse(`Could not read the profile source: ${message(legacyError)}`);
+          existing = legacy;
+        }
+      } else {
+        const { data: platformWide, error: platformError } = await (admin as any)
+          .from("ai_knowledge_sources")
+          .select("*")
+          .eq("user_id", user.id)
+          .eq("source_type", "profile_text")
+          .eq("file_name", legacyPlatformProfileFileName(platform))
+          .maybeSingle();
+        if (platformError) return errorResponse(`Could not read the profile source: ${message(platformError)}`);
+        existing = platformWide;
+      }
+      // The default label is the account's name; an adopted legacy row keeps
+      // its uuid title only until it is stamped below, a renamed row keeps
+      // whatever the user called it.
+      let accountLabel: { id: string; platform_username?: string | null; platform_user_id?: string | null } | null = null;
+      if (namedAccount) {
+        const { data: accountRow, error: accountError } = await (admin as any)
+          .from("social_accounts")
+          .select("id, platform_username, platform_user_id")
+          .eq("id", namedAccount)
+          .eq("user_id", user.id)
+          .maybeSingle();
+        if (accountError) return errorResponse(`Could not read the account: ${message(accountError)}`);
+        if (!accountRow) return errorResponse("Account not found", 404);
+        accountLabel = accountRow;
+      }
+      const fileName = accountLabel
+        ? profileSourceFileName(platform, accountLabel)
+        : legacyPlatformProfileFileName(platform);
       const text = config?.business_profile_text?.trim();
       if (!text) {
         if (existing)
@@ -1019,10 +1099,25 @@ async function handleRequest(req: Request): Promise<Response> {
               // another. The platform-wide row (no account named) stays
               // shared, which is what it has always been.
               visibility: namedAccount ? "restricted" : "shared",
+              metadata: namedAccount ? { [PROFILE_ACCOUNT_KEY]: namedAccount } : {},
             })
             .select()
             .single()
         ).data;
+      // Adopt a pre-key row: stamp the account id, and swap its uuid title for
+      // the account's name unless the user has already renamed it.
+      if (namedAccount && existing && existing.metadata?.[PROFILE_ACCOUNT_KEY] !== namedAccount) {
+        const keepsOldTitle = LEGACY_ACCOUNT_PROFILE_TITLE.test(String(existing.file_name ?? ""));
+        const { error: stampError } = await (admin as any)
+          .from("ai_knowledge_sources")
+          .update({
+            metadata: { ...(existing.metadata ?? {}), [PROFILE_ACCOUNT_KEY]: namedAccount },
+            ...(keepsOldTitle ? { file_name: fileName } : {}),
+          })
+          .eq("id", source.id)
+          .eq("user_id", user.id);
+        if (stampError) return errorResponse(`Could not key the profile source to this account: ${message(stampError)}`);
+      }
       // A restricted source with no link is visible to nobody, so the link is
       // part of creating it rather than a later step. Idempotent: re-indexing
       // an existing profile must not duplicate the row.
@@ -1066,6 +1161,53 @@ async function handleRequest(req: Request): Promise<Response> {
           platform,
           chunk_count: chunks.length,
         });
+        // The platform-wide profile from before account scoping is retired
+        // once every account on the platform has a file of its own; until
+        // then it is still the only profile some account reads.
+        if (namedAccount) {
+          const { data: configs, error: configsError } = await (admin as any)
+            .from("ai_agent_configs")
+            .select("social_account_id")
+            .eq("user_id", user.id)
+            .eq("platform", platform)
+            .not("social_account_id", "is", null);
+          const { data: keyedSources, error: keyedSourcesError } = await (admin as any)
+            .from("ai_knowledge_sources")
+            .select("metadata")
+            .eq("user_id", user.id)
+            .eq("source_type", "profile_text")
+            .not(`metadata->>${PROFILE_ACCOUNT_KEY}`, "is", null);
+          if (configsError || keyedSourcesError) {
+            console.error(
+              "[ai-knowledge-ingest] legacy profile retirement skipped:",
+              message(configsError ?? keyedSourcesError),
+            );
+          } else if (
+            shouldRetireLegacyPlatformProfile(
+              (configs ?? []).map((row: { social_account_id: string }) => row.social_account_id),
+              (keyedSources ?? []).map((row: { metadata: Record<string, unknown> | null }) =>
+                String(row.metadata?.[PROFILE_ACCOUNT_KEY] ?? "")
+              ),
+            )
+          ) {
+            const { data: retired, error: retireError } = await (admin as any)
+              .from("ai_knowledge_sources")
+              .delete()
+              .eq("user_id", user.id)
+              .eq("source_type", "profile_text")
+              .eq("file_name", legacyPlatformProfileFileName(platform))
+              .select("id");
+            if (retireError) {
+              console.error("[ai-knowledge-ingest] legacy profile retirement failed:", message(retireError));
+            } else if (retired?.length) {
+              await logKnowledgeEvent(admin, user.id, "retire_platform_profile", true, {
+                platform,
+                source_id: retired[0].id,
+                replaced_by: source.id,
+              });
+            }
+          }
+        }
         return jsonResponse({ ok: true, chunk_count: chunks.length });
       } catch (error) {
         await setFailed(admin, source.id, error);
