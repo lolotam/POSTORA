@@ -473,6 +473,8 @@ export function AiKnowledgeManager({
           )
         }
         onDelete={(source) => run("delete_source", { source_id: source.id }, "Source deleted")}
+        onRename={(source, fileName) =>
+          run("rename_source", { source_id: source.id, file_name: fileName }, "Source renamed")}
         onToggleShare={toggleShare}
       />
       <KnowledgeGraphCard

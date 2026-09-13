@@ -54,6 +54,7 @@ function renderPanel(sources: AiKnowledgeSource[]) {
       busy={false}
       onReingest={vi.fn()}
       onDelete={vi.fn()}
+      onRename={vi.fn()}
       onToggleShare={vi.fn()}
     />,
   );

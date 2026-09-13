@@ -1,10 +1,11 @@
 import { useState } from "react";
-import { Check, Circle, Download, Loader2, RefreshCw, Trash2 } from "lucide-react";
+import { Check, Circle, Download, Loader2, Pencil, RefreshCw, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
 import { PlatformIcon } from "@/components/PlatformIcon";
 import {
   requestSourceDownloadUrl,
@@ -105,6 +106,8 @@ export interface KnowledgeSourcesPanelProps {
   busy: boolean;
   onReingest: (source: AiKnowledgeSource) => void;
   onDelete: (source: AiKnowledgeSource) => void;
+  /** Rename any source; the label is display only, never an identity. */
+  onRename: (source: AiKnowledgeSource, fileName: string) => void;
   onToggleShare: (source: AiKnowledgeSource, target: SharingAccount, checked: boolean) => void;
 }
 
@@ -130,8 +133,18 @@ export function KnowledgeSourcesPanel({
   busy,
   onReingest,
   onDelete,
+  onRename,
   onToggleShare,
 }: KnowledgeSourcesPanelProps) {
+  // One row editable at a time; the draft is local until Save so a stray
+  // keystroke never reaches the server.
+  const [renaming, setRenaming] = useState<{ id: string; draft: string } | null>(null);
+  const submitRename = (source: AiKnowledgeSource) => {
+    const next = (renaming?.draft ?? "").replace(/\s+/g, " ").trim();
+    setRenaming(null);
+    if (!next || next === source.file_name) return;
+    onRename(source, next);
+  };
   // A set, not one id: the row being resolved is the only one disabled, so a
   // second download can start while the first is still in flight. With a single
   // id the later click overwrote the earlier one and whichever settled first
@@ -189,7 +202,45 @@ export function KnowledgeSourcesPanel({
               className="flex flex-wrap items-center justify-between gap-3 rounded-md border p-3"
             >
               <div>
-                <p className="font-medium">{displaySourceTitle(source.file_name, socialAccounts)}</p>
+                {renaming?.id === source.id ? (
+                  <form
+                    className="flex items-center gap-2"
+                    onSubmit={(event) => { event.preventDefault(); submitRename(source); }}
+                  >
+                    <Input
+                      aria-label="Source name"
+                      autoFocus
+                      maxLength={120}
+                      className="h-8 w-72"
+                      value={renaming.draft}
+                      onChange={(event) => setRenaming({ id: source.id, draft: event.target.value })}
+                      onKeyDown={(event) => { if (event.key === "Escape") setRenaming(null); }}
+                    />
+                    <Button type="submit" size="sm" className="h-8" disabled={busy}>
+                      Save
+                    </Button>
+                    <Button type="button" size="icon" variant="ghost" className="h-8 w-8" aria-label="Cancel rename" onClick={() => setRenaming(null)}>
+                      <X className="h-4 w-4" />
+                    </Button>
+                  </form>
+                ) : (
+                  <p className="flex items-center gap-1.5 font-medium">
+                    {displaySourceTitle(source.file_name, socialAccounts)}
+                    <button
+                      type="button"
+                      aria-label="Rename source"
+                      title="Rename"
+                      className="text-muted-foreground hover:text-foreground"
+                      disabled={busy}
+                      onClick={() => setRenaming({
+                        id: source.id,
+                        draft: displaySourceTitle(source.file_name, socialAccounts) ?? "",
+                      })}
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                    </button>
+                  </p>
+                )}
                 <div className="mt-1 flex gap-2">
                   <Badge variant="secondary">{source.source_type}</Badge>
                   {/* How many OTHER accounts can read this, stated rather than
