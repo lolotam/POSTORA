@@ -300,6 +300,7 @@ export type Database = {
           created_at: string | null
           daily_message_cap: number
           default_mode: string
+          escalation_timeout_minutes: number
           fallback_model_1: string | null
           fallback_model_2: string | null
           handoff_on_low_confidence: boolean | null
@@ -322,6 +323,7 @@ export type Database = {
           created_at?: string | null
           daily_message_cap?: number
           default_mode?: string
+          escalation_timeout_minutes?: number
           fallback_model_1?: string | null
           fallback_model_2?: string | null
           handoff_on_low_confidence?: boolean | null
@@ -344,6 +346,7 @@ export type Database = {
           created_at?: string | null
           daily_message_cap?: number
           default_mode?: string
+          escalation_timeout_minutes?: number
           fallback_model_1?: string | null
           fallback_model_2?: string | null
           handoff_on_low_confidence?: boolean | null
@@ -475,6 +478,7 @@ export type Database = {
         Row: {
           conversation_id: string
           created_at: string | null
+          expires_at: string | null
           id: string
           mode: string
           platform: string
@@ -484,6 +488,7 @@ export type Database = {
         Insert: {
           conversation_id: string
           created_at?: string | null
+          expires_at?: string | null
           id?: string
           mode: string
           platform: string
@@ -493,6 +498,7 @@ export type Database = {
         Update: {
           conversation_id?: string
           created_at?: string | null
+          expires_at?: string | null
           id?: string
           mode?: string
           platform?: string

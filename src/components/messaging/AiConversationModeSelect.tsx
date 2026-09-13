@@ -1,5 +1,7 @@
-import { Bot } from "lucide-react";
+import { Bot, UserRound } from "lucide-react";
 import { toast } from "sonner";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
   Select,
   SelectContent,
@@ -37,19 +39,43 @@ export function AiConversationModeSelect({
   };
 
   return (
-    <Select value={currentValue} onValueChange={handleChange} disabled={setConversationMode.isPending}>
-      <SelectTrigger className="h-8 w-40 text-xs" aria-label="AI engagement mode for this conversation">
-        <div className="flex items-center gap-1.5">
-          <Bot className="h-3.5 w-3.5 shrink-0" />
-          <SelectValue />
-        </div>
-      </SelectTrigger>
-      <SelectContent>
-        <SelectItem value="default">{modeLabels.default}</SelectItem>
-        <SelectItem value="ai_first">{modeLabels.ai_first}</SelectItem>
-        <SelectItem value="human_first">{modeLabels.human_first}</SelectItem>
-        <SelectItem value="human_then_ai">{modeLabels.human_then_ai}</SelectItem>
-      </SelectContent>
-    </Select>
+    <div className="flex items-center gap-2">
+      <Select value={currentValue} onValueChange={handleChange} disabled={setConversationMode.isPending}>
+        <SelectTrigger className="h-8 w-40 text-xs" aria-label="AI engagement mode for this conversation">
+          <div className="flex items-center gap-1.5">
+            <Bot className="h-3.5 w-3.5 shrink-0" />
+            <SelectValue />
+          </div>
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="default">{modeLabels.default}</SelectItem>
+          <SelectItem value="ai_first">{modeLabels.ai_first}</SelectItem>
+          <SelectItem value="human_first">{modeLabels.human_first}</SelectItem>
+          <SelectItem value="human_then_ai">{modeLabels.human_then_ai}</SelectItem>
+        </SelectContent>
+      </Select>
+      {mode?.expires_at && (
+        <>
+          <Badge
+            variant="secondary"
+            className="gap-1 text-xs"
+            title={`Human window until ${new Date(mode.expires_at).toLocaleString()}`}
+          >
+            <UserRound className="h-3 w-3" />
+            {`${mode.mode === "human_first" ? "Escalated to human" : "Escalation noted · AI answering"} · until ${new Date(mode.expires_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`}
+          </Badge>
+          <Button
+            type="button" size="sm" variant="outline" className="h-8 text-xs"
+            disabled={setConversationMode.isPending}
+            onClick={() => setConversationMode.mutate("default", {
+              onSuccess: () => toast.success("Override cleared. The account default applies again."),
+              onError: (error) => toast.error(error.message || "Could not clear the override"),
+            })}
+          >
+            Release override
+          </Button>
+        </>
+      )}
+    </div>
   );
 }

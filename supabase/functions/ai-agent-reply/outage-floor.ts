@@ -31,11 +31,15 @@ function message(error: unknown): string {
  * callers are fire-and-forget, so nothing downstream notices.
  *
  * Escalation runs BEFORE the apology, and the apology is conditional on it. The
- * mode flip inside escalateConversation is what silences the AI for this
- * conversation (shouldAiReply rejects human_first, logic.ts:99), so doing it first
- * stops the customer's next message producing a second apology. Apologising first
- * and failing the mode write would repeat the apology on every later message,
- * forever -- and would promise a human who had not been told.
+ * mode flip inside escalateConversation is what gates the AI for this
+ * conversation (shouldAiReply rejects human_first, logic.ts:99), so doing it
+ * first stops the customer's next message producing a second apology. Apologising
+ * first and failing the mode write would repeat the apology on every later
+ * message, and would promise a human who had not been told.
+ *
+ * muteRegardless: an assistant whose every model failed must not keep answering,
+ * whatever the account default. The mute is bounded by the account's escalation
+ * timeout, and the apology suppression holds for that window.
  *
  * Each step swallows its own errors on purpose: this runs inside a catch, so a
  * throw here would replace a reported model outage with an unrelated error.
@@ -54,12 +58,22 @@ export async function deliverModelOutageFloor(
       // for the customer send. escalateConversation always completes the mode
       // upsert; only the assignment and the admin notifications yield to it.
       outcome = await escalateConversation(
-        target,
+        { ...target, muteRegardless: true },
         "All configured AI models failed",
         Date.now() + ESCALATION_BUDGET_MS,
       );
     } catch (escalationError) {
       console.error("[ai-agent-reply] Outage escalation failed:", message(escalationError));
+    }
+    // A manual override (ai_first or human_then_ai, no expiry) is the operator's
+    // and is never rewritten, so the escalation can return without a mute. An
+    // apology then would repeat on every message; treat it like a failed
+    // escalation (Codex P2, PR #178).
+    if (outcome && !outcome.muted) {
+      console.error(
+        `[ai-agent-reply] Outage escalation left the conversation unmuted (mode ${outcome.mode}, manual override); no apology sent`,
+      );
+      outcome = null;
     }
   }
 

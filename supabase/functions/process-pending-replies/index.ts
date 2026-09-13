@@ -30,6 +30,7 @@ import { MetaMessagingFetcher } from "../_shared/inboundMediaFetchers.ts";
 import type { MediaKind } from "../_shared/inboundMediaUnderstanding.ts";
 import { noteUnreadAttachments } from "../facebook-instagram-webhook/attachments.ts";
 import { escalateConversation, type EscalationTarget } from "../ai-agent-reply/tools.ts";
+import { resolveConversationOverride } from "../_shared/conversationModeOverride.ts";
 import {
   canStartAnotherRow,
   decideRecovery,
@@ -147,6 +148,12 @@ async function handToHuman(admin: any, row: OutboxRow, config: AgentConfigForEsc
     // numbers the loop does not run and adminsNotified is honestly zero.
     adminPhoneNumbers: [],
     sendWhatsAppText: () => Promise.resolve(),
+    // The interrupted run may have half-fired a tool; the window belongs to a
+    // human whatever the account default, and it is bounded by the account's
+    // escalation timeout so the conversation cannot stay silent for ever.
+    defaultMode: config.default_mode,
+    escalationTimeoutMinutes: config.escalation_timeout_minutes,
+    muteRegardless: true,
   };
   try {
     const outcome = await escalateConversation(target, "recovery could not determine what the interrupted agent had already done");
@@ -169,27 +176,40 @@ async function handToHuman(admin: any, row: OutboxRow, config: AgentConfigForEsc
 
 interface AgentConfigForEscalation {
   admin_phone_numbers: string[] | null;
+  default_mode: string | null;
+  escalation_timeout_minutes: number | null;
 }
 
 async function loadAgentConfig(admin: any, row: OutboxRow): Promise<AgentConfigForEscalation> {
-  const { data } = await admin
+  // Scoped to the row's EXACT account (user_id AND social_account_id): a
+  // hand-off must run on the settings that answered this conversation, not on
+  // another account's mode or timeout. The error is thrown rather than
+  // discarded -- a hand-off on guessed settings is worse than none (the claim
+  // loop's catch keeps the row for the next tick).
+  const { data, error } = await admin
     .from("ai_agent_configs")
-    .select("admin_phone_numbers")
+    .select("admin_phone_numbers, default_mode, escalation_timeout_minutes")
     .eq("user_id", row.user_id)
-    .eq("platform", row.platform)
+    .eq("social_account_id", row.social_account_id)
     .maybeSingle();
-  return { admin_phone_numbers: data?.admin_phone_numbers ?? null };
+  if (error) throw new Error(`agent config read failed: ${error.message}`);
+  return {
+    admin_phone_numbers: data?.admin_phone_numbers ?? null,
+    default_mode: data?.default_mode ?? null,
+    escalation_timeout_minutes: data?.escalation_timeout_minutes ?? null,
+  };
 }
 
 async function loadContext(admin: any, row: OutboxRow) {
-  const [{ data: modeRow }, { count: newer }] = await Promise.all([
-    admin
-      .from("ai_conversation_modes")
-      .select("mode")
-      .eq("user_id", row.user_id)
-      .eq("platform", row.platform)
-      .eq("conversation_id", row.conversation_id)
-      .maybeSingle(),
+  // The override reader throws on a failed read (AGENTS.md reviewer rule 3)
+  // and cleans up an expired row on the way, so recovery does not merely
+  // ignore expired escalations but retires them like the reply path does.
+  const [overrideMode, { count: newer, error: newerError }] = await Promise.all([
+    resolveConversationOverride(admin, {
+      userId: row.user_id,
+      platform: row.platform,
+      conversationId: row.conversation_id,
+    }, Date.now()),
     // "Newer" must use the SAME total order the claim uses, or a message that sorts later
     // for claiming can sort as not-newer here and both get answered out of order. WhatsApp's
     // second-resolution timestamps make the tie real, not theoretical.
@@ -205,8 +225,11 @@ async function loadContext(admin: any, row: OutboxRow) {
       .eq("conversation_id", row.conversation_id)
       .or(`inbound_at.gt.${row.inbound_at},and(inbound_at.eq.${row.inbound_at},ingress_seq.gt.${row.ingress_seq})`),
   ]);
+  // A failed read must not look like "no newer message". Thrown, the claim
+  // loop's catch logs it and keeps the row for the next tick.
+  if (newerError) throw new Error(`newer-message read failed: ${newerError.message}`);
   return {
-    humanTookOver: modeRow?.mode === "human_first",
+    humanTookOver: overrideMode === "human_first",
     newerPendingInConversation: (newer ?? 0) > 0,
     outsideSendWindow: isOutsideSendWindow(row, Date.now()),
   };
@@ -314,9 +337,14 @@ async function processRow(admin: any, row: OutboxRow): Promise<string> {
       // Same gate, and here it matters more: escalateConversation mutes the conversation and
       // notifies people. Doing that on a row another worker already took would silence a
       // conversation twice and page an admin twice for one interruption.
+      // Read BEFORE the transition: loadAgentConfig throws on a failed read, and
+      // a throw after the row went terminal would strand it -- nothing would
+      // retry the hand-off and nobody would be told (Codex P1, PR #178). Thrown
+      // here, the row is still `running` and the next tick tries again.
+      const config = await loadAgentConfig(admin, row);
       const claimed = await advanceReply(admin, { id: row.id, from, to: "delivery_unknown", error: "lease lapsed while the agent was running" });
       if (!claimed) return "conceded";
-      const handed = await handToHuman(admin, row, await loadAgentConfig(admin, row));
+      const handed = await handToHuman(admin, row, config);
       await surfaceToHumans(
         admin,
         row,

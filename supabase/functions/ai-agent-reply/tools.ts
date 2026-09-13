@@ -1,6 +1,7 @@
 // Tool definitions and executors for the AI agent chat loop.
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { pickEscalationAgent, SIMILARITY_FLOOR, waRecipient } from "./logic.ts";
+import { escalationOverride, isOverrideExpired } from "../_shared/conversationModeOverride.ts";
 import type { KnowledgeChunkMatch } from "../_shared/knowledgeEmbeddings.ts";
 import { composeToolDescription } from "../_shared/composeToolDescription.ts";
 import {
@@ -42,6 +43,12 @@ export interface ToolContext {
   // and failing over to the configured fallback provider when it is down.
   retrieveKnowledge: (query: string, matchCount: number) => Promise<KnowledgeChunkMatch[]>;
   sendWhatsAppText: (recipientPhone: string, text: string) => Promise<void>;
+  /** The account default; decides whether an unassigned escalation still lets the assistant answer. */
+  defaultMode?: string | null;
+  /** ai_agent_configs.escalation_timeout_minutes; null/undefined/0 means 240. */
+  escalationTimeoutMinutes?: number | null;
+  /** Mute for the whole window whatever the default. The outage floor and outbox recovery set it. */
+  muteRegardless?: boolean;
 }
 
 export interface ToolResult {
@@ -194,12 +201,30 @@ export interface EscalationTarget {
   customerName: string;
   adminPhoneNumbers: string[];
   sendWhatsAppText: (recipientPhone: string, text: string) => Promise<void>;
+  /** The account default; decides whether an unassigned escalation still lets the assistant answer. */
+  defaultMode?: string | null;
+  /** ai_agent_configs.escalation_timeout_minutes; null/undefined/0 means 240. */
+  escalationTimeoutMinutes?: number | null;
+  /** Mute for the whole window whatever the default. The outage floor and outbox recovery set it. */
+  muteRegardless?: boolean;
 }
 
 export interface EscalationOutcome {
   assigned: boolean;
   assignmentNote: string;
   adminsNotified: number;
+  /** The mode confirmed in the row when this returned; "released" if the row is gone. */
+  mode: string;
+  /** Null when the row is a manual override, which escalation never bounds. */
+  expiresAt: string | null;
+  /** True when an active escalation window already covered this conversation. */
+  repeated: boolean;
+  /**
+   * True when the conversation is muted for the assistant when this returns
+   * (mode human_first). False when a manual row kept another mode: the outage
+   * floor must not then send an apology that would repeat on every message.
+   */
+  muted: boolean;
 }
 
 /**
@@ -208,7 +233,12 @@ export interface EscalationOutcome {
  * with.
  *
  * The mode upsert comes first deliberately: it is platform-agnostic and it is
- * what silences the AI for this conversation from the next inbound message on.
+ * what gates the AI for this conversation from the next inbound message on.
+ * Since 2026-09-13 the row it writes is BOUNDED: it expires after the account's
+ * escalation timeout, so an escalation can no longer silence a conversation
+ * for ever. Under human_then_ai the first write deliberately does NOT mute --
+ * the exclusive human window is granted only once a human was actually
+ * assigned, and the row is tightened to human_first afterwards.
  * The assignment tables below it are WhatsApp-shaped, so on other platforms the
  * mode flip plus the admin notification is the whole of the handoff.
  */
@@ -220,18 +250,89 @@ export async function escalateConversation(
   const outOfTime = () => deadlineAt !== undefined && Date.now() >= deadlineAt;
   const msLeft = () => (deadlineAt === undefined ? undefined : Math.max(0, deadlineAt - Date.now()));
 
-  const { error: modeError } = await target.admin
-    .from("ai_conversation_modes")
-    .upsert(
-      {
-        user_id: target.userId,
-        platform: target.platform,
-        conversation_id: target.conversationId,
-        mode: "human_first",
-      },
-      { onConflict: "user_id,platform,conversation_id" },
-    );
-  if (modeError) throw modeError;
+  const nowMs = Date.now();
+  // What the conversation already holds decides whether this escalation may
+  // write at all. A manual override (no expiry) is the operator's decision and
+  // outranks the escalation: it is left untouched, so expiry can never undo a
+  // narrowing they chose. An escalation window that is still running is not
+  // extended and not re-announced: under human_then_ai the assistant keeps
+  // answering, so the model may escalate on every message, and each of those
+  // must not push expires_at forward or page the admins again.
+  type StoredMode = { id: string; mode: string; expires_at: string | null };
+  const readExisting = async (): Promise<StoredMode | null> => {
+    const { data, error } = await target.admin
+      .from("ai_conversation_modes")
+      .select("id, mode, expires_at")
+      .eq("user_id", target.userId)
+      .eq("platform", target.platform)
+      .eq("conversation_id", target.conversationId)
+      .maybeSingle();
+    if (error) throw error;
+    return (data ?? null) as StoredMode | null;
+  };
+  const classify = (row: StoredMode | null) => ({
+    manual: row !== null && row.expires_at === null,
+    repeated: row !== null && row.expires_at !== null && !isOverrideExpired(row, nowMs),
+  });
+
+  // The first write happens before assignment, exactly as before, but bounded
+  // by the timeout. Under human_then_ai it deliberately does NOT mute: the
+  // exclusive human window is granted only once a human was actually assigned.
+  // The outage floor and recovery ask for the mute regardless, which is the
+  // same decision as a human_first default.
+  const proposed = escalationOverride(
+    target.muteRegardless ? "human_first" : target.defaultMode,
+    false,
+    target.escalationTimeoutMinutes,
+    nowMs,
+  );
+  // Compare-and-set against what was read: an insert when there was no row (a
+  // unique violation means someone wrote one meanwhile), a conditional update
+  // when the row observed had expired. Either way a row that changed between
+  // the read and the write is re-read and wins -- an operator's manual choice
+  // or a concurrent escalation is never overwritten (Codex P2, PR #178).
+  let existing = await readExisting();
+  let { manual, repeated } = classify(existing);
+  let written = false;
+  // Every attempt is compare-and-set; there is no unconditional write on any
+  // path, so a row an operator creates in the retry window survives too. Three
+  // attempts bound a pathological race; after that the row as it stands wins.
+  for (let attempt = 0; attempt < 3 && !written && !manual && !repeated; attempt++) {
+    if (attempt > 0) {
+      existing = await readExisting();
+      ({ manual, repeated } = classify(existing));
+      if (manual || repeated) break;
+    }
+    if (existing === null) {
+      const { error: insertError } = await target.admin
+        .from("ai_conversation_modes")
+        .insert({
+          user_id: target.userId,
+          platform: target.platform,
+          conversation_id: target.conversationId,
+          mode: proposed.mode,
+          expires_at: proposed.expires_at,
+        });
+      if (insertError && insertError.code !== "23505") throw insertError;
+      written = !insertError;
+    } else {
+      const { data: replaced, error: updateError } = await target.admin
+        .from("ai_conversation_modes")
+        .update({ mode: proposed.mode, expires_at: proposed.expires_at })
+        .eq("id", existing.id)
+        .eq("user_id", target.userId)
+        .eq("expires_at", existing.expires_at)
+        .select("id")
+        .maybeSingle();
+      if (updateError) throw updateError;
+      written = replaced !== null && replaced !== undefined;
+    }
+  }
+  const first: { mode: string; expires_at: string | null } = written
+    ? proposed
+    : existing
+    ? { mode: existing.mode, expires_at: existing.expires_at }
+    : proposed;
 
   // Past this point the conversation is muted, which is the part of the escalation
   // the outage floor depends on. So nothing below may throw: a post-mute failure
@@ -332,8 +433,54 @@ export async function escalateConversation(
     );
   }
 
+  let persistedMode: string = first.mode;
+  // A manual row is never tightened; a repeated escalation may be, when a
+  // human has come online since the window opened (human_then_ai -> human_first).
+  const decided = target.muteRegardless || manual
+    ? first
+    : escalationOverride(target.defaultMode, assigned, target.escalationTimeoutMinutes, nowMs);
+  if (decided.mode !== first.mode) {
+    try {
+      // Conditional on the row still holding what this run wrote: an operator
+      // or a newer escalation that changed it meanwhile wins.
+      const { data: updated, error: decideError } = await target.admin
+        .from("ai_conversation_modes")
+        .update({ mode: decided.mode })
+        .eq("user_id", target.userId)
+        .eq("platform", target.platform)
+        .eq("conversation_id", target.conversationId)
+        .eq("mode", first.mode)
+        .eq("expires_at", first.expires_at)
+        .select("mode")
+        .maybeSingle();
+      if (decideError) throw decideError;
+      if (updated) {
+        persistedMode = updated.mode;
+      } else {
+        const { data: current, error: currentError } = await target.admin
+          .from("ai_conversation_modes")
+          .select("mode")
+          .eq("user_id", target.userId)
+          .eq("platform", target.platform)
+          .eq("conversation_id", target.conversationId)
+          .maybeSingle();
+        if (currentError) throw currentError;
+        persistedMode = current?.mode ?? "released";
+      }
+    } catch (decideFailure) {
+      console.error(
+        "[ai-agent-reply] escalation mode decision failed; the first write stands for at most the window:",
+        typeof decideFailure === "object" && decideFailure !== null && "message" in decideFailure
+          ? String((decideFailure as { message: unknown }).message)
+          : String(decideFailure),
+      );
+    }
+  }
+
   let adminsNotified = 0;
-  for (const phone of target.adminPhoneNumbers) {
+  // Admins were paged when this window opened; a repeat inside it stays quiet.
+  const phonesToNotify = repeated ? [] : target.adminPhoneNumbers;
+  for (const phone of phonesToNotify) {
     // These sends are sequential and admin_phone_numbers has no cap, so an
     // unreachable Graph API here could otherwise run past the caller's budget.
     if (outOfTime()) {
@@ -355,10 +502,18 @@ export async function escalateConversation(
   }
 
   console.log(
-    `[ai-agent-reply] Escalated conversation (assigned: ${assigned}, admins notified: ${adminsNotified})`,
+    `[ai-agent-reply] Escalated conversation (assigned: ${assigned}, admins notified: ${adminsNotified}, mode: ${persistedMode}, until: ${first.expires_at ?? "released by an operator"}, repeated: ${repeated})`,
   );
 
-  return { assigned, assignmentNote, adminsNotified };
+  return {
+    assigned,
+    assignmentNote,
+    adminsNotified,
+    mode: persistedMode,
+    expiresAt: first.expires_at,
+    repeated,
+    muted: persistedMode === "human_first",
+  };
 }
 
 async function escalateToHuman(context: ToolContext, reason: string): Promise<ToolResult> {
@@ -372,9 +527,14 @@ async function escalateToHuman(context: ToolContext, reason: string): Promise<To
 
   const outcome = await escalateConversation(context, reason);
 
+  // Plain language only: a raw timestamp or an internal mode name handed to
+  // the model tends to be parroted back to the customer.
+  const window = outcome.expiresAt
+    ? ` The team has until ${new Date(outcome.expiresAt).toUTCString()} to take over before the assistant resumes.`
+    : "";
   return {
     output:
-      `Escalation recorded. ${outcome.assignmentNote} Tell the customer briefly that a team member will follow up.`,
+      `${outcome.repeated ? "This conversation was already escalated." : "Escalation recorded."} ${outcome.assignmentNote}${window} Tell the customer briefly that a team member will follow up.`,
     escalated: true,
     // Carried so the outage floor can tell a real handoff from a bare mute. This
     // returns true whenever the mode write succeeded, even with no online agent and

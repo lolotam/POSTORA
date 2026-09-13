@@ -3128,6 +3128,10 @@ components:
         platform: { type: string, enum: [whatsapp] }
         mode: { type: [string, 'null'], enum: [ai_first, human_first, human_then_ai, null] }
         updated_at: { type: [string, 'null'], format: date-time }
+        expires_at:
+          type: [string, 'null']
+          format: date-time
+          description: Set only when an escalation wrote the override; it stops applying at this time. Null for a manual override.
     ConversationModeResponse:
       unevaluatedProperties: false
       allOf:
@@ -3293,6 +3297,11 @@ components:
           type: array
           items: { type: string, description: International number beginning with +. }
         daily_message_cap: { type: integer, minimum: 0 }
+        escalation_timeout_minutes:
+          type: integer
+          minimum: 1
+          maximum: 10080
+          description: Minutes an escalated conversation stays with humans before the override expires. Default 240.
         reply_cooldown_seconds: { type: integer, minimum: 0 }
         max_tool_iterations: { type: integer, minimum: 0 }
         handoff_on_request: { type: boolean }

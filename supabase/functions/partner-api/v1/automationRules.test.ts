@@ -101,7 +101,7 @@ Deno.test("mode rejects invalid input without writes, and persists using the cac
   }
   const f = fixture();
   assertEquals((await safeBody(await drive(f, request("PUT", MODE_PATH, { mode: "human_then_ai" })))).mode, "human_then_ai");
-  assertEquals(f.writes.find((w) => w.table === "ai_conversation_modes")!.row, { user_id: "cache-owner", platform: "whatsapp", conversation_id: KEY, mode: "human_then_ai" });
+  assertEquals(f.writes.find((w) => w.table === "ai_conversation_modes")!.row, { user_id: "cache-owner", platform: "whatsapp", conversation_id: KEY, mode: "human_then_ai", expires_at: null });
 });
 Deno.test("mode list omits orphan and foreign-owner modes, paginates tied cache timestamps with gaps", async () => {
   const f = fixture();

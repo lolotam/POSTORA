@@ -130,3 +130,21 @@ for (const failTable of ["social_accounts", "ai_agent_tools", "ai_agent_tool_acc
     assertEquals(f.writes, []);
   });
 }
+
+Deno.test("escalation_timeout_minutes outside 1..10080 is refused, inside is stored", async () => {
+  const f = agentFixture();
+  await assertRejects(
+    () => updateAgentConfig(f.ctx, ACCOUNT_ID, { escalation_timeout_minutes: 0 }),
+    AgentConfigOpError,
+    "escalation_timeout_minutes must be an integer between 1 and 10080",
+  );
+  await assertRejects(
+    () => updateAgentConfig(f.ctx, ACCOUNT_ID, { escalation_timeout_minutes: 10081 }),
+    AgentConfigOpError,
+    "escalation_timeout_minutes must be an integer between 1 and 10080",
+  );
+  await updateAgentConfig(f.ctx, ACCOUNT_ID, { escalation_timeout_minutes: 90 });
+  const write = f.writes.find((w) => w.table === "ai_agent_configs")!;
+  assertEquals(write.row.escalation_timeout_minutes, 90);
+});
+

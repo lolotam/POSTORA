@@ -9,6 +9,7 @@ import {
   type ToolAccountLink,
 } from "../_shared/toolResolution.ts";
 import { loadAgentConfigForAccount } from "../_shared/agentConfigLookup.ts";
+import { resolveConversationOverride } from "../_shared/conversationModeOverride.ts";
 import {
   buildSystemPrompt,
   completionFailure,
@@ -603,14 +604,14 @@ Deno.serve(async (req) => {
       return jsonResponse({ ok: true, skipped: "agent_disabled" });
     }
 
-    const { data: modeOverride } = await admin
-      .from("ai_conversation_modes")
-      .select("mode")
-      .eq("user_id", request.user_id)
-      .eq("platform", request.platform)
-      .eq("conversation_id", request.conversation_id)
-      .maybeSingle();
-    const mode = resolveEngagementMode(modeOverride?.mode, config.default_mode);
+    // Reads the override, ignores and cleans up an expired one, and throws on a
+    // failed read rather than treating it as "no override".
+    const overrideMode = await resolveConversationOverride(admin, {
+      userId: request.user_id,
+      platform: request.platform,
+      conversationId: request.conversation_id,
+    }, Date.now());
+    const mode = resolveEngagementMode(overrideMode, config.default_mode);
 
     const { data: thread, error: threadError } = await admin
       .from("ai_threads")
@@ -873,6 +874,10 @@ Deno.serve(async (req) => {
         if (dryRun) return;
         await notifyAdmin(recipientPhone, text);
       },
+      // The escalation's first write is bounded by these; under human_then_ai it
+      // does not mute unless a human is actually assigned.
+      defaultMode: config.default_mode ?? null,
+      escalationTimeoutMinutes: config.escalation_timeout_minutes ?? null,
     };
     escalationTarget = toolContext;
 
