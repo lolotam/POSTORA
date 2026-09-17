@@ -4089,6 +4089,7 @@ export type Database = {
           admin_notified_at: string | null
           ai_model: string | null
           api_key: string | null
+          api_key_hash: string | null
           avatar_url: string | null
           created_at: string | null
           email: string
@@ -4107,6 +4108,7 @@ export type Database = {
           admin_notified_at?: string | null
           ai_model?: string | null
           api_key?: string | null
+          api_key_hash?: string | null
           avatar_url?: string | null
           created_at?: string | null
           email: string
@@ -4125,6 +4127,7 @@ export type Database = {
           admin_notified_at?: string | null
           ai_model?: string | null
           api_key?: string | null
+          api_key_hash?: string | null
           avatar_url?: string | null
           created_at?: string | null
           email?: string

@@ -25,6 +25,7 @@ import { youtubeOptionsUnsupportedOnComposio } from "../_shared/youtubeComposioO
 import { recordConnectorCall, resolveWorkspaceForCall } from "../_shared/connectorTelemetry.ts";
 
 import { restrictedCorsHeaders } from "../_shared/cors.ts";
+import { sha256Hex } from "../_shared/crypto.ts";
 
 // Rate limiting configuration lives in ./rateLimitConfig.ts: limits resolve
 // per request from user_rate_limits -> tier_rate_limits (per plan) ->
@@ -49,7 +50,7 @@ export async function checkRateLimit(
   method: string,
   ipAddress: string | null,
   config: ResolvedRateLimit
-): Promise<{ allowed: boolean; remaining: number; resetAt: Date }> {
+): Promise<{ allowed: boolean; failClosed?: boolean; remaining: number; resetAt: Date }> {
   // Conservative upper bound on the true reset: the window is rolling, so
   // quota can reopen earlier as individual api_logs rows age out, but
   // now + windowMs is never earlier than the real reset. The previous
@@ -94,8 +95,22 @@ export async function checkRateLimit(
 
   if (error) {
     console.error('Error checking rate limit:', error);
-    // If we can't check rate limit, allow the request but log it
-    return { allowed: true, remaining: config.requests, resetAt };
+    // Fail closed: a rate limiter that silently allows on error turns a database
+    // outage into unlimited API usage. The refusing return writes its audit row
+    // (project rule) and the caller answers 503 instead of the usual 429.
+    await supabase.from('system_logs').insert({
+      source: 'n8n-api',
+      category: 'security',
+      level: 'error',
+      message: 'Rate limit check failed; refusing request (fail-closed)',
+      user_id: userId,
+      metadata: {
+        endpoint,
+        method,
+        pg_code: (error as { code?: string | null }).code ?? null,
+      },
+    });
+    return { allowed: false, failClosed: true, remaining: 0, resetAt };
   }
 
   const currentCount = count || 0;
@@ -135,10 +150,11 @@ async function authenticateApiKey(supabase: any, apiKey: string | null): Promise
     return null;
   }
 
+  const apiKeyHash = await sha256Hex(apiKey);
   const { data: profile, error } = await supabase
     .from('profiles')
     .select('id, preferred_timezone')
-    .eq('api_key', apiKey)
+    .eq('api_key_hash', apiKeyHash)
     .maybeSingle();
 
   if (error) {
@@ -2239,6 +2255,14 @@ export async function handleRequest(req: Request): Promise<Response> {
       fetchGlobalSetting: (endpointKey) => fetchGlobalSetting(supabaseAdmin, endpointKey),
     });
     const rateLimit = await checkRateLimit(supabaseAdmin, userId, rateLimitKey, req.method, ipAddress, rateLimitConfig);
+
+    if (rateLimit.failClosed) {
+      return apiError(req,
+        'Rate limit check is temporarily unavailable. Please retry shortly.',
+        503,
+        'RATE_LIMIT_UNAVAILABLE',
+        { retry_after: 10 });
+    }
 
     if (!rateLimit.allowed) {
       console.log('Rate limit exceeded for user:', userId, 'on endpoint:', path);

@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useImperativeHandle, forwardRef } from "react";
 import { useMutation, useQueryClient, useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
+import { sanitizeEmailHtml } from "@/lib/sanitizeHtml";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -702,7 +703,7 @@ export const ComposeEmail = forwardRef<ComposeEmailRef, {}>(function ComposeEmai
                 </p>
                 <div 
                   className="text-sm text-muted-foreground bg-muted/30 p-3 rounded-md"
-                  dangerouslySetInnerHTML={{ __html: selectedSignature.content }}
+                  dangerouslySetInnerHTML={{ __html: sanitizeEmailHtml(selectedSignature.content) }}
                 />
               </div>
             )}

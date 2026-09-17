@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
+import { sanitizeEmailHtml } from "@/lib/sanitizeHtml";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
@@ -209,7 +210,7 @@ export function DraftsManager({ onEditDraft }: DraftsManagerProps) {
               {selectedDraft.html_body ? (
                 <div
                   className="prose prose-sm dark:prose-invert max-w-none"
-                  dangerouslySetInnerHTML={{ __html: selectedDraft.html_body }}
+                  dangerouslySetInnerHTML={{ __html: sanitizeEmailHtml(selectedDraft.html_body) }}
                 />
               ) : selectedDraft.body ? (
                 <pre className="text-sm whitespace-pre-wrap font-sans">

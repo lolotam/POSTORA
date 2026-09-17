@@ -13,6 +13,8 @@ function calculateEngagementScore(likes = 0, comments = 0, shares = 0, views = 0
 // ─── Instagram: Official Business Discovery API ───
 async function scrapeInstagramOfficial(username: string, viewerIgUserId: string, accessToken: string, maxPosts = 50) {
   const fields = `id,username,name,biography,followers_count,media_count,profile_picture_url,website,media.limit(${maxPosts}){id,media_type,media_url,thumbnail_url,timestamp,like_count,comments_count,video_view_count,permalink,caption}`;
+  // Token-in-query is the documented Meta Graph API pattern here; destination hosts
+  // are hardcoded constants (no SSRF), so this is an accepted log-exposure tradeoff.
   const url = `https://graph.facebook.com/v22.0/${viewerIgUserId}?fields=business_discovery.fields(${fields})&username=${username}&access_token=${accessToken}`;
   const res = await fetch(url);
   if (!res.ok) {
