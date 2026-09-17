@@ -1,5 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { getOpeninaryConfig, openinaryTarget, openinaryDeliveryUrl, uploadBytesToOpeninary, extensionForContentType } from "../_shared/openinary.ts";
+import { getOpeninaryConfig, openinaryTarget, openinaryDeliveryUrl, uploadBytesToOpeninary, deriveOpeninaryUploadType } from "../_shared/openinary.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -48,14 +48,6 @@ async function getCdnPolicy(db: any): Promise<CdnPolicy> {
     openinaryEnabled: value?.openinary?.enabled === true,
   };
 }
-
-// Canonical MIME per extension — Openinary rejects application/octet-stream uploads.
-const MIME_BY_EXT: Record<string, string> = {
-  png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp",
-  avif: "image/avif", heic: "image/heic", heif: "image/heif", psd: "image/vnd.adobe.photoshop",
-  mp4: "video/mp4", mov: "video/quicktime", webm: "video/webm", mp3: "audio/mpeg", ogg: "audio/ogg", wav: "audio/wav",
-  svg: "image/svg+xml",
-};
 
 // SSRF hardening for externalUrl fetching (the Openinary path downloads bytes from
 // the edge runtime, unlike the Cloudinary path where Cloudinary's servers fetch).
@@ -506,9 +498,7 @@ Deno.serve(async (req) => {
     // Materialise payload bytes once so every provider stores identical content.
     let uploadSource = externalUrl || ""; // Cloudinary accepts remote URLs or base64 data URIs
     let payloadBytes: Uint8Array | null = null;
-    // The URL name may lie (or carry no extension at all — the admin logo flow sends
-    // "app_logo"), so the object extension comes from what the origin actually served.
-    let fetchedExt: string | null = null;
+    let headerType: string | null = null;
     if (fileData) {
       const b64Part = fileData.includes(",") ? fileData.split(",")[1] : fileData;
       uploadSource = fileData.startsWith("data:") ? fileData : `data:application/octet-stream;base64,${b64Part}`;
@@ -518,7 +508,7 @@ Deno.serve(async (req) => {
     } else if (externalUrl && effectiveProviders.includes("openinary")) {
       try {
         const res = await safeFetchExternal(externalUrl);
-        fetchedExt = extensionForContentType(res.headers.get("content-type"));
+        headerType = res.headers.get("content-type");
         if (res.ok) {
           payloadBytes = await readCappedBytes(res, MAX_EXTERNAL_BYTES);
           if (!incomingFileSize) incomingFileSize = payloadBytes.length;
@@ -530,7 +520,18 @@ Deno.serve(async (req) => {
       }
     }
 
-    const objectExt = fetchedExt || fileExtension || (fileType === "video" ? "mp4" : fileType === "gif" ? "gif" : "jpg");
+    // The stored type must describe the bytes, not the caller's filename: the admin
+    // logo flow sends "app_logo" with no extension, which used to force .jpg and be
+    // rejected whenever the logo was PNG/WebP. Header can lie; magic bytes win.
+    const fallbackExt = fileExtension || (fileType === "video" ? "mp4" : fileType === "gif" ? "gif" : "jpg");
+    const uploadType = deriveOpeninaryUploadType(payloadBytes, headerType, fallbackExt);
+    if (payloadBytes && uploadType.unsupportedReason) {
+      return new Response(
+        JSON.stringify({ success: false, error: uploadType.unsupportedReason }),
+        { status: 422, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
+    const objectExt = uploadType.ext;
     const openinaryBaseName = fileType === "raw" && fileExtension ? uniquePublicId.slice(0, -(fileExtension.length + 1)) : uniquePublicId;
     const openinaryFallbackKey = `${openinaryConfig?.folderPrefix || "postora.cloud"}/${folder}/${uniquePublicId}.${objectExt}`;
 
@@ -544,7 +545,7 @@ Deno.serve(async (req) => {
       try {
         if (provider === "openinary" && openinaryConfig && payloadBytes) {
           const target = openinaryTarget(`${folder}/${uniquePublicId}`, openinaryConfig.folderPrefix);
-          const uploadMime = MIME_BY_EXT[objectExt] || (fileType === "video" ? "video/mp4" : `image/${objectExt}`);
+          const uploadMime = uploadType.mimeType;
           const openResult = await uploadBytesToOpeninary(openinaryConfig, payloadBytes, target.folder, openinaryBaseName, objectExt, uploadMime, payloadBytes.length);
           if (openResult.success && openResult.path) {
             openinaryPath = openResult.path;

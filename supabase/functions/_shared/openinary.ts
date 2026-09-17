@@ -31,6 +31,11 @@ export function encodeOpeninaryPath(path: string): string {
   return path.replace(/^\/+|\/+$/g, "").split("/").map((s) => encodeURIComponent(s)).join("/");
 }
 
+export function openinaryTarget(publicId: string, folderPrefix = "postora.cloud"): { folder: string; baseName: string } {
+  const parts = publicId.split("/").filter(Boolean);
+  return { folder: [folderPrefix.replace(/^\/+|\/+$/g, ""), ...parts.slice(0, -1)].filter(Boolean).join("/"), baseName: parts.at(-1) || "image" };
+}
+
 // Reverse of TYPES: extension -> the content-type the type is stored and served with.
 const MIME_BY_EXT: Record<string, string> = Object.fromEntries(
   Object.entries(TYPES).map(([mime, ext]) => [ext, mime]),
