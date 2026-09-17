@@ -2,6 +2,8 @@
  * This module decides where bytes are written; src/lib/openinary.ts derives the URL a browser reads. Change one and change the other, or reads stop finding writes.
  */
 
+import { sniffBytesMimeType } from "./base64Media.ts";
+
 export interface OpeninaryConfig { serverUrl: string; apiKey: string; folderPrefix: string }
 export interface OpeninaryFile { name: string; path: string; size: number; mtime?: string }
 export interface OpeninaryUploadResult { success: boolean; path?: string; url?: string; adopted?: boolean; error?: string }
@@ -29,9 +31,83 @@ export function encodeOpeninaryPath(path: string): string {
   return path.replace(/^\/+|\/+$/g, "").split("/").map((s) => encodeURIComponent(s)).join("/");
 }
 
-export function openinaryTarget(publicId: string, folderPrefix = "postora.cloud"): { folder: string; baseName: string } {
-  const parts = publicId.split("/").filter(Boolean);
-  return { folder: [folderPrefix.replace(/^\/+|\/+$/g, ""), ...parts.slice(0, -1)].filter(Boolean).join("/"), baseName: parts.at(-1) || "image" };
+// Reverse of TYPES: extension -> the content-type the type is stored and served with.
+const MIME_BY_EXT: Record<string, string> = Object.fromEntries(
+  Object.entries(TYPES).map(([mime, ext]) => [ext, mime]),
+);
+
+const SVG_MIME = "image/svg+xml";
+
+/**
+ * SVG is deliberately excluded from Openinary's upload whitelist (stored-XSS
+ * vector when served inline), so an attempt can never succeed. Detecting it here
+ * lets callers refuse with that reason instead of a misleading content-mismatch
+ * 400 from the server.
+ */
+function looksLikeSvg(bytes: Uint8Array | null, headerType: string | null): boolean {
+  if (headerType?.split(";")[0].trim().toLowerCase() === SVG_MIME) return true;
+  if (!bytes) return false;
+  const head = new TextDecoder().decode(bytes.subarray(0, 256)).trimStart().toLowerCase();
+  return head.startsWith("<svg") || (head.startsWith("<?xml") && head.includes("<svg"));
+}
+
+export interface DerivedUploadType {
+  ext: string;
+  mimeType: string;
+  /** Set when the content can never be stored on Openinary, with the reason. */
+  unsupportedReason?: string;
+}
+
+/**
+ * Resolves the extension and content-type an Openinary upload must claim for
+ * these bytes.
+ *
+ * Openinary validates file content against the extension it is stored under, so
+ * the claim has to describe the bytes, not the filename — a caller passing
+ * "app_logo" (no extension) used to default to .jpg and be rejected with 400
+ * whenever the logo was a PNG or WebP. Evidence order: magic bytes (a header
+ * can lie, octet-stream is common), then the origin's content-type, then the
+ * caller's filename-derived fallback.
+ *
+ * ISO-BMFF containers (mp4/mov/avif/heic) share one box signature the sniffer
+ * reports as video/mp4, so a header naming one of the other brands wins there.
+ */
+export function deriveOpeninaryUploadType(
+  bytes: Uint8Array | null,
+  headerType: string | null,
+  fallbackExt: string,
+): DerivedUploadType {
+  const headerBase = headerType ? headerType.split(";")[0].trim().toLowerCase() : null;
+  const headerExt = extensionForContentType(headerBase);
+  const sniffed = bytes ? sniffBytesMimeType(bytes) : null;
+
+  let ext: string | null;
+  if (sniffed === "video/mp4" && headerExt && ["avif", "heic", "heif", "mov"].includes(headerExt)) {
+    ext = headerExt === "heif" ? "heic" : headerExt;
+  } else {
+    ext = (sniffed && extensionForContentType(sniffed)) || headerExt || fallbackExt;
+  }
+
+  if (looksLikeSvg(bytes, headerBase)) {
+    return {
+      ext,
+      mimeType: SVG_MIME,
+      unsupportedReason: "SVG is not supported by the CDN — use a PNG, WebP, or JPEG logo",
+    };
+  }
+
+  const mimeType = sniffed ??
+    (headerExt ? headerBase! : MIME_BY_EXT[ext] ?? "application/octet-stream");
+  return { ext, mimeType };
+}
+
+/** Reads the failure reason out of an Openinary upload response body. */
+export function openinaryUploadError(result: unknown, status: number): string {
+  const body = result as { error?: unknown; errors?: { error?: unknown }[] } | null;
+  if (typeof body?.error === "string" && body.error) return body.error;
+  const listed = body?.errors?.map((e) => (typeof e?.error === "string" ? e.error : null)).filter(Boolean);
+  if (listed && listed.length) return listed.join("; ");
+  return String(status);
 }
 
 export function openinaryDeliveryUrl(config: OpeninaryConfig, path: string): string {
@@ -107,7 +183,13 @@ async function storeOpeninaryObject(config: OpeninaryConfig, body: Blob, folder:
   const form = new FormData(); form.append("folder", folder); form.append("files", new File([body], fileName, { type: body.type || "application/octet-stream" }));
   const response = await request(`${config.serverUrl}/api/upload`, { method: "POST", headers: { Authorization: `Bearer ${config.apiKey}` }, body: form }, 120_000);
   const result = await response.json().catch(() => null);
-  if (!response.ok || !result?.success) return { success: false, error: `Openinary upload failed: ${result?.error || response.status}` };
+  // The upload API reports failures as { success: false, errors: [{ filename, error }] };
+  // some callers also use a flat `error`. Read both or the real reason is swallowed
+  // and admins only ever see the status code.
+  const serverError = result?.error
+    || (Array.isArray(result?.errors) ? result.errors.map((e: { error?: string }) => e?.error).filter(Boolean).join("; ") : "")
+    || "";
+  if (!response.ok || !result?.success) return { success: false, error: `Openinary upload failed: ${serverError || response.status}` };
   const stored = result.files?.[0]?.path;
   const requested = `${folder}/${fileName}`;
   // COLLISION-AS-FAILURE: a suffixed path is unreachable by the deterministic read URL.
