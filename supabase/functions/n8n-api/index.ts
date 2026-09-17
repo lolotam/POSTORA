@@ -100,7 +100,7 @@ export async function checkRateLimit(
     // (project rule) and the caller answers 503 instead of the usual 429.
     await supabase.from('system_logs').insert({
       source: 'n8n-api',
-      category: 'security',
+      category: 'system',
       level: 'error',
       message: 'Rate limit check failed; refusing request (fail-closed)',
       user_id: userId,
