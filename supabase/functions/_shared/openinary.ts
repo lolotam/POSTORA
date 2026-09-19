@@ -25,6 +25,20 @@ export function extensionForContentType(contentType: string | null): string | nu
   return contentType ? TYPES[contentType.split(";")[0].trim().toLowerCase()] ?? null : null;
 }
 
+/**
+ * Extension implied by the leading bytes of an image payload, or null when unrecognised.
+ * Openinary compares the declared extension against the real content and rejects a
+ * mismatch with HTTP 400, so a caller that only knows the bytes must ask them, not guess.
+ */
+export function extensionForBytes(data: Uint8Array): string | null {
+  const startsWith = (offset: number, ...bytes: number[]) => bytes.every((b, i) => data[offset + i] === b);
+  if (startsWith(0, 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a)) return "png";
+  if (startsWith(0, 0xff, 0xd8, 0xff)) return "jpg";
+  if (startsWith(0, 0x47, 0x49, 0x46, 0x38)) return "gif";
+  if (startsWith(0, 0x52, 0x49, 0x46, 0x46) && startsWith(8, 0x57, 0x45, 0x42, 0x50)) return "webp";
+  return null;
+}
+
 export function encodeOpeninaryPath(path: string): string {
   return path.replace(/^\/+|\/+$/g, "").split("/").map((s) => encodeURIComponent(s)).join("/");
 }
@@ -107,7 +121,7 @@ async function storeOpeninaryObject(config: OpeninaryConfig, body: Blob, folder:
   const form = new FormData(); form.append("folder", folder); form.append("files", new File([body], fileName, { type: body.type || "application/octet-stream" }));
   const response = await request(`${config.serverUrl}/api/upload`, { method: "POST", headers: { Authorization: `Bearer ${config.apiKey}` }, body: form }, 120_000);
   const result = await response.json().catch(() => null);
-  if (!response.ok || !result?.success) return { success: false, error: `Openinary upload failed: ${result?.error || response.status}` };
+  if (!response.ok || !result?.success) return { success: false, error: `Openinary upload failed: ${result?.error || result?.errors?.[0]?.error || response.status}` };
   const stored = result.files?.[0]?.path;
   const requested = `${folder}/${fileName}`;
   // COLLISION-AS-FAILURE: a suffixed path is unreachable by the deterministic read URL.
