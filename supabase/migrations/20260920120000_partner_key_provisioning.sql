@@ -73,8 +73,13 @@ $function$;
 
 REVOKE ALL ON FUNCTION public.partner_ensure_provisioned_workspace(uuid, uuid, text) FROM PUBLIC;
 
--- 2. Backfill every workspace that already has a key but no binding.
---    Runs before the key-minting change so the two cannot disagree.
+-- 2. Backfill every workspace holding a LIVE key but no binding. Runs before the
+--    key-minting change so the two cannot disagree.
+--
+--    Revoked-only workspaces are skipped deliberately. Backfilling one would mint
+--    a principal asserting a partner relationship that has already been ended, and
+--    a revoked key cannot reach an entitlement check to benefit from it. If such a
+--    workspace is ever issued a new key, step 3 provisions it at that moment.
 DO $backfill$
 DECLARE
   r RECORD;
@@ -84,6 +89,7 @@ BEGIN
            k.workspace_id, k.social_account_id, k.environment
     FROM public.partner_api_keys k
     WHERE k.social_account_id IS NOT NULL
+      AND k.revoked_at IS NULL
       AND NOT EXISTS (
         SELECT 1 FROM public.partner_provisioned_workspaces w
         WHERE w.workspace_id = k.workspace_id
