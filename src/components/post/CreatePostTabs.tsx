@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 import { Image, Type, Users, Settings, Clock } from "lucide-react";
 import { motion } from "framer-motion";
@@ -11,15 +12,17 @@ interface CreatePostTabsProps {
   mediaCount?: number;
 }
 
-const tabs: { id: PostTab; label: string; icon: React.ElementType }[] = [
-  { id: "media", label: "Media", icon: Image },
-  { id: "caption", label: "Caption", icon: Type },
-  { id: "accounts", label: "Accounts", icon: Users },
-  { id: "settings", label: "Settings", icon: Settings },
-  { id: "schedule", label: "Schedule", icon: Clock },
-];
-
 export function CreatePostTabs({ activeTab, onTabChange, accountCount = 0, mediaCount = 0 }: CreatePostTabsProps) {
+  const { t } = useTranslation("post");
+
+  const tabs: { id: PostTab; label: string; icon: React.ElementType }[] = [
+    { id: "media", label: t("tabs.media", "Media"), icon: Image },
+    { id: "caption", label: t("tabs.caption", "Caption"), icon: Type },
+    { id: "accounts", label: t("tabs.accounts", "Accounts"), icon: Users },
+    { id: "settings", label: t("tabs.settings", "Settings"), icon: Settings },
+    { id: "schedule", label: t("tabs.schedule", "Schedule"), icon: Clock },
+  ];
+
   return (
     <div className="flex flex-wrap items-center gap-2 p-1.5 rounded-2xl border border-white/15 bg-white/5 backdrop-blur-xl">
       {tabs.map((tab) => {

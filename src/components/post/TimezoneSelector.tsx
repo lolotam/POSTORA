@@ -17,6 +17,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { Label } from "@/components/ui/label";
+import { useTranslation } from "react-i18next";
 
 // Common timezones organized by region
 const COMMON_TIMEZONES = [
@@ -114,9 +115,22 @@ const getScheduledTimeInTimezone = (date: Date, timezone: string): string => {
 };
 
 export function TimezoneSelector({ value, onChange, scheduledAt }: TimezoneSelectorProps) {
+  const { t } = useTranslation("post");
   const [open, setOpen] = useState(false);
   const [detectedTimezone, setDetectedTimezone] = useState<string>("");
   const [currentTime, setCurrentTime] = useState<string>("");
+
+  const getRegionHeading = (region: string) => {
+    switch (region) {
+      case "Americas": return t("timezone.regionAmericas", "Americas");
+      case "Europe": return t("timezone.regionEurope", "Europe");
+      case "Asia": return t("timezone.regionAsia", "Asia");
+      case "Pacific": return t("timezone.regionPacific", "Pacific");
+      case "Africa": return t("timezone.regionAfrica", "Africa");
+      case "UTC": return t("timezone.regionUtc", "UTC");
+      default: return region;
+    }
+  };
 
   // Detect user's local timezone on mount
   useEffect(() => {
@@ -147,8 +161,8 @@ export function TimezoneSelector({ value, onChange, scheduledAt }: TimezoneSelec
   // Find display label for current value
   const selectedLabel = useMemo(() => {
     const found = COMMON_TIMEZONES.find(tz => tz.value === value);
-    return found ? found.label : value || "Select timezone...";
-  }, [value]);
+    return found ? found.label : value || t("timezone.select", "Select timezone...");
+  }, [value, t]);
 
   // Group timezones by region
   const groupedTimezones = useMemo(() => {
@@ -169,14 +183,14 @@ export function TimezoneSelector({ value, onChange, scheduledAt }: TimezoneSelec
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between">
-        <Label className="text-sm">Timezone (Optional)</Label>
+        <Label className="text-sm">{t("timezone.label", "Timezone (Optional)")}</Label>
         <a 
           href="https://en.wikipedia.org/wiki/List_of_tz_database_time_zones" 
           target="_blank" 
           rel="noopener noreferrer"
           className="text-xs text-primary hover:underline"
         >
-          See list
+          {t("timezone.seeList", "See list")}
         </a>
       </div>
       
@@ -191,7 +205,7 @@ export function TimezoneSelector({ value, onChange, scheduledAt }: TimezoneSelec
             <div className="flex items-center gap-2 truncate">
               <Globe className="w-4 h-4 text-muted-foreground flex-shrink-0" />
               <span className={cn("truncate", !value && "text-muted-foreground")}>
-                {value ? selectedLabel : "Select timezone..."}
+                {value ? selectedLabel : t("timezone.select", "Select timezone...")}
               </span>
             </div>
             <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
@@ -199,11 +213,11 @@ export function TimezoneSelector({ value, onChange, scheduledAt }: TimezoneSelec
         </PopoverTrigger>
         <PopoverContent className="w-[320px] p-0 bg-popover border z-50" align="start">
           <Command>
-            <CommandInput placeholder="Search timezone..." />
+            <CommandInput placeholder={t("timezone.search", "Search timezone...")} />
             <CommandList>
-              <CommandEmpty>No timezone found.</CommandEmpty>
+              <CommandEmpty>{t("timezone.notFound", "No timezone found.")}</CommandEmpty>
               {Object.entries(groupedTimezones).map(([region, timezones]) => (
-                <CommandGroup key={region} heading={region}>
+                <CommandGroup key={region} heading={getRegionHeading(region)}>
                   {timezones.map((tz) => (
                     <CommandItem
                       key={tz.value}
@@ -236,7 +250,7 @@ export function TimezoneSelector({ value, onChange, scheduledAt }: TimezoneSelec
       {value && currentTime && (
         <div className="flex items-center gap-2 text-xs bg-muted/50 rounded-md px-3 py-2">
           <Clock className="w-3 h-3 text-muted-foreground" />
-          <span className="text-muted-foreground">Current time:</span>
+          <span className="text-muted-foreground">{t("timezone.currentTime", "Current time:")}</span>
           <span className="font-medium text-foreground">{currentTime}</span>
         </div>
       )}
@@ -245,7 +259,7 @@ export function TimezoneSelector({ value, onChange, scheduledAt }: TimezoneSelec
       {value && scheduledAt && (
         <div className="flex items-center gap-2 text-xs bg-primary/10 rounded-md px-3 py-2">
           <Clock className="w-3 h-3 text-primary" />
-          <span className="text-muted-foreground">Will post at:</span>
+          <span className="text-muted-foreground">{t("timezone.willPostAt", "Will post at:")}</span>
           <span className="font-medium text-primary">{getScheduledTimeInTimezone(scheduledAt, value)}</span>
         </div>
       )}
@@ -254,7 +268,7 @@ export function TimezoneSelector({ value, onChange, scheduledAt }: TimezoneSelec
       {detectedTimezone && (
         <div className="flex items-center gap-2 text-xs">
           <span className="text-muted-foreground">
-            Detected: <span className="font-medium text-foreground">{detectedTimezone}</span>
+            {t("timezone.detected", "Detected:")} <span className="font-medium text-foreground">{detectedTimezone}</span>
           </span>
           {value !== detectedTimezone && (
             <Button
@@ -263,7 +277,7 @@ export function TimezoneSelector({ value, onChange, scheduledAt }: TimezoneSelec
               className="h-auto p-0 text-xs text-primary"
               onClick={handleUseDetected}
             >
-              Use this
+              {t("timezone.useThis", "Use this")}
             </Button>
           )}
           {value === detectedTimezone && (
@@ -273,7 +287,7 @@ export function TimezoneSelector({ value, onChange, scheduledAt }: TimezoneSelec
       )}
 
       <p className="text-xs text-muted-foreground">
-        Defaults to UTC conversion of your local time if left blank.
+        {t("timezone.hint", "Defaults to UTC conversion of your local time if left blank.")}
       </p>
     </div>
   );

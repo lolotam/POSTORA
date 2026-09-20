@@ -1,11 +1,13 @@
 {
   "all": "الكل",
+  "back": "رجوع",
   "cancel": "إلغاء",
   "createPost": "إنشاء منشور",
   "delete": "حذف",
   "noCaption": "بدون وصف",
   "refresh": "تحديث",
   "retry": "إعادة المحاولة",
+  "save": "حفظ",
   "saveChanges": "حفظ التغييرات",
   "saving": "جاري الحفظ...",
   "status": {

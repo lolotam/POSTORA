@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Platform } from "@/lib/types";
@@ -51,6 +52,7 @@ export function PostActions({
   onBack,
   hasAttributionError = false,
 }: PostActionsProps) {
+  const { t } = useTranslation("post");
   const isScheduleIncomplete = scheduleEnabled && !scheduledAt;
   const isDisabled = isPosting || isUploading || selectedAccountIds.length === 0 || hasCharacterError || isScheduleIncomplete || hasAttributionError;
 
@@ -64,7 +66,7 @@ export function PostActions({
             className="gap-2"
           >
             <ArrowLeft className="w-4 h-4" />
-            Back
+            {t("common:back", "Back")}
           </Button>
         )}
 
@@ -73,12 +75,12 @@ export function PostActions({
             <DialogTrigger asChild>
               <Button variant="outline" className="gap-2">
                 <Eye className="w-4 h-4" />
-                Preview
+                {t("actions.preview", "Preview")}
               </Button>
             </DialogTrigger>
             <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
               <DialogHeader>
-                <DialogTitle>Post Preview</DialogTitle>
+                <DialogTitle>{t("actions.postPreview", "Post Preview")}</DialogTitle>
               </DialogHeader>
               <PostPreview
                 caption={caption}
@@ -104,17 +106,17 @@ export function PostActions({
         {isPosting ? (
           <>
             <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-            {scheduleEnabled ? "Scheduling..." : "Publishing..."}
+            {scheduleEnabled ? t("actions.scheduling", "Scheduling...") : t("actions.publishing", "Publishing...")}
           </>
         ) : scheduleEnabled ? (
           <>
             <Clock className="w-4 h-4 mr-2" />
-            {scheduledAt ? "Schedule Post" : "Select Date & Time"}
+            {scheduledAt ? t("actions.schedulePost", "Schedule Post") : t("actions.selectDateTime", "Select Date & Time")}
           </>
         ) : (
           <>
             <Send className="w-4 h-4 mr-2" />
-            Post Now
+            {t("actions.postNow", "Post Now")}
           </>
         )}
       </Button>

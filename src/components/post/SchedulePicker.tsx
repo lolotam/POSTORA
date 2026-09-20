@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { format } from "date-fns";
 import { CalendarIcon, Clock } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -20,6 +21,7 @@ interface SchedulePickerProps {
 }
 
 export function SchedulePicker({ scheduledAt, onScheduleChange }: SchedulePickerProps) {
+  const { t } = useTranslation("post");
   const [isScheduled, setIsScheduled] = useState(!!scheduledAt);
   const [selectedDate, setSelectedDate] = useState<Date | undefined>(scheduledAt || undefined);
   const [selectedTime, setSelectedTime] = useState(
@@ -65,7 +67,7 @@ export function SchedulePicker({ scheduledAt, onScheduleChange }: SchedulePicker
         <div className="flex items-center gap-3">
           <Icon3D icon={Clock} variant="amber" size="sm" />
           <Label htmlFor="schedule-toggle" className="font-semibold bg-clip-text text-transparent bg-gradient-to-r from-amber-500 via-orange-500 to-rose-500">
-            Schedule Post
+            {t("schedulePicker.label", "Schedule Post")}
           </Label>
         </div>
         <Switch
@@ -87,7 +89,7 @@ export function SchedulePicker({ scheduledAt, onScheduleChange }: SchedulePicker
                 )}
               >
                 <CalendarIcon className="mr-2 h-4 w-4 text-amber-500" />
-                {selectedDate ? format(selectedDate, "PPP") : <span>Pick a date</span>}
+                {selectedDate ? format(selectedDate, "PPP") : <span>{t("schedulePicker.pickDate", "Pick a date")}</span>}
               </Button>
             </PopoverTrigger>
             <PopoverContent className="w-auto p-0" align="start">
@@ -115,7 +117,9 @@ export function SchedulePicker({ scheduledAt, onScheduleChange }: SchedulePicker
           {scheduledAt && (
             <div className="flex justify-center">
               <span className="inline-flex items-center bg-amber-500/10 text-amber-700 dark:text-amber-300 border border-amber-400/40 rounded-full px-3 py-1 text-xs font-medium">
-                Will be posted on {format(scheduledAt, "PPP 'at' p")}
+                {t("schedulePicker.willBePosted", "Will be posted on {{date}}", {
+                  date: format(scheduledAt, "PPP 'at' p"),
+                })}
               </span>
             </div>
           )}

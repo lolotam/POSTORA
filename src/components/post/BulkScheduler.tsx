@@ -28,6 +28,7 @@ import {
 import { Platform } from "@/lib/types";
 import { TimezoneSelector } from "./TimezoneSelector";
 import { useQuotas } from "@/hooks/useQuotas";
+import { useTranslation } from "react-i18next";
 
 interface ParsedPost {
   caption: string;
@@ -39,6 +40,7 @@ interface ParsedPost {
 
 export function BulkScheduler() {
   const { canCreatePost } = useQuotas();
+  const { t } = useTranslation("post");
   const [open, setOpen] = useState(false);
   const [parsedPosts, setParsedPosts] = useState<ParsedPost[]>([]);
   const [isUploading, setIsUploading] = useState(false);
@@ -103,7 +105,7 @@ export function BulkScheduler() {
             platforms: [],
             scheduled_at: scheduledAt,
             status: "error",
-            error: "No valid platforms specified",
+            error: t("bulkScheduler.noValidPlatforms", "No valid platforms specified"),
           });
           continue;
         }
@@ -116,7 +118,7 @@ export function BulkScheduler() {
             platforms,
             scheduled_at: scheduledAt,
             status: "error",
-            error: "Invalid date format",
+            error: t("bulkScheduler.invalidDateFormat", "Invalid date format"),
           });
           continue;
         }
@@ -127,7 +129,7 @@ export function BulkScheduler() {
             platforms,
             scheduled_at: scheduledAt,
             status: "error",
-            error: "Scheduled time is in the past",
+            error: t("bulkScheduler.timeInPast", "Scheduled time is in the past"),
           });
           continue;
         }
@@ -161,8 +163,8 @@ export function BulkScheduler() {
     };
     reader.onerror = () => {
       toast({
-        title: "Failed to read file",
-        description: "Please check your file format and try again.",
+        title: t("bulkScheduler.readErrorTitle", "Failed to read file"),
+        description: t("bulkScheduler.readErrorDesc", "Please check your file format and try again."),
         variant: "destructive",
       });
       setIsUploading(false);
@@ -176,8 +178,8 @@ export function BulkScheduler() {
     const validPosts = parsedPosts.filter((p) => p.status === "pending");
     if (validPosts.length === 0) {
       toast({
-        title: "No valid posts",
-        description: "Please fix the errors and try again.",
+        title: t("bulkScheduler.noValidPostsTitle", "No valid posts"),
+        description: t("bulkScheduler.noValidPostsDesc", "Please fix the errors and try again."),
         variant: "destructive",
       });
       return;
@@ -198,7 +200,7 @@ export function BulkScheduler() {
           updatedPosts[i] = {
             ...post,
             status: "error",
-            error: quotaCheck.message || "Post quota exceeded",
+            error: quotaCheck.message || t("bulkScheduler.quotaExceeded", "Post quota exceeded"),
           };
           continue;
         }
@@ -238,10 +240,10 @@ export function BulkScheduler() {
     const errorCount = updatedPosts.filter((p) => p.status === "error").length;
 
     toast({
-      title: "Bulk scheduling complete",
-      description: `${successCount} posts scheduled successfully${
-        errorCount > 0 ? `, ${errorCount} failed` : ""
-      }`,
+      title: t("bulkScheduler.completeTitle", "Bulk scheduling complete"),
+      description: errorCount > 0
+        ? t("bulkScheduler.completeDescWithErrors", "{{successCount}} posts scheduled successfully, {{errorCount}} failed", { successCount, errorCount })
+        : t("bulkScheduler.completeDesc", "{{successCount}} posts scheduled successfully", { successCount }),
     });
   };
 
@@ -270,26 +272,26 @@ export function BulkScheduler() {
       <DialogTrigger asChild>
         <Button variant="outline" className="gap-2">
           <FileSpreadsheet className="w-4 h-4" />
-          Bulk Schedule
+          {t("bulkScheduler.trigger", "Bulk Schedule")}
         </Button>
       </DialogTrigger>
       <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <FileSpreadsheet className="w-5 h-5 text-primary" />
-            Bulk Schedule Posts
+            {t("bulkScheduler.title", "Bulk Schedule Posts")}
           </DialogTitle>
         </DialogHeader>
 
         <div className="space-y-6 pt-4">
           {/* Instructions */}
           <Card className="p-4 bg-secondary/30 border-border">
-            <h4 className="font-medium mb-2">How to use:</h4>
+            <h4 className="font-medium mb-2">{t("bulkScheduler.howToUse", "How to use:")}</h4>
             <ol className="text-sm text-muted-foreground space-y-1 list-decimal list-inside">
-              <li>Download the CSV template below</li>
-              <li>Fill in your posts with captions, platforms, and scheduled times</li>
-              <li>Upload the completed CSV file</li>
-              <li>Review and confirm to schedule all posts</li>
+              <li>{t("bulkScheduler.step1", "Download the CSV template below")}</li>
+              <li>{t("bulkScheduler.step2", "Fill in your posts with captions, platforms, and scheduled times")}</li>
+              <li>{t("bulkScheduler.step3", "Upload the completed CSV file")}</li>
+              <li>{t("bulkScheduler.step4", "Review and confirm to schedule all posts")}</li>
             </ol>
             <Button
               variant="outline"
@@ -298,7 +300,7 @@ export function BulkScheduler() {
               onClick={downloadTemplate}
             >
               <Download className="w-4 h-4 mr-2" />
-              Download Template
+              {t("bulkScheduler.downloadTemplate", "Download Template")}
             </Button>
           </Card>
 
@@ -306,17 +308,17 @@ export function BulkScheduler() {
           <div className="space-y-2">
             <div className="flex items-center gap-2 mb-2">
               <Globe className="w-4 h-4 text-muted-foreground" />
-              <Label>Timezone for All Posts (Optional)</Label>
+              <Label>{t("bulkScheduler.timezoneLabel", "Timezone for All Posts (Optional)")}</Label>
             </div>
             <TimezoneSelector
               value={selectedTimezone}
               onChange={setSelectedTimezone}
             />
             <p className="text-xs text-muted-foreground">
-              All scheduled times in your CSV will be interpreted in this timezone.
+              {t("bulkScheduler.timezoneHint", "All scheduled times in your CSV will be interpreted in this timezone.")}
               {profile?.preferred_timezone && (
                 <span className="block mt-1">
-                  Your saved preference ({profile.preferred_timezone}) is pre-selected.
+                  {t("bulkScheduler.timezoneSavedPreference", "Your saved preference ({{tz}}) is pre-selected.", { tz: profile.preferred_timezone })}
                 </span>
               )}
             </p>
@@ -324,7 +326,7 @@ export function BulkScheduler() {
 
           {/* File Upload */}
           <div className="space-y-2">
-            <Label>Upload CSV File</Label>
+            <Label>{t("bulkScheduler.uploadLabel", "Upload CSV File")}</Label>
             <div
               onClick={() => fileInputRef.current?.click()}
               className="border-2 border-dashed border-border rounded-xl p-8 text-center cursor-pointer hover:border-primary/50 hover:bg-secondary/30 transition-colors"
@@ -342,7 +344,7 @@ export function BulkScheduler() {
                 <Upload className="w-8 h-8 mx-auto mb-2 text-muted-foreground" />
               )}
               <p className="text-sm text-muted-foreground">
-                Click to upload or drag and drop your CSV file
+                {t("bulkScheduler.dropzone", "Click to upload or drag and drop your CSV file")}
               </p>
             </div>
           </div>
@@ -352,19 +354,19 @@ export function BulkScheduler() {
             <div className="space-y-4">
               <div className="flex items-center justify-between">
                 <h4 className="font-medium">
-                  Preview ({parsedPosts.length} posts)
+                  {t("bulkScheduler.previewCount", "Preview ({{count}} posts)", { count: parsedPosts.length })}
                 </h4>
                 <div className="flex items-center gap-2">
                   {pendingCount > 0 && (
-                    <Badge variant="secondary">{pendingCount} pending</Badge>
+                    <Badge variant="secondary">{t("bulkScheduler.pendingBadge", "{{count}} pending", { count: pendingCount })}</Badge>
                   )}
                   {successCount > 0 && (
                     <Badge className="bg-emerald-500/20 text-emerald-500">
-                      {successCount} success
+                      {t("bulkScheduler.successBadge", "{{count}} success", { count: successCount })}
                     </Badge>
                   )}
                   {errorCount > 0 && (
-                    <Badge variant="destructive">{errorCount} errors</Badge>
+                    <Badge variant="destructive">{t("bulkScheduler.errorsBadge", "{{count}} errors", { count: errorCount })}</Badge>
                   )}
                 </div>
               </div>
@@ -424,17 +426,17 @@ export function BulkScheduler() {
                   {isProcessing ? (
                     <>
                       <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                      Scheduling...
+                      {t("bulkScheduler.schedulingProgress", "Scheduling...")}
                     </>
                   ) : (
                     <>
                       <CheckCircle2 className="w-4 h-4 mr-2" />
-                      Schedule {pendingCount} Posts
+                      {t("bulkScheduler.scheduleBtn", "Schedule {{count}} Posts", { count: pendingCount })}
                     </>
                   )}
                 </Button>
                 <Button variant="outline" onClick={resetState}>
-                  Clear
+                  {t("bulkScheduler.clear", "Clear")}
                 </Button>
               </div>
             </div>

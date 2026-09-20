@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { useTranslation } from "react-i18next";
 import { Check, ChevronDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -43,6 +44,7 @@ export function PlatformAccountMultiSelect({
   onPlatformsChange,
   onAccountsChange,
 }: PlatformAccountMultiSelectProps) {
+  const { t } = useTranslation("post");
   const availablePlatforms = useMemo(() => {
     const set = new Set<Platform>();
     accounts.forEach((a) => set.add(a.platform));
@@ -106,15 +108,15 @@ export function PlatformAccountMultiSelect({
         {/* Platforms dropdown */}
         <div>
           <label className="text-xs font-medium text-muted-foreground mb-1.5 block">
-            Platforms
+            {t("multiSelect.platforms", "Platforms")}
           </label>
           <Popover>
             <PopoverTrigger asChild>
               <Button variant="outline" className="w-full justify-between font-normal">
                 <span className="truncate">
                   {selectedPlatforms.length === 0
-                    ? "Select platforms"
-                    : `${selectedPlatforms.length} platform${selectedPlatforms.length > 1 ? "s" : ""}`}
+                    ? t("multiSelect.selectPlatforms", "Select platforms")
+                    : t("multiSelect.platformsCount", "{{count}} platform(s)", { count: selectedPlatforms.length })}
                 </span>
                 <ChevronDown className="w-4 h-4 opacity-60" />
               </Button>
@@ -122,7 +124,7 @@ export function PlatformAccountMultiSelect({
             <PopoverContent className="w-64 p-1 max-h-64 overflow-y-auto" align="start">
               {availablePlatforms.length === 0 && (
                 <div className="p-3 text-sm text-muted-foreground">
-                  No connected accounts.
+                  {t("multiSelect.noAccounts", "No connected accounts.")}
                 </div>
               )}
               {availablePlatforms.map((p) => {
@@ -151,7 +153,7 @@ export function PlatformAccountMultiSelect({
         {/* Accounts dropdown */}
         <div>
           <label className="text-xs font-medium text-muted-foreground mb-1.5 block">
-            Accounts
+            {t("multiSelect.accounts", "Accounts")}
           </label>
           <Popover>
             <PopoverTrigger asChild>
@@ -163,9 +165,9 @@ export function PlatformAccountMultiSelect({
                 <span className="truncate">
                   {selectedAccountIds.length === 0
                     ? selectedPlatforms.length === 0
-                      ? "Pick platforms first"
-                      : "Select accounts"
-                    : `${selectedAccountIds.length} account${selectedAccountIds.length > 1 ? "s" : ""}`}
+                      ? t("multiSelect.pickPlatformsFirst", "Pick platforms first")
+                      : t("multiSelect.selectAccounts", "Select accounts")
+                    : t("multiSelect.accountsCount", "{{count}} account(s)", { count: selectedAccountIds.length })}
                 </span>
                 <ChevronDown className="w-4 h-4 opacity-60" />
               </Button>
@@ -181,7 +183,7 @@ export function PlatformAccountMultiSelect({
                     </div>
                     {list.length === 0 && (
                       <div className="px-2 py-1.5 text-xs text-muted-foreground">
-                        No connected accounts.
+                        {t("multiSelect.noAccounts", "No connected accounts.")}
                       </div>
                     )}
                     {list.map((a) => {

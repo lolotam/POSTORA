@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 import { Check } from "lucide-react";
 
@@ -8,13 +9,15 @@ interface StepProgressBarProps {
   onStepChange: (step: PostStep) => void;
 }
 
-const steps = [
-  { number: 1 as PostStep, label: "Content" },
-  { number: 2 as PostStep, label: "Platforms" },
-  { number: 3 as PostStep, label: "Schedule" },
-];
-
 export function StepProgressBar({ currentStep, onStepChange }: StepProgressBarProps) {
+  const { t } = useTranslation("post");
+
+  const steps = [
+    { number: 1 as PostStep, label: t("steps.content", "Content") },
+    { number: 2 as PostStep, label: t("steps.platforms", "Platforms") },
+    { number: 3 as PostStep, label: t("steps.schedule", "Schedule") },
+  ];
+
   return (
     <div className="flex items-center justify-center w-full max-w-md mx-auto py-3" style={{ perspective: '600px' }}>
       {steps.map((step, index) => {

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { supabase } from "@/integrations/supabase/client";
@@ -14,6 +15,7 @@ interface HashtagSuggestionsProps {
 }
 
 export function HashtagSuggestions({ caption, platform, onAddHashtags }: HashtagSuggestionsProps) {
+  const { t } = useTranslation("post");
   const [isLoading, setIsLoading] = useState(false);
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [selectedHashtags, setSelectedHashtags] = useState<Set<string>>(new Set());
@@ -24,8 +26,8 @@ export function HashtagSuggestions({ caption, platform, onAddHashtags }: Hashtag
   const handleGenerateHashtags = async () => {
     if (!caption.trim()) {
       toast({
-        title: "Enter a caption first",
-        description: "Write some caption content to get hashtag suggestions.",
+        title: t("hashtags.enterCaptionTitle", "Enter a caption first"),
+        description: t("hashtags.enterCaptionDesc", "Write some caption content to get hashtag suggestions."),
         variant: "destructive",
       });
       return;
@@ -103,16 +105,18 @@ export function HashtagSuggestions({ caption, platform, onAddHashtags }: Hashtag
   const handleAddSelected = () => {
     if (selectedHashtags.size === 0) {
       toast({
-        title: "No hashtags selected",
-        description: "Click on hashtags to select them first.",
+        title: t("hashtags.noSelectedTitle", "No hashtags selected"),
+        description: t("hashtags.noSelectedDesc", "Click on hashtags to select them first."),
         variant: "destructive",
       });
       return;
     }
     onAddHashtags(Array.from(selectedHashtags));
     toast({
-      title: "Hashtags added!",
-      description: `Added ${selectedHashtags.size} hashtag(s) to your caption.`,
+      title: t("hashtags.addedTitle", "Hashtags added!"),
+      description: t("hashtags.addedDesc", "Added {{count}} hashtag(s) to your caption.", {
+        count: selectedHashtags.size,
+      }),
     });
   };
 
@@ -122,8 +126,8 @@ export function HashtagSuggestions({ caption, platform, onAddHashtags }: Hashtag
     setCopiedAll(true);
     setTimeout(() => setCopiedAll(false), 2000);
     toast({
-      title: "Copied!",
-      description: "All hashtags copied to clipboard.",
+      title: t("hashtags.copiedTitle", "Copied!"),
+      description: t("hashtags.copiedDesc", "All hashtags copied to clipboard."),
     });
   };
 
@@ -140,12 +144,12 @@ export function HashtagSuggestions({ caption, platform, onAddHashtags }: Hashtag
           {isLoading ? (
             <>
               <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-              Generating...
+              {t("hashtags.generating", "Generating...")}
             </>
           ) : (
             <>
               <Hash className="w-4 h-4 mr-2" />
-              Suggest Hashtags
+              {t("hashtags.suggest", "Suggest Hashtags")}
             </>
           )}
         </Button>
@@ -162,7 +166,7 @@ export function HashtagSuggestions({ caption, platform, onAddHashtags }: Hashtag
               ) : (
                 <Copy className="w-4 h-4 mr-1" />
               )}
-              Copy All
+              {copiedAll ? t("hashtags.copied", "Copied") : t("hashtags.copyAll", "Copy All")}
             </Button>
             <Button
               variant="default"
@@ -170,7 +174,9 @@ export function HashtagSuggestions({ caption, platform, onAddHashtags }: Hashtag
               onClick={handleAddSelected}
               disabled={selectedHashtags.size === 0}
             >
-              Add Selected ({selectedHashtags.size})
+              {t("hashtags.addSelected", "Add Selected ({{count}})", {
+                count: selectedHashtags.size,
+              })}
             </Button>
           </div>
         )}
@@ -193,7 +199,7 @@ export function HashtagSuggestions({ caption, platform, onAddHashtags }: Hashtag
 
       {suggestions.length > 0 && (
         <p className="text-xs text-muted-foreground">
-          Click hashtags to select, then "Add Selected" to append to caption
+          {t("hashtags.helperText", "Click hashtags to select, then \"Add Selected\" to append to caption")}
         </p>
       )}
     </div>

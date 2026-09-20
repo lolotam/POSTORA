@@ -19,6 +19,7 @@ import { toast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import type { UnsplashAttributionData } from "@/lib/unsplashAttribution";
 import { Icon3D, GradientHeading, GradientRingCard } from "@/components/fx";
+import { useTranslation } from "react-i18next";
 
 interface CaptionSectionProps {
   caption: string;
@@ -57,6 +58,7 @@ export function CaptionSection({
   isAttributionValid = true,
 }: CaptionSectionProps) {
   const { flags } = useFeatureFlags();
+  const { t } = useTranslation("post");
   const { captionLimit, refreshLimits } = useAIRateLimit();
   const { save: saveToHistory } = useCaptionHistory();
   const [aiDialogOpen, setAiDialogOpen] = useState(false);
@@ -66,6 +68,13 @@ export function CaptionSection({
   const [selectedTone, setSelectedTone] = useState<string>("Engaging");
   const [captionOptions, setCaptionOptions] = useState<string[]>([]);
   const [savedIndices, setSavedIndices] = useState<Set<number>>(new Set());
+
+  const tones = [
+    { id: "Engaging", label: t("caption.toneEngaging", "Engaging") },
+    { id: "Professional", label: t("caption.toneProfessional", "Professional") },
+    { id: "Funny", label: t("caption.toneFunny", "Funny") },
+    { id: "Inspirational", label: t("caption.toneInspirational", "Inspirational") },
+  ];
 
   // Calculate the lowest character limit among selected platforms
   const { lowestLimit, lowestPlatform, isOverLimit, isNearLimit } = useMemo(() => {
@@ -119,12 +128,12 @@ export function CaptionSection({
 
       if (data?.captions && Array.isArray(data.captions) && data.captions.length > 0) {
         setCaptionOptions(data.captions);
-        showSuccessToast("Captions generated!", "Pick one of the 5 options below.");
+        showSuccessToast(t("caption.generatedSuccessTitle", "Captions generated!"), t("caption.generatedSuccessDesc", "Pick one of the 5 options below."));
         refreshLimits();
       } else if (data?.caption) {
         // Fallback for single caption response
         setCaptionOptions([data.caption]);
-        showSuccessToast("Caption generated!", "Your AI-generated caption is ready.");
+        showSuccessToast(t("caption.singleGeneratedTitle", "Caption generated!"), t("caption.singleGeneratedDesc", "Your AI-generated caption is ready."));
         refreshLimits();
       } else if (data?.error) {
         throw new Error(data.error);
@@ -161,7 +170,10 @@ export function CaptionSection({
 
   const handleCopyOption = async (text: string) => {
     await navigator.clipboard.writeText(text);
-    toast({ title: "Copied", description: "Caption copied to clipboard." });
+    toast({
+      title: t("caption.copiedTitle", "Copied"),
+      description: t("caption.copiedDesc", "Caption copied to clipboard."),
+    });
   };
 
   const isRateLimited = captionLimit.remainingHour === 0 && captionLimit.limitPerHour > 0;
@@ -193,7 +205,7 @@ export function CaptionSection({
           <div className="flex items-center gap-2">
             <Icon3D icon={Sparkles} variant="sky" size="sm" />
             <Label className="text-sm font-semibold bg-clip-text text-transparent bg-gradient-to-r from-sky-500 via-violet-500 to-pink-500">
-              Tags / Hashtag Generator
+              {t("caption.hashtagGenTitle", "Tags / Hashtag Generator")}
             </Label>
           </div>
           <HashtagSuggestions
@@ -210,9 +222,9 @@ export function CaptionSection({
       <div className="space-y-2">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <Label className="text-sm">Title</Label>
+            <Label className="text-sm">{t("caption.titleLabel", "Title")}</Label>
             {flags.titleRequired && (
-              <span className="text-xs text-destructive">Required for all media posts</span>
+              <span className="text-xs text-destructive">{t("caption.requiredMedia", "Required for all media posts")}</span>
             )}
           </div>
           {flags.aiCaption && (
@@ -224,7 +236,7 @@ export function CaptionSection({
                   className="h-7 text-xs gap-1.5 bg-gradient-to-r from-sky-500/15 to-violet-500/15 text-sky-700 dark:text-sky-300 border border-sky-400/40 hover:from-sky-500 hover:to-violet-500 hover:text-white hover:shadow-md hover:shadow-sky-500/30 transition-all"
                 >
                   <Sparkles className="w-3 h-3 mr-1" />
-                  Generate with AI
+                  {t("caption.generateAi", "Generate with AI")}
                 </Button>
               </DialogTrigger>
               <DialogContent className="bg-card/80 backdrop-blur-xl border-border/50 shadow-2xl shadow-sky-500/10">
@@ -232,7 +244,7 @@ export function CaptionSection({
                   <DialogTitle className="flex items-center gap-3 group">
                     <Icon3D icon={Sparkles} variant="sky" size="sm" />
                     <GradientHeading as="h2" size="lg" preset="sky-violet-pink" className="!text-2xl md:!text-3xl">
-                      AI Caption Generator
+                      {t("caption.aiGeneratorTitle", "AI Caption Generator")}
                     </GradientHeading>
                     {captionLimit.limitPerHour > 0 && (
                       <RateLimitIndicator
@@ -242,7 +254,7 @@ export function CaptionSection({
                         remainingDay={captionLimit.remainingDay}
                         resetTimeHour={captionLimit.resetTimeHour}
                         resetTimeDay={captionLimit.resetTimeDay}
-                        label="Caption Generation"
+                        label={t("caption.rateLimitLabel", "Caption Generation")}
                         compact
                         className="ml-auto"
                       />
@@ -252,7 +264,7 @@ export function CaptionSection({
                 <div className="space-y-4 pt-4">
                   {/* Language Toggle */}
                   <div className="space-y-2">
-                    <Label className="text-sm">Language</Label>
+                    <Label className="text-sm">{t("caption.languageLabel", "Language")}</Label>
                     <div className="flex gap-2">
                       <Button
                         variant={language === "english" ? "default" : "outline"}
@@ -266,7 +278,7 @@ export function CaptionSection({
                             : "bg-card/50 backdrop-blur-sm border-border/50 hover:border-sky-400/60"
                         )}
                       >
-                        English
+                        {t("caption.english", "English")}
                       </Button>
                       <Button
                         variant={language === "arabic" ? "default" : "outline"}
@@ -280,18 +292,18 @@ export function CaptionSection({
                             : "bg-card/50 backdrop-blur-sm border-border/50 hover:border-sky-400/60"
                         )}
                       >
-                        العربية
+                        {t("caption.arabic", "العربية")}
                       </Button>
                     </div>
                   </div>
 
                   <div className="space-y-2">
-                    <Label>What's your post about?</Label>
+                    <Label>{t("caption.promptLabel", "What's your post about?")}</Label>
                     <Textarea
                       value={aiPrompt}
                       onChange={(e) => setAiPrompt(e.target.value)}
                       placeholder={language === "arabic" 
-                        ? "مثال: إطلاق منتج جديد لخط الأزياء المستدامة..."
+                        ? t("caption.promptPlaceholder", "مثال: إطلاق منتج جديد لخط الأزياء المستدامة...")
                         : "e.g., New product launch for our sustainable fashion line..."}
                       className="min-h-[100px] bg-background/60 backdrop-blur-sm border-border/50 focus-visible:border-sky-400 focus-visible:ring-sky-400/30"
                       dir={language === "arabic" ? "rtl" : "ltr"}
@@ -301,23 +313,23 @@ export function CaptionSection({
 
                   {/* Tone Selector */}
                   <div className="space-y-2">
-                    <Label className="text-sm">Tone</Label>
+                    <Label className="text-sm">{t("caption.toneLabel", "Tone")}</Label>
                     <div className="flex gap-2 flex-wrap">
-                      {["Engaging", "Professional", "Funny", "Inspirational"].map((tone) => (
+                      {tones.map((tone) => (
                         <Button
-                          key={tone}
-                          variant={selectedTone === tone ? "default" : "outline"}
+                          key={tone.id}
+                          variant={selectedTone === tone.id ? "default" : "outline"}
                           size="sm"
-                          onClick={() => setSelectedTone(tone)}
+                          onClick={() => setSelectedTone(tone.id)}
                           disabled={isRateLimited}
                           className={cn(
                             "transition-all",
-                            selectedTone === tone
+                            selectedTone === tone.id
                               ? "bg-gradient-to-r from-sky-500 via-violet-500 to-pink-500 text-white border-0 shadow-md shadow-sky-500/30"
                               : "bg-card/50 backdrop-blur-sm border-border/50 hover:border-sky-400/60"
                           )}
                         >
-                          {tone}
+                          {tone.label}
                         </Button>
                       ))}
                     </div>
@@ -331,14 +343,14 @@ export function CaptionSection({
                     {isGeneratingCaption ? (
                       <>
                         <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                        Generating 5 options...
+                        {t("caption.generatingOptions", "Generating 5 options...")}
                       </>
                     ) : isRateLimited ? (
-                      "Rate limit reached"
+                      t("caption.rateLimitReached", "Rate limit reached")
                     ) : (
                       <>
                         <Sparkles className="w-4 h-4 mr-2" />
-                        Generate 5 Captions
+                        {t("caption.generateFive", "Generate 5 Captions")}
                       </>
                     )}
                   </Button>
@@ -346,7 +358,7 @@ export function CaptionSection({
                   {isRateLimited && (
                     <GradientRingCard variant="rose" hoverLift={false} ringIntensity="subtle" padded={false} innerClassName="p-2.5">
                       <p className="text-xs text-rose-700 dark:text-rose-300 text-center font-medium">
-                        You've reached your hourly limit. Please wait for it to reset.
+                        {t("caption.rateLimitBanner", "You've reached your hourly limit. Please wait for it to reset.")}
                       </p>
                     </GradientRingCard>
                   )}
@@ -354,7 +366,7 @@ export function CaptionSection({
                   {/* Caption Options */}
                   {captionOptions.length > 0 && (
                     <div className="space-y-2">
-                      <Label className="text-sm">Pick a caption:</Label>
+                      <Label className="text-sm">{t("caption.pickCaption", "Pick a caption:")}</Label>
                       <div className="space-y-2 max-h-[300px] overflow-y-auto pr-1">
                         {captionOptions.map((opt, index) => {
                           const isSaved = savedIndices.has(index);
@@ -365,7 +377,7 @@ export function CaptionSection({
                             >
                               <div className="flex items-center justify-between">
                                 <span className="text-xs font-medium text-muted-foreground">
-                                  Option {index + 1}
+                                  {t("caption.optionNumber", "Option {{number}}", { number: index + 1 })}
                                 </span>
                                 <div className="flex items-center gap-1">
                                   <Button
@@ -374,7 +386,7 @@ export function CaptionSection({
                                     variant="ghost"
                                     className="h-7 px-2 text-xs"
                                     onClick={() => handleCopyOption(opt)}
-                                    title="Copy"
+                                    title={t("caption.copyTitle", "Copy")}
                                   >
                                     <Copy className="w-3 h-3" />
                                   </Button>
@@ -388,7 +400,7 @@ export function CaptionSection({
                                     )}
                                     onClick={() => handleSaveOption(index, opt)}
                                     disabled={isSaved}
-                                    title={isSaved ? "Saved" : "Save to history"}
+                                    title={isSaved ? t("caption.savedTitle", "Saved") : t("caption.saveTitle", "Save to history")}
                                   >
                                     {isSaved ? (
                                       <Check className="w-3 h-3" />
@@ -403,7 +415,7 @@ export function CaptionSection({
                                     className="h-7 px-2 text-xs bg-gradient-to-r from-sky-500 to-violet-500 text-white border-0 shadow-sm shadow-sky-500/30 hover:shadow-md hover:shadow-sky-500/50"
                                     onClick={() => handleSelectCaption(opt)}
                                   >
-                                    Use
+                                    {t("caption.use", "Use")}
                                   </Button>
                                 </div>
                               </div>
@@ -435,7 +447,7 @@ export function CaptionSection({
             <div className="flex items-center gap-2 text-rose-700 dark:text-rose-300 text-sm">
               <AlertTriangle className="w-4 h-4 flex-shrink-0 animate-pulse" />
               <span>
-                Caption exceeds {getPlatformName(lowestPlatform)} limit by {(caption.length - lowestLimit).toLocaleString()} characters
+                {t("caption.overLimitBanner", "Caption exceeds {{platform}} limit by {{count}} characters", { platform: getPlatformName(lowestPlatform), count: caption.length - lowestLimit })}
               </span>
             </div>
           </GradientRingCard>
@@ -444,7 +456,7 @@ export function CaptionSection({
         <Textarea
           value={caption}
           onChange={(e) => setCaption(e.target.value)}
-          placeholder="Enter title for your post"
+          placeholder={t("caption.placeholder", "Enter title for your post")}
           className={cn(
             "min-h-[120px] resize-none transition-all duration-200 bg-background/60 backdrop-blur-sm border-border/50 focus-visible:border-sky-400 focus-visible:ring-sky-400/30",
             isOverLimit && "border-rose-400 ring-rose-400/30 ring-2 bg-rose-500/5 focus-visible:border-rose-400 focus-visible:ring-rose-400/40",

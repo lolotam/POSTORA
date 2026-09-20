@@ -1,4 +1,5 @@
 import React from "react";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Trash2 } from "lucide-react";
 import {
@@ -11,12 +12,6 @@ import { Platform } from "@/lib/types";
 import { PlatformIcon } from "@/components/PlatformIcon";
 import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { motion, AnimatePresence } from "framer-motion";
-
-const stepDescriptions: Record<PostStep, string> = {
-  1: "Add your media and write your caption",
-  2: "Choose which accounts to publish to",
-  3: "Set your schedule and publish",
-};
 
 interface ConnectedAccount {
   id: string;
@@ -37,7 +32,7 @@ interface CreatePostHeaderProps {
 }
 
 export function CreatePostHeader({
-  title = "Create New Post",
+  title,
   currentStep = 1,
   onDiscardDraft,
   hasDraft = false,
@@ -45,6 +40,15 @@ export function CreatePostHeader({
   connectedAccounts = [],
   selectedAccountIds = [],
 }: CreatePostHeaderProps) {
+  const { t } = useTranslation("post");
+
+  const stepDescriptions: Record<PostStep, string> = {
+    1: t("header.step1Desc", "Add your media and write your caption"),
+    2: t("header.step2Desc", "Choose which accounts to publish to"),
+    3: t("header.step3Desc", "Set your schedule and publish"),
+  };
+
+  const displayTitle = title ?? t("header.title", "Create New Post");
   const uniquePlatforms = Array.from(new Set(selectedPlatforms));
 
   const getAccountsForPlatform = (platform: Platform) => {
@@ -64,10 +68,13 @@ export function CreatePostHeader({
   return (
     <div className="relative text-center py-4">
       <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-foreground">
-        {title}
+        {displayTitle}
       </h1>
       <p className="text-muted-foreground mt-1 text-sm">
-        Step {currentStep}: {stepDescriptions[currentStep]}
+        {t("header.stepIndicator", "Step {{step}}: {{description}}", {
+          step: currentStep,
+          description: stepDescriptions[currentStep],
+        })}
       </p>
 
       <AnimatePresence>
@@ -160,11 +167,11 @@ export function CreatePostHeader({
                 className="gap-1.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
               >
                 <Trash2 className="w-4 h-4" />
-                <span className="hidden sm:inline">Discard</span>
+                <span className="hidden sm:inline">{t("header.discard", "Discard")}</span>
               </Button>
             </TooltipTrigger>
             <TooltipContent>
-              <p>Clear all saved content and start fresh</p>
+              <p>{t("header.discardTooltip", "Clear all saved content and start fresh")}</p>
             </TooltipContent>
           </Tooltip>
         </div>

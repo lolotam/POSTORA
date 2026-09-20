@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/dialog";
 import { Clock, Sparkles, Loader2, TrendingUp, Calendar } from "lucide-react";
 import { format, addDays, setHours, setMinutes } from "date-fns";
+import { useTranslation } from "react-i18next";
 
 interface TimeSuggestion {
   platform: Platform;
@@ -39,6 +40,7 @@ export function BestTimeSuggestions({
   const [suggestions, setSuggestions] = useState<TimeSuggestion[]>([]);
   const { data: posts = [] } = usePosts();
   const { toast } = useToast();
+  const { t } = useTranslation("post");
 
   const analyzePostingPatterns = () => {
     // Analyze historical posting data
@@ -62,8 +64,8 @@ export function BestTimeSuggestions({
   const generateSuggestions = async () => {
     if (selectedPlatforms.length === 0) {
       toast({
-        title: "Select platforms first",
-        description: "Choose at least one platform to get suggestions.",
+        title: t("bestTimes.selectPlatformsTitle", "Select platforms first"),
+        description: t("bestTimes.selectPlatformsDesc", "Choose at least one platform to get suggestions."),
         variant: "destructive",
       });
       return;
@@ -166,8 +168,8 @@ export function BestTimeSuggestions({
     } catch (error) {
       console.error("Suggestion error:", error);
       toast({
-        title: "Failed to get suggestions",
-        description: "Using general best practices instead.",
+        title: t("bestTimes.fallbackTitle", "Failed to get suggestions"),
+        description: t("bestTimes.fallbackDesc", "Using general best practices instead."),
       });
     } finally {
       setIsLoading(false);
@@ -200,8 +202,10 @@ export function BestTimeSuggestions({
       setOpen(false);
       
       toast({
-        title: "Time selected!",
-        description: `Scheduled for ${format(scheduledDate, "EEEE, MMM d 'at' h:mm a")}`,
+        title: t("bestTimes.selectedTitle", "Time selected!"),
+        description: t("bestTimes.selectedDesc", "Scheduled for {{date}}", {
+          date: format(scheduledDate, "EEEE, MMM d 'at' h:mm a"),
+        }),
       });
     }
   };
@@ -211,20 +215,20 @@ export function BestTimeSuggestions({
       <DialogTrigger asChild>
         <Button variant="ghost" size="sm" className="text-primary gap-2">
           <Sparkles className="w-4 h-4" />
-          Suggest Best Times
+          {t("bestTimes.suggestTimes", "Suggest Best Times")}
         </Button>
       </DialogTrigger>
       <DialogContent className="max-w-lg">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <TrendingUp className="w-5 h-5 text-primary" />
-            Best Times to Post
+            {t("bestTimes.dialogTitle", "Best Times to Post")}
           </DialogTitle>
         </DialogHeader>
 
         <div className="space-y-4 pt-4">
           <p className="text-sm text-muted-foreground">
-            AI-powered recommendations based on platform data and your posting history.
+            {t("bestTimes.dialogDesc", "AI-powered recommendations based on platform data and your posting history.")}
           </p>
 
           {suggestions.length === 0 && !isLoading && (
@@ -234,14 +238,14 @@ export function BestTimeSuggestions({
               disabled={selectedPlatforms.length === 0}
             >
               <Sparkles className="w-4 h-4 mr-2" />
-              Get Suggestions for {selectedPlatforms.length} Platform(s)
+              {t("bestTimes.getSuggestions", "Get Suggestions for {{count}} Platform(s)", { count: selectedPlatforms.length })}
             </Button>
           )}
 
           {isLoading && (
             <div className="flex flex-col items-center py-8">
               <Loader2 className="w-8 h-8 animate-spin text-primary mb-3" />
-              <p className="text-sm text-muted-foreground">Analyzing best posting times...</p>
+              <p className="text-sm text-muted-foreground">{t("bestTimes.analyzing", "Analyzing best posting times...")}</p>
             </div>
           )}
 
@@ -261,7 +265,7 @@ export function BestTimeSuggestions({
                       <div>
                         <div className="flex items-center gap-2">
                           <span className="font-medium">{suggestion.day}</span>
-                          <span className="text-muted-foreground">at</span>
+                          <span className="text-muted-foreground">{t("bestTimes.at", "at")}</span>
                           <span className="font-medium">{suggestion.time}</span>
                         </div>
                         <p className="text-xs text-muted-foreground">
@@ -279,7 +283,7 @@ export function BestTimeSuggestions({
                             : "outline"
                         }
                       >
-                        {suggestion.score}% match
+                        {t("bestTimes.match", "{{score}}% match", { score: suggestion.score })}
                       </Badge>
                     </div>
                   </div>
@@ -291,7 +295,7 @@ export function BestTimeSuggestions({
                 onClick={generateSuggestions}
                 className="w-full"
               >
-                Refresh Suggestions
+                {t("bestTimes.refresh", "Refresh Suggestions")}
               </Button>
             </div>
           )}

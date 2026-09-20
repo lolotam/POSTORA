@@ -21,6 +21,7 @@ import { YouTubeSettingsState } from "@/components/post/settings/YouTubeSettings
 import { youtubeOptionsUnsupportedOnComposio } from "@/lib/youtubeComposioOptions";
 import { useSavedFieldSuggestions } from "@/hooks/useSavedFieldSuggestions";
 import { useQuotas } from "@/hooks/useQuotas";
+import { useTranslation } from "react-i18next";
 
 // Extracted components
 import { CreatePostHeader } from "@/components/post/CreatePostHeader";
@@ -43,6 +44,7 @@ import { Icon3D, GradientDivider } from "@/components/fx";
 import { ImagePlus, Type } from "lucide-react";
 
 export default function CreatePost() {
+  const { t } = useTranslation("post");
   const { toast } = useToast();
   const location = useLocation();
   const { flags, isLoading: isFlagsLoading } = useFeatureFlags();
@@ -362,8 +364,8 @@ export default function CreatePost() {
       const unsupported = youtubeOptionsUnsupportedOnComposio(platformSettings.buildPostMetadata());
       if (unsupported.length > 0) {
         showErrorToast(
-          "YouTube options unavailable",
-          `This Composio-managed channel cannot use: ${unsupported.join(", ")}`,
+          t("toast.youtubeOptionsUnavailable", "YouTube options unavailable"),
+          t("toast.youtubeOptionsUnavailableDesc", "This Composio-managed channel cannot use: {{unsupported}}", { unsupported: unsupported.join(", ") }),
         );
         return;
       }
@@ -373,7 +375,10 @@ export default function CreatePost() {
     if (!editPostId) {
       const quotaCheck = await canCreatePost();
       if (!quotaCheck.allowed) {
-        showErrorToast("Post limit reached", quotaCheck.message || "You've reached your post quota.");
+        showErrorToast(
+          t("toast.postLimitReached", "Post limit reached"),
+          quotaCheck.message || t("toast.postQuotaReached", "You've reached your post quota.")
+        );
         return;
       }
     }
@@ -381,7 +386,7 @@ export default function CreatePost() {
     if (selectedPlatforms.includes("tiktok")) {
       const tiktokError = platformSettings.validateTiktokSettings(hasVideo);
       if (tiktokError) {
-        showErrorToast("TikTok validation failed", tiktokError);
+        showErrorToast(t("toast.tiktokValidationFailed", "TikTok validation failed"), tiktokError);
         return;
       }
     }
@@ -389,7 +394,7 @@ export default function CreatePost() {
     if (selectedPlatforms.includes("pinterest")) {
       const pinterestError = platformSettings.validatePinterestSettings();
       if (pinterestError) {
-        showErrorToast("Pinterest validation failed", pinterestError);
+        showErrorToast(t("toast.pinterestValidationFailed", "Pinterest validation failed"), pinterestError);
         return;
       }
     }
@@ -483,8 +488,8 @@ export default function CreatePost() {
           const msg = error.message || "";
           if (msg.includes("POST_QUOTA_DAILY_EXCEEDED") || msg.includes("POST_QUOTA_MONTHLY_EXCEEDED")) {
             showErrorToast(
-              "Post limit reached",
-              msg.replace(/^.*POST_QUOTA_[A-Z_]+:\s*/i, "") || "You've reached your post quota."
+              t("toast.postLimitReached", "Post limit reached"),
+              msg.replace(/^.*POST_QUOTA_[A-Z_]+:\s*/i, "") || t("toast.postQuotaReached", "You've reached your post quota.")
             );
             return;
           }
@@ -530,12 +535,12 @@ export default function CreatePost() {
 
         // Optimistic publishing: Show success immediately, process in background
         toast({
-          title: "Publishing...",
+          title: t("toast.publishingTitle", "Publishing..."),
           description: (
             <div className="space-y-2">
-              <p>Your post is being published to {selectedAccountIds.length} account(s).</p>
+              <p>{t("toast.publishingDesc", "Your post is being published to {{count}} account(s).", { count: selectedAccountIds.length })}</p>
               <p className="text-xs text-muted-foreground">
-                Check the History page for real-time status updates.
+                {t("toast.checkHistory", "Check the History page for real-time status updates.")}
               </p>
             </div>
           ),
@@ -552,8 +557,8 @@ export default function CreatePost() {
           if (funcError) {
             console.error("Background publish error:", funcError);
             toast({
-              title: "Publishing issue",
-              description: "Some platforms may have failed. Check History for details.",
+              title: t("toast.publishingIssueTitle", "Publishing issue"),
+              description: t("toast.publishingIssueDesc", "Some platforms may have failed. Check History for details."),
               variant: "destructive",
               duration: 8000,
             });
@@ -565,10 +570,10 @@ export default function CreatePost() {
             const successfulPosts = result.platform_results.filter((p: any) => p.status === "success" && p.platform_post_url);
             if (successfulPosts.length > 0) {
               toast({
-                title: "Post published!",
+                title: t("toast.postPublishedTitle", "Post published!"),
                 description: (
                   <div className="space-y-2">
-                    <p>Your post has been published successfully.</p>
+                    <p>{t("toast.postPublishedDesc", "Your post has been published successfully.")}</p>
                     <div className="flex flex-wrap gap-2 mt-2">
                       {successfulPosts.map((p: any) => (
                         <a
@@ -583,7 +588,7 @@ export default function CreatePost() {
                             openExternalPostUrl(p.platform_post_url);
                           }}
                         >
-                          View on {p.platform.charAt(0).toUpperCase() + p.platform.slice(1)}
+                          {t("toast.viewOnPlatform", "View on {{platform}}", { platform: p.platform.charAt(0).toUpperCase() + p.platform.slice(1) })}
                         </a>
                       ))}
                     </div>
@@ -597,7 +602,10 @@ export default function CreatePost() {
           // Show TikTok inbox reminder
           if (selectedPlatforms.includes("tiktok")) {
             setTimeout(() => {
-              showSuccessToast("Check your TikTok inbox", "TikTok posts are sent to your inbox. Open the TikTok app to complete posting.");
+              showSuccessToast(
+                t("toast.tiktokInboxTitle", "Check your TikTok inbox"),
+                t("toast.tiktokInboxDesc", "TikTok posts are sent to your inbox. Open the TikTok app to complete posting.")
+              );
             }, 1000);
           }
         }).catch((error) => {
@@ -606,8 +614,16 @@ export default function CreatePost() {
           clearPublishingPost(post.id);
         });
       } else {
-        const actionLabel = editPostId ? "Post updated & scheduled!" : "Post scheduled!";
-        showSuccessToast(actionLabel, `Your post will be published on ${scheduledAt.toLocaleDateString()} at ${scheduledAt.toLocaleTimeString()}.`);
+        const actionLabel = editPostId
+          ? t("toast.postUpdatedScheduled", "Post updated & scheduled!")
+          : t("toast.postScheduled", "Post scheduled!");
+        showSuccessToast(
+          actionLabel,
+          t("toast.scheduledDesc", "Your post will be published on {{date}} at {{time}}.", {
+            date: scheduledAt.toLocaleDateString(),
+            time: scheduledAt.toLocaleTimeString(),
+          })
+        );
       }
 
       // Reset form immediately for optimistic UX
@@ -616,7 +632,7 @@ export default function CreatePost() {
 
     } catch (error) {
       console.error("Post error:", error);
-      showErrorToast("Post failed", error);
+      showErrorToast(t("toast.postFailed", "Post failed"), error);
     } finally {
       setIsPosting(false);
     }
@@ -649,10 +665,10 @@ export default function CreatePost() {
                   <Icon3D icon={ImagePlus} variant="violet" size="sm" />
                   <div>
                     <Label className="text-base font-semibold leading-tight bg-gradient-to-r from-violet-500 via-fuchsia-500 to-pink-500 bg-clip-text text-transparent">
-                      Upload Media
+                      {t("content.uploadMedia", "Upload Media")}
                     </Label>
                     <p className="text-xs text-muted-foreground mt-0.5">
-                      Add images, videos or GIFs for your post
+                      {t("content.uploadMediaSubtitle", "Add images, videos or GIFs for your post")}
                     </p>
                   </div>
                 </div>
@@ -718,10 +734,10 @@ export default function CreatePost() {
                   <Icon3D icon={Type} variant="sky" size="sm" />
                   <div>
                     <Label className="text-base font-semibold leading-tight bg-gradient-to-r from-sky-500 via-violet-500 to-pink-500 bg-clip-text text-transparent">
-                      Caption & Details
+                      {t("content.captionDetails", "Caption & Details")}
                     </Label>
                     <p className="text-xs text-muted-foreground mt-0.5">
-                      Write your post caption
+                      {t("content.captionDetailsSubtitle", "Write your post caption")}
                     </p>
                   </div>
                 </div>
@@ -743,7 +759,7 @@ export default function CreatePost() {
             {/* Card Footer */}
             <div className="px-5 sm:px-6 py-4 border-t border-border flex justify-end" style={{ background: 'linear-gradient(to top, hsl(var(--muted) / 0.5), hsl(var(--muted) / 0.2))' }}>
               <Button onClick={() => setCurrentStep(2)} className="gap-2 shadow-md hover:shadow-lg transition-shadow">
-                Next: Select Platforms
+                {t("actions.nextSelectPlatforms", "Next: Select Platforms")}
                 <ArrowRight className="w-4 h-4" />
               </Button>
             </div>
@@ -827,7 +843,7 @@ export default function CreatePost() {
                       } : undefined}
                       username={connectedAccounts.find(a => a.platform === "tiktok" && selectedAccountIds.includes(a.id))?.platform_username || "your_account"}
                       avatarUrl={connectedAccounts.find(a => a.platform === "tiktok" && selectedAccountIds.includes(a.id))?.avatar_url || undefined}
-                      soundName={platformSettings.tiktokTitle || "Original sound"}
+                      soundName={platformSettings.tiktokTitle || t("preview.originalSound", "Original sound")}
                     />
                   </div>
                 )}
@@ -837,10 +853,10 @@ export default function CreatePost() {
             {/* Card Footer */}
             <div className="px-5 sm:px-6 py-4 border-t border-border flex justify-between" style={{ background: 'linear-gradient(to top, hsl(var(--muted) / 0.5), hsl(var(--muted) / 0.2))' }}>
               <Button variant="outline" onClick={() => setCurrentStep(1)} className="gap-2 shadow-sm hover:shadow-md transition-shadow">
-                Back
+                {t("common:back", "Back")}
               </Button>
               <Button onClick={() => setCurrentStep(3)} className="gap-2 shadow-md hover:shadow-lg transition-shadow">
-                Next: Review & Schedule
+                {t("actions.nextReviewSchedule", "Next: Review & Schedule")}
                 <ArrowRight className="w-4 h-4" />
               </Button>
             </div>
@@ -883,7 +899,7 @@ export default function CreatePost() {
                   photographerUrl: f.photographerUrl,
                   unsplashUrl: f.unsplashUrl,
                 }))}
-                username={profile?.full_name || connectedAccounts[0]?.platform_username || "Your Account"}
+                username={profile?.full_name || connectedAccounts[0]?.platform_username || t("actions.defaultAccount", "Your Account")}
                 platformIdentities={previewIdentitiesByPlatform}
                 previewOpen={previewOpen}
                 setPreviewOpen={setPreviewOpen}

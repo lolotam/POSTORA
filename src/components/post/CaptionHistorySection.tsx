@@ -18,12 +18,14 @@ import { BookMarked, ChevronDown, Check, Pencil, Copy, Trash2, X } from "lucide-
 import { useCaptionHistory, type CaptionHistoryItem } from "@/hooks/useCaptionHistory";
 import { toast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
+import { useTranslation } from "react-i18next";
 
 interface CaptionHistorySectionProps {
   onUseCaption: (caption: string) => void;
 }
 
 export function CaptionHistorySection({ onUseCaption }: CaptionHistorySectionProps) {
+  const { t } = useTranslation("post");
   const { history, isLoading, update, remove } = useCaptionHistory();
   const [open, setOpen] = useState(true);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -48,7 +50,10 @@ export function CaptionHistorySection({ onUseCaption }: CaptionHistorySectionPro
 
   const handleCopy = async (text: string) => {
     await navigator.clipboard.writeText(text);
-    toast({ title: "Copied", description: "Caption copied to clipboard." });
+    toast({
+      title: t("captionHistory.copiedTitle", "Copied"),
+      description: t("captionHistory.copiedDesc", "Caption copied to clipboard."),
+    });
   };
 
   const handleDelete = async () => {
@@ -74,7 +79,7 @@ export function CaptionHistorySection({ onUseCaption }: CaptionHistorySectionPro
           >
             <Label className="text-sm flex items-center gap-2 cursor-pointer">
               <BookMarked className="w-4 h-4 text-primary" />
-              Caption History {history.length > 0 && `(${history.length})`}
+              {t("captionHistory.title", "Caption History")} {history.length > 0 && `(${history.length})`}
             </Label>
             <ChevronDown
               className={cn(
@@ -87,7 +92,7 @@ export function CaptionHistorySection({ onUseCaption }: CaptionHistorySectionPro
         <CollapsibleContent className="space-y-2">
           {history.length === 0 ? (
             <p className="text-xs text-muted-foreground text-center py-4">
-              Saved captions will appear here.
+              {t("captionHistory.empty", "Saved captions will appear here.")}
             </p>
           ) : (
             <div className="space-y-2 max-h-[280px] overflow-y-auto pr-1">
@@ -129,10 +134,10 @@ export function CaptionHistorySection({ onUseCaption }: CaptionHistorySectionPro
                       />
                       <div className="flex gap-2 justify-end">
                         <Button size="sm" variant="ghost" onClick={cancelEdit}>
-                          <X className="w-3 h-3 mr-1" /> Cancel
+                          <X className="w-3 h-3 mr-1" /> {t("common:cancel", "Cancel")}
                         </Button>
                         <Button size="sm" onClick={saveEdit} disabled={!editText.trim()}>
-                          <Check className="w-3 h-3 mr-1" /> Save
+                          <Check className="w-3 h-3 mr-1" /> {t("common:save", "Save")}
                         </Button>
                       </div>
                     </div>
@@ -151,7 +156,7 @@ export function CaptionHistorySection({ onUseCaption }: CaptionHistorySectionPro
                           className="h-7 text-xs"
                           onClick={() => onUseCaption(item.caption)}
                         >
-                          <Check className="w-3 h-3 mr-1" /> Use
+                          <Check className="w-3 h-3 mr-1" /> {t("captionHistory.use", "Use")}
                         </Button>
                         <Button
                           size="sm"
@@ -159,7 +164,7 @@ export function CaptionHistorySection({ onUseCaption }: CaptionHistorySectionPro
                           className="h-7 text-xs"
                           onClick={() => startEdit(item)}
                         >
-                          <Pencil className="w-3 h-3 mr-1" /> Edit
+                          <Pencil className="w-3 h-3 mr-1" /> {t("captionHistory.edit", "Edit")}
                         </Button>
                         <Button
                           size="sm"
@@ -167,7 +172,7 @@ export function CaptionHistorySection({ onUseCaption }: CaptionHistorySectionPro
                           className="h-7 text-xs"
                           onClick={() => handleCopy(item.caption)}
                         >
-                          <Copy className="w-3 h-3 mr-1" /> Copy
+                          <Copy className="w-3 h-3 mr-1" /> {t("captionHistory.copy", "Copy")}
                         </Button>
                         <Button
                           size="sm"
@@ -175,7 +180,7 @@ export function CaptionHistorySection({ onUseCaption }: CaptionHistorySectionPro
                           className="h-7 text-xs text-destructive hover:text-destructive"
                           onClick={() => setConfirmDeleteId(item.id)}
                         >
-                          <Trash2 className="w-3 h-3 mr-1" /> Delete
+                          <Trash2 className="w-3 h-3 mr-1" /> {t("common:delete", "Delete")}
                         </Button>
                       </div>
                     </>
@@ -193,14 +198,14 @@ export function CaptionHistorySection({ onUseCaption }: CaptionHistorySectionPro
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete saved caption?</AlertDialogTitle>
+            <AlertDialogTitle>{t("captionHistory.deleteTitle", "Delete saved caption?")}</AlertDialogTitle>
             <AlertDialogDescription>
-              This will permanently remove the caption from your history. This action cannot be undone.
+              {t("captionHistory.deleteDesc", "This will permanently remove the caption from your history. This action cannot be undone.")}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={handleDelete}>Delete</AlertDialogAction>
+            <AlertDialogCancel>{t("common:cancel", "Cancel")}</AlertDialogCancel>
+            <AlertDialogAction onClick={handleDelete}>{t("common:delete", "Delete")}</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

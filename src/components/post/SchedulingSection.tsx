@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { ChevronDown, Clock } from "lucide-react";
@@ -31,6 +32,8 @@ export function SchedulingSection({
   setScheduleTimezone,
   selectedPlatforms,
 }: SchedulingSectionProps) {
+  const { t } = useTranslation("post");
+
   return (
     <Collapsible open={isOpen} onOpenChange={onOpenChange}>
       <GradientRingCard variant="amber" hoverLift={false} ringIntensity="subtle" padded={false}>
@@ -39,9 +42,11 @@ export function SchedulingSection({
             <Icon3D icon={Clock} variant="amber" size="sm" />
             <div className="text-left">
               <h3 className="font-semibold leading-tight bg-clip-text text-transparent bg-gradient-to-r from-amber-500 via-orange-500 to-rose-500">
-                Scheduling & auto-poster
+                {t("scheduling.title", "Scheduling & auto-poster")}
               </h3>
-              <p className="text-xs text-muted-foreground mt-0.5">Schedule posts to publish at specific times</p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                {t("scheduling.subtitle", "Schedule posts to publish at specific times")}
+              </p>
             </div>
           </div>
           <ChevronDown className={cn("w-5 h-5 text-amber-500 transition-transform", isOpen && "rotate-180")} />
@@ -56,7 +61,7 @@ export function SchedulingSection({
                 onCheckedChange={(checked) => setScheduleEnabled(!!checked)}
               />
               <label htmlFor="schedule" className="text-sm cursor-pointer">
-                Enable scheduled posting
+                {t("scheduling.enable", "Enable scheduled posting")}
               </label>
             </div>
 

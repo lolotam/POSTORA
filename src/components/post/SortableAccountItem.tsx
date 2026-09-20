@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Platform } from "@/lib/types";
 import { useSortable } from "@dnd-kit/sortable";
@@ -35,6 +36,7 @@ export function SortableAccountItem({
   isTokenExpired = false,
   onToggle,
 }: SortableAccountItemProps) {
+  const { t } = useTranslation("post");
   const [imageError, setImageError] = useState(false);
   
   const {
@@ -91,7 +93,7 @@ export function SortableAccountItem({
               {!showFallback ? (
                 <img
                   src={avatarUrl}
-                  alt={username || "Account avatar"}
+                  alt={username || t("accountItem.avatarAlt", "Account avatar")}
                   className={cn("w-full h-full object-cover", isTokenExpired && "grayscale")}
                   onError={() => setImageError(true)}
                 />
@@ -102,15 +104,17 @@ export function SortableAccountItem({
 
             <div className="flex-1 min-w-0" onClick={isTokenExpired ? undefined : onToggle}>
               <p className={cn("text-sm font-medium truncate", isTokenExpired && "text-muted-foreground")}>
-                {username || "Unknown account"}
+                {username || t("accountItem.unknownAccount", "Unknown account")}
               </p>
               {isTokenExpired ? (
                 <p className="text-xs text-destructive font-medium flex items-center gap-1">
                   <ShieldAlert className="w-3 h-3" />
-                  Token expired — reconnect
+                  {t("accountItem.tokenExpired", "Token expired — reconnect")}
                 </p>
               ) : (
-                <p className="text-xs text-muted-foreground">{maxChars.toLocaleString()} chars max</p>
+                <p className="text-xs text-muted-foreground">
+                  {t("accountItem.charsMax", "{{count}} chars max", { count: maxChars })}
+                </p>
               )}
             </div>
 
@@ -125,7 +129,7 @@ export function SortableAccountItem({
         </TooltipTrigger>
         {isTokenExpired && (
           <TooltipContent side="top" className="max-w-xs">
-            <p>This account's token has expired. Go to <strong>Profiles</strong> to reconnect it before posting.</p>
+            <p>{t("accountItem.tokenExpiredTooltip", "This account's token has expired. Go to Profiles to reconnect it before posting.")}</p>
           </TooltipContent>
         )}
       </Tooltip>

@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { Platform } from "@/lib/types";
 import { PlatformIcon, getPlatformName } from "@/components/PlatformIcon";
 import { cn } from "@/lib/utils";
@@ -29,6 +30,7 @@ const platformLimits: Record<Platform, number> = {
 };
 
 export function CharacterCounter({ caption, selectedPlatforms }: CharacterCounterProps) {
+  const { t } = useTranslation("post");
   const length = caption.length;
 
   if (selectedPlatforms.length === 0) {
@@ -78,15 +80,24 @@ export function CharacterCounter({ caption, selectedPlatforms }: CharacterCounte
               <TooltipContent>
                 {isOverLimit ? (
                   <p className="text-destructive font-medium">
-                    {overBy.toLocaleString()} characters over the {getPlatformName(platform)} limit!
+                    {t("charCounter.overLimit", "{{count}} characters over the {{platform}} limit!", {
+                      count: overBy,
+                      platform: getPlatformName(platform),
+                    })}
                   </p>
                 ) : isNearLimit ? (
                   <p className="text-amber-600">
-                    Approaching {getPlatformName(platform)} character limit ({Math.round(percentage)}%)
+                    {t("charCounter.nearLimit", "Approaching {{platform}} character limit ({{percent}}%)", {
+                      platform: getPlatformName(platform),
+                      percent: Math.round(percentage),
+                    })}
                   </p>
                 ) : (
                   <p>
-                    {(limit - length).toLocaleString()} characters remaining for {getPlatformName(platform)}
+                    {t("charCounter.remaining", "{{count}} characters remaining for {{platform}}", {
+                      count: limit - length,
+                      platform: getPlatformName(platform),
+                    })}
                   </p>
                 )}
               </TooltipContent>

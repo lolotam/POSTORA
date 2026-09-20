@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
@@ -81,6 +82,7 @@ export function AccountSelectionSidebar({
   platformEligibility = [],
   mediaAnalysis,
 }: AccountSelectionSidebarProps) {
+  const { t } = useTranslation("post");
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
@@ -110,7 +112,7 @@ export function AccountSelectionSidebar({
         <div className="flex items-center gap-3">
           <Icon3D icon={Users} variant="emerald" size="sm" />
           <Label className="text-base font-semibold leading-tight bg-gradient-to-r from-emerald-500 via-cyan-500 to-sky-500 bg-clip-text text-transparent">
-            Post visibility
+            {t("accountSidebar.visibility", "Post visibility")}
           </Label>
         </div>
         {allPlatforms.length > 1 && (
@@ -118,11 +120,13 @@ export function AccountSelectionSidebar({
             <DropdownMenuTrigger asChild>
               <Button variant="outline" size="sm" className="h-8 gap-2 bg-card/40 backdrop-blur-sm border-border/40 hover:border-emerald-400/60 hover:bg-card/60 transition-all">
                 <Filter className="w-3.5 h-3.5" />
-                {platformFilter.length === 0 ? "All platforms" : `${platformFilter.length} platform${platformFilter.length > 1 ? 's' : ''}`}
+                {platformFilter.length === 0
+                  ? t("accountSidebar.allPlatforms", "All platforms")
+                  : t("accountSidebar.platformsCount", "{{count}} platform(s)", { count: platformFilter.length })}
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-48">
-              <DropdownMenuLabel>Filter by platform</DropdownMenuLabel>
+              <DropdownMenuLabel>{t("accountSidebar.filterByPlatform", "Filter by platform")}</DropdownMenuLabel>
               <DropdownMenuSeparator />
               {allPlatforms.map(platform => (
                 <DropdownMenuCheckboxItem
@@ -138,7 +142,7 @@ export function AccountSelectionSidebar({
                 <>
                   <DropdownMenuSeparator />
                   <DropdownMenuCheckboxItem checked={false} onCheckedChange={onClearFilter}>
-                    Clear filter
+                    {t("accountSidebar.clearFilter", "Clear filter")}
                   </DropdownMenuCheckboxItem>
                 </>
               )}
@@ -156,13 +160,13 @@ export function AccountSelectionSidebar({
           <div className="inline-flex flex-col items-center gap-3">
             <Icon3D icon={Users} variant="emerald" size="md" />
             <h4 className="font-semibold text-sm bg-clip-text text-transparent bg-gradient-to-r from-emerald-500 via-cyan-500 to-sky-500">
-              No social accounts connected
+              {t("accountSidebar.noAccountsTitle", "No social accounts connected")}
             </h4>
-            <p className="text-xs text-muted-foreground max-w-xs">Connect your social media accounts to start publishing.</p>
+            <p className="text-xs text-muted-foreground max-w-xs">{t("accountSidebar.noAccountsDesc", "Connect your social media accounts to start publishing.")}</p>
             <Button size="sm" asChild className="bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500 text-white border-0 shadow-md shadow-emerald-500/30 hover:shadow-lg hover:shadow-emerald-500/50 hover:opacity-95 transition-all">
               <a href="/profiles">
                 <Plus className="w-4 h-4 mr-2" />
-                Connect Accounts
+                {t("accountSidebar.connectAccounts", "Connect Accounts")}
               </a>
             </Button>
           </div>
@@ -194,7 +198,7 @@ export function AccountSelectionSidebar({
                       className="h-6 text-xs px-2 hover:bg-emerald-500/10 hover:text-emerald-700 dark:hover:text-emerald-300"
                       onClick={() => onSelectAllPlatform(platform as Platform)}
                     >
-                      {allSelected ? "Deselect All" : "Select All"}
+                      {allSelected ? t("accountSidebar.deselectAll", "Deselect All") : t("accountSidebar.selectAll", "Select All")}
                     </Button>
                   )}
                 </div>
@@ -232,7 +236,7 @@ export function AccountSelectionSidebar({
               <div className="flex items-center gap-2 mb-2">
                 <Icon3D icon={Ban} variant="amber" size="sm" className="!h-7 !w-7" />
                 <p className="text-xs font-medium bg-clip-text text-transparent bg-gradient-to-r from-amber-500 via-orange-500 to-rose-500">
-                  Unavailable for current media
+                  {t("accountSidebar.unavailableMedia", "Unavailable for current media")}
                 </p>
               </div>
               <div className="space-y-1.5">
@@ -260,7 +264,7 @@ export function AccountSelectionSidebar({
           <GradientRingCard variant="rose" hoverLift={false} ringIntensity="subtle" padded={false} innerClassName="p-3">
             <div className="flex items-center gap-2 text-rose-700 dark:text-rose-300 text-sm font-medium">
               <AlertCircle className="w-4 h-4 shrink-0" />
-              Select at least one account
+              {t("accountSidebar.selectAtLeastOne", "Select at least one account")}
             </div>
           </GradientRingCard>
         </div>
