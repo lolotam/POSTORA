@@ -34,6 +34,7 @@ DECLARE
   v_owner_user_id uuid;
   v_principal_id uuid;
   v_principal_name text;
+  v_existing_owner_id uuid;
 BEGIN
   -- The invariants below are checked on EVERY mint, not only the first.
   -- Returning early on an existing binding skipped them, and a shared workspace
@@ -79,12 +80,23 @@ BEGIN
   FROM public.profiles p WHERE p.id = v_owner_user_id;
   v_principal_name := COALESCE(v_principal_name, 'workspace ' || p_workspace_id::text);
 
-  -- Now that the account and its owner have been validated, an existing binding
-  -- wins and is left exactly as it stands. Rewriting it would re-point a
-  -- workspace at a different owner, which is the one thing this function must
-  -- never do (AGENTS.md rule 5).
-  IF EXISTS (SELECT 1 FROM public.partner_provisioned_workspaces
-             WHERE workspace_id = p_workspace_id) THEN
+  -- A workspace resolves to exactly ONE owner, but it can hold accounts owned by
+  -- several people. So an existing binding is not simply "already done": if it
+  -- names a different owner than this account's, entitlement would authorise the
+  -- key against owner A's flags and overrides while owner-scoped automation read
+  -- and wrote owner B's rows. Refuse, and do not rewrite the binding -- re-pointing
+  -- a workspace at a different owner is the one thing this must never do
+  -- (AGENTS.md rule 5).
+  SELECT owner_user_id INTO v_existing_owner_id
+  FROM public.partner_provisioned_workspaces
+  WHERE workspace_id = p_workspace_id;
+
+  IF v_existing_owner_id IS NOT NULL THEN
+    IF v_existing_owner_id <> v_owner_user_id THEN
+      RAISE EXCEPTION 'cannot provision workspace %: it is bound to owner %, but account % is owned by %',
+        p_workspace_id, v_existing_owner_id, p_social_account_id, v_owner_user_id
+        USING ERRCODE = 'check_violation';
+    END IF;
     RETURN;
   END IF;
 
@@ -97,6 +109,19 @@ BEGIN
   VALUES (p_workspace_id, v_principal_id, v_owner_user_id,
           COALESCE(p_environment, 'production'))
   ON CONFLICT (workspace_id) DO NOTHING;
+
+  -- A concurrent first mint may have won the race, and DO NOTHING is silent
+  -- about it. Re-read: if the row that landed names a different owner, this call
+  -- must fail rather than return as though it had provisioned what it wanted.
+  SELECT owner_user_id INTO v_existing_owner_id
+  FROM public.partner_provisioned_workspaces
+  WHERE workspace_id = p_workspace_id;
+
+  IF v_existing_owner_id IS DISTINCT FROM v_owner_user_id THEN
+    RAISE EXCEPTION 'cannot provision workspace %: it was concurrently bound to owner %, not %',
+      p_workspace_id, v_existing_owner_id, v_owner_user_id
+      USING ERRCODE = 'check_violation';
+  END IF;
 END;
 $function$;
 
@@ -119,17 +144,27 @@ DO $backfill$
 DECLARE
   r RECORD;
 BEGIN
+  -- EVERY live key on the workspace is validated, not just the oldest. Binding a
+  -- workspace unlocks the entitlement check for all of its keys at once, so
+  -- provisioning on the strength of one safe key would let a second key whose
+  -- owner fails the guard straight through it. A workspace qualifies only when
+  -- all of its live keys resolve to ONE owner that is itself single-workspace.
   FOR r IN
-    SELECT DISTINCT ON (k.workspace_id)
-           k.workspace_id, k.social_account_id, k.environment
+    SELECT k.workspace_id,
+           min(k.social_account_id::text)::uuid AS social_account_id,
+           min(k.environment) AS environment
     FROM public.partner_api_keys k
+    JOIN public.social_accounts a
+      ON a.id = k.social_account_id
+     AND a.workspace_id = k.workspace_id
     WHERE k.social_account_id IS NOT NULL
       AND k.revoked_at IS NULL
       AND NOT EXISTS (
         SELECT 1 FROM public.partner_provisioned_workspaces w
         WHERE w.workspace_id = k.workspace_id
       )
-    ORDER BY k.workspace_id, k.created_at
+    GROUP BY k.workspace_id
+    HAVING count(DISTINCT a.user_id) = 1
   LOOP
     -- One unownable account must not abort the whole backfill; it is reported
     -- and the remaining workspaces still get their bindings.
