@@ -41,16 +41,35 @@ BEGIN
     RETURN;
   END IF;
 
+  -- The workspace predicate is structural, not advisory. Without it the two
+  -- arguments are independent and a caller could bind any workspace to the owner
+  -- of any account it can name; ON CONFLICT DO NOTHING would then make that
+  -- binding permanent and block the legitimate one from ever repairing it.
   SELECT user_id INTO v_owner_user_id
   FROM public.social_accounts
-  WHERE id = p_social_account_id;
+  WHERE id = p_social_account_id
+    AND workspace_id = p_workspace_id;
 
   -- Refusing here is the point. Returning quietly would mint exactly the key
   -- this migration exists to stop existing: one that authenticates and then
   -- 403s on every gated endpoint with a message blaming a feature flag.
   IF v_owner_user_id IS NULL THEN
-    RAISE EXCEPTION 'cannot provision workspace %: social account % has no owner',
+    RAISE EXCEPTION 'cannot provision workspace %: account % is not an owned account of it',
       p_workspace_id, p_social_account_id
+      USING ERRCODE = 'check_violation';
+  END IF;
+
+  -- An owner whose accounts span several workspaces must not be provisioned
+  -- automatically. Some owner-scoped tables reached by entitlement-gated
+  -- endpoints -- the auto-reply rules among them -- are keyed on user_id alone,
+  -- so binding a multi-workspace identity would let a key bound to ONE workspace
+  -- reach rules governing that same person's accounts in another. Refusing makes
+  -- that a deliberate decision with a dedicated owner, instead of a silent
+  -- consequence of minting a key.
+  IF (SELECT count(DISTINCT workspace_id) FROM public.social_accounts
+      WHERE user_id = v_owner_user_id) > 1 THEN
+    RAISE EXCEPTION 'cannot provision workspace %: owner % holds accounts in several workspaces and owner-scoped rules would be shared across them',
+      p_workspace_id, v_owner_user_id
       USING ERRCODE = 'check_violation';
   END IF;
 
@@ -71,7 +90,13 @@ BEGIN
 END;
 $function$;
 
-REVOKE ALL ON FUNCTION public.partner_ensure_provisioned_workspace(uuid, uuid, text) FROM PUBLIC;
+-- PUBLIC alone is not enough on this stack: default privileges grant EXECUTE
+-- directly to anon and authenticated, so a SECURITY DEFINER function revoked
+-- only from PUBLIC stays callable through PostgREST by any API client. This
+-- helper performs no caller authorization, so that would be a door onto it.
+-- It is reached only from create_partner_key, which does its own authorization.
+REVOKE ALL ON FUNCTION public.partner_ensure_provisioned_workspace(uuid, uuid, text)
+  FROM PUBLIC, anon, authenticated;
 
 -- 2. Backfill every workspace holding a LIVE key but no binding. Runs before the
 --    key-minting change so the two cannot disagree.

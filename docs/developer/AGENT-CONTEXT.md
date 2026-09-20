@@ -146,6 +146,7 @@ Derived from `V1_ERROR_POLICY`. The retry verdict is the `retryable` flag, never
 | `resource_not_found` | 404 | no | Resource not found |
 | `sync_already_running` | 409 | yes | History sync is already running; poll history-sync for progress |
 | `template_not_approved` | 422 | no | Template rejected by Meta |
+| `media_unavailable` | 503 | yes | The media could not be retrieved right now; retry shortly |
 | `temporarily_unavailable` | 503 | no | This action is temporarily suspended; see the Partner API changelog. Retrying will not succeed until it is re-enabled |
 | `tool_execution_failed` | 502 | yes | The connector request could not be completed |
 | `tool_execution_timeout` | 504 | yes | The connector request timed out |

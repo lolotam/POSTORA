@@ -56,6 +56,8 @@ const CONVERSATION_COLUMNS =
 const MESSAGE_COLUMNS =
   "id, social_account_id, conversation_id, message_id, message_text, " +
   "message_type, direction, status, timestamp, media_type, media_metadata";
+// `direction` is already in that list and presentMedia depends on it: the media
+// object is inbound-only, matching the download route.
 
 // deno-lint-ignore no-explicit-any
 function presentConversation(row: any): Record<string, unknown> {
@@ -104,6 +106,11 @@ function presentMessage(row: any, conversationUuid: string | null): Record<strin
 // deno-lint-ignore no-explicit-any
 function presentMedia(row: any): Record<string, unknown> | null {
   if (!row.media_type) return null;
+  // Inbound only, to stay consistent with the endpoint this object points at.
+  // GET /v1/messages/{id}/media serves inbound rows and 404s on the rest, so
+  // describing an outbound echo's attachment here would promise a downloadable
+  // sub-resource that cannot be fetched.
+  if (row.direction !== "inbound") return null;
   const meta = row.media_metadata && typeof row.media_metadata === "object" &&
       !Array.isArray(row.media_metadata)
     ? row.media_metadata as Record<string, unknown>

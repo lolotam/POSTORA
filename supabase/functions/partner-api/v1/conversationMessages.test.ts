@@ -120,3 +120,20 @@ Deno.test("the storage path behind a media message is never published", async ()
   assert(!text.includes("media_url"), text);
   assert(!text.includes("owner/whatsapp/inbound/"), text);
 });
+
+
+Deno.test("an outbound message's attachment is not described as a fetchable sub-resource", async () => {
+  // GET /v1/messages/{id}/media serves inbound rows only, so advertising media
+  // here for an owner-sent echo promises a download that answers 404.
+  const f = fixture();
+  f.rows.whatsapp_messages.push({
+    id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    social_account_id: ACCOUNT_ID, conversation_id: KEY,
+    message_type: "image", direction: "outbound", status: "sent",
+    timestamp: "2026-09-10T00:00:00Z", media_type: "image",
+    media_metadata: { mime_type: "image/jpeg" },
+  });
+  const response = await handleRequest(request(`conversations/conv_${CONV}/messages`), () => f.admin);
+  const body = await response.json();
+  assertEquals(body.data[0].media, null);
+});
