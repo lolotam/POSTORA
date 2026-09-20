@@ -3819,6 +3819,7 @@ components:
 
             The bytes are NOT here and no location is published: fetch them with
             `GET /v1/messages/{id}/media`.
+          required: [type, mime_type, file_name, size_bytes]
           properties:
             type:
               type: string

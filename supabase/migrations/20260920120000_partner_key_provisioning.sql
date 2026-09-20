@@ -35,11 +35,12 @@ DECLARE
   v_principal_id uuid;
   v_principal_name text;
 BEGIN
-  -- An existing binding wins, whatever it says. Nothing below runs.
-  IF EXISTS (SELECT 1 FROM public.partner_provisioned_workspaces
-             WHERE workspace_id = p_workspace_id) THEN
-    RETURN;
-  END IF;
+  -- The invariants below are checked on EVERY mint, not only the first.
+  -- Returning early on an existing binding skipped them, and a shared workspace
+  -- makes that reachable: once owner A has established the binding, an account
+  -- owned by B can be connected to the same workspace, and minting a key for
+  -- B's account would then pass unvalidated. The binding row itself is still
+  -- never rewritten -- only the checks run again.
 
   -- The workspace predicate is structural, not advisory. Without it the two
   -- arguments are independent and a caller could bind any workspace to the owner
@@ -77,6 +78,15 @@ BEGIN
   INTO v_principal_name
   FROM public.profiles p WHERE p.id = v_owner_user_id;
   v_principal_name := COALESCE(v_principal_name, 'workspace ' || p_workspace_id::text);
+
+  -- Now that the account and its owner have been validated, an existing binding
+  -- wins and is left exactly as it stands. Rewriting it would re-point a
+  -- workspace at a different owner, which is the one thing this function must
+  -- never do (AGENTS.md rule 5).
+  IF EXISTS (SELECT 1 FROM public.partner_provisioned_workspaces
+             WHERE workspace_id = p_workspace_id) THEN
+    RETURN;
+  END IF;
 
   INSERT INTO public.partner_principals (id, name, is_active)
   VALUES (gen_random_uuid(), v_principal_name, true)
