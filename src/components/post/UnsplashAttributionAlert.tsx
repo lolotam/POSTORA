@@ -1,4 +1,5 @@
 import { AlertCircle, Camera, CheckCircle2, ExternalLink } from "lucide-react";
+import { useTranslation, Trans } from "react-i18next";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { cn } from "@/lib/utils";
 import { UnsplashAttributionData } from "@/lib/unsplashAttribution";
@@ -18,6 +19,8 @@ export function UnsplashAttributionAlert({
   hasValidAttribution,
   className,
 }: UnsplashAttributionAlertProps) {
+  const { t } = useTranslation("postmedia");
+
   if (!attribution) return null;
 
   return (
@@ -44,33 +47,51 @@ export function UnsplashAttributionAlert({
               ? "text-green-800 dark:text-green-200" 
               : "text-orange-800 dark:text-orange-200"
           )}>
-            {hasValidAttribution ? "Attribution Added" : "Attribution Required"}
+            {hasValidAttribution ? t("unsplashAlert.titleAdded", "Attribution Added") : t("unsplashAlert.titleRequired", "Attribution Required")}
           </AlertTitle>
           <AlertDescription className="text-sm">
             {hasValidAttribution ? (
               <span className="text-green-700 dark:text-green-300">
-                Your caption includes proper credit to{" "}
-                <a
-                  href={attribution.photographerProfileUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="font-medium underline hover:no-underline inline-flex items-center gap-1"
+                <Trans
+                  ns="postmedia"
+                  i18nKey="unsplashAlert.validCaption"
+                  values={{ name: attribution.photographerName }}
+                  components={{
+                    1: (
+                      <a
+                        href={attribution.photographerProfileUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="font-medium underline hover:no-underline inline-flex items-center gap-1"
+                      >
+                        {attribution.photographerName}
+                        <ExternalLink className="h-3 w-3" />
+                      </a>
+                    ),
+                  }}
                 >
-                  {attribution.photographerName}
-                  <ExternalLink className="h-3 w-3" />
-                </a>
-                {" "}on Unsplash.
+                  Your caption includes proper credit to{" "}
+                  <a
+                    href={attribution.photographerProfileUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="font-medium underline hover:no-underline inline-flex items-center gap-1"
+                  >
+                    {attribution.photographerName}
+                    <ExternalLink className="h-3 w-3" />
+                  </a>
+                  {" "}on Unsplash.
+                </Trans>
               </span>
             ) : (
               <div className="space-y-2">
                 <p className="text-orange-700 dark:text-orange-300">
-                  Using Unsplash images requires crediting the photographer in your post text.
-                  Please keep the attribution at the end of your caption.
+                  {t("unsplashAlert.requiredNotice", "Using Unsplash images requires crediting the photographer in your post text. Please keep the attribution at the end of your caption.")}
                 </p>
                 <div className="flex items-center gap-2 text-xs text-orange-600 dark:text-orange-400 bg-orange-100/50 dark:bg-orange-900/30 rounded-md px-2 py-1.5">
                   <Camera className="h-3.5 w-3.5 shrink-0" />
                   <span className="font-mono">
-                    Photo by {attribution.photographerName} on Unsplash
+                    {t("unsplashAlert.format", "Photo by {{name}} on Unsplash", { name: attribution.photographerName })}
                   </span>
                 </div>
               </div>

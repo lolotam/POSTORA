@@ -1,4 +1,5 @@
 import { useSortable } from "@dnd-kit/sortable";
+import { useTranslation } from "react-i18next";
 import { CSS } from "@dnd-kit/utilities";
 import { X, GripVertical, Palette, Image, Layers, HelpCircle } from "lucide-react";
 import {
@@ -31,33 +32,34 @@ interface DraggableReferenceImageProps {
   onTypeChange: (id: string, type: ReferenceType) => void;
 }
 
-export const referenceTypes = [
-  { 
-    value: "style" as ReferenceType, 
-    label: "Style", 
-    icon: Palette,
-    description: "Use for artistic style, colors, mood"
-  },
-  { 
-    value: "content" as ReferenceType, 
-    label: "Content", 
-    icon: Image,
-    description: "Use for subject matter, composition"
-  },
-  { 
-    value: "image-to-image" as ReferenceType, 
-    label: "Img2Img", 
-    icon: Layers,
-    description: "Transform this image with the prompt"
-  },
-];
-
 export function DraggableReferenceImage({
   image,
   index,
   onRemove,
   onTypeChange,
 }: DraggableReferenceImageProps) {
+  const { t } = useTranslation("postmedia");
+
+  const referenceTypes = [
+    { 
+      value: "style" as ReferenceType, 
+      label: t("referenceImage.typeStyle", "Style"), 
+      icon: Palette,
+      description: t("referenceImage.typeStyleDesc", "Use for artistic style, colors, mood")
+    },
+    { 
+      value: "content" as ReferenceType, 
+      label: t("referenceImage.typeContent", "Content"), 
+      icon: Image,
+      description: t("referenceImage.typeContentDesc", "Use for subject matter, composition")
+    },
+    { 
+      value: "image-to-image" as ReferenceType, 
+      label: t("referenceImage.typeImg2Img", "Img2Img"), 
+      icon: Layers,
+      description: t("referenceImage.typeImg2ImgDesc", "Transform this image with the prompt")
+    },
+  ];
   const {
     attributes,
     listeners,
@@ -102,7 +104,7 @@ export function DraggableReferenceImage({
               </div>
             </TooltipTrigger>
             <TooltipContent side="bottom">
-              <p>Priority {index + 1} - Images at top have more influence</p>
+              <p>{t("referenceImage.priorityTooltip", "Priority {{priority}} - Images at top have more influence", { priority: index + 1 })}</p>
             </TooltipContent>
           </Tooltip>
         </TooltipProvider>
@@ -110,7 +112,7 @@ export function DraggableReferenceImage({
         {/* Image */}
         <img
           src={image.url}
-          alt={`Reference ${index + 1}`}
+          alt={t("referenceImage.alt", "Reference {{index}}", { index: index + 1 })}
           className="w-full h-full object-cover"
           draggable={false}
         />

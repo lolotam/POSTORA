@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Clapperboard, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -46,8 +47,10 @@ type VideoModel = {
 export function VideoGenerator({
   onVideoGenerated,
   triggerClassName,
-  triggerLabel = "Create video with AI",
+  triggerLabel,
 }: VideoGeneratorProps) {
+  const { t } = useTranslation("postmedia");
+  const finalTriggerLabel = triggerLabel ?? t("videoGen.triggerLabel", "Create video with AI");
   const { toast } = useToast();
   const [open, setOpen] = useState(false);
   const [prompt, setPrompt] = useState("");
@@ -86,11 +89,11 @@ export function VideoGenerator({
   }, [spec]);
   const submit = async () => {
     if (!prompt.trim() || !modelId || !spec)
-      return toast({ title: "Add a prompt and choose a model", variant: "destructive" });
+      return toast({ title: t("videoGen.toastPromptAndModel", "Add a prompt and choose a model"), variant: "destructive" });
     const missing = missingRequiredParams(spec, params);
     if (missing.length)
       return toast({
-        title: "Missing model settings",
+        title: t("videoGen.toastMissingSettings", "Missing model settings"),
         description: missing.map(paramLabel).join(", "),
         variant: "destructive",
       });
@@ -109,10 +112,10 @@ export function VideoGenerator({
       });
       if (error || data?.error) throw error ?? new Error(data.error);
       setJobId(data.jobId);
-      toast({ title: "Video generation started" });
+      toast({ title: t("videoGen.toastStarted", "Video generation started") });
     } catch (e) {
       toast({
-        title: "Could not start video",
+        title: t("videoGen.toastFailed", "Could not start video"),
         description: e instanceof Error ? e.message : "Unknown error",
         variant: "destructive",
       });
@@ -125,28 +128,28 @@ export function VideoGenerator({
       <DialogTrigger asChild>
         <Button type="button" variant="outline" className={triggerClassName}>
           <Clapperboard className="mr-2 h-4 w-4" />
-          {triggerLabel}
+          {finalTriggerLabel}
         </Button>
       </DialogTrigger>
       <DialogContent className="max-h-[90vh] max-w-xl overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Generate video for this post</DialogTitle>
+          <DialogTitle>{t("videoGen.title", "Generate video for this post")}</DialogTitle>
         </DialogHeader>
         <div className="space-y-4">
           <div className="space-y-2">
-            <Label>Describe the video</Label>
+            <Label>{t("videoGen.describeVideo", "Describe the video")}</Label>
             <Textarea
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
               rows={4}
-              placeholder="A cinematic product reveal with soft studio light"
+              placeholder={t("videoGen.promptPlaceholder", "A cinematic product reveal with soft studio light")}
             />
           </div>
           <div className="space-y-2">
-            <Label>Model</Label>
+            <Label>{t("videoGen.model", "Model")}</Label>
             <Select value={modelId} onValueChange={setModelId}>
               <SelectTrigger>
-                <SelectValue placeholder="Select a video model" />
+                <SelectValue placeholder={t("videoGen.selectModelPlaceholder", "Select a video model")} />
               </SelectTrigger>
               <SelectContent>
                 {models.map((m) => (
@@ -161,7 +164,7 @@ export function VideoGenerator({
             <>
               <div className="grid gap-3 sm:grid-cols-2">
                 <div className="space-y-2">
-                  <Label>Camera motion</Label>
+                  <Label>{t("videoGen.cameraMotion", "Camera motion")}</Label>
                   <Select value={motion} onValueChange={setMotion}>
                     <SelectTrigger>
                       <SelectValue />
@@ -177,7 +180,7 @@ export function VideoGenerator({
                 </div>
                 {spec.aspectRatios.length > 0 && (
                   <div className="space-y-2">
-                    <Label>Aspect ratio</Label>
+                    <Label>{t("videoGen.aspectRatio", "Aspect ratio")}</Label>
                     <Select value={aspectRatio} onValueChange={setAspectRatio}>
                       <SelectTrigger>
                         <SelectValue />
@@ -195,7 +198,7 @@ export function VideoGenerator({
               </div>
               {(spec.durations || spec.durationRange) && (
                 <div className="space-y-2">
-                  <Label>Duration (seconds)</Label>
+                  <Label>{t("videoGen.duration", "Duration (seconds)")}</Label>
                   <Input
                     type="number"
                     value={duration}
@@ -223,8 +226,8 @@ export function VideoGenerator({
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="true">On</SelectItem>
-                          <SelectItem value="false">Off</SelectItem>
+                          <SelectItem value="true">{t("videoGen.on", "On")}</SelectItem>
+                          <SelectItem value="false">{t("videoGen.off", "Off")}</SelectItem>
                         </SelectContent>
                       </Select>
                     ) : parameter.options ? (
@@ -269,10 +272,12 @@ export function VideoGenerator({
             {submitting || job.isPolling ? (
               <>
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                {job.isPolling ? `Rendering… ${job.elapsedSeconds}s` : "Submitting…"}
+                {job.isPolling
+                  ? t("videoGen.renderingSeconds", "Rendering… {{seconds}}s", { seconds: job.elapsedSeconds })
+                  : t("videoGen.submitting", "Submitting…")}
               </>
             ) : (
-              "Generate video"
+              t("videoGen.generateBtn", "Generate video")
             )}
           </Button>
           {job.error && (
@@ -290,7 +295,7 @@ export function VideoGenerator({
                   setOpen(false);
                 }}
               >
-                Attach video to post
+                {t("videoGen.attachBtn", "Attach video to post")}
               </Button>
             </div>
           )}

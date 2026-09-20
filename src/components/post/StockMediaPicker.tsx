@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { useTranslation } from "react-i18next";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -181,6 +182,20 @@ const PER_PAGE = 24;
 // ============ Component ============
 
 export function StockMediaPicker({ open, onOpenChange, onSelect, photosOnly = false }: StockMediaPickerProps) {
+  const { t } = useTranslation("postmedia");
+
+  const getOrientationLabel = (value: string, label: string) => {
+    switch (value) {
+      case "all": return t("stockMedia.orientationAll", label);
+      case "landscape":
+      case "horizontal": return t("stockMedia.orientationLandscape", label);
+      case "portrait":
+      case "vertical": return t("stockMedia.orientationPortrait", label);
+      case "square": return t("stockMedia.orientationSquare", label);
+      default: return label;
+    }
+  };
+
   // Main tabs state - default to combined tabs
   const [mainTab, setMainTab] = useState<MainTab>(photosOnly ? "all-photos" : "all-gifs");
   const [klipySubTab, setKlipySubTab] = useState<KlipySubTab>("gifs");
@@ -638,13 +653,13 @@ export function StockMediaPicker({ open, onOpenChange, onSelect, photosOnly = fa
       setHasMore(prev => ({ ...prev, [`all-photos-${orientation}`]: combined.length >= PER_PAGE / 3 }));
     } catch (err) {
       console.error("Failed to fetch combined photos:", err);
-      setError("Failed to load photos");
+      setError(t("stockMedia.failedPhotos", "Failed to load photos"));
       if (!append) setCombinedPhotos([]);
     } finally {
       setLoading(false);
       setLoadingMore(false);
     }
-  }, []);
+  }, [t]);
 
   const fetchAllVideos = useCallback(async (query: string, orientation: CombinedOrientation, page: number, append: boolean) => {
     if (page === 1) setLoading(true);
@@ -703,13 +718,13 @@ export function StockMediaPicker({ open, onOpenChange, onSelect, photosOnly = fa
       setHasMore(prev => ({ ...prev, [`all-videos-${orientation}`]: combined.length >= PER_PAGE / 3 }));
     } catch (err) {
       console.error("Failed to fetch combined videos:", err);
-      setError("Failed to load videos");
+      setError(t("stockMedia.failedVideos", "Failed to load videos"));
       if (!append) setCombinedVideos([]);
     } finally {
       setLoading(false);
       setLoadingMore(false);
     }
-  }, []);
+  }, [t]);
 
   const fetchAllGifs = useCallback(async (query: string, page: number, append: boolean) => {
     if (page === 1) setLoading(true);
@@ -785,13 +800,13 @@ export function StockMediaPicker({ open, onOpenChange, onSelect, photosOnly = fa
       setHasMore(prev => ({ ...prev, "all-gifs": combined.length >= PER_PAGE / 3 }));
     } catch (err) {
       console.error("Failed to fetch combined GIFs:", err);
-      setError("Failed to load GIFs");
+      setError(t("stockMedia.failedGifs", "Failed to load GIFs"));
       if (!append) setCombinedGifs([]);
     } finally {
       setLoading(false);
       setLoadingMore(false);
     }
-  }, []);
+  }, [t]);
 
   // ============ Data Fetching Logic ============
 
@@ -1088,25 +1103,25 @@ export function StockMediaPicker({ open, onOpenChange, onSelect, photosOnly = fa
   // ============ Get Search Placeholder ============
 
   const getSearchPlaceholder = () => {
-    if (mainTab === "all-photos") return "Search all photos...";
-    if (mainTab === "all-videos") return "Search all videos...";
-    if (mainTab === "all-gifs") return "Search all GIFs...";
+    if (mainTab === "all-photos") return t("stockMedia.searchAllPhotos", "Search all photos...");
+    if (mainTab === "all-videos") return t("stockMedia.searchAllVideos", "Search all videos...");
+    if (mainTab === "all-gifs") return t("stockMedia.searchAllGifs", "Search all GIFs...");
     if (mainTab === "klipy") {
-      return klipySubTab === "gifs" ? "Search GIFs..." : "Search Clips...";
+      return klipySubTab === "gifs" ? t("stockMedia.searchGifs", "Search GIFs...") : t("stockMedia.searchClips", "Search Clips...");
     } else if (mainTab === "pexels") {
-      return pexelsSubTab === "photos" ? "Search photos..." : "Search videos...";
+      return pexelsSubTab === "photos" ? t("stockMedia.searchPhotos", "Search photos...") : t("stockMedia.searchVideos", "Search videos...");
     } else if (mainTab === "pixabay") {
-      if (pixabaySubTab === "photos") return "Search photos...";
-      if (pixabaySubTab === "videos") return "Search videos...";
-      return "Search GIFs...";
+      if (pixabaySubTab === "photos") return t("stockMedia.searchPhotos", "Search photos...");
+      if (pixabaySubTab === "videos") return t("stockMedia.searchVideos", "Search videos...");
+      return t("stockMedia.searchGifs", "Search GIFs...");
     } else if (mainTab === "giphy") {
-      if (giphySubTab === "gifs") return "Search GIFs...";
-      if (giphySubTab === "stickers") return "Search Stickers...";
-      return "Search Clips...";
+      if (giphySubTab === "gifs") return t("stockMedia.searchGifs", "Search GIFs...");
+      if (giphySubTab === "stickers") return t("stockMedia.searchStickers", "Search Stickers...");
+      return t("stockMedia.searchClips", "Search Clips...");
     } else if (mainTab === "unsplash") {
-      return "Search photos...";
+      return t("stockMedia.searchPhotos", "Search photos...");
     }
-    return "Search...";
+    return t("stockMedia.searchDefault", "Search...");
   };
 
   const attribution = getAttribution();
@@ -1117,7 +1132,7 @@ export function StockMediaPicker({ open, onOpenChange, onSelect, photosOnly = fa
     loadingMore && (
       <div className="flex items-center justify-center py-4">
         <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
-        <span className="ml-2 text-xs text-muted-foreground">Loading more...</span>
+        <span className="ml-2 text-xs text-muted-foreground">{t("stockMedia.loadingMore", "Loading more...")}</span>
       </div>
     )
   );
@@ -1155,7 +1170,7 @@ export function StockMediaPicker({ open, onOpenChange, onSelect, photosOnly = fa
           <DialogTitle className="flex items-center gap-3 group">
             <Icon3D icon={Image} variant="emerald" size="sm" />
             <GradientHeading as="h2" size="lg" preset="emerald-cyan-sky" className="!text-2xl md:!text-3xl">
-              {photosOnly ? "Add Stock Photo" : "Add Stock Media"}
+              {photosOnly ? t("stockMedia.titlePhoto", "Add Stock Photo") : t("stockMedia.titleMedia", "Add Stock Media")}
             </GradientHeading>
           </DialogTitle>
         </DialogHeader>
@@ -1170,17 +1185,17 @@ export function StockMediaPicker({ open, onOpenChange, onSelect, photosOnly = fa
             {/* Combined tabs */}
             <TabsTrigger value="all-photos" className="flex items-center gap-1.5 text-xs">
               <Layers className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">All</span> Photos
+              <span className="hidden sm:inline">{t("stockMedia.allPhotosPrefix", "All")}</span> {t("stockMedia.photosTab", "Photos")}
             </TabsTrigger>
             {!photosOnly && (
               <>
                 <TabsTrigger value="all-videos" className="flex items-center gap-1.5 text-xs">
                   <Layers className="w-3.5 h-3.5" />
-                  <span className="hidden sm:inline">All</span> Videos
+                  <span className="hidden sm:inline">{t("stockMedia.allVideosPrefix", "All")}</span> {t("stockMedia.videosTab", "Videos")}
                 </TabsTrigger>
                 <TabsTrigger value="all-gifs" className="flex items-center gap-1.5 text-xs">
                   <Layers className="w-3.5 h-3.5" />
-                  <span className="hidden sm:inline">All</span> GIFs
+                  <span className="hidden sm:inline">{t("stockMedia.allGifsPrefix", "All")}</span> {t("stockMedia.gifsTab", "GIFs")}
                 </TabsTrigger>
               </>
             )}
@@ -1220,17 +1235,17 @@ export function StockMediaPicker({ open, onOpenChange, onSelect, photosOnly = fa
                 <Input placeholder={getSearchPlaceholder()} value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="pl-9" />
               </div>
               <Select value={combinedPhotoOrientation} onValueChange={(v) => setCombinedPhotoOrientation(v as CombinedOrientation)}>
-                <SelectTrigger className="w-[130px]"><SelectValue placeholder="Orientation" /></SelectTrigger>
-                <SelectContent>{COMBINED_ORIENTATIONS.map((opt) => (<SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>))}</SelectContent>
+                <SelectTrigger className="w-[130px]"><SelectValue placeholder={t("stockMedia.orientationPlaceholder", "Orientation")} /></SelectTrigger>
+                <SelectContent>{COMBINED_ORIENTATIONS.map((opt) => (<SelectItem key={opt.value} value={opt.value}>{getOrientationLabel(opt.value, opt.label)}</SelectItem>))}</SelectContent>
               </Select>
             </div>
             <ScrollArea className="h-[350px]" onScrollCapture={handleScroll}>
-              {loading ? renderLoading() : error ? renderError() : combinedPhotos.length === 0 ? renderEmpty(searchQuery ? "No photos found" : "No photos available") : (
+              {loading ? renderLoading() : error ? renderError() : combinedPhotos.length === 0 ? renderEmpty(searchQuery ? t("stockMedia.noPhotosFound", "No photos found") : t("stockMedia.noPhotosAvailable", "No photos available")) : (
                 <>
                   <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 p-1">
                     {combinedPhotos.map((item) => (
                       <button key={item.id} type="button" onClick={() => handleSelectCombinedPhoto(item)} className="relative aspect-square rounded-lg overflow-hidden border border-border hover:border-primary transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 group bg-muted">
-                        <img src={item.thumbnailUrl} alt="Photo" className="w-full h-full object-cover" loading="lazy" />
+                        <img src={item.thumbnailUrl} alt={t("stockMedia.altPhoto", "Photo")} className="w-full h-full object-cover" loading="lazy" />
                         <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors" />
                         <SourceBadge source={item.source} />
                         <div className="absolute bottom-0 left-0 right-0 p-1 bg-gradient-to-t from-black/60 to-transparent opacity-0 group-hover:opacity-100 transition-opacity">
@@ -1251,20 +1266,20 @@ export function StockMediaPicker({ open, onOpenChange, onSelect, photosOnly = fa
               <div className="flex gap-2 mb-3">
                 <div className="relative flex-1">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                  <Input placeholder="Search all videos..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="pl-9" />
+                  <Input placeholder={t("stockMedia.searchAllVideos", "Search all videos...")} value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="pl-9" />
                 </div>
                 <Select value={combinedVideoOrientation} onValueChange={(v) => setCombinedVideoOrientation(v as CombinedOrientation)}>
-                  <SelectTrigger className="w-[130px]"><SelectValue placeholder="Orientation" /></SelectTrigger>
-                  <SelectContent>{COMBINED_ORIENTATIONS.map((opt) => (<SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>))}</SelectContent>
+                  <SelectTrigger className="w-[130px]"><SelectValue placeholder={t("stockMedia.orientationPlaceholder", "Orientation")} /></SelectTrigger>
+                  <SelectContent>{COMBINED_ORIENTATIONS.map((opt) => (<SelectItem key={opt.value} value={opt.value}>{getOrientationLabel(opt.value, opt.label)}</SelectItem>))}</SelectContent>
                 </Select>
               </div>
               <ScrollArea className="h-[350px]" onScrollCapture={handleScroll}>
-                {loading ? renderLoading() : error ? renderError() : combinedVideos.length === 0 ? renderEmpty(searchQuery ? "No videos found" : "No videos available") : (
+                {loading ? renderLoading() : error ? renderError() : combinedVideos.length === 0 ? renderEmpty(searchQuery ? t("stockMedia.noVideosFound", "No videos found") : t("stockMedia.noVideosAvailable", "No videos available")) : (
                   <>
                     <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 p-1">
                       {combinedVideos.map((item) => (
                         <button key={item.id} type="button" onClick={() => handleSelectCombinedVideo(item)} className="relative aspect-video rounded-lg overflow-hidden border border-border hover:border-primary transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 group bg-muted">
-                          <img src={item.thumbnailUrl} alt="Video thumbnail" className="w-full h-full object-cover" loading="lazy" />
+                          <img src={item.thumbnailUrl} alt={t("stockMedia.altVideoThumbnail", "Video thumbnail")} className="w-full h-full object-cover" loading="lazy" />
                           <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors" />
                           <SourceBadge source={item.source} />
                           <div className="absolute top-1 right-1"><Video className="w-3 h-3 text-white drop-shadow-md" /></div>
@@ -1296,12 +1311,12 @@ export function StockMediaPicker({ open, onOpenChange, onSelect, photosOnly = fa
                 </div>
               </div>
               <ScrollArea className="h-[350px]" onScrollCapture={handleScroll}>
-                {loading ? renderLoading() : error ? renderError() : combinedGifs.length === 0 ? renderEmpty(searchQuery ? "No GIFs found" : "No GIFs available") : (
+                {loading ? renderLoading() : error ? renderError() : combinedGifs.length === 0 ? renderEmpty(searchQuery ? t("stockMedia.noGifsFound", "No GIFs found") : t("stockMedia.noGifsAvailable", "No GIFs available")) : (
                   <>
                     <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 p-1">
                       {combinedGifs.map((item) => (
                         <button key={item.id} type="button" onClick={() => handleSelectCombinedGif(item)} className="relative aspect-square rounded-lg overflow-hidden border border-border hover:border-primary transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 group bg-muted">
-                          <img src={item.thumbnailUrl} alt={item.title || "GIF"} className="w-full h-full object-cover" loading="lazy" />
+                          <img src={item.thumbnailUrl} alt={item.title || t("stockMedia.altGif", "GIF")} className="w-full h-full object-cover" loading="lazy" />
                           <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors" />
                           <SourceBadge source={item.source} />
                           <div className="absolute top-1 right-1"><Film className="w-3 h-3 text-white drop-shadow-md" /></div>
@@ -1323,22 +1338,22 @@ export function StockMediaPicker({ open, onOpenChange, onSelect, photosOnly = fa
                 <Input placeholder={getSearchPlaceholder()} value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="pl-9" />
               </div>
               <Select value={unsplashOrientation} onValueChange={(v) => setUnsplashOrientation(v as UnsplashOrientation)}>
-                <SelectTrigger className="w-[130px]"><SelectValue placeholder="Orientation" /></SelectTrigger>
-                <SelectContent>{UNSPLASH_ORIENTATIONS.map((opt) => (<SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>))}</SelectContent>
+                <SelectTrigger className="w-[130px]"><SelectValue placeholder={t("stockMedia.orientationPlaceholder", "Orientation")} /></SelectTrigger>
+                <SelectContent>{UNSPLASH_ORIENTATIONS.map((opt) => (<SelectItem key={opt.value} value={opt.value}>{getOrientationLabel(opt.value, opt.label)}</SelectItem>))}</SelectContent>
               </Select>
             </div>
             <ScrollArea className="h-[350px]" onScrollCapture={handleScroll}>
-              {loading ? renderLoading() : error ? renderError() : unsplashPhotos.length === 0 ? renderEmpty(searchQuery ? "No photos found" : "No editorial photos available") : (
+              {loading ? renderLoading() : error ? renderError() : unsplashPhotos.length === 0 ? renderEmpty(searchQuery ? t("stockMedia.noPhotosFound", "No photos found") : t("stockMedia.noEditorialPhotos", "No editorial photos available")) : (
                 <>
                   <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 p-1">
                     {unsplashPhotos.map((photo) => (
                       <button key={photo.id} type="button" onClick={() => handleSelectUnsplashPhoto(photo)} className="relative aspect-square rounded-lg overflow-hidden border border-border hover:border-primary transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 group bg-muted">
-                        <img src={getUnsplashPhotoThumbnail(photo)} alt={photo.alt_description || "Photo"} className="w-full h-full object-cover" loading="lazy" />
+                        <img src={getUnsplashPhotoThumbnail(photo)} alt={photo.alt_description || t("stockMedia.altPhoto", "Photo")} className="w-full h-full object-cover" loading="lazy" />
                         <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors" />
                         {/* Unsplash attribution - visible on hover per API guidelines */}
                         <div className="absolute bottom-0 left-0 right-0 p-1.5 bg-gradient-to-t from-black/70 to-transparent opacity-0 group-hover:opacity-100 transition-opacity">
                           <p className="text-[9px] text-white/90 truncate leading-tight">
-                            Photo by{" "}
+                            {t("stockMedia.photoByPrefix", "Photo by")}{" "}
                             <span 
                               className="underline hover:text-white cursor-pointer"
                               onClick={(e) => {
@@ -1348,7 +1363,7 @@ export function StockMediaPicker({ open, onOpenChange, onSelect, photosOnly = fa
                             >
                               {photo.user.name}
                             </span>
-                            {" "}on{" "}
+                            {" "}{t("stockMedia.onPlatform", "on")}{" "}
                             <span 
                               className="underline hover:text-white cursor-pointer"
                               onClick={(e) => {
@@ -1376,11 +1391,11 @@ export function StockMediaPicker({ open, onOpenChange, onSelect, photosOnly = fa
                 <TabsList className="grid w-full grid-cols-2 mb-3">
                   <TabsTrigger value="gifs" className="flex items-center gap-1.5">
                     <Film className="w-4 h-4" />
-                    GIFs
+                    {t("stockMedia.gifsTab", "GIFs")}
                   </TabsTrigger>
                   <TabsTrigger value="clips" className="flex items-center gap-1.5">
                     <Video className="w-4 h-4" />
-                    Clips
+                    {t("stockMedia.clipsTab", "Clips")}
                   </TabsTrigger>
                 </TabsList>
 
@@ -1392,7 +1407,7 @@ export function StockMediaPicker({ open, onOpenChange, onSelect, photosOnly = fa
                   </div>
                   <Select value={klipyCategory} onValueChange={setKlipyCategory}>
                     <SelectTrigger className="w-[140px]">
-                      <SelectValue placeholder="Category" />
+                      <SelectValue placeholder={t("stockMedia.categoryPlaceholder", "Category")} />
                     </SelectTrigger>
                     <SelectContent>
                       {KLIPY_CATEGORIES.map((cat) => (
@@ -1404,7 +1419,7 @@ export function StockMediaPicker({ open, onOpenChange, onSelect, photosOnly = fa
 
                 <TabsContent value="gifs" className="flex-1 mt-0">
                   <ScrollArea className="h-[350px]" onScrollCapture={handleScroll}>
-                    {loading ? renderLoading() : error ? renderError() : gifs.length === 0 ? renderEmpty(searchQuery || klipyCategory !== "all" ? "No GIFs found" : "No trending GIFs available") : (
+                    {loading ? renderLoading() : error ? renderError() : gifs.length === 0 ? renderEmpty(searchQuery || klipyCategory !== "all" ? t("stockMedia.noGifsFound", "No GIFs found") : t("stockMedia.noTrendingGifs", "No trending GIFs available")) : (
                       <>
                         <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 p-1">
                           {gifs.map((gif, index) => {
@@ -1412,7 +1427,7 @@ export function StockMediaPicker({ open, onOpenChange, onSelect, photosOnly = fa
                             if (!thumbnailUrl) return null;
                             return (
                               <button key={gif.id || gif.slug || index} type="button" onClick={() => handleSelectKlipyGif(gif)} className="relative aspect-square rounded-lg overflow-hidden border border-border hover:border-primary transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 group bg-muted">
-                                <img src={thumbnailUrl} alt={gif.title || "GIF"} className="w-full h-full object-cover" loading="lazy" />
+                                <img src={thumbnailUrl} alt={gif.title || t("stockMedia.altGif", "GIF")} className="w-full h-full object-cover" loading="lazy" />
                                 <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors" />
                               </button>
                             );
@@ -1426,7 +1441,7 @@ export function StockMediaPicker({ open, onOpenChange, onSelect, photosOnly = fa
 
                 <TabsContent value="clips" className="flex-1 mt-0">
                   <ScrollArea className="h-[350px]" onScrollCapture={handleScroll}>
-                    {loading ? renderLoading() : error ? renderError() : clips.length === 0 ? renderEmpty(searchQuery || klipyCategory !== "all" ? "No Clips found" : "No trending Clips available") : (
+                    {loading ? renderLoading() : error ? renderError() : clips.length === 0 ? renderEmpty(searchQuery || klipyCategory !== "all" ? t("stockMedia.noClipsFound", "No Clips found") : t("stockMedia.noTrendingClips", "No trending Clips available")) : (
                       <>
                         <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 p-1">
                           {clips.map((clip, index) => {
@@ -1434,7 +1449,7 @@ export function StockMediaPicker({ open, onOpenChange, onSelect, photosOnly = fa
                             if (!thumbnailUrl) return null;
                             return (
                               <button key={clip.slug || index} type="button" onClick={() => handleSelectKlipyClip(clip)} className="relative aspect-video rounded-lg overflow-hidden border border-border hover:border-primary transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 group bg-muted">
-                                <img src={thumbnailUrl} alt={clip.title || "Clip"} className="w-full h-full object-cover" loading="lazy" />
+                                <img src={thumbnailUrl} alt={clip.title || t("stockMedia.altClip", "Clip")} className="w-full h-full object-cover" loading="lazy" />
                                 <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors" />
                                 <div className="absolute top-1 right-1"><Video className="w-3 h-3 text-white drop-shadow-md" /></div>
                                 {clip.title && (<div className="absolute bottom-0 left-0 right-0 p-1.5 bg-gradient-to-t from-black/70 to-transparent"><p className="text-[10px] text-white truncate">{clip.title}</p></div>)}
@@ -1458,15 +1473,15 @@ export function StockMediaPicker({ open, onOpenChange, onSelect, photosOnly = fa
                 <TabsList className="grid w-full grid-cols-3 mb-3">
                   <TabsTrigger value="gifs" className="flex items-center gap-1.5">
                     <Film className="w-4 h-4" />
-                    GIFs
+                    {t("stockMedia.gifsTab", "GIFs")}
                   </TabsTrigger>
                   <TabsTrigger value="clips" className="flex items-center gap-1.5">
                     <Play className="w-4 h-4" />
-                    Clips
+                    {t("stockMedia.clipsTab", "Clips")}
                   </TabsTrigger>
                   <TabsTrigger value="stickers" className="flex items-center gap-1.5">
                     <Sparkles className="w-4 h-4" />
-                    Stickers
+                    {t("stockMedia.stickersTab", "Stickers")}
                   </TabsTrigger>
                 </TabsList>
 
@@ -1479,7 +1494,7 @@ export function StockMediaPicker({ open, onOpenChange, onSelect, photosOnly = fa
                   {(giphySubTab === "gifs" || giphySubTab === "clips") && (
                     <Select value={giphyCategory} onValueChange={setGiphyCategory}>
                       <SelectTrigger className="w-[140px]">
-                        <SelectValue placeholder="Category" />
+                        <SelectValue placeholder={t("stockMedia.categoryPlaceholder", "Category")} />
                       </SelectTrigger>
                       <SelectContent>
                         {GIPHY_POPULAR_CATEGORIES.map((cat) => (
@@ -1493,7 +1508,7 @@ export function StockMediaPicker({ open, onOpenChange, onSelect, photosOnly = fa
                 {/* GIFs Content */}
                 <TabsContent value="gifs" className="flex-1 mt-0">
                   <ScrollArea className="h-[350px]" onScrollCapture={handleScroll}>
-                    {loading ? renderLoading() : error ? renderError() : giphyGifs.length === 0 ? renderEmpty(searchQuery || giphyCategory ? "No GIFs found" : "No trending GIFs available") : (
+                    {loading ? renderLoading() : error ? renderError() : giphyGifs.length === 0 ? renderEmpty(searchQuery || giphyCategory ? t("stockMedia.noGifsFound", "No GIFs found") : t("stockMedia.noTrendingGifs", "No trending GIFs available")) : (
                       <>
                         <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 p-1">
                           {giphyGifs.map((gif) => {
@@ -1501,7 +1516,7 @@ export function StockMediaPicker({ open, onOpenChange, onSelect, photosOnly = fa
                             if (!thumbnailUrl) return null;
                             return (
                               <button key={gif.id} type="button" onClick={() => handleSelectGiphyGif(gif)} className="relative aspect-square rounded-lg overflow-hidden border border-border hover:border-primary transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 group bg-muted">
-                                <img src={thumbnailUrl} alt={gif.title || "GIF"} className="w-full h-full object-cover" loading="lazy" />
+                                <img src={thumbnailUrl} alt={gif.title || t("stockMedia.altGif", "GIF")} className="w-full h-full object-cover" loading="lazy" />
                                 <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors" />
                                 <div className="absolute top-1 right-1"><Film className="w-3 h-3 text-white drop-shadow-md" /></div>
                               </button>
@@ -1517,7 +1532,7 @@ export function StockMediaPicker({ open, onOpenChange, onSelect, photosOnly = fa
                 {/* Clips Content */}
                 <TabsContent value="clips" className="flex-1 mt-0">
                   <ScrollArea className="h-[350px]" onScrollCapture={handleScroll}>
-                    {loading ? renderLoading() : error ? renderError() : giphyClips.length === 0 ? renderEmpty(searchQuery || giphyCategory ? "No Clips found" : "No trending Clips available") : (
+                    {loading ? renderLoading() : error ? renderError() : giphyClips.length === 0 ? renderEmpty(searchQuery || giphyCategory ? t("stockMedia.noClipsFound", "No Clips found") : t("stockMedia.noTrendingClips", "No trending Clips available")) : (
                       <>
                         <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 p-1">
                           {giphyClips.map((clip) => {
@@ -1525,7 +1540,7 @@ export function StockMediaPicker({ open, onOpenChange, onSelect, photosOnly = fa
                             if (!thumbnailUrl) return null;
                             return (
                               <button key={clip.id} type="button" onClick={() => handleSelectGiphyClip(clip)} className="relative aspect-video rounded-lg overflow-hidden border border-border hover:border-primary transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 group bg-muted">
-                                <img src={thumbnailUrl} alt={clip.title || "Clip"} className="w-full h-full object-cover" loading="lazy" />
+                                <img src={thumbnailUrl} alt={clip.title || t("stockMedia.altClip", "Clip")} className="w-full h-full object-cover" loading="lazy" />
                                 <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors" />
                                 <div className="absolute top-1 right-1"><Play className="w-3 h-3 text-white drop-shadow-md" /></div>
                                 {clip.title && (<div className="absolute bottom-0 left-0 right-0 p-1.5 bg-gradient-to-t from-black/70 to-transparent"><p className="text-[10px] text-white truncate">{clip.title}</p></div>)}
@@ -1542,7 +1557,7 @@ export function StockMediaPicker({ open, onOpenChange, onSelect, photosOnly = fa
                 {/* Stickers Content */}
                 <TabsContent value="stickers" className="flex-1 mt-0">
                   <ScrollArea className="h-[350px]" onScrollCapture={handleScroll}>
-                    {loading ? renderLoading() : error ? renderError() : giphyStickers.length === 0 ? renderEmpty(searchQuery ? "No stickers found" : "No trending stickers available") : (
+                    {loading ? renderLoading() : error ? renderError() : giphyStickers.length === 0 ? renderEmpty(searchQuery ? t("stockMedia.noStickersFound", "No stickers found") : t("stockMedia.noTrendingStickers", "No trending stickers available")) : (
                       <>
                         <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 p-1">
                           {giphyStickers.map((sticker) => {
@@ -1550,7 +1565,7 @@ export function StockMediaPicker({ open, onOpenChange, onSelect, photosOnly = fa
                             if (!thumbnailUrl) return null;
                             return (
                               <button key={sticker.id} type="button" onClick={() => handleSelectGiphyGif(sticker)} className="relative aspect-square rounded-lg overflow-hidden border border-border hover:border-primary transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 group bg-muted">
-                                <img src={thumbnailUrl} alt={sticker.title || "Sticker"} className="w-full h-full object-contain" loading="lazy" />
+                                <img src={thumbnailUrl} alt={sticker.title || t("stockMedia.altSticker", "Sticker")} className="w-full h-full object-contain" loading="lazy" />
                                 <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors" />
                                 <div className="absolute top-1 right-1"><Sparkles className="w-3 h-3 text-white drop-shadow-md" /></div>
                               </button>
@@ -1572,15 +1587,15 @@ export function StockMediaPicker({ open, onOpenChange, onSelect, photosOnly = fa
               <div className="flex flex-col flex-1 min-h-0">
                 <div className="relative mb-3">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                  <Input placeholder="Search photos..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="pl-9" />
+                  <Input placeholder={t("stockMedia.searchPhotos", "Search photos...")} value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="pl-9" />
                 </div>
                 <ScrollArea className="h-[350px]" onScrollCapture={handleScroll}>
-                  {loading ? renderLoading() : error ? renderError() : pexelsPhotos.length === 0 ? renderEmpty(searchQuery ? "No photos found" : "No curated photos available") : (
+                  {loading ? renderLoading() : error ? renderError() : pexelsPhotos.length === 0 ? renderEmpty(searchQuery ? t("stockMedia.noPhotosFound", "No photos found") : t("stockMedia.noCuratedPhotos", "No curated photos available")) : (
                     <>
                       <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 p-1">
                         {pexelsPhotos.map((photo) => (
                           <button key={photo.id} type="button" onClick={() => handleSelectPexelsPhoto(photo)} className="relative aspect-square rounded-lg overflow-hidden border border-border hover:border-primary transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 group bg-muted">
-                            <img src={getPexelsPhotoThumbnail(photo)} alt={photo.alt || "Photo"} className="w-full h-full object-cover" loading="lazy" />
+                            <img src={getPexelsPhotoThumbnail(photo)} alt={photo.alt || t("stockMedia.altPhoto", "Photo")} className="w-full h-full object-cover" loading="lazy" />
                             <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors" />
                             <div className="absolute bottom-0 left-0 right-0 p-1 bg-gradient-to-t from-black/60 to-transparent opacity-0 group-hover:opacity-100 transition-opacity">
                               <p className="text-[9px] text-white truncate">📷 {photo.photographer}</p>
@@ -1596,8 +1611,8 @@ export function StockMediaPicker({ open, onOpenChange, onSelect, photosOnly = fa
             ) : (
               <Tabs value={pexelsSubTab} onValueChange={(v) => setPexelsSubTab(v as PexelsSubTab)} className="flex flex-col flex-1 min-h-0">
                 <TabsList className="grid w-full grid-cols-2 mb-3">
-                  <TabsTrigger value="photos" className="flex items-center gap-1.5"><Image className="w-4 h-4" />Photos</TabsTrigger>
-                  <TabsTrigger value="videos" className="flex items-center gap-1.5"><Video className="w-4 h-4" />Videos</TabsTrigger>
+                  <TabsTrigger value="photos" className="flex items-center gap-1.5"><Image className="w-4 h-4" />{t("stockMedia.photosTab", "Photos")}</TabsTrigger>
+                  <TabsTrigger value="videos" className="flex items-center gap-1.5"><Video className="w-4 h-4" />{t("stockMedia.videosTab", "Videos")}</TabsTrigger>
                 </TabsList>
 
                 <div className="flex gap-2 mb-3">
@@ -1606,19 +1621,19 @@ export function StockMediaPicker({ open, onOpenChange, onSelect, photosOnly = fa
                     <Input placeholder={getSearchPlaceholder()} value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="pl-9" />
                   </div>
                   <Select value={pexelsOrientation} onValueChange={(v) => setPexelsOrientation(v as PexelsOrientation)}>
-                    <SelectTrigger className="w-[130px]"><SelectValue placeholder="Orientation" /></SelectTrigger>
-                    <SelectContent>{PEXELS_ORIENTATIONS.map((opt) => (<SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>))}</SelectContent>
+                    <SelectTrigger className="w-[130px]"><SelectValue placeholder={t("stockMedia.orientationPlaceholder", "Orientation")} /></SelectTrigger>
+                    <SelectContent>{PEXELS_ORIENTATIONS.map((opt) => (<SelectItem key={opt.value} value={opt.value}>{getOrientationLabel(opt.value, opt.label)}</SelectItem>))}</SelectContent>
                   </Select>
                 </div>
 
                 <TabsContent value="photos" className="flex-1 mt-0">
                   <ScrollArea className="h-[350px]" onScrollCapture={handleScroll}>
-                    {loading ? renderLoading() : error ? renderError() : pexelsPhotos.length === 0 ? renderEmpty(searchQuery ? "No photos found" : "No curated photos available") : (
+                    {loading ? renderLoading() : error ? renderError() : pexelsPhotos.length === 0 ? renderEmpty(searchQuery ? t("stockMedia.noPhotosFound", "No photos found") : t("stockMedia.noCuratedPhotos", "No curated photos available")) : (
                       <>
                         <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 p-1">
                           {pexelsPhotos.map((photo) => (
                             <button key={photo.id} type="button" onClick={() => handleSelectPexelsPhoto(photo)} className="relative aspect-square rounded-lg overflow-hidden border border-border hover:border-primary transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 group bg-muted">
-                              <img src={getPexelsPhotoThumbnail(photo)} alt={photo.alt || "Photo"} className="w-full h-full object-cover" loading="lazy" />
+                              <img src={getPexelsPhotoThumbnail(photo)} alt={photo.alt || t("stockMedia.altPhoto", "Photo")} className="w-full h-full object-cover" loading="lazy" />
                               <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors" />
                               <div className="absolute bottom-0 left-0 right-0 p-1 bg-gradient-to-t from-black/60 to-transparent opacity-0 group-hover:opacity-100 transition-opacity">
                                 <p className="text-[9px] text-white truncate">📷 {photo.photographer}</p>
@@ -1634,12 +1649,12 @@ export function StockMediaPicker({ open, onOpenChange, onSelect, photosOnly = fa
 
                 <TabsContent value="videos" className="flex-1 mt-0">
                   <ScrollArea className="h-[350px]" onScrollCapture={handleScroll}>
-                    {loading ? renderLoading() : error ? renderError() : pexelsVideos.length === 0 ? renderEmpty(searchQuery ? "No videos found" : "No popular videos available") : (
+                    {loading ? renderLoading() : error ? renderError() : pexelsVideos.length === 0 ? renderEmpty(searchQuery ? t("stockMedia.noVideosFound", "No videos found") : t("stockMedia.noPopularVideos", "No popular videos available")) : (
                       <>
                         <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 p-1">
                           {pexelsVideos.map((video) => (
                             <button key={video.id} type="button" onClick={() => handleSelectPexelsVideo(video)} className="relative aspect-video rounded-lg overflow-hidden border border-border hover:border-primary transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 group bg-muted">
-                              <img src={getPexelsVideoThumbnail(video)} alt="Video thumbnail" className="w-full h-full object-cover" loading="lazy" />
+                              <img src={getPexelsVideoThumbnail(video)} alt={t("stockMedia.altVideoThumbnail", "Video thumbnail")} className="w-full h-full object-cover" loading="lazy" />
                               <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors" />
                               <div className="absolute top-1 right-1"><Video className="w-3 h-3 text-white drop-shadow-md" /></div>
                               <div className="absolute bottom-0 left-0 right-0 p-1 bg-gradient-to-t from-black/60 to-transparent opacity-0 group-hover:opacity-100 transition-opacity">
@@ -1663,15 +1678,15 @@ export function StockMediaPicker({ open, onOpenChange, onSelect, photosOnly = fa
               <div className="flex flex-col flex-1 min-h-0">
                 <div className="relative mb-3">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                  <Input placeholder="Search photos..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="pl-9" />
+                  <Input placeholder={t("stockMedia.searchPhotos", "Search photos...")} value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="pl-9" />
                 </div>
                 <ScrollArea className="h-[350px]" onScrollCapture={handleScroll}>
-                  {loading ? renderLoading() : error ? renderError() : pixabayPhotos.length === 0 ? renderEmpty(searchQuery ? "No photos found" : "No popular photos available") : (
+                  {loading ? renderLoading() : error ? renderError() : pixabayPhotos.length === 0 ? renderEmpty(searchQuery ? t("stockMedia.noPhotosFound", "No photos found") : t("stockMedia.noPopularPhotos", "No popular photos available")) : (
                     <>
                       <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 p-1">
                         {pixabayPhotos.map((photo) => (
                           <button key={photo.id} type="button" onClick={() => handleSelectPixabayPhoto(photo)} className="relative aspect-square rounded-lg overflow-hidden border border-border hover:border-primary transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 group bg-muted">
-                            <img src={getPixabayPhotoThumbnail(photo)} alt={photo.tags || "Photo"} className="w-full h-full object-cover" loading="lazy" />
+                            <img src={getPixabayPhotoThumbnail(photo)} alt={photo.tags || t("stockMedia.altPhoto", "Photo")} className="w-full h-full object-cover" loading="lazy" />
                             <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors" />
                             <div className="absolute bottom-0 left-0 right-0 p-1 bg-gradient-to-t from-black/60 to-transparent opacity-0 group-hover:opacity-100 transition-opacity">
                               <p className="text-[9px] text-white truncate">📷 {photo.user}</p>
@@ -1687,9 +1702,9 @@ export function StockMediaPicker({ open, onOpenChange, onSelect, photosOnly = fa
             ) : (
               <Tabs value={pixabaySubTab} onValueChange={(v) => setPixabaySubTab(v as PixabaySubTab)} className="flex flex-col flex-1 min-h-0">
                 <TabsList className="grid w-full grid-cols-3 mb-3">
-                  <TabsTrigger value="photos" className="flex items-center gap-1.5"><Image className="w-4 h-4" />Photos</TabsTrigger>
-                  <TabsTrigger value="videos" className="flex items-center gap-1.5"><Video className="w-4 h-4" />Videos</TabsTrigger>
-                  <TabsTrigger value="gifs" className="flex items-center gap-1.5"><Film className="w-4 h-4" />GIFs</TabsTrigger>
+                  <TabsTrigger value="photos" className="flex items-center gap-1.5"><Image className="w-4 h-4" />{t("stockMedia.photosTab", "Photos")}</TabsTrigger>
+                  <TabsTrigger value="videos" className="flex items-center gap-1.5"><Video className="w-4 h-4" />{t("stockMedia.videosTab", "Videos")}</TabsTrigger>
+                  <TabsTrigger value="gifs" className="flex items-center gap-1.5"><Film className="w-4 h-4" />{t("stockMedia.gifsTab", "GIFs")}</TabsTrigger>
                 </TabsList>
 
                 <div className="flex gap-2 mb-3">
@@ -1698,19 +1713,19 @@ export function StockMediaPicker({ open, onOpenChange, onSelect, photosOnly = fa
                     <Input placeholder={getSearchPlaceholder()} value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="pl-9" />
                   </div>
                   <Select value={pixabayOrientation} onValueChange={(v) => setPixabayOrientation(v as PixabayOrientation)}>
-                    <SelectTrigger className="w-[130px]"><SelectValue placeholder="Orientation" /></SelectTrigger>
-                    <SelectContent>{PIXABAY_ORIENTATIONS.map((opt) => (<SelectItem key={opt.value} value={opt.value}>{opt.label}</SelectItem>))}</SelectContent>
+                    <SelectTrigger className="w-[130px]"><SelectValue placeholder={t("stockMedia.orientationPlaceholder", "Orientation")} /></SelectTrigger>
+                    <SelectContent>{PIXABAY_ORIENTATIONS.map((opt) => (<SelectItem key={opt.value} value={opt.value}>{getOrientationLabel(opt.value, opt.label)}</SelectItem>))}</SelectContent>
                   </Select>
                 </div>
 
                 <TabsContent value="photos" className="flex-1 mt-0">
                   <ScrollArea className="h-[350px]" onScrollCapture={handleScroll}>
-                    {loading ? renderLoading() : error ? renderError() : pixabayPhotos.length === 0 ? renderEmpty(searchQuery ? "No photos found" : "No popular photos available") : (
+                    {loading ? renderLoading() : error ? renderError() : pixabayPhotos.length === 0 ? renderEmpty(searchQuery ? t("stockMedia.noPhotosFound", "No photos found") : t("stockMedia.noPopularPhotos", "No popular photos available")) : (
                       <>
                         <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 p-1">
                           {pixabayPhotos.map((photo) => (
                             <button key={photo.id} type="button" onClick={() => handleSelectPixabayPhoto(photo)} className="relative aspect-square rounded-lg overflow-hidden border border-border hover:border-primary transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 group bg-muted">
-                              <img src={getPixabayPhotoThumbnail(photo)} alt={photo.tags || "Photo"} className="w-full h-full object-cover" loading="lazy" />
+                              <img src={getPixabayPhotoThumbnail(photo)} alt={photo.tags || t("stockMedia.altPhoto", "Photo")} className="w-full h-full object-cover" loading="lazy" />
                               <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors" />
                               <div className="absolute bottom-0 left-0 right-0 p-1 bg-gradient-to-t from-black/60 to-transparent opacity-0 group-hover:opacity-100 transition-opacity">
                                 <p className="text-[9px] text-white truncate">📷 {photo.user}</p>
@@ -1726,12 +1741,12 @@ export function StockMediaPicker({ open, onOpenChange, onSelect, photosOnly = fa
 
                 <TabsContent value="videos" className="flex-1 mt-0">
                   <ScrollArea className="h-[350px]" onScrollCapture={handleScroll}>
-                    {loading ? renderLoading() : error ? renderError() : pixabayVideos.length === 0 ? renderEmpty(searchQuery ? "No videos found" : "No popular videos available") : (
+                    {loading ? renderLoading() : error ? renderError() : pixabayVideos.length === 0 ? renderEmpty(searchQuery ? t("stockMedia.noVideosFound", "No videos found") : t("stockMedia.noPopularVideos", "No popular videos available")) : (
                       <>
                         <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 p-1">
                           {pixabayVideos.map((video) => (
                             <button key={video.id} type="button" onClick={() => handleSelectPixabayVideo(video)} className="relative aspect-video rounded-lg overflow-hidden border border-border hover:border-primary transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 group bg-muted">
-                              <img src={getPixabayVideoThumbnail(video)} alt="Video thumbnail" className="w-full h-full object-cover" loading="lazy" />
+                              <img src={getPixabayVideoThumbnail(video)} alt={t("stockMedia.altVideoThumbnail", "Video thumbnail")} className="w-full h-full object-cover" loading="lazy" />
                               <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors" />
                               <div className="absolute top-1 right-1"><Video className="w-3 h-3 text-white drop-shadow-md" /></div>
                               <div className="absolute bottom-0 left-0 right-0 p-1 bg-gradient-to-t from-black/60 to-transparent opacity-0 group-hover:opacity-100 transition-opacity">
@@ -1748,12 +1763,12 @@ export function StockMediaPicker({ open, onOpenChange, onSelect, photosOnly = fa
 
                 <TabsContent value="gifs" className="flex-1 mt-0">
                   <ScrollArea className="h-[350px]" onScrollCapture={handleScroll}>
-                    {loading ? renderLoading() : error ? renderError() : pixabayGifsData.length === 0 ? renderEmpty(searchQuery ? "No GIFs found" : "No popular GIFs available") : (
+                    {loading ? renderLoading() : error ? renderError() : pixabayGifsData.length === 0 ? renderEmpty(searchQuery ? t("stockMedia.noGifsFound", "No GIFs found") : t("stockMedia.noPopularGifs", "No popular GIFs available")) : (
                       <>
                         <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 p-1">
                           {pixabayGifsData.map((gif) => (
                             <button key={gif.id} type="button" onClick={() => handleSelectPixabayGif(gif)} className="relative aspect-square rounded-lg overflow-hidden border border-border hover:border-primary transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 group bg-muted">
-                              <img src={getPixabayPhotoThumbnail(gif)} alt={gif.tags || "GIF"} className="w-full h-full object-cover" loading="lazy" />
+                              <img src={getPixabayPhotoThumbnail(gif)} alt={gif.tags || t("stockMedia.altGif", "GIF")} className="w-full h-full object-cover" loading="lazy" />
                               <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors" />
                               <div className="absolute top-1 right-1"><Film className="w-3 h-3 text-white drop-shadow-md" /></div>
                               <div className="absolute bottom-0 left-0 right-0 p-1 bg-gradient-to-t from-black/60 to-transparent opacity-0 group-hover:opacity-100 transition-opacity">
@@ -1775,7 +1790,7 @@ export function StockMediaPicker({ open, onOpenChange, onSelect, photosOnly = fa
         {/* Attribution */}
         <div className="flex items-center justify-center pt-2 border-t">
           <a href={attribution?.url} target="_blank" rel="noopener noreferrer" className="text-xs text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1.5">
-            Powered by <span className="font-semibold">{attribution?.name}</span>
+            {t("stockMedia.poweredByPrefix", "Powered by")} <span className="font-semibold">{attribution?.name}</span>
           </a>
         </div>
       </DialogContent>

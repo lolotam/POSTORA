@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import { useTranslation } from "react-i18next";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -27,6 +28,7 @@ interface GIFPickerDialogProps {
 type TabType = "gifs" | "clips";
 
 export function GIFPickerDialog({ open, onOpenChange, onSelect }: GIFPickerDialogProps) {
+  const { t } = useTranslation("postmedia");
   const [activeTab, setActiveTab] = useState<TabType>("gifs");
   const [searchQuery, setSearchQuery] = useState("");
   const [gifs, setGifs] = useState<KlipyGif[]>([]);
@@ -47,12 +49,12 @@ export function GIFPickerDialog({ open, onOpenChange, onSelect }: GIFPickerDialo
       setGifs(Array.isArray(results) ? results : []);
     } catch (err) {
       console.error("Failed to fetch GIFs:", err);
-      setError("Failed to load GIFs. Please try again.");
+      setError(t("gifPicker.errorGifs", "Failed to load GIFs. Please try again."));
       setGifs([]);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [t]);
 
   // Fetch Clips
   const fetchClipsData = useCallback(async (query: string) => {
@@ -65,12 +67,12 @@ export function GIFPickerDialog({ open, onOpenChange, onSelect }: GIFPickerDialo
       setClips(Array.isArray(results) ? results : []);
     } catch (err) {
       console.error("Failed to fetch Clips:", err);
-      setError("Failed to load Clips. Please try again.");
+      setError(t("gifPicker.errorClips", "Failed to load Clips. Please try again."));
       setClips([]);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [t]);
 
   // Fetch data based on active tab
   const fetchData = useCallback((query: string) => {
@@ -130,7 +132,7 @@ export function GIFPickerDialog({ open, onOpenChange, onSelect }: GIFPickerDialo
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Film className="w-5 h-5" />
-            Add from KLIPY
+            {t("gifPicker.title", "Add from KLIPY")}
           </DialogTitle>
         </DialogHeader>
 
@@ -139,11 +141,11 @@ export function GIFPickerDialog({ open, onOpenChange, onSelect }: GIFPickerDialo
           <TabsList className="grid w-full grid-cols-2 mb-3">
             <TabsTrigger value="gifs" className="flex items-center gap-1.5">
               <Film className="w-4 h-4" />
-              GIFs
+              {t("gifPicker.tabGifs", "GIFs")}
             </TabsTrigger>
             <TabsTrigger value="clips" className="flex items-center gap-1.5">
               <Video className="w-4 h-4" />
-              Clips
+              {t("gifPicker.tabClips", "Clips")}
             </TabsTrigger>
           </TabsList>
 
@@ -151,7 +153,7 @@ export function GIFPickerDialog({ open, onOpenChange, onSelect }: GIFPickerDialo
           <div className="relative mb-3">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
             <Input
-              placeholder={`Search ${activeTab === "gifs" ? "GIFs" : "Clips"}...`}
+              placeholder={activeTab === "gifs" ? t("gifPicker.searchGifs", "Search GIFs...") : t("gifPicker.searchClips", "Search Clips...")}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="pl-9"
@@ -172,7 +174,7 @@ export function GIFPickerDialog({ open, onOpenChange, onSelect }: GIFPickerDialo
                 </div>
               ) : gifs.length === 0 ? (
                 <div className="flex items-center justify-center py-12 text-muted-foreground text-sm">
-                  {searchQuery ? "No GIFs found" : "No trending GIFs available"}
+                  {searchQuery ? t("gifPicker.noGifsFound", "No GIFs found") : t("gifPicker.noTrendingGifs", "No trending GIFs available")}
                 </div>
               ) : (
                 <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 p-1">
@@ -215,7 +217,7 @@ export function GIFPickerDialog({ open, onOpenChange, onSelect }: GIFPickerDialo
                 </div>
               ) : clips.length === 0 ? (
                 <div className="flex items-center justify-center py-12 text-muted-foreground text-sm">
-                  {searchQuery ? "No Clips found" : "No trending Clips available"}
+                  {searchQuery ? t("gifPicker.noClipsFound", "No Clips found") : t("gifPicker.noTrendingClips", "No trending Clips available")}
                 </div>
               ) : (
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 p-1">
@@ -262,7 +264,7 @@ export function GIFPickerDialog({ open, onOpenChange, onSelect }: GIFPickerDialo
             rel="noopener noreferrer"
             className="text-xs text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1.5"
           >
-            Powered by <span className="font-semibold">KLIPY</span>
+            {t("gifPicker.poweredBy", "Powered by")} <span className="font-semibold">KLIPY</span>
           </a>
         </div>
       </DialogContent>

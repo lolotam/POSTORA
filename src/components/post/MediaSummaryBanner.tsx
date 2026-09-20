@@ -1,5 +1,6 @@
 import { Image, Video, FileImage, Info } from "lucide-react";
-import { MediaAnalysis, getMediaDescription } from "@/lib/mediaAnalyzer";
+import { useTranslation } from "react-i18next";
+import { MediaAnalysis } from "@/lib/mediaAnalyzer";
 import { cn } from "@/lib/utils";
 import {
   Tooltip,
@@ -21,11 +22,23 @@ export function MediaSummaryBanner({
   totalPlatforms,
   className,
 }: MediaSummaryBannerProps) {
+  const { t } = useTranslation("postmedia");
+
   if (analysis.isTextOnly) {
     return null;
   }
 
-  const description = getMediaDescription(analysis);
+  const parts: string[] = [];
+  if (analysis.imageCount > 0) {
+    parts.push(t("summary.photosCount", "{{count}} photos", { count: analysis.imageCount }));
+  }
+  if (analysis.videoCount > 0) {
+    parts.push(t("summary.videosCount", "{{count}} videos", { count: analysis.videoCount }));
+  }
+  if (analysis.gifCount > 0) {
+    parts.push(t("summary.gifsCount", "{{count}} GIFs", { count: analysis.gifCount }));
+  }
+  const description = parts.length > 0 ? parts.join(t("summary.separator", ", ")) : t("summary.textOnly", "Text only");
   const hasRestrictions = eligibleCount < totalPlatforms;
 
   return (
@@ -78,15 +91,15 @@ export function MediaSummaryBanner({
             >
               {hasRestrictions && <Info className="w-3 h-3" />}
               <span>
-                {eligibleCount}/{totalPlatforms} platforms
+                {t("summary.platformsCount", "{{eligible}}/{{total}} platforms", { eligible: eligibleCount, total: totalPlatforms })}
               </span>
             </div>
           </TooltipTrigger>
           <TooltipContent side="left" className="max-w-[250px]">
             <p className="text-xs">
               {hasRestrictions
-                ? `${totalPlatforms - eligibleCount} platform(s) don't support this media combination.`
-                : "All connected platforms support this media type."}
+                ? t("summary.unsupportedNotice", "{{count}} platform(s) don't support this media combination.", { count: totalPlatforms - eligibleCount })
+                : t("summary.allSupported", "All connected platforms support this media type.")}
             </p>
           </TooltipContent>
         </Tooltip>

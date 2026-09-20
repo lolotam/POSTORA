@@ -1,4 +1,5 @@
 import { Camera } from "lucide-react";
+import { Trans, useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 
 interface UnsplashAttributionProps {
@@ -22,6 +23,8 @@ export function UnsplashAttribution({
   className,
   variant = "inline",
 }: UnsplashAttributionProps) {
+  useTranslation("postmedia");
+
   if (variant === "overlay") {
     return (
       <div
@@ -32,26 +35,52 @@ export function UnsplashAttribution({
       >
         <p className="text-[10px] text-white/90 flex items-center gap-1">
           <Camera className="w-3 h-3" />
-          Photo by{" "}
-          <a
-            href={photographerUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="underline hover:text-white font-medium"
-            onClick={(e) => e.stopPropagation()}
+          <Trans
+            ns="postmedia"
+            i18nKey="unsplash.attribution"
+            values={{ photographerName }}
+            components={{
+              1: (
+                <a
+                  href={photographerUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="underline hover:text-white font-medium"
+                  onClick={(e) => e.stopPropagation()}
+                />
+              ),
+              2: (
+                <a
+                  href={unsplashUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="underline hover:text-white font-medium"
+                  onClick={(e) => e.stopPropagation()}
+                />
+              ),
+            }}
           >
-            {photographerName}
-          </a>
-          {" "}on{" "}
-          <a
-            href={unsplashUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="underline hover:text-white font-medium"
-            onClick={(e) => e.stopPropagation()}
-          >
-            Unsplash
-          </a>
+            Photo by{" "}
+            <a
+              href={photographerUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline hover:text-white font-medium"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {photographerName}
+            </a>
+            {" "}on{" "}
+            <a
+              href={unsplashUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline hover:text-white font-medium"
+              onClick={(e) => e.stopPropagation()}
+            >
+              Unsplash
+            </a>
+          </Trans>
         </p>
       </div>
     );
@@ -67,24 +96,48 @@ export function UnsplashAttribution({
       >
         <Camera className="w-3 h-3" />
         <span>
-          Photo by{" "}
-          <a
-            href={photographerUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="underline hover:text-foreground font-medium"
+          <Trans
+            ns="postmedia"
+            i18nKey="unsplash.attribution"
+            values={{ photographerName }}
+            components={{
+              1: (
+                <a
+                  href={photographerUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="underline hover:text-foreground font-medium"
+                />
+              ),
+              2: (
+                <a
+                  href={unsplashUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="underline hover:text-foreground font-medium"
+                />
+              ),
+            }}
           >
-            {photographerName}
-          </a>
-          {" "}on{" "}
-          <a
-            href={unsplashUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="underline hover:text-foreground font-medium"
-          >
-            Unsplash
-          </a>
+            Photo by{" "}
+            <a
+              href={photographerUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline hover:text-foreground font-medium"
+            >
+              {photographerName}
+            </a>
+            {" "}on{" "}
+            <a
+              href={unsplashUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline hover:text-foreground font-medium"
+            >
+              Unsplash
+            </a>
+          </Trans>
         </span>
       </div>
     );
@@ -93,24 +146,48 @@ export function UnsplashAttribution({
   // Default inline variant
   return (
     <span className={cn("text-xs text-muted-foreground", className)}>
-      Photo by{" "}
-      <a
-        href={photographerUrl}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="underline hover:text-foreground"
+      <Trans
+        ns="postmedia"
+        i18nKey="unsplash.attribution"
+        values={{ photographerName }}
+        components={{
+          1: (
+            <a
+              href={photographerUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline hover:text-foreground"
+            />
+          ),
+          2: (
+            <a
+              href={unsplashUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline hover:text-foreground"
+            />
+          ),
+        }}
       >
-        {photographerName}
-      </a>
-      {" "}on{" "}
-      <a
-        href={unsplashUrl}
-        target="_blank"
-        rel="noopener noreferrer"
-        className="underline hover:text-foreground"
-      >
-        Unsplash
-      </a>
+        Photo by{" "}
+        <a
+          href={photographerUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="underline hover:text-foreground"
+        >
+          {photographerName}
+        </a>
+        {" "}on{" "}
+        <a
+          href={unsplashUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="underline hover:text-foreground"
+        >
+          Unsplash
+        </a>
+      </Trans>
     </span>
   );
 }

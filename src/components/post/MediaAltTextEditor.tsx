@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -29,6 +30,7 @@ export function MediaAltTextEditor({
   currentAltText,
   onSave,
 }: MediaAltTextEditorProps) {
+  const { t } = useTranslation("postmedia");
   const [altText, setAltText] = useState(currentAltText);
 
   const handleSave = () => {
@@ -49,10 +51,10 @@ export function MediaAltTextEditor({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <FileText className="w-5 h-5" />
-            Add Alt Text
+            {t("altText.title", "Add Alt Text")}
           </DialogTitle>
           <DialogDescription>
-            Alt text describes the image for screen readers and when images fail to load.
+            {t("altText.description", "Alt text describes the image for screen readers and when images fail to load.")}
           </DialogDescription>
         </DialogHeader>
 
@@ -61,20 +63,20 @@ export function MediaAltTextEditor({
           <div className="relative rounded-lg overflow-hidden bg-muted aspect-video flex items-center justify-center">
             <img
               src={mediaSrc}
-              alt="Preview"
+              alt={t("altText.previewAlt", "Preview")}
               className="max-h-48 w-auto object-contain"
             />
           </div>
 
           {/* Alt Text Input */}
           <div className="space-y-2">
-            <Label htmlFor="alt-text">Description</Label>
+            <Label htmlFor="alt-text">{t("altText.descriptionLabel", "Description")}</Label>
             <SavedSuggestionsInput
               fieldType="alt_text"
               isTextarea
               value={altText}
               onChange={setAltText}
-              placeholder="Describe what's in this image..."
+              placeholder={t("altText.placeholder", "Describe what's in this image...")}
               maxLength={1000}
               rows={3}
             />
@@ -85,20 +87,20 @@ export function MediaAltTextEditor({
 
           {/* Tips */}
           <div className="p-3 rounded-lg bg-muted/50 space-y-1">
-            <p className="text-xs font-medium">Tips for good alt text:</p>
+            <p className="text-xs font-medium">{t("altText.tipsTitle", "Tips for good alt text:")}</p>
             <ul className="text-xs text-muted-foreground list-disc list-inside space-y-0.5">
-              <li>Be specific and descriptive</li>
-              <li>Keep it concise (under 125 characters is ideal)</li>
-              <li>Don't start with "Image of" or "Picture of"</li>
+              <li>{t("altText.tip1", "Be specific and descriptive")}</li>
+              <li>{t("altText.tip2", "Keep it concise (under 125 characters is ideal)")}</li>
+              <li>{t("altText.tip3", "Don't start with \"Image of\" or \"Picture of\"")}</li>
             </ul>
           </div>
         </div>
 
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Cancel
+            {t("common:cancel", "Cancel")}
           </Button>
-          <Button onClick={handleSave}>Save Alt Text</Button>
+          <Button onClick={handleSave}>{t("altText.saveBtn", "Save Alt Text")}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

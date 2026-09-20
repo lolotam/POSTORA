@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors, DragEndEvent } from "@dnd-kit/core";
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, horizontalListSortingStrategy } from "@dnd-kit/sortable";
 import { Button } from "@/components/ui/button";
@@ -74,6 +75,7 @@ export function MediaUploadArea({
   platformEligibility,
   allPlatforms,
 }: MediaUploadAreaProps) {
+  const { t } = useTranslation("postmedia");
   const { flags, isLoading: isFlagsLoading } = useFeatureFlags();
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   
@@ -111,7 +113,7 @@ export function MediaUploadArea({
   if (uploadMethod === "url") {
     return (
       <div className="space-y-4">
-        <Label className="text-sm">Media URLs</Label>
+        <Label className="text-sm">{t("uploadArea.mediaUrls", "Media URLs")}</Label>
         <GradientRingCard variant="violet" hoverLift={false} ringIntensity="subtle" padded={false} innerClassName="p-4">
           <Tabs value={urlMediaType} onValueChange={(v) => setUrlMediaType(v as "images" | "video")}>
             <TabsList className={cn(
@@ -120,33 +122,33 @@ export function MediaUploadArea({
             )}>
               <TabsTrigger value="images" className="gap-2">
                 <Image className="w-4 h-4" />
-                Images
+                {t("uploadArea.tabImages", "Images")}
               </TabsTrigger>
               <TabsTrigger value="video" className="gap-2">
                 <Video className="w-4 h-4" />
-                Video
+                {t("uploadArea.tabVideo", "Video")}
               </TabsTrigger>
             </TabsList>
             <TabsContent value="images">
               <Input
-                placeholder="Enter image URLs (one per line, max 10)"
+                placeholder={t("uploadArea.imageUrlsPlaceholder", "Enter image URLs (one per line, max 10)")}
                 value={imageUrls}
                 onChange={(e) => setImageUrls(e.target.value)}
                 className="min-h-[80px] bg-background/60 backdrop-blur-sm border-violet-400/30 focus-visible:border-violet-400 focus-visible:ring-violet-400/30"
               />
               <p className="text-xs text-muted-foreground mt-1">
-                Enter direct image URLs, one per line
+                {t("uploadArea.imageUrlsHint", "Enter direct image URLs, one per line")}
               </p>
             </TabsContent>
             <TabsContent value="video">
               <Input
-                placeholder="Enter video URL"
+                placeholder={t("uploadArea.videoUrlPlaceholder", "Enter video URL")}
                 value={videoUrl}
                 onChange={(e) => setVideoUrl(e.target.value)}
                 className="bg-background/60 backdrop-blur-sm border-violet-400/30 focus-visible:border-violet-400 focus-visible:ring-violet-400/30"
               />
               <p className="text-xs text-muted-foreground mt-1">
-                Enter a direct video URL (MP4, MOV)
+                {t("uploadArea.videoUrlHint", "Enter a direct video URL (MP4, MOV)")}
               </p>
             </TabsContent>
           </Tabs>
@@ -158,7 +160,7 @@ export function MediaUploadArea({
   // Local upload method
   return (
     <div className="space-y-4">
-      <Label className="text-sm">Media</Label>
+      <Label className="text-sm">{t("uploadArea.mediaLabel", "Media")}</Label>
       <div
         className={cn(
           "border-2 border-dashed rounded-2xl p-6 text-center transition-all duration-300 backdrop-blur-sm",
@@ -181,12 +183,12 @@ export function MediaUploadArea({
         <div className="group flex flex-col items-center gap-3">
           <Icon3D icon={Upload} variant="violet" size="md" />
           <p className="text-base font-semibold bg-clip-text text-transparent bg-gradient-to-r from-violet-500 via-fuchsia-500 to-sky-500">
-            Drag and drop your media here
+            {t("uploadArea.dragDropTitle", "Drag and drop your media here")}
           </p>
           <p className="text-xs text-muted-foreground">
             {firstFileIsVideo 
-              ? "Video uploaded - only one video per post allowed" 
-              : `or click to browse (max ${MAX_FILES} files, up to 100MB each)`}
+              ? t("uploadArea.videoLimitNotice", "Video uploaded - only one video per post allowed") 
+              : t("uploadArea.browseHint", "or click to browse (max {{max}} files, up to 100MB each)", { max: MAX_FILES })}
           </p>
           {/* Hide upload button when first file is video */}
           {!firstFileIsVideo && (
@@ -204,12 +206,12 @@ export function MediaUploadArea({
               {isUploading ? (
                 <>
                   <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  Uploading...
+                  {t("uploadArea.uploading", "Uploading...")}
                 </>
               ) : isAtLimit ? (
-                "Limit Reached"
+                t("uploadArea.limitReached", "Limit Reached")
               ) : (
-                "Select Files"
+                t("uploadArea.selectFiles", "Select Files")
               )}
             </Button>
           )}
@@ -222,7 +224,7 @@ export function MediaUploadArea({
           <div className="flex items-center gap-2">
             <ImagePlus className="w-4 h-4" />
             <span>
-              {files.length} of {MAX_FILES} media added
+              {t("uploadArea.mediaCounter", "{{count}} of {{max}} media added", { count: files.length, max: MAX_FILES })}
             </span>
             {/* Platform compatibility tooltip */}
             {mediaAnalysis && platformEligibility && allPlatforms && allPlatforms.length > 0 && (

@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useTranslation } from "react-i18next";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { AlertTriangle, CheckCircle2, Crop } from "lucide-react";
@@ -151,6 +152,7 @@ export function ImageAspectRatioValidator({
   onCropRequest,
   className,
 }: ImageAspectRatioValidatorProps) {
+  const { t } = useTranslation("postmedia");
   const [suggestions, setSuggestions] = useState<AspectRatioSuggestion[]>([]);
   const [imageDimensions, setImageDimensions] = useState<{ width: number; height: number } | null>(null);
 
@@ -183,7 +185,7 @@ export function ImageAspectRatioValidator({
 
   return (
     <div className={cn("space-y-2", className)}>
-      <p className="text-xs font-medium text-muted-foreground">Image Aspect Ratio Check</p>
+      <p className="text-xs font-medium text-muted-foreground">{t("aspectRatioValidator.title", "Image Aspect Ratio Check")}</p>
       <div className="flex flex-wrap gap-2">
         {suggestions.map((suggestion) => (
           <div
@@ -204,7 +206,11 @@ export function ImageAspectRatioValidator({
             {!suggestion.isValid && (
               <>
                 <span className="text-muted-foreground">
-                  → Crop to {suggestion.targetDimensions.width}×{suggestion.targetDimensions.height} ({suggestion.recommendedRatio})
+                  {t("aspectRatioValidator.cropTo", "→ Crop to {{width}}×{{height}} ({{ratio}})", {
+                    width: suggestion.targetDimensions.width,
+                    height: suggestion.targetDimensions.height,
+                    ratio: suggestion.recommendedRatio,
+                  })}
                 </span>
                 {onCropRequest && (
                   <Button
@@ -224,7 +230,7 @@ export function ImageAspectRatioValidator({
       
       {hasIssues && onCropRequest && (
         <p className="text-xs text-muted-foreground">
-          Click the crop icon to automatically adjust the image for optimal display
+          {t("aspectRatioValidator.hint", "Click the crop icon to automatically adjust the image for optimal display")}
         </p>
       )}
     </div>

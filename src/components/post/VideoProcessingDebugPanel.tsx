@@ -3,6 +3,7 @@
  */
 
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -33,6 +34,7 @@ interface VideoProcessingDebugPanelProps {
 }
 
 export function VideoProcessingDebugPanel({ className, compact = false }: VideoProcessingDebugPanelProps) {
+  const { t } = useTranslation("postmedia");
   const { debugMode, toggleDebugMode, debugLogs, clearDebugLogs } = useVideoProcessingDebug();
   const [isOpen, setIsOpen] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -58,7 +60,7 @@ export function VideoProcessingDebugPanel({ className, compact = false }: VideoP
         />
         <Label htmlFor="debug-mode-compact" className="text-xs text-muted-foreground flex items-center gap-1">
           <Bug className="w-3 h-3" />
-          Debug
+          {t("debugPanel.debug", "Debug")}
         </Label>
       </div>
     );
@@ -72,10 +74,10 @@ export function VideoProcessingDebugPanel({ className, compact = false }: VideoP
             <div className="flex items-center justify-between">
               <CardTitle className="text-sm font-medium flex items-center gap-2">
                 <Bug className="w-4 h-4" />
-                Video Processing Debug
+                {t("debugPanel.title", "Video Processing Debug")}
                 {debugMode && (
                   <Badge variant="secondary" className="text-[10px] h-4">
-                    Active
+                    {t("debugPanel.active", "Active")}
                   </Badge>
                 )}
               </CardTitle>
@@ -88,7 +90,7 @@ export function VideoProcessingDebugPanel({ className, compact = false }: VideoP
                     className="scale-90"
                   />
                   <Label htmlFor="debug-mode" className="text-xs text-muted-foreground">
-                    {debugMode ? "On" : "Off"}
+                    {debugMode ? t("debugPanel.on", "On") : t("debugPanel.off", "Off")}
                   </Label>
                 </div>
                 {isOpen ? (
@@ -105,13 +107,13 @@ export function VideoProcessingDebugPanel({ className, compact = false }: VideoP
           <CardContent className="p-3 pt-0 space-y-3">
             {!debugMode && (
               <p className="text-xs text-muted-foreground text-center py-2">
-                Enable debug mode to see Cloudinary transformation details
+                {t("debugPanel.enableDesc", "Enable debug mode to see Cloudinary transformation details")}
               </p>
             )}
 
             {debugMode && debugLogs.length === 0 && (
               <p className="text-xs text-muted-foreground text-center py-2">
-                No debug logs yet. Process a video to see details.
+                {t("debugPanel.noLogs", "No debug logs yet. Process a video to see details.")}
               </p>
             )}
 
@@ -125,7 +127,7 @@ export function VideoProcessingDebugPanel({ className, compact = false }: VideoP
                     className="h-6 text-xs gap-1"
                   >
                     <Trash2 className="w-3 h-3" />
-                    Clear logs
+                    {t("debugPanel.clearLogs", "Clear logs")}
                   </Button>
                 </div>
 
@@ -159,7 +161,7 @@ export function VideoProcessingDebugPanel({ className, compact = false }: VideoP
 
                         {log.transformation && (
                           <div className="flex items-start gap-1.5">
-                            <span className="text-muted-foreground shrink-0">Transform:</span>
+                            <span className="text-muted-foreground shrink-0">{t("debugPanel.transform", "Transform:")}</span>
                             <code className="text-[10px] bg-muted px-1 py-0.5 rounded break-all flex-1">
                               {log.transformation}
                             </code>
@@ -180,7 +182,7 @@ export function VideoProcessingDebugPanel({ className, compact = false }: VideoP
 
                         {log.request_id && (
                           <div className="flex items-center gap-1.5">
-                            <span className="text-muted-foreground">Request ID:</span>
+                            <span className="text-muted-foreground">{t("debugPanel.requestId", "Request ID:")}</span>
                             <code className="text-[10px] bg-muted px-1 py-0.5 rounded">
                               {log.request_id}
                             </code>
@@ -201,7 +203,7 @@ export function VideoProcessingDebugPanel({ className, compact = false }: VideoP
 
                         {log.video_metadata && (
                           <div className="text-muted-foreground">
-                            Dimensions: {log.video_metadata.width}×{log.video_metadata.height}
+                            {t("debugPanel.dimensions", "Dimensions:")} {log.video_metadata.width}×{log.video_metadata.height}
                             {log.video_metadata.duration && ` • ${Math.round(log.video_metadata.duration)}s`}
                           </div>
                         )}

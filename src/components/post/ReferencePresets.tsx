@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -49,6 +50,7 @@ interface ReferencePresetsProps {
 }
 
 export function ReferencePresets({ currentImages, onLoadPreset }: ReferencePresetsProps) {
+  const { t } = useTranslation("postmedia");
   const { user } = useAuth();
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -97,13 +99,13 @@ export function ReferencePresets({ currentImages, onLoadPreset }: ReferencePrese
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["reference-presets"] });
-      toast({ title: "Preset saved!", description: `"${presetName}" has been saved.` });
+      toast({ title: t("referencePresets.toastSaved", "Preset saved!"), description: t("referencePresets.toastSavedDesc", "\"{{name}}\" has been saved.", { name: presetName }) });
       setIsSaveDialogOpen(false);
       setPresetName("");
     },
     onError: (error) => {
       toast({
-        title: "Failed to save preset",
+        title: t("referencePresets.toastSaveFailed", "Failed to save preset"),
         description: error instanceof Error ? error.message : "Unknown error",
         variant: "destructive",
       });
@@ -122,12 +124,12 @@ export function ReferencePresets({ currentImages, onLoadPreset }: ReferencePrese
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["reference-presets"] });
-      toast({ title: "Preset deleted" });
+      toast({ title: t("referencePresets.toastDeleted", "Preset deleted") });
       setDeletePresetId(null);
     },
     onError: (error) => {
       toast({
-        title: "Failed to delete preset",
+        title: t("referencePresets.toastDeleteFailed", "Failed to delete preset"),
         description: error instanceof Error ? error.message : "Unknown error",
         variant: "destructive",
       });
@@ -136,7 +138,7 @@ export function ReferencePresets({ currentImages, onLoadPreset }: ReferencePrese
 
   const handleSave = () => {
     if (!presetName.trim()) {
-      toast({ title: "Enter a name", variant: "destructive" });
+      toast({ title: t("referencePresets.toastEnterName", "Enter a name"), variant: "destructive" });
       return;
     }
     savePresetMutation.mutate(presetName.trim());
@@ -149,7 +151,7 @@ export function ReferencePresets({ currentImages, onLoadPreset }: ReferencePrese
       id: `ref-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
     }));
     onLoadPreset(imagesWithNewIds);
-    toast({ title: `Loaded "${preset.name}"`, description: `${preset.reference_images.length} reference image(s)` });
+    toast({ title: t("referencePresets.toastLoaded", "Loaded \"{{name}}\"", { name: preset.name }), description: t("referencePresets.toastLoadedDesc", "{{count}} reference image(s)", { count: preset.reference_images.length }) });
   };
 
   const canSave = currentImages.length > 0;
@@ -166,7 +168,7 @@ export function ReferencePresets({ currentImages, onLoadPreset }: ReferencePrese
             disabled={isLoading}
           >
             <FolderOpen className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">Presets</span>
+            <span className="hidden sm:inline">{t("referencePresets.trigger", "Presets")}</span>
             <ChevronDown className="w-3 h-3" />
           </Button>
         </DropdownMenuTrigger>
@@ -174,8 +176,8 @@ export function ReferencePresets({ currentImages, onLoadPreset }: ReferencePrese
           {presets.length === 0 ? (
             <div className="px-3 py-4 text-center text-sm text-muted-foreground">
               <ImageIcon className="w-8 h-8 mx-auto mb-2 opacity-50" />
-              <p>No saved presets yet</p>
-              <p className="text-xs mt-1">Add reference images and save them for reuse</p>
+              <p>{t("referencePresets.emptyTitle", "No saved presets yet")}</p>
+              <p className="text-xs mt-1">{t("referencePresets.emptyDesc", "Add reference images and save them for reuse")}</p>
             </div>
           ) : (
             presets.map((preset) => (
@@ -187,7 +189,7 @@ export function ReferencePresets({ currentImages, onLoadPreset }: ReferencePrese
                   <div className="flex-1 min-w-0">
                     <p className="font-medium truncate">{preset.name}</p>
                     <p className="text-xs text-muted-foreground">
-                      {preset.reference_images.length} image{preset.reference_images.length !== 1 ? "s" : ""}
+                      {t("referencePresets.imagesCount", "{{count}} images", { count: preset.reference_images.length })}
                     </p>
                   </div>
                   {/* Preview thumbnails */}
@@ -233,7 +235,7 @@ export function ReferencePresets({ currentImages, onLoadPreset }: ReferencePrese
             className="cursor-pointer"
           >
             <Save className="w-4 h-4 mr-2" />
-            Save Current as Preset
+            {t("referencePresets.saveCurrent", "Save Current as Preset")}
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
@@ -242,12 +244,12 @@ export function ReferencePresets({ currentImages, onLoadPreset }: ReferencePrese
       <Dialog open={isSaveDialogOpen} onOpenChange={setIsSaveDialogOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Save Reference Preset</DialogTitle>
+            <DialogTitle>{t("referencePresets.dialogTitle", "Save Reference Preset")}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-4">
             <div className="space-y-2">
               <Input
-                placeholder="Enter preset name..."
+                placeholder={t("referencePresets.namePlaceholder", "Enter preset name...")}
                 value={presetName}
                 onChange={(e) => setPresetName(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && handleSave()}
@@ -255,7 +257,7 @@ export function ReferencePresets({ currentImages, onLoadPreset }: ReferencePrese
             </div>
             <div className="flex gap-2 flex-wrap">
               <p className="text-sm text-muted-foreground w-full">
-                Saving {currentImages.length} reference image{currentImages.length !== 1 ? "s" : ""}:
+                {t("referencePresets.savingCount", "Saving {{count}} reference image(s):", { count: currentImages.length })}
               </p>
               {currentImages.map((img, i) => (
                 <div
@@ -269,11 +271,11 @@ export function ReferencePresets({ currentImages, onLoadPreset }: ReferencePrese
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setIsSaveDialogOpen(false)}>
-              Cancel
+              {t("common:cancel", "Cancel")}
             </Button>
             <Button onClick={handleSave} disabled={savePresetMutation.isPending}>
               {savePresetMutation.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-              Save Preset
+              {t("referencePresets.saveBtn", "Save Preset")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -283,19 +285,19 @@ export function ReferencePresets({ currentImages, onLoadPreset }: ReferencePrese
       <AlertDialog open={!!deletePresetId} onOpenChange={(open) => !open && setDeletePresetId(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete Preset?</AlertDialogTitle>
+            <AlertDialogTitle>{t("referencePresets.deleteTitle", "Delete Preset?")}</AlertDialogTitle>
             <AlertDialogDescription>
-              This will permanently delete this reference preset. This action cannot be undone.
+              {t("referencePresets.deleteDesc", "This will permanently delete this reference preset. This action cannot be undone.")}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel>{t("common:cancel", "Cancel")}</AlertDialogCancel>
             <AlertDialogAction
               onClick={() => deletePresetId && deletePresetMutation.mutate(deletePresetId)}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
               {deletePresetMutation.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-              Delete
+              {t("common:delete", "Delete")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

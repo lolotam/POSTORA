@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback } from "react";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -110,6 +111,7 @@ function readAsDataUrl(blob: Blob): Promise<string> {
 }
 
 export function ImageGenerator({ onImageGenerated, buttonClassName }: ImageGeneratorProps) {
+  const { t } = useTranslation("postmedia");
   const [open, setOpen] = useState(false);
   const [prompt, setPrompt] = useState("");
   const [selectedPlatform, setSelectedPlatform] = useState("all");
@@ -183,7 +185,7 @@ export function ImageGenerator({ onImageGenerated, buttonClassName }: ImageGener
         });
       } catch {
         toast({
-          title: "Could not read that image",
+          title: t("imageGen.toastReadError", "Could not read that image"),
           description: file.name,
           variant: "destructive",
         });
@@ -245,8 +247,8 @@ export function ImageGenerator({ onImageGenerated, buttonClassName }: ImageGener
   const handleGenerate = async () => {
     if (!prompt.trim()) {
       toast({
-        title: "Enter a prompt",
-        description: "Describe the image you want to generate.",
+        title: t("imageGen.toastEnterPrompt", "Enter a prompt"),
+        description: t("imageGen.toastDescribePrompt", "Describe the image you want to generate."),
         variant: "destructive",
       });
       return;
@@ -309,7 +311,7 @@ export function ImageGenerator({ onImageGenerated, buttonClassName }: ImageGener
         }
 
         toast({
-          title: "Image generation Failed",
+          title: t("imageGen.toastFailed", "Image generation Failed"),
           description: actualError,
           variant: "destructive",
         });
@@ -327,7 +329,7 @@ export function ImageGenerator({ onImageGenerated, buttonClassName }: ImageGener
           handleAIError({ status: 429, message }, 'Image generation');
         } else {
           toast({
-            title: 'Image generation Failed',
+            title: t("imageGen.toastFailed", "Image generation Failed"),
             description: message,
             variant: 'destructive',
           });
@@ -352,8 +354,8 @@ export function ImageGenerator({ onImageGenerated, buttonClassName }: ImageGener
       if (data?.imageUrl) {
         setGeneratedImage(data.imageUrl);
         toast({
-          title: "Image generated!",
-          description: "Your AI image is ready. Click 'Use Image' to add it to your post.",
+          title: t("imageGen.toastSuccess", "Image generated!"),
+          description: t("imageGen.toastSuccessDesc", "Your AI image is ready. Click 'Use Image' to add it to your post."),
         });
         // Refresh rate limits after successful generation
         refreshLimits();
@@ -378,13 +380,13 @@ export function ImageGenerator({ onImageGenerated, buttonClassName }: ImageGener
       resetForm();
 
       toast({
-        title: "Image added!",
-        description: "The generated image has been added to your post.",
+        title: t("imageGen.toastAdded", "Image added!"),
+        description: t("imageGen.toastAddedDesc", "The generated image has been added to your post."),
       });
     } catch (error) {
       toast({
-        title: "Failed to add image",
-        description: "Could not process the generated image.",
+        title: t("imageGen.toastAddFailed", "Failed to add image"),
+        description: t("imageGen.toastAddFailedDesc", "Could not process the generated image."),
         variant: "destructive",
       });
     }
@@ -421,7 +423,7 @@ export function ImageGenerator({ onImageGenerated, buttonClassName }: ImageGener
             )}
           >
             <Sparkles className="w-3 h-3 transition-transform duration-300 group-hover:rotate-12 group-hover:scale-110" />
-            Generate with AI
+            {t("imageGen.generateWithAi", "Generate with AI")}
           </Button>
         </DialogTrigger>
         <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto bg-card/80 backdrop-blur-xl border-border/50 shadow-2xl shadow-violet-500/10">
@@ -429,7 +431,7 @@ export function ImageGenerator({ onImageGenerated, buttonClassName }: ImageGener
             <DialogTitle className="flex items-center gap-3 group">
               <Icon3D icon={Sparkles} variant="violet" size="sm" />
               <GradientHeading as="h2" size="lg" preset="sky-violet-pink" className="!text-2xl md:!text-3xl">
-                AI Image Generator
+                {t("imageGen.title", "AI Image Generator")}
               </GradientHeading>
               {imageLimit.limitPerHour > 0 && (
                 <RateLimitIndicator
@@ -439,7 +441,7 @@ export function ImageGenerator({ onImageGenerated, buttonClassName }: ImageGener
                   remainingDay={imageLimit.remainingDay}
                   resetTimeHour={imageLimit.resetTimeHour}
                   resetTimeDay={imageLimit.resetTimeDay}
-                  label="Image Generation"
+                  label={t("imageGen.rateLimitLabel", "Image Generation")}
                   compact
                   className="ml-auto"
                 />
@@ -453,10 +455,10 @@ export function ImageGenerator({ onImageGenerated, buttonClassName }: ImageGener
               <Reveal>
                 <GradientRingCard variant="rose" hoverLift={false} ringIntensity="subtle" innerClassName="p-3">
                   <p className="text-sm font-medium text-rose-700 dark:text-rose-300">
-                    You've reached your hourly image generation limit.
+                    {t("imageGen.hourlyLimitReached", "You've reached your hourly image generation limit.")}
                   </p>
                   <p className="text-xs text-rose-600/80 dark:text-rose-300/80 mt-1">
-                    Please wait for it to reset before generating more images.
+                    {t("imageGen.waitReset", "Please wait for it to reset before generating more images.")}
                   </p>
                 </GradientRingCard>
               </Reveal>
@@ -464,11 +466,11 @@ export function ImageGenerator({ onImageGenerated, buttonClassName }: ImageGener
 
             {/* Prompt */}
             <div className="space-y-2">
-              <Label>Describe your image</Label>
+              <Label>{t("imageGen.describeImage", "Describe your image")}</Label>
               <Textarea
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
-                placeholder="A professional product photo of a modern smartphone on a marble surface with soft lighting..."
+                placeholder={t("imageGen.promptPlaceholder", "A professional product photo of a modern smartphone on a marble surface with soft lighting...")}
                 className="min-h-[100px]"
                 disabled={isRateLimited}
               />
@@ -476,7 +478,7 @@ export function ImageGenerator({ onImageGenerated, buttonClassName }: ImageGener
 
             {/* Which models will run — administrator-controlled, read-only here. */}
             <div className="space-y-2">
-              <Label>AI Model</Label>
+              <Label>{t("imageGen.aiModel", "AI Model")}</Label>
               <ResolvedModelCards tiers={tiers} />
             </div>
 
@@ -484,7 +486,11 @@ export function ImageGenerator({ onImageGenerated, buttonClassName }: ImageGener
             {supportsReference && (
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <Label>Reference Images (optional, up to {MAX_REFERENCE_IMAGES})</Label>
+                  <Label>
+                    {t("imageGen.referenceImages", "Reference Images (optional, up to {{count}})", {
+                      count: MAX_REFERENCE_IMAGES,
+                    })}
+                  </Label>
                   <ReferencePresets
                     currentImages={referenceImages}
                     onLoadPreset={setReferenceImages}
@@ -507,7 +513,7 @@ export function ImageGenerator({ onImageGenerated, buttonClassName }: ImageGener
                     disabled={referenceImages.length >= MAX_REFERENCE_IMAGES}
                   >
                     <Upload className="w-4 h-4" />
-                    Upload
+                    {t("imageGen.uploadRef", "Upload")}
                   </Button>
                   <Button
                     variant="outline"
@@ -517,7 +523,7 @@ export function ImageGenerator({ onImageGenerated, buttonClassName }: ImageGener
                     disabled={referenceImages.length >= MAX_REFERENCE_IMAGES}
                   >
                     <FolderOpen className="w-4 h-4" />
-                    Library
+                    {t("imageGen.libraryRef", "Library")}
                   </Button>
                   <Button
                     variant="outline"
@@ -527,7 +533,7 @@ export function ImageGenerator({ onImageGenerated, buttonClassName }: ImageGener
                     disabled={referenceImages.length >= MAX_REFERENCE_IMAGES}
                   >
                     <ImageIcon className="w-4 h-4" />
-                    Stock
+                    {t("imageGen.stockRef", "Stock")}
                   </Button>
                   
                   {/* Reference image previews with drag-and-drop */}
@@ -557,14 +563,17 @@ export function ImageGenerator({ onImageGenerated, buttonClassName }: ImageGener
                   )}
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  Drag to reorder (first = most influence). Select type for each reference ({referenceImages.length}/{MAX_REFERENCE_IMAGES})
+                  {t("imageGen.reorderHint", "Drag to reorder (first = most influence). Select type for each reference ({{current}}/{{max}})", {
+                    current: referenceImages.length,
+                    max: MAX_REFERENCE_IMAGES,
+                  })}
                 </p>
               </div>
             )}
 
             {/* Platform Selection */}
             <div className="space-y-2">
-              <Label>Target Platform</Label>
+              <Label>{t("imageGen.targetPlatform", "Target Platform")}</Label>
               <Select value={selectedPlatform} onValueChange={handlePlatformChange}>
                 <SelectTrigger>
                   <SelectValue />
@@ -572,20 +581,20 @@ export function ImageGenerator({ onImageGenerated, buttonClassName }: ImageGener
                 <SelectContent className="bg-background border border-border z-50">
                   {platformOptions.map((p) => (
                     <SelectItem key={p.value} value={p.value}>
-                      {p.label}
+                      {p.value === "all" ? t("imageGen.platformAll", p.label) : p.label}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
               <p className="text-xs text-muted-foreground">
-                Select a platform to show only supported aspect ratios
+                {t("imageGen.platformHint", "Select a platform to show only supported aspect ratios")}
               </p>
             </div>
 
             {/* Options Row */}
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label>Aspect Ratio</Label>
+                <Label>{t("imageGen.aspectRatio", "Aspect Ratio")}</Label>
                 <Select value={aspectRatio} onValueChange={setAspectRatio}>
                   <SelectTrigger>
                     <SelectValue />
@@ -600,7 +609,10 @@ export function ImageGenerator({ onImageGenerated, buttonClassName }: ImageGener
                 </Select>
                 {selectedPlatform !== "all" && (
                   <p className="text-xs text-muted-foreground">
-                    Showing {filteredAspectRatios.length} ratio{filteredAspectRatios.length !== 1 ? "s" : ""} for {platformOptions.find(p => p.value === selectedPlatform)?.label}
+                    {t("imageGen.showingRatios", "Showing {{count}} ratio(s) for {{platform}}", {
+                      count: filteredAspectRatios.length,
+                      platform: platformOptions.find(p => p.value === selectedPlatform)?.label || selectedPlatform,
+                    })}
                   </p>
                 )}
               </div>
@@ -618,14 +630,16 @@ export function ImageGenerator({ onImageGenerated, buttonClassName }: ImageGener
               {isGenerating ? (
                 <>
                   <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  {tiers.some((t) => SLOW_MODELS.has(t.model_id)) ? "Generating… up to 2 minutes" : "Generating..."}
+                  {tiers.some((t) => SLOW_MODELS.has(t.model_id))
+                    ? t("imageGen.generatingSlow", "Generating… up to 2 minutes")
+                    : t("imageGen.generating", "Generating...")}
                 </>
               ) : isRateLimited ? (
-                "Rate limit reached"
+                t("imageGen.rateLimitReached", "Rate limit reached")
               ) : (
                 <>
                   <Sparkles className="w-4 h-4 mr-2" />
-                  Generate Image
+                  {t("imageGen.generateBtn", "Generate Image")}
                 </>
               )}
             </Button>
@@ -637,18 +651,18 @@ export function ImageGenerator({ onImageGenerated, buttonClassName }: ImageGener
                   <div className="rounded-xl overflow-hidden border border-emerald-400/30 shadow-lg shadow-emerald-500/20">
                     <img
                       src={generatedImage}
-                      alt="Generated"
+                      alt={t("imageGen.generatedAlt", "Generated")}
                       className="w-full h-auto"
                     />
                   </div>
                   <div className="flex gap-3">
                     <Button onClick={handleUseImage} className="flex-1 bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500 text-white shadow-md shadow-emerald-500/30 hover:shadow-emerald-500/50 border-0">
                       <ImagePlus className="w-4 h-4 mr-2" />
-                      Use Image
+                      {t("imageGen.useImage", "Use Image")}
                     </Button>
                     <Button variant="outline" onClick={handleDownload} className="bg-card/50 backdrop-blur-sm border-border/50 hover:border-emerald-400/60">
                       <Download className="w-4 h-4 mr-2" />
-                      Download
+                      {t("imageGen.download", "Download")}
                     </Button>
                   </div>
                 </GradientRingCard>

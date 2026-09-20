@@ -1,4 +1,5 @@
 import { useSortable } from "@dnd-kit/sortable";
+import { useTranslation } from "react-i18next";
 import { CSS } from "@dnd-kit/utilities";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -31,6 +32,7 @@ export function SortableMediaItem({
   onEditAltText,
   sizeVariant = "full",
 }: SortableMediaItemProps) {
+  const { t } = useTranslation("postmedia");
   const { flags } = useFeatureFlags();
   const {
     attributes,
@@ -113,7 +115,7 @@ export function SortableMediaItem({
       ) : (
         <img
           src={file.previewUrl}
-          alt={file.altText || "Preview"}
+          alt={file.altText || t("sortable.previewAlt", "Preview")}
           className={cn(maxHeightClass, "w-full object-contain cursor-pointer transition-all duration-300")}
           onClick={onOpenLightbox}
         />
@@ -145,7 +147,7 @@ export function SortableMediaItem({
               onClick={onOpenLightbox}
             >
               <Maximize2 className="w-4 h-4 mr-1" />
-              View
+              {t("sortable.view", "View")}
             </Button>
             {isImageOrGif && onEditAltText && (
               <Button
@@ -155,7 +157,7 @@ export function SortableMediaItem({
                 onClick={() => onEditAltText(file)}
               >
                 <FileText className="w-4 h-4 mr-1" />
-                Alt
+                {t("sortable.alt", "Alt")}
               </Button>
             )}
             {file.fileType === "image" && flags.imageCrop && (
@@ -166,7 +168,7 @@ export function SortableMediaItem({
                 onClick={() => onOpenCropper(file)}
               >
                 <Crop className="w-4 h-4 mr-1" />
-                Crop
+                {t("sortable.crop", "Crop")}
               </Button>
             )}
             {/* GIF cropping disabled - GIFs don't support cropping (breaks animation) */}
@@ -179,7 +181,7 @@ export function SortableMediaItem({
                 onClick={() => onOpenCropper(file)}
               >
                 <Crop className="w-4 h-4 mr-1" />
-                Crop
+                {t("sortable.crop", "Crop")}
               </Button>
             )}
             {file.fileType === "video" && flags.videoCompress && (
@@ -190,7 +192,7 @@ export function SortableMediaItem({
                 onClick={() => onOpenCompressor(file)}
               >
                 <Shrink className="w-4 h-4 mr-1" />
-                Compress
+                {t("sortable.compress", "Compress")}
               </Button>
             )}
             <Button

@@ -3,6 +3,7 @@
  */
 
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -76,6 +77,7 @@ export function VideoProcessingPresetSelector({
   onApplyPreset,
   currentSettings,
 }: VideoProcessingPresetSelectorProps) {
+  const { t } = useTranslation("postmedia");
   const {
     presets,
     isLoading,
@@ -149,19 +151,19 @@ export function VideoProcessingPresetSelector({
         <DropdownMenuTrigger asChild>
           <Button variant="outline" size="sm" className="gap-1.5" disabled={isLoading}>
             <Bookmark className="w-4 h-4" />
-            Presets
+            {t("presets.button", "Presets")}
             <ChevronDown className="w-3 h-3" />
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-56">
           <DropdownMenuLabel className="text-xs text-muted-foreground">
-            Quick apply saved settings
+            {t("presets.dropdownLabel", "Quick apply saved settings")}
           </DropdownMenuLabel>
           <DropdownMenuSeparator />
 
           {availablePresets.length === 0 ? (
             <div className="px-2 py-3 text-center text-sm text-muted-foreground">
-              No presets saved yet
+              {t("presets.noPresets", "No presets saved yet")}
             </div>
           ) : (
             availablePresets.map((preset) => (
@@ -204,7 +206,7 @@ export function VideoProcessingPresetSelector({
           
           <DropdownMenuItem onSelect={handleSaveCurrentAsPreset} className="gap-2">
             <Plus className="w-4 h-4" />
-            Save current as preset
+            {t("presets.saveCurrent", "Save current as preset")}
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
@@ -215,15 +217,15 @@ export function VideoProcessingPresetSelector({
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Bookmark className="w-5 h-5" />
-              Save Processing Preset
+              {t("presets.dialogTitle", "Save Processing Preset")}
             </DialogTitle>
           </DialogHeader>
 
           <div className="space-y-4 py-4">
             <div className="space-y-2">
-              <Label>Preset Name</Label>
+              <Label>{t("presets.nameLabel", "Preset Name")}</Label>
               <Input
-                placeholder="e.g., TikTok Vertical"
+                placeholder={t("presets.namePlaceholder", "e.g., TikTok Vertical")}
                 value={newPreset.name}
                 onChange={(e) => setNewPreset(prev => ({ ...prev, name: e.target.value }))}
               />
@@ -231,7 +233,7 @@ export function VideoProcessingPresetSelector({
 
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label>Platform</Label>
+                <Label>{t("presets.platformLabel", "Platform")}</Label>
                 <Select
                   value={newPreset.platform}
                   onValueChange={(v) => setNewPreset(prev => ({ 
@@ -253,7 +255,7 @@ export function VideoProcessingPresetSelector({
               </div>
 
               <div className="space-y-2">
-                <Label>Type</Label>
+                <Label>{t("presets.typeLabel", "Type")}</Label>
                 <Select
                   value={newPreset.preset_type}
                   onValueChange={(v) => setNewPreset(prev => ({ 
@@ -265,9 +267,9 @@ export function VideoProcessingPresetSelector({
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="crop">Crop only</SelectItem>
-                    <SelectItem value="compress">Compress only</SelectItem>
-                    <SelectItem value="both">Both</SelectItem>
+                    <SelectItem value="crop">{t("presets.cropOnly", "Crop only")}</SelectItem>
+                    <SelectItem value="compress">{t("presets.compressOnly", "Compress only")}</SelectItem>
+                    <SelectItem value="both">{t("presets.both", "Both")}</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -275,7 +277,7 @@ export function VideoProcessingPresetSelector({
 
             {(newPreset.preset_type === "crop" || newPreset.preset_type === "both") && (
               <div className="space-y-2">
-                <Label>Aspect Ratio</Label>
+                <Label>{t("presets.aspectRatioLabel", "Aspect Ratio")}</Label>
                 <Select
                   value={newPreset.crop_aspect_ratio}
                   onValueChange={(v) => setNewPreset(prev => ({ ...prev, crop_aspect_ratio: v }))}
@@ -297,7 +299,7 @@ export function VideoProcessingPresetSelector({
             {(newPreset.preset_type === "compress" || newPreset.preset_type === "both") && (
               <>
                 <div className="space-y-2">
-                  <Label>Quality: {newPreset.compress_quality}%</Label>
+                  <Label>{t("presets.qualityLabel", "Quality: {{quality}}%", { quality: newPreset.compress_quality })}</Label>
                   <Slider
                     value={[newPreset.compress_quality]}
                     onValueChange={([v]) => setNewPreset(prev => ({ ...prev, compress_quality: v }))}
@@ -308,10 +310,10 @@ export function VideoProcessingPresetSelector({
                 </div>
 
                 <div className="space-y-2">
-                  <Label>Max Size (MB, optional)</Label>
+                  <Label>{t("presets.maxSizeLabel", "Max Size (MB, optional)")}</Label>
                   <Input
                     type="number"
-                    placeholder="e.g., 50"
+                    placeholder={t("presets.maxSizePlaceholder", "e.g., 50")}
                     value={newPreset.compress_max_size_mb || ""}
                     onChange={(e) => setNewPreset(prev => ({ 
                       ...prev, 
@@ -323,7 +325,7 @@ export function VideoProcessingPresetSelector({
             )}
 
             <div className="flex items-center justify-between">
-              <Label htmlFor="is-default">Set as default for {newPreset.platform}</Label>
+              <Label htmlFor="is-default">{t("presets.setDefault", "Set as default for {{platform}}", { platform: newPreset.platform })}</Label>
               <Switch
                 id="is-default"
                 checked={newPreset.is_default}
@@ -334,10 +336,10 @@ export function VideoProcessingPresetSelector({
 
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowCreateDialog(false)}>
-              Cancel
+              {t("common:cancel", "Cancel")}
             </Button>
             <Button onClick={handleCreatePreset} disabled={!newPreset.name.trim()}>
-              Save Preset
+              {t("presets.saveBtn", "Save Preset")}
             </Button>
           </DialogFooter>
         </DialogContent>

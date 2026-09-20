@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
@@ -118,6 +119,7 @@ export function MediaCropper({
   platforms = [],
   mediaFileId,
 }: MediaCropperProps) {
+  const { t } = useTranslation("postmedia");
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const mediaRef = useRef<HTMLImageElement | HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -131,6 +133,41 @@ export function MediaCropper({
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
   const [qualityPreset, setQualityPreset] = useState<string>("balanced");
+
+  const getRatioLabel = (value: string, defaultLabel: string) => {
+    switch (value) {
+      case "1:1": return t("cropper.ratioSquare", defaultLabel);
+      case "4:5": return t("cropper.ratioPortrait45", defaultLabel);
+      case "9:16": return t("cropper.ratioVertical916", defaultLabel);
+      case "16:9": return t("cropper.ratioLandscape169", defaultLabel);
+      case "4:3": return t("cropper.ratioStandard43", defaultLabel);
+      case "2:3": return t("cropper.ratioPinterest23", defaultLabel);
+      case "free": return t("cropper.ratioFree", defaultLabel);
+      default: return defaultLabel;
+    }
+  };
+
+  const getQualityPresetInfo = (value: string, defaultLabel: string, defaultDesc: string) => {
+    switch (value) {
+      case "fast":
+        return {
+          label: t("cropper.qualityFast", defaultLabel),
+          description: t("cropper.qualityFastDesc", defaultDesc),
+        };
+      case "balanced":
+        return {
+          label: t("cropper.qualityBalanced", defaultLabel),
+          description: t("cropper.qualityBalancedDesc", defaultDesc),
+        };
+      case "high":
+        return {
+          label: t("cropper.qualityHigh", defaultLabel),
+          description: t("cropper.qualityHighDesc", defaultDesc),
+        };
+      default:
+        return { label: defaultLabel, description: defaultDesc };
+    }
+  };
 
   // Calculate expected output resolution
   const expectedResolution = useMemo(() => {
@@ -454,7 +491,9 @@ export function MediaCropper({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Crop className="w-5 h-5" />
-            Crop {mediaType === "image" ? "Image" : "Video Frame"}
+            {mediaType === "image"
+              ? t("cropper.titleImage", "Crop Image")
+              : t("cropper.titleVideo", "Crop Video Frame")}
           </DialogTitle>
         </DialogHeader>
 
@@ -462,7 +501,7 @@ export function MediaCropper({
           {/* Preset Selector + Aspect Ratio Selection */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
-              <Label>Aspect Ratio</Label>
+              <Label>{t("cropper.aspectRatio", "Aspect Ratio")}</Label>
               <VideoProcessingPresetSelector
                 platform={platforms[0]?.toLowerCase() || "general"}
                 onApplyPreset={(preset) => {
@@ -482,10 +521,10 @@ export function MediaCropper({
                   onClick={() => setSelectedRatio(ratio.value)}
                   className="gap-1"
                 >
-                  {ratio.label}
+                  {getRatioLabel(ratio.value, ratio.label)}
                   {recommendedRatios.includes(ratio.value) && (
                     <Badge variant="secondary" className="text-xs ml-1">
-                      Recommended
+                      {t("cropper.recommended", "Recommended")}
                     </Badge>
                   )}
                 </Button>
@@ -493,7 +532,10 @@ export function MediaCropper({
             </div>
             {platforms.length > 0 && (
               <p className="text-xs text-muted-foreground">
-                Recommended for {platforms.join(", ")}: {recommendedRatios.join(", ")}
+                {t("cropper.recommendedFor", "Recommended for {{platforms}}: {{ratios}}", {
+                  platforms: platforms.join(", "),
+                  ratios: recommendedRatios.join(", "),
+                })}
               </p>
             )}
           </div>
@@ -511,7 +553,7 @@ export function MediaCropper({
               <img
                 ref={mediaRef as React.RefObject<HTMLImageElement>}
                 src={mediaSrc}
-                alt="Crop preview"
+                alt={t("cropper.previewAlt", "Crop preview")}
                 className="w-full h-full object-contain"
                 style={{ transform: `scale(${zoom[0]})` }}
                 onLoad={handleMediaLoad}
@@ -593,7 +635,7 @@ export function MediaCropper({
             <div className="flex items-center justify-between">
               <Label className="flex items-center gap-2">
                 <ZoomIn className="w-4 h-4" />
-                Zoom
+                {t("cropper.zoom", "Zoom")}
               </Label>
               <span className="text-sm text-muted-foreground">{Math.round(zoom[0] * 100)}%</span>
             </div>
@@ -609,7 +651,7 @@ export function MediaCropper({
           {/* Quality Preset for Videos */}
           {mediaType === "video" && selectedRatio !== "free" && (
             <div className="space-y-2">
-              <Label className="text-sm font-medium">Processing Quality</Label>
+              <Label className="text-sm font-medium">{t("cropper.processingQuality", "Processing Quality")}</Label>
               <div className="flex gap-2">
                 {QUALITY_PRESETS.map((preset) => (
                   <Button
@@ -619,12 +661,15 @@ export function MediaCropper({
                     onClick={() => setQualityPreset(preset.value)}
                     className="flex-1"
                   >
-                    {preset.label}
+                    {getQualityPresetInfo(preset.value, preset.label, preset.description).label}
                   </Button>
                 ))}
               </div>
               <p className="text-xs text-muted-foreground">
-                {QUALITY_PRESETS.find(p => p.value === qualityPreset)?.description}
+                {(() => {
+                  const current = QUALITY_PRESETS.find((p) => p.value === qualityPreset);
+                  return current ? getQualityPresetInfo(current.value, current.label, current.description).description : "";
+                })()}
               </p>
             </div>
           )}
@@ -633,11 +678,11 @@ export function MediaCropper({
           {mediaDimensions.width > 0 && (
             <div className="p-3 rounded-lg bg-muted/50 space-y-2">
               <div className="flex items-center justify-between text-sm">
-                <span className="text-muted-foreground">Source:</span>
+                <span className="text-muted-foreground">{t("cropper.sourceLabel", "Source:")}</span>
                 <span className="font-mono">{mediaDimensions.width}×{mediaDimensions.height}</span>
               </div>
               <div className="flex items-center justify-between text-sm">
-                <span className="text-muted-foreground">Cropped:</span>
+                <span className="text-muted-foreground">{t("cropper.croppedLabel", "Cropped:")}</span>
                 <span className="font-mono">
                   {Math.round((cropArea.width / 100) * mediaDimensions.width)}×
                   {Math.round((cropArea.height / 100) * mediaDimensions.height)}
@@ -645,14 +690,14 @@ export function MediaCropper({
               </div>
               {expectedResolution && (
                 <div className="flex items-center justify-between text-sm">
-                  <span className="text-muted-foreground">Output:</span>
+                  <span className="text-muted-foreground">{t("cropper.outputLabel", "Output:")}</span>
                   <span className={cn(
                     "font-mono font-medium",
                     expectedResolution.upscaled ? "text-primary" : ""
                   )}>
                     {expectedResolution.width}×{expectedResolution.height}
                     {expectedResolution.upscaled && (
-                      <Badge variant="secondary" className="ml-2 text-[10px]">Upscaled</Badge>
+                      <Badge variant="secondary" className="ml-2 text-[10px]">{t("cropper.upscaled", "Upscaled")}</Badge>
                     )}
                   </span>
                 </div>
@@ -664,17 +709,17 @@ export function MediaCropper({
         <DialogFooter className="gap-2">
           <Button variant="outline" onClick={handleReset}>
             <RotateCcw className="w-4 h-4 mr-2" />
-            Reset
+            {t("cropper.reset", "Reset")}
           </Button>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             <X className="w-4 h-4 mr-2" />
-            Cancel
+            {t("common:cancel", "Cancel")}
           </Button>
           {/* Show warning if video is still uploading (no mediaFileId) */}
           {mediaType === "video" && !mediaFileId ? (
             <Button disabled className="gap-2">
               <AlertCircle className="w-4 h-4" />
-              Wait for upload to finish
+              {t("cropper.waitForUpload", "Wait for upload to finish")}
             </Button>
           ) : (
             <Button onClick={handleApplyCrop} disabled={isProcessing}>
@@ -683,7 +728,7 @@ export function MediaCropper({
               ) : (
                 <Check className="w-4 h-4 mr-2" />
               )}
-              Apply Crop
+              {t("cropper.applyCrop", "Apply Crop")}
             </Button>
           )}
         </DialogFooter>

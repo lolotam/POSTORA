@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import { useTranslation } from "react-i18next";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Upload, Link2, MessageSquare, FolderOpen, Image as ImageIcon, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -43,6 +44,7 @@ export function UploadMethodSelector({
   currentFileCount = 0,
   isDragActive = false,
 }: UploadMethodSelectorProps) {
+  const { t } = useTranslation("postmedia");
   const { flags } = useFeatureFlags();
   const [isLibraryOpen, setIsLibraryOpen] = useState(false);
   const [isStockPickerOpen, setIsStockPickerOpen] = useState(false);
@@ -228,9 +230,9 @@ export function UploadMethodSelector({
   };
 
   const modeTiles: ModeTile[] = [
-    { value: "local", icon: Upload,          label: "Upload", description: "Upload images or videos from your device", shortcut: "1", variant: "violet" },
-    { value: "url",   icon: Link2,           label: "URL",    description: "Import media from a direct URL link",       shortcut: "2", variant: "sky"    },
-    { value: "text",  icon: MessageSquare,   label: "Text",   description: "Create a text-only post without media",     shortcut: "3", variant: "amber"  },
+    { value: "local", icon: Upload,          label: t("uploadMethod.uploadLabel", "Upload"), description: t("uploadMethod.uploadDesc", "Upload images or videos from your device"), shortcut: "1", variant: "violet" },
+    { value: "url",   icon: Link2,           label: t("uploadMethod.urlLabel", "URL"),    description: t("uploadMethod.urlDesc", "Import media from a direct URL link"),       shortcut: "2", variant: "sky"    },
+    { value: "text",  icon: MessageSquare,   label: t("uploadMethod.textLabel", "Text"),   description: t("uploadMethod.textDesc", "Create a text-only post without media"),     shortcut: "3", variant: "amber"  },
   ];
 
   type ActionTile = {
@@ -248,8 +250,8 @@ export function UploadMethodSelector({
     {
       key: "library",
       icon: FolderOpen,
-      label: "Library",
-      description: "Select from your previously uploaded media",
+      label: t("uploadMethod.libraryLabel", "Library"),
+      description: t("uploadMethod.libraryDesc", "Select from your previously uploaded media"),
       shortcut: "4",
       variant: "emerald",
       onClick: () => setIsLibraryOpen(true),
@@ -258,8 +260,8 @@ export function UploadMethodSelector({
     {
       key: "stock",
       icon: ImageIcon,
-      label: "Stock",
-      description: "Browse free stock photos and videos",
+      label: t("uploadMethod.stockLabel", "Stock"),
+      description: t("uploadMethod.stockDesc", "Browse free stock photos and videos"),
       shortcut: "5",
       variant: "rose",
       onClick: () => setIsStockPickerOpen(true),
@@ -288,7 +290,7 @@ export function UploadMethodSelector({
         <div className="absolute inset-0 z-50 flex items-center justify-center bg-primary/10 border-2 border-dashed border-primary rounded-2xl pointer-events-none">
           <div className="flex flex-col items-center gap-2 text-primary">
             <Upload className="w-10 h-10 animate-bounce" />
-            <p className="text-sm font-medium">Drop files here to upload</p>
+            <p className="text-sm font-medium">{t("uploadMethod.dropFiles", "Drop files here to upload")}</p>
           </div>
         </div>
       )}
@@ -297,8 +299,8 @@ export function UploadMethodSelector({
         {/* Upload Method group */}
         <div className="space-y-3">
           <div className="flex items-baseline justify-between gap-2">
-            <h4 className="text-sm font-semibold tracking-tight">Upload Method</h4>
-            <span className="text-[11px] text-muted-foreground">Choose how to add media</span>
+            <h4 className="text-sm font-semibold tracking-tight">{t("uploadMethod.title", "Upload Method")}</h4>
+            <span className="text-[11px] text-muted-foreground">{t("uploadMethod.subtitle", "Choose how to add media")}</span>
           </div>
 
           <RadioGroup
@@ -306,10 +308,10 @@ export function UploadMethodSelector({
             onValueChange={handleModeChange}
             className="grid grid-cols-3 gap-3"
           >
-            {modeTiles.map((t, i) => {
-              const isSelected = uploadMethod === t.value;
+            {modeTiles.map((tItem, i) => {
+              const isSelected = uploadMethod === tItem.value;
               return (
-                <Reveal key={t.value} delay={i * 60}>
+                <Reveal key={tItem.value} delay={i * 60}>
                   <Tooltip>
                     <TooltipTrigger asChild>
                       <label
@@ -318,9 +320,9 @@ export function UploadMethodSelector({
                           "focus-within:outline-none"
                         )}
                       >
-                        <RadioGroupItem value={t.value} className="sr-only" />
+                        <RadioGroupItem value={tItem.value} className="sr-only" />
                         <GradientRingCard
-                          variant={t.variant}
+                          variant={tItem.variant}
                           active={isSelected}
                           padded={false}
                           hoverLift={false}
@@ -331,15 +333,15 @@ export function UploadMethodSelector({
                             isSelected && "ring-2 ring-primary/40"
                           )}
                         >
-                          <Icon3D icon={t.icon} variant={t.variant} size="sm" />
-                          <span className="text-sm font-semibold leading-tight">{t.label}</span>
-                          <span className="text-[10px] text-muted-foreground">⌘{t.shortcut}</span>
+                          <Icon3D icon={tItem.icon} variant={tItem.variant} size="sm" />
+                          <span className="text-sm font-semibold leading-tight">{tItem.label}</span>
+                          <span className="text-[10px] text-muted-foreground">⌘{tItem.shortcut}</span>
                         </GradientRingCard>
                       </label>
                     </TooltipTrigger>
                     <TooltipContent side="bottom" className="max-w-[220px]">
-                      <p>{t.description}</p>
-                      <p className="text-xs text-muted-foreground mt-1">⌘/Ctrl + {t.shortcut}</p>
+                      <p>{tItem.description}</p>
+                      <p className="text-xs text-muted-foreground mt-1">⌘/Ctrl + {tItem.shortcut}</p>
                     </TooltipContent>
                   </Tooltip>
                 </Reveal>
@@ -353,8 +355,8 @@ export function UploadMethodSelector({
         {/* Action / picker tiles */}
         <div className="space-y-3">
           <div className="flex items-baseline justify-between gap-2">
-            <h4 className="text-sm font-semibold tracking-tight">Or pick from</h4>
-            <span className="text-[11px] text-muted-foreground">Library, stock & AI</span>
+            <h4 className="text-sm font-semibold tracking-tight">{t("uploadMethod.pickFromTitle", "Or pick from")}</h4>
+            <span className="text-[11px] text-muted-foreground">{t("uploadMethod.pickFromSubtitle", "Library, stock & AI")}</span>
           </div>
 
           <div className={cn(
@@ -363,34 +365,34 @@ export function UploadMethodSelector({
               ? "grid-cols-3"
               : "grid-cols-2"
           )}>
-            {visibleActions.map((t, i) => (
-              <Reveal key={t.key} delay={i * 60}>
+            {visibleActions.map((tItem, i) => (
+              <Reveal key={tItem.key} delay={i * 60}>
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <button
                       type="button"
-                      onClick={t.onClick}
+                      onClick={tItem.onClick}
                       className="block w-full text-left h-full"
                     >
                       <GradientRingCard
-                        variant={t.variant}
+                        variant={tItem.variant}
                         padded={false}
                         hoverLift={false}
                         ringIntensity="normal"
                         innerClassName="px-3 py-4 sm:py-5 flex flex-col items-center justify-center gap-2 text-center rounded-3xl"
                       >
-                        <Icon3D icon={t.icon} variant={t.variant} size="sm" />
-                        <span className="text-sm font-semibold leading-tight">{t.label}</span>
-                        {t.shortcut && (
-                          <span className="text-[10px] text-muted-foreground">⌘{t.shortcut}</span>
+                        <Icon3D icon={tItem.icon} variant={tItem.variant} size="sm" />
+                        <span className="text-sm font-semibold leading-tight">{tItem.label}</span>
+                        {tItem.shortcut && (
+                          <span className="text-[10px] text-muted-foreground">⌘{tItem.shortcut}</span>
                         )}
                       </GradientRingCard>
                     </button>
                   </TooltipTrigger>
                   <TooltipContent side="bottom" className="max-w-[220px]">
-                    <p>{t.description}</p>
-                    {t.shortcut && (
-                      <p className="text-xs text-muted-foreground mt-1">⌘/Ctrl + {t.shortcut}</p>
+                    <p>{tItem.description}</p>
+                    {tItem.shortcut && (
+                      <p className="text-xs text-muted-foreground mt-1">⌘/Ctrl + {tItem.shortcut}</p>
                     )}
                   </TooltipContent>
                 </Tooltip>
@@ -431,7 +433,7 @@ export function UploadMethodSelector({
                     </div>
                   </TooltipTrigger>
                   <TooltipContent side="bottom" className="max-w-[220px]">
-                    <p>Generate unique images using AI</p>
+                    <p>{t("uploadMethod.aiDesc", "Generate unique images using AI")}</p>
                   </TooltipContent>
                 </Tooltip>
               </Reveal>

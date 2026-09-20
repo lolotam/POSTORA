@@ -1,4 +1,5 @@
 import { useState, useMemo, useRef, useCallback } from "react";
+import { useTranslation } from "react-i18next";
 import { getAspectRatioLabel } from "@/lib/aspectRatioUtils";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
@@ -107,6 +108,7 @@ export function MediaLibraryPicker({
   imagesOnly = false,
   showExtendedFilters = false,
 }: MediaLibraryPickerProps) {
+  const { t } = useTranslation("postmedia");
   const { user } = useAuth();
   const { data: cdnConfig } = useCdnConfig();
   const queryClient = useQueryClient();
@@ -302,7 +304,7 @@ export function MediaLibraryPicker({
   // Breadcrumb navigation
   const pathParts = currentPath.split("/").filter(Boolean);
   const breadcrumbs = [
-    { name: "Library", path: "/" },
+    { name: t("mediaLibrary.breadcrumbRoot", "Library"), path: "/" },
     ...pathParts.map((part, i) => ({
       name: part,
       path: "/" + pathParts.slice(0, i + 1).join("/"),
@@ -416,11 +418,11 @@ export function MediaLibraryPicker({
           <DialogTitle className="flex items-center gap-3 group">
             <Icon3D icon={FolderOpen} variant="sky" size="sm" />
             <GradientHeading as="h2" size="lg" preset="sky-violet" className="!text-2xl md:!text-3xl">
-              Select from Media Library
+              {t("mediaLibrary.title", "Select from Media Library")}
             </GradientHeading>
             {imagesOnly && (
               <Badge className="text-xs bg-sky-500/15 text-sky-700 dark:text-sky-300 border border-sky-400/40">
-                Images Only
+                {t("mediaLibrary.imagesOnly", "Images Only")}
               </Badge>
             )}
           </DialogTitle>
@@ -432,7 +434,7 @@ export function MediaLibraryPicker({
           <div className="relative flex-1 min-w-[200px]">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
             <Input
-              placeholder="Search files..."
+              placeholder={t("mediaLibrary.searchPlaceholder", "Search files...")}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="pl-9 h-9"
@@ -447,7 +449,7 @@ export function MediaLibraryPicker({
                 className={cn("gap-2 h-9", selectedDate && "border-primary")}
               >
                 <Calendar className="w-4 h-4" />
-                {selectedDate ? format(selectedDate, "MMM d") : "Date"}
+                {selectedDate ? format(selectedDate, "MMM d") : t("mediaLibrary.dateFilter", "Date")}
               </Button>
             </PopoverTrigger>
             <PopoverContent className="w-auto p-0" align="start">
@@ -466,7 +468,7 @@ export function MediaLibraryPicker({
               {selectedDate && (
                 <div className="p-3 border-t">
                   <Button variant="ghost" size="sm" className="w-full" onClick={() => setSelectedDate(undefined)}>
-                    Clear date
+                    {t("mediaLibrary.clearDate", "Clear date")}
                   </Button>
                 </div>
               )}
@@ -481,17 +483,17 @@ export function MediaLibraryPicker({
                   {selectedPlatform === "_local" ? (
                     <>
                       <HardDrive className="w-4 h-4" />
-                      Local
+                      {t("mediaLibrary.sourceLocal", "Local")}
                     </>
                   ) : selectedPlatform === "_cloudinary" ? (
                     <>
                       <Upload className="w-4 h-4" />
-                      Cloudinary
+                      {t("mediaLibrary.sourceCloudinary", "Cloudinary")}
                     </>
                   ) : selectedPlatform === "_processed" ? (
                     <>
                       <Wand2 className="w-4 h-4" />
-                      Processed
+                      {t("mediaLibrary.sourceProcessed", "Processed")}
                     </>
                   ) : selectedPlatform ? (
                     <>
@@ -501,14 +503,14 @@ export function MediaLibraryPicker({
                   ) : (
                     <>
                       <Filter className="w-4 h-4" />
-                      Source
+                      {t("mediaLibrary.sourceFilter", "Source")}
                     </>
                   )}
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
                 <DropdownMenuItem onClick={() => setSelectedPlatform(null)}>
-                  All Sources
+                  {t("mediaLibrary.allSources", "All Sources")}
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 {availablePlatforms.map((platform) => (
@@ -516,17 +518,17 @@ export function MediaLibraryPicker({
                     {platform === "_local" ? (
                       <>
                         <HardDrive className="w-4 h-4 mr-2" />
-                        Local Uploads
+                        {t("mediaLibrary.localUploads", "Local Uploads")}
                       </>
                     ) : platform === "_cloudinary" ? (
                       <>
                         <Upload className="w-4 h-4 mr-2" />
-                        Cloudinary Files
+                        {t("mediaLibrary.cloudinaryFiles", "Cloudinary Files")}
                       </>
                     ) : platform === "_processed" ? (
                       <>
                         <Wand2 className="w-4 h-4 mr-2" />
-                        Processed Files
+                        {t("mediaLibrary.processedFiles", "Processed Files")}
                       </>
                     ) : (
                       <>
@@ -554,20 +556,20 @@ export function MediaLibraryPicker({
                         </AvatarFallback>
                       </Avatar>
                       <span className="max-w-[60px] truncate">
-                        {getAccountInfo(selectedAccountId)?.platform_username || "Account"}
+                        {getAccountInfo(selectedAccountId)?.platform_username || t("mediaLibrary.accountFilter", "Account")}
                       </span>
                     </>
                   ) : (
                     <>
                       <User className="w-4 h-4" />
-                      Account
+                      {t("mediaLibrary.accountFilter", "Account")}
                     </>
                   )}
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-56">
                 <DropdownMenuItem onClick={() => setSelectedAccountId(null)}>
-                  All Accounts
+                  {t("mediaLibrary.allAccounts", "All Accounts")}
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 {accountsWithMedia.map((account) => (
@@ -594,20 +596,20 @@ export function MediaLibraryPicker({
               <DropdownMenuTrigger asChild>
                 <Button variant="outline" className={cn("gap-2 h-9", filterType !== "all" && "border-primary")}>
                   <Filter className="w-4 h-4" />
-                  {filterType === "all" ? "All" : filterType === "image" ? "Images" : "Videos"}
+                  {filterType === "all" ? t("mediaLibrary.allFiles", "All") : filterType === "image" ? t("mediaLibrary.typeImages", "Images") : t("mediaLibrary.typeVideos", "Videos")}
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
                 <DropdownMenuItem onClick={() => setFilterType("all")}>
-                  All Files
+                  {t("mediaLibrary.allFiles", "All Files")}
                 </DropdownMenuItem>
                 <DropdownMenuItem onClick={() => setFilterType("image")}>
                   <Image className="w-4 h-4 mr-2" />
-                  Images Only
+                  {t("mediaLibrary.imagesOnly", "Images Only")}
                 </DropdownMenuItem>
                 <DropdownMenuItem onClick={() => setFilterType("video")}>
                   <Video className="w-4 h-4 mr-2" />
-                  Videos Only
+                  {t("mediaLibrary.videosOnly", "Videos Only")}
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
@@ -621,20 +623,20 @@ export function MediaLibraryPicker({
                  aspectRatioFilter === "portrait" ? <RectangleVertical className="w-4 h-4" /> :
                  aspectRatioFilter === "landscape" ? <RectangleHorizontal className="w-4 h-4" /> :
                  <RectangleHorizontal className="w-4 h-4" />}
-                {aspectRatioFilter === "all" ? "Ratio" : aspectRatioFilter === "square" ? "Square" : aspectRatioFilter === "portrait" ? "Portrait" : "Landscape"}
+                {aspectRatioFilter === "all" ? t("mediaLibrary.ratioFilter", "Ratio") : aspectRatioFilter === "square" ? t("mediaLibrary.ratioSquare", "Square") : aspectRatioFilter === "portrait" ? t("mediaLibrary.ratioPortrait", "Portrait") : t("mediaLibrary.ratioLandscape", "Landscape")}
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
-              <DropdownMenuItem onClick={() => setAspectRatioFilter("all")}>All Ratios</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setAspectRatioFilter("all")}>{t("mediaLibrary.allRatios", "All Ratios")}</DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem onClick={() => setAspectRatioFilter("square")}>
-                <Square className="w-4 h-4 mr-2" />Square (1:1)
+                <Square className="w-4 h-4 mr-2" />{t("mediaLibrary.ratioSquare11", "Square (1:1)")}
               </DropdownMenuItem>
               <DropdownMenuItem onClick={() => setAspectRatioFilter("portrait")}>
-                <RectangleVertical className="w-4 h-4 mr-2" />Portrait
+                <RectangleVertical className="w-4 h-4 mr-2" />{t("mediaLibrary.ratioPortrait", "Portrait")}
               </DropdownMenuItem>
               <DropdownMenuItem onClick={() => setAspectRatioFilter("landscape")}>
-                <RectangleHorizontal className="w-4 h-4 mr-2" />Landscape
+                <RectangleHorizontal className="w-4 h-4 mr-2" />{t("mediaLibrary.ratioLandscape", "Landscape")}
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -643,7 +645,7 @@ export function MediaLibraryPicker({
             <DropdownMenuTrigger asChild>
               <Button variant="outline" className={cn("gap-2 h-9", itemsPerPage !== 50 && "border-primary")}>
                 <Filter className="w-4 h-4" />
-                {itemsPerPage} items
+                {t("mediaLibrary.itemsCount", "{{count}} items", { count: itemsPerPage })}
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
@@ -653,7 +655,7 @@ export function MediaLibraryPicker({
                   onClick={() => setItemsPerPage(count as ItemsPerPage)}
                   className={cn(itemsPerPage === count && "bg-secondary")}
                 >
-                  {count} items
+                  {t("mediaLibrary.itemsCount", "{{count}} items", { count })}
                 </DropdownMenuItem>
               ))}
             </DropdownMenuContent>
@@ -675,7 +677,7 @@ export function MediaLibraryPicker({
                     onClick={() => setColumnsPerRow(cols as ColumnsPerRow)}
                     className={cn(columnsPerRow === cols && "bg-secondary")}
                   >
-                    {cols} per row
+                    {t("mediaLibrary.colsPerRow", "{{cols}} per row", { cols })}
                   </DropdownMenuItem>
                 ))}
               </DropdownMenuContent>
@@ -712,7 +714,7 @@ export function MediaLibraryPicker({
         {/* Active filters display */}
         {hasActiveFilters && (
           <div className="flex items-center gap-2 flex-wrap py-2">
-            <span className="text-xs text-muted-foreground">Active:</span>
+            <span className="text-xs text-muted-foreground">{t("mediaLibrary.activeFilters", "Active:")}</span>
             {searchQuery && (
               <Badge variant="secondary" className="gap-1 text-xs">
                 <Search className="w-3 h-3" />
@@ -737,9 +739,9 @@ export function MediaLibraryPicker({
                  selectedPlatform === "_cloudinary" ? <Upload className="w-3 h-3" /> :
                  selectedPlatform === "_processed" ? <Wand2 className="w-3 h-3" /> :
                  <PlatformIcon platform={selectedPlatform as any} size="sm" />}
-                {selectedPlatform === "_local" ? "Local" : 
-                 selectedPlatform === "_cloudinary" ? "Cloudinary" :
-                 selectedPlatform === "_processed" ? "Processed" : selectedPlatform}
+                {selectedPlatform === "_local" ? t("mediaLibrary.sourceLocal", "Local") : 
+                 selectedPlatform === "_cloudinary" ? t("mediaLibrary.sourceCloudinary", "Cloudinary") :
+                 selectedPlatform === "_processed" ? t("mediaLibrary.sourceProcessed", "Processed") : selectedPlatform}
                 <button onClick={() => setSelectedPlatform(null)} className="ml-1 hover:text-destructive">
                   <X className="w-3 h-3" />
                 </button>
@@ -748,7 +750,7 @@ export function MediaLibraryPicker({
             {selectedAccountId && (
               <Badge variant="secondary" className="gap-1 text-xs">
                 <User className="w-3 h-3" />
-                {getAccountInfo(selectedAccountId)?.platform_username || "Account"}
+                {getAccountInfo(selectedAccountId)?.platform_username || t("mediaLibrary.accountFilter", "Account")}
                 <button onClick={() => setSelectedAccountId(null)} className="ml-1 hover:text-destructive">
                   <X className="w-3 h-3" />
                 </button>
@@ -768,7 +770,9 @@ export function MediaLibraryPicker({
                 {aspectRatioFilter === "square" ? <Square className="w-3 h-3" /> :
                  aspectRatioFilter === "portrait" ? <RectangleVertical className="w-3 h-3" /> :
                  <RectangleHorizontal className="w-3 h-3" />}
-                {aspectRatioFilter}
+                {aspectRatioFilter === "square" ? t("mediaLibrary.ratioSquare", "Square") :
+                 aspectRatioFilter === "portrait" ? t("mediaLibrary.ratioPortrait", "Portrait") :
+                 t("mediaLibrary.ratioLandscape", "Landscape")}
                 <button onClick={() => setAspectRatioFilter("all")} className="ml-1 hover:text-destructive">
                   <X className="w-3 h-3" />
                 </button>
@@ -777,14 +781,14 @@ export function MediaLibraryPicker({
             {itemsPerPage !== 50 && (
               <Badge variant="secondary" className="gap-1 text-xs">
                 <Filter className="w-3 h-3" />
-                {itemsPerPage} items
+                {t("mediaLibrary.itemsCount", "{{count}} items", { count: itemsPerPage })}
                 <button onClick={() => setItemsPerPage(50)} className="ml-1 hover:text-destructive">
                   <X className="w-3 h-3" />
                 </button>
               </Badge>
             )}
             <Button variant="ghost" size="sm" onClick={clearFilters} className="text-xs text-muted-foreground h-6">
-              Clear all
+              {t("mediaLibrary.clearAll", "Clear all")}
             </Button>
           </div>
         )}
@@ -807,8 +811,8 @@ export function MediaLibraryPicker({
           ))}
           <span className="ml-auto text-xs text-muted-foreground">
             {filteredFiles.length === totalFilteredCount 
-              ? `${totalFilteredCount} files`
-              : `Showing ${filteredFiles.length} of ${totalFilteredCount} files`
+              ? t("mediaLibrary.totalFilesCount", "{{count}} files", { count: totalFilteredCount })
+              : t("mediaLibrary.showingFilesCount", "Showing {{current}} of {{total}} files", { current: filteredFiles.length, total: totalFilteredCount })
             }
           </span>
         </div>
@@ -843,7 +847,11 @@ export function MediaLibraryPicker({
               {filteredFiles.length === 0 && folders.length === 0 ? (
                 <div className="text-center py-12 text-muted-foreground">
                   <FolderOpen className="w-12 h-12 mx-auto mb-3 opacity-50" />
-                  <p>No {imagesOnly ? "images" : "media files"} in this folder</p>
+                  <p>
+                    {imagesOnly
+                      ? t("mediaLibrary.noImagesInFolder", "No images in this folder")
+                      : t("mediaLibrary.noMediaInFolder", "No media files in this folder")}
+                  </p>
                 </div>
               ) : viewMode === "grid" ? (
                 <div 
@@ -902,7 +910,7 @@ export function MediaLibraryPicker({
                         {/* Type & ratio badges */}
                         <div className="absolute bottom-1 left-1 flex gap-0.5">
                           <Badge variant="secondary" className="text-[10px] px-1 py-0">
-                            {file.file_type === "video" ? "Video" : "Image"}
+                            {file.file_type === "video" ? t("mediaLibrary.badgeVideo", "Video") : t("mediaLibrary.badgeImage", "Image")}
                           </Badge>
                           {(() => { const label = getAspectRatioLabel(file.metadata?.width as number, file.metadata?.height as number); return label ? <Badge variant="secondary" className="text-[10px] px-1 py-0">{label}</Badge> : null; })()}
                         </div>
@@ -985,19 +993,21 @@ export function MediaLibraryPicker({
         <DialogFooter className="border-t pt-4">
           <div className="flex items-center gap-2 mr-auto">
             <Badge variant="outline">
-              {selectedIds.size} selected
+              {t("mediaLibrary.selectedCount", "{{count}} selected", { count: selectedIds.size })}
             </Badge>
             {remainingSlots < 10 && (
               <span className="text-xs text-muted-foreground">
-                ({remainingSlots} slots remaining)
+                {t("mediaLibrary.slotsRemaining", "({{count}} slots remaining)", { count: remainingSlots })}
               </span>
             )}
           </div>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Cancel
+            {t("common:cancel", "Cancel")}
           </Button>
           <Button onClick={handleConfirm} disabled={selectedIds.size === 0}>
-            Add {selectedIds.size > 0 ? `${selectedIds.size} ` : ""}Files
+            {selectedIds.size > 0
+              ? t("mediaLibrary.addCountFiles", "Add {{count}} Files", { count: selectedIds.size })
+              : t("mediaLibrary.addFiles", "Add Files")}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { ChevronLeft, ChevronRight, X, ZoomIn, ZoomOut, RotateCcw } from "lucide-react";
@@ -26,6 +27,7 @@ export function MediaLightbox({
   onNavigate,
   selectedPlatforms,
 }: MediaLightboxProps) {
+  const { t } = useTranslation("postmedia");
   const [zoomIndex, setZoomIndex] = useState(0);
   const [isHovering, setIsHovering] = useState(false);
   
@@ -165,7 +167,7 @@ export function MediaLightbox({
               >
                 <img
                   src={currentFile.previewUrl}
-                  alt={`Media ${currentIndex + 1}`}
+                  alt={t("lightbox.mediaAlt", "Media {{index}}", { index: currentIndex + 1 })}
                   className={cn(
                     "max-h-[85vh] max-w-[90vw] object-contain transition-transform duration-300 ease-out",
                     isHovering && zoomIndex === 0 && "scale-[1.02]"
@@ -199,7 +201,7 @@ export function MediaLightbox({
               </div>
             )}
             <div className="bg-black/40 text-white/70 text-xs px-3 py-1 rounded-full">
-              ← → Navigate • +/- Zoom • Esc Close
+              {t("lightbox.keyboardHints", "← → Navigate • +/- Zoom • Esc Close")}
             </div>
           </div>
         </div>

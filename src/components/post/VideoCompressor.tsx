@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from "react";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
@@ -36,6 +37,7 @@ export function VideoCompressor({
   mediaFileId,
   onCompressComplete,
 }: VideoCompressorProps) {
+  const { t } = useTranslation("postmedia");
   const videoRef = useRef<HTMLVideoElement>(null);
 
   const [mode, setMode] = useState<CompressionMode>("percentage");
@@ -76,7 +78,7 @@ export function VideoCompressor({
 
   const handleCompress = async () => {
     if (!mediaFileId) {
-      setError("Video must be uploaded before compression");
+      setError(t("compressor.mustUploadFirst", "Video must be uploaded before compression"));
       return;
     }
 
@@ -170,7 +172,7 @@ export function VideoCompressor({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Minimize2 className="w-5 h-5" />
-            Video Compression
+            {t("compressor.title", "Video Compression")}
           </DialogTitle>
         </DialogHeader>
 
@@ -178,9 +180,11 @@ export function VideoCompressor({
           {/* Original File Info */}
           <div className="flex items-center justify-between p-3 rounded-lg bg-secondary/50">
             <div>
-              <p className="text-sm font-medium">{videoFile?.name || "Stock Video"}</p>
+              <p className="text-sm font-medium">{videoFile?.name || t("compressor.stockVideo", "Stock Video")}</p>
               <p className="text-xs text-muted-foreground">
-                {originalSizeMB > 0 ? `Original: ${originalSizeMB.toFixed(2)} MB` : "Size unknown"}
+                {originalSizeMB > 0
+                  ? t("compressor.originalSize", "Original: {{size}} MB", { size: originalSizeMB.toFixed(2) })
+                  : t("compressor.sizeUnknown", "Size unknown")}
                 {videoMetadata && (
                   <span> • {videoMetadata.width}×{videoMetadata.height}</span>
                 )}
@@ -204,7 +208,7 @@ export function VideoCompressor({
           {/* Compression Mode Selection */}
           <div className="space-y-3">
             <div className="flex items-center justify-between">
-              <Label>Compression Method</Label>
+              <Label>{t("compressor.method", "Compression Method")}</Label>
               <VideoProcessingPresetSelector
                 platform="general"
                 onApplyPreset={(preset) => {
@@ -230,7 +234,7 @@ export function VideoCompressor({
                 onClick={() => setMode("percentage")}
               >
                 <Percent className="w-4 h-4" />
-                By Quality
+                {t("compressor.byQuality", "By Quality")}
               </Button>
               <Button
                 variant={mode === "targetSize" ? "default" : "outline"}
@@ -239,7 +243,7 @@ export function VideoCompressor({
                 disabled={originalSizeMB === 0}
               >
                 <HardDrive className="w-4 h-4" />
-                Target Size
+                {t("compressor.targetSize", "Target Size")}
               </Button>
             </div>
           </div>
@@ -248,10 +252,10 @@ export function VideoCompressor({
           {mode === "percentage" ? (
             <div className="space-y-3">
               <div className="flex items-center justify-between">
-                <Label>Quality: {percentage[0]}%</Label>
+                <Label>{t("compressor.qualityLabel", "Quality: {{quality}}%", { quality: percentage[0] })}</Label>
                 {originalSizeMB > 0 && (
                   <span className="text-sm text-muted-foreground">
-                    Est. size: {estimatedSize.toFixed(2)} MB
+                    {t("compressor.estSize", "Est. size: {{size}} MB", { size: estimatedSize.toFixed(2) })}
                   </span>
                 )}
               </div>
@@ -263,19 +267,19 @@ export function VideoCompressor({
                 step={5}
               />
               <div className="flex justify-between text-xs text-muted-foreground">
-                <span>Smaller file (20%)</span>
-                <span>Better quality (100%)</span>
+                <span>{t("compressor.smallerFile", "Smaller file (20%)")}</span>
+                <span>{t("compressor.betterQuality", "Better quality (100%)")}</span>
               </div>
             </div>
           ) : (
             <div className="space-y-3">
-              <Label>Target File Size (MB)</Label>
+              <Label>{t("compressor.targetFileSize", "Target File Size (MB)")}</Label>
               <div className="flex gap-2">
                 <Input
                   type="number"
                   value={targetSizeMB}
                   onChange={(e) => setTargetSizeMB(e.target.value)}
-                  placeholder={originalSizeMB > 0 ? `Max: ${originalSizeMB.toFixed(1)}` : "Enter size"}
+                  placeholder={originalSizeMB > 0 ? t("compressor.maxSizePlaceholder", "Max: {{size}}", { size: originalSizeMB.toFixed(1) }) : t("compressor.enterSize", "Enter size")}
                   min={1}
                   max={originalSizeMB > 0 ? Math.floor(originalSizeMB) : 500}
                   step={1}
@@ -284,7 +288,7 @@ export function VideoCompressor({
               </div>
               {targetSizeMB && originalSizeMB > 0 && parseFloat(targetSizeMB) >= originalSizeMB && (
                 <p className="text-xs text-amber-600">
-                  Target size should be smaller than original ({originalSizeMB.toFixed(1)} MB)
+                  {t("compressor.targetSmallerWarning", "Target size should be smaller than original ({{size}} MB)", { size: originalSizeMB.toFixed(1) })}
                 </p>
               )}
             </div>
@@ -295,14 +299,13 @@ export function VideoCompressor({
             <div className="p-3 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800">
               <p className="text-xs text-amber-700 dark:text-amber-300 flex items-center gap-2">
                 <AlertCircle className="w-4 h-4 flex-shrink-0" />
-                Video must be uploaded before compression. Please wait for the upload to complete.
+                {t("compressor.mustUploadFirst", "Video must be uploaded before compression. Please wait for the upload to complete.")}
               </p>
             </div>
           ) : (
             <div className="p-3 rounded-lg bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800">
               <p className="text-xs text-blue-700 dark:text-blue-300">
-                <strong>Server-side compression:</strong> Your video will be compressed using Cloudinary's 
-                professional video encoding. This produces better quality at smaller file sizes.
+                <strong>{t("compressor.serverCompressionTitle", "Server-side compression:")} </strong>{t("compressor.serverCompressionDesc", "Your video will be compressed using Cloudinary's professional video encoding. This produces better quality at smaller file sizes.")}
               </p>
             </div>
           )}
@@ -321,7 +324,7 @@ export function VideoCompressor({
           {isCompressing && (
             <div className="space-y-2">
               <div className="flex items-center justify-between text-sm">
-                <span>Compressing on server...</span>
+                <span>{t("compressor.compressingProgress", "Compressing on server...")}</span>
                 <span>{progress}%</span>
               </div>
               <Progress value={progress} />
@@ -332,7 +335,7 @@ export function VideoCompressor({
         <DialogFooter className="gap-2">
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isCompressing}>
             <X className="w-4 h-4 mr-2" />
-            Cancel
+            {t("common:cancel", "Cancel")}
           </Button>
           <Button
             onClick={handleCompress}
@@ -343,7 +346,7 @@ export function VideoCompressor({
             ) : (
               <Check className="w-4 h-4 mr-2" />
             )}
-            Compress Video
+            {t("compressor.compressBtn", "Compress Video")}
           </Button>
         </DialogFooter>
       </DialogContent>
