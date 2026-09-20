@@ -129,6 +129,18 @@ BEGIN
       p_workspace_id, v_existing_owner_id, v_owner_user_id
       USING ERRCODE = 'check_violation';
   END IF;
+
+  -- Losing the race under the SAME owner is a success for the caller, but the
+  -- principal this call minted is now referenced by nothing. Two sessions each
+  -- insert one and only one can be referenced, so without this the estate
+  -- accumulates an orphan identity per race. Delete only our own, and only when
+  -- the surviving binding does not point at it.
+  DELETE FROM public.partner_principals
+  WHERE id = v_principal_id
+    AND NOT EXISTS (
+      SELECT 1 FROM public.partner_provisioned_workspaces
+      WHERE principal_id = v_principal_id
+    );
 END;
 $function$;
 
