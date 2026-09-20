@@ -68,9 +68,16 @@ BEGIN
   -- reach rules governing that same person's accounts in another. Refusing makes
   -- that a deliberate decision with a dedicated owner, instead of a silent
   -- consequence of minting a key.
-  IF (SELECT count(DISTINCT workspace_id) FROM public.social_accounts
+  -- count(DISTINCT workspace_id) would silently drop NULLs, and a NULL workspace
+  -- is exactly the dangerous case: only WhatsApp accounts are required to carry
+  -- one, so a legacy Facebook or Instagram account can sit outside every
+  -- workspace while owner-scoped rules still reach it. Such an account is its own
+  -- scope, so it is counted as one by coalescing to a sentinel the uuid text
+  -- space cannot produce.
+  IF (SELECT count(DISTINCT COALESCE(workspace_id::text, 'unscoped'))
+      FROM public.social_accounts
       WHERE user_id = v_owner_user_id) > 1 THEN
-    RAISE EXCEPTION 'cannot provision workspace %: owner % holds accounts in several workspaces and owner-scoped rules would be shared across them',
+    RAISE EXCEPTION 'cannot provision workspace %: owner % holds accounts outside it (another workspace, or none at all) and owner-scoped rules would be shared across them',
       p_workspace_id, v_owner_user_id
       USING ERRCODE = 'check_violation';
   END IF;
@@ -133,52 +140,7 @@ $function$;
 REVOKE ALL ON FUNCTION public.partner_ensure_provisioned_workspace(uuid, uuid, text)
   FROM PUBLIC, anon, authenticated;
 
--- 2. Backfill every workspace holding a LIVE key but no binding. Runs before the
---    key-minting change so the two cannot disagree.
---
---    Revoked-only workspaces are skipped deliberately. Backfilling one would mint
---    a principal asserting a partner relationship that has already been ended, and
---    a revoked key cannot reach an entitlement check to benefit from it. If such a
---    workspace is ever issued a new key, step 3 provisions it at that moment.
-DO $backfill$
-DECLARE
-  r RECORD;
-BEGIN
-  -- EVERY live key on the workspace is validated, not just the oldest. Binding a
-  -- workspace unlocks the entitlement check for all of its keys at once, so
-  -- provisioning on the strength of one safe key would let a second key whose
-  -- owner fails the guard straight through it. A workspace qualifies only when
-  -- all of its live keys resolve to ONE owner that is itself single-workspace.
-  FOR r IN
-    SELECT k.workspace_id,
-           min(k.social_account_id::text)::uuid AS social_account_id,
-           min(k.environment) AS environment
-    FROM public.partner_api_keys k
-    JOIN public.social_accounts a
-      ON a.id = k.social_account_id
-     AND a.workspace_id = k.workspace_id
-    WHERE k.social_account_id IS NOT NULL
-      AND k.revoked_at IS NULL
-      AND NOT EXISTS (
-        SELECT 1 FROM public.partner_provisioned_workspaces w
-        WHERE w.workspace_id = k.workspace_id
-      )
-    GROUP BY k.workspace_id
-    HAVING count(DISTINCT a.user_id) = 1
-  LOOP
-    -- One unownable account must not abort the whole backfill; it is reported
-    -- and the remaining workspaces still get their bindings.
-    BEGIN
-      PERFORM public.partner_ensure_provisioned_workspace(
-        r.workspace_id, r.social_account_id, r.environment);
-    EXCEPTION WHEN check_violation THEN
-      RAISE WARNING 'skipped workspace %: %', r.workspace_id, SQLERRM;
-    END;
-  END LOOP;
-END;
-$backfill$;
-
--- 3. Mint the binding with the key. The signature is reproduced exactly,
+-- 2. Mint the binding with the key. The signature is reproduced exactly,
 --    defaults included: CREATE OR REPLACE with a changed argument list adds an
 --    overload rather than replacing, and two candidates would then resolve
 --    ambiguously from PostgREST.
@@ -256,3 +218,55 @@ BEGIN
   RETURN v_key_id;
 END;
 $function$;
+
+-- 3. Backfill every workspace holding a LIVE key but no binding.
+--
+--    Runs LAST, after the new create_partner_key is committed and visible. This
+--    file carries no BEGIN/COMMIT, so psql commits each statement as it goes; a
+--    key minted while the migration was mid-flight would otherwise have run the
+--    OLD writer, committed without a provisioning row, and been missed by a
+--    backfill whose snapshot was taken before it. With the new writer already
+--    live, any key minted from here on provisions itself, and this pass closes
+--    everything earlier. It is idempotent and safe to re-run.
+--
+--    Revoked-only workspaces are skipped deliberately. Backfilling one would mint
+--    a principal asserting a partner relationship that has already been ended, and
+--    a revoked key cannot reach an entitlement check to benefit from it. If such a
+--    workspace is ever issued a new key, step 3 provisions it at that moment.
+DO $backfill$
+DECLARE
+  r RECORD;
+BEGIN
+  -- EVERY live key on the workspace is validated, not just the oldest. Binding a
+  -- workspace unlocks the entitlement check for all of its keys at once, so
+  -- provisioning on the strength of one safe key would let a second key whose
+  -- owner fails the guard straight through it. A workspace qualifies only when
+  -- all of its live keys resolve to ONE owner that is itself single-workspace.
+  FOR r IN
+    SELECT k.workspace_id,
+           min(k.social_account_id::text)::uuid AS social_account_id,
+           min(k.environment) AS environment
+    FROM public.partner_api_keys k
+    JOIN public.social_accounts a
+      ON a.id = k.social_account_id
+     AND a.workspace_id = k.workspace_id
+    WHERE k.social_account_id IS NOT NULL
+      AND k.revoked_at IS NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM public.partner_provisioned_workspaces w
+        WHERE w.workspace_id = k.workspace_id
+      )
+    GROUP BY k.workspace_id
+    HAVING count(DISTINCT a.user_id) = 1
+  LOOP
+    -- One unownable account must not abort the whole backfill; it is reported
+    -- and the remaining workspaces still get their bindings.
+    BEGIN
+      PERFORM public.partner_ensure_provisioned_workspace(
+        r.workspace_id, r.social_account_id, r.environment);
+    EXCEPTION WHEN check_violation THEN
+      RAISE WARNING 'skipped workspace %: %', r.workspace_id, SQLERRM;
+    END;
+  END LOOP;
+END;
+$backfill$;
