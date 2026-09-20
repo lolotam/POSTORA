@@ -1,0 +1,63 @@
+{
+  "badge": {
+    "admin": "أدمن",
+    "hidden": "مخفي",
+    "hiddenTooltip": "الميزة دي معطلة حالياً. الأدمن بس اللي يقدر يشوفها.",
+    "upgrade": "ترقية"
+  },
+  "footer": {
+    "cookiePolicy": "سياسة الكوكيز",
+    "copyright": "© 2026 Postora. منتج تم تطويره وتشغيله بواسطة WALEED PROLIFE LLC. جميع الحقوق محفوظة.",
+    "documentation": "التوثيق",
+    "googleApiDisclosure": "إفصاح Google API",
+    "privacyPolicy": "سياسة الخصوصية",
+    "termsOfService": "شروط الخدمة"
+  },
+  "header": {
+    "user": "مستخدم"
+  },
+  "sidebar": {
+    "account": "الحساب",
+    "adAnalytics": "تحليلات الإعلانات",
+    "adManager": "إدارة الإعلانات",
+    "agentSetup": "إعداد الوكيل",
+    "analytics": "التحليلات",
+    "audienceContacts": "الجمهور وجهات الاتصال",
+    "automation": "الأتمتة",
+    "calendar": "التقويم",
+    "canvas": "Canvas",
+    "commentManager": "إدارة التعليقات",
+    "commentWorkflow": "مسار التعليقات",
+    "createPost": "إنشاء منشور",
+    "dashboard": "لوحة التحكم",
+    "docs": "التوثيق",
+    "facebook": "Facebook",
+    "history": "السجل",
+    "humanAgent": "الوكيل البشري",
+    "instagram": "Instagram",
+    "leadsCrm": "إدارة العملاء المحتملين",
+    "overview": "نظرة عامة",
+    "pricing": "الأسعار",
+    "publishing": "النشر",
+    "scheduled": "المنشورات المجدولة",
+    "smartSchedule": "الجدولة الذكية",
+    "threads": "Threads",
+    "tiktok": "TikTok",
+    "unifiedInboxes": "صندوق الرسائل الموحد",
+    "users": "الحسابات",
+    "whatsappShop": "متجر WhatsApp"
+  },
+  "userMenu": {
+    "adminDashboard": "لوحة تحكم الأدمن",
+    "aiCredits": "رصيد الذكاء الاصطناعي",
+    "contactUs": "تواصل معنا",
+    "health": "حالة الاتصال",
+    "logout": "تسجيل الخروج",
+    "mcpApi": "MCP و API",
+    "mediaLibrary": "مكتبة الوسائط",
+    "postAnalytics": "تحليلات المنشورات",
+    "settings": "الإعدادات",
+    "systemLogs": "سجلات النظام",
+    "templates": "القوالب"
+  }
+}

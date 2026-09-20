@@ -1,4 +1,5 @@
 import { useState, useMemo } from "react";
+import { useTranslation } from "react-i18next";
 import { usePosts } from "@/hooks/usePosts";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
@@ -11,6 +12,7 @@ import { useSubscription } from "@/hooks/useSubscription";
 import { usePublishing } from "@/contexts/PublishingContext";
 import { cn } from "@/lib/utils";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { LanguageToggle } from "@/components/LanguageToggle";
 import { NotificationBell } from "@/components/NotificationBell";
 import { CreditBalanceIndicator } from "@/components/CreditBalanceIndicator";
 import { PublishingStatusWidget } from "@/components/PublishingStatusWidget";
@@ -95,19 +97,8 @@ interface NavItemDropdown {
 
 type NavEntry = NavItemDirect | NavItemDropdown;
 
-// User dropdown menu items
-const getUserMenuItems = (isAdmin: boolean) => [
-  ...(!isAdmin ? [{ icon: Zap, label: "AI Credits", path: "/credits" }] : []),
-  { icon: BarChart3, label: "Post Analytics", path: "/analytics" },
-  { icon: FileText, label: "Templates", path: "/templates" },
-  { icon: FolderOpen, label: "Media Library", path: "/media" },
-  { icon: Key, label: "MCP & API", path: "/api-keys" },
-  { icon: Activity, label: "Health", path: "/connection-health" },
-  ...(isAdmin ? [{ icon: BookOpen, label: "System Logs", path: "/admin/logs" }] : []),
-  { icon: Mail, label: "Contact Us", path: "/contact" },
-];
-
 export function DashboardLayout({ children, contentClassName, noPadding = false, hideFooter = false }: DashboardLayoutProps) {
+  const { t } = useTranslation("nav");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [mobileExpandedDropdown, setMobileExpandedDropdown] = useState<string | null>(null);
@@ -126,42 +117,54 @@ export function DashboardLayout({ children, contentClassName, noPadding = false,
 
   const showCanvas = isAdmin || (!flagsLoading && flags.canvas);
 
+  // User dropdown menu items
+  const userMenuItems = useMemo(() => [
+    ...(!isAdmin ? [{ icon: Zap, label: t("userMenu.aiCredits", "AI Credits"), path: "/credits" }] : []),
+    { icon: BarChart3, label: t("userMenu.postAnalytics", "Post Analytics"), path: "/analytics" },
+    { icon: FileText, label: t("userMenu.templates", "Templates"), path: "/templates" },
+    { icon: FolderOpen, label: t("userMenu.mediaLibrary", "Media Library"), path: "/media" },
+    { icon: Key, label: t("userMenu.mcpApi", "MCP & API"), path: "/api-keys" },
+    { icon: Activity, label: t("userMenu.health", "Health"), path: "/connection-health" },
+    ...(isAdmin ? [{ icon: BookOpen, label: t("userMenu.systemLogs", "System Logs"), path: "/admin/logs" }] : []),
+    { icon: Mail, label: t("userMenu.contactUs", "Contact Us"), path: "/contact" },
+  ], [isAdmin, t]);
+
   // Build nav entries
   const navEntries = useMemo(() => {
     const entries: NavEntry[] = [
-      { type: "link", icon: LayoutDashboard, label: "Dashboard", path: "/dashboard" },
+      { type: "link", icon: LayoutDashboard, label: t("sidebar.dashboard", "Dashboard"), path: "/dashboard" },
       {
         type: "dropdown",
         icon: Send,
-        label: "Publishing",
+        label: t("sidebar.publishing", "Publishing"),
         basePath: "/post",
         children: [
-          { icon: Send, label: "Create Post", path: "/post" },
-          { icon: Clock, label: "History", path: "/history" },
-          { icon: CalendarDays, label: "Scheduled", path: "/scheduled" },
-          { icon: CalendarDays, label: "Calendar", path: "/calendar" },
-          ...(flags.smartScheduling ? [{ icon: Sparkles, label: "Smart Schedule", path: "/smart-scheduling" }] : []),
+          { icon: Send, label: t("sidebar.createPost", "Create Post"), path: "/post" },
+          { icon: Clock, label: t("sidebar.history", "History"), path: "/history" },
+          { icon: CalendarDays, label: t("sidebar.scheduled", "Scheduled"), path: "/scheduled" },
+          { icon: CalendarDays, label: t("sidebar.calendar", "Calendar"), path: "/calendar" },
+          ...(flags.smartScheduling ? [{ icon: Sparkles, label: t("sidebar.smartSchedule", "Smart Schedule"), path: "/smart-scheduling" }] : []),
         ],
       },
-      { type: "link", icon: Users, label: "Users", path: "/profiles" },
+      { type: "link", icon: Users, label: t("sidebar.users", "Users"), path: "/profiles" },
     ];
 
     if (showCanvas) {
-      entries.push({ type: "link", icon: PenTool, label: "Canvas", path: "/canvas" });
+      entries.push({ type: "link", icon: PenTool, label: t("sidebar.canvas", "Canvas"), path: "/canvas" });
     }
 
     const analyticsChildren = [
-      ...(flags.analyticsFacebook ? [{ icon: Facebook, label: "Facebook", path: "/analytics/facebook" }] : []),
-      ...(flags.analyticsInstagram ? [{ icon: Camera, label: "Instagram", path: "/analytics/instagram" }] : []),
-      ...(flags.analyticsThreads ? [{ icon: AtSign, label: "Threads", path: "/analytics/threads" }] : []),
-      ...(flags.analyticsTiktok ? [{ icon: Video, label: "TikTok", path: "/analytics/tiktok" }] : []),
+      ...(flags.analyticsFacebook ? [{ icon: Facebook, label: t("sidebar.facebook", "Facebook"), path: "/analytics/facebook" }] : []),
+      ...(flags.analyticsInstagram ? [{ icon: Camera, label: t("sidebar.instagram", "Instagram"), path: "/analytics/instagram" }] : []),
+      ...(flags.analyticsThreads ? [{ icon: AtSign, label: t("sidebar.threads", "Threads"), path: "/analytics/threads" }] : []),
+      ...(flags.analyticsTiktok ? [{ icon: Video, label: t("sidebar.tiktok", "TikTok"), path: "/analytics/tiktok" }] : []),
     ];
 
     if (analyticsChildren.length > 0) {
       entries.push({
         type: "dropdown",
         icon: BarChart3,
-        label: "Analytics",
+        label: t("sidebar.analytics", "Analytics"),
         basePath: "/analytics/",
         children: analyticsChildren,
       });
@@ -170,46 +173,46 @@ export function DashboardLayout({ children, contentClassName, noPadding = false,
     const hasMessagingFlags = flags.msgWhatsapp || flags.msgFacebook || flags.msgInstagram || flags.msgThreads;
 
     const automationChildren = [
-      { icon: Sparkles, label: "Overview", path: "/automation" },
-      { icon: Bot, label: "Agent Setup", path: "/automation/agents" },
+      { icon: Sparkles, label: t("sidebar.overview", "Overview"), path: "/automation" },
+      { icon: Bot, label: t("sidebar.agentSetup", "Agent Setup"), path: "/automation/agents" },
       // Sits beside Agent Setup deliberately: this is the human half of the same
       // conversation pipeline the AI agent handles. It lived under Ad Manager until
       // 2026-09-08, which put a live support queue next to advertising tools.
-      ...(flags.humanAgent ? [{ icon: Headphones, label: "Human Agent", path: "/human-agent" }] : []),
-      ...(hasMessagingFlags ? [{ icon: Inbox, label: "Unified Inboxes", path: "/messaging" }] : []),
-      ...(flags.commentManager ? [{ icon: MessageCircle, label: "Comment Manager", path: "/comments" }] : []),
-      ...(flags.audienceHub ? [{ icon: Users, label: "Audience & Contacts", path: "/automation/audience" }] : []),
-      ...(flags.commentWorkflow ? [{ icon: Workflow, label: "Comment Workflow", path: "/automation/comment-workflow" }] : []),
+      ...(flags.humanAgent ? [{ icon: Headphones, label: t("sidebar.humanAgent", "Human Agent"), path: "/human-agent" }] : []),
+      ...(hasMessagingFlags ? [{ icon: Inbox, label: t("sidebar.unifiedInboxes", "Unified Inboxes"), path: "/messaging" }] : []),
+      ...(flags.commentManager ? [{ icon: MessageCircle, label: t("sidebar.commentManager", "Comment Manager"), path: "/comments" }] : []),
+      ...(flags.audienceHub ? [{ icon: Users, label: t("sidebar.audienceContacts", "Audience & Contacts"), path: "/automation/audience" }] : []),
+      ...(flags.commentWorkflow ? [{ icon: Workflow, label: t("sidebar.commentWorkflow", "Comment Workflow"), path: "/automation/comment-workflow" }] : []),
     ];
 
     entries.push({
       type: "dropdown",
       icon: Sparkles,
-      label: "Automation",
+      label: t("sidebar.automation", "Automation"),
       basePath: "/automation",
       children: automationChildren,
     });
 
     const adManagerChildren = [
-      ...(flags.adManager ? [{ icon: Megaphone, label: "Ad Manager", path: "/ad-manager" }] : []),
-      ...(flags.adAnalytics ? [{ icon: BarChart3, label: "Ad Analytics", path: "/ad-analytics" }] : []),
-      ...(flags.leadsCrm ? [{ icon: Users, label: "Leads CRM", path: "/leads-crm" }] : []),
-      ...(flags.whatsappShop ? [{ icon: ShoppingBag, label: "WhatsApp Shop", path: "/whatsapp-shop" }] : []),
+      ...(flags.adManager ? [{ icon: Megaphone, label: t("sidebar.adManager", "Ad Manager"), path: "/ad-manager" }] : []),
+      ...(flags.adAnalytics ? [{ icon: BarChart3, label: t("sidebar.adAnalytics", "Ad Analytics"), path: "/ad-analytics" }] : []),
+      ...(flags.leadsCrm ? [{ icon: Users, label: t("sidebar.leadsCrm", "Leads CRM"), path: "/leads-crm" }] : []),
+      ...(flags.whatsappShop ? [{ icon: ShoppingBag, label: t("sidebar.whatsappShop", "WhatsApp Shop"), path: "/whatsapp-shop" }] : []),
     ];
 
     if (adManagerChildren.length > 0) {
       entries.push({
         type: "dropdown",
         icon: Megaphone,
-        label: "Ad Manager",
+        label: t("sidebar.adManager", "Ad Manager"),
         basePath: "/ad-",
         children: adManagerChildren,
       });
     }
 
     entries.push(
-      { type: "link", icon: BookOpen, label: "Docs", path: "https://postora.cloud/docs", external: true },
-      { type: "link", icon: BarChart3, label: "Pricing", path: "/pricing" },
+      { type: "link", icon: BookOpen, label: t("sidebar.docs", "Docs"), path: "https://postora.cloud/docs", external: true },
+      { type: "link", icon: BarChart3, label: t("sidebar.pricing", "Pricing"), path: "/pricing" },
     );
 
     if (import.meta.env.DEV) {
@@ -218,7 +221,7 @@ export function DashboardLayout({ children, contentClassName, noPadding = false,
     }
 
     return entries;
-  }, [showCanvas, flags.msgFacebook, flags.msgInstagram, flags.msgWhatsapp, flags.msgThreads, flags.commentManager, flags.audienceHub, flags.leadsCrm, flags.adAnalytics, flags.smartScheduling, flags.humanAgent, flags.whatsappShop, flags.adManager, flags.analyticsFacebook, flags.analyticsInstagram, flags.analyticsThreads, flags.analyticsTiktok, flagsLoading]);
+  }, [showCanvas, flags.msgFacebook, flags.msgInstagram, flags.msgWhatsapp, flags.msgThreads, flags.commentManager, flags.commentWorkflow, flags.audienceHub, flags.leadsCrm, flags.adAnalytics, flags.smartScheduling, flags.humanAgent, flags.whatsappShop, flags.adManager, flags.analyticsFacebook, flags.analyticsInstagram, flags.analyticsThreads, flags.analyticsTiktok, t]);
 
   const handleLogout = async () => {
     setIsLoggingOut(true);
@@ -232,8 +235,7 @@ export function DashboardLayout({ children, contentClassName, noPadding = false,
 
   const isDropdownActive = (entry: NavItemDropdown) =>
     entry.children.some((c) => location.pathname === c.path || (c.path.includes("?") && (location.pathname + location.search) === c.path)) ||
-    location.pathname.startsWith(entry.basePath) ||
-    (entry.label === "Inboxes" && location.pathname === "/comments");
+    location.pathname.startsWith(entry.basePath);
 
   const isCanvasHiddenFromUsers = (path: string) => path === "/canvas" && isAdmin && !flags.canvas;
 
@@ -317,11 +319,11 @@ export function DashboardLayout({ children, contentClassName, noPadding = false,
                             <TooltipTrigger asChild>
                               <span className="relative z-10 flex items-center gap-0.5 ml-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-500/20 text-amber-600 dark:text-amber-400 cursor-help">
                                 <EyeOff className="h-2.5 w-2.5" />
-                                Hidden
+                                {t("badge.hidden", "Hidden")}
                               </span>
                             </TooltipTrigger>
                             <TooltipContent side="bottom" className="max-w-[200px]">
-                              <p className="text-xs">This feature is currently disabled globally. Only admins can see it.</p>
+                              <p className="text-xs">{t("badge.hiddenTooltip", "This feature is currently disabled globally. Only admins can see it.")}</p>
                             </TooltipContent>
                           </Tooltip>
                         </TooltipProvider>
@@ -336,7 +338,7 @@ export function DashboardLayout({ children, contentClassName, noPadding = false,
               const active = isDropdownActive(dropdown);
 
               return (
-                <DropdownMenu key={dropdown.label}>
+                <DropdownMenu key={dropdown.basePath}>
                   <DropdownMenuTrigger asChild>
                     <button
                       className={cn(
@@ -362,7 +364,7 @@ export function DashboardLayout({ children, contentClassName, noPadding = false,
                       <span className="relative z-10"><dropdown.icon className={cn("h-4 w-4 shrink-0", active && "text-primary")} /></span>
                       <span className="relative z-10">{dropdown.label}</span>
                       <ChevronDown className="relative z-10 h-3 w-3 ml-0.5 opacity-60" />
-                      {dropdown.label === "Publishing" && scheduledCount > 0 && (
+                      {dropdown.basePath === "/post" && scheduledCount > 0 && (
                         <span className="relative z-10 ml-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 text-[10px] font-bold text-white px-1">
                           {scheduledCount}
                         </span>
@@ -407,13 +409,14 @@ export function DashboardLayout({ children, contentClassName, noPadding = false,
             <CreditBalanceIndicator />
             <NotificationBell />
             <ThemeToggle />
+            <LanguageToggle />
 
             {/* User Menu */}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="ghost" className="flex items-center gap-2 h-9 px-2 rounded-full">
                   <Avatar className="h-8 w-8">
-                    <AvatarImage src={profile?.avatar_url || ""} alt={profile?.full_name || "User"} referrerPolicy="no-referrer" />
+                    <AvatarImage src={profile?.avatar_url || ""} alt={profile?.full_name || t("header.user", "User")} referrerPolicy="no-referrer" />
                     <AvatarFallback className="text-xs bg-primary/10 text-primary font-semibold">
                       {userInitials}
                     </AvatarFallback>
@@ -425,13 +428,13 @@ export function DashboardLayout({ children, contentClassName, noPadding = false,
                 <DropdownMenuLabel className="font-normal">
                   <div className="flex items-center gap-3">
                     <Avatar className="h-10 w-10">
-                      <AvatarImage src={profile?.avatar_url || ""} alt={profile?.full_name || "User"} referrerPolicy="no-referrer" />
+                      <AvatarImage src={profile?.avatar_url || ""} alt={profile?.full_name || t("header.user", "User")} referrerPolicy="no-referrer" />
                       <AvatarFallback className="text-sm bg-primary/10 text-primary font-semibold">
                         {userInitials}
                       </AvatarFallback>
                     </Avatar>
                     <div className="flex flex-col space-y-1">
-                      <p className="text-sm font-medium">{profile?.full_name || "User"}</p>
+                      <p className="text-sm font-medium">{profile?.full_name || t("header.user", "User")}</p>
                       <p className="text-xs text-muted-foreground truncate max-w-[140px]">
                         {profile?.email}
                       </p>
@@ -447,13 +450,13 @@ export function DashboardLayout({ children, contentClassName, noPadding = false,
                       >
                         {isAdmin && <Shield className="h-2.5 w-2.5 mr-0.5" />}
                         {!isAdmin && (isPro || isBusiness) && <Crown className="h-2.5 w-2.5 mr-0.5" />}
-                        {isAdmin ? "Admin" : (isFree ? "Upgrade" : planName)}
+                        {isAdmin ? t("badge.admin", "Admin") : (isFree ? t("badge.upgrade", "Upgrade") : planName)}
                       </Badge>
                     </div>
                   </div>
                 </DropdownMenuLabel>
                 <DropdownMenuSeparator />
-                {getUserMenuItems(isAdmin).map((item) => (
+                {userMenuItems.map((item) => (
                     <DropdownMenuItem key={item.path} asChild>
                       <Link to={item.path} className="flex items-center gap-2 cursor-pointer">
                         <item.icon className="h-4 w-4" />
@@ -465,7 +468,7 @@ export function DashboardLayout({ children, contentClassName, noPadding = false,
                 <DropdownMenuItem asChild>
                   <Link to="/settings" className="flex items-center gap-2 cursor-pointer">
                     <Settings className="h-4 w-4" />
-                    Settings
+                    {t("userMenu.settings", "Settings")}
                   </Link>
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
@@ -473,7 +476,7 @@ export function DashboardLayout({ children, contentClassName, noPadding = false,
                   <DropdownMenuItem asChild>
                     <Link to="/admin" className="flex items-center gap-2 cursor-pointer text-primary">
                       <Shield className="h-4 w-4" />
-                      Admin Dashboard
+                      {t("userMenu.adminDashboard", "Admin Dashboard")}
                     </Link>
                   </DropdownMenuItem>
                 )}
@@ -488,7 +491,7 @@ export function DashboardLayout({ children, contentClassName, noPadding = false,
                   ) : (
                     <LogOut className="h-4 w-4 mr-2" />
                   )}
-                  Logout
+                  {t("userMenu.logout", "Logout")}
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
@@ -569,17 +572,17 @@ export function DashboardLayout({ children, contentClassName, noPadding = false,
                   // Dropdown in mobile = expandable section
                   const dropdown = entry;
                   const active = isDropdownActive(dropdown);
-                  const expanded = mobileExpandedDropdown === dropdown.label;
+                  const expanded = mobileExpandedDropdown === dropdown.basePath;
 
                   return (
                     <motion.div
-                      key={dropdown.label}
+                      key={dropdown.basePath}
                       initial={{ opacity: 0, x: -20 }}
                       animate={{ opacity: 1, x: 0 }}
                       transition={{ delay: index * 0.05, duration: 0.3 }}
                     >
                       <button
-                        onClick={() => setMobileExpandedDropdown(expanded ? null : dropdown.label)}
+                        onClick={() => setMobileExpandedDropdown(expanded ? null : dropdown.basePath)}
                         className={cn(
                           "flex items-center gap-3 px-4 py-3 rounded-lg transition-colors duration-200 w-full text-left",
                           active
@@ -633,8 +636,8 @@ export function DashboardLayout({ children, contentClassName, noPadding = false,
                   transition={{ delay: navEntries.length * 0.05 + 0.1 }}
                   className="border-t border-border my-2 pt-2"
                 >
-                  <p className="px-4 py-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Account</p>
-                  {getUserMenuItems(isAdmin).map((item, idx) => (
+                  <p className="px-4 py-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider">{t("sidebar.account", "Account")}</p>
+                  {userMenuItems.map((item, idx) => (
                     <motion.div
                       key={item.path}
                       initial={{ opacity: 0, x: -20 }}
@@ -654,7 +657,7 @@ export function DashboardLayout({ children, contentClassName, noPadding = false,
                   <motion.div
                     initial={{ opacity: 0, x: -20 }}
                     animate={{ opacity: 1, x: 0 }}
-                    transition={{ delay: (navEntries.length + getUserMenuItems(isAdmin).length + 1) * 0.05, duration: 0.3 }}
+                    transition={{ delay: (navEntries.length + userMenuItems.length + 1) * 0.05, duration: 0.3 }}
                   >
                     <Link
                       to="/settings"
@@ -662,7 +665,7 @@ export function DashboardLayout({ children, contentClassName, noPadding = false,
                       className="flex items-center gap-3 px-4 py-3 rounded-lg text-muted-foreground hover:text-foreground hover:bg-secondary"
                     >
                       <Settings className="h-5 w-5" />
-                      <span className="font-medium">Settings</span>
+                      <span className="font-medium">{t("userMenu.settings", "Settings")}</span>
                     </Link>
                   </motion.div>
                 </motion.div>
@@ -687,23 +690,23 @@ export function DashboardLayout({ children, contentClassName, noPadding = false,
               <Logo size="sm" />
               <div className="flex flex-wrap items-center justify-center gap-x-6 gap-y-2">
                 <a href="https://postora.cloud/docs" target="_blank" rel="noopener noreferrer" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
-                  Documentation
+                  {t("footer.documentation", "Documentation")}
                 </a>
                 <a href="https://postora.cloud/privacy" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
-                  Privacy Policy
+                  {t("footer.privacyPolicy", "Privacy Policy")}
                 </a>
                 <a href="https://postora.cloud/terms" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
-                  Terms of Service
+                  {t("footer.termsOfService", "Terms of Service")}
                 </a>
                 <a href="https://postora.cloud/cookies" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
-                  Cookie Policy
+                  {t("footer.cookiePolicy", "Cookie Policy")}
                 </a>
                 <a href="https://postora.cloud/google-api-disclosure" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
-                  Google API Disclosure
+                  {t("footer.googleApiDisclosure", "Google API Disclosure")}
                 </a>
               </div>
               <p className="text-sm text-muted-foreground">
-                © 2026 Postora. A product developed and operated by WALEED PROLIFE LLC. All rights reserved.
+                {t("footer.copyright", "© 2026 Postora. A product developed and operated by WALEED PROLIFE LLC. All rights reserved.")}
               </p>
             </div>
           </div>

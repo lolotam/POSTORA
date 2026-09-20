@@ -12,7 +12,8 @@
     "typecheck": "tsc -b --noEmit",
     "preview": "vite preview",
     "check:edge-env": "node scripts/check-edge-env-drift.mjs",
-    "check:edge-env:local": "node scripts/check-edge-env-local.mjs"
+    "check:edge-env:local": "node scripts/check-edge-env-local.mjs",
+    "check:i18n": "node scripts/check-i18n-coverage.mjs"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",

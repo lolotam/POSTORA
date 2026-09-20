@@ -10,15 +10,20 @@
  * English copy as the `t(key, "English copy")` default, so a parallel `en` bundle
  * would be a second source of truth for the same string and the two would drift.
  * The namespace is declared empty instead, which lets every lookup fall through to
- * that default without an "unloaded namespace" warning. A translated language ships
- * as a real bundle keyed the same way.
+ * that default without an "unloaded namespace" warning. Translated languages (currently
+ * Egyptian colloquial Arabic, `ar`) ship as real bundles statically imported and keyed
+ * the same way.
  */
 import i18next from "i18next";
 import LanguageDetector from "i18next-browser-languagedetector";
 import { initReactI18next } from "react-i18next";
 
+import common from "./locales/ar/common.json";
+import nav from "./locales/ar/nav.json";
+import apikeys from "./locales/ar/apikeys.json";
+
 /** Languages with copy behind them. Anything detected outside this list resolves to `en`. */
-export const SUPPORTED_LANGUAGES = ["en"] as const;
+export const SUPPORTED_LANGUAGES = ["en", "ar"] as const;
 
 const DEFAULT_LANGUAGE = "en";
 
@@ -32,9 +37,20 @@ void i18next
     // and the language never resolves, which leaves i18next.dir() guessing from
     // an empty code. Region subtags fold onto their base language instead.
     nonExplicitSupportedLngs: true,
-    ns: ["apikeys"],
-    defaultNS: "apikeys",
-    resources: { en: { apikeys: {} } },
+    ns: ["common", "nav", "apikeys"],
+    defaultNS: "common",
+    resources: {
+      en: {
+        common: {},
+        nav: {},
+        apikeys: {},
+      },
+      ar: {
+        common,
+        nav,
+        apikeys,
+      },
+    },
     // React escapes interpolated values already; escaping here would double-encode.
     interpolation: { escapeValue: false },
     detection: {

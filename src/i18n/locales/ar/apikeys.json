@@ -1,0 +1,73 @@
+{
+  "common": {
+    "error": "خطأ"
+  },
+  "defaultKey": {
+    "copied": "تم نسخ مفتاح API",
+    "copiedDesc": "تم نسخ مفتاح الـ API في الحافظة.",
+    "desc": "استخدم المفتاح ده للربط مع n8n أو Zapier أو الأدوات التانية",
+    "failedRegenerate": "فشلنا في تجديد مفتاح الـ API.",
+    "label": "مفتاح الـ API بتاعك",
+    "regenerate": "تجديد",
+    "regenerated": "تم تجديد مفتاح الـ API",
+    "regeneratedDesc": "مفتاح الـ API الجديد جاهز للاستخدام دلوقتي.",
+    "securityWarning": "خلي المفتاح ده سري وما تشاركوش مع حد. ابعته في هيدر {{header}}.",
+    "title": "مفتاح API الافتراضي"
+  },
+  "endpoints": {
+    "badgeOptional": "اختياري",
+    "badgeRequired": "مطلوب",
+    "baseUrl": "الرابط الأساسي:",
+    "desc": "الروابط المتاحة للربط مع تطبيقاتك. اضغط للتفاصيل.",
+    "description": "الوصف",
+    "endpointPath": "+ مسار الرابط",
+    "field": "الحقل",
+    "fullDocs": "التوثيق الكامل",
+    "fullUrl": "الرابط بالكامل",
+    "param": "المعامل",
+    "queryParams": "معاملات البحث (Query Params)",
+    "requestBody": "بيانات الطلب (Request Body)",
+    "required": "مطلوب",
+    "responseExample": "نموذج الرد",
+    "title": "روابط الـ API",
+    "type": "النوع"
+  },
+  "errorCodes": {
+    "code": "الرمز",
+    "desc": "أشهر رموز استجابة HTTP ومعانيها",
+    "description": "الوصف",
+    "status": "الحالة",
+    "title": "دليل رموز الأخطاء"
+  },
+  "guide": {
+    "authText": "لما تربط أدواتك أو خوادم MCP المخصصة، سجل الدخول مباشرة باستخدام مفتاح API الافتراضي اللي فوق (عبر X-API-Key أو Authorization: Bearer <API_KEY>).",
+    "badge": "وصول فوري",
+    "desc": "كل مستخدمين Postora عندهم صلاحية فورية ومباشرة لربط الأدوات الخارجية (زي n8n و Zapier و Make و عملاء MCP) بحصص حسابهم بدون الحاجة لموافقة يدوية.",
+    "mcpDesc": "اربط أدوات Postora في خوادم MCP مباشرة مع Claude أو Cursor أو Windsurf أو وكلاء Antigravity. كل العمليات بتتحسب من رصيد اشتراكك الحالي.",
+    "mcpTitle": "ربط MCP (فوري)",
+    "title": "الوصول المباشر للـ API و OAuth 2.0 (موافق عليه تلقائياً)",
+    "webhooksDesc": "الأتمتة ومسارات العمل بتشتغل في بيئة معزولة خاصة بحسابك. مش محتاج مراجعة إدارية أو انتظار لتسجيل روابط التحويل.",
+    "webhooksTitle": "الـ Webhooks وعملاء OAuth"
+  },
+  "header": {
+    "createNewKey": "إنشاء مفتاح جديد",
+    "subtitle": "إدارة خوادم MCP ومفاتيح API والربط مع الأدوات الخارجية",
+    "title": "MCP و API"
+  },
+  "mcpServer": {
+    "badge": "تجريبي",
+    "desc": "اربط Postora بـ Claude و Cursor و ChatGPT وغيرها من أدوات الذكاء الاصطناعي اللي بتدعم MCP باستخدام نفس مفتاح الـ API.",
+    "title": "خادم MCP"
+  },
+  "quickStart": {
+    "desc": "إزاي تسجل الدخول وتعمل أول طلب API",
+    "title": "مثال للبدء السريع"
+  },
+  "usage": {
+    "current": "الاستهلاك الحالي",
+    "limit": "حد الاستهلاك",
+    "nextReset": "التجديد الجاي",
+    "progress": "معدل الاستهلاك",
+    "title": "حالة استهلاك API"
+  }
+}
