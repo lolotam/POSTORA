@@ -26,7 +26,7 @@ For local TestSprite execution, use `http://localhost:54321/functions/v1`. Produ
 - Webhooks: `stripe-webhook`, `resend-webhook`, `whatsapp-webhook`, `tiktok-webhook`.
 - Billing functions: `stripe-checkout`, `stripe-manage-subscription`, `create-payment`, `verify-payment`, `backfill-subscription`, `check-subscription`.
 - Admin and observability functions: `manage-app-secrets`, `manage-cron-jobs`, `observability-alerts`, `observability-collector`, `sync-user-quotas`, `notify-admin-new-user`, `notify-expiring-ai-overrides`.
-- Account security functions: `check-user-mfa`, `send-reset-otp`, `verify-reset-otp`, `verify-mfa-reset`, `send-change-password-otp`, `change-password`, `manage-backup-codes`.
+- Account security functions: `send-reset-otp`, `verify-reset-otp`, `verify-mfa-reset`, `send-change-password-otp`, `change-password`, `manage-backup-codes`.
 
 ## Required Test Coverage
 - Every edge function should answer `OPTIONS` preflight with CORS headers.

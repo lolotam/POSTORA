@@ -557,7 +557,6 @@ features:
   - name: Account Security APIs
     description: Password reset, MFA reset, MFA status, backup-code management, and password change endpoints.
     files:
-      - supabase/functions/check-user-mfa/index.ts
       - supabase/functions/verify-mfa-reset/index.ts
       - supabase/functions/verify-reset-otp/index.ts
       - supabase/functions/send-reset-otp/index.ts
@@ -565,12 +564,6 @@ features:
       - supabase/functions/change-password/index.ts
       - supabase/functions/manage-backup-codes/index.ts
     endpoints:
-      - method: POST
-        path: /functions/v1/check-user-mfa
-        description: Return MFA factors for the authenticated user.
-        auth_required: true
-        response_schema:
-          "200": MFA factor status
       - method: POST
         path: /functions/v1/send-reset-otp
         description: Send password reset OTP.

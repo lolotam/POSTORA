@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useImperativeHandle, forwardRef } from "react";
 import { useMutation, useQueryClient, useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
-import { sanitizeEmailHtml } from "@/lib/sanitizeHtml";
+import { sanitizeEmailHtml, escapeHtmlText } from "@/lib/sanitizeHtml";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -130,12 +130,12 @@ export const ComposeEmail = forwardRef<ComposeEmailRef, {}>(function ComposeEmai
         <div style="border-left: 2px solid #ccc; padding-left: 10px; margin-left: 10px; color: #666;">
           <p style="margin: 0 0 10px 0; font-size: 12px;">
             <strong>---------- Forwarded message ----------</strong><br>
-            From: ${data.originalFrom}<br>
-            To: ${data.originalTo}<br>
-            Date: ${data.originalDate}<br>
-            Subject: ${data.subject || "(no subject)"}
+            From: ${escapeHtmlText(data.originalFrom)}<br>
+            To: ${escapeHtmlText(data.originalTo)}<br>
+            Date: ${escapeHtmlText(data.originalDate)}<br>
+            Subject: ${escapeHtmlText(data.subject || "(no subject)")}
           </p>
-          <div style="font-size: 13px;">${data.originalBody || ""}</div>
+          <div style="font-size: 13px;">${sanitizeEmailHtml(data.originalBody || "")}</div>
         </div>
       `;
       setBody(forwardedContent);
@@ -242,8 +242,8 @@ export const ComposeEmail = forwardRef<ComposeEmailRef, {}>(function ComposeEmai
       if (isReplyMode && originalBodyQuote) {
         const quotedOriginal = `
           <div style="margin-top: 20px; padding-left: 10px; border-left: 2px solid #ccc; color: #666;">
-            <p style="margin: 0 0 10px 0; font-size: 12px;"><strong>On ${new Date().toLocaleDateString()}, ${toEmails[0]} wrote:</strong></p>
-            <div style="font-size: 13px;">${originalBodyQuote}</div>
+            <p style="margin: 0 0 10px 0; font-size: 12px;"><strong>On ${new Date().toLocaleDateString()}, ${escapeHtmlText(toEmails[0])} wrote:</strong></p>
+            <div style="font-size: 13px;">${sanitizeEmailHtml(originalBodyQuote)}</div>
           </div>
         `;
         htmlBody = `${htmlBody}${quotedOriginal}`;
