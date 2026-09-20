@@ -1,5 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { getOpeninaryConfig, openinaryTarget, openinaryDeliveryUrl, uploadBytesToOpeninary } from "../_shared/openinary.ts";
+import { extensionForBytes, extensionForContentType, getOpeninaryConfig, openinaryTarget, openinaryDeliveryUrl, uploadBytesToOpeninary } from "../_shared/openinary.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -505,6 +505,7 @@ Deno.serve(async (req) => {
     // Materialise payload bytes once so every provider stores identical content.
     let uploadSource = externalUrl || ""; // Cloudinary accepts remote URLs or base64 data URIs
     let payloadBytes: Uint8Array | null = null;
+    let externalContentType: string | null = null;
     if (fileData) {
       const b64Part = fileData.includes(",") ? fileData.split(",")[1] : fileData;
       uploadSource = fileData.startsWith("data:") ? fileData : `data:application/octet-stream;base64,${b64Part}`;
@@ -515,6 +516,7 @@ Deno.serve(async (req) => {
       try {
         const res = await safeFetchExternal(externalUrl);
         if (res.ok) {
+          externalContentType = res.headers.get("content-type");
           payloadBytes = await readCappedBytes(res, MAX_EXTERNAL_BYTES);
           if (!incomingFileSize) incomingFileSize = payloadBytes.length;
         } else {
@@ -525,7 +527,11 @@ Deno.serve(async (req) => {
       }
     }
 
-    const objectExt = fileExtension || (fileType === "video" ? "mp4" : fileType === "gif" ? "gif" : "jpg");
+    // Callers such as the admin identity settings send a bare key ("app_favicon") as the
+    // file name, so the extension has to come from the bytes themselves. Openinary checks the
+    // declared extension against the real content and rejects a mismatch with HTTP 400.
+    const sniffedExt = fileExtension ? null : (payloadBytes && extensionForBytes(payloadBytes)) || extensionForContentType(externalContentType);
+    const objectExt = fileExtension || sniffedExt || (fileType === "video" ? "mp4" : fileType === "gif" ? "gif" : "jpg");
     const openinaryBaseName = fileType === "raw" && fileExtension ? uniquePublicId.slice(0, -(fileExtension.length + 1)) : uniquePublicId;
     const openinaryFallbackKey = `${openinaryConfig?.folderPrefix || "postora.cloud"}/${folder}/${uniquePublicId}.${objectExt}`;
 
@@ -601,7 +607,7 @@ Deno.serve(async (req) => {
 
     // Resilient contract: success when at least one provider stored the bytes.
     if (storedIn.length === 0) {
-      return new Response(JSON.stringify({ success: false, partial: false, storedIn, errors }), { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      return new Response(JSON.stringify({ success: false, partial: false, storedIn, errors, error: errors.join("; ") }), { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
     const preferOpeninaryRead = cdnPolicy.readPreference === "openinary";

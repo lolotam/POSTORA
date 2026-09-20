@@ -118,7 +118,15 @@ export function GeneralIdentitySettings() {
       const { data, error } = await supabase.functions.invoke("cloudinary-upload", {
         body: { externalUrl: sourceUrl, fileName: key, fileType: "image" },
       });
-      if (error || !data?.success) {
+      if (error) {
+        // A non-2xx reply arrives as FunctionsHttpError with `data` null; the reason the
+        // function gave (which provider refused the file, and why) is only on its Response.
+        const envelope = error.context instanceof Response
+          ? await error.context.clone().json().catch(() => null)
+          : null;
+        throw new Error(envelope?.error || "The image could not be copied to the CDN.");
+      }
+      if (!data?.success) {
         throw new Error(data?.error || "The image could not be copied to the CDN.");
       }
       return data.url as string;
