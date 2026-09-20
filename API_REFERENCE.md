@@ -432,11 +432,10 @@ Total: **96 functions** (verified against `supabase/functions/` directory).
 | `notify-expiring-ai-overrides` | cron | POST | Warn admins when AI provider keys near expiry |
 | `get-public-config` | public | POST | Public-safe config (feature flags, plan IDs) |
 
-### 7.14 MFA & password (3)
+### 7.14 MFA & password (2)
 
 | Name | Access | Method | Brief |
 |---|---|---|---|
-| `check-user-mfa` | user JWT | POST | Returns MFA factors for a user |
 | `verify-mfa-reset` | public | POST | Verify reset OTP for MFA disable |
 | `verify-reset-otp` | public | POST | Verify password reset OTP |
 
@@ -821,7 +820,6 @@ magic link) through Resend with custom branded templates.
 | `messaging-api` | Unified inbox CRUD for FB/IG/WA. |
 | `comment-manager` | Comment list/reply/hide for FB/IG. |
 | `facebook-places-search` | FB Places lookup for location tagging. |
-| `check-user-mfa` | Returns `aal2`-eligible factors for a user. |
 | `verify-mfa-reset` / `verify-reset-otp` | OTP verification for MFA disable / password reset. |
 | `tiktok-analytics` / `tiktok-check-status` | Read-only TikTok helpers. |
 | `tiktok-demo-publish` | Sandbox publish (admin only; bypasses live API). |
@@ -1062,7 +1060,7 @@ models are allowed in this code path
 | `observability-alerts` | Evaluates configs; writes `observability_alert_history`. |
 | `unsplash-proxy` | `?query=…&page=…` rate-limited. |
 | `cleanup-media` | Removes orphaned `media_files`. |
-| `check-user-mfa` / `verify-mfa-reset` / `verify-reset-otp` | OTP/MFA helpers. |
+| `verify-mfa-reset` / `verify-reset-otp` | OTP/MFA helpers. |
 
 ---
 
