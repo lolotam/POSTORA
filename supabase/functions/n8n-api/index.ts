@@ -98,7 +98,13 @@ export async function checkRateLimit(
     // Fail closed: a rate limiter that silently allows on error turns a database
     // outage into unlimited API usage. The refusing return writes its audit row
     // (project rule) and the caller answers 503 instead of the usual 429.
-    await supabase.from('system_logs').insert({
+    //
+    // The whole reason this row is being written is that a database read just
+    // failed, so the write most likely to fail is this one. Its error is checked
+    // rather than discarded, and the fallback is the edge log, which is the only
+    // sink still reachable when Postgres is the thing that is down. Without it a
+    // refusal during an outage leaves no trace in either place.
+    const { error: auditError } = await supabase.from('system_logs').insert({
       source: 'n8n-api',
       category: 'system',
       level: 'error',
@@ -110,6 +116,12 @@ export async function checkRateLimit(
         pg_code: (error as { code?: string | null }).code ?? null,
       },
     });
+    if (auditError) {
+      console.error(
+        `[n8n-api] system_logs insert failed while refusing ${method} ${endpoint} (fail-closed 503 has no durable audit row):`,
+        auditError.message,
+      );
+    }
     return { allowed: false, failClosed: true, remaining: 0, resetAt };
   }
 
