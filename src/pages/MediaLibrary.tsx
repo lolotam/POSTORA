@@ -1,4 +1,5 @@
 import { useState, useMemo, useRef, useCallback } from "react";
+import { useTranslation, Trans } from "react-i18next";
 import { getAspectRatioLabel } from "@/lib/aspectRatioUtils";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
@@ -184,6 +185,7 @@ function MediaThumbnail({
 }
 
 export default function MediaLibrary() {
+  const { t } = useTranslation("assets");
   const navigate = useNavigate();
   const [search, setSearch] = useState("");
   const [viewMode, setViewMode] = useState<ViewMode>("grid");
@@ -427,16 +429,16 @@ export default function MediaLibrary() {
   const currentFolders = useMemo(() => folders.filter((f) => f.parent_path === currentFolder), [folders, currentFolder]);
 
   const breadcrumbs: Breadcrumb[] = useMemo(() => {
-    if (currentFolder === "/") return [{ name: "Root", path: "/" }];
+    if (currentFolder === "/") return [{ name: t("library.root", "Root"), path: "/" }];
     const parts = currentFolder.split("/").filter(Boolean);
-    const crumbs: Breadcrumb[] = [{ name: "Root", path: "/" }];
+    const crumbs: Breadcrumb[] = [{ name: t("library.root", "Root"), path: "/" }];
     let accPath = "";
     for (const part of parts) {
       accPath += `/${part}`;
       crumbs.push({ name: part, path: accPath });
     }
     return crumbs;
-  }, [currentFolder]);
+  }, [currentFolder, t]);
 
   const availableDates = useMemo(() => {
     const dates = new Set<string>();
@@ -540,7 +542,7 @@ export default function MediaLibrary() {
   // Handlers
   const handleSendToPost = () => {
     if (selectedFiles.size === 0) {
-      toast({ title: "No files selected", description: "Please select at least one file to send to post", variant: "destructive" });
+      toast({ title: t("toast.noFilesSelected", "No files selected"), description: t("toast.noFilesSelectedDesc", "Please select at least one file to send to post"), variant: "destructive" });
       return;
     }
     const filesToSend = mediaFiles.filter((f) => selectedFiles.has(f.id));
@@ -554,7 +556,7 @@ export default function MediaLibrary() {
       cloudinaryPublicId: f.cloudinary_public_id,
     }));
     sessionStorage.setItem("mediaLibrarySelection", JSON.stringify(mediaData));
-    toast({ title: "Media selected", description: `${filesToSend.length} file(s) ready for your new post` });
+    toast({ title: t("toast.mediaSelected", "Media selected"), description: t("toast.mediaSelectedDesc", "{{count}} file(s) ready for your new post", { count: filesToSend.length }) });
     navigate("/post?from=media-library");
   };
 
@@ -597,7 +599,7 @@ export default function MediaLibrary() {
         await supabase.storage.from("media").remove([file.file_path]);
       }
       await supabase.from("media_files").delete().eq("id", fileId);
-      toast({ title: "File deleted", description: "The file has been removed from your library." });
+      toast({ title: t("toast.fileDeleted", "File deleted"), description: t("toast.fileDeletedDesc", "The file has been removed from your library.") });
 
       if (operationId) {
         await completeOperation(operationId, undefined, Date.now() - startTime);
@@ -606,7 +608,7 @@ export default function MediaLibrary() {
       refetch();
     } catch (error) {
       console.error("Delete error:", error);
-      toast({ title: "Delete failed", description: "Failed to delete file. Please try again.", variant: "destructive" });
+      toast({ title: t("toast.deleteFailed", "Delete failed"), description: t("errors.deleteFileFailed", "Failed to delete file. Please try again."), variant: "destructive" });
 
       if (operationId) {
         await failOperation(
@@ -653,7 +655,7 @@ export default function MediaLibrary() {
         await supabase.storage.from("media").remove(supabaseFiles.map((f) => f.file_path));
       }
       await supabase.from("media_files").delete().in("id", Array.from(selectedFiles));
-      toast({ title: "Files deleted", description: `${selectedFiles.size} files have been removed.` });
+      toast({ title: t("toast.filesDeleted", "Files deleted"), description: t("toast.filesDeletedDesc", "{{count}} files have been removed.", { count: selectedFiles.size }) });
 
       if (operationId) {
         await completeOperation(operationId, undefined, Date.now() - startTime);
@@ -663,7 +665,7 @@ export default function MediaLibrary() {
       refetch();
     } catch (error) {
       console.error("Bulk delete error:", error);
-      toast({ title: "Delete failed", description: "Failed to delete files. Please try again.", variant: "destructive" });
+      toast({ title: t("toast.deleteFailed", "Delete failed"), description: t("errors.deleteFilesFailed", "Failed to delete files. Please try again."), variant: "destructive" });
 
       if (operationId) {
         await failOperation(
@@ -694,7 +696,7 @@ export default function MediaLibrary() {
 
       await supabase.from("media_files").update({ folder_path: "/" }).eq("folder_path", folderToDelete.full_path);
       await supabase.from("media_folders").delete().eq("id", folderToDelete.id);
-      toast({ title: "Folder deleted", description: `Deleted folder "${folderToDelete.name}"` });
+      toast({ title: t("toast.folderDeleted", "Folder deleted"), description: t("toast.folderDeletedDesc", "Deleted folder \"{{name}}\"", { name: folderToDelete.name }) });
 
       if (operationId) {
         await completeOperation(operationId, undefined, Date.now() - startTime);
@@ -705,7 +707,7 @@ export default function MediaLibrary() {
       setFolderToDelete(null);
     } catch (error) {
       console.error("Delete folder error:", error);
-      toast({ title: "Delete failed", description: "Could not delete folder", variant: "destructive" });
+      toast({ title: t("toast.deleteFailed", "Delete failed"), description: t("errors.couldNotDeleteFolder", "Could not delete folder"), variant: "destructive" });
 
       if (operationId) {
         await failOperation(
@@ -738,7 +740,7 @@ export default function MediaLibrary() {
       document.body.removeChild(a);
     } catch (error) {
       console.error("Download error:", error);
-      toast({ title: "Download failed", description: "Could not download the file", variant: "destructive" });
+      toast({ title: t("toast.downloadFailed", "Download failed"), description: t("errors.couldNotDownload", "Could not download the file"), variant: "destructive" });
     }
   };
 
@@ -751,15 +753,15 @@ export default function MediaLibrary() {
       await new Promise((resolve) => setTimeout(resolve, 300));
     }
     setDownloadProgress(null);
-    toast({ title: "Download complete", description: `Downloaded ${filesToDownload.length} files successfully.` });
+    toast({ title: t("toast.downloadComplete", "Download complete"), description: t("toast.downloadCompleteDesc", "Downloaded {{count}} files successfully.", { count: filesToDownload.length }) });
   };
 
   const copyFileLink = async (file: MediaFile) => {
     try {
       await navigator.clipboard.writeText(file.publicUrl);
-      toast({ title: "Link copied", description: "Image link copied to clipboard" });
+      toast({ title: t("toast.linkCopied", "Link copied"), description: t("toast.copiedDesc", "Image link copied to clipboard") });
     } catch (error) {
-      toast({ title: "Copy failed", description: "Could not copy link to clipboard", variant: "destructive" });
+      toast({ title: t("toast.copyFailed", "Copy failed"), description: t("errors.copyFailed", "Could not copy link to clipboard"), variant: "destructive" });
     }
   };
 
@@ -797,14 +799,16 @@ export default function MediaLibrary() {
         const fileIds = filesToMove.map((f) => f.id);
         await supabase.from("media_files").update({ folder_path: targetFolder.full_path }).in("id", fileIds);
         toast({
-          title: filesToMove.length > 1 ? "Files moved" : "File moved",
-          description: `Moved ${filesToMove.length} ${filesToMove.length > 1 ? "files" : "file"} to "${targetFolder.name}"`,
+          title: filesToMove.length > 1 ? t("toast.filesMoved", "Files moved") : t("toast.fileMoved", "File moved"),
+          description: filesToMove.length > 1
+            ? t("toast.movedDesc", "Moved {{count}} files to \"{{name}}\"", { count: filesToMove.length, name: targetFolder.name })
+            : t("toast.movedOneDesc", "Moved {{count}} file to \"{{name}}\"", { count: filesToMove.length, name: targetFolder.name }),
         });
         if (selectedFiles.has(draggedFileId)) setSelectedFiles(new Set());
         refetch();
       } catch (error) {
         console.error("Move error:", error);
-        toast({ title: "Move failed", description: "Could not move the file(s)", variant: "destructive" });
+        toast({ title: t("toast.moveFailed", "Move failed"), description: t("errors.moveFilesFailed", "Could not move the file(s)"), variant: "destructive" });
       }
     }
   };
@@ -819,7 +823,7 @@ export default function MediaLibrary() {
           {isAdmin && (
             <div className="space-y-3">
               <div className="flex items-center gap-3">
-                <label className="text-sm font-medium text-muted-foreground whitespace-nowrap">View as user:</label>
+                <label className="text-sm font-medium text-muted-foreground whitespace-nowrap">{t("library.viewAsUser", "View as user:")}</label>
                 <Popover open={userSearchOpen} onOpenChange={setUserSearchOpen}>
                   <PopoverTrigger asChild>
                     <Button
@@ -830,15 +834,15 @@ export default function MediaLibrary() {
                     >
                       {viewAsUser
                         ? (viewAsUser.full_name ? `${viewAsUser.full_name} (${viewAsUser.email})` : viewAsUser.email)
-                        : "My Library"}
+                        : t("library.myLibrary", "My Library")}
                       <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
                     </Button>
                   </PopoverTrigger>
                   <PopoverContent className="w-[400px] p-0" align="start">
                     <Command>
-                      <CommandInput placeholder="Search users by name or email..." />
+                      <CommandInput placeholder={t("form.searchUsers", "Search users by name or email...")} />
                       <CommandList>
-                        <CommandEmpty>No user found.</CommandEmpty>
+                        <CommandEmpty>{t("empty.noUserFound", "No user found.")}</CommandEmpty>
                         <CommandGroup>
                           <CommandItem
                             onSelect={() => {
@@ -849,7 +853,7 @@ export default function MediaLibrary() {
                             }}
                           >
                             <Check className={cn("mr-2 h-4 w-4", !viewAsUserId ? "opacity-100" : "opacity-0")} />
-                            My Library
+                            {t("library.myLibrary", "My Library")}
                           </CommandItem>
                           {allUsers.map((u) => (
                             <CommandItem
@@ -883,10 +887,16 @@ export default function MediaLibrary() {
                 <Alert className="border-primary/30 bg-primary/5">
                   <AlertDescription className="flex items-center justify-between">
                     <span className="text-sm">
-                      Viewing media library of <strong>{viewAsUser.full_name || viewAsUser.email}</strong>
+                      <Trans
+                        ns="assets"
+                        i18nKey="library.viewingOf"
+                        defaults="Viewing media library of <strong>{{name}}</strong>"
+                        values={{ name: viewAsUser.full_name || viewAsUser.email }}
+                        components={{ strong: <strong /> }}
+                      />
                     </span>
                     <Button variant="ghost" size="sm" onClick={() => { setViewAsUserId(null); setSelectedFiles(new Set()); setCurrentFolder("/"); }}>
-                      Return to my library
+                      {t("actions.returnToMine", "Return to my library")}
                     </Button>
                   </AlertDescription>
                 </Alert>
@@ -920,7 +930,7 @@ export default function MediaLibrary() {
             <div className="flex flex-col sm:flex-row gap-4">
               <div className="relative flex-1">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                <Input placeholder="Search files..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-10" />
+                <Input placeholder={t("form.searchFiles", "Search files...")} value={search} onChange={(e) => setSearch(e.target.value)} className="pl-10" />
               </div>
               <div className="flex gap-2 flex-wrap">
                 {/* Date Filter */}
@@ -928,7 +938,7 @@ export default function MediaLibrary() {
                   <PopoverTrigger asChild>
                     <Button variant="outline" className={cn("gap-2", selectedDate && "border-primary")}>
                       <CalendarDays className="w-4 h-4" />
-                      {selectedDate ? format(selectedDate, "MMM d, yyyy") : "Date"}
+                      {selectedDate ? format(selectedDate, "MMM d, yyyy") : t("filters.date", "Date")}
                     </Button>
                   </PopoverTrigger>
                   <PopoverContent className="w-auto p-0" align="start">
@@ -943,7 +953,7 @@ export default function MediaLibrary() {
                     {selectedDate && (
                       <div className="p-3 border-t">
                         <Button variant="ghost" size="sm" className="w-full" onClick={() => setSelectedDate(undefined)}>
-                          Clear date
+                          {t("filters.clearDate", "Clear date")}
                         </Button>
                       </div>
                     )}
@@ -956,15 +966,15 @@ export default function MediaLibrary() {
                     <DropdownMenuTrigger asChild>
                       <Button variant="outline" className={cn("gap-2", selectedPlatform && "border-primary")}>
                         {selectedPlatform === "_local" ? <HardDrive className="w-4 h-4" /> : selectedPlatform === "_cloudinary" ? <Upload className="w-4 h-4" /> : selectedPlatform === "_processed" ? <Wand2 className="w-4 h-4" /> : selectedPlatform ? <PlatformIcon platform={selectedPlatform as any} size="sm" /> : <Filter className="w-4 h-4" />}
-                        {!selectedPlatform ? "Source" : selectedPlatform === "_local" ? "Local" : selectedPlatform === "_cloudinary" ? "Cloud" : selectedPlatform === "_processed" ? "Processed" : null}
+                        {!selectedPlatform ? t("filters.source", "Source") : selectedPlatform === "_local" ? t("filters.local", "Local") : selectedPlatform === "_cloudinary" ? t("filters.cloud", "Cloud") : selectedPlatform === "_processed" ? t("filters.processed", "Processed") : null}
                       </Button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end">
-                      <DropdownMenuItem onClick={() => setSelectedPlatform(null)}>All Sources</DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => setSelectedPlatform(null)}>{t("filters.allSources", "All Sources")}</DropdownMenuItem>
                       <DropdownMenuSeparator />
                       {availablePlatforms.map((platform) => (
                         <DropdownMenuItem key={platform} onClick={() => setSelectedPlatform(platform)}>
-                          {platform === "_local" ? <><HardDrive className="w-4 h-4 mr-2" />Local Uploads</> : platform === "_cloudinary" ? <><Upload className="w-4 h-4 mr-2" />Cloudinary Files</> : platform === "_processed" ? <><Wand2 className="w-4 h-4 mr-2" />Processed Files</> : <><PlatformIcon platform={platform as any} size="sm" className="mr-2" />{platform.charAt(0).toUpperCase() + platform.slice(1)}</>}
+                          {platform === "_local" ? <><HardDrive className="w-4 h-4 mr-2" />{t("filters.localUploads", "Local Uploads")}</> : platform === "_cloudinary" ? <><Upload className="w-4 h-4 mr-2" />{t("filters.cloudinaryFiles", "Cloudinary Files")}</> : platform === "_processed" ? <><Wand2 className="w-4 h-4 mr-2" />{t("filters.processedFiles", "Processed Files")}</> : <><PlatformIcon platform={platform as any} size="sm" className="mr-2" />{platform.charAt(0).toUpperCase() + platform.slice(1)}</>}
                         </DropdownMenuItem>
                       ))}
                     </DropdownMenuContent>
@@ -982,15 +992,15 @@ export default function MediaLibrary() {
                               <AvatarImage src={getAccountInfo(selectedAccountId)?.avatar_url || undefined} />
                               <AvatarFallback className="text-[8px]">{(getAccountInfo(selectedAccountId)?.platform_username || "?")[0]?.toUpperCase()}</AvatarFallback>
                             </Avatar>
-                            <span className="max-w-[80px] truncate">{getAccountInfo(selectedAccountId)?.platform_username || "Account"}</span>
+                            <span className="max-w-[80px] truncate">{getAccountInfo(selectedAccountId)?.platform_username || t("filters.account", "Account")}</span>
                           </>
                         ) : (
-                          <><User className="w-4 h-4" />Account</>
+                          <><User className="w-4 h-4" />{t("filters.account", "Account")}</>
                         )}
                       </Button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end" className="w-56">
-                      <DropdownMenuItem onClick={() => setSelectedAccountId(null)}>All Accounts</DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => setSelectedAccountId(null)}>{t("filters.allAccounts", "All Accounts")}</DropdownMenuItem>
                       <DropdownMenuSeparator />
                       {accountsWithMedia.map((account) => (
                         <DropdownMenuItem key={account.id} onClick={() => setSelectedAccountId(account.id)}>
@@ -1013,13 +1023,13 @@ export default function MediaLibrary() {
                   <DropdownMenuTrigger asChild>
                     <Button variant="outline" className={cn("gap-2", filterType !== "all" && "border-primary")}>
                       <Filter className="w-4 h-4" />
-                      {filterType === "all" ? "All" : filterType === "image" ? "Images" : "Videos"}
+                      {filterType === "all" ? t("common:all", "All") : filterType === "image" ? t("filters.images", "Images") : t("filters.videos", "Videos")}
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end">
-                    <DropdownMenuItem onClick={() => setFilterType("all")}>All Files</DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => setFilterType("image")}><Image className="w-4 h-4 mr-2" />Images Only</DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => setFilterType("video")}><Video className="w-4 h-4 mr-2" />Videos Only</DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => setFilterType("all")}>{t("filters.allFiles", "All Files")}</DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => setFilterType("image")}><Image className="w-4 h-4 mr-2" />{t("filters.imagesOnly", "Images Only")}</DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => setFilterType("video")}><Video className="w-4 h-4 mr-2" />{t("filters.videosOnly", "Videos Only")}</DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
 
@@ -1031,15 +1041,15 @@ export default function MediaLibrary() {
                        aspectRatioFilter === "portrait" ? <RectangleVertical className="w-4 h-4" /> :
                        aspectRatioFilter === "landscape" ? <RectangleHorizontal className="w-4 h-4" /> :
                        <RectangleHorizontal className="w-4 h-4" />}
-                      {aspectRatioFilter === "all" ? "Ratio" : aspectRatioFilter === "square" ? "Square" : aspectRatioFilter === "portrait" ? "Portrait" : "Landscape"}
+                      {aspectRatioFilter === "all" ? t("filters.ratio", "Ratio") : aspectRatioFilter === "square" ? t("filters.square", "Square") : aspectRatioFilter === "portrait" ? t("filters.portrait", "Portrait") : t("filters.landscape", "Landscape")}
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end">
-                    <DropdownMenuItem onClick={() => setAspectRatioFilter("all")}>All Ratios</DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => setAspectRatioFilter("all")}>{t("filters.allRatios", "All Ratios")}</DropdownMenuItem>
                     <DropdownMenuSeparator />
-                    <DropdownMenuItem onClick={() => setAspectRatioFilter("square")}><Square className="w-4 h-4 mr-2" />Square (1:1)</DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => setAspectRatioFilter("portrait")}><RectangleVertical className="w-4 h-4 mr-2" />Portrait</DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => setAspectRatioFilter("landscape")}><RectangleHorizontal className="w-4 h-4 mr-2" />Landscape</DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => setAspectRatioFilter("square")}><Square className="w-4 h-4 mr-2" />{t("filters.squareRatio", "Square (1:1)")}</DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => setAspectRatioFilter("portrait")}><RectangleVertical className="w-4 h-4 mr-2" />{t("filters.portrait", "Portrait")}</DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => setAspectRatioFilter("landscape")}><RectangleHorizontal className="w-4 h-4 mr-2" />{t("filters.landscape", "Landscape")}</DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
 
@@ -1047,12 +1057,12 @@ export default function MediaLibrary() {
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <Button variant="outline" className={cn("gap-2", itemsPerPage !== 50 && "border-primary")}>
-                      <Filter className="w-4 h-4" />{itemsPerPage} items
+                      <Filter className="w-4 h-4" />{t("filters.itemsCount", "{{count}} items", { count: itemsPerPage })}
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end" className="bg-background">
                     {[5, 8, 10, 20, 50].map((count) => (
-                      <DropdownMenuItem key={count} onClick={() => { setItemsPerPage(count); localStorage.setItem("mediaLibraryItemsPerPage", count.toString()); }} className={cn(itemsPerPage === count && "bg-secondary")}>{count} items</DropdownMenuItem>
+                      <DropdownMenuItem key={count} onClick={() => { setItemsPerPage(count); localStorage.setItem("mediaLibraryItemsPerPage", count.toString()); }} className={cn(itemsPerPage === count && "bg-secondary")}>{t("filters.itemsCount", "{{count}} items", { count })}</DropdownMenuItem>
                     ))}
                   </DropdownMenuContent>
                 </DropdownMenu>
@@ -1065,7 +1075,7 @@ export default function MediaLibrary() {
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end" className="bg-background">
                       {[4, 5, 6, 7, 8, 10].map((cols) => (
-                        <DropdownMenuItem key={cols} onClick={() => { setColumnsPerRow(cols); localStorage.setItem("mediaLibraryColumnsPerRow", cols.toString()); }} className={cn(columnsPerRow === cols && "bg-secondary")}>{cols} per row</DropdownMenuItem>
+                        <DropdownMenuItem key={cols} onClick={() => { setColumnsPerRow(cols); localStorage.setItem("mediaLibraryColumnsPerRow", cols.toString()); }} className={cn(columnsPerRow === cols && "bg-secondary")}>{t("filters.perRow", "{{count}} per row", { count: cols })}</DropdownMenuItem>
                       ))}
                     </DropdownMenuContent>
                   </DropdownMenu>
@@ -1082,7 +1092,7 @@ export default function MediaLibrary() {
             {/* Active filters display */}
             {hasActiveFilters && (
               <div className="flex items-center gap-2 flex-wrap">
-                <span className="text-sm text-muted-foreground">Active filters:</span>
+                <span className="text-sm text-muted-foreground">{t("filters.active", "Active filters:")}</span>
                 {selectedDate && (
                   <Badge variant="secondary" className="gap-1">
                     <CalendarDays className="w-3 h-3" />{format(selectedDate, "MMM d, yyyy")}
@@ -1092,7 +1102,7 @@ export default function MediaLibrary() {
                 {selectedPlatform && (
                   <Badge variant="secondary" className="gap-1">
                     {selectedPlatform === "_local" ? <HardDrive className="w-3 h-3" /> : selectedPlatform === "_cloudinary" ? <Upload className="w-3 h-3" /> : selectedPlatform === "_processed" ? <Wand2 className="w-3 h-3" /> : <PlatformIcon platform={selectedPlatform as any} size="sm" />}
-                    {selectedPlatform === "_local" ? "Local Uploads" : selectedPlatform === "_cloudinary" ? "Cloudinary" : selectedPlatform === "_processed" ? "Processed" : selectedPlatform}
+                    {selectedPlatform === "_local" ? t("filters.localUploads", "Local Uploads") : selectedPlatform === "_cloudinary" ? t("filters.cloudinary", "Cloudinary") : selectedPlatform === "_processed" ? t("filters.processed", "Processed") : selectedPlatform}
                     <button onClick={() => setSelectedPlatform(null)} className="ml-1 hover:text-destructive"><X className="w-3 h-3" /></button>
                   </Badge>
                 )}
@@ -1104,7 +1114,7 @@ export default function MediaLibrary() {
                 )}
                 {filterType !== "all" && (
                   <Badge variant="secondary" className="gap-1">
-                    {filterType === "image" ? <Image className="w-3 h-3" /> : <Video className="w-3 h-3" />}{filterType}s
+                    {filterType === "image" ? <Image className="w-3 h-3" /> : <Video className="w-3 h-3" />}{filterType === "image" ? t("filters.imagesLower", "images") : t("filters.videosLower", "videos")}
                     <button onClick={() => setFilterType("all")} className="ml-1 hover:text-destructive"><X className="w-3 h-3" /></button>
                   </Badge>
                 )}
@@ -1113,11 +1123,11 @@ export default function MediaLibrary() {
                     {aspectRatioFilter === "square" ? <Square className="w-3 h-3" /> :
                      aspectRatioFilter === "portrait" ? <RectangleVertical className="w-3 h-3" /> :
                      <RectangleHorizontal className="w-3 h-3" />}
-                    {aspectRatioFilter}
+                    {aspectRatioFilter === "square" ? t("filters.square", "Square") : aspectRatioFilter === "portrait" ? t("filters.portrait", "Portrait") : t("filters.landscape", "Landscape")}
                     <button onClick={() => setAspectRatioFilter("all")} className="ml-1 hover:text-destructive"><X className="w-3 h-3" /></button>
                   </Badge>
                 )}
-                <Button variant="ghost" size="sm" onClick={clearFilters}>Clear all</Button>
+                <Button variant="ghost" size="sm" onClick={clearFilters}>{t("actions.clearAll", "Clear all")}</Button>
               </div>
             )}
           </div>
@@ -1130,12 +1140,12 @@ export default function MediaLibrary() {
           ) : displayedFiles.length === 0 && currentFolders.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-64 text-center">
               <FolderOpen className="w-16 h-16 text-muted-foreground mb-4" />
-              <h3 className="text-lg font-semibold">No media files</h3>
+              <h3 className="text-lg font-semibold">{t("empty.noMedia", "No media files")}</h3>
               <p className="text-muted-foreground mt-1">
-                {hasActiveFilters ? "No files match your current filters" : "Upload some images or videos to get started"}
+                {hasActiveFilters ? t("empty.noMatch", "No files match your current filters") : t("empty.uploadHint", "Upload some images or videos to get started")}
               </p>
               {hasActiveFilters && (
-                <Button variant="outline" className="mt-4" onClick={clearFilters}>Clear Filters</Button>
+                <Button variant="outline" className="mt-4" onClick={clearFilters}>{t("actions.clearFilters", "Clear Filters")}</Button>
               )}
             </div>
           ) : (
@@ -1157,26 +1167,26 @@ export default function MediaLibrary() {
                       <div className={cn("relative rounded-xl overflow-hidden border-2 transition-all cursor-pointer aspect-square", selectedFiles.has(file.id) ? "border-primary bg-primary/5" : "border-border hover:border-primary/50")} onClick={() => toggleFileSelection(file.id)}>
                         <MediaThumbnail file={file} size={300} openinaryOrigin={openinaryOrigin} onHeal={healMetadata} />
                         <div className="absolute bottom-1 left-1 flex gap-0.5">
-                          <Badge variant="secondary" className="text-[10px] px-1 py-0 opacity-80">{file.file_type === "video" ? "Video" : "Image"}</Badge>
+                          <Badge variant="secondary" className="text-[10px] px-1 py-0 opacity-80">{file.file_type === "video" ? t("library.video", "Video") : t("library.image", "Image")}</Badge>
                           {(() => { const label = getAspectRatioLabel(file.metadata?.width as number, file.metadata?.height as number); return label ? <Badge variant="secondary" className="text-[10px] px-1 py-0 opacity-80">{label}</Badge> : null; })()}
                         </div>
                         <Button size="icon" variant="secondary" className={cn("absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full opacity-0 group-hover:opacity-100 transition-opacity shadow-lg", columnsPerRow >= 10 ? "h-5 w-5" : columnsPerRow >= 8 ? "h-7 w-7" : "h-10 w-10")} onClick={(e) => { e.stopPropagation(); setPreviewFile(file); }}><Eye className={columnsPerRow >= 10 ? "w-2.5 h-2.5" : columnsPerRow >= 8 ? "w-3.5 h-3.5" : "w-5 h-5"} /></Button>
                         <div className={cn("absolute rounded-full flex items-center justify-center transition-all", columnsPerRow >= 10 ? "top-0.5 left-0.5 w-3 h-3" : columnsPerRow >= 8 ? "top-1 left-1 w-4 h-4" : "top-1 left-1 w-6 h-6", selectedFiles.has(file.id) ? "bg-primary text-primary-foreground" : "bg-background/80 backdrop-blur opacity-0 group-hover:opacity-100")}>{selectedFiles.has(file.id) ? <CheckCircle2 className={columnsPerRow >= 10 ? "w-2 h-2" : columnsPerRow >= 8 ? "w-3 h-3" : "w-4 h-4"} /> : <div className={cn("rounded-full border-2 border-muted-foreground", columnsPerRow >= 10 ? "w-1.5 h-1.5" : columnsPerRow >= 8 ? "w-2 h-2" : "w-3 h-3")} />}</div>
                         <div className={cn("absolute flex items-center opacity-0 group-hover:opacity-100 transition-opacity", columnsPerRow >= 10 ? "top-0.5 right-0.5 gap-0" : columnsPerRow >= 8 ? "top-1 right-1 gap-0.5" : "top-1 right-1 gap-1")}>
                           <DropdownMenu>
-                            <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}><Button size="icon" variant="secondary" aria-label="View more options" className={columnsPerRow >= 10 ? "h-4 w-4" : columnsPerRow >= 8 ? "h-5 w-5" : "h-7 w-7"}><MoreVertical className={columnsPerRow >= 10 ? "w-2 h-2" : columnsPerRow >= 8 ? "w-2.5 h-2.5" : "w-3 h-3"} /></Button></DropdownMenuTrigger>
+                            <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}><Button size="icon" variant="secondary" aria-label={t("actions.moreOptions", "View more options")} className={columnsPerRow >= 10 ? "h-4 w-4" : columnsPerRow >= 8 ? "h-5 w-5" : "h-7 w-7"}><MoreVertical className={columnsPerRow >= 10 ? "w-2 h-2" : columnsPerRow >= 8 ? "w-2.5 h-2.5" : "w-3 h-3"} /></Button></DropdownMenuTrigger>
                             <DropdownMenuContent align="end" className="bg-background">
-                              <DropdownMenuItem onClick={(e) => { e.stopPropagation(); setPreviewFile(file); }}><Eye className="w-4 h-4 mr-2" />Open</DropdownMenuItem>
+                              <DropdownMenuItem onClick={(e) => { e.stopPropagation(); setPreviewFile(file); }}><Eye className="w-4 h-4 mr-2" />{t("common:open", "Open")}</DropdownMenuItem>
                               <DropdownMenuSeparator />
-                              <DropdownMenuItem onClick={(e) => { e.stopPropagation(); setRenameFile(file); }}><Pencil className="w-4 h-4 mr-2" />Rename</DropdownMenuItem>
-                              <DropdownMenuItem onClick={(e) => { e.stopPropagation(); setShareFile(file); }}><Share2 className="w-4 h-4 mr-2" />Share / Embed</DropdownMenuItem>
-                              <DropdownMenuItem onClick={(e) => { e.stopPropagation(); setSingleFileMoveId(file.id); }}><Move className="w-4 h-4 mr-2" />Move</DropdownMenuItem>
-                              <DropdownMenuItem onClick={(e) => { e.stopPropagation(); setReplaceFile(file); }}><RefreshCw className="w-4 h-4 mr-2" />Replace</DropdownMenuItem>
-                              {file.file_type === "image" && <DropdownMenuItem onClick={(e) => { e.stopPropagation(); setImageToolsFile(file); }}><Wand2 className="w-4 h-4 mr-2" />Image Tools</DropdownMenuItem>}
+                              <DropdownMenuItem onClick={(e) => { e.stopPropagation(); setRenameFile(file); }}><Pencil className="w-4 h-4 mr-2" />{t("common:rename", "Rename")}</DropdownMenuItem>
+                              <DropdownMenuItem onClick={(e) => { e.stopPropagation(); setShareFile(file); }}><Share2 className="w-4 h-4 mr-2" />{t("actions.shareEmbed", "Share / Embed")}</DropdownMenuItem>
+                              <DropdownMenuItem onClick={(e) => { e.stopPropagation(); setSingleFileMoveId(file.id); }}><Move className="w-4 h-4 mr-2" />{t("common:move", "Move")}</DropdownMenuItem>
+                              <DropdownMenuItem onClick={(e) => { e.stopPropagation(); setReplaceFile(file); }}><RefreshCw className="w-4 h-4 mr-2" />{t("actions.replace", "Replace")}</DropdownMenuItem>
+                              {file.file_type === "image" && <DropdownMenuItem onClick={(e) => { e.stopPropagation(); setImageToolsFile(file); }}><Wand2 className="w-4 h-4 mr-2" />{t("actions.imageTools", "Image Tools")}</DropdownMenuItem>}
                               <DropdownMenuSeparator />
-                              <DropdownMenuItem onClick={(e) => { e.stopPropagation(); handleDownload(file); }}><Download className="w-4 h-4 mr-2" />Download</DropdownMenuItem>
+                              <DropdownMenuItem onClick={(e) => { e.stopPropagation(); handleDownload(file); }}><Download className="w-4 h-4 mr-2" />{t("common:download", "Download")}</DropdownMenuItem>
                               <DropdownMenuSeparator />
-                              <DropdownMenuItem className="text-destructive" onClick={(e) => { e.stopPropagation(); setFileToDelete(file.id); }}><Trash2 className="w-4 h-4 mr-2" />Delete</DropdownMenuItem>
+                              <DropdownMenuItem className="text-destructive" onClick={(e) => { e.stopPropagation(); setFileToDelete(file.id); }}><Trash2 className="w-4 h-4 mr-2" />{t("common:delete", "Delete")}</DropdownMenuItem>
                             </DropdownMenuContent>
                           </DropdownMenu>
                         </div>
@@ -1192,21 +1202,21 @@ export default function MediaLibrary() {
                       <div className="flex-1 min-w-0">
                         <p className="font-medium truncate">{getFileDisplayName(file)}</p>
                         <div className="flex items-center gap-4 text-sm text-muted-foreground mt-1">
-                          <span className="flex items-center gap-1">{file.file_type === "image" ? <Image className="w-3 h-3" /> : <Video className="w-3 h-3" />}{file.file_type}</span>
+                          <span className="flex items-center gap-1">{file.file_type === "image" ? <Image className="w-3 h-3" /> : <Video className="w-3 h-3" />}{file.file_type === "image" ? t("type.imageLower", "image") : t("type.videoLower", "video")}</span>
                           <span>{formatFileSize(file.file_size)}</span>
                           {(() => { const label = getAspectRatioLabel(file.metadata?.width as number, file.metadata?.height as number); return label ? <Badge variant="secondary" className="text-[10px] px-1 py-0">{label}</Badge> : null; })()}
                           <span>{format(new Date(file.created_at), "MMM d, yyyy")}</span>
                         </div>
                       </div>
                       <DropdownMenu>
-                        <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}><Button size="icon" variant="ghost" aria-label="View more options"><MoreVertical className="w-4 h-4" /></Button></DropdownMenuTrigger>
+                        <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}><Button size="icon" variant="ghost" aria-label={t("actions.moreOptions", "View more options")}><MoreVertical className="w-4 h-4" /></Button></DropdownMenuTrigger>
                         <DropdownMenuContent align="end" className="bg-background">
-                          <DropdownMenuItem onClick={(e) => { e.stopPropagation(); setPreviewFile(file); }}><Eye className="w-4 h-4 mr-2" />Open</DropdownMenuItem>
+                          <DropdownMenuItem onClick={(e) => { e.stopPropagation(); setPreviewFile(file); }}><Eye className="w-4 h-4 mr-2" />{t("common:open", "Open")}</DropdownMenuItem>
                           <DropdownMenuSeparator />
-                          <DropdownMenuItem onClick={(e) => { e.stopPropagation(); setRenameFile(file); }}><Pencil className="w-4 h-4 mr-2" />Rename</DropdownMenuItem>
-                          <DropdownMenuItem onClick={(e) => { e.stopPropagation(); handleDownload(file); }}><Download className="w-4 h-4 mr-2" />Download</DropdownMenuItem>
+                          <DropdownMenuItem onClick={(e) => { e.stopPropagation(); setRenameFile(file); }}><Pencil className="w-4 h-4 mr-2" />{t("common:rename", "Rename")}</DropdownMenuItem>
+                          <DropdownMenuItem onClick={(e) => { e.stopPropagation(); handleDownload(file); }}><Download className="w-4 h-4 mr-2" />{t("common:download", "Download")}</DropdownMenuItem>
                           <DropdownMenuSeparator />
-                          <DropdownMenuItem className="text-destructive" onClick={(e) => { e.stopPropagation(); setFileToDelete(file.id); }}><Trash2 className="w-4 h-4 mr-2" />Delete</DropdownMenuItem>
+                          <DropdownMenuItem className="text-destructive" onClick={(e) => { e.stopPropagation(); setFileToDelete(file.id); }}><Trash2 className="w-4 h-4 mr-2" />{t("common:delete", "Delete")}</DropdownMenuItem>
                         </DropdownMenuContent>
                       </DropdownMenu>
                     </div>

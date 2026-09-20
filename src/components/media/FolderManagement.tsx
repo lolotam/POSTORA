@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   Dialog,
   DialogContent,
@@ -42,6 +43,7 @@ export function CreateFolderDialog({
 }: CreateFolderDialogProps) {
   const [folderName, setFolderName] = useState("");
   const [creating, setCreating] = useState(false);
+  const { t } = useTranslation("assets");
   const { toast } = useToast();
   const { logOperation, completeOperation, failOperation } = useLogMediaOperation();
 
@@ -82,8 +84,8 @@ export function CreateFolderDialog({
       if (error) {
         if (error.code === "23505") {
           toast({
-            title: "Folder exists",
-            description: "A folder with this name already exists",
+            title: t("toast.folderExists", "Folder exists"),
+            description: t("toast.folderExistsDesc", "A folder with this name already exists"),
             variant: "destructive",
           });
           if (operationId) {
@@ -94,8 +96,8 @@ export function CreateFolderDialog({
         }
       } else {
         toast({
-          title: "Folder created",
-          description: `Created folder "${sanitizedName}"`,
+          title: t("toast.folderCreated", "Folder created"),
+          description: t("toast.folderCreatedDesc", "Created folder \"{{name}}\"", { name: sanitizedName }),
         });
         if (operationId) {
           await completeOperation(operationId, undefined, Date.now() - startTime);
@@ -107,8 +109,8 @@ export function CreateFolderDialog({
     } catch (error) {
       console.error("Create folder error:", error);
       toast({
-        title: "Error",
-        description: "Failed to create folder",
+        title: t("common:error", "Error"),
+        description: t("errors.createFolderFailed", "Failed to create folder"),
         variant: "destructive",
       });
       if (operationId) {
@@ -134,41 +136,41 @@ export function CreateFolderDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <FolderPlus className="w-5 h-5" />
-            Create New Folder
+            {t("folders.createTitle", "Create New Folder")}
           </DialogTitle>
           <DialogDescription>
-            Enter a name for your new folder.
+            {t("folders.subtitle", "Enter a name for your new folder.")}
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
           <div className="space-y-2">
-            <Label htmlFor="folder-name">Folder Name</Label>
+            <Label htmlFor="folder-name">{t("folders.folderName", "Folder Name")}</Label>
             <Input
               id="folder-name"
               value={folderName}
               onChange={(e) => setFolderName(e.target.value)}
-              placeholder="Enter folder name"
+              placeholder={t("folders.namePlaceholder", "Enter folder name")}
               onKeyDown={(e) => e.key === "Enter" && handleCreate()}
             />
           </div>
           {parentPath !== "/" && (
             <p className="text-sm text-muted-foreground">
-              Creating in: <span className="font-medium">{parentPath}</span>
+              {t("folders.createIn", "Creating in: {{path}}", { path: parentPath })}
             </p>
           )}
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={handleClose} disabled={creating}>
-            Cancel
+            {t("common:cancel", "Cancel")}
           </Button>
           <Button onClick={handleCreate} disabled={!folderName.trim() || creating}>
             {creating ? (
               <>
                 <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                Creating...
+                {t("folders.creating", "Creating...")}
               </>
             ) : (
-              "Create Folder"
+              t("folders.createFolder", "Create Folder")
             )}
           </Button>
         </DialogFooter>
@@ -193,6 +195,7 @@ export function DeleteFolderDialog({
   onFolderDeleted,
 }: DeleteFolderDialogProps) {
   const [deleting, setDeleting] = useState(false);
+  const { t } = useTranslation("assets");
   const { toast } = useToast();
   const { logOperation, completeOperation, failOperation } = useLogMediaOperation();
 
@@ -220,8 +223,8 @@ export function DeleteFolderDialog({
       if (error) throw error;
 
       toast({
-        title: "Folder deleted",
-        description: `Deleted folder "${folderName}"`,
+        title: t("toast.folderDeleted", "Folder deleted"),
+        description: t("toast.folderDeletedDesc", "Deleted folder \"{{name}}\"", { name: folderName }),
       });
       
       if (operationId) {
@@ -233,8 +236,8 @@ export function DeleteFolderDialog({
     } catch (error) {
       console.error("Delete folder error:", error);
       toast({
-        title: "Error",
-        description: "Failed to delete folder",
+        title: t("common:error", "Error"),
+        description: t("errors.deleteFolderFailed", "Failed to delete folder"),
         variant: "destructive",
       });
       if (operationId) {
@@ -253,19 +256,19 @@ export function DeleteFolderDialog({
     <AlertDialog open={open} onOpenChange={onClose}>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>Delete folder "{folderName}"?</AlertDialogTitle>
+          <AlertDialogTitle>{t("folders.deleteTitle", "Delete folder \"{{name}}\"?", { name: folderName })}</AlertDialogTitle>
           <AlertDialogDescription>
-            This will delete the folder. Files inside will be moved to the root folder.
+            {t("folders.deleteBody", "This will delete the folder. Files inside will be moved to the root folder.")}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
-          <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
+          <AlertDialogCancel disabled={deleting}>{t("common:cancel", "Cancel")}</AlertDialogCancel>
           <AlertDialogAction
             className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             onClick={handleDelete}
             disabled={deleting}
           >
-            {deleting ? "Deleting..." : "Delete"}
+            {deleting ? t("folders.deleting", "Deleting...") : t("common:delete", "Delete")}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
@@ -292,6 +295,7 @@ export function MoveFileDialog({
 }: MoveFileDialogProps) {
   const [selectedFolder, setSelectedFolder] = useState<string | null>(null);
   const [moving, setMoving] = useState(false);
+  const { t } = useTranslation("assets");
   const { toast } = useToast();
   const { logOperation, completeOperation, failOperation } = useLogMediaOperation();
 
@@ -329,8 +333,11 @@ export function MoveFileDialog({
       if (error) throw error;
 
       toast({
-        title: "Files moved",
-        description: `Moved ${fileIds.length} file(s) to ${selectedFolder === "/" ? "Root" : selectedFolder}`,
+        title: t("toast.filesMoved", "Files moved"),
+        description: t("toast.movedTo", "Moved {{count}} file(s) to {{destination}}", {
+          count: fileIds.length,
+          destination: selectedFolder === "/" ? t("library.root", "Root") : selectedFolder,
+        }),
       });
       
       if (operationId) {
@@ -343,8 +350,8 @@ export function MoveFileDialog({
     } catch (error) {
       console.error("Move files error:", error);
       toast({
-        title: "Error",
-        description: "Failed to move files",
+        title: t("common:error", "Error"),
+        description: t("errors.moveFailed", "Failed to move files"),
         variant: "destructive",
       });
       if (operationId) {
@@ -367,9 +374,9 @@ export function MoveFileDialog({
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Move {fileIds.length} file(s)</DialogTitle>
+          <DialogTitle>{t("folders.moveTitle", "Move {{count}} file(s)", { count: fileIds.length })}</DialogTitle>
           <DialogDescription>
-            Select a destination folder for the selected files.
+            {t("folders.moveSubtitle", "Select a destination folder for the selected files.")}
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-2 max-h-[300px] overflow-auto">
@@ -379,7 +386,7 @@ export function MoveFileDialog({
               className="w-full justify-start"
               onClick={() => setSelectedFolder("/")}
             >
-              📁 Root
+              {t("folders.rootOption", "📁 Root")}
             </Button>
           )}
           {availableFolders.length > 0 ? (
@@ -395,22 +402,22 @@ export function MoveFileDialog({
             ))
           ) : !showRootOption ? (
             <p className="text-sm text-muted-foreground text-center py-4">
-              No folders available. Create a folder first to move files.
+              {t("folders.noFolders", "No folders available. Create a folder first to move files.")}
             </p>
           ) : null}
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => handleOpenChange(false)} disabled={moving}>
-            Cancel
+            {t("common:cancel", "Cancel")}
           </Button>
           <Button onClick={handleMove} disabled={moving || selectedFolder === null}>
             {moving ? (
               <>
                 <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                Moving...
+                {t("folders.moving", "Moving...")}
               </>
             ) : (
-              "Move Here"
+              t("folders.moveHere", "Move Here")
             )}
           </Button>
         </DialogFooter>

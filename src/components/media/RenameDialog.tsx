@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useTranslation } from "react-i18next";
 import {
   Dialog,
   DialogContent,
@@ -64,6 +65,7 @@ export function RenameFileDialog({
 }: RenameFileDialogProps) {
   const [newName, setNewName] = useState("");
   const [renaming, setRenaming] = useState(false);
+  const { t } = useTranslation("assets");
   const { toast } = useToast();
   const { logOperation, completeOperation, failOperation } = useLogMediaOperation();
 
@@ -122,8 +124,8 @@ export function RenameFileDialog({
         console.log("Cloudinary rename successful:", data);
         
         toast({
-          title: "File renamed",
-          description: `Renamed to "${finalName}". All links have been updated.`,
+          title: t("toast.fileRenamed", "File renamed"),
+          description: t("toast.fileRenamedCloud", "Renamed to \"{{name}}\". All links have been updated.", { name: finalName }),
         });
       } else {
         // For Supabase storage, update the file_path
@@ -149,8 +151,8 @@ export function RenameFileDialog({
         if (error) throw error;
 
         toast({
-          title: "File renamed",
-          description: `Renamed to "${finalName}"`,
+          title: t("toast.fileRenamed", "File renamed"),
+          description: t("toast.fileRenamedDesc", "Renamed to \"{{name}}\"", { name: finalName }),
         });
       }
 
@@ -163,8 +165,8 @@ export function RenameFileDialog({
     } catch (error) {
       console.error("Rename error:", error);
       toast({
-        title: "Rename failed",
-        description: error instanceof Error ? error.message : "Could not rename the file",
+        title: t("toast.renameFailed", "Rename failed"),
+        description: error instanceof Error ? error.message : t("errors.renameFailed", "Could not rename the file"),
         variant: "destructive",
       });
       if (operationId) {
@@ -185,10 +187,10 @@ export function RenameFileDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Pencil className="w-5 h-5" />
-            Rename File
+            {t("rename.fileTitle", "Rename File")}
           </DialogTitle>
           <DialogDescription>
-            Enter a new name for this file.
+            {t("rename.fileSubtitle", "Enter a new name for this file.")}
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
@@ -196,18 +198,18 @@ export function RenameFileDialog({
             <Alert>
               <AlertCircle className="h-4 w-4" />
               <AlertDescription>
-                This will rename the file in Cloudinary. All existing links will be updated to the new URL.
+                {t("rename.cloudinaryNotice", "This will rename the file in Cloudinary. All existing links will be updated to the new URL.")}
               </AlertDescription>
             </Alert>
           )}
           <div className="space-y-2">
-            <Label htmlFor="file-name">New Name</Label>
+            <Label htmlFor="file-name">{t("rename.newName", "New Name")}</Label>
             <div className="flex items-center gap-2">
               <Input
                 id="file-name"
                 value={newName}
                 onChange={(e) => setNewName(e.target.value)}
-                placeholder="Enter new name"
+                placeholder={t("rename.namePlaceholder", "Enter new name")}
                 onKeyDown={(e) => e.key === "Enter" && handleRename()}
               />
               {extension && (
@@ -220,16 +222,16 @@ export function RenameFileDialog({
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onClose} disabled={renaming}>
-            Cancel
+            {t("common:cancel", "Cancel")}
           </Button>
           <Button onClick={handleRename} disabled={!newName.trim() || renaming}>
             {renaming ? (
               <>
                 <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                Renaming...
+                {t("rename.renaming", "Renaming...")}
               </>
             ) : (
-              "Rename"
+              t("common:rename", "Rename")
             )}
           </Button>
         </DialogFooter>
@@ -259,6 +261,7 @@ export function RenameFolderDialog({
 }: RenameFolderDialogProps) {
   const [newName, setNewName] = useState(currentName);
   const [renaming, setRenaming] = useState(false);
+  const { t } = useTranslation("assets");
   const { toast } = useToast();
   const { logOperation, completeOperation, failOperation } = useLogMediaOperation();
 
@@ -305,8 +308,8 @@ export function RenameFolderDialog({
       if (error) {
         if (error.code === "23505") {
           toast({
-            title: "Folder exists",
-            description: "A folder with this name already exists",
+            title: t("toast.folderExists", "Folder exists"),
+            description: t("toast.folderExistsDesc", "A folder with this name already exists"),
             variant: "destructive",
           });
           if (operationId) {
@@ -351,8 +354,8 @@ export function RenameFolderDialog({
       }
 
       toast({
-        title: "Folder renamed",
-        description: `Renamed to "${sanitizedName}"`,
+        title: t("toast.folderRenamed", "Folder renamed"),
+        description: t("toast.folderRenamedDesc", "Renamed to \"{{name}}\"", { name: sanitizedName }),
       });
 
       if (operationId) {
@@ -364,8 +367,8 @@ export function RenameFolderDialog({
     } catch (error) {
       console.error("Rename folder error:", error);
       toast({
-        title: "Rename failed",
-        description: "Could not rename the folder",
+        title: t("toast.renameFailed", "Rename failed"),
+        description: t("errors.renameFolderFailed", "Could not rename the folder"),
         variant: "destructive",
       });
       if (operationId) {
@@ -386,36 +389,36 @@ export function RenameFolderDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Pencil className="w-5 h-5" />
-            Rename Folder
+            {t("rename.folderTitle", "Rename Folder")}
           </DialogTitle>
           <DialogDescription>
-            Enter a new name for this folder.
+            {t("rename.folderSubtitle", "Enter a new name for this folder.")}
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
           <div className="space-y-2">
-            <Label htmlFor="folder-name">New Name</Label>
+            <Label htmlFor="folder-name">{t("rename.newName", "New Name")}</Label>
             <Input
               id="folder-name"
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
-              placeholder="Enter new name"
+              placeholder={t("rename.namePlaceholder", "Enter new name")}
               onKeyDown={(e) => e.key === "Enter" && handleRename()}
             />
           </div>
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onClose} disabled={renaming}>
-            Cancel
+            {t("common:cancel", "Cancel")}
           </Button>
           <Button onClick={handleRename} disabled={!newName.trim() || renaming}>
             {renaming ? (
               <>
                 <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                Renaming...
+                {t("rename.renaming", "Renaming...")}
               </>
             ) : (
-              "Rename"
+              t("common:rename", "Rename")
             )}
           </Button>
         </DialogFooter>

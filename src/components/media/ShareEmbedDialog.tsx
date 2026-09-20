@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import {
   Dialog,
   DialogContent,
@@ -28,7 +29,8 @@ export function ShareEmbedDialog({
   onClose,
   file,
 }: ShareEmbedDialogProps) {
-  const { copiedId, copy } = useCopyToClipboard({ showToast: true, successMessage: "Link copied to clipboard" });
+  const { t } = useTranslation("assets");
+  const { copiedId, copy } = useCopyToClipboard({ showToast: true, successMessage: t("share.linkCopied", "Link copied to clipboard") });
 
   if (!file) return null;
 
@@ -57,10 +59,10 @@ export function ShareEmbedDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Share2 className="w-5 h-5" />
-            Share & Embed
+            {t("share.title", "Share & Embed")}
           </DialogTitle>
           <DialogDescription>
-            Get links and embed codes for "{fileName}"
+            {t("share.subtitle", "Get links and embed codes for \"{{name}}\"", { name: fileName })}
           </DialogDescription>
         </DialogHeader>
 
@@ -68,17 +70,17 @@ export function ShareEmbedDialog({
           <TabsList className="grid w-full grid-cols-2">
             <TabsTrigger value="link" className="gap-2">
               <Link2 className="w-4 h-4" />
-              Direct Link
+              {t("share.directLink", "Direct Link")}
             </TabsTrigger>
             <TabsTrigger value="embed" className="gap-2">
               <Code className="w-4 h-4" />
-              Embed Codes
+              {t("share.embedCodes", "Embed Codes")}
             </TabsTrigger>
           </TabsList>
 
           <TabsContent value="link" className="space-y-4 mt-4">
             <div className="space-y-2">
-              <Label>Direct URL</Label>
+              <Label>{t("share.directUrl", "Direct URL")}</Label>
               <div className="flex gap-2">
                 <Input value={directUrl} readOnly className="font-mono text-sm" />
                 <Button
@@ -98,7 +100,7 @@ export function ShareEmbedDialog({
             {/* Preview */}
             <div className="border rounded-lg p-4 bg-muted/50">
               <Label className="text-xs text-muted-foreground mb-2 block">
-                Preview
+                {t("share.preview", "Preview")}
               </Label>
               {file.file_type === "image" ? (
                 <img
@@ -118,7 +120,7 @@ export function ShareEmbedDialog({
 
           <TabsContent value="embed" className="space-y-4 mt-4">
             <div className="space-y-2">
-              <Label>HTML Embed</Label>
+              <Label>{t("share.htmlEmbed", "HTML Embed")}</Label>
               <div className="flex gap-2">
                 <Textarea
                   value={htmlEmbed}
@@ -142,7 +144,7 @@ export function ShareEmbedDialog({
             </div>
 
             <div className="space-y-2">
-              <Label>Markdown</Label>
+              <Label>{t("share.markdown", "Markdown")}</Label>
               <div className="flex gap-2">
                 <Input
                   value={markdownEmbed}
@@ -164,7 +166,7 @@ export function ShareEmbedDialog({
             </div>
 
             <div className="space-y-2">
-              <Label>BBCode</Label>
+              <Label>{t("share.bbcode", "BBCode")}</Label>
               <div className="flex gap-2">
                 <Input
                   value={bbCodeEmbed}

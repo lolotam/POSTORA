@@ -29,6 +29,7 @@ import postsettings from "./locales/ar/postsettings.json";
 import postmedia from "./locales/ar/postmedia.json";
 import postpreview from "./locales/ar/postpreview.json";
 import accounts from "./locales/ar/accounts.json";
+import assets from "./locales/ar/assets.json";
 
 /** Languages with copy behind them. Anything detected outside this list resolves to `en`. */
 export const SUPPORTED_LANGUAGES = ["en", "ar"] as const;
@@ -45,7 +46,7 @@ void i18next
     // and the language never resolves, which leaves i18next.dir() guessing from
     // an empty code. Region subtags fold onto their base language instead.
     nonExplicitSupportedLngs: true,
-    ns: ["common", "nav", "apikeys", "dashboard", "calendar", "history", "post", "postsettings", "postmedia", "postpreview", "accounts"],
+    ns: ["common", "nav", "apikeys", "dashboard", "calendar", "history", "post", "postsettings", "postmedia", "postpreview", "accounts", "assets"],
     defaultNS: "common",
     resources: {
       en: {
@@ -60,6 +61,7 @@ void i18next
         postmedia: {},
         postpreview: {},
         accounts: {},
+        assets: {},
       },
       ar: {
         common,
@@ -73,6 +75,7 @@ void i18next
         postmedia,
         postpreview,
         accounts,
+        assets,
       },
     },
     // React escapes interpolated values already; escaping here would double-encode.

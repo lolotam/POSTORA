@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Maximize2 } from "lucide-react";
@@ -25,12 +26,27 @@ export function ResizeOptions({
   onCustomWidthChange,
   onCustomHeightChange,
 }: ResizeOptionsProps) {
+  const { t } = useTranslation("assets");
+  const resizeLabels: Record<ResizeMode, string> = {
+    original: t("imageTools.resize.original", "Original"),
+    square: t("imageTools.resize.square", "Square (1:1)"),
+    portrait: t("imageTools.resize.portrait", "Portrait (4:5)"),
+    landscape: t("imageTools.resize.landscape", "Landscape (16:9)"),
+    custom: t("imageTools.resize.custom", "Custom"),
+  };
+  const cropLabels: Record<CropMode, { label: string; description: string }> = {
+    fill: { label: t("imageTools.crop.fill", "Fill (crop to fit)"), description: t("imageTools.crop.fillDesc", "Crops image to exact dimensions") },
+    fit: { label: t("imageTools.crop.fit", "Fit (contain)"), description: t("imageTools.crop.fitDesc", "Fits within dimensions, may add padding") },
+    scale: { label: t("imageTools.crop.scale", "Scale"), description: t("imageTools.crop.scaleDesc", "Scales to dimensions, may distort") },
+    crop: { label: t("imageTools.crop.crop", "Crop (center)"), description: t("imageTools.crop.cropDesc", "Crops from center") },
+    pad: { label: t("imageTools.crop.pad", "Pad"), description: t("imageTools.crop.padDesc", "Adds padding to fit dimensions") },
+  };
   return (
     <div className="p-4 border rounded-lg space-y-4">
       <div className="space-y-3">
         <Label className="flex items-center gap-2 text-sm font-medium">
           <Maximize2 className="w-4 h-4" />
-          Size Preset
+          {t("imageTools.sizePreset", "Size Preset")}
         </Label>
         <Select
           value={resizeMode}
@@ -42,7 +58,7 @@ export function ResizeOptions({
           <SelectContent>
             {Object.entries(RESIZE_PRESETS).map(([key, preset]) => (
               <SelectItem key={key} value={key}>
-                {preset.label}
+                {resizeLabels[key as ResizeMode]}
                 {preset.width && preset.height && (
                   <span className="text-muted-foreground ml-2">
                     ({preset.width}×{preset.height})
@@ -57,7 +73,7 @@ export function ResizeOptions({
       {resizeMode === "custom" && (
         <div className="grid grid-cols-2 gap-4">
           <div className="space-y-2">
-            <Label>Width (px)</Label>
+            <Label>{t("imageTools.widthPx", "Width (px)")}</Label>
             <input
               type="number"
               value={customWidth}
@@ -68,7 +84,7 @@ export function ResizeOptions({
             />
           </div>
           <div className="space-y-2">
-            <Label>Height (px)</Label>
+            <Label>{t("imageTools.heightPx", "Height (px)")}</Label>
             <input
               type="number"
               value={customHeight}
@@ -83,7 +99,7 @@ export function ResizeOptions({
 
       {resizeMode !== "original" && (
         <div className="space-y-3">
-          <Label className="text-sm font-medium">Crop Mode</Label>
+          <Label className="text-sm font-medium">{t("imageTools.crop.label", "Crop Mode")}</Label>
           <Select
             value={cropMode}
             onValueChange={(v) => onCropModeChange(v as CropMode)}
@@ -92,11 +108,11 @@ export function ResizeOptions({
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {Object.entries(CROP_MODES).map(([key, mode]) => (
+              {Object.entries(CROP_MODES).map(([key]) => (
                 <SelectItem key={key} value={key}>
                   <div>
-                    <span>{mode.label}</span>
-                    <p className="text-xs text-muted-foreground">{mode.description}</p>
+                    <span>{cropLabels[key as CropMode].label}</span>
+                    <p className="text-xs text-muted-foreground">{cropLabels[key as CropMode].description}</p>
                   </div>
                 </SelectItem>
               ))}

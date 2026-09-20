@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Scissors, Maximize2, ZoomIn, Palette, Sparkles } from "lucide-react";
@@ -27,12 +28,13 @@ export function FeatureToggles({
   onToggleFilters,
   onToggleQuality,
 }: FeatureTogglesProps) {
+  const { t } = useTranslation("assets");
   return (
     <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 p-3 bg-muted/50 rounded-lg">
       <div className="flex items-center justify-between p-2 border rounded-md bg-background">
         <div className="flex items-center gap-1.5">
           <Scissors className="w-3.5 h-3.5 text-primary" />
-          <Label className="text-[11px] font-medium">BG Remove</Label>
+          <Label className="text-[11px] font-medium">{t("imageTools.bgRemove", "BG Remove")}</Label>
         </div>
         <Switch
           checked={enableBgRemoval}
@@ -44,7 +46,7 @@ export function FeatureToggles({
       <div className="flex items-center justify-between p-2 border rounded-md bg-background">
         <div className="flex items-center gap-1.5">
           <Maximize2 className="w-3.5 h-3.5 text-primary" />
-          <Label className="text-[11px] font-medium">Resize</Label>
+          <Label className="text-[11px] font-medium">{t("imageTools.resize.label", "Resize")}</Label>
         </div>
         <Switch
           checked={enableResize}
@@ -56,7 +58,7 @@ export function FeatureToggles({
       <div className="flex items-center justify-between p-2 border rounded-md bg-background">
         <div className="flex items-center gap-1.5">
           <ZoomIn className="w-3.5 h-3.5 text-primary" />
-          <Label className="text-[11px] font-medium">Upscale</Label>
+          <Label className="text-[11px] font-medium">{t("imageTools.upscale", "Upscale")}</Label>
         </div>
         <Switch
           checked={enableUpscale}
@@ -68,7 +70,7 @@ export function FeatureToggles({
       <div className="flex items-center justify-between p-2 border rounded-md bg-background">
         <div className="flex items-center gap-1.5">
           <Palette className="w-3.5 h-3.5 text-primary" />
-          <Label className="text-[11px] font-medium">Filters</Label>
+          <Label className="text-[11px] font-medium">{t("imageTools.filters", "Filters")}</Label>
         </div>
         <Switch
           checked={enableFilters}
@@ -80,7 +82,7 @@ export function FeatureToggles({
       <div className="flex items-center justify-between p-2 border rounded-md bg-background">
         <div className="flex items-center gap-1.5">
           <Sparkles className="w-3.5 h-3.5 text-primary" />
-          <Label className="text-[11px] font-medium">Quality</Label>
+          <Label className="text-[11px] font-medium">{t("imageTools.quality", "Quality")}</Label>
         </div>
         <Switch
           checked={enableQuality}

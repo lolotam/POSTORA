@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from "react";
+import { useTranslation } from "react-i18next";
 import {
   Dialog,
   DialogContent,
@@ -38,7 +39,6 @@ import {
   OutputFormat,
   TempCloudinaryData,
 } from "./types";
-import { RESIZE_PRESETS, CROP_MODES } from "./constants";
 import {
   getCropOverlayInfo,
   buildCloudinaryUrl,
@@ -115,8 +115,23 @@ export function ImageToolsDialog({
   const previewDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const previewCacheRef = useRef<Map<string, string>>(new Map());
   const preloadImageRef = useRef<HTMLImageElement | null>(null);
+  const { t } = useTranslation("assets");
   const { toast } = useToast();
   const { logOperation, completeOperation, failOperation } = useLogMediaOperation();
+  const cropLabels: Record<CropMode, string> = {
+    fill: t("imageTools.crop.fill", "Fill (crop to fit)"),
+    fit: t("imageTools.crop.fit", "Fit (contain)"),
+    scale: t("imageTools.crop.scale", "Scale"),
+    crop: t("imageTools.crop.crop", "Crop (center)"),
+    pad: t("imageTools.crop.pad", "Pad"),
+  };
+  const resizeLabels: Record<ResizeMode, string> = {
+    original: t("imageTools.resize.original", "Original"),
+    square: t("imageTools.resize.square", "Square (1:1)"),
+    portrait: t("imageTools.resize.portrait", "Portrait (4:5)"),
+    landscape: t("imageTools.resize.landscape", "Landscape (16:9)"),
+    custom: t("imageTools.resize.custom", "Custom"),
+  };
   
   const filterModified = hasFilterModifications(
     brightness, contrast, saturation, blur, sharpening, noiseReduction, artisticFilter
@@ -339,8 +354,8 @@ export function ImageToolsDialog({
     
     if (!enableBgRemoval && !hasValidResize && !enableUpscale && !hasValidFilters && !enableQuality) {
       toast({
-        title: "No features selected",
-        description: "Please enable and configure at least one transformation",
+        title: t("toast.noFeatures", "No features selected"),
+        description: t("toast.noFeaturesConfigDesc", "Please enable and configure at least one transformation"),
         variant: "destructive",
       });
       return;
@@ -348,8 +363,8 @@ export function ImageToolsDialog({
 
     if (enableResize && resizeMode === "original" && !enableBgRemoval && !enableUpscale && !hasValidFilters && !enableQuality) {
       toast({
-        title: "Invalid resize",
-        description: "Please select a resize preset or custom dimensions",
+        title: t("toast.invalidResize", "Invalid resize"),
+        description: t("toast.invalidResizeDesc", "Please select a resize preset or custom dimensions"),
         variant: "destructive",
       });
       return;
@@ -431,8 +446,8 @@ export function ImageToolsDialog({
 
       if (!isCloudinaryFile) {
         toast({
-          title: "Uploading to Cloudinary",
-          description: "The file needs to be uploaded for processing...",
+          title: t("toast.uploadingCloudinary", "Uploading to Cloudinary"),
+          description: t("toast.uploadingForProcess", "The file needs to be uploaded for processing..."),
         });
 
         const uploadResult = await uploadToCloudinary();
@@ -441,8 +456,8 @@ export function ImageToolsDialog({
         setTempCloudinaryData(uploadResult);
 
         toast({
-          title: "Upload complete",
-          description: "Now processing your image...",
+          title: t("toast.uploadComplete", "Upload complete"),
+          description: t("toast.nowProcessing", "Now processing your image..."),
         });
       } else {
         publicId = file.cloudinary_public_id!;
@@ -466,8 +481,8 @@ export function ImageToolsDialog({
       // Handle AtlasCloud 4K upscaling separately via edge function
       if (enableUpscale && upscalePlatform === "atlascloud") {
         toast({
-          title: "Starting AtlasCloud 4K Upscale",
-          description: "This may take up to 2 minutes for high-quality results...",
+          title: t("toast.atlasStarting", "Starting AtlasCloud 4K Upscale"),
+          description: t("toast.atlasStartingDesc", "This may take up to 2 minutes for high-quality results..."),
         });
 
         // Get the source image URL
@@ -498,8 +513,8 @@ export function ImageToolsDialog({
         resultUrl = data.upscaled_url;
         setProcessedUrl(resultUrl);
         toast({
-          title: "4K Upscale Complete!",
-          description: "Your image has been upscaled using AtlasCloud AI",
+          title: t("toast.atlasComplete", "4K Upscale Complete!"),
+          description: t("toast.atlasCompleteDesc", "Your image has been upscaled using AtlasCloud AI"),
         });
       } else {
         // Use Cloudinary URL transformations for other operations
@@ -538,8 +553,8 @@ export function ImageToolsDialog({
               resultUrl = url;
               setProcessedUrl(url);
               toast({
-                title: "Processing complete",
-                description: "Use the slider to compare before and after",
+                title: t("toast.processingComplete", "Processing complete"),
+                description: t("toast.compareHint", "Use the slider to compare before and after"),
               });
               break;
             } else if (response.status === 423) {
@@ -561,8 +576,8 @@ export function ImageToolsDialog({
             resultUrl = url;
             setProcessedUrl(url);
             toast({
-              title: "Processing complete",
-              description: "Your image has been processed",
+              title: t("toast.processingComplete", "Processing complete"),
+              description: t("toast.processedDesc", "Your image has been processed"),
             });
           } else {
             throw new Error(`Processing failed: ${response.status}`);
@@ -601,7 +616,7 @@ export function ImageToolsDialog({
       if (parsedError.action && !parsedError.actionUrl) {
         setTimeout(() => {
           toast({
-            title: "Suggestion",
+            title: t("toast.suggestion", "Suggestion"),
             description: parsedError.action,
           });
         }, 500);
@@ -635,13 +650,13 @@ export function ImageToolsDialog({
       document.body.removeChild(a);
 
       toast({
-        title: "Download started",
-        description: "Your processed image is downloading",
+        title: t("toast.downloadStarted", "Download started"),
+        description: t("toast.downloadStartedDesc", "Your processed image is downloading"),
       });
     } catch (error) {
       toast({
-        title: "Download failed",
-        description: "Could not download the image",
+        title: t("toast.downloadFailed", "Download failed"),
+        description: t("errors.couldNotDownloadImage", "Could not download the image"),
         variant: "destructive",
       });
     }
@@ -696,8 +711,10 @@ export function ImageToolsDialog({
       }
 
       toast({
-        title: "Saved to library",
-        description: `The processed image has been saved${file.folder_path && file.folder_path !== "/" ? ` to ${file.folder_path}` : ""}`,
+        title: t("toast.savedToLibrary", "Saved to library"),
+        description: file.folder_path && file.folder_path !== "/"
+          ? t("toast.savedToLibraryFolder", "The processed image has been saved to {{folder}}", { folder: file.folder_path })
+          : t("toast.savedToLibraryDesc", "The processed image has been saved"),
       });
 
       onProcessComplete?.();
@@ -705,8 +722,8 @@ export function ImageToolsDialog({
     } catch (error) {
       console.error("Save error:", error);
       toast({
-        title: "Save failed",
-        description: error instanceof Error ? error.message : "Could not save the image to your library",
+        title: t("toast.saveFailed", "Save failed"),
+        description: error instanceof Error ? error.message : t("errors.couldNotSaveImage", "Could not save the image to your library"),
         variant: "destructive",
       });
     } finally {
@@ -734,16 +751,16 @@ export function ImageToolsDialog({
 
   const getDialogTitle = () => {
     const features = [];
-    if (enableBgRemoval) features.push("Background Removal");
-    if (enableResize) features.push("Resize");
-    if (enableUpscale) features.push("Upscale");
-    if (enableFilters) features.push("Filters");
-    if (enableQuality) features.push("Quality");
+    if (enableBgRemoval) features.push(t("imageTools.feature.bgRemoval", "Background Removal"));
+    if (enableResize) features.push(t("imageTools.feature.resize", "Resize"));
+    if (enableUpscale) features.push(t("imageTools.feature.upscale", "Upscale"));
+    if (enableFilters) features.push(t("imageTools.feature.filters", "Filters"));
+    if (enableQuality) features.push(t("imageTools.feature.quality", "Quality"));
     
-    if (features.length === 0) return "Image Tools";
+    if (features.length === 0) return t("imageTools.title", "Image Tools");
     if (features.length === 1) return features[0];
-    if (features.length === 2) return features.join(" & ");
-    return `${features.length} Tools Active`;
+    if (features.length === 2) return t("imageTools.titleTwo", "{{first}} & {{second}}", { first: features[0], second: features[1] });
+    return t("imageTools.titleMany", "{{count}} Tools Active", { count: features.length });
   };
 
   const handleResetFilters = () => {
@@ -765,7 +782,7 @@ export function ImageToolsDialog({
             {getDialogTitle()}
           </DialogTitle>
           <DialogDescription>
-            Apply transformations to your image. Enable the features you need.
+            {t("imageTools.subtitle", "Apply transformations to your image. Enable the features you need.")}
           </DialogDescription>
         </DialogHeader>
 
@@ -775,7 +792,7 @@ export function ImageToolsDialog({
             <Alert>
               <Upload className="h-4 w-4" />
               <AlertDescription>
-                This file will be automatically uploaded to Cloudinary for processing.
+                {t("imageTools.notice", "This file will be automatically uploaded to Cloudinary for processing.")}
               </AlertDescription>
             </Alert>
           )}
@@ -875,7 +892,7 @@ export function ImageToolsDialog({
                   <img
                     ref={imageRef}
                     src={livePreviewUrl || file.publicUrl}
-                    alt={livePreviewUrl ? "Preview" : "Original"}
+                    alt={livePreviewUrl ? t("imageTools.preview", "Preview") : t("imageTools.original", "Original")}
                     className={cn(
                       "w-full h-full object-contain transition-opacity duration-300",
                       previewLoading && "opacity-50"
@@ -885,19 +902,19 @@ export function ImageToolsDialog({
                   />
                   {processedUrl && (
                     <div className="absolute top-2 left-2 px-2 py-1 bg-background/80 backdrop-blur rounded text-xs font-medium">
-                      Original
+                      {t("imageTools.original", "Original")}
                     </div>
                   )}
                   {!processedUrl && livePreviewUrl && (
                     <div className="absolute top-2 left-2 px-2 py-1 bg-primary/80 backdrop-blur rounded text-xs font-medium text-primary-foreground flex items-center gap-1">
                       <Palette className="w-3 h-3" />
-                      Live Preview
+                      {t("imageTools.livePreview", "Live Preview")}
                     </div>
                   )}
                   {previewLoading && (
                     <div className="absolute top-2 right-2 px-2 py-1 bg-background/80 backdrop-blur rounded text-xs font-medium flex items-center gap-1">
                       <Loader2 className="w-3 h-3 animate-spin" />
-                      Loading...
+                      {t("common:loading", "Loading...")}
                     </div>
                   )}
                 </div>
@@ -910,12 +927,12 @@ export function ImageToolsDialog({
                   >
                     <img
                       src={processedUrl}
-                      alt="Processed"
+                      alt={t("imageTools.processed", "Processed")}
                       className="w-full h-full object-contain"
                       draggable={false}
                     />
                     <div className="absolute top-2 right-2 px-2 py-1 bg-background/80 backdrop-blur rounded text-xs font-medium">
-                      Processed
+                      {t("imageTools.processed", "Processed")}
                     </div>
                   </div>
                 )}
@@ -1009,12 +1026,12 @@ export function ImageToolsDialog({
                         "bg-background/95 backdrop-blur text-foreground shadow-md"
                       )}>
                         {cropOverlayInfo.isCropMode ? (
-                          <span className="text-destructive">✂ {CROP_MODES[cropMode].label}</span>
+                          <span className="text-destructive">✂ {cropLabels[cropMode]}</span>
                         ) : (
-                          <span>{CROP_MODES[cropMode].label}</span>
+                          <span>{cropLabels[cropMode]}</span>
                         )}
                         {" • "}
-                        {RESIZE_PRESETS[resizeMode]?.label || 'Custom'}
+                        {resizeLabels[resizeMode] || t("imageTools.resize.custom", "Custom")}
                         {resizeMode === "custom" && ` (${(targetDimensions.width / targetDimensions.height).toFixed(2)}:1)`}
                       </div>
                     </div>
@@ -1027,10 +1044,10 @@ export function ImageToolsDialog({
                     <div className="text-center space-y-2">
                       <Loader2 className="w-8 h-8 animate-spin mx-auto text-primary" />
                       <p className="text-sm font-medium">
-                        {uploading ? "Uploading to Cloudinary..." : "Processing image..."}
+                        {uploading ? t("dialog.uploadingCloudinary", "Uploading to Cloudinary...") : t("imageTools.overlay", "Processing image...")}
                       </p>
                       <p className="text-xs text-muted-foreground">
-                        This may take a moment
+                        {t("imageTools.hint", "This may take a moment")}
                       </p>
                     </div>
                   </div>
@@ -1042,7 +1059,7 @@ export function ImageToolsDialog({
           {/* Slider for fine control */}
           {processedUrl && (
             <div className="space-y-2">
-              <Label>Compare Position</Label>
+              <Label>{t("imageTools.comparePosition", "Compare Position")}</Label>
               <Slider
                 value={[comparePosition]}
                 onValueChange={([v]) => setComparePosition(v)}
@@ -1058,7 +1075,7 @@ export function ImageToolsDialog({
           {!processedUrl ? (
             <>
               <Button variant="outline" onClick={onClose}>
-                Cancel
+                {t("common:cancel", "Cancel")}
               </Button>
               <Button
                 onClick={handleProcess}
@@ -1067,12 +1084,12 @@ export function ImageToolsDialog({
                 {processing || uploading ? (
                   <>
                     <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                    {uploading ? "Uploading..." : "Processing..."}
+                    {uploading ? t("dialog.uploading", "Uploading...") : t("common:status.processing", "Processing...")}
                   </>
                 ) : (
                   <>
                     <Wand2 className="w-4 h-4 mr-2" />
-                    Process Image
+                    {t("imageTools.processImage", "Process Image")}
                   </>
                 )}
               </Button>
@@ -1087,20 +1104,20 @@ export function ImageToolsDialog({
                 }}
               >
                 <RefreshCw className="w-4 h-4 mr-2" />
-                Try Again
+                {t("actions.tryAgain", "Try Again")}
               </Button>
               <Button variant="secondary" onClick={handleDownload}>
                 <Download className="w-4 h-4 mr-2" />
-                Download
+                {t("common:download", "Download")}
               </Button>
               <Button onClick={handleSaveAsNew} disabled={saving}>
                 {saving ? (
                   <>
                     <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                    Saving...
+                    {t("common:saving", "Saving...")}
                   </>
                 ) : (
-                  "Save to Library"
+                  t("actions.saveToLibrary", "Save to Library")
                 )}
               </Button>
             </>

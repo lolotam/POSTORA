@@ -1,4 +1,5 @@
 import { useState, useCallback } from "react";
+import { useTranslation } from "react-i18next";
 import {
   Dialog,
   DialogContent,
@@ -42,8 +43,12 @@ export function ReplaceFileDialog({
   const [preview, setPreview] = useState<string | null>(null);
   const [replacing, setReplacing] = useState(false);
   const [progress, setProgress] = useState(0);
+  const { t } = useTranslation("assets");
   const { toast } = useToast();
   const { logOperation, completeOperation, failOperation } = useLogMediaOperation();
+  const fileTypeLabel = file?.file_type === "video"
+    ? t("type.videoLower", "video")
+    : t("type.imageLower", "image");
 
   const onDrop = useCallback((acceptedFiles: File[]) => {
     if (acceptedFiles.length > 0) {
@@ -133,8 +138,8 @@ export function ReplaceFileDialog({
       setProgress(100);
 
       toast({
-        title: "File replaced",
-        description: "The file has been replaced successfully",
+        title: t("toast.fileReplaced", "File replaced"),
+        description: t("toast.fileReplacedDesc", "The file has been replaced successfully"),
       });
 
       if (operationId) {
@@ -146,8 +151,8 @@ export function ReplaceFileDialog({
     } catch (error) {
       console.error("Replace error:", error);
       toast({
-        title: "Replace failed",
-        description: "Could not replace the file",
+        title: t("toast.replaceFailed", "Replace failed"),
+        description: t("errors.replaceFailed", "Could not replace the file"),
         variant: "destructive",
       });
       if (operationId) {
@@ -180,18 +185,17 @@ export function ReplaceFileDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <RefreshCw className="w-5 h-5" />
-            Replace File
+            {t("replace.title", "Replace File")}
           </DialogTitle>
           <DialogDescription>
-            Upload a new {file.file_type} to replace the current one. The file
-            name and all references will be preserved.
+            {t("replace.desc", "Upload a new {{fileType}} to replace the current one. The file name and all references will be preserved.", { fileType: fileTypeLabel })}
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4">
           {/* Current file preview */}
           <div className="space-y-2">
-            <p className="text-sm font-medium">Current File</p>
+            <p className="text-sm font-medium">{t("replace.currentFile", "Current File")}</p>
             <div className="border rounded-lg p-2 bg-muted/50">
               {file.file_type === "image" ? (
                 <img
@@ -221,7 +225,7 @@ export function ReplaceFileDialog({
             <input {...getInputProps()} />
             {preview ? (
               <div className="space-y-2">
-                <p className="text-sm font-medium text-green-600">New file selected</p>
+                <p className="text-sm font-medium text-green-600">{t("replace.newSelected", "New file selected")}</p>
                 {newFile?.type.startsWith("image/") ? (
                   <img
                     src={preview}
@@ -243,11 +247,11 @@ export function ReplaceFileDialog({
                 <div>
                   <p className="font-medium">
                     {isDragActive
-                      ? `Drop your ${file.file_type} here`
-                      : `Drag & drop or click to select`}
+                      ? t("replace.dropHere", "Drop your {{fileType}} here", { fileType: fileTypeLabel })
+                      : t("replace.dragOrClick", "Drag & drop or click to select")}
                   </p>
                   <p className="text-sm text-muted-foreground">
-                    Select a new {file.file_type} file
+                    {t("replace.selectNew", "Select a new {{fileType}} file", { fileType: fileTypeLabel })}
                   </p>
                 </div>
               </div>
@@ -258,7 +262,7 @@ export function ReplaceFileDialog({
           {replacing && (
             <div className="space-y-2">
               <div className="flex items-center justify-between text-sm">
-                <span>Replacing file...</span>
+                <span>{t("replace.progress", "Replacing file...")}</span>
                 <span>{progress}%</span>
               </div>
               <Progress value={progress} />
@@ -268,18 +272,18 @@ export function ReplaceFileDialog({
 
         <DialogFooter>
           <Button variant="outline" onClick={handleClose} disabled={replacing}>
-            Cancel
+            {t("common:cancel", "Cancel")}
           </Button>
           <Button onClick={handleReplace} disabled={!newFile || replacing}>
             {replacing ? (
               <>
                 <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                Replacing...
+                {t("replace.replacing", "Replacing...")}
               </>
             ) : (
               <>
                 <Upload className="w-4 h-4 mr-2" />
-                Replace
+                {t("actions.replace", "Replace")}
               </>
             )}
           </Button>

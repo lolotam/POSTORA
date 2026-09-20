@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useTranslation } from "react-i18next";
 import {
   Dialog,
   DialogContent,
@@ -87,7 +88,13 @@ export function BatchRenameDialog({
   const [startNumber, setStartNumber] = useState(1);
   const [isRenaming, setIsRenaming] = useState(false);
   const [progress, setProgress] = useState({ current: 0, total: 0 });
+  const { t } = useTranslation("assets");
   const { toast } = useToast();
+  const numberingLabels = {
+    numeric: t("rename.numbering.numeric", "1, 2, 3..."),
+    padded: t("rename.numbering.padded", "001, 002, 003..."),
+    alpha: t("rename.numbering.alpha", "a, b, c..."),
+  };
 
   // Reset state when dialog opens
   useEffect(() => {
@@ -166,13 +173,13 @@ export function BatchRenameDialog({
 
     if (failCount === 0) {
       toast({
-        title: "Batch rename complete",
-        description: `Successfully renamed ${successCount} files`,
+        title: t("toast.batchRenameComplete", "Batch rename complete"),
+        description: t("toast.batchRenameOk", "Successfully renamed {{count}} files", { count: successCount }),
       });
     } else {
       toast({
-        title: "Batch rename completed with errors",
-        description: `${successCount} succeeded, ${failCount} failed`,
+        title: t("toast.batchRenameErrors", "Batch rename completed with errors"),
+        description: t("toast.batchRenameErrorsDesc", "{{success}} succeeded, {{fail}} failed", { success: successCount, fail: failCount }),
         variant: "destructive",
       });
     }
@@ -187,10 +194,10 @@ export function BatchRenameDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <FileEdit className="w-5 h-5" />
-            Batch Rename
+            {t("rename.batchTitle", "Batch Rename")}
           </DialogTitle>
           <DialogDescription>
-            Rename {files.length} selected files with a pattern
+            {t("rename.batchSubtitle", "Rename {{count}} selected files with a pattern", { count: files.length })}
           </DialogDescription>
         </DialogHeader>
 
@@ -198,7 +205,7 @@ export function BatchRenameDialog({
           {/* Pattern Settings */}
           <div className="grid gap-4">
             <div className="space-y-2">
-              <Label>Base Name</Label>
+              <Label>{t("rename.baseName", "Base Name")}</Label>
               <Input
                 value={baseName}
                 onChange={(e) => setBaseName(e.target.value)}
@@ -208,21 +215,21 @@ export function BatchRenameDialog({
 
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label>Separator</Label>
+                <Label>{t("rename.separator", "Separator")}</Label>
                 <Select value={separator} onValueChange={setSeparator}>
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="-">Hyphen (-)</SelectItem>
-                    <SelectItem value="_">Underscore (_)</SelectItem>
-                    <SelectItem value="none">None</SelectItem>
+                    <SelectItem value="-">{t("rename.hyphen", "Hyphen (-)")}</SelectItem>
+                    <SelectItem value="_">{t("rename.underscore", "Underscore (_)")}</SelectItem>
+                    <SelectItem value="none">{t("rename.none", "None")}</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
 
               <div className="space-y-2">
-                <Label>Numbering Style</Label>
+                <Label>{t("rename.numberingStyle", "Numbering Style")}</Label>
                 <Select
                   value={numberingStyle}
                   onValueChange={(v) => setNumberingStyle(v as NumberingStyle)}
@@ -231,9 +238,9 @@ export function BatchRenameDialog({
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {Object.entries(NUMBERING_STYLES).map(([key, style]) => (
+                    {Object.entries(NUMBERING_STYLES).map(([key]) => (
                       <SelectItem key={key} value={key}>
-                        {style.label}
+                        {numberingLabels[key as NumberingStyle]}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -242,7 +249,7 @@ export function BatchRenameDialog({
             </div>
 
             <div className="space-y-2">
-              <Label>Start Number</Label>
+              <Label>{t("rename.startNumber", "Start Number")}</Label>
               <Input
                 type="number"
                 value={startNumber}
@@ -256,7 +263,7 @@ export function BatchRenameDialog({
           <div className="space-y-2">
             <Label className="flex items-center gap-2">
               <Hash className="w-4 h-4" />
-              Preview
+              {t("rename.preview", "Preview")}
             </Label>
             <ScrollArea className="h-[140px] rounded-md border p-3">
               <div className="space-y-2">
@@ -276,7 +283,7 @@ export function BatchRenameDialog({
                 ))}
                 {files.length > 5 && (
                   <p className="text-xs text-muted-foreground mt-2">
-                    ... and {files.length - 5} more files
+                    {t("rename.moreFiles", "... and {{count}} more files", { count: files.length - 5 })}
                   </p>
                 )}
               </div>
@@ -287,7 +294,7 @@ export function BatchRenameDialog({
           {isRenaming && (
             <div className="space-y-2">
               <div className="flex items-center justify-between text-sm">
-                <span>Renaming files...</span>
+                <span>{t("rename.renamingFiles", "Renaming files...")}</span>
                 <span className="text-muted-foreground">
                   {progress.current} / {progress.total}
                 </span>
@@ -306,7 +313,7 @@ export function BatchRenameDialog({
 
         <DialogFooter>
           <Button variant="outline" onClick={onClose} disabled={isRenaming}>
-            Cancel
+            {t("common:cancel", "Cancel")}
           </Button>
           <Button
             onClick={handleBatchRename}
@@ -315,12 +322,12 @@ export function BatchRenameDialog({
             {isRenaming ? (
               <>
                 <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                Renaming...
+                {t("rename.renaming", "Renaming...")}
               </>
             ) : (
               <>
                 <FileEdit className="w-4 h-4 mr-2" />
-                Rename {files.length} Files
+                {t("rename.renameCount", "Rename {{count}} Files", { count: files.length })}
               </>
             )}
           </Button>

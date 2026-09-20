@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -47,6 +48,7 @@ interface Template {
 }
 
 export default function Templates() {
+  const { t } = useTranslation("assets");
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingTemplate, setEditingTemplate] = useState<Template | null>(null);
   const [name, setName] = useState("");
@@ -107,8 +109,8 @@ export default function Templates() {
   const handleSave = async () => {
     if (!user || !name.trim() || !caption.trim()) {
       toast({
-        title: "Missing fields",
-        description: "Please fill in template name and caption.",
+        title: t("toast.missingFields", "Missing fields"),
+        description: t("toast.missingFieldsDesc", "Please fill in template name and caption."),
         variant: "destructive",
       });
       return;
@@ -134,7 +136,7 @@ export default function Templates() {
           })
           .eq("id", editingTemplate.id);
         if (error) throw error;
-        toast({ title: "Template updated!" });
+        toast({ title: t("toast.templateUpdated", "Template updated!") });
       } else {
         // Create
         const { error } = await supabase.from("post_templates").insert({
@@ -145,7 +147,7 @@ export default function Templates() {
           hashtags,
         });
         if (error) throw error;
-        toast({ title: "Template created!" });
+        toast({ title: t("toast.templateCreated", "Template created!") });
       }
 
       queryClient.invalidateQueries({ queryKey: ["templates"] });
@@ -154,8 +156,8 @@ export default function Templates() {
     } catch (error) {
       console.error("Save error:", error);
       toast({
-        title: "Failed to save",
-        description: error instanceof Error ? error.message : "Unknown error",
+        title: t("toast.templateSaveFailed", "Failed to save"),
+        description: error instanceof Error ? error.message : t("errors.unknownError", "Unknown error"),
         variant: "destructive",
       });
     } finally {
@@ -172,11 +174,11 @@ export default function Templates() {
       if (error) throw error;
 
       queryClient.invalidateQueries({ queryKey: ["templates"] });
-      toast({ title: "Template deleted" });
+      toast({ title: t("toast.templateDeleted", "Template deleted") });
     } catch (error) {
       toast({
-        title: "Failed to delete",
-        description: error instanceof Error ? error.message : "Unknown error",
+        title: t("toast.deleteFailed", "Failed to delete"),
+        description: error instanceof Error ? error.message : t("errors.unknownError", "Unknown error"),
         variant: "destructive",
       });
     }
@@ -184,7 +186,7 @@ export default function Templates() {
 
   const handleCopy = async (template: Template) => {
     await navigator.clipboard.writeText(template.caption);
-    toast({ title: "Caption copied to clipboard!" });
+    toast({ title: t("toast.captionCopied", "Caption copied to clipboard!") });
   };
 
   const togglePlatform = (platform: Platform) => {
@@ -201,9 +203,9 @@ export default function Templates() {
         {/* Header */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
           <div>
-            <h1 className="text-3xl font-bold">Post Templates</h1>
+            <h1 className="text-3xl font-bold">{t("templates.title", "Post Templates")}</h1>
             <p className="text-muted-foreground mt-1">
-              Save and reuse your best captions
+              {t("templates.subtitle", "Save and reuse your best captions")}
             </p>
           </div>
 
@@ -211,42 +213,42 @@ export default function Templates() {
             <DialogTrigger asChild>
               <Button variant="gradient" onClick={openCreateDialog}>
                 <Plus className="w-4 h-4 mr-2" />
-                New Template
+                {t("templates.newTemplate", "New Template")}
               </Button>
             </DialogTrigger>
             <DialogContent className="max-w-lg">
               <DialogHeader>
                 <DialogTitle className="flex items-center gap-2">
                   <FileText className="w-5 h-5 text-primary" />
-                  {editingTemplate ? "Edit Template" : "Create Template"}
+                  {editingTemplate ? t("templates.editTitle", "Edit Template") : t("templates.createTitle", "Create Template")}
                 </DialogTitle>
               </DialogHeader>
 
               <div className="space-y-4 pt-4">
                 <div className="space-y-2">
-                  <Label>Template Name</Label>
+                  <Label>{t("templates.name", "Template Name")}</Label>
                   <Input
                     value={name}
                     onChange={(e) => setName(e.target.value)}
-                    placeholder="e.g., Product Launch, Weekly Quote..."
+                    placeholder={t("templates.namePlaceholder", "e.g., Product Launch, Weekly Quote...")}
                   />
                 </div>
 
                 <div className="space-y-2">
-                  <Label>Caption</Label>
+                  <Label>{t("templates.caption", "Caption")}</Label>
                   <Textarea
                     value={caption}
                     onChange={(e) => setCaption(e.target.value)}
-                    placeholder="Write your reusable caption here..."
+                    placeholder={t("templates.captionPlaceholder", "Write your reusable caption here...")}
                     className="min-h-[120px]"
                   />
                   <p className="text-xs text-muted-foreground">
-                    Tip: Use placeholders like {"{{product}}"} or {"{{date}}"} for dynamic content
+                    {t("templates.placeholderTip", "Tip: Use placeholders like {{product}} or {{date}} for dynamic content", { product: "{{product}}", date: "{{date}}" })}
                   </p>
                 </div>
 
                 <div className="space-y-2">
-                  <Label>Default Platforms</Label>
+                  <Label>{t("templates.defaultPlatforms", "Default Platforms")}</Label>
                   <div className="flex flex-wrap gap-2">
                     {platforms.map((platform) => (
                       <label
@@ -270,14 +272,14 @@ export default function Templates() {
                 </div>
 
                 <div className="space-y-2">
-                  <Label>Default Hashtags</Label>
+                  <Label>{t("templates.defaultHashtags", "Default Hashtags")}</Label>
                   <Input
                     value={hashtagsInput}
                     onChange={(e) => setHashtagsInput(e.target.value)}
-                    placeholder="#marketing, #socialmedia, #tips"
+                    placeholder={t("templates.hashtagsPlaceholder", "#marketing, #socialmedia, #tips")}
                   />
                   <p className="text-xs text-muted-foreground">
-                    Separate hashtags with commas
+                    {t("templates.hashtagsHint", "Separate hashtags with commas")}
                   </p>
                 </div>
 
@@ -289,12 +291,12 @@ export default function Templates() {
                   {isSaving ? (
                     <>
                       <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                      Saving...
+                      {t("common:saving", "Saving...")}
                     </>
                   ) : editingTemplate ? (
-                    "Update Template"
+                    t("templates.updateTemplate", "Update Template")
                   ) : (
-                    "Create Template"
+                    t("templates.createTitle", "Create Template")
                   )}
                 </Button>
               </div>
@@ -308,7 +310,7 @@ export default function Templates() {
           <Input
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search templates..."
+            placeholder={t("form.searchTemplates", "Search templates...")}
             className="pl-10"
           />
         </div>
@@ -322,17 +324,17 @@ export default function Templates() {
           <div className="text-center py-16">
             <FileText className="w-16 h-16 mx-auto text-muted-foreground/50 mb-4" />
             <h3 className="text-lg font-semibold mb-2">
-              {searchQuery ? "No templates found" : "No templates yet"}
+              {searchQuery ? t("empty.noTemplates", "No templates found") : t("empty.noTemplatesYet", "No templates yet")}
             </h3>
             <p className="text-muted-foreground mb-6">
               {searchQuery
-                ? "Try a different search term"
-                : "Create your first template to get started"}
+                ? t("empty.tryDifferentSearch", "Try a different search term")
+                : t("templates.createFirst", "Create your first template to get started")}
             </p>
             {!searchQuery && (
               <Button onClick={openCreateDialog}>
                 <Plus className="w-4 h-4 mr-2" />
-                Create Template
+                {t("templates.createTitle", "Create Template")}
               </Button>
             )}
           </div>
@@ -347,7 +349,7 @@ export default function Templates() {
                   <div>
                     <h3 className="font-semibold">{template.name}</h3>
                     <p className="text-xs text-muted-foreground">
-                      Updated {format(new Date(template.updated_at), "MMM d, yyyy")}
+                      {t("templates.updated", "Updated {{date}}", { date: format(new Date(template.updated_at), "MMM d, yyyy") })}
                     </p>
                   </div>
                   <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
@@ -355,6 +357,7 @@ export default function Templates() {
                       variant="ghost"
                       size="icon"
                       className="h-8 w-8"
+                      aria-label={t("common:copy", "Copy")}
                       onClick={() => handleCopy(template)}
                     >
                       <Copy className="w-4 h-4" />
@@ -363,6 +366,7 @@ export default function Templates() {
                       variant="ghost"
                       size="icon"
                       className="h-8 w-8"
+                      aria-label={t("common:edit", "Edit")}
                       onClick={() => openEditDialog(template)}
                     >
                       <Pencil className="w-4 h-4" />
@@ -371,6 +375,7 @@ export default function Templates() {
                       variant="ghost"
                       size="icon"
                       className="h-8 w-8 text-destructive hover:text-destructive"
+                      aria-label={t("common:delete", "Delete")}
                       onClick={() => handleDelete(template.id)}
                     >
                       <Trash2 className="w-4 h-4" />
@@ -413,7 +418,7 @@ export default function Templates() {
                 <Link to={`/post?template=${template.id}`}>
                   <Button variant="outline" size="sm" className="w-full mt-4">
                     <Send className="w-4 h-4 mr-2" />
-                    Use Template
+                    {t("actions.useTemplate", "Use Template")}
                   </Button>
                 </Link>
               </Card>

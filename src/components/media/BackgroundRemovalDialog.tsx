@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from "react";
+import { useTranslation } from "react-i18next";
 import {
   Dialog,
   DialogContent,
@@ -81,7 +82,15 @@ export function BackgroundRemovalDialog({
     url: string;
   } | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const { t } = useTranslation("assets");
   const { toast } = useToast();
+  const resizeLabels: Record<ResizeMode, string> = {
+    original: t("imageTools.resize.original", "Original"),
+    square: t("imageTools.resize.square", "Square (1:1)"),
+    portrait: t("imageTools.resize.portrait", "Portrait (4:5)"),
+    landscape: t("imageTools.resize.landscape", "Landscape (16:9)"),
+    custom: t("imageTools.resize.custom", "Custom"),
+  };
 
   const isCloudinaryFile = file?.storage_bucket === "cloudinary" && !!file?.cloudinary_public_id;
 
@@ -188,8 +197,8 @@ export function BackgroundRemovalDialog({
       // If not a Cloudinary file, upload it first
       if (!isCloudinaryFile) {
         toast({
-          title: "Uploading to Cloudinary",
-          description: "The file needs to be uploaded to Cloudinary for background removal...",
+          title: t("toast.uploadingCloudinary", "Uploading to Cloudinary"),
+          description: t("toast.uploadingCloudinaryDesc", "The file needs to be uploaded to Cloudinary for background removal..."),
         });
 
         const uploadResult = await uploadToCloudinary();
@@ -198,8 +207,8 @@ export function BackgroundRemovalDialog({
         setTempCloudinaryData(uploadResult);
 
         toast({
-          title: "Upload complete",
-          description: "Now processing background removal...",
+          title: t("toast.uploadComplete", "Upload complete"),
+          description: t("toast.nowProcessingBg", "Now processing background removal..."),
         });
       } else {
         publicId = file.cloudinary_public_id!;
@@ -223,8 +232,8 @@ export function BackgroundRemovalDialog({
         if (response.ok) {
           setProcessedUrl(url);
           toast({
-            title: "Background removed",
-            description: "Use the slider to compare before and after",
+            title: t("toast.backgroundRemoved", "Background removed"),
+            description: t("toast.backgroundRemovedDesc", "Use the slider to compare before and after"),
           });
           break;
         } else if (response.status === 423) {
@@ -244,9 +253,9 @@ export function BackgroundRemovalDialog({
     } catch (error) {
       console.error("Background removal error:", error);
       toast({
-        title: "Processing failed",
+        title: t("toast.processingFailed", "Processing failed"),
         description:
-          error instanceof Error ? error.message : "Failed to remove background",
+          error instanceof Error ? error.message : t("errors.removeBgFailed", "Failed to remove background"),
         variant: "destructive",
       });
     } finally {
@@ -270,13 +279,13 @@ export function BackgroundRemovalDialog({
       document.body.removeChild(a);
 
       toast({
-        title: "Download started",
-        description: "Your processed image is downloading",
+        title: t("toast.downloadStarted", "Download started"),
+        description: t("toast.downloadStartedDesc", "Your processed image is downloading"),
       });
     } catch (error) {
       toast({
-        title: "Download failed",
-        description: "Could not download the image",
+        title: t("toast.downloadFailed", "Download failed"),
+        description: t("errors.couldNotDownloadImage", "Could not download the image"),
         variant: "destructive",
       });
     }
@@ -330,8 +339,10 @@ export function BackgroundRemovalDialog({
       }
 
       toast({
-        title: "Saved to library",
-        description: `The processed image has been saved${file.folder_path && file.folder_path !== "/" ? ` to ${file.folder_path}` : ""}`,
+        title: t("toast.savedToLibrary", "Saved to library"),
+        description: file.folder_path && file.folder_path !== "/"
+          ? t("toast.savedToLibraryFolder", "The processed image has been saved to {{folder}}", { folder: file.folder_path })
+          : t("toast.savedToLibraryDesc", "The processed image has been saved"),
       });
 
       onProcessComplete?.();
@@ -339,8 +350,8 @@ export function BackgroundRemovalDialog({
     } catch (error) {
       console.error("Save error:", error);
       toast({
-        title: "Save failed",
-        description: error instanceof Error ? error.message : "Could not save the image to your library",
+        title: t("toast.saveFailed", "Save failed"),
+        description: error instanceof Error ? error.message : t("errors.couldNotSaveImage", "Could not save the image to your library"),
         variant: "destructive",
       });
     } finally {
@@ -372,11 +383,10 @@ export function BackgroundRemovalDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Scissors className="w-5 h-5" />
-            Remove Background
+            {t("bgRemoval.title", "Remove Background")}
           </DialogTitle>
           <DialogDescription>
-            Remove the background from your image using AI. Use the slider to
-            compare before and after.
+            {t("bgRemoval.subtitle", "Remove the background from your image using AI. Use the slider to compare before and after.")}
           </DialogDescription>
         </DialogHeader>
 
@@ -386,7 +396,7 @@ export function BackgroundRemovalDialog({
             <Alert>
               <Upload className="h-4 w-4" />
               <AlertDescription>
-                This file will be automatically uploaded to Cloudinary for background removal processing.
+                {t("bgRemoval.notice", "This file will be automatically uploaded to Cloudinary for background removal processing.")}
               </AlertDescription>
             </Alert>
           )}
@@ -396,7 +406,7 @@ export function BackgroundRemovalDialog({
             <div className="space-y-2">
               <Label className="flex items-center gap-2">
                 <SlidersHorizontal className="w-4 h-4" />
-                Edge Quality
+                {t("bgRemoval.edgeQuality", "Edge Quality")}
               </Label>
               <Select
                 value={edgeMode}
@@ -406,8 +416,8 @@ export function BackgroundRemovalDialog({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="none">Standard</SelectItem>
-                  <SelectItem value="fine">Fine Edges</SelectItem>
+                  <SelectItem value="none">{t("bgRemoval.standard", "Standard")}</SelectItem>
+                  <SelectItem value="fine">{t("bgRemoval.fineEdges", "Fine Edges")}</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -415,7 +425,7 @@ export function BackgroundRemovalDialog({
             <div className="space-y-2">
               <Label className="flex items-center gap-2">
                 <Maximize2 className="w-4 h-4" />
-                Resize Output
+                {t("bgRemoval.resizeOutput", "Resize Output")}
               </Label>
               <Select
                 value={resizeMode}
@@ -425,9 +435,9 @@ export function BackgroundRemovalDialog({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {Object.entries(RESIZE_PRESETS).map(([key, preset]) => (
+                  {Object.entries(RESIZE_PRESETS).map(([key]) => (
                     <SelectItem key={key} value={key}>
-                      {preset.label}
+                      {resizeLabels[key as ResizeMode]}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -437,7 +447,7 @@ export function BackgroundRemovalDialog({
             {resizeMode === "custom" && (
               <div className="col-span-2 grid grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <Label>Width (px)</Label>
+                  <Label>{t("bgRemoval.widthPx", "Width (px)")}</Label>
                   <input
                     type="number"
                     value={customWidth}
@@ -448,7 +458,7 @@ export function BackgroundRemovalDialog({
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label>Height (px)</Label>
+                  <Label>{t("bgRemoval.heightPx", "Height (px)")}</Label>
                   <input
                     type="number"
                     value={customHeight}
@@ -481,12 +491,12 @@ export function BackgroundRemovalDialog({
                 >
                   <img
                     src={file.publicUrl}
-                    alt="Original"
+                    alt={t("bgRemoval.original", "Original")}
                     className="w-full h-full object-contain"
                     draggable={false}
                   />
                   <div className="absolute top-2 left-2 px-2 py-1 bg-background/80 backdrop-blur rounded text-xs font-medium">
-                    Original
+                    {t("bgRemoval.original", "Original")}
                   </div>
                 </div>
 
@@ -498,12 +508,12 @@ export function BackgroundRemovalDialog({
                   >
                     <img
                       src={processedUrl}
-                      alt="Processed"
+                      alt={t("imageTools.processed", "Processed")}
                       className="w-full h-full object-contain"
                       draggable={false}
                     />
                     <div className="absolute top-2 right-2 px-2 py-1 bg-background/80 backdrop-blur rounded text-xs font-medium">
-                      Removed
+                      {t("bgRemoval.removed", "Removed")}
                     </div>
                   </div>
                 )}
@@ -529,10 +539,10 @@ export function BackgroundRemovalDialog({
                     <div className="text-center space-y-2">
                       <Loader2 className="w-8 h-8 animate-spin mx-auto text-primary" />
                       <p className="text-sm font-medium">
-                        {uploading ? "Uploading to Cloudinary..." : "Removing background..."}
+                        {uploading ? t("bgRemoval.uploadingOverlay", "Uploading to Cloudinary...") : t("bgRemoval.overlay", "Removing background...")}
                       </p>
                       <p className="text-xs text-muted-foreground">
-                        This may take a moment
+                        {t("bgRemoval.overlayHint", "This may take a moment")}
                       </p>
                     </div>
                   </div>
@@ -544,7 +554,7 @@ export function BackgroundRemovalDialog({
           {/* Slider for fine control */}
           {processedUrl && (
             <div className="space-y-2">
-              <Label>Compare Position</Label>
+              <Label>{t("bgRemoval.comparePosition", "Compare Position")}</Label>
               <Slider
                 value={[comparePosition]}
                 onValueChange={([v]) => setComparePosition(v)}
@@ -560,7 +570,7 @@ export function BackgroundRemovalDialog({
           {!processedUrl ? (
             <>
               <Button variant="outline" onClick={onClose}>
-                Cancel
+                {t("common:cancel", "Cancel")}
               </Button>
               <Button
                 onClick={handleProcess}
@@ -569,12 +579,12 @@ export function BackgroundRemovalDialog({
                 {processing || uploading ? (
                   <>
                     <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                    {uploading ? "Uploading..." : "Processing..."}
+                    {uploading ? t("dialog.uploading", "Uploading...") : t("common:status.processing", "Processing...")}
                   </>
                 ) : (
                   <>
                     <Scissors className="w-4 h-4 mr-2" />
-                    Remove Background
+                    {t("bgRemoval.title", "Remove Background")}
                   </>
                 )}
               </Button>
@@ -589,20 +599,20 @@ export function BackgroundRemovalDialog({
                 }}
               >
                 <RefreshCw className="w-4 h-4 mr-2" />
-                Try Again
+                {t("actions.tryAgain", "Try Again")}
               </Button>
               <Button variant="secondary" onClick={handleDownload}>
                 <Download className="w-4 h-4 mr-2" />
-                Download
+                {t("common:download", "Download")}
               </Button>
               <Button onClick={handleSaveAsNew} disabled={saving}>
                 {saving ? (
                   <>
                     <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                    Saving...
+                    {t("common:saving", "Saving...")}
                   </>
                 ) : (
-                  "Save to Library"
+                  t("actions.saveToLibrary", "Save to Library")
                 )}
               </Button>
             </>

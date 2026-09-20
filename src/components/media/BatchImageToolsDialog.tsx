@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from "react";
+import { useTranslation } from "react-i18next";
 import {
   Dialog,
   DialogContent,
@@ -154,7 +155,44 @@ export function BatchImageToolsDialog({
   const [qualityPreset, setQualityPreset] = useState<keyof typeof QUALITY_PRESETS>("auto");
   const [outputFormat, setOutputFormat] = useState<"auto" | "jpg" | "png" | "webp">("auto");
   
+  const { t } = useTranslation("assets");
   const { toast } = useToast();
+  const resizeLabels: Record<ResizeMode, string> = {
+    original: t("imageTools.resize.original", "Original"),
+    square: t("imageTools.resize.square", "Square (1:1)"),
+    portrait: t("imageTools.resize.portrait", "Portrait (4:5)"),
+    landscape: t("imageTools.resize.landscape", "Landscape (16:9)"),
+  };
+  const qualityLabels = {
+    auto: t("imageTools.qualityPreset.auto", "Auto (recommended)"),
+    best: t("imageTools.qualityPreset.best", "Best Quality"),
+    high: t("imageTools.qualityPreset.high", "High (80%)"),
+    medium: t("imageTools.qualityPreset.medium", "Medium (60%)"),
+  };
+  const artisticLabels: Record<ArtisticFilter, string> = {
+    none: t("imageTools.artistic.none", "None"),
+    al_dente: t("imageTools.artistic.al_dente", "Al Dente"),
+    athena: t("imageTools.artistic.athena", "Athena"),
+    audrey: t("imageTools.artistic.audrey", "Audrey"),
+    aurora: t("imageTools.artistic.aurora", "Aurora"),
+    daguerre: t("imageTools.artistic.daguerre", "Daguerre"),
+    eucalyptus: t("imageTools.artistic.eucalyptus", "Eucalyptus"),
+    fes: t("imageTools.artistic.fes", "Fes"),
+    frost: t("imageTools.artistic.frost", "Frost"),
+    hairspray: t("imageTools.artistic.hairspray", "Hairspray"),
+    hokusai: t("imageTools.artistic.hokusai", "Hokusai"),
+    incognito: t("imageTools.artistic.incognito", "Incognito"),
+    linen: t("imageTools.artistic.linen", "Linen"),
+    peacock: t("imageTools.artistic.peacock", "Peacock"),
+    primavera: t("imageTools.artistic.primavera", "Primavera"),
+    quartz: t("imageTools.artistic.quartz", "Quartz"),
+    red_rock: t("imageTools.artistic.red_rock", "Red Rock"),
+    refresh: t("imageTools.artistic.refresh", "Refresh"),
+    sizzle: t("imageTools.artistic.sizzle", "Sizzle"),
+    sonnet: t("imageTools.artistic.sonnet", "Sonnet"),
+    ukulele: t("imageTools.artistic.ukulele", "Ukulele"),
+    zorro: t("imageTools.artistic.zorro", "Zorro"),
+  };
 
   // Reset state when dialog opens/closes
   useEffect(() => {
@@ -394,8 +432,8 @@ export function BatchImageToolsDialog({
     
     if (!enableBgRemoval && !hasValidResize && !enableUpscale && !hasValidFilters && !enableQuality) {
       toast({
-        title: "No features selected",
-        description: "Please enable at least one transformation",
+        title: t("toast.noFeatures", "No features selected"),
+        description: t("toast.noFeaturesDesc", "Please enable at least one transformation"),
         variant: "destructive",
       });
       return;
@@ -431,8 +469,8 @@ export function BatchImageToolsDialog({
     
     const successCount = fileStates.filter(fs => fs.status === "success").length + 1;
     toast({
-      title: "Batch processing complete",
-      description: `Successfully processed ${successCount} of ${files.length} images`,
+      title: t("toast.batchComplete", "Batch processing complete"),
+      description: t("toast.batchCompleteDesc", "Successfully processed {{success}} of {{total}} images", { success: successCount, total: files.length }),
     });
     
     onProcessComplete?.();
@@ -457,10 +495,10 @@ export function BatchImageToolsDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Wand2 className="w-5 h-5" />
-            Batch Image Processing ({files.length} images)
+            {t("batch.title", "Batch Image Processing ({{count}} images)", { count: files.length })}
           </DialogTitle>
           <DialogDescription>
-            Apply the same transformations to all selected images.
+            {t("batch.subtitle", "Apply the same transformations to all selected images.")}
           </DialogDescription>
         </DialogHeader>
 
@@ -470,7 +508,7 @@ export function BatchImageToolsDialog({
             <div className="flex items-center justify-between p-2 border rounded-md bg-background">
               <div className="flex items-center gap-1.5">
                 <Scissors className="w-3.5 h-3.5 text-primary" />
-                <Label className="text-[11px] font-medium">BG Remove</Label>
+                <Label className="text-[11px] font-medium">{t("imageTools.bgRemove", "BG Remove")}</Label>
               </div>
               <Switch
                 checked={enableBgRemoval}
@@ -483,7 +521,7 @@ export function BatchImageToolsDialog({
             <div className="flex items-center justify-between p-2 border rounded-md bg-background">
               <div className="flex items-center gap-1.5">
                 <Maximize2 className="w-3.5 h-3.5 text-primary" />
-                <Label className="text-[11px] font-medium">Resize</Label>
+                <Label className="text-[11px] font-medium">{t("imageTools.resize.label", "Resize")}</Label>
               </div>
               <Switch
                 checked={enableResize}
@@ -496,7 +534,7 @@ export function BatchImageToolsDialog({
             <div className="flex items-center justify-between p-2 border rounded-md bg-background">
               <div className="flex items-center gap-1.5">
                 <ZoomIn className="w-3.5 h-3.5 text-primary" />
-                <Label className="text-[11px] font-medium">Upscale</Label>
+                <Label className="text-[11px] font-medium">{t("imageTools.upscale", "Upscale")}</Label>
               </div>
               <Switch
                 checked={enableUpscale}
@@ -509,7 +547,7 @@ export function BatchImageToolsDialog({
             <div className="flex items-center justify-between p-2 border rounded-md bg-background">
               <div className="flex items-center gap-1.5">
                 <Palette className="w-3.5 h-3.5 text-primary" />
-                <Label className="text-[11px] font-medium">Filters</Label>
+                <Label className="text-[11px] font-medium">{t("imageTools.filters", "Filters")}</Label>
               </div>
               <Switch
                 checked={enableFilters}
@@ -522,7 +560,7 @@ export function BatchImageToolsDialog({
             <div className="flex items-center justify-between p-2 border rounded-md bg-background">
               <div className="flex items-center gap-1.5">
                 <Sparkles className="w-3.5 h-3.5 text-primary" />
-                <Label className="text-[11px] font-medium">Quality</Label>
+                <Label className="text-[11px] font-medium">{t("imageTools.quality", "Quality")}</Label>
               </div>
               <Switch
                 checked={enableQuality}
@@ -539,14 +577,14 @@ export function BatchImageToolsDialog({
             <div className="space-y-4">
               {enableBgRemoval && (
                 <div className="p-3 border rounded-lg space-y-2">
-                  <Label className="text-xs font-medium">Edge Quality</Label>
+                  <Label className="text-xs font-medium">{t("batch.edgeQuality", "Edge Quality")}</Label>
                   <Select value={edgeMode} onValueChange={(v) => setEdgeMode(v as EdgeMode)} disabled={processing}>
                     <SelectTrigger className="h-8 text-xs">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="none">Standard</SelectItem>
-                      <SelectItem value="fine">Fine Edges</SelectItem>
+                      <SelectItem value="none">{t("batch.standard", "Standard")}</SelectItem>
+                      <SelectItem value="fine">{t("batch.fineEdges", "Fine Edges")}</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -554,14 +592,14 @@ export function BatchImageToolsDialog({
 
               {enableResize && (
                 <div className="p-3 border rounded-lg space-y-2">
-                  <Label className="text-xs font-medium">Resize Preset</Label>
+                  <Label className="text-xs font-medium">{t("batch.resizePreset", "Resize Preset")}</Label>
                   <Select value={resizeMode} onValueChange={(v) => setResizeMode(v as ResizeMode)} disabled={processing}>
                     <SelectTrigger className="h-8 text-xs">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {Object.entries(RESIZE_PRESETS).map(([key, { label }]) => (
-                        <SelectItem key={key} value={key}>{label}</SelectItem>
+                      {Object.entries(RESIZE_PRESETS).map(([key]) => (
+                        <SelectItem key={key} value={key}>{resizeLabels[key as ResizeMode]}</SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
@@ -570,11 +608,11 @@ export function BatchImageToolsDialog({
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="fill">Fill</SelectItem>
-                      <SelectItem value="fit">Fit</SelectItem>
-                      <SelectItem value="scale">Scale</SelectItem>
-                      <SelectItem value="crop">Crop</SelectItem>
-                      <SelectItem value="pad">Pad</SelectItem>
+                      <SelectItem value="fill">{t("batch.crop.fill", "Fill")}</SelectItem>
+                      <SelectItem value="fit">{t("batch.crop.fit", "Fit")}</SelectItem>
+                      <SelectItem value="scale">{t("batch.crop.scale", "Scale")}</SelectItem>
+                      <SelectItem value="crop">{t("batch.crop.crop", "Crop")}</SelectItem>
+                      <SelectItem value="pad">{t("batch.crop.pad", "Pad")}</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -582,15 +620,15 @@ export function BatchImageToolsDialog({
 
               {enableUpscale && (
                 <div className="p-3 border rounded-lg space-y-2">
-                  <Label className="text-xs font-medium">Upscale Mode</Label>
+                  <Label className="text-xs font-medium">{t("batch.upscaleMode", "Upscale Mode")}</Label>
                   <Select value={upscaleMode} onValueChange={(v) => setUpscaleMode(v as any)} disabled={processing}>
                     <SelectTrigger className="h-8 text-xs">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="standard">Standard</SelectItem>
-                      <SelectItem value="enhance">Upscale + Enhance</SelectItem>
-                      <SelectItem value="restore">Upscale + Restore</SelectItem>
+                      <SelectItem value="standard">{t("batch.standard", "Standard")}</SelectItem>
+                      <SelectItem value="enhance">{t("batch.upscaleEnhance", "Upscale + Enhance")}</SelectItem>
+                      <SelectItem value="restore">{t("batch.upscaleRestore", "Upscale + Restore")}</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -598,14 +636,14 @@ export function BatchImageToolsDialog({
 
               {enableQuality && (
                 <div className="p-3 border rounded-lg space-y-2">
-                  <Label className="text-xs font-medium">Quality & Format</Label>
+                  <Label className="text-xs font-medium">{t("batch.qualityFormat", "Quality & Format")}</Label>
                   <Select value={qualityPreset} onValueChange={(v) => setQualityPreset(v as any)} disabled={processing}>
                     <SelectTrigger className="h-8 text-xs">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {Object.entries(QUALITY_PRESETS).map(([key, { label }]) => (
-                        <SelectItem key={key} value={key}>{label}</SelectItem>
+                      {Object.entries(QUALITY_PRESETS).map(([key]) => (
+                        <SelectItem key={key} value={key}>{qualityLabels[key as keyof typeof qualityLabels]}</SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
@@ -614,10 +652,10 @@ export function BatchImageToolsDialog({
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="auto">Auto</SelectItem>
-                      <SelectItem value="jpg">JPG</SelectItem>
-                      <SelectItem value="png">PNG</SelectItem>
-                      <SelectItem value="webp">WebP</SelectItem>
+                      <SelectItem value="auto">{t("batch.format.auto", "Auto")}</SelectItem>
+                      <SelectItem value="jpg">{t("batch.format.jpg", "JPG")}</SelectItem>
+                      <SelectItem value="png">{t("batch.format.png", "PNG")}</SelectItem>
+                      <SelectItem value="webp">{t("batch.format.webp", "WebP")}</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -628,11 +666,11 @@ export function BatchImageToolsDialog({
             <div className="space-y-4">
               {enableFilters && (
                 <div className="p-3 border rounded-lg space-y-3">
-                  <Label className="text-xs font-medium">Filters & Effects</Label>
+                  <Label className="text-xs font-medium">{t("imageTools.filtersEffects", "Filters & Effects")}</Label>
                   
                   <div className="space-y-2">
                     <div className="flex items-center justify-between">
-                      <span className="text-xs flex items-center gap-1"><Sun className="w-3 h-3" /> Brightness</span>
+                      <span className="text-xs flex items-center gap-1"><Sun className="w-3 h-3" /> {t("filters.brightness", "Brightness")}</span>
                       <span className="text-xs text-muted-foreground">{brightness}</span>
                     </div>
                     <Slider value={[brightness]} onValueChange={([v]) => setBrightness(v)} min={-100} max={100} disabled={processing} />
@@ -640,7 +678,7 @@ export function BatchImageToolsDialog({
 
                   <div className="space-y-2">
                     <div className="flex items-center justify-between">
-                      <span className="text-xs flex items-center gap-1"><Contrast className="w-3 h-3" /> Contrast</span>
+                      <span className="text-xs flex items-center gap-1"><Contrast className="w-3 h-3" /> {t("filters.contrast", "Contrast")}</span>
                       <span className="text-xs text-muted-foreground">{contrast}</span>
                     </div>
                     <Slider value={[contrast]} onValueChange={([v]) => setContrast(v)} min={-100} max={100} disabled={processing} />
@@ -648,7 +686,7 @@ export function BatchImageToolsDialog({
 
                   <div className="space-y-2">
                     <div className="flex items-center justify-between">
-                      <span className="text-xs flex items-center gap-1"><Droplets className="w-3 h-3" /> Saturation</span>
+                      <span className="text-xs flex items-center gap-1"><Droplets className="w-3 h-3" /> {t("filters.saturation", "Saturation")}</span>
                       <span className="text-xs text-muted-foreground">{saturation}</span>
                     </div>
                     <Slider value={[saturation]} onValueChange={([v]) => setSaturation(v)} min={-100} max={100} disabled={processing} />
@@ -656,7 +694,7 @@ export function BatchImageToolsDialog({
 
                   <div className="space-y-2">
                     <div className="flex items-center justify-between">
-                      <span className="text-xs flex items-center gap-1"><Focus className="w-3 h-3" /> Sharpening</span>
+                      <span className="text-xs flex items-center gap-1"><Focus className="w-3 h-3" /> {t("filters.sharpening", "Sharpening")}</span>
                       <span className="text-xs text-muted-foreground">{sharpening}</span>
                     </div>
                     <Slider value={[sharpening]} onValueChange={([v]) => setSharpening(v)} min={0} max={100} disabled={processing} />
@@ -664,21 +702,21 @@ export function BatchImageToolsDialog({
 
                   <div className="space-y-2">
                     <div className="flex items-center justify-between">
-                      <span className="text-xs flex items-center gap-1"><Eraser className="w-3 h-3" /> Noise Reduction</span>
+                      <span className="text-xs flex items-center gap-1"><Eraser className="w-3 h-3" /> {t("filters.noiseReduction", "Noise Reduction")}</span>
                       <span className="text-xs text-muted-foreground">{noiseReduction}</span>
                     </div>
                     <Slider value={[noiseReduction]} onValueChange={([v]) => setNoiseReduction(v)} min={0} max={100} disabled={processing} />
                   </div>
 
                   <div className="space-y-2">
-                    <span className="text-xs">Artistic Filter</span>
+                    <span className="text-xs">{t("batch.artisticFilter", "Artistic Filter")}</span>
                     <Select value={artisticFilter} onValueChange={(v) => setArtisticFilter(v as ArtisticFilter)} disabled={processing}>
                       <SelectTrigger className="h-8 text-xs">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        {Object.entries(ARTISTIC_FILTERS).map(([key, label]) => (
-                          <SelectItem key={key} value={key}>{label}</SelectItem>
+                        {Object.entries(ARTISTIC_FILTERS).map(([key]) => (
+                          <SelectItem key={key} value={key}>{artisticLabels[key as ArtisticFilter]}</SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
@@ -692,8 +730,8 @@ export function BatchImageToolsDialog({
           {processing && (
             <div className="space-y-3">
               <div className="flex items-center justify-between text-sm">
-                <span>Processing {processingIndex + 1} of {files.length}...</span>
-                <span className="text-muted-foreground">{completedCount} completed, {errorCount} failed</span>
+                <span>{t("batch.processingOf", "Processing {{current}} of {{total}}...", { current: processingIndex + 1, total: files.length })}</span>
+                <span className="text-muted-foreground">{t("batch.progressSummary", "{{completed}} completed, {{failed}} failed", { completed: completedCount, failed: errorCount })}</span>
               </div>
               <Progress value={(completedCount / files.length) * 100} className="h-2" />
             </div>
@@ -702,7 +740,7 @@ export function BatchImageToolsDialog({
           {/* File List */}
           <div className="border rounded-lg">
             <div className="p-2 border-b bg-muted/50">
-              <span className="text-xs font-medium">Files to process</span>
+              <span className="text-xs font-medium">{t("batch.filesToProcess", "Files to process")}</span>
             </div>
             <ScrollArea className="h-40">
               <div className="p-2 space-y-1">
@@ -728,18 +766,18 @@ export function BatchImageToolsDialog({
 
         <DialogFooter className="mt-4">
           <Button variant="outline" onClick={onClose} disabled={processing}>
-            {processing ? "Processing..." : "Cancel"}
+            {processing ? t("common:status.processing", "Processing...") : t("common:cancel", "Cancel")}
           </Button>
           <Button onClick={handleProcess} disabled={processing}>
             {processing ? (
               <>
                 <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                Processing {processingIndex + 1}/{files.length}
+                {t("batch.processingCount", "Processing {{current}}/{{total}}", { current: processingIndex + 1, total: files.length })}
               </>
             ) : (
               <>
                 <Wand2 className="w-4 h-4 mr-2" />
-                Process {files.length} Images
+                {t("batch.processCount", "Process {{count}} Images", { count: files.length })}
               </>
             )}
           </Button>

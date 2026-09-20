@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect } from "react";
+import { Trans, useTranslation } from "react-i18next";
 import { useDropzone } from "react-dropzone";
 import {
   Dialog,
@@ -67,6 +68,7 @@ export function MediaUploadDialog({
   const [showResults, setShowResults] = useState(false);
   const [quotaError, setQuotaError] = useState<string | null>(null);
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
+  const { t } = useTranslation("assets");
   const { toast } = useToast();
   const { canUploadMedia, incrementMediaUpload, quota, planLimits } = useQuotas();
   const { logOperation, completeOperation, failOperation } = useLogMediaOperation();
@@ -80,13 +82,13 @@ export function MediaUploadDialog({
       }
       const result = await canUploadMedia();
       if (!result.allowed) {
-        setQuotaError(result.message || "Upload limit reached");
+        setQuotaError(result.message || t("upload.uploadLimitReached", "Upload limit reached"));
       } else {
         setQuotaError(null);
       }
     };
     checkQuota();
-  }, [files.length]);
+  }, [files.length, t]);
 
   const onDrop = useCallback((acceptedFiles: File[]) => {
     setFiles((prev) => [...prev, ...acceptedFiles]);
@@ -118,7 +120,7 @@ export function MediaUploadDialog({
     const quotaCheck = await canUploadMedia();
     if (!quotaCheck.allowed) {
       toast({
-        title: "Upload limit reached",
+        title: t("toast.uploadLimit", "Upload limit reached"),
         description: quotaCheck.message,
         variant: "destructive",
       });
@@ -138,8 +140,8 @@ export function MediaUploadDialog({
       const canUpload = await incrementMediaUpload();
       if (!canUpload) {
         toast({
-          title: "Upload limit reached",
-          description: `Could not upload ${file.name}. Daily upload limit reached.`,
+          title: t("toast.uploadLimit", "Upload limit reached"),
+          description: t("toast.uploadLimitFile", "Could not upload {{name}}. Daily upload limit reached.", { name: file.name }),
           variant: "destructive",
         });
         setUploadProgress((prev) => ({ ...prev, [fileId]: -1 }));
@@ -228,8 +230,8 @@ export function MediaUploadDialog({
       } catch (error) {
         console.error("Upload error:", error);
         toast({
-          title: "Upload failed",
-          description: `Failed to upload ${file.name}`,
+          title: t("toast.uploadFailed", "Upload failed"),
+          description: t("toast.uploadFailedFile", "Failed to upload {{name}}", { name: file.name }),
           variant: "destructive",
         });
         setUploadProgress((prev) => ({ ...prev, [fileId]: -1 }));
@@ -251,8 +253,8 @@ export function MediaUploadDialog({
     
     if (uploaded.length > 0) {
       toast({
-        title: "Upload complete",
-        description: `Successfully uploaded ${uploaded.length} file(s)`,
+        title: t("toast.uploadComplete", "Upload complete"),
+        description: t("toast.uploadCompleteDesc", "Successfully uploaded {{count}} file(s)", { count: uploaded.length }),
       });
       onUploadComplete();
     }
@@ -272,8 +274,8 @@ export function MediaUploadDialog({
       document.body.removeChild(a);
     } catch (error) {
       toast({
-        title: "Download failed",
-        description: "Could not download the file",
+        title: t("toast.downloadFailed", "Download failed"),
+        description: t("errors.couldNotDownload", "Could not download the file"),
         variant: "destructive",
       });
     }
@@ -282,8 +284,8 @@ export function MediaUploadDialog({
   const copyUrl = (url: string) => {
     navigator.clipboard.writeText(url);
     toast({
-      title: "URL copied",
-      description: "The file URL has been copied to your clipboard",
+      title: t("toast.urlCopied", "URL copied"),
+      description: t("toast.urlCopiedDesc", "The file URL has been copied to your clipboard"),
     });
   };
 
@@ -303,7 +305,7 @@ export function MediaUploadDialog({
   // per-user overrides and any plan edit (I2, 2026-08-23 final review).
   const maxUploads = planLimits.max_media_uploads_per_day;
   const usedUploads = quota?.media_uploads_today ?? 0;
-  const remainingUploads = maxUploads === -1 ? "Unlimited" : Math.max(0, maxUploads - usedUploads);
+  const remainingUploads = maxUploads === -1 ? t("upload.unlimited", "Unlimited") : Math.max(0, maxUploads - usedUploads);
 
   const resetUpload = () => {
     setFiles([]);
@@ -319,7 +321,7 @@ export function MediaUploadDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Upload className="w-5 h-5" />
-            {showResults ? "Upload Complete" : "Upload Media"}
+            {showResults ? t("upload.complete", "Upload Complete") : t("upload.title", "Upload Media")}
           </DialogTitle>
         </DialogHeader>
 
@@ -327,10 +329,10 @@ export function MediaUploadDialog({
           <div className="flex-1 overflow-auto space-y-4">
             <div className="flex items-center justify-between">
               <p className="text-sm text-muted-foreground">
-                {uploadedFiles.length} file(s) uploaded successfully
+                {t("upload.successCount", "{{count}} file(s) uploaded successfully", { count: uploadedFiles.length })}
               </p>
               <Button variant="outline" size="sm" onClick={resetUpload}>
-                Upload More
+                {t("actions.uploadMore", "Upload More")}
               </Button>
             </div>
 
@@ -368,7 +370,7 @@ export function MediaUploadDialog({
                             ) : (
                               <FileVideo className="w-3 h-3 mr-1" />
                             )}
-                            {file.type}
+                            {file.type === "video" ? t("type.videoLower", "video") : file.type === "gif" ? t("type.gif", "gif") : t("type.imageLower", "image")}
                           </Badge>
                         </div>
                         <Check className="w-5 h-5 text-emerald-500 shrink-0" />
@@ -412,7 +414,7 @@ export function MediaUploadDialog({
                       onClick={() => handleDownload(file)}
                     >
                       <Download className="w-4 h-4 mr-2" />
-                      Download
+                      {t("common:download", "Download")}
                     </Button>
                     <Button
                       variant="outline"
@@ -421,7 +423,7 @@ export function MediaUploadDialog({
                       onClick={() => copyUrl(file.url)}
                     >
                       <Copy className="w-4 h-4 mr-2" />
-                      Copy URL
+                      {t("upload.copyUrl", "Copy URL")}
                     </Button>
                     <Button
                       variant="outline"
@@ -438,7 +440,7 @@ export function MediaUploadDialog({
             </div>
 
             <div className="flex justify-end pt-4">
-              <Button onClick={handleClose}>Done</Button>
+              <Button onClick={handleClose}>{t("common:done", "Done")}</Button>
             </div>
           </div>
         ) : (
@@ -456,12 +458,12 @@ export function MediaUploadDialog({
               <input {...getInputProps()} />
               <Upload className="w-10 h-10 mx-auto text-muted-foreground mb-3" />
               {isDragActive ? (
-                <p className="text-primary font-medium">Drop files here...</p>
+                <p className="text-primary font-medium">{t("upload.dropHere", "Drop files here...")}</p>
               ) : (
                 <>
-                  <p className="font-medium">Drop files here or click to browse</p>
+                  <p className="font-medium">{t("upload.dropOrClick", "Drop files here or click to browse")}</p>
                   <p className="text-sm text-muted-foreground mt-1">
-                    Supports images and videos up to 100MB
+                    {t("upload.sizeHint", "Supports images and videos up to 100MB")}
                   </p>
                 </>
               )}
@@ -471,11 +473,19 @@ export function MediaUploadDialog({
             <div className="flex items-center justify-between text-sm text-muted-foreground">
               {currentFolder !== "/" && (
                 <span>
-                  Uploading to: <span className="font-medium">{currentFolder}</span>
+                  {t("upload.uploadingTo", "Uploading to: {{folder}}", { folder: currentFolder })}
                 </span>
               )}
               <span className="ml-auto">
-                Uploads remaining today: <span className="font-medium">{remainingUploads}</span>
+                <Trans
+                  ns="assets"
+                  i18nKey="upload.remaining"
+                  defaults="Uploads remaining today: <value>{{remaining}}</value>"
+                  values={{ remaining: remainingUploads }}
+                  components={{ value: <span className="font-medium" /> }}
+                >
+                  Uploads remaining today: <span className="font-medium">{remainingUploads}</span>
+                </Trans>
               </span>
             </div>
 
@@ -487,7 +497,7 @@ export function MediaUploadDialog({
                   <span>{quotaError}</span>
                   <Button variant="ghost" size="sm" className="gap-1 h-auto py-1 px-2">
                     <Crown className="w-3 h-3" />
-                    Upgrade
+                    {t("upload.upgrade", "Upgrade")}
                   </Button>
                 </AlertDescription>
               </Alert>
@@ -496,7 +506,7 @@ export function MediaUploadDialog({
             {/* File list */}
             {files.length > 0 && (
               <div className="space-y-2">
-                <h4 className="text-sm font-medium">Files to upload ({files.length})</h4>
+                <h4 className="text-sm font-medium">{t("upload.filesToUpload", "Files to upload ({{count}})", { count: files.length })}</h4>
                 <div className="space-y-2 max-h-[200px] overflow-auto">
                   {files.map((file, index) => {
                     const fileId = `file-${index}`;
@@ -524,11 +534,11 @@ export function MediaUploadDialog({
                             {isComplete && (
                               <Badge variant="secondary" className="text-emerald-600 bg-emerald-400/10">
                                 <Check className="w-3 h-3 mr-1" />
-                                Uploaded
+                                {t("upload.uploaded", "Uploaded")}
                               </Badge>
                             )}
                             {isFailed && (
-                              <Badge variant="destructive">Failed</Badge>
+                              <Badge variant="destructive">{t("common:status.failed", "Failed")}</Badge>
                             )}
                           </div>
                           {isUploading && (
@@ -558,7 +568,7 @@ export function MediaUploadDialog({
             {/* Actions */}
             <div className="flex justify-end gap-2 pt-4">
               <Button variant="outline" onClick={handleClose} disabled={uploading}>
-                Cancel
+                {t("common:cancel", "Cancel")}
               </Button>
               <Button
                 onClick={handleUpload}
@@ -567,12 +577,17 @@ export function MediaUploadDialog({
                 {uploading ? (
                   <>
                     <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                    Uploading...
+                    {t("dialog.uploading", "Uploading...")}
+                  </>
+                ) : files.length > 0 ? (
+                  <>
+                    <Upload className="w-4 h-4 mr-2" />
+                    {t("upload.uploadCount", "Upload ({{count}})", { count: files.length })}
                   </>
                 ) : (
                   <>
                     <Upload className="w-4 h-4 mr-2" />
-                    Upload {files.length > 0 && `(${files.length})`}
+                    {t("common:upload", "Upload")}
                   </>
                 )}
               </Button>
