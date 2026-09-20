@@ -1,16 +1,26 @@
 #!/usr/bin/env node
 // Postora — Arabic i18n coverage gate.
 //
-// Verifies translation key coverage between code and the Arabic resource bundles:
-//   1. Walks src/**/*.{ts,tsx} (excluding any path containing __tests__).
-//   2. Resolves each file's namespace from its useTranslation("<ns>") call.
-//   3. Extracts every t("key.path", "English default") call in each file.
-//   4. Flattens dotted paths in src/i18n/locales/ar/<ns>.json.
-//   5. Checks for MISSING keys (used in code, absent from ar bundle)
-//      and ORPHAN keys (present in ar bundle, used nowhere in code).
-//   6. Exits non-zero on any missing or orphan key.
+// Three-way consistency check between the call sites, the i18next registration
+// and the Arabic bundles:
+//   1. REGISTRATION: every namespace a component asks for via useTranslation is
+//      listed in the `ns` array in src/i18n/index.ts. An unregistered namespace
+//      does not throw — i18next silently falls through to the call-site English
+//      default, so the page still renders and the bug is invisible.
+//   2. CODE -> BUNDLE: every key used in code exists in src/i18n/locales/ar/<ns>.json.
+//   3. BUNDLE -> CODE: every key in a bundle is still used somewhere (no orphans
+//      left behind by a deleted component).
 //
-// Runs as `npm run check:i18n`.
+// Exits non-zero on any drift. Runs as `npm run check:i18n`.
+//
+// Namespace resolution mirrors i18next's own rules, because the failure this
+// gate exists to catch is silent:
+//   useTranslation("nav")            -> nav
+//   useTranslation(["nav", "media"]) -> both
+//   useTranslation()                 -> whatever defaultNS is set to in index.ts
+//   t("common:save")                 -> common, regardless of the file's namespace
+// `keyPrefix` is rejected rather than guessed at: it rewrites every key in the
+// file, and a gate that silently mis-attributes keys is worse than no gate.
 
 import { readFileSync, readdirSync, statSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -19,7 +29,11 @@ import { dirname, join, resolve, relative } from "node:path";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = resolve(__dirname, "..");
 
-let totalFailures = 0;
+let failures = 0;
+const report = (msg) => {
+  console.error(`  ${msg}`);
+  failures += 1;
+};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -33,8 +47,7 @@ function listSourceFiles(dir, out = []) {
   }
   for (const entry of entries) {
     const full = join(dir, entry);
-    const rel = relative(root, full);
-    if (rel.includes("__tests__")) continue;
+    if (relative(root, full).includes("__tests__")) continue;
     const st = statSync(full);
     if (st.isDirectory()) {
       if (entry === "node_modules" || entry === ".git" || entry === "dist") continue;
@@ -47,7 +60,7 @@ function listSourceFiles(dir, out = []) {
 }
 
 function flattenKeys(obj, prefix = "") {
-  let keys = [];
+  const keys = [];
   if (!obj || typeof obj !== "object" || Array.isArray(obj)) return keys;
   for (const [k, v] of Object.entries(obj)) {
     const fullKey = prefix ? `${prefix}.${k}` : k;
@@ -60,117 +73,151 @@ function flattenKeys(obj, prefix = "") {
   return keys;
 }
 
+const quotedStrings = (source) => [...source.matchAll(/["']([^"']+)["']/g)].map((m) => m[1]);
+
 // ---------------------------------------------------------------------------
-// 1. Walk code files and extract keys per namespace
+// 1. Read the i18next registration so the gate cannot drift from the config
 // ---------------------------------------------------------------------------
-const srcDir = join(root, "src");
-const sourceFiles = listSourceFiles(srcDir);
+const configPath = join(root, "src", "i18n", "index.ts");
+const config = readFileSync(configPath, "utf8");
+
+const defaultNsMatch = config.match(/defaultNS:\s*["']([^"']+)["']/);
+if (!defaultNsMatch) {
+  console.error(`\nERROR: could not find defaultNS in ${relative(root, configPath)}.`);
+  process.exit(1);
+}
+const defaultNs = defaultNsMatch[1];
+
+const nsArrayMatch = config.match(/\bns:\s*\[([^\]]*)\]/);
+if (!nsArrayMatch) {
+  console.error(`\nERROR: could not find the ns array in ${relative(root, configPath)}.`);
+  process.exit(1);
+}
+const registeredNamespaces = new Set(quotedStrings(nsArrayMatch[1]));
+
+// ---------------------------------------------------------------------------
+// 2. Walk code files and attribute every key to a namespace
+// ---------------------------------------------------------------------------
+const sourceFiles = listSourceFiles(join(root, "src"));
 
 const codeKeysByNs = new Map();
-const tCallRegex = /\bt\(\s*["']([a-zA-Z0-9_.-]+)["']/g;
-const useTranslationRegex = /useTranslation\(\s*["']([^"']+)["']\s*\)/g;
+const addKey = (ns, key) => {
+  if (!codeKeysByNs.has(ns)) codeKeysByNs.set(ns, new Set());
+  codeKeysByNs.get(ns).add(key);
+};
+
+// `t("key")`, `i18next.t("key")`, and <Trans i18nKey="key"> all reach the bundle.
+const tCallRegex = /\bt\(\s*["']([a-zA-Z0-9_.:-]+)["']/g;
+const transKeyRegex = /\bi18nKey=["']([a-zA-Z0-9_.:-]+)["']/g;
+const useTranslationRegex = /useTranslation\(([^)]*)\)/g;
 
 for (const file of sourceFiles) {
   const content = readFileSync(file, "utf8");
-  const nsMatches = [...content.matchAll(useTranslationRegex)].map((m) => m[1]);
-  if (nsMatches.length === 0) continue;
+  const calls = [...content.matchAll(useTranslationRegex)];
+  if (calls.length === 0) continue;
 
-  const namespaces = [...new Set(nsMatches)];
-  const fileKeys = new Set();
-  let m;
-  while ((m = tCallRegex.exec(content)) !== null) {
-    fileKeys.add(m[1]);
+  const rel = relative(root, file);
+
+  const fileNamespaces = new Set();
+  for (const [, args] of calls) {
+    if (args.includes("keyPrefix")) {
+      report(
+        `UNSUPPORTED: ${rel} uses useTranslation({ keyPrefix }), which rewrites every key in the ` +
+          `file. This gate cannot verify it — pass full key paths instead.`
+      );
+      continue;
+    }
+    const explicit = quotedStrings(args);
+    if (explicit.length === 0) fileNamespaces.add(defaultNs);
+    for (const ns of explicit) fileNamespaces.add(ns);
+  }
+  if (fileNamespaces.size === 0) continue;
+
+  for (const ns of fileNamespaces) {
+    if (!registeredNamespaces.has(ns)) {
+      report(
+        `UNREGISTERED: ${rel} asks for namespace "${ns}", which is missing from the ns array in ` +
+          `${relative(root, configPath)}. i18next will silently serve the English call-site default.`
+      );
+    }
   }
 
-  for (const ns of namespaces) {
-    if (!codeKeysByNs.has(ns)) {
-      codeKeysByNs.set(ns, new Set());
+  const keys = [
+    ...[...content.matchAll(tCallRegex)].map((m) => m[1]),
+    ...[...content.matchAll(transKeyRegex)].map((m) => m[1]),
+  ];
+
+  for (const key of keys) {
+    // An explicit "ns:key" prefix wins over the file's own namespace — that is
+    // how i18next resolves it, and it is the only way a file reading two
+    // namespaces can be attributed precisely.
+    const separator = key.indexOf(":");
+    if (separator > 0) {
+      addKey(key.slice(0, separator), key.slice(separator + 1));
+      continue;
     }
-    const nsKeySet = codeKeysByNs.get(ns);
-    for (const key of fileKeys) {
-      nsKeySet.add(key);
-    }
+    for (const ns of fileNamespaces) addKey(ns, key);
   }
 }
 
 // ---------------------------------------------------------------------------
-// 2. Discover all namespaces (from locales directory and code)
+// 3. Compare code keys against the Arabic bundles
 // ---------------------------------------------------------------------------
 const localesDir = join(root, "src", "i18n", "locales", "ar");
-const localeNamespaces = new Set();
+const namespaces = new Set(codeKeysByNs.keys());
 
 if (existsSync(localesDir)) {
   for (const entry of readdirSync(localesDir)) {
-    if (entry.endsWith(".json")) {
-      localeNamespaces.add(entry.slice(0, -5));
-    }
+    if (entry.endsWith(".json")) namespaces.add(entry.slice(0, -5));
   }
 }
-
-for (const ns of codeKeysByNs.keys()) {
-  localeNamespaces.add(ns);
-}
-
-const allNamespaces = [...localeNamespaces].sort();
 
 console.log("\nChecking Arabic (ar) i18n bundle coverage...");
+console.log(`  defaultNS: ${defaultNs} · registered: ${[...registeredNamespaces].sort().join(", ")}`);
 
-// ---------------------------------------------------------------------------
-// 3. Compare code keys vs Arabic bundle keys per namespace
-// ---------------------------------------------------------------------------
-for (const ns of allNamespaces) {
+for (const ns of [...namespaces].sort()) {
   const bundlePath = join(localesDir, `${ns}.json`);
   if (!existsSync(bundlePath)) {
-    console.error(`\n[${ns}] ERROR: Missing bundle file at ${relative(root, bundlePath)}`);
-    totalFailures += 1;
+    report(`[${ns}] MISSING BUNDLE: expected ${relative(root, bundlePath)}`);
     continue;
   }
 
-  let bundleData = {};
+  let bundle;
   try {
-    const raw = readFileSync(bundlePath, "utf8");
-    bundleData = JSON.parse(raw);
+    bundle = JSON.parse(readFileSync(bundlePath, "utf8"));
   } catch (err) {
-    console.error(`\n[${ns}] ERROR: Failed to parse ${relative(root, bundlePath)}: ${err.message}`);
-    totalFailures += 1;
+    report(`[${ns}] UNPARSEABLE: ${relative(root, bundlePath)}: ${err.message}`);
     continue;
   }
 
-  const bundleKeys = new Set(flattenKeys(bundleData));
-  const codeKeys = codeKeysByNs.get(ns) || new Set();
+  const bundleKeys = new Set(flattenKeys(bundle));
+  const codeKeys = codeKeysByNs.get(ns) ?? new Set();
 
   const missing = [...codeKeys].filter((k) => !bundleKeys.has(k)).sort();
   const orphans = [...bundleKeys].filter((k) => !codeKeys.has(k)).sort();
 
-  if (missing.length > 0 || orphans.length > 0) {
-    console.error(`\n[${ns}] FAILED:`);
-    if (missing.length > 0) {
-      console.error(`  MISSING keys in Arabic bundle (${missing.length}):`);
-      for (const k of missing) {
-        console.error(`    - ${k}`);
-      }
-      totalFailures += missing.length;
-    }
-    if (orphans.length > 0) {
-      console.error(`  ORPHAN keys in Arabic bundle (${orphans.length}):`);
-      for (const k of orphans) {
-        console.error(`    - ${k}`);
-      }
-      totalFailures += orphans.length;
-    }
-  } else {
-    console.log(`  OK [${ns}]: ${codeKeys.size} key(s) verified (0 missing, 0 orphans)`);
+  if (missing.length === 0 && orphans.length === 0) {
+    console.log(`  OK [${ns}]: ${codeKeys.size} key(s) verified`);
+    continue;
+  }
+
+  console.error(`\n  [${ns}] FAILED:`);
+  if (missing.length > 0) {
+    console.error(`    MISSING from the Arabic bundle (${missing.length}):`);
+    for (const k of missing) console.error(`      - ${k}`);
+    failures += missing.length;
+  }
+  if (orphans.length > 0) {
+    console.error(`    ORPHANED in the Arabic bundle (${orphans.length}):`);
+    for (const k of orphans) console.error(`      - ${k}`);
+    failures += orphans.length;
   }
 }
 
-// ---------------------------------------------------------------------------
-// Summary
-// ---------------------------------------------------------------------------
 console.log("");
-if (totalFailures > 0) {
-  console.error(`FAILED: ${totalFailures} i18n coverage issue(s) found.`);
+if (failures > 0) {
+  console.error(`FAILED: ${failures} i18n coverage issue(s) found.`);
   process.exit(1);
 }
 
 console.log("OK: all translation keys verified across all namespaces.");
-process.exit(0);
