@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { AspectRatio } from "@/components/ui/aspect-ratio";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -26,6 +27,7 @@ const MEDIA_BADGES: Record<string, { label: string; className: string }> = {
 };
 
 export function PostCard({ post, index, onClick, hasContent, canDelete, isDeleting, onDelete }: PostCardProps) {
+  const { t } = useTranslation("analytics");
   const badge = MEDIA_BADGES[post.mediaType] || MEDIA_BADGES.IMAGE;
   const isHot = post.engagementScore > 10000;
 
@@ -63,11 +65,15 @@ export function PostCard({ post, index, onClick, hasContent, canDelete, isDeleti
           {/* Top badges */}
           <div className="absolute top-1.5 left-1.5 flex gap-1">
             <Badge variant="outline" className={`text-[10px] px-1.5 py-0 border ${badge.className}`}>
-              {badge.label}
+              {post.mediaType === "REEL" ? t("posts.reel", "REEL")
+                : post.mediaType === "IMAGE" ? t("posts.image", "IMAGE")
+                : post.mediaType === "CAROUSEL" ? t("posts.carousel", "CAROUSEL")
+                : post.mediaType === "VIDEO" ? t("posts.video", "VIDEO")
+                : t("posts.image", "IMAGE")}
             </Badge>
             {hasContent && (
               <Badge className="text-[10px] px-1.5 py-0 bg-gradient-to-r from-violet-500 to-pink-500 text-white border-0">
-                AI ✓
+                {t("posts.aiReady", "AI ✓")}
               </Badge>
             )}
           </div>
@@ -86,10 +92,10 @@ export function PostCard({ post, index, onClick, hasContent, canDelete, isDeleti
             </div>
             <div className="flex gap-2 mt-1">
               <Button size="sm" variant="secondary" className="h-7 text-xs gap-1" onClick={(e) => { e.stopPropagation(); onClick(post); }}>
-                <Eye className="w-3 h-3" /> Details
+                <Eye className="w-3 h-3" /> {t("posts.details", "Details")}
               </Button>
               <Button size="sm" className="h-7 text-xs gap-1 bg-gradient-to-r from-violet-500 to-pink-500 border-0 text-white" onClick={(e) => { e.stopPropagation(); onClick(post); }}>
-                <Sparkles className="w-3 h-3" /> Generate
+                <Sparkles className="w-3 h-3" /> {t("actions.generate", "Generate")}
               </Button>
               {canDelete && (
                 <Button
@@ -98,7 +104,7 @@ export function PostCard({ post, index, onClick, hasContent, canDelete, isDeleti
                   className="h-7 text-xs gap-1 bg-destructive/90 hover:bg-destructive text-destructive-foreground"
                   onClick={(e) => { e.stopPropagation(); onDelete?.(post); }}
                   disabled={isDeleting}
-                  aria-label="Delete from Threads"
+                  aria-label={t("posts.deleteAria", "Delete from Threads")}
                 >
                   {isDeleting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3 h-3" />}
                 </Button>

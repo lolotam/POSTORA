@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -26,6 +27,7 @@ const platformIcons: Record<string, React.ReactNode> = {
 };
 
 export function ScrapeHistory({ onReuse }: ScrapeHistoryProps) {
+  const { t } = useTranslation("analytics");
   const queryClient = useQueryClient();
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [platformFilter, setPlatformFilter] = useState<string>("all");
@@ -64,9 +66,9 @@ export function ScrapeHistory({ onReuse }: ScrapeHistoryProps) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["scrape-history"] });
       setSelected(new Set());
-      toast.success("Sessions deleted");
+      toast.success(t("toast.sessionsDeleted", "Sessions deleted"));
     },
-    onError: () => toast.error("Failed to delete sessions"),
+    onError: () => toast.error(t("errors.deleteSessionsFailed", "Failed to delete sessions")),
   });
 
   const toggleSelect = (id: string) => {
@@ -88,11 +90,11 @@ export function ScrapeHistory({ onReuse }: ScrapeHistoryProps) {
 
   const handleReuse = (session: BrandScrapeSession) => {
     if (!session.profile_data || !session.posts_data) {
-      toast.error("This session has no stored data to reuse");
+      toast.error(t("errors.sessionNoData", "This session has no stored data to reuse"));
       return;
     }
     onReuse(session.profile_data, session.posts_data);
-    toast.success(`Loaded ${session.username} data from history`);
+    toast.success(t("toast.loadedHistory", "Loaded {{username}} data from history", { username: session.username }));
   };
 
   return (
@@ -101,7 +103,7 @@ export function ScrapeHistory({ onReuse }: ScrapeHistoryProps) {
         <div className="flex items-center justify-between">
           <CardTitle className="text-lg flex items-center gap-2">
             <History className="w-5 h-5" />
-            Scraping History
+            {t("history.title", "Scraping History")}
           </CardTitle>
           {selected.size > 0 && (
             <Button
@@ -111,7 +113,7 @@ export function ScrapeHistory({ onReuse }: ScrapeHistoryProps) {
               disabled={deleteMutation.isPending}
             >
               <Trash2 className="w-4 h-4 mr-1" />
-              Delete {selected.size}
+              {t("history.deleteCount", "Delete {{count}}", { count: selected.size })}
             </Button>
           )}
         </div>
@@ -122,7 +124,7 @@ export function ScrapeHistory({ onReuse }: ScrapeHistoryProps) {
           <div className="relative flex-1 max-w-xs">
             <Search className="absolute left-2.5 top-2.5 w-4 h-4 text-muted-foreground" />
             <Input
-              placeholder="Search username..."
+              placeholder={t("form.searchUsername", "Search username...")}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="pl-8 h-9 text-sm"
@@ -130,14 +132,14 @@ export function ScrapeHistory({ onReuse }: ScrapeHistoryProps) {
           </div>
           <Select value={platformFilter} onValueChange={setPlatformFilter}>
             <SelectTrigger className="w-[140px] h-9 text-xs">
-              <SelectValue placeholder="Platform" />
+              <SelectValue placeholder={t("history.platform", "Platform")} />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">All Platforms</SelectItem>
-              <SelectItem value="instagram">Instagram</SelectItem>
-              <SelectItem value="threads">Threads</SelectItem>
-              <SelectItem value="facebook">Facebook</SelectItem>
-              <SelectItem value="tiktok">TikTok</SelectItem>
+              <SelectItem value="all">{t("history.allPlatforms", "All Platforms")}</SelectItem>
+              <SelectItem value="instagram">{t("brand.instagram", "Instagram")}</SelectItem>
+              <SelectItem value="threads">{t("brand.threads", "Threads")}</SelectItem>
+              <SelectItem value="facebook">{t("brand.facebook", "Facebook")}</SelectItem>
+              <SelectItem value="tiktok">{t("brand.tiktok", "TikTok")}</SelectItem>
             </SelectContent>
           </Select>
         </div>
@@ -149,7 +151,7 @@ export function ScrapeHistory({ onReuse }: ScrapeHistoryProps) {
           </div>
         ) : !sessions?.length ? (
           <div className="text-center py-8 text-muted-foreground text-sm">
-            No scraping history yet. Search for a brand to get started.
+            {t("history.empty", "No scraping history yet. Search for a brand to get started.")}
           </div>
         ) : (
           <div className="rounded-md border">
@@ -162,12 +164,12 @@ export function ScrapeHistory({ onReuse }: ScrapeHistoryProps) {
                       onCheckedChange={toggleAll}
                     />
                   </TableHead>
-                  <TableHead className="w-10">Platform</TableHead>
-                  <TableHead>Username</TableHead>
-                  <TableHead className="text-center">Posts</TableHead>
-                  <TableHead>Strategy</TableHead>
-                  <TableHead>Date</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
+                  <TableHead className="w-10">{t("history.platform", "Platform")}</TableHead>
+                  <TableHead>{t("history.username", "Username")}</TableHead>
+                  <TableHead className="text-center">{t("history.posts", "Posts")}</TableHead>
+                  <TableHead>{t("history.strategy", "Strategy")}</TableHead>
+                  <TableHead>{t("history.date", "Date")}</TableHead>
+                  <TableHead className="text-right">{t("history.actions", "Actions")}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -197,13 +199,13 @@ export function ScrapeHistory({ onReuse }: ScrapeHistoryProps) {
                           variant={session.strategy_used === "official" ? "default" : "outline"}
                           className={`text-xs ${session.strategy_used === "official" ? "bg-emerald-600 hover:bg-emerald-700" : session.strategy_used === "apify" ? "border-orange-400 text-orange-600" : ""}`}
                         >
-                          {session.strategy_used === "official" ? "Meta API" : session.strategy_used === "apify" ? "Apify" : session.strategy_used || "unknown"}
+                          {session.strategy_used === "official" ? t("history.metaApi", "Meta API") : session.strategy_used === "apify" ? t("history.apify", "Apify") : session.strategy_used || t("common:unknown", "unknown")}
                         </Badge>
                         {session.api_endpoint && (
                           <p className="text-[10px] text-muted-foreground truncate max-w-[140px]" title={session.api_endpoint}>
                             {session.strategy_used === "apify" ? (
                               <span className="inline-flex items-center gap-0.5">
-                                <span className="font-medium text-orange-500">Actor:</span>{" "}
+                                <span className="font-medium text-orange-500">{t("history.actor", "Actor:")}</span>{" "}
                                 {session.api_endpoint.replace("~", "/")}
                               </span>
                             ) : (
@@ -225,7 +227,7 @@ export function ScrapeHistory({ onReuse }: ScrapeHistoryProps) {
                           onClick={() => handleReuse(session)}
                           disabled={!session.posts_data}
                         >
-                          <RotateCcw className="w-3 h-3" /> Reuse
+                          <RotateCcw className="w-3 h-3" /> {t("actions.reuse", "Reuse")}
                         </Button>
                         <Button
                           variant="ghost"

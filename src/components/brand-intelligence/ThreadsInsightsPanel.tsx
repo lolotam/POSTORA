@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
+import { useTranslation } from "react-i18next";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -69,15 +70,16 @@ const METRIC_ICONS: Record<string, any> = {
   followers_count: Users,
 };
 
-const ENGLISH_LABELS: Record<string, string> = {
-  views: "Views",
-  likes: "Likes",
-  replies: "Comments",
-  reposts: "Reposts",
-  quotes: "Quotes",
-  shares: "Shares",
-  followers_count: "Followers",
-};
+function metricLabel(key: string, fallback: string, t: (key: string, defaultValue: string) => string): string {
+  if (key === "views") return t("insights.views", "Views");
+  if (key === "likes") return t("insights.likes", "Likes");
+  if (key === "replies") return t("insights.comments", "Comments");
+  if (key === "reposts") return t("insights.reposts", "Reposts");
+  if (key === "quotes") return t("insights.quotes", "Quotes");
+  if (key === "shares") return t("insights.shares", "Shares");
+  if (key === "followers_count") return t("insights.followers", "Followers");
+  return fallback;
+}
 
 type SortKey = "views" | "likes" | "replies" | "reposts" | "quotes" | "shares" | "engagement" | "timestamp";
 type PeriodDays = 7 | 14 | 30 | 90;
@@ -142,6 +144,7 @@ function InsightCard({
   previous: number;
   daily: number[];
 }) {
+  const { t } = useTranslation("analytics");
   const delta = value - previous;
   const isUp = delta > 0;
   const isDown = delta < 0;
@@ -166,7 +169,7 @@ function InsightCard({
             <p className="text-2xl font-bold leading-none">{formatValue(value)}</p>
             <div className={cn("flex items-center gap-1 text-xs mt-1.5", deltaColor)}>
               <ArrowIcon className="w-3 h-3" />
-              <span>Previous: {formatValue(previous)}</span>
+              <span>{t("insights.previous", "Previous: {{value}}", { value: formatValue(previous) })}</span>
             </div>
           </div>
           <Sparkline data={daily} className="shrink-0" />
@@ -177,6 +180,7 @@ function InsightCard({
 }
 
 export function ThreadsInsightsPanel() {
+  const { t } = useTranslation("analytics");
   const [isLoading, setIsLoading] = useState(true);
   const [insights, setInsights] = useState<Record<string, InsightMetric> | null>(null);
   const [posts, setPosts] = useState<PostWithMetrics[]>([]);
@@ -226,22 +230,22 @@ export function ThreadsInsightsPanel() {
             resBody = await fnError.context.json();
           }
         } catch { /* ignore */ }
-        if (!resBody) { setError(fnError.message || "Unknown error"); return; }
+        if (!resBody) { setError(fnError.message || t("errors.unknown", "Unknown error")); return; }
       }
 
       if (resBody && resBody.ok === false) {
         const reason = resBody.reason;
         if (reason === "no_account") {
           setNeedsConnection(true);
-          setError(resBody.message || "No Threads account connected.");
+          setError(resBody.message || t("errors.noThreads", "No Threads account connected."));
           return;
         }
         if (reason === "permission_not_approved" || reason === "missing_scope") {
           setNeedsPermission(true);
-          setError(resBody.message || "Threads insights permission not granted.");
+          setError(resBody.message || t("errors.insightsPermission", "Threads insights permission not granted."));
           return;
         }
-        setError(resBody.message || "Threads insights failed.");
+        setError(resBody.message || t("errors.insightsFailed", "Threads insights failed."));
         return;
       }
 
@@ -318,7 +322,7 @@ export function ThreadsInsightsPanel() {
     return (
       <div className="flex flex-col items-center justify-center py-16">
         <Loader2 className="w-8 h-8 animate-spin text-primary mb-3" />
-        <p className="text-sm text-muted-foreground">Loading Threads Insights...</p>
+        <p className="text-sm text-muted-foreground">{t("insights.loading", "Loading Threads Insights...")}</p>
       </div>
     );
   }
@@ -330,14 +334,14 @@ export function ThreadsInsightsPanel() {
         <div>
           <h3 className="text-lg font-semibold flex items-center gap-2 flex-wrap">
             <BarChart3 className="w-5 h-5 text-primary" />
-            Threads Insights
+            {t("insights.title", "Threads Insights")}
             {accounts.length > 0 && (
               <Select
                 value={selectedAccountId ?? accounts.find(a => a.platform_username === username)?.id ?? ""}
                 onValueChange={(val) => setSelectedAccountId(val)}
               >
                 <SelectTrigger className="h-8 w-auto min-w-[200px] text-sm font-normal">
-                  <SelectValue placeholder="Select account" />
+                  <SelectValue placeholder={t("ads.selectAccount", "Select account")} />
                 </SelectTrigger>
                 <SelectContent>
                   {accounts.map((acc) => (
@@ -358,7 +362,7 @@ export function ThreadsInsightsPanel() {
             )}
           </h3>
           <p className="text-sm text-muted-foreground">
-            Performance analytics for your Threads profile and posts
+            {t("insights.subtitle", "Performance analytics for your Threads profile and posts")}
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
@@ -367,19 +371,19 @@ export function ThreadsInsightsPanel() {
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="7">Last 7 days</SelectItem>
-              <SelectItem value="14">Last 14 days</SelectItem>
-              <SelectItem value="30">Last 30 days</SelectItem>
-              <SelectItem value="90">Last 90 days</SelectItem>
+              <SelectItem value="7">{t("header.date7", "Last 7 days")}</SelectItem>
+              <SelectItem value="14">{t("header.date14", "Last 14 days")}</SelectItem>
+              <SelectItem value="30">{t("header.date30", "Last 30 days")}</SelectItem>
+              <SelectItem value="90">{t("header.date90", "Last 90 days")}</SelectItem>
             </SelectContent>
           </Select>
           <Badge variant="outline" className="gap-1 text-xs">
             <Shield className="w-3 h-3" />
-            Your Account Only
+            {t("insights.yourAccountOnly", "Your Account Only")}
           </Badge>
           <Button variant="ghost" size="sm" onClick={() => fetchInsights(selectedAccountId, periodDays)} disabled={isLoading} className="gap-1">
             <Loader2 className={`w-3 h-3 ${isLoading ? "animate-spin" : "hidden"}`} />
-            Refresh
+            {t("common:refresh", "Refresh")}
           </Button>
         </div>
       </div>
@@ -390,13 +394,13 @@ export function ThreadsInsightsPanel() {
         <Card className="border-amber-500/30 bg-amber-500/5">
           <CardContent className="p-6 text-center space-y-3">
             <AtSign className="w-10 h-10 mx-auto text-amber-500" />
-            <h3 className="font-semibold">Connect Your Threads Account</h3>
+            <h3 className="font-semibold">{t("threads.connectAccount", "Connect Your Threads Account")}</h3>
             <p className="text-sm text-muted-foreground max-w-md mx-auto">
-              To view Threads Insights, connect your Threads account with the required permissions.
+              {t("threads.connectInsights", "To view Threads Insights, connect your Threads account with the required permissions.")}
             </p>
             <Button variant="outline" className="gap-2" onClick={() => window.location.href = "/profiles"}>
               <AtSign className="w-4 h-4" />
-              Go to Profiles
+              {t("actions.goToProfiles", "Go to Profiles")}
             </Button>
           </CardContent>
         </Card>
@@ -420,14 +424,14 @@ export function ThreadsInsightsPanel() {
       {insights && Object.keys(insights).length > 0 && (
         <div className="space-y-3">
           <h4 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">
-            Profile Metrics · Last {periodDays} days
+            {t("insights.profileMetrics", "Profile Metrics · Last {{days}} days", { days: periodDays })}
           </h4>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
             {/* Your activity card */}
             {activity && (
               <InsightCard
                 icon={FileText}
-                label="Your activity"
+                label={t("insights.yourActivity", "Your activity")}
                 value={activity.current_posts}
                 previous={activity.previous_posts}
                 daily={activity.daily_posts}
@@ -439,7 +443,7 @@ export function ThreadsInsightsPanel() {
                 <InsightCard
                   key={key}
                   icon={IconComp}
-                  label={ENGLISH_LABELS[key] || metric.title || key}
+                  label={metricLabel(key, metric.title || key, t)}
                   value={metric.value}
                   previous={metric.previous ?? 0}
                   daily={metric.daily ?? []}
@@ -453,34 +457,34 @@ export function ThreadsInsightsPanel() {
       {/* === Aggregated Analytics === */}
       {aggregated && (
         <div className="space-y-3">
-          <h4 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Aggregated Analytics</h4>
+          <h4 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">{t("insights.aggregated", "Aggregated Analytics")}</h4>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             <Card>
               <CardContent className="p-4 text-center">
                 <Eye className="w-5 h-5 mx-auto mb-1 text-primary" />
                 <p className="text-xl font-bold">{formatValue(aggregated.avg_views_per_post)}</p>
-                <p className="text-xs text-muted-foreground">Avg Views / Post</p>
+                <p className="text-xs text-muted-foreground">{t("insights.avgViews", "Avg Views / Post")}</p>
               </CardContent>
             </Card>
             <Card>
               <CardContent className="p-4 text-center">
                 <TrendingUp className="w-5 h-5 mx-auto mb-1 text-primary" />
                 <p className="text-xl font-bold">{formatValue(aggregated.avg_engagement_per_post)}</p>
-                <p className="text-xs text-muted-foreground">Avg Engagement / Post</p>
+                <p className="text-xs text-muted-foreground">{t("insights.avgEngagement", "Avg Engagement / Post")}</p>
               </CardContent>
             </Card>
             <Card>
               <CardContent className="p-4 text-center">
                 <Activity className="w-5 h-5 mx-auto mb-1 text-primary" />
                 <p className="text-xl font-bold">{aggregated.posting_frequency}</p>
-                <p className="text-xs text-muted-foreground">Posting Frequency</p>
+                <p className="text-xs text-muted-foreground">{t("insights.postingFrequency", "Posting Frequency")}</p>
               </CardContent>
             </Card>
             <Card>
               <CardContent className="p-4 text-center">
                 <CalendarDays className="w-5 h-5 mx-auto mb-1 text-primary" />
                 <p className="text-xl font-bold">{aggregated.total_posts}</p>
-                <p className="text-xs text-muted-foreground">Posts Analyzed</p>
+                <p className="text-xs text-muted-foreground">{t("insights.postsAnalyzed", "Posts Analyzed")}</p>
               </CardContent>
             </Card>
           </div>
@@ -490,18 +494,18 @@ export function ThreadsInsightsPanel() {
       {/* === Recent Posts Performance === */}
       {sortedPosts.length > 0 && (
         <div className="space-y-3">
-          <h4 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">Recent Posts Performance</h4>
+          <h4 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">{t("insights.recentPerformance", "Recent Posts Performance")}</h4>
           <div className="border rounded-lg overflow-hidden">
             <div className="grid grid-cols-[40px_1fr_repeat(7,_minmax(60px,80px))_64px] gap-2 px-4 py-2 bg-muted/50 text-xs font-medium border-b items-center">
               <span className="text-center text-muted-foreground">#</span>
-              <SortHeader label="Post" sortKeyVal="timestamp" />
-              <SortHeader label="Views" sortKeyVal="views" />
-              <SortHeader label="Likes" sortKeyVal="likes" />
-              <SortHeader label="Comments" sortKeyVal="replies" />
-              <SortHeader label="Reposts" sortKeyVal="reposts" />
-              <SortHeader label="Quotes" sortKeyVal="quotes" />
-              <SortHeader label="Shares" sortKeyVal="shares" />
-              <SortHeader label="Engagement" sortKeyVal="engagement" />
+              <SortHeader label={t("insights.post", "Post")} sortKeyVal="timestamp" />
+              <SortHeader label={t("insights.views", "Views")} sortKeyVal="views" />
+              <SortHeader label={t("insights.likes", "Likes")} sortKeyVal="likes" />
+              <SortHeader label={t("insights.comments", "Comments")} sortKeyVal="replies" />
+              <SortHeader label={t("insights.reposts", "Reposts")} sortKeyVal="reposts" />
+              <SortHeader label={t("insights.quotes", "Quotes")} sortKeyVal="quotes" />
+              <SortHeader label={t("insights.shares", "Shares")} sortKeyVal="shares" />
+              <SortHeader label={t("insights.engagement", "Engagement")} sortKeyVal="engagement" />
               <span />
             </div>
             {sortedPosts.map((post, index) => {
@@ -512,9 +516,9 @@ export function ThreadsInsightsPanel() {
                 if (!hasText) return;
                 try {
                   await navigator.clipboard.writeText(post.text);
-                  toast.success("Post copied");
+                  toast.success(t("toast.postCopied", "Post copied"));
                 } catch {
-                  toast.error("Failed to copy");
+                  toast.error(t("errors.copyFailed", "Failed to copy"));
                 }
               };
               return (
@@ -542,7 +546,7 @@ export function ThreadsInsightsPanel() {
                       type="button"
                       onClick={handleCopy}
                       disabled={!hasText}
-                      title={hasText ? "Copy post" : "No text to copy"}
+                      title={hasText ? t("insights.copyPost", "Copy post") : t("insights.noTextToCopy", "No text to copy")}
                       className="text-muted-foreground hover:text-primary disabled:opacity-40 disabled:hover:text-muted-foreground transition-colors"
                     >
                       <Copy className="w-3.5 h-3.5" />
@@ -551,7 +555,7 @@ export function ThreadsInsightsPanel() {
                       href={post.permalink}
                       target="_blank"
                       rel="noopener noreferrer"
-                      title="View on Threads"
+                      title={t("insights.viewOnThreads", "View on Threads")}
                       className="text-muted-foreground hover:text-primary transition-colors"
                     >
                       <ExternalLink className="w-3.5 h-3.5" />

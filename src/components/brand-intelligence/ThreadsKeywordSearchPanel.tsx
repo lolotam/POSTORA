@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useTranslation } from "react-i18next";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -77,6 +78,7 @@ const LIMIT_OPTIONS = [25, 50, 100] as const;
 const ACCOUNT_STORAGE_KEY = "threads-keyword:selected-account-id";
 
 export function ThreadsKeywordSearchPanel() {
+  const { t } = useTranslation("analytics");
   const [keyword, setKeyword] = useState("");
   const [searchType, setSearchType] = useState<SearchType>("TOP");
   const [searchMode, setSearchMode] = useState<SearchMode>("KEYWORD");
@@ -248,7 +250,7 @@ export function ThreadsKeywordSearchPanel() {
     const q = keyword.trim();
     if (!q || q.length < 2) return;
     if (since && until && since > until) {
-      toast.error("'Since' must be on or before 'Until'");
+      toast.error(t("errors.sinceUntil", "'Since' must be on or before 'Until'"));
       return;
     }
 
@@ -288,7 +290,7 @@ export function ThreadsKeywordSearchPanel() {
           }
         } catch { /* ignore */ }
         if (!body) {
-          setErrorState({ reason: "unknown", message: fnError.message || "Unknown error" });
+          setErrorState({ reason: "unknown", message: fnError.message || t("errors.unknown", "Unknown error") });
           return;
         }
       }
@@ -334,8 +336,8 @@ export function ThreadsKeywordSearchPanel() {
 
   const replayRecent = (r: RecentSearch) => {
     setKeyword(r.query);
-    const t: SearchType = (r.search_type as SearchType) === "RECENT" ? "RECENT" : "TOP";
-    setSearchType(t);
+    const nextType: SearchType = (r.search_type as SearchType) === "RECENT" ? "RECENT" : "TOP";
+    setSearchType(nextType);
     setSince(r.since_date || "");
     setUntil(r.until_date || "");
     // Defer to next tick so state is applied before search
@@ -361,7 +363,7 @@ export function ThreadsKeywordSearchPanel() {
     if (!openComposer) return;
     const text = composerText.trim();
     if (!text) {
-      toast.error(openComposer.kind === "reply" ? "Reply cannot be empty" : "Quote text cannot be empty");
+      toast.error(openComposer.kind === "reply" ? t("errors.replyEmpty", "Reply cannot be empty") : t("errors.quoteEmpty", "Quote text cannot be empty"));
       return;
     }
     setIsSubmittingAction(true);
@@ -373,24 +375,24 @@ export function ThreadsKeywordSearchPanel() {
           : { quote_post_id: openComposer.postId, text };
 
       const { data, error } = await supabase.functions.invoke(fnName, { body });
-      if (error) throw new Error(error.message || "Action failed");
+      if (error) throw new Error(error.message || t("errors.actionFailed", "Action failed"));
       if (data && data.ok === false) {
         const mapped = mapThreadsReason(data, "keyword_search");
-        toast.error(mapped.message || "Action failed");
+        toast.error(mapped.message || t("errors.actionFailed", "Action failed"));
         return;
       }
       const permalink: string | undefined = data?.permalink;
-      const successMsg = openComposer.kind === "reply" ? "Reply posted on Threads" : "Quote posted on Threads";
+      const successMsg = openComposer.kind === "reply" ? t("toast.replyPosted", "Reply posted on Threads") : t("toast.quotePosted", "Quote posted on Threads");
       if (permalink) {
         toast.success(successMsg, {
-          action: { label: "View", onClick: () => window.open(permalink, "_blank") },
+          action: { label: t("common:view", "View"), onClick: () => window.open(permalink, "_blank") },
         });
       } else {
         toast.success(successMsg);
       }
       cancelComposer();
     } catch (err) {
-      toast.error((err as Error).message || "Action failed");
+      toast.error((err as Error).message || t("errors.actionFailed", "Action failed"));
     } finally {
       setIsSubmittingAction(false);
     }
@@ -402,15 +404,15 @@ export function ThreadsKeywordSearchPanel() {
       const { data, error } = await supabase.functions.invoke("threads-repost", {
         body: { post_id: postId },
       });
-      if (error) throw new Error(error.message || "Repost failed");
+      if (error) throw new Error(error.message || t("errors.repostFailed", "Repost failed"));
       if (data && data.ok === false) {
         const mapped = mapThreadsReason(data, "keyword_search");
-        toast.error(mapped.message || "Could not repost");
+        toast.error(mapped.message || t("errors.couldNotRepost", "Could not repost"));
         return;
       }
-      toast.success("Reposted on Threads");
+      toast.success(t("toast.reposted", "Reposted on Threads"));
     } catch (err) {
-      toast.error((err as Error).message || "Repost failed");
+      toast.error((err as Error).message || t("errors.repostFailed", "Repost failed"));
     } finally {
       setRepostingId(null);
     }
@@ -425,14 +427,14 @@ export function ThreadsKeywordSearchPanel() {
         <div>
           <h3 className="text-lg font-semibold flex items-center gap-2 flex-wrap">
             <Hash className="w-5 h-5 text-primary" />
-            Threads Keyword Search
+            {t("keyword.title", "Threads Keyword Search")}
             {accounts.length > 1 && (
               <Select
                 value={selectedAccountId ?? accounts[0]?.id ?? ""}
                 onValueChange={handleAccountChange}
               >
                 <SelectTrigger className="h-8 w-auto min-w-[200px] text-sm font-normal">
-                  <SelectValue placeholder="Select account" />
+                  <SelectValue placeholder={t("ads.selectAccount", "Select account")} />
                 </SelectTrigger>
                 <SelectContent>
                   {accounts.map((acc) => (
@@ -453,7 +455,7 @@ export function ThreadsKeywordSearchPanel() {
             )}
           </h3>
           <p className="text-sm text-muted-foreground">
-            Search public Threads posts by keyword or topic tag for trend analysis
+            {t("keyword.subtitle", "Search public Threads posts by keyword or topic tag for trend analysis")}
           </p>
         </div>
       </div>
@@ -463,7 +465,7 @@ export function ThreadsKeywordSearchPanel() {
         <div className="relative flex-1">
           <InputIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
           <Input
-            placeholder={isTagMode ? "Enter a topic tag (e.g. coffee)..." : "Enter a keyword to search..."}
+            placeholder={isTagMode ? t("keyword.placeholderTag", "Enter a topic tag (e.g. coffee)...") : t("keyword.placeholderKeyword", "Enter a keyword to search...")}
             value={keyword}
             onChange={(e) => setKeyword(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && handleSearch()}
@@ -472,14 +474,14 @@ export function ThreadsKeywordSearchPanel() {
         </div>
         <Button onClick={handleSearch} disabled={isLoading || keyword.trim().length < 2} className="gap-2">
           {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
-          Search
+          {t("actions.search", "Search")}
         </Button>
       </div>
 
       {/* Filters row 1: mode + sort + media type + limit + dates + author */}
       <div className="flex flex-wrap items-end gap-3">
         <div className="space-y-1 flex flex-col items-center">
-           <label className="text-xs text-muted-foreground text-center block">Mode</label>
+           <label className="text-xs text-muted-foreground text-center block">{t("filters.mode", "Mode")}</label>
           <div className="flex h-8 rounded-md border border-border overflow-hidden">
             {(["KEYWORD", "TAG"] as SearchMode[]).map((m) => (
               <button
@@ -493,35 +495,35 @@ export function ThreadsKeywordSearchPanel() {
                     : "bg-background hover:bg-muted text-muted-foreground",
                 )}
               >
-                {m}
+                {m === "KEYWORD" ? t("keyword.keyword", "KEYWORD") : t("keyword.tag", "TAG")}
               </button>
             ))}
           </div>
         </div>
 
         <div className="space-y-1 flex flex-col items-center">
-           <label className="text-xs text-muted-foreground text-center block">Sort</label>
+           <label className="text-xs text-muted-foreground text-center block">{t("filters.sort", "Sort")}</label>
           <div className="flex h-8 rounded-md border border-border overflow-hidden">
-            {(["TOP", "RECENT"] as SearchType[]).map((t) => (
+            {(["TOP", "RECENT"] as SearchType[]).map((sortOpt) => (
               <button
-                key={t}
+                key={sortOpt}
                 type="button"
-                onClick={() => setSearchType(t)}
+                onClick={() => setSearchType(sortOpt)}
                 className={cn(
                   "px-3 py-1.5 text-xs font-medium transition-colors",
-                  searchType === t
+                  searchType === sortOpt
                     ? "bg-primary text-primary-foreground"
                     : "bg-background hover:bg-muted text-muted-foreground",
                 )}
               >
-                {t}
+                {sortOpt === "TOP" ? t("keyword.top", "TOP") : t("keyword.recent", "RECENT")}
               </button>
             ))}
           </div>
         </div>
 
         <div className="space-y-1 flex flex-col items-center">
-           <label className="text-xs text-muted-foreground text-center block">Media</label>
+           <label className="text-xs text-muted-foreground text-center block">{t("filters.media", "Media")}</label>
           <div className="flex h-8 rounded-md border border-border overflow-hidden">
             {(["ALL", "TEXT", "IMAGE", "VIDEO"] as MediaTypeFilter[]).map((m) => (
               <button
@@ -535,14 +537,17 @@ export function ThreadsKeywordSearchPanel() {
                     : "bg-background hover:bg-muted text-muted-foreground",
                 )}
               >
-                {m}
+                {m === "ALL" ? t("keyword.all", "ALL")
+                  : m === "TEXT" ? t("keyword.text", "TEXT")
+                  : m === "IMAGE" ? t("keyword.image", "IMAGE")
+                  : t("keyword.video", "VIDEO")}
               </button>
             ))}
           </div>
         </div>
 
         <div className="space-y-1 flex flex-col items-center">
-          <label className="text-xs text-muted-foreground text-center block">Limit</label>
+          <label className="text-xs text-muted-foreground text-center block">{t("filters.limit", "Limit")}</label>
           <Select value={String(pageLimit)} onValueChange={(v) => setPageLimit(Number(v))}>
             <SelectTrigger className="h-8 w-24">
               <SelectValue />
@@ -556,29 +561,29 @@ export function ThreadsKeywordSearchPanel() {
         </div>
 
         <div className="space-y-1 flex flex-col items-center">
-          <label className="text-xs text-muted-foreground text-center block">Since</label>
+          <label className="text-xs text-muted-foreground text-center block">{t("filters.since", "Since")}</label>
           <Input type="date" value={since} onChange={(e) => setSince(e.target.value)} className="h-8 w-36" />
         </div>
 
         <div className="space-y-1 flex flex-col items-center">
-          <label className="text-xs text-muted-foreground text-center block">Until</label>
+          <label className="text-xs text-muted-foreground text-center block">{t("filters.until", "Until")}</label>
           <Input type="date" value={until} onChange={(e) => setUntil(e.target.value)} className="h-8 w-36" />
         </div>
 
         {(since || until) && (
           <div className="flex items-end">
             <Button variant="ghost" size="sm" onClick={() => { setSince(""); setUntil(""); }} className="h-8 text-xs">
-              Clear dates
+              {t("actions.clearDates", "Clear dates")}
             </Button>
           </div>
         )}
 
         <div className="space-y-1 flex flex-col items-center">
-          <label className="text-xs text-muted-foreground text-center block">Author username</label>
+          <label className="text-xs text-muted-foreground text-center block">{t("filters.authorUsername", "Author username")}</label>
           <div className="relative">
             <AtSign className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
             <Input
-              placeholder="optional, no @"
+              placeholder={t("filters.optionalNoAt", "optional, no @")}
               value={authorUsername}
               onChange={(e) => setAuthorUsername(e.target.value)}
               className="h-8 pl-8 w-44"
@@ -597,8 +602,8 @@ export function ThreadsKeywordSearchPanel() {
               <div className="w-6 h-6 rounded-md bg-primary/10 flex items-center justify-center">
                 <HistoryIcon className="w-3.5 h-3.5 text-primary" />
               </div>
-              <span className="text-xs font-semibold text-foreground">Recent searches</span>
-              <Badge variant="secondary" className="text-[10px] h-4 px-1.5 font-medium">Meta</Badge>
+              <span className="text-xs font-semibold text-foreground">{t("keyword.recentSearches", "Recent searches")}</span>
+              <Badge variant="secondary" className="text-[10px] h-4 px-1.5 font-medium">{t("keyword.meta", "Meta")}</Badge>
             </div>
             {metaRecentLoading && <Loader2 className="w-3.5 h-3.5 animate-spin text-muted-foreground" />}
           </div>
@@ -624,7 +629,7 @@ export function ThreadsKeywordSearchPanel() {
             </div>
           ) : (
             !metaRecentLoading && (
-              <p className="text-[11px] text-muted-foreground italic">No recent searches from Meta (last 7 days).</p>
+              <p className="text-[11px] text-muted-foreground italic">{t("empty.noMetaSearches", "No recent searches from Meta (last 7 days).")}</p>
             )
           )}
         </div>
@@ -636,8 +641,8 @@ export function ThreadsKeywordSearchPanel() {
               <div className="w-6 h-6 rounded-md bg-primary/10 flex items-center justify-center">
                 <HistoryIcon className="w-3.5 h-3.5 text-primary" />
               </div>
-              <span className="text-xs font-semibold text-foreground">Recent searches</span>
-              <Badge variant="secondary" className="text-[10px] h-4 px-1.5 font-medium">Local</Badge>
+              <span className="text-xs font-semibold text-foreground">{t("keyword.recentSearches", "Recent searches")}</span>
+              <Badge variant="secondary" className="text-[10px] h-4 px-1.5 font-medium">{t("keyword.local", "Local")}</Badge>
             </div>
           </div>
           {recent.length > 0 ? (
@@ -649,7 +654,7 @@ export function ThreadsKeywordSearchPanel() {
                     className="flex items-center gap-1.5"
                   >
                     <span className="font-medium">{r.query}</span>
-                    <Badge variant="outline" className="text-[10px] h-4 px-1 bg-primary/5 border-primary/20">{r.search_type}</Badge>
+                    <Badge variant="outline" className="text-[10px] h-4 px-1 bg-primary/5 border-primary/20">{r.search_type === "RECENT" ? t("keyword.recent", "RECENT") : t("keyword.top", "TOP")}</Badge>
                     {(r.since_date || r.until_date) && (
                       <span className="text-[10px] text-muted-foreground">{r.since_date || "…"} → {r.until_date || "…"}</span>
                     )}
@@ -657,7 +662,7 @@ export function ThreadsKeywordSearchPanel() {
                   <button
                     onClick={() => removeRecent(r.id)}
                     className="opacity-0 group-hover:opacity-100 ml-0.5 p-0.5 rounded-full hover:bg-destructive/15 hover:text-destructive transition-all"
-                    aria-label="Remove"
+                    aria-label={t("common:remove", "Remove")}
                   >
                     <X className="w-3 h-3" />
                   </button>
@@ -665,7 +670,7 @@ export function ThreadsKeywordSearchPanel() {
               ))}
             </div>
           ) : (
-            <p className="text-[11px] text-muted-foreground italic">No local searches yet.</p>
+            <p className="text-[11px] text-muted-foreground italic">{t("empty.noLocalSearches", "No local searches yet.")}</p>
           )}
         </div>
       </div>
@@ -676,9 +681,9 @@ export function ThreadsKeywordSearchPanel() {
         <Card className="border-border bg-muted/40">
           <CardContent className="p-6 text-center space-y-2">
             <Search className="w-8 h-8 mx-auto text-muted-foreground" />
-            <h4 className="font-medium">No public posts found.</h4>
+            <h4 className="font-medium">{t("empty.noPublicPosts", "No public posts found.")}</h4>
             <p className="text-sm text-muted-foreground max-w-md mx-auto">
-              Threads Keyword Search does not index all public content. Try different keywords, switch mode (Keyword ↔ Tag), change the media filter, or widen the date range.
+              {t("empty.noPublicPostsHint", "Threads Keyword Search does not index all public content. Try different keywords, switch mode (Keyword ↔ Tag), change the media filter, or widen the date range.")}
             </p>
           </CardContent>
         </Card>
@@ -686,7 +691,7 @@ export function ThreadsKeywordSearchPanel() {
 
       {results.length > 0 && (
         <div className="space-y-3">
-          <h4 className="text-sm font-medium text-muted-foreground">{results.length} result{results.length !== 1 ? "s" : ""} loaded</h4>
+          <h4 className="text-sm font-medium text-muted-foreground">{t("keyword.resultsLoaded", "{{count}} results loaded", { count: results.length })}</h4>
           {results.map((post) => {
             const composerOpen = openComposer?.postId === post.id;
             return (
@@ -705,13 +710,13 @@ export function ThreadsKeywordSearchPanel() {
                       <div className="flex items-center gap-2 mb-1 flex-wrap">
                         <span className="text-sm font-medium">@{post.username}</span>
                         <Badge variant="secondary" className="text-xs">{post.mediaType}</Badge>
-                        {post.isQuotePost && <Badge variant="outline" className="text-[10px]">Quote</Badge>}
-                        {post.isReply && <Badge variant="outline" className="text-[10px]">Reply</Badge>}
+                        {post.isQuotePost && <Badge variant="outline" className="text-[10px]">{t("keyword.quote", "Quote")}</Badge>}
+                        {post.isReply && <Badge variant="outline" className="text-[10px]">{t("keyword.reply", "Reply")}</Badge>}
                         {post.hasReplies && (
-                          <Badge variant="outline" className="text-[10px] text-muted-foreground">Has replies</Badge>
+                          <Badge variant="outline" className="text-[10px] text-muted-foreground">{t("keyword.hasReplies", "Has replies")}</Badge>
                         )}
                       </div>
-                      <p className="text-sm line-clamp-2 text-muted-foreground">{post.text || "(No text)"}</p>
+                      <p className="text-sm line-clamp-2 text-muted-foreground">{post.text || t("discovery.noText", "(No text)")}</p>
                       <div className="flex items-center gap-3 mt-2 flex-wrap">
                         <span className="text-xs text-muted-foreground">
                           {post.timestamp ? format(new Date(post.timestamp), "MMM d, yyyy") : ""}
@@ -723,7 +728,7 @@ export function ThreadsKeywordSearchPanel() {
                             className="h-7 px-2 text-xs gap-1"
                             onClick={() => openComposerFor(post.id, "reply")}
                           >
-                            <MessageSquare className="w-3 h-3" /> Reply
+                            <MessageSquare className="w-3 h-3" /> {t("actions.reply", "Reply")}
                           </Button>
                           <Button
                             size="sm"
@@ -731,7 +736,7 @@ export function ThreadsKeywordSearchPanel() {
                             className="h-7 px-2 text-xs gap-1"
                             onClick={() => openComposerFor(post.id, "quote")}
                           >
-                            <QuoteIcon className="w-3 h-3" /> Quote
+                            <QuoteIcon className="w-3 h-3" /> {t("actions.quote", "Quote")}
                           </Button>
                           <Button
                             size="sm"
@@ -745,7 +750,7 @@ export function ThreadsKeywordSearchPanel() {
                             ) : (
                               <Repeat2 className="w-3 h-3" />
                             )}
-                            Repost
+                            {t("actions.repost", "Repost")}
                           </Button>
                           {post.permalink && (
                             <a
@@ -754,7 +759,7 @@ export function ThreadsKeywordSearchPanel() {
                               rel="noopener noreferrer"
                               className="text-xs text-primary hover:underline flex items-center gap-1 px-2"
                             >
-                              <ExternalLink className="w-3 h-3" />View
+                              <ExternalLink className="w-3 h-3" />{t("common:view", "View")}
                             </a>
                           )}
                         </div>
@@ -765,7 +770,7 @@ export function ThreadsKeywordSearchPanel() {
                   {composerOpen && (
                     <div className="space-y-2 p-3 rounded-lg border bg-muted/30">
                       <Textarea
-                        placeholder={openComposer?.kind === "reply" ? "Write a reply…" : "Add your take on this thread…"}
+                        placeholder={openComposer?.kind === "reply" ? t("keyword.replyPlaceholder", "Write a reply…") : t("keyword.quotePlaceholder", "Add your take on this thread…")}
                         value={composerText}
                         onChange={(e) => setComposerText(e.target.value)}
                         maxLength={500}
@@ -774,7 +779,7 @@ export function ThreadsKeywordSearchPanel() {
                       <div className="flex items-center justify-between">
                         <p className="text-xs text-muted-foreground">{composerText.length}/500</p>
                         <div className="flex items-center gap-2">
-                          <Button size="sm" variant="ghost" onClick={cancelComposer}>Cancel</Button>
+                          <Button size="sm" variant="ghost" onClick={cancelComposer}>{t("common:cancel", "Cancel")}</Button>
                           <Button
                             size="sm"
                             className="gap-1.5"
@@ -782,7 +787,7 @@ export function ThreadsKeywordSearchPanel() {
                             disabled={isSubmittingAction || !composerText.trim()}
                           >
                             {isSubmittingAction ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-                            {openComposer?.kind === "reply" ? "Post reply" : "Post quote"}
+                            {openComposer?.kind === "reply" ? t("actions.postReply", "Post reply") : t("actions.postQuote", "Post quote")}
                           </Button>
                         </div>
                       </div>
@@ -802,7 +807,7 @@ export function ThreadsKeywordSearchPanel() {
                 className="gap-2"
               >
                 {isLoadingMore ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
-                Load more
+                {t("actions.loadMore", "Load more")}
               </Button>
             </div>
           )}

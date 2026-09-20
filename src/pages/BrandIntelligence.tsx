@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect } from "react";
+import { useTranslation } from "react-i18next";
 import { useNavigate, useLocation } from "react-router-dom";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { useAuth } from "@/hooks/useAuth";
@@ -32,6 +33,7 @@ const DEFAULT_FILTERS: BrandScrapeFilters = {
 const EXAMPLE_BRANDS = ["@nike", "@cocacola", "@redbull", "@apple"];
 
 export default function BrandIntelligence() {
+  const { t } = useTranslation("analytics");
   const navigate = useNavigate();
   const location = useLocation();
   const { session } = useAuth();
@@ -146,8 +148,8 @@ export default function BrandIntelligence() {
               <SearchCheck className="w-5 h-5 text-white" />
             </div>
             <div>
-              <h1 className="text-2xl font-bold">Social Media</h1>
-              <p className="text-sm text-muted-foreground">Analyze brands & manage conversations</p>
+              <h1 className="text-2xl font-bold">{t("brand.topTitle", "Social Media")}</h1>
+              <p className="text-sm text-muted-foreground">{t("brand.subtitle", "Analyze brands & manage conversations")}</p>
             </div>
           </div>
         </div>
@@ -157,11 +159,11 @@ export default function BrandIntelligence() {
           <TabsList>
             <TabsTrigger value="brand-intelligence" className="gap-1.5">
               <SearchCheck className="w-4 h-4" />
-              Brand Intelligence
+              {t("brand.title", "Brand Intelligence")}
             </TabsTrigger>
             <TabsTrigger value="messaging" className="gap-1.5">
               <MessageCircle className="w-4 h-4" />
-              Messaging
+              {t("brand.messaging", "Messaging")}
             </TabsTrigger>
           </TabsList>
 
@@ -174,24 +176,24 @@ export default function BrandIntelligence() {
             <TabsTrigger value="instagram" className="gap-1.5">
               <Camera className="w-4 h-4" />
               <span className={activeTab === "instagram" ? "bg-gradient-to-r from-orange-400 via-pink-500 to-purple-600 bg-clip-text text-transparent" : ""}>
-                Instagram
+                {t("brand.instagram", "Instagram")}
               </span>
             </TabsTrigger>
             <TabsTrigger value="threads" className="gap-1.5">
               <AtSign className="w-4 h-4" />
-              Threads
+              {t("brand.threads", "Threads")}
             </TabsTrigger>
             <TabsTrigger value="facebook" className="gap-1.5">
               <Facebook className="w-4 h-4" />
-              Facebook
+              {t("brand.facebook", "Facebook")}
             </TabsTrigger>
             <TabsTrigger value="tiktok" className="gap-1.5">
               <Video className="w-4 h-4" />
-              TikTok
+              {t("brand.tiktok", "TikTok")}
             </TabsTrigger>
             <TabsTrigger value="history" className="gap-1.5">
               <History className="w-4 h-4" />
-              History
+              {t("brand.history", "History")}
             </TabsTrigger>
           </TabsList>
 
@@ -222,7 +224,7 @@ export default function BrandIntelligence() {
                   <FilterToolbar filters={filters} onChange={setFilters} maxEngagement={maxEngagement} />
                   <div className="flex items-center justify-between">
                     <p className="text-sm text-muted-foreground">
-                      {filteredPosts.length} of {totalPosts} posts
+                      {t("posts.countOf", "{{filtered}} of {{total}} posts", { filtered: filteredPosts.length, total: totalPosts })}
                     </p>
                   </div>
                   <PostsGrid posts={filteredPosts} isLoading={isLoading} onPostClick={handlePostClick} contentPostIds={contentPostIds} />
@@ -230,7 +232,7 @@ export default function BrandIntelligence() {
                     <div className="flex justify-center pt-4">
                       <Button variant="outline" onClick={loadMore} className="gap-2">
                         <Loader2 className="w-4 h-4" />
-                        Load More
+                        {t("actions.loadMore", "Load More")}
                       </Button>
                     </div>
                   )}
@@ -242,9 +244,13 @@ export default function BrandIntelligence() {
                   <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-violet-500/20 to-pink-500/20 flex items-center justify-center mb-4">
                     <SearchCheck className="w-10 h-10 text-violet-500" />
                   </div>
-                  <h3 className="text-lg font-semibold mb-1">Start by searching for a brand</h3>
+                  <h3 className="text-lg font-semibold mb-1">{t("empty.searchBrand", "Start by searching for a brand")}</h3>
                   <p className="text-sm text-muted-foreground mb-6 max-w-md">
-                    Enter any {tab === "tiktok" ? "TikTok" : tab === "facebook" ? "Facebook page" : "Instagram"} username to analyze their top performing content
+                    {tab === "tiktok"
+                      ? t("empty.searchHintTiktok", "Enter any TikTok username to analyze their top performing content")
+                      : tab === "facebook"
+                        ? t("empty.searchHintFacebook", "Enter any Facebook page username to analyze their top performing content")
+                        : t("empty.searchHintInstagram", "Enter any Instagram username to analyze their top performing content")}
                   </p>
                   <div className="flex flex-wrap justify-center gap-2">
                     {EXAMPLE_BRANDS.map((brand) => (
@@ -274,7 +280,7 @@ export default function BrandIntelligence() {
                 className="gap-1.5"
               >
                 <SearchCheck className="w-4 h-4" />
-                Analyze
+                {t("header.analyze", "Analyze")}
               </Button>
               <Button
                 variant={threadsMode === "discovery" ? "default" : "ghost"}
@@ -283,7 +289,7 @@ export default function BrandIntelligence() {
                 className="gap-1.5"
               >
                 <AtSign className="w-4 h-4" />
-                Discovery
+                {t("header.discovery", "Discovery")}
               </Button>
               <Button
                 variant={threadsMode === "keyword_search" ? "default" : "ghost"}
@@ -292,7 +298,7 @@ export default function BrandIntelligence() {
                 className="gap-1.5"
               >
                 <Hash className="w-4 h-4" />
-                Keyword Search
+                {t("header.keywordSearch", "Keyword Search")}
               </Button>
               <Button
                 variant={threadsMode === "insights" ? "default" : "ghost"}
@@ -301,7 +307,7 @@ export default function BrandIntelligence() {
                 className="gap-1.5"
               >
                 <BarChart3 className="w-4 h-4" />
-                Insights
+                {t("header.insights", "Insights")}
               </Button>
             </div>
 
@@ -319,7 +325,7 @@ export default function BrandIntelligence() {
                     <FilterToolbar filters={filters} onChange={setFilters} maxEngagement={maxEngagement} />
                     <div className="flex items-center justify-between">
                       <p className="text-sm text-muted-foreground">
-                        {filteredPosts.length} of {totalPosts} posts
+                        {t("posts.countOf", "{{filtered}} of {{total}} posts", { filtered: filteredPosts.length, total: totalPosts })}
                       </p>
                     </div>
                     <PostsGrid posts={filteredPosts} isLoading={isLoading} onPostClick={handlePostClick} contentPostIds={contentPostIds} />
@@ -327,7 +333,7 @@ export default function BrandIntelligence() {
                       <div className="flex justify-center pt-4">
                         <Button variant="outline" onClick={loadMore} className="gap-2">
                           <Loader2 className="w-4 h-4" />
-                          Load More
+                          {t("actions.loadMore", "Load More")}
                         </Button>
                       </div>
                     )}
@@ -339,9 +345,9 @@ export default function BrandIntelligence() {
                     <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-violet-500/20 to-pink-500/20 flex items-center justify-center mb-4">
                       <SearchCheck className="w-10 h-10 text-violet-500" />
                     </div>
-                    <h3 className="text-lg font-semibold mb-1">Start by searching for a brand</h3>
+                    <h3 className="text-lg font-semibold mb-1">{t("empty.searchBrand", "Start by searching for a brand")}</h3>
                     <p className="text-sm text-muted-foreground mb-6 max-w-md">
-                      Enter any Threads username to analyze their top performing content
+                      {t("empty.searchHintThreads", "Enter any Threads username to analyze their top performing content")}
                     </p>
                     <div className="flex flex-wrap justify-center gap-2">
                       {EXAMPLE_BRANDS.map((brand) => (

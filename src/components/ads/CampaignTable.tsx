@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Campaign } from "@/hooks/useAdAnalytics";
@@ -17,26 +18,28 @@ function getStatusVariant(status: string): "default" | "secondary" | "destructiv
 }
 
 export function CampaignTable({ campaigns }: CampaignTableProps) {
+  const { t } = useTranslation("analytics");
+
   return (
     <div className="border rounded-lg overflow-auto">
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead>Campaign</TableHead>
-            <TableHead>Status</TableHead>
-            <TableHead>Objective</TableHead>
-            <TableHead className="text-right">Impressions</TableHead>
-            <TableHead className="text-right">Clicks</TableHead>
-            <TableHead className="text-right">CTR</TableHead>
-            <TableHead className="text-right">Spend</TableHead>
-            <TableHead className="text-right">CPC</TableHead>
+            <TableHead>{t("ads.campaign", "Campaign")}</TableHead>
+            <TableHead>{t("ads.status", "Status")}</TableHead>
+            <TableHead>{t("ads.objective", "Objective")}</TableHead>
+            <TableHead className="text-right">{t("ads.impressions", "Impressions")}</TableHead>
+            <TableHead className="text-right">{t("ads.clicks", "Clicks")}</TableHead>
+            <TableHead className="text-right">{t("ads.ctr", "CTR")}</TableHead>
+            <TableHead className="text-right">{t("ads.spend", "Spend")}</TableHead>
+            <TableHead className="text-right">{t("ads.cpc", "CPC")}</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
           {campaigns.length === 0 ? (
             <TableRow>
               <TableCell colSpan={8} className="text-center text-muted-foreground py-8">
-                No campaigns found
+                {t("ads.noCampaigns", "No campaigns found")}
               </TableCell>
             </TableRow>
           ) : (

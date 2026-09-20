@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -45,6 +46,7 @@ function highlightText(text: string) {
 }
 
 export function PostDetailDrawer({ post, isOpen, onClose, platformUsername, onDeleted }: PostDetailDrawerProps) {
+  const { t } = useTranslation("analytics");
   const [showGeneration, setShowGeneration] = useState(false);
   const [commentText, setCommentText] = useState("");
   const [isCommenting, setIsCommenting] = useState(false);
@@ -68,12 +70,12 @@ export function PostDetailDrawer({ post, isOpen, onClose, platformUsername, onDe
   const durationLabel = formatDuration(post.duration);
 
   const stats = [
-    { emoji: "❤️", label: "Likes", value: post.likesCount },
-    { emoji: "💬", label: "Comments", value: post.commentsCount },
-    { emoji: "▶️", label: "Views", value: post.videoViewCount || 0 },
-    { emoji: "🔁", label: "Shares", value: post.sharesCount || 0 },
-    { emoji: "🔖", label: "Saves", value: post.savesCount || 0 },
-    { emoji: "🔥", label: "Score", value: post.engagementScore },
+    { id: "likes", emoji: "❤️", label: t("stats.likes", "Likes"), value: post.likesCount },
+    { id: "comments", emoji: "💬", label: t("stats.comments", "Comments"), value: post.commentsCount },
+    { id: "views", emoji: "▶️", label: t("stats.views", "Views"), value: post.videoViewCount || 0 },
+    { id: "shares", emoji: "🔁", label: t("stats.shares", "Shares"), value: post.sharesCount || 0 },
+    { id: "saves", emoji: "🔖", label: t("stats.saves", "Saves"), value: post.savesCount || 0 },
+    { id: "score", emoji: "🔥", label: t("stats.score", "Score"), value: post.engagementScore },
   ];
 
   const handleDelete = async () => {
@@ -83,17 +85,17 @@ export function PostDetailDrawer({ post, isOpen, onClose, platformUsername, onDe
       const { data, error } = await supabase.functions.invoke("threads-delete-post", {
         body: { thread_id: post.id, social_account_id: ownedAccountId },
       });
-      if (error) throw new Error(error.message || "Delete failed");
+      if (error) throw new Error(error.message || t("errors.deleteFailed", "Delete failed"));
       if (data && data.ok === false) {
         const mapped = mapThreadsReason(data, "discovery");
-        toast.error(mapped.message || "Could not delete on Threads");
+        toast.error(mapped.message || t("errors.couldNotDelete", "Could not delete on Threads"));
         return;
       }
-      toast.success("Post deleted from Threads");
+      toast.success(t("toast.postDeleted", "Post deleted from Threads"));
       onDeleted?.(post.id);
       onClose();
     } catch (err) {
-      toast.error((err as Error).message || "Delete failed");
+      toast.error((err as Error).message || t("errors.deleteFailed", "Delete failed"));
     } finally {
       setIsDeleting(false);
     }
@@ -102,7 +104,7 @@ export function PostDetailDrawer({ post, isOpen, onClose, platformUsername, onDe
   const handleComment = async () => {
     const text = commentText.trim();
     if (!text) {
-      toast.error("Comment cannot be empty");
+      toast.error(t("errors.commentEmpty", "Comment cannot be empty"));
       return;
     }
     setIsCommenting(true);
@@ -114,26 +116,26 @@ export function PostDetailDrawer({ post, isOpen, onClose, platformUsername, onDe
           ...(ownedAccountId ? { social_account_id: ownedAccountId } : {}),
         },
       });
-      if (error) throw new Error(error.message || "Comment failed");
+      if (error) throw new Error(error.message || t("errors.commentFailed", "Comment failed"));
       if (data && data.ok === false) {
         const mapped = mapThreadsReason(data, "discovery");
-        toast.error(mapped.message || "Could not post comment");
+        toast.error(mapped.message || t("errors.couldNotComment", "Could not post comment"));
         return;
       }
       const permalink: string | undefined = data?.permalink;
       if (permalink) {
-        toast.success("Comment posted on Threads", {
-          action: { label: "View", onClick: () => window.open(permalink, "_blank") },
+        toast.success(t("toast.commentPosted", "Comment posted on Threads"), {
+          action: { label: t("common:view", "View"), onClick: () => window.open(permalink, "_blank") },
         });
       } else {
-        toast.success("Comment posted on Threads");
+        toast.success(t("toast.commentPosted", "Comment posted on Threads"));
       }
       setCommentText("");
       setShowCommentBox(false);
     } catch (err) {
-      const msg = (err as Error).message || "Comment failed";
+      const msg = (err as Error).message || t("errors.commentFailed", "Comment failed");
       const friendly = /Failed to send a request to the Edge Function/i.test(msg)
-        ? "Comment service is temporarily unavailable. Please try again in a moment."
+        ? t("errors.commentUnavailable", "Comment service is temporarily unavailable. Please try again in a moment.")
         : msg;
       toast.error(friendly);
     } finally {
@@ -145,7 +147,7 @@ export function PostDetailDrawer({ post, isOpen, onClose, platformUsername, onDe
     <Sheet open={isOpen} onOpenChange={(open) => !open && onClose()}>
       <SheetContent side="right" className="w-full sm:max-w-[580px] overflow-y-auto p-0">
         <SheetHeader className="p-4 pb-0">
-          <SheetTitle className="text-lg">Post Details</SheetTitle>
+          <SheetTitle className="text-lg">{t("posts.title", "Post Details")}</SheetTitle>
         </SheetHeader>
 
         <div className="p-4 space-y-4">
@@ -155,7 +157,7 @@ export function PostDetailDrawer({ post, isOpen, onClose, platformUsername, onDe
               <div className="relative w-full" style={{ aspectRatio: "9 / 16", maxHeight: 500 }}>
                 <iframe
                   src={post.mediaUrl}
-                  title="TikTok video"
+                  title={t("video.tiktokTitle", "TikTok video")}
                   allow="encrypted-media;"
                   allowFullScreen
                   className="absolute inset-0 w-full h-full border-0"
@@ -177,7 +179,7 @@ export function PostDetailDrawer({ post, isOpen, onClose, platformUsername, onDe
               />
             ) : (
               <div className="w-full h-64 flex items-center justify-center text-muted-foreground text-sm">
-                Preview unavailable
+                {t("posts.previewUnavailable", "Preview unavailable")}
               </div>
             )}
             {durationLabel && (
@@ -190,7 +192,7 @@ export function PostDetailDrawer({ post, isOpen, onClose, platformUsername, onDe
           {/* Stats Grid */}
           <div className="grid grid-cols-3 gap-2">
             {stats.map((s) => (
-              <Card key={s.label} className="overflow-hidden">
+              <Card key={s.id} className="overflow-hidden">
                 <CardContent className="p-3 text-center">
                   <p className="text-xs text-muted-foreground">{s.emoji} {s.label}</p>
                   <p className="text-sm font-bold">{s.value.toLocaleString()}</p>
@@ -202,7 +204,7 @@ export function PostDetailDrawer({ post, isOpen, onClose, platformUsername, onDe
           {/* Caption */}
           {post.caption && (
             <div className="space-y-1">
-              <p className="text-xs font-medium text-muted-foreground">Caption</p>
+              <p className="text-xs font-medium text-muted-foreground">{t("posts.caption", "Caption")}</p>
               <p className="text-sm leading-relaxed whitespace-pre-wrap">{highlightText(post.caption)}</p>
             </div>
           )}
@@ -215,7 +217,7 @@ export function PostDetailDrawer({ post, isOpen, onClose, platformUsername, onDe
             {post.permalink && (
               <Button variant="ghost" size="sm" className="h-7 text-xs gap-1" asChild>
                 <a href={post.permalink} target="_blank" rel="noopener noreferrer">
-                  View Original <ExternalLink className="w-3 h-3" />
+                  {t("posts.viewOriginal", "View Original")} <ExternalLink className="w-3 h-3" />
                 </a>
               </Button>
             )}
@@ -231,7 +233,7 @@ export function PostDetailDrawer({ post, isOpen, onClose, platformUsername, onDe
                 onClick={() => setShowCommentBox((v) => !v)}
               >
                 <MessageSquarePlus className="w-4 h-4" />
-                Add comment
+                {t("actions.addComment", "Add comment")}
               </Button>
 
               {ownedAccountId && (
@@ -239,21 +241,21 @@ export function PostDetailDrawer({ post, isOpen, onClose, platformUsername, onDe
                   <AlertDialogTrigger asChild>
                     <Button variant="outline" size="sm" className="gap-1.5 text-destructive hover:text-destructive">
                       <Trash2 className="w-4 h-4" />
-                      Delete from Threads
+                      {t("actions.deleteFromThreads", "Delete from Threads")}
                     </Button>
                   </AlertDialogTrigger>
                   <AlertDialogContent>
                     <AlertDialogHeader>
-                      <AlertDialogTitle>Delete this post from Threads?</AlertDialogTitle>
+                      <AlertDialogTitle>{t("dialog.deleteThreadsTitle", "Delete this post from Threads?")}</AlertDialogTitle>
                       <AlertDialogDescription>
-                        This removes the post from Meta. Your local history record stays so you can still see it here.
+                        {t("dialog.deleteThreadsBody", "This removes the post from Meta. Your local history record stays so you can still see it here.")}
                       </AlertDialogDescription>
                     </AlertDialogHeader>
                     <AlertDialogFooter>
-                      <AlertDialogCancel>Cancel</AlertDialogCancel>
+                      <AlertDialogCancel>{t("common:cancel", "Cancel")}</AlertDialogCancel>
                       <AlertDialogAction onClick={handleDelete} disabled={isDeleting}>
                         {isDeleting ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
-                        Delete
+                        {t("common:delete", "Delete")}
                       </AlertDialogAction>
                     </AlertDialogFooter>
                   </AlertDialogContent>
@@ -264,7 +266,7 @@ export function PostDetailDrawer({ post, isOpen, onClose, platformUsername, onDe
             {showCommentBox && (
               <div className="space-y-2 p-3 rounded-lg border bg-muted/30">
                 <Textarea
-                  placeholder="Write a reply…"
+                  placeholder={t("keyword.replyPlaceholder", "Write a reply…")}
                   value={commentText}
                   onChange={(e) => setCommentText(e.target.value)}
                   maxLength={500}
@@ -274,7 +276,7 @@ export function PostDetailDrawer({ post, isOpen, onClose, platformUsername, onDe
                   <p className="text-xs text-muted-foreground">{commentText.length}/500</p>
                   <Button size="sm" className="gap-1.5" onClick={handleComment} disabled={isCommenting || !commentText.trim()}>
                     {isCommenting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-                    Post comment
+                    {t("actions.postComment", "Post comment")}
                   </Button>
                 </div>
               </div>
@@ -294,12 +296,12 @@ export function PostDetailDrawer({ post, isOpen, onClose, platformUsername, onDe
                   {isTranscribing ? (
                     <>
                       <Loader2 className="w-4 h-4 animate-spin" />
-                      Transcribing with AI...
+                      {t("transcript.transcribing", "Transcribing with AI...")}
                     </>
                   ) : (
                     <>
                       <Mic className="w-4 h-4" />
-                      🎙 Transcribe Audio
+                      {t("actions.transcribeAudio", "🎙 Transcribe Audio")}
                     </>
                   )}
                 </Button>
@@ -320,7 +322,7 @@ export function PostDetailDrawer({ post, isOpen, onClose, platformUsername, onDe
               onClick={() => setShowGeneration(!showGeneration)}
             >
               <Sparkles className="w-4 h-4" />
-              ✨ Generate Content from this Post
+              {t("actions.generateContent", "✨ Generate Content from this Post")}
             </Button>
 
             {showGeneration && (

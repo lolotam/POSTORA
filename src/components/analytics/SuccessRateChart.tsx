@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { Card } from "@/components/ui/card";
 import {
   AreaChart,
@@ -21,11 +22,12 @@ interface SuccessRateChartProps {
 }
 
 export function SuccessRateChart({ data, overallSuccessRate }: SuccessRateChartProps) {
+  const { t } = useTranslation("analytics");
   return (
     <Card className="p-6 bg-card/50 border-border">
       <div className="flex items-center gap-2 mb-6">
         <Target className="w-5 h-5 text-primary" />
-        <h3 className="font-semibold">Success Rate Over Time</h3>
+        <h3 className="font-semibold">{t("charts.successOverTime", "Success Rate Over Time")}</h3>
         <span className="ml-auto text-2xl font-bold text-emerald-500">
           {overallSuccessRate}%
         </span>
@@ -58,7 +60,7 @@ export function SuccessRateChart({ data, overallSuccessRate }: SuccessRateChartP
                 borderRadius: "8px",
               }}
               formatter={(value) =>
-                value !== null ? [`${value}%`, "Success Rate"] : ["N/A", "Success Rate"]
+                value !== null ? [`${value}%`, t("charts.successRate", "Success Rate")] : [t("charts.nA", "N/A"), t("charts.successRate", "Success Rate")]
               }
             />
             <Area

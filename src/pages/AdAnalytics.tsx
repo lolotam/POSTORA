@@ -1,4 +1,5 @@
 import { useState, useMemo } from "react";
+import { useTranslation } from "react-i18next";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { useFeatureFlags } from "@/hooks/useFeatureFlags";
 import { Navigate } from "react-router-dom";
@@ -22,6 +23,7 @@ const DATE_PRESETS = [
 ];
 
 export default function AdAnalytics() {
+  const { t } = useTranslation("analytics");
   const { flags, isLoading: flagsLoading } = useFeatureFlags();
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
   const [selectedAdAccountId, setSelectedAdAccountId] = useState<string | null>(null);
@@ -69,8 +71,8 @@ export default function AdAnalytics() {
           <div className="group flex items-center gap-4">
             <Icon3D icon={BarChart3} variant="sky" size="md" />
             <div className="flex-1 min-w-0">
-              <GradientHeading preset="sky-violet" size="lg" as="h1">Ad Analytics</GradientHeading>
-              <p className="text-sm text-muted-foreground mt-1">Facebook & Instagram ad performance</p>
+              <GradientHeading preset="sky-violet" size="lg" as="h1">{t("ads.title", "Ad Analytics")}</GradientHeading>
+              <p className="text-sm text-muted-foreground mt-1">{t("ads.subtitle", "Facebook & Instagram ad performance")}</p>
             </div>
           </div>
         </Reveal>
@@ -82,10 +84,10 @@ export default function AdAnalytics() {
         <div className="flex flex-wrap gap-4 items-end">
           {fbAccounts.length > 0 && (
             <div className="space-y-1.5">
-              <span className="text-xs text-muted-foreground">Facebook Account</span>
+              <span className="text-xs text-muted-foreground">{t("ads.facebookAccount", "Facebook Account")}</span>
               <Select value={activeAccountId || ""} onValueChange={setSelectedAccountId}>
                 <SelectTrigger className="w-[200px] h-9">
-                  <SelectValue placeholder="Select account" />
+                  <SelectValue placeholder={t("ads.selectAccount", "Select account")} />
                 </SelectTrigger>
                 <SelectContent>
                   {fbAccounts.map((a) => (
@@ -97,10 +99,10 @@ export default function AdAnalytics() {
           )}
           {adAccounts.length > 0 && (
             <div className="space-y-1.5">
-              <span className="text-xs text-muted-foreground">Ad Account</span>
+              <span className="text-xs text-muted-foreground">{t("ads.adAccount", "Ad Account")}</span>
               <Select value={activeAdAccountId || ""} onValueChange={setSelectedAdAccountId}>
                 <SelectTrigger className="w-[220px] h-9">
-                  <SelectValue placeholder="Select ad account" />
+                  <SelectValue placeholder={t("ads.selectAdAccount", "Select ad account")} />
                 </SelectTrigger>
                 <SelectContent>
                   {adAccounts.map((a) => (
@@ -111,14 +113,21 @@ export default function AdAnalytics() {
             </div>
           )}
           <div className="space-y-1.5">
-            <span className="text-xs text-muted-foreground">Date Range</span>
+            <span className="text-xs text-muted-foreground">{t("ads.dateRange", "Date Range")}</span>
             <Select value={datePreset} onValueChange={setDatePreset}>
               <SelectTrigger className="w-[160px] h-9">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
                 {DATE_PRESETS.map((d) => (
-                  <SelectItem key={d.value} value={d.value}>{d.label}</SelectItem>
+                  <SelectItem key={d.value} value={d.value}>
+                    {d.value === "today" ? t("header.today", "Today")
+                      : d.value === "yesterday" ? t("header.yesterday", "Yesterday")
+                      : d.value === "last_7d" ? t("header.date7", "Last 7 days")
+                      : d.value === "last_14d" ? t("header.date14", "Last 14 days")
+                      : d.value === "last_30d" ? t("header.date30", "Last 30 days")
+                      : t("header.date90", "Last 90 days")}
+                  </SelectItem>
                 ))}
               </SelectContent>
             </Select>
@@ -136,8 +145,8 @@ export default function AdAnalytics() {
             <GradientRingCard variant="sky" hoverLift={false} ringIntensity="subtle">
               <div className="flex flex-col items-center text-center py-6 space-y-3">
                 <div className="group"><Icon3D icon={BarChart3} variant="sky" size="lg" /></div>
-                <p className="font-medium mt-1">No Facebook accounts connected</p>
-                <p className="text-sm text-muted-foreground">Connect a Facebook account to view ad analytics.</p>
+                <p className="font-medium mt-1">{t("empty.noFacebook", "No Facebook accounts connected")}</p>
+                <p className="text-sm text-muted-foreground">{t("ads.connectToView", "Connect a Facebook account to view ad analytics.")}</p>
               </div>
             </GradientRingCard>
           </Reveal>
@@ -146,12 +155,12 @@ export default function AdAnalytics() {
             {/* Summary cards */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               {([
-                { label: "Total Spend", value: `$${totals.spend.toFixed(2)}`, icon: DollarSign, variant: "emerald" as GradientKey },
-                { label: "Impressions", value: totals.impressions.toLocaleString(), icon: Eye, variant: "sky" as GradientKey },
-                { label: "Clicks", value: totals.clicks.toLocaleString(), icon: MousePointerClick, variant: "violet" as GradientKey },
-                { label: "Avg CTR", value: totals.impressions > 0 ? `${((totals.clicks / totals.impressions) * 100).toFixed(2)}%` : "0%", icon: TrendingUp, variant: "amber" as GradientKey },
+                { id: "spend", label: t("ads.totalSpend", "Total Spend"), value: `$${totals.spend.toFixed(2)}`, icon: DollarSign, variant: "emerald" as GradientKey },
+                { id: "impressions", label: t("ads.impressions", "Impressions"), value: totals.impressions.toLocaleString(), icon: Eye, variant: "sky" as GradientKey },
+                { id: "clicks", label: t("ads.clicks", "Clicks"), value: totals.clicks.toLocaleString(), icon: MousePointerClick, variant: "violet" as GradientKey },
+                { id: "ctr", label: t("ads.avgCtr", "Avg CTR"), value: totals.impressions > 0 ? `${((totals.clicks / totals.impressions) * 100).toFixed(2)}%` : "0%", icon: TrendingUp, variant: "amber" as GradientKey },
               ]).map((m, i) => (
-                <Reveal key={m.label} delay={i * 60}>
+                <Reveal key={m.id} delay={i * 60}>
                   <div className="group rounded-2xl border border-border/40 bg-card/60 backdrop-blur-md p-4 flex items-center gap-3 transition-transform hover:-translate-y-0.5">
                     <Icon3D icon={m.icon} variant={m.variant} size="sm" />
                     <div>
@@ -181,7 +190,7 @@ export default function AdAnalytics() {
               <GradientRingCard variant="sky" padded={false} hoverLift={false} ringIntensity="subtle" innerClassName="p-4 md:p-5">
                 <div className="flex items-center gap-2 text-base font-semibold mb-3">
                   <BarChart3 className="h-4 w-4 text-sky-500" />
-                  Campaigns
+                  {t("ads.campaigns", "Campaigns")}
                 </div>
                 <CampaignTable campaigns={campaigns} />
               </GradientRingCard>

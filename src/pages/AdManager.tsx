@@ -1,4 +1,5 @@
 import { useState, useMemo } from "react";
+import { useTranslation } from "react-i18next";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { useFeatureFlags } from "@/hooks/useFeatureFlags";
 import { Navigate } from "react-router-dom";
@@ -27,6 +28,7 @@ const OBJECTIVES = [
 ];
 
 export default function AdManager() {
+  const { t } = useTranslation("analytics");
   const { flags, isLoading: flagsLoading } = useFeatureFlags();
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
   const [selectedAdAccountId, setSelectedAdAccountId] = useState<string | null>(null);
@@ -80,8 +82,8 @@ export default function AdManager() {
             <div className="group flex items-center gap-4 min-w-0">
               <Icon3D icon={Megaphone} variant="rose" size="md" />
               <div className="flex-1 min-w-0">
-                <GradientHeading preset="amber-rose-violet" size="lg" as="h1">Ad Campaign Manager</GradientHeading>
-                <p className="text-sm text-muted-foreground mt-1">Create and manage Facebook/Instagram ad campaigns</p>
+                <GradientHeading preset="amber-rose-violet" size="lg" as="h1">{t("ads.titleManager", "Ad Campaign Manager")}</GradientHeading>
+                <p className="text-sm text-muted-foreground mt-1">{t("ads.subtitleManager", "Create and manage Facebook/Instagram ad campaigns")}</p>
               </div>
             </div>
           <Dialog open={createOpen} onOpenChange={setCreateOpen}>
@@ -92,7 +94,7 @@ export default function AdManager() {
                     <DialogTrigger asChild>
                       <Button size="sm" className="bg-gradient-to-r from-rose-500 via-pink-500 to-fuchsia-500 text-white hover:opacity-90 disabled:bg-none disabled:bg-muted disabled:text-muted-foreground" disabled={!activeAdAccountId || adAccountsLoading}>
                         {adAccountsLoading ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <Plus className="h-4 w-4 mr-1" />}
-                        New Campaign
+                        {t("actions.newCampaign", "New Campaign")}
                       </Button>
                     </DialogTrigger>
                   </span>
@@ -100,10 +102,10 @@ export default function AdManager() {
                 {!activeAdAccountId && !adAccountsLoading && (
                   <TooltipContent>
                     {fbAccounts.length === 0
-                      ? "Connect a Facebook account first"
+                      ? t("ads.connectFirst", "Connect a Facebook account first")
                       : adAccountsError
-                        ? "Failed to load ad accounts"
-                        : "No ad accounts found for this Facebook account"}
+                        ? t("ads.failedLoadAccounts", "Failed to load ad accounts")
+                        : t("ads.noAdAccounts", "No ad accounts found for this Facebook account")}
                   </TooltipContent>
                 )}
               </Tooltip>
@@ -112,32 +114,39 @@ export default function AdManager() {
               <DialogHeader>
                 <DialogTitle className="flex items-center gap-3">
                   <span className="group inline-flex"><Icon3D icon={Megaphone} variant="rose" size="sm" /></span>
-                  Create Campaign
+                  {t("ads.createCampaign", "Create Campaign")}
                 </DialogTitle>
               </DialogHeader>
               <div className="space-y-4">
                 <div className="space-y-1.5">
-                  <Label>Campaign Name</Label>
-                  <Input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="My Campaign" />
+                  <Label>{t("ads.campaignName", "Campaign Name")}</Label>
+                  <Input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder={t("ads.placeholderName", "My Campaign")} />
                 </div>
                 <div className="space-y-1.5">
-                  <Label>Objective</Label>
+                  <Label>{t("ads.objective", "Objective")}</Label>
                   <Select value={newObjective} onValueChange={setNewObjective}>
-                    <SelectTrigger><SelectValue placeholder="Select objective" /></SelectTrigger>
+                    <SelectTrigger><SelectValue placeholder={t("ads.selectObjective", "Select objective")} /></SelectTrigger>
                     <SelectContent>
                       {OBJECTIVES.map((o) => (
-                        <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                        <SelectItem key={o.value} value={o.value}>
+                          {o.value === "OUTCOME_AWARENESS" ? t("ads.objectiveAwareness", "Brand Awareness")
+                            : o.value === "OUTCOME_TRAFFIC" ? t("ads.objectiveTraffic", "Traffic")
+                            : o.value === "OUTCOME_ENGAGEMENT" ? t("ads.objectiveEngagement", "Engagement")
+                            : o.value === "OUTCOME_LEADS" ? t("ads.objectiveLeads", "Lead Generation")
+                            : o.value === "OUTCOME_SALES" ? t("ads.objectiveSales", "Sales")
+                            : t("ads.objectiveApp", "App Promotion")}
+                        </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
                 </div>
                 <div className="space-y-1.5">
-                  <Label>Daily Budget ($)</Label>
+                  <Label>{t("ads.dailyBudget", "Daily Budget ($)")}</Label>
                   <Input type="number" value={newBudget} onChange={(e) => setNewBudget(e.target.value)} placeholder="10" />
                 </div>
                 <Button onClick={handleCreate} disabled={!newName || !newObjective || createCampaign.isPending} className="w-full bg-gradient-to-r from-rose-500 via-pink-500 to-fuchsia-500 text-white hover:opacity-90">
                   {createCampaign.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null}
-                  Create Campaign
+                  {t("ads.createCampaign", "Create Campaign")}
                 </Button>
               </div>
             </DialogContent>
@@ -152,9 +161,9 @@ export default function AdManager() {
         <div className="flex flex-wrap gap-4 items-end">
           {fbAccounts.length > 0 && (
             <div className="space-y-1.5">
-              <span className="text-xs text-muted-foreground">Facebook Account</span>
+              <span className="text-xs text-muted-foreground">{t("ads.facebookAccount", "Facebook Account")}</span>
               <Select value={activeAccountId || ""} onValueChange={setSelectedAccountId}>
-                <SelectTrigger className="w-[200px] h-9"><SelectValue placeholder="Select account" /></SelectTrigger>
+                <SelectTrigger className="w-[200px] h-9"><SelectValue placeholder={t("ads.selectAccount", "Select account")} /></SelectTrigger>
                 <SelectContent>
                   {fbAccounts.map((a) => (
                     <SelectItem key={a.id} value={a.id}>{a.platform_username || a.platform_user_id}</SelectItem>
@@ -165,9 +174,9 @@ export default function AdManager() {
           )}
           {adAccounts.length > 0 && (
             <div className="space-y-1.5">
-              <span className="text-xs text-muted-foreground">Ad Account</span>
+              <span className="text-xs text-muted-foreground">{t("ads.adAccount", "Ad Account")}</span>
               <Select value={activeAdAccountId || ""} onValueChange={setSelectedAdAccountId}>
-                <SelectTrigger className="w-[220px] h-9"><SelectValue placeholder="Select ad account" /></SelectTrigger>
+                <SelectTrigger className="w-[220px] h-9"><SelectValue placeholder={t("ads.selectAdAccount", "Select ad account")} /></SelectTrigger>
                 <SelectContent>
                   {adAccounts.map((a) => (
                     <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>
@@ -185,8 +194,8 @@ export default function AdManager() {
           <GradientRingCard variant="amber" padded={false} hoverLift={false} ringIntensity="subtle" innerClassName="px-4 py-3 flex items-center gap-2 text-sm text-muted-foreground">
             <AlertCircle className="h-4 w-4 shrink-0 text-amber-500" />
             {adAccountsError
-              ? "Failed to load ad accounts. Please try again."
-              : "No ad accounts found for this Facebook account. Make sure your Facebook account has an associated Ad Account."}
+              ? t("ads.failedLoadAccountsRetry", "Failed to load ad accounts. Please try again.")
+              : t("ads.noAdAccountsHint", "No ad accounts found for this Facebook account. Make sure your Facebook account has an associated Ad Account.")}
           </GradientRingCard>
         )}
 
@@ -200,8 +209,8 @@ export default function AdManager() {
             <GradientRingCard variant="rose" hoverLift={false} ringIntensity="subtle">
               <div className="flex flex-col items-center text-center py-6 space-y-3">
                 <div className="group"><Icon3D icon={Megaphone} variant="rose" size="lg" /></div>
-                <p className="font-medium mt-1">No Facebook accounts connected</p>
-                <p className="text-sm text-muted-foreground">Connect a Facebook account to manage ad campaigns.</p>
+                <p className="font-medium mt-1">{t("empty.noFacebook", "No Facebook accounts connected")}</p>
+                <p className="text-sm text-muted-foreground">{t("ads.connectToManage", "Connect a Facebook account to manage ad campaigns.")}</p>
               </div>
             </GradientRingCard>
           </Reveal>
@@ -210,16 +219,16 @@ export default function AdManager() {
           <GradientRingCard variant="rose" padded={false} hoverLift={false} ringIntensity="subtle" innerClassName="overflow-hidden">
             <div className="p-6 pb-3 flex items-center gap-2 text-base font-semibold">
               <Megaphone className="h-4 w-4 text-rose-500" />
-              Campaigns ({campaigns.length})
+              {t("ads.campaignsCount", "Campaigns ({{count}})", { count: campaigns.length })}
             </div>
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Name</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Objective</TableHead>
-                    <TableHead className="text-right">Budget</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
+                    <TableHead>{t("ads.name", "Name")}</TableHead>
+                    <TableHead>{t("ads.status", "Status")}</TableHead>
+                    <TableHead>{t("ads.objective", "Objective")}</TableHead>
+                    <TableHead className="text-right">{t("ads.budget", "Budget")}</TableHead>
+                    <TableHead className="text-right">{t("history.actions", "Actions")}</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -227,8 +236,8 @@ export default function AdManager() {
                     <TableRow>
                       <TableCell colSpan={5} className="text-center text-muted-foreground py-10">
                         <div className="group inline-flex mb-3"><Icon3D icon={Megaphone} variant="rose" size="lg" /></div>
-                        <p className="font-medium mt-2">No campaigns yet</p>
-                        <p className="text-sm mt-1">Create your first campaign above.</p>
+                        <p className="font-medium mt-2">{t("ads.noCampaignsYet", "No campaigns yet")}</p>
+                        <p className="text-sm mt-1">{t("ads.createFirst", "Create your first campaign above.")}</p>
                       </TableCell>
                     </TableRow>
                   ) : (
@@ -244,7 +253,7 @@ export default function AdManager() {
                         </TableCell>
                         <TableCell className="text-xs capitalize">{c.objective?.replace(/_/g, " ").toLowerCase()}</TableCell>
                         <TableCell className="text-right tabular-nums">
-                          {c.daily_budget ? `$${(parseInt(c.daily_budget) / 100).toFixed(2)}/day` : "—"}
+                          {c.daily_budget ? t("ads.budgetPerDay", "${{amount}}/day", { amount: (parseInt(c.daily_budget) / 100).toFixed(2) }) : "—"}
                         </TableCell>
                         <TableCell className="text-right">
                           <div className="flex justify-end gap-1">

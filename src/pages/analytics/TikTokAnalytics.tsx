@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect } from "react";
+import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { useAuth } from "@/hooks/useAuth";
@@ -30,6 +31,7 @@ const DEFAULT_FILTERS: BrandScrapeFilters = {
 const EXAMPLE_BRANDS = ["@nike", "@cocacola", "@redbull", "@apple"];
 
 export default function TikTokAnalytics() {
+  const { t } = useTranslation("analytics");
   const navigate = useNavigate();
   const { session } = useAuth();
   const [filters, setFilters] = useState<BrandScrapeFilters>(DEFAULT_FILTERS);
@@ -128,15 +130,13 @@ export default function TikTokAnalytics() {
       return (
         <GradientRingCard variant="rose" padded={false} hoverLift={false} ringIntensity="subtle" innerClassName="p-4 space-y-2">
           <div className="flex items-center gap-2 font-semibold text-rose-500">
-            <AlertCircle className="w-4 h-4" /> Missing TikTok permissions
+            <AlertCircle className="w-4 h-4" /> {t("errors.missingScope", "Missing TikTok permissions")}
           </div>
           <p className="text-xs text-muted-foreground">
-            This account is missing the <code className="px-1 rounded bg-background/50">user.info.stats</code> or{" "}
-            <code className="px-1 rounded bg-background/50">video.list</code> scope. Please reconnect TikTok to grant the
-            new permissions.
+            {t("errors.missingScopeBody", "This account is missing the user.info.stats or video.list scope. Please reconnect TikTok to grant the new permissions.")}
           </p>
           <Button size="sm" variant="outline" className="border-rose-500/40 hover:bg-rose-500/10" onClick={() => navigate("/profiles")}>
-            <Plug className="w-3.5 h-3.5 mr-2" /> Reconnect TikTok
+            <Plug className="w-3.5 h-3.5 mr-2" /> {t("actions.reconnectTikTok", "Reconnect TikTok")}
           </Button>
         </GradientRingCard>
       );
@@ -145,11 +145,11 @@ export default function TikTokAnalytics() {
       return (
         <GradientRingCard variant="rose" padded={false} hoverLift={false} ringIntensity="subtle" innerClassName="p-4 space-y-2">
           <div className="flex items-center gap-2 font-semibold text-rose-500">
-            <AlertCircle className="w-4 h-4" /> TikTok token expired
+            <AlertCircle className="w-4 h-4" /> {t("errors.tokenExpired", "TikTok token expired")}
           </div>
-          <p className="text-xs text-muted-foreground">Please reconnect this TikTok account to refresh your access.</p>
+          <p className="text-xs text-muted-foreground">{t("errors.tokenExpiredBody", "Please reconnect this TikTok account to refresh your access.")}</p>
           <Button size="sm" variant="outline" className="border-rose-500/40 hover:bg-rose-500/10" onClick={() => navigate("/profiles")}>
-            <Plug className="w-3.5 h-3.5 mr-2" /> Reconnect TikTok
+            <Plug className="w-3.5 h-3.5 mr-2" /> {t("actions.reconnectTikTok", "Reconnect TikTok")}
           </Button>
         </GradientRingCard>
       );
@@ -158,11 +158,10 @@ export default function TikTokAnalytics() {
       return (
         <GradientRingCard variant="amber" padded={false} hoverLift={false} ringIntensity="subtle" innerClassName="p-4">
           <div className="flex items-center gap-2 font-semibold mb-1 text-amber-500">
-            <AlertCircle className="w-4 h-4" /> Sandbox restriction
+            <AlertCircle className="w-4 h-4" /> {t("errors.sandboxTitle", "Sandbox restriction")}
           </div>
           <p className="text-xs text-muted-foreground">
-            Your TikTok app is in Sandbox mode and this user has not been added as a test user. Add them in the TikTok
-            Developer Portal → Sandbox → Test Users.
+            {t("errors.sandboxBody", "Your TikTok app is in Sandbox mode and this user has not been added as a test user. Add them in the TikTok Developer Portal → Sandbox → Test Users.")}
           </p>
         </GradientRingCard>
       );
@@ -181,8 +180,8 @@ export default function TikTokAnalytics() {
           <div className="group flex items-center gap-4">
             <Icon3D icon={Video} variant="rose" size="md" />
             <div className="flex-1 min-w-0">
-              <GradientHeading preset="amber-rose-violet" size="lg" as="h1">TikTok Analytics</GradientHeading>
-              <p className="text-sm text-muted-foreground mt-1">Analyze TikTok creators & top performing content</p>
+              <GradientHeading preset="amber-rose-violet" size="lg" as="h1">{t("header.tiktok", "TikTok Analytics")}</GradientHeading>
+              <p className="text-sm text-muted-foreground mt-1">{t("header.tiktokSubtitle", "Analyze TikTok creators & top performing content")}</p>
             </div>
             {!sourceLoading && (
               <Badge
@@ -195,7 +194,7 @@ export default function TikTokAnalytics() {
                 )}
               >
                 {isApi ? <ShieldCheck className="w-3 h-3 mr-1" /> : <Bot className="w-3 h-3 mr-1" />}
-                {isApi ? "Official TikTok API" : "Apify Scraper"}
+                {isApi ? t("header.officialApi", "Official TikTok API") : t("header.apifyScraper", "Apify Scraper")}
               </Badge>
             )}
           </div>
@@ -224,13 +223,13 @@ export default function TikTokAnalytics() {
             <Reveal delay={120} className="space-y-4">
               <ProfileCard profile={profile!} isLoading={isLoading} />
               <FilterToolbar filters={filters} onChange={setFilters} maxEngagement={maxEngagement} />
-              <p className="text-sm text-muted-foreground">{filteredPosts.length} of {totalPosts} posts</p>
+              <p className="text-sm text-muted-foreground">{t("posts.countOf", "{{filtered}} of {{total}} posts", { filtered: filteredPosts.length, total: totalPosts })}</p>
               <PostsGrid posts={filteredPosts} isLoading={isLoading} onPostClick={handlePostClick} contentPostIds={contentPostIds} />
               {hasMore && (
                 <div className="flex justify-center pt-4">
                   <Button variant="outline" onClick={loadMore} className="gap-2 border-rose-500/40 hover:bg-rose-500/10" disabled={isLoading}>
                     {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Loader2 className="w-4 h-4" />}
-                    Load More
+                    {t("actions.loadMore", "Load More")}
                   </Button>
                 </div>
               )}
@@ -243,12 +242,12 @@ export default function TikTokAnalytics() {
               <GradientRingCard variant="rose" hoverLift={false} ringIntensity="subtle">
                 <div className="flex flex-col items-center justify-center py-12 text-center">
                   <div className="group mb-5"><Icon3D icon={Plug} variant="rose" size="lg" /></div>
-                  <h3 className="text-lg font-semibold mb-1">Connect a TikTok account</h3>
+                  <h3 className="text-lg font-semibold mb-1">{t("empty.connectTikTok", "Connect a TikTok account")}</h3>
                   <p className="text-sm text-muted-foreground mb-6 max-w-md">
-                    Official TikTok API mode is active. Connect a TikTok account to view its real analytics.
+                    {t("empty.connectTikTokHint", "Official TikTok API mode is active. Connect a TikTok account to view its real analytics.")}
                   </p>
                   <Button onClick={() => navigate("/profiles")} className="bg-gradient-to-r from-rose-500 via-pink-500 to-fuchsia-500 text-white hover:opacity-90">
-                    <Plug className="w-4 h-4 mr-2" /> Connect TikTok
+                    <Plug className="w-4 h-4 mr-2" /> {t("actions.connectTikTok", "Connect TikTok")}
                   </Button>
               </div>
               </GradientRingCard>
@@ -260,8 +259,8 @@ export default function TikTokAnalytics() {
               <GradientRingCard variant="rose" hoverLift={false} ringIntensity="subtle">
                 <div className="flex flex-col items-center justify-center py-12 text-center">
                   <div className="group mb-5"><Icon3D icon={SearchCheck} variant="rose" size="lg" /></div>
-                  <h3 className="text-lg font-semibold mb-1">Start by searching for a creator</h3>
-                  <p className="text-sm text-muted-foreground mb-6 max-w-md">Enter any TikTok username to analyze their top performing content</p>
+                  <h3 className="text-lg font-semibold mb-1">{t("empty.searchCreator", "Start by searching for a creator")}</h3>
+                  <p className="text-sm text-muted-foreground mb-6 max-w-md">{t("empty.searchHintTiktok", "Enter any TikTok username to analyze their top performing content")}</p>
                   <div className="flex flex-wrap justify-center gap-2">
                     {EXAMPLE_BRANDS.map((brand) => (
                       <Button key={brand} variant="outline" size="sm" className="text-xs border-rose-500/40 hover:bg-rose-500/10 transition-transform hover:-translate-y-0.5" onClick={() => handleSearch(brand.replace("@", ""))}>{brand}</Button>

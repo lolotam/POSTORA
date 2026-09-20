@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -17,6 +18,7 @@ interface TikTokAccount {
 }
 
 export function TikTokAccountSelector({ value, onChange }: TikTokAccountSelectorProps) {
+  const { t } = useTranslation("analytics");
   const { session } = useAuth();
 
   const { data: accounts = [], isLoading } = useQuery({
@@ -40,7 +42,7 @@ export function TikTokAccountSelector({ value, onChange }: TikTokAccountSelector
     return (
       <div className="flex items-center gap-2 text-sm text-muted-foreground p-3 rounded-lg border bg-muted/20">
         <Loader2 className="w-4 h-4 animate-spin" />
-        Loading TikTok accounts…
+        {t("tiktok.loadingAccounts", "Loading TikTok accounts…")}
       </div>
     );
   }
@@ -52,7 +54,7 @@ export function TikTokAccountSelector({ value, onChange }: TikTokAccountSelector
   return (
     <Select value={value || undefined} onValueChange={onChange}>
       <SelectTrigger className="w-full">
-        <SelectValue placeholder="Select a connected TikTok account…">
+        <SelectValue placeholder={t("search.selectTikTok", "Select a connected TikTok account…")}>
           {selected && (
             <div className="flex items-center gap-2">
               <Avatar className="w-5 h-5">

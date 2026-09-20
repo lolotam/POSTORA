@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { supabase } from "@/integrations/supabase/client";
 import { useBrandSearchHistory } from "@/hooks/useBrandSearchHistory";
 import { Clock, X as XIcon } from "lucide-react";
@@ -66,6 +67,7 @@ interface ThreadsProfile {
 }
 
 export function ThreadsDiscoveryPanel() {
+  const { t } = useTranslation("analytics");
   const [username, setUsername] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [profile, setProfile] = useState<ThreadsProfile | null>(null);
@@ -88,12 +90,12 @@ export function ThreadsDiscoveryPanel() {
       const { data, error } = await supabase.functions.invoke("threads-delete-post", {
         body: { thread_id: postId, social_account_id: ownedAccountId },
       });
-      if (error) throw new Error(error.message || "Delete failed");
+      if (error) throw new Error(error.message || t("errors.deleteFailed", "Delete failed"));
       if (data && data.ok === false) {
-        toast.error(mapThreadsReason(data, "discovery").message || "Delete failed");
+        toast.error(mapThreadsReason(data, "discovery").message || t("errors.deleteFailed", "Delete failed"));
         return;
       }
-      toast.success("Post deleted from Threads");
+      toast.success(t("toast.postDeleted", "Post deleted from Threads"));
       setPosts((prev) => prev.filter((p) => p.id !== postId));
     } catch (err) {
       toast.error((err as Error).message);
@@ -105,7 +107,7 @@ export function ThreadsDiscoveryPanel() {
   const handlePostComment = async (postId: string) => {
     const text = commentText.trim();
     if (!text) {
-      toast.error("Comment cannot be empty");
+      toast.error(t("errors.commentEmpty", "Comment cannot be empty"));
       return;
     }
     setActionLoadingId(postId);
@@ -117,25 +119,25 @@ export function ThreadsDiscoveryPanel() {
           ...(ownedAccountId ? { social_account_id: ownedAccountId } : {}),
         },
       });
-      if (error) throw new Error(error.message || "Comment failed");
+      if (error) throw new Error(error.message || t("errors.commentFailed", "Comment failed"));
       if (data && data.ok === false) {
-        toast.error(mapThreadsReason(data, "discovery").message || "Comment failed");
+        toast.error(mapThreadsReason(data, "discovery").message || t("errors.commentFailed", "Comment failed"));
         return;
       }
       const permalink: string | undefined = data?.permalink;
       if (permalink) {
-        toast.success("Comment posted on Threads", {
-          action: { label: "View", onClick: () => window.open(permalink, "_blank") },
+        toast.success(t("toast.commentPosted", "Comment posted on Threads"), {
+          action: { label: t("common:view", "View"), onClick: () => window.open(permalink, "_blank") },
         });
       } else {
-        toast.success("Comment posted on Threads");
+        toast.success(t("toast.commentPosted", "Comment posted on Threads"));
       }
       setCommentText("");
       setCommentForId(null);
     } catch (err) {
-      const msg = (err as Error).message || "Comment failed";
+      const msg = (err as Error).message || t("errors.commentFailed", "Comment failed");
       const friendly = /Failed to send a request to the Edge Function/i.test(msg)
-        ? "Comment service is temporarily unavailable. Please try again in a moment."
+        ? t("errors.commentUnavailable", "Comment service is temporarily unavailable. Please try again in a moment.")
         : msg;
       toast.error(friendly);
     } finally {
@@ -169,7 +171,7 @@ export function ThreadsDiscoveryPanel() {
           }
         } catch { /* ignore */ }
         if (!body) {
-          setErrorState({ reason: "unknown", message: fnError.message || "Unknown error" });
+          setErrorState({ reason: "unknown", message: fnError.message || t("errors.unknown", "Unknown error") });
           return;
         }
       }
@@ -191,7 +193,7 @@ export function ThreadsDiscoveryPanel() {
       searchHistory.save(clean).catch(() => undefined);
 
       if ((body.posts || []).length === 0) {
-        toast.info("No public posts found for this account");
+        toast.info(t("empty.noPublicPostsToast", "No public posts found for this account"));
       }
     } catch (err) {
       const msg = (err as Error).message;
@@ -210,10 +212,10 @@ export function ThreadsDiscoveryPanel() {
         <div>
           <h3 className="text-lg font-semibold flex items-center gap-2">
             <AtSign className="w-5 h-5 text-primary" />
-            Threads Profile Discovery
+            {t("discovery.title", "Threads Profile Discovery")}
           </h3>
           <p className="text-sm text-muted-foreground">
-            Search public Threads profiles for competitor analysis
+            {t("discovery.subtitle", "Search public Threads profiles for competitor analysis")}
           </p>
         </div>
       </div>
@@ -222,7 +224,7 @@ export function ThreadsDiscoveryPanel() {
         <div className="relative flex-1">
           <AtSign className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
           <Input
-            placeholder="Enter a Threads username..."
+            placeholder={t("discovery.usernamePlaceholder", "Enter a Threads username...")}
             value={username}
             onChange={(e) => {
               setUsername(e.target.value);
@@ -250,7 +252,7 @@ export function ThreadsDiscoveryPanel() {
               }}
             >
               <div className="px-3 py-2 text-[11px] uppercase tracking-wide text-muted-foreground flex items-center gap-1.5 border-b border-border/60">
-                <Clock className="w-3 h-3" /> Recent searches
+                <Clock className="w-3 h-3" /> {t("search.recent", "Recent searches")}
               </div>
               <ul className="max-h-64 overflow-y-auto py-1">
                 {searchHistory.items.map((row) => (
@@ -270,7 +272,7 @@ export function ThreadsDiscoveryPanel() {
                     </button>
                     <button
                       type="button"
-                      aria-label="Remove from history"
+                      aria-label={t("search.removeHistory", "Remove from history")}
                       className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-muted text-muted-foreground hover:text-destructive"
                       onClick={(e) => {
                         e.stopPropagation();
@@ -287,7 +289,7 @@ export function ThreadsDiscoveryPanel() {
         </div>
         <Button onClick={() => handleSearch()} disabled={isLoading || !username.trim()} className="gap-2">
           {isLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
-          Discover
+          {t("actions.discover", "Discover")}
         </Button>
       </div>
 
@@ -309,7 +311,7 @@ export function ThreadsDiscoveryPanel() {
               </Avatar>
               <div>
                 <CardTitle className="text-base">@{profile.username}</CardTitle>
-                <p className="text-sm text-muted-foreground">{profile.postsCount} public posts discovered</p>
+                <p className="text-sm text-muted-foreground">{t("discovery.postsCount", "{{count}} public posts discovered", { count: profile.postsCount })}</p>
               </div>
             </div>
           </CardHeader>
@@ -318,16 +320,16 @@ export function ThreadsDiscoveryPanel() {
 
       {stats && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-          <Card><CardContent className="p-4 text-center"><BarChart3 className="w-5 h-5 mx-auto mb-1 text-primary" /><p className="text-2xl font-bold">{stats.totalPosts}</p><p className="text-xs text-muted-foreground">Posts Discovered</p></CardContent></Card>
-          <Card><CardContent className="p-4 text-center"><Calendar className="w-5 h-5 mx-auto mb-1 text-primary" /><p className="text-2xl font-bold">{stats.avgPostsPerWeek}</p><p className="text-xs text-muted-foreground">Avg Posts/Week</p></CardContent></Card>
-          <Card><CardContent className="p-4 text-center"><MessageCircle className="w-5 h-5 mx-auto mb-1 text-primary" /><p className="text-2xl font-bold">{stats.textPosts}%</p><p className="text-xs text-muted-foreground">Text Posts</p></CardContent></Card>
-          <Card><CardContent className="p-4 text-center"><Eye className="w-5 h-5 mx-auto mb-1 text-primary" /><p className="text-2xl font-bold">{stats.mediaPosts}%</p><p className="text-xs text-muted-foreground">Media Posts</p></CardContent></Card>
+          <Card><CardContent className="p-4 text-center"><BarChart3 className="w-5 h-5 mx-auto mb-1 text-primary" /><p className="text-2xl font-bold">{stats.totalPosts}</p><p className="text-xs text-muted-foreground">{t("discovery.postsDiscovered", "Posts Discovered")}</p></CardContent></Card>
+          <Card><CardContent className="p-4 text-center"><Calendar className="w-5 h-5 mx-auto mb-1 text-primary" /><p className="text-2xl font-bold">{stats.avgPostsPerWeek}</p><p className="text-xs text-muted-foreground">{t("discovery.avgPerWeek", "Avg Posts/Week")}</p></CardContent></Card>
+          <Card><CardContent className="p-4 text-center"><MessageCircle className="w-5 h-5 mx-auto mb-1 text-primary" /><p className="text-2xl font-bold">{stats.textPosts}%</p><p className="text-xs text-muted-foreground">{t("discovery.textPosts", "Text Posts")}</p></CardContent></Card>
+          <Card><CardContent className="p-4 text-center"><Eye className="w-5 h-5 mx-auto mb-1 text-primary" /><p className="text-2xl font-bold">{stats.mediaPosts}%</p><p className="text-xs text-muted-foreground">{t("discovery.mediaPosts", "Media Posts")}</p></CardContent></Card>
         </div>
       )}
 
       {posts.length > 0 && (
         <div className="space-y-3">
-          <h4 className="text-sm font-medium text-muted-foreground">Recent Public Posts</h4>
+          <h4 className="text-sm font-medium text-muted-foreground">{t("discovery.recentPosts", "Recent Public Posts")}</h4>
           {posts.map((post) => (
             <Card
               key={post.id}
@@ -345,10 +347,10 @@ export function ThreadsDiscoveryPanel() {
                     />
                   )}
                   <div className="flex-1 min-w-0">
-                    <p className="text-sm line-clamp-2">{post.caption || "(No text)"}</p>
+                    <p className="text-sm line-clamp-2">{post.caption || t("discovery.noText", "(No text)")}</p>
                     <div className="flex items-center gap-3 mt-2 flex-wrap">
                       <Badge variant="secondary" className="text-xs">{post.mediaType}</Badge>
-                      {post.isQuotePost && <Badge variant="outline" className="text-xs">Quote Post</Badge>}
+                      {post.isQuotePost && <Badge variant="outline" className="text-xs">{t("discovery.quotePost", "Quote Post")}</Badge>}
                       <span className="text-xs text-muted-foreground">
                         {post.timestamp ? format(new Date(post.timestamp), "MMM d, yyyy") : ""}
                       </span>
@@ -361,7 +363,7 @@ export function ThreadsDiscoveryPanel() {
                             onClick={(e) => e.stopPropagation()}
                             className="text-xs text-primary hover:underline flex items-center gap-1"
                           >
-                            <ExternalLink className="w-3 h-3" />View
+                            <ExternalLink className="w-3 h-3" />{t("common:view", "View")}
                           </a>
                         )}
                         <Button
@@ -375,7 +377,7 @@ export function ThreadsDiscoveryPanel() {
                           }}
                         >
                           <MessageSquarePlus className="w-3.5 h-3.5" />
-                          Comment
+                          {t("actions.comment", "Comment")}
                         </Button>
                         {ownedAccountId && (
                           <AlertDialog>
@@ -387,21 +389,21 @@ export function ThreadsDiscoveryPanel() {
                                 onClick={(e) => e.stopPropagation()}
                               >
                                 <Trash2 className="w-3.5 h-3.5" />
-                                Delete
+                                {t("common:delete", "Delete")}
                               </Button>
                             </AlertDialogTrigger>
                             <AlertDialogContent onClick={(e) => e.stopPropagation()}>
                               <AlertDialogHeader>
-                                <AlertDialogTitle>Delete this post from Threads?</AlertDialogTitle>
+                                <AlertDialogTitle>{t("dialog.deleteThreadsTitle", "Delete this post from Threads?")}</AlertDialogTitle>
                                 <AlertDialogDescription>
-                                  This removes the post from Meta. Your local history record stays so you can still see it here.
+                                  {t("dialog.deleteThreadsBody", "This removes the post from Meta. Your local history record stays so you can still see it here.")}
                                 </AlertDialogDescription>
                               </AlertDialogHeader>
                               <AlertDialogFooter>
-                                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                                <AlertDialogCancel>{t("common:cancel", "Cancel")}</AlertDialogCancel>
                                 <AlertDialogAction onClick={() => handleDeletePost(post.id)} disabled={actionLoadingId === post.id}>
                                   {actionLoadingId === post.id ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
-                                  Delete
+                                  {t("common:delete", "Delete")}
                                 </AlertDialogAction>
                               </AlertDialogFooter>
                             </AlertDialogContent>
@@ -412,7 +414,7 @@ export function ThreadsDiscoveryPanel() {
                     {commentForId === post.id && (
                       <div className="mt-3 space-y-2 p-3 rounded-lg border bg-muted/30" onClick={(e) => e.stopPropagation()}>
                         <Textarea
-                          placeholder="Write a reply…"
+                          placeholder={t("keyword.replyPlaceholder", "Write a reply…")}
                           value={commentText}
                           onChange={(e) => setCommentText(e.target.value)}
                           maxLength={500}
@@ -422,7 +424,7 @@ export function ThreadsDiscoveryPanel() {
                           <p className="text-xs text-muted-foreground">{commentText.length}/500</p>
                           <Button size="sm" className="gap-1.5" onClick={() => handlePostComment(post.id)} disabled={actionLoadingId === post.id || !commentText.trim()}>
                             {actionLoadingId === post.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-                            Post comment
+                            {t("actions.postComment", "Post comment")}
                           </Button>
                         </div>
                       </div>
@@ -437,7 +439,7 @@ export function ThreadsDiscoveryPanel() {
 
       {profile && (
         <p className="text-xs text-center text-muted-foreground">
-          Powered by Threads Profile Discovery API • Public data only
+          {t("discovery.poweredBy", "Powered by Threads Profile Discovery API • Public data only")}
         </p>
       )}
 

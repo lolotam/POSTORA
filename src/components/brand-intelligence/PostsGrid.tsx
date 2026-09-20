@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AspectRatio } from "@/components/ui/aspect-ratio";
 import { Filter } from "lucide-react";
@@ -16,6 +17,7 @@ interface PostsGridProps {
 }
 
 export function PostsGrid({ posts, isLoading, onPostClick, contentPostIds, canDelete, deletingPostId, onPostDelete }: PostsGridProps) {
+  const { t } = useTranslation("analytics");
   if (isLoading) {
     return (
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
@@ -34,8 +36,8 @@ export function PostsGrid({ posts, isLoading, onPostClick, contentPostIds, canDe
     return (
       <div className="flex flex-col items-center justify-center py-16 text-center">
         <Filter className="w-12 h-12 text-muted-foreground/30 mb-3" />
-        <p className="text-muted-foreground font-medium">No posts match your filters</p>
-        <p className="text-sm text-muted-foreground/60">Try adjusting your filter criteria</p>
+        <p className="text-muted-foreground font-medium">{t("empty.noFilterMatch", "No posts match your filters")}</p>
+        <p className="text-sm text-muted-foreground/60">{t("empty.adjustFilters", "Try adjusting your filter criteria")}</p>
       </div>
     );
   }

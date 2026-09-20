@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
+import { useTranslation } from "react-i18next";
 import { useNavigate, useLocation, useParams } from "react-router-dom";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { Button } from "@/components/ui/button";
@@ -17,6 +18,7 @@ import { format } from "date-fns";
 import type { BrandPost, GeneratedContent } from "@/types/brand-intelligence";
 
 export default function BrandIntelligencePost() {
+  const { t } = useTranslation("analytics");
   const navigate = useNavigate();
   const location = useLocation();
   const { postId } = useParams<{ postId: string }>();
@@ -113,7 +115,7 @@ export default function BrandIntelligencePost() {
 
   const handleTranscribe = () => {
     if (!post?.mediaUrl) {
-      toast.error("No media URL available for transcription");
+      toast.error(t("errors.noMediaUrl", "No media URL available for transcription"));
       return;
     }
     transcribe(post.mediaUrl);
@@ -121,7 +123,7 @@ export default function BrandIntelligencePost() {
 
   const handleGenerate = async () => {
     if (!editableTranscript && !post?.caption) {
-      toast.error("Transcribe the video first or ensure there's a caption");
+      toast.error(t("errors.transcribeFirst", "Transcribe the video first or ensure there's a caption"));
       return;
     }
 
@@ -158,9 +160,9 @@ export default function BrandIntelligencePost() {
         generation_platform: genPlatform,
       });
 
-      toast.success("30 content ideas generated!");
+      toast.success(t("toast.generated30", "30 content ideas generated!"));
     } catch (err) {
-      toast.error((err as Error).message || "Generation failed");
+      toast.error((err as Error).message || t("errors.generationFailed", "Generation failed"));
     } finally {
       setIsGenerating(false);
     }
@@ -184,12 +186,12 @@ export default function BrandIntelligencePost() {
   const displayDuration = cachedDuration ?? duration ?? 0;
 
   const stats = [
-    { icon: Heart, label: "Likes", value: post.likesCount, color: "text-red-500" },
-    { icon: MessageCircle, label: "Comments", value: post.commentsCount, color: "text-blue-500" },
-    { icon: Eye, label: "Views", value: post.videoViewCount || 0, color: "text-green-500" },
-    { icon: Share2, label: "Shares", value: post.sharesCount || 0, color: "text-violet-500" },
-    { icon: Bookmark, label: "Saves", value: post.savesCount || 0, color: "text-amber-500" },
-    { icon: TrendingUp, label: "Score", value: post.engagementScore, color: "text-pink-500" },
+    { id: "likes", icon: Heart, label: t("stats.likes", "Likes"), value: post.likesCount, color: "text-red-500" },
+    { id: "comments", icon: MessageCircle, label: t("stats.comments", "Comments"), value: post.commentsCount, color: "text-blue-500" },
+    { id: "views", icon: Eye, label: t("stats.views", "Views"), value: post.videoViewCount || 0, color: "text-green-500" },
+    { id: "shares", icon: Share2, label: t("stats.shares", "Shares"), value: post.sharesCount || 0, color: "text-violet-500" },
+    { id: "saves", icon: Bookmark, label: t("stats.saves", "Saves"), value: post.savesCount || 0, color: "text-amber-500" },
+    { id: "score", icon: TrendingUp, label: t("stats.score", "Score"), value: post.engagementScore, color: "text-pink-500" },
   ];
 
   return (
@@ -201,14 +203,14 @@ export default function BrandIntelligencePost() {
             <ArrowLeft className="w-5 h-5" />
           </Button>
           <div>
-            <h1 className="text-xl font-bold">Video Analysis</h1>
+            <h1 className="text-xl font-bold">{t("video.analysis", "Video Analysis")}</h1>
             <p className="text-sm text-muted-foreground">
               {post.mediaType} • {platform}
             </p>
           </div>
           {hasTranscript && (
             <Badge className="bg-gradient-to-r from-violet-500 to-pink-500 text-white border-0 ml-auto">
-              <Sparkles className="w-3 h-3 mr-1" /> Transcribed
+              <Sparkles className="w-3 h-3 mr-1" /> {t("video.transcribed", "Transcribed")}
             </Badge>
           )}
         </div>
@@ -235,7 +237,7 @@ export default function BrandIntelligencePost() {
                       <div className="relative w-full bg-black mx-auto" style={{ aspectRatio: "9 / 16", maxHeight: 600 }}>
                         <iframe
                           src={post.mediaUrl}
-                          title="TikTok video"
+                          title={t("video.tiktokTitle", "TikTok video")}
                           allow="encrypted-media;"
                           allowFullScreen
                           className="absolute inset-0 w-full h-full border-0"
@@ -305,7 +307,7 @@ export default function BrandIntelligencePost() {
                 {post.permalink && (
                   <Button variant="outline" size="sm" className="h-7 text-xs gap-1.5" asChild>
                     <a href={post.permalink} target="_blank" rel="noopener noreferrer">
-                      View on {platform === "tiktok" ? "TikTok" : "Original"}
+                      {platform === "tiktok" ? t("video.viewOnTikTok", "View on TikTok") : t("video.viewOnOriginal", "View on Original")}
                       <ExternalLink className="w-3 h-3" />
                     </a>
                   </Button>
@@ -315,8 +317,8 @@ export default function BrandIntelligencePost() {
 
             {/* Stats Grid */}
             <div className="grid grid-cols-3 gap-2">
-              {stats.map(({ icon: Icon, label, value, color }) => (
-                <Card key={label}>
+              {stats.map(({ id, icon: Icon, label, value, color }) => (
+                <Card key={id}>
                   <CardContent className="p-3 text-center">
                     <Icon className={`w-4 h-4 mx-auto mb-1 ${color}`} />
                     <p className="text-sm font-bold">{value.toLocaleString()}</p>
@@ -330,7 +332,7 @@ export default function BrandIntelligencePost() {
             {post.caption && (
               <Card>
                 <CardHeader className="pb-2">
-                  <CardTitle className="text-sm">Video Description</CardTitle>
+                  <CardTitle className="text-sm">{t("video.description", "Video Description")}</CardTitle>
                 </CardHeader>
                 <CardContent>
                   <p className="text-sm text-muted-foreground whitespace-pre-wrap">{post.caption}</p>
@@ -347,7 +349,7 @@ export default function BrandIntelligencePost() {
                 <div className="flex items-center justify-between">
                   <CardTitle className="text-sm flex items-center gap-2">
                     <Mic className="w-4 h-4 text-violet-500" />
-                    Transcription
+                    {t("transcript.title", "Transcription")}
                   </CardTitle>
                   {displayLanguage !== "unknown" && (
                     <Badge variant="secondary" className="text-[10px]">🌐 {displayLanguage}</Badge>
@@ -358,9 +360,9 @@ export default function BrandIntelligencePost() {
                 {!hasTranscript && !isTranscribing && (
                   <div className="text-center py-6">
                     <Mic className="w-10 h-10 text-muted-foreground/30 mx-auto mb-2" />
-                    <p className="text-sm text-muted-foreground mb-3">Extract text from this video</p>
+                    <p className="text-sm text-muted-foreground mb-3">{t("transcript.extractText", "Extract text from this video")}</p>
                     <Button onClick={handleTranscribe} className="gap-2 bg-gradient-to-r from-violet-500 to-pink-500 border-0 text-white">
-                      <Mic className="w-4 h-4" /> Transcribe Video
+                      <Mic className="w-4 h-4" /> {t("actions.transcribeVideo", "Transcribe Video")}
                     </Button>
                   </div>
                 )}
@@ -368,7 +370,7 @@ export default function BrandIntelligencePost() {
                 {isTranscribing && (
                   <div className="text-center py-6">
                     <Loader2 className="w-8 h-8 animate-spin text-violet-500 mx-auto mb-2" />
-                    <p className="text-sm text-muted-foreground">Transcribing audio...</p>
+                    <p className="text-sm text-muted-foreground">{t("transcript.transcribingShort", "Transcribing audio...")}</p>
                   </div>
                 )}
 
@@ -376,7 +378,7 @@ export default function BrandIntelligencePost() {
                   <div className="p-3 rounded-lg bg-destructive/10 text-destructive text-sm">
                     {transcriptionError}
                     <Button variant="outline" size="sm" className="mt-2 w-full" onClick={handleTranscribe}>
-                      Retry
+                      {t("common:retry", "Retry")}
                     </Button>
                   </div>
                 )}
@@ -391,7 +393,7 @@ export default function BrandIntelligencePost() {
                     />
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
-                        <span className="text-[10px] text-muted-foreground">{editableTranscript.length} chars</span>
+                        <span className="text-[10px] text-muted-foreground">{t("transcript.chars", "{{count}} chars", { count: editableTranscript.length })}</span>
                         {displayDuration > 0 && (
                           <span className="text-[10px] text-muted-foreground">
                             ⏱ {Math.floor(displayDuration / 60)}:{Math.round(displayDuration % 60).toString().padStart(2, "0")}
@@ -404,10 +406,10 @@ export default function BrandIntelligencePost() {
                         className="text-xs gap-1"
                         onClick={() => {
                           upsertContent({ transcript: editableTranscript });
-                          toast.success("Transcript saved");
+                          toast.success(t("toast.transcriptSaved", "Transcript saved"));
                         }}
                       >
-                        Save Changes
+                        {t("common:saveChanges", "Save Changes")}
                       </Button>
                     </div>
                   </>
@@ -420,7 +422,7 @@ export default function BrandIntelligencePost() {
               <CardHeader className="pb-3">
                 <CardTitle className="text-sm flex items-center gap-2">
                   <Sparkles className="w-4 h-4 text-pink-500" />
-                  AI Content Ideas
+                  {t("video.aiIdeas", "AI Content Ideas")}
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-3">
@@ -431,9 +433,9 @@ export default function BrandIntelligencePost() {
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="english">English</SelectItem>
-                      <SelectItem value="arabic">Arabic</SelectItem>
-                      <SelectItem value="both">Both</SelectItem>
+                      <SelectItem value="english">{t("content.englishPlain", "English")}</SelectItem>
+                      <SelectItem value="arabic">{t("content.arabicPlain", "Arabic")}</SelectItem>
+                      <SelectItem value="both">{t("content.both", "Both")}</SelectItem>
                     </SelectContent>
                   </Select>
                   <Select value={genTone} onValueChange={setGenTone}>
@@ -441,11 +443,11 @@ export default function BrandIntelligencePost() {
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="professional">Professional</SelectItem>
-                      <SelectItem value="casual">Casual</SelectItem>
-                      <SelectItem value="inspirational">Inspirational</SelectItem>
-                      <SelectItem value="educational">Educational</SelectItem>
-                      <SelectItem value="humorous">Humorous</SelectItem>
+                      <SelectItem value="professional">{t("content.professional", "Professional")}</SelectItem>
+                      <SelectItem value="casual">{t("content.casual", "Casual")}</SelectItem>
+                      <SelectItem value="inspirational">{t("content.inspirational", "Inspirational")}</SelectItem>
+                      <SelectItem value="educational">{t("content.educational", "Educational")}</SelectItem>
+                      <SelectItem value="humorous">{t("content.humorous", "Humorous")}</SelectItem>
                     </SelectContent>
                   </Select>
                   <Select value={genPlatform} onValueChange={setGenPlatform}>
@@ -453,12 +455,12 @@ export default function BrandIntelligencePost() {
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="instagram">Instagram</SelectItem>
-                      <SelectItem value="tiktok">TikTok</SelectItem>
-                      <SelectItem value="facebook">Facebook</SelectItem>
-                      <SelectItem value="threads">Threads</SelectItem>
-                      <SelectItem value="twitter">Twitter/X</SelectItem>
-                      <SelectItem value="linkedin">LinkedIn</SelectItem>
+                      <SelectItem value="instagram">{t("brand.instagram", "Instagram")}</SelectItem>
+                      <SelectItem value="tiktok">{t("brand.tiktok", "TikTok")}</SelectItem>
+                      <SelectItem value="facebook">{t("brand.facebook", "Facebook")}</SelectItem>
+                      <SelectItem value="threads">{t("brand.threads", "Threads")}</SelectItem>
+                      <SelectItem value="twitter">{t("brand.twitter", "Twitter/X")}</SelectItem>
+                      <SelectItem value="linkedin">{t("brand.linkedin", "LinkedIn")}</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -469,9 +471,9 @@ export default function BrandIntelligencePost() {
                   className="w-full gap-2 bg-gradient-to-r from-violet-500 to-pink-500 border-0 text-white"
                 >
                   {isGenerating ? (
-                    <><Loader2 className="w-4 h-4 animate-spin" /> Generating...</>
+                    <><Loader2 className="w-4 h-4 animate-spin" /> {t("content.generating", "Generating...")}</>
                   ) : (
-                    <><Sparkles className="w-4 h-4" /> Generate 30 Ideas</>
+                    <><Sparkles className="w-4 h-4" /> {t("actions.generate30Plain", "Generate 30 Ideas")}</>
                   )}
                 </Button>
 
@@ -483,15 +485,15 @@ export default function BrandIntelligencePost() {
                       <TabsList className="w-full">
                         <TabsTrigger value="captions" className="flex-1 gap-1 text-xs">
                           <FileText className="w-3 h-3" />
-                          Captions ({generatedContent.captions.length})
+                          {t("content.captionsShort", "Captions ({{count}})", { count: generatedContent.captions.length })}
                         </TabsTrigger>
                         <TabsTrigger value="images" className="flex-1 gap-1 text-xs">
                           <Image className="w-3 h-3" />
-                          Images ({generatedContent.imagePrompts.length})
+                          {t("content.imagesShort", "Images ({{count}})", { count: generatedContent.imagePrompts.length })}
                         </TabsTrigger>
                         <TabsTrigger value="videos" className="flex-1 gap-1 text-xs">
                           <Video className="w-3 h-3" />
-                          Videos ({generatedContent.videoPrompts.length})
+                          {t("content.videosShort", "Videos ({{count}})", { count: generatedContent.videoPrompts.length })}
                         </TabsTrigger>
                       </TabsList>
 
@@ -502,10 +504,10 @@ export default function BrandIntelligencePost() {
                             <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                               <Button size="sm" variant="ghost" className="h-6 text-[10px] gap-1" onClick={() => copyToClipboard(caption, i)}>
                                 {copiedIndex === i ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
-                                {copiedIndex === i ? "Copied" : "Copy"}
+                                {copiedIndex === i ? t("common:copied", "Copied") : t("common:copy", "Copy")}
                               </Button>
                               <Button size="sm" variant="ghost" className="h-6 text-[10px] gap-1" onClick={() => handleUseInPost(caption)}>
-                                Use in Post
+                                {t("actions.useInPost", "Use in Post")}
                               </Button>
                             </div>
                           </div>
@@ -519,7 +521,7 @@ export default function BrandIntelligencePost() {
                             <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                               <Button size="sm" variant="ghost" className="h-6 text-[10px] gap-1" onClick={() => copyToClipboard(prompt, 1000 + i)}>
                                 {copiedIndex === 1000 + i ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
-                                {copiedIndex === 1000 + i ? "Copied" : "Copy"}
+                                {copiedIndex === 1000 + i ? t("common:copied", "Copied") : t("common:copy", "Copy")}
                               </Button>
                             </div>
                           </div>
@@ -533,7 +535,7 @@ export default function BrandIntelligencePost() {
                             <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                               <Button size="sm" variant="ghost" className="h-6 text-[10px] gap-1" onClick={() => copyToClipboard(prompt, 2000 + i)}>
                                 {copiedIndex === 2000 + i ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
-                                {copiedIndex === 2000 + i ? "Copied" : "Copy"}
+                                {copiedIndex === 2000 + i ? t("common:copied", "Copied") : t("common:copy", "Copy")}
                               </Button>
                             </div>
                           </div>

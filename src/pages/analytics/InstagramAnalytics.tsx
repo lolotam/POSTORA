@@ -1,4 +1,5 @@
 import { useState, useMemo } from "react";
+import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { useAuth } from "@/hooks/useAuth";
@@ -25,6 +26,7 @@ const DEFAULT_FILTERS: BrandScrapeFilters = {
 const EXAMPLE_BRANDS = ["@nike", "@cocacola", "@redbull", "@apple"];
 
 export default function InstagramAnalytics() {
+  const { t } = useTranslation("analytics");
   const navigate = useNavigate();
   const { session } = useAuth();
   const [filters, setFilters] = useState<BrandScrapeFilters>(DEFAULT_FILTERS);
@@ -87,8 +89,8 @@ export default function InstagramAnalytics() {
           <div className="group flex items-center gap-4">
             <Icon3D icon={Camera} variant="rose" size="md" />
             <div className="flex-1 min-w-0">
-              <GradientHeading preset="amber-rose-violet" size="lg" as="h1">Instagram Analytics</GradientHeading>
-              <p className="text-sm text-muted-foreground mt-1">Analyze Instagram brands & top performing content</p>
+              <GradientHeading preset="amber-rose-violet" size="lg" as="h1">{t("header.instagram", "Instagram Analytics")}</GradientHeading>
+              <p className="text-sm text-muted-foreground mt-1">{t("header.instagramSubtitle", "Analyze Instagram brands & top performing content")}</p>
             </div>
           </div>
         </Reveal>
@@ -113,12 +115,12 @@ export default function InstagramAnalytics() {
             <div className="space-y-4">
               <ProfileCard profile={profile!} isLoading={isLoading} />
               <FilterToolbar filters={filters} onChange={setFilters} maxEngagement={maxEngagement} />
-              <p className="text-sm text-muted-foreground">{filteredPosts.length} of {totalPosts} posts</p>
+              <p className="text-sm text-muted-foreground">{t("posts.countOf", "{{filtered}} of {{total}} posts", { filtered: filteredPosts.length, total: totalPosts })}</p>
               <PostsGrid posts={filteredPosts} isLoading={isLoading} onPostClick={handlePostClick} contentPostIds={contentPostIds} />
               {hasMore && (
                 <div className="flex justify-center pt-4">
                   <Button variant="outline" onClick={loadMore} className="gap-2 border-rose-500/40 hover:bg-rose-500/10">
-                    <Loader2 className="w-4 h-4" />Load More
+                    <Loader2 className="w-4 h-4" />{t("actions.loadMore", "Load More")}
                   </Button>
                 </div>
               )}
@@ -131,8 +133,8 @@ export default function InstagramAnalytics() {
             <GradientRingCard variant="rose" hoverLift={false} ringIntensity="subtle">
               <div className="flex flex-col items-center justify-center py-12 text-center">
                 <div className="group mb-5"><Icon3D icon={SearchCheck} variant="rose" size="lg" /></div>
-                <h3 className="text-lg font-semibold mb-1">Start by searching for a brand</h3>
-                <p className="text-sm text-muted-foreground mb-6 max-w-md">Enter any Instagram username to analyze their top performing content</p>
+                <h3 className="text-lg font-semibold mb-1">{t("empty.searchBrand", "Start by searching for a brand")}</h3>
+                <p className="text-sm text-muted-foreground mb-6 max-w-md">{t("empty.searchHintInstagram", "Enter any Instagram username to analyze their top performing content")}</p>
                 <div className="flex flex-wrap justify-center gap-2">
                   {EXAMPLE_BRANDS.map((brand) => (
                     <Button key={brand} variant="outline" size="sm" className="text-xs border-rose-500/40 hover:bg-rose-500/10 transition-transform hover:-translate-y-0.5" onClick={() => handleSearch(brand.replace("@", ""))}>{brand}</Button>

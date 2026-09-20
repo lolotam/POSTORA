@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { Card } from "@/components/ui/card";
 import {
   AreaChart,
@@ -23,11 +24,12 @@ export function PlatformPerformanceChart({
   data,
   platforms,
 }: PlatformPerformanceChartProps) {
+  const { t } = useTranslation("analytics");
   return (
     <Card className="p-6 bg-card/50 border-border">
       <div className="flex items-center gap-2 mb-6">
         <Activity className="w-5 h-5 text-primary" />
-        <h3 className="font-semibold">Posts by Platform Over Time</h3>
+        <h3 className="font-semibold">{t("charts.platformOverTime", "Posts by Platform Over Time")}</h3>
       </div>
       <div className="h-64">
         {platforms.length > 0 ? (
@@ -64,7 +66,7 @@ export function PlatformPerformanceChart({
           </ResponsiveContainer>
         ) : (
           <div className="h-full flex items-center justify-center text-muted-foreground">
-            No platform data available
+            {t("empty.noPlatformData", "No platform data available")}
           </div>
         )}
       </div>

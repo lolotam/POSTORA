@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { Card } from "@/components/ui/card";
 import {
   PieChart,
@@ -20,11 +21,12 @@ interface PlatformPieChartProps {
 }
 
 export function PlatformPieChart({ data }: PlatformPieChartProps) {
+  const { t } = useTranslation("analytics");
   return (
     <Card className="p-6 bg-card/50 border-border">
       <div className="flex items-center gap-2 mb-6">
         <BarChart3 className="w-5 h-5 text-primary" />
-        <h3 className="font-semibold">Posts by Platform</h3>
+        <h3 className="font-semibold">{t("charts.postsByPlatform", "Posts by Platform")}</h3>
       </div>
       <div className="h-64">
         {data.length > 0 ? (
@@ -60,7 +62,7 @@ export function PlatformPieChart({ data }: PlatformPieChartProps) {
           </ResponsiveContainer>
         ) : (
           <div className="h-full flex items-center justify-center text-muted-foreground">
-            No posts in this time range
+            {t("empty.noPostsRange", "No posts in this time range")}
           </div>
         )}
       </div>

@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { Card } from "@/components/ui/card";
 import { PlatformIcon, getPlatformName } from "@/components/PlatformIcon";
 import { Platform } from "@/lib/types";
@@ -17,9 +18,11 @@ export function ConnectedAccountsSummary({
   accounts,
   getPostCountForPlatform,
 }: ConnectedAccountsSummaryProps) {
+  const { t } = useTranslation("analytics");
+
   return (
     <Card className="p-6 bg-card/50 border-border">
-      <h3 className="font-semibold mb-4">Connected Accounts</h3>
+      <h3 className="font-semibold mb-4">{t("profile.connectedAccounts", "Connected Accounts")}</h3>
       <div className="grid sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
         {accounts.map((account) => (
           <div
@@ -34,14 +37,14 @@ export function ConnectedAccountsSummary({
                 {account.platform_username || getPlatformName(account.platform as Platform)}
               </p>
               <p className="text-xs text-muted-foreground">
-                {getPostCountForPlatform(account.platform)} posts
+                {t("posts.countPosts", "{{count}} posts", { count: getPostCountForPlatform(account.platform) })}
               </p>
             </div>
           </div>
         ))}
         {accounts.length === 0 && (
           <p className="text-muted-foreground text-sm col-span-full">
-            No connected accounts yet
+            {t("posts.noConnected", "No connected accounts yet")}
           </p>
         )}
       </div>

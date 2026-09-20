@@ -1,4 +1,5 @@
 import { useState, useMemo } from "react";
+import { useTranslation } from "react-i18next";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { useFeatureFlags } from "@/hooks/useFeatureFlags";
 import { Navigate } from "react-router-dom";
@@ -23,6 +24,7 @@ const STATUS_PILL: Record<string, string> = {
 };
 
 export default function LeadsCRM() {
+  const { t } = useTranslation("analytics");
   const { flags, isLoading: flagsLoading } = useFeatureFlags();
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
   const [selectedFormId, setSelectedFormId] = useState("all");
@@ -83,18 +85,18 @@ export default function LeadsCRM() {
             <div className="group flex items-center gap-4 min-w-0">
               <Icon3D icon={Users} variant="violet" size="md" />
               <div className="flex-1 min-w-0">
-                <GradientHeading preset="sky-violet-pink" size="lg" as="h1">Lead Forms CRM</GradientHeading>
-                <p className="text-sm text-muted-foreground mt-1">Manage Facebook Lead Ad submissions</p>
+                <GradientHeading preset="sky-violet-pink" size="lg" as="h1">{t("leads.title", "Lead Forms CRM")}</GradientHeading>
+                <p className="text-sm text-muted-foreground mt-1">{t("leads.subtitle", "Manage Facebook Lead Ad submissions")}</p>
               </div>
             </div>
             <div className="flex gap-2">
               <Button variant="outline" size="sm" className="border-violet-500/40 hover:bg-violet-500/10" onClick={handleSyncForms} disabled={syncForms.isPending || !activeAccountId}>
                 {syncForms.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <Download className="h-4 w-4 mr-1" />}
-                Sync Forms
+                {t("actions.syncForms", "Sync Forms")}
               </Button>
               <Button size="sm" className="bg-gradient-to-r from-sky-500 via-violet-500 to-pink-500 text-white hover:opacity-90" onClick={handleSyncLeads} disabled={syncLeads.isPending || forms.length === 0}>
                 {syncLeads.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <RefreshCw className="h-4 w-4 mr-1" />}
-                Sync Leads
+                {t("actions.syncLeads", "Sync Leads")}
               </Button>
             </div>
           </div>
@@ -104,11 +106,20 @@ export default function LeadsCRM() {
         {/* Status summary */}
         <Reveal delay={60}>
           <div className="flex flex-wrap gap-2">
-            {Object.entries(statusCounts).map(([status, count]) => (
+            {Object.entries(statusCounts).map(([status, count]) => {
+              const statusLabel =
+                status === "new" ? t("leads.new", "New")
+                : status === "contacted" ? t("leads.contacted", "Contacted")
+                : status === "qualified" ? t("leads.qualified", "Qualified")
+                : status === "won" ? t("leads.won", "Won")
+                : status === "lost" ? t("leads.lost", "Lost")
+                : status;
+              return (
               <span key={status} className={cn("inline-flex items-center gap-1.5 rounded-full border backdrop-blur-md px-3 py-1 text-xs font-medium capitalize", STATUS_PILL[status] || "bg-card/60 border-border/40")}>
-                {status}: <span className="tabular-nums font-semibold">{count}</span>
+                {statusLabel}: <span className="tabular-nums font-semibold">{count}</span>
               </span>
-            ))}
+              );
+            })}
           </div>
         </Reveal>
 
@@ -118,10 +129,10 @@ export default function LeadsCRM() {
             <div className="flex flex-wrap items-end gap-4">
               {fbAccounts.length > 0 && (
                 <div className="space-y-1.5">
-                  <span className="text-xs text-muted-foreground">Facebook Page</span>
+                  <span className="text-xs text-muted-foreground">{t("leads.facebookPage", "Facebook Page")}</span>
                   <Select value={activeAccountId || ""} onValueChange={setSelectedAccountId}>
                     <SelectTrigger className="w-[220px] h-9">
-                      <SelectValue placeholder="Select page" />
+                      <SelectValue placeholder={t("leads.selectPage", "Select page")} />
                     </SelectTrigger>
                     <SelectContent>
                       {fbAccounts.map((a) => (
@@ -154,10 +165,10 @@ export default function LeadsCRM() {
             <GradientRingCard variant="violet" hoverLift={false} ringIntensity="subtle">
               <div className="flex flex-col items-center text-center py-6 space-y-3">
                 <div className="group"><Icon3D icon={Users} variant="violet" size="lg" /></div>
-                <p className="font-medium mt-1">No Facebook pages connected</p>
-                <p className="text-sm text-muted-foreground">Connect a Facebook page to sync lead forms.</p>
+                <p className="font-medium mt-1">{t("empty.noFacebookPages", "No Facebook pages connected")}</p>
+                <p className="text-sm text-muted-foreground">{t("empty.syncFormsHint", "Connect a Facebook page to sync lead forms.")}</p>
                 <Button asChild className="bg-gradient-to-r from-sky-500 via-violet-500 to-pink-500 text-white hover:opacity-90">
-                  <Link to="/profiles">Go to Profiles</Link>
+                  <Link to="/profiles">{t("actions.goToProfiles", "Go to Profiles")}</Link>
                 </Button>
               </div>
             </GradientRingCard>
@@ -166,8 +177,8 @@ export default function LeadsCRM() {
           <Reveal delay={160}>
             <div className="rounded-2xl border border-border/40 bg-card/60 backdrop-blur-md text-center py-12">
               <div className="group inline-flex mb-3"><Icon3D icon={Users} variant="violet" size="lg" /></div>
-              <p className="font-medium mt-2">No leads found</p>
-              <p className="text-sm text-muted-foreground mt-1">Sync your lead forms to import leads from Facebook.</p>
+              <p className="font-medium mt-2">{t("empty.noLeads", "No leads found")}</p>
+              <p className="text-sm text-muted-foreground mt-1">{t("empty.noLeadsHint", "Sync your lead forms to import leads from Facebook.")}</p>
             </div>
           </Reveal>
         ) : (

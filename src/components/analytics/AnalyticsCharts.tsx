@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { Card } from "@/components/ui/card";
 import {
   BarChart,
@@ -36,11 +37,12 @@ interface PlatformSuccessChartProps {
 }
 
 export function PlatformSuccessChart({ data }: PlatformSuccessChartProps) {
+  const { t } = useTranslation("analytics");
   return (
     <Card className="p-6 bg-card/50 border-border">
       <div className="flex items-center gap-2 mb-6">
         <Target className="w-5 h-5 text-primary" />
-        <h3 className="font-semibold">Success Rate by Platform</h3>
+        <h3 className="font-semibold">{t("charts.successByPlatform", "Success Rate by Platform")}</h3>
       </div>
       <div className="h-64">
         {data.length > 0 ? (
@@ -69,7 +71,7 @@ export function PlatformSuccessChart({ data }: PlatformSuccessChartProps) {
                 }}
                 formatter={(value, name, props) => [
                   `${value}% (${props.payload.successful}/${props.payload.total})`,
-                  "Success Rate",
+                  t("charts.successRate", "Success Rate"),
                 ]}
               />
               <Bar dataKey="successRate" radius={[0, 4, 4, 0]}>
@@ -84,7 +86,7 @@ export function PlatformSuccessChart({ data }: PlatformSuccessChartProps) {
           </ResponsiveContainer>
         ) : (
           <div className="h-full flex items-center justify-center text-muted-foreground">
-            No platform performance data yet
+            {t("empty.noPlatformPerf", "No platform performance data yet")}
           </div>
         )}
       </div>
@@ -97,11 +99,12 @@ interface StatusDistributionChartProps {
 }
 
 export function StatusDistributionChart({ data }: StatusDistributionChartProps) {
+  const { t } = useTranslation("analytics");
   return (
     <Card className="p-6 bg-card/50 border-border">
       <div className="flex items-center gap-2 mb-6">
         <Eye className="w-5 h-5 text-primary" />
-        <h3 className="font-semibold">Status Distribution</h3>
+        <h3 className="font-semibold">{t("charts.statusDistribution", "Status Distribution")}</h3>
       </div>
       <div className="h-64">
         {data.length > 0 ? (
@@ -132,7 +135,7 @@ export function StatusDistributionChart({ data }: StatusDistributionChartProps) 
           </ResponsiveContainer>
         ) : (
           <div className="h-full flex items-center justify-center text-muted-foreground">
-            No posts in this time range
+            {t("empty.noPostsRange", "No posts in this time range")}
           </div>
         )}
       </div>
@@ -145,11 +148,12 @@ interface PostingActivityChartProps {
 }
 
 export function PostingActivityChart({ data }: PostingActivityChartProps) {
+  const { t } = useTranslation("analytics");
   return (
     <Card className="p-6 bg-card/50 border-border">
       <div className="flex items-center gap-2 mb-6">
         <Clock className="w-5 h-5 text-primary" />
-        <h3 className="font-semibold">Posting Activity by Hour</h3>
+        <h3 className="font-semibold">{t("charts.postsByHour", "Posting Activity by Hour")}</h3>
       </div>
       <div className="h-64">
         <ResponsiveContainer width="100%" height="100%">
@@ -173,7 +177,7 @@ export function PostingActivityChart({ data }: PostingActivityChartProps) {
               dataKey="posts"
               fill="hsl(199, 89%, 48%)"
               radius={[4, 4, 0, 0]}
-              name="Posts"
+              name={t("charts.postsLabel", "Posts")}
             />
           </BarChart>
         </ResponsiveContainer>

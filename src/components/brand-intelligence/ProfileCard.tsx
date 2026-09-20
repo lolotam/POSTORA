@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -64,6 +65,7 @@ function PlatformLogoButton({
 }
 
 export function ProfileCard({ profile, isLoading }: ProfileCardProps) {
+  const { t } = useTranslation("analytics");
   if (isLoading) {
     return (
       <Card className="overflow-hidden">
@@ -104,7 +106,10 @@ export function ProfileCard({ profile, isLoading }: ProfileCardProps) {
       <CardContent className="p-6 relative">
         <Badge variant="secondary" className="absolute top-4 right-4 gap-1">
           <PlatformIcon className="w-3 h-3" />
-          {config.label}
+          {profile.platform === "instagram" ? t("brand.instagram", "Instagram")
+            : profile.platform === "threads" ? t("brand.threads", "Threads")
+            : profile.platform === "facebook" ? t("brand.facebook", "Facebook")
+            : t("brand.tiktok", "TikTok")}
         </Badge>
 
         <div className="flex items-center gap-4 mb-4">
@@ -130,11 +135,11 @@ export function ProfileCard({ profile, isLoading }: ProfileCardProps) {
         </div>
 
         <div className="flex justify-around py-3 border-y border-border/50 mb-4 flex-wrap gap-2">
-          <StatItem label="Followers" value={profile.followersCount} emoji="👥" />
-          <StatItem label="Following" value={profile.followingCount} emoji="👤" />
-          <StatItem label="Posts" value={profile.postsCount} emoji="📝" />
+          <StatItem label={t("profile.followers", "Followers")} value={profile.followersCount} emoji="👥" />
+          <StatItem label={t("profile.following", "Following")} value={profile.followingCount} emoji="👤" />
+          <StatItem label={t("profile.posts", "Posts")} value={profile.postsCount} emoji="📝" />
           {profile.platform === "tiktok" && typeof profile.totalHearts === "number" && (
-            <StatItem label="Hearts" value={profile.totalHearts} emoji="❤️" />
+            <StatItem label={t("profile.hearts", "Hearts")} value={profile.totalHearts} emoji="❤️" />
           )}
         </div>
 
@@ -146,7 +151,7 @@ export function ProfileCard({ profile, isLoading }: ProfileCardProps) {
           {profile.website && (
             <Button variant="outline" size="sm" asChild>
               <a href={profile.website} target="_blank" rel="noopener noreferrer">
-                🔗 Website
+                {t("profile.website", "🔗 Website")}
               </a>
             </Button>
           )}
@@ -155,12 +160,12 @@ export function ProfileCard({ profile, isLoading }: ProfileCardProps) {
               <div className="flex items-center gap-2">
                 <PlatformLogoButton
                   href={`https://www.threads.net/@${profile.username}`}
-                  label="Open on Threads"
+                  label={t("profile.openThreads", "Open on Threads")}
                   kind="threads"
                 />
                 <PlatformLogoButton
                   href={`https://www.instagram.com/${profile.username}/`}
-                  label="Open on Instagram"
+                  label={t("profile.openInstagram", "Open on Instagram")}
                   kind="instagram"
                 />
               </div>
@@ -173,7 +178,7 @@ export function ProfileCard({ profile, isLoading }: ProfileCardProps) {
                 rel="noopener noreferrer"
                 className="gap-1"
               >
-                View Profile <ExternalLink className="w-3 h-3" />
+                {t("profile.viewProfile", "View Profile")} <ExternalLink className="w-3 h-3" />
               </a>
             </Button>
           )}

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { getPlatformName } from "@/components/PlatformIcon";
 import { Platform } from "@/lib/types";
@@ -21,6 +22,7 @@ import { AlertCircle } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 
 export default function Analytics() {
+  const { t } = useTranslation("analytics");
   const [timeRange, setTimeRange] = useState("7");
   const { data: posts = [], error: postsError } = usePostsWithResults();
   const { data: accounts = [], error: accountsError } = useSocialAccounts();
@@ -130,11 +132,12 @@ export default function Analytics() {
 
   // Status distribution
   const statusData = [
-    { name: "Published", value: publishedPosts, color: "hsl(142, 76%, 36%)" },
-    { name: "Scheduled", value: scheduledPosts, color: "hsl(199, 89%, 48%)" },
-    { name: "Failed", value: failedPosts, color: "hsl(0, 72%, 51%)" },
+    { id: "published", name: t("stats.published", "Published"), value: publishedPosts, color: "hsl(142, 76%, 36%)" },
+    { id: "scheduled", name: t("stats.scheduled", "Scheduled"), value: scheduledPosts, color: "hsl(199, 89%, 48%)" },
+    { id: "failed", name: t("common:status.failed", "Failed"), value: failedPosts, color: "hsl(0, 72%, 51%)" },
     {
-      name: "Pending",
+      id: "pending",
+      name: t("common:status.pending", "Pending"),
       value: totalPosts - publishedPosts - scheduledPosts - failedPosts,
       color: "hsl(215, 20%, 55%)",
     },
@@ -167,11 +170,9 @@ export default function Analytics() {
           <Alert variant="destructive">
             <AlertCircle className="h-4 w-4" />
             <AlertDescription>
-              Failed to load analytics data.{" "}
-              {postsError instanceof Error ? postsError.message : ""}
-              {accountsError instanceof Error ? accountsError.message : ""}
-              {" "}
-              Try refreshing the page or re-logging in.
+              {t("errors.loadFailed", "Failed to load analytics data. {{details}} Try refreshing the page or re-logging in.", {
+                details: `${postsError instanceof Error ? postsError.message : ""}${accountsError instanceof Error ? accountsError.message : ""}`.trim(),
+              })}
             </AlertDescription>
           </Alert>
         )}

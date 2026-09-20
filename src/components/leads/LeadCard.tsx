@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -21,11 +22,19 @@ interface LeadCardProps {
 }
 
 export function LeadCard({ lead }: LeadCardProps) {
+  const { t } = useTranslation("analytics");
   const [expanded, setExpanded] = useState(false);
   const [notes, setNotes] = useState(lead.notes || "");
   const updateStatus = useUpdateLeadStatus();
   const updateNotes = useUpdateLeadNotes();
 
+  const statusLabel = (value: string) =>
+    value === "new" ? t("leads.new", "New")
+    : value === "contacted" ? t("leads.contacted", "Contacted")
+    : value === "qualified" ? t("leads.qualified", "Qualified")
+    : value === "won" ? t("leads.won", "Won")
+    : value === "lost" ? t("leads.lost", "Lost")
+    : t("leads.new", "New");
   const statusConfig = STATUS_OPTIONS.find((s) => s.value === lead.status) || STATUS_OPTIONS[0];
   const dataEntries = Object.entries(lead.lead_data).filter(([, v]) => v);
 
@@ -40,9 +49,9 @@ export function LeadCard({ lead }: LeadCardProps) {
         <div className="flex items-start justify-between gap-3">
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 mb-1 flex-wrap">
-              <span className="font-medium text-sm">{name || email || `Lead #${lead.meta_lead_id?.slice(-6)}`}</span>
+              <span className="font-medium text-sm">{name || email || t("leads.fallbackId", "Lead #{{id}}", { id: lead.meta_lead_id?.slice(-6) })}</span>
               <Badge variant="outline" className={statusConfig.color}>
-                {statusConfig.label}
+                {statusLabel(statusConfig.value)}
               </Badge>
               <span className="text-xs text-muted-foreground">
                 {formatDistanceToNow(new Date(lead.created_at), { addSuffix: true })}
@@ -64,7 +73,7 @@ export function LeadCard({ lead }: LeadCardProps) {
               </SelectTrigger>
               <SelectContent>
                 {STATUS_OPTIONS.map((s) => (
-                  <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>
+                  <SelectItem key={s.value} value={s.value}>{statusLabel(s.value)}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
@@ -87,12 +96,12 @@ export function LeadCard({ lead }: LeadCardProps) {
               </div>
             )}
             <div className="space-y-1.5">
-              <span className="text-xs text-muted-foreground">Notes</span>
+              <span className="text-xs text-muted-foreground">{t("leads.notes", "Notes")}</span>
               <div className="flex gap-2">
                 <Textarea
                   value={notes}
                   onChange={(e) => setNotes(e.target.value)}
-                  placeholder="Add notes about this lead..."
+                  placeholder={t("leads.notesPlaceholder", "Add notes about this lead...")}
                   className="min-h-[60px] text-sm"
                 />
                 <Button

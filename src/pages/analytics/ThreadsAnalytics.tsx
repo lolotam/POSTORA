@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect } from "react";
+import { useTranslation } from "react-i18next";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { useAuth } from "@/hooks/useAuth";
@@ -43,6 +44,7 @@ const DEFAULT_FILTERS: BrandScrapeFilters = {
 const EXAMPLE_BRANDS = ["@nike", "@cocacola", "@redbull", "@apple"];
 
 export default function ThreadsAnalytics() {
+  const { t } = useTranslation("analytics");
   const navigate = useNavigate();
   const { session } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -92,15 +94,15 @@ export default function ThreadsAnalytics() {
       const { data, error } = await supabase.functions.invoke("threads-delete-post", {
         body: { thread_id: id, social_account_id: ownedAccountId },
       });
-      if (error) throw new Error(error.message || "Delete failed");
+      if (error) throw new Error(error.message || t("errors.deleteFailed", "Delete failed"));
       if (data && data.ok === false) {
-        toast.error(mapThreadsReason(data, "discovery").message || "Could not delete on Threads");
+        toast.error(mapThreadsReason(data, "discovery").message || t("errors.couldNotDelete", "Could not delete on Threads"));
         return;
       }
-      toast.success("Post deleted from Threads");
+      toast.success(t("toast.postDeleted", "Post deleted from Threads"));
       removePostId(id);
     } catch (err) {
-      toast.error((err as Error).message || "Delete failed");
+      toast.error((err as Error).message || t("errors.deleteFailed", "Delete failed"));
     } finally {
       setIsDeletingId(null);
       setPendingDeleteId(null);
@@ -163,8 +165,8 @@ export default function ThreadsAnalytics() {
           <div className="group flex items-center gap-4">
             <Icon3D icon={AtSign} variant="indigo" size="md" />
             <div className="flex-1 min-w-0">
-              <GradientHeading preset="violet-sky" size="lg" as="h1">Threads Analytics</GradientHeading>
-              <p className="text-sm text-muted-foreground mt-1">Analyze Threads profiles, discover trends & insights</p>
+              <GradientHeading preset="violet-sky" size="lg" as="h1">{t("header.threads", "Threads Analytics")}</GradientHeading>
+              <p className="text-sm text-muted-foreground mt-1">{t("header.threadsSubtitle", "Analyze Threads profiles, discover trends & insights")}</p>
             </div>
           </div>
         </Reveal>
@@ -173,10 +175,10 @@ export default function ThreadsAnalytics() {
         <Reveal delay={60}>
           <div className="inline-flex flex-wrap gap-1 rounded-xl bg-card/50 backdrop-blur-md border border-border/40 p-1">
             {([
-              { key: "analyze", label: "Discovery", Icon: SearchCheck },
-              { key: "discovery", label: "Analyze", Icon: AtSign },
-              { key: "keyword_search", label: "Keyword Search", Icon: Hash },
-              { key: "insights", label: "Insights", Icon: BarChart3 },
+              { key: "analyze", label: t("header.discovery", "Discovery"), Icon: SearchCheck },
+              { key: "discovery", label: t("header.analyze", "Analyze"), Icon: AtSign },
+              { key: "keyword_search", label: t("header.keywordSearch", "Keyword Search"), Icon: Hash },
+              { key: "insights", label: t("header.insights", "Insights"), Icon: BarChart3 },
             ] as const).map(({ key, label, Icon }) => (
               <button
                 key={key}
@@ -205,7 +207,7 @@ export default function ThreadsAnalytics() {
               <div className="space-y-4">
                 <ProfileCard profile={profile!} isLoading={isLoading} />
                 <FilterToolbar filters={filters} onChange={setFilters} maxEngagement={maxEngagement} />
-                <p className="text-sm text-muted-foreground">{filteredPosts.length} of {totalPosts} posts</p>
+                <p className="text-sm text-muted-foreground">{t("posts.countOf", "{{filtered}} of {{total}} posts", { filtered: filteredPosts.length, total: totalPosts })}</p>
                 <PostsGrid
                   posts={filteredPosts}
                   isLoading={isLoading}
@@ -217,7 +219,7 @@ export default function ThreadsAnalytics() {
                 />
                 {hasMore && (
                   <div className="flex justify-center pt-4">
-                    <Button variant="outline" disabled className="gap-2 border-violet-500/40"><Loader2 className="w-4 h-4" />Load More</Button>
+                    <Button variant="outline" disabled className="gap-2 border-violet-500/40"><Loader2 className="w-4 h-4" />{t("actions.loadMore", "Load More")}</Button>
                   </div>
                 )}
               </div>
@@ -226,8 +228,8 @@ export default function ThreadsAnalytics() {
               <GradientRingCard variant="indigo" hoverLift={false} ringIntensity="subtle">
                 <div className="flex flex-col items-center justify-center py-12 text-center">
                   <div className="group mb-5"><Icon3D icon={SearchCheck} variant="indigo" size="lg" /></div>
-                  <h3 className="text-lg font-semibold mb-1">Start by searching for a brand</h3>
-                  <p className="text-sm text-muted-foreground mb-6 max-w-md">Enter any Threads username to analyze their top performing content</p>
+                  <h3 className="text-lg font-semibold mb-1">{t("empty.searchBrand", "Start by searching for a brand")}</h3>
+                  <p className="text-sm text-muted-foreground mb-6 max-w-md">{t("empty.searchHintThreads", "Enter any Threads username to analyze their top performing content")}</p>
                   <div className="flex flex-wrap justify-center gap-2">
                     {EXAMPLE_BRANDS.map((brand) => (
                       <Button key={brand} variant="outline" size="sm" className="text-xs border-violet-500/40 hover:bg-violet-500/10 transition-transform hover:-translate-y-0.5" onClick={() => handleSearch(brand.replace("@", ""))}>{brand}</Button>
@@ -263,16 +265,16 @@ export default function ThreadsAnalytics() {
         <AlertDialog open={!!pendingDeleteId} onOpenChange={(open) => { if (!open) setPendingDeleteId(null); }}>
           <AlertDialogContent className="bg-card/85 backdrop-blur-xl border-border/50">
             <AlertDialogHeader>
-              <AlertDialogTitle>Delete this post from Threads?</AlertDialogTitle>
+              <AlertDialogTitle>{t("dialog.deleteThreadsTitle", "Delete this post from Threads?")}</AlertDialogTitle>
               <AlertDialogDescription>
-                This removes the post from Meta. Your local history record stays so you can still see it here.
+                {t("dialog.deleteThreadsBody", "This removes the post from Meta. Your local history record stays so you can still see it here.")}
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter>
-              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogCancel>{t("common:cancel", "Cancel")}</AlertDialogCancel>
               <AlertDialogAction onClick={handleConfirmDelete} disabled={!!isDeletingId}>
                 {isDeletingId ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
-                Delete
+                {t("common:delete", "Delete")}
               </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>

@@ -1,4 +1,5 @@
 import { useState, useMemo } from "react";
+import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { useAuth } from "@/hooks/useAuth";
@@ -26,6 +27,7 @@ const DEFAULT_FILTERS: BrandScrapeFilters = {
 const EXAMPLE_BRANDS = ["@nike", "@cocacola", "@redbull", "@apple"];
 
 export default function FacebookAnalytics() {
+  const { t } = useTranslation("analytics");
   const navigate = useNavigate();
   const { session } = useAuth();
   const { isAdmin } = useUserRole();
@@ -90,8 +92,8 @@ export default function FacebookAnalytics() {
           <div className="group flex items-center gap-4">
             <Icon3D icon={Facebook} variant="sky" size="md" />
             <div className="flex-1 min-w-0">
-              <GradientHeading preset="sky-violet" size="lg" as="h1">Facebook Analytics</GradientHeading>
-              <p className="text-sm text-muted-foreground mt-1">Analyze Facebook pages & top performing content</p>
+              <GradientHeading preset="sky-violet" size="lg" as="h1">{t("header.facebook", "Facebook Analytics")}</GradientHeading>
+              <p className="text-sm text-muted-foreground mt-1">{t("header.facebookSubtitle", "Analyze Facebook pages & top performing content")}</p>
             </div>
           </div>
         </Reveal>
@@ -110,17 +112,17 @@ export default function FacebookAnalytics() {
                 <div className="flex items-start gap-3">
                   <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
                   <div className="flex-1 space-y-2">
-                    <p className="text-sm font-medium">Facebook analytics needs setup</p>
+                    <p className="text-sm font-medium">{t("errors.facebookNeedsSetup", "Facebook analytics needs setup")}</p>
                     <p className="text-sm text-muted-foreground">
-                      The Facebook app credentials (App ID and App Secret) are not configured in this environment, so brand analysis cannot run yet.
+                      {t("errors.facebookNeedsSetupBody", "The Facebook app credentials (App ID and App Secret) are not configured in this environment, so brand analysis cannot run yet.")}
                       {isAdmin
-                        ? " As an admin you can add them in App Credentials."
-                        : " Please contact your workspace admin to configure them."}
+                        ? t("errors.facebookNeedsSetupAdmin", " As an admin you can add them in App Credentials.")
+                        : t("errors.facebookNeedsSetupUser", " Please contact your workspace admin to configure them.")}
                     </p>
                     {isAdmin && (
                       <Button size="sm" variant="outline" onClick={() => navigate("/admin/settings")} className="gap-2 mt-1">
                         <Settings className="w-4 h-4" />
-                        Open App Credentials
+                        {t("actions.openCredentials", "Open App Credentials")}
                       </Button>
                     )}
                   </div>
@@ -139,12 +141,12 @@ export default function FacebookAnalytics() {
             <div className="space-y-4">
               <ProfileCard profile={profile!} isLoading={isLoading} />
               <FilterToolbar filters={filters} onChange={setFilters} maxEngagement={maxEngagement} />
-              <p className="text-sm text-muted-foreground">{filteredPosts.length} of {totalPosts} posts</p>
+              <p className="text-sm text-muted-foreground">{t("posts.countOf", "{{filtered}} of {{total}} posts", { filtered: filteredPosts.length, total: totalPosts })}</p>
               <PostsGrid posts={filteredPosts} isLoading={isLoading} onPostClick={handlePostClick} contentPostIds={contentPostIds} />
               {hasMore && (
                 <div className="flex justify-center pt-4">
                   <Button variant="outline" onClick={loadMore} className="gap-2 border-sky-500/40 hover:bg-sky-500/10">
-                    <Loader2 className="w-4 h-4" />Load More
+                    <Loader2 className="w-4 h-4" />{t("actions.loadMore", "Load More")}
                   </Button>
                 </div>
               )}
@@ -157,8 +159,8 @@ export default function FacebookAnalytics() {
             <GradientRingCard variant="sky" hoverLift={false} ringIntensity="subtle">
               <div className="flex flex-col items-center justify-center py-12 text-center">
                 <div className="group mb-5"><Icon3D icon={SearchCheck} variant="sky" size="lg" /></div>
-                <h3 className="text-lg font-semibold mb-1">Start by searching for a brand</h3>
-                <p className="text-sm text-muted-foreground mb-6 max-w-md">Enter any Facebook page username to analyze their top performing content</p>
+                <h3 className="text-lg font-semibold mb-1">{t("empty.searchBrand", "Start by searching for a brand")}</h3>
+                <p className="text-sm text-muted-foreground mb-6 max-w-md">{t("empty.searchHintFacebook", "Enter any Facebook page username to analyze their top performing content")}</p>
                 <div className="flex flex-wrap justify-center gap-2">
                   {EXAMPLE_BRANDS.map((brand) => (
                     <Button key={brand} variant="outline" size="sm" className="text-xs border-sky-500/40 hover:bg-sky-500/10 transition-transform hover:-translate-y-0.5" onClick={() => handleSearch(brand.replace("@", ""))}>{brand}</Button>

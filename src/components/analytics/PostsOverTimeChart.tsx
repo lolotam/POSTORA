@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { Card } from "@/components/ui/card";
 import {
   LineChart,
@@ -24,11 +25,12 @@ interface PostsOverTimeChartProps {
 }
 
 export function PostsOverTimeChart({ data }: PostsOverTimeChartProps) {
+  const { t } = useTranslation("analytics");
   return (
     <Card className="p-6 bg-card/50 border-border">
       <div className="flex items-center gap-2 mb-6">
         <TrendingUp className="w-5 h-5 text-primary" />
-        <h3 className="font-semibold">Posts Over Time</h3>
+        <h3 className="font-semibold">{t("charts.postsOverTime", "Posts Over Time")}</h3>
       </div>
       <div className="h-64">
         <ResponsiveContainer width="100%" height="100%">
@@ -54,7 +56,7 @@ export function PostsOverTimeChart({ data }: PostsOverTimeChartProps) {
               stroke="hsl(199, 89%, 48%)"
               strokeWidth={2}
               dot={{ fill: "hsl(199, 89%, 48%)" }}
-              name="Total Posts"
+              name={t("charts.totalPosts", "Total Posts")}
             />
             <Line
               type="monotone"
@@ -62,7 +64,7 @@ export function PostsOverTimeChart({ data }: PostsOverTimeChartProps) {
               stroke="hsl(142, 76%, 36%)"
               strokeWidth={2}
               dot={{ fill: "hsl(142, 76%, 36%)" }}
-              name="Published"
+              name={t("charts.published", "Published")}
             />
           </LineChart>
         </ResponsiveContainer>

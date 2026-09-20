@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Search, Loader2, Check, Clock, X } from "lucide-react";
@@ -46,6 +47,7 @@ function extractUsername(input: string, platform: string): string | null {
 }
 
 export function BrandSearchBar({ platform, onSearch, isLoading, scope }: BrandSearchBarProps) {
+  const { t } = useTranslation("analytics");
   const [input, setInput] = useState("");
   const [parsed, setParsed] = useState<string | null>(null);
   const [invalid, setInvalid] = useState(false);
@@ -56,10 +58,10 @@ export function BrandSearchBar({ platform, onSearch, isLoading, scope }: BrandSe
   const showHistory = !!scope && history.items.length > 0;
 
   const placeholders: Record<string, string> = {
-    instagram: "Enter @username or instagram.com/username",
-    threads: "Enter @username or threads.net/username",
-    facebook: "Enter page name or facebook.com/pagename",
-    tiktok: "Enter @username or tiktok.com/@username",
+    instagram: t("form.placeholderInstagram", "Enter @username or instagram.com/username"),
+    threads: t("form.placeholderThreads", "Enter @username or threads.net/username"),
+    facebook: t("form.placeholderFacebook", "Enter page name or facebook.com/pagename"),
+    tiktok: t("form.placeholderTiktok", "Enter @username or tiktok.com/@username"),
   };
   const placeholder = placeholders[platform] || placeholders.instagram;
 
@@ -130,7 +132,7 @@ export function BrandSearchBar({ platform, onSearch, isLoading, scope }: BrandSe
               }}
             >
               <div className="px-3 py-2 text-[11px] uppercase tracking-wide text-muted-foreground flex items-center gap-1.5 border-b border-border/60">
-                <Clock className="w-3 h-3" /> Recent searches
+                <Clock className="w-3 h-3" /> {t("search.recent", "Recent searches")}
               </div>
               <ul className="max-h-64 overflow-y-auto py-1">
                 {history.items.map((row) => (
@@ -147,7 +149,7 @@ export function BrandSearchBar({ platform, onSearch, isLoading, scope }: BrandSe
                     </button>
                     <button
                       type="button"
-                      aria-label="Remove from history"
+                      aria-label={t("search.removeHistory", "Remove from history")}
                       className="opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-muted text-muted-foreground hover:text-destructive"
                       onClick={(e) => {
                         e.stopPropagation();
@@ -172,13 +174,13 @@ export function BrandSearchBar({ platform, onSearch, isLoading, scope }: BrandSe
           ) : (
             <Search className="w-4 h-4 mr-2" />
           )}
-          Analyze
+          {t("actions.analyze", "Analyze")}
         </Button>
       </div>
       {parsed && !isLoading && (
         <div className="flex items-center gap-1.5 text-sm text-emerald-500">
           <Check className="w-3.5 h-3.5" />
-          <span>Searching: @{parsed}</span>
+          <span>{t("search.searching", "Searching: @{{username}}", { username: parsed })}</span>
         </div>
       )}
     </div>
