@@ -674,7 +674,7 @@ export function DashboardLayout({ children, contentClassName, noPadding = false,
 
       {/* Main Content */}
       <main className="app-main flex-1 overflow-auto flex flex-col">
-        <div className={cn(noPadding ? "w-full flex-1 flex flex-col p-0" : "p-4 md:p-6 lg:p-8 2xl:p-10 w-full", contentClassName)}>
+        <div className={cn(noPadding ? "w-full flex-1 flex flex-col p-0" : "p-4 md:p-6 lg:p-8 2xl:p-10 w-full max-w-7xl mx-auto", contentClassName)}>
           {children}
         </div>
       </main>
