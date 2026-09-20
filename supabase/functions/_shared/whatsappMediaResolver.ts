@@ -72,7 +72,9 @@ interface MessageMediaRow {
   social_account_id: string;
 }
 
-function isHttpMediaUrl(value: string | null | undefined): boolean {
+/** Exported so a caller branching on media_url uses the same rule this module
+ *  does; two copies of it would eventually disagree about the same value. */
+export function isHttpMediaUrl(value: string | null | undefined): boolean {
   return typeof value === "string" && /^https?:\/\//i.test(value);
 }
 

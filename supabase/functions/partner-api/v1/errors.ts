@@ -204,6 +204,15 @@ export const V1_ERROR_POLICY = {
     status: 422, retryable: false,
     message: "Template rejected by Meta",
   },
+  // Media resolution failed for a reason a retry can clear: the provider fetch,
+  // the byte-budget admission, the storage upload or the signature. Distinct
+  // from temporarily_unavailable, which is a deliberate suspension and says
+  // retrying will NOT succeed -- telling a caller to abandon a download that
+  // would have worked on the next attempt.
+  media_unavailable: {
+    status: 503, retryable: true,
+    message: "The media could not be retrieved right now; retry shortly",
+  },
   temporarily_unavailable: {
     status: 503, retryable: false,
     message: "This action is temporarily suspended; see the Partner API changelog. " +

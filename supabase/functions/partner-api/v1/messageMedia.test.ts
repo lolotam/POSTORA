@@ -23,6 +23,7 @@ function withMessage(f: ReturnType<typeof agentFixture>, overrides: Record<strin
   f.rows.whatsapp_messages.push({
     id: MSG,
     social_account_id: ACCOUNT_ID,
+    direction: "inbound",
     media_type: "image",
     media_metadata: { mime_type: "image/jpeg", size: 84213 },
     media_url: "owner/whatsapp/inbound/cached.jpg",
@@ -98,4 +99,46 @@ Deno.test("no response body ever carries a storage path or a signing URL", async
   // storage path or a provider URL, and neither is partner-usable.
   assert(!text.includes("owner/whatsapp/inbound/"), text);
   assert(!text.includes("media_url"), text);
+});
+
+
+Deno.test("a cached path owned by someone else is never signed", async () => {
+  // The account binding proves who owns the message ROW. It says nothing about
+  // who owns the storage OBJECT, and the resolver signs any non-http media_url
+  // with the service-role client without checking. A bad restore is enough.
+  const f = withMessage(fixture(), { media_url: "some-other-user/whatsapp/inbound/x.jpg" });
+  const response = await handleRequest(request(`messages/msg_${MSG}/media`), () => f.admin);
+  assertEquals(response.status, 404);
+  const text = await response.text();
+  assert(!text.includes("some-other-user"), text);
+});
+
+Deno.test("a traversal or absolute path in media_url is refused", async () => {
+  for (const path of ["../../etc/passwd", "/absolute/x.jpg", "https://evil.test/x.jpg#"]) {
+    const f = withMessage(fixture(), { media_url: path });
+    const response = await handleRequest(request(`messages/msg_${MSG}/media`), () => f.admin);
+    assert(response.status >= 400, `${path} produced ${response.status}`);
+  }
+});
+
+Deno.test("an outbound message carrying media is not served by this route", async () => {
+  // The contract describes an INBOUND sub-resource; an owner-sent echo must not
+  // be published through it.
+  const f = withMessage(fixture(), { direction: "outbound" });
+  const response = await handleRequest(request(`messages/msg_${MSG}/media`), () => f.admin);
+  assertEquals(response.status, 404);
+  const read = f.reads.find((url) => url.pathname.endsWith("/whatsapp_messages"));
+  assertEquals(read?.searchParams.get("direction"), "eq.inbound");
+});
+
+Deno.test("a transient resolution failure is reported as retryable", async () => {
+  const f = withMessage(fixture(), { media_url: null });
+  const response = await handleRequest(request(`messages/msg_${MSG}/media`), () => f.admin);
+  assertEquals(response.status, 503);
+  const body = await response.json();
+  // media_unavailable, not temporarily_unavailable: the latter is a deliberate
+  // suspension carrying retryable:false, which would tell a caller to give up on
+  // a download the next attempt would have served.
+  assertEquals(body.error.code, "media_unavailable");
+  assertEquals(body.error.retryable, true);
 });

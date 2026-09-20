@@ -2120,8 +2120,11 @@ paths:
         Do not persist it, do not log it, and do not embed it in a durable
         record: request this endpoint again when the bytes are needed.
 
-        `413` means the media is larger than this API will materialise and a
-        retry will not change that. `503` is transient and may be retried.
+        `413 payload_too_large` means the media is larger than this API will
+        materialise, and a retry will not change that. `503 media_unavailable`
+        is transient and carries `retryable: true`; it is a different code from
+        `temporarily_unavailable`, which is a deliberate suspension whose policy
+        says retrying will not succeed.
 
         Scope `media:read`. D7 class B.
       parameters:
@@ -3034,6 +3037,7 @@ components:
         - media_pending
         - media_rejected
         # --- END Phase 9 rich-media block ---
+        - media_unavailable
         - meta_error
         - method_not_allowed
         - missing_idempotency_key
@@ -4491,11 +4495,19 @@ components:
           enum: [whatsapp]
         message:
           type: object
-          required: [id, direction, type, timestamp]
+          required: [id, postora_message_id, direction, type, timestamp]
           properties:
             id:
               type: string
               description: The provider message id (wamid / Evolution id).
+            postora_message_id:
+              type: string
+              description: |
+                Postora's own `msg_`-prefixed id for this message, the same one
+                the /v1 read surface publishes. Pass it to
+                `GET /v1/messages/{id}/media` to fetch an attachment. Prefer it
+                over `id` as a correlation key: `id` is the provider's.
+              example: msg_9f1c2b7e-0a3d-4c5e-8b21-6d7f8e9a0b1c
             direction:
               type: string
               enum: [inbound]

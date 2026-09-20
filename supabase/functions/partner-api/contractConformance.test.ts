@@ -58,6 +58,7 @@ const UNREACHABLE_WHILE_SEND_IS_SUSPENDED: Record<string, string> = {
   idempotency_indeterminate: "idempotency settle runs only for send actions",
   quota_exceeded: "monthly quota is reserved only for send actions",
   payload_too_large: "upload-only; POST /v1/media is not reachable from the alias these tests drive",
+  media_unavailable: "emitted by GET /v1/messages/{id}/media when resolution fails transiently; no alias route; exercised in v1/messageMedia.test.ts",
   media_pending: "emitted by the /v1 media send gate (Phase 9.3); the alias these tests drive has no media surface",
   media_rejected: "emitted by the /v1 media send gate (Phase 9.3); the alias these tests drive has no media surface",
   account_not_connected: "account lookup is downstream of the suspension gate",

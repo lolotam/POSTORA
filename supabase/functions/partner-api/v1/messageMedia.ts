@@ -27,7 +27,7 @@ import { boundAccountIds } from "./binding.ts";
 import { decodeId } from "./ids.ts";
 import { v1ErrorResponse } from "./errors.ts";
 import { v1JsonResponse } from "./respond.ts";
-import { resolveWhatsAppMedia } from "../../_shared/whatsappMediaResolver.ts";
+import { isHttpMediaUrl, ownedStoragePath, resolveWhatsAppMedia } from "../../_shared/whatsappMediaResolver.ts";
 import type { WhatsAppAccountAccess } from "../../_shared/whatsappWorkspaceAccess.ts";
 import type { V1AuthedContext } from "./authenticated.ts";
 
@@ -64,9 +64,14 @@ export async function getMessageMedia(
   // being returned by mistake. Identical to getMessage in conversations.ts.
   const { data: message, error } = await admin
     .from("whatsapp_messages")
-    .select("id, social_account_id, media_type")
+    .select("id, social_account_id, media_type, media_url, direction")
     .eq("id", messageId)
     .in("social_account_id", bound.ids)
+    // Inbound only. The route and the published contract describe a sub-resource
+    // of an INBOUND message; without this an owner-sent echo or an outbound
+    // history row carrying media would be published through a surface that
+    // promises the other direction.
+    .eq("direction", "inbound")
     .maybeSingle();
 
   if (error) {
@@ -128,6 +133,23 @@ export async function getMessageMedia(
     accountMetadata: account.account_metadata,
   };
 
+  // The account binding proved who owns the message ROW. It says nothing about
+  // who owns the storage OBJECT the row points at, and those are separate facts:
+  // the resolver hands any non-http media_url straight to the signer without
+  // consulting its own ownedStoragePath validator. A path left by a bad restore
+  // or a malformed writer would otherwise be signed with the service-role client
+  // and handed to a partner. Refuse instead of minting a URL over it.
+  if (message.media_url && !isHttpMediaUrl(message.media_url)) {
+    try {
+      ownedStoragePath(message.media_url, account.user_id);
+    } catch {
+      console.error(
+        `[partner-api] v1 media path is not owned by the account that holds the message (request ${requestId})`,
+      );
+      return v1ErrorResponse("resource_not_found", requestId);
+    }
+  }
+
   const [item] = await resolveWhatsAppMedia(
     admin,
     access,
@@ -138,13 +160,15 @@ export async function getMessageMedia(
   if (!item || item.url === null) {
     // too_large is a permanent fact about these bytes and a retry cannot change
     // it. Everything else — deadline, byte budget, no fetcher, a failed fetch or
-    // a failed signature — is transient, and saying so is what tells a partner
-    // whether to retry or to stop.
+    // a failed signature — is transient, which is why it answers media_unavailable
+    // and not temporarily_unavailable: the latter is a deliberate suspension whose
+    // policy says retrying will not succeed, and would tell a caller to abandon a
+    // download that the next attempt would have served.
     return item?.reason === "too_large"
       ? v1ErrorResponse("payload_too_large", requestId, {
         message: "The media exceeds the size this API will materialise",
       })
-      : v1ErrorResponse("temporarily_unavailable", requestId);
+      : v1ErrorResponse("media_unavailable", requestId);
   }
 
   const expiresIn = item.expires_in ?? PARTNER_MEDIA_URL_TTL_SECONDS;
