@@ -277,7 +277,7 @@ postora/
 | Public API (n8n / Make.com) | REST surface for automation integrations | `n8n-api`, `ApiDocumentation.tsx`, `ApiKeys.tsx` | `api_logs`, `profiles.api_key` |
 | Subscriptions + credits + coupons | Stripe billing | `stripe-*` functions, `useSubscription.tsx`, `Pricing.tsx` | `subscription_plans`, `user_subscriptions`, `coupons`, `user_credits` |
 | Admin observability suite | Logs, health, alerts, token health, rate limits, quotas, feature flags, launch checklist | `admin/Admin*.tsx`, `observability-*` functions | `system_logs`, `system_health_snapshots`, `edge_function_status`, `admin_audit_log` |
-| Two-factor auth | TOTP + hashed backup codes | `check-user-mfa`, `manage-backup-codes`, `Settings.tsx` | `backup_codes` |
+| Two-factor auth | TOTP + hashed backup codes | `manage-backup-codes`, `profile/MFASection.tsx` | `backup_codes` |
 | Admin email inbox | Resend-backed inbox with threads/drafts/signatures | `send-inbox-email`, `AdminInbox.tsx`, `useAdminInbox.ts` | `email_log`, `email_templates` |
 
 ### Partial / experimental
@@ -321,7 +321,7 @@ The primary API surface is **~96 Supabase Edge Functions** invoked via `supabase
 | Billing | 7 | `stripe-checkout`, `stripe-manage-subscription`, `stripe-webhook`, `create-payment`, `verify-payment`, `backfill-subscription`, `check-subscription` | user JWT / public (signature) |
 | Email | 10 | `send-auth-email`, `send-inbox-email`, `send-reset-otp`, `send-subscription-email`, `send-weekly-analytics`, `send-expiry-reminders`, `sync-resend-delivery-status`, `resend-webhook`, `fetch-email-content`, `notify-admin-new-user` | mixed |
 | Admin / Ops | 8 | `manage-app-secrets`, `manage-cron-jobs`, `observability-alerts`, `observability-collector`, `sync-user-quotas`, `notify-expiring-ai-overrides`, `get-public-config`, `ecommerce-whatsapp-api` | admin / cron / public |
-| MFA & Password | 6 | `check-user-mfa`, `verify-mfa-reset`, `verify-reset-otp`, `manage-backup-codes`, `change-password`, `send-change-password-otp` | mixed |
+| MFA & Password | 5 | `verify-mfa-reset`, `verify-reset-otp`, `manage-backup-codes`, `change-password`, `send-change-password-otp` | mixed |
 | MCP | 3 | `mcp`, `mcp-oauth` | mixed |
 | Public API | 2 | `n8n-api`, `unsplash-proxy` | api_key / user JWT |
 | Webhooks | 5 | `stripe-webhook`, `resend-webhook`, `tiktok-webhook`, `whatsapp-webhook`, `threads-webhook` | signature verification |

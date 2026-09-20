@@ -25,6 +25,7 @@ import { youtubeOptionsUnsupportedOnComposio } from "../_shared/youtubeComposioO
 import { recordConnectorCall, resolveWorkspaceForCall } from "../_shared/connectorTelemetry.ts";
 
 import { restrictedCorsHeaders } from "../_shared/cors.ts";
+import { sha256Hex } from "../_shared/crypto.ts";
 
 // Rate limiting configuration lives in ./rateLimitConfig.ts: limits resolve
 // per request from user_rate_limits -> tier_rate_limits (per plan) ->
@@ -49,7 +50,7 @@ export async function checkRateLimit(
   method: string,
   ipAddress: string | null,
   config: ResolvedRateLimit
-): Promise<{ allowed: boolean; remaining: number; resetAt: Date }> {
+): Promise<{ allowed: boolean; failClosed?: boolean; remaining: number; resetAt: Date }> {
   // Conservative upper bound on the true reset: the window is rolling, so
   // quota can reopen earlier as individual api_logs rows age out, but
   // now + windowMs is never earlier than the real reset. The previous
@@ -94,8 +95,34 @@ export async function checkRateLimit(
 
   if (error) {
     console.error('Error checking rate limit:', error);
-    // If we can't check rate limit, allow the request but log it
-    return { allowed: true, remaining: config.requests, resetAt };
+    // Fail closed: a rate limiter that silently allows on error turns a database
+    // outage into unlimited API usage. The refusing return writes its audit row
+    // (project rule) and the caller answers 503 instead of the usual 429.
+    //
+    // The whole reason this row is being written is that a database read just
+    // failed, so the write most likely to fail is this one. Its error is checked
+    // rather than discarded, and the fallback is the edge log, which is the only
+    // sink still reachable when Postgres is the thing that is down. Without it a
+    // refusal during an outage leaves no trace in either place.
+    const { error: auditError } = await supabase.from('system_logs').insert({
+      source: 'n8n-api',
+      category: 'system',
+      level: 'error',
+      message: 'Rate limit check failed; refusing request (fail-closed)',
+      user_id: userId,
+      metadata: {
+        endpoint,
+        method,
+        pg_code: (error as { code?: string | null }).code ?? null,
+      },
+    });
+    if (auditError) {
+      console.error(
+        `[n8n-api] system_logs insert failed while refusing ${method} ${endpoint} (fail-closed 503 has no durable audit row):`,
+        auditError.message,
+      );
+    }
+    return { allowed: false, failClosed: true, remaining: 0, resetAt };
   }
 
   const currentCount = count || 0;
@@ -135,10 +162,11 @@ async function authenticateApiKey(supabase: any, apiKey: string | null): Promise
     return null;
   }
 
+  const apiKeyHash = await sha256Hex(apiKey);
   const { data: profile, error } = await supabase
     .from('profiles')
     .select('id, preferred_timezone')
-    .eq('api_key', apiKey)
+    .eq('api_key_hash', apiKeyHash)
     .maybeSingle();
 
   if (error) {
@@ -2239,6 +2267,14 @@ export async function handleRequest(req: Request): Promise<Response> {
       fetchGlobalSetting: (endpointKey) => fetchGlobalSetting(supabaseAdmin, endpointKey),
     });
     const rateLimit = await checkRateLimit(supabaseAdmin, userId, rateLimitKey, req.method, ipAddress, rateLimitConfig);
+
+    if (rateLimit.failClosed) {
+      return apiError(req,
+        'Rate limit check is temporarily unavailable. Please retry shortly.',
+        503,
+        'RATE_LIMIT_UNAVAILABLE',
+        { retry_after: 10 });
+    }
 
     if (!rateLimit.allowed) {
       console.log('Rate limit exceeded for user:', userId, 'on endpoint:', path);

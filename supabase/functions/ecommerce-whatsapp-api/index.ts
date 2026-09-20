@@ -1,5 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
 import { resolveWhatsAppTransport } from "../_shared/whatsappTransport.ts";
+import { sha256Hex } from "../_shared/crypto.ts";
 
 // Public, API-key authenticated endpoint that lets external e-commerce
 // stores (Curemedkw, custom storefronts, etc.) send WhatsApp messages
@@ -82,7 +83,7 @@ Deno.serve(async (req) => {
     const { data: profile } = await admin
       .from("profiles")
       .select("id")
-      .eq("api_key", apiKey)
+      .eq("api_key_hash", await sha256Hex(apiKey))
       .maybeSingle();
 
     if (!profile) {

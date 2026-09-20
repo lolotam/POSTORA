@@ -1,0 +1,284 @@
+-- Every partner key minted since the entitlement gate shipped has been unable to
+-- reach an entitlement-gated endpoint, and nothing said so.
+--
+-- `assertEntitled` (supabase/functions/_shared/partnerEntitlement.ts) resolves a
+-- workspace's owner through `partner_provisioned_workspaces` BEFORE it reads a
+-- single feature flag:
+--
+--     if (!provisioning?.owner_user_id)
+--       return await refuse("feature_not_entitled", "missing_provisioned_owner");
+--
+-- `create_partner_key` never wrote that row, and both tables were empty in
+-- production, so every gated call returned 403 for every key regardless of scopes
+-- or flags. The refusal names a feature, which is why it read as an entitlement
+-- problem rather than a missing binding.
+--
+-- Two parts: mint the binding alongside the key from now on, and backfill the
+-- keys already issued.
+
+-- 1. Ensure a workspace has an owner binding. Idempotent, and deliberately
+--    non-destructive: an existing binding is never re-pointed at a different
+--    owner, because permission-shaped state must only ever widen deliberately
+--    (AGENTS.md rule 5).
+CREATE OR REPLACE FUNCTION public.partner_ensure_provisioned_workspace(
+  p_workspace_id uuid,
+  p_social_account_id uuid,
+  p_environment text
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path TO 'public'
+AS $function$
+DECLARE
+  v_owner_user_id uuid;
+  v_principal_id uuid;
+  v_principal_name text;
+  v_existing_owner_id uuid;
+BEGIN
+  -- The invariants below are checked on EVERY mint, not only the first.
+  -- Returning early on an existing binding skipped them, and a shared workspace
+  -- makes that reachable: once owner A has established the binding, an account
+  -- owned by B can be connected to the same workspace, and minting a key for
+  -- B's account would then pass unvalidated. The binding row itself is still
+  -- never rewritten -- only the checks run again.
+
+  -- The workspace predicate is structural, not advisory. Without it the two
+  -- arguments are independent and a caller could bind any workspace to the owner
+  -- of any account it can name; ON CONFLICT DO NOTHING would then make that
+  -- binding permanent and block the legitimate one from ever repairing it.
+  SELECT user_id INTO v_owner_user_id
+  FROM public.social_accounts
+  WHERE id = p_social_account_id
+    AND workspace_id = p_workspace_id;
+
+  -- Refusing here is the point. Returning quietly would mint exactly the key
+  -- this migration exists to stop existing: one that authenticates and then
+  -- 403s on every gated endpoint with a message blaming a feature flag.
+  IF v_owner_user_id IS NULL THEN
+    RAISE EXCEPTION 'cannot provision workspace %: account % is not an owned account of it',
+      p_workspace_id, p_social_account_id
+      USING ERRCODE = 'check_violation';
+  END IF;
+
+  -- An owner whose accounts span several workspaces must not be provisioned
+  -- automatically. Some owner-scoped tables reached by entitlement-gated
+  -- endpoints -- the auto-reply rules among them -- are keyed on user_id alone,
+  -- so binding a multi-workspace identity would let a key bound to ONE workspace
+  -- reach rules governing that same person's accounts in another. Refusing makes
+  -- that a deliberate decision with a dedicated owner, instead of a silent
+  -- consequence of minting a key.
+  -- count(DISTINCT workspace_id) would silently drop NULLs, and a NULL workspace
+  -- is exactly the dangerous case: only WhatsApp accounts are required to carry
+  -- one, so a legacy Facebook or Instagram account can sit outside every
+  -- workspace while owner-scoped rules still reach it. Such an account is its own
+  -- scope, so it is counted as one by coalescing to a sentinel the uuid text
+  -- space cannot produce.
+  IF (SELECT count(DISTINCT COALESCE(workspace_id::text, 'unscoped'))
+      FROM public.social_accounts
+      WHERE user_id = v_owner_user_id) > 1 THEN
+    RAISE EXCEPTION 'cannot provision workspace %: owner % holds accounts outside it (another workspace, or none at all) and owner-scoped rules would be shared across them',
+      p_workspace_id, v_owner_user_id
+      USING ERRCODE = 'check_violation';
+  END IF;
+
+  SELECT COALESCE(p.email, 'workspace ' || p_workspace_id::text)
+  INTO v_principal_name
+  FROM public.profiles p WHERE p.id = v_owner_user_id;
+  v_principal_name := COALESCE(v_principal_name, 'workspace ' || p_workspace_id::text);
+
+  -- A workspace resolves to exactly ONE owner, but it can hold accounts owned by
+  -- several people. So an existing binding is not simply "already done": if it
+  -- names a different owner than this account's, entitlement would authorise the
+  -- key against owner A's flags and overrides while owner-scoped automation read
+  -- and wrote owner B's rows. Refuse, and do not rewrite the binding -- re-pointing
+  -- a workspace at a different owner is the one thing this must never do
+  -- (AGENTS.md rule 5).
+  SELECT owner_user_id INTO v_existing_owner_id
+  FROM public.partner_provisioned_workspaces
+  WHERE workspace_id = p_workspace_id;
+
+  IF v_existing_owner_id IS NOT NULL THEN
+    IF v_existing_owner_id <> v_owner_user_id THEN
+      RAISE EXCEPTION 'cannot provision workspace %: it is bound to owner %, but account % is owned by %',
+        p_workspace_id, v_existing_owner_id, p_social_account_id, v_owner_user_id
+        USING ERRCODE = 'check_violation';
+    END IF;
+    RETURN;
+  END IF;
+
+  INSERT INTO public.partner_principals (id, name, is_active)
+  VALUES (gen_random_uuid(), v_principal_name, true)
+  RETURNING id INTO v_principal_id;
+
+  INSERT INTO public.partner_provisioned_workspaces
+    (workspace_id, principal_id, owner_user_id, environment)
+  VALUES (p_workspace_id, v_principal_id, v_owner_user_id,
+          COALESCE(p_environment, 'production'))
+  ON CONFLICT (workspace_id) DO NOTHING;
+
+  -- A concurrent first mint may have won the race, and DO NOTHING is silent
+  -- about it. Re-read: if the row that landed names a different owner, this call
+  -- must fail rather than return as though it had provisioned what it wanted.
+  SELECT owner_user_id INTO v_existing_owner_id
+  FROM public.partner_provisioned_workspaces
+  WHERE workspace_id = p_workspace_id;
+
+  IF v_existing_owner_id IS DISTINCT FROM v_owner_user_id THEN
+    RAISE EXCEPTION 'cannot provision workspace %: it was concurrently bound to owner %, not %',
+      p_workspace_id, v_existing_owner_id, v_owner_user_id
+      USING ERRCODE = 'check_violation';
+  END IF;
+
+  -- Losing the race under the SAME owner is a success for the caller, but the
+  -- principal this call minted is now referenced by nothing. Two sessions each
+  -- insert one and only one can be referenced, so without this the estate
+  -- accumulates an orphan identity per race. Delete only our own, and only when
+  -- the surviving binding does not point at it.
+  DELETE FROM public.partner_principals
+  WHERE id = v_principal_id
+    AND NOT EXISTS (
+      SELECT 1 FROM public.partner_provisioned_workspaces
+      WHERE principal_id = v_principal_id
+    );
+END;
+$function$;
+
+-- PUBLIC alone is not enough on this stack: default privileges grant EXECUTE
+-- directly to anon and authenticated, so a SECURITY DEFINER function revoked
+-- only from PUBLIC stays callable through PostgREST by any API client. This
+-- helper performs no caller authorization, so that would be a door onto it.
+-- It is reached only from create_partner_key, which does its own authorization.
+REVOKE ALL ON FUNCTION public.partner_ensure_provisioned_workspace(uuid, uuid, text)
+  FROM PUBLIC, anon, authenticated;
+
+-- 2. Mint the binding with the key. The signature is reproduced exactly,
+--    defaults included: CREATE OR REPLACE with a changed argument list adds an
+--    overload rather than replacing, and two candidates would then resolve
+--    ambiguously from PostgREST.
+CREATE OR REPLACE FUNCTION public.create_partner_key(p_workspace_id uuid, p_social_account_id uuid, p_name text, p_key_prefix text, p_key_hash text, p_scopes text[], p_rate_limit_per_min integer DEFAULT 60, p_monthly_quota integer DEFAULT NULL::integer, p_expires_at timestamp with time zone DEFAULT NULL::timestamp with time zone, p_request_id text DEFAULT NULL::text, p_environment text DEFAULT 'production'::text)
+ RETURNS uuid
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+ SET search_path TO 'public'
+AS $function$
+DECLARE
+  v_key_id UUID;
+BEGIN
+  IF NOT public.partner_caller_may_manage_keys(p_workspace_id) THEN
+    RAISE EXCEPTION 'not authorized to create partner keys in this workspace'
+      USING ERRCODE = 'insufficient_privilege';
+  END IF;
+
+  IF p_key_hash IS NULL OR length(p_key_hash) <> 64 THEN
+    -- A 64-char hex SHA-256 digest. Anything else is either a plaintext key
+    -- reaching the database or a caller that forgot to hash -- both are
+    -- credential-handling failures, not validation nits.
+    RAISE EXCEPTION 'key_hash must be a 64-character SHA-256 hex digest'
+      USING ERRCODE = 'check_violation';
+  END IF;
+
+  IF p_environment IS NULL OR p_environment NOT IN ('staging', 'production') THEN
+    RAISE EXCEPTION 'environment must be staging or production'
+      USING ERRCODE = 'check_violation';
+  END IF;
+  -- The prefix is what the door checks before any lookup, so a row whose
+  -- prefix disagrees with its environment would be a key one door mints and
+  -- the other accepts. Refused at the mint, where it is a caller bug.
+  IF public.partner_key_environment_for_prefix(p_key_prefix) <> p_environment THEN
+    RAISE EXCEPTION 'key prefix % does not belong to environment %', p_key_prefix, p_environment
+      USING ERRCODE = 'check_violation';
+  END IF;
+
+  -- The owner binding shares the transaction with the key, so a key can never
+  -- again exist without the row that makes it usable.
+  PERFORM public.partner_ensure_provisioned_workspace(
+    p_workspace_id, p_social_account_id, p_environment);
+
+  -- Both inserts and the audit row share this function's single transaction:
+  -- a failure at any point leaves no key, no binding and no trail, rather than
+  -- the orphaned key F3 describes.
+  INSERT INTO public.partner_api_keys (
+    workspace_id, social_account_id, created_by, name, key_prefix, key_hash,
+    scopes, rate_limit_per_min, monthly_quota, expires_at, environment
+  ) VALUES (
+    p_workspace_id, p_social_account_id, auth.uid(), p_name, p_key_prefix,
+    p_key_hash, COALESCE(p_scopes, '{}'), p_rate_limit_per_min, p_monthly_quota,
+    p_expires_at, p_environment
+  )
+  RETURNING id INTO v_key_id;
+
+  -- created_by is stamped from auth.uid() above and is deliberately NOT a
+  -- parameter: an actor a caller can choose is an actor a caller can forge,
+  -- and the audit trail's only value is that it cannot be.
+
+  INSERT INTO public.partner_api_key_accounts (key_id, social_account_id, workspace_id)
+  VALUES (v_key_id, p_social_account_id, p_workspace_id);
+
+  INSERT INTO public.partner_audit_logs (workspace_id, key_id, actor_id, action, request_id, metadata)
+  VALUES (
+    p_workspace_id, v_key_id, auth.uid(), 'create', p_request_id,
+    jsonb_build_object(
+      'key_prefix', p_key_prefix,
+      'scopes', to_jsonb(COALESCE(p_scopes, '{}')),
+      'social_account_id', p_social_account_id,
+      'expires_at', p_expires_at,
+      'environment', p_environment
+    )
+  );
+
+  RETURN v_key_id;
+END;
+$function$;
+
+-- 3. Backfill every workspace holding a LIVE key but no binding.
+--
+--    Runs LAST, after the new create_partner_key is committed and visible. This
+--    file carries no BEGIN/COMMIT, so psql commits each statement as it goes; a
+--    key minted while the migration was mid-flight would otherwise have run the
+--    OLD writer, committed without a provisioning row, and been missed by a
+--    backfill whose snapshot was taken before it. With the new writer already
+--    live, any key minted from here on provisions itself, and this pass closes
+--    everything earlier. It is idempotent and safe to re-run.
+--
+--    Revoked-only workspaces are skipped deliberately. Backfilling one would mint
+--    a principal asserting a partner relationship that has already been ended, and
+--    a revoked key cannot reach an entitlement check to benefit from it. If such a
+--    workspace is ever issued a new key, step 3 provisions it at that moment.
+DO $backfill$
+DECLARE
+  r RECORD;
+BEGIN
+  -- EVERY live key on the workspace is validated, not just the oldest. Binding a
+  -- workspace unlocks the entitlement check for all of its keys at once, so
+  -- provisioning on the strength of one safe key would let a second key whose
+  -- owner fails the guard straight through it. A workspace qualifies only when
+  -- all of its live keys resolve to ONE owner that is itself single-workspace.
+  FOR r IN
+    SELECT k.workspace_id,
+           min(k.social_account_id::text)::uuid AS social_account_id,
+           min(k.environment) AS environment
+    FROM public.partner_api_keys k
+    JOIN public.social_accounts a
+      ON a.id = k.social_account_id
+     AND a.workspace_id = k.workspace_id
+    WHERE k.social_account_id IS NOT NULL
+      AND k.revoked_at IS NULL
+      AND NOT EXISTS (
+        SELECT 1 FROM public.partner_provisioned_workspaces w
+        WHERE w.workspace_id = k.workspace_id
+      )
+    GROUP BY k.workspace_id
+    HAVING count(DISTINCT a.user_id) = 1
+  LOOP
+    -- One unownable account must not abort the whole backfill; it is reported
+    -- and the remaining workspaces still get their bindings.
+    BEGIN
+      PERFORM public.partner_ensure_provisioned_workspace(
+        r.workspace_id, r.social_account_id, r.environment);
+    EXCEPTION WHEN check_violation THEN
+      RAISE WARNING 'skipped workspace %: %', r.workspace_id, SQLERRM;
+    END;
+  END LOOP;
+END;
+$backfill$;

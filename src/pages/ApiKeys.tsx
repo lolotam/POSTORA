@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -204,6 +205,7 @@ const ERROR_CODES = [
 ];
 
 function EndpointCard({ endpoint }: { endpoint: EndpointInfo }) {
+    const { t } = useTranslation("apikeys");
     const [isOpen, setIsOpen] = useState(false);
     const { copied, copy } = useCopyToClipboard();
 
@@ -226,7 +228,7 @@ function EndpointCard({ endpoint }: { endpoint: EndpointInfo }) {
                             <Badge variant="outline" className={`${methodColors[endpoint.method]} font-mono shrink-0`}>
                                 {endpoint.method}
                             </Badge>
-                            <code className="text-sm font-mono truncate">{endpoint.path}</code>
+                            <code className="text-sm font-mono truncate" dir="ltr">{endpoint.path}</code>
                         </div>
                         <div className="flex items-center gap-2 shrink-0">
                             <Badge variant="secondary" className="text-xs hidden sm:inline-flex">
@@ -243,11 +245,12 @@ function EndpointCard({ endpoint }: { endpoint: EndpointInfo }) {
 
                         {/* Full URL */}
                         <div className="space-y-2">
-                            <Label className="text-xs">Full URL</Label>
+                            <Label className="text-xs">{t("endpoints.fullUrl", "Full URL")}</Label>
                             <div className="flex gap-2">
                                 <Input
                                     value={`${BASE_URL}${endpoint.path}`}
                                     readOnly
+                                    dir="ltr"
                                     className="font-mono text-xs"
                                 />
                                 <Button variant="outline" size="sm" onClick={handleCopy}>
@@ -259,27 +262,27 @@ function EndpointCard({ endpoint }: { endpoint: EndpointInfo }) {
                         {/* Request Body */}
                         {endpoint.requestBody && (
                             <div className="space-y-2">
-                                <Label className="text-xs">Request Body</Label>
+                                <Label className="text-xs">{t("endpoints.requestBody", "Request Body")}</Label>
                                 <div className="rounded-lg border bg-secondary/50 overflow-hidden">
                                     <table className="w-full text-xs">
                                         <thead className="bg-secondary">
                                             <tr>
-                                                <th className="text-left p-2 font-medium">Field</th>
-                                                <th className="text-left p-2 font-medium">Type</th>
-                                                <th className="text-left p-2 font-medium hidden sm:table-cell">Required</th>
-                                                <th className="text-left p-2 font-medium hidden md:table-cell">Description</th>
+                                                <th className="text-start p-2 font-medium">{t("endpoints.field", "Field")}</th>
+                                                <th className="text-start p-2 font-medium">{t("endpoints.type", "Type")}</th>
+                                                <th className="text-start p-2 font-medium hidden sm:table-cell">{t("endpoints.required", "Required")}</th>
+                                                <th className="text-start p-2 font-medium hidden md:table-cell">{t("endpoints.description", "Description")}</th>
                                             </tr>
                                         </thead>
                                         <tbody>
                                             {endpoint.requestBody.map((field) => (
                                                 <tr key={field.field} className="border-t border-border/50">
-                                                    <td className="p-2 font-mono text-primary">{field.field}</td>
-                                                    <td className="p-2 font-mono text-muted-foreground">{field.type}</td>
+                                                    <td className="p-2 font-mono text-primary" dir="ltr">{field.field}</td>
+                                                    <td className="p-2 font-mono text-muted-foreground" dir="ltr">{field.type}</td>
                                                     <td className="p-2 hidden sm:table-cell">
                                                         {field.required ? (
-                                                            <Badge variant="destructive" className="text-[10px]">Required</Badge>
+                                                            <Badge variant="destructive" className="text-[10px]">{t("endpoints.badgeRequired", "Required")}</Badge>
                                                         ) : (
-                                                            <Badge variant="secondary" className="text-[10px]">Optional</Badge>
+                                                            <Badge variant="secondary" className="text-[10px]">{t("endpoints.badgeOptional", "Optional")}</Badge>
                                                         )}
                                                     </td>
                                                     <td className="p-2 text-muted-foreground hidden md:table-cell">{field.description}</td>
@@ -294,21 +297,21 @@ function EndpointCard({ endpoint }: { endpoint: EndpointInfo }) {
                         {/* Query Params */}
                         {endpoint.queryParams && (
                             <div className="space-y-2">
-                                <Label className="text-xs">Query Parameters</Label>
+                                <Label className="text-xs">{t("endpoints.queryParams", "Query Parameters")}</Label>
                                 <div className="rounded-lg border bg-secondary/50 overflow-hidden">
                                     <table className="w-full text-xs">
                                         <thead className="bg-secondary">
                                             <tr>
-                                                <th className="text-left p-2 font-medium">Param</th>
-                                                <th className="text-left p-2 font-medium">Type</th>
-                                                <th className="text-left p-2 font-medium hidden sm:table-cell">Description</th>
+                                                <th className="text-start p-2 font-medium">{t("endpoints.param", "Param")}</th>
+                                                <th className="text-start p-2 font-medium">{t("endpoints.type", "Type")}</th>
+                                                <th className="text-start p-2 font-medium hidden sm:table-cell">{t("endpoints.description", "Description")}</th>
                                             </tr>
                                         </thead>
                                         <tbody>
                                             {endpoint.queryParams.map((param) => (
                                                 <tr key={param.param} className="border-t border-border/50">
-                                                    <td className="p-2 font-mono text-primary">{param.param}</td>
-                                                    <td className="p-2 font-mono text-muted-foreground">{param.type}</td>
+                                                    <td className="p-2 font-mono text-primary" dir="ltr">{param.param}</td>
+                                                    <td className="p-2 font-mono text-muted-foreground" dir="ltr">{param.type}</td>
                                                     <td className="p-2 text-muted-foreground hidden sm:table-cell">{param.description}</td>
                                                 </tr>
                                             ))}
@@ -321,8 +324,8 @@ function EndpointCard({ endpoint }: { endpoint: EndpointInfo }) {
                         {/* Response Example */}
                         {endpoint.responseExample && (
                             <div className="space-y-2">
-                                <Label className="text-xs">Response Example</Label>
-                                <pre className="p-3 rounded-lg bg-secondary/50 text-xs font-mono overflow-x-auto">
+                                <Label className="text-xs">{t("endpoints.responseExample", "Response Example")}</Label>
+                                <pre className="p-3 rounded-lg bg-secondary/50 text-xs font-mono overflow-x-auto" dir="ltr">
                                     {endpoint.responseExample}
                                 </pre>
                             </div>
@@ -335,6 +338,7 @@ function EndpointCard({ endpoint }: { endpoint: EndpointInfo }) {
 }
 
 export default function ApiKeys() {
+    const { t } = useTranslation("apikeys");
     const [showKey, setShowKey] = useState(false);
     const { toast } = useToast();
     const { profile, refreshProfile } = useAuth();
@@ -346,30 +350,34 @@ export default function ApiKeys() {
     const handleCopyApiKey = async () => {
         await copy(apiKey);
         toast({
-            title: "API Key copied",
-            description: "The API key has been copied to your clipboard.",
+            title: t("defaultKey.copied", "API Key copied"),
+            description: t("defaultKey.copiedDesc", "The API key has been copied to your clipboard."),
         });
     };
 
     const handleRegenerateApiKey = async () => {
         if (!profile) return;
 
+        const newKey = crypto.randomUUID();
+        const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(newKey));
+        const apiKeyHash = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+
         const { error } = await supabase
             .from("profiles")
-            .update({ api_key: crypto.randomUUID() })
+            .update({ api_key: newKey, api_key_hash: apiKeyHash })
             .eq("id", profile.id);
 
         if (error) {
             toast({
-                title: "Error",
-                description: "Failed to regenerate API key.",
+                title: t("common.error", "Error"),
+                description: t("defaultKey.failedRegenerate", "Failed to regenerate API key."),
                 variant: "destructive",
             });
         } else {
             await refreshProfile();
             toast({
-                title: "API Key regenerated",
-                description: "Your new API key is ready to use.",
+                title: t("defaultKey.regenerated", "API Key regenerated"),
+                description: t("defaultKey.regeneratedDesc", "Your new API key is ready to use."),
             });
         }
     };
@@ -380,14 +388,14 @@ export default function ApiKeys() {
                 {/* Header */}
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                     <div>
-                        <h1 className="text-2xl sm:text-3xl font-bold">MCP & API</h1>
+                        <h1 className="text-2xl sm:text-3xl font-bold">{t("header.title", "MCP & API")}</h1>
                         <p className="text-muted-foreground mt-1">
-                            Manage your Model Context Protocol (MCP) servers, API keys, and external integrations
+                            {t("header.subtitle", "Manage your Model Context Protocol (MCP) servers, API keys, and external integrations")}
                         </p>
                     </div>
                     <Button variant="gradient" className="w-full sm:w-auto">
-                        <Plus className="w-4 h-4 mr-2" />
-                        Create New Key
+                        <Plus className="w-4 h-4 me-2" />
+                        {t("header.createNewKey", "Create New Key")}
                     </Button>
                 </div>
 
@@ -399,24 +407,25 @@ export default function ApiKeys() {
                                 <Key className="w-5 h-5 text-primary" />
                             </div>
                             <div>
-                                <CardTitle className="text-lg">Default API Key</CardTitle>
+                                <CardTitle className="text-lg">{t("defaultKey.title", "Default API Key")}</CardTitle>
                                 <CardDescription>
-                                    Use this key to integrate with n8n, Zapier, or custom tools
+                                    {t("defaultKey.desc", "Use this key to integrate with n8n, Zapier, or custom tools")}
                                 </CardDescription>
                             </div>
                         </div>
                     </CardHeader>
                     <CardContent className="space-y-4">
                         <div className="space-y-2">
-                            <Label>Your API Key</Label>
+                            <Label>{t("defaultKey.label", "Your API Key")}</Label>
                             <div className="flex flex-col sm:flex-row gap-2">
                                 <div className="flex-1 relative">
                                     <Input
                                         value={showKey ? apiKey : maskedKey}
                                         readOnly
-                                        className="pr-20 font-mono text-sm"
+                                        dir="ltr"
+                                        className="pe-20 ps-3 font-mono text-sm"
                                     />
-                                    <div className="absolute right-1 top-1/2 -translate-y-1/2 flex gap-1">
+                                    <div className="absolute end-1 top-1/2 -translate-y-1/2 flex gap-1">
                                         <Button
                                             variant="ghost"
                                             size="sm"
@@ -440,12 +449,12 @@ export default function ApiKeys() {
                                     </div>
                                 </div>
                                 <Button variant="outline" onClick={handleRegenerateApiKey} className="shrink-0">
-                                    <RefreshCw className="w-4 h-4 mr-2" />
-                                    Regenerate
+                                    <RefreshCw className="w-4 h-4 me-2" />
+                                    {t("defaultKey.regenerate", "Regenerate")}
                                 </Button>
                             </div>
                             <p className="text-xs text-muted-foreground">
-                                Keep this key secret. Never share it publicly. Include it in the <code className="bg-secondary px-1 rounded">x-api-key</code> header.
+                                {t("defaultKey.securityWarning", { header: "x-api-key", defaultValue: "Keep this key secret. Never share it publicly. Include it in the x-api-key header." })}
                             </p>
                         </div>
                     </CardContent>
@@ -455,32 +464,32 @@ export default function ApiKeys() {
                 <Card>
                     <CardHeader>
                         <CardTitle className="text-lg flex items-center gap-2">
-                            <Activity className="w-5 h-5" />
-                            API Usage Status
+                            <Activity className="w-5 h-5 me-2" />
+                            {t("usage.title", "API Usage Status")}
                         </CardTitle>
                     </CardHeader>
                     <CardContent>
                         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                             <div className="p-4 rounded-lg bg-secondary/50 text-center">
                                 <p className="text-2xl font-bold text-primary">10</p>
-                                <p className="text-sm text-muted-foreground">Current Usage</p>
+                                <p className="text-sm text-muted-foreground">{t("usage.current", "Current Usage")}</p>
                             </div>
                             <div className="p-4 rounded-lg bg-secondary/50 text-center">
                                 <p className="text-2xl font-bold">10</p>
-                                <p className="text-sm text-muted-foreground">Usage Limit</p>
+                                <p className="text-sm text-muted-foreground">{t("usage.limit", "Usage Limit")}</p>
                             </div>
                             <div className="p-4 rounded-lg bg-secondary/50 text-center">
                                 <div className="flex items-center justify-center gap-1">
-                                    <Clock className="w-4 h-4" />
+                                    <Clock className="w-4 h-4 me-1" />
                                     <p className="text-lg font-bold">Jan 28</p>
                                 </div>
-                                <p className="text-sm text-muted-foreground">Next Reset</p>
+                                <p className="text-sm text-muted-foreground">{t("usage.nextReset", "Next Reset")}</p>
                             </div>
                         </div>
                         <div className="mt-4">
                             <div className="flex justify-between text-sm mb-1">
-                                <span>Usage Progress</span>
-                                <span>10 / 10</span>
+                                <span>{t("usage.progress", "Usage Progress")}</span>
+                                <span dir="ltr">10 / 10</span>
                             </div>
                             <div className="w-full bg-secondary rounded-full h-2">
                                 <div className="bg-primary h-2 rounded-full" style={{ width: "100%" }}></div>
@@ -497,18 +506,18 @@ export default function ApiKeys() {
                     <CardHeader>
                         <div className="flex items-center justify-between">
                             <div>
-                                <CardTitle className="text-lg">API Endpoints</CardTitle>
-                                <CardDescription>Available endpoints for your integrations. Click to expand for details.</CardDescription>
+                                <CardTitle className="text-lg">{t("endpoints.title", "API Endpoints")}</CardTitle>
+                                <CardDescription>{t("endpoints.desc", "Available endpoints for your integrations. Click to expand for details.")}</CardDescription>
                                 <p className="text-sm text-muted-foreground mt-2">
-                                    <span className="font-bold text-foreground">Base URL: </span>
-                                    <code className="font-mono text-sm bg-muted px-2 py-1 rounded">https://api.postora.cloud/functions/v1/n8n-api</code>
-                                    <span>{" "}+ endpoint path</span>
+                                    <span className="font-bold text-foreground me-1">{t("endpoints.baseUrl", "Base URL:")} </span>
+                                    <code className="font-mono text-sm bg-muted px-2 py-1 rounded" dir="ltr">https://api.postora.cloud/functions/v1/n8n-api</code>
+                                    <span>{" "}{t("endpoints.endpointPath", "+ endpoint path")}</span>
                                 </p>
                             </div>
                             <Button variant="outline" size="sm" asChild>
                                 <a href="/docs" target="_blank" rel="noopener noreferrer" className="gap-2">
-                                    <ExternalLink className="w-4 h-4" />
-                                    Full Docs
+                                    <ExternalLink className="w-4 h-4 rtl:rotate-180" />
+                                    {t("endpoints.fullDocs", "Full Docs")}
                                 </a>
                             </Button>
                         </div>
@@ -529,34 +538,34 @@ export default function ApiKeys() {
                             </div>
                             <div className="flex-1">
                                 <div className="flex items-center gap-2">
-                                    <CardTitle className="text-lg">Direct API & OAuth 2.0 Access (Auto-Approved)</CardTitle>
-                                    <Badge variant="outline" className="text-[10px] bg-emerald-500/10 text-emerald-400 border-emerald-500/30">Instant Access</Badge>
+                                    <CardTitle className="text-lg">{t("guide.title", "Direct API & OAuth 2.0 Access (Auto-Approved)")}</CardTitle>
+                                    <Badge variant="outline" className="text-[10px] bg-emerald-500/10 text-emerald-400 border-emerald-500/30">{t("guide.badge", "Instant Access")}</Badge>
                                 </div>
                                 <CardDescription>
-                                    All registered Postora users have immediate, pre-approved access to authenticate external tools (n8n, Zapier, Make, and MCP clients) using their account quotas with zero manual admin approval required.
+                                    {t("guide.desc", "All registered Postora users have immediate, pre-approved access to authenticate external tools (n8n, Zapier, Make, and MCP clients) using their account quotas with zero manual admin approval required.")}
                                 </CardDescription>
                             </div>
                         </div>
                     </CardHeader>
                     <CardContent className="space-y-3 text-sm text-muted-foreground">
                         <p>
-                            When connecting self-hosted tools or custom MCP connectors, authenticate directly using your <strong>Default API Key</strong> above (passed via <code className="font-mono text-xs bg-background px-1.5 py-0.5 rounded border">X-API-Key</code> or <code className="font-mono text-xs bg-background px-1.5 py-0.5 rounded border">Authorization: Bearer &lt;API_KEY&gt;</code>).
+                            {t("guide.authText", "When connecting self-hosted tools or custom MCP connectors, authenticate directly using your Default API Key above (passed via X-API-Key or Authorization: Bearer <API_KEY>).")}
                         </p>
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
                             <div className="p-3 rounded-xl bg-card border border-border/60">
                                 <h4 className="font-semibold text-foreground text-sm flex items-center gap-1.5 mb-1">
-                                    <Plug className="w-4 h-4 text-sky-400" /> MCP Connection (Instant)
+                                    <Plug className="w-4 h-4 text-sky-400 me-1.5" /> {t("guide.mcpTitle", "MCP Connection (Instant)")}
                                 </h4>
                                 <p className="text-xs">
-                                    Plug Postora MCP tools directly into Claude, Cursor, Windsurf, or Antigravity agents. All operations are billed against your active subscription limits.
+                                    {t("guide.mcpDesc", "Plug Postora MCP tools directly into Claude, Cursor, Windsurf, or Antigravity agents. All operations are billed against your active subscription limits.")}
                                 </p>
                             </div>
                             <div className="p-3 rounded-xl bg-card border border-border/60">
                                 <h4 className="font-semibold text-foreground text-sm flex items-center gap-1.5 mb-1">
-                                    <Globe className="w-4 h-4 text-emerald-400" /> Webhooks & OAuth Clients
+                                    <Globe className="w-4 h-4 text-emerald-400 me-1.5" /> {t("guide.webhooksTitle", "Webhooks & OAuth Clients")}
                                 </h4>
                                 <p className="text-xs">
-                                    Automations and workflows execute under your own tenant isolation. No administrative review or redirect URI whitelisting delay is required.
+                                    {t("guide.webhooksDesc", "Automations and workflows execute under your own tenant isolation. No administrative review or redirect URI whitelisting delay is required.")}
                                 </p>
                             </div>
                         </div>
@@ -572,11 +581,11 @@ export default function ApiKeys() {
                             </div>
                             <div className="flex-1">
                                 <div className="flex items-center gap-2">
-                                    <CardTitle className="text-lg">MCP Server</CardTitle>
-                                    <Badge variant="outline" className="text-[10px] bg-amber-500/10 text-amber-400 border-amber-500/30">Beta</Badge>
+                                    <CardTitle className="text-lg">{t("mcpServer.title", "MCP Server")}</CardTitle>
+                                    <Badge variant="outline" className="text-[10px] bg-amber-500/10 text-amber-400 border-amber-500/30">{t("mcpServer.badge", "Beta")}</Badge>
                                 </div>
                                 <CardDescription>
-                                    Connect Postora to Claude, Cursor, ChatGPT and other MCP-compatible AI agents using the same API key above.
+                                    {t("mcpServer.desc", "Connect Postora to Claude, Cursor, ChatGPT and other MCP-compatible AI agents using the same API key above.")}
                                 </CardDescription>
                             </div>
                         </div>
@@ -592,24 +601,24 @@ export default function ApiKeys() {
                 {/* Error Codes Reference */}
                 <Card>
                     <CardHeader>
-                        <CardTitle className="text-lg">Error Codes Reference</CardTitle>
-                        <CardDescription>Common HTTP status codes and their meanings</CardDescription>
+                        <CardTitle className="text-lg">{t("errorCodes.title", "Error Codes Reference")}</CardTitle>
+                        <CardDescription>{t("errorCodes.desc", "Common HTTP status codes and their meanings")}</CardDescription>
                     </CardHeader>
                     <CardContent>
                         <div className="rounded-lg border overflow-hidden">
                             <table className="w-full text-sm">
                                 <thead className="bg-secondary">
                                     <tr>
-                                        <th className="text-left p-3 font-medium w-20">Code</th>
-                                        <th className="text-left p-3 font-medium w-32">Status</th>
-                                        <th className="text-left p-3 font-medium">Description</th>
+                                        <th className="text-start p-3 font-medium w-20">{t("errorCodes.code", "Code")}</th>
+                                        <th className="text-start p-3 font-medium w-32">{t("errorCodes.status", "Status")}</th>
+                                        <th className="text-start p-3 font-medium">{t("errorCodes.description", "Description")}</th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                     {ERROR_CODES.map((error) => (
                                         <tr key={error.code} className="border-t border-border/50">
                                             <td className="p-3">
-                                                <span className={`font-mono font-bold ${error.color}`}>{error.code}</span>
+                                                <span className={`font-mono font-bold ${error.color}`} dir="ltr">{error.code}</span>
                                             </td>
                                             <td className="p-3 font-medium">{error.title}</td>
                                             <td className="p-3 text-muted-foreground">{error.description}</td>
@@ -624,11 +633,11 @@ export default function ApiKeys() {
                 {/* Authentication Example */}
                 <Card>
                     <CardHeader>
-                        <CardTitle className="text-lg">Quick Start Example</CardTitle>
-                        <CardDescription>How to authenticate and make your first API call</CardDescription>
+                        <CardTitle className="text-lg">{t("quickStart.title", "Quick Start Example")}</CardTitle>
+                        <CardDescription>{t("quickStart.desc", "How to authenticate and make your first API call")}</CardDescription>
                     </CardHeader>
                     <CardContent>
-                        <pre className="p-4 rounded-lg bg-secondary/50 text-xs font-mono overflow-x-auto">
+                        <pre className="p-4 rounded-lg bg-secondary/50 text-xs font-mono overflow-x-auto" dir="ltr">
 {`curl -X POST "${BASE_URL}/api/v1/post" \\
   -H "Content-Type: application/json" \\
   -H "x-api-key: YOUR_API_KEY" \\

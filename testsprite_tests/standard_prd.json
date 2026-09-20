@@ -122,7 +122,6 @@
       "name": "Account Security APIs",
       "description": "Supports MFA inspection, password reset OTP flows, MFA reset verification, password changes, and backup code management.",
       "user_flows": [
-        "POST /functions/v1/check-user-mfa with Authorization Bearer <Supabase JWT> -> Receive 200 with MFA factor status",
         "POST /functions/v1/send-reset-otp with valid email payload -> Receive 200 with OTP send result",
         "POST /functions/v1/verify-reset-otp with valid email and OTP -> Receive 200 with OTP verification result",
         "POST /functions/v1/verify-mfa-reset with valid OTP and reset payload -> Receive 200 with MFA reset verification result",
@@ -923,7 +922,6 @@
         "name": "Account Security APIs",
         "description": "Password reset, MFA reset, MFA status, backup-code management, and password change endpoints.",
         "files": [
-          "supabase/functions/check-user-mfa/index.ts",
           "supabase/functions/verify-mfa-reset/index.ts",
           "supabase/functions/verify-reset-otp/index.ts",
           "supabase/functions/send-reset-otp/index.ts",
@@ -932,15 +930,6 @@
           "supabase/functions/manage-backup-codes/index.ts"
         ],
         "endpoints": [
-          {
-            "method": "POST",
-            "path": "/functions/v1/check-user-mfa",
-            "description": "Return MFA factors for the authenticated user.",
-            "auth_required": true,
-            "response_schema": {
-              "200": "MFA factor status"
-            }
-          },
           {
             "method": "POST",
             "path": "/functions/v1/send-reset-otp",

@@ -82,6 +82,10 @@ export const ACTION_SCOPES: Record<string, readonly PartnerScope[] | null> = {
   // billed for -- so it takes media:write, not media:read.
   upload_media: ["media:write"],
   get_media: ["media:read"],
+  // The bytes behind an inbound message. The METADATA on the message rides
+  // under messages:read, since it is the same row the key already reads; the
+  // file itself needs its own grant.
+  get_message_media: ["media:read"],
   // Generic scope ONLY, deliberately. `send_template`'s set also contains the
   // frozen legacy `whatsapp:template.send`, which authorises approved
   // templates and nothing more (D3). If either of these accepted it, a legacy
@@ -195,6 +199,10 @@ export const ACTION_RISK_CLASSES: Record<string, LimiterRiskClass> = {
   // route.
   upload_media: "C",
   get_media: "A",
+  // B, not A: class A means a bounded local read with no outbound call, and a
+  // cache miss here fetches from the provider, buffers the bytes and writes
+  // both storage and the row back.
+  get_message_media: "B",
   // Same class as send_template: they spend money and reach a customer. These
   // are per-TYPE authorisation entries checked inside POST /v1/messages, not
   // routes of their own -- and never alias actions (see ALIAS_ACTIONS).

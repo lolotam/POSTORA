@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { InboxMessage } from "@/hooks/useAdminInbox";
+import { sanitizeEmailHtml } from "@/lib/sanitizeHtml";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
@@ -183,7 +184,7 @@ function SingleMessage({ message, isExpanded, onToggle, isLatest }: SingleMessag
             {message.html_body ? (
               <div
                 className="prose prose-sm dark:prose-invert max-w-none"
-                dangerouslySetInnerHTML={{ __html: message.html_body }}
+                dangerouslySetInnerHTML={{ __html: sanitizeEmailHtml(message.html_body) }}
               />
             ) : (
               <pre className="text-sm whitespace-pre-wrap font-sans">

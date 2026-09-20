@@ -2103,6 +2103,49 @@ paths:
         default:
           $ref: '#/components/responses/V1Error'
 
+  /functions/v1/partner-api/v1/messages/{id}/media:
+    get:
+      operationId: getMessageMedia
+      summary: Get a time-bounded URL for an inbound message's media
+      description: |
+        Mints a short-lived, Postora-origin URL for the media attached to an
+        inbound message, materialising the bytes into storage on first request.
+
+        The `media` object on a `Message` describes the attachment; this is how
+        the bytes are actually reached. The `media_url` carried on the
+        `message.received` webhook is a provider URL that requires provider
+        credentials and is NOT a supported download path.
+
+        The returned `url` is a short-lived capability, not a stable reference.
+        Do not persist it, do not log it, and do not embed it in a durable
+        record: request this endpoint again when the bytes are needed.
+
+        `413 payload_too_large` means the media is larger than this API will
+        materialise, and a retry will not change that. `503 media_unavailable`
+        is transient and carries `retryable: true`; it is a different code from
+        `temporarily_unavailable`, which is a deliberate suspension whose policy
+        says retrying will not succeed.
+
+        Scope `media:read`. D7 class B.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/PrefixedId'
+      responses:
+        '200':
+          description: A time-bounded URL for the media.
+          headers:
+            X-Postora-Request-Id:
+              $ref: '#/components/headers/X-Postora-Request-Id'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageMediaDownload'
+        default:
+          $ref: '#/components/responses/V1Error'
+
   /functions/v1/partner-api/v1/messages/{id}:
     get:
       operationId: getMessage
@@ -2994,6 +3037,7 @@ components:
         - media_pending
         - media_rejected
         # --- END Phase 9 rich-media block ---
+        - media_unavailable
         - meta_error
         - method_not_allowed
         - missing_idempotency_key
@@ -3767,6 +3811,61 @@ components:
           type: [string, 'null']
           description: The provider's message id (a WhatsApp `wamid`). Separate field, never the primary id (§7.1).
           example: wamid.HBgLMTU1NTAwMDAwMDAVAgARGB
+        media:
+          type: ['object', 'null']
+          description: |
+            Metadata for an inbound attachment, or null when the message carries
+            none. Always present, so the field's presence does not vary.
+
+            The bytes are NOT here and no location is published: fetch them with
+            `GET /v1/messages/{id}/media`.
+          required: [type, mime_type, file_name, size_bytes]
+          properties:
+            type:
+              type: string
+              description: The provider's media type (image, video, audio, document, sticker).
+              example: image
+            mime_type:
+              type: [string, 'null']
+              example: image/jpeg
+            file_name:
+              type: [string, 'null']
+            size_bytes:
+              type: [integer, 'null']
+
+    MessageMediaDownload:
+      type: object
+      description: |
+        A time-bounded URL for one inbound message's media, plus the metadata
+        needed to handle the file. The expiry is stated explicitly because
+        "temporary" without a number is not a contract.
+      required: [message_id, type, mime_type, file_name, size_bytes, url, expires_in, expires_at]
+      properties:
+        message_id:
+          $ref: '#/components/schemas/PrefixedId'
+        type:
+          type: string
+          example: image
+        mime_type:
+          type: [string, 'null']
+          example: image/jpeg
+        file_name:
+          type: [string, 'null']
+        size_bytes:
+          type: [integer, 'null']
+        url:
+          type: string
+          description: |
+            A signed, short-lived URL on a Postora origin. Treat it as a
+            capability that expires, never as an identifier.
+        expires_in:
+          type: integer
+          description: Seconds the URL remains valid, counted from when it was minted.
+          example: 900
+        expires_at:
+          type: string
+          format: date-time
+          description: The same expiry as an absolute instant.
 
     MessageAcceptedResponse:
       type: object
@@ -4397,11 +4496,19 @@ components:
           enum: [whatsapp]
         message:
           type: object
-          required: [id, direction, type, timestamp]
+          required: [id, postora_message_id, direction, type, timestamp]
           properties:
             id:
               type: string
               description: The provider message id (wamid / Evolution id).
+            postora_message_id:
+              type: string
+              description: |
+                Postora's own `msg_`-prefixed id for this message, the same one
+                the /v1 read surface publishes. Pass it to
+                `GET /v1/messages/{id}/media` to fetch an attachment. Prefer it
+                over `id` as a correlation key: `id` is the provider's.
+              example: msg_9f1c2b7e-0a3d-4c5e-8b21-6d7f8e9a0b1c
             direction:
               type: string
               enum: [inbound]

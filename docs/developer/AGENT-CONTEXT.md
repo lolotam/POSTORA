@@ -87,6 +87,7 @@ Derived from both route tables, `ACTION_SCOPES` and `PLATFORM_ACTION_SCOPES`. "L
 | `POST` | `/v1/media` | `media:write` | C | Upload a file for later use in a message |
 | `GET` | `/v1/media/{id}` | `media:read` | A | Get one uploaded file's metadata |
 | `POST` | `/v1/messages` | `whatsapp:template.send` or `messages:send` | C | Send a WhatsApp message |
+| `GET` | `/v1/messages/{id}/media` | `media:read` | B | Get a time-bounded URL for an inbound message's media |
 | `GET` | `/v1/messages/{id}` | `messages:read` | A | Get one message |
 | `POST` | `/v1/tools/execute` | `tools:execute` | C | Execute one capability of a connected tool |
 | `GET` | `/v1/templates` | `whatsapp:templates.read` or `templates:read` | B | List approved WhatsApp templates |
@@ -145,6 +146,7 @@ Derived from `V1_ERROR_POLICY`. The retry verdict is the `retryable` flag, never
 | `resource_not_found` | 404 | no | Resource not found |
 | `sync_already_running` | 409 | yes | History sync is already running; poll history-sync for progress |
 | `template_not_approved` | 422 | no | Template rejected by Meta |
+| `media_unavailable` | 503 | yes | The media could not be retrieved right now; retry shortly |
 | `temporarily_unavailable` | 503 | no | This action is temporarily suspended; see the Partner API changelog. Retrying will not succeed until it is re-enabled |
 | `tool_execution_failed` | 502 | yes | The connector request could not be completed |
 | `tool_execution_timeout` | 504 | yes | The connector request timed out |

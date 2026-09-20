@@ -1,0 +1,5 @@
+[mcp_servers.meta_developer_tools]
+url = "https://mcp.facebook.com/devtools"
+
+[mcp_servers.postora]
+url = "https://api.postora.cloud/functions/v1/mcp"
