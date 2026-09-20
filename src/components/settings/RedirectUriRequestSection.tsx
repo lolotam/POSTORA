@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -27,6 +28,7 @@ interface RedirectRequest {
 }
 
 export function RedirectUriRequestSection() {
+  const { t } = useTranslation("accounts");
   const { user } = useAuth();
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -60,7 +62,7 @@ export function RedirectUriRequestSection() {
 
   const submitMutation = useMutation({
     mutationFn: async () => {
-      if (!user) throw new Error("Not authenticated");
+      if (!user) throw new Error(t("redirect.errors.notAuth", "Not authenticated"));
       const { error } = await (supabase as any)
         .from("oauth_redirect_requests")
         .insert({
@@ -74,14 +76,21 @@ export function RedirectUriRequestSection() {
       queryClient.invalidateQueries({ queryKey: ["my-redirect-requests"] });
       setRedirectUri("");
       setSelectedAppId("");
-      toast({ title: "Request submitted", description: "An admin will review your redirect URI request." });
+      toast({ title: t("redirect.toast.submitted", "Request submitted"), description: t("redirect.toast.submittedDesc", "An admin will review your redirect URI request.") });
     },
     onError: (e: Error) => {
-      toast({ title: "Error", description: e.message, variant: "destructive" });
+      toast({ title: t("common:error", "Error"), description: e.message, variant: "destructive" });
     },
   });
 
-  const getAppName = (appId: string) => apps?.find((a) => a.id === appId)?.name || "Unknown";
+  const getAppName = (appId: string) => apps?.find((a) => a.id === appId)?.name || t("common:unknown", "Unknown");
+
+  const statusLabel = (status: string) => {
+    if (status === "pending") return t("common:status.pending", "Pending");
+    if (status === "approved") return t("redirect.status.approved", "Approved");
+    if (status === "rejected") return t("redirect.status.rejected", "Rejected");
+    return status;
+  };
 
   const statusConfig: Record<string, { icon: React.ReactNode; variant: "default" | "secondary" | "destructive" }> = {
     pending: { icon: <Clock className="h-3 w-3" />, variant: "secondary" },
@@ -94,23 +103,23 @@ export function RedirectUriRequestSection() {
       <CardHeader>
         <div className="flex items-center gap-2">
           <KeyRound className="h-5 w-5 text-primary" />
-          <CardTitle>Request API Access</CardTitle>
+          <CardTitle>{t("redirect.header.title", "Request API Access")}</CardTitle>
         </div>
         <CardDescription>
-          Request a redirect URI for your self-hosted integration (e.g., n8n, Zapier, Make). An admin will review your request.
+          {t("redirect.header.desc", "Request a redirect URI for your self-hosted integration (e.g., n8n, Zapier, Make). An admin will review your request.")}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
         {/* Request Form */}
         <div className="space-y-4">
           <div className="space-y-2">
-            <Label>Integration Platform</Label>
+            <Label>{t("redirect.form.platform", "Integration Platform")}</Label>
             {appsLoading ? (
               <Loader2 className="h-4 w-4 animate-spin" />
             ) : (
               <Select value={selectedAppId} onValueChange={setSelectedAppId}>
                 <SelectTrigger>
-                  <SelectValue placeholder="Select an app..." />
+                  <SelectValue placeholder={t("redirect.form.placeholder", "Select an app...")} />
                 </SelectTrigger>
                 <SelectContent>
                   {apps?.map((app) => (
@@ -124,14 +133,14 @@ export function RedirectUriRequestSection() {
             )}
           </div>
           <div className="space-y-2">
-            <Label>Your Redirect URI</Label>
+            <Label>{t("redirect.form.uri", "Your Redirect URI")}</Label>
             <Input
               placeholder="https://your-instance.com/rest/oauth2-credential/callback"
               value={redirectUri}
               onChange={(e) => setRedirectUri(e.target.value)}
               className="font-mono text-sm"
             />
-            <p className="text-xs text-muted-foreground">Must start with https://</p>
+            <p className="text-xs text-muted-foreground">{t("redirect.form.hint", "Must start with https://")}</p>
           </div>
           <Button
             onClick={() => submitMutation.mutate()}
@@ -142,7 +151,7 @@ export function RedirectUriRequestSection() {
             ) : (
               <Send className="h-4 w-4 mr-2" />
             )}
-            Submit Request
+            {t("redirect.actions.submit", "Submit Request")}
           </Button>
         </div>
 
@@ -151,7 +160,7 @@ export function RedirectUriRequestSection() {
           <Loader2 className="h-4 w-4 animate-spin" />
         ) : requests && requests.length > 0 ? (
           <div className="space-y-2">
-            <Label className="text-xs text-muted-foreground">Your Requests</Label>
+            <Label className="text-xs text-muted-foreground">{t("redirect.history.title", "Your Requests")}</Label>
             {requests.map((req) => {
               const config = statusConfig[req.status] || statusConfig.pending;
               return (
@@ -161,12 +170,12 @@ export function RedirectUriRequestSection() {
                       <span className="text-sm font-medium">{getAppName(req.oauth_app_id)}</span>
                       <Badge variant={config.variant} className="text-xs flex items-center gap-1">
                         {config.icon}
-                        {req.status}
+                        {statusLabel(req.status)}
                       </Badge>
                     </div>
                     <p className="text-xs font-mono text-muted-foreground truncate">{req.redirect_uri}</p>
                     {req.admin_note && (
-                      <p className="text-xs text-muted-foreground italic">Admin: {req.admin_note}</p>
+                      <p className="text-xs text-muted-foreground italic">{t("redirect.adminNote", "Admin: {{note}}", { note: req.admin_note })}</p>
                     )}
                   </div>
                 </div>

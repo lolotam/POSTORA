@@ -1,8 +1,8 @@
 import { useState, useEffect } from "react";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useToast } from "@/hooks/use-toast";
 import { useSubscription } from "@/hooks/useSubscription";
 import { supabase } from "@/integrations/supabase/client";
 import { format } from "date-fns";
@@ -27,7 +27,7 @@ interface Invoice {
 }
 
 export function BillingHistorySection() {
-  const { toast } = useToast();
+  const { t } = useTranslation("accounts");
   const { subscription } = useSubscription();
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -65,7 +65,7 @@ export function BillingHistorySection() {
       }
     } catch (err) {
       console.error("Error fetching invoices:", err);
-      setError(err instanceof Error ? err.message : "Failed to load invoices");
+      setError(err instanceof Error ? err.message : t("billing.errors.loadFailed", "Failed to load invoices"));
     } finally {
       setIsLoading(false);
     }
@@ -76,21 +76,21 @@ export function BillingHistorySection() {
       case "paid":
         return (
           <Badge className="bg-green-500/10 text-green-600 border-green-500/30">
-            Paid
+            {t("billing.status.paid", "Paid")}
           </Badge>
         );
       case "open":
         return (
           <Badge variant="outline" className="text-amber-600 border-amber-500/30">
-            Open
+            {t("billing.status.open", "Open")}
           </Badge>
         );
       case "void":
-        return <Badge variant="secondary">Void</Badge>;
+        return <Badge variant="secondary">{t("billing.status.void", "Void")}</Badge>;
       case "uncollectible":
-        return <Badge variant="destructive">Uncollectible</Badge>;
+        return <Badge variant="destructive">{t("billing.status.uncollectible", "Uncollectible")}</Badge>;
       default:
-        return <Badge variant="secondary">{status || "Unknown"}</Badge>;
+        return <Badge variant="secondary">{status || t("common:unknown", "Unknown")}</Badge>;
     }
   };
 
@@ -102,12 +102,12 @@ export function BillingHistorySection() {
             <Receipt className="w-5 h-5 text-muted-foreground" />
           </div>
           <div>
-            <h2 className="font-semibold">Billing History</h2>
-            <p className="text-sm text-muted-foreground">View past invoices and payments</p>
+            <h2 className="font-semibold">{t("billing.header.title", "Billing History")}</h2>
+            <p className="text-sm text-muted-foreground">{t("billing.header.subtitle", "View past invoices and payments")}</p>
           </div>
         </div>
         <p className="text-muted-foreground text-sm">
-          Subscribe to a plan to view your billing history.
+          {t("billing.empty.subscribe", "Subscribe to a plan to view your billing history.")}
         </p>
       </div>
     );
@@ -121,15 +121,15 @@ export function BillingHistorySection() {
             <Receipt className="w-5 h-5 text-primary" />
           </div>
           <div>
-            <h2 className="font-semibold">Billing History</h2>
-            <p className="text-sm text-muted-foreground">View past invoices and payments</p>
+            <h2 className="font-semibold">{t("billing.header.title", "Billing History")}</h2>
+            <p className="text-sm text-muted-foreground">{t("billing.header.subtitle", "View past invoices and payments")}</p>
           </div>
         </div>
         <Button variant="ghost" size="sm" onClick={fetchInvoices} disabled={isLoading}>
           {isLoading ? (
             <Loader2 className="w-4 h-4 animate-spin" />
           ) : (
-            "Refresh"
+            t("common:refresh", "Refresh")
           )}
         </Button>
       </div>
@@ -157,9 +157,9 @@ export function BillingHistorySection() {
       ) : invoices.length === 0 ? (
         <div className="text-center py-8">
           <FileText className="w-12 h-12 mx-auto text-muted-foreground mb-3" />
-          <p className="text-muted-foreground">No invoices yet</p>
+          <p className="text-muted-foreground">{t("billing.empty.none", "No invoices yet")}</p>
           <p className="text-sm text-muted-foreground">
-            Your invoices will appear here after your first payment.
+            {t("billing.empty.hint", "Your invoices will appear here after your first payment.")}
           </p>
         </div>
       ) : (
@@ -176,7 +176,7 @@ export function BillingHistorySection() {
                 <div>
                   <div className="flex items-center gap-2">
                     <span className="font-medium">
-                      {invoice.number || `Invoice`}
+                      {invoice.number || t("billing.invoice", "Invoice")}
                     </span>
                     {getStatusBadge(invoice.status)}
                   </div>
@@ -198,7 +198,7 @@ export function BillingHistorySection() {
                     className="gap-1"
                   >
                     <Download className="w-4 h-4" />
-                    <span className="hidden sm:inline">PDF</span>
+                    <span className="hidden sm:inline">{t("billing.actions.pdf", "PDF")}</span>
                   </Button>
                 )}
                 {invoice.hosted_invoice_url && (
@@ -209,7 +209,7 @@ export function BillingHistorySection() {
                     className="gap-1"
                   >
                     <ExternalLink className="w-4 h-4" />
-                    <span className="hidden sm:inline">View</span>
+                    <span className="hidden sm:inline">{t("common:view", "View")}</span>
                   </Button>
                 )}
               </div>

@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -32,6 +33,7 @@ export function ProfileSection({
   onSave,
   isSaving,
 }: ProfileSectionProps) {
+  const { t } = useTranslation("accounts");
   const { toast } = useToast();
   const { profile, refreshProfile, user } = useAuth();
 
@@ -55,8 +57,8 @@ export function ProfileSection({
 
     if (!file.type.startsWith("image/")) {
       toast({
-        title: "Invalid file type",
-        description: "Please upload an image file (JPG, PNG, etc.)",
+        title: t("profile.toast.invalidType", "Invalid file type"),
+        description: t("profile.toast.invalidTypeDesc", "Please upload an image file (JPG, PNG, etc.)"),
         variant: "destructive",
       });
       return;
@@ -64,8 +66,8 @@ export function ProfileSection({
 
     if (file.size > 5 * 1024 * 1024) {
       toast({
-        title: "File too large",
-        description: "Please upload an image smaller than 5MB",
+        title: t("profile.toast.tooLarge", "File too large"),
+        description: t("profile.toast.tooLargeDesc", "Please upload an image smaller than 5MB"),
         variant: "destructive",
       });
       return;
@@ -78,7 +80,7 @@ export function ProfileSection({
       const base64 = await new Promise<string>((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = () => resolve(reader.result as string);
-        reader.onerror = () => reject(new Error("Failed to read file"));
+        reader.onerror = () => reject(new Error(t("profile.errors.readFile", "Failed to read file")));
         reader.readAsDataURL(file);
       });
 
@@ -87,7 +89,7 @@ export function ProfileSection({
       });
 
       if (uploadError || !uploadData?.success) {
-        throw new Error(uploadData?.error || uploadError?.message || "Upload failed");
+        throw new Error(uploadData?.error || uploadError?.message || t("profile.errors.uploadFailed", "Upload failed"));
       }
 
       // Use .select() to detect silent 0-row updates (e.g. profile row
@@ -110,14 +112,14 @@ export function ProfileSection({
       await refreshProfile();
 
       toast({
-        title: "Avatar updated",
-        description: "Your profile picture has been changed.",
+        title: t("profile.toast.updated", "Avatar updated"),
+        description: t("profile.toast.updatedDesc", "Your profile picture has been changed."),
       });
     } catch (error) {
       console.error("Avatar upload error:", error);
       toast({
-        title: "Upload failed",
-        description: error instanceof Error ? error.message : "Failed to upload avatar",
+        title: t("profile.toast.uploadFailed", "Upload failed"),
+        description: error instanceof Error ? error.message : t("profile.toast.uploadFailedDesc", "Failed to upload avatar"),
         variant: "destructive",
       });
     } finally {
@@ -143,13 +145,13 @@ export function ProfileSection({
       await refreshProfile();
 
       toast({
-        title: "Avatar removed",
-        description: "Your profile picture has been removed.",
+        title: t("profile.toast.removed", "Avatar removed"),
+        description: t("profile.toast.removedDesc", "Your profile picture has been removed."),
       });
     } catch (error) {
       toast({
-        title: "Failed to remove avatar",
-        description: error instanceof Error ? error.message : "An error occurred",
+        title: t("profile.toast.removeFailed", "Failed to remove avatar"),
+        description: error instanceof Error ? error.message : t("profile.errors.generic", "An error occurred"),
         variant: "destructive",
       });
     }
@@ -164,16 +166,16 @@ export function ProfileSection({
             <Camera className="w-5 h-5 text-primary" />
           </div>
           <div>
-            <h2 className="font-semibold">Profile Picture</h2>
+            <h2 className="font-semibold">{t("profile.picture.title", "Profile Picture")}</h2>
             <p className="text-sm text-muted-foreground">
-              Upload a photo to personalize your account
+              {t("profile.picture.subtitle", "Upload a photo to personalize your account")}
             </p>
           </div>
         </div>
 
         <div className="flex items-center gap-6">
           <Avatar className="w-24 h-24 border-2 border-border">
-            <AvatarImage src={profile?.avatar_url || undefined} alt="Profile" />
+            <AvatarImage src={profile?.avatar_url || undefined} alt={t("profile.picture.alt", "Profile")} />
             <AvatarFallback className="text-2xl bg-primary/10 text-primary">
               {getInitials(profile?.full_name)}
             </AvatarFallback>
@@ -196,12 +198,12 @@ export function ProfileSection({
                 {isUploadingAvatar ? (
                   <>
                     <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                    Uploading...
+                    {t("profile.picture.uploading", "Uploading...")}
                   </>
                 ) : (
                   <>
                     <Upload className="w-4 h-4 mr-2" />
-                    Upload Photo
+                    {t("profile.picture.upload", "Upload Photo")}
                   </>
                 )}
               </Button>
@@ -212,7 +214,7 @@ export function ProfileSection({
               )}
             </div>
             <p className="text-xs text-muted-foreground">
-              JPG, PNG or GIF. Max size 5MB.
+              {t("profile.picture.hint", "JPG, PNG or GIF. Max size 5MB.")}
             </p>
           </div>
         </div>
@@ -225,16 +227,16 @@ export function ProfileSection({
             <User className="w-5 h-5 text-primary" />
           </div>
           <div>
-            <h2 className="font-semibold">Profile Information</h2>
+            <h2 className="font-semibold">{t("profile.info.title", "Profile Information")}</h2>
             <p className="text-sm text-muted-foreground">
-              Update your personal information
+              {t("profile.info.subtitle", "Update your personal information")}
             </p>
           </div>
         </div>
 
         <div className="grid sm:grid-cols-2 gap-6">
           <div className="space-y-2">
-            <Label htmlFor="fullName">Full Name</Label>
+            <Label htmlFor="fullName">{t("profile.info.fullName", "Full Name")}</Label>
             <Input
               id="fullName"
               value={fullName}
@@ -242,7 +244,7 @@ export function ProfileSection({
             />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="email">Email</Label>
+            <Label htmlFor="email">{t("profile.info.email", "Email")}</Label>
             <Input id="email" type="email" value={email} disabled />
           </div>
         </div>
@@ -252,22 +254,22 @@ export function ProfileSection({
 
       {/* Account Details */}
       <div className="rounded-xl border border-border bg-card/50 p-6">
-        <h3 className="font-semibold mb-4">Account Details</h3>
+        <h3 className="font-semibold mb-4">{t("profile.details.title", "Account Details")}</h3>
         <div className="grid grid-cols-2 gap-4 text-sm">
           <div>
-            <p className="text-muted-foreground">Member since</p>
+            <p className="text-muted-foreground">{t("profile.details.memberSince", "Member since")}</p>
             <p className="font-medium">
               {profile?.created_at
                 ? new Date(profile.created_at).toLocaleDateString()
-                : "Unknown"}
+                : t("common:unknown", "Unknown")}
             </p>
           </div>
           <div>
-            <p className="text-muted-foreground">Last updated</p>
+            <p className="text-muted-foreground">{t("profile.details.lastUpdated", "Last updated")}</p>
             <p className="font-medium">
               {profile?.updated_at
                 ? new Date(profile.updated_at).toLocaleDateString()
-                : "Unknown"}
+                : t("common:unknown", "Unknown")}
             </p>
           </div>
         </div>
@@ -284,10 +286,10 @@ export function ProfileSection({
           {isSaving ? (
             <>
               <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-              Saving...
+              {t("common:saving", "Saving...")}
             </>
           ) : (
-            "Save Changes"
+            t("common:saveChanges", "Save Changes")
           )}
         </Button>
       </div>

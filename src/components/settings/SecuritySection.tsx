@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -44,6 +45,7 @@ interface MfaFactor {
 }
 
 export function SecuritySection() {
+  const { t } = useTranslation("accounts");
   const { toast } = useToast();
   const { profile, user } = useAuth();
 
@@ -133,7 +135,7 @@ export function SecuritySection() {
   };
 
   // Password validation schema
-  const passwordSchema = z.string().min(8, "Password must be at least 8 characters");
+  const passwordSchema = z.string().min(8, t("security.errors.minPassword", "Password must be at least 8 characters"));
 
   const resetPwState = () => {
     setNewPassword("");
@@ -163,7 +165,7 @@ export function SecuritySection() {
       throw new Error(result.error);
     }
     if (data?.code) return { code: data.code, error: data.error ?? "" };
-    if (!data?.success) throw new Error(data?.error ?? "Failed to update password");
+    if (!data?.success) throw new Error(data?.error ?? t("security.errors.passwordFailed", "Failed to update password"));
     return { success: true as const };
   };
 
@@ -175,7 +177,7 @@ export function SecuritySection() {
       return;
     }
     if (newPassword !== confirmPassword) {
-      setPasswordError("Passwords do not match");
+      setPasswordError(t("security.errors.mismatch", "Passwords do not match"));
       return;
     }
 
@@ -191,10 +193,10 @@ export function SecuritySection() {
       const result = await callChangePassword({ newPassword }, userToken);
       if ("success" in result) {
         toast({
-          title: isGoogleUser ? "Password created!" : "Password changed!",
+          title: isGoogleUser ? t("security.password.created", "Password created!") : t("security.password.changed", "Password changed!"),
           description: isGoogleUser
-            ? "You can now sign in with email and password."
-            : "Your password has been updated successfully.",
+            ? t("security.password.createdDesc", "You can now sign in with email and password.")
+            : t("security.password.changedDesc", "Your password has been updated successfully."),
         });
         setPasswordDialogOpen(false);
         resetPwState();
@@ -225,14 +227,14 @@ export function SecuritySection() {
           if (result.code === "mfa_required") {
             setPwStep("mfa");
           }
-          setPasswordError(result.error || "Could not send verification email. Try again shortly.");
+          setPasswordError(result.error || t("security.errors.otpSend", "Could not send verification email. Try again shortly."));
         }
         setPwOtpSending(false);
       } else {
-        setPasswordError(result.error || "Unable to start password change");
+        setPasswordError(result.error || t("security.errors.startFailed", "Unable to start password change"));
       }
     } catch (err) {
-      setPasswordError(err instanceof Error ? err.message : "Failed to update password");
+      setPasswordError(err instanceof Error ? err.message : t("security.errors.passwordFailed", "Failed to update password"));
     } finally {
       setIsChangingPassword(false);
     }
@@ -241,14 +243,14 @@ export function SecuritySection() {
   const handleConfirmWithMfa = async () => {
     setPasswordError("");
     if (!/^\d{6}$/.test(pwMfaCode.trim())) {
-      setPasswordError("Enter the 6-digit code from your authenticator app");
+      setPasswordError(t("security.errors.mfaCode", "Enter the 6-digit code from your authenticator app"));
       return;
     }
     setIsChangingPassword(true);
     try {
       // Upgrade the current session to AAL2.
       const verified = mfaFactors.find((f) => f.status === "verified");
-      if (!verified) throw new Error("No verified authenticator factor");
+      if (!verified) throw new Error(t("security.errors.noFactor", "No verified authenticator factor"));
       const { data: challenge, error: challengeError } = await supabase.auth.mfa.challenge({
         factorId: verified.id,
       });
@@ -263,19 +265,19 @@ export function SecuritySection() {
       const { data: refreshedSession } = await supabase.auth.getSession();
       const aal2Token = refreshedSession.session?.access_token;
       if (!aal2Token) {
-        throw new Error("Could not retrieve upgraded session token after MFA verification.");
+        throw new Error(t("security.errors.sessionToken", "Could not retrieve upgraded session token after MFA verification."));
       }
 
       const result = await callChangePassword({ newPassword }, aal2Token);
       if ("success" in result) {
-        toast({ title: "Password changed!", description: "Your password has been updated." });
+        toast({ title: t("security.password.changed", "Password changed!"), description: t("security.password.changedShort", "Your password has been updated.") });
         setPasswordDialogOpen(false);
         resetPwState();
       } else {
-        setPasswordError(result.error || "Failed to update password");
+        setPasswordError(result.error || t("security.errors.passwordFailed", "Failed to update password"));
       }
     } catch (err) {
-      setPasswordError(err instanceof Error ? err.message : "Verification failed");
+      setPasswordError(err instanceof Error ? err.message : t("security.errors.verifyFailed", "Verification failed"));
     } finally {
       setIsChangingPassword(false);
     }
@@ -284,7 +286,7 @@ export function SecuritySection() {
   const handleConfirmWithOtp = async () => {
     setPasswordError("");
     if (!/^\d{6}$/.test(pwOtpCode.trim())) {
-      setPasswordError("Enter the 6-digit code from the email we just sent");
+      setPasswordError(t("security.errors.otpCode", "Enter the 6-digit code from the email we just sent"));
       return;
     }
     setIsChangingPassword(true);
@@ -297,18 +299,18 @@ export function SecuritySection() {
       const result = await callChangePassword({ newPassword, otp: pwOtpCode.trim() }, userToken);
       if ("success" in result) {
         toast({
-          title: isGoogleUser ? "Password created!" : "Password changed!",
+          title: isGoogleUser ? t("security.password.created", "Password created!") : t("security.password.changed", "Password changed!"),
           description: isGoogleUser
-            ? "You can now sign in with email and password."
-            : "Your password has been updated successfully.",
+            ? t("security.password.createdDesc", "You can now sign in with email and password.")
+            : t("security.password.changedDesc", "Your password has been updated successfully."),
         });
         setPasswordDialogOpen(false);
         resetPwState();
       } else {
-        setPasswordError(result.error || "Invalid verification code");
+        setPasswordError(result.error || t("security.errors.invalidCode", "Invalid verification code"));
       }
     } catch (err) {
-      setPasswordError(err instanceof Error ? err.message : "Failed to update password");
+      setPasswordError(err instanceof Error ? err.message : t("security.errors.passwordFailed", "Failed to update password"));
     } finally {
       setIsChangingPassword(false);
     }
@@ -371,8 +373,8 @@ export function SecuritySection() {
     } catch (error) {
       console.error("MFA enrollment error:", error);
       toast({
-        title: "Failed to start 2FA setup",
-        description: error instanceof Error ? error.message : "An error occurred",
+        title: t("security.mfa.enrollFailed", "Failed to start 2FA setup"),
+        description: error instanceof Error ? error.message : t("security.errors.generic", "An error occurred"),
         variant: "destructive",
       });
     } finally {
@@ -400,8 +402,8 @@ export function SecuritySection() {
       if (verifyError) throw verifyError;
 
       toast({
-        title: "2FA enabled!",
-        description: "Two-factor authentication is now active on your account.",
+        title: t("security.mfa.enabledToast", "2FA enabled!"),
+        description: t("security.mfa.enabledToastDesc", "Two-factor authentication is now active on your account."),
       });
 
       setShowMfaDialog(false);
@@ -410,8 +412,8 @@ export function SecuritySection() {
     } catch (error) {
       console.error("MFA verification error:", error);
       toast({
-        title: "Verification failed",
-        description: error instanceof Error ? error.message : "Invalid code. Please try again.",
+        title: t("security.errors.verifyFailed", "Verification failed"),
+        description: error instanceof Error ? error.message : t("security.mfa.invalidCode", "Invalid code. Please try again."),
         variant: "destructive",
       });
     } finally {
@@ -427,16 +429,16 @@ export function SecuritySection() {
       if (error) throw error;
 
       toast({
-        title: "2FA disabled",
-        description: "Two-factor authentication has been removed from your account.",
+        title: t("security.mfa.disabled", "2FA disabled"),
+        description: t("security.mfa.disabledDesc", "Two-factor authentication has been removed from your account."),
       });
 
       await loadMfaFactors();
     } catch (error) {
       console.error("MFA unenroll error:", error);
       toast({
-        title: "Failed to disable 2FA",
-        description: error instanceof Error ? error.message : "An error occurred",
+        title: t("security.mfa.disableFailed", "Failed to disable 2FA"),
+        description: error instanceof Error ? error.message : t("security.errors.generic", "An error occurred"),
         variant: "destructive",
       });
     } finally {
@@ -461,13 +463,13 @@ export function SecuritySection() {
       setSecretCopied(true);
       setTimeout(() => setSecretCopied(false), 2000);
       toast({
-        title: "Secret key copied",
-        description: "Paste it into your authenticator app.",
+        title: t("security.mfa.copySecret", "Secret key copied"),
+        description: t("security.mfa.copySecretDesc", "Paste it into your authenticator app."),
       });
     } catch {
       toast({
-        title: "Copy failed",
-        description: "Please copy the secret manually.",
+        title: t("security.errors.copyFailed", "Copy failed"),
+        description: t("security.backup.copyManual", "Please copy the secret manually."),
         variant: "destructive",
       });
     }
@@ -480,13 +482,13 @@ export function SecuritySection() {
       setUriCopied(true);
       setTimeout(() => setUriCopied(false), 2000);
       toast({
-        title: "Setup URI copied",
-        description: "Paste it into an authenticator app that supports URI import.",
+        title: t("security.mfa.copyUriTitle", "Setup URI copied"),
+        description: t("security.mfa.copyUriDesc", "Paste it into an authenticator app that supports URI import."),
       });
     } catch {
       toast({
-        title: "Copy failed",
-        description: "Please try again.",
+        title: t("security.errors.copyFailed", "Copy failed"),
+        description: t("security.backup.tryAgain", "Please try again."),
         variant: "destructive",
       });
     }
@@ -510,13 +512,13 @@ export function SecuritySection() {
       document.body.removeChild(link);
 
       toast({
-        title: "QR Code downloaded",
-        description: "Open the image on another device to scan it easily.",
+        title: t("security.backup.qrDownloaded", "QR Code downloaded"),
+        description: t("security.backup.qrDownloadedDesc", "Open the image on another device to scan it easily."),
       });
     } catch {
       toast({
-        title: "Download failed",
-        description: "Could not download QR code.",
+        title: t("security.backup.downloadFailed", "Download failed"),
+        description: t("security.backup.downloadFailedDesc", "Could not download QR code."),
         variant: "destructive",
       });
     }
@@ -559,7 +561,7 @@ export function SecuritySection() {
       });
 
       if (storeError || !storeResponse?.success || storeResponse.count !== 10) {
-        throw new Error("Backup code persistence failed");
+        throw new Error(t("security.backup.persistenceFailed", "Backup code persistence failed"));
       }
 
       setBackupCodes(codes);
@@ -567,14 +569,14 @@ export function SecuritySection() {
       setShowBackupCodesDialog(true);
 
       toast({
-        title: "Backup codes generated",
-        description: "Save these codes in a safe place. They won't be shown again.",
+        title: t("security.backup.generatedToast", "Backup codes generated"),
+        description: t("security.backup.generatedToastDesc", "Save these codes in a safe place. They won't be shown again."),
       });
     } catch {
       await checkExistingBackupCodes();
       toast({
-        title: "Failed to generate backup codes",
-        description: "Could not securely save backup codes. Please try again.",
+        title: t("security.backup.generateFailed", "Failed to generate backup codes"),
+        description: t("security.backup.generateFailedDesc", "Could not securely save backup codes. Please try again."),
         variant: "destructive",
       });
     } finally {
@@ -589,20 +591,24 @@ export function SecuritySection() {
       setBackupCodesCopied(true);
       setTimeout(() => setBackupCodesCopied(false), 2000);
       toast({
-        title: "Backup codes copied",
-        description: "Store them in a secure location.",
+        title: t("security.backup.copied", "Backup codes copied"),
+        description: t("security.backup.copiedDesc", "Store them in a secure location."),
       });
     } catch {
       toast({
-        title: "Copy failed",
-        description: "Please copy the codes manually.",
+        title: t("security.errors.copyFailed", "Copy failed"),
+        description: t("security.backup.copyFailedDesc", "Please copy the codes manually."),
         variant: "destructive",
       });
     }
   };
 
   const handleDownloadBackupCodes = () => {
-    const codesText = `Postora 2FA Backup Codes\n${"=".repeat(30)}\n\nGenerated: ${new Date().toLocaleString()}\n\nSave these codes in a secure location.\nEach code can only be used once.\n\n${backupCodes.map((code, i) => `${i + 1}. ${code}`).join('\n')}\n\nIf you lose access to your authenticator app,\nuse one of these codes to sign in.`;
+    const codesText = t("security.backup.downloadFile", "Postora 2FA Backup Codes\n{{divider}}\n\nGenerated: {{generated}}\n\nSave these codes in a secure location.\nEach code can only be used once.\n\n{{codes}}\n\nIf you lose access to your authenticator app,\nuse one of these codes to sign in.", {
+      divider: "=".repeat(30),
+      generated: new Date().toLocaleString(),
+      codes: backupCodes.map((code, i) => `${i + 1}. ${code}`).join('\n'),
+    });
 
     const blob = new Blob([codesText], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
@@ -615,8 +621,8 @@ export function SecuritySection() {
     URL.revokeObjectURL(url);
 
     toast({
-      title: "Backup codes downloaded",
-      description: "Store the file in a secure location.",
+      title: t("security.backup.downloaded", "Backup codes downloaded"),
+      description: t("security.backup.downloadedDesc", "Store the file in a secure location."),
     });
   };
 
@@ -636,9 +642,9 @@ export function SecuritySection() {
             <Shield className="w-5 h-5 text-primary" />
           </div>
           <div>
-            <h2 className="font-semibold">Security</h2>
+            <h2 className="font-semibold">{t("security.header.title", "Security")}</h2>
             <p className="text-sm text-muted-foreground">
-              Manage your account security
+              {t("security.header.subtitle", "Manage your account security")}
             </p>
           </div>
         </div>
@@ -649,12 +655,12 @@ export function SecuritySection() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="font-medium text-sm">
-                  {isGoogleUser ? "Create Password" : "Change Password"}
+                  {isGoogleUser ? t("security.password.createTitle", "Create Password") : t("security.password.changeTitle", "Change Password")}
                 </p>
                 <p className="text-xs text-muted-foreground">
                   {isGoogleUser
-                    ? "Add a password to sign in with email"
-                    : "Update your account password"}
+                    ? t("security.password.createDesc", "Add a password to sign in with email")
+                    : t("security.password.changeDesc", "Update your account password")}
                 </p>
               </div>
               <Button
@@ -663,7 +669,7 @@ export function SecuritySection() {
                 onClick={() => setPasswordDialogOpen(true)}
               >
                 <Key className="w-4 h-4 mr-2" />
-                {isGoogleUser ? "Create" : "Change"}
+                {isGoogleUser ? t("common:create", "Create") : t("security.password.change", "Change")}
               </Button>
             </div>
           </div>
@@ -674,9 +680,9 @@ export function SecuritySection() {
           <div className="space-y-4">
             <div className="flex items-center justify-between">
               <div>
-                <p className="font-medium text-sm">Two-Factor Authentication (2FA)</p>
+                <p className="font-medium text-sm">{t("security.mfa.title", "Two-Factor Authentication (2FA)")}</p>
                 <p className="text-xs text-muted-foreground">
-                  Secure your account with an authenticator app
+                  {t("security.mfa.desc", "Secure your account with an authenticator app")}
                 </p>
               </div>
               <div className="flex items-center gap-2">
@@ -692,17 +698,17 @@ export function SecuritySection() {
                   {isEnrollingMfa ? (
                     <>
                       <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                      Setting up...
+                      {t("security.mfa.settingUp", "Setting up...")}
                     </>
                   ) : mfaFactors.some(f => f.status === 'verified') ? (
                     <>
                       <Smartphone className="w-4 h-4 mr-2" />
-                      Add authenticator
+                      {t("security.mfa.add", "Add authenticator")}
                     </>
                   ) : (
                     <>
                       <Smartphone className="w-4 h-4 mr-2" />
-                      Enable 2FA
+                      {t("security.mfa.enable", "Enable 2FA")}
                     </>
                   )}
                 </Button>
@@ -718,7 +724,7 @@ export function SecuritySection() {
                 {mfaFactors.some(f => f.status === 'verified') && (
                   <div className="flex items-center gap-2 text-sm text-emerald-500">
                     <Check className="w-4 h-4" />
-                    <span>Two-factor authentication is enabled</span>
+                    <span>{t("security.mfa.enabled", "Two-factor authentication is enabled")}</span>
                   </div>
                 )}
 
@@ -735,20 +741,20 @@ export function SecuritySection() {
                       <div>
                         <div className="flex items-center gap-2">
                           <p className="font-medium text-sm">
-                            {factor.friendly_name || "Authenticator App"}
+                            {factor.friendly_name || t("security.mfa.defaultName", "Authenticator App")}
                           </p>
                           {factor.status === 'verified' ? (
                             <span className="px-2 py-0.5 text-xs rounded-full bg-emerald-500/10 text-emerald-600 border border-emerald-500/20">
-                              Verified
+                              {t("security.mfa.verified", "Verified")}
                             </span>
                           ) : (
                             <span className="px-2 py-0.5 text-xs rounded-full bg-amber-500/10 text-amber-600 border border-amber-500/20">
-                              Unverified
+                              {t("security.mfa.unverified", "Unverified")}
                             </span>
                           )}
                         </div>
                         <p className="text-xs text-muted-foreground">
-                          Added {new Date(factor.created_at).toLocaleDateString()}
+                          {t("security.mfa.added", "Added {{date}}", { date: new Date(factor.created_at).toLocaleDateString() })}
                         </p>
                       </div>
                     </div>
@@ -762,7 +768,7 @@ export function SecuritySection() {
                       {isUnenrolling === factor.id ? (
                         <Loader2 className="w-4 h-4 animate-spin" />
                       ) : (
-                        "Remove"
+                        t("common:remove", "Remove")
                       )}
                     </Button>
                   </div>
@@ -770,7 +776,7 @@ export function SecuritySection() {
               </div>
             ) : (
               <p className="text-sm text-muted-foreground py-2">
-                No authenticator apps connected. Enable 2FA to add an extra layer of security.
+                {t("security.mfa.empty", "No authenticator apps connected. Enable 2FA to add an extra layer of security.")}
               </p>
             )}
           </div>
@@ -781,9 +787,9 @@ export function SecuritySection() {
           <div className="space-y-3">
             <div className="flex items-center justify-between">
               <div>
-                <p className="font-medium text-sm">Backup Codes</p>
+                <p className="font-medium text-sm">{t("security.backup.title", "Backup Codes")}</p>
                 <p className="text-xs text-muted-foreground">
-                  Use these codes if you lose access to your authenticator
+                  {t("security.backup.desc", "Use these codes if you lose access to your authenticator")}
                 </p>
               </div>
               <Button
@@ -795,24 +801,24 @@ export function SecuritySection() {
                 {isGeneratingBackupCodes ? (
                   <>
                     <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                    Generating...
+                    {t("security.backup.generating", "Generating...")}
                   </>
                 ) : hasBackupCodes ? (
                   <>
                     <RefreshCw className="w-4 h-4 mr-2" />
-                    Regenerate
+                    {t("security.backup.regenerate", "Regenerate")}
                   </>
                 ) : (
                   <>
                     <Key className="w-4 h-4 mr-2" />
-                    Generate Codes
+                    {t("security.backup.generateCodes", "Generate Codes")}
                   </>
                 )}
               </Button>
             </div>
             {hasBackupCodes && (
               <p className="text-xs text-emerald-500">
-                ✓ Backup codes have been generated
+                {t("security.backup.generatedHint", "✓ Backup codes have been generated")}
               </p>
             )}
           </div>
@@ -832,36 +838,36 @@ export function SecuritySection() {
             <DialogTitle>
               {pwStep === "password"
                 ? isGoogleUser
-                  ? "Create Password"
-                  : "Change Password"
+                  ? t("security.dialog.createTitle", "Create Password")
+                  : t("security.dialog.changeTitle", "Change Password")
                 : pwStep === "mfa"
-                ? "Confirm with your authenticator"
-                : "Confirm with email code"}
+                ? t("security.dialog.confirmMfa", "Confirm with your authenticator")
+                : t("security.dialog.confirmEmail", "Confirm with email code")}
             </DialogTitle>
             <DialogDescription>
               {pwStep === "password"
                 ? isGoogleUser
-                  ? "Create a password to sign in with your email address."
-                  : "Enter a new password for your account."
+                  ? t("security.dialog.createDesc", "Create a password to sign in with your email address.")
+                  : t("security.dialog.enterNew", "Enter a new password for your account.")
                 : pwStep === "mfa"
-                ? "Enter the 6-digit code from your authenticator app to confirm this change."
+                ? t("security.dialog.enterOtpMfa", "Enter the 6-digit code from your authenticator app to confirm this change.")
                 : pwOtpSending
-                ? "Sending a verification code to your email…"
-                : "Enter the 6-digit code we just emailed to confirm this change."}
+                ? t("security.dialog.sendingOtp", "Sending a verification code to your email…")
+                : t("security.dialog.enterOtp", "Enter the 6-digit code we just emailed to confirm this change.")}
             </DialogDescription>
           </DialogHeader>
 
           {pwStep === "password" && (
             <div className="space-y-4 py-4">
               <div className="space-y-2">
-                <Label htmlFor="newPassword">New Password</Label>
+                <Label htmlFor="newPassword">{t("security.form.newPassword", "New Password")}</Label>
                 <div className="relative">
                   <Input
                     id="newPassword"
                     type={showPassword ? "text" : "password"}
                     value={newPassword}
                     onChange={(e) => setNewPassword(e.target.value)}
-                    placeholder="Enter new password"
+                    placeholder={t("security.form.passwordPlaceholder", "Enter new password")}
                     className="pr-10"
                     autoComplete="new-password"
                   />
@@ -876,13 +882,13 @@ export function SecuritySection() {
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="confirmPassword">Confirm Password</Label>
+                <Label htmlFor="confirmPassword">{t("security.form.confirmPassword", "Confirm Password")}</Label>
                 <Input
                   id="confirmPassword"
                   type={showPassword ? "text" : "password"}
                   value={confirmPassword}
                   onChange={(e) => setConfirmPassword(e.target.value)}
-                  placeholder="Confirm new password"
+                  placeholder={t("security.form.confirmPlaceholder", "Confirm new password")}
                   autoComplete="new-password"
                 />
               </div>
@@ -896,7 +902,7 @@ export function SecuritySection() {
           {pwStep === "mfa" && (
             <div className="space-y-4 py-4">
               <div className="space-y-2">
-                <Label htmlFor="pwMfaCode">Authenticator code</Label>
+                <Label htmlFor="pwMfaCode">{t("security.form.authCode", "Authenticator code")}</Label>
                 <Input
                   id="pwMfaCode"
                   inputMode="numeric"
@@ -917,7 +923,7 @@ export function SecuritySection() {
           {pwStep === "otp" && (
             <div className="space-y-4 py-4">
               <div className="space-y-2">
-                <Label htmlFor="pwOtpCode">Email verification code</Label>
+                <Label htmlFor="pwOtpCode">{t("security.form.emailCode", "Email verification code")}</Label>
                 <Input
                   id="pwOtpCode"
                   inputMode="numeric"
@@ -944,7 +950,7 @@ export function SecuritySection() {
                 resetPwState();
               }}
             >
-              Cancel
+              {t("common:cancel", "Cancel")}
             </Button>
             <Button
               onClick={
@@ -959,12 +965,12 @@ export function SecuritySection() {
               {isChangingPassword ? (
                 <>
                   <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  Saving...
+                  {t("common:saving", "Saving...")}
                 </>
               ) : pwStep === "password" ? (
-                isGoogleUser ? "Create Password" : "Continue"
+                isGoogleUser ? t("security.dialog.createTitle", "Create Password") : t("common:continue", "Continue")
               ) : (
-                "Confirm"
+                t("common:confirm", "Confirm")
               )}
             </Button>
           </DialogFooter>
@@ -987,15 +993,16 @@ export function SecuritySection() {
             <DialogTitle className="flex items-center gap-2">
               <QrCode className="w-5 h-5 text-primary" />
               {mfaFactors.some((f) => f.status === "verified")
-                ? "Add another authenticator app"
-                : "Set Up Two-Factor Authentication"}
+                ? t("security.mfa.addTitle", "Add another authenticator app")
+                : t("security.mfa.setupTitle", "Set Up Two-Factor Authentication")}
             </DialogTitle>
             <DialogDescription>
-              Scan the QR code with your authenticator app (Google Authenticator, Authy, etc.)
+              {t("security.mfa.scanDesc", "Scan the QR code with your authenticator app (Google Authenticator, Authy, etc.)")}
               {mfaFactors.filter((f) => f.status === "verified").length > 0 && (
                 <span className="block mt-1 text-xs">
-                  You already have {mfaFactors.filter((f) => f.status === "verified").length} verified authenticator
-                  {mfaFactors.filter((f) => f.status === "verified").length === 1 ? "" : "s"}.
+                  {mfaFactors.filter((f) => f.status === "verified").length === 1
+                    ? t("security.mfa.alreadyHaveOne", "You already have {{count}} verified authenticator.", { count: mfaFactors.filter((f) => f.status === "verified").length })
+                    : t("security.mfa.alreadyHaveMany", "You already have {{count}} verified authenticators.", { count: mfaFactors.filter((f) => f.status === "verified").length })}
                 </span>
               )}
             </DialogDescription>
@@ -1007,14 +1014,14 @@ export function SecuritySection() {
                 <div className="p-8 bg-white rounded-2xl shadow-lg border border-gray-200">
                   <img
                     src={mfaQrCode}
-                    alt="2FA QR Code"
+                    alt={t("security.mfa.qrAlt", "2FA QR Code")}
                     width={300}
                     height={300}
                     className="w-[300px] h-[300px] object-contain"
                   />
                 </div>
                 <p className="text-xs text-muted-foreground text-center max-w-[300px]">
-                  Point your authenticator app camera at this QR code
+                  {t("security.mfa.pointCamera", "Point your authenticator app camera at this QR code")}
                 </p>
                 <Button
                   variant="outline"
@@ -1023,7 +1030,7 @@ export function SecuritySection() {
                   className="gap-2"
                 >
                   <Download className="w-4 h-4" />
-                  Download QR (1024px PNG)
+                  {t("security.mfa.downloadQr", "Download QR (1024px PNG)")}
                 </Button>
               </div>
             )}
@@ -1031,7 +1038,7 @@ export function SecuritySection() {
             {mfaSecret && (
               <div className="space-y-3">
                 <Label className="text-xs text-muted-foreground">
-                  Can't scan? Enter this code manually:
+                  {t("security.mfa.cantScan", "Can't scan? Enter this code manually:")}
                 </Label>
                 <div className="flex items-center gap-2">
                   <div className="flex-1 p-3 bg-secondary rounded-lg font-mono text-sm text-center break-all select-all">
@@ -1042,7 +1049,7 @@ export function SecuritySection() {
                     size="sm"
                     onClick={handleCopySecret}
                     className="shrink-0"
-                    aria-label="Copy secret key"
+                    aria-label={t("security.mfa.copyAria", "Copy secret key")}
                   >
                     {secretCopied ? (
                       <Check className="w-4 h-4 text-emerald-500" />
@@ -1063,12 +1070,12 @@ export function SecuritySection() {
                       {uriCopied ? (
                         <>
                           <Check className="w-4 h-4 mr-2 text-emerald-500" />
-                          Copied URI
+                          {t("security.mfa.copiedUri", "Copied URI")}
                         </>
                       ) : (
                         <>
                           <Copy className="w-4 h-4 mr-2" />
-                          Copy setup URI
+                          {t("security.mfa.copyUri", "Copy setup URI")}
                         </>
                       )}
                     </Button>
@@ -1078,7 +1085,7 @@ export function SecuritySection() {
             )}
 
             <div className="space-y-2">
-              <Label htmlFor="verifyCode">Enter verification code</Label>
+              <Label htmlFor="verifyCode">{t("security.mfa.enterCode", "Enter verification code")}</Label>
               <Input
                 id="verifyCode"
                 value={verifyCode}
@@ -1088,7 +1095,7 @@ export function SecuritySection() {
                 className="text-center text-2xl tracking-widest font-mono"
               />
               <p className="text-xs text-muted-foreground text-center">
-                Enter the 6-digit code from your authenticator app
+                {t("security.mfa.enterCodeHint", "Enter the 6-digit code from your authenticator app")}
               </p>
             </div>
 
@@ -1101,7 +1108,7 @@ export function SecuritySection() {
                   resetMfaState();
                 }}
               >
-                Cancel
+                {t("common:cancel", "Cancel")}
               </Button>
               <Button
                 className="flex-1"
@@ -1111,10 +1118,10 @@ export function SecuritySection() {
                 {isVerifying ? (
                   <>
                     <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                    Verifying...
+                    {t("security.mfa.verifying", "Verifying...")}
                   </>
                 ) : (
-                  "Verify & Enable"
+                  t("security.mfa.verifyEnable", "Verify & Enable")
                 )}
               </Button>
             </div>
@@ -1131,20 +1138,20 @@ export function SecuritySection() {
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Key className="w-5 h-5 text-primary" />
-              Your Backup Codes
+              {t("security.backupDialog.title", "Your Backup Codes")}
             </DialogTitle>
             <DialogDescription>
-              Save these codes in a secure location. Each code can only be used once.
+              {t("security.backupDialog.desc", "Save these codes in a secure location. Each code can only be used once.")}
             </DialogDescription>
           </DialogHeader>
 
           <div className="space-y-4 py-4">
             <div className="bg-amber-500/5 border border-amber-500/20 rounded-lg p-4">
               <p className="text-sm text-amber-600 font-medium">
-                ⚠️ These codes will only be shown once
+                {t("security.backupDialog.shownOnce", "⚠️ These codes will only be shown once")}
               </p>
               <p className="text-xs text-amber-600/80 mt-1">
-                Copy or download them now. If you lose these codes and your authenticator, you'll need to contact support.
+                {t("security.backupDialog.shownOnceHint", "Copy or download them now. If you lose these codes and your authenticator, you'll need to contact support.")}
               </p>
             </div>
 
@@ -1166,12 +1173,12 @@ export function SecuritySection() {
                 {backupCodesCopied ? (
                   <>
                     <Check className="w-4 h-4 mr-2 text-emerald-500" />
-                    Copied!
+                    {t("security.backupDialog.copied", "Copied!")}
                   </>
                 ) : (
                   <>
                     <Copy className="w-4 h-4 mr-2" />
-                    Copy All
+                    {t("security.backupDialog.copyAll", "Copy All")}
                   </>
                 )}
               </Button>
@@ -1181,14 +1188,14 @@ export function SecuritySection() {
                 onClick={handleDownloadBackupCodes}
               >
                 <Download className="w-4 h-4 mr-2" />
-                Download
+                {t("common:download", "Download")}
               </Button>
             </div>
           </div>
 
           <DialogFooter>
             <Button onClick={() => handleBackupCodesDialogOpenChange(false)}>
-              I've saved my codes
+              {t("security.backupDialog.saved", "I've saved my codes")}
             </Button>
           </DialogFooter>
         </DialogContent>

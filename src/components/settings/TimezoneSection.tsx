@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
@@ -19,6 +20,7 @@ export function TimezoneSection({
   preferredTimezone,
   setPreferredTimezone,
 }: TimezoneSectionProps) {
+  const { t } = useTranslation("accounts");
   const { toast } = useToast();
   const { profile, refreshProfile, user } = useAuth();
   const [isSavingTimezone, setIsSavingTimezone] = useState(false);
@@ -38,16 +40,16 @@ export function TimezoneSection({
       await refreshProfile();
 
       toast({
-        title: "Timezone saved",
+        title: t("timezone.toast.saved", "Timezone saved"),
         description: preferredTimezone
-          ? `Your preferred timezone is now ${preferredTimezone}.`
-          : "Timezone preference has been cleared.",
+          ? t("timezone.toast.savedDesc", "Your preferred timezone is now {{timezone}}.", { timezone: preferredTimezone })
+          : t("timezone.toast.cleared", "Timezone preference has been cleared."),
       });
     } catch (error) {
       console.error("Timezone save error:", error);
       toast({
-        title: "Failed to save timezone",
-        description: error instanceof Error ? error.message : "An error occurred",
+        title: t("timezone.toast.failed", "Failed to save timezone"),
+        description: error instanceof Error ? error.message : t("timezone.errors.generic", "An error occurred"),
         variant: "destructive",
       });
     } finally {
@@ -62,9 +64,9 @@ export function TimezoneSection({
           <Globe className="w-5 h-5 text-primary" />
         </div>
         <div>
-          <h2 className="font-semibold">Timezone Preferences</h2>
+          <h2 className="font-semibold">{t("timezone.header.title", "Timezone Preferences")}</h2>
           <p className="text-sm text-muted-foreground">
-            Set your preferred timezone for scheduling posts
+            {t("timezone.header.subtitle", "Set your preferred timezone for scheduling posts")}
           </p>
         </div>
       </div>
@@ -83,12 +85,12 @@ export function TimezoneSection({
             {isSavingTimezone ? (
               <>
                 <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                Saving...
+                {t("common:saving", "Saving...")}
               </>
             ) : (
               <>
                 <Check className="w-4 h-4 mr-2" />
-                Save Timezone
+                {t("timezone.actions.save", "Save Timezone")}
               </>
             )}
           </Button>
@@ -97,13 +99,13 @@ export function TimezoneSection({
               variant="ghost"
               onClick={() => setPreferredTimezone("")}
             >
-              Clear
+              {t("common:clear", "Clear")}
             </Button>
           )}
         </div>
 
         <p className="text-xs text-muted-foreground">
-          This timezone will be automatically selected when scheduling new posts.
+          {t("timezone.hint", "This timezone will be automatically selected when scheduling new posts.")}
         </p>
       </div>
     </div>

@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -39,6 +40,7 @@ import { BillingHistorySection } from "./BillingHistorySection";
 import { QuotaIndicators } from "@/components/profiles/QuotaIndicators";
 
 export function SubscriptionSection() {
+  const { t } = useTranslation("accounts");
   const navigate = useNavigate();
   const { toast } = useToast();
   const { subscription, isSubscribed, planName, isLoading, refetch, stripeAuthError } = useSubscription();
@@ -59,13 +61,13 @@ export function SubscriptionSection() {
       await supabase.auth.refreshSession();
       refetch();
       toast({
-        title: "Session refreshed",
-        description: "Checking subscription status...",
+        title: t("subscription.toast.sessionRefreshed", "Session refreshed"),
+        description: t("subscription.toast.sessionRefreshedDesc", "Checking subscription status..."),
       });
     } catch (error) {
       toast({
-        title: "Refresh failed",
-        description: "Please try logging out and back in.",
+        title: t("subscription.toast.refreshFailed", "Refresh failed"),
+        description: t("subscription.toast.refreshFailedDesc", "Please try logging out and back in."),
         variant: "destructive",
       });
     }
@@ -74,8 +76,8 @@ export function SubscriptionSection() {
   const handleCancelSubscription = async () => {
     if (!subscription?.stripe_subscription_id) {
       toast({
-        title: "Cannot cancel",
-        description: "No active subscription found.",
+        title: t("subscription.toast.cannotCancel", "Cannot cancel"),
+        description: t("subscription.toast.cannotCancelDesc", "No active subscription found."),
         variant: "destructive",
       });
       return;
@@ -94,16 +96,16 @@ export function SubscriptionSection() {
       if (error) throw error;
 
       toast({
-        title: "Subscription cancelled",
-        description: "Your subscription will end at the current billing period.",
+        title: t("subscription.toast.cancelled", "Subscription cancelled"),
+        description: t("subscription.toast.cancelledDesc", "Your subscription will end at the current billing period."),
       });
 
       refetch();
     } catch (error) {
       console.error("Cancel error:", error);
       toast({
-        title: "Failed to cancel",
-        description: error instanceof Error ? error.message : "Please try again later.",
+        title: t("subscription.toast.cancelFailed", "Failed to cancel"),
+        description: error instanceof Error ? error.message : t("subscription.errors.later", "Please try again later."),
         variant: "destructive",
       });
     } finally {
@@ -114,8 +116,8 @@ export function SubscriptionSection() {
   const handleManageBilling = async () => {
     if (!subscription?.stripe_customer_id) {
       toast({
-        title: "Cannot open billing",
-        description: "No billing information found.",
+        title: t("subscription.toast.cannotBilling", "Cannot open billing"),
+        description: t("subscription.toast.cannotBillingDesc", "No billing information found."),
         variant: "destructive",
       });
       return;
@@ -139,8 +141,8 @@ export function SubscriptionSection() {
     } catch (error) {
       console.error("Billing portal error:", error);
       toast({
-        title: "Failed to open billing",
-        description: error instanceof Error ? error.message : "Please try again later.",
+        title: t("subscription.toast.billingFailed", "Failed to open billing"),
+        description: error instanceof Error ? error.message : t("subscription.errors.later", "Please try again later."),
         variant: "destructive",
       });
     } finally {
@@ -153,7 +155,7 @@ export function SubscriptionSection() {
       <div className="rounded-xl border border-border bg-card/50 p-6">
         <div className="flex items-center gap-3">
           <Loader2 className="w-5 h-5 animate-spin" />
-          <span className="text-muted-foreground">Loading subscription...</span>
+          <span className="text-muted-foreground">{t("subscription.loading", "Loading subscription...")}</span>
         </div>
       </div>
     );
@@ -168,22 +170,22 @@ export function SubscriptionSection() {
               <Crown className="w-5 h-5 text-amber-500" />
             </div>
             <div>
-              <h2 className="font-semibold">Subscription</h2>
-              <p className="text-sm text-muted-foreground">Manage your subscription and billing</p>
+              <h2 className="font-semibold">{t("subscription.header.title", "Subscription")}</h2>
+              <p className="text-sm text-muted-foreground">{t("subscription.header.subtitle", "Manage your subscription and billing")}</p>
             </div>
           </div>
           <div className="flex items-center gap-3 mb-4">
             <Badge className="bg-gradient-to-r from-amber-500 to-orange-500 text-white">
-              Admin
+              {t("subscription.admin.badge", "Admin")}
             </Badge>
             <span className="text-sm text-muted-foreground">
-              Full access to all features — billing checkout is hidden for admin accounts.
+              {t("subscription.admin.access", "Full access to all features — billing checkout is hidden for admin accounts.")}
             </span>
           </div>
           <div className="flex flex-wrap gap-2">
             <Button variant="outline" size="sm" onClick={() => navigate("/pricing")} className="gap-2">
               <Sparkles className="w-4 h-4" />
-              Preview pricing page
+              {t("subscription.actions.previewPricing", "Preview pricing page")}
             </Button>
           </div>
         </div>
@@ -195,23 +197,23 @@ export function SubscriptionSection() {
               <Receipt className="w-5 h-5 text-primary" />
             </div>
             <div>
-              <h2 className="font-semibold">Plan Management</h2>
+              <h2 className="font-semibold">{t("subscription.plans.title", "Plan Management")}</h2>
               <p className="text-sm text-muted-foreground">
-                Create, edit, and reorder subscription plans available to users.
+                {t("subscription.plans.subtitle", "Create, edit, and reorder subscription plans available to users.")}
               </p>
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
             <Button onClick={() => navigate("/admin/plans")} className="gap-2">
               <ArrowRight className="w-4 h-4" />
-              Manage subscription plans
+              {t("subscription.actions.managePlans", "Manage subscription plans")}
             </Button>
             <Button variant="outline" onClick={() => navigate("/admin/coupons")} className="gap-2">
               <Receipt className="w-4 h-4" />
-              Manage coupons
+              {t("subscription.actions.manageCoupons", "Manage coupons")}
             </Button>
             <Button variant="ghost" onClick={() => navigate("/admin/subscriptions")} className="gap-2">
-              View customer subscriptions
+              {t("subscription.actions.viewCustomerSubs", "View customer subscriptions")}
             </Button>
           </div>
         </div>
@@ -227,13 +229,12 @@ export function SubscriptionSection() {
           <Info className="h-4 w-4 text-amber-500" />
           <AlertDescription className="flex items-center justify-between">
             <span className="text-sm">
-              <span className="font-medium">Session verification issue:</span> We couldn't verify your subscription with Stripe. 
-              This is usually a temporary login/session issue, not a billing problem. Your subscription data is shown from our records.
+              <span className="font-medium">{t("subscription.auth.issue", "Session verification issue:")}</span> {t("subscription.auth.issueDesc", "We couldn't verify your subscription with Stripe. This is usually a temporary login/session issue, not a billing problem. Your subscription data is shown from our records.")}
             </span>
             <div className="flex items-center gap-2 ml-4 shrink-0">
               <Button size="sm" variant="outline" onClick={handleRefreshSession} className="gap-1">
                 <RefreshCw className="w-3 h-3" />
-                Refresh
+                {t("common:refresh", "Refresh")}
               </Button>
               <Button size="icon" variant="ghost" className="h-6 w-6" onClick={() => setShowAuthBanner(false)}>
                 <X className="w-3 h-3" />
@@ -250,9 +251,9 @@ export function SubscriptionSection() {
             <Crown className="w-5 h-5 text-amber-500" />
           </div>
           <div>
-            <h2 className="font-semibold">Current Plan</h2>
+            <h2 className="font-semibold">{t("subscription.current.title", "Current Plan")}</h2>
             <p className="text-sm text-muted-foreground">
-              Manage your subscription and billing
+              {t("subscription.current.subtitle", "Manage your subscription and billing")}
             </p>
           </div>
         </div>
@@ -269,17 +270,17 @@ export function SubscriptionSection() {
               </Badge>
               {subscription?.cancel_at_period_end && (
                 <Badge variant="outline" className="text-amber-600 border-amber-500/30">
-                  Cancelling
+                  {t("subscription.current.cancelling", "Cancelling")}
                 </Badge>
               )}
               {isSubscribed && !subscription?.cancel_at_period_end && (
                 <span className="text-sm text-muted-foreground">
-                  Premium features enabled
+                  {t("subscription.current.premiumOn", "Premium features enabled")}
                 </span>
               )}
               {!isSubscribed && (
                 <span className="text-sm text-muted-foreground">
-                  Limited features • Upgrade for more
+                  {t("subscription.current.limited", "Limited features • Upgrade for more")}
                 </span>
               )}
             </div>
@@ -287,7 +288,7 @@ export function SubscriptionSection() {
             {!isSubscribed && (
               <Button onClick={() => navigate("/pricing")} className="gap-2">
                 <Sparkles className="w-4 h-4" />
-                Upgrade to Pro
+                {t("subscription.actions.upgrade", "Upgrade to Pro")}
               </Button>
             )}
           </div>
@@ -299,7 +300,7 @@ export function SubscriptionSection() {
                 <Calendar className="w-4 h-4 text-muted-foreground" />
                 <div>
                   <p className="text-sm font-medium">
-                    {subscription.cancel_at_period_end ? "Ends on" : "Renews on"}
+                    {subscription.cancel_at_period_end ? t("subscription.current.endsOn", "Ends on") : t("subscription.current.renewsOn", "Renews on")}
                   </p>
                   <p className="text-sm text-muted-foreground">
                     {subscription.current_period_end
@@ -311,9 +312,9 @@ export function SubscriptionSection() {
               <div className="flex items-center gap-3">
                 <CreditCard className="w-4 h-4 text-muted-foreground" />
                 <div>
-                  <p className="text-sm font-medium">Billing</p>
+                  <p className="text-sm font-medium">{t("subscription.billing.label", "Billing")}</p>
                   <p className="text-sm text-muted-foreground">
-                    ${subscription.plan?.price_monthly?.toFixed(2) || "0.00"}/month
+                    {t("subscription.billing.monthlyPrice", "${{price}}/month", { price: subscription.plan?.price_monthly?.toFixed(2) || "0.00" })}
                   </p>
                 </div>
               </div>
@@ -323,7 +324,7 @@ export function SubscriptionSection() {
           {/* Plan Features */}
           {isSubscribed && subscription?.plan?.features && (
             <div className="pt-4 border-t border-border">
-              <p className="text-sm font-medium mb-3">What's included:</p>
+              <p className="text-sm font-medium mb-3">{t("subscription.current.included", "What's included:")}</p>
               <div className="grid sm:grid-cols-2 gap-2">
                 {subscription.plan.features.slice(0, 6).map((feature, index) => (
                   <div key={index} className="flex items-center gap-2 text-sm">
@@ -348,9 +349,9 @@ export function SubscriptionSection() {
               <Receipt className="w-5 h-5 text-primary" />
             </div>
             <div>
-              <h2 className="font-semibold">Billing & Invoices</h2>
+              <h2 className="font-semibold">{t("subscription.billing.title", "Billing & Invoices")}</h2>
               <p className="text-sm text-muted-foreground">
-                Manage payment methods and view invoices
+                {t("subscription.billing.subtitle", "Manage payment methods and view invoices")}
               </p>
             </div>
           </div>
@@ -367,12 +368,12 @@ export function SubscriptionSection() {
               ) : (
                 <ExternalLink className="w-4 h-4" />
               )}
-              Manage Billing
+              {t("subscription.actions.manageBilling", "Manage Billing")}
             </Button>
 
             <Button variant="outline" onClick={() => navigate("/pricing")} className="gap-2">
               <ArrowRight className="w-4 h-4" />
-              Change Plan
+              {t("subscription.actions.changePlan", "Change Plan")}
             </Button>
 
             {!subscription.cancel_at_period_end && (
@@ -380,22 +381,22 @@ export function SubscriptionSection() {
                 <AlertDialogTrigger asChild>
                   <Button variant="ghost" className="text-destructive hover:text-destructive gap-2">
                     <AlertTriangle className="w-4 h-4" />
-                    Cancel Subscription
+                    {t("subscription.actions.cancel", "Cancel Subscription")}
                   </Button>
                 </AlertDialogTrigger>
                 <AlertDialogContent>
                   <AlertDialogHeader>
-                    <AlertDialogTitle>Cancel your subscription?</AlertDialogTitle>
+                    <AlertDialogTitle>{t("subscription.dialog.cancelTitle", "Cancel your subscription?")}</AlertDialogTitle>
                     <AlertDialogDescription>
-                      Your subscription will remain active until{" "}
-                      {subscription.current_period_end
-                        ? format(new Date(subscription.current_period_end), "MMMM d, yyyy")
-                        : "the end of your billing period"}
-                      . After that, you'll lose access to premium features.
+                      {t("subscription.dialog.cancelDesc", "Your subscription will remain active until {{date}}. After that, you'll lose access to premium features.", {
+                        date: subscription.current_period_end
+                          ? format(new Date(subscription.current_period_end), "MMMM d, yyyy")
+                          : t("subscription.dialog.endOfPeriod", "the end of your billing period"),
+                      })}
                     </AlertDialogDescription>
                   </AlertDialogHeader>
                   <AlertDialogFooter>
-                    <AlertDialogCancel>Keep Subscription</AlertDialogCancel>
+                    <AlertDialogCancel>{t("subscription.actions.keep", "Keep Subscription")}</AlertDialogCancel>
                     <AlertDialogAction
                       onClick={handleCancelSubscription}
                       disabled={isCancelling}
@@ -404,10 +405,10 @@ export function SubscriptionSection() {
                       {isCancelling ? (
                         <>
                           <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                          Cancelling...
+                          {t("subscription.actions.cancelling", "Cancelling...")}
                         </>
                       ) : (
-                        "Yes, Cancel"
+                        t("subscription.actions.yesCancel", "Yes, Cancel")
                       )}
                     </AlertDialogAction>
                   </AlertDialogFooter>
@@ -427,15 +428,15 @@ export function SubscriptionSection() {
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <Sparkles className="w-5 h-5 text-primary" />
-              Unlock Premium Features
+              {t("subscription.upgrade.title", "Unlock Premium Features")}
             </CardTitle>
             <CardDescription>
-              Get more profiles, higher posting limits, AI tools, and priority support.
+              {t("subscription.upgrade.desc", "Get more profiles, higher posting limits, AI tools, and priority support.")}
             </CardDescription>
           </CardHeader>
           <CardContent>
             <Button onClick={() => navigate("/pricing")} className="gap-2">
-              View Plans
+              {t("subscription.actions.viewPlans", "View Plans")}
               <ArrowRight className="w-4 h-4" />
             </Button>
           </CardContent>

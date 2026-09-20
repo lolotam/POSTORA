@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useTranslation } from "react-i18next";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
@@ -14,6 +15,7 @@ interface LeaderboardEntry {
 }
 
 export function ReferralLeaderboard() {
+  const { t } = useTranslation("accounts");
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -103,7 +105,7 @@ export function ReferralLeaderboard() {
         <CardHeader>
           <CardTitle className="text-lg flex items-center gap-2">
             <TrendingUp className="w-5 h-5" />
-            Top Referrers
+            {t("leaderboard.title", "Top Referrers")}
           </CardTitle>
         </CardHeader>
         <CardContent>
@@ -127,13 +129,13 @@ export function ReferralLeaderboard() {
         <CardHeader>
           <CardTitle className="text-lg flex items-center gap-2">
             <TrendingUp className="w-5 h-5" />
-            Top Referrers
+            {t("leaderboard.title", "Top Referrers")}
           </CardTitle>
         </CardHeader>
         <CardContent>
           <div className="text-center py-8 text-muted-foreground">
             <Trophy className="w-12 h-12 mx-auto mb-3 opacity-30" />
-            <p>No referrals yet. Be the first!</p>
+            <p>{t("leaderboard.empty", "No referrals yet. Be the first!")}</p>
           </div>
         </CardContent>
       </Card>
@@ -145,7 +147,7 @@ export function ReferralLeaderboard() {
       <CardHeader>
         <CardTitle className="text-lg flex items-center gap-2">
           <TrendingUp className="w-5 h-5" />
-          Top Referrers
+          {t("leaderboard.title", "Top Referrers")}
         </CardTitle>
       </CardHeader>
       <CardContent>
@@ -167,14 +169,16 @@ export function ReferralLeaderboard() {
               </Avatar>
               <div className="flex-1 min-w-0">
                 <p className="font-medium truncate">
-                  Referrer #{entry.rank}
+                  {t("leaderboard.referrer", "Referrer #{{rank}}", { rank: entry.rank })}
                 </p>
                 <p className="text-xs text-muted-foreground">
-                  {entry.total_referrals} successful referral{entry.total_referrals !== 1 ? "s" : ""}
+                  {entry.total_referrals === 1
+                    ? t("leaderboard.successfulOne", "{{count}} successful referral", { count: entry.total_referrals })
+                    : t("leaderboard.successfulMany", "{{count}} successful referrals", { count: entry.total_referrals })}
                 </p>
               </div>
               <Badge variant="secondary" className="shrink-0">
-                ${entry.total_earned.toFixed(0)} earned
+                {t("leaderboard.earned", "${{amount}} earned", { amount: entry.total_earned.toFixed(0) })}
               </Badge>
             </div>
           ))}

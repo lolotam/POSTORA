@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import { Link } from "react-router-dom";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { Button } from "@/components/ui/button";
@@ -65,22 +67,22 @@ interface SocialAccountHealth {
 
 type HealthStatus = "healthy" | "expired" | "unknown" | "needs_reauth" | "disconnected";
 
-function getTokenHealth(expiresAt: string | null, platform: string, needsReauth?: boolean, isActive = true): { status: HealthStatus; daysLeft: number | null; hoursLeft: number | null; message: string } {
+function getTokenHealth(expiresAt: string | null, platform: string, needsReauth: boolean | undefined, isActive: boolean, t: TFunction): { status: HealthStatus; daysLeft: number | null; hoursLeft: number | null; message: string } {
     // Ahead of every token check on purpose. A disconnected account can still hold a
     // perfectly valid token, so judging it on expiry alone renders it "Active" and offers
     // Refresh -- while webhooks for it are being dropped, because both account resolvers
     // filter is_active = true. The row has to say what is actually wrong with it.
     if (!isActive) {
-        return { status: "disconnected", daysLeft: null, hoursLeft: null, message: "Disconnected - reconnect to receive events" };
+        return { status: "disconnected", daysLeft: null, hoursLeft: null, message: t("health.message.disconnected", "Disconnected - reconnect to receive events") };
     }
 
     // Check needs_reauth first
     if (needsReauth) {
-        return { status: "needs_reauth", daysLeft: null, hoursLeft: null, message: "Reconnection required" };
+        return { status: "needs_reauth", daysLeft: null, hoursLeft: null, message: t("health.message.reconnectionRequired", "Reconnection required") };
     }
 
     if (!expiresAt) {
-        return { status: "unknown", daysLeft: null, hoursLeft: null, message: "No expiry info" };
+        return { status: "unknown", daysLeft: null, hoursLeft: null, message: t("health.message.noExpiry", "No expiry info") };
     }
 
     const now = new Date();
@@ -94,9 +96,9 @@ function getTokenHealth(expiresAt: string | null, platform: string, needsReauth?
     const thresholdDays = platformInfo ? Math.ceil(platformInfo.refreshWindowSeconds / 86400) : 7;
 
     if (hoursLeft < 0) {
-        return { status: "expired", daysLeft: 0, hoursLeft: 0, message: "Token expired" };
+        return { status: "expired", daysLeft: 0, hoursLeft: 0, message: t("health.message.tokenExpired", "Token expired") };
     } else {
-        return { status: "healthy", daysLeft, hoursLeft, message: `Valid for ${daysLeft} days` };
+        return { status: "healthy", daysLeft, hoursLeft, message: t("health.message.validFor", "Valid for {{days}} days", { days: daysLeft }) };
     }
 }
 
@@ -115,7 +117,7 @@ function getStatusIcon(status: HealthStatus) {
     }
 }
 
-function getStatusBadge(status: HealthStatus) {
+function getStatusBadge(status: HealthStatus, t: TFunction) {
     const variants: Record<HealthStatus, { variant: "default" | "secondary" | "destructive" | "outline"; className: string }> = {
         healthy: { variant: "default", className: "bg-green-500/10 text-green-500 border-green-500/30 hover:bg-green-500/20" },
         expired: { variant: "destructive", className: "" },
@@ -125,11 +127,11 @@ function getStatusBadge(status: HealthStatus) {
     };
 
     const labels: Record<HealthStatus, string> = {
-        healthy: "Active",
-        expired: "Expired",
-        needs_reauth: "Needs Reconnect",
-        unknown: "Unknown",
-        disconnected: "Disconnected",
+        healthy: t("health.status.active", "Active"),
+        expired: t("health.status.expired", "Expired"),
+        needs_reauth: t("health.status.needsReconnect", "Needs Reconnect"),
+        unknown: t("common:unknown", "Unknown"),
+        disconnected: t("health.status.disconnected", "Disconnected"),
     };
 
     return (
@@ -140,6 +142,7 @@ function getStatusBadge(status: HealthStatus) {
 }
 
 export default function ConnectionHealth() {
+    const { t } = useTranslation("accounts");
     const { user } = useAuth();
     const { toast } = useToast();
     const queryClient = useQueryClient();
@@ -148,7 +151,7 @@ export default function ConnectionHealth() {
     const [isSendingTestNotification, setIsSendingTestNotification] = useState(false);
     const { handleConnectPlatform, connectingPlatform } = useProfileOAuth();
     const { data: inboundActivity } = useInboundActivity();
-    const { copy, copiedId } = useCopyToClipboard({ showToast: true, successMessage: "Webhook identity copied" });
+    const { copy, copiedId } = useCopyToClipboard({ showToast: true, successMessage: t("health.toast.webhookCopied", "Webhook identity copied") });
 
     const { data: accounts = [], isLoading, error } = useQuery({
         queryKey: ["connection_health", user?.id],
@@ -183,15 +186,15 @@ export default function ConnectionHealth() {
         },
         onSuccess: (data) => {
             toast({
-                title: data.success ? "Connection Working" : "Connection Issue",
-                description: data.message || (data.success ? "API connection is healthy" : "Failed to verify connection"),
+                title: data.success ? t("health.toast.working", "Connection Working") : t("health.toast.issue", "Connection Issue"),
+                description: data.message || (data.success ? t("health.toast.healthy", "API connection is healthy") : t("health.toast.unhealthy", "Failed to verify connection")),
                 variant: data.success ? "default" : "destructive",
             });
         },
         onError: (error) => {
             toast({
-                title: "Test Failed",
-                description: error instanceof Error ? error.message : "Failed to test connection",
+                title: t("health.toast.testFailed", "Test Failed"),
+                description: error instanceof Error ? error.message : t("health.toast.testFailedDesc", "Failed to test connection"),
                 variant: "destructive",
             });
         },
@@ -204,7 +207,7 @@ export default function ConnectionHealth() {
         mutationFn: async (accountId: string) => {
             setRefreshingAccountId(accountId);
             const account = accounts.find(a => a.id === accountId);
-            if (!account) throw new Error("Account not found");
+            if (!account) throw new Error(t("health.errors.accountNotFound", "Account not found"));
 
             const { data, error } = await supabase.functions.invoke(`${account.platform}-oauth`, {
                 body: { action: "refresh", account_id: accountId },
@@ -214,15 +217,15 @@ export default function ConnectionHealth() {
         },
         onSuccess: () => {
             toast({
-                title: "Token Refreshed",
-                description: "Access token has been refreshed successfully.",
+                title: t("health.toast.tokenRefreshed", "Token Refreshed"),
+                description: t("health.toast.tokenRefreshedDesc", "Access token has been refreshed successfully."),
             });
             queryClient.invalidateQueries({ queryKey: ["connection_health"] });
         },
         onError: (error) => {
             toast({
-                title: "Refresh Failed",
-                description: error instanceof Error ? error.message : "Failed to refresh token",
+                title: t("health.toast.refreshFailed", "Refresh Failed"),
+                description: error instanceof Error ? error.message : t("health.toast.refreshFailedDesc", "Failed to refresh token"),
                 variant: "destructive",
             });
         },
@@ -240,14 +243,14 @@ export default function ConnectionHealth() {
         },
         onSuccess: (data) => {
             toast({
-                title: "Notification Check Complete",
-                description: data.message || `Sent ${data.sent || 0} notification email(s)`,
+                title: t("health.toast.notifComplete", "Notification Check Complete"),
+                description: data.message || t("health.toast.sentEmails", "Sent {{count}} notification email(s)", { count: data.sent || 0 }),
             });
         },
         onError: (error) => {
             toast({
-                title: "Notification Check Failed",
-                description: error instanceof Error ? error.message : "Failed to run notification check",
+                title: t("health.toast.notifFailed", "Notification Check Failed"),
+                description: error instanceof Error ? error.message : t("health.toast.notifFailedDesc", "Failed to run notification check"),
                 variant: "destructive",
             });
         },
@@ -259,7 +262,7 @@ export default function ConnectionHealth() {
     // Calculate overall health stats
     const healthStats = accounts.reduce(
         (acc, account) => {
-            const { status } = getTokenHealth(account.token_expires_at, account.platform, account.needs_reauth, account.is_active);
+            const { status } = getTokenHealth(account.token_expires_at, account.platform, account.needs_reauth, account.is_active, t);
             acc[status] = (acc[status] || 0) + 1;
             acc.total += 1;
             return acc;
@@ -279,10 +282,10 @@ export default function ConnectionHealth() {
                     <div>
                         <h1 className="text-3xl font-bold flex items-center gap-3">
                             <Activity className="w-8 h-8 text-primary" />
-                            Connection Health
+                            {t("health.header.title", "Connection Health")}
                         </h1>
                         <p className="text-muted-foreground mt-1">
-                            Monitor the health and status of your connected social accounts.
+                            {t("health.header.subtitle", "Monitor the health and status of your connected social accounts.")}
                         </p>
                     </div>
                     <div className="flex gap-2">
@@ -298,12 +301,12 @@ export default function ConnectionHealth() {
                             ) : (
                                 <Mail className="w-4 h-4" />
                             )}
-                            Test Notifications
+                            {t("health.actions.testNotifications", "Test Notifications")}
                         </Button>
                         <Link to="/docs/token-expiry">
                             <Button variant="outline" size="sm" className="gap-2">
                                 <Info className="w-4 h-4" />
-                                Token Expiry Guide
+                                {t("health.actions.tokenGuide", "Token Expiry Guide")}
                                 <ExternalLink className="w-3 h-3" />
                             </Button>
                         </Link>
@@ -314,7 +317,7 @@ export default function ConnectionHealth() {
                 <div className="grid md:grid-cols-4 gap-4">
                     <Card>
                         <CardHeader className="pb-2">
-                            <CardDescription>Overall Health</CardDescription>
+                            <CardDescription>{t("health.stats.overall", "Overall Health")}</CardDescription>
                             <CardTitle className="text-3xl">{healthPercentage}%</CardTitle>
                         </CardHeader>
                         <CardContent>
@@ -326,12 +329,12 @@ export default function ConnectionHealth() {
                         <CardHeader className="pb-2">
                             <CardDescription className="flex items-center gap-2">
                                 <CheckCircle2 className="w-4 h-4 text-green-500" />
-                                Active
+                                {t("health.stats.active", "Active")}
                             </CardDescription>
                             <CardTitle className="text-3xl text-green-500">{healthStats.healthy}</CardTitle>
                         </CardHeader>
                         <CardContent>
-                            <p className="text-xs text-muted-foreground">Tokens valid</p>
+                            <p className="text-xs text-muted-foreground">{t("health.stats.tokensValid", "Tokens valid")}</p>
                         </CardContent>
                     </Card>
 
@@ -339,12 +342,12 @@ export default function ConnectionHealth() {
                         <CardHeader className="pb-2">
                             <CardDescription className="flex items-center gap-2">
                                 <XCircle className="w-4 h-4 text-destructive" />
-                                Expired
+                                {t("health.stats.expired", "Expired")}
                             </CardDescription>
                             <CardTitle className="text-3xl text-destructive">{healthStats.expired}</CardTitle>
                         </CardHeader>
                         <CardContent>
-                            <p className="text-xs text-muted-foreground">Token expired</p>
+                            <p className="text-xs text-muted-foreground">{t("health.stats.tokenExpired", "Token expired")}</p>
                         </CardContent>
                     </Card>
 
@@ -352,12 +355,12 @@ export default function ConnectionHealth() {
                         <CardHeader className="pb-2">
                             <CardDescription className="flex items-center gap-2">
                                 <RotateCcw className="w-4 h-4 text-red-600" />
-                                Needs Reconnect
+                                {t("health.stats.needsReconnect", "Needs Reconnect")}
                             </CardDescription>
                             <CardTitle className="text-3xl text-red-600">{healthStats.needs_reauth || 0}</CardTitle>
                         </CardHeader>
                         <CardContent>
-                            <p className="text-xs text-muted-foreground">Reconnection required</p>
+                            <p className="text-xs text-muted-foreground">{t("health.stats.reconnectionRequired", "Reconnection required")}</p>
                         </CardContent>
                     </Card>
                 </div>
@@ -367,10 +370,10 @@ export default function ConnectionHealth() {
                     <CardHeader>
                         <CardTitle className="flex items-center gap-2">
                             <Shield className="w-5 h-5" />
-                            Connected Accounts
+                            {t("health.table.title", "Connected Accounts")}
                         </CardTitle>
                         <CardDescription>
-                            Check token status and test connections for each platform
+                            {t("health.table.desc", "Check token status and test connections for each platform")}
                         </CardDescription>
                     </CardHeader>
                     <CardContent>
@@ -382,32 +385,32 @@ export default function ConnectionHealth() {
                             <div className="text-center py-12 space-y-2">
                                 <AlertCircle className="w-10 h-10 text-destructive mx-auto" />
                                 <p className="text-sm font-medium text-destructive">
-                                    Failed to load connection data
+                                    {t("health.errors.loadFailed", "Failed to load connection data")}
                                 </p>
                                 <p className="text-xs text-muted-foreground">
-                                    {error instanceof Error ? error.message : "An unexpected error occurred. Try refreshing the page."}
+                                    {error instanceof Error ? error.message : t("health.errors.unexpected", "An unexpected error occurred. Try refreshing the page.")}
                                 </p>
                             </div>
                         ) : accounts.length === 0 ? (
                             <div className="text-center py-12 text-muted-foreground">
-                                No connected accounts. Go to Profiles to connect your social accounts.
+                                {t("health.empty", "No connected accounts. Go to Profiles to connect your social accounts.")}
                             </div>
                         ) : (
                             <Table>
                                 <TableHeader>
                                     <TableRow>
-                                        <TableHead>Account</TableHead>
-                                        <TableHead>Status</TableHead>
-                                        <TableHead>Token Expiry</TableHead>
-                                        <TableHead>Webhook Identity</TableHead>
-                                        <TableHead>Last Inbound Event</TableHead>
-                                        <TableHead>Last Updated</TableHead>
-                                        <TableHead className="text-right">Actions</TableHead>
+                                        <TableHead>{t("health.table.account", "Account")}</TableHead>
+                                        <TableHead>{t("health.table.status", "Status")}</TableHead>
+                                        <TableHead>{t("health.table.tokenExpiry", "Token Expiry")}</TableHead>
+                                        <TableHead>{t("health.table.webhookIdentity", "Webhook Identity")}</TableHead>
+                                        <TableHead>{t("health.table.lastInbound", "Last Inbound Event")}</TableHead>
+                                        <TableHead>{t("health.table.lastUpdated", "Last Updated")}</TableHead>
+                                        <TableHead className="text-right">{t("health.table.actions", "Actions")}</TableHead>
                                     </TableRow>
                                 </TableHeader>
                                 <TableBody>
                                     {accounts.map((account) => {
-                                        const health = getTokenHealth(account.token_expires_at, account.platform, account.needs_reauth, account.is_active);
+                                        const health = getTokenHealth(account.token_expires_at, account.platform, account.needs_reauth, account.is_active, t);
                                         const platformInfo = PLATFORM_TOKEN_INFO[account.platform.toLowerCase()];
                                         const messaging = isMessagingPlatform(account.platform);
                                         const webhookIdentity = messaging ? resolveWebhookIdentity(account) : null;
@@ -426,7 +429,7 @@ export default function ConnectionHealth() {
                                                             </AvatarFallback>
                                                         </Avatar>
                                                         <div>
-                                                            <div className="font-medium">{account.platform_username || "Unknown"}</div>
+                                                            <div className="font-medium">{account.platform_username || t("common:unknown", "Unknown")}</div>
                                                             <div className="text-xs text-muted-foreground flex items-center gap-1">
                                                                 <PlatformIcon platform={account.platform as ExtendedPlatform} size="xs" />
                                                                 {getPlatformName(account.platform as ExtendedPlatform)}
@@ -437,7 +440,7 @@ export default function ConnectionHealth() {
                                                 <TableCell>
                                                     <div className="flex items-center gap-2">
                                                         {getStatusIcon(health.status)}
-                                                        {getStatusBadge(health.status)}
+                                                        {getStatusBadge(health.status, t)}
                                                     </div>
                                                 </TableCell>
                                                 <TableCell>
@@ -449,12 +452,12 @@ export default function ConnectionHealth() {
                                                             <Tooltip>
                                                                 <TooltipTrigger asChild>
                                                                     <button type="button" className="text-xs text-muted-foreground cursor-help hover:underline bg-transparent border-none p-0">
-                                                                        {platformInfo.accessTokenExpiry} access token
+                                                                        {t("health.table.accessToken", "{{expiry}} access token", { expiry: platformInfo.accessTokenExpiry })}
                                                                     </button>
                                                                 </TooltipTrigger>
                                                                 <TooltipContent>
-                                                                    <p>Access: {platformInfo.accessTokenExpiry}</p>
-                                                                    <p>Refresh: {platformInfo.refreshTokenExpiry}</p>
+                                                                    <p>{t("health.table.access", "Access: {{expiry}}", { expiry: platformInfo.accessTokenExpiry })}</p>
+                                                                    <p>{t("health.table.refresh", "Refresh: {{expiry}}", { expiry: platformInfo.refreshTokenExpiry })}</p>
                                                                 </TooltipContent>
                                                             </Tooltip>
                                                         )}
@@ -466,9 +469,9 @@ export default function ConnectionHealth() {
                                                             type="button"
                                                             onClick={() => copy(webhookIdentity, account.id)}
                                                             className="font-mono text-xs text-muted-foreground hover:text-foreground transition-colors"
-                                                            title="Copy the id this platform uses to address your account"
+                                                            title={t("health.table.copyTitle", "Copy the id this platform uses to address your account")}
                                                         >
-                                                            {copiedId === account.id ? "Copied" : webhookIdentity}
+                                                            {copiedId === account.id ? t("common:copied", "Copied") : webhookIdentity}
                                                         </button>
                                                     ) : (
                                                         <span className="text-xs text-muted-foreground">&mdash;</span>
@@ -486,7 +489,7 @@ export default function ConnectionHealth() {
                                                         // an inbound event is either not subscribed on the platform
                                                         // side or is not the account being messaged at all.
                                                         <span className="text-sm text-amber-600 dark:text-amber-500">
-                                                            Never received an inbound event
+                                                            {t("health.table.neverInbound", "Never received an inbound event")}
                                                         </span>
                                                     )}
                                                 </TableCell>
@@ -508,7 +511,7 @@ export default function ConnectionHealth() {
                                                             ) : (
                                                                 <Zap className="w-4 h-4" />
                                                             )}
-                                                            <span className="ml-1.5 hidden sm:inline">Test</span>
+                                                            <span className="ml-1.5 hidden sm:inline">{t("health.actions.test", "Test")}</span>
                                                         </Button>
                                                         {health.status === "expired" || health.status === "needs_reauth" ? (
                                                             <Button
@@ -523,7 +526,7 @@ export default function ConnectionHealth() {
                                                                 ) : (
                                                                     <RotateCcw className="w-4 h-4" />
                                                                 )}
-                                                                <span className="ml-1.5 hidden sm:inline">Reconnect</span>
+                                                                <span className="ml-1.5 hidden sm:inline">{t("health.actions.reconnect", "Reconnect")}</span>
                                                             </Button>
                                                         ) : (
                                                             <Button
@@ -537,7 +540,7 @@ export default function ConnectionHealth() {
                                                                 ) : (
                                                                     <RefreshCw className="w-4 h-4" />
                                                                 )}
-                                                                <span className="ml-1.5 hidden sm:inline">Refresh</span>
+                                                                <span className="ml-1.5 hidden sm:inline">{t("common:refresh", "Refresh")}</span>
                                                             </Button>
                                                         )}
                                                     </div>

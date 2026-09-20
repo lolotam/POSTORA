@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -13,19 +14,20 @@ import {
 } from "lucide-react";
 
 export function ApiKeySection() {
+  const { t } = useTranslation("accounts");
   const { toast } = useToast();
   const { profile, refreshProfile } = useAuth();
   const [copied, setCopied] = useState(false);
 
-  const apiKey = profile?.api_key || "Not available";
+  const apiKey = profile?.api_key || t("apiKey.notAvailable", "Not available");
 
   const handleCopyApiKey = () => {
     navigator.clipboard.writeText(apiKey);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
     toast({
-      title: "API Key copied",
-      description: "The API key has been copied to your clipboard.",
+      title: t("apiKey.toast.copied", "API Key copied"),
+      description: t("apiKey.toast.copiedDesc", "The API key has been copied to your clipboard."),
     });
   };
 
@@ -40,15 +42,15 @@ export function ApiKeySection() {
 
     if (error) {
       toast({
-        title: "Error",
-        description: "Failed to regenerate API key.",
+        title: t("common:error", "Error"),
+        description: t("apiKey.toast.regenFailed", "Failed to regenerate API key."),
         variant: "destructive",
       });
     } else {
       await refreshProfile();
       toast({
-        title: "API Key regenerated",
-        description: "Your new API key is ready to use.",
+        title: t("apiKey.toast.regenerated", "API Key regenerated"),
+        description: t("apiKey.toast.regeneratedDesc", "Your new API key is ready to use."),
       });
     }
   };
@@ -60,16 +62,16 @@ export function ApiKeySection() {
           <Key className="w-5 h-5 text-primary" />
         </div>
         <div>
-          <h2 className="font-semibold">API Access</h2>
+          <h2 className="font-semibold">{t("apiKey.header.title", "API Access")}</h2>
           <p className="text-sm text-muted-foreground">
-            Use this key to integrate with n8n or other tools
+            {t("apiKey.header.subtitle", "Use this key to integrate with n8n or other tools")}
           </p>
         </div>
       </div>
 
       <div className="space-y-4">
         <div className="space-y-2">
-          <Label>API Key</Label>
+          <Label>{t("apiKey.form.label", "API Key")}</Label>
           <div className="flex gap-2">
             <div className="flex-1 relative">
               <Input
@@ -95,12 +97,12 @@ export function ApiKeySection() {
             </Button>
           </div>
           <p className="text-xs text-muted-foreground">
-            Keep this key secret. Never share it publicly.
+            {t("apiKey.form.secretHint", "Keep this key secret. Never share it publicly.")}
           </p>
         </div>
 
         <div className="p-4 rounded-lg bg-secondary/50">
-          <p className="text-sm font-medium mb-2">API Endpoints</p>
+          <p className="text-sm font-medium mb-2">{t("apiKey.endpoints.title", "API Endpoints")}</p>
           <code className="text-xs text-muted-foreground block">
             POST https://api.postora.cloud/functions/v1/api/post
           </code>

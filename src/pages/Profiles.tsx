@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
+import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { Button } from "@/components/ui/button";
@@ -52,6 +53,7 @@ import {
 } from "@/features/webhook-observability";
 
 export default function Profiles() {
+  const { t } = useTranslation("accounts");
   const [pageSearchQuery, setPageSearchQuery] = useState("");
   const [disconnectAccount, setDisconnectAccount] = useState<SocialAccountWithProfile | null>(null);
   const [upgradeModal, setUpgradeModal] = useState<{
@@ -173,11 +175,11 @@ export default function Profiles() {
     try {
       await disconnectAccountMutation.mutateAsync(account.id);
       toast({
-        title: "Account disconnected",
-        description: `Your ${getPlatformName(account.platform)} account has been disconnected.`,
+        title: t("profiles.toast.disconnected", "Account disconnected"),
+        description: t("profiles.toast.disconnectedDesc", "Your {{platform}} account has been disconnected.", { platform: getPlatformName(account.platform) }),
       });
     } catch {
-      toast({ title: "Error", description: "Failed to disconnect account.", variant: "destructive" });
+      toast({ title: t("common:error", "Error"), description: t("profiles.toast.disconnectFailed", "Failed to disconnect account."), variant: "destructive" });
     }
     setDisconnectAccount(null);
   };
@@ -254,9 +256,9 @@ export default function Profiles() {
             <div className="flex items-center gap-3 flex-wrap">
               <Icon3D icon={Layers} variant="violet" size="sm" />
               <GradientHeading as="h2" preset="violet-sky" size="lg">
-                Connected Accounts
+                {t("profiles.header.connectedAccounts", "Connected Accounts")}
               </GradientHeading>
-              <Badge variant="secondary" className="ml-1">{totalAccounts} Total</Badge>
+              <Badge variant="secondary" className="ml-1">{t("profiles.header.totalAccounts", "{{count}} Total", { count: totalAccounts })}</Badge>
               <Button
                 variant="ghost"
                 size="icon"
@@ -292,7 +294,7 @@ export default function Profiles() {
                           )}
                         >
                           {betaPlatforms[config.platform] && (
-                            <Badge className="absolute -top-2.5 left-1/2 -translate-x-1/2 bg-amber-500/20 text-amber-600 border-amber-500/30 text-[9px] px-1.5 py-0 leading-tight">Beta</Badge>
+                            <Badge className="absolute -top-2.5 left-1/2 -translate-x-1/2 bg-amber-500/20 text-amber-600 border-amber-500/30 text-[9px] px-1.5 py-0 leading-tight">{t("profiles.badge.beta", "Beta")}</Badge>
                           )}
                           <PlatformIcon platform={config.platform} size="lg" />
                           <Badge
@@ -321,7 +323,7 @@ export default function Profiles() {
                       if (defaultProfileId) {
                         handleConnectPlatform(defaultProfileId, config.platform);
                       } else {
-                        toast({ title: "Please wait", description: "Setting up your account...", variant: "destructive" });
+                        toast({ title: t("profiles.toast.pleaseWait", "Please wait"), description: t("profiles.toast.settingUp", "Setting up your account..."), variant: "destructive" });
                       }
                     }}
                     onDisconnect={setDisconnectAccount}
@@ -351,7 +353,7 @@ export default function Profiles() {
         onOpenChange={(open) => { if (!open) setYoutubeConnectProfileId(null); }}
         workspaceId={youtubeWorkspace.workspaceId}
         socialProfileId={youtubeConnectProfileId}
-        onConnected={() => toast({ title: "YouTube channel connected", description: "Your channel now appears on this profile." })}
+        onConnected={() => toast({ title: t("profiles.toast.youtubeConnected", "YouTube channel connected"), description: t("profiles.toast.youtubeConnectedDesc", "Your channel now appears on this profile.") })}
         onNativeConnect={() => {
           const profileId = youtubeConnectProfileId;
           setYoutubeConnectProfileId(null);

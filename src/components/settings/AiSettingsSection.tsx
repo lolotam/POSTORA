@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import {
@@ -25,6 +26,8 @@ export function AiSettingsSection({
   onSave,
   isSaving,
 }: AiSettingsSectionProps) {
+  const { t } = useTranslation("accounts");
+
   return (
     <div className="space-y-6">
       {/* AI Model Section */}
@@ -34,37 +37,37 @@ export function AiSettingsSection({
             <Sparkles className="w-5 h-5 text-primary" />
           </div>
           <div>
-            <h2 className="font-semibold">AI Model</h2>
+            <h2 className="font-semibold">{t("ai.model.title", "AI Model")}</h2>
             <p className="text-sm text-muted-foreground">
-              Configure your AI model preferences
+              {t("ai.model.subtitle", "Configure your AI model preferences")}
             </p>
           </div>
         </div>
 
         <div className="space-y-4">
           <div className="space-y-2">
-            <Label htmlFor="aiModel">AI Model</Label>
+            <Label htmlFor="aiModel">{t("ai.model.label", "AI Model")}</Label>
             <Select value={aiModel} onValueChange={setAiModel}>
               <SelectTrigger className="w-full max-w-md">
-                <SelectValue placeholder="Select AI model" />
+                <SelectValue placeholder={t("ai.model.placeholder", "Select AI model")} />
               </SelectTrigger>
               <SelectContent className="bg-background border border-border z-50">
                 <SelectItem value="google/gemini-2.5-flash">
                   <div className="flex flex-col">
-                    <span className="font-medium">Gemini Flash</span>
-                    <span className="text-xs text-muted-foreground">Fast & balanced - recommended for most tasks</span>
+                    <span className="font-medium">{t("ai.model.geminiFlash", "Gemini Flash")}</span>
+                    <span className="text-xs text-muted-foreground">{t("ai.model.geminiFlashDesc", "Fast & balanced - recommended for most tasks")}</span>
                   </div>
                 </SelectItem>
                 <SelectItem value="google/gemini-3-pro-preview">
                   <div className="flex flex-col">
-                    <span className="font-medium">Gemini 3 Pro</span>
-                    <span className="text-xs text-muted-foreground">Advanced reasoning - best for complex captions</span>
+                    <span className="font-medium">{t("ai.model.geminiPro", "Gemini 3 Pro")}</span>
+                    <span className="text-xs text-muted-foreground">{t("ai.model.geminiProDesc", "Advanced reasoning - best for complex captions")}</span>
                   </div>
                 </SelectItem>
               </SelectContent>
             </Select>
             <p className="text-xs text-muted-foreground">
-              This model will be used for caption generation and AI features.
+              {t("ai.model.hint", "This model will be used for caption generation and AI features.")}
             </p>
           </div>
 
@@ -78,10 +81,10 @@ export function AiSettingsSection({
               {isSaving ? (
                 <>
                   <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  Saving...
+                  {t("common:saving", "Saving...")}
                 </>
               ) : (
-                "Save Changes"
+                t("common:saveChanges", "Save Changes")
               )}
             </Button>
           </div>
@@ -95,9 +98,9 @@ export function AiSettingsSection({
             <Sparkles className="w-5 h-5 text-primary" />
           </div>
           <div>
-            <h2 className="font-semibold">AI Credits</h2>
+            <h2 className="font-semibold">{t("ai.credits.title", "AI Credits")}</h2>
             <p className="text-sm text-muted-foreground">
-              Your AI usage and remaining credits
+              {t("ai.credits.subtitle", "Your AI usage and remaining credits")}
             </p>
           </div>
         </div>
@@ -105,18 +108,18 @@ export function AiSettingsSection({
         <div className="space-y-4">
           <div className="p-4 rounded-lg bg-secondary/50 border border-border">
             <div className="flex items-center justify-between mb-3">
-              <span className="text-sm font-medium">Usage This Month</span>
+              <span className="text-sm font-medium">{t("ai.credits.usage", "Usage This Month")}</span>
               <a
                 href="https://lovable.dev/settings"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-xs text-primary hover:underline"
               >
-                View in Lovable Dashboard →
+                {t("ai.credits.viewLovable", "View in Lovable Dashboard →")}
               </a>
             </div>
             <p className="text-xs text-muted-foreground">
-              AI credits are managed through your Lovable workspace. Visit your Lovable settings to view detailed usage, add credits, or upgrade your plan.
+              {t("ai.credits.managed", "AI credits are managed through your Lovable workspace. Visit your Lovable settings to view detailed usage, add credits, or upgrade your plan.")}
             </p>
             <div className="mt-3 flex gap-2">
               <a
@@ -125,16 +128,16 @@ export function AiSettingsSection({
                 rel="noopener noreferrer"
               >
                 <Button variant="outline" size="sm">
-                  Manage Credits
+                  {t("ai.credits.manage", "Manage Credits")}
                 </Button>
               </a>
             </div>
           </div>
 
           <div className="text-xs text-muted-foreground space-y-1">
-            <p>• <strong>401 Error:</strong> Session expired - re-login required</p>
-            <p>• <strong>402 Error:</strong> Credits exhausted - add more credits</p>
-            <p>• <strong>429 Error:</strong> Rate limited - wait and retry</p>
+            <p>• <strong>{t("ai.credits.err401Label", "401 Error:")}</strong> {t("ai.credits.err401", "Session expired - re-login required")}</p>
+            <p>• <strong>{t("ai.credits.err402Label", "402 Error:")}</strong> {t("ai.credits.err402", "Credits exhausted - add more credits")}</p>
+            <p>• <strong>{t("ai.credits.err429Label", "429 Error:")}</strong> {t("ai.credits.err429", "Rate limited - wait and retry")}</p>
           </div>
         </div>
       </div>

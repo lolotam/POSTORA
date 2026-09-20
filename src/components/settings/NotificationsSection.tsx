@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useTranslation } from "react-i18next";
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
 import { Bell, Mail, Loader2, Volume2, EyeOff } from "lucide-react";
@@ -8,6 +9,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useFeatureFlags } from "@/hooks/useFeatureFlags";
 
 export function NotificationsSection() {
+  const { t } = useTranslation("accounts");
   const { profile, refreshProfile } = useAuth();
   const { toast } = useToast();
   const { flags } = useFeatureFlags();
@@ -43,17 +45,17 @@ export function NotificationsSection() {
     if (error) {
       setEmailNotificationsEnabled(!enabled);
       toast({
-        title: "Error",
-        description: "Failed to update email preferences.",
+        title: t("common:error", "Error"),
+        description: t("notifications.toast.emailFailed", "Failed to update email preferences."),
         variant: "destructive",
       });
     } else {
       await refreshProfile();
       toast({
-        title: enabled ? "Email notifications enabled" : "Email notifications disabled",
+        title: enabled ? t("notifications.toast.emailOn", "Email notifications enabled") : t("notifications.toast.emailOff", "Email notifications disabled"),
         description: enabled
-          ? "You'll receive emails about new updates."
-          : "You won't receive update emails anymore.",
+          ? t("notifications.toast.emailOnDesc", "You'll receive emails about new updates.")
+          : t("notifications.toast.emailOffDesc", "You won't receive update emails anymore."),
       });
     }
 
@@ -74,17 +76,17 @@ export function NotificationsSection() {
     if (error) {
       setSoundEnabled(!enabled);
       toast({
-        title: "Error",
-        description: "Failed to update sound preferences.",
+        title: t("common:error", "Error"),
+        description: t("notifications.toast.soundFailed", "Failed to update sound preferences."),
         variant: "destructive",
       });
     } else {
       await refreshProfile();
       toast({
-        title: enabled ? "Sound notifications enabled" : "Sound notifications disabled",
+        title: enabled ? t("notifications.toast.soundOn", "Sound notifications enabled") : t("notifications.toast.soundOff", "Sound notifications disabled"),
         description: enabled
-          ? "You'll hear sounds when posts publish."
-          : "Sound notifications are now muted.",
+          ? t("notifications.toast.soundOnDesc", "You'll hear sounds when posts publish.")
+          : t("notifications.toast.soundOffDesc", "Sound notifications are now muted."),
       });
     }
 
@@ -105,17 +107,17 @@ export function NotificationsSection() {
     if (error) {
       setPostSuccessEnabled(!enabled);
       toast({
-        title: "Error",
-        description: "Failed to update post success preferences.",
+        title: t("common:error", "Error"),
+        description: t("notifications.toast.successFailed", "Failed to update post success preferences."),
         variant: "destructive",
       });
     } else {
       await refreshProfile();
       toast({
-        title: enabled ? "Post success notifications enabled" : "Post success notifications disabled",
+        title: enabled ? t("notifications.toast.successOn", "Post success notifications enabled") : t("notifications.toast.successOff", "Post success notifications disabled"),
         description: enabled
-          ? "You'll be notified when posts are published."
-          : "Post success notifications are now disabled.",
+          ? t("notifications.toast.successOnDesc", "You'll be notified when posts are published.")
+          : t("notifications.toast.successOffDesc", "Post success notifications are now disabled."),
       });
     }
 
@@ -136,17 +138,17 @@ export function NotificationsSection() {
     if (error) {
       setPostFailureEnabled(!enabled);
       toast({
-        title: "Error",
-        description: "Failed to update post failure preferences.",
+        title: t("common:error", "Error"),
+        description: t("notifications.toast.failureFailed", "Failed to update post failure preferences."),
         variant: "destructive",
       });
     } else {
       await refreshProfile();
       toast({
-        title: enabled ? "Post failure notifications enabled" : "Post failure notifications disabled",
+        title: enabled ? t("notifications.toast.failureOn", "Post failure notifications enabled") : t("notifications.toast.failureOff", "Post failure notifications disabled"),
         description: enabled
-          ? "You'll be notified when posts fail."
-          : "Post failure notifications are now disabled.",
+          ? t("notifications.toast.failureOnDesc", "You'll be notified when posts fail.")
+          : t("notifications.toast.failureOffDesc", "Post failure notifications are now disabled."),
       });
     }
 
@@ -162,9 +164,9 @@ export function NotificationsSection() {
           <Bell className="w-5 h-5 text-primary" />
         </div>
         <div>
-          <h2 className="font-semibold">Notifications</h2>
+          <h2 className="font-semibold">{t("notifications.header.title", "Notifications")}</h2>
           <p className="text-sm text-muted-foreground">
-            Configure how you receive updates
+            {t("notifications.header.subtitle", "Configure how you receive updates")}
           </p>
         </div>
       </div>
@@ -175,9 +177,9 @@ export function NotificationsSection() {
           <div className="flex items-center gap-3">
             <Volume2 className="w-4 h-4 text-muted-foreground" />
             <div>
-              <p className="font-medium text-sm">Sound Notifications</p>
+              <p className="font-medium text-sm">{t("notifications.sound.title", "Sound Notifications")}</p>
               <p className="text-xs text-muted-foreground">
-                Play sounds when posts publish or fail
+                {t("notifications.sound.desc", "Play sounds when posts publish or fail")}
               </p>
             </div>
           </div>
@@ -199,9 +201,9 @@ export function NotificationsSection() {
               <div className="flex items-center gap-3">
                 <Mail className="w-4 h-4 text-muted-foreground" />
                 <div>
-                  <p className="font-medium text-sm">Email Notifications</p>
+                  <p className="font-medium text-sm">{t("notifications.email.title", "Email Notifications")}</p>
                   <p className="text-xs text-muted-foreground">
-                    Token expiry warnings, connection alerts & announcements
+                    {t("notifications.email.desc", "Token expiry warnings, connection alerts & announcements")}
                   </p>
                 </div>
               </div>
@@ -217,9 +219,9 @@ export function NotificationsSection() {
             <Separator />
             <div className="flex items-center justify-between">
               <div>
-                <p className="font-medium text-sm">Post Success</p>
+                <p className="font-medium text-sm">{t("notifications.postSuccess.title", "Post Success")}</p>
                 <p className="text-xs text-muted-foreground">
-                  Get notified when posts are published
+                  {t("notifications.postSuccess.desc", "Get notified when posts are published")}
                 </p>
               </div>
               <div className="flex items-center gap-2">
@@ -234,9 +236,9 @@ export function NotificationsSection() {
             <Separator />
             <div className="flex items-center justify-between">
               <div>
-                <p className="font-medium text-sm">Post Failures</p>
+                <p className="font-medium text-sm">{t("notifications.postFailure.title", "Post Failures")}</p>
                 <p className="text-xs text-muted-foreground">
-                  Get notified when posts fail
+                  {t("notifications.postFailure.desc", "Get notified when posts fail")}
                 </p>
               </div>
               <div className="flex items-center gap-2">
@@ -251,9 +253,9 @@ export function NotificationsSection() {
             <Separator />
             <div className="flex items-center justify-between">
               <div>
-                <p className="font-medium text-sm">Weekly Summary</p>
+                <p className="font-medium text-sm">{t("notifications.weekly.title", "Weekly Summary")}</p>
                 <p className="text-xs text-muted-foreground">
-                  Receive a weekly report of your activity
+                  {t("notifications.weekly.desc", "Receive a weekly report of your activity")}
                 </p>
               </div>
               <Switch />
@@ -263,7 +265,7 @@ export function NotificationsSection() {
           <div className="flex items-center gap-3 py-2">
             <EyeOff className="w-4 h-4 text-muted-foreground" />
             <p className="text-sm text-muted-foreground">
-              Email notifications are currently not available.
+              {t("notifications.email.unavailable", "Email notifications are currently not available.")}
             </p>
           </div>
         )}

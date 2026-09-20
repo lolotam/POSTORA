@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { useTheme } from "next-themes";
 import {
   Select,
@@ -14,6 +15,7 @@ import {
 } from "lucide-react";
 
 export function AppearanceSection() {
+  const { t } = useTranslation("accounts");
   const { theme, setTheme } = useTheme();
 
   return (
@@ -23,43 +25,43 @@ export function AppearanceSection() {
           <Palette className="w-5 h-5 text-primary" />
         </div>
         <div>
-          <h2 className="font-semibold">Appearance</h2>
+          <h2 className="font-semibold">{t("appearance.header.title", "Appearance")}</h2>
           <p className="text-sm text-muted-foreground">
-            Customize how Postora looks
+            {t("appearance.header.subtitle", "Customize how Postora looks")}
           </p>
         </div>
       </div>
 
       <div className="space-y-4">
         <div className="space-y-2">
-          <label className="text-sm font-medium">Theme</label>
+          <label className="text-sm font-medium">{t("appearance.form.theme", "Theme")}</label>
           <Select value={theme} onValueChange={setTheme}>
             <SelectTrigger className="w-full max-w-xs">
-              <SelectValue placeholder="Select theme" />
+              <SelectValue placeholder={t("appearance.form.placeholder", "Select theme")} />
             </SelectTrigger>
             <SelectContent className="bg-background border border-border z-50">
               <SelectItem value="light">
                 <div className="flex items-center gap-2">
                   <Sun className="w-4 h-4" />
-                  <span>Light</span>
+                  <span>{t("appearance.form.light", "Light")}</span>
                 </div>
               </SelectItem>
               <SelectItem value="dark">
                 <div className="flex items-center gap-2">
                   <Moon className="w-4 h-4" />
-                  <span>Dark</span>
+                  <span>{t("appearance.form.dark", "Dark")}</span>
                 </div>
               </SelectItem>
               <SelectItem value="system">
                 <div className="flex items-center gap-2">
                   <Monitor className="w-4 h-4" />
-                  <span>System</span>
+                  <span>{t("appearance.form.system", "System")}</span>
                 </div>
               </SelectItem>
             </SelectContent>
           </Select>
           <p className="text-xs text-muted-foreground">
-            Choose your preferred color scheme
+            {t("appearance.form.hint", "Choose your preferred color scheme")}
           </p>
         </div>
       </div>

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -32,6 +33,7 @@ interface AuthorizedClient {
 }
 
 export function IntegrationsSection() {
+  const { t } = useTranslation("accounts");
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [revokingId, setRevokingId] = useState<string | null>(null);
@@ -41,7 +43,7 @@ export function IntegrationsSection() {
     queryFn: async () => {
       const { data: sessionData } = await supabase.auth.getSession();
       const accessToken = sessionData?.session?.access_token;
-      if (!accessToken) throw new Error("Not authenticated");
+      if (!accessToken) throw new Error(t("integrations.errors.notAuth", "Not authenticated"));
 
       const res = await fetch(`${SUPABASE_URL}/auth/v1/oauth/authorized-clients`, {
         headers: {
@@ -53,7 +55,7 @@ export function IntegrationsSection() {
       if (!res.ok) {
         if (res.status === 404) return [];
         const errText = await res.text();
-        throw new Error(`Failed to fetch authorized apps: ${errText}`);
+        throw new Error(t("integrations.errors.fetchFailed", "Failed to fetch authorized apps: {{detail}}", { detail: errText }));
       }
 
       return (await res.json()) as AuthorizedClient[];
@@ -64,7 +66,7 @@ export function IntegrationsSection() {
     mutationFn: async (clientId: string) => {
       const { data: sessionData } = await supabase.auth.getSession();
       const accessToken = sessionData?.session?.access_token;
-      if (!accessToken) throw new Error("Not authenticated");
+      if (!accessToken) throw new Error(t("integrations.errors.notAuth", "Not authenticated"));
 
       const res = await fetch(
         `${SUPABASE_URL}/auth/v1/oauth/authorized-clients/${clientId}`,
@@ -79,16 +81,16 @@ export function IntegrationsSection() {
 
       if (!res.ok) {
         const errText = await res.text();
-        throw new Error(`Failed to revoke access: ${errText}`);
+        throw new Error(t("integrations.errors.revokeFailed", "Failed to revoke access: {{detail}}", { detail: errText }));
       }
     },
     onSuccess: () => {
-      toast({ title: "Access revoked", description: "The application can no longer access your account." });
+      toast({ title: t("integrations.toast.revoked", "Access revoked"), description: t("integrations.toast.revokedDesc", "The application can no longer access your account.") });
       queryClient.invalidateQueries({ queryKey: ["oauth-authorized-clients"] });
       setRevokingId(null);
     },
     onError: (err: any) => {
-      toast({ title: "Error", description: err.message, variant: "destructive" });
+      toast({ title: t("common:error", "Error"), description: err.message, variant: "destructive" });
       setRevokingId(null);
     },
   });
@@ -99,10 +101,10 @@ export function IntegrationsSection() {
       <CardHeader>
         <div className="flex items-center gap-2">
           <Plug className="h-5 w-5 text-primary" />
-          <CardTitle>Connected Applications</CardTitle>
+          <CardTitle>{t("integrations.header.title", "Connected Applications")}</CardTitle>
         </div>
         <CardDescription>
-          Third-party applications that have access to your Postora account.
+          {t("integrations.header.desc", "Third-party applications that have access to your Postora account.")}
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -112,7 +114,7 @@ export function IntegrationsSection() {
           </div>
         ) : error ? (
           <div className="text-center py-8 text-muted-foreground">
-            <p className="text-sm">Unable to load connected applications.</p>
+            <p className="text-sm">{t("integrations.errors.load", "Unable to load connected applications.")}</p>
             <p className="text-xs mt-1">{(error as Error).message}</p>
           </div>
         ) : !clients || clients.length === 0 ? (
@@ -121,9 +123,9 @@ export function IntegrationsSection() {
               <ShieldCheck className="h-6 w-6 text-muted-foreground" />
             </div>
             <div>
-              <p className="text-sm font-medium">No connected applications</p>
+              <p className="text-sm font-medium">{t("integrations.empty.title", "No connected applications")}</p>
               <p className="text-xs text-muted-foreground mt-1">
-                When you authorize third-party apps (like n8n, Zapier, or Make), they'll appear here.
+                {t("integrations.empty.hint", "When you authorize third-party apps (like n8n, Zapier, or Make), they'll appear here.")}
               </p>
             </div>
           </div>
@@ -152,7 +154,7 @@ export function IntegrationsSection() {
                       ))}
                       {(client.authorized_at || client.created_at) && (
                         <span className="text-xs text-muted-foreground">
-                          Connected {format(new Date(client.authorized_at || client.created_at!), "MMM d, yyyy")}
+                          {t("integrations.connectedOn", "Connected {{date}}", { date: format(new Date(client.authorized_at || client.created_at!), "MMM d, yyyy") })}
                         </span>
                       )}
                     </div>
@@ -167,19 +169,18 @@ export function IntegrationsSection() {
                       className="text-destructive hover:text-destructive hover:bg-destructive/10"
                     >
                       <Trash2 className="h-4 w-4" />
-                      Revoke
+                      {t("integrations.actions.revoke", "Revoke")}
                     </Button>
                   </AlertDialogTrigger>
                   <AlertDialogContent>
                     <AlertDialogHeader>
-                      <AlertDialogTitle>Revoke Access</AlertDialogTitle>
+                      <AlertDialogTitle>{t("integrations.dialog.title", "Revoke Access")}</AlertDialogTitle>
                       <AlertDialogDescription>
-                        Are you sure you want to revoke access for <strong>{client.name}</strong>?
-                        This application will no longer be able to access your Postora account.
+                        {t("integrations.dialog.desc", "Are you sure you want to revoke access for {{name}}? This application will no longer be able to access your Postora account.", { name: client.name })}
                       </AlertDialogDescription>
                     </AlertDialogHeader>
                     <AlertDialogFooter>
-                      <AlertDialogCancel>Cancel</AlertDialogCancel>
+                      <AlertDialogCancel>{t("common:cancel", "Cancel")}</AlertDialogCancel>
                       <AlertDialogAction
                         onClick={() => {
                           setRevokingId(client.id);
@@ -190,7 +191,7 @@ export function IntegrationsSection() {
                         {revokingId === client.id ? (
                           <Loader2 className="h-4 w-4 animate-spin" />
                         ) : (
-                          "Revoke Access"
+                          t("integrations.dialog.confirm", "Revoke Access")
                         )}
                       </AlertDialogAction>
                     </AlertDialogFooter>

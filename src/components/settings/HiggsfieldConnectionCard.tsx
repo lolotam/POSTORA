@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Link2, Loader2, Unlink } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
@@ -7,6 +8,7 @@ import { useToast } from "@/hooks/use-toast";
 import { HIGGSFIELD_CALLBACK_PATH } from "@/lib/higgsfieldOAuthReturn";
 
 export function HiggsfieldConnectionCard() {
+  const { t } = useTranslation("accounts");
   const { toast } = useToast();
   const [connected, setConnected] = useState(false);
   const [account, setAccount] = useState<string | null>(null);
@@ -37,12 +39,12 @@ export function HiggsfieldConnectionCard() {
         redirect_uri: `${window.location.origin}${HIGGSFIELD_CALLBACK_PATH}`,
         return_to: "/settings",
       });
-      if (typeof data?.url !== "string" || !data.url.trim()) throw new Error("Higgsfield did not return an authorization URL");
+      if (typeof data?.url !== "string" || !data.url.trim()) throw new Error(t("higgsfield.errors.noAuthUrl", "Higgsfield did not return an authorization URL"));
       window.location.assign(data.url);
     } catch (e) {
       toast({
-        title: "Could not connect Higgsfield",
-        description: e instanceof Error ? e.message : "Unknown error",
+        title: t("higgsfield.toast.connectFailed", "Could not connect Higgsfield"),
+        description: e instanceof Error ? e.message : t("higgsfield.errors.unknown", "Unknown error"),
         variant: "destructive",
       });
       setBusy(false);
@@ -54,11 +56,11 @@ export function HiggsfieldConnectionCard() {
       await invoke({ action: "disconnect", scope_kind: "user" });
       setConnected(false);
       setAccount(null);
-      toast({ title: "Higgsfield disconnected" });
+      toast({ title: t("higgsfield.toast.disconnected", "Higgsfield disconnected") });
     } catch (e) {
       toast({
-        title: "Could not disconnect",
-        description: e instanceof Error ? e.message : "Unknown error",
+        title: t("higgsfield.toast.disconnectFailed", "Could not disconnect"),
+        description: e instanceof Error ? e.message : t("higgsfield.errors.unknown", "Unknown error"),
         variant: "destructive",
       });
     } finally {
@@ -68,16 +70,14 @@ export function HiggsfieldConnectionCard() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Your Higgsfield account</CardTitle>
+        <CardTitle>{t("higgsfield.header.title", "Your Higgsfield account")}</CardTitle>
         <CardDescription>
-          Use your own Higgsfield account for generation. BYO generation bills Higgsfield and does
-          not consume your Postora plan quota; without it, Postora uses the platform connection and
-          plan quota.
+          {t("higgsfield.header.desc", "Use your own Higgsfield account for generation. BYO generation bills Higgsfield and does not consume your Postora plan quota; without it, Postora uses the platform connection and plan quota.")}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
         {connected && account && (
-          <p className="text-sm text-muted-foreground">Connected as {account}</p>
+          <p className="text-sm text-muted-foreground">{t("higgsfield.connectedAs", "Connected as {{account}}", { account })}</p>
         )}
         <Button
           onClick={() => void (connected ? disconnect() : connect())}
@@ -91,11 +91,10 @@ export function HiggsfieldConnectionCard() {
           ) : (
             <Link2 className="mr-2 h-4 w-4" />
           )}
-          {connected ? "Disconnect" : "Connect with Higgsfield"}
+          {connected ? t("higgsfield.actions.disconnect", "Disconnect") : t("higgsfield.actions.connect", "Connect with Higgsfield")}
         </Button>
         <p className="text-xs text-muted-foreground">
-          Disconnect deletes stored tokens but does not revoke Higgsfield’s grant. Remove the app
-          from your Higgsfield account settings to end the grant.
+          {t("higgsfield.hint", "Disconnect deletes stored tokens but does not revoke Higgsfield’s grant. Remove the app from your Higgsfield account settings to end the grant.")}
         </p>
       </CardContent>
     </Card>
