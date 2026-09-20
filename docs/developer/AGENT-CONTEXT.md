@@ -87,6 +87,7 @@ Derived from both route tables, `ACTION_SCOPES` and `PLATFORM_ACTION_SCOPES`. "L
 | `POST` | `/v1/media` | `media:write` | C | Upload a file for later use in a message |
 | `GET` | `/v1/media/{id}` | `media:read` | A | Get one uploaded file's metadata |
 | `POST` | `/v1/messages` | `whatsapp:template.send` or `messages:send` | C | Send a WhatsApp message |
+| `GET` | `/v1/messages/{id}/media` | `media:read` | B | Get a time-bounded URL for an inbound message's media |
 | `GET` | `/v1/messages/{id}` | `messages:read` | A | Get one message |
 | `POST` | `/v1/tools/execute` | `tools:execute` | C | Execute one capability of a connected tool |
 | `GET` | `/v1/templates` | `whatsapp:templates.read` or `templates:read` | B | List approved WhatsApp templates |
