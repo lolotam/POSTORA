@@ -1,0 +1,1 @@
+{"nodes": [{"id": "f_postora_new_supabase_migrations_20260905230000_jina_embedding_provider_sql", "label": "20260905230000_jina_embedding_provider.sql", "file_type": "code", "source_file": "supabase/migrations/20260905230000_jina_embedding_provider.sql", "source_location": null}], "edges": []}
