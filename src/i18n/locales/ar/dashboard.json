@@ -1,0 +1,33 @@
+{
+  "accounts": {
+    "connectMore": "اربط حسابات تانية",
+    "manage": "إدارة",
+    "noAccounts": "لسه مفيش حسابات مرتبطة",
+    "title": "الحسابات المرتبطة"
+  },
+  "header": {
+    "tagline": "Postora بتساعد صناع المحتوى والمسوقين يجدولوا وينشئوا وينشروا المحتوى على Instagram و YouTube و TikTok و LinkedIn و 7 منصات تانية — كل ده من لوحة تحكم واحدة مميزة.",
+    "title": "لوحة التحكم",
+    "welcome": "أهلاً بيك تاني{{name}}! دي نظرة عامة على منشوراتك."
+  },
+  "reauth": {
+    "accountNeedsReconnect": "حساب {{platform}} بتاعك محتاج يتعمله إعادة ربط.",
+    "accountWithUsernameNeedsReconnect": "حساب {{platform}} بتاعك (@{{username}}) محتاج يتعمله إعادة ربط.",
+    "connecting": "جاري الربط...",
+    "connectionExpired": "انتهت صلاحية اتصال {{platform}}",
+    "dismiss": "تجاهل",
+    "error": "خطأ: {{error}}",
+    "reconnect": "إعادة ربط"
+  },
+  "recentPosts": {
+    "noPosts": "لسه مفيش منشورات. اعمل أول منشور ليك!",
+    "title": "آخر المنشورات",
+    "viewAll": "عرض الكل"
+  },
+  "stats": {
+    "connectedAccounts": "الحسابات المرتبطة",
+    "scheduled": "المجدولة",
+    "successRate": "نسبة النجاح",
+    "totalPosts": "إجمالي المنشورات"
+  }
+}

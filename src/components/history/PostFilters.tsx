@@ -28,16 +28,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useTranslation } from "react-i18next";
 
 const ALL_PLATFORMS: Platform[] = ["instagram", "facebook", "tiktok", "twitter", "linkedin", "pinterest"];
 const ITEMS_PER_PAGE_OPTIONS = [10, 25, 50, 100];
-
-const STATUS_OPTIONS = [
-  { value: "all", label: "All statuses", icon: ListFilter },
-  { value: "completed", label: "Completed", icon: CheckCircle2 },
-  { value: "pending", label: "Pending", icon: Clock },
-  { value: "failed", label: "Failed", icon: XCircle },
-] as const;
 
 interface PostFiltersProps {
   search: string;
@@ -64,8 +58,23 @@ export function PostFilters({
   itemsPerPage,
   onItemsPerPageChange,
 }: PostFiltersProps) {
-  const activeStatus = STATUS_OPTIONS.find((s) => s.value === selectedFilter) ?? STATUS_OPTIONS[0];
+  const { t } = useTranslation("history");
+
+  const statusOptions = [
+    { value: "all" as const, icon: ListFilter, label: t("filters.allStatuses", "All statuses") },
+    { value: "completed" as const, icon: CheckCircle2, label: t("common:status.completed", "Completed") },
+    { value: "pending" as const, icon: Clock, label: t("common:status.pending", "Pending") },
+    { value: "failed" as const, icon: XCircle, label: t("common:status.failed", "Failed") },
+  ];
+
+  const activeStatus = statusOptions.find((s) => s.value === selectedFilter) ?? statusOptions[0];
   const StatusIcon = activeStatus.icon;
+
+  const sourceOptions = [
+    { value: "all" as const, label: t("common:all", "All"), icon: null },
+    { value: "manual" as const, label: t("source.manual", "Manual"), icon: MousePointer },
+    { value: "api" as const, label: "API", icon: Zap },
+  ];
 
   return (
     <GradientRingCard variant="cyan" padded={false} innerClassName="p-4">
@@ -77,7 +86,7 @@ export function PostFilters({
           <Input
             value={search}
             onChange={(e) => onSearchChange(e.target.value)}
-            placeholder="Search posts..."
+            placeholder={t("filters.searchPlaceholder", "Search posts...")}
             className="h-10 rounded-xl bg-card/50 border-border/60 focus-visible:ring-2 focus-visible:ring-primary/30"
             data-testid="search-input"
           />
@@ -96,7 +105,7 @@ export function PostFilters({
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            {STATUS_OPTIONS.map(({ value, label, icon: Icon }) => (
+            {statusOptions.map(({ value, label, icon: Icon }) => (
               <SelectItem key={value} value={value} data-testid={`filter-status-${value}`}>
                 <div className="flex items-center gap-2">
                   <Icon className="w-3.5 h-3.5" />
@@ -114,11 +123,7 @@ export function PostFilters({
           className="inline-flex items-center rounded-lg bg-muted/50 p-0.5 gap-0.5"
           data-testid="source-filters"
         >
-          {([
-            { value: "all", label: "All", icon: null },
-            { value: "manual", label: "Manual", icon: MousePointer },
-            { value: "api", label: "API", icon: Zap },
-          ] as const).map(({ value, label, icon: Icon }) => {
+          {sourceOptions.map(({ value, label, icon: Icon }) => {
             const isActive = sourceFilter === value;
             return (
               <Button
@@ -155,7 +160,7 @@ export function PostFilters({
               {platformFilter === "all" ? (
                 <>
                   <Filter className="w-3.5 h-3.5 text-muted-foreground" />
-                  All Platforms
+                  {t("filters.allPlatforms", "All Platforms")}
                 </>
               ) : (
                 <>
@@ -166,10 +171,10 @@ export function PostFilters({
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="start" data-testid="platform-filter-content">
-            <DropdownMenuLabel>Filter by platform</DropdownMenuLabel>
+            <DropdownMenuLabel>{t("filters.filterByPlatform", "Filter by platform")}</DropdownMenuLabel>
             <DropdownMenuSeparator />
             <DropdownMenuItem onClick={() => onPlatformFilterChange("all")} data-testid="filter-platform-all">
-              All Platforms
+              {t("filters.allPlatforms", "All Platforms")}
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             {ALL_PLATFORMS.map((platform) => (
@@ -188,7 +193,7 @@ export function PostFilters({
 
         {/* Items per page */}
         <div className="flex items-center gap-2 ml-auto" data-testid="items-per-page">
-          <span className="text-xs text-muted-foreground hidden sm:inline">Show</span>
+          <span className="text-xs text-muted-foreground hidden sm:inline">{t("filters.show", "Show")}</span>
           <Select
             value={itemsPerPage.toString()}
             onValueChange={(value) => onItemsPerPageChange(Number(value))}

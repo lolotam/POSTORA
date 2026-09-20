@@ -5,6 +5,7 @@ import {
 } from "@/components/ui/collapsible";
 import { Badge } from "@/components/ui/badge";
 import { ChevronDown, Hash } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 interface TopicTagDebug {
   raw?: string | null;
@@ -30,14 +31,15 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 }
 
 export function TopicTagDebugView({ debug }: { debug: TopicTagDebug }) {
+  const { t } = useTranslation("history");
   if (!debug) return null;
   const headlineLabel = debug.accepted
-    ? "Accepted"
+    ? t("debug.accepted", "Accepted")
     : debug.sent
-    ? "Sent"
+    ? t("debug.sent", "Sent")
     : debug.raw
-    ? "Cleaned to empty"
-    : "Not used";
+    ? t("debug.cleanedToEmpty", "Cleaned to empty")
+    : t("debug.notUsed", "Not used");
   const headlineVariant: "default" | "destructive" | "secondary" | "outline" =
     debug.accepted ? "default" : debug.sent ? "outline" : debug.raw ? "destructive" : "secondary";
 
@@ -46,22 +48,22 @@ export function TopicTagDebugView({ debug }: { debug: TopicTagDebug }) {
       <CollapsibleTrigger className="flex items-center gap-1.5 text-[11px] text-muted-foreground hover:text-foreground transition-colors mt-1">
         <ChevronDown className="w-3 h-3" />
         <Hash className="w-3 h-3" />
-        Show topic tag debug
+        {t("debug.showTopicTagDebug", "Show topic tag debug")}
         <Badge variant={headlineVariant} className="ml-1 text-[9px] h-4">
           {headlineLabel}
         </Badge>
       </CollapsibleTrigger>
       <CollapsibleContent>
         <div className="bg-muted/40 rounded-md p-2 mt-1 space-y-0.5">
-          <Row label="Raw input">{debug.raw || "—"}</Row>
-          <Row label="Cleaned value">{debug.cleaned || "—"}</Row>
-          <Row label="Sent to Meta">
+          <Row label={t("debug.rawInput", "Raw input")}>{debug.raw || "—"}</Row>
+          <Row label={t("debug.cleanedValue", "Cleaned value")}>{debug.cleaned || "—"}</Row>
+          <Row label={t("debug.sentToMeta", "Sent to Meta")}>
             <YesNoBadge value={debug.sent} />
           </Row>
-          <Row label="Accepted">
+          <Row label={t("debug.accepted", "Accepted")}>
             <YesNoBadge value={debug.accepted} />
           </Row>
-          <Row label="Returned by Meta">
+          <Row label={t("debug.returnedByMeta", "Returned by Meta")}>
             {debug.returned_by_meta ?? "—"}
           </Row>
         </div>

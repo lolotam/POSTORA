@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { ChevronLeft, ChevronRight, CalendarDays } from "lucide-react";
 import { format } from "date-fns";
@@ -16,16 +17,18 @@ export function CalendarHeader({
   onNextMonth,
   onToday,
 }: CalendarHeaderProps) {
+  const { t } = useTranslation("calendar");
+
   return (
     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 group">
       <div className="flex items-center gap-4">
         <Icon3D icon={CalendarDays} variant="violet" size="md" />
         <div>
           <GradientHeading as="h1" preset="sky-violet-pink" size="xl">
-            Content Calendar
+            {t("header.title", "Content Calendar")}
           </GradientHeading>
           <p className="text-muted-foreground mt-1">
-            View and reschedule your posts with drag and drop
+            {t("header.subtitle", "View and reschedule your posts with drag and drop")}
           </p>
         </div>
       </div>
@@ -57,7 +60,7 @@ export function CalendarHeader({
           onClick={onToday}
           className="rounded-xl bg-gradient-to-br from-violet-500/15 to-pink-500/10 hover:from-violet-500/25 hover:to-pink-500/20 text-violet-600 dark:text-violet-300 font-medium"
         >
-          Today
+          {t("header.today", "Today")}
         </Button>
       </div>
     </div>

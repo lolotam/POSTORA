@@ -2,6 +2,7 @@ import { LucideIcon, Loader2 } from "lucide-react";
 import { Reveal, Icon3D, GradientRingCard, type GradientKey } from "@/components/fx";
 
 interface StatCardData {
+  id?: string;
   label: string;
   value: string;
   icon: LucideIcon;
@@ -22,7 +23,7 @@ export function StatCards({ stats, isLoading }: StatCardsProps) {
       {stats.map((stat, i) => {
         const variant = stat.variant ?? DEFAULT_VARIANTS[i % DEFAULT_VARIANTS.length];
         return (
-          <Reveal key={stat.label} delay={i * 90}>
+          <Reveal key={stat.id ?? stat.label} delay={i * 90}>
             <GradientRingCard variant={variant} innerClassName="p-5 md:p-5">
               <div className="flex items-center justify-between mb-3">
                 <Icon3D icon={stat.icon} variant={variant} size="sm" />

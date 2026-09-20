@@ -16,6 +16,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { GradientRingCard, Icon3D } from "@/components/fx";
+import { useTranslation } from "react-i18next";
 
 interface HistoryHeaderProps {
   paginatedCount: number;
@@ -48,6 +49,8 @@ export function HistoryHeader({
   onRefresh,
   isRefreshing,
 }: HistoryHeaderProps) {
+  const { t } = useTranslation("history");
+
   return (
     <>
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4" data-testid="history-header">
@@ -56,11 +59,11 @@ export function HistoryHeader({
           <div>
             <h1 className="text-3xl md:text-4xl font-bold tracking-tight" data-testid="history-title">
               <span className="bg-clip-text text-transparent bg-gradient-to-r from-emerald-500 via-cyan-500 to-sky-500">
-                Post History
+                {t("header.title", "Post History")}
               </span>
             </h1>
             <p className="text-muted-foreground mt-1">
-              View and manage all your published posts.
+              {t("header.subtitle", "View and manage all your published posts.")}
             </p>
           </div>
         </div>
@@ -68,7 +71,7 @@ export function HistoryHeader({
           {onRefresh && (
             <Button variant="outline" size="sm" onClick={onRefresh} disabled={isRefreshing} className="gap-2">
               <RotateCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
-              Refresh
+              {t("common:refresh", "Refresh")}
             </Button>
           )}
           {/* Bulk Selection Controls */}
@@ -76,12 +79,12 @@ export function HistoryHeader({
             <>
               {isAllSelected ? (
                 <Button variant="outline" size="sm" onClick={onDeselectAll} data-testid="deselect-all-btn">
-                  Deselect All
+                  {t("header.deselectAll", "Deselect All")}
                 </Button>
               ) : (
                 <Button variant="outline" size="sm" onClick={onSelectAll} data-testid="select-all-btn">
                   <CheckCircle2 className="w-4 h-4 mr-2" />
-                  Select All ({paginatedCount})
+                  {t("header.selectAll", "Select All ({{count}})", { count: paginatedCount })}
                 </Button>
               )}
             </>
@@ -95,7 +98,7 @@ export function HistoryHeader({
               data-testid="bulk-delete-btn"
             >
               <Trash2 className="w-4 h-4" />
-              Delete ({selectedCount})
+              {t("header.deleteSelected", "Delete ({{count}})", { count: selectedCount })}
             </Button>
           )}
           {failedCount > 0 && (
@@ -112,22 +115,22 @@ export function HistoryHeader({
               ) : (
                 <RefreshCw className="w-4 h-4" />
               )}
-              Retry All Failed ({failedCount})
+              {t("header.retryAllFailed", "Retry All Failed ({{count}})", { count: failedCount })}
             </Button>
           )}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="outline" size="sm" className="gap-2" data-testid="export-btn">
                 <Download className="w-4 h-4" />
-                Export
+                {t("header.export", "Export")}
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" data-testid="export-menu">
               <DropdownMenuItem onClick={() => onExport("csv")} data-testid="export-csv">
-                Export as CSV
+                {t("header.exportCsv", "Export as CSV")}
               </DropdownMenuItem>
               <DropdownMenuItem onClick={() => onExport("json")} data-testid="export-json">
-                Export as JSON
+                {t("header.exportJson", "Export as JSON")}
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -141,7 +144,7 @@ export function HistoryHeader({
             <Icon3D icon={RotateCw} variant="amber" size="sm" />
             <div className="flex-1 space-y-2">
               <div className="flex items-center justify-between text-sm">
-                <span className="font-medium">Retrying failed posts...</span>
+                <span className="font-medium">{t("header.retryingFailed", "Retrying failed posts...")}</span>
                 <span className="text-muted-foreground">
                   {bulkRetryProgress.current} / {bulkRetryProgress.total}
                 </span>

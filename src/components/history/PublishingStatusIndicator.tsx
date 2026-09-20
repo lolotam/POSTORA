@@ -5,6 +5,7 @@ import { PlatformIcon, getPlatformName } from "@/components/PlatformIcon";
 import { Platform } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import type { PublishingPost } from "@/hooks/useRealtimePostUpdates";
+import { useTranslation } from "react-i18next";
 
 // TikTok-specific status phases
 type TikTokPhase = "uploading" | "processing" | "publishing" | "complete" | "failed";
@@ -14,6 +15,7 @@ interface PublishingStatusIndicatorProps {
 }
 
 export function PublishingStatusIndicator({ publishingPosts }: PublishingStatusIndicatorProps) {
+  const { t } = useTranslation("history");
   const [isExpanded, setIsExpanded] = useState(true);
 
   // Auto-expand when new posts start publishing
@@ -47,11 +49,11 @@ export function PublishingStatusIndicator({ publishingPosts }: PublishingStatusI
                 <span className="absolute -top-1 -right-1 w-2 h-2 bg-primary rounded-full animate-pulse" />
               </div>
               <span className="font-medium text-foreground">
-                Publishing {posts.length} post{posts.length > 1 ? "s" : ""}...
+                {t("indicator.publishingPosts", "Publishing {{count}} post(s)...", { count: posts.length })}
               </span>
             </div>
             <span className="text-xs text-muted-foreground">
-              {isExpanded ? "Click to collapse" : "Click to expand"}
+              {isExpanded ? t("indicator.clickToCollapse", "Click to collapse") : t("indicator.clickToExpand", "Click to expand")}
             </span>
           </button>
 
@@ -128,6 +130,7 @@ function PublishingPostItem({ post }: { post: PublishingPost }) {
     return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
   };
 
+  const { t } = useTranslation("history");
   const completedCount = post.completedPlatforms.size;
   const totalCount = post.platforms.length;
   const progress = (completedCount / totalCount) * 100;
@@ -137,7 +140,7 @@ function PublishingPostItem({ post }: { post: PublishingPost }) {
       {/* Progress header */}
       <div className="flex items-center justify-between text-sm">
         <span className="text-muted-foreground">
-          {completedCount} of {totalCount} platforms
+          {t("indicator.platformsProgress", "{{completed}} of {{total}} platforms", { completed: completedCount, total: totalCount })}
         </span>
         <div className="flex items-center gap-2 text-muted-foreground">
           <Clock className="w-3.5 h-3.5" />
@@ -184,33 +187,35 @@ function PlatformStatusBadge({
   status?: "success" | "failed" | "pending_inbox";
   tiktokPhase?: TikTokPhase;
 }) {
+  const { t } = useTranslation("history");
+
   // Get TikTok-specific status display
   const getTikTokStatusDisplay = () => {
     if (status === "success" || tiktokPhase === "complete") {
-      return { icon: <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />, label: "Published" };
+      return { icon: <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />, label: t("status.published", "Published") };
     }
     if (status === "failed" || tiktokPhase === "failed") {
-      return { icon: <XCircle className="w-3.5 h-3.5 text-destructive" />, label: "Failed" };
+      return { icon: <XCircle className="w-3.5 h-3.5 text-destructive" />, label: t("common:status.failed", "Failed") };
     }
     if (status === "pending_inbox") {
-      return { icon: <Clock className="w-3.5 h-3.5 text-blue-500" />, label: "Check Inbox" };
+      return { icon: <Clock className="w-3.5 h-3.5 text-blue-500" />, label: t("status.pendingInbox", "Check Inbox") };
     }
     
     switch (tiktokPhase) {
       case "uploading":
         return { 
           icon: <Upload className="w-3.5 h-3.5 animate-pulse text-amber-500" />, 
-          label: "Uploading..." 
+          label: t("indicator.uploading", "Uploading...") 
         };
       case "processing":
         return { 
           icon: <Cog className="w-3.5 h-3.5 animate-spin text-blue-500" />, 
-          label: "Processing..." 
+          label: t("common:status.processing", "Processing...") 
         };
       case "publishing":
         return { 
           icon: <Video className="w-3.5 h-3.5 animate-pulse text-primary" />, 
-          label: "Publishing..." 
+          label: t("indicator.publishing", "Publishing...") 
         };
       default:
         return { 

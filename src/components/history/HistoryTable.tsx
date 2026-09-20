@@ -43,6 +43,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { useTranslation } from "react-i18next";
 
 interface PlatformResult {
   id: string;
@@ -91,16 +92,16 @@ interface HistoryTableProps {
 }
 
 // Get request type icon and label
-function getRequestType(source?: string): { icon: React.ElementType; label: string; className: string } {
+function getRequestType(source?: string, t?: (key: string, fallback: string) => string): { icon: React.ElementType; label: string; className: string } {
   switch (source) {
     case "api":
       return { icon: Zap, label: "API", className: "text-blue-500" };
     case "upload-media":
-      return { icon: FileUp, label: "Upload", className: "text-purple-500" };
+      return { icon: FileUp, label: t ? t("source.upload", "Upload") : "Upload", className: "text-purple-500" };
     case "webhook":
       return { icon: Webhook, label: "Webhook", className: "text-orange-500" };
     default:
-      return { icon: MousePointer, label: "Manual", className: "text-muted-foreground" };
+      return { icon: MousePointer, label: t ? t("source.manual", "Manual") : "Manual", className: "text-muted-foreground" };
   }
 }
 
@@ -191,8 +192,20 @@ export function HistoryTable({
   onDelete,
   isTikTokMediaError,
 }: HistoryTableProps) {
+  const { t } = useTranslation("history");
   const allSelected = posts.length > 0 && selectedPosts.size === posts.length;
   const someSelected = selectedPosts.size > 0 && selectedPosts.size < posts.length;
+
+  const getStatusLabel = (s: string) => {
+    switch (s) {
+      case "completed": return t("common:status.success", "Success");
+      case "failed": return t("common:status.failed", "Failed");
+      case "pending": return t("common:status.pending", "Pending");
+      case "pending_inbox": return t("status.pendingInbox", "Check Inbox");
+      case "processing": return t("common:status.processing", "Processing");
+      default: return statusConfig[s as keyof typeof statusConfig]?.label || s;
+    }
+  };
 
   return (
     <div className="relative rounded-lg border border-border overflow-hidden">
@@ -201,7 +214,7 @@ export function HistoryTable({
         <div className="absolute inset-0 bg-background/50 backdrop-blur-[1px] z-10 flex items-center justify-center pointer-events-none">
           <div className="flex items-center gap-2 px-3 py-1.5 bg-background/90 rounded-full border border-border shadow-sm">
             <Loader2 className="w-4 h-4 animate-spin text-primary" />
-            <span className="text-xs text-muted-foreground">Updating...</span>
+            <span className="text-xs text-muted-foreground">{t("table.updating", "Updating...")}</span>
           </div>
         </div>
       )}
@@ -223,19 +236,19 @@ export function HistoryTable({
                     onDeselectAll();
                   }
                 }}
-                aria-label="Select all"
+                aria-label={t("table.selectAll", "Select all")}
               />
             </TableHead>
-            <TableHead className="w-28">Type</TableHead>
-            <TableHead className="w-44">Activity Date & Time</TableHead>
+            <TableHead className="w-28">{t("table.type", "Type")}</TableHead>
+            <TableHead className="w-44">{t("table.activityDateTime", "Activity Date & Time")}</TableHead>
             
-            <TableHead className="w-40">Account</TableHead>
-            <TableHead className="w-28">Platform</TableHead>
-            <TableHead className="w-28">Post Type</TableHead>
-            <TableHead className="min-w-[100px] max-w-[180px]">Caption</TableHead>
-            <TableHead className="w-24">Status</TableHead>
-            <TableHead className="min-w-[140px]">Post Link</TableHead>
-            <TableHead className="w-20 text-right">Actions</TableHead>
+            <TableHead className="w-40">{t("table.account", "Account")}</TableHead>
+            <TableHead className="w-28">{t("table.platform", "Platform")}</TableHead>
+            <TableHead className="w-28">{t("table.postType", "Post Type")}</TableHead>
+            <TableHead className="min-w-[100px] max-w-[180px]">{t("table.caption", "Caption")}</TableHead>
+            <TableHead className="w-24">{t("table.status", "Status")}</TableHead>
+            <TableHead className="min-w-[140px]">{t("table.postLink", "Post Link")}</TableHead>
+            <TableHead className="w-20 text-right">{t("table.actions", "Actions")}</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -243,11 +256,11 @@ export function HistoryTable({
             const status = post.status as keyof typeof statusConfig;
             const StatusIcon = statusConfig[status]?.icon || statusConfig.pending.icon;
             const statusClass = statusConfig[status]?.className || "";
-            const statusLabel = statusConfig[status]?.label || post.status;
+            const statusLabel = getStatusLabel(status);
             const hasFailedPlatforms = post.platformResults?.some((r) => r.status === "failed");
             const isRetrying = retryingPostId === post.id;
             const isSelected = selectedPosts.has(post.id);
-            const requestType = getRequestType(post.source);
+            const requestType = getRequestType(post.source, t);
             const RequestIcon = requestType.icon;
 
             // Get unique accounts from platform results
@@ -299,7 +312,7 @@ export function HistoryTable({
                   <Checkbox
                     checked={isSelected}
                     onCheckedChange={() => onToggleSelection(post.id)}
-                    aria-label={`Select post ${post.id}`}
+                    aria-label={t("table.selectPost", "Select post {{id}}", { id: post.id })}
                   />
                 </TableCell>
                 <TableCell>
@@ -333,7 +346,7 @@ export function HistoryTable({
                               </div>
                             </TooltipTrigger>
                             <TooltipContent>
-                              <p className="text-xs">{account.username || "Unknown account"}</p>
+                              <p className="text-xs">{account.username || t("table.unknownAccount", "Unknown account")}</p>
                             </TooltipContent>
                           </Tooltip>
                         </TooltipProvider>
@@ -379,7 +392,7 @@ export function HistoryTable({
                     <Tooltip>
                       <TooltipTrigger asChild>
                         <p className="text-sm truncate cursor-help">
-                          {post.caption || <span className="text-muted-foreground italic">No caption</span>}
+                          {post.caption || <span className="text-muted-foreground italic">{t("common:noCaption", "No caption")}</span>}
                         </p>
                       </TooltipTrigger>
                       {post.caption && post.caption.length > 30 && (
@@ -433,7 +446,7 @@ export function HistoryTable({
                               <PlatformIcon platform={result.platform as Platform} size="xs" />
                               <ExternalLink className="w-3 h-3 shrink-0" />
                               <span className="truncate">
-                                View{result.response_data?.ig_post_subtype ? ` (${result.response_data.ig_post_subtype})` : ""}
+                                {t("table.view", "View")}{result.response_data?.ig_post_subtype ? ` (${result.response_data.ig_post_subtype})` : ""}
                               </span>
                             </a>
                           );
@@ -445,12 +458,12 @@ export function HistoryTable({
                                   <span className="flex items-center gap-1 text-xs text-destructive cursor-help">
                                     <PlatformIcon platform={result.platform as Platform} size="xs" />
                                     <span className="truncate max-w-[100px]">
-                                      {result.error_message?.slice(0, 20) || "Failed"}
+                                      {result.error_message?.slice(0, 20) || t("common:status.failed", "Failed")}
                                     </span>
                                   </span>
                                 </TooltipTrigger>
                                 <TooltipContent className="max-w-xs">
-                                  <p>{result.error_message || "Posting failed"}</p>
+                                  <p>{result.error_message || t("table.postingFailed", "Posting failed")}</p>
                                 </TooltipContent>
                               </Tooltip>
                             </TooltipProvider>
@@ -459,7 +472,7 @@ export function HistoryTable({
                           return (
                             <span key={result.id} className="flex items-center gap-1 text-xs text-muted-foreground">
                               <PlatformIcon platform={result.platform as Platform} size="xs" />
-                              <span>{result.status === "pending_inbox" ? "Check inbox" : "Pending"}</span>
+                              <span>{result.status === "pending_inbox" ? t("status.pendingInbox", "Check inbox") : t("common:status.pending", "Pending")}</span>
                             </span>
                           );
                         }
@@ -467,7 +480,7 @@ export function HistoryTable({
                       })}
                       {post.platformResults.length > 2 && (
                         <span className="text-xs text-muted-foreground">
-                          +{post.platformResults.length - 2} more
+                          {t("table.more", "+{{count}} more", { count: post.platformResults.length - 2 })}
                         </span>
                       )}
                     </div>
@@ -494,7 +507,7 @@ export function HistoryTable({
                         data-testid="post-menu-view-details"
                       >
                         <Eye className="w-4 h-4" />
-                        Show Details
+                        {t("table.showDetails", "Show Details")}
                       </DropdownMenuItem>
                       {hasFailedPlatforms && (
                         <>
@@ -509,7 +522,7 @@ export function HistoryTable({
                             ) : (
                               <RefreshCw className="w-4 h-4" />
                             )}
-                            Retry Failed
+                            {t("table.retryFailed", "Retry Failed")}
                           </DropdownMenuItem>
                           {isTikTokMediaError(post) && (
                             <DropdownMenuItem
@@ -518,7 +531,9 @@ export function HistoryTable({
                               data-testid="post-menu-retry-media"
                             >
                               <Upload className="w-4 h-4" />
-                            {(post.media_file_ids?.length || 0) > 1 ? "Replace Carousel Media" : "Retry with New Video"}
+                            {(post.media_file_ids?.length || 0) > 1
+                              ? t("table.replaceCarouselMedia", "Replace Carousel Media")
+                              : t("table.retryWithNewVideo", "Retry with New Video")}
                             </DropdownMenuItem>
                           )}
                         </>
@@ -530,7 +545,7 @@ export function HistoryTable({
                         data-testid="post-menu-delete"
                       >
                         <Trash2 className="w-4 h-4" />
-                        Delete
+                        {t("common:delete", "Delete")}
                       </DropdownMenuItem>
                     </DropdownMenuContent>
                   </DropdownMenu>

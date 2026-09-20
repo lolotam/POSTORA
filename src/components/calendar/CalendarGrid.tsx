@@ -1,4 +1,5 @@
 import { GripVertical } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { GradientRingCard } from "@/components/fx";
 import {
   format,
@@ -47,6 +48,7 @@ export function CalendarGrid({
   onDrop,
   onDayClick,
 }: CalendarGridProps) {
+  const { t } = useTranslation("calendar");
   const monthStart = startOfMonth(currentMonth);
   const monthEnd = endOfMonth(currentMonth);
   const calendarStart = startOfWeek(monthStart, { weekStartsOn: 0 });
@@ -55,6 +57,16 @@ export function CalendarGrid({
     start: calendarStart,
     end: calendarEnd,
   });
+
+  const WEEKDAYS = [
+    { id: "sun", label: t("weekdays.sun", "Sun") },
+    { id: "mon", label: t("weekdays.mon", "Mon") },
+    { id: "tue", label: t("weekdays.tue", "Tue") },
+    { id: "wed", label: t("weekdays.wed", "Wed") },
+    { id: "thu", label: t("weekdays.thu", "Thu") },
+    { id: "fri", label: t("weekdays.fri", "Fri") },
+    { id: "sat", label: t("weekdays.sat", "Sat") },
+  ];
 
   const getPostsForDay = (day: Date) => {
     return posts.filter((post) => {
@@ -68,12 +80,12 @@ export function CalendarGrid({
     <GradientRingCard variant="violet" hoverLift={false} ringIntensity="subtle" innerClassName="p-4 md:p-5">
       {/* Weekday Headers */}
       <div className="grid grid-cols-7 gap-1 mb-2">
-        {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((day) => (
+        {WEEKDAYS.map((day) => (
           <div
-            key={day}
+            key={day.id}
             className="p-2 text-center text-xs font-semibold uppercase tracking-wider text-muted-foreground/80"
           >
-            {day}
+            {day.label}
           </div>
         ))}
       </div>
@@ -127,7 +139,7 @@ export function CalendarGrid({
                 ))}
                 {dayPosts.length > 3 && (
                   <div className="text-xs text-emerald-600/80 dark:text-emerald-300/80 pl-1 font-medium">
-                    +{dayPosts.length - 3} more
+                    {t("grid.more", "+{{count}} more", { count: dayPosts.length - 3 })}
                   </div>
                 )}
               </div>
@@ -140,15 +152,19 @@ export function CalendarGrid({
       <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground mt-4 pt-3 border-t border-border/40">
         <div className="flex items-center gap-2 px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-400/30">
           <div className="w-2 h-2 rounded-full bg-gradient-to-br from-emerald-400 to-cyan-500" />
-          <span className="text-emerald-700 dark:text-emerald-300 font-medium">Scheduled</span>
+          <span className="text-emerald-700 dark:text-emerald-300 font-medium">
+            {t("common:status.scheduled", "Scheduled")}
+          </span>
         </div>
         <div className="flex items-center gap-2 px-2.5 py-1 rounded-full bg-sky-500/10 border border-sky-400/30">
           <div className="w-2 h-2 rounded-full bg-gradient-to-br from-sky-400 to-indigo-500" />
-          <span className="text-sky-700 dark:text-sky-300 font-medium">Today</span>
+          <span className="text-sky-700 dark:text-sky-300 font-medium">
+            {t("grid.today", "Today")}
+          </span>
         </div>
         <div className="flex items-center gap-2 ml-auto">
           <GripVertical className="w-4 h-4" />
-          <span>Drag to reschedule</span>
+          <span>{t("grid.dragHint", "Drag to reschedule")}</span>
         </div>
       </div>
     </GradientRingCard>

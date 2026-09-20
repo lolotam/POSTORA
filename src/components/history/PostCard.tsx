@@ -34,6 +34,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { useTranslation } from "react-i18next";
 
 interface PlatformResult {
   id: string;
@@ -89,10 +90,21 @@ export function PostCard({
   onDelete,
   hasTikTokMediaError,
 }: PostCardProps) {
+  const { t } = useTranslation("history");
   const status = post.status as keyof typeof statusConfig;
   const StatusIcon = statusConfig[status]?.icon || statusConfig.pending.icon;
   const statusClass = statusConfig[status]?.className || "";
-  const statusLabel = statusConfig[status]?.label || post.status;
+  const getStatusLabel = (s: string) => {
+    switch (s) {
+      case "completed": return t("common:status.success", "Success");
+      case "failed": return t("common:status.failed", "Failed");
+      case "pending": return t("common:status.pending", "Pending");
+      case "pending_inbox": return t("status.pendingInbox", "Check Inbox");
+      case "processing": return t("common:status.processing", "Processing");
+      default: return statusConfig[s as keyof typeof statusConfig]?.label || s;
+    }
+  };
+  const statusLabel = getStatusLabel(status);
   const hasFailedPlatforms = post.platformResults?.some((r) => r.status === "failed");
 
   // Extract post types from metadata + platforms (handles Pinterest inference)
@@ -163,7 +175,7 @@ export function PostCard({
 
           {/* Content */}
           <div className="flex-1 min-w-0">
-            <p className="text-sm line-clamp-2 mb-3">{post.caption || "No caption"}</p>
+            <p className="text-sm line-clamp-2 mb-3">{post.caption || t("common:noCaption", "No caption")}</p>
             <div className="flex flex-wrap items-center gap-3">
               <div className="flex items-center gap-1.5">
                 {post.platforms.map((platform) => (
@@ -179,7 +191,7 @@ export function PostCard({
               ) : (
                 <Badge variant="outline" className="text-xs gap-1">
                   <MousePointer className="w-3 h-3" />
-                  Manual
+                  {t("source.manual", "Manual")}
                 </Badge>
               )}
               {postTypes.map((type) => (
@@ -208,7 +220,7 @@ export function PostCard({
               {post.media_file_ids && post.media_file_ids.length > 0 && (
                 <span className="flex items-center gap-1 text-xs text-muted-foreground">
                   <Image className="w-3 h-3" />
-                  {post.media_file_ids.length} media
+                  {t("card.mediaCount", "{{count}} media", { count: post.media_file_ids.length })}
                 </span>
               )}
               <span className="flex items-center gap-1 text-xs text-muted-foreground">
@@ -251,7 +263,7 @@ export function PostCard({
                   data-testid="post-menu-view-details"
                 >
                   <Eye className="w-4 h-4" />
-                  View Details
+                  {t("card.viewDetails", "View Details")}
                 </DropdownMenuItem>
                 {hasFailedPlatforms && (
                   <>
@@ -266,7 +278,7 @@ export function PostCard({
                       ) : (
                         <RefreshCw className="w-4 h-4" />
                       )}
-                      Retry Failed
+                      {t("card.retryFailed", "Retry Failed")}
                     </DropdownMenuItem>
                     {hasTikTokMediaError && (
                       <DropdownMenuItem
@@ -275,7 +287,9 @@ export function PostCard({
                         data-testid="post-menu-retry-media"
                       >
                         <Upload className="w-4 h-4" />
-                          {(post.media_file_ids?.length || 0) > 1 ? "Replace Carousel Media" : "Retry with New Video"}
+                          {(post.media_file_ids?.length || 0) > 1
+                            ? t("card.replaceCarouselMedia", "Replace Carousel Media")
+                            : t("card.retryWithNewVideo", "Retry with New Video")}
                       </DropdownMenuItem>
                     )}
                   </>
@@ -287,7 +301,7 @@ export function PostCard({
                   data-testid="post-menu-delete"
                 >
                   <Trash2 className="w-4 h-4" />
-                  Delete
+                  {t("common:delete", "Delete")}
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
@@ -365,11 +379,11 @@ export function PostCard({
                               <TooltipTrigger asChild>
                                 <span className="flex items-center gap-1 text-xs text-blue-400 cursor-help">
                                   <Inbox className="w-3 h-3" />
-                                  Check inbox
+                                  {t("status.pendingInbox", "Check inbox")}
                                 </span>
                               </TooltipTrigger>
                               <TooltipContent className="max-w-xs">
-                                <p>TikTok posts are sent to your TikTok inbox. Open the TikTok app and complete posting from there.</p>
+                                <p>{t("card.tiktokInboxTooltip", "TikTok posts are sent to your TikTok inbox. Open the TikTok app and complete posting from there.")}</p>
                               </TooltipContent>
                             </Tooltip>
                           </TooltipProvider>

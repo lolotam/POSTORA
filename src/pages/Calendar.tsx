@@ -1,4 +1,5 @@
 import { useState, useMemo } from "react";
+import { useTranslation } from "react-i18next";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { usePosts } from "@/hooks/usePosts";
 import { supabase } from "@/integrations/supabase/client";
@@ -20,6 +21,7 @@ interface DraggedPost {
 }
 
 export default function Calendar() {
+  const { t } = useTranslation("calendar");
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [draggedPost, setDraggedPost] = useState<DraggedPost | null>(null);
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
@@ -76,14 +78,16 @@ export default function Calendar() {
 
       queryClient.invalidateQueries({ queryKey: ["posts"] });
       toast({
-        title: "Post rescheduled",
-        description: `Moved to ${format(newDate, "MMM d, yyyy 'at' h:mm a")}`,
+        title: t("toast.rescheduled", "Post rescheduled"),
+        description: t("toast.rescheduledDesc", "Moved to {{date}}", {
+          date: format(newDate, "MMM d, yyyy 'at' h:mm a"),
+        }),
       });
     } catch (error) {
       console.error("Reschedule error:", error);
       toast({
-        title: "Failed to reschedule",
-        description: error instanceof Error ? error.message : "Unknown error",
+        title: t("toast.rescheduleFailed", "Failed to reschedule"),
+        description: error instanceof Error ? error.message : t("toast.unknownError", "Unknown error"),
         variant: "destructive",
       });
     } finally {

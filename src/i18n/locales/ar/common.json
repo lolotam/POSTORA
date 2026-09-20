@@ -1,1 +1,19 @@
-{}
+{
+  "all": "الكل",
+  "cancel": "إلغاء",
+  "createPost": "إنشاء منشور",
+  "delete": "حذف",
+  "noCaption": "بدون وصف",
+  "refresh": "تحديث",
+  "retry": "إعادة المحاولة",
+  "saveChanges": "حفظ التغييرات",
+  "saving": "جاري الحفظ...",
+  "status": {
+    "completed": "مكتمل",
+    "failed": "فشل",
+    "pending": "قيد الانتظار",
+    "processing": "جاري المعالجة...",
+    "scheduled": "مجدول",
+    "success": "ناجح"
+  }
+}

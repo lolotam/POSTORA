@@ -1,4 +1,5 @@
 import { Link } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { Reveal, GradientRingCard } from "@/components/fx";
 import { Button } from "@/components/ui/button";
 import { PlatformIcon, getPlatformName, ExtendedPlatform } from "@/components/PlatformIcon";
@@ -17,14 +18,16 @@ interface ConnectedAccountsProps {
 }
 
 export function ConnectedAccounts({ accounts, isLoading }: ConnectedAccountsProps) {
+  const { t } = useTranslation("dashboard");
+
   return (
     <Reveal delay={240}>
     <GradientRingCard variant="violet" innerClassName="p-0 overflow-hidden" hoverLift={false}>
       <div className="p-5 border-b border-border/60 flex items-center justify-between">
-        <h2 className="font-semibold">Connected Accounts</h2>
+        <h2 className="font-semibold">{t("accounts.title", "Connected Accounts")}</h2>
         <Link to="/profiles">
           <Button variant="ghost" size="sm">
-            Manage
+            {t("accounts.manage", "Manage")}
             <ArrowUpRight className="w-4 h-4 ml-1" />
           </Button>
         </Link>
@@ -36,7 +39,7 @@ export function ConnectedAccounts({ accounts, isLoading }: ConnectedAccountsProp
           </div>
         ) : accounts.length === 0 ? (
           <div className="text-center py-4">
-            <p className="text-sm text-muted-foreground mb-3">No connected accounts yet</p>
+            <p className="text-sm text-muted-foreground mb-3">{t("accounts.noAccounts", "No connected accounts yet")}</p>
           </div>
         ) : (
           accounts.map((account) => (
@@ -63,7 +66,7 @@ export function ConnectedAccounts({ accounts, isLoading }: ConnectedAccountsProp
         <Link to="/profiles" className="block">
           <Button variant="outline" className="w-full mt-2">
             <Plus className="w-4 h-4 mr-2" />
-            Connect More
+            {t("accounts.connectMore", "Connect More")}
           </Button>
         </Link>
       </div>

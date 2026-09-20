@@ -1,0 +1,124 @@
+{
+  "bulk": {
+    "cancelButton": "إلغاء {{count}} منشور",
+    "cancelDesc": "متأكد إنك عايز تلغي {{count}} منشور مجدول؟ الإجراء ده مش هينفع ترجع فيه، والمنشورات دي هتتحذف نهائياً.",
+    "cancelSelected": "إلغاء المحدد",
+    "cancelTitle": "إلغاء {{count}} منشور مجدول",
+    "cancelling": "جاري الإلغاء...",
+    "clear": "مسح التحديد",
+    "keepPosts": "الاحتفاظ بالمنشورات",
+    "reschedule": "إعادة جدولة",
+    "rescheduleButton": "إعادة جدولة {{count}} منشور",
+    "rescheduleDesc": "حدد تاريخ ووقت جديد لكل المنشورات المحددة.",
+    "rescheduleTitle": "إعادة جدولة {{count}} منشور",
+    "rescheduling": "جاري إعادة الجدولة...",
+    "selectedCount": "{{count}} متحدد"
+  },
+  "cancelDialog": {
+    "cancelButton": "إلغاء المنشور",
+    "cancelling": "جاري الإلغاء...",
+    "desc": "متأكد إنك عايز تلغي المنشور المجدول ده؟ الإجراء ده مش هينفع ترجع فيه، والمنشور هيتحذف نهائياً.",
+    "keepPost": "الاحتفاظ بالمنشور",
+    "title": "إلغاء المنشور المجدول"
+  },
+  "card": {
+    "cancelPost": "إلغاء المنشور",
+    "editInComposer": "تعديل في المحرر",
+    "manual": "يدوي",
+    "noAccounts": "مفيش حسابات",
+    "overdue": "متأخر",
+    "pending": "قيد الانتظار",
+    "publishNow": "انشر دلوقتي",
+    "quickEdit": "تعديل سريع",
+    "viewMoreOptions": "عرض خيارات أكتر"
+  },
+  "dayDialog": {
+    "mediaCount": "{{count}} ملف ميديا",
+    "noPosts": "مفيش منشورات مجدولة لليوم ده"
+  },
+  "editDialog": {
+    "caption": "الوصف",
+    "date": "التاريخ",
+    "desc": "عدّل الوصف أو أعد جدولة المنشور ده.",
+    "pickDate": "اختار تاريخ",
+    "placeholder": "اكتب الوصف بتاعك...",
+    "time": "الوقت",
+    "title": "تعديل المنشور المجدول"
+  },
+  "empty": {
+    "noPostsNonAdmin": "معندكش أي منشورات مجدولة في الحساب ده. لو متوقع تلاقي منشورات هنا، اتأكد إنك مسجل دخول بالحساب اللي عملها.",
+    "noSearchMatch": "مفيش منشورات مطابقة لبحثك",
+    "noUpcoming": "معندكش أي منشورات مجدولة قادمة.",
+    "signedInAs": "مسجل دخول حالياً بـ {{email}}",
+    "title": "مفيش منشورات مجدولة",
+    "viewHistory": "عرض سجل المنشورات"
+  },
+  "error": {
+    "failedToLoad": "فشلنا في تحميل المنشورات المجدولة",
+    "logInAgain": "سجل دخولك تاني",
+    "sessionExpired": "ممكن تكون جلستك انتهت. من فضلك حدّث الصفحة أو سجل دخولك تاني.",
+    "tryAgain": "حاول تاني",
+    "unexpected": "حصل خطأ غير متوقع وإحنا بنجيب منشوراتك."
+  },
+  "filters": {
+    "allPlatforms": "كل المنصات",
+    "allProfiles": "كل الملفات الشخصية",
+    "allStatus": "كل الحالات",
+    "overdue": "متأخر",
+    "pending": "قيد الانتظار",
+    "platform": "المنصة",
+    "profile": "الملف الشخصي",
+    "searchPlaceholder": "ابحث في المنشورات المجدولة...",
+    "status": "الحالة"
+  },
+  "grid": {
+    "dragHint": "اسحب لإعادة الجدولة",
+    "more": "+{{count}} زيادة",
+    "today": "النهاردة"
+  },
+  "header": {
+    "overdueCount": "{{count}} متأخر",
+    "scheduledCount": "{{count}} مجدول",
+    "scheduledSubtitle": "إدارة منشوراتك المجدولة القادمة.",
+    "scheduledTitle": "المنشورات المجدولة",
+    "subtitle": "شوف منشوراتك وأعد جدولتها بالسحب والإفلات",
+    "title": "تقويم المحتوى",
+    "today": "النهاردة",
+    "viewingPostsFor": "بتشوف منشورات {{email}} حالياً"
+  },
+  "toast": {
+    "cancelFailed": "فشل الإلغاء",
+    "failedToCancel": "فشلنا في إلغاء المنشورات",
+    "failedToCancelSingle": "فشلنا في إلغاء المنشور",
+    "failedToPublish": "فشلنا في نشر المنشور",
+    "failedToReschedule": "فشلنا في إعادة جدولة المنشورات",
+    "failedToUpdate": "فشلنا في تحديث المنشور",
+    "futureRequired": "وقت الجدولة لازم يكون في المستقبل.",
+    "invalidDate": "تاريخ غير صالح",
+    "postCancelledSingle": "تم إلغاء المنشور",
+    "postCancelledSingleDesc": "تم إلغاء المنشور المجدول وحذفه.",
+    "postUpdated": "تم تحديث المنشور",
+    "postUpdatedDesc": "تم تحديث المنشور المجدول بنجاح.",
+    "postsCancelled": "تم إلغاء المنشورات",
+    "postsCancelledDesc": "تم إلغاء {{count}} منشور مجدول.",
+    "postsRescheduled": "تمت إعادة جدولة المنشورات",
+    "postsRescheduledDesc": "تمت إعادة جدولة {{count}} منشور لـ {{date}}.",
+    "publishFailed": "فشل النشر",
+    "publishingStarted": "بدأ النشر",
+    "publishingStartedDesc": "منشورك بيتنشر دلوقتي.",
+    "rescheduleFailed": "فشلت إعادة الجدولة",
+    "rescheduled": "تمت إعادة جدولة المنشور",
+    "rescheduledDesc": "اتنقل لـ {{date}}",
+    "unknownError": "خطأ غير معروف",
+    "updateFailed": "فشل التحديث"
+  },
+  "weekdays": {
+    "fri": "الجمعة",
+    "mon": "الإثنين",
+    "sat": "السبت",
+    "sun": "الأحد",
+    "thu": "الخميس",
+    "tue": "الثلاثاء",
+    "wed": "الأربعاء"
+  }
+}

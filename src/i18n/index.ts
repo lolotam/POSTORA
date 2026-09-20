@@ -21,6 +21,9 @@ import { initReactI18next } from "react-i18next";
 import common from "./locales/ar/common.json";
 import nav from "./locales/ar/nav.json";
 import apikeys from "./locales/ar/apikeys.json";
+import dashboard from "./locales/ar/dashboard.json";
+import calendar from "./locales/ar/calendar.json";
+import history from "./locales/ar/history.json";
 
 /** Languages with copy behind them. Anything detected outside this list resolves to `en`. */
 export const SUPPORTED_LANGUAGES = ["en", "ar"] as const;
@@ -37,18 +40,24 @@ void i18next
     // and the language never resolves, which leaves i18next.dir() guessing from
     // an empty code. Region subtags fold onto their base language instead.
     nonExplicitSupportedLngs: true,
-    ns: ["common", "nav", "apikeys"],
+    ns: ["common", "nav", "apikeys", "dashboard", "calendar", "history"],
     defaultNS: "common",
     resources: {
       en: {
         common: {},
         nav: {},
         apikeys: {},
+        dashboard: {},
+        calendar: {},
+        history: {},
       },
       ar: {
         common,
         nav,
         apikeys,
+        dashboard,
+        calendar,
+        history,
       },
     },
     // React escapes interpolated values already; escaping here would double-encode.

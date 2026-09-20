@@ -6,6 +6,7 @@ import { Platform } from "@/lib/types";
 import { format } from "date-fns";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
+import { useTranslation } from "react-i18next";
 import {
   Pagination,
   PaginationContent,
@@ -58,6 +59,7 @@ export default function History() {
   const { data: posts = [], isLoading, isFetching, refetch, error } = usePostsWithResults();
   const { publishingPosts } = usePublishing();
   const { toast } = useToast();
+  const { t } = useTranslation("history");
 
   const actions = useHistoryActions();
 
@@ -272,8 +274,10 @@ export default function History() {
     URL.revokeObjectURL(url);
 
     toast({
-      title: "Export complete",
-      description: `History exported as ${exportFormat.toUpperCase()}.`,
+      title: t("toast.exportComplete", "Export complete"),
+      description: t("toast.exportDesc", "History exported as {{format}}.", {
+        format: exportFormat.toUpperCase(),
+      }),
     });
   };
 
@@ -295,7 +299,7 @@ export default function History() {
                 )}
               >
                 <Send className="w-4 h-4" />
-                Post History
+                {t("tabs.postHistory", "Post History")}
               </TabsTrigger>
               <TabsTrigger
                 value="media"
@@ -306,7 +310,7 @@ export default function History() {
                 )}
               >
                 <Image className="w-4 h-4" />
-                Media Operations
+                {t("tabs.mediaOperations", "Media Operations")}
               </TabsTrigger>
             </TabsList>
           </Reveal>
@@ -360,9 +364,9 @@ export default function History() {
                   <GradientRingCard variant="sky">
                     <div className="flex flex-col items-center text-center py-8">
                       <Icon3D icon={Search} variant="sky" size="lg" />
-                      <h3 className="mt-5 text-lg font-semibold">Failed to load posts</h3>
+                      <h3 className="mt-5 text-lg font-semibold">{t("empty.failedToLoad", "Failed to load posts")}</h3>
                       <p className="text-muted-foreground mt-1 max-w-sm">
-                        {(error as Error)?.message || "Something went wrong while fetching your post history."}
+                        {(error as Error)?.message || t("empty.failedToLoadDesc", "Something went wrong while fetching your post history.")}
                       </p>
                     </div>
                   </GradientRingCard>
@@ -372,9 +376,9 @@ export default function History() {
                   <GradientRingCard variant="sky">
                     <div className="flex flex-col items-center text-center py-8">
                       <Icon3D icon={Search} variant="sky" size="lg" />
-                      <h3 className="mt-5 text-lg font-semibold">No posts found</h3>
+                      <h3 className="mt-5 text-lg font-semibold">{t("empty.noPosts", "No posts found")}</h3>
                       <p className="text-muted-foreground mt-1 max-w-sm">
-                        {search ? "Try a different search term." : "Your post history will appear here once you start publishing."}
+                        {search ? t("empty.noSearchMatch", "Try a different search term.") : t("empty.noPostsDesc", "Your post history will appear here once you start publishing.")}
                       </p>
                     </div>
                   </GradientRingCard>
@@ -382,7 +386,11 @@ export default function History() {
               ) : (
                 <>
                   <div className="inline-flex items-center gap-2 text-xs text-muted-foreground rounded-full border border-border/60 bg-card/60 backdrop-blur-md px-3 py-1">
-                    Showing {startIndex + 1}-{Math.min(endIndex, totalItems)} of {totalItems} posts
+                    {t("pagination.showing", "Showing {{start}}-{{end}} of {{total}} posts", {
+                      start: startIndex + 1,
+                      end: Math.min(endIndex, totalItems),
+                      total: totalItems,
+                    })}
                   </div>
 
                   <Reveal delay={120}>

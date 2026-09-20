@@ -18,6 +18,7 @@ import { buildPostUrl } from "@/components/history/historyUtils";
 import { useToast } from "@/hooks/use-toast";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { useFeatureFlags } from "@/hooks/useFeatureFlags";
 import { useThreadsCapabilities } from "@/hooks/useThreadsCapabilities";
@@ -94,6 +95,7 @@ export function PostDetailsDialog({
   retryingPostId,
   onDeletePlatformPost,
 }: PostDetailsDialogProps) {
+  const { t } = useTranslation("history");
   const { toast } = useToast();
   const navigate = useNavigate();
   const { flags } = useFeatureFlags();
@@ -116,7 +118,16 @@ export function PostDetailsDialog({
     sessionStorage.setItem("postora_reuse_payload", JSON.stringify(payload));
     onClose();
     navigate("/post?from=reuse");
-    toast({ title: "Post data loaded", description: `Reusing ${mode === "full" ? "full post" : mode} in Post Creator` });
+    const modeLabel =
+      mode === "full"
+        ? t("details.fullPost", "full post")
+        : mode === "caption"
+          ? t("details.caption", "caption")
+          : t("details.media", "media");
+    toast({
+      title: t("details.postDataLoaded", "Post data loaded"),
+      description: t("details.reusingMode", "Reusing {{mode}} in Post Creator", { mode: modeLabel }),
+    });
   };
 
   const handleDownloadSingle = async (mediaItem: MediaPreview) => {
@@ -135,8 +146,8 @@ export function PostDetailsDialog({
     } catch (error) {
       console.error("Download error:", error);
       toast({
-        title: "Download failed",
-        description: "Could not download the file",
+        title: t("details.downloadFailed", "Download failed"),
+        description: t("details.downloadFailedDesc", "Could not download the file"),
         variant: "destructive",
       });
     }
@@ -147,8 +158,8 @@ export function PostDetailsDialog({
     
     setDownloading(true);
     toast({
-      title: "Downloading...",
-      description: `Downloading ${media.length} file(s)`,
+      title: t("details.downloading", "Downloading..."),
+      description: t("details.downloadingCount", "Downloading {{count}} file(s)", { count: media.length }),
     });
 
     try {
@@ -160,8 +171,8 @@ export function PostDetailsDialog({
         }
       }
       toast({
-        title: "Download complete",
-        description: `Downloaded ${media.length} file(s) successfully`,
+        title: t("details.downloadComplete", "Download complete"),
+        description: t("details.downloadSuccess", "Downloaded {{count}} file(s) successfully", { count: media.length }),
       });
     } catch (error) {
       console.error("Bulk download error:", error);
@@ -174,17 +185,17 @@ export function PostDetailsDialog({
     <Dialog open={!!post} onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Post Details</DialogTitle>
-          <DialogDescription>View detailed information about this post</DialogDescription>
+          <DialogTitle>{t("details.title", "Post Details")}</DialogTitle>
+          <DialogDescription>{t("details.subtitle", "View detailed information about this post")}</DialogDescription>
         </DialogHeader>
 
         {post && (
           <div className="space-y-6 pt-4">
             {/* Caption */}
             <div>
-              <h4 className="text-sm font-medium text-muted-foreground mb-2">Caption</h4>
+              <h4 className="text-sm font-medium text-muted-foreground mb-2">{t("details.captionHeader", "Caption")}</h4>
               <p className="text-sm bg-secondary/50 rounded-lg p-3 whitespace-pre-wrap">
-                {post.caption || "No caption"}
+                {post.caption || t("common:noCaption", "No caption")}
               </p>
             </div>
 
@@ -192,20 +203,20 @@ export function PostDetailsDialog({
             {flags.reusePostData && (
               <div className="flex flex-wrap gap-2">
                 <Button size="sm" variant="outline" className="h-7 text-xs gap-1.5" onClick={() => handleReusePost("caption")} disabled={!post.caption}>
-                  <Type className="w-3 h-3" /> Reuse Caption
+                  <Type className="w-3 h-3" /> {t("details.reuseCaption", "Reuse Caption")}
                 </Button>
                 <Button size="sm" variant="outline" className="h-7 text-xs gap-1.5" onClick={() => handleReusePost("media")} disabled={media.length === 0}>
-                  <ImageIcon className="w-3 h-3" /> Reuse Media
+                  <ImageIcon className="w-3 h-3" /> {t("details.reuseMedia", "Reuse Media")}
                 </Button>
                 <Button size="sm" variant="outline" className="h-7 text-xs gap-1.5" onClick={() => handleReusePost("full")}>
-                  <Copy className="w-3 h-3" /> Reuse Full Post
+                  <Copy className="w-3 h-3" /> {t("details.reuseFullPost", "Reuse Full Post")}
                 </Button>
               </div>
             )}
             {media.length > 0 && (
               <div>
                 <div className="flex items-center justify-between mb-2">
-                  <h4 className="text-sm font-medium text-muted-foreground">Media ({media.length})</h4>
+                  <h4 className="text-sm font-medium text-muted-foreground">{t("details.mediaHeader", "Media ({{count}})", { count: media.length })}</h4>
                   {media.length > 1 && (
                     <Button
                       size="sm"
@@ -215,7 +226,7 @@ export function PostDetailsDialog({
                       className="h-7 text-xs"
                     >
                       <DownloadCloud className="w-3.5 h-3.5 mr-1.5" />
-                      {downloading ? "Downloading..." : "Download All"}
+                      {downloading ? t("details.downloading", "Downloading...") : t("details.downloadAll", "Download All")}
                     </Button>
                   )}
                 </div>
@@ -264,19 +275,25 @@ export function PostDetailsDialog({
             {/* Metadata */}
             <div className="grid grid-cols-2 gap-4 text-sm">
               <div>
-                <span className="text-muted-foreground">Created</span>
+                <span className="text-muted-foreground">{t("details.created", "Created")}</span>
                 <p className="font-medium">{format(new Date(post.created_at), "PPp")}</p>
               </div>
               <div>
-                <span className="text-muted-foreground">Status</span>
+                <span className="text-muted-foreground">{t("table.status", "Status")}</span>
                 <p className="font-medium capitalize">{post.status}</p>
               </div>
               <div>
-                <span className="text-muted-foreground">Source</span>
-                <p className="font-medium capitalize">{post.source || "manual"}</p>
+                <span className="text-muted-foreground">{t("details.source", "Source")}</span>
+                <p className="font-medium capitalize">
+                  {post.source === "upload"
+                    ? t("source.upload", "Upload")
+                    : post.source === "manual"
+                      ? t("source.manual", "Manual")
+                      : (post.source || t("source.manual", "Manual"))}
+                </p>
               </div>
               <div>
-                <span className="text-muted-foreground">Platforms</span>
+                <span className="text-muted-foreground">{t("details.platforms", "Platforms")}</span>
                 <div className="flex gap-1 mt-1">
                   {post.platforms.map((p) => (
                     <PlatformIcon key={p} platform={p as Platform} size="sm" />
@@ -287,7 +304,7 @@ export function PostDetailsDialog({
 
             {/* Platform Results */}
             <div>
-              <h4 className="text-sm font-medium text-muted-foreground mb-3">Platform Results</h4>
+              <h4 className="text-sm font-medium text-muted-foreground mb-3">{t("details.platformResults", "Platform Results")}</h4>
               <div className="space-y-2">
                 {(() => {
                   const results = post.platformResults || [];
@@ -299,7 +316,7 @@ export function PostDetailsDialog({
                   );
 
                   if (results.length === 0 && missingPlatforms.length === 0) {
-                    return <p className="text-sm text-muted-foreground">No platform results yet</p>;
+                    return <p className="text-sm text-muted-foreground">{t("details.noPlatformResults", "No platform results yet")}</p>;
                   }
 
                   return (
@@ -337,12 +354,12 @@ export function PostDetailsDialog({
                                     )}
                                   >
                                     {result.status === "success" 
-                                      ? "Success" 
+                                      ? t("common:status.success", "Success") 
                                       : result.status === "pending_inbox" 
-                                        ? "Check Inbox" 
+                                        ? t("status.pendingInbox", "Check Inbox") 
                                         : result.status === "pending"
-                                          ? "Pending"
-                                          : "Failed"}
+                                          ? t("common:status.pending", "Pending")
+                                          : t("common:status.failed", "Failed")}
                                   </Badge>
                                 </div>
                                 {/* Account Info */}
@@ -366,7 +383,7 @@ export function PostDetailsDialog({
                                 const accountInfo = result.social_account_id ? accountsCache[result.social_account_id] : null;
                                 const postUrl = buildPostUrl(
                                   result.platform,
-                                  (result as any).platform_post_id,
+                                  result.platform_post_id,
                                   result.platform_post_url,
                                   accountInfo?.username,
                                   accountInfo?.tiktokUsername
@@ -386,7 +403,7 @@ export function PostDetailsDialog({
                                         openExternalPostUrl(postUrl);
                                       }}
                                     >
-                                      View Post <ExternalLink className="w-3 h-3" />
+                                      {t("details.viewPost", "View Post")} <ExternalLink className="w-3 h-3" />
                                     </a>
                                   );
                                 }
@@ -419,13 +436,13 @@ export function PostDetailsDialog({
                                   ) : (
                                     <RefreshCw className="w-3 h-3" />
                                   )}
-                                  Retry
+                                  {t("common:retry", "Retry")}
                                 </Button>
                               )}
 
                               {/* Delete from Threads — only for Threads rows with a live platform_post_id */}
                               {result.platform === "threads" &&
-                                (result as any).platform_post_id &&
+                                result.platform_post_id &&
                                 onDeletePlatformPost && (
                                   <TooltipProvider>
                                     <Tooltip>
@@ -446,16 +463,16 @@ export function PostDetailsDialog({
                                             ) : (
                                               <Trash2 className="w-3 h-3" />
                                             )}
-                                            Delete from Threads
+                                            {t("details.deleteFromThreads", "Delete from Threads")}
                                           </Button>
                                         </span>
                                       </TooltipTrigger>
                                       <TooltipContent>
                                         {canDeleteThreadsPosts === false
-                                          ? "Reconnect Threads — your token doesn't include threads_delete"
+                                          ? t("details.threadsDeleteTooltipNoPerm", "Reconnect Threads — your token doesn't include threads_delete")
                                           : canDeleteThreadsPosts === null
-                                            ? "Not yet verified — will confirm on attempt"
-                                            : "Delete this post from Threads (Meta)"}
+                                            ? t("details.threadsDeleteTooltipUnverified", "Not yet verified — will confirm on attempt")
+                                            : t("details.threadsDeleteTooltipVerified", "Delete this post from Threads (Meta)")}
                                       </TooltipContent>
                                     </Tooltip>
                                   </TooltipProvider>
@@ -486,14 +503,14 @@ export function PostDetailsDialog({
                                   </div>
                                   <div className="flex items-start gap-2 bg-background/60 rounded p-2">
                                     <Lightbulb className="w-3.5 h-3.5 text-primary mt-0.5 shrink-0" />
-                                    <p className="text-foreground/80"><span className="font-medium">Recommendation:</span> {explanation.recommendation}</p>
+                                    <p className="text-foreground/80"><span className="font-medium">{t("details.recommendation", "Recommendation:")}</span> {explanation.recommendation}</p>
                                   </div>
                                 </div>
                                 {/* Collapsible technical error */}
                                 <Collapsible>
                                   <CollapsibleTrigger className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors">
                                     <ChevronDown className="w-3 h-3" />
-                                    Show technical details
+                                    {t("details.showTechnicalDetails", "Show technical details")}
                                   </CollapsibleTrigger>
                                   <CollapsibleContent>
                                     <div className="bg-destructive/10 rounded-md p-2 text-[10px] text-destructive break-words mt-1 font-mono">
@@ -504,7 +521,7 @@ export function PostDetailsDialog({
                               </div>
                             ) : (
                               <div className="bg-destructive/10 rounded-md p-2.5 text-xs text-destructive break-words">
-                                <span className="font-medium">Error: </span>
+                                <span className="font-medium">{t("details.errorLabel", "Error:")} </span>
                                 {result.error_message}
                               </div>
                             );
@@ -559,13 +576,13 @@ export function PostDetailsDialog({
                                   variant="secondary"
                                   className="text-muted-foreground bg-muted"
                                 >
-                                  No Record
+                                  {t("details.noRecord", "No Record")}
                                 </Badge>
                               </div>
                               <span className="text-xs text-muted-foreground mt-0.5">
                                 {platform === "tiktok" 
-                                  ? "TikTok video may still be processing" 
-                                  : "No publishing record found for this platform"}
+                                  ? t("details.tiktokProcessing", "TikTok video may still be processing") 
+                                  : t("details.noRecordFound", "No publishing record found for this platform")}
                               </span>
                             </div>
                           </div>
@@ -588,13 +605,13 @@ export function PostDetailsDialog({
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete this post from Threads?</AlertDialogTitle>
+            <AlertDialogTitle>{t("details.deleteThreadsDialogTitle", "Delete this post from Threads?")}</AlertDialogTitle>
             <AlertDialogDescription>
-              This removes the post from Meta. Your local history record stays so you can still see it here.
+              {t("details.deleteThreadsDialogDesc", "This removes the post from Meta. Your local history record stays so you can still see it here.")}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel>{t("common:cancel", "Cancel")}</AlertDialogCancel>
             <AlertDialogAction
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               onClick={async () => {
@@ -609,7 +626,7 @@ export function PostDetailsDialog({
                 }
               }}
             >
-              Delete from Threads
+              {t("details.deleteFromThreads", "Delete from Threads")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

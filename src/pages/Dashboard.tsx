@@ -1,4 +1,5 @@
 import { Link } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/hooks/useAuth";
@@ -20,6 +21,7 @@ import {
 } from "lucide-react";
 
 export default function Dashboard() {
+  const { t } = useTranslation("dashboard");
   const { profile } = useAuth();
   const { flags } = useFeatureFlags();
   const { isAdmin } = useUserRole();
@@ -28,10 +30,10 @@ export default function Dashboard() {
   const { data: stats, isLoading: statsLoading } = usePostStats();
 
   const statsData = [
-    { label: "Total Posts",        value: stats?.total.toString() || "0",  icon: Send,       trend: null, variant: "sky" as const },
-    { label: "Connected Accounts", value: accounts.length.toString(),       icon: Link2,      trend: null, variant: "violet" as const },
-    { label: "Scheduled",          value: stats?.scheduled.toString() || "0", icon: Calendar, trend: null, variant: "amber" as const },
-    { label: "Success Rate",       value: `${stats?.successRate || 0}%`,    icon: TrendingUp, trend: null, variant: "emerald" as const },
+    { id: "totalPosts", label: t("stats.totalPosts", "Total Posts"), value: stats?.total.toString() || "0", icon: Send, trend: null, variant: "sky" as const },
+    { id: "connectedAccounts", label: t("stats.connectedAccounts", "Connected Accounts"), value: accounts.length.toString(), icon: Link2, trend: null, variant: "violet" as const },
+    { id: "scheduled", label: t("stats.scheduled", "Scheduled"), value: stats?.scheduled.toString() || "0", icon: Calendar, trend: null, variant: "amber" as const },
+    { id: "successRate", label: t("stats.successRate", "Success Rate"), value: `${stats?.successRate || 0}%`, icon: TrendingUp, trend: null, variant: "emerald" as const },
   ];
 
   return (
@@ -43,9 +45,13 @@ export default function Dashboard() {
         {/* Header */}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div>
-            <GradientHeading as="h1" preset="sky-violet-pink" size="lg">Dashboard</GradientHeading>
+            <GradientHeading as="h1" preset="sky-violet-pink" size="lg">
+              {t("header.title", "Dashboard")}
+            </GradientHeading>
             <p className="text-muted-foreground mt-1">
-              Welcome back{profile?.full_name ? `, ${profile.full_name}` : ""}! Here's your posting overview.
+              {t("header.welcome", "Welcome back{{name}}! Here's your posting overview.", {
+                name: profile?.full_name ? `, ${profile.full_name}` : "",
+              })}
             </p>
             <TypingTagline />
           </div>
@@ -61,7 +67,7 @@ export default function Dashboard() {
             <Link to="/post">
               <Button variant="gradient" size="lg">
                 <Plus className="w-4 h-4 mr-2" />
-                Create Post
+                {t("common:createPost", "Create Post")}
               </Button>
             </Link>
           </div>

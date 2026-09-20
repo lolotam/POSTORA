@@ -5,6 +5,7 @@ import {
 } from "@/components/ui/collapsible";
 import { Badge } from "@/components/ui/badge";
 import { ChevronDown, MapPin } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 interface LocationDebug {
   platform?: string;
@@ -78,6 +79,7 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 }
 
 export function LocationDebugView({ debug }: { debug: LocationDebug }) {
+  const { t } = useTranslation("history");
   if (!debug) return null;
   const isIG = debug.platform === "instagram";
   const isThreads = debug.platform === "threads";
@@ -96,7 +98,7 @@ export function LocationDebugView({ debug }: { debug: LocationDebug }) {
       <CollapsibleTrigger className="flex items-center gap-1.5 text-[11px] text-muted-foreground hover:text-foreground transition-colors mt-1">
         <ChevronDown className="w-3 h-3" />
         <MapPin className="w-3 h-3" />
-        Show location debug
+        {t("debug.showLocationDebug", "Show location debug")}
         {finalMeta && (
           <Badge variant={finalMeta.variant} className="ml-1 text-[9px] h-4">
             {finalMeta.label}
@@ -202,7 +204,7 @@ export function LocationDebugView({ debug }: { debug: LocationDebug }) {
 
           {finalMeta && (
             <div className="pt-2 mt-1 border-t border-border/60 flex items-center gap-2">
-              <span className="text-[10px] text-muted-foreground">Final reason:</span>
+              <span className="text-[10px] text-muted-foreground">{t("debug.finalReason", "Final reason:")}</span>
               <Badge variant={finalMeta.variant} className="text-[10px]">
                 {finalMeta.label}
               </Badge>

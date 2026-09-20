@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { useTranslation } from "react-i18next";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -20,6 +21,7 @@ interface AccountNeedingReauth {
 }
 
 export function TokenReauthBanner() {
+  const { t } = useTranslation("dashboard");
   const { user } = useAuth();
   const [dismissedAccounts, setDismissedAccounts] = useState<Set<string>>(new Set());
   const {
@@ -91,21 +93,26 @@ export function TokenReauthBanner() {
           <AlertTriangle className="h-4 w-4" />
           <AlertTitle className="flex items-center gap-2">
             <PlatformIcon platform={account.platform as ExtendedPlatform} size="sm" />
-            {getPlatformName(account.platform as ExtendedPlatform)} Connection Expired
+            {t("reauth.connectionExpired", "{{platform}} Connection Expired", {
+              platform: getPlatformName(account.platform as ExtendedPlatform),
+            })}
           </AlertTitle>
           <AlertDescription className="mt-2">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
                 <p className="text-sm">
-                  Your {getPlatformName(account.platform as ExtendedPlatform)} account
-                  {account.platform_username && (
-                    <span className="font-medium"> (@{account.platform_username})</span>
-                  )}{" "}
-                  needs to be reconnected.
+                  {account.platform_username
+                    ? t("reauth.accountWithUsernameNeedsReconnect", "Your {{platform}} account (@{{username}}) needs to be reconnected.", {
+                        platform: getPlatformName(account.platform as ExtendedPlatform),
+                        username: account.platform_username,
+                      })
+                    : t("reauth.accountNeedsReconnect", "Your {{platform}} account needs to be reconnected.", {
+                        platform: getPlatformName(account.platform as ExtendedPlatform),
+                      })}
                 </p>
                 {account.last_refresh_error && (
                   <p className="text-xs text-muted-foreground mt-1 truncate max-w-[400px]">
-                    Error: {account.last_refresh_error}
+                    {t("reauth.error", "Error: {{error}}", { error: account.last_refresh_error })}
                   </p>
                 )}
               </div>
@@ -117,7 +124,7 @@ export function TokenReauthBanner() {
                   className="text-muted-foreground hover:text-foreground"
                 >
                   <X className="w-3 h-3 mr-1" />
-                  Dismiss
+                  {t("reauth.dismiss", "Dismiss")}
                 </Button>
                 <Button
                   size="sm"
@@ -127,12 +134,12 @@ export function TokenReauthBanner() {
                   {connectingPlatform === account.platform ? (
                     <>
                       <RefreshCw className="w-3 h-3 mr-1 animate-spin" />
-                      Connecting...
+                      {t("reauth.connecting", "Connecting...")}
                     </>
                   ) : (
                     <>
                       <RefreshCw className="w-3 h-3 mr-1" />
-                      Reconnect
+                      {t("reauth.reconnect", "Reconnect")}
                     </>
                   )}
                 </Button>

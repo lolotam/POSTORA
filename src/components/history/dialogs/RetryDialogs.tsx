@@ -1,4 +1,5 @@
 import { useRef } from "react";
+import { useTranslation } from "react-i18next";
 import {
   Dialog,
   DialogContent,
@@ -49,20 +50,22 @@ export function RetryAccountDialog({
   isLoading,
   accountsCache,
 }: RetryAccountDialogProps) {
+  const { t } = useTranslation("history");
+
   return (
     <Dialog open={!!post} onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle>Retry Failed Post</DialogTitle>
+          <DialogTitle>{t("retryDialog.title", "Retry Failed Post")}</DialogTitle>
           <DialogDescription>
-            TikTok requires you to confirm which account(s) to retry.
+            {t("retryDialog.tiktokDesc", "TikTok requires you to confirm which account(s) to retry.")}
           </DialogDescription>
         </DialogHeader>
 
         {post && (
           <div className="space-y-4">
             <div className="space-y-2">
-              <h4 className="text-sm font-medium text-muted-foreground">Failed Platforms</h4>
+              <h4 className="text-sm font-medium text-muted-foreground">{t("retryDialog.failedPlatforms", "Failed Platforms")}</h4>
               <div className="flex flex-wrap gap-2">
                 {post.platformResults
                   ?.filter((r) => r.status === "failed")
@@ -115,7 +118,7 @@ export function RetryAccountDialog({
                 onClick={onClose}
                 disabled={isLoading}
               >
-                Cancel
+                {t("common:cancel", "Cancel")}
               </Button>
               <Button
                 className="flex-1"
@@ -125,12 +128,12 @@ export function RetryAccountDialog({
                 {isLoading ? (
                   <>
                     <Loader2 className="w-4 h-4 animate-spin mr-2" />
-                    Retrying...
+                    {t("retryDialog.retrying", "Retrying...")}
                   </>
                 ) : (
                   <>
                     <RefreshCw className="w-4 h-4 mr-2" />
-                    Retry ({selectedAccountIds.length})
+                    {t("retryDialog.retryCount", "Retry ({{count}})", { count: selectedAccountIds.length })}
                   </>
                 )}
               </Button>
@@ -159,9 +162,10 @@ export function RetryMediaDialog({
   onRetry,
   isUploading,
 }: RetryMediaDialogProps) {
+  const { t } = useTranslation("history");
   const inputRef = useRef<HTMLInputElement>(null);
   const isCarousel = (post?.media_file_ids?.length || 0) > 1;
-  const selectedMediaLabel = isCarousel ? `${mediaFiles.length} image${mediaFiles.length === 1 ? "" : "s"} selected` : mediaFiles[0]?.name;
+  const selectedMediaLabel = isCarousel ? t("retryMediaDialog.imagesSelected", "{{count}} image(s) selected", { count: mediaFiles.length }) : mediaFiles[0]?.name;
 
   return (
     <Dialog open={!!post} onOpenChange={(open) => !open && onClose()}>
@@ -169,12 +173,12 @@ export function RetryMediaDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             {isCarousel ? <FileImage className="w-5 h-5" /> : <FileVideo className="w-5 h-5" />}
-            {isCarousel ? "Replace Carousel Media" : "Retry with New Video"}
+            {isCarousel ? t("retryMediaDialog.replaceCarouselMedia", "Replace Carousel Media") : t("retryMediaDialog.retryWithNewVideo", "Retry with New Video")}
           </DialogTitle>
           <DialogDescription>
             {isCarousel
-              ? "Upload 2 to 10 replacement images. They will replace the unavailable carousel media."
-              : "Upload a new vertical 9:16 video (720×1280 or higher)."}
+              ? t("retryMediaDialog.carouselDesc", "Upload 2 to 10 replacement images. They will replace the unavailable carousel media.")
+              : t("retryMediaDialog.videoDesc", "Upload a new vertical 9:16 video (720×1280 or higher).")}
           </DialogDescription>
         </DialogHeader>
 
@@ -205,14 +209,14 @@ export function RetryMediaDialog({
                   {isCarousel ? <FileImage className="w-10 h-10 mx-auto text-primary" /> : <FileVideo className="w-10 h-10 mx-auto text-primary" />}
                   <p className="font-medium">{selectedMediaLabel}</p>
                   <p className="text-sm text-muted-foreground">
-                    {(mediaFiles.reduce((total, file) => total + file.size, 0) / 1024 / 1024).toFixed(2)} MB total
+                    {t("retryMediaDialog.mbTotal", "{{size}} MB total", { size: (mediaFiles.reduce((total, file) => total + file.size, 0) / 1024 / 1024).toFixed(2) })}
                   </p>
                 </div>
               ) : (
                 <div className="space-y-2">
                   <Upload className="w-10 h-10 mx-auto text-muted-foreground" />
                   <p className="text-sm text-muted-foreground">
-                    {isCarousel ? "Click to select 2 to 10 image files" : "Click to select a video file"}
+                    {isCarousel ? t("retryMediaDialog.clickSelectImages", "Click to select 2 to 10 image files") : t("retryMediaDialog.clickSelectVideo", "Click to select a video file")}
                   </p>
                 </div>
               )}
@@ -228,7 +232,7 @@ export function RetryMediaDialog({
                 }}
                 disabled={isUploading}
               >
-                Cancel
+                {t("common:cancel", "Cancel")}
               </Button>
               <Button
                 className="flex-1"
@@ -238,10 +242,10 @@ export function RetryMediaDialog({
                 {isUploading ? (
                   <>
                     <Loader2 className="w-4 h-4 animate-spin mr-2" />
-                    Uploading...
+                    {t("retryMediaDialog.uploading", "Uploading...")}
                   </>
                 ) : (
-                  isCarousel ? "Retry with Replacement Images" : "Retry with New Video"
+                  isCarousel ? t("retryMediaDialog.retryReplacementImages", "Retry with Replacement Images") : t("retryMediaDialog.retryWithNewVideo", "Retry with New Video")
                 )}
               </Button>
             </div>

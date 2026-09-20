@@ -1,4 +1,5 @@
 import { Badge } from "@/components/ui/badge";
+import { useTranslation } from "react-i18next";
 import { PlatformIcon, getPlatformName } from "@/components/PlatformIcon";
 import { Platform } from "@/lib/types";
 import { format, parseISO } from "date-fns";
@@ -34,6 +35,8 @@ export function DayDetailDialog({
   selectedDate,
   posts,
 }: DayDetailDialogProps) {
+  const { t } = useTranslation("calendar");
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-lg">
@@ -51,7 +54,7 @@ export function DayDetailDialog({
             <div className="text-center py-10 group">
               <div className="inline-flex flex-col items-center gap-3">
                 <Icon3D icon={CalendarIcon} variant="sky" size="md" />
-                <p className="text-muted-foreground">No posts scheduled for this day</p>
+                <p className="text-muted-foreground">{t("dayDialog.noPosts", "No posts scheduled for this day")}</p>
               </div>
             </div>
           ) : (
@@ -93,14 +96,14 @@ export function DayDetailDialog({
                         <p className="text-sm line-clamp-3">
                           {post.caption || (
                             <span className="text-muted-foreground italic">
-                              No caption
+                              {t("common:noCaption", "No caption")}
                             </span>
                           )}
                         </p>
                         {post.media_file_ids && post.media_file_ids.length > 0 && (
                           <div className="flex items-center gap-1 mt-2 text-xs text-muted-foreground">
                             <Image className="w-3 h-3" />
-                            {post.media_file_ids.length} media file(s)
+                            {t("dayDialog.mediaCount", "{{count}} media file(s)", { count: post.media_file_ids.length })}
                           </div>
                         )}
                       </div>

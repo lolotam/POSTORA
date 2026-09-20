@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useTranslation } from "react-i18next";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -132,6 +133,7 @@ function CountdownTimer({ scheduledAt }: { scheduledAt: string }) {
 }
 
 export default function ScheduledPosts() {
+  const { t } = useTranslation("calendar");
   const [search, setSearch] = useState("");
   const [editPost, setEditPost] = useState<Post | null>(null);
   const [cancelPost, setCancelPost] = useState<Post | null>(null);
@@ -285,8 +287,10 @@ export default function ScheduledPosts() {
       if (error) throw error;
 
       toast({
-        title: "Posts cancelled",
-        description: `${selectedPostIds.size} scheduled post(s) have been cancelled.`,
+        title: t("toast.postsCancelled", "Posts cancelled"),
+        description: t("toast.postsCancelledDesc", "Successfully cancelled {{count}} scheduled posts.", {
+          count: selectedPostIds.size,
+        }),
       });
 
       queryClient.invalidateQueries({ queryKey: ["posts"] });
@@ -295,8 +299,8 @@ export default function ScheduledPosts() {
     } catch (error) {
       console.error("Bulk cancel error:", error);
       toast({
-        title: "Cancel failed",
-        description: error instanceof Error ? error.message : "Failed to cancel posts",
+        title: t("toast.cancelFailed", "Cancel failed"),
+        description: error instanceof Error ? error.message : t("toast.failedToCancel", "Failed to cancel posts"),
         variant: "destructive",
       });
     } finally {
@@ -316,8 +320,8 @@ export default function ScheduledPosts() {
 
       if (!isFuture(scheduledAt)) {
         toast({
-          title: "Invalid date",
-          description: "Scheduled time must be in the future.",
+          title: t("toast.invalidDate", "Invalid date"),
+          description: t("toast.futureRequired", "Scheduled time must be in the future."),
           variant: "destructive",
         });
         setIsBulkRescheduling(false);
@@ -332,8 +336,11 @@ export default function ScheduledPosts() {
       if (error) throw error;
 
       toast({
-        title: "Posts rescheduled",
-        description: `${selectedPostIds.size} post(s) rescheduled to ${format(scheduledAt, "PPP 'at' p")}.`,
+        title: t("toast.postsRescheduled", "Posts rescheduled"),
+        description: t("toast.postsRescheduledDesc", "Successfully rescheduled {{count}} posts to {{date}}.", {
+          count: selectedPostIds.size,
+          date: format(scheduledAt, "PPP 'at' p"),
+        }),
       });
 
       queryClient.invalidateQueries({ queryKey: ["posts"] });
@@ -344,8 +351,8 @@ export default function ScheduledPosts() {
     } catch (error) {
       console.error("Bulk reschedule error:", error);
       toast({
-        title: "Reschedule failed",
-        description: error instanceof Error ? error.message : "Failed to reschedule posts",
+        title: t("toast.rescheduleFailed", "Reschedule failed"),
+        description: error instanceof Error ? error.message : t("toast.failedToReschedule", "Failed to reschedule posts"),
         variant: "destructive",
       });
     } finally {
@@ -377,8 +384,8 @@ export default function ScheduledPosts() {
 
       if (!isFuture(scheduledAt)) {
         toast({
-          title: "Invalid date",
-          description: "Scheduled time must be in the future.",
+          title: t("toast.invalidDate", "Invalid date"),
+          description: t("toast.futureRequired", "Scheduled time must be in the future."),
           variant: "destructive",
         });
         setIsSaving(false);
@@ -403,8 +410,8 @@ export default function ScheduledPosts() {
       if (error) throw error;
 
       toast({
-        title: "Post updated",
-        description: "Your scheduled post has been updated.",
+        title: t("toast.postUpdated", "Post updated"),
+        description: t("toast.postUpdatedDesc", "The scheduled post has been updated."),
       });
 
       queryClient.invalidateQueries({ queryKey: ["posts"] });
@@ -412,8 +419,8 @@ export default function ScheduledPosts() {
     } catch (error) {
       console.error("Update error:", error);
       toast({
-        title: "Update failed",
-        description: error instanceof Error ? error.message : "Failed to update post",
+        title: t("toast.updateFailed", "Update failed"),
+        description: error instanceof Error ? error.message : t("toast.failedToUpdate", "Failed to update post"),
         variant: "destructive",
       });
     } finally {
@@ -435,8 +442,8 @@ export default function ScheduledPosts() {
       if (error) throw error;
 
       toast({
-        title: "Post cancelled",
-        description: "The scheduled post has been cancelled and removed.",
+        title: t("toast.postCancelledSingle", "Post cancelled"),
+        description: t("toast.postCancelledSingleDesc", "The scheduled post has been cancelled and removed."),
       });
 
       queryClient.invalidateQueries({ queryKey: ["posts"] });
@@ -445,8 +452,8 @@ export default function ScheduledPosts() {
     } catch (error) {
       console.error("Cancel error:", error);
       toast({
-        title: "Cancel failed",
-        description: error instanceof Error ? error.message : "Failed to cancel post",
+        title: t("toast.cancelFailed", "Cancel failed"),
+        description: error instanceof Error ? error.message : t("toast.failedToCancelSingle", "Failed to cancel post"),
         variant: "destructive",
       });
     } finally {
@@ -474,16 +481,16 @@ export default function ScheduledPosts() {
       if (error) throw error;
 
       toast({
-        title: "Publishing started",
-        description: "Your post is now being published.",
+        title: t("toast.publishingStarted", "Publishing started"),
+        description: t("toast.publishingStartedDesc", "Your post is now being published."),
       });
 
       queryClient.invalidateQueries({ queryKey: ["posts"] });
     } catch (error) {
       console.error("Publish error:", error);
       toast({
-        title: "Publish failed",
-        description: error instanceof Error ? error.message : "Failed to publish post",
+        title: t("toast.publishFailed", "Publish failed"),
+        description: error instanceof Error ? error.message : t("toast.failedToPublish", "Failed to publish post"),
         variant: "destructive",
       });
     } finally {
@@ -504,10 +511,10 @@ export default function ScheduledPosts() {
               <Icon3D icon={Clock} variant="amber" size="md" />
               <div>
                 <GradientHeading as="h1" preset="amber-rose-violet" size="xl">
-                  Scheduled Posts
+                  {t("header.scheduledTitle", "Scheduled Posts")}
                 </GradientHeading>
                 <p className="text-muted-foreground mt-1">
-                  Manage your upcoming scheduled posts.
+                  {t("header.scheduledSubtitle", "Manage your upcoming scheduled posts.")}
                 </p>
               </div>
             </div>
@@ -520,22 +527,22 @@ export default function ScheduledPosts() {
                 className="gap-2 rounded-full border border-border/60 bg-card/60 backdrop-blur-md hover:bg-amber-500/10 hover:text-amber-600"
               >
                 <RefreshCw className={cn("w-4 h-4", isFetching && "animate-spin")} />
-                Refresh
+                {t("common:refresh", "Refresh")}
               </Button>
               <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium border border-amber-400/40 bg-gradient-to-r from-amber-500/15 to-orange-500/10 text-amber-700 dark:text-amber-300 tabular-nums">
                 <CalendarClock className="w-3.5 h-3.5" />
-                {scheduledPosts.length} scheduled
+                {t("header.scheduledCount", "{{count}} scheduled", { count: scheduledPosts.length })}
               </span>
               {overdueCount > 0 && (
                 <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium border border-rose-400/40 bg-gradient-to-r from-rose-500/15 to-pink-500/10 text-rose-600 dark:text-rose-300 tabular-nums">
                   <AlertTriangle className="w-3.5 h-3.5" />
-                  {overdueCount} overdue
+                  {t("header.overdueCount", "{{count}} overdue", { count: overdueCount })}
                 </span>
               )}
               {user?.email && (
                 <span
                   className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium border border-border/60 bg-card/60 backdrop-blur-md text-muted-foreground"
-                  title={`Currently viewing posts for ${user.email}`}
+                  title={t("header.viewingPostsFor", "Currently viewing posts for {{email}}", { email: user.email })}
                 >
                   <User className="w-3.5 h-3.5" />
                   <span className="max-w-[200px] truncate">{user.email}</span>
@@ -559,7 +566,7 @@ export default function ScheduledPosts() {
                 <Input
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Search scheduled posts..."
+                  placeholder={t("filters.searchPlaceholder", "Search scheduled posts...")}
                   className="pl-10 rounded-full bg-background/60 backdrop-blur border-border/60 focus-visible:ring-cyan-500/40"
                 />
               </div>
@@ -567,10 +574,10 @@ export default function ScheduledPosts() {
           {/* Platform Filter */}
           <Select value={platformFilter} onValueChange={(v) => setPlatformFilter(v as Platform | "all")}>
             <SelectTrigger className="w-[160px] rounded-full bg-background/60 backdrop-blur border-border/60">
-              <SelectValue placeholder="Platform" />
+              <SelectValue placeholder={t("filters.platform", "Platform")} />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">All Platforms</SelectItem>
+              <SelectItem value="all">{t("filters.allPlatforms", "All Platforms")}</SelectItem>
               {allPlatformsInPosts.map((platform) => (
                 <SelectItem key={platform} value={platform}>
                   <div className="flex items-center gap-2">
@@ -585,10 +592,10 @@ export default function ScheduledPosts() {
           {/* Profile Filter */}
           <Select value={profileFilter} onValueChange={setProfileFilter}>
             <SelectTrigger className="w-[160px] rounded-full bg-background/60 backdrop-blur border-border/60">
-              <SelectValue placeholder="Profile" />
+              <SelectValue placeholder={t("filters.profile", "Profile")} />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">All Profiles</SelectItem>
+              <SelectItem value="all">{t("filters.allProfiles", "All Profiles")}</SelectItem>
               {socialProfiles.map((profile) => (
                 <SelectItem key={profile.id} value={profile.id}>
                   {profile.name}
@@ -600,12 +607,12 @@ export default function ScheduledPosts() {
           {/* Status Filter */}
           <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as "all" | "pending" | "overdue")}>
             <SelectTrigger className="w-[140px] rounded-full bg-background/60 backdrop-blur border-border/60">
-              <SelectValue placeholder="Status" />
+              <SelectValue placeholder={t("filters.status", "Status")} />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">All Status</SelectItem>
-              <SelectItem value="pending">Pending</SelectItem>
-              <SelectItem value="overdue">Overdue</SelectItem>
+              <SelectItem value="all">{t("filters.allStatus", "All Status")}</SelectItem>
+              <SelectItem value="pending">{t("filters.pending", "Pending")}</SelectItem>
+              <SelectItem value="overdue">{t("filters.overdue", "Overdue")}</SelectItem>
             </SelectContent>
           </Select>
             </div>
@@ -623,7 +630,7 @@ export default function ScheduledPosts() {
                   onCheckedChange={selectAllPosts}
                 />
                 <span className="text-sm font-medium">
-                  {selectedPostIds.size} selected
+                  {t("bulk.selectedCount", "{{count}} selected", { count: selectedPostIds.size })}
                 </span>
               </div>
               <div className="flex-1" />
@@ -633,7 +640,7 @@ export default function ScheduledPosts() {
                 className="gap-2 rounded-full bg-gradient-to-r from-violet-500 to-fuchsia-500 hover:from-violet-600 hover:to-fuchsia-600 text-white shadow-md shadow-violet-500/30"
               >
                 <CalendarIcon className="w-4 h-4" />
-                Reschedule
+                {t("bulk.reschedule", "Reschedule")}
               </Button>
               <Button
                 size="sm"
@@ -641,7 +648,7 @@ export default function ScheduledPosts() {
                 className="gap-2 rounded-full bg-gradient-to-r from-rose-500 to-pink-500 hover:from-rose-600 hover:to-pink-600 text-white shadow-md shadow-rose-500/30"
               >
                 <XCircle className="w-4 h-4" />
-                Cancel Selected
+                {t("bulk.cancelSelected", "Cancel Selected")}
               </Button>
               <Button
                 variant="ghost"
@@ -649,7 +656,7 @@ export default function ScheduledPosts() {
                 onClick={clearSelection}
                 className="rounded-full"
               >
-                Clear
+                {t("bulk.clear", "Clear")}
               </Button>
             </div>
           </GradientRingCard>
@@ -665,19 +672,19 @@ export default function ScheduledPosts() {
             <GradientRingCard variant="rose" hoverLift={false} innerClassName="py-16 text-center">
               <div className="group inline-flex flex-col items-center gap-4">
                 <Icon3D icon={AlertTriangle} variant="rose" size="lg" />
-                <h3 className="text-lg font-semibold">Failed to load scheduled posts</h3>
+                <h3 className="text-lg font-semibold">{t("error.failedToLoad", "Failed to load scheduled posts")}</h3>
                 <p className="text-muted-foreground max-w-md text-sm">
                   {postsError.message?.includes("JWT") || postsError.message?.includes("auth") || postsError.message?.includes("session")
-                    ? "Your session may have expired. Please refresh the page or log in again."
-                    : postsError.message || "An unexpected error occurred while fetching your posts."}
+                    ? t("error.sessionExpired", "Your session may have expired. Please refresh the page or log in again.")
+                    : postsError.message || t("error.unexpected", "An unexpected error occurred while fetching your posts.")}
                 </p>
                 <div className="flex gap-3">
                   <Button variant="outline" size="sm" className="gap-2 rounded-full" onClick={() => refetch()}>
                     <RefreshCw className="w-4 h-4" />
-                    Try Again
+                    {t("error.tryAgain", "Try Again")}
                   </Button>
                   <Button size="sm" className="gap-2 rounded-full" onClick={() => window.location.href = "/auth"}>
-                    Log In Again
+                    {t("error.logInAgain", "Log In Again")}
                   </Button>
                 </div>
               </div>
@@ -688,17 +695,17 @@ export default function ScheduledPosts() {
             <GradientRingCard variant="sky" hoverLift={false} innerClassName="py-16 text-center">
               <div className="group inline-flex flex-col items-center gap-4">
                 <Icon3D icon={CalendarClock} variant="sky" size="lg" />
-                <h3 className="text-lg font-semibold">No scheduled posts</h3>
+                <h3 className="text-lg font-semibold">{t("empty.title", "No scheduled posts")}</h3>
                 <p className="text-muted-foreground max-w-md">
                   {search
-                    ? "No posts match your search"
+                    ? t("empty.noSearchMatch", "No posts match your search")
                     : posts.length === 0 && !isAdmin
-                      ? <>You don't have any scheduled posts under this account. If you expected to see posts here, make sure you're logged in with the account that created them.</>
-                      : "You don't have any upcoming scheduled posts."}
+                      ? t("empty.noPostsNonAdmin", "You don't have any scheduled posts under this account. If you expected to see posts here, make sure you're logged in with the account that created them.")
+                      : t("empty.noUpcoming", "You don't have any upcoming scheduled posts.")}
                 </p>
                 {posts.length === 0 && !isAdmin && user?.email && (
                   <p className="text-xs text-muted-foreground/70 max-w-md">
-                    Currently signed in as <span className="font-medium">{user.email}</span>
+                    {t("empty.signedInAs", "Currently signed in as {{email}}", { email: user.email })}
                   </p>
                 )}
                 {!search && (
@@ -709,7 +716,7 @@ export default function ScheduledPosts() {
                     onClick={() => window.location.href = "/history"}
                   >
                     <Clock className="w-4 h-4" />
-                    View Published History
+                    {t("empty.viewHistory", "View Published History")}
                   </Button>
                 )}
               </div>
@@ -748,18 +755,18 @@ export default function ScheduledPosts() {
                           {isOverdue ? (
                             <Badge variant="destructive" className="gap-1 text-xs">
                               <AlertTriangle className="w-3 h-3" />
-                              Overdue
+                              {t("card.overdue", "Overdue")}
                             </Badge>
                           ) : (
                             <Badge variant="secondary" className="gap-1 text-xs">
                               <Clock className="w-3 h-3" />
-                              Pending
+                              {t("card.pending", "Pending")}
                             </Badge>
                           )}
                           {/* Type Badge */}
                           <Badge variant="outline" className="gap-1 text-xs">
                             {postType === "API" ? <Zap className="w-3 h-3" /> : <User className="w-3 h-3" />}
-                            {postType}
+                            {postType === "API" ? "API" : t("card.manual", "Manual")}
                           </Badge>
                           {contentTypes.map((type) => (
                             <Badge key={type} variant="outline" className="text-xs capitalize">
@@ -770,18 +777,18 @@ export default function ScheduledPosts() {
                       </div>
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
-                          <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" aria-label="View more options">
+                          <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" aria-label={t("card.viewMoreOptions", "View more options")}>
                             <MoreHorizontal className="w-4 h-4" />
                           </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
                           <DropdownMenuItem onClick={() => handleEditClick(post)} className="gap-2">
                             <Edit className="w-4 h-4" />
-                            Quick Edit
+                            {t("card.quickEdit", "Quick Edit")}
                           </DropdownMenuItem>
                           <DropdownMenuItem onClick={() => window.location.href = `/post?edit=${post.id}`} className="gap-2">
                             <FolderOpen className="w-4 h-4" />
-                            Edit in Composer
+                            {t("card.editInComposer", "Edit in Composer")}
                           </DropdownMenuItem>
                           <DropdownMenuItem
                             onClick={() => handlePublishNow(post)}
@@ -793,7 +800,7 @@ export default function ScheduledPosts() {
                             ) : (
                               <Send className="w-4 h-4" />
                             )}
-                            Publish Now
+                            {t("card.publishNow", "Publish Now")}
                           </DropdownMenuItem>
                           <DropdownMenuSeparator />
                           <DropdownMenuItem
@@ -801,7 +808,7 @@ export default function ScheduledPosts() {
                             className="text-destructive gap-2"
                           >
                             <XCircle className="w-4 h-4" />
-                            Cancel Post
+                            {t("card.cancelPost", "Cancel Post")}
                           </DropdownMenuItem>
                         </DropdownMenuContent>
                       </DropdownMenu>
@@ -814,7 +821,7 @@ export default function ScheduledPosts() {
                       <HoverCard openDelay={200} closeDelay={100}>
                         <HoverCardTrigger asChild>
                           <p className="text-sm line-clamp-3 text-foreground cursor-pointer hover:text-primary transition-colors">
-                            {post.caption || <span className="text-muted-foreground italic">No caption</span>}
+                            {post.caption || <span className="text-muted-foreground italic">{t("common:noCaption", "No caption")}</span>}
                           </p>
                         </HoverCardTrigger>
                         {post.caption && (
@@ -880,7 +887,7 @@ export default function ScheduledPosts() {
                         ))
                       )}
                       {postAccounts.length === 0 && post.platforms.length === 0 && (
-                        <span className="text-xs text-muted-foreground">No accounts</span>
+                        <span className="text-xs text-muted-foreground">{t("card.noAccounts", "No accounts")}</span>
                       )}
                     </div>
 
@@ -918,9 +925,9 @@ export default function ScheduledPosts() {
       <Dialog open={!!editPost} onOpenChange={(open) => !open && setEditPost(null)}>
         <DialogContent className="max-w-lg">
           <DialogHeader>
-            <DialogTitle>Edit Scheduled Post</DialogTitle>
+            <DialogTitle>{t("editDialog.title", "Edit Scheduled Post")}</DialogTitle>
             <DialogDescription>
-              Update the caption or reschedule this post.
+              {t("editDialog.desc", "Update the caption or reschedule this post.")}
             </DialogDescription>
           </DialogHeader>
 
@@ -938,12 +945,12 @@ export default function ScheduledPosts() {
               {/* Caption */}
               <div>
                 <label className="text-sm font-medium text-muted-foreground mb-2 block">
-                  Caption
+                  {t("editDialog.caption", "Caption")}
                 </label>
                 <Textarea
                   value={editCaption}
                   onChange={(e) => setEditCaption(e.target.value)}
-                  placeholder="Write your caption..."
+                  placeholder={t("editDialog.placeholder", "Write your caption...")}
                   rows={4}
                 />
               </div>
@@ -952,7 +959,7 @@ export default function ScheduledPosts() {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="text-sm font-medium text-muted-foreground mb-2 block">
-                    Date
+                    {t("editDialog.date", "Date")}
                   </label>
                   <Popover>
                     <PopoverTrigger asChild>
@@ -964,7 +971,7 @@ export default function ScheduledPosts() {
                         )}
                       >
                         <CalendarIcon className="mr-2 h-4 w-4" />
-                        {editScheduledDate ? format(editScheduledDate, "PPP") : "Pick a date"}
+                        {editScheduledDate ? format(editScheduledDate, "PPP") : t("editDialog.pickDate", "Pick a date")}
                       </Button>
                     </PopoverTrigger>
                     <PopoverContent className="w-auto p-0" align="start">
@@ -980,7 +987,7 @@ export default function ScheduledPosts() {
                 </div>
                 <div>
                   <label className="text-sm font-medium text-muted-foreground mb-2 block">
-                    Time
+                    {t("editDialog.time", "Time")}
                   </label>
                   <Input
                     type="time"
@@ -994,16 +1001,16 @@ export default function ScheduledPosts() {
 
           <DialogFooter>
             <Button variant="outline" onClick={() => setEditPost(null)}>
-              Cancel
+              {t("common:cancel", "Cancel")}
             </Button>
             <Button onClick={handleSaveEdit} disabled={isSaving}>
               {isSaving ? (
                 <>
                   <Loader2 className="w-4 h-4 animate-spin mr-2" />
-                  Saving...
+                  {t("common:saving", "Saving...")}
                 </>
               ) : (
-                "Save Changes"
+                t("common:saveChanges", "Save Changes")
               )}
             </Button>
           </DialogFooter>
@@ -1014,14 +1021,13 @@ export default function ScheduledPosts() {
       <AlertDialog open={!!cancelPost} onOpenChange={(open) => !open && setCancelPost(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Cancel Scheduled Post</AlertDialogTitle>
+            <AlertDialogTitle>{t("cancelDialog.title", "Cancel Scheduled Post")}</AlertDialogTitle>
             <AlertDialogDescription>
-              Are you sure you want to cancel this scheduled post? This action cannot be undone.
-              The post will be permanently removed.
+              {t("cancelDialog.desc", "Are you sure you want to cancel this scheduled post? This action cannot be undone. The post will be permanently removed.")}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel disabled={isCancelling}>Keep Post</AlertDialogCancel>
+            <AlertDialogCancel disabled={isCancelling}>{t("cancelDialog.keepPost", "Keep Post")}</AlertDialogCancel>
             <AlertDialogAction
               onClick={handleCancelPost}
               disabled={isCancelling}
@@ -1030,10 +1036,10 @@ export default function ScheduledPosts() {
               {isCancelling ? (
                 <>
                   <Loader2 className="w-4 h-4 animate-spin mr-2" />
-                  Cancelling...
+                  {t("cancelDialog.cancelling", "Cancelling...")}
                 </>
               ) : (
-                "Cancel Post"
+                t("cancelDialog.cancelButton", "Cancel Post")
               )}
             </AlertDialogAction>
           </AlertDialogFooter>
@@ -1043,14 +1049,13 @@ export default function ScheduledPosts() {
       <AlertDialog open={showBulkCancelDialog} onOpenChange={setShowBulkCancelDialog}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Cancel {selectedPostIds.size} Scheduled Posts</AlertDialogTitle>
+            <AlertDialogTitle>{t("bulk.cancelTitle", "Cancel {{count}} Scheduled Posts", { count: selectedPostIds.size })}</AlertDialogTitle>
             <AlertDialogDescription>
-              Are you sure you want to cancel {selectedPostIds.size} scheduled post(s)? This action cannot be undone.
-              All selected posts will be permanently removed.
+              {t("bulk.cancelDesc", "Are you sure you want to cancel {{count}} scheduled post(s)? This action cannot be undone. All selected posts will be permanently removed.", { count: selectedPostIds.size })}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel disabled={isBulkCancelling}>Keep Posts</AlertDialogCancel>
+            <AlertDialogCancel disabled={isBulkCancelling}>{t("bulk.keepPosts", "Keep Posts")}</AlertDialogCancel>
             <AlertDialogAction
               onClick={handleBulkCancel}
               disabled={isBulkCancelling}
@@ -1059,10 +1064,10 @@ export default function ScheduledPosts() {
               {isBulkCancelling ? (
                 <>
                   <Loader2 className="w-4 h-4 animate-spin mr-2" />
-                  Cancelling...
+                  {t("bulk.cancelling", "Cancelling...")}
                 </>
               ) : (
-                `Cancel ${selectedPostIds.size} Posts`
+                t("bulk.cancelButton", "Cancel {{count}} Posts", { count: selectedPostIds.size })
               )}
             </AlertDialogAction>
           </AlertDialogFooter>
@@ -1073,9 +1078,9 @@ export default function ScheduledPosts() {
       <Dialog open={showBulkRescheduleDialog} onOpenChange={setShowBulkRescheduleDialog}>
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>Reschedule {selectedPostIds.size} Posts</DialogTitle>
+            <DialogTitle>{t("bulk.rescheduleTitle", "Reschedule {{count}} Posts", { count: selectedPostIds.size })}</DialogTitle>
             <DialogDescription>
-              Set a new date and time for all selected posts.
+              {t("bulk.rescheduleDesc", "Set a new date and time for all selected posts.")}
             </DialogDescription>
           </DialogHeader>
 
@@ -1083,7 +1088,7 @@ export default function ScheduledPosts() {
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="text-sm font-medium text-muted-foreground mb-2 block">
-                  Date
+                  {t("editDialog.date", "Date")}
                 </label>
                 <Popover>
                   <PopoverTrigger asChild>
@@ -1095,7 +1100,7 @@ export default function ScheduledPosts() {
                       )}
                     >
                       <CalendarIcon className="mr-2 h-4 w-4" />
-                      {bulkScheduledDate ? format(bulkScheduledDate, "PPP") : "Pick a date"}
+                      {bulkScheduledDate ? format(bulkScheduledDate, "PPP") : t("editDialog.pickDate", "Pick a date")}
                     </Button>
                   </PopoverTrigger>
                   <PopoverContent className="w-auto p-0" align="start">
@@ -1111,7 +1116,7 @@ export default function ScheduledPosts() {
               </div>
               <div>
                 <label className="text-sm font-medium text-muted-foreground mb-2 block">
-                  Time
+                  {t("editDialog.time", "Time")}
                 </label>
                 <Input
                   type="time"
@@ -1124,7 +1129,7 @@ export default function ScheduledPosts() {
 
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowBulkRescheduleDialog(false)}>
-              Cancel
+              {t("common:cancel", "Cancel")}
             </Button>
             <Button
               onClick={handleBulkReschedule}
@@ -1133,10 +1138,10 @@ export default function ScheduledPosts() {
               {isBulkRescheduling ? (
                 <>
                   <Loader2 className="w-4 h-4 animate-spin mr-2" />
-                  Rescheduling...
+                  {t("bulk.rescheduling", "Rescheduling...")}
                 </>
               ) : (
-                `Reschedule ${selectedPostIds.size} Posts`
+                t("bulk.rescheduleButton", "Reschedule {{count}} Posts", { count: selectedPostIds.size })
               )}
             </Button>
           </DialogFooter>

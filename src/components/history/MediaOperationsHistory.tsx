@@ -82,36 +82,9 @@ import {
   Info,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useTranslation } from "react-i18next";
 
-const OPERATION_TYPES: { value: OperationType | "all"; label: string }[] = [
-  { value: "all", label: "All Operations" },
-  { value: "upload", label: "Upload" },
-  { value: "delete_file", label: "Delete File" },
-  { value: "delete_bulk", label: "Bulk Delete" },
-  { value: "create_folder", label: "Create Folder" },
-  { value: "delete_folder", label: "Delete Folder" },
-  { value: "rename_file", label: "Rename File" },
-  { value: "rename_folder", label: "Rename Folder" },
-  { value: "move_file", label: "Move File" },
-  { value: "download", label: "Download" },
-  { value: "background_removal", label: "Background Removal" },
-  { value: "upscale", label: "Upscale" },
-  { value: "crop", label: "Crop" },
-  { value: "resize", label: "Resize" },
-  { value: "filter", label: "Filters" },
-  { value: "compress", label: "Compress" },
-  { value: "batch_rename", label: "Batch Rename" },
-  { value: "batch_tools", label: "Batch Tools" },
-  { value: "image_edit", label: "Image Edit" },
-  { value: "replace_file", label: "Replace File" },
-];
 
-const STATUS_OPTIONS: { value: OperationStatus | "all"; label: string }[] = [
-  { value: "all", label: "All Status" },
-  { value: "completed", label: "Completed" },
-  { value: "processing", label: "Processing" },
-  { value: "failed", label: "Failed" },
-];
 
 function getOperationIcon(type: OperationType) {
   const iconProps = { className: "w-4 h-4" };
@@ -158,27 +131,27 @@ function getOperationIcon(type: OperationType) {
   }
 }
 
-function getStatusBadge(status: OperationStatus) {
+function getStatusBadge(status: OperationStatus, t: (key: string, fallback: string) => string) {
   switch (status) {
     case "completed":
       return (
         <Badge className="bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20">
           <CheckCircle2 className="w-3 h-3 mr-1" />
-          Completed
+          {t("common:status.completed", "Completed")}
         </Badge>
       );
     case "processing":
       return (
         <Badge className="bg-blue-500/10 text-blue-500 hover:bg-blue-500/20">
           <Loader2 className="w-3 h-3 mr-1 animate-spin" />
-          Processing
+          {t("common:status.processing", "Processing")}
         </Badge>
       );
     case "failed":
       return (
         <Badge className="bg-destructive/10 text-destructive hover:bg-destructive/20">
           <XCircle className="w-3 h-3 mr-1" />
-          Failed
+          {t("common:status.failed", "Failed")}
         </Badge>
       );
     default:
@@ -258,6 +231,7 @@ function OperationDetails({ details }: { details: Json }) {
 
 // Full details panel component
 function OperationFullDetails({ operation }: { operation: MediaOperation }) {
+  const { t } = useTranslation("history");
   const details = operation.operation_details as Record<string, unknown> | null;
   
   return (
@@ -265,32 +239,38 @@ function OperationFullDetails({ operation }: { operation: MediaOperation }) {
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {/* Basic Info */}
         <div className="space-y-2">
-          <h4 className="font-medium text-sm text-muted-foreground">Basic Info</h4>
+          <h4 className="font-medium text-sm text-muted-foreground">{t("mediaOps.basicInfo", "Basic Info")}</h4>
           <div className="space-y-1 text-sm">
             <div className="flex justify-between">
-              <span className="text-muted-foreground">Operation:</span>
+              <span className="text-muted-foreground">{t("mediaOps.table.operation", "Operation")}:</span>
               <span className="font-medium">{getOperationTypeLabel(operation.operation_type)}</span>
             </div>
             <div className="flex justify-between">
-              <span className="text-muted-foreground">Status:</span>
+              <span className="text-muted-foreground">{t("table.status", "Status")}:</span>
               <span className={cn(
                 "font-medium",
                 operation.status === "completed" && "text-emerald-500",
                 operation.status === "failed" && "text-destructive",
                 operation.status === "processing" && "text-blue-500"
               )}>
-                {operation.status.charAt(0).toUpperCase() + operation.status.slice(1)}
+                {operation.status === "completed"
+                  ? t("common:status.completed", "Completed")
+                  : operation.status === "failed"
+                  ? t("common:status.failed", "Failed")
+                  : operation.status === "processing"
+                  ? t("common:status.processing", "Processing")
+                  : operation.status}
               </span>
             </div>
             {operation.file_name && (
               <div className="flex justify-between">
-                <span className="text-muted-foreground">File:</span>
+                <span className="text-muted-foreground">{t("mediaOps.fileLabel", "File:")}</span>
                 <span className="font-medium truncate max-w-[200px]">{operation.file_name}</span>
               </div>
             )}
             {operation.duration_ms && (
               <div className="flex justify-between">
-                <span className="text-muted-foreground">Duration:</span>
+                <span className="text-muted-foreground">{t("mediaOps.durationLabel", "Duration:")}</span>
                 <span className="font-medium">{formatDuration(operation.duration_ms)}</span>
               </div>
             )}
@@ -299,15 +279,15 @@ function OperationFullDetails({ operation }: { operation: MediaOperation }) {
 
         {/* Timestamps */}
         <div className="space-y-2">
-          <h4 className="font-medium text-sm text-muted-foreground">Timestamps</h4>
+          <h4 className="font-medium text-sm text-muted-foreground">{t("mediaOps.timestamps", "Timestamps")}</h4>
           <div className="space-y-1 text-sm">
             <div className="flex justify-between">
-              <span className="text-muted-foreground">Started:</span>
+              <span className="text-muted-foreground">{t("mediaOps.started", "Started:")}</span>
               <span className="font-medium">{format(new Date(operation.created_at), "PPpp")}</span>
             </div>
             {operation.completed_at && (
               <div className="flex justify-between">
-                <span className="text-muted-foreground">Completed:</span>
+                <span className="text-muted-foreground">{t("mediaOps.completed", "Completed:")}</span>
                 <span className="font-medium">{format(new Date(operation.completed_at), "PPpp")}</span>
               </div>
             )}
@@ -317,7 +297,7 @@ function OperationFullDetails({ operation }: { operation: MediaOperation }) {
         {/* Operation Details */}
         {details && Object.keys(details).length > 0 && (
           <div className="space-y-2">
-            <h4 className="font-medium text-sm text-muted-foreground">Operation Details</h4>
+            <h4 className="font-medium text-sm text-muted-foreground">{t("mediaOps.operationDetails", "Operation Details")}</h4>
             <div className="space-y-1 text-sm">
               {Object.entries(details).map(([key, value]) => (
                 <div key={key} className="flex justify-between">
@@ -337,7 +317,7 @@ function OperationFullDetails({ operation }: { operation: MediaOperation }) {
         <div className="space-y-2">
           <h4 className="font-medium text-sm text-destructive flex items-center gap-2">
             <XCircle className="w-4 h-4" />
-            Error Details
+            {t("mediaOps.errorDetails", "Error Details")}
           </h4>
           <div className="bg-destructive/10 text-destructive rounded-md p-3 text-sm">
             {operation.error_message}
@@ -348,11 +328,11 @@ function OperationFullDetails({ operation }: { operation: MediaOperation }) {
       {/* URLs */}
       {(operation.source_url || operation.result_url) && (
         <div className="space-y-2">
-          <h4 className="font-medium text-sm text-muted-foreground">URLs</h4>
+          <h4 className="font-medium text-sm text-muted-foreground">{t("mediaOps.urls", "URLs")}</h4>
           <div className="space-y-2 text-sm">
             {operation.source_url && (
               <div className="flex items-center gap-2">
-                <span className="text-muted-foreground">Source:</span>
+                <span className="text-muted-foreground">{t("mediaOps.sourceLabel", "Source:")}</span>
                 <a 
                   href={operation.source_url} 
                   target="_blank" 
@@ -366,7 +346,7 @@ function OperationFullDetails({ operation }: { operation: MediaOperation }) {
             )}
             {operation.result_url && (
               <div className="flex items-center gap-2">
-                <span className="text-muted-foreground">Result:</span>
+                <span className="text-muted-foreground">{t("mediaOps.resultLabel", "Result:")}</span>
                 <a 
                   href={operation.result_url} 
                   target="_blank" 
@@ -386,6 +366,7 @@ function OperationFullDetails({ operation }: { operation: MediaOperation }) {
 }
 
 export function MediaOperationsHistory() {
+  const { t } = useTranslation("history");
   const [operationTypeFilter, setOperationTypeFilter] = useState<
     OperationType | "all"
   >("all");
@@ -453,6 +434,36 @@ export function MediaOperationsHistory() {
     setClearAllDialogOpen(false);
   };
 
+  const operationTypeOptions: { value: OperationType | "all"; label: string }[] = [
+    { value: "all", label: t("mediaOps.allOperations", "All Operations") },
+    { value: "upload", label: t("mediaOps.upload", "Upload") },
+    { value: "delete_file", label: t("mediaOps.deleteFile", "Delete File") },
+    { value: "delete_bulk", label: t("mediaOps.bulkDelete", "Bulk Delete") },
+    { value: "create_folder", label: t("mediaOps.createFolder", "Create Folder") },
+    { value: "delete_folder", label: t("mediaOps.deleteFolder", "Delete Folder") },
+    { value: "rename_file", label: t("mediaOps.renameFile", "Rename File") },
+    { value: "rename_folder", label: t("mediaOps.renameFolder", "Rename Folder") },
+    { value: "move_file", label: t("mediaOps.moveFile", "Move File") },
+    { value: "download", label: t("mediaOps.download", "Download") },
+    { value: "background_removal", label: t("mediaOps.backgroundRemoval", "Background Removal") },
+    { value: "upscale", label: t("mediaOps.upscale", "Upscale") },
+    { value: "crop", label: t("mediaOps.crop", "Crop") },
+    { value: "resize", label: t("mediaOps.resize", "Resize") },
+    { value: "filter", label: t("mediaOps.filters", "Filters") },
+    { value: "compress", label: t("mediaOps.compress", "Compress") },
+    { value: "batch_rename", label: t("mediaOps.batchRename", "Batch Rename") },
+    { value: "batch_tools", label: t("mediaOps.batchTools", "Batch Tools") },
+    { value: "image_edit", label: t("mediaOps.imageEdit", "Image Edit") },
+    { value: "replace_file", label: t("mediaOps.replaceFile", "Replace File") },
+  ];
+
+  const statusOptions: { value: OperationStatus | "all"; label: string }[] = [
+    { value: "all", label: t("mediaOps.allStatus", "All Status") },
+    { value: "completed", label: t("common:status.completed", "Completed") },
+    { value: "processing", label: t("common:status.processing", "Processing") },
+    { value: "failed", label: t("common:status.failed", "Failed") },
+  ];
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-16">
@@ -472,10 +483,10 @@ export function MediaOperationsHistory() {
           }
         >
           <SelectTrigger className="w-[180px]">
-            <SelectValue placeholder="Operation Type" />
+            <SelectValue placeholder={t("mediaOps.allOperations", "All Operations")} />
           </SelectTrigger>
           <SelectContent>
-            {OPERATION_TYPES.map((type) => (
+            {operationTypeOptions.map((type) => (
               <SelectItem key={type.value} value={type.value}>
                 {type.label}
               </SelectItem>
@@ -488,10 +499,10 @@ export function MediaOperationsHistory() {
           onValueChange={(v) => setStatusFilter(v as OperationStatus | "all")}
         >
           <SelectTrigger className="w-[150px]">
-            <SelectValue placeholder="Status" />
+            <SelectValue placeholder={t("mediaOps.allStatus", "All Status")} />
           </SelectTrigger>
           <SelectContent>
-            {STATUS_OPTIONS.map((status) => (
+            {statusOptions.map((status) => (
               <SelectItem key={status.value} value={status.value}>
                 {status.label}
               </SelectItem>
@@ -508,7 +519,7 @@ export function MediaOperationsHistory() {
             onClick={() => setDeleteDialogOpen(true)}
           >
             <Trash2 className="w-4 h-4 mr-2" />
-            Delete ({selectedOperations.size})
+            {t("mediaOps.deleteCount", "Delete ({{count}})", { count: selectedOperations.size })}
           </Button>
         )}
 
@@ -518,7 +529,7 @@ export function MediaOperationsHistory() {
             size="sm"
             onClick={() => setClearAllDialogOpen(true)}
           >
-            Clear All
+            {t("mediaOps.clearAll", "Clear All")}
           </Button>
         )}
       </div>
@@ -527,25 +538,25 @@ export function MediaOperationsHistory() {
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <div className="bg-card border rounded-lg p-4">
           <div className="text-2xl font-bold">{operations.length}</div>
-          <div className="text-sm text-muted-foreground">Total Operations</div>
+          <div className="text-sm text-muted-foreground">{t("mediaOps.totalOperations", "Total Operations")}</div>
         </div>
         <div className="bg-card border rounded-lg p-4">
           <div className="text-2xl font-bold text-emerald-500">
             {operations.filter((op) => op.status === "completed").length}
           </div>
-          <div className="text-sm text-muted-foreground">Completed</div>
+          <div className="text-sm text-muted-foreground">{t("common:status.completed", "Completed")}</div>
         </div>
         <div className="bg-card border rounded-lg p-4">
           <div className="text-2xl font-bold text-blue-500">
             {operations.filter((op) => op.status === "processing").length}
           </div>
-          <div className="text-sm text-muted-foreground">Processing</div>
+          <div className="text-sm text-muted-foreground">{t("common:status.processing", "Processing")}</div>
         </div>
         <div className="bg-card border rounded-lg p-4">
           <div className="text-2xl font-bold text-destructive">
             {operations.filter((op) => op.status === "failed").length}
           </div>
-          <div className="text-sm text-muted-foreground">Failed</div>
+          <div className="text-sm text-muted-foreground">{t("common:status.failed", "Failed")}</div>
         </div>
       </div>
 
@@ -555,9 +566,9 @@ export function MediaOperationsHistory() {
           <div className="w-16 h-16 rounded-full bg-secondary mx-auto flex items-center justify-center mb-4">
             <Image className="w-8 h-8 text-muted-foreground" />
           </div>
-          <h3 className="text-lg font-medium mb-2">No operations found</h3>
+          <h3 className="text-lg font-medium mb-2">{t("mediaOps.noOperations", "No operations found")}</h3>
           <p className="text-muted-foreground">
-            Your media operation history will appear here
+            {t("mediaOps.noOperationsDesc", "Your media operation history will appear here")}
           </p>
         </div>
       ) : (
@@ -577,12 +588,12 @@ export function MediaOperationsHistory() {
                       }
                     />
                   </TableHead>
-                  <TableHead>Operation</TableHead>
-                  <TableHead>File</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Duration</TableHead>
-                  <TableHead>Date</TableHead>
-                  <TableHead className="w-24 text-center">Actions</TableHead>
+                  <TableHead>{t("mediaOps.table.operation", "Operation")}</TableHead>
+                  <TableHead>{t("mediaOps.table.file", "File")}</TableHead>
+                  <TableHead>{t("table.status", "Status")}</TableHead>
+                  <TableHead>{t("mediaOps.table.duration", "Duration")}</TableHead>
+                  <TableHead>{t("mediaOps.table.date", "Date")}</TableHead>
+                  <TableHead className="w-24 text-center">{t("table.actions", "Actions")}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -629,7 +640,7 @@ export function MediaOperationsHistory() {
                             </Tooltip>
                           </TooltipProvider>
                         </TableCell>
-                        <TableCell>{getStatusBadge(op.status)}</TableCell>
+                        <TableCell>{getStatusBadge(op.status, t)}</TableCell>
                         <TableCell>
                           <span className="text-muted-foreground">
                             {formatDuration(op.duration_ms)}
@@ -682,7 +693,7 @@ export function MediaOperationsHistory() {
                                       </a>
                                     </Button>
                                   </TooltipTrigger>
-                                  <TooltipContent>View Result</TooltipContent>
+                                  <TooltipContent>{t("mediaOps.viewResult", "View Result")}</TooltipContent>
                                 </Tooltip>
                               </TooltipProvider>
                             )}
@@ -693,7 +704,7 @@ export function MediaOperationsHistory() {
                                     <AlertCircle className="w-4 h-4 text-destructive" />
                                   </TooltipTrigger>
                                   <TooltipContent className="max-w-[300px]">
-                                    {op.error_message || "Operation failed"}
+                                    {op.error_message || t("mediaOps.operationFailed", "Operation failed")}
                                   </TooltipContent>
                                 </Tooltip>
                               </TooltipProvider>
@@ -724,14 +735,13 @@ export function MediaOperationsHistory() {
       <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete Operations</AlertDialogTitle>
+            <AlertDialogTitle>{t("mediaOps.deleteTitle", "Delete Operations")}</AlertDialogTitle>
             <AlertDialogDescription>
-              Are you sure you want to delete {selectedOperations.size}{" "}
-              operation(s) from history? This action cannot be undone.
+              {t("mediaOps.deleteDesc", "Are you sure you want to delete {{count}} operation(s) from history? This action cannot be undone.", { count: selectedOperations.size })}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel>{t("common:cancel", "Cancel")}</AlertDialogCancel>
             <AlertDialogAction
               onClick={handleDelete}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
@@ -739,7 +749,7 @@ export function MediaOperationsHistory() {
               {deleteMutation.isPending ? (
                 <Loader2 className="w-4 h-4 animate-spin mr-2" />
               ) : null}
-              Delete
+              {t("common:delete", "Delete")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -749,14 +759,13 @@ export function MediaOperationsHistory() {
       <AlertDialog open={clearAllDialogOpen} onOpenChange={setClearAllDialogOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Clear All History</AlertDialogTitle>
+            <AlertDialogTitle>{t("mediaOps.clearAllTitle", "Clear All History")}</AlertDialogTitle>
             <AlertDialogDescription>
-              Are you sure you want to clear all operation history? This action
-              cannot be undone.
+              {t("mediaOps.clearAllDesc", "Are you sure you want to clear all operation history? This action cannot be undone.")}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel>{t("common:cancel", "Cancel")}</AlertDialogCancel>
             <AlertDialogAction
               onClick={handleClearAll}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
@@ -764,7 +773,7 @@ export function MediaOperationsHistory() {
               {clearAllMutation.isPending ? (
                 <Loader2 className="w-4 h-4 animate-spin mr-2" />
               ) : null}
-              Clear All
+              {t("mediaOps.clearAll", "Clear All")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

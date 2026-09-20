@@ -1,4 +1,5 @@
 import { Link } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { Reveal, GradientRingCard } from "@/components/fx";
 import { Button } from "@/components/ui/button";
 import { PlatformIcon } from "@/components/PlatformIcon";
@@ -27,14 +28,16 @@ interface RecentPostsProps {
 }
 
 export function RecentPosts({ posts, isLoading }: RecentPostsProps) {
+  const { t } = useTranslation("dashboard");
+
   return (
     <Reveal className="lg:col-span-2" delay={120}>
     <GradientRingCard variant="sky" innerClassName="p-0 overflow-hidden" hoverLift={false}>
       <div className="p-5 border-b border-border/60 flex items-center justify-between">
-        <h2 className="font-semibold">Recent Posts</h2>
+        <h2 className="font-semibold">{t("recentPosts.title", "Recent Posts")}</h2>
         <Link to="/history">
           <Button variant="ghost" size="sm">
-            View All
+            {t("recentPosts.viewAll", "View All")}
             <ArrowUpRight className="w-4 h-4 ml-1" />
           </Button>
         </Link>
@@ -46,11 +49,11 @@ export function RecentPosts({ posts, isLoading }: RecentPostsProps) {
           </div>
         ) : posts.length === 0 ? (
           <div className="p-8 text-center">
-            <p className="text-muted-foreground">No posts yet. Create your first post!</p>
+            <p className="text-muted-foreground">{t("recentPosts.noPosts", "No posts yet. Create your first post!")}</p>
             <Link to="/post">
               <Button variant="outline" className="mt-4">
                 <Plus className="w-4 h-4 mr-2" />
-                Create Post
+                {t("common:createPost", "Create Post")}
               </Button>
             </Link>
           </div>
@@ -60,7 +63,7 @@ export function RecentPosts({ posts, isLoading }: RecentPostsProps) {
               <div className="flex items-start justify-between gap-4">
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium truncate mb-2">
-                    {post.caption || "No caption"}
+                    {post.caption || t("common:noCaption", "No caption")}
                   </p>
                   <div className="flex items-center gap-3">
                     <div className="flex items-center gap-1.5">
@@ -82,12 +85,12 @@ export function RecentPosts({ posts, isLoading }: RecentPostsProps) {
                   {post.status === "completed" ? (
                     <span className="flex items-center gap-1 text-xs text-emerald-400">
                       <CheckCircle2 className="w-4 h-4" />
-                      Success
+                      {t("common:status.success", "Success")}
                     </span>
                   ) : post.status === "failed" ? (
                     <span className="flex items-center gap-1 text-xs text-destructive">
                       <XCircle className="w-4 h-4" />
-                      Failed
+                      {t("common:status.failed", "Failed")}
                     </span>
                   ) : (
                     <span className="flex items-center gap-1 text-xs text-amber-400">
