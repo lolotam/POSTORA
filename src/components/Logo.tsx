@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { cn } from "@/lib/utils";
 import { useAppSettings } from "@/hooks/useAppSettings";
 
@@ -46,6 +47,7 @@ function LogoSkeleton({ size, showText, className }: { size: "sm" | "md" | "lg";
 
 export function Logo({ className, size = "md", showText = true, animate = true }: LogoProps) {
   const { data: settings, isLoading } = useAppSettings();
+  const [failedLogoSrc, setFailedLogoSrc] = useState<string | null>(null);
 
   const sizes = {
     sm: "w-8 h-8",
@@ -65,7 +67,10 @@ export function Logo({ className, size = "md", showText = true, animate = true }
   }
 
   const appName = settings?.appName || "Postora";
-  const appLogo = settings?.appLogo;
+  // Blank/whitespace URLs and URLs that already failed to load fall back to
+  // the built-in mark, so a stale app_logo value never renders a broken image.
+  const storedLogo = settings?.appLogo?.trim() || null;
+  const appLogo = storedLogo && storedLogo !== failedLogoSrc ? storedLogo : null;
 
   return (
     <div className={cn("flex items-center gap-3", className)}>
@@ -83,6 +88,9 @@ export function Logo({ className, size = "md", showText = true, animate = true }
             className="object-contain w-full h-full"
             width={size === "sm" ? 32 : size === "md" ? 40 : 56}
             height={size === "sm" ? 32 : size === "md" ? 40 : 56}
+            decoding="async"
+            draggable={false}
+            onError={() => setFailedLogoSrc(appLogo)}
           />
         </div>
       ) : (
