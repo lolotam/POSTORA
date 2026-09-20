@@ -55,7 +55,7 @@ const CONVERSATION_COLUMNS =
 
 const MESSAGE_COLUMNS =
   "id, social_account_id, conversation_id, message_id, message_text, " +
-  "message_type, direction, status, timestamp";
+  "message_type, direction, status, timestamp, media_type, media_metadata";
 
 // deno-lint-ignore no-explicit-any
 function presentConversation(row: any): Record<string, unknown> {
@@ -84,6 +84,45 @@ function presentMessage(row: any, conversationUuid: string | null): Record<strin
     // The wamid. §7.1: a provider id is a separate, clearly named field —
     // never the primary id, which must stay stable and Postora-owned.
     provider_message_id: row.message_id ?? null,
+    media: presentMedia(row),
+  };
+}
+
+/**
+ * Inbound media as METADATA only, never a location.
+ *
+ * `media_url` is deliberately absent from MESSAGE_COLUMNS and from this shape.
+ * It holds either a bucket-relative storage path or a Graph lookaside URL
+ * (_shared/whatsappMediaResolver.ts:4-5), and neither is fetchable by a partner:
+ * the first is not a URL at all, the second needs a bearer token the partner
+ * does not hold. The bytes are reached through GET /v1/messages/{id}/media,
+ * which mints a short-lived Postora-origin URL.
+ *
+ * The metadata keys mirror the resolver's own reads so a listing and a download
+ * cannot disagree about the same row.
+ */
+// deno-lint-ignore no-explicit-any
+function presentMedia(row: any): Record<string, unknown> | null {
+  if (!row.media_type) return null;
+  const meta = row.media_metadata && typeof row.media_metadata === "object" &&
+      !Array.isArray(row.media_metadata)
+    ? row.media_metadata as Record<string, unknown>
+    : null;
+  const str = (key: string): string | null => {
+    const value = meta?.[key];
+    return typeof value === "string" && value.length > 0 ? value : null;
+  };
+  const num = (key: string): number | null => {
+    const value = meta?.[key];
+    return typeof value === "number" && Number.isFinite(value) && value > 0
+      ? Math.floor(value)
+      : null;
+  };
+  return {
+    type: row.media_type,
+    mime_type: str("mime_type"),
+    file_name: str("filename") ?? str("file_name"),
+    size_bytes: num("size") ?? num("file_length") ?? num("size_bytes"),
   };
 }
 

@@ -28,6 +28,7 @@ import {
   listConversationMessages,
   listConversations,
 } from "./conversations.ts";
+import { getMessageMedia } from "./messageMedia.ts";
 import { createConnectLink, listConnectors } from "./connectors.ts";
 import { getMedia, postMedia } from "./media.ts";
 import { postMessages } from "./messages.ts";
@@ -328,6 +329,14 @@ export const V1_ROUTES: V1Route[] = [
     pattern: "/v1/messages",
     methods: {
       POST: withPartnerAuth("send_template", "C", postMessages),
+    },
+  },
+  {
+    // Above /v1/messages/{id}: segment counts differ so they cannot collide,
+    // but the more specific pattern is registered first by habit.
+    pattern: "/v1/messages/{id}/media",
+    methods: {
+      GET: withPartnerAuth("get_message_media", "B", getMessageMedia),
     },
   },
   {

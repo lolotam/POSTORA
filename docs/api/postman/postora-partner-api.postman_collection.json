@@ -513,6 +513,42 @@
       "name": "messages",
       "item": [
         {
+          "name": "Get a time-bounded URL for an inbound message's media",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "x-postora-key",
+                "value": "{{partnerApiKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/functions/v1/partner-api/v1/messages/:id/media",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "functions",
+                "v1",
+                "partner-api",
+                "v1",
+                "messages",
+                ":id",
+                "media"
+              ],
+              "variable": [
+                {
+                  "key": "id",
+                  "value": "msg_01H8X2K4Y9Z3Q7W6E5R4T3Y2U1"
+                }
+              ]
+            },
+            "description": "Mints a short-lived, Postora-origin URL for the media attached to an\ninbound message, materialising the bytes into storage on first request.\n\nThe `media` object on a `Message` describes the attachment; this is how\nthe bytes are actually reached. The `media_url` carried on the\n`message.received` webhook is a provider URL that requires provider\ncredentials and is NOT a supported download path.\n\nThe returned `url` is a short-lived capability, not a stable reference.\nDo not persist it, do not log it"
+          },
+          "response": []
+        },
+        {
           "name": "Get one message",
           "request": {
             "method": "GET",
@@ -1797,7 +1833,7 @@
             "description": "Scope `automation:manage`. Risk class C.\nRequires the agent setup flag for the explicitly requested platform:\nfeature_msg_whatsapp, feature_msg_facebook, feature_msg_instagram,\nfeature_msg_threads, or feature_youtube_comments respectively.\nEntitlement is checked before account or tool resolution. account_id must\nbelong to the current workspace and key binding; otherwise resource_not_found.\nOmit account_id only if the key binds exactly one account. The account\nmust be active and match platform. N",
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"is_enabled\": true,\n  \"default_mode\": \"ai_first\",\n  \"persona_instructions\": \"string\",\n  \"business_profile_text\": \"string\",\n  \"language_mode\": \"auto\",\n  \"model\": \"string\",\n  \"fallback_model_1\": \"string\",\n  \"fallback_model_2\": \"string\",\n  \"temperature\": 0,\n  \"admin_phone_numbers\": [\n    \"+15550000000\"\n  ],\n  \"daily_message_cap\": 0,\n  \"reply_cooldown_seconds\": 0,\n  \"max_tool_iterations\": 0,\n  \"handoff_on_request\": true,\n  \"handoff_on_low_confidence\": true,\n  \"business_profile\": {\n    \"industry\": \"ecommerce\",\n    \"products\": \"string\",\n    \"notes\": \"string\",\n    \"policies\": {\n      \"returns\": \"string\",\n      \"shipping\": \"string\",\n      \"warranty\": \"string\"\n    },\n    \"faqs\": [\n      {\n        \"q\": \"string\",\n        \"a\": \"string\"\n      }\n    ]\n  },\n  \"agent_behavior\": {\n    \"tone\": \"friendly_professional\",\n    \"response_length\": \"short\",\n    \"greeting\": \"string\",\n    \"goals\": [\n      \"recommend_products\"\n    ],\n    \"instruction_blocks\": [\n      {\n        \"title\": \"string\",\n        \"body\": \"string\"\n      }\n    ]\n  },\n  \"confirm_clear\": true\n}",
+              "raw": "{\n  \"is_enabled\": true,\n  \"default_mode\": \"ai_first\",\n  \"persona_instructions\": \"string\",\n  \"business_profile_text\": \"string\",\n  \"language_mode\": \"auto\",\n  \"model\": \"string\",\n  \"fallback_model_1\": \"string\",\n  \"fallback_model_2\": \"string\",\n  \"temperature\": 0,\n  \"admin_phone_numbers\": [\n    \"+15550000000\"\n  ],\n  \"daily_message_cap\": 0,\n  \"escalation_timeout_minutes\": 1,\n  \"reply_cooldown_seconds\": 0,\n  \"max_tool_iterations\": 0,\n  \"handoff_on_request\": true,\n  \"handoff_on_low_confidence\": true,\n  \"business_profile\": {\n    \"industry\": \"ecommerce\",\n    \"products\": \"string\",\n    \"notes\": \"string\",\n    \"policies\": {\n      \"returns\": \"string\",\n      \"shipping\": \"string\",\n      \"warranty\": \"string\"\n    },\n    \"faqs\": [\n      {\n        \"q\": \"string\",\n        \"a\": \"string\"\n      }\n    ]\n  },\n  \"agent_behavior\": {\n    \"tone\": \"friendly_professional\",\n    \"response_length\": \"short\",\n    \"greeting\": \"string\",\n    \"goals\": [\n      \"recommend_products\"\n    ],\n    \"instruction_blocks\": [\n      {\n        \"title\": \"string\",\n        \"body\": \"string\"\n      }\n    ]\n  },\n  \"confirm_clear\": true\n}",
               "options": {
                 "raw": {
                   "language": "json"
