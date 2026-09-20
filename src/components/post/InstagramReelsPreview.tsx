@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Heart, MessageCircle, Send, Bookmark, MoreHorizontal, Music2 } from "lucide-react";
@@ -15,6 +16,8 @@ export function InstagramReelsPreview({
   username = "your_account",
   avatarUrl,
 }: InstagramReelsPreviewProps) {
+  const { t } = useTranslation("postpreview");
+
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
@@ -22,10 +25,10 @@ export function InstagramReelsPreview({
           <div className="w-5 h-5 bg-gradient-to-br from-[#833AB4] via-[#E1306C] to-[#F77737] rounded flex items-center justify-center">
             <span className="text-white text-xs font-bold">▶</span>
           </div>
-          <span className="text-sm font-medium">Reels Preview</span>
+          <span className="text-sm font-medium">{t("instagramReels.previewTitle", "Reels Preview")}</span>
         </div>
         <Badge variant="secondary" className="text-xs bg-gradient-to-r from-[#833AB4]/10 via-[#E1306C]/10 to-[#F77737]/10 text-[#E1306C]">
-          Reel
+          {t("instagramReels.reelBadge", "Reel")}
         </Badge>
       </div>
 
@@ -59,7 +62,7 @@ export function InstagramReelsPreview({
         {/* Instagram Reels logo */}
         <div className="absolute top-4 left-4 flex items-center gap-1">
           <div className="bg-gradient-to-r from-[#833AB4] via-[#E1306C] to-[#F77737] rounded-sm px-1.5 py-0.5">
-            <span className="text-white text-xs font-bold">Reels</span>
+            <span className="text-white text-xs font-bold">{t("instagramReels.reelsLabel", "Reels")}</span>
           </div>
         </div>
 
@@ -103,7 +106,7 @@ export function InstagramReelsPreview({
             </Avatar>
             <span className="font-semibold text-sm">{username}</span>
             <button className="px-2 py-0.5 border border-white text-white text-xs font-semibold rounded">
-              Follow
+              {t("instagramReels.follow", "Follow")}
             </button>
           </div>
           {caption && (
@@ -111,14 +114,14 @@ export function InstagramReelsPreview({
           )}
           <div className="flex items-center gap-1 mt-2 text-xs opacity-70">
             <Music2 className="w-3 h-3" />
-            <span className="truncate">Original audio - {username}</span>
+            <span className="truncate">{t("instagramReels.originalAudio", "Original audio - {{username}}", { username })}</span>
           </div>
         </div>
       </div>
 
       {/* Info text */}
       <p className="text-xs text-muted-foreground text-center">
-        Reels are vertical videos up to 90 seconds
+        {t("instagramReels.infoText", "Reels are vertical videos up to 90 seconds")}
       </p>
     </div>
   );

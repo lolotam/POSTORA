@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Heart, MessageCircle, Repeat2, MoreHorizontal, ExternalLink, AlertTriangle, Lock, Share, Users, List } from "lucide-react";
@@ -41,6 +42,8 @@ export function BlueskyPostPreview({
   replyControl = "everyone",
   replySettings,
 }: BlueskyPostPreviewProps) {
+  const { t } = useTranslation("postpreview");
+
   // Combine single mediaFile with mediaFiles array
   const allMedia = mediaFile ? [mediaFile, ...mediaFiles] : mediaFiles;
   
@@ -72,19 +75,19 @@ export function BlueskyPostPreview({
   const getReplyLabel = () => {
     if (replySettings) {
       switch (replySettings.selectedOption) {
-        case "nobody": return "Replies disabled";
-        case "following": return "Following can reply";
-        case "mentioned": return "Mentioned only";
-        case "list": return "List members can reply";
-        default: return "Everybody can reply";
+        case "nobody": return t("bluesky.repliesDisabled", "Replies disabled");
+        case "following": return t("bluesky.followingCanReply", "Following can reply");
+        case "mentioned": return t("bluesky.mentionedOnly", "Mentioned only");
+        case "list": return t("bluesky.listMembersCanReply", "List members can reply");
+        default: return t("bluesky.everybodyCanReply", "Everybody can reply");
       }
     }
     // Legacy fallback
     switch (replyControl) {
-      case "none": return "Replies disabled";
-      case "following": return "Following can reply";
-      case "mentions": return "Mentioned only";
-      default: return "Everybody can reply";
+      case "none": return t("bluesky.repliesDisabled", "Replies disabled");
+      case "following": return t("bluesky.followingCanReply", "Following can reply");
+      case "mentions": return t("bluesky.mentionedOnly", "Mentioned only");
+      default: return t("bluesky.everybodyCanReply", "Everybody can reply");
     }
   };
 
@@ -185,7 +188,7 @@ export function BlueskyPostPreview({
               <path d="M123.121 33.6637C188.241 82.5526 258.281 181.681 284 234.873C309.719 181.681 379.759 82.5526 444.879 33.6637C491.866 -1.61183 568 -28.9064 568 57.9464C568 75.2916 558.055 203.659 552.222 224.501C531.947 296.954 458.067 315.434 392.347 304.249C507.222 323.8 536.444 388.56 473.333 453.32C353.473 576.312 301.061 422.461 287.631 383.039C285.169 373.514 284.017 369.044 284 368.769C283.983 369.044 282.831 373.514 280.369 383.039C266.939 422.461 214.527 576.312 94.6667 453.32C31.5556 388.56 60.7778 323.8 175.653 304.249C109.933 315.434 36.0533 296.954 15.7778 224.501C9.94533 203.659 0 75.2916 0 57.9464C0 -28.9064 76.1333 -1.61183 123.121 33.6637Z" />
             </svg>
           </div>
-          <span className="text-sm font-medium">Bluesky Preview</span>
+          <span className="text-sm font-medium">{t("bluesky.previewTitle", "Bluesky Preview")}</span>
         </div>
         <div className="flex items-center gap-2">
           {isReplyRestricted && (
@@ -195,7 +198,7 @@ export function BlueskyPostPreview({
             </Badge>
           )}
           <Badge variant="secondary" className="text-xs bg-sky-500/10 text-sky-600 dark:bg-sky-500/20 dark:text-sky-400">
-            Post
+            {t("bluesky.postBadge", "Post")}
           </Badge>
         </div>
       </div>
@@ -205,7 +208,7 @@ export function BlueskyPostPreview({
         <div className="flex items-center gap-2 p-2 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-700 dark:text-amber-400">
           <AlertTriangle className="w-4 h-4 flex-shrink-0" />
           <span className="text-xs font-medium">
-            {adultContent && "Adult content"}
+            {adultContent && t("bluesky.adultContent", "Adult content")}
             {adultContent && contentWarning && " • "}
             {contentWarning}
           </span>
@@ -216,7 +219,7 @@ export function BlueskyPostPreview({
       <div className="max-w-lg mx-auto bg-background border rounded-xl overflow-hidden">
         {/* Back Header */}
         <div className="flex items-center gap-3 p-3 border-b">
-          <span className="text-sm font-medium">← Post</span>
+          <span className="text-sm font-medium">{t("bluesky.backPost", "← Post")}</span>
           <div className="ml-auto">
             <MoreHorizontal className="w-5 h-5 text-muted-foreground" />
           </div>
@@ -251,7 +254,7 @@ export function BlueskyPostPreview({
                 {truncatedCaption}
                 {caption.length > 300 && (
                   <span className="text-sky-500 hover:underline cursor-pointer ml-1">
-                    Show more
+                    {t("bluesky.showMore", "Show more")}
                   </span>
                 )}
               </p>
@@ -270,7 +273,7 @@ export function BlueskyPostPreview({
                   controls
                 />
                 <Badge className="absolute top-2 right-2 bg-black/70 text-white text-xs">
-                  Video
+                  {t("bluesky.videoBadge", "Video")}
                 </Badge>
               </div>
             )}
@@ -286,7 +289,7 @@ export function BlueskyPostPreview({
                 </div>
                 <div className="p-3 border-t">
                   <p className="text-xs text-muted-foreground mb-1">{embedDomain}</p>
-                  <p className="text-sm font-medium line-clamp-2">Link Preview</p>
+                  <p className="text-sm font-medium line-clamp-2">{t("bluesky.linkPreview", "Link Preview")}</p>
                 </div>
               </div>
             )}
@@ -325,9 +328,11 @@ export function BlueskyPostPreview({
 
       {/* Info text */}
       <p className="text-xs text-muted-foreground text-center">
-        {caption.length > 0 ? `${caption.length}/300 characters` : "Add content to see how your post will appear on Bluesky"}
-        {images.length > 0 && ` • ${images.length}/4 images`}
-        {video && " • 1 video"}
+        {caption.length > 0
+          ? t("bluesky.charCount", "{{count}}/300 characters", { count: caption.length })
+          : t("bluesky.emptyHint", "Add content to see how your post will appear on Bluesky")}
+        {images.length > 0 && ` • ${t("bluesky.imageCount", "{{count}}/4 images", { count: images.length })}`}
+        {video && ` • ${t("bluesky.videoCount", "1 video")}`}
       </p>
     </div>
   );

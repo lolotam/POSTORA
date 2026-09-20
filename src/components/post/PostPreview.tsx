@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from "react";
+import { useTranslation } from "react-i18next";
 import { Platform } from "@/lib/types";
 import { PlatformIcon, getPlatformName } from "@/components/PlatformIcon";
 import { cn } from "@/lib/utils";
@@ -43,22 +44,25 @@ export function PostPreview({
   caption,
   mediaFiles,
   selectedPlatforms,
-  username = "Your Account",
+  username,
   avatarUrl,
   platformIdentities,
 }: PostPreviewProps) {
+  const { t } = useTranslation("postpreview");
+  const defaultUsername = username || t("postPreview.defaultUsername", "Your Account");
+
   // Track selected identity index per platform
   const [selectedIdentityIndex, setSelectedIdentityIndex] = useState<Partial<Record<Platform, number>>>({});
 
   const getIdentity = (platform: Platform) => {
     const identities = platformIdentities?.[platform];
     if (!identities || identities.length === 0) {
-      return { username, avatarUrl };
+      return { username: defaultUsername, avatarUrl };
     }
     const idx = selectedIdentityIndex[platform] ?? 0;
     const identity = identities[idx] ?? identities[0];
     return {
-      username: identity.username || username || "Your Account",
+      username: identity.username || defaultUsername,
       avatarUrl: identity.avatarUrl ?? avatarUrl,
     };
   };
@@ -75,7 +79,7 @@ export function PostPreview({
     return (
       <div className="rounded-xl border border-dashed border-border p-8 text-center">
         <p className="text-muted-foreground text-sm">
-          Select platforms to see preview
+          {t("postPreview.selectPlatforms", "Select platforms to see preview")}
         </p>
       </div>
     );
@@ -112,7 +116,7 @@ export function PostPreview({
                 <Users className="w-4 h-4 text-muted-foreground" />
                 <Select value={currentId} onValueChange={(id) => handleIdentityChange(platform, id)}>
                   <SelectTrigger className="w-[200px] h-8 text-sm">
-                    <SelectValue placeholder="Select account" />
+                    <SelectValue placeholder={t("postPreview.selectAccount", "Select account")} />
                   </SelectTrigger>
                   <SelectContent>
                     {identities.map((ident) => (
@@ -124,7 +128,7 @@ export function PostPreview({
                               {(ident.username?.[0] ?? "?").toUpperCase()}
                             </AvatarFallback>
                           </Avatar>
-                          <span className="truncate max-w-[140px]">{ident.username || "Account"}</span>
+                          <span className="truncate max-w-[140px]">{ident.username || t("postPreview.accountFallback", "Account")}</span>
                         </div>
                       </SelectItem>
                     ))}
@@ -137,7 +141,7 @@ export function PostPreview({
               <InstagramPreview
                 caption={truncateCaption(caption, 2200)}
                 mediaFiles={mediaFiles}
-                username={identity.username || "Your Account"}
+                username={identity.username}
                 avatarUrl={identity.avatarUrl || undefined}
               />
             )}
@@ -145,7 +149,7 @@ export function PostPreview({
               <FacebookPreview
                 caption={truncateCaption(caption, 500)}
                 mediaFiles={mediaFiles}
-                username={identity.username || "Your Account"}
+                username={identity.username}
                 avatarUrl={identity.avatarUrl || undefined}
               />
             )}
@@ -153,7 +157,7 @@ export function PostPreview({
               <TikTokPreview
                 caption={truncateCaption(caption, 150)}
                 mediaFiles={mediaFiles}
-                username={identity.username || "Your Account"}
+                username={identity.username}
                 avatarUrl={identity.avatarUrl || undefined}
               />
             )}
@@ -162,7 +166,7 @@ export function PostPreview({
                 platform={platform}
                 caption={caption}
                 mediaFiles={mediaFiles}
-                username={identity.username || "Your Account"}
+                username={identity.username}
                 avatarUrl={identity.avatarUrl || undefined}
               />
             )}
@@ -184,6 +188,7 @@ function InstagramPreview({
   username: string;
   avatarUrl?: string;
 }) {
+  const { t } = useTranslation("postpreview");
   const firstMedia = mediaFiles[0];
   const hasUnsplashAttribution = firstMedia?.mediaSource === "unsplash" && 
     firstMedia.photographerName && 
@@ -208,7 +213,7 @@ function InstagramPreview({
           {firstMedia.fileType === "image" ? (
             <img
               src={firstMedia.previewUrl}
-              alt="Preview"
+              alt={t("postPreview.previewAlt", "Preview")}
               className="w-full h-full object-cover"
             />
           ) : (
@@ -245,13 +250,13 @@ function InstagramPreview({
           </div>
           <Bookmark className="w-6 h-6" />
         </div>
-        <p className="text-sm font-semibold">0 likes</p>
+        <p className="text-sm font-semibold">{t("postPreview.zeroLikes", "0 likes")}</p>
         {caption && (
           <p className="text-sm">
             <span className="font-semibold">{username}</span>{" "}
             {caption.slice(0, 125)}
             {caption.length > 125 && (
-              <span className="text-muted-foreground"> ...more</span>
+              <span className="text-muted-foreground"> {t("postPreview.more", "...more")}</span>
             )}
           </p>
         )}
@@ -271,6 +276,7 @@ function FacebookPreview({
   username: string;
   avatarUrl?: string;
 }) {
+  const { t } = useTranslation("postpreview");
   const firstMedia = mediaFiles[0];
   const hasUnsplashAttribution = firstMedia?.mediaSource === "unsplash" && 
     firstMedia.photographerName && 
@@ -287,7 +293,7 @@ function FacebookPreview({
         </Avatar>
         <div className="flex-1">
           <p className="font-semibold text-sm">{username}</p>
-          <p className="text-xs text-muted-foreground">Just now · 🌍</p>
+          <p className="text-xs text-muted-foreground">{t("postPreview.justNow", "Just now · 🌍")}</p>
         </div>
         <MoreHorizontal className="w-5 h-5 text-muted-foreground" />
       </div>
@@ -347,15 +353,15 @@ function FacebookPreview({
         <div className="flex items-center justify-around text-muted-foreground">
           <button className="flex items-center gap-2 hover:bg-secondary px-4 py-2 rounded-lg">
             <ThumbsUp className="w-5 h-5" />
-            <span className="text-sm font-medium">Like</span>
+            <span className="text-sm font-medium">{t("postPreview.like", "Like")}</span>
           </button>
           <button className="flex items-center gap-2 hover:bg-secondary px-4 py-2 rounded-lg">
             <MessageCircle className="w-5 h-5" />
-            <span className="text-sm font-medium">Comment</span>
+            <span className="text-sm font-medium">{t("postPreview.comment", "Comment")}</span>
           </button>
           <button className="flex items-center gap-2 hover:bg-secondary px-4 py-2 rounded-lg">
             <Share2 className="w-5 h-5" />
-            <span className="text-sm font-medium">Share</span>
+            <span className="text-sm font-medium">{t("postPreview.share", "Share")}</span>
           </button>
         </div>
       </div>
@@ -374,6 +380,7 @@ function TikTokPreview({
   username: string;
   avatarUrl?: string;
 }) {
+  const { t } = useTranslation("postpreview");
   const [previewMode, setPreviewMode] = React.useState<"feed" | "profile" | "webtv">("feed");
 
   return (
@@ -390,7 +397,7 @@ function TikTokPreview({
                 : "text-muted-foreground hover:text-foreground"
             )}
           >
-            Feed
+            {t("postPreview.feed", "Feed")}
           </button>
           <button
             onClick={() => setPreviewMode("profile")}
@@ -401,7 +408,7 @@ function TikTokPreview({
                 : "text-muted-foreground hover:text-foreground"
             )}
           >
-            Profile
+            {t("postPreview.profile", "Profile")}
           </button>
           <button
             onClick={() => setPreviewMode("webtv")}
@@ -412,7 +419,7 @@ function TikTokPreview({
                 : "text-muted-foreground hover:text-foreground"
             )}
           >
-            Web/TV
+            {t("postPreview.webTv", "Web/TV")}
           </button>
         </div>
       </div>
@@ -453,8 +460,8 @@ function TikTokPreview({
 
           {/* Top navigation */}
           <div className="absolute top-8 left-0 right-0 z-10 flex items-center justify-center gap-4 text-white/70">
-            <span className="text-sm">Following</span>
-            <span className="text-sm font-semibold text-white border-b-2 border-white pb-0.5">For You</span>
+            <span className="text-sm">{t("postPreview.following", "Following")}</span>
+            <span className="text-sm font-semibold text-white border-b-2 border-white pb-0.5">{t("postPreview.forYou", "For You")}</span>
           </div>
 
           {/* Overlay gradient */}
@@ -485,7 +492,7 @@ function TikTokPreview({
             </div>
             <div className="flex flex-col items-center text-white">
               <Share2 className="w-7 h-7" />
-              <span className="text-xs mt-0.5">Share</span>
+              <span className="text-xs mt-0.5">{t("postPreview.share", "Share")}</span>
             </div>
           </div>
 
@@ -497,7 +504,7 @@ function TikTokPreview({
             )}
             <div className="flex items-center gap-1 mt-2 text-xs opacity-80">
               <span>🎵</span>
-              <span className="truncate">Original sound - {username}</span>
+              <span className="truncate">{t("postPreview.originalAudio", "Original sound - {{username}}", { username })}</span>
             </div>
           </div>
 
@@ -505,22 +512,22 @@ function TikTokPreview({
           <div className="absolute bottom-0 left-0 right-0 bg-black/90 flex items-center justify-around py-2 z-10">
             <div className="flex flex-col items-center text-white">
               <span className="text-lg">🏠</span>
-              <span className="text-[10px]">Home</span>
+              <span className="text-[10px]">{t("postPreview.home", "Home")}</span>
             </div>
             <div className="flex flex-col items-center text-white/60">
               <span className="text-lg">👥</span>
-              <span className="text-[10px]">Friends</span>
+              <span className="text-[10px]">{t("postPreview.friends", "Friends")}</span>
             </div>
             <div className="w-10 h-7 bg-white rounded-lg flex items-center justify-center">
               <span className="text-black font-bold text-lg">+</span>
             </div>
             <div className="flex flex-col items-center text-white/60">
               <span className="text-lg">📥</span>
-              <span className="text-[10px]">Inbox</span>
+              <span className="text-[10px]">{t("postPreview.inbox", "Inbox")}</span>
             </div>
             <div className="flex flex-col items-center text-white/60">
               <span className="text-lg">👤</span>
-              <span className="text-[10px]">Me</span>
+              <span className="text-[10px]">{t("postPreview.me", "Me")}</span>
             </div>
           </div>
         </div>

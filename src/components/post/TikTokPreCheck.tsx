@@ -25,6 +25,7 @@ import { cn } from "@/lib/utils";
 import { useFeatureFlags } from "@/hooks/useFeatureFlags";
 import { TikTokPreCheckDetails } from "./TikTokPreCheckDetails";
 import { formatDistanceToNow } from "date-fns";
+import { useTranslation } from "react-i18next";
 
 interface TikTokPreCheckProps {
   file: File | null;
@@ -37,7 +38,10 @@ interface TikTokPreCheckProps {
   className?: string;
 }
 
-interface VideoCheck {
+export type VideoCheckId = "format" | "resolution" | "aspectRatio" | "duration" | "fileSize";
+
+export interface VideoCheck {
+  id: VideoCheckId;
   label: string;
   icon: React.ReactNode;
   status: "pending" | "checking" | "passed" | "warning" | "failed";
@@ -49,7 +53,7 @@ type PreCheckCache = {
   version: 1;
   key: string;
   createdAt: number;
-  checks: Array<Pick<VideoCheck, "label" | "status" | "message" | "value">>;
+  checks: Array<Pick<VideoCheck, "id" | "label" | "status" | "message" | "value">>;
 };
 
 const CACHE_PREFIX = "tiktok_precheck_v1:";
@@ -86,6 +90,7 @@ function writeCache(sourceKey: string, checks: VideoCheck[]) {
       key: sourceKey,
       createdAt: Date.now(),
       checks: checks.map((c) => ({
+        id: c.id,
         label: c.label,
         status: c.status,
         message: c.message,
@@ -101,22 +106,19 @@ function writeCache(sourceKey: string, checks: VideoCheck[]) {
 function mergeWithCachedChecksWhenMetaMissing(next: VideoCheck[], cached: VideoCheck[] | null) {
   if (!cached || cached.length === 0) return next;
 
-  const cachedByLabel = new Map(cached.map((c) => [c.label, c] as const));
+  const cachedById = new Map(cached.map((c) => [c.id || c.label, c] as const));
   return next.map((c) => {
     // If our current run couldn't read metadata, keep the last known values
     const looksLikeMissingMeta =
-      c.message === "Could not read video metadata" ||
-      c.message === "Could not determine aspect ratio" ||
-      c.message === "Could not read duration" ||
-      c.message === "Could not read size";
+      c.status === "warning" && (!c.value || c.value === "Unknown");
 
     if (!looksLikeMissingMeta) return c;
 
-    const prev = cachedByLabel.get(c.label);
+    const prev = cachedById.get(c.id || c.label);
     if (!prev) return c;
 
     // Only override if the cached value is more informative than the current placeholder
-    const prevHasInfo = Boolean(prev.value) || Boolean(prev.message && !prev.message.startsWith("Could not"));
+    const prevHasInfo = Boolean(prev.value && prev.value !== "Unknown");
     if (!prevHasInfo) return c;
 
     return {
@@ -164,6 +166,7 @@ export function TikTokPreCheck({
   maxVideoDurationSec,
   className,
 }: TikTokPreCheckProps) {
+  const { t } = useTranslation("postpreview");
   const { toast } = useToast();
   const { flags } = useFeatureFlags();
 
@@ -205,13 +208,24 @@ export function TikTokPreCheck({
       return;
     }
 
-    const restored: VideoCheck[] = cache.checks.map((c) => ({
-      label: c.label,
-      icon: <Video className="w-4 h-4" />,
-      status: c.status,
-      message: c.message,
-      value: c.value,
-    }));
+    const restored: VideoCheck[] = cache.checks.map((c) => {
+      const id: VideoCheckId = (c.id || (
+        c.label === "Format" ? "format" :
+        c.label === "Resolution" ? "resolution" :
+        c.label === "Aspect Ratio" ? "aspectRatio" :
+        c.label === "Duration" ? "duration" :
+        c.label === "File Size" ? "fileSize" : "format"
+      )) as VideoCheckId;
+
+      return {
+        id,
+        label: c.label,
+        icon: <Video className="w-4 h-4" />,
+        status: c.status,
+        message: c.message,
+        value: c.value,
+      };
+    });
 
     cachedChecksRef.current = restored;
     setChecks(restored);
@@ -228,17 +242,17 @@ export function TikTokPreCheck({
     };
   }, [localPreviewUrl]);
 
-  const setInitialChecks = useCallback(() => {
+  const setInitialChecks = useCallback((): VideoCheck[] => {
     const initial: VideoCheck[] = [
-      { label: "Format", icon: <Video className="w-4 h-4" />, status: "checking" },
-      { label: "Resolution", icon: <Maximize2 className="w-4 h-4" />, status: "checking" },
-      { label: "Aspect Ratio", icon: <Maximize2 className="w-4 h-4" />, status: "checking" },
-      { label: "Duration", icon: <Clock className="w-4 h-4" />, status: "checking" },
-      { label: "File Size", icon: <HardDrive className="w-4 h-4" />, status: "checking" },
+      { id: "format", label: t("tikTokPreCheck.format", "Format"), icon: <Video className="w-4 h-4" />, status: "checking" },
+      { id: "resolution", label: t("tikTokPreCheck.resolution", "Resolution"), icon: <Maximize2 className="w-4 h-4" />, status: "checking" },
+      { id: "aspectRatio", label: t("tikTokPreCheck.aspectRatio", "Aspect Ratio"), icon: <Maximize2 className="w-4 h-4" />, status: "checking" },
+      { id: "duration", label: t("tikTokPreCheck.duration", "Duration"), icon: <Clock className="w-4 h-4" />, status: "checking" },
+      { id: "fileSize", label: t("tikTokPreCheck.fileSize", "File Size"), icon: <HardDrive className="w-4 h-4" />, status: "checking" },
     ];
     setChecks(initial);
     return initial;
-  }, []);
+  }, [t]);
 
 
   const runPreCheckForFile = useCallback(
@@ -254,11 +268,11 @@ export function TikTokPreCheck({
         if (TIKTOK_REQUIREMENTS.supportedFormats.includes(videoFile.type)) {
           formatCheck.status = "passed";
           formatCheck.value = videoFile.type === "video/mp4" ? "MP4" : "MOV";
-          formatCheck.message = "Format supported";
+          formatCheck.message = t("tikTokPreCheck.formatSupported", "Format supported");
         } else {
           formatCheck.status = "failed";
-          formatCheck.value = videoFile.type || "Unknown";
-          formatCheck.message = "Use MP4 or MOV format";
+          formatCheck.value = videoFile.type || t("tikTokPreCheck.unknown", "Unknown");
+          formatCheck.message = t("tikTokPreCheck.useMp4OrMov", "Use MP4 or MOV format");
           needsFix = true;
         }
 
@@ -276,18 +290,18 @@ export function TikTokPreCheck({
           resolutionCheck.value = `${meta.width}×${meta.height}`;
           if (meta.width >= TIKTOK_REQUIREMENTS.recommendedWidth && meta.height >= TIKTOK_REQUIREMENTS.recommendedHeight) {
             resolutionCheck.status = "passed";
-            resolutionCheck.message = "Resolution optimal";
+            resolutionCheck.message = t("tikTokPreCheck.resOptimal", "Resolution optimal");
           } else if (meta.width >= TIKTOK_REQUIREMENTS.minWidth && meta.height >= TIKTOK_REQUIREMENTS.minHeight) {
             resolutionCheck.status = "warning";
-            resolutionCheck.message = `Recommended: ${TIKTOK_REQUIREMENTS.recommendedWidth}×${TIKTOK_REQUIREMENTS.recommendedHeight}+`;
+            resolutionCheck.message = t("tikTokPreCheck.resRecommended", { recommended: `${TIKTOK_REQUIREMENTS.recommendedWidth}×${TIKTOK_REQUIREMENTS.recommendedHeight}`, defaultValue: `Recommended: ${TIKTOK_REQUIREMENTS.recommendedWidth}×${TIKTOK_REQUIREMENTS.recommendedHeight}+` });
           } else {
             resolutionCheck.status = "failed";
-            resolutionCheck.message = `Minimum: ${TIKTOK_REQUIREMENTS.minWidth}×${TIKTOK_REQUIREMENTS.minHeight}`;
+            resolutionCheck.message = t("tikTokPreCheck.resMinimum", { minimum: `${TIKTOK_REQUIREMENTS.minWidth}×${TIKTOK_REQUIREMENTS.minHeight}`, defaultValue: `Minimum: ${TIKTOK_REQUIREMENTS.minWidth}×${TIKTOK_REQUIREMENTS.minHeight}` });
             needsFix = true;
           }
         } else {
           resolutionCheck.status = "warning";
-          resolutionCheck.message = "Could not read video metadata";
+          resolutionCheck.message = t("tikTokPreCheck.couldNotReadMeta", "Could not read video metadata");
         }
 
         // Aspect
@@ -299,22 +313,22 @@ export function TikTokPreCheck({
           if (meta.height >= meta.width) {
             if (diff <= TIKTOK_REQUIREMENTS.aspectRatioTolerance) {
               aspectCheck.status = "passed";
-              aspectCheck.value = "9:16 (vertical)";
-              aspectCheck.message = "Perfect for TikTok";
+              aspectCheck.value = t("tikTokPreCheck.ratioVertical", "9:16 (vertical)");
+              aspectCheck.message = t("tikTokPreCheck.perfectForTikTok", "Perfect for TikTok");
             } else {
               aspectCheck.status = "warning";
               aspectCheck.value = ratio.toFixed(2);
-              aspectCheck.message = "Close to 9:16, may work";
+              aspectCheck.message = t("tikTokPreCheck.closeToRatio", "Close to 9:16, may work");
             }
           } else {
             aspectCheck.status = "failed";
-            aspectCheck.value = "Horizontal";
-            aspectCheck.message = "TikTok requires vertical 9:16";
+            aspectCheck.value = t("tikTokPreCheck.ratioHorizontal", "Horizontal");
+            aspectCheck.message = t("tikTokPreCheck.requiresVertical", "TikTok requires vertical 9:16");
             needsFix = true;
           }
         } else {
           aspectCheck.status = "warning";
-          aspectCheck.message = "Could not determine aspect ratio";
+          aspectCheck.message = t("tikTokPreCheck.couldNotDetermineRatio", "Could not determine aspect ratio");
         }
 
         // Duration
@@ -325,15 +339,15 @@ export function TikTokPreCheck({
           durationCheck.value = `${mins}:${secs.toString().padStart(2, "0")}`;
           if (meta.duration <= TIKTOK_REQUIREMENTS.maxDuration) {
             durationCheck.status = "passed";
-            durationCheck.message = "Duration acceptable";
+            durationCheck.message = t("tikTokPreCheck.durationAcceptable", "Duration acceptable");
           } else {
             durationCheck.status = "failed";
-            durationCheck.message = `Max ${TIKTOK_REQUIREMENTS.maxDuration / 60} minutes`;
+            durationCheck.message = t("tikTokPreCheck.maxDuration", { count: TIKTOK_REQUIREMENTS.maxDuration / 60, defaultValue: `Max ${TIKTOK_REQUIREMENTS.maxDuration / 60} minutes` });
             needsFix = true;
           }
         } else {
           durationCheck.status = "warning";
-          durationCheck.message = "Could not read duration";
+          durationCheck.message = t("tikTokPreCheck.couldNotReadDuration", "Could not read duration");
         }
 
         // Size
@@ -341,18 +355,18 @@ export function TikTokPreCheck({
         sizeCheck.value = formatFileSize(videoFile.size);
         if (videoFile.size < TIKTOK_REQUIREMENTS.minFileSize) {
           sizeCheck.status = "failed";
-          sizeCheck.message = "File too small (likely invalid)";
+          sizeCheck.message = t("tikTokPreCheck.fileTooSmall", "File too small (likely invalid)");
           needsFix = true;
         } else if (videoFile.size > TIKTOK_REQUIREMENTS.maxFileSize) {
           sizeCheck.status = "failed";
-          sizeCheck.message = "File too large (max 4GB)";
+          sizeCheck.message = t("tikTokPreCheck.fileTooLarge", "File too large (max 4GB)");
           needsFix = true;
         } else if (videoFile.size < 1024 * 1024) {
           sizeCheck.status = "warning";
-          sizeCheck.message = "Very small file, may be rejected";
+          sizeCheck.message = t("tikTokPreCheck.verySmallFile", "Very small file, may be rejected");
         } else {
           sizeCheck.status = "passed";
-          sizeCheck.message = "File size OK";
+          sizeCheck.message = t("tikTokPreCheck.fileSizeOk", "File size OK");
         }
 
         // If it needs fix, show transcode CTA (existing UX)
@@ -383,7 +397,7 @@ export function TikTokPreCheck({
         setIsChecking(false);
       }
     },
-    [TIKTOK_REQUIREMENTS, setInitialChecks, sourceKey, mediaFileId]
+    [TIKTOK_REQUIREMENTS, setInitialChecks, sourceKey, mediaFileId, t]
   );
   
   // Persist pre-check results to Supabase media_files.metadata
@@ -449,7 +463,7 @@ export function TikTokPreCheck({
         }
 
         // We always output MP4
-        const formatCheck = { ...initialChecks[0], status: "passed" as const, value: "MP4", message: "Transcoded as MP4" };
+        const formatCheck = { ...initialChecks[0], status: "passed" as const, value: "MP4", message: t("tikTokPreCheck.transcodedAsMp4", "Transcoded as MP4") };
 
         // Meta
         let meta: { width: number; height: number; duration: number } | null = null;
@@ -470,14 +484,14 @@ export function TikTokPreCheck({
           resolutionCheck.value = `${meta.width}×${meta.height}`;
           if (meta.width >= TIKTOK_REQUIREMENTS.recommendedWidth && meta.height >= TIKTOK_REQUIREMENTS.recommendedHeight) {
             resolutionCheck.status = "passed";
-            resolutionCheck.message = "Resolution optimal";
+            resolutionCheck.message = t("tikTokPreCheck.resOptimal", "Resolution optimal");
           } else {
             resolutionCheck.status = "warning";
-            resolutionCheck.message = `Recommended: ${TIKTOK_REQUIREMENTS.recommendedWidth}×${TIKTOK_REQUIREMENTS.recommendedHeight}+`;
+            resolutionCheck.message = t("tikTokPreCheck.resRecommended", { recommended: `${TIKTOK_REQUIREMENTS.recommendedWidth}×${TIKTOK_REQUIREMENTS.recommendedHeight}`, defaultValue: `Recommended: ${TIKTOK_REQUIREMENTS.recommendedWidth}×${TIKTOK_REQUIREMENTS.recommendedHeight}+` });
           }
         } else {
           resolutionCheck.status = "warning";
-          resolutionCheck.message = "Could not read video metadata";
+          resolutionCheck.message = t("tikTokPreCheck.couldNotReadMeta", "Could not read video metadata");
         }
 
         // Aspect
@@ -487,16 +501,16 @@ export function TikTokPreCheck({
           const diff = Math.abs(ratio - TIKTOK_REQUIREMENTS.aspectRatio);
           if (meta.height >= meta.width && diff <= TIKTOK_REQUIREMENTS.aspectRatioTolerance) {
             aspectCheck.status = "passed";
-            aspectCheck.value = "9:16 (vertical)";
-            aspectCheck.message = "Perfect for TikTok";
+            aspectCheck.value = t("tikTokPreCheck.ratioVertical", "9:16 (vertical)");
+            aspectCheck.message = t("tikTokPreCheck.perfectForTikTok", "Perfect for TikTok");
           } else {
             aspectCheck.status = "warning";
             aspectCheck.value = ratio.toFixed(2);
-            aspectCheck.message = "Aspect ratio may be off";
+            aspectCheck.message = t("tikTokPreCheck.ratioMayBeOff", "Aspect ratio may be off");
           }
         } else {
           aspectCheck.status = "warning";
-          aspectCheck.message = "Could not determine aspect ratio";
+          aspectCheck.message = t("tikTokPreCheck.couldNotDetermineRatio", "Could not determine aspect ratio");
         }
 
         // Duration
@@ -506,10 +520,10 @@ export function TikTokPreCheck({
           const secs = Math.floor(meta.duration % 60);
           durationCheck.value = `${mins}:${secs.toString().padStart(2, "0")}`;
           durationCheck.status = meta.duration <= TIKTOK_REQUIREMENTS.maxDuration ? "passed" : "warning";
-          durationCheck.message = meta.duration <= TIKTOK_REQUIREMENTS.maxDuration ? "Duration acceptable" : "Duration looks long";
+          durationCheck.message = meta.duration <= TIKTOK_REQUIREMENTS.maxDuration ? t("tikTokPreCheck.durationAcceptable", "Duration acceptable") : t("tikTokPreCheck.durationLooksLong", "Duration looks long");
         } else {
           durationCheck.status = "warning";
-          durationCheck.message = "Could not read duration";
+          durationCheck.message = t("tikTokPreCheck.couldNotReadDuration", "Could not read duration");
         }
 
         // Size
@@ -517,11 +531,11 @@ export function TikTokPreCheck({
         if (sizeBytes != null) {
           sizeCheck.value = formatFileSize(sizeBytes);
           sizeCheck.status = "passed";
-          sizeCheck.message = "File size OK";
+          sizeCheck.message = t("tikTokPreCheck.fileSizeOk", "File size OK");
         } else {
-          sizeCheck.value = "Unknown";
+          sizeCheck.value = t("tikTokPreCheck.unknown", "Unknown");
           sizeCheck.status = "warning";
-          sizeCheck.message = "Could not read size";
+          sizeCheck.message = t("tikTokPreCheck.couldNotReadSize", "Could not read size");
         }
 
         const next = [formatCheck, resolutionCheck, aspectCheck, durationCheck, sizeCheck];
@@ -548,7 +562,7 @@ export function TikTokPreCheck({
         setIsChecking(false);
       }
     },
-    [TIKTOK_REQUIREMENTS, setInitialChecks, sourceKey, mediaFileId, persistPreCheckToSupabase]
+    [TIKTOK_REQUIREMENTS, setInitialChecks, sourceKey, mediaFileId, persistPreCheckToSupabase, t]
   );
 
   useEffect(() => {
@@ -585,8 +599,8 @@ export function TikTokPreCheck({
   const handleTranscode = async () => {
     if (!isFileUploaded || !mediaFileId) {
       toast({
-        title: "Upload required",
-        description: "Please wait for the video to finish uploading before transcoding.",
+        title: t("tikTokPreCheck.uploadRequiredTitle", "Upload required"),
+        description: t("tikTokPreCheck.uploadRequiredDesc", "Please wait for the video to finish uploading before transcoding."),
         variant: "destructive",
       });
       return;
@@ -627,8 +641,8 @@ export function TikTokPreCheck({
       setTranscodedUrl(transcodeResult.transcoded_url);
 
       toast({
-        title: "Video transcoded!",
-        description: "Now using the transcoded video for TikTok.",
+        title: t("tikTokPreCheck.transcodedSuccessTitle", "Video transcoded!"),
+        description: t("tikTokPreCheck.transcodedSuccessDesc", "Now using the transcoded video for TikTok."),
       });
 
       onTranscodeComplete?.(transcodeResult.new_media_file_id, transcodeResult.transcoded_url);
@@ -638,7 +652,7 @@ export function TikTokPreCheck({
     } catch (error) {
       console.error("Transcode error:", error);
       toast({
-        title: "Transcode failed",
+        title: t("tikTokPreCheck.transcodeFailedTitle", "Transcode failed"),
         description: error instanceof Error ? error.message : "Failed to transcode video",
         variant: "destructive",
       });
@@ -659,7 +673,7 @@ export function TikTokPreCheck({
         <div className="flex items-center gap-2">
           <h4 className="text-sm font-medium flex items-center gap-2">
             <Video className="w-4 h-4 text-primary" />
-            TikTok Video Pre-Check
+            {t("tikTokPreCheck.title", "TikTok Video Pre-Check")}
           </h4>
           {lastCheckedAt && !isChecking && (
             <span className="text-[10px] text-muted-foreground">
@@ -677,7 +691,7 @@ export function TikTokPreCheck({
             disabled={isChecking}
           >
             <RotateCcw className="w-3 h-3 mr-1" />
-            Re-check
+            {t("tikTokPreCheck.recheck", "Re-check")}
           </Button>
           <TikTokPreCheckDetails
             checks={checks}
@@ -686,7 +700,7 @@ export function TikTokPreCheck({
           >
             <Button variant="ghost" size="sm" className="h-7 px-2 text-xs">
               <Info className="w-3 h-3 mr-1" />
-              Details
+              {t("tikTokPreCheck.details", "Details")}
             </Button>
           </TikTokPreCheckDetails>
         </div>
@@ -710,7 +724,7 @@ export function TikTokPreCheck({
             {transcodeComplete && (
               <div className="mt-2 flex items-center justify-center gap-1 text-xs text-emerald-600 font-medium">
                 <CheckCircle2 className="w-3 h-3" />
-                Transcoded
+                {t("tikTokPreCheck.transcoded", "Transcoded")}
               </div>
             )}
           </div>
@@ -769,7 +783,7 @@ export function TikTokPreCheck({
                 <div className="flex items-center gap-2 p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-sm text-emerald-600">
                   <CheckCircle2 className="w-4 h-4 shrink-0" />
                   <span>
-                    {transcodeComplete ? "Transcoded video is ready for TikTok" : "Video meets TikTok requirements"}
+                    {transcodeComplete ? t("tikTokPreCheck.transcodeReadyMsg", "Transcoded video is ready for TikTok") : t("tikTokPreCheck.meetsReqsMsg", "Video meets TikTok requirements")}
                   </span>
                 </div>
               )}
@@ -780,8 +794,8 @@ export function TikTokPreCheck({
                     <AlertCircle className="w-4 h-4 shrink-0" />
                     <span>
                       {flags.tiktokTranscode 
-                        ? "Video doesn't meet TikTok requirements. Transcode to fix."
-                        : "Video doesn't meet TikTok requirements."}
+                        ? t("tikTokPreCheck.doesNotMeetTranscode", "Video doesn't meet TikTok requirements. Transcode to fix.")
+                        : t("tikTokPreCheck.doesNotMeet", "Video doesn't meet TikTok requirements.")}
                     </span>
                   </div>
 
@@ -791,7 +805,7 @@ export function TikTokPreCheck({
                         <div className="space-y-2">
                           <div className="flex items-center justify-between text-sm">
                             <span className="text-muted-foreground">
-                              {transcodeProgress < 45 ? "Preparing..." : transcodeProgress < 100 ? "Transcoding..." : "Done"}
+                              {transcodeProgress < 45 ? t("tikTokPreCheck.preparing", "Preparing...") : transcodeProgress < 100 ? t("tikTokPreCheck.transcoding", "Transcoding...") : t("tikTokPreCheck.done", "Done")}
                             </span>
                             <span className="font-medium">{transcodeProgress}%</span>
                           </div>
@@ -805,7 +819,7 @@ export function TikTokPreCheck({
                           disabled={!isFileUploaded}
                         >
                           <RefreshCw className="w-4 h-4 mr-2" />
-                          Transcode for TikTok
+                          {t("tikTokPreCheck.transcodeBtn", "Transcode for TikTok")}
                         </Button>
                       )}
                     </>
@@ -816,7 +830,7 @@ export function TikTokPreCheck({
               {hasWarnings && !hasFailures && !transcodeComplete && (
                 <div className="flex items-center gap-2 p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 text-sm text-amber-600">
                   <AlertTriangle className="w-4 h-4 shrink-0" />
-                  <span>Video may work but isn't optimal. Consider transcoding.</span>
+                  <span>{t("tikTokPreCheck.warningMsg", "Video may work but isn't optimal. Consider transcoding.")}</span>
                 </div>
               )}
             </div>

@@ -2,6 +2,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Twitter, Link2 } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 interface TwitterThreadPreviewProps {
   caption: string;
@@ -90,6 +91,7 @@ export function TwitterThreadPreview({
   username = "username",
   avatarUrl,
 }: TwitterThreadPreviewProps) {
+  const { t } = useTranslation("postpreview");
   const tweets = splitIntoTweets(caption);
   const numberedTweets = addThreadNumbers(tweets);
 
@@ -102,10 +104,10 @@ export function TwitterThreadPreview({
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Twitter className="w-4 h-4 text-[#1DA1F2]" />
-          <span className="text-sm font-medium">Thread Preview</span>
+          <span className="text-sm font-medium">{t("twitterThread.previewTitle", "Thread Preview")}</span>
         </div>
         <Badge variant="secondary" className="text-xs">
-          {tweets.length} tweets
+          {t("twitterThread.tweetsCount", { count: tweets.length, defaultValue: `${tweets.length} tweets` })}
         </Badge>
       </div>
 
@@ -143,10 +145,10 @@ export function TwitterThreadPreview({
                       {tweet}
                     </p>
                     <div className="flex items-center gap-1 mt-2 text-xs text-muted-foreground">
-                      <span>{tweet.length} chars</span>
+                      <span>{t("twitterThread.charsCount", { count: tweet.length, defaultValue: `${tweet.length} chars` })}</span>
                       {tweet.length > 280 && (
                         <Badge variant="destructive" className="text-[10px] ml-2">
-                          Over limit!
+                          {t("twitterThread.overLimit", "Over limit!")}
                         </Badge>
                       )}
                     </div>
@@ -163,9 +165,9 @@ export function TwitterThreadPreview({
       <div className="flex items-center justify-between text-xs text-muted-foreground">
         <div className="flex items-center gap-2">
           <Link2 className="w-3 h-3" />
-          <span>Tweets will be posted as a reply chain</span>
+          <span>{t("twitterThread.replyChainHint", "Tweets will be posted as a reply chain")}</span>
         </div>
-        <span>Total: {caption.length} characters</span>
+        <span>{t("twitterThread.totalChars", { count: caption.length, defaultValue: `Total: ${caption.length} characters` })}</span>
       </div>
     </div>
   );

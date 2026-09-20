@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Heart, MessageCircle, Repeat2, Share, MoreHorizontal, Bookmark, BarChart2 } from "lucide-react";
@@ -19,6 +20,7 @@ export function TwitterPostPreview({
   displayName,
   isVerified = false,
 }: TwitterPostPreviewProps) {
+  const { t } = useTranslation("postpreview");
   const name = displayName || username;
   
   // Truncate caption for preview (Twitter shows full tweet but we want to fit in preview)
@@ -31,10 +33,10 @@ export function TwitterPostPreview({
           <div className="w-5 h-5 bg-black dark:bg-white rounded flex items-center justify-center">
             <span className="text-white dark:text-black text-xs font-bold">𝕏</span>
           </div>
-          <span className="text-sm font-medium">Post Preview</span>
+          <span className="text-sm font-medium">{t("twitter.previewTitle", "Post Preview")}</span>
         </div>
         <Badge variant="secondary" className="text-xs bg-black/5 dark:bg-white/10 text-foreground">
-          Post
+          {t("twitter.postBadge", "Post")}
         </Badge>
       </div>
 
@@ -62,7 +64,7 @@ export function TwitterPostPreview({
                 )}
                 <span className="text-muted-foreground text-sm">@{username}</span>
                 <span className="text-muted-foreground text-sm">·</span>
-                <span className="text-muted-foreground text-sm">now</span>
+                <span className="text-muted-foreground text-sm">{t("twitter.now", "now")}</span>
               </div>
             </div>
             
@@ -125,8 +127,8 @@ export function TwitterPostPreview({
       {/* Info text */}
       <p className="text-xs text-muted-foreground text-center">
         {caption.length > 280 
-          ? `${caption.length} characters - will be posted as a thread or long tweet`
-          : `${caption.length}/280 characters`
+          ? t("twitter.threadWarning", "{{count}} characters - will be posted as a thread or long tweet", { count: caption.length })
+          : t("twitter.charCount", "{{count}}/280 characters", { count: caption.length })
         }
       </p>
     </div>

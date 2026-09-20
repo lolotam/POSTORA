@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
@@ -32,17 +33,19 @@ export function TikTokForYouPreview({
   mediaFile,
   username = "your_account",
   avatarUrl,
-  soundName = "Original sound",
+  soundName,
 }: TikTokForYouPreviewProps) {
+  const { t } = useTranslation("postpreview");
   const [activeView, setActiveView] = useState<PreviewView>("feed");
+  const displaySoundName = soundName || t("tikTokForYou.defaultSoundName", "Original sound");
   
   // Truncate caption for preview
   const truncatedCaption = caption.length > 150 ? caption.slice(0, 147) + "..." : caption;
 
   const viewTabs: { id: PreviewView; label: string }[] = [
-    { id: "feed", label: "Feed" },
-    { id: "profile", label: "Profile" },
-    { id: "webtv", label: "Web/TV" },
+    { id: "feed", label: t("tikTokForYou.feedTab", "Feed") },
+    { id: "profile", label: t("tikTokForYou.profileTab", "Profile") },
+    { id: "webtv", label: t("tikTokForYou.webTvTab", "Web/TV") },
   ];
 
   return (
@@ -55,10 +58,10 @@ export function TikTokForYouPreview({
               <path d="M19.59 6.69a4.83 4.83 0 01-3.77-4.25V2h-3.45v13.67a2.89 2.89 0 01-5.2 1.74 2.89 2.89 0 012.31-4.64 2.93 2.93 0 01.88.13V9.4a6.84 6.84 0 00-1-.05A6.33 6.33 0 005 20.1a6.34 6.34 0 0010.86-4.43v-7a8.16 8.16 0 004.77 1.52v-3.4a4.85 4.85 0 01-1-.1z"/>
             </svg>
           </div>
-          <span className="text-sm font-medium">TikTok Preview</span>
+          <span className="text-sm font-medium">{t("tikTokForYou.previewTitle", "TikTok Preview")}</span>
         </div>
         <Badge variant="secondary" className="text-xs bg-black/5 dark:bg-white/10 text-foreground">
-          Video
+          {t("tikTokForYou.videoBadge", "Video")}
         </Badge>
       </div>
 
@@ -88,7 +91,7 @@ export function TikTokForYouPreview({
             mediaFile={mediaFile}
             username={username}
             avatarUrl={avatarUrl}
-            soundName={soundName}
+            soundName={displaySoundName}
           />
         )}
         {activeView === "profile" && (
@@ -110,9 +113,9 @@ export function TikTokForYouPreview({
 
       {/* Info text */}
       <p className="text-xs text-muted-foreground text-center mt-4">
-        {activeView === "feed" && "How your video appears on the For You page"}
-        {activeView === "profile" && "How your video appears on your profile grid"}
-        {activeView === "webtv" && "How your video appears on web and TV apps"}
+        {activeView === "feed" && t("tikTokForYou.feedInfo", "How your video appears on the For You page")}
+        {activeView === "profile" && t("tikTokForYou.profileInfo", "How your video appears on your profile grid")}
+        {activeView === "webtv" && t("tikTokForYou.webTvInfo", "How your video appears on web and TV apps")}
       </p>
     </div>
   );
@@ -132,6 +135,7 @@ function FeedPreview({
   avatarUrl?: string;
   soundName: string;
 }) {
+  const { t } = useTranslation("postpreview");
   return (
     <div className="max-w-[280px]">
       <div className="relative bg-black rounded-[2rem] overflow-hidden aspect-[9/16] shadow-2xl border-4 border-gray-800">
@@ -165,8 +169,8 @@ function FeedPreview({
 
         {/* Top Navigation */}
         <div className="absolute top-8 left-0 right-0 flex items-center justify-center gap-6 z-10">
-          <span className="text-white/60 text-sm font-medium">Following</span>
-          <span className="text-white text-sm font-bold border-b-2 border-white pb-1">For You</span>
+          <span className="text-white/60 text-sm font-medium">{t("tikTokForYou.following", "Following")}</span>
+          <span className="text-white text-sm font-bold border-b-2 border-white pb-1">{t("tikTokForYou.forYou", "For You")}</span>
           <Search className="w-5 h-5 text-white absolute right-4" />
         </div>
 
@@ -214,7 +218,7 @@ function FeedPreview({
             <div className="w-10 h-10 flex items-center justify-center">
               <Share2 className="w-7 h-7 text-white drop-shadow-lg" />
             </div>
-            <span className="text-white text-xs font-medium">Share</span>
+            <span className="text-white text-xs font-medium">{t("tikTokForYou.share", "Share")}</span>
           </div>
 
           {/* Spinning Disc */}
@@ -252,22 +256,22 @@ function FeedPreview({
         <div className="absolute bottom-0 left-0 right-0 h-14 bg-black/90 flex items-center justify-around px-4 z-10">
           <div className="flex flex-col items-center">
             <Home className="w-5 h-5 text-white" fill="white" />
-            <span className="text-white text-[10px] mt-0.5">Home</span>
+            <span className="text-white text-[10px] mt-0.5">{t("tikTokForYou.home", "Home")}</span>
           </div>
           <div className="flex flex-col items-center">
             <Search className="w-5 h-5 text-white/60" />
-            <span className="text-white/60 text-[10px] mt-0.5">Discover</span>
+            <span className="text-white/60 text-[10px] mt-0.5">{t("tikTokForYou.discover", "Discover")}</span>
           </div>
           <div className="w-10 h-7 bg-white rounded-lg flex items-center justify-center">
             <Plus className="w-5 h-5 text-black" />
           </div>
           <div className="flex flex-col items-center">
             <MessageCircle className="w-5 h-5 text-white/60" />
-            <span className="text-white/60 text-[10px] mt-0.5">Inbox</span>
+            <span className="text-white/60 text-[10px] mt-0.5">{t("tikTokForYou.inbox", "Inbox")}</span>
           </div>
           <div className="flex flex-col items-center">
             <User className="w-5 h-5 text-white/60" />
-            <span className="text-white/60 text-[10px] mt-0.5">Profile</span>
+            <span className="text-white/60 text-[10px] mt-0.5">{t("tikTokForYou.profile", "Profile")}</span>
           </div>
         </div>
       </div>
@@ -285,6 +289,7 @@ function ProfilePreview({
   username: string;
   avatarUrl?: string;
 }) {
+  const { t } = useTranslation("postpreview");
   return (
     <div className="max-w-[280px]">
       <div className="relative bg-black rounded-[2rem] overflow-hidden aspect-[9/16] shadow-2xl border-4 border-gray-800">
@@ -311,15 +316,15 @@ function ProfilePreview({
           <div className="flex justify-center gap-8 text-white text-center mb-4">
             <div>
               <p className="font-bold text-lg">0</p>
-              <p className="text-xs text-white/60">Following</p>
+              <p className="text-xs text-white/60">{t("tikTokForYou.followingCount", "Following")}</p>
             </div>
             <div>
               <p className="font-bold text-lg">0</p>
-              <p className="text-xs text-white/60">Followers</p>
+              <p className="text-xs text-white/60">{t("tikTokForYou.followersCount", "Followers")}</p>
             </div>
             <div>
               <p className="font-bold text-lg">0</p>
-              <p className="text-xs text-white/60">Likes</p>
+              <p className="text-xs text-white/60">{t("tikTokForYou.likesCount", "Likes")}</p>
             </div>
           </div>
 
@@ -374,22 +379,22 @@ function ProfilePreview({
         <div className="absolute bottom-0 left-0 right-0 h-14 bg-black flex items-center justify-around px-4 z-10">
           <div className="flex flex-col items-center">
             <Home className="w-5 h-5 text-white/60" />
-            <span className="text-white/60 text-[10px] mt-0.5">Home</span>
+            <span className="text-white/60 text-[10px] mt-0.5">{t("tikTokForYou.home", "Home")}</span>
           </div>
           <div className="flex flex-col items-center">
             <Search className="w-5 h-5 text-white/60" />
-            <span className="text-white/60 text-[10px] mt-0.5">Discover</span>
+            <span className="text-white/60 text-[10px] mt-0.5">{t("tikTokForYou.discover", "Discover")}</span>
           </div>
           <div className="w-10 h-7 bg-white rounded-lg flex items-center justify-center">
             <Plus className="w-5 h-5 text-black" />
           </div>
           <div className="flex flex-col items-center">
             <MessageCircle className="w-5 h-5 text-white/60" />
-            <span className="text-white/60 text-[10px] mt-0.5">Inbox</span>
+            <span className="text-white/60 text-[10px] mt-0.5">{t("tikTokForYou.inbox", "Inbox")}</span>
           </div>
           <div className="flex flex-col items-center">
             <User className="w-5 h-5 text-white" fill="white" />
-            <span className="text-white text-[10px] mt-0.5">Profile</span>
+            <span className="text-white text-[10px] mt-0.5">{t("tikTokForYou.profile", "Profile")}</span>
           </div>
         </div>
       </div>

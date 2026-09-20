@@ -4,6 +4,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { useMemo } from "react";
+import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { 
@@ -53,27 +54,28 @@ export function TikTokPostPreview({
   creatorInfo,
   className,
 }: TikTokPostPreviewProps) {
+  const { t } = useTranslation("postpreview");
   const isVideo = mediaFiles.some(f => f.fileType === "video");
   const previewMedia = mediaFiles[0];
   
   const privacyInfo = useMemo(() => {
     switch (privacyLevel) {
       case "PUBLIC_TO_EVERYONE":
-        return { label: "Everyone", icon: Users, color: "text-green-500" };
+        return { label: t("tikTokPost.privacyEveryone", "Everyone"), icon: Users, color: "text-green-500" };
       case "MUTUAL_FOLLOW_FRIENDS":
-        return { label: "Friends", icon: Users, color: "text-blue-500" };
+        return { label: t("tikTokPost.privacyFriends", "Friends"), icon: Users, color: "text-blue-500" };
       case "SELF_ONLY":
-        return { label: "Only me", icon: Lock, color: "text-amber-500" };
+        return { label: t("tikTokPost.privacyOnlyMe", "Only me"), icon: Lock, color: "text-amber-500" };
       case "FOLLOWER_OF_CREATOR":
-        return { label: "Followers", icon: Eye, color: "text-purple-500" };
+        return { label: t("tikTokPost.privacyFollowers", "Followers"), icon: Eye, color: "text-purple-500" };
       default:
-        return { label: "Select privacy", icon: Eye, color: "text-muted-foreground" };
+        return { label: t("tikTokPost.selectPrivacy", "Select privacy"), icon: Eye, color: "text-muted-foreground" };
     }
-  }, [privacyLevel]);
+  }, [privacyLevel, t]);
 
   const getContentLabel = () => {
-    if (brandedContent) return "Paid partnership";
-    if (yourBrand) return "Promotional content";
+    if (brandedContent) return t("tikTokPost.paidPartnership", "Paid partnership");
+    if (yourBrand) return t("tikTokPost.promotionalContent", "Promotional content");
     return null;
   };
 
@@ -83,17 +85,17 @@ export function TikTokPostPreview({
       <div className="flex items-center justify-between">
         <h4 className="text-sm font-medium flex items-center gap-2">
           <Eye className="w-4 h-4" />
-          TikTok Preview
+          {t("tikTokPost.previewTitle", "TikTok Preview")}
         </h4>
         {isVideo ? (
           <Badge variant="secondary" className="text-xs">
             <Play className="w-3 h-3 mr-1" />
-            Video
+            {t("tikTokPost.videoBadge", "Video")}
           </Badge>
         ) : (
           <Badge variant="secondary" className="text-xs">
             <ImageIcon className="w-3 h-3 mr-1" />
-            Photo
+            {t("tikTokPost.photoBadge", "Photo")}
           </Badge>
         )}
       </div>
@@ -112,13 +114,13 @@ export function TikTokPostPreview({
           ) : (
             <img
               src={previewMedia.previewUrl}
-              alt="Preview"
+              alt={t("tikTokPost.previewAlt", "Preview")}
               className="w-full h-full object-cover"
             />
           )
         ) : (
           <div className="w-full h-full flex items-center justify-center bg-muted/20">
-            <p className="text-muted-foreground text-sm">No media selected</p>
+            <p className="text-muted-foreground text-sm">{t("tikTokPost.noMedia", "No media selected")}</p>
           </div>
         )}
 
@@ -130,7 +132,7 @@ export function TikTokPostPreview({
           {aiGenerated && (
             <Badge variant="secondary" className="text-[10px] bg-black/50 backdrop-blur-sm">
               <Sparkles className="w-2.5 h-2.5 mr-1" />
-              AI-generated
+              {t("tikTokPost.aiGenerated", "AI-generated")}
             </Badge>
           )}
           {getContentLabel() && (
@@ -150,13 +152,13 @@ export function TikTokPostPreview({
           
           {/* Caption Preview */}
           <p className="text-white text-[11px] line-clamp-2 opacity-90">
-            {caption || "Your caption will appear here..."}
+            {caption || t("tikTokPost.captionPlaceholder", "Your caption will appear here...")}
           </p>
 
           {/* Music/Sound indicator */}
           <div className="flex items-center gap-1 text-white/70">
             <Music className="w-3 h-3" />
-            <span className="text-[10px]">Original sound</span>
+            <span className="text-[10px]">{t("tikTokPost.originalSound", "Original sound")}</span>
           </div>
         </div>
 
@@ -181,7 +183,7 @@ export function TikTokPostPreview({
             )}>
               <MessageCircle className="w-5 h-5 text-white" />
               <span className="text-[9px] text-white">
-                {allowComment ? "On" : "Off"}
+                {allowComment ? t("tikTokPost.on", "On") : t("tikTokPost.off", "Off")}
               </span>
             </div>
             
@@ -193,7 +195,7 @@ export function TikTokPostPreview({
                 )}>
                   <Repeat2 className="w-5 h-5 text-white" />
                   <span className="text-[9px] text-white">
-                    {allowDuet ? "Duet" : "Off"}
+                    {allowDuet ? t("tikTokPost.duet", "Duet") : t("tikTokPost.off", "Off")}
                   </span>
                 </div>
                 
@@ -203,7 +205,7 @@ export function TikTokPostPreview({
                 )}>
                   <Scissors className="w-5 h-5 text-white" />
                   <span className="text-[9px] text-white">
-                    {allowStitch ? "Stitch" : "Off"}
+                    {allowStitch ? t("tikTokPost.stitch", "Stitch") : t("tikTokPost.off", "Off")}
                   </span>
                 </div>
               </>
@@ -215,7 +217,7 @@ export function TikTokPostPreview({
       {/* Settings Summary */}
       <div className="space-y-2 p-3 bg-muted/30 rounded-lg">
         <div className="flex items-center justify-between text-xs">
-          <span className="text-muted-foreground">Privacy:</span>
+          <span className="text-muted-foreground">{t("tikTokPost.privacyLabel", "Privacy:")}</span>
           <span className={cn("flex items-center gap-1 font-medium", privacyInfo.color)}>
             <privacyInfo.icon className="w-3 h-3" />
             {privacyInfo.label}
@@ -223,25 +225,25 @@ export function TikTokPostPreview({
         </div>
         
         <div className="flex items-center justify-between text-xs">
-          <span className="text-muted-foreground">Comments:</span>
+          <span className="text-muted-foreground">{t("tikTokPost.commentsLabel", "Comments:")}</span>
           <span className={allowComment ? "text-green-500" : "text-muted-foreground"}>
-            {allowComment ? "Enabled" : "Disabled"}
+            {allowComment ? t("tikTokPost.enabled", "Enabled") : t("tikTokPost.disabled", "Disabled")}
           </span>
         </div>
         
         {isVideo && (
           <>
             <div className="flex items-center justify-between text-xs">
-              <span className="text-muted-foreground">Duet:</span>
+              <span className="text-muted-foreground">{t("tikTokPost.duetLabel", "Duet:")}</span>
               <span className={allowDuet ? "text-green-500" : "text-muted-foreground"}>
-                {allowDuet ? "Enabled" : "Disabled"}
+                {allowDuet ? t("tikTokPost.enabled", "Enabled") : t("tikTokPost.disabled", "Disabled")}
               </span>
             </div>
             
             <div className="flex items-center justify-between text-xs">
-              <span className="text-muted-foreground">Stitch:</span>
+              <span className="text-muted-foreground">{t("tikTokPost.stitchLabel", "Stitch:")}</span>
               <span className={allowStitch ? "text-green-500" : "text-muted-foreground"}>
-                {allowStitch ? "Enabled" : "Disabled"}
+                {allowStitch ? t("tikTokPost.enabled", "Enabled") : t("tikTokPost.disabled", "Disabled")}
               </span>
             </div>
           </>
@@ -249,7 +251,7 @@ export function TikTokPostPreview({
         
         {(yourBrand || brandedContent) && (
           <div className="flex items-center justify-between text-xs">
-            <span className="text-muted-foreground">Disclosure:</span>
+            <span className="text-muted-foreground">{t("tikTokPost.disclosureLabel", "Disclosure:")}</span>
             <span className="text-primary font-medium">{getContentLabel()}</span>
           </div>
         )}

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { ScrollArea, ScrollBar } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -90,6 +91,7 @@ export function MultiPlatformPreviewPanel({
   connectedAccounts,
   platformSettings,
 }: MultiPlatformPreviewPanelProps) {
+  const { t } = useTranslation("postpreview");
   const [isOpen, setIsOpen] = useState(false);
 
   const getAccountForPlatform = (platform: Platform) =>
@@ -156,7 +158,7 @@ export function MultiPlatformPreviewPanel({
               mediaFile={files.find(f => f.fileType === "video")}
               username={username}
               avatarUrl={avatarUrl}
-              soundName={platformSettings.tiktokTitle || "Original sound"}
+              soundName={platformSettings.tiktokTitle || undefined}
             />
           );
         }
@@ -254,8 +256,8 @@ export function MultiPlatformPreviewPanel({
       <DialogTrigger asChild>
         <Button variant="outline" className="gap-2">
           <Grid3X3 className="w-4 h-4" />
-          <span className="hidden sm:inline">Multi-Platform Preview</span>
-          <span className="sm:hidden">Preview All</span>
+          <span className="hidden sm:inline">{t("multiPlatform.button", "Multi-Platform Preview")}</span>
+          <span className="sm:hidden">{t("multiPlatform.previewAll", "Preview All")}</span>
           <Badge variant="secondary" className="ml-1">
             {selectedPlatforms.length}
           </Badge>
@@ -265,10 +267,10 @@ export function MultiPlatformPreviewPanel({
         <DialogHeader className="p-6 pb-0">
           <DialogTitle className="flex items-center gap-2">
             <Eye className="w-5 h-5" />
-            Multi-Platform Preview
+            {t("multiPlatform.title", "Multi-Platform Preview")}
           </DialogTitle>
           <p className="text-sm text-muted-foreground">
-            Compare how your post will look across {selectedPlatforms.length} platforms
+            {t("multiPlatform.description", "Compare how your post will look across {{count}} platforms", { count: selectedPlatforms.length })}
           </p>
         </DialogHeader>
 
@@ -299,7 +301,7 @@ export function MultiPlatformPreviewPanel({
                     <div className="w-full max-w-lg">
                       {renderPreview(platform) || (
                         <div className="text-center py-12 text-muted-foreground">
-                          <p>Preview not available for this content type on {platform}</p>
+                          <p>{t("multiPlatform.notAvailable", "Preview not available for this content type on {{platform}}", { platform })}</p>
                         </div>
                       )}
                     </div>
@@ -315,7 +317,7 @@ export function MultiPlatformPreviewPanel({
           <div className="px-6 pb-6 border-t pt-4">
             <div className="flex items-center gap-2 mb-4">
               <Maximize2 className="w-4 h-4 text-muted-foreground" />
-              <span className="text-sm font-medium">Side-by-Side Comparison</span>
+              <span className="text-sm font-medium">{t("multiPlatform.sideBySide", "Side-by-Side Comparison")}</span>
             </div>
             <ScrollArea className="w-full">
               <div className={`grid gap-4 ${orderedPlatforms.length === 2 ? 'grid-cols-2' : 'grid-cols-3'}`}>

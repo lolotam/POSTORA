@@ -1,5 +1,6 @@
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { User } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 interface DestinationAvatar {
   id: string;
@@ -23,6 +24,7 @@ export function LinkedInDestinationStack({
   destinations,
   max = 4,
 }: LinkedInDestinationStackProps) {
+  const { t } = useTranslation("postpreview");
   if (destinations.length === 0) return null;
 
   const visible = destinations.slice(0, max);
@@ -49,7 +51,7 @@ export function LinkedInDestinationStack({
       {overflow > 0 && (
         <span
           className="h-5 min-w-5 px-1 rounded-full bg-muted text-muted-foreground text-[9px] font-semibold flex items-center justify-center ring-2 ring-background"
-          title={`${overflow} more destination${overflow > 1 ? "s" : ""}`}
+          title={t("linkedInDestination.overflowTooltip", { count: overflow, defaultValue: `+${overflow} more destinations` })}
         >
           +{overflow}
         </span>

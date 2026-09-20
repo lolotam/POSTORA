@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -19,6 +20,7 @@ export function InstagramCarouselPreview({
   username = "your_account",
   avatarUrl,
 }: InstagramCarouselPreviewProps) {
+  const { t } = useTranslation("postpreview");
   const [currentIndex, setCurrentIndex] = useState(0);
 
   if (mediaFiles.length <= 1) {
@@ -40,10 +42,10 @@ export function InstagramCarouselPreview({
           <div className="w-5 h-5 bg-gradient-to-br from-[#833AB4] via-[#E1306C] to-[#F77737] rounded flex items-center justify-center">
             <span className="text-white text-xs font-bold">◫</span>
           </div>
-          <span className="text-sm font-medium">Carousel Preview</span>
+          <span className="text-sm font-medium">{t("instagramCarousel.previewTitle", "Carousel Preview")}</span>
         </div>
         <Badge variant="secondary" className="text-xs">
-          {mediaFiles.length} slides
+          {t("instagramCarousel.slidesCount", "{{count}} slides", { count: mediaFiles.length })}
         </Badge>
       </div>
 
@@ -65,7 +67,7 @@ export function InstagramCarouselPreview({
           {mediaFiles[currentIndex]?.fileType === "image" ? (
             <img
               src={mediaFiles[currentIndex].previewUrl}
-              alt={`Slide ${currentIndex + 1}`}
+              alt={t("instagramCarousel.slideAlt", "Slide {{number}}", { number: currentIndex + 1 })}
               className="w-full h-full object-cover transition-opacity duration-200"
             />
           ) : (
@@ -128,13 +130,13 @@ export function InstagramCarouselPreview({
             </div>
             <Bookmark className="w-6 h-6" />
           </div>
-          <p className="text-sm font-semibold">0 likes</p>
+          <p className="text-sm font-semibold">{t("instagramCarousel.likesCount", "0 likes")}</p>
           {caption && (
             <p className="text-sm">
               <span className="font-semibold">{username}</span>{" "}
               {caption.slice(0, 100)}
               {caption.length > 100 && (
-                <span className="text-muted-foreground"> ...more</span>
+                <span className="text-muted-foreground"> {t("instagramCarousel.more", "...more")}</span>
               )}
             </p>
           )}
@@ -167,7 +169,7 @@ export function InstagramCarouselPreview({
       </div>
 
       <p className="text-xs text-muted-foreground text-center">
-        Carousel posts can have up to 10 photos or videos
+        {t("instagramCarousel.infoText", "Carousel posts can have up to 10 photos or videos")}
       </p>
     </div>
   );

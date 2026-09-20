@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Heart, MessageCircle, Send, Bookmark, MoreHorizontal, Music2 } from "lucide-react";
@@ -12,9 +13,12 @@ interface FacebookReelsPreviewProps {
 export function FacebookReelsPreview({
   caption,
   mediaFile,
-  username = "Your Page",
+  username,
   avatarUrl,
 }: FacebookReelsPreviewProps) {
+  const { t } = useTranslation("postpreview");
+  const displayUsername = username || t("facebookReels.defaultUsername", "Your Page");
+
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
@@ -22,10 +26,10 @@ export function FacebookReelsPreview({
           <div className="w-5 h-5 bg-[#1877F2] rounded-full flex items-center justify-center">
             <span className="text-white text-[10px] font-bold">f</span>
           </div>
-          <span className="text-sm font-medium">Reels Preview</span>
+          <span className="text-sm font-medium">{t("facebookReels.previewTitle", "Reels Preview")}</span>
         </div>
         <Badge variant="secondary" className="text-xs bg-[#1877F2]/10 text-[#1877F2]">
-          Reel
+          {t("facebookReels.reelBadge", "Reel")}
         </Badge>
       </div>
 
@@ -59,7 +63,7 @@ export function FacebookReelsPreview({
         {/* Facebook Reels logo */}
         <div className="absolute top-4 left-4 flex items-center gap-1">
           <div className="bg-[#1877F2] rounded-sm px-1.5 py-0.5">
-            <span className="text-white text-xs font-bold">Reels</span>
+            <span className="text-white text-xs font-bold">{t("facebookReels.reelsLabel", "Reels")}</span>
           </div>
         </div>
 
@@ -98,12 +102,12 @@ export function FacebookReelsPreview({
         <div className="absolute bottom-4 left-3 right-16 text-white z-10">
           <div className="flex items-center gap-2 mb-2">
             <Avatar className="h-8 w-8 border-2 border-white">
-              {avatarUrl ? <AvatarImage src={avatarUrl} alt={username} /> : null}
-              <AvatarFallback className="bg-[#1877F2] text-white text-xs">{username[0]?.toUpperCase()}</AvatarFallback>
+              {avatarUrl ? <AvatarImage src={avatarUrl} alt={displayUsername} /> : null}
+              <AvatarFallback className="bg-[#1877F2] text-white text-xs">{displayUsername[0]?.toUpperCase()}</AvatarFallback>
             </Avatar>
-            <span className="font-semibold text-sm">{username}</span>
+            <span className="font-semibold text-sm">{displayUsername}</span>
             <button className="px-2 py-0.5 border border-white text-white text-xs font-semibold rounded">
-              Follow
+              {t("facebookReels.follow", "Follow")}
             </button>
           </div>
           {caption && (
@@ -111,14 +115,14 @@ export function FacebookReelsPreview({
           )}
           <div className="flex items-center gap-1 mt-2 text-xs opacity-70">
             <Music2 className="w-3 h-3" />
-            <span className="truncate">Original audio - {username}</span>
+            <span className="truncate">{t("facebookReels.originalAudio", "Original audio - {{username}}", { username: displayUsername })}</span>
           </div>
         </div>
       </div>
 
       {/* Info text */}
       <p className="text-xs text-muted-foreground text-center">
-        Reels are short vertical videos up to 90 seconds
+        {t("facebookReels.infoText", "Reels are short vertical videos up to 90 seconds")}
       </p>
     </div>
   );

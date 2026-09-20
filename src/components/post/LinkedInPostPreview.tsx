@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { ThumbsUp, MessageSquare, Repeat2, Send, MoreHorizontal, Globe, X } from "lucide-react";
@@ -14,11 +15,15 @@ interface LinkedInPostPreviewProps {
 export function LinkedInPostPreview({
   caption,
   mediaFile,
-  username = "Your Name",
+  username,
   avatarUrl,
-  headline = "Professional Title",
+  headline,
   visibility = "public",
 }: LinkedInPostPreviewProps) {
+  const { t } = useTranslation("postpreview");
+  const displayUsername = username || t("linkedIn.defaultUsername", "Your Name");
+  const displayHeadline = headline || t("linkedIn.defaultHeadline", "Professional Title");
+
   // Truncate caption for preview with "see more" behavior
   const truncatedCaption = caption.length > 200 ? caption.slice(0, 197) + "..." : caption;
 
@@ -37,10 +42,10 @@ export function LinkedInPostPreview({
           <div className="w-5 h-5 bg-[#0A66C2] rounded flex items-center justify-center">
             <span className="text-white text-xs font-bold">in</span>
           </div>
-          <span className="text-sm font-medium">Feed Preview</span>
+          <span className="text-sm font-medium">{t("linkedIn.previewTitle", "Feed Preview")}</span>
         </div>
         <Badge variant="secondary" className="text-xs bg-[#0A66C2]/10 text-[#0A66C2] dark:bg-[#0A66C2]/20">
-          Post
+          {t("linkedIn.postBadge", "Post")}
         </Badge>
       </div>
 
@@ -50,22 +55,22 @@ export function LinkedInPostPreview({
         <div className="p-4">
           <div className="flex items-start gap-3">
             <Avatar className="h-12 w-12">
-              {avatarUrl ? <AvatarImage src={avatarUrl} alt={username} /> : null}
+              {avatarUrl ? <AvatarImage src={avatarUrl} alt={displayUsername} /> : null}
               <AvatarFallback className="bg-[#0A66C2] text-white">
-                {username[0]?.toUpperCase()}
+                {displayUsername[0]?.toUpperCase()}
               </AvatarFallback>
             </Avatar>
             
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-1">
                 <span className="font-semibold text-sm hover:text-[#0A66C2] hover:underline cursor-pointer">
-                  {username}
+                  {displayUsername}
                 </span>
-                <span className="text-muted-foreground text-sm">• 1st</span>
+                <span className="text-muted-foreground text-sm">{t("linkedIn.firstConnection", "• 1st")}</span>
               </div>
-              <p className="text-xs text-muted-foreground truncate">{headline}</p>
+              <p className="text-xs text-muted-foreground truncate">{displayHeadline}</p>
               <div className="flex items-center gap-1 text-xs text-muted-foreground">
-                <span>now</span>
+                <span>{t("linkedIn.now", "now")}</span>
                 <span>•</span>
                 {visibilityIcon}
               </div>
@@ -85,7 +90,7 @@ export function LinkedInPostPreview({
               {truncatedCaption}
               {caption.length > 200 && (
                 <span className="text-muted-foreground hover:text-[#0A66C2] hover:underline cursor-pointer ml-1">
-                  ...see more
+                  {t("linkedIn.seeMore", "...see more")}
                 </span>
               )}
             </p>
@@ -131,8 +136,8 @@ export function LinkedInPostPreview({
             <span className="ml-1">0</span>
           </div>
           <div className="flex items-center gap-3">
-            <span>0 comments</span>
-            <span>0 reposts</span>
+            <span>{t("linkedIn.commentsCount", "0 comments")}</span>
+            <span>{t("linkedIn.repostsCount", "0 reposts")}</span>
           </div>
         </div>
 
@@ -140,26 +145,28 @@ export function LinkedInPostPreview({
         <div className="px-2 py-1 border-t flex items-center justify-around">
           <button className="flex-1 flex items-center justify-center gap-2 py-3 hover:bg-muted rounded-lg transition-colors">
             <ThumbsUp className="w-5 h-5 text-muted-foreground" />
-            <span className="text-sm text-muted-foreground font-medium">Like</span>
+            <span className="text-sm text-muted-foreground font-medium">{t("linkedIn.like", "Like")}</span>
           </button>
           <button className="flex-1 flex items-center justify-center gap-2 py-3 hover:bg-muted rounded-lg transition-colors">
             <MessageSquare className="w-5 h-5 text-muted-foreground" />
-            <span className="text-sm text-muted-foreground font-medium">Comment</span>
+            <span className="text-sm text-muted-foreground font-medium">{t("linkedIn.comment", "Comment")}</span>
           </button>
           <button className="flex-1 flex items-center justify-center gap-2 py-3 hover:bg-muted rounded-lg transition-colors">
             <Repeat2 className="w-5 h-5 text-muted-foreground" />
-            <span className="text-sm text-muted-foreground font-medium">Repost</span>
+            <span className="text-sm text-muted-foreground font-medium">{t("linkedIn.repost", "Repost")}</span>
           </button>
           <button className="flex-1 flex items-center justify-center gap-2 py-3 hover:bg-muted rounded-lg transition-colors">
             <Send className="w-5 h-5 text-muted-foreground" />
-            <span className="text-sm text-muted-foreground font-medium">Send</span>
+            <span className="text-sm text-muted-foreground font-medium">{t("linkedIn.send", "Send")}</span>
           </button>
         </div>
       </div>
 
       {/* Info text */}
       <p className="text-xs text-muted-foreground text-center">
-        {caption.length > 0 ? `${caption.length} characters` : "Add content to see how your post will appear"}
+        {caption.length > 0
+          ? t("linkedIn.charCount", "{{count}} characters", { count: caption.length })
+          : t("linkedIn.emptyHint", "Add content to see how your post will appear")}
       </p>
     </div>
   );

@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { 
@@ -28,7 +29,7 @@ interface RedditPostPreviewProps {
 export function RedditPostPreview({
   caption,
   mediaFile,
-  title = "Your post title",
+  title,
   subreddit = "subreddit",
   username = "your_username",
   avatarUrl,
@@ -37,7 +38,9 @@ export function RedditPostPreview({
   spoiler = false,
   nsfw = false,
 }: RedditPostPreviewProps) {
-  const displayTitle = title || caption.slice(0, 100) || "Your post title";
+  const { t } = useTranslation("postpreview");
+  const defaultTitle = t("reddit.defaultTitle", "Your post title");
+  const displayTitle = title || caption.slice(0, 100) || defaultTitle;
   const truncatedBody = caption.length > 300 ? caption.slice(0, 297) + "..." : caption;
 
   return (
@@ -57,10 +60,10 @@ export function RedditPostPreview({
               <circle cx="13" cy="1" r="1" fill="#FF4500" />
             </svg>
           </div>
-          <span className="text-sm font-medium">Feed Preview</span>
+          <span className="text-sm font-medium">{t("reddit.previewTitle", "Feed Preview")}</span>
         </div>
         <Badge variant="secondary" className="text-xs bg-[#FF4500]/10 text-[#FF4500] dark:bg-[#FF4500]/20">
-          Post
+          {t("reddit.postBadge", "Post")}
         </Badge>
       </div>
 
@@ -91,7 +94,7 @@ export function RedditPostPreview({
                 </span>
               </div>
               <span>•</span>
-              <span>Posted by</span>
+              <span>{t("reddit.postedBy", "Posted by")}</span>
               <div className="flex items-center gap-1">
                 <Avatar className="h-4 w-4">
                   {avatarUrl ? <AvatarImage src={avatarUrl} alt={username} /> : null}
@@ -102,20 +105,20 @@ export function RedditPostPreview({
                 <span className="hover:underline cursor-pointer">u/{username}</span>
               </div>
               <span>•</span>
-              <span>just now</span>
+              <span>{t("reddit.justNow", "just now")}</span>
             </div>
 
             {/* Flairs/Tags */}
             <div className="flex items-center gap-2 mb-2">
               {nsfw && (
                 <Badge variant="destructive" className="text-[10px] px-1.5 py-0 font-bold">
-                  NSFW
+                  {t("reddit.nsfw", "NSFW")}
                 </Badge>
               )}
               {spoiler && (
                 <Badge variant="secondary" className="text-[10px] px-1.5 py-0 font-bold bg-muted-foreground/20">
                   <EyeOff className="w-2.5 h-2.5 mr-0.5" />
-                  SPOILER
+                  {t("reddit.spoiler", "SPOILER")}
                 </Badge>
               )}
             </div>
@@ -181,19 +184,19 @@ export function RedditPostPreview({
             <div className="flex items-center gap-1 text-xs text-muted-foreground">
               <button className="flex items-center gap-1.5 px-2 py-1.5 hover:bg-muted rounded-sm transition-colors">
                 <MessageSquare className="w-4 h-4" />
-                <span className="font-bold">0 Comments</span>
+                <span className="font-bold">{t("reddit.commentsCount", "0 Comments")}</span>
               </button>
               <button className="flex items-center gap-1.5 px-2 py-1.5 hover:bg-muted rounded-sm transition-colors">
                 <Gift className="w-4 h-4" />
-                <span className="font-bold">Award</span>
+                <span className="font-bold">{t("reddit.award", "Award")}</span>
               </button>
               <button className="flex items-center gap-1.5 px-2 py-1.5 hover:bg-muted rounded-sm transition-colors">
                 <Share className="w-4 h-4" />
-                <span className="font-bold">Share</span>
+                <span className="font-bold">{t("reddit.share", "Share")}</span>
               </button>
               <button className="flex items-center gap-1.5 px-2 py-1.5 hover:bg-muted rounded-sm transition-colors">
                 <Bookmark className="w-4 h-4" />
-                <span className="font-bold">Save</span>
+                <span className="font-bold">{t("reddit.save", "Save")}</span>
               </button>
               <button className="flex items-center gap-1.5 px-2 py-1.5 hover:bg-muted rounded-sm transition-colors">
                 <MoreHorizontal className="w-4 h-4" />
@@ -205,7 +208,7 @@ export function RedditPostPreview({
 
       {/* Info text */}
       <p className="text-xs text-muted-foreground text-center">
-        {title ? `Posting to r/${subreddit}` : "Add a title to preview your Reddit post"}
+        {title ? t("reddit.postingTo", "Posting to r/{{subreddit}}", { subreddit }) : t("reddit.emptyHint", "Add a title to preview your Reddit post")}
       </p>
     </div>
   );

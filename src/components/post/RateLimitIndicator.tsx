@@ -2,6 +2,7 @@ import { Progress } from "@/components/ui/progress";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Sparkles, AlertTriangle, Clock } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useTranslation } from "react-i18next";
 
 interface RateLimitIndicatorProps {
   limitPerHour: number;
@@ -26,6 +27,8 @@ export function RateLimitIndicator({
   compact = false,
   className,
 }: RateLimitIndicatorProps) {
+  const { t } = useTranslation("postpreview");
+
   if (limitPerHour === 0 && limitPerDay === 0) return null;
 
   // Use hourly as primary display, but show daily if hourly is depleted
@@ -43,17 +46,17 @@ export function RateLimitIndicator({
   const getTimeUntilReset = (type: "hour" | "day") => {
     const resetTime = type === "hour" ? resetTimeHour : resetTimeDay;
     if (!resetTime) {
-      return type === "hour" ? "Resets every hour" : "Resets daily";
+      return type === "hour" ? t("rateLimit.resetsEveryHour", "Resets every hour") : t("rateLimit.resetsDaily", "Resets daily");
     }
     const now = new Date();
     const diff = resetTime.getTime() - now.getTime();
-    if (diff <= 0) return "Resetting soon...";
+    if (diff <= 0) return t("rateLimit.resettingSoon", "Resetting soon...");
     
     const minutes = Math.ceil(diff / (1000 * 60));
-    if (minutes < 60) return `Resets in ${minutes}m`;
+    if (minutes < 60) return t("rateLimit.resetsInMinutes", { count: minutes, defaultValue: `Resets in ${minutes}m` });
     const hours = Math.ceil(minutes / 60);
-    if (hours < 24) return `Resets in ${hours}h`;
-    return `Resets in ${Math.ceil(hours / 24)}d`;
+    if (hours < 24) return t("rateLimit.resetsInHours", { count: hours, defaultValue: `Resets in ${hours}h` });
+    return t("rateLimit.resetsInDays", { count: Math.ceil(hours / 24), defaultValue: `Resets in ${Math.ceil(hours / 24)}d` });
   };
 
   if (compact) {
@@ -85,7 +88,7 @@ export function RateLimitIndicator({
               <p className="font-medium">{label}</p>
               {limitPerHour > 0 && (
                 <div className="flex items-center justify-between gap-4 text-xs">
-                  <span className="text-muted-foreground">Hourly:</span>
+                  <span className="text-muted-foreground">{t("rateLimit.hourly", "Hourly:")}</span>
                   <span className={cn(isHourlyLimited && "text-destructive")}>
                     {remainingHour}/{limitPerHour}
                   </span>
@@ -93,7 +96,7 @@ export function RateLimitIndicator({
               )}
               {limitPerDay > 0 && (
                 <div className="flex items-center justify-between gap-4 text-xs">
-                  <span className="text-muted-foreground">Daily:</span>
+                  <span className="text-muted-foreground">{t("rateLimit.daily", "Daily:")}</span>
                   <span className={cn(isDailyLimited && "text-destructive")}>
                     {remainingDay}/{limitPerDay}
                   </span>
@@ -106,8 +109,8 @@ export function RateLimitIndicator({
               {isEmpty && (
                 <p className="text-xs text-destructive">
                   {isHourlyLimited 
-                    ? "Hourly limit reached. Please wait for it to reset."
-                    : "Daily limit reached. Please wait until tomorrow."}
+                    ? t("rateLimit.hourlyLimitReached", "Hourly limit reached. Please wait for it to reset.")
+                    : t("rateLimit.dailyLimitReached", "Daily limit reached. Please wait until tomorrow.")}
                 </p>
               )}
             </div>
@@ -133,12 +136,12 @@ export function RateLimitIndicator({
         <div className="text-xs font-medium space-x-2">
           {limitPerHour > 0 && (
             <span className={cn(isHourlyLimited ? "text-destructive" : "text-muted-foreground")}>
-              {remainingHour}/{limitPerHour}/hr
+              {t("rateLimit.perHour", { remaining: remainingHour, limit: limitPerHour, defaultValue: `${remainingHour}/${limitPerHour}/hr` })}
             </span>
           )}
           {limitPerDay > 0 && (
             <span className={cn(isDailyLimited ? "text-destructive" : "text-muted-foreground")}>
-              {remainingDay}/{limitPerDay}/day
+              {t("rateLimit.perDay", { remaining: remainingDay, limit: limitPerDay, defaultValue: `${remainingDay}/${limitPerDay}/day` })}
             </span>
           )}
         </div>
@@ -157,8 +160,8 @@ export function RateLimitIndicator({
       {isEmpty && (
         <p className="text-xs text-destructive bg-destructive/10 px-2 py-1 rounded">
           {isHourlyLimited 
-            ? "Hourly limit reached. Please wait for it to reset."
-            : "Daily limit reached. Please wait until tomorrow."}
+            ? t("rateLimit.hourlyLimitReached", "Hourly limit reached. Please wait for it to reset.")
+            : t("rateLimit.dailyLimitReached", "Daily limit reached. Please wait until tomorrow.")}
         </p>
       )}
     </div>

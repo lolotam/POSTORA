@@ -14,6 +14,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import { useTranslation } from "react-i18next";
 import { Badge } from "@/components/ui/badge";
 import { 
   Loader2, 
@@ -79,42 +80,43 @@ export function TikTokConfirmDialog({
   aiGenerated,
   creatorInfo,
 }: TikTokConfirmDialogProps) {
+  const { t } = useTranslation(["postpreview", "common"]);
   const isVideo = mediaFiles.some(f => f.fileType === "video");
   const previewMedia = mediaFiles[0];
   
   // Estimate processing time based on file size
   const estimatedTime = useMemo(() => {
-    if (!isVideo) return "~30 seconds";
+    if (!isVideo) return t("postpreview:tikTokConfirm.time30s", "~30 seconds");
     
     const videoFile = mediaFiles.find(f => f.fileType === "video")?.file;
-    if (!videoFile) return "1-2 minutes";
+    if (!videoFile) return t("postpreview:tikTokConfirm.time1to2m", "1-2 minutes");
     
     const sizeMB = videoFile.size / (1024 * 1024);
     
-    if (sizeMB < 512) return "~30 seconds";
-    if (sizeMB < 1024) return "~1 minute";
-    if (sizeMB < 2048) return "~1-2 minutes";
-    return "2+ minutes";
-  }, [isVideo, mediaFiles]);
+    if (sizeMB < 512) return t("postpreview:tikTokConfirm.time30s", "~30 seconds");
+    if (sizeMB < 1024) return t("postpreview:tikTokConfirm.time1m", "~1 minute");
+    if (sizeMB < 2048) return t("postpreview:tikTokConfirm.time1to2m", "~1-2 minutes");
+    return t("postpreview:tikTokConfirm.time2mPlus", "2+ minutes");
+  }, [isVideo, mediaFiles, t]);
 
   const privacyInfo = useMemo(() => {
     switch (privacyLevel) {
       case "PUBLIC_TO_EVERYONE":
-        return { label: "Everyone", icon: Users, color: "text-green-600" };
+        return { label: t("postpreview:tikTokConfirm.privacyEveryone", "Everyone"), icon: Users, color: "text-green-600" };
       case "MUTUAL_FOLLOW_FRIENDS":
-        return { label: "Friends only", icon: Users, color: "text-blue-600" };
+        return { label: t("postpreview:tikTokConfirm.privacyFriends", "Friends only"), icon: Users, color: "text-blue-600" };
       case "SELF_ONLY":
-        return { label: "Only me", icon: Lock, color: "text-amber-600" };
+        return { label: t("postpreview:tikTokConfirm.privacyOnlyMe", "Only me"), icon: Lock, color: "text-amber-600" };
       case "FOLLOWER_OF_CREATOR":
-        return { label: "Followers", icon: Eye, color: "text-purple-600" };
+        return { label: t("postpreview:tikTokConfirm.privacyFollowers", "Followers"), icon: Eye, color: "text-purple-600" };
       default:
         return { label: privacyLevel, icon: Eye, color: "text-muted-foreground" };
     }
-  }, [privacyLevel]);
+  }, [privacyLevel, t]);
 
   const getContentLabel = () => {
-    if (brandedContent) return "Paid partnership";
-    if (yourBrand) return "Promotional content";
+    if (brandedContent) return t("postpreview:tikTokPost.paidPartnership", "Paid partnership");
+    if (yourBrand) return t("postpreview:tikTokPost.promotionalContent", "Promotional content");
     return null;
   };
 
@@ -126,7 +128,7 @@ export function TikTokConfirmDialog({
             <div className="w-8 h-8 rounded-full bg-gradient-to-br from-[#00f2ea] to-[#ff0050] flex items-center justify-center">
               <span className="text-white text-xs font-bold">TT</span>
             </div>
-            Confirm TikTok Post
+            {t("postpreview:tikTokConfirm.title", "Confirm TikTok Post")}
           </AlertDialogTitle>
           <AlertDialogDescription asChild>
             <div className="space-y-4">
@@ -143,15 +145,15 @@ export function TikTokConfirmDialog({
                 )}
                 <div>
                   <p className="font-medium text-foreground">
-                    @{creatorInfo?.creator_username || creatorInfo?.creator_nickname || "Your account"}
+                    @{creatorInfo?.creator_username || creatorInfo?.creator_nickname || t("postpreview:tikTokConfirm.defaultAccount", "Your account")}
                   </p>
                   <p className="text-xs text-muted-foreground">
-                    {isVideo ? "Video post" : "Photo post"}
+                    {isVideo ? t("postpreview:tikTokConfirm.videoPost", "Video post") : t("postpreview:tikTokConfirm.photoPost", "Photo post")}
                   </p>
                 </div>
                 <Badge variant="secondary" className="ml-auto">
                   {isVideo ? <Video className="w-3 h-3 mr-1" /> : <ImageIcon className="w-3 h-3 mr-1" />}
-                  {mediaFiles.length} {mediaFiles.length === 1 ? "file" : "files"}
+                  {t("postpreview:tikTokConfirm.filesCount", { count: mediaFiles.length, defaultValue: `${mediaFiles.length} ${mediaFiles.length === 1 ? "file" : "files"}` })}
                 </Badge>
               </div>
 
@@ -160,7 +162,7 @@ export function TikTokConfirmDialog({
                 <div className="flex items-center justify-between py-1.5 border-b border-border/50">
                   <span className="text-muted-foreground flex items-center gap-2">
                     <privacyInfo.icon className="w-4 h-4" />
-                    Privacy
+                    {t("postpreview:tikTokConfirm.privacy", "Privacy")}
                   </span>
                   <span className={cn("font-medium", privacyInfo.color)}>
                     {privacyInfo.label}
@@ -170,10 +172,10 @@ export function TikTokConfirmDialog({
                 <div className="flex items-center justify-between py-1.5 border-b border-border/50">
                   <span className="text-muted-foreground flex items-center gap-2">
                     <MessageCircle className="w-4 h-4" />
-                    Comments
+                    {t("postpreview:tikTokConfirm.comments", "Comments")}
                   </span>
                   <span className={allowComment ? "text-green-600 font-medium" : "text-muted-foreground"}>
-                    {allowComment ? "Enabled" : "Disabled"}
+                    {allowComment ? t("postpreview:tikTokConfirm.enabled", "Enabled") : t("postpreview:tikTokConfirm.disabled", "Disabled")}
                   </span>
                 </div>
 
@@ -182,20 +184,20 @@ export function TikTokConfirmDialog({
                     <div className="flex items-center justify-between py-1.5 border-b border-border/50">
                       <span className="text-muted-foreground flex items-center gap-2">
                         <Repeat2 className="w-4 h-4" />
-                        Duet
+                        {t("postpreview:tikTokConfirm.duet", "Duet")}
                       </span>
                       <span className={allowDuet ? "text-green-600 font-medium" : "text-muted-foreground"}>
-                        {allowDuet ? "Enabled" : "Disabled"}
+                        {allowDuet ? t("postpreview:tikTokConfirm.enabled", "Enabled") : t("postpreview:tikTokConfirm.disabled", "Disabled")}
                       </span>
                     </div>
 
                     <div className="flex items-center justify-between py-1.5 border-b border-border/50">
                       <span className="text-muted-foreground flex items-center gap-2">
                         <Scissors className="w-4 h-4" />
-                        Stitch
+                        {t("postpreview:tikTokConfirm.stitch", "Stitch")}
                       </span>
                       <span className={allowStitch ? "text-green-600 font-medium" : "text-muted-foreground"}>
-                        {allowStitch ? "Enabled" : "Disabled"}
+                        {allowStitch ? t("postpreview:tikTokConfirm.enabled", "Enabled") : t("postpreview:tikTokConfirm.disabled", "Disabled")}
                       </span>
                     </div>
                   </>
@@ -205,9 +207,9 @@ export function TikTokConfirmDialog({
                   <div className="flex items-center justify-between py-1.5 border-b border-border/50">
                     <span className="text-muted-foreground flex items-center gap-2">
                       <Sparkles className="w-4 h-4" />
-                      AI Label
+                      {t("postpreview:tikTokConfirm.aiLabel", "AI Label")}
                     </span>
-                    <span className="text-primary font-medium">Enabled</span>
+                    <span className="text-primary font-medium">{t("postpreview:tikTokConfirm.enabled", "Enabled")}</span>
                   </div>
                 )}
 
@@ -215,7 +217,7 @@ export function TikTokConfirmDialog({
                   <div className="flex items-center justify-between py-1.5 border-b border-border/50">
                     <span className="text-muted-foreground flex items-center gap-2">
                       <Tag className="w-4 h-4" />
-                      Disclosure
+                      {t("postpreview:tikTokConfirm.disclosure", "Disclosure")}
                     </span>
                     <span className="text-primary font-medium">{getContentLabel()}</span>
                   </div>
@@ -224,7 +226,7 @@ export function TikTokConfirmDialog({
                 {/* Caption Preview */}
                 {caption && (
                   <div className="pt-2">
-                    <p className="text-xs text-muted-foreground mb-1">Caption:</p>
+                    <p className="text-xs text-muted-foreground mb-1">{t("postpreview:tikTokConfirm.captionLabel", "Caption:")}</p>
                     <p className="text-sm line-clamp-2 bg-muted/30 p-2 rounded">
                       {caption}
                     </p>
@@ -238,11 +240,10 @@ export function TikTokConfirmDialog({
                   <AlertTriangle className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
                   <div className="space-y-1">
                     <p className="text-sm text-amber-800 dark:text-amber-200">
-                      Processing may take <strong>{estimatedTime}</strong>
+                      {t("postpreview:tikTokConfirm.processingTimeMayTake", { estimatedTime, defaultValue: `Processing may take ${estimatedTime}` })}
                     </p>
                     <p className="text-xs text-amber-700/80 dark:text-amber-300/80">
-                      After uploading, TikTok needs time to process your content. 
-                      Moderation may take an additional 1-2 minutes.
+                      {t("postpreview:tikTokConfirm.processingDescription", "After uploading, TikTok needs time to process your content. Moderation may take an additional 1-2 minutes.")}
                     </p>
                   </div>
                 </div>
@@ -254,10 +255,10 @@ export function TikTokConfirmDialog({
                   <Clock className="w-4 h-4 text-blue-600 flex-shrink-0 mt-0.5" />
                   <div>
                     <p className="text-sm text-blue-800 dark:text-blue-200">
-                      Check your TikTok inbox
+                      {t("postpreview:tikTokConfirm.inboxTitle", "Check your TikTok inbox")}
                     </p>
                     <p className="text-xs text-blue-700/80 dark:text-blue-300/80">
-                      The post will be sent to your TikTok inbox for final review before publishing.
+                      {t("postpreview:tikTokConfirm.inboxDescription", "The post will be sent to your TikTok inbox for final review before publishing.")}
                     </p>
                   </div>
                 </div>
@@ -272,7 +273,7 @@ export function TikTokConfirmDialog({
             onClick={() => onOpenChange(false)}
             disabled={isPosting}
           >
-            Cancel
+            {t("common:cancel", "Cancel")}
           </Button>
           <Button
             onClick={onConfirm}
@@ -289,7 +290,7 @@ export function TikTokConfirmDialog({
                   className="flex items-center gap-2"
                 >
                   <Loader2 className="w-4 h-4 animate-spin" />
-                  Uploading...
+                  {t("postpreview:tikTokConfirm.uploading", "Uploading...")}
                 </motion.span>
               ) : (
                 <motion.span
@@ -300,7 +301,7 @@ export function TikTokConfirmDialog({
                   className="flex items-center gap-2"
                 >
                   <CheckCircle2 className="w-4 h-4" />
-                  Confirm Post
+                  {t("postpreview:tikTokConfirm.confirmPost", "Confirm Post")}
                 </motion.span>
               )}
             </AnimatePresence>

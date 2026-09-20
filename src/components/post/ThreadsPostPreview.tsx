@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Heart, MessageCircle, Repeat2, Send, MoreHorizontal, Verified, MapPin, Hash } from "lucide-react";
@@ -21,14 +22,15 @@ export function ThreadsPostPreview({
   topicTag = "",
   locationName = "",
 }: ThreadsPostPreviewProps) {
+  const { t } = useTranslation("postpreview");
   // Truncate caption for preview
   const truncatedCaption = caption.length > 200 ? caption.slice(0, 197) + "..." : caption;
 
   const replyText = {
-    everyone: "Anyone can reply",
-    followers: "Followers can reply",
-    mentioned: "Mentioned only",
-  }[replyControl];
+    everyone: t("threads.anyoneCanReply", "Anyone can reply"),
+    followers: t("threads.followersCanReply", "Followers can reply"),
+    mentioned: t("threads.mentionedOnly", "Mentioned only"),
+  }[replyControl] || t("threads.anyoneCanReply", "Anyone can reply");
 
   // Sanitize topic tag the same way the settings input + backend do
   const cleanedTopicTag = (topicTag || "").replace(/[.&]/g, "").slice(0, 50).trim();
@@ -46,10 +48,10 @@ export function ThreadsPostPreview({
               />
             </svg>
           </div>
-          <span className="text-sm font-medium">Thread Preview</span>
+          <span className="text-sm font-medium">{t("threads.previewTitle", "Thread Preview")}</span>
         </div>
         <Badge variant="secondary" className="text-xs bg-foreground/10 text-foreground">
-          Thread
+          {t("threads.threadBadge", "Thread")}
         </Badge>
       </div>
 
@@ -86,7 +88,7 @@ export function ThreadsPostPreview({
                   <Verified className="w-3.5 h-3.5 text-[#0095F6] fill-[#0095F6]" />
                 </div>
                 <div className="flex items-center gap-2 text-muted-foreground">
-                  <span className="text-xs">now</span>
+                  <span className="text-xs">{t("threads.now", "now")}</span>
                   <MoreHorizontal className="w-4 h-4" />
                 </div>
               </div>
@@ -96,7 +98,7 @@ export function ThreadsPostPreview({
                 <p className="text-sm whitespace-pre-wrap break-words mb-3">
                   {truncatedCaption}
                   {caption.length > 200 && (
-                    <span className="text-muted-foreground"> more</span>
+                    <span className="text-muted-foreground">{t("threads.more", " more")}</span>
                   )}
                 </p>
               )}
@@ -157,7 +159,7 @@ export function ThreadsPostPreview({
               <div className="w-5 h-5 rounded-full bg-muted border-2 border-background" />
             </div>
             <span className="text-xs text-muted-foreground">
-              0 replies · {replyText}
+              {t("threads.repliesCount", "0 replies · {{replyText}}", { replyText })}
             </span>
           </div>
         </div>
@@ -168,7 +170,9 @@ export function ThreadsPostPreview({
 
       {/* Info text */}
       <p className="text-xs text-muted-foreground text-center">
-        {caption.length > 0 ? `${caption.length} characters` : "Add content to see how your thread will appear"}
+        {caption.length > 0
+          ? t("threads.charCount", "{{count}} characters", { count: caption.length })
+          : t("threads.emptyHint", "Add content to see how your thread will appear")}
       </p>
     </div>
   );

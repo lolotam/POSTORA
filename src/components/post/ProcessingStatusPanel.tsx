@@ -14,6 +14,7 @@ import {
   X
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useTranslation } from "react-i18next";
 
 export type ProcessingStatus = "queued" | "processing" | "done" | "error";
 export type OperationType = "crop" | "compress";
@@ -53,6 +54,7 @@ export function ProcessingStatusPanel({
   onClear,
   className,
 }: ProcessingStatusPanelProps) {
+  const { t } = useTranslation(["postpreview", "common"]);
   const [expandedJobId, setExpandedJobId] = useState<string | null>(null);
 
   // Auto-expand first error job
@@ -94,13 +96,13 @@ export function ProcessingStatusPanel({
   const getStatusLabel = (status: ProcessingStatus) => {
     switch (status) {
       case "queued":
-        return "Queued";
+        return t("postpreview:processingPanel.statusQueued", "Queued");
       case "processing":
-        return "Processing";
+        return t("common:status.processing", "Processing");
       case "done":
-        return "Complete";
+        return t("common:status.completed", "Complete");
       case "error":
-        return "Failed";
+        return t("common:status.failed", "Failed");
     }
   };
 
@@ -117,21 +119,21 @@ export function ProcessingStatusPanel({
         {/* Header */}
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <span className="text-sm font-medium">Processing</span>
+            <span className="text-sm font-medium">{t("postpreview:processingPanel.title", "Processing")}</span>
             <div className="flex gap-1">
               {processingCount > 0 && (
                 <Badge variant="secondary" className="text-xs h-5">
-                  {processingCount} active
+                  {t("postpreview:processingPanel.activeCount", { count: processingCount, defaultValue: `${processingCount} active` })}
                 </Badge>
               )}
               {completedCount > 0 && (
                 <Badge variant="outline" className="text-xs h-5 text-green-600 border-green-200">
-                  {completedCount} done
+                  {t("postpreview:processingPanel.doneCount", { count: completedCount, defaultValue: `${completedCount} done` })}
                 </Badge>
               )}
               {errorCount > 0 && (
                 <Badge variant="destructive" className="text-xs h-5">
-                  {errorCount} failed
+                  {t("postpreview:processingPanel.failedCount", { count: errorCount, defaultValue: `${errorCount} failed` })}
                 </Badge>
               )}
             </div>
@@ -143,7 +145,7 @@ export function ProcessingStatusPanel({
               onClick={onClear}
               className="h-6 text-xs"
             >
-              Clear all
+              {t("postpreview:processingPanel.clearAll", "Clear all")}
             </Button>
           )}
         </div>

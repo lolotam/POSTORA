@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/hover-card";
 import { Button } from "@/components/ui/button";
 import { Link } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 
 interface PlatformCompatibilityTooltipProps {
   mediaAnalysis: MediaAnalysis;
@@ -32,6 +33,7 @@ export function PlatformCompatibilityTooltip({
   allPlatforms,
   className,
 }: PlatformCompatibilityTooltipProps) {
+  const { t } = useTranslation("postpreview");
   const eligibleCount = platformEligibility.filter(e => e.isEligible).length;
   const hasRestrictions = eligibleCount < allPlatforms.length;
 
@@ -55,14 +57,14 @@ export function PlatformCompatibilityTooltip({
           )}
         >
           <Info className="w-3.5 h-3.5" />
-          {eligibleCount}/{allPlatforms.length} platforms
+          {t("platformCompatibility.button", { eligible: eligibleCount, total: allPlatforms.length, defaultValue: `${eligibleCount}/${allPlatforms.length} platforms` })}
         </Button>
       </HoverCardTrigger>
       <HoverCardContent align="start" className="w-80 p-0">
         <div className="p-3 border-b border-border">
-          <h4 className="font-semibold text-sm">Platform Compatibility</h4>
+          <h4 className="font-semibold text-sm">{t("platformCompatibility.title", "Platform Compatibility")}</h4>
           <p className="text-xs text-muted-foreground mt-1">
-            Based on your current media selection
+            {t("platformCompatibility.subtitle", "Based on your current media selection")}
           </p>
         </div>
 
@@ -72,7 +74,7 @@ export function PlatformCompatibilityTooltip({
             <div className="p-3 border-b border-border/50">
               <p className="text-xs font-medium text-green-600 dark:text-green-400 mb-2 flex items-center gap-1">
                 <Check className="w-3 h-3" />
-                Fully Compatible ({eligible.length})
+                {t("platformCompatibility.fullyCompatible", { count: eligible.length, defaultValue: `Fully Compatible (${eligible.length})` })}
               </p>
               <div className="flex flex-wrap gap-1.5">
                 {eligible.map(({ platform }) => (
@@ -93,7 +95,7 @@ export function PlatformCompatibilityTooltip({
             <div className="p-3 border-b border-border/50">
               <p className="text-xs font-medium text-amber-600 dark:text-amber-400 mb-2 flex items-center gap-1">
                 <AlertTriangle className="w-3 h-3" />
-                With Limitations ({withWarnings.length})
+                {t("platformCompatibility.withLimitations", { count: withWarnings.length, defaultValue: `With Limitations (${withWarnings.length})` })}
               </p>
               <div className="space-y-1.5">
                 {withWarnings.map(({ platform, warningReason }) => (
@@ -119,7 +121,7 @@ export function PlatformCompatibilityTooltip({
             <div className="p-3">
               <p className="text-xs font-medium text-destructive/80 mb-2 flex items-center gap-1">
                 <X className="w-3 h-3" />
-                Not Compatible ({ineligible.length})
+                {t("platformCompatibility.notCompatible", { count: ineligible.length, defaultValue: `Not Compatible (${ineligible.length})` })}
               </p>
               <div className="space-y-1.5">
                 {ineligible.map(({ platform, reason }) => (
@@ -144,7 +146,7 @@ export function PlatformCompatibilityTooltip({
         <div className="p-3 border-t border-border bg-muted/30">
           <Link to="/docs/media-matrix">
             <Button variant="ghost" size="sm" className="w-full text-xs h-7">
-              View full compatibility matrix
+              {t("platformCompatibility.viewMatrix", "View full compatibility matrix")}
             </Button>
           </Link>
         </div>

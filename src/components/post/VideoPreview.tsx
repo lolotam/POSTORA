@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import { Play, Pause, Volume2, VolumeX, Maximize2, Image, Loader2, AlertTriangle, CheckCircle2 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useTranslation } from "react-i18next";
 import { 
   formatFileSize, 
   validateAspectRatioForPlatforms,
@@ -43,6 +44,7 @@ export function VideoPreview({
   selectedPlatforms = [],
   fileSize,
 }: VideoPreviewProps) {
+  const { t } = useTranslation("postpreview");
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -262,7 +264,7 @@ export function VideoPreview({
                   ) : (
                     <Image className="w-3 h-3" />
                   )}
-                  Capture
+                  {t("videoPreview.capture", "Capture")}
                 </Button>
               )}
               <Button
@@ -291,7 +293,7 @@ export function VideoPreview({
             {metadata.width}×{metadata.height}
           </span>
           <span className="px-2 py-1 rounded bg-secondary text-muted-foreground">
-            {(metadata.width / metadata.height).toFixed(2)} ratio
+            {t("videoPreview.ratio", { ratio: (metadata.width / metadata.height).toFixed(2), defaultValue: `${(metadata.width / metadata.height).toFixed(2)} ratio` })}
           </span>
           {fileSize && (
             <span className="px-2 py-1 rounded bg-secondary text-muted-foreground">
@@ -304,7 +306,7 @@ export function VideoPreview({
       {/* Aspect Ratio Validation */}
       {aspectRatioValidations.length > 0 && (
         <div className="space-y-2">
-          <p className="text-xs font-medium text-muted-foreground">Platform Aspect Ratio Check</p>
+          <p className="text-xs font-medium text-muted-foreground">{t("videoPreview.platformCheck", "Platform Aspect Ratio Check")}</p>
           <div className="flex flex-wrap gap-2">
             {aspectRatioValidations.map((validation) => (
               <div
@@ -332,7 +334,7 @@ export function VideoPreview({
           </div>
           {aspectRatioValidations.some(v => !v.isValid) && (
             <p className="text-xs text-muted-foreground">
-              Use the crop tool to adjust the video frame for optimal display on each platform
+              {t("videoPreview.cropToolHint", "Use the crop tool to adjust the video frame for optimal display on each platform")}
             </p>
           )}
         </div>
@@ -341,9 +343,9 @@ export function VideoPreview({
       {/* Thumbnail Preview */}
       {thumbnail && showThumbnailCapture && (
         <div className="space-y-2">
-          <p className="text-xs text-muted-foreground font-medium">Generated Thumbnail</p>
+          <p className="text-xs text-muted-foreground font-medium">{t("videoPreview.generatedThumbnail", "Generated Thumbnail")}</p>
           <div className="relative w-32 aspect-video rounded-lg overflow-hidden border border-border">
-            <img src={thumbnail} alt="Video thumbnail" className="w-full h-full object-cover" />
+            <img src={thumbnail} alt={t("videoPreview.thumbnailAlt", "Video thumbnail")} className="w-full h-full object-cover" />
           </div>
         </div>
       )}

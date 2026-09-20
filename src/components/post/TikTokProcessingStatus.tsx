@@ -8,6 +8,7 @@ import { Progress } from "@/components/ui/progress";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
+import { useTranslation } from "react-i18next";
 import {
   Loader2,
   CheckCircle2,
@@ -40,12 +41,14 @@ export function TikTokProcessingStatus({
   onDismiss,
   className,
 }: TikTokProcessingStatusProps) {
+  const { t } = useTranslation("postpreview");
+
   const formatTime = (ms: number) => {
     const seconds = Math.floor(ms / 1000);
-    if (seconds < 60) return `${seconds}s`;
+    if (seconds < 60) return t("tikTokProcessing.seconds", { count: seconds, defaultValue: `${seconds}s` });
     const minutes = Math.floor(seconds / 60);
     const remainingSeconds = seconds % 60;
-    return `${minutes}m ${remainingSeconds}s`;
+    return t("tikTokProcessing.minutesSeconds", { minutes, seconds: remainingSeconds, defaultValue: `${minutes}m ${remainingSeconds}s` });
   };
 
   const getStatusInfo = () => {
@@ -53,49 +56,49 @@ export function TikTokProcessingStatus({
       case "pending":
         return {
           icon: Clock,
-          label: "Preparing upload...",
+          label: t("tikTokProcessing.preparingUpload", "Preparing upload..."),
           color: "text-muted-foreground",
           bgColor: "bg-muted/30",
         };
       case "PROCESSING_UPLOAD":
         return {
           icon: Upload,
-          label: "Uploading to TikTok...",
+          label: t("tikTokProcessing.uploadingToTikTok", "Uploading to TikTok..."),
           color: "text-blue-500",
           bgColor: "bg-blue-500/10",
         };
       case "PROCESSING_DOWNLOAD":
         return {
           icon: Video,
-          label: "Processing video...",
+          label: t("tikTokProcessing.processingVideo", "Processing video..."),
           color: "text-primary",
           bgColor: "bg-primary/10",
         };
       case "SEND_TO_USER_INBOX":
         return {
           icon: Inbox,
-          label: "Sent to your TikTok inbox",
+          label: t("tikTokProcessing.sentToInbox", "Sent to your TikTok inbox"),
           color: "text-amber-500",
           bgColor: "bg-amber-500/10",
         };
       case "PUBLISH_COMPLETE":
         return {
           icon: CheckCircle2,
-          label: "Published successfully!",
+          label: t("tikTokProcessing.publishedSuccess", "Published successfully!"),
           color: "text-green-500",
           bgColor: "bg-green-500/10",
         };
       case "FAILED":
         return {
           icon: XCircle,
-          label: "Publishing failed",
+          label: t("tikTokProcessing.publishingFailed", "Publishing failed"),
           color: "text-destructive",
           bgColor: "bg-destructive/10",
         };
       default:
         return {
           icon: Loader2,
-          label: "Processing...",
+          label: t("tikTokProcessing.processingVideo", "Processing..."),
           color: "text-muted-foreground",
           bgColor: "bg-muted/30",
         };
@@ -141,14 +144,14 @@ export function TikTokProcessingStatus({
               </span>
             </div>
             <p className="text-xs text-muted-foreground">
-              Elapsed: {formatTime(elapsedTime)}
+              {t("tikTokProcessing.elapsed", { time: formatTime(elapsedTime), defaultValue: `Elapsed: ${formatTime(elapsedTime)}` })}
             </p>
           </div>
         </div>
 
         {(isComplete || isFailed || isInbox) && onDismiss && (
           <Button variant="ghost" size="sm" onClick={onDismiss}>
-            Dismiss
+            {t("tikTokProcessing.dismiss", "Dismiss")}
           </Button>
         )}
       </div>
@@ -164,7 +167,7 @@ export function TikTokProcessingStatus({
           >
             <Progress value={progress} className="h-2" />
             <div className="flex justify-between text-xs text-muted-foreground">
-              <span>Processing...</span>
+              <span>{t("tikTokProcessing.processingVideo", "Processing...")}</span>
               <span>{Math.round(progress)}%</span>
             </div>
           </motion.div>
@@ -181,17 +184,17 @@ export function TikTokProcessingStatus({
             className="space-y-2"
           >
             <ProcessingStep
-              label="Upload file"
+              label={t("tikTokProcessing.stepUploadFile", "Upload file")}
               completed={["PROCESSING_DOWNLOAD", "SEND_TO_USER_INBOX", "PUBLISH_COMPLETE"].includes(status as string)}
               active={status === "PROCESSING_UPLOAD"}
             />
             <ProcessingStep
-              label="Process video"
+              label={t("tikTokProcessing.stepProcessVideo", "Process video")}
               completed={["SEND_TO_USER_INBOX", "PUBLISH_COMPLETE"].includes(status as string)}
               active={status === "PROCESSING_DOWNLOAD"}
             />
             <ProcessingStep
-              label="Review & Publish"
+              label={t("tikTokProcessing.stepReviewPublish", "Review & Publish")}
               completed={(status as string) === "PUBLISH_COMPLETE"}
               active={(status as string) === "SEND_TO_USER_INBOX"}
             />
@@ -211,7 +214,7 @@ export function TikTokProcessingStatus({
               <div className="flex items-center gap-2">
                 <CheckCircle2 className="w-5 h-5 text-green-500" />
                 <span className="text-sm font-medium text-green-700 dark:text-green-300">
-                  Your post is live on TikTok!
+                  {t("tikTokProcessing.postLive", "Your post is live on TikTok!")}
                 </span>
               </div>
               <Button
@@ -221,7 +224,7 @@ export function TikTokProcessingStatus({
                 className="border-green-500/30 hover:bg-green-500/10"
               >
                 <a href={postUrl} target="_blank" rel="noopener noreferrer">
-                  View Post
+                  {t("tikTokProcessing.viewPost", "View Post")}
                   <ExternalLink className="w-3 h-3 ml-1" />
                 </a>
               </Button>
@@ -242,11 +245,10 @@ export function TikTokProcessingStatus({
               <Inbox className="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5" />
               <div>
                 <p className="text-sm font-medium text-amber-700 dark:text-amber-300">
-                  Check your TikTok inbox
+                  {t("tikTokProcessing.inboxTitle", "Check your TikTok inbox")}
                 </p>
                 <p className="text-xs text-amber-600/80 dark:text-amber-400/80 mt-1">
-                  Open the TikTok app to review and complete the post.
-                  This may take a few minutes to appear.
+                  {t("tikTokProcessing.inboxDescription", "Open the TikTok app to review and complete the post. This may take a few minutes to appear.")}
                 </p>
               </div>
             </div>
@@ -266,7 +268,7 @@ export function TikTokProcessingStatus({
               <AlertCircle className="w-5 h-5 text-destructive flex-shrink-0 mt-0.5" />
               <div>
                 <p className="text-sm font-medium text-destructive">
-                  Publishing failed
+                  {t("tikTokProcessing.publishingFailed", "Publishing failed")}
                 </p>
                 <p className="text-xs text-destructive/80 mt-1">
                   {failReason}
@@ -280,7 +282,7 @@ export function TikTokProcessingStatus({
       {/* Processing Time Notice */}
       {isProcessing && (
         <p className="text-xs text-muted-foreground text-center">
-          You can close this panel. We'll notify you when it's done.
+          {t("tikTokProcessing.closeNotice", "You can close this panel. We'll notify you when it's done.")}
         </p>
       )}
     </motion.div>

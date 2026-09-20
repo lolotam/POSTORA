@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { Badge } from "@/components/ui/badge";
 import { Heart, Share, MoreHorizontal, ExternalLink } from "lucide-react";
 
@@ -16,11 +17,13 @@ export function PinterestPinPreview({
   mediaFile,
   title,
   link,
-  boardName = "My Board",
+  boardName,
   username = "your_profile",
   avatarUrl,
 }: PinterestPinPreviewProps) {
-  const displayTitle = title || caption.slice(0, 50) || "Your Pin";
+  const { t } = useTranslation("postpreview");
+  const displayBoardName = boardName || t("pinterest.defaultBoardName", "My Board");
+  const displayTitle = title || caption.slice(0, 50) || t("pinterest.defaultPinTitle", "Your Pin");
   const truncatedDescription = caption.length > 100 ? caption.slice(0, 97) + "..." : caption;
 
   return (
@@ -30,10 +33,10 @@ export function PinterestPinPreview({
           <div className="w-5 h-5 bg-[#E60023] rounded-full flex items-center justify-center">
             <span className="text-white text-[10px] font-bold">P</span>
           </div>
-          <span className="text-sm font-medium">Pin Preview</span>
+          <span className="text-sm font-medium">{t("pinterest.previewTitle", "Pin Preview")}</span>
         </div>
         <Badge variant="secondary" className="text-xs bg-[#E60023]/10 text-[#E60023] dark:bg-[#E60023]/20">
-          Pin
+          {t("pinterest.pinBadge", "Pin")}
         </Badge>
       </div>
 
@@ -69,7 +72,7 @@ export function PinterestPinPreview({
                 )
               ) : (
                 <div className="w-full h-full flex items-center justify-center">
-                  <span className="text-muted-foreground text-xs">Add media</span>
+                  <span className="text-muted-foreground text-xs">{t("pinterest.addMedia", "Add media")}</span>
                 </div>
               )}
               
@@ -78,7 +81,7 @@ export function PinterestPinPreview({
                 {/* Top actions */}
                 <div className="flex items-center justify-between">
                   <button className="bg-[#E60023] text-white text-sm font-semibold px-4 py-2 rounded-full hover:bg-[#ad081b] transition-colors">
-                    Save
+                    {t("common:save", "Save")}
                   </button>
                   <div className="flex items-center gap-2">
                     <button className="w-8 h-8 bg-white/90 rounded-full flex items-center justify-center hover:bg-white transition-colors">
@@ -104,7 +107,7 @@ export function PinterestPinPreview({
               {/* Video indicator */}
               {mediaFile?.fileType === "video" && (
                 <div className="absolute bottom-2 left-2 bg-black/60 text-white text-xs px-2 py-0.5 rounded-full">
-                  Video
+                  {t("pinterest.videoBadge", "Video")}
                 </div>
               )}
             </div>
@@ -143,8 +146,8 @@ export function PinterestPinPreview({
           
           {/* Board indicator below */}
           <div className="mt-2 flex items-center justify-center gap-1 text-xs text-muted-foreground">
-            <span>Saving to</span>
-            <span className="font-medium text-foreground">{boardName}</span>
+            <span>{t("pinterest.savingTo", "Saving to")}</span>
+            <span className="font-medium text-foreground">{displayBoardName}</span>
           </div>
         </div>
 
@@ -157,7 +160,9 @@ export function PinterestPinPreview({
 
       {/* Info text */}
       <p className="text-xs text-muted-foreground text-center">
-        {mediaFile ? "This is how your Pin will appear on Pinterest boards" : "Add an image to preview your Pin"}
+        {mediaFile
+          ? t("pinterest.infoWithMedia", "This is how your Pin will appear on Pinterest boards")
+          : t("pinterest.infoWithoutMedia", "Add an image to preview your Pin")}
       </p>
     </div>
   );

@@ -5,6 +5,7 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { useMemo, useState, useRef, useEffect } from "react";
+import { useTranslation } from "react-i18next";
 import {
   Dialog,
   DialogContent,
@@ -133,6 +134,7 @@ export function TikTokPreviewDialog({
   isUploading = false,
   scheduleEnabled = false,
 }: TikTokPreviewDialogProps) {
+  const { t } = useTranslation("postpreview");
   const videoRef = useRef<HTMLVideoElement>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [isMuted, setIsMuted] = useState(true);
@@ -241,7 +243,7 @@ export function TikTokPreviewDialog({
               <CheckCircle2 className="w-6 h-6 text-emerald-500" />
             </motion.div>
             <DialogTitle className="text-xl font-semibold">
-              Your {isVideo ? "video" : "photo"} is ready!
+              {isVideo ? t("tikTokDialog.videoReady", "Your video is ready!") : t("tikTokDialog.photoReady", "Your photo is ready!")}
             </DialogTitle>
           </div>
         </DialogHeader>
@@ -326,7 +328,7 @@ export function TikTokPreviewDialog({
                 ) : (
                   <img
                     src={previewMedia.previewUrl}
-                    alt="Preview"
+                    alt={t("tikTokDialog.previewAlt", "Preview")}
                     className="w-full h-full object-contain"
                   />
                 )
@@ -340,23 +342,23 @@ export function TikTokPreviewDialog({
             {/* File Information Bar - Inside Black Frame */}
             <div className="grid grid-cols-4 gap-2 p-4 text-white border-t border-white/10">
               <div>
-                <p className="text-[10px] text-gray-400 uppercase tracking-wide">Filename</p>
+                <p className="text-[10px] text-gray-400 uppercase tracking-wide">{t("tikTokDialog.filename", "Filename")}</p>
                 <p className="text-xs font-medium truncate mt-0.5">
                   {getDisplayFileName()}
                 </p>
               </div>
               <div>
-                <p className="text-[10px] text-gray-400 uppercase tracking-wide">Format</p>
+                <p className="text-[10px] text-gray-400 uppercase tracking-wide">{t("tikTokDialog.format", "Format")}</p>
                 <p className="text-xs font-medium mt-0.5">
                   {getFileFormat(file, previewMedia?.fileName)}
                 </p>
               </div>
               <div>
-                <p className="text-[10px] text-gray-400 uppercase tracking-wide">Resolution</p>
+                <p className="text-[10px] text-gray-400 uppercase tracking-wide">{t("tikTokDialog.resolution", "Resolution")}</p>
                 <p className="text-xs font-medium mt-0.5">{videoResolution}</p>
               </div>
               <div>
-                <p className="text-[10px] text-gray-400 uppercase tracking-wide">Size</p>
+                <p className="text-[10px] text-gray-400 uppercase tracking-wide">{t("tikTokDialog.size", "Size")}</p>
                 <p className="text-xs font-medium mt-0.5">
                   {file?.size ? formatFileSize(file.size) : "--"}
                 </p>
@@ -376,7 +378,7 @@ export function TikTokPreviewDialog({
               >
                 <ChevronLeft className="w-5 h-5" />
               </Button>
-              <h2 className="text-xl font-bold">Upload to TikTok</h2>
+              <h2 className="text-xl font-bold">{t("tikTokDialog.uploadToTikTok", "Upload to TikTok")}</h2>
             </div>
 
             {/* Account Selector */}
@@ -401,7 +403,7 @@ export function TikTokPreviewDialog({
                   </div>
                 </div>
                 <span className="font-semibold text-sm">
-                  {creatorInfo?.creator_nickname || "TikTok Account"}
+                  {creatorInfo?.creator_nickname || t("tikTokDialog.defaultAccountName", "TikTok Account")}
                 </span>
               </div>
               <ChevronLeft className="w-5 h-5 rotate-180 text-muted-foreground" />
@@ -409,12 +411,12 @@ export function TikTokPreviewDialog({
 
             {/* Title Override (100 chars) */}
             <div className="space-y-2">
-              <Label className="text-sm font-medium">Title override</Label>
+              <Label className="text-sm font-medium">{t("tikTokDialog.titleOverride", "Title override")}</Label>
               <div className="relative">
                 <Textarea
                   value={title}
                   onChange={(e) => onTitleChange?.(e.target.value)}
-                  placeholder="Add a title that describes your video (optional - will use caption if empty)"
+                  placeholder={t("tikTokDialog.titlePlaceholder", "Add a title that describes your video (optional - will use caption if empty)")}
                   maxLength={100}
                   className="min-h-[60px] resize-none pr-16 border rounded-xl"
                 />
@@ -423,14 +425,14 @@ export function TikTokPreviewDialog({
                 </span>
               </div>
               <p className="text-xs text-muted-foreground">
-                If empty, the main caption will be used as the title
+                {t("tikTokDialog.titleHint", "If empty, the main caption will be used as the title")}
               </p>
             </div>
             
             {/* Caption Preview (read-only) */}
             {caption && (
               <div className="space-y-2">
-                <Label className="text-sm font-medium text-muted-foreground">Caption (from main post)</Label>
+                <Label className="text-sm font-medium text-muted-foreground">{t("tikTokDialog.captionFromMain", "Caption (from main post)")}</Label>
                 <div className="p-3 bg-muted/50 rounded-xl text-sm text-muted-foreground max-h-[80px] overflow-y-auto">
                   {caption.length > 150 ? `${caption.slice(0, 150)}...` : caption}
                 </div>
@@ -439,13 +441,13 @@ export function TikTokPreviewDialog({
 
             {/* Privacy */}
             <div className="space-y-2">
-              <Label className="text-sm font-medium">Who can view this video</Label>
+              <Label className="text-sm font-medium">{t("tikTokDialog.whoCanView", "Who can view this video")}</Label>
               <Select
                 value={settings.privacyLevel}
                 onValueChange={(value) => onSettingsChange?.({ privacyLevel: value })}
               >
                 <SelectTrigger className="w-full rounded-xl">
-                  <SelectValue placeholder="Select privacy level" />
+                  <SelectValue placeholder={t("tikTokDialog.selectPrivacyLevel", "Select privacy level")} />
                 </SelectTrigger>
                 <SelectContent>
                   {(creatorInfo?.privacy_level_options || tiktokPrivacyOptions.map(o => o.value)).map((option) => {
@@ -462,25 +464,25 @@ export function TikTokPreviewDialog({
 
             {/* Allow users to - Square Checkboxes */}
             <div className="space-y-3">
-              <Label className="text-sm font-medium">Allow users to</Label>
+              <Label className="text-sm font-medium">{t("tikTokDialog.allowUsersTo", "Allow users to")}</Label>
               <div className="flex flex-wrap gap-6">
                 <SquareCheckbox
                   checked={settings.allowComment}
                   onCheckedChange={(checked) => onSettingsChange?.({ allowComment: checked })}
                   disabled={creatorInfo?.comment_disabled}
-                  label="Comment"
+                  label={t("tikTokDialog.comment", "Comment")}
                 />
                 <SquareCheckbox
                   checked={settings.allowDuet}
                   onCheckedChange={(checked) => onSettingsChange?.({ allowDuet: checked })}
                   disabled={creatorInfo?.duet_disabled}
-                  label="Duet"
+                  label={t("tikTokDialog.duet", "Duet")}
                 />
                 <SquareCheckbox
                   checked={settings.allowStitch}
                   onCheckedChange={(checked) => onSettingsChange?.({ allowStitch: checked })}
                   disabled={creatorInfo?.stitch_disabled}
-                  label="Stitch"
+                  label={t("tikTokDialog.stitch", "Stitch")}
                 />
               </div>
             </div>
@@ -488,7 +490,7 @@ export function TikTokPreviewDialog({
             {/* Disclose video content toggle (in center column) */}
             <div className="space-y-2 pt-2 border-t">
               <div className="flex items-center justify-between">
-                <Label className="text-sm font-medium">Disclose video content</Label>
+                <Label className="text-sm font-medium">{t("tikTokDialog.discloseVideoContent", "Disclose video content")}</Label>
                 <Switch
                   checked={settings.discloseContent}
                   onCheckedChange={(checked) => onSettingsChange?.({ discloseContent: checked })}
@@ -496,7 +498,7 @@ export function TikTokPreviewDialog({
                 />
               </div>
               <p className="text-xs text-muted-foreground">
-                Turn on to disclose that this video promotes goods or services in exchange for something of value. Your video
+                {t("tikTokDialog.discloseDescriptionShort", "Turn on to disclose that this video promotes goods or services in exchange for something of value. Your video")}
               </p>
             </div>
 
@@ -513,12 +515,12 @@ export function TikTokPreviewDialog({
                     transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
                     className="w-5 h-5 mr-2 border-2 border-white/30 border-t-white rounded-full"
                   />
-                  Uploading...
+                  {t("tikTokDialog.uploading", "Uploading...")}
                 </>
               ) : scheduleEnabled ? (
-                "Schedule"
+                t("tikTokDialog.schedule", "Schedule")
               ) : (
-                "Upload"
+                t("tikTokDialog.upload", "Upload")
               )}
             </Button>
           </div>
@@ -535,7 +537,7 @@ export function TikTokPreviewDialog({
               >
                 {/* Header with Toggle */}
                 <div className="flex items-center justify-between">
-                  <h3 className="font-semibold">Disclose video content</h3>
+                  <h3 className="font-semibold">{t("tikTokDialog.discloseVideoContent", "Disclose video content")}</h3>
                   <Switch
                     checked={settings.discloseContent}
                     onCheckedChange={(checked) => onSettingsChange?.({ discloseContent: checked })}
@@ -549,10 +551,10 @@ export function TikTokPreviewDialog({
                     <AlertCircle className="w-4 h-4 text-[#25f4ee] flex-shrink-0 mt-0.5" />
                     <div>
                       <p className="text-sm font-medium text-[#0a9a94] dark:text-[#25f4ee]">
-                        Your video will be labeled "Promotional content".
+                        {t("tikTokDialog.labeledPromotional", "Your video will be labeled \"Promotional content\".")}
                       </p>
                       <p className="text-xs text-[#0a9a94]/80 dark:text-[#25f4ee]/80 mt-0.5">
-                        This cannot be changed once your video is posted.
+                        {t("tikTokDialog.cannotBeChanged", "This cannot be changed once your video is posted.")}
                       </p>
                     </div>
                   </div>
@@ -560,7 +562,7 @@ export function TikTokPreviewDialog({
 
                 {/* Description */}
                 <p className="text-sm text-muted-foreground">
-                  Turn on to disclose that this video promotes goods or services in exchange for something of value. Your video could promote yourself, a third party, or both.
+                  {t("tikTokDialog.discloseDescriptionFull", "Turn on to disclose that this video promotes goods or services in exchange for something of value. Your video could promote yourself, a third party, or both.")}
                 </p>
 
                 {/* Your brand checkbox - with highlight when selected */}
@@ -587,9 +589,9 @@ export function TikTokPreviewDialog({
                     {settings.yourBrand && <Check className="w-3.5 h-3.5 text-black" strokeWidth={3} />}
                   </button>
                   <div className="flex-1">
-                    <p className="font-semibold text-sm">Your brand</p>
+                    <p className="font-semibold text-sm">{t("tikTokDialog.yourBrand", "Your brand")}</p>
                     <p className="text-xs text-muted-foreground mt-0.5">
-                      You are promoting yourself or your own business. This video will be classified as Brand Organic.
+                      {t("tikTokDialog.yourBrandDesc", "You are promoting yourself or your own business. This video will be classified as Brand Organic.")}
                     </p>
                   </div>
                 </div>
@@ -627,11 +629,11 @@ export function TikTokPreviewDialog({
                         {settings.brandedContent && !isPrivate && <Check className="w-3.5 h-3.5 text-black" strokeWidth={3} />}
                       </button>
                       <div className="flex-1">
-                        <p className="font-semibold text-sm">Branded content</p>
+                        <p className="font-semibold text-sm">{t("tikTokDialog.brandedContent", "Branded content")}</p>
                         <p className="text-xs text-muted-foreground mt-0.5">
                           {isPrivate 
-                            ? "Branded content is not available for private videos."
-                            : "You are promoting another brand or a third party. This video will be classified as Branded Content."}
+                            ? t("tikTokDialog.brandedContentPrivateDisabled", "Branded content is not available for private videos.")
+                            : t("tikTokDialog.brandedContentDesc", "You are promoting another brand or a third party. This video will be classified as Branded Content.")}
                         </p>
                       </div>
                     </div>
@@ -640,14 +642,14 @@ export function TikTokPreviewDialog({
 
                 {/* Music Usage Link */}
                 <p className="text-xs text-muted-foreground">
-                  By posting, you agree to our{" "}
+                  {t("tikTokDialog.agreePrefix", "By posting, you agree to our ")}
                   <a
                     href="https://www.tiktok.com/legal/page/global/music-usage-confirmation/en"
                     target="_blank"
                     rel="noopener noreferrer"
                     className="text-[#25f4ee] hover:underline"
                   >
-                    Music Usage Confirmation
+                    {t("tikTokDialog.musicUsageConfirmation", "Music Usage Confirmation")}
                   </a>
                   .
                 </p>
@@ -665,12 +667,12 @@ export function TikTokPreviewDialog({
                         transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
                         className="w-5 h-5 mr-2 border-2 border-white/30 border-t-white rounded-full"
                       />
-                      Uploading...
+                      {t("tikTokDialog.uploading", "Uploading...")}
                     </>
                   ) : scheduleEnabled ? (
-                    "Schedule"
+                    t("tikTokDialog.schedule", "Schedule")
                   ) : (
-                    "Upload"
+                    t("tikTokDialog.upload", "Upload")
                   )}
                 </Button>
               </motion.div>
@@ -693,11 +695,10 @@ export function TikTokPreviewDialog({
               <AlertTriangle className="w-4 h-4 text-destructive flex-shrink-0 mt-0.5" />
               <div>
                 <p className="text-sm font-medium text-destructive">
-                  Video is too long
+                  {t("tikTokDialog.videoTooLong", "Video is too long")}
                 </p>
                 <p className="text-xs text-muted-foreground mt-1">
-                  Your video is {formatTime(duration)} but TikTok allows a maximum of {formatTime(maxDurationSec || 0)}.
-                  Please trim your video before uploading.
+                  {t("tikTokDialog.videoTooLongDesc", "Your video is {{duration}} but TikTok allows a maximum of {{maxDuration}}. Please trim your video before uploading.", { duration: formatTime(duration), maxDuration: formatTime(maxDurationSec || 0) })}
                 </p>
               </div>
             </div>
