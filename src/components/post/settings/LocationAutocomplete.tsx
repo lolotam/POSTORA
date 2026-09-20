@@ -6,6 +6,8 @@ import { supabase } from "@/integrations/supabase/client";
 import { cn } from "@/lib/utils";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
+import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 
 export type PlaceSource = "threads" | "facebook" | "nominatim" | "meta";
 
@@ -39,29 +41,30 @@ interface LocationAutocompleteProps {
 function platformBadge(
   place: PlaceResult,
   platform: LocationAutocompleteProps["platform"],
+  t: TFunction<"postsettings">,
 ): { label: string; tone: "ok" | "warn" | "muted" } {
   // OSM is never taggable on Meta
   if (place.source === "nominatim" || String(place.id).startsWith("osm_")) {
-    return { label: "Reference only", tone: "warn" };
+    return { label: t("location.referenceOnly", "Reference only"), tone: "warn" };
   }
 
   if (platform === "threads") {
     if (place.taggable_on_threads === true && place.source === "threads") {
-      return { label: "Threads taggable", tone: "ok" };
+      return { label: t("location.threadsTaggable", "Threads taggable"), tone: "ok" };
     }
-    return { label: "Reference only", tone: "warn" };
+    return { label: t("location.referenceOnly", "Reference only"), tone: "warn" };
   }
 
   if (platform === "instagram") {
-    if (place.taggable_on_instagram === true) return { label: "Instagram taggable", tone: "ok" };
-    if (place.taggable_on_instagram === false) return { label: "Not eligible for Instagram", tone: "warn" };
-    return { label: "Unverified", tone: "warn" };
+    if (place.taggable_on_instagram === true) return { label: t("location.instagramTaggable", "Instagram taggable"), tone: "ok" };
+    if (place.taggable_on_instagram === false) return { label: t("location.notEligibleInstagram", "Not eligible for Instagram"), tone: "warn" };
+    return { label: t("location.unverified", "Unverified"), tone: "warn" };
   }
 
   if (platform === "facebook") {
-    if (place.taggable_on_facebook === true) return { label: "Likely Facebook place", tone: "ok" };
-    if (place.taggable_on_facebook === false) return { label: "May not appear", tone: "warn" };
-    return { label: "Unverified", tone: "muted" };
+    if (place.taggable_on_facebook === true) return { label: t("location.likelyFacebookPlace", "Likely Facebook place"), tone: "ok" };
+    if (place.taggable_on_facebook === false) return { label: t("location.mayNotAppear", "May not appear"), tone: "warn" };
+    return { label: t("location.unverified", "Unverified"), tone: "muted" };
   }
 
   // No platform context — show source as a neutral hint
@@ -103,23 +106,24 @@ function isSelectableForPlatform(
 function disabledReasonFor(
   place: PlaceResult,
   platform: LocationAutocompleteProps["platform"],
+  t: TFunction<"postsettings">,
 ): string {
   if (String(place.id).startsWith("osm_") || place.source === "nominatim") {
     return platform === "instagram"
-      ? "Reference only — won't be tagged on Instagram"
+      ? t("location.disabledReasonRefInstagram", "Reference only — won't be tagged on Instagram")
       : platform === "threads"
-      ? "Reference only — won't be tagged on Threads"
-      : "Reference only — won't be tagged on the published post";
+      ? t("location.disabledReasonRefThreads", "Reference only — won't be tagged on Threads")
+      : t("location.disabledReasonRefPost", "Reference only — won't be tagged on the published post");
   }
   if (platform === "instagram") {
-    if (place.taggable_on_instagram === false) return "Not eligible for Instagram";
-    if (place.taggable_on_instagram !== true) return "Unverified — not guaranteed to tag on Instagram";
+    if (place.taggable_on_instagram === false) return t("location.notEligibleInstagram", "Not eligible for Instagram");
+    if (place.taggable_on_instagram !== true) return t("location.disabledReasonUnverifiedInstagram", "Unverified — not guaranteed to tag on Instagram");
   }
   if (platform === "threads") {
-    if (place.source !== "threads") return "Not a native Threads location — won't be tagged";
-    if (place.taggable_on_threads !== true) return "Not taggable on Threads";
+    if (place.source !== "threads") return t("location.disabledReasonNotNativeThreads", "Not a native Threads location — won't be tagged");
+    if (place.taggable_on_threads !== true) return t("location.disabledReasonNotTaggableThreads", "Not taggable on Threads");
   }
-  return "Not selectable for this platform";
+  return t("location.disabledReasonNotSelectable", "Not selectable for this platform");
 }
 
 export function LocationAutocomplete({
@@ -141,6 +145,7 @@ export function LocationAutocomplete({
   const debounceRef = useRef<ReturnType<typeof setTimeout>>();
   const containerRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
+  const { t } = useTranslation("postsettings");
 
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -188,7 +193,7 @@ export function LocationAutocomplete({
             eligibility_reason: p.eligibility_reason || undefined,
           }));
         } else if (data?.needsConnection) {
-          setErrorMessage("Connect Threads to search locations.");
+          setErrorMessage(t("location.connectThreadsToSearch", "Connect Threads to search locations."));
         }
       } else {
         const { data, error } = await supabase.functions.invoke("facebook-places-search", {
@@ -232,7 +237,7 @@ export function LocationAutocomplete({
       setShowDropdown(true);
     } catch (err) {
       console.error("Place search error:", err);
-      setErrorMessage("Failed to search locations. Please try again.");
+      setErrorMessage(t("location.failedToSearch", "Failed to search locations. Please try again."));
       setResults([]);
       setShowDropdown(true);
     } finally {
@@ -292,15 +297,15 @@ export function LocationAutocomplete({
           <div className="flex items-start gap-1.5 px-2 text-xs text-amber-600 dark:text-amber-400">
             <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
             <span>
-              Reference only — this location won't be tagged on the published post.
+              {t("location.osmWarning", "Reference only — this location won't be tagged on the published post.")}{" "}
               <button
                 type="button"
                 onClick={() => navigate("/profiles")}
                 className="underline font-medium ml-1 hover:text-amber-700 dark:hover:text-amber-300"
               >
-                Reconnect your account
+                {t("location.reconnectAccount", "Reconnect your account")}
               </button>
-              {" "}to enable native location tagging.
+              {" "}{t("location.toEnableTagging", "to enable native location tagging.")}
             </span>
           </div>
         )}
@@ -312,17 +317,17 @@ export function LocationAutocomplete({
     <div ref={containerRef} className="relative">
       <p className="text-xs text-muted-foreground mb-1.5 leading-snug">
         {platform === "threads"
-          ? "Only native Threads results can appear as a Threads location tag. Facebook/Reference results are shown as fallback only."
+          ? t("location.threadsHelper", "Only native Threads results can appear as a Threads location tag. Facebook/Reference results are shown as fallback only.")
           : platform === "instagram"
-          ? "Instagram only accepts eligible Meta place IDs. Non-taggable results are marked and will be skipped at publish time."
+          ? t("location.instagramHelper", "Instagram only accepts eligible Meta place IDs. Non-taggable results are marked and will be skipped at publish time.")
           : platform === "facebook"
-          ? "Facebook may publish the post successfully but silently ignore invalid place tags. We pre-check and verify after publish."
-          : "Tag a location on your post."}
+          ? t("location.facebookHelper", "Facebook may publish the post successfully but silently ignore invalid place tags. We pre-check and verify after publish.")
+          : t("location.defaultHelper", "Tag a location on your post.")}
       </p>
       <div className="relative">
         <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
         <Input
-          placeholder="Search for a location..."
+          placeholder={t("location.searchPlaceholder", "Search for a location...")}
           value={query}
           onChange={(e) => handleInputChange(e.target.value)}
           onFocus={() => (results.length > 0 || errorMessage || needsReconnect) && setShowDropdown(true)}
@@ -338,16 +343,16 @@ export function LocationAutocomplete({
           <div className="flex items-start gap-2 text-amber-700 dark:text-amber-400">
             <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
             <div>
-              <p className="font-medium">Permission update needed</p>
+              <p className="font-medium">{t("location.permissionUpdateNeeded", "Permission update needed")}</p>
               <p className="text-xs mt-1 text-muted-foreground">
-                Reconnect your account to enable native location search.
+                {t("location.reconnectToSearch", "Reconnect your account to enable native location search.")}
               </p>
               <button
                 type="button"
                 onClick={() => navigate("/profiles")}
                 className="mt-2 text-xs font-medium text-primary underline hover:no-underline"
               >
-                Go to Profiles → Reconnect
+                {t("location.goToProfilesReconnect", "Go to Profiles → Reconnect")}
               </button>
             </div>
           </div>
@@ -358,8 +363,8 @@ export function LocationAutocomplete({
         <div className="absolute z-50 w-full mt-1 bg-popover border rounded-lg shadow-lg max-h-56 overflow-y-auto">
           {results.map((place) => {
             const selectable = isSelectableForPlatform(place, platform);
-            const badge = platformBadge(place, platform);
-            const reason = !selectable ? disabledReasonFor(place, platform) : undefined;
+            const badge = platformBadge(place, platform, t);
+            const reason = !selectable ? disabledReasonFor(place, platform, t) : undefined;
             return (
               <button
                 key={`${place.source}-${place.id}`}
@@ -367,11 +372,11 @@ export function LocationAutocomplete({
                 onClick={() => {
                   if (!selectable) {
                     if (platform === "instagram") {
-                      toast.error("This location is reference-only and cannot be tagged on Instagram. Try a Meta place result or search a more specific official place name.");
+                      toast.error(t("location.toastRefInstagram", "This location is reference-only and cannot be tagged on Instagram. Try a Meta place result or search a more specific official place name."));
                     } else if (platform === "threads") {
-                      toast.error("This location is reference-only and cannot be tagged on Threads. Threads only accepts native Threads location results.");
+                      toast.error(t("location.toastRefThreads", "This location is reference-only and cannot be tagged on Threads. Threads only accepts native Threads location results."));
                     } else {
-                      toast.error(reason || "This location is not selectable.");
+                      toast.error(reason || t("location.toastNotSelectable", "This location is not selectable."));
                     }
                     return;
                   }
@@ -418,7 +423,7 @@ export function LocationAutocomplete({
 
       {showDropdown && query.length >= 2 && results.length === 0 && !loading && !errorMessage && !needsReconnect && (
         <div className="absolute z-50 w-full mt-1 bg-popover border rounded-lg shadow-lg p-3 text-sm text-muted-foreground text-center">
-          No locations found
+          {t("location.noLocationsFound", "No locations found")}
         </div>
       )}
 
@@ -426,7 +431,7 @@ export function LocationAutocomplete({
         <div className="mt-1.5 flex items-start gap-1.5 text-xs text-muted-foreground">
           <Info className="w-3.5 h-3.5 shrink-0 mt-0.5" />
           <span>
-            Threads native results unavailable for this query — showing Facebook/Reference results (won't be tagged on Threads).
+            {t("location.threadsSampleDataWarning", "Threads native results unavailable for this query — showing Facebook/Reference results (won't be tagged on Threads).")}
           </span>
         </div>
       )}
@@ -438,7 +443,7 @@ export function LocationAutocomplete({
           <div className="mt-1.5 flex items-start gap-1.5 text-xs text-amber-600 dark:text-amber-400">
             <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
             <span>
-              No Instagram-taggable location found for this search. The results shown are reference-only and will not appear on the published Instagram post. Try a more specific official place name (mall, restaurant, landmark, or city).
+              {t("location.instagramNoTaggableWarning", "No Instagram-taggable location found for this search. The results shown are reference-only and will not appear on the published Instagram post. Try a more specific official place name (mall, restaurant, landmark, or city).")}
             </span>
           </div>
         )}
@@ -450,7 +455,7 @@ export function LocationAutocomplete({
           <div className="mt-1.5 flex items-start gap-1.5 text-xs text-amber-600 dark:text-amber-400">
             <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
             <span>
-              No Threads-taggable location found for this search. The results shown are reference-only and will not appear on the published Threads post. Threads requires native Threads location results.
+              {t("location.threadsNoTaggableWarning", "No Threads-taggable location found for this search. The results shown are reference-only and will not appear on the published Threads post. Threads requires native Threads location results.")}
             </span>
           </div>
         )}

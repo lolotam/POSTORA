@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { Tabs, TabsContent, TabsList } from "@/components/ui/tabs";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { ChevronDown } from "lucide-react";
@@ -121,6 +122,7 @@ export function PlatformSettingsSection({
   ineligiblePlatforms = [],
   hiddenPlatforms = [],
 }: PlatformSettingsSectionProps) {
+  const { t } = useTranslation("postsettings");
   const isPlatformEligible = (platform: Platform) => !ineligiblePlatforms.includes(platform);
   const isPlatformVisible = (platform: Platform) => !hiddenPlatforms.includes(platform);
   const hasPlatformSelected = (platform: Platform) =>
@@ -169,7 +171,7 @@ export function PlatformSettingsSection({
     if (id === "personal") {
       return {
         id: "personal",
-        name: linkedinPrimaryAccount?.platform_username || "Personal Profile",
+        name: linkedinPrimaryAccount?.platform_username || t("linkedin.personalProfile", "Personal Profile"),
         avatarUrl: linkedinPrimaryAccount?.avatar_url ?? undefined,
         isPersonal: true,
       };
@@ -188,8 +190,8 @@ export function PlatformSettingsSection({
       <div className="rounded-xl border border-border bg-card/50">
         <CollapsibleTrigger className="w-full p-4 sm:p-6 flex items-center justify-between">
           <div>
-            <h3 className="font-semibold text-left">Platform-specific settings</h3>
-            <p className="text-xs text-muted-foreground text-left">Adjust requirements for each platform</p>
+            <h3 className="font-semibold text-left">{t("section.title", "Platform-specific settings")}</h3>
+            <p className="text-xs text-muted-foreground text-left">{t("section.description", "Adjust requirements for each platform")}</p>
           </div>
           <ChevronDown className={cn("w-5 h-5 transition-transform", isOpen && "rotate-180")} />
         </CollapsibleTrigger>
@@ -197,14 +199,14 @@ export function PlatformSettingsSection({
           <div className="px-4 sm:px-6 pb-4 sm:pb-6 space-y-4">
             {uploadMethod === "text" && (
               <div className="p-3 bg-amber-500/10 border border-amber-500/30 rounded-lg text-sm text-amber-700 dark:text-amber-300 mb-2">
-                <strong>Text-Only Mode:</strong> Instagram, TikTok, Pinterest, and YouTube require media and are hidden.
+                <strong>{t("section.textOnlyModeTitle", "Text-Only Mode:")}</strong> {t("section.textOnlyModeDesc", "Instagram, TikTok, Pinterest, and YouTube require media and are hidden.")}
               </div>
             )}
 
             <Tabs defaultValue={firstSelectedPlatform} key={firstSelectedPlatform} className="w-full">
               {!hasAnyPlatformSelected ? (
                 <div className="p-6 text-center text-muted-foreground text-sm">
-                  Select accounts in Step 2 to configure platform-specific settings.
+                  {t("section.noAccountsSelected", "Select accounts in Step 2 to configure platform-specific settings.")}
                 </div>
               ) : (
               <>
@@ -309,8 +311,8 @@ export function PlatformSettingsSection({
                     if (!videoFile) {
                       console.error('[MusicCheck] No uploaded video file found');
                       toast({
-                        title: "No video available",
-                        description: "Please wait for the video to finish uploading.",
+                        title: t("section.toastNoVideoTitle", "No video available"),
+                        description: t("section.toastNoVideoDesc", "Please wait for the video to finish uploading."),
                         variant: "destructive",
                       });
                       return;
@@ -362,8 +364,8 @@ export function PlatformSettingsSection({
                     } else {
                       console.error('[MusicCheck] No video URL available');
                       toast({
-                        title: "Cannot check copyright",
-                        description: "Unable to find video URL for copyright check.",
+                        title: t("section.toastCannotCheckTitle", "Cannot check copyright"),
+                        description: t("section.toastCannotCheckDesc", "Unable to find video URL for copyright check."),
                         variant: "destructive",
                       });
                     }
@@ -379,15 +381,15 @@ export function PlatformSettingsSection({
                   onLoadDraft={() => {
                     const draft = platformSettings.loadTiktokDraft();
                     if (draft?.caption) setCaption(draft.caption);
-                    toast({ title: "Draft loaded", description: "Your TikTok draft has been restored." });
+                    toast({ title: t("section.toastDraftLoadedTitle", "Draft loaded"), description: t("section.toastDraftLoadedDesc", "Your TikTok draft has been restored.") });
                   }}
                   onSaveDraft={() => {
                     platformSettings.saveTiktokDraft(caption, selectedPlatforms);
-                    toast({ title: "Draft saved", description: "Your TikTok post has been saved." });
+                    toast({ title: t("section.toastDraftSavedTitle", "Draft saved"), description: t("section.toastDraftSavedDesc", "Your TikTok post has been saved.") });
                   }}
                   onDiscard={() => {
                     platformSettings.resetTiktokSettings();
-                    toast({ title: "Discarded", description: "TikTok settings have been reset." });
+                    toast({ title: t("section.toastDiscardedTitle", "Discarded"), description: t("section.toastDiscardedDesc", "TikTok settings have been reset.") });
                   }}
                   isPosting={isPosting}
                   scheduleEnabled={scheduleEnabled}
@@ -440,7 +442,7 @@ export function PlatformSettingsSection({
                   <FacebookReelsPreview
                     caption={caption}
                     mediaFile={files.find(f => f.fileType === "video") ? { previewUrl: files.find(f => f.fileType === "video")!.previewUrl, fileType: "video" } : undefined}
-                    username={getAccountForPlatform("facebook")?.platform_username || "Your Page"}
+                    username={getAccountForPlatform("facebook")?.platform_username || t("section.yourPageDefault", "Your Page")}
                     avatarUrl={getAccountForPlatform("facebook")?.avatar_url || undefined}
                   />
                 )}
@@ -562,7 +564,7 @@ export function PlatformSettingsSection({
                     title={youtubeSettingsState.title || caption}
                     description={youtubeSettingsState.description}
                     mediaFile={files.find(f => f.fileType === "video") ? { previewUrl: files.find(f => f.fileType === "video")!.previewUrl, fileType: "video" } : undefined}
-                    username={getAccountForPlatform("youtube")?.platform_username || "Your Channel"}
+                    username={getAccountForPlatform("youtube")?.platform_username || t("section.yourChannelDefault", "Your Channel")}
                     avatarUrl={getAccountForPlatform("youtube")?.avatar_url || undefined}
                   />
                 )}
@@ -595,7 +597,7 @@ export function PlatformSettingsSection({
                       mediaFile={files[0] ? { previewUrl: files[0].previewUrl, fileType: files[0].fileType } : undefined}
                       title={platformSettings.pinterestTitle}
                       link={platformSettings.pinterestLink}
-                      boardName={platformSettings.selectedPinterestBoard?.name || "My Board"}
+                      boardName={platformSettings.selectedPinterestBoard?.name || t("section.myBoardDefault", "My Board")}
                       username={getAccountForPlatform("pinterest")?.platform_username || "your_profile"}
                       avatarUrl={getAccountForPlatform("pinterest")?.avatar_url || undefined}
                     />

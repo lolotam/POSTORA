@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -68,12 +69,14 @@ export function PinterestSettings({
   mediaCount = 0,
   selectedAccounts = [],
 }: PinterestSettingsProps) {
+  const { t } = useTranslation("postsettings");
+
   return (
     <div className="space-y-4">
       {/* Posting to Pinterest as: */}
       {selectedAccounts.length > 0 && (
         <div className="space-y-2">
-          <Label className="text-xs text-muted-foreground">Posting to Pinterest as:</Label>
+          <Label className="text-xs text-muted-foreground">{t("pinterest.postingAs", "Posting to Pinterest as:")}</Label>
           <div className="flex flex-wrap gap-2">
             {selectedAccounts.map((account) => {
               const profileUrl = getPlatformProfileUrl("pinterest", account.platform_username);
@@ -123,11 +126,10 @@ export function PinterestSettings({
             <AlertCircle className="w-4 h-4 text-amber-600 dark:text-amber-400 mt-0.5 flex-shrink-0" />
             <div className="space-y-1">
               <p className="text-sm text-amber-800 dark:text-amber-200 font-medium">
-                {mediaCount} images = {mediaCount} separate pins
+                {t("pinterest.multipleImagesTitle", "{{count}} images = {{count}} separate pins", { count: mediaCount })}
               </p>
               <p className="text-xs text-amber-700 dark:text-amber-300">
-                Pinterest's API doesn't support carousel pins. Each image will be posted as a separate pin with a numbered title 
-                (e.g., "{title || 'Your Pin'} (1/{mediaCount})", "{title || 'Your Pin'} (2/{mediaCount})").
+                {t("pinterest.multipleImagesDesc", "Pinterest's API doesn't support carousel pins. Each image will be posted as a separate pin with a numbered title (e.g., \"{{title}} (1/{{count}})\", \"{{title}} (2/{{count}})\").", { title: title || t("pinterest.yourPinDefault", "Your Pin"), count: mediaCount })}
               </p>
             </div>
           </div>
@@ -140,14 +142,13 @@ export function PinterestSettings({
             <TooltipTrigger asChild>
               <Label className="text-sm font-medium flex items-center gap-2 cursor-help">
                 <LayoutGrid className="w-4 h-4" />
-                Board <span className="text-destructive">*</span>
+                {t("pinterest.board", "Board")} <span className="text-destructive">*</span>
               </Label>
             </TooltipTrigger>
             <TooltipContent className="max-w-xs">
-              <p className="font-medium mb-1">Select a Pinterest Board</p>
+              <p className="font-medium mb-1">{t("pinterest.selectBoardTooltipTitle", "Select a Pinterest Board")}</p>
               <p className="text-xs text-muted-foreground">
-                Boards help organize your pins by topic. Choose a relevant board to improve discoverability. 
-                If you don't have one, create it on Pinterest first.
+                {t("pinterest.selectBoardTooltipDesc", "Boards help organize your pins by topic. Choose a relevant board to improve discoverability. If you don't have one, create it on Pinterest first.")}
               </p>
             </TooltipContent>
           </Tooltip>
@@ -155,7 +156,7 @@ export function PinterestSettings({
         {loadingBoards ? (
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
             <Loader2 className="w-4 h-4 animate-spin" />
-            Loading boards...
+            {t("pinterest.loadingBoards", "Loading boards...")}
           </div>
         ) : boards.length === 0 ? (
           <div className="p-3 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-lg">
@@ -163,10 +164,10 @@ export function PinterestSettings({
               <AlertCircle className="w-4 h-4 text-amber-600 dark:text-amber-400 mt-0.5 flex-shrink-0" />
               <div className="space-y-2">
                 <p className="text-sm text-amber-800 dark:text-amber-200 font-medium">
-                  No Pinterest boards found
+                  {t("pinterest.noBoardsFound", "No Pinterest boards found")}
                 </p>
                 <p className="text-xs text-amber-700 dark:text-amber-300">
-                  Pinterest requires a board to save pins to. Please create a board on Pinterest first, then click Refresh.
+                  {t("pinterest.noBoardsDesc", "Pinterest requires a board to save pins to. Please create a board on Pinterest first, then click Refresh.")}
                 </p>
                 <div className="flex items-center gap-3">
                   <a
@@ -176,7 +177,7 @@ export function PinterestSettings({
                     className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
                   >
                     <Plus className="w-3 h-3" />
-                    Create a board
+                    {t("pinterest.createBoard", "Create a board")}
                   </a>
                   <Button
                     type="button"
@@ -187,7 +188,7 @@ export function PinterestSettings({
                     className="h-7 text-xs"
                   >
                     <RefreshCw className={cn("w-3 h-3 mr-1", loadingBoards && "animate-spin")} />
-                    Refresh
+                    {t("pinterest.refresh", "Refresh")}
                   </Button>
                 </div>
               </div>
@@ -196,7 +197,7 @@ export function PinterestSettings({
         ) : (
           <Select value={selectedBoard} onValueChange={setSelectedBoard}>
             <SelectTrigger className={cn("w-full", !selectedBoard && "border-destructive/50")}>
-              <SelectValue placeholder="Select a board" />
+              <SelectValue placeholder={t("pinterest.selectBoardPlaceholder", "Select a board")} />
             </SelectTrigger>
             <SelectContent>
               {boards.map((board) => (
@@ -204,7 +205,7 @@ export function PinterestSettings({
                   <div className="flex items-center justify-between w-full">
                     <span>{board.name}</span>
                     {board.pin_count !== undefined && (
-                      <span className="text-xs text-muted-foreground ml-2">({board.pin_count} pins)</span>
+                      <span className="text-xs text-muted-foreground ml-2">{t("pinterest.pinsCount", "({{count}} pins)", { count: board.pin_count })}</span>
                     )}
                   </div>
                 </SelectItem>
@@ -212,7 +213,7 @@ export function PinterestSettings({
             </SelectContent>
           </Select>
         )}
-        {!selectedBoard && boards.length > 0 && <p className="text-xs text-destructive">Board is required</p>}
+        {!selectedBoard && boards.length > 0 && <p className="text-xs text-destructive">{t("pinterest.boardRequired", "Board is required")}</p>}
       </div>
 
       {/* Pin Title */}
@@ -222,20 +223,19 @@ export function PinterestSettings({
             <TooltipTrigger asChild>
               <Label className="text-sm font-medium flex items-center gap-2 cursor-help">
                 <Type className="w-4 h-4" />
-                Pin Title
+                {t("pinterest.pinTitle", "Pin Title")}
               </Label>
             </TooltipTrigger>
             <TooltipContent className="max-w-xs">
-              <p className="font-medium mb-1">Create an Eye-Catching Title</p>
+              <p className="font-medium mb-1">{t("pinterest.pinTitleTooltipTitle", "Create an Eye-Catching Title")}</p>
               <p className="text-xs text-muted-foreground">
-                Use keywords people search for. Keep it under 60 characters for best display. 
-                Good titles describe what the pin offers (e.g., "10 Easy Breakfast Recipes").
+                {t("pinterest.pinTitleTooltipDesc", "Use keywords people search for. Keep it under 60 characters for best display. Good titles describe what the pin offers (e.g., \"10 Easy Breakfast Recipes\").")}
               </p>
             </TooltipContent>
           </Tooltip>
         </TooltipProvider>
         <Input
-          placeholder="Add a title for your pin"
+          placeholder={t("pinterest.pinTitlePlaceholder", "Add a title for your pin")}
           maxLength={100}
           value={title}
           onChange={(e) => setTitle(e.target.value)}
@@ -247,10 +247,10 @@ export function PinterestSettings({
           <p className="text-xs text-muted-foreground">
             {mediaCount > 1 && title.length > 0 && (
               <span className="text-amber-600 dark:text-amber-400">
-                Note: With {mediaCount} images, titles will be "{title.substring(0, 85)}{title.length > 85 ? '...' : ''} (1/{mediaCount})"
+                {t("pinterest.multipleImagesTitleNote", "Note: With {{count}} images, titles will be \"{{titlePreview}} (1/{{count}})\"", { count: mediaCount, titlePreview: `${title.substring(0, 85)}${title.length > 85 ? '...' : ''}` })}
               </span>
             )}
-            {(mediaCount <= 1 || title.length === 0) && "Max 100 characters"}
+            {(mediaCount <= 1 || title.length === 0) && t("pinterest.maxCharacters", "Max 100 characters")}
           </p>
           <span className={cn(
             "text-xs",
@@ -261,7 +261,7 @@ export function PinterestSettings({
         </div>
         {mediaCount > 1 && title.length > 90 && (
           <p className="text-xs text-amber-600 dark:text-amber-400">
-            ⚠️ Title may be truncated when suffix "(X/{mediaCount})" is added
+            {t("pinterest.titleTruncateWarning", "⚠️ Title may be truncated when suffix \"(X/{{count}})\" is added", { count: mediaCount })}
           </p>
         )}
       </div>
@@ -273,14 +273,13 @@ export function PinterestSettings({
             <TooltipTrigger asChild>
               <Label className="text-sm font-medium flex items-center gap-2 cursor-help">
                 <Link className="w-4 h-4" />
-                Destination Link
+                {t("pinterest.destinationLink", "Destination Link")}
               </Label>
             </TooltipTrigger>
             <TooltipContent className="max-w-xs">
-              <p className="font-medium mb-1">Add a Destination URL</p>
+              <p className="font-medium mb-1">{t("pinterest.destinationLinkTooltipTitle", "Add a Destination URL")}</p>
               <p className="text-xs text-muted-foreground">
-                Link to your website, blog post, or product page. Use a clean URL without excessive tracking parameters. 
-                Make sure the landing page is mobile-friendly as most Pinterest users browse on mobile.
+                {t("pinterest.destinationLinkTooltipDesc", "Link to your website, blog post, or product page. Use a clean URL without excessive tracking parameters. Make sure the landing page is mobile-friendly as most Pinterest users browse on mobile.")}
               </p>
             </TooltipContent>
           </Tooltip>
@@ -300,20 +299,19 @@ export function PinterestSettings({
             <TooltipTrigger asChild>
               <Label className="text-sm font-medium flex items-center gap-2 cursor-help">
                 <Image className="w-4 h-4" />
-                Alt Text (optional)
+                {t("pinterest.altText", "Alt Text (optional)")}
               </Label>
             </TooltipTrigger>
             <TooltipContent className="max-w-xs">
-              <p className="font-medium mb-1">Improve Accessibility & SEO</p>
+              <p className="font-medium mb-1">{t("pinterest.altTextTooltipTitle", "Improve Accessibility & SEO")}</p>
               <p className="text-xs text-muted-foreground">
-                Describe your image for screen readers. Be specific and include relevant keywords naturally. 
-                Example: "A woman in a blue dress standing on a beach at sunset" instead of "photo123".
+                {t("pinterest.altTextTooltipDesc", "Describe your image for screen readers. Be specific and include relevant keywords naturally. Example: \"A woman in a blue dress standing on a beach at sunset\" instead of \"photo123\".")}
               </p>
             </TooltipContent>
           </Tooltip>
         </TooltipProvider>
         <Textarea
-          placeholder="Describe what's in your image for accessibility..."
+          placeholder={t("pinterest.altTextPlaceholder", "Describe what's in your image for accessibility...")}
           className="min-h-[60px] resize-none"
           maxLength={500}
           value={altText}
@@ -328,16 +326,16 @@ export function PinterestSettings({
             <TooltipTrigger asChild>
               <Label className="text-sm font-medium flex items-center gap-2 cursor-help">
                 <FileText className="w-4 h-4" />
-                Note (optional)
+                {t("pinterest.note", "Note (optional)")}
               </Label>
             </TooltipTrigger>
             <TooltipContent>
-              <p>A private note for yourself - not visible to others</p>
+              <p>{t("pinterest.noteTooltip", "A private note for yourself - not visible to others")}</p>
             </TooltipContent>
           </Tooltip>
         </TooltipProvider>
         <Textarea
-          placeholder="Add a note to yourself about this pin..."
+          placeholder={t("pinterest.notePlaceholder", "Add a note to yourself about this pin...")}
           className="min-h-[60px] resize-none"
           maxLength={500}
           value={note}

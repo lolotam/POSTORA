@@ -1,4 +1,5 @@
 import { useState, useRef } from "react";
+import { useTranslation } from "react-i18next";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
@@ -125,6 +126,7 @@ export function YouTubeSettings({
   selectedAccounts = [],
 }: YouTubeSettingsProps) {
   const { flags } = useFeatureFlags();
+  const { t } = useTranslation("postsettings");
   const [thumbnailDialogOpen, setThumbnailDialogOpen] = useState(false);
   const [aiThumbnailPrompt, setAiThumbnailPrompt] = useState("");
   const { tiers: resolvedTiers } = useResolvedImageModels();
@@ -198,7 +200,7 @@ export function YouTubeSettings({
       {/* Posting to YouTube as: */}
       {selectedAccounts.length > 0 && (
         <div className="space-y-2">
-          <Label className="text-xs text-muted-foreground">Posting to YouTube as:</Label>
+          <Label className="text-xs text-muted-foreground">{t("youtube.postingAs", "Posting to YouTube as:")}</Label>
           <div className="flex flex-wrap gap-2">
             {selectedAccounts.map((account) => {
               const profileUrl = getPlatformProfileUrl("youtube", account.platform_username);
@@ -244,13 +246,13 @@ export function YouTubeSettings({
       {/* Video Type Selection */}
       <div className="space-y-2">
         <Label className="text-sm font-medium flex items-center gap-2">
-          Video Type
+          {t("youtube.videoType", "Video Type")}
           <Tooltip>
             <TooltipTrigger asChild>
               <HelpCircle className="w-3.5 h-3.5 text-muted-foreground cursor-help" />
             </TooltipTrigger>
             <TooltipContent>
-              <p>Choose between regular video or YouTube Shorts (under 60s)</p>
+              <p>{t("youtube.videoTypeTooltip", "Choose between regular video or YouTube Shorts (under 60s)")}</p>
             </TooltipContent>
           </Tooltip>
         </Label>
@@ -261,12 +263,12 @@ export function YouTubeSettings({
         >
           <label className="flex items-center gap-2 cursor-pointer">
             <RadioGroupItem value="video" />
-            <span className="text-sm">Regular Video</span>
+            <span className="text-sm">{t("youtube.regularVideo", "Regular Video")}</span>
           </label>
           <label className="flex items-center gap-2 cursor-pointer">
             <RadioGroupItem value="short" />
             <span className="text-sm flex items-center gap-1">
-              📱 Short (up to 60s)
+              {t("youtube.shortOption", "📱 Short (up to 60s)")}
             </span>
           </label>
         </RadioGroup>
@@ -276,13 +278,13 @@ export function YouTubeSettings({
       {settings.videoType === "short" && (
         <div className="p-3 rounded-lg bg-primary/5 border border-primary/20">
           <div className="flex items-center gap-2 text-sm font-medium text-primary mb-2">
-            📱 YouTube Shorts
+            {t("youtube.shortsHeading", "📱 YouTube Shorts")}
           </div>
           <div className="text-xs text-muted-foreground space-y-1">
-            <p>• Shorts must be under 60 seconds</p>
-            <p>• Vertical format (9:16 aspect ratio) required</p>
-            <p>• Maximum resolution: 1920x1080</p>
-            <p>• Title should include #Shorts for discovery</p>
+            <p>{t("youtube.shortsTipDuration", "• Shorts must be under 60 seconds")}</p>
+            <p>{t("youtube.shortsTipAspectRatio", "• Vertical format (9:16 aspect ratio) required")}</p>
+            <p>{t("youtube.shortsTipResolution", "• Maximum resolution: 1920x1080")}</p>
+            <p>{t("youtube.shortsTipTitle", "• Title should include #Shorts for discovery")}</p>
           </div>
         </div>
       )}
@@ -290,28 +292,28 @@ export function YouTubeSettings({
       {/* Title Override */}
       <div className="space-y-2">
         <Label className="text-sm font-medium flex items-center gap-2">
-          {settings.videoType === "short" ? "Short Title" : "Title override"}
+          {settings.videoType === "short" ? t("youtube.shortTitle", "Short Title") : t("youtube.titleOverride", "Title override")}
           <Tooltip>
             <TooltipTrigger asChild>
               <HelpCircle className="w-3.5 h-3.5 text-muted-foreground cursor-help" />
             </TooltipTrigger>
             <TooltipContent>
               <p>{settings.videoType === "short" 
-                ? "Title shown on your Short - include #Shorts for discoverability" 
-                : "Custom title for YouTube (overrides main caption)"}</p>
+                ? t("youtube.shortTitleTooltip", "Title shown on your Short - include #Shorts for discoverability") 
+                : t("youtube.titleOverrideTooltip", "Custom title for YouTube (overrides main caption)")}</p>
             </TooltipContent>
           </Tooltip>
         </Label>
         <Input
           placeholder={settings.videoType === "short" 
-            ? "My awesome Short #Shorts" 
-            : "Custom title just for YouTube (fallbacks to main title)"}
+            ? t("youtube.shortTitlePlaceholder", "My awesome Short #Shorts") 
+            : t("youtube.titleOverridePlaceholder", "Custom title just for YouTube (fallbacks to main title)")}
           maxLength={100}
           value={settings.title}
           onChange={(e) => onSettingsChange({ title: e.target.value })}
         />
         <p className="text-xs text-muted-foreground">
-          Max 100 characters{settings.videoType === "short" ? " - Include #Shorts for better discovery" : ""}
+          {t("youtube.maxCharacters", "Max 100 characters")}{settings.videoType === "short" ? t("youtube.includeShortsNote", " - Include #Shorts for better discovery") : ""}
         </p>
         <YouTubeAISuggestions
           type="title"
@@ -323,20 +325,20 @@ export function YouTubeSettings({
       {/* Description */}
       <div className="space-y-2">
         <Label className="text-sm font-medium flex items-center gap-2">
-          Description
+          {t("youtube.description", "Description")}
           <Tooltip>
             <TooltipTrigger asChild>
               <HelpCircle className="w-3.5 h-3.5 text-muted-foreground cursor-help" />
             </TooltipTrigger>
             <TooltipContent>
-              <p>Video description with links, hashtags, and keywords for SEO</p>
+              <p>{t("youtube.descriptionTooltip", "Video description with links, hashtags, and keywords for SEO")}</p>
             </TooltipContent>
           </Tooltip>
         </Label>
         <Textarea
           placeholder={settings.videoType === "short" 
-            ? "Add a short description with relevant hashtags"
-            : "Enter description for your YouTube video"}
+            ? t("youtube.shortDescriptionPlaceholder", "Add a short description with relevant hashtags")
+            : t("youtube.descriptionPlaceholder", "Enter description for your YouTube video")}
           maxLength={5000}
           value={settings.description}
           onChange={(e) => onSettingsChange({ description: e.target.value })}
@@ -355,23 +357,23 @@ export function YouTubeSettings({
       <div className="grid grid-cols-2 gap-4">
         <div className="space-y-2">
           <Label className="text-sm font-medium flex items-center gap-2">
-            Tags
+            {t("youtube.tags", "Tags")}
             <Tooltip>
               <TooltipTrigger asChild>
                 <HelpCircle className="w-3.5 h-3.5 text-muted-foreground cursor-help" />
               </TooltipTrigger>
               <TooltipContent>
-                <p>Keywords to help viewers find your video in search</p>
+                <p>{t("youtube.tagsTooltip", "Keywords to help viewers find your video in search")}</p>
               </TooltipContent>
             </Tooltip>
           </Label>
           <Input
-            placeholder="tutorial, howto, demo"
+            placeholder={t("youtube.tagsPlaceholder", "tutorial, howto, demo")}
             value={settings.tags}
             onChange={(e) => onSettingsChange({ tags: e.target.value.slice(0, 500) })}
             maxLength={500}
           />
-          <p className="text-xs text-muted-foreground">Separate tags with commas.</p>
+          <p className="text-xs text-muted-foreground">{t("youtube.separateTagsWithCommas", "Separate tags with commas.")}</p>
           <YouTubeAISuggestions
             type="tags"
             context={settings.title || ""}
@@ -381,13 +383,13 @@ export function YouTubeSettings({
         </div>
         <div className="space-y-2">
           <Label className="text-sm font-medium flex items-center gap-2">
-            Category ID
+            {t("youtube.categoryId", "Category ID")}
             <Tooltip>
               <TooltipTrigger asChild>
                 <HelpCircle className="w-3.5 h-3.5 text-muted-foreground cursor-help" />
               </TooltipTrigger>
               <TooltipContent>
-                <p>YouTube category (e.g., 22=People & Blogs, 24=Entertainment)</p>
+                <p>{t("youtube.categoryIdTooltip", "YouTube category (e.g., 22=People & Blogs, 24=Entertainment)")}</p>
               </TooltipContent>
             </Tooltip>
           </Label>
@@ -396,7 +398,7 @@ export function YouTubeSettings({
             value={settings.category}
             onChange={(e) => onSettingsChange({ category: e.target.value })}
           />
-          <p className="text-xs text-muted-foreground">Use numeric values from YouTube categories.</p>
+          <p className="text-xs text-muted-foreground">{t("youtube.useNumericValuesCategory", "Use numeric values from YouTube categories.")}</p>
         </div>
       </div>
 
@@ -404,13 +406,13 @@ export function YouTubeSettings({
       <div className="grid grid-cols-2 gap-4">
         <div className="space-y-2">
           <Label className="text-sm font-medium flex items-center gap-2">
-            Privacy
+            {t("youtube.privacy", "Privacy")}
             <Tooltip>
               <TooltipTrigger asChild>
                 <HelpCircle className="w-3.5 h-3.5 text-muted-foreground cursor-help" />
               </TooltipTrigger>
               <TooltipContent>
-                <p>Who can see your video: public, unlisted, or private</p>
+                <p>{t("youtube.privacyTooltip", "Who can see your video: public, unlisted, or private")}</p>
               </TooltipContent>
             </Tooltip>
           </Label>
@@ -419,21 +421,21 @@ export function YouTubeSettings({
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="public">public</SelectItem>
-              <SelectItem value="unlisted">unlisted</SelectItem>
-              <SelectItem value="private">private</SelectItem>
+              <SelectItem value="public">{t("youtube.visibilityPublic", "public")}</SelectItem>
+              <SelectItem value="unlisted">{t("youtube.visibilityUnlisted", "unlisted")}</SelectItem>
+              <SelectItem value="private">{t("youtube.visibilityPrivate", "private")}</SelectItem>
             </SelectContent>
           </Select>
         </div>
         <div className="space-y-2">
           <Label className="text-sm font-medium flex items-center gap-2">
-            License
+            {t("youtube.license", "License")}
             <Tooltip>
               <TooltipTrigger asChild>
                 <HelpCircle className="w-3.5 h-3.5 text-muted-foreground cursor-help" />
               </TooltipTrigger>
               <TooltipContent>
-                <p>Standard YouTube license or Creative Commons</p>
+                <p>{t("youtube.licenseTooltip", "Standard YouTube license or Creative Commons")}</p>
               </TooltipContent>
             </Tooltip>
           </Label>
@@ -442,8 +444,8 @@ export function YouTubeSettings({
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="youtube">youtube</SelectItem>
-              <SelectItem value="creativeCommon">creativeCommon</SelectItem>
+              <SelectItem value="youtube">{t("youtube.licenseStandard", "youtube")}</SelectItem>
+              <SelectItem value="creativeCommon">{t("youtube.licenseCreativeCommons", "creativeCommon")}</SelectItem>
             </SelectContent>
           </Select>
         </div>
@@ -459,13 +461,13 @@ export function YouTubeSettings({
             onCheckedChange={(checked) => onSettingsChange({ allowEmbedding: checked as boolean })}
           />
           <label htmlFor="embeddable" className="text-sm cursor-pointer flex items-center gap-1">
-            Embeddable
+            {t("youtube.embeddable", "Embeddable")}
             <Tooltip>
               <TooltipTrigger asChild>
                 <HelpCircle className="w-3.5 h-3.5 text-muted-foreground cursor-help" />
               </TooltipTrigger>
               <TooltipContent>
-                <p>Allow others to embed this video on their websites</p>
+                <p>{t("youtube.embeddableTooltip", "Allow others to embed this video on their websites")}</p>
               </TooltipContent>
             </Tooltip>
           </label>
@@ -478,13 +480,13 @@ export function YouTubeSettings({
             onCheckedChange={(checked) => onSettingsChange({ publicStatsViewable: checked as boolean })}
           />
           <label htmlFor="publicStats" className="text-sm cursor-pointer flex items-center gap-1">
-            Public stats viewable
+            {t("youtube.publicStats", "Public stats viewable")}
             <Tooltip>
               <TooltipTrigger asChild>
                 <HelpCircle className="w-3.5 h-3.5 text-muted-foreground cursor-help" />
               </TooltipTrigger>
               <TooltipContent>
-                <p>Allow viewers to see video statistics (views, likes)</p>
+                <p>{t("youtube.publicStatsTooltip", "Allow viewers to see video statistics (views, likes)")}</p>
               </TooltipContent>
             </Tooltip>
           </label>
@@ -497,13 +499,13 @@ export function YouTubeSettings({
             onCheckedChange={(checked) => onSettingsChange({ madeForKids: checked as boolean })}
           />
           <label htmlFor="madeForKids" className="text-sm cursor-pointer flex items-center gap-1">
-            Self-declared made for kids
+            {t("youtube.madeForKids", "Self-declared made for kids")}
             <Tooltip>
               <TooltipTrigger asChild>
                 <HelpCircle className="w-3.5 h-3.5 text-muted-foreground cursor-help" />
               </TooltipTrigger>
               <TooltipContent>
-                <p>COPPA compliance - disables comments and personalized ads</p>
+                <p>{t("youtube.madeForKidsTooltip", "COPPA compliance - disables comments and personalized ads")}</p>
               </TooltipContent>
             </Tooltip>
           </label>
@@ -519,13 +521,13 @@ export function YouTubeSettings({
             onCheckedChange={(checked) => onSettingsChange({ containsSyntheticMedia: checked as boolean })}
           />
           <label htmlFor="syntheticMedia" className="text-sm cursor-pointer flex items-center gap-1">
-            Contains synthetic media
+            {t("youtube.syntheticMedia", "Contains synthetic media")}
             <Tooltip>
               <TooltipTrigger asChild>
                 <HelpCircle className="w-3.5 h-3.5 text-muted-foreground cursor-help" />
               </TooltipTrigger>
               <TooltipContent>
-                <p>Video contains AI-generated or altered content</p>
+                <p>{t("youtube.syntheticMediaTooltip", "Video contains AI-generated or altered content")}</p>
               </TooltipContent>
             </Tooltip>
           </label>
@@ -538,13 +540,13 @@ export function YouTubeSettings({
             onCheckedChange={(checked) => onSettingsChange({ hasPaidPromotion: checked as boolean })}
           />
           <label htmlFor="paidPromotion" className="text-sm cursor-pointer flex items-center gap-1">
-            Has paid product placement
+            {t("youtube.paidPromotion", "Has paid product placement")}
             <Tooltip>
               <TooltipTrigger asChild>
                 <HelpCircle className="w-3.5 h-3.5 text-muted-foreground cursor-help" />
               </TooltipTrigger>
               <TooltipContent>
-                <p>Video includes paid promotions or sponsorships</p>
+                <p>{t("youtube.paidPromotionTooltip", "Video includes paid promotions or sponsorships")}</p>
               </TooltipContent>
             </Tooltip>
           </label>
@@ -554,10 +556,10 @@ export function YouTubeSettings({
       {/* Language Settings */}
       <div className="grid grid-cols-2 gap-4">
         <div className="space-y-2">
-          <Label className="text-sm font-medium">Default language</Label>
+          <Label className="text-sm font-medium">{t("youtube.defaultLanguage", "Default language")}</Label>
           <Select disabled={composioManaged} value={settings.videoLanguage || ""} onValueChange={(v) => onSettingsChange({ videoLanguage: v })}>
             <SelectTrigger className="w-full">
-              <SelectValue placeholder="Select language" />
+              <SelectValue placeholder={t("youtube.selectLanguage", "Select language")} />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="en">English</SelectItem>
@@ -584,10 +586,10 @@ export function YouTubeSettings({
           </Select>
         </div>
         <div className="space-y-2">
-          <Label className="text-sm font-medium">Default audio language</Label>
+          <Label className="text-sm font-medium">{t("youtube.defaultAudioLanguage", "Default audio language")}</Label>
           <Select disabled={composioManaged} value={settings.audioLanguage || ""} onValueChange={(v) => onSettingsChange({ audioLanguage: v })}>
             <SelectTrigger className="w-full">
-              <SelectValue placeholder="Select audio language" />
+              <SelectValue placeholder={t("youtube.selectAudioLanguage", "Select audio language")} />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="en">English</SelectItem>
@@ -618,20 +620,20 @@ export function YouTubeSettings({
       {/* Country Restrictions */}
       <div className="space-y-4">
         <div className="space-y-2">
-          <Label className="text-sm font-medium">Allowed countries</Label>
+          <Label className="text-sm font-medium">{t("youtube.allowedCountries", "Allowed countries")}</Label>
           <CountryMultiSelect
             value={settings.allowedCountries}
             onChange={(val) => onSettingsChange({ allowedCountries: val })}
-            placeholder="Select allowed countries..."
+            placeholder={t("youtube.selectAllowedCountries", "Select allowed countries...")}
             disabled={composioManaged}
           />
         </div>
         <div className="space-y-2">
-          <Label className="text-sm font-medium">Blocked countries</Label>
+          <Label className="text-sm font-medium">{t("youtube.blockedCountries", "Blocked countries")}</Label>
           <CountryMultiSelect
             value={settings.blockedCountries}
             onChange={(val) => onSettingsChange({ blockedCountries: val })}
-            placeholder="Select blocked countries..."
+            placeholder={t("youtube.selectBlockedCountries", "Select blocked countries...")}
             disabled={composioManaged}
           />
         </div>
@@ -639,7 +641,7 @@ export function YouTubeSettings({
 
       {/* Recording Date */}
       <div className="space-y-2">
-        <Label className="text-sm font-medium">Recording date</Label>
+        <Label className="text-sm font-medium">{t("youtube.recordingDate", "Recording date")}</Label>
         <Input
           type="datetime-local"
           placeholder="mm/dd/yyyy --:-- --"
@@ -647,14 +649,14 @@ export function YouTubeSettings({
           onChange={(e) => onSettingsChange({ recordingDate: e.target.value })}
           disabled={composioManaged}
         />
-        <p className="text-xs text-muted-foreground">ISO 8601 format (e.g. "2024-01-15T14:30:00Z")</p>
+        <p className="text-xs text-muted-foreground">{t("youtube.recordingDateHelp", "ISO 8601 format (e.g. \"2024-01-15T14:30:00Z\")")}</p>
       </div>
 
       {/* Thumbnail Section */}
       <div className="space-y-3 border-t pt-4">
         <div>
-          <Label className="text-sm font-medium">Thumbnail file</Label>
-          <p className="text-xs text-muted-foreground">JPG/PNG/GIF/BMP - ≤ 2MB recommended - ideal size 1280×720 (16:9).</p>
+          <Label className="text-sm font-medium">{t("youtube.thumbnailFile", "Thumbnail file")}</Label>
+          <p className="text-xs text-muted-foreground">{t("youtube.thumbnailSpecHelp", "JPG/PNG/GIF/BMP - ≤ 2MB recommended - ideal size 1280×720 (16:9).")}</p>
         </div>
         <div className="grid grid-cols-3 gap-3">
           <button
@@ -666,7 +668,7 @@ export function YouTubeSettings({
             )}
           >
             <Upload className="w-6 h-6" />
-            <span className="text-xs">Upload file</span>
+            <span className="text-xs">{t("youtube.uploadFile", "Upload file")}</span>
           </button>
           <button
             type="button"
@@ -681,7 +683,7 @@ export function YouTubeSettings({
             )}
           >
             <Sparkles className="w-6 h-6" />
-            <span className="text-xs">Auto-generated</span>
+            <span className="text-xs">{t("youtube.autoGenerated", "Auto-generated")}</span>
           </button>
           <button
             type="button"
@@ -692,7 +694,7 @@ export function YouTubeSettings({
             )}
           >
             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="18" height="18" x="3" y="3" rx="2" /><path d="M7 3v18" /><path d="M3 7.5h4" /><path d="M3 12h18" /><path d="M3 16.5h4" /><path d="M17 3v18" /><path d="M17 7.5h4" /><path d="M17 16.5h4" /></svg>
-            <span className="text-xs">Test & compare</span>
+            <span className="text-xs">{t("youtube.testAndCompare", "Test & compare")}</span>
           </button>
         </div>
 
@@ -701,7 +703,7 @@ export function YouTubeSettings({
           <div className="mt-3">
             <img
               src={settings.thumbnailUrl}
-              alt="Selected thumbnail"
+              alt={t("youtube.selectedThumbnailAlt", "Selected thumbnail")}
               className="w-full max-w-xs rounded-lg border aspect-video object-cover"
             />
           </div>
@@ -710,22 +712,22 @@ export function YouTubeSettings({
 
       {/* Thumbnail URL Input */}
       <div className="space-y-2">
-        <Label className="text-sm font-medium">Thumbnail URL</Label>
+        <Label className="text-sm font-medium">{t("youtube.thumbnailUrl", "Thumbnail URL")}</Label>
         <Input
           placeholder="https://example.com/images/thumbnail-1280x720.jpg"
           value={settings.thumbnailUrl}
           onChange={(e) => onSettingsChange({ thumbnailUrl: e.target.value })}
         />
-        <p className="text-xs text-muted-foreground">JPG/PNG/GIF/BMP - ≤ 2MB recommended - ideal size 1280×720 (16:9).</p>
+        <p className="text-xs text-muted-foreground">{t("youtube.thumbnailSpecHelp", "JPG/PNG/GIF/BMP - ≤ 2MB recommended - ideal size 1280×720 (16:9).")}</p>
       </div>
 
       {/* Auto-generated Thumbnail Dialog */}
       <Dialog open={thumbnailDialogOpen} onOpenChange={setThumbnailDialogOpen}>
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
-            <DialogTitle>Auto-generated thumbnail</DialogTitle>
+            <DialogTitle>{t("youtube.autoGenThumbnailTitle", "Auto-generated thumbnail")}</DialogTitle>
             <DialogDescription>
-              Select an image from your video to use as a thumbnail
+              {t("youtube.autoGenThumbnailDesc", "Select an image from your video to use as a thumbnail")}
             </DialogDescription>
           </DialogHeader>
 
@@ -758,7 +760,7 @@ export function YouTubeSettings({
                         onDownloadThumbnail(thumb, `video-frame-${idx + 1}.jpg`);
                       }}
                       className="absolute bottom-1 right-1 p-1.5 bg-black/70 hover:bg-black/90 rounded-md opacity-0 group-hover:opacity-100 transition-opacity"
-                      title="Download thumbnail"
+                      title={t("youtube.downloadThumbnail", "Download thumbnail")}
                     >
                       <Download className="w-3 h-3 text-white" />
                     </button>
@@ -767,7 +769,7 @@ export function YouTubeSettings({
               ) : (
                 <div className="flex-1 flex items-center justify-center h-24 rounded-lg border border-dashed text-muted-foreground text-sm">
                   <Loader2 className="w-4 h-4 animate-spin mr-2" />
-                  Generating thumbnails...
+                  {t("youtube.generatingThumbnails", "Generating thumbnails...")}
                 </div>
               )}
             </div>
@@ -775,7 +777,7 @@ export function YouTubeSettings({
             {/* AI Generated Thumbnails */}
             {aiGeneratedThumbnails.length > 0 && (
               <div className="space-y-2">
-                <Label className="text-sm font-medium">AI Generated</Label>
+                <Label className="text-sm font-medium">{t("youtube.aiGeneratedHeading", "AI Generated")}</Label>
                 <div className="flex gap-3 flex-wrap">
                   {aiGeneratedThumbnails.map((thumb, idx) => (
                     <div key={`ai-${idx}`} className="relative group">
@@ -805,7 +807,7 @@ export function YouTubeSettings({
                           onDownloadThumbnail(thumb, `ai-thumbnail-${idx + 1}.jpg`);
                         }}
                         className="absolute bottom-1 right-1 p-1.5 bg-black/70 hover:bg-black/90 rounded-md opacity-0 group-hover:opacity-100 transition-opacity"
-                        title="Download thumbnail"
+                        title={t("youtube.downloadThumbnail", "Download thumbnail")}
                       >
                         <Download className="w-3 h-3 text-white" />
                       </button>
@@ -820,10 +822,10 @@ export function YouTubeSettings({
               <div className="space-y-3 border-t pt-4">
                 <div className="flex items-center gap-2">
                   <Sparkles className="w-4 h-4 text-primary" />
-                  <Label className="text-sm font-medium">Generate with AI</Label>
+                  <Label className="text-sm font-medium">{t("youtube.generateWithAi", "Generate with AI")}</Label>
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  Create custom thumbnails with AI. Aspect ratio fixed at 16:9.
+                  {t("youtube.createCustomThumbnailHelp", "Create custom thumbnails with AI. Aspect ratio fixed at 16:9.")}
                 </p>
 
                 {/* Which models will run — administrator-controlled, read-only here. */}
@@ -832,7 +834,7 @@ export function YouTubeSettings({
                 {/* Prompt */}
                 <div className="space-y-2">
                   <Textarea
-                    placeholder="Describe the thumbnail you want to generate... (e.g., 'A dramatic sunset over mountains with bold text overlay')"
+                    placeholder={t("youtube.aiPromptPlaceholder", "Describe the thumbnail you want to generate... (e.g., 'A dramatic sunset over mountains with bold text overlay')")}
                     className="min-h-[80px] resize-none"
                     value={aiThumbnailPrompt}
                     onChange={(e) => setAiThumbnailPrompt(e.target.value)}
@@ -842,7 +844,7 @@ export function YouTubeSettings({
                 {/* Reference Images */}
                 <div className="space-y-2">
                   <Label className="text-xs text-muted-foreground">
-                    Reference Images (optional, up to {MAX_THUMBNAIL_REFERENCES})
+                    {t("youtube.referenceImagesLabel", "Reference Images (optional, up to {{max}})", { max: MAX_THUMBNAIL_REFERENCES })}
                   </Label>
                   <div className="flex flex-wrap items-center gap-2">
                     <input
@@ -862,7 +864,7 @@ export function YouTubeSettings({
                       className="gap-1.5"
                     >
                       <Upload className="w-3 h-3" />
-                      Upload
+                      {t("youtube.uploadBtn", "Upload")}
                     </Button>
                     <Button
                       type="button"
@@ -873,7 +875,7 @@ export function YouTubeSettings({
                       className="gap-1.5"
                     >
                       <FolderOpen className="w-3 h-3" />
-                      Library
+                      {t("youtube.libraryBtn", "Library")}
                     </Button>
                     <Button
                       type="button"
@@ -884,7 +886,7 @@ export function YouTubeSettings({
                       className="gap-1.5"
                     >
                       <ImageIcon className="w-3 h-3" />
-                      Stock
+                      {t("youtube.stockBtn", "Stock")}
                     </Button>
                     
                     {/* Reference image previews */}
@@ -906,7 +908,7 @@ export function YouTubeSettings({
                     ))}
                   </div>
                   <p className="text-[10px] text-muted-foreground">
-                    {aiThumbnailRefs.length}/{MAX_THUMBNAIL_REFERENCES} images selected
+                    {t("youtube.imagesSelectedCount", "{{count}}/{{max}} images selected", { count: aiThumbnailRefs.length, max: MAX_THUMBNAIL_REFERENCES })}
                   </p>
                 </div>
 
@@ -920,12 +922,12 @@ export function YouTubeSettings({
                   {isGeneratingAiThumbnail ? (
                     <>
                       <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                      Generating...
+                      {t("youtube.generatingBtn", "Generating...")}
                     </>
                   ) : (
                     <>
                       <Sparkles className="w-4 h-4 mr-2" />
-                      Generate Thumbnail
+                      {t("youtube.generateThumbnailBtn", "Generate Thumbnail")}
                     </>
                   )}
                 </Button>
@@ -938,7 +940,7 @@ export function YouTubeSettings({
                 variant="outline"
                 onClick={() => setThumbnailDialogOpen(false)}
               >
-                Cancel
+                {t("common:cancel", "Cancel")}
               </Button>
               <Button
                 onClick={() => {
@@ -949,7 +951,7 @@ export function YouTubeSettings({
                 }}
                 disabled={selectedAutoThumbnail === null && !settings.thumbnailUrl}
               >
-                Apply Selection
+                {t("youtube.applySelection", "Apply Selection")}
               </Button>
             </div>
           </div>
@@ -959,8 +961,8 @@ export function YouTubeSettings({
       {/* Notify Subscribers Toggle */}
       <div className="flex items-center justify-between border-t pt-4">
         <div>
-          <p className="text-sm font-medium">Notify subscribers</p>
-          <p className="text-xs text-muted-foreground">Send notifications to your subscribers</p>
+          <p className="text-sm font-medium">{t("youtube.notifySubscribers", "Notify subscribers")}</p>
+          <p className="text-xs text-muted-foreground">{t("youtube.notifySubscribersSubtitle", "Send notifications to your subscribers")}</p>
         </div>
         <Switch disabled={composioManaged} checked={settings.notifySubscribers} onCheckedChange={(v) => onSettingsChange({ notifySubscribers: v })} />
       </div>
@@ -969,8 +971,8 @@ export function YouTubeSettings({
       <div className="space-y-3 border-t pt-4">
         <div className="flex items-center justify-between">
           <div>
-            <Label className="text-sm font-medium">First comment</Label>
-            <p className="text-xs text-muted-foreground">Add a pinned comment when video is published</p>
+            <Label className="text-sm font-medium">{t("youtube.firstComment", "First comment")}</Label>
+            <p className="text-xs text-muted-foreground">{t("youtube.firstCommentSubtitle", "Add a pinned comment when video is published")}</p>
           </div>
           <Switch 
             checked={settings.enableFirstComment} 
@@ -980,7 +982,7 @@ export function YouTubeSettings({
         </div>
         {settings.enableFirstComment && (
           <Textarea
-            placeholder="Write your first comment here..."
+            placeholder={t("youtube.firstCommentPlaceholder", "Write your first comment here...")}
             value={settings.firstComment}
             onChange={(e) => onSettingsChange({ firstComment: e.target.value })}
             className="min-h-[80px]"

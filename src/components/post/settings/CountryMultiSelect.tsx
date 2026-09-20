@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from "react";
+import { useTranslation } from "react-i18next";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { X, ChevronDown, Search } from "lucide-react";
@@ -80,10 +81,12 @@ interface CountryMultiSelectProps {
   disabled?: boolean;
 }
 
-export function CountryMultiSelect({ value, onChange, placeholder = "Select countries...", disabled = false }: CountryMultiSelectProps) {
+export function CountryMultiSelect({ value, onChange, placeholder, disabled = false }: CountryMultiSelectProps) {
+  const { t } = useTranslation("postsettings");
   const [isOpen, setIsOpen] = useState(false);
   const [search, setSearch] = useState("");
   const containerRef = useRef<HTMLDivElement>(null);
+  const displayPlaceholder = placeholder ?? t("countries.selectPlaceholder", "Select countries...");
 
   const selectedCodes = value ? value.split(",").map(c => c.trim()).filter(Boolean) : [];
 
@@ -126,7 +129,7 @@ export function CountryMultiSelect({ value, onChange, placeholder = "Select coun
         onClick={() => { if (!disabled) setIsOpen(!isOpen); }}
       >
         {selectedCodes.length === 0 && (
-          <span className="text-muted-foreground">{placeholder}</span>
+          <span className="text-muted-foreground">{displayPlaceholder}</span>
         )}
         {selectedCodes.map(code => (
           <Badge key={code} variant="secondary" className="gap-1 text-xs">
@@ -151,7 +154,7 @@ export function CountryMultiSelect({ value, onChange, placeholder = "Select coun
             <input
               autoFocus
               className="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
-              placeholder="Search countries..."
+              placeholder={t("countries.searchPlaceholder", "Search countries...")}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               onClick={(e) => e.stopPropagation()}
@@ -159,7 +162,9 @@ export function CountryMultiSelect({ value, onChange, placeholder = "Select coun
           </div>
           <div className="max-h-48 overflow-y-auto p-1">
             {filtered.length === 0 ? (
-              <div className="py-4 text-center text-sm text-muted-foreground">No countries found</div>
+              <div className="py-4 text-center text-sm text-muted-foreground">
+                {t("countries.noCountriesFound", "No countries found")}
+              </div>
             ) : (
               filtered.slice(0, 50).map(country => (
                 <button

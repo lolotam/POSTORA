@@ -18,6 +18,7 @@ import { LocationAutocomplete } from "./LocationAutocomplete";
 import { SavedSuggestionsInput } from "./SavedSuggestionsInput";
 import { useState } from "react";
 import { useFeatureFlags } from "@/hooks/useFeatureFlags";
+import { useTranslation } from "react-i18next";
 
 type PostType = "feed" | "story" | "reel";
 
@@ -87,6 +88,7 @@ export function FacebookSettings({
   const hasReel = postTypes.includes("reel");
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const { flags } = useFeatureFlags();
+  const { t } = useTranslation("postsettings");
 
   const togglePostType = (type: PostType) => {
     if (postTypes.includes(type)) {
@@ -104,7 +106,7 @@ export function FacebookSettings({
       {/* Posting to Facebook as: */}
       {selectedAccounts.length > 0 && (
         <div className="space-y-2">
-          <Label className="text-xs text-muted-foreground">Posting to Facebook as:</Label>
+          <Label className="text-xs text-muted-foreground">{t("facebook.postingAs", "Posting to Facebook as:")}</Label>
           <div className="flex flex-wrap gap-2">
             {selectedAccounts.map((account) => {
               const profileUrl = getPlatformProfileUrl("facebook", account.platform_username, account.platform_user_id);
@@ -150,7 +152,7 @@ export function FacebookSettings({
       {/* Post Type - Multi-select checkboxes */}
       {flags.fbPostType && (
       <div className="space-y-2">
-        <Label className="text-sm font-medium">Post Type</Label>
+        <Label className="text-sm font-medium">{t("facebook.postType", "Post Type")}</Label>
         <div className="flex gap-4">
           <label className="flex items-center gap-2 cursor-pointer">
             <Checkbox
@@ -159,7 +161,7 @@ export function FacebookSettings({
             />
             <span className="text-sm flex items-center gap-1">
               <Image className="w-4 h-4" />
-              Feed Post
+              {t("facebook.feedPost", "Feed Post")}
             </span>
           </label>
           <label className="flex items-center gap-2 cursor-pointer">
@@ -169,7 +171,7 @@ export function FacebookSettings({
             />
             <span className="text-sm flex items-center gap-1">
               <Sparkles className="w-4 h-4" />
-              Story
+              {t("facebook.story", "Story")}
             </span>
           </label>
           {hasVideo && (
@@ -180,12 +182,12 @@ export function FacebookSettings({
               />
               <span className="text-sm flex items-center gap-1">
                 <Film className="w-4 h-4" />
-                Reel
+                {t("facebook.reel", "Reel")}
               </span>
             </label>
           )}
         </div>
-        <p className="text-xs text-muted-foreground">Select one or more destinations for your post</p>
+        <p className="text-xs text-muted-foreground">{t("facebook.selectDestinations", "Select one or more destinations for your post")}</p>
       </div>
       )}
 
@@ -194,21 +196,21 @@ export function FacebookSettings({
         <div className="space-y-3 p-3 rounded-lg bg-primary/5 border border-primary/20">
           <div className="flex items-center gap-2 text-sm font-medium text-primary">
             <Film className="w-4 h-4" />
-            Facebook Reel Settings
+            {t("facebook.reelSettings", "Facebook Reel Settings")}
           </div>
           
           <div className="text-xs text-muted-foreground space-y-1">
-            <p>• Reels are short-form videos up to 90 seconds</p>
-            <p>• Vertical format (9:16 aspect ratio) recommended</p>
-            <p>• Reels appear in the Reels tab and may be featured in Feed</p>
+            <p>{t("facebook.reelTipDuration", "• Reels are short-form videos up to 90 seconds")}</p>
+            <p>{t("facebook.reelTipAspectRatio", "• Vertical format (9:16 aspect ratio) recommended")}</p>
+            <p>{t("facebook.reelTipFeed", "• Reels appear in the Reels tab and may be featured in Feed")}</p>
           </div>
 
           {/* Reel Description */}
           {setReelDescription && (
             <div className="space-y-2">
-              <Label className="text-sm font-medium">Reel Description</Label>
+              <Label className="text-sm font-medium">{t("facebook.reelDescription", "Reel Description")}</Label>
               <Textarea
-                placeholder="Write a catchy description for your Reel..."
+                placeholder={t("facebook.reelDescriptionPlaceholder", "Write a catchy description for your Reel...")}
                 value={reelDescription}
                 onChange={(e) => setReelDescription(e.target.value)}
                 className="min-h-[60px] resize-none"
@@ -226,11 +228,11 @@ export function FacebookSettings({
                   <TooltipTrigger asChild>
                     <Label className="text-sm font-medium flex items-center gap-2 cursor-help">
                       <Users className="w-4 h-4" />
-                      Invite Collaborator (optional)
+                      {t("facebook.inviteCollaborator", "Invite Collaborator (optional)")}
                     </Label>
                   </TooltipTrigger>
                   <TooltipContent className="max-w-xs">
-                    <p>Invite another Facebook Page to co-publish this Reel. They'll receive an invitation link to accept.</p>
+                    <p>{t("facebook.inviteCollaboratorTooltip", "Invite another Facebook Page to co-publish this Reel. They'll receive an invitation link to accept.")}</p>
                   </TooltipContent>
                 </Tooltip>
               </TooltipProvider>
@@ -239,11 +241,11 @@ export function FacebookSettings({
                 platform="facebook"
                 value={reelCollaborator}
                 onChange={(v) => setReelCollaborator(v)}
-                placeholder="Collaborator Facebook Page ID..."
+                placeholder={t("facebook.collaboratorPlaceholder", "Collaborator Facebook Page ID...")}
               />
               <p className="text-xs text-muted-foreground flex items-center gap-1">
                 <Info className="w-3 h-3" />
-                Collaborator must accept the invitation for the Reel to appear on their Page
+                {t("facebook.collaboratorNote", "Collaborator must accept the invitation for the Reel to appear on their Page")}
               </p>
             </div>
           )}
@@ -254,7 +256,7 @@ export function FacebookSettings({
       {hasReel && !hasVideo && (
         <div className="flex items-center gap-2 p-3 rounded-lg bg-destructive/10 text-destructive text-sm">
           <AlertCircle className="w-4 h-4 shrink-0" />
-          Reels require a video. Please upload a video to post as a Reel.
+          {t("facebook.reelVideoRequired", "Reels require a video. Please upload a video to post as a Reel.")}
         </div>
       )}
 
@@ -262,7 +264,7 @@ export function FacebookSettings({
       {hasStory && (
         <div className="flex items-center gap-2 p-3 rounded-lg bg-muted/50 border text-sm text-muted-foreground">
           <AlertCircle className="w-4 h-4 shrink-0" />
-          Stories only support a single photo or video. Captions, locations, and other settings are not available for stories via the API.
+          {t("facebook.storyMediaOnly", "Stories only support a single photo or video. Captions, locations, and other settings are not available for stories via the API.")}
         </div>
       )}
 
@@ -274,11 +276,11 @@ export function FacebookSettings({
             <TooltipTrigger asChild>
               <Label className="text-sm font-medium flex items-center gap-2 cursor-help">
                 <MapPin className="w-4 h-4" />
-                Location (optional)
+                {t("facebook.location", "Location (optional)")}
               </Label>
             </TooltipTrigger>
             <TooltipContent>
-              <p>Tag a Facebook Place to help people discover your post</p>
+              <p>{t("facebook.locationTooltip", "Tag a Facebook Place to help people discover your post")}</p>
             </TooltipContent>
           </Tooltip>
         </TooltipProvider>
@@ -294,13 +296,13 @@ export function FacebookSettings({
           />
         ) : (
           <Input
-            placeholder="Add location..."
+            placeholder={t("facebook.locationPlaceholder", "Add location...")}
             value={location}
             onChange={(e) => setLocation(e.target.value)}
           />
         )}
         <p className="text-xs text-muted-foreground">
-          When a connected account is available, location will be tagged on your published post.
+          {t("facebook.locationNote", "When a connected account is available, location will be tagged on your published post.")}
         </p>
       </div>
       )}
@@ -313,16 +315,16 @@ export function FacebookSettings({
               <TooltipTrigger asChild>
                 <Label className="text-sm font-medium flex items-center gap-2 cursor-help">
                   <MessageSquare className="w-4 h-4" />
-                  First Comment (optional)
+                  {t("facebook.firstComment", "First Comment (optional)")}
                 </Label>
               </TooltipTrigger>
               <TooltipContent>
-                <p>Add hashtags as a comment to keep your main post clean</p>
+                <p>{t("facebook.firstCommentTooltip", "Add hashtags as a comment to keep your main post clean")}</p>
               </TooltipContent>
             </Tooltip>
           </TooltipProvider>
           <Textarea
-            placeholder="Add hashtags or additional text..."
+            placeholder={t("facebook.firstCommentPlaceholder", "Add hashtags or additional text...")}
             value={firstComment}
             onChange={(e) => setFirstComment(e.target.value)}
             className="min-h-[60px] resize-none"
@@ -338,11 +340,11 @@ export function FacebookSettings({
               <TooltipTrigger asChild>
                 <Label className="text-sm font-medium flex items-center gap-2 cursor-help">
                   <Link className="w-4 h-4" />
-                  Link (optional)
+                  {t("facebook.link", "Link (optional)")}
                 </Label>
               </TooltipTrigger>
               <TooltipContent>
-                <p>Share a clickable link preview with your post</p>
+                <p>{t("facebook.linkTooltip", "Share a clickable link preview with your post")}</p>
               </TooltipContent>
             </Tooltip>
           </TooltipProvider>
@@ -363,13 +365,13 @@ export function FacebookSettings({
                 <div className="flex items-start gap-2 cursor-help">
                   <Share2 className="w-4 h-4 mt-0.5 text-muted-foreground" />
                   <div>
-                    <p className="text-sm">Also share to Story</p>
-                    <p className="text-xs text-muted-foreground">Post will appear in your story too</p>
+                    <p className="text-sm">{t("facebook.shareToStory", "Also share to Story")}</p>
+                    <p className="text-xs text-muted-foreground">{t("facebook.shareToStorySubtitle", "Post will appear in your story too")}</p>
                   </div>
                 </div>
               </TooltipTrigger>
               <TooltipContent>
-                <p>Your post will also appear as a story for 24 hours</p>
+                <p>{t("facebook.shareToStoryTooltip", "Your post will also appear as a story for 24 hours")}</p>
               </TooltipContent>
             </Tooltip>
           </TooltipProvider>

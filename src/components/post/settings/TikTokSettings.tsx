@@ -13,6 +13,7 @@ import { Progress } from "@/components/ui/progress";
 import { cn } from "@/lib/utils";
 import { tiktokPrivacyOptions } from "@/lib/platformConstants";
 import { useToast } from "@/hooks/use-toast";
+import { useTranslation } from "react-i18next";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Select,
@@ -193,9 +194,25 @@ export function TikTokSettings({
   onUpload,
 }: TikTokSettingsProps) {
   const { toast } = useToast();
+  const { t } = useTranslation("postsettings");
   const hasShownLowQuotaWarning = useRef(false);
   const [showDisclosurePanel, setShowDisclosurePanel] = useState(false);
   const [showPreviewDialog, setShowPreviewDialog] = useState(false);
+
+  const getPrivacyOptionLabel = (value: string, defaultLabel: string) => {
+    switch (value) {
+      case "PUBLIC_TO_EVERYONE":
+        return t("tiktok.privacyPublic", "Everyone");
+      case "MUTUAL_FOLLOW_FRIENDS":
+        return t("tiktok.privacyFriends", "Friends only");
+      case "FOLLOWER_OF_CREATOR":
+        return t("tiktok.privacyFollowers", "Followers");
+      case "SELF_ONLY":
+        return t("tiktok.privacySelf", "Only me");
+      default:
+        return defaultLabel;
+    }
+  };
 
   // ─────────────────────────────────────────────────────────────────────────
   // Privacy options from creator_info API (TikTok requirement)
@@ -224,13 +241,13 @@ export function TikTokSettings({
     ) {
       hasShownLowQuotaWarning.current = true;
       toast({
-        title: "TikTok Daily Limit Warning",
-        description: `You have ${creatorInfo.daily_limit_remaining} post${creatorInfo.daily_limit_remaining === 1 ? "" : "s"} remaining today.`,
+        title: t("tiktok.dailyLimitWarningTitle", "TikTok Daily Limit Warning"),
+        description: t("tiktok.dailyLimitWarningDesc", `You have ${creatorInfo.daily_limit_remaining} post${creatorInfo.daily_limit_remaining === 1 ? "" : "s"} remaining today.`, { count: creatorInfo.daily_limit_remaining }),
         variant: "default",
         className: "border-amber-500/50 bg-amber-50 dark:bg-amber-950/30",
       });
     }
-  }, [creatorInfo, loadingCreatorInfo, toast]);
+  }, [creatorInfo, loadingCreatorInfo, toast, t]);
 
   // Auto-expand disclosure panel when content disclosure is enabled
   useEffect(() => {
@@ -246,8 +263,8 @@ export function TikTokSettings({
   const isCommercialDisclosureIncomplete = settings.discloseContent && !settings.yourBrand && !settings.brandedContent;
 
   const getContentLabel = () => {
-    if (settings.brandedContent) return "Paid partnership";
-    if (settings.yourBrand) return "Promotional content";
+    if (settings.brandedContent) return t("tiktok.paidPartnership", "Paid partnership");
+    if (settings.yourBrand) return t("tiktok.promotionalContent", "Promotional content");
     return null;
   };
 
@@ -260,11 +277,11 @@ export function TikTokSettings({
     isCreatorPostingBlocked;
 
   const getPublishDisabledReason = () => {
-    if (isCreatorPostingBlocked) return creatorInfo?.posting_blocked_reason || "Daily limit reached";
-    if (!settings.privacyLevel) return "Select who can view this video";
-    if (!settings.consentAgreed) return "Agree to TikTok's terms";
-    if (isCommercialDisclosureIncomplete) return "You need to indicate if your content promotes yourself, a third party, or both";
-    if (isBrandedContentPrivacyConflict) return "Branded content cannot be private";
+    if (isCreatorPostingBlocked) return creatorInfo?.posting_blocked_reason || t("tiktok.dailyLimitReached", "Daily limit reached");
+    if (!settings.privacyLevel) return t("tiktok.selectWhoCanView", "Select who can view this video");
+    if (!settings.consentAgreed) return t("tiktok.agreeToTerms", "Agree to TikTok's terms");
+    if (isCommercialDisclosureIncomplete) return t("tiktok.indicatePromotion", "You need to indicate if your content promotes yourself, a third party, or both");
+    if (isBrandedContentPrivacyConflict) return t("tiktok.brandedContentCannotBePrivate", "Branded content cannot be private");
     return "";
   };
 
@@ -310,9 +327,9 @@ export function TikTokSettings({
           <div className="p-3 bg-destructive/10 border border-destructive/30 rounded-lg flex items-start gap-2">
             <AlertCircle className="w-4 h-4 text-destructive flex-shrink-0 mt-0.5" />
             <div>
-              <p className="text-sm font-medium text-destructive">Posting unavailable</p>
+              <p className="text-sm font-medium text-destructive">{t("tiktok.postingUnavailable", "Posting unavailable")}</p>
               <p className="text-xs text-destructive/80">
-                {creatorInfo?.posting_blocked_reason || "Daily limit reached. Try again later."}
+                {creatorInfo?.posting_blocked_reason || t("tiktok.dailyLimitReachedTryLater", "Daily limit reached. Try again later.")}
               </p>
             </div>
           </div>
@@ -331,7 +348,7 @@ export function TikTokSettings({
               selectedAccounts.map((account) => {
                 const tiktokHandle = account.tiktok_username || account.platform_username;
                 const profileUrl = tiktokHandle ? `https://www.tiktok.com/@${tiktokHandle.replace("@", "")}` : null;
-                const displayName = creatorInfo?.creator_nickname || account.platform_username || "TikTok Account";
+                const displayName = creatorInfo?.creator_nickname || account.platform_username || t("tiktok.accountFallback", "TikTok Account");
 
                 return (
                   <a
@@ -397,7 +414,7 @@ export function TikTokSettings({
                 creatorInfo.daily_limit_remaining <= 3 ? "text-amber-600" : "text-muted-foreground"
               )}>
                 <Clock className="w-3 h-3" />
-                Daily posts
+                {t("tiktok.dailyPosts", "Daily posts")}
               </span>
               <span className={cn(
                 creatorInfo.daily_limit_remaining === 0 ? "text-destructive" :
@@ -419,20 +436,20 @@ export function TikTokSettings({
 
         {/* Privacy Dropdown - TikTok style */}
         <div className="space-y-2">
-          <Label className="text-sm font-medium">Who can view this video</Label>
+          <Label className="text-sm font-medium">{t("tiktok.whoCanView", "Who can view this video")}</Label>
           {loadingCreatorInfo ? (
             <Skeleton className="h-10 w-full" />
           ) : (
             <Select value={settings.privacyLevel} onValueChange={handlePrivacyChange}>
               <SelectTrigger className={cn(!settings.privacyLevel && "text-muted-foreground")}>
-                <SelectValue placeholder="Select privacy" />
+                <SelectValue placeholder={t("tiktok.selectPrivacy", "Select privacy")} />
               </SelectTrigger>
               <SelectContent>
                 {getAvailablePrivacyOptions().map((option) => {
                   const isDisabled = option.value === "SELF_ONLY" && settings.brandedContent;
                   return (
                     <SelectItem key={option.value} value={option.value} disabled={isDisabled}>
-                      <span className={cn(isDisabled && "text-muted-foreground")}>{option.label}</span>
+                      <span className={cn(isDisabled && "text-muted-foreground")}>{getPrivacyOptionLabel(option.value, option.label)}</span>
                     </SelectItem>
                   );
                 })}
@@ -442,18 +459,18 @@ export function TikTokSettings({
           {!settings.privacyLevel && !loadingCreatorInfo && (
             <p className="text-xs text-amber-600 flex items-center gap-1">
               <AlertTriangle className="w-3 h-3" />
-              Required
+              {t("tiktok.required", "Required")}
             </p>
           )}
         </div>
 
         {/* Interaction Toggles - TikTok-style cyan checkboxes */}
         <div className="space-y-3">
-          <Label className="text-sm font-medium">Allow users to</Label>
+          <Label className="text-sm font-medium">{t("tiktok.allowUsersTo", "Allow users to")}</Label>
           
           {settings.privacyLevel === "SELF_ONLY" ? (
             <p className="text-xs text-muted-foreground italic">
-              Not available for private videos
+              {t("tiktok.notAvailableForPrivate", "Not available for private videos")}
             </p>
           ) : (
             <div className="flex flex-wrap items-center gap-x-8 gap-y-3">
@@ -462,7 +479,7 @@ export function TikTokSettings({
                 checked={settings.allowComment}
                 onCheckedChange={(v) => onSettingsChange({ allowComment: v })}
                 disabled={creatorInfo?.comment_disabled}
-                label="Comment"
+                label={t("tiktok.allowComment", "Comment")}
               />
 
               {/* Duet - Video only */}
@@ -471,7 +488,7 @@ export function TikTokSettings({
                   checked={settings.allowDuet}
                   onCheckedChange={(v) => onSettingsChange({ allowDuet: v })}
                   disabled={creatorInfo?.duet_disabled}
-                  label="Duet"
+                  label={t("tiktok.allowDuet", "Duet")}
                 />
               )}
 
@@ -481,7 +498,7 @@ export function TikTokSettings({
                   checked={settings.allowStitch}
                   onCheckedChange={(v) => onSettingsChange({ allowStitch: v })}
                   disabled={creatorInfo?.stitch_disabled}
-                  label="Stitch"
+                  label={t("tiktok.allowStitch", "Stitch")}
                 />
               )}
             </div>
@@ -505,9 +522,9 @@ export function TikTokSettings({
           }}
         >
           <div className="flex-1">
-            <p className="text-sm font-medium">Disclose video content</p>
+            <p className="text-sm font-medium">{t("tiktok.discloseContent", "Disclose video content")}</p>
             <p className="text-xs text-muted-foreground">
-              Let others know this promotes a brand or product
+              {t("tiktok.discloseContentSubtitle", "Let others know this promotes a brand or product")}
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -530,9 +547,9 @@ export function TikTokSettings({
         {/* AI Generated Content Toggle */}
         <div className="flex items-center justify-between p-3 rounded-lg border">
           <div>
-            <p className="text-sm font-medium">AI-generated content</p>
+            <p className="text-sm font-medium">{t("tiktok.aiGenerated", "AI-generated content")}</p>
             <p className="text-xs text-muted-foreground">
-              Label content made with AI tools
+              {t("tiktok.aiGeneratedSubtitle", "Label content made with AI tools")}
             </p>
           </div>
           <Switch
@@ -546,7 +563,7 @@ export function TikTokSettings({
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <Label className="text-sm font-medium flex items-center gap-1">
-                Music copyright check
+                {t("tiktok.musicCopyrightCheck", "Music copyright check")}
                 <Info className="w-3 h-3 text-muted-foreground" />
               </Label>
               <Switch
@@ -560,13 +577,13 @@ export function TikTokSettings({
                 {isCheckingMusic ? (
                   <p className="text-xs text-muted-foreground flex items-center gap-1">
                     <Loader2 className="w-3 h-3 animate-spin" />
-                    Checking...
+                    {t("tiktok.musicChecking", "Checking...")}
                   </p>
                 ) : musicCopyrightResult?.hasCopyrightedMusic ? (
                   <div className="p-2 bg-amber-500/10 border border-amber-500/30 rounded text-xs">
                     <p className="text-amber-600 font-medium flex items-center gap-1">
                       <AlertCircle className="w-3 h-3" />
-                      Copyrighted music detected
+                      {t("tiktok.copyrightedMusicDetected", "Copyrighted music detected")}
                     </p>
                     {musicCopyrightResult.musicInfo && (
                       <p className="text-muted-foreground mt-1">
@@ -577,11 +594,11 @@ export function TikTokSettings({
                 ) : musicCopyrightResult ? (
                   <p className="text-xs text-emerald-600 flex items-center gap-1">
                     <CheckCircle2 className="w-3 h-3" />
-                    No issues found
+                    {t("tiktok.noIssuesFound", "No issues found")}
                   </p>
                 ) : canRunMusicCheck ? (
                   <Button variant="outline" size="sm" className="h-7 text-xs" onClick={onRunMusicCheck}>
-                    Run check
+                    {t("tiktok.runCheck", "Run check")}
                   </Button>
                 ) : null}
               </div>
@@ -599,7 +616,7 @@ export function TikTokSettings({
               className="mt-0.5"
             />
             <span className="text-sm leading-relaxed">
-              By posting, you agree to TikTok's{" "}
+              {t("tiktok.agreePrefix", "By posting, you agree to TikTok's ")}
               <a
                 href="https://www.tiktok.com/legal/page/global/music-usage-confirmation/en"
                 target="_blank"
@@ -607,11 +624,11 @@ export function TikTokSettings({
                 className="text-primary hover:underline"
                 onClick={(e) => e.stopPropagation()}
               >
-                Music Usage Confirmation
+                {t("tiktok.musicUsageConfirmation", "Music Usage Confirmation")}
               </a>
               {settings.brandedContent && (
                 <>
-                  {" "}and{" "}
+                  {t("tiktok.and", " and ")}
                   <a
                     href="https://www.tiktok.com/legal/page/global/bc-policy/en"
                     target="_blank"
@@ -619,7 +636,7 @@ export function TikTokSettings({
                     className="text-primary hover:underline"
                     onClick={(e) => e.stopPropagation()}
                   >
-                    Branded Content Policy
+                    {t("tiktok.brandedContentPolicy", "Branded Content Policy")}
                   </a>
                 </>
               )}
@@ -627,7 +644,7 @@ export function TikTokSettings({
             </span>
           </label>
           {!settings.consentAgreed && (
-            <p className="text-xs text-destructive pl-6">Required to post</p>
+            <p className="text-xs text-destructive pl-6">{t("tiktok.requiredToPost", "Required to post")}</p>
           )}
         </div>
 
@@ -643,7 +660,7 @@ export function TikTokSettings({
                     disabled={mediaFiles.length === 0 || isPublishDisabled}
                   >
                     <Eye className="w-5 h-5" />
-                    Preview & Upload
+                    {t("tiktok.previewAndUpload", "Preview & Upload")}
                   </Button>
                 </div>
               </TooltipTrigger>
@@ -651,7 +668,7 @@ export function TikTokSettings({
                 <TooltipContent>
                   <p>
                     {mediaFiles.length === 0 
-                      ? "Add media to preview" 
+                      ? t("tiktok.addMediaToPreview", "Add media to preview")
                       : getPublishDisabledReason()}
                   </p>
                 </TooltipContent>
@@ -661,10 +678,10 @@ export function TikTokSettings({
 
           <div className="flex gap-2">
             <Button variant="outline" className="flex-1" onClick={onSaveDraft}>
-              Save draft
+              {t("tiktok.saveDraft", "Save draft")}
             </Button>
             <Button variant="ghost" onClick={onDiscard}>
-              Discard
+              {t("tiktok.discard", "Discard")}
             </Button>
           </div>
         </div>
@@ -690,10 +707,10 @@ export function TikTokSettings({
           <div className="p-3 bg-blue-500/10 border border-blue-500/30 rounded-lg flex items-center justify-between">
             <div className="flex items-center gap-2">
               <Info className="w-4 h-4 text-blue-500" />
-              <span className="text-sm">You have a saved draft</span>
+              <span className="text-sm">{t("tiktok.haveSavedDraft", "You have a saved draft")}</span>
             </div>
             <Button variant="outline" size="sm" onClick={onLoadDraft}>
-              Load
+              {t("tiktok.loadDraft", "Load")}
             </Button>
           </div>
         )}
@@ -717,9 +734,9 @@ export function TikTokSettings({
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.1 }}
             >
-              <h3 className="font-medium text-sm">Disclose video content</h3>
+              <h3 className="font-medium text-sm">{t("tiktok.discloseContent", "Disclose video content")}</h3>
               <p className="text-xs text-muted-foreground mt-1">
-                Turn on to disclose that this video promotes goods or services in exchange for something of value.
+                {t("tiktok.discloseContentDesc", "Turn on to disclose that this video promotes goods or services in exchange for something of value.")}
               </p>
             </motion.div>
 
@@ -737,10 +754,10 @@ export function TikTokSettings({
                     <Info className="w-4 h-4 text-primary flex-shrink-0 mt-0.5" />
                     <div>
                       <p className="text-sm font-medium text-primary">
-                        Your video will be labeled "{getContentLabel()}"
+                        {t("tiktok.labeledAs", `Your video will be labeled "${getContentLabel()}"`, { label: getContentLabel() })}
                       </p>
                       <p className="text-xs text-muted-foreground mt-1">
-                        This cannot be changed once your video is posted.
+                        {t("tiktok.cannotBeChanged", "This cannot be changed once your video is posted.")}
                       </p>
                     </div>
                   </div>
@@ -759,7 +776,7 @@ export function TikTokSettings({
                 >
                   <p className="text-xs text-amber-600 flex items-center gap-1">
                     <AlertCircle className="w-3 h-3" />
-                    Select at least one option below
+                    {t("tiktok.selectAtLeastOneOption", "Select at least one option below")}
                   </p>
                 </motion.div>
               )}
@@ -781,9 +798,9 @@ export function TikTokSettings({
                 className="mt-0.5"
               />
               <div className="flex-1">
-                <p className="text-sm font-medium">Your brand</p>
+                <p className="text-sm font-medium">{t("tiktok.yourBrand", "Your brand")}</p>
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  You are promoting yourself or your own business. This video will be classified as Brand Organic.
+                  {t("tiktok.yourBrandDesc", "You are promoting yourself or your own business. This video will be classified as Brand Organic.")}
                 </p>
               </div>
             </motion.label>
@@ -812,14 +829,14 @@ export function TikTokSettings({
                       className="mt-0.5"
                     />
                     <div className="flex-1">
-                      <p className="text-sm font-medium">Branded content</p>
+                      <p className="text-sm font-medium">{t("tiktok.brandedContent", "Branded content")}</p>
                       <p className="text-xs text-muted-foreground mt-0.5">
-                        You are promoting another brand or a third party. This video will be classified as Branded Content.
+                        {t("tiktok.brandedContentDesc", "You are promoting another brand or a third party. This video will be classified as Branded Content.")}
                       </p>
                       {settings.privacyLevel === "SELF_ONLY" && (
                         <p className="text-xs text-destructive mt-1 flex items-center gap-1">
                           <AlertCircle className="w-3 h-3" />
-                          Not available for private videos
+                          {t("tiktok.notAvailableForPrivate", "Not available for private videos")}
                         </p>
                       )}
                     </div>
@@ -827,7 +844,7 @@ export function TikTokSettings({
                 </TooltipTrigger>
                 {settings.privacyLevel === "SELF_ONLY" && (
                   <TooltipContent>
-                    <p>Branded content cannot be private</p>
+                    <p>{t("tiktok.brandedContentCannotBePrivate", "Branded content cannot be private")}</p>
                   </TooltipContent>
                 )}
               </Tooltip>
@@ -846,7 +863,7 @@ export function TikTokSettings({
                 rel="noopener noreferrer"
                 className="text-xs text-primary hover:underline flex items-center gap-1"
               >
-                Learn more about content disclosure
+                {t("tiktok.learnMoreContentDisclosure", "Learn more about content disclosure")}
                 <ExternalLink className="w-3 h-3" />
               </a>
             </motion.div>

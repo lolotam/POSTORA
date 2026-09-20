@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useTranslation } from "react-i18next";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -90,10 +91,38 @@ const defaultReplySettings: BlueskyReplySettings = {
 };
 
 export function BlueskySettings({ settings, onChange, hasMedia, selectedAccounts = [] }: BlueskySettingsProps) {
+  const { t } = useTranslation("postsettings");
   const replySettings = settings.replySettings || defaultReplySettings;
   const [lists, setLists] = useState<BlueskyList[]>([]);
   const [loadingLists, setLoadingLists] = useState(false);
   const [listsError, setListsError] = useState<string | null>(null);
+
+  const getLanguageLabel = (code: string) => {
+    switch (code) {
+      case "":
+        return t("bluesky.langAuto", "Auto-detect");
+      case "en":
+        return t("bluesky.langEn", "English");
+      case "ar":
+        return t("bluesky.langAr", "Arabic");
+      case "es":
+        return t("bluesky.langEs", "Spanish");
+      case "fr":
+        return t("bluesky.langFr", "French");
+      case "de":
+        return t("bluesky.langDe", "German");
+      case "ja":
+        return t("bluesky.langJa", "Japanese");
+      case "ko":
+        return t("bluesky.langKo", "Korean");
+      case "pt":
+        return t("bluesky.langPt", "Portuguese");
+      case "zh":
+        return t("bluesky.langZh", "Chinese");
+      default:
+        return code;
+    }
+  };
 
   // Fetch lists when "list" option is selected
   useEffect(() => {
@@ -104,7 +133,7 @@ export function BlueskySettings({ settings, onChange, hasMedia, selectedAccounts
 
   const fetchBlueskyLists = async () => {
     if (selectedAccounts.length === 0) {
-      setListsError("No Bluesky account selected");
+      setListsError(t("bluesky.errorNoAccount", "No Bluesky account selected"));
       return;
     }
 
@@ -128,7 +157,7 @@ export function BlueskySettings({ settings, onChange, hasMedia, selectedAccounts
       }
     } catch (err) {
       console.error("Failed to fetch Bluesky lists:", err);
-      setListsError("Failed to fetch lists. Please try again.");
+      setListsError(t("bluesky.errorFetchLists", "Failed to fetch lists. Please try again."));
     } finally {
       setLoadingLists(false);
     }
@@ -159,21 +188,21 @@ export function BlueskySettings({ settings, onChange, hasMedia, selectedAccounts
       <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-3 text-xs space-y-2">
         <div className="flex items-center gap-2 font-semibold text-blue-700 dark:text-blue-400">
           <Info className="w-4 h-4" />
-          Bluesky Platform Limits
+          {t("bluesky.platformLimitsTitle", "Bluesky Platform Limits")}
         </div>
         <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-muted-foreground">
-          <span>📝 Text: <span className="font-medium text-foreground/80">300 characters max</span></span>
-          <span>🖼️ Images: <span className="font-medium text-foreground/80">4 per post, 1MB each</span></span>
-          <span>🎥 Video: <span className="font-medium text-foreground/80">50MB, 60 sec max</span></span>
-          <span>📁 Formats: <span className="font-medium text-foreground/80">JPEG, PNG, WebP, MP4</span></span>
+          <span>{t("bluesky.limitTextLabel", "📝 Text:")} <span className="font-medium text-foreground/80">{t("bluesky.limitTextVal", "300 characters max")}</span></span>
+          <span>{t("bluesky.limitImagesLabel", "🖼️ Images:")} <span className="font-medium text-foreground/80">{t("bluesky.limitImagesVal", "4 per post, 1MB each")}</span></span>
+          <span>{t("bluesky.limitVideoLabel", "🎥 Video:")} <span className="font-medium text-foreground/80">{t("bluesky.limitVideoVal", "50MB, 60 sec max")}</span></span>
+          <span>{t("bluesky.limitFormatsLabel", "📁 Formats:")} <span className="font-medium text-foreground/80">{t("bluesky.limitFormatsVal", "JPEG, PNG, WebP, MP4")}</span></span>
         </div>
-        <p className="text-muted-foreground/80 italic">Cloudinary images are auto-compressed to fit the 1MB limit.</p>
+        <p className="text-muted-foreground/80 italic">{t("bluesky.cloudinaryNotice", "Cloudinary images are auto-compressed to fit the 1MB limit.")}</p>
       </div>
 
       {/* Posting to Bluesky as: */}
       {selectedAccounts.length > 0 && (
         <div className="space-y-2">
-          <Label className="text-xs text-muted-foreground">Posting to Bluesky as:</Label>
+          <Label className="text-xs text-muted-foreground">{t("bluesky.postingAs", "Posting to Bluesky as:")}</Label>
           <div className="flex flex-wrap gap-2">
             {selectedAccounts.map((account) => {
               const profileUrl = getPlatformProfileUrl("bluesky", account.platform_username);
@@ -224,16 +253,16 @@ export function BlueskySettings({ settings, onChange, hasMedia, selectedAccounts
               <TooltipTrigger asChild>
                 <Label className="text-sm font-medium flex items-center gap-2 cursor-help">
                   <Image className="w-4 h-4" />
-                  Alt text
+                  {t("bluesky.altText", "Alt text")}
                 </Label>
               </TooltipTrigger>
               <TooltipContent>
-                <p>Describe your image for users who can't see it - improves accessibility</p>
+                <p>{t("bluesky.altTextTooltip", "Describe your image for users who can't see it - improves accessibility")}</p>
               </TooltipContent>
             </Tooltip>
           </TooltipProvider>
           <Textarea
-            placeholder="Describe your image for accessibility..."
+            placeholder={t("bluesky.altTextPlaceholder", "Describe your image for accessibility...")}
             value={settings.altText}
             onChange={(e) => onChange({ altText: e.target.value })}
             maxLength={2000}
@@ -252,11 +281,11 @@ export function BlueskySettings({ settings, onChange, hasMedia, selectedAccounts
             <TooltipTrigger asChild>
               <Label className="text-sm font-medium flex items-center gap-1 cursor-help">
                 <Languages className="w-4 h-4" />
-                Post language
+                {t("bluesky.postLanguage", "Post language")}
               </Label>
             </TooltipTrigger>
             <TooltipContent>
-              <p>Helps categorize your post for users browsing by language</p>
+              <p>{t("bluesky.postLanguageTooltip", "Helps categorize your post for users browsing by language")}</p>
             </TooltipContent>
           </Tooltip>
         </TooltipProvider>
@@ -267,7 +296,7 @@ export function BlueskySettings({ settings, onChange, hasMedia, selectedAccounts
         >
           {languageOptions.map((lang) => (
             <option key={lang.code} value={lang.code}>
-              {lang.label}
+              {getLanguageLabel(lang.code)}
             </option>
           ))}
         </select>
@@ -281,11 +310,11 @@ export function BlueskySettings({ settings, onChange, hasMedia, selectedAccounts
               <TooltipTrigger asChild>
                 <Label className="text-sm font-medium flex items-center gap-1 cursor-help">
                   <Link className="w-4 h-4" />
-                  Link embed
+                  {t("bluesky.linkEmbed", "Link embed")}
                 </Label>
               </TooltipTrigger>
               <TooltipContent>
-                <p>Add a link card with title, description, and image</p>
+                <p>{t("bluesky.linkEmbedTooltip", "Add a link card with title, description, and image")}</p>
               </TooltipContent>
             </Tooltip>
           </TooltipProvider>
@@ -314,18 +343,18 @@ export function BlueskySettings({ settings, onChange, hasMedia, selectedAccounts
               <TooltipTrigger asChild>
                 <Label className="text-sm font-medium flex items-center gap-1 cursor-help">
                   <AlertTriangle className="w-4 h-4" />
-                  Content warning
+                  {t("bluesky.contentWarning", "Content warning")}
                 </Label>
               </TooltipTrigger>
               <TooltipContent>
-                <p>Add a content warning label to your post</p>
+                <p>{t("bluesky.contentWarningTooltip", "Add a content warning label to your post")}</p>
               </TooltipContent>
             </Tooltip>
           </TooltipProvider>
         </div>
         
         <Input
-          placeholder="Optional content warning (e.g., 'spoilers', 'sensitive')"
+          placeholder={t("bluesky.contentWarningPlaceholder", "Optional content warning (e.g., 'spoilers', 'sensitive')")}
           value={settings.contentWarning || ""}
           onChange={(e) => onChange({ contentWarning: e.target.value })}
           maxLength={64}
@@ -333,7 +362,7 @@ export function BlueskySettings({ settings, onChange, hasMedia, selectedAccounts
 
         <div className="flex items-center justify-between">
           <Label className="text-sm flex items-center gap-2">
-            <span>Adult content</span>
+            <span>{t("bluesky.adultContent", "Adult content")}</span>
             {settings.adultContent && (
               <Badge variant="outline" className="text-xs text-amber-600 border-amber-500/50">
                 18+
@@ -351,11 +380,11 @@ export function BlueskySettings({ settings, onChange, hasMedia, selectedAccounts
       <div className="space-y-4 border-t pt-4">
         <Label className="text-sm font-medium flex items-center gap-1">
           <MessageSquare className="w-4 h-4" />
-          Post interaction settings
+          {t("bluesky.interactionSettings", "Post interaction settings")}
         </Label>
         
         <div className="space-y-3">
-          <p className="text-sm text-muted-foreground">Who can reply</p>
+          <p className="text-sm text-muted-foreground">{t("bluesky.whoCanReply", "Who can reply")}</p>
           
           {/* Radio-style options */}
           <div className="space-y-2">
@@ -381,7 +410,7 @@ export function BlueskySettings({ settings, onChange, hasMedia, selectedAccounts
                 )}
               </div>
               <Users className="w-4 h-4" />
-              Anyone
+              {t("bluesky.replyAnyone", "Anyone")}
             </button>
 
             {/* Nobody */}
@@ -406,7 +435,7 @@ export function BlueskySettings({ settings, onChange, hasMedia, selectedAccounts
                 )}
               </div>
               <Lock className="w-4 h-4" />
-              Nobody
+              {t("bluesky.replyNobody", "Nobody")}
             </button>
 
             {/* People you follow */}
@@ -431,7 +460,7 @@ export function BlueskySettings({ settings, onChange, hasMedia, selectedAccounts
                 )}
               </div>
               <Users className="w-4 h-4" />
-              People you follow
+              {t("bluesky.replyFollowing", "People you follow")}
             </button>
 
             {/* People you mention */}
@@ -456,7 +485,7 @@ export function BlueskySettings({ settings, onChange, hasMedia, selectedAccounts
                 )}
               </div>
               <MessageSquare className="w-4 h-4" />
-              People you mention
+              {t("bluesky.replyMentioned", "People you mention")}
             </button>
 
             {/* Select from your lists */}
@@ -482,7 +511,7 @@ export function BlueskySettings({ settings, onChange, hasMedia, selectedAccounts
                   )}
                 </div>
                 <List className="w-4 h-4" />
-                Select from your lists
+                {t("bluesky.replyLists", "Select from your lists")}
                 {replySettings.selectedOption === "list" && (
                   <Button
                     type="button"
@@ -506,7 +535,7 @@ export function BlueskySettings({ settings, onChange, hasMedia, selectedAccounts
                   {loadingLists ? (
                     <div className="flex items-center gap-2 text-sm text-muted-foreground py-2">
                       <Loader2 className="w-4 h-4 animate-spin" />
-                      <span>Loading your lists...</span>
+                      <span>{t("bluesky.loadingLists", "Loading your lists...")}</span>
                     </div>
                   ) : listsError ? (
                     <div className="flex items-center gap-2 text-sm text-destructive py-2">
@@ -519,12 +548,12 @@ export function BlueskySettings({ settings, onChange, hasMedia, selectedAccounts
                         onClick={fetchBlueskyLists}
                         className="h-6 px-2 text-xs"
                       >
-                        Retry
+                        {t("bluesky.retry", "Retry")}
                       </Button>
                     </div>
                   ) : lists.length === 0 ? (
                     <p className="text-sm text-muted-foreground py-2">
-                      No lists found. Create lists on Bluesky first.
+                      {t("bluesky.noListsFound", "No lists found. Create lists on Bluesky first.")}
                     </p>
                   ) : (
                     <div className="space-y-1 max-h-48 overflow-y-auto border rounded-lg p-2 bg-background">
@@ -563,7 +592,7 @@ export function BlueskySettings({ settings, onChange, hasMedia, selectedAccounts
                             <div className="flex-1 min-w-0">
                               <p className="text-sm font-medium truncate">{list.name}</p>
                               <p className="text-xs text-muted-foreground">
-                                {list.listItemCount || 0} members • {list.purpose === "app.bsky.graph.defs#modlist" ? "Moderation" : "Curate"}
+                                {t("bluesky.membersCount", "{{count}} members", { count: list.listItemCount || 0 })} • {list.purpose === "app.bsky.graph.defs#modlist" ? t("bluesky.purposeModeration", "Moderation") : t("bluesky.purposeCurate", "Curate")}
                               </p>
                             </div>
                           </div>
@@ -574,7 +603,7 @@ export function BlueskySettings({ settings, onChange, hasMedia, selectedAccounts
                   
                   {replySettings.selectedListUri && (
                     <p className="text-xs text-muted-foreground">
-                      1 list selected
+                      {t("bluesky.oneListSelected", "1 list selected")}
                     </p>
                   )}
                 </div>
@@ -587,7 +616,7 @@ export function BlueskySettings({ settings, onChange, hasMedia, selectedAccounts
       {/* Platform info */}
       <div className="p-3 bg-muted/30 rounded-lg border-t">
         <p className="text-xs text-muted-foreground">
-          <strong>Note:</strong> Bluesky posts are limited to 300 characters. You can attach up to 4 images or 1 video (max 60s).
+          <strong>{t("bluesky.notePrefix", "Note:")}</strong> {t("bluesky.platformNote", "Bluesky posts are limited to 300 characters. You can attach up to 4 images or 1 video (max 60s).")}
         </p>
       </div>
     </div>

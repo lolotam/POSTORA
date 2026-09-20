@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -73,6 +74,7 @@ export function TwitterSettings({
   caption,
   selectedAccounts = [],
 }: TwitterSettingsProps) {
+  const { t } = useTranslation("postsettings");
   const charCount = caption.length;
   const isOverLimit = charCount > 280 && !settings.threadMode && !settings.postAsLongTweet;
 
@@ -82,7 +84,7 @@ export function TwitterSettings({
       {/* Posting to X as: */}
       {selectedAccounts.length > 0 && (
         <div className="space-y-2">
-          <Label className="text-xs text-muted-foreground">Posting to X as:</Label>
+          <Label className="text-xs text-muted-foreground">{t("twitter.postingAs", "Posting to X as:")}</Label>
           <div className="flex flex-wrap gap-2">
             {selectedAccounts.map((account) => {
               const profileUrl = getPlatformProfileUrl("twitter", account.platform_username);
@@ -129,7 +131,7 @@ export function TwitterSettings({
       {isOverLimit && (
         <div className="flex items-center gap-2 p-3 rounded-lg bg-destructive/10 text-destructive text-sm">
           <AlertCircle className="w-4 h-4 shrink-0" />
-          Tweet exceeds 280 character limit ({charCount}/280). Enable thread mode or long tweet mode.
+          {t("twitter.limitWarning", "Tweet exceeds 280 character limit ({{count}}/280). Enable thread mode or long tweet mode.", { count: charCount })}
         </div>
       )}
 
@@ -138,17 +140,17 @@ export function TwitterSettings({
         <div className="flex items-center justify-between">
           <Label className="text-sm font-medium flex items-center gap-2">
             <Image className="w-4 h-4" />
-            Custom Thumbnail
+            {t("twitter.customThumbnail", "Custom Thumbnail")}
             <Tooltip>
               <TooltipTrigger asChild>
                 <HelpCircle className="w-3.5 h-3.5 text-muted-foreground cursor-help" />
               </TooltipTrigger>
               <TooltipContent>
-                <p>Add a custom thumbnail image for video tweets</p>
+                <p>{t("twitter.customThumbnailTooltip", "Add a custom thumbnail image for video tweets")}</p>
               </TooltipContent>
             </Tooltip>
           </Label>
-          <span className="text-xs text-muted-foreground">Optional</span>
+          <span className="text-xs text-muted-foreground">{t("twitter.optional", "Optional")}</span>
         </div>
         
         <div className="flex items-center gap-2">
@@ -171,19 +173,19 @@ export function TwitterSettings({
             }}
           >
             <Upload className="w-4 h-4" />
-            Choose File
+            {t("twitter.chooseFile", "Choose File")}
           </Button>
           <span className="text-sm text-muted-foreground">
-            {settings.thumbnailFile?.name || "No file chosen"}
+            {settings.thumbnailFile?.name || t("twitter.noFileChosen", "No file chosen")}
           </span>
         </div>
 
         <div className="flex items-center gap-2 text-muted-foreground text-xs">
-          <span>– OR –</span>
+          <span>{t("twitter.orDivider", "– OR –")}</span>
         </div>
 
         <Input
-          placeholder="Thumbnail URL"
+          placeholder={t("twitter.thumbnailUrlPlaceholder", "Thumbnail URL")}
           value={settings.thumbnailUrl}
           onChange={(e) => onChange({ thumbnailUrl: e.target.value, thumbnailFile: null })}
           className="bg-background/50"
@@ -194,11 +196,11 @@ export function TwitterSettings({
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border-b pb-4">
         <div className="space-y-2">
           <div className="flex items-center justify-between">
-            <Label className="text-sm font-medium">X Title (optional)</Label>
-            <span className="text-xs text-muted-foreground">Overrides Title</span>
+            <Label className="text-sm font-medium">{t("twitter.title", "X Title (optional)")}</Label>
+            <span className="text-xs text-muted-foreground">{t("twitter.overridesTitle", "Overrides Title")}</span>
           </div>
           <Textarea
-            placeholder="Custom title for X"
+            placeholder={t("twitter.titlePlaceholder", "Custom title for X")}
             value={settings.customTitle}
             onChange={(e) => onChange({ customTitle: e.target.value })}
             className="min-h-[80px] bg-background/50 resize-y"
@@ -207,13 +209,13 @@ export function TwitterSettings({
 
         <div className="space-y-2">
           <Label className="text-sm font-medium flex items-center gap-2">
-            Reply settings
+            {t("twitter.replySettings", "Reply settings")}
             <Tooltip>
               <TooltipTrigger asChild>
                 <HelpCircle className="w-3.5 h-3.5 text-muted-foreground cursor-help" />
               </TooltipTrigger>
               <TooltipContent>
-                <p>Control who can reply to your tweet</p>
+                <p>{t("twitter.replySettingsTooltip", "Control who can reply to your tweet")}</p>
               </TooltipContent>
             </Tooltip>
           </Label>
@@ -225,11 +227,11 @@ export function TwitterSettings({
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="everyone">All users</SelectItem>
-              <SelectItem value="following">Following</SelectItem>
-              <SelectItem value="mentionedUsers">Mentioned users</SelectItem>
-              <SelectItem value="subscribers">Subscribers</SelectItem>
-              <SelectItem value="verified">Verified</SelectItem>
+              <SelectItem value="everyone">{t("twitter.replyEveryone", "All users")}</SelectItem>
+              <SelectItem value="following">{t("twitter.replyFollowing", "Following")}</SelectItem>
+              <SelectItem value="mentionedUsers">{t("twitter.replyMentioned", "Mentioned users")}</SelectItem>
+              <SelectItem value="subscribers">{t("twitter.replySubscribers", "Subscribers")}</SelectItem>
+              <SelectItem value="verified">{t("twitter.replyVerified", "Verified")}</SelectItem>
             </SelectContent>
           </Select>
         </div>
@@ -241,17 +243,17 @@ export function TwitterSettings({
           <div className="flex items-center justify-between">
             <Label className="text-sm font-medium flex items-center gap-2">
               <AtSign className="w-4 h-4" />
-              Tagged user IDs
+              {t("twitter.taggedUserIds", "Tagged user IDs")}
               <Tooltip>
                 <TooltipTrigger asChild>
                   <HelpCircle className="w-3.5 h-3.5 text-muted-foreground cursor-help" />
                 </TooltipTrigger>
                 <TooltipContent>
-                  <p>Tag users in media by their Twitter user IDs</p>
+                  <p>{t("twitter.taggedUserIdsTooltip", "Tag users in media by their Twitter user IDs")}</p>
                 </TooltipContent>
               </Tooltip>
             </Label>
-            <span className="text-xs text-muted-foreground">Comma-separated</span>
+            <span className="text-xs text-muted-foreground">{t("twitter.commaSeparated", "Comma-separated")}</span>
           </div>
           <Input
             placeholder="123, 456"
@@ -265,17 +267,17 @@ export function TwitterSettings({
           <div className="flex items-center justify-between">
             <Label className="text-sm font-medium flex items-center gap-2">
               <MessageSquare className="w-4 h-4" />
-              Reply to tweet ID
+              {t("twitter.replyToTweetId", "Reply to tweet ID")}
               <Tooltip>
                 <TooltipTrigger asChild>
                   <HelpCircle className="w-3.5 h-3.5 text-muted-foreground cursor-help" />
                 </TooltipTrigger>
                 <TooltipContent>
-                  <p>Makes this tweet a reply to another tweet</p>
+                  <p>{t("twitter.replyToTweetIdTooltip", "Makes this tweet a reply to another tweet")}</p>
                 </TooltipContent>
               </Tooltip>
             </Label>
-            <span className="text-xs text-muted-foreground">Optional - makes this a reply</span>
+            <span className="text-xs text-muted-foreground">{t("twitter.replyToTweetIdHelp", "Optional - makes this a reply")}</span>
           </div>
           <Input
             placeholder="1346889436626259968"
@@ -290,8 +292,8 @@ export function TwitterSettings({
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border-b pb-4">
         <div className="space-y-2">
           <div className="flex items-center justify-between">
-            <Label className="text-sm font-medium">Exclude reply user IDs</Label>
-            <span className="text-xs text-muted-foreground">Comma-separated, requires reply_to_id</span>
+            <Label className="text-sm font-medium">{t("twitter.excludeReplyUserIds", "Exclude reply user IDs")}</Label>
+            <span className="text-xs text-muted-foreground">{t("twitter.excludeReplyUserIdsHelp", "Comma-separated, requires reply_to_id")}</span>
           </div>
           <Input
             placeholder="123, 456"
@@ -305,15 +307,15 @@ export function TwitterSettings({
         <div className="flex items-center justify-between pt-6">
           <div className="flex items-center gap-2">
             <div>
-              <p className="text-sm font-medium">Nullcast (no broadcast)</p>
-              <p className="text-xs text-muted-foreground">Post won't appear in timelines</p>
+              <p className="text-sm font-medium">{t("twitter.nullcast", "Nullcast (no broadcast)")}</p>
+              <p className="text-xs text-muted-foreground">{t("twitter.nullcastSubtitle", "Post won't appear in timelines")}</p>
             </div>
             <Tooltip>
               <TooltipTrigger asChild>
                 <HelpCircle className="w-3.5 h-3.5 text-muted-foreground cursor-help" />
               </TooltipTrigger>
               <TooltipContent>
-                <p>Tweet won't be shown in followers' feeds or search</p>
+                <p>{t("twitter.nullcastTooltip", "Tweet won't be shown in followers' feeds or search")}</p>
               </TooltipContent>
             </Tooltip>
           </div>
@@ -328,18 +330,18 @@ export function TwitterSettings({
       <div className="space-y-2 border-b pb-4">
         <Label className="text-sm font-medium flex items-center gap-2">
           <MapPin className="w-4 h-4" />
-          Place ID
+          {t("twitter.placeId", "Place ID")}
           <Tooltip>
             <TooltipTrigger asChild>
               <HelpCircle className="w-3.5 h-3.5 text-muted-foreground cursor-help" />
             </TooltipTrigger>
             <TooltipContent>
-              <p>Add a location tag to your tweet using Twitter Place ID</p>
+              <p>{t("twitter.placeIdTooltip", "Add a location tag to your tweet using Twitter Place ID")}</p>
             </TooltipContent>
           </Tooltip>
         </Label>
         <Input
-          placeholder="Place ID"
+          placeholder={t("twitter.placeIdPlaceholder", "Place ID")}
           value={settings.placeId}
           onChange={(e) => onChange({ placeId: e.target.value })}
           className="bg-background/50"
@@ -351,18 +353,18 @@ export function TwitterSettings({
         <div className="space-y-2">
           <Label className="text-sm font-medium flex items-center gap-2">
             <Users className="w-4 h-4" />
-            Community ID
+            {t("twitter.communityId", "Community ID")}
             <Tooltip>
               <TooltipTrigger asChild>
                 <HelpCircle className="w-3.5 h-3.5 text-muted-foreground cursor-help" />
               </TooltipTrigger>
               <TooltipContent>
-                <p>Post to a specific Twitter Community</p>
+                <p>{t("twitter.communityIdTooltip", "Post to a specific Twitter Community")}</p>
               </TooltipContent>
             </Tooltip>
           </Label>
           <Input
-            placeholder="Community ID"
+            placeholder={t("twitter.communityIdPlaceholder", "Community ID")}
             value={settings.communityId}
             onChange={(e) => onChange({ communityId: e.target.value })}
             className="bg-background/50"
@@ -372,18 +374,18 @@ export function TwitterSettings({
         <div className="space-y-2">
           <Label className="text-sm font-medium flex items-center gap-2">
             <Link className="w-4 h-4" />
-            Direct Message Deep Link
+            {t("twitter.dmDeepLink", "Direct Message Deep Link")}
             <Tooltip>
               <TooltipTrigger asChild>
                 <HelpCircle className="w-3.5 h-3.5 text-muted-foreground cursor-help" />
               </TooltipTrigger>
               <TooltipContent>
-                <p>Add a DM link for users to message you directly</p>
+                <p>{t("twitter.dmDeepLinkTooltip", "Add a DM link for users to message you directly")}</p>
               </TooltipContent>
             </Tooltip>
           </Label>
           <Input
-            placeholder="DM deep link URL"
+            placeholder={t("twitter.dmDeepLinkPlaceholder", "DM deep link URL")}
             value={settings.dmDeepLink}
             onChange={(e) => onChange({ dmDeepLink: e.target.value })}
             className="bg-background/50"
@@ -396,15 +398,15 @@ export function TwitterSettings({
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <div>
-              <p className="text-sm font-medium">For Super Followers Only</p>
-              <p className="text-xs text-muted-foreground">Exclusive to super followers</p>
+              <p className="text-sm font-medium">{t("twitter.superFollowersOnly", "For Super Followers Only")}</p>
+              <p className="text-xs text-muted-foreground">{t("twitter.superFollowersOnlySubtitle", "Exclusive to super followers")}</p>
             </div>
             <Tooltip>
               <TooltipTrigger asChild>
                 <HelpCircle className="w-3.5 h-3.5 text-muted-foreground cursor-help" />
               </TooltipTrigger>
               <TooltipContent>
-                <p>Only your Super Followers will see this tweet</p>
+                <p>{t("twitter.superFollowersOnlyTooltip", "Only your Super Followers will see this tweet")}</p>
               </TooltipContent>
             </Tooltip>
           </div>
@@ -416,8 +418,8 @@ export function TwitterSettings({
 
         <div className="flex items-center justify-between">
           <div>
-            <p className="text-sm font-medium">Share with Followers</p>
-            <p className="text-xs text-muted-foreground">Share to your followers</p>
+            <p className="text-sm font-medium">{t("twitter.shareWithFollowers", "Share with Followers")}</p>
+            <p className="text-xs text-muted-foreground">{t("twitter.shareWithFollowersSubtitle", "Share to your followers")}</p>
           </div>
           <Switch 
             checked={settings.shareWithFollowers} 
@@ -431,15 +433,15 @@ export function TwitterSettings({
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <div>
-              <p className="text-sm font-medium">Post as a single long tweet</p>
-              <p className="text-xs text-muted-foreground">If disabled, long content will be posted as a threaded series.</p>
+              <p className="text-sm font-medium">{t("twitter.postAsLongTweet", "Post as a single long tweet")}</p>
+              <p className="text-xs text-muted-foreground">{t("twitter.postAsLongTweetSubtitle", "If disabled, long content will be posted as a threaded series.")}</p>
             </div>
             <Tooltip>
               <TooltipTrigger asChild>
                 <HelpCircle className="w-3.5 h-3.5 text-muted-foreground cursor-help" />
               </TooltipTrigger>
               <TooltipContent>
-                <p>Uses X Premium's long-form tweet feature (requires X Premium)</p>
+                <p>{t("twitter.postAsLongTweetTooltip", "Uses X Premium's long-form tweet feature (requires X Premium)")}</p>
               </TooltipContent>
             </Tooltip>
           </div>
@@ -455,15 +457,15 @@ export function TwitterSettings({
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <div>
-              <p className="text-sm font-medium">Thread mode</p>
-              <p className="text-xs text-muted-foreground">Split long posts into multiple tweets</p>
+              <p className="text-sm font-medium">{t("twitter.threadMode", "Thread mode")}</p>
+              <p className="text-xs text-muted-foreground">{t("twitter.threadModeSubtitle", "Split long posts into multiple tweets")}</p>
             </div>
             <Tooltip>
               <TooltipTrigger asChild>
                 <HelpCircle className="w-3.5 h-3.5 text-muted-foreground cursor-help" />
               </TooltipTrigger>
               <TooltipContent>
-                <p>Automatically splits content into a connected thread of tweets</p>
+                <p>{t("twitter.threadModeTooltip", "Automatically splits content into a connected thread of tweets")}</p>
               </TooltipContent>
             </Tooltip>
           </div>
@@ -485,14 +487,14 @@ export function TwitterSettings({
 
       {/* Quote Tweet */}
       <div className="space-y-2 border-b pb-4">
-        <Label className="text-sm font-medium">Quote Tweet URL (optional)</Label>
+        <Label className="text-sm font-medium">{t("twitter.quoteTweetUrl", "Quote Tweet URL (optional)")}</Label>
         <Input
-          placeholder="Paste tweet URL to quote..."
+          placeholder={t("twitter.quoteTweetPlaceholder", "Paste tweet URL to quote...")}
           value={settings.quoteTweetUrl}
           onChange={(e) => onChange({ quoteTweetUrl: e.target.value })}
           className="bg-background/50"
         />
-        <p className="text-xs text-muted-foreground">Quote another tweet in your post</p>
+        <p className="text-xs text-muted-foreground">{t("twitter.quoteTweetHelp", "Quote another tweet in your post")}</p>
       </div>
 
       {/* Poll */}
@@ -500,15 +502,15 @@ export function TwitterSettings({
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <div>
-              <p className="text-sm font-medium">Add Poll</p>
-              <p className="text-xs text-muted-foreground">Create a poll for your followers</p>
+              <p className="text-sm font-medium">{t("twitter.addPoll", "Add Poll")}</p>
+              <p className="text-xs text-muted-foreground">{t("twitter.addPollSubtitle", "Create a poll for your followers")}</p>
             </div>
             <Tooltip>
               <TooltipTrigger asChild>
                 <HelpCircle className="w-3.5 h-3.5 text-muted-foreground cursor-help" />
               </TooltipTrigger>
               <TooltipContent>
-                <p>Add an interactive poll with 2-4 options</p>
+                <p>{t("twitter.addPollTooltip", "Add an interactive poll with 2-4 options")}</p>
               </TooltipContent>
             </Tooltip>
           </div>
@@ -523,7 +525,7 @@ export function TwitterSettings({
             {settings.pollOptions.map((option, idx) => (
               <div key={idx} className="flex items-center gap-2">
                 <Input
-                  placeholder={`Option ${idx + 1}`}
+                  placeholder={t("twitter.pollOptionPlaceholder", "Option {{num}}", { num: idx + 1 })}
                   value={option}
                   onChange={(e) => {
                     const newOptions = [...settings.pollOptions];
@@ -555,25 +557,25 @@ export function TwitterSettings({
                 onClick={() => onChange({ pollOptions: [...settings.pollOptions, ""] })}
               >
                 <Plus className="w-4 h-4 mr-2" />
-                Add option
+                {t("twitter.addOption", "Add option")}
               </Button>
             )}
 
             <div className="space-y-2">
-              <Label className="text-xs text-muted-foreground">Poll duration</Label>
+              <Label className="text-xs text-muted-foreground">{t("twitter.pollDuration", "Poll duration")}</Label>
               <Select value={settings.pollDuration} onValueChange={(v) => onChange({ pollDuration: v })}>
                 <SelectTrigger className="w-full max-w-xs bg-background/50">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="5">5 minutes</SelectItem>
-                  <SelectItem value="30">30 minutes</SelectItem>
-                  <SelectItem value="60">1 hour</SelectItem>
-                  <SelectItem value="360">6 hours</SelectItem>
-                  <SelectItem value="720">12 hours</SelectItem>
-                  <SelectItem value="1440">1 day</SelectItem>
-                  <SelectItem value="4320">3 days</SelectItem>
-                  <SelectItem value="10080">7 days</SelectItem>
+                  <SelectItem value="5">{t("twitter.duration5m", "5 minutes")}</SelectItem>
+                  <SelectItem value="30">{t("twitter.duration30m", "30 minutes")}</SelectItem>
+                  <SelectItem value="60">{t("twitter.duration1h", "1 hour")}</SelectItem>
+                  <SelectItem value="360">{t("twitter.duration6h", "6 hours")}</SelectItem>
+                  <SelectItem value="720">{t("twitter.duration12h", "12 hours")}</SelectItem>
+                  <SelectItem value="1440">{t("twitter.duration1d", "1 day")}</SelectItem>
+                  <SelectItem value="4320">{t("twitter.duration3d", "3 days")}</SelectItem>
+                  <SelectItem value="10080">{t("twitter.duration7d", "7 days")}</SelectItem>
                 </SelectContent>
               </Select>
             </div>

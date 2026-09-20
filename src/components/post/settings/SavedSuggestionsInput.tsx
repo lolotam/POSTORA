@@ -1,4 +1,5 @@
 import { useState, useRef } from "react";
+import { useTranslation } from "react-i18next";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { X, History } from "lucide-react";
@@ -30,6 +31,7 @@ export function SavedSuggestionsInput({
   maxLength,
   rows,
 }: SavedSuggestionsInputProps) {
+  const { t } = useTranslation("postsettings");
   const [showSuggestions, setShowSuggestions] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const { suggestions, deleteSuggestion } = useSavedFieldSuggestions(fieldType, platform);
@@ -81,7 +83,9 @@ export function SavedSuggestionsInput({
         <div className="absolute z-50 w-full mt-1 p-2 rounded-lg border bg-popover shadow-md max-h-40 overflow-y-auto animate-fade-in">
           <div className="flex items-center gap-1.5 mb-1.5 px-1">
             <History className="w-3 h-3 text-muted-foreground" />
-            <span className="text-xs text-muted-foreground font-medium">Previously used</span>
+            <span className="text-xs text-muted-foreground font-medium">
+              {t("savedSuggestions.previouslyUsed", "Previously used")}
+            </span>
           </div>
           <div className="flex flex-wrap gap-1.5">
             {suggestions.map((s) => (

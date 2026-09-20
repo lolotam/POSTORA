@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { useTranslation } from "react-i18next";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -66,8 +67,9 @@ export function LinkedInSettings({
   availablePages = [],
   selectedAccounts = [],
 }: LinkedInSettingsProps) {
+  const { t } = useTranslation("postsettings");
   const personalAccount = selectedAccounts[0];
-  const personalName = personalAccount?.platform_username || "Personal Profile";
+  const personalName = personalAccount?.platform_username || t("linkedin.personalProfile", "Personal Profile");
 
   const allDestinationIds = useMemo(
     () => [PERSONAL_ID, ...availablePages.map((p) => p.id)],
@@ -93,19 +95,21 @@ export function LinkedInSettings({
 
   const triggerLabel = (() => {
     const count = selectedDestinationIds.length;
-    if (count === 0) return "Select destinations";
+    if (count === 0) return t("linkedin.selectDestinations", "Select destinations");
     if (count === 1) {
       const only = selectedDestinationIds[0];
-      if (only === PERSONAL_ID) return "Personal Profile";
+      if (only === PERSONAL_ID) return t("linkedin.personalProfile", "Personal Profile");
       const page = availablePages.find((p) => p.id === only);
-      return page?.name || "1 destination";
+      return page?.name || t("linkedin.oneDestination", "1 destination");
     }
     const hasPersonal = selectedDestinationIds.includes(PERSONAL_ID);
     const pageCount = count - (hasPersonal ? 1 : 0);
     if (hasPersonal && pageCount > 0) {
-      return `Personal Profile + ${pageCount} Page${pageCount > 1 ? "s" : ""}`;
+      return pageCount === 1
+        ? t("linkedin.personalPlusPage", "Personal Profile + 1 Page")
+        : t("linkedin.personalPlusPages", "Personal Profile + {{count}} Pages", { count: pageCount });
     }
-    return `${count} destinations`;
+    return t("linkedin.countDestinations", "{{count}} destinations", { count });
   })();
 
   return (
@@ -113,7 +117,7 @@ export function LinkedInSettings({
       {/* Posting to LinkedIn as: */}
       {selectedAccounts.length > 0 && (
         <div className="space-y-2">
-          <Label className="text-xs text-muted-foreground">Posting to LinkedIn as:</Label>
+          <Label className="text-xs text-muted-foreground">{t("linkedin.postingAs", "Posting to LinkedIn as:")}</Label>
           <div className="flex flex-wrap gap-2">
             {selectedAccounts.map((account) => {
               const profileUrl = getPlatformProfileUrl(
@@ -173,11 +177,11 @@ export function LinkedInSettings({
             <TooltipTrigger asChild>
               <Label className="text-sm font-medium flex items-center gap-2 cursor-help">
                 <Building2 className="w-4 h-4" />
-                Post Destinations
+                {t("linkedin.destinations", "Post Destinations")}
               </Label>
             </TooltipTrigger>
             <TooltipContent>
-              <p>Choose any combination of your personal profile and the company pages you manage.</p>
+              <p>{t("linkedin.destinationsTooltip", "Choose any combination of your personal profile and the company pages you manage.")}</p>
             </TooltipContent>
           </Tooltip>
         </TooltipProvider>
@@ -196,7 +200,7 @@ export function LinkedInSettings({
           <PopoverContent align="start" className="w-[--radix-popover-trigger-width] p-0">
             <div className="flex items-center justify-between px-3 py-2 border-b text-xs">
               <span className="text-muted-foreground">
-                {selectedDestinationIds.length} selected
+                {t("linkedin.selectedCount", "{{count}} selected", { count: selectedDestinationIds.length })}
               </span>
               <div className="flex gap-2">
                 <button
@@ -204,7 +208,7 @@ export function LinkedInSettings({
                   className="text-primary hover:underline"
                   onClick={selectAll}
                 >
-                  Select all
+                  {t("linkedin.selectAll", "Select all")}
                 </button>
                 <span className="text-muted-foreground">·</span>
                 <button
@@ -212,7 +216,7 @@ export function LinkedInSettings({
                   className="text-primary hover:underline"
                   onClick={clearToPersonal}
                 >
-                  Reset
+                  {t("linkedin.reset", "Reset")}
                 </button>
               </div>
             </div>
@@ -220,7 +224,7 @@ export function LinkedInSettings({
             <div className="max-h-64 overflow-y-auto py-1">
               {/* Personal accounts group */}
               <div className="px-3 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                Personal account
+                {t("linkedin.personalAccountGroup", "Personal account")}
               </div>
               <label className="flex items-center gap-3 px-3 py-2 hover:bg-accent cursor-pointer">
                 <Checkbox
@@ -236,7 +240,7 @@ export function LinkedInSettings({
                   </AvatarFallback>
                 </Avatar>
                 <div className="flex flex-col text-left">
-                  <span className="text-sm">Personal Profile</span>
+                  <span className="text-sm">{t("linkedin.personalProfile", "Personal Profile")}</span>
                   <span className="text-xs text-muted-foreground truncate max-w-[200px]">
                     {personalName}
                   </span>
@@ -248,19 +252,19 @@ export function LinkedInSettings({
                 <>
                   <div className="my-1 border-t border-border/60" />
                   <div className="px-3 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                    Commercial pages
+                    {t("linkedin.commercialPagesGroup", "Commercial pages")}
                   </div>
                   <div className="px-3 py-3 text-xs text-muted-foreground">
-                    No LinkedIn Pages found on this account. Reconnect with the
+                    {t("linkedin.noPagesPrefix", "No LinkedIn Pages found on this account. Reconnect with the")}
                     <code className="mx-1 px-1 rounded bg-muted">w_organization_social</code>
-                    scope to manage Pages.
+                    {t("linkedin.noPagesSuffix", "scope to manage Pages.")}
                   </div>
                 </>
               ) : (
                 <>
                   <div className="my-1 border-t border-border/60" />
                   <div className="px-3 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-                    Commercial pages
+                    {t("linkedin.commercialPagesGroup", "Commercial pages")}
                   </div>
                   {availablePages.map((page) => (
                     <label
@@ -294,7 +298,7 @@ export function LinkedInSettings({
         </Popover>
 
         <p className="text-xs text-muted-foreground">
-          The same post will be published once per selected destination.
+          {t("linkedin.destinationsHelp", "The same post will be published once per selected destination.")}
         </p>
       </div>
 
@@ -306,11 +310,11 @@ export function LinkedInSettings({
               <TooltipTrigger asChild>
                 <Label className="text-sm font-medium flex items-center gap-2 cursor-help">
                   <Eye className="w-4 h-4" />
-                  Visibility
+                  {t("linkedin.visibility", "Visibility")}
                 </Label>
               </TooltipTrigger>
               <TooltipContent>
-                <p>Control who can see your post on LinkedIn. Organization Pages always post as PUBLIC.</p>
+                <p>{t("linkedin.visibilityTooltip", "Control who can see your post on LinkedIn. Organization Pages always post as PUBLIC.")}</p>
               </TooltipContent>
             </Tooltip>
           </TooltipProvider>
@@ -319,10 +323,10 @@ export function LinkedInSettings({
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="PUBLIC">PUBLIC</SelectItem>
-              <SelectItem value="CONNECTIONS">CONNECTIONS</SelectItem>
-              <SelectItem value="LOGGED_IN">LOGGED_IN</SelectItem>
-              <SelectItem value="CONTAINER">CONTAINER</SelectItem>
+              <SelectItem value="PUBLIC">{t("linkedin.visibilityPublic", "PUBLIC")}</SelectItem>
+              <SelectItem value="CONNECTIONS">{t("linkedin.visibilityConnections", "CONNECTIONS")}</SelectItem>
+              <SelectItem value="LOGGED_IN">{t("linkedin.visibilityLoggedIn", "LOGGED_IN")}</SelectItem>
+              <SelectItem value="CONTAINER">{t("linkedin.visibilityContainer", "CONTAINER")}</SelectItem>
             </SelectContent>
           </Select>
         </div>
@@ -333,16 +337,16 @@ export function LinkedInSettings({
               <TooltipTrigger asChild>
                 <Label className="text-sm font-medium flex items-center gap-2 cursor-help">
                   <Type className="w-4 h-4" />
-                  LinkedIn Title (optional)
+                  {t("linkedin.title", "LinkedIn Title (optional)")}
                 </Label>
               </TooltipTrigger>
               <TooltipContent>
-                <p>Add a custom title that appears above your post content</p>
+                <p>{t("linkedin.titleTooltip", "Add a custom title that appears above your post content")}</p>
               </TooltipContent>
             </Tooltip>
           </TooltipProvider>
           <Textarea
-            placeholder="Custom title for LinkedIn"
+            placeholder={t("linkedin.titlePlaceholder", "Custom title for LinkedIn")}
             className="min-h-[40px] resize-y"
             value={linkedInTitle}
             onChange={(e) => setLinkedInTitle(e.target.value)}
@@ -356,16 +360,16 @@ export function LinkedInSettings({
             <TooltipTrigger asChild>
               <Label className="text-sm font-medium flex items-center gap-2 cursor-help">
                 <FileText className="w-4 h-4" />
-                LinkedIn Description (optional)
+                {t("linkedin.description", "LinkedIn Description (optional)")}
               </Label>
             </TooltipTrigger>
             <TooltipContent>
-              <p>Add additional context or details specific to your LinkedIn audience</p>
+              <p>{t("linkedin.descriptionTooltip", "Add additional context or details specific to your LinkedIn audience")}</p>
             </TooltipContent>
           </Tooltip>
         </TooltipProvider>
         <Textarea
-          placeholder="LinkedIn description"
+          placeholder={t("linkedin.descriptionPlaceholder", "LinkedIn description")}
           className="min-h-[80px] resize-y"
           value={linkedInDescription}
           onChange={(e) => setLinkedInDescription(e.target.value)}

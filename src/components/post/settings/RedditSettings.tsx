@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
@@ -55,12 +56,34 @@ export function RedditSettings({
   onSearchSubreddits,
   selectedAccounts = [],
 }: RedditSettingsProps) {
+  const { t } = useTranslation("postsettings");
+
+  const getPostTypeLabel = (value: RedditSettingsState["postType"]) => {
+    switch (value) {
+      case "self":
+        return {
+          label: t("reddit.postTypeText", "Text Post"),
+          description: t("reddit.postTypeTextDesc", "Post with text body"),
+        };
+      case "link":
+        return {
+          label: t("reddit.postTypeLink", "Link Post"),
+          description: t("reddit.postTypeLinkDesc", "Share a URL"),
+        };
+      case "image":
+        return {
+          label: t("reddit.postTypeMedia", "Image/Video"),
+          description: t("reddit.postTypeMediaDesc", "Upload media"),
+        };
+    }
+  };
+
   return (
     <div className="space-y-5">
       {/* Posting to Reddit as: */}
       {selectedAccounts.length > 0 && (
         <div className="space-y-2">
-          <Label className="text-xs text-muted-foreground">Posting to Reddit as:</Label>
+          <Label className="text-xs text-muted-foreground">{t("reddit.postingAs", "Posting to Reddit as:")}</Label>
           <div className="flex flex-wrap gap-2">
             {selectedAccounts.map((account) => {
               const profileUrl = getPlatformProfileUrl("reddit", account.platform_username);
@@ -110,11 +133,11 @@ export function RedditSettings({
             <TooltipTrigger asChild>
               <Label className="text-sm font-medium flex items-center gap-2 cursor-help">
                 <Hash className="w-4 h-4" />
-                Subreddit <span className="text-destructive">*</span>
+                {t("reddit.subreddit", "Subreddit")} <span className="text-destructive">*</span>
               </Label>
             </TooltipTrigger>
             <TooltipContent>
-              <p>The subreddit community where your post will appear</p>
+              <p>{t("reddit.subredditTooltip", "The subreddit community where your post will appear")}</p>
             </TooltipContent>
           </Tooltip>
         </TooltipProvider>
@@ -134,7 +157,7 @@ export function RedditSettings({
         {loadingSuggestions && (
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
             <Loader2 className="w-3 h-3 animate-spin" />
-            Searching subreddits...
+            {t("reddit.searchingSubreddits", "Searching subreddits...")}
           </div>
         )}
         {subredditSuggestions.length > 0 && (
@@ -155,7 +178,7 @@ export function RedditSettings({
         {!settings.subreddit && (
           <p className="text-xs text-destructive flex items-center gap-1">
             <AlertCircle className="w-3 h-3" />
-            Subreddit is required
+            {t("reddit.subredditRequired", "Subreddit is required")}
           </p>
         )}
       </div>
@@ -167,29 +190,29 @@ export function RedditSettings({
             <TooltipTrigger asChild>
               <Label className="text-sm font-medium flex items-center gap-2 cursor-help">
                 <Type className="w-4 h-4" />
-                Title <span className="text-destructive">*</span>
+                {t("reddit.title", "Title")} <span className="text-destructive">*</span>
               </Label>
             </TooltipTrigger>
             <TooltipContent>
-              <p>A compelling title is essential for Reddit - it determines if users click</p>
+              <p>{t("reddit.titleTooltip", "A compelling title is essential for Reddit - it determines if users click")}</p>
             </TooltipContent>
           </Tooltip>
         </TooltipProvider>
         <Input
-          placeholder="An interesting title"
+          placeholder={t("reddit.titlePlaceholder", "An interesting title")}
           value={settings.title}
           onChange={(e) => onChange({ title: e.target.value })}
           maxLength={300}
         />
         <div className="flex justify-between text-xs text-muted-foreground">
-          <span>Required for all Reddit posts</span>
+          <span>{t("reddit.requiredForAll", "Required for all Reddit posts")}</span>
           <span>{settings.title.length}/300</span>
         </div>
       </div>
 
       {/* Post Type */}
       <div className="space-y-2">
-        <Label className="text-sm font-medium">Post type</Label>
+        <Label className="text-sm font-medium">{t("reddit.postType", "Post type")}</Label>
         <RadioGroup
           value={settings.postType}
           onValueChange={(v) => onChange({ postType: v as RedditSettingsState["postType"] })}
@@ -198,6 +221,7 @@ export function RedditSettings({
           {postTypeOptions.map((option) => {
             const IconComponent = option.icon;
             const isDisabled = option.value === "image" && !hasMedia;
+            const opt = getPostTypeLabel(option.value as RedditSettingsState["postType"]);
             
             return (
               <label
@@ -213,8 +237,8 @@ export function RedditSettings({
                 <RadioGroupItem value={option.value} disabled={isDisabled} />
                 <IconComponent className="w-4 h-4 text-muted-foreground" />
                 <div>
-                  <span className="text-sm font-medium">{option.label}</span>
-                  <p className="text-xs text-muted-foreground">{option.description}</p>
+                  <span className="text-sm font-medium">{opt.label}</span>
+                  <p className="text-xs text-muted-foreground">{opt.description}</p>
                 </div>
               </label>
             );
@@ -226,7 +250,7 @@ export function RedditSettings({
       {settings.postType === "link" && (
         <div className="space-y-2">
           <Label className="text-sm font-medium">
-            Link URL <span className="text-destructive">*</span>
+            {t("reddit.linkUrl", "Link URL")} <span className="text-destructive">*</span>
           </Label>
           <Input
             placeholder="https://example.com"
@@ -243,16 +267,16 @@ export function RedditSettings({
             <TooltipTrigger asChild>
               <Label className="text-sm font-medium flex items-center gap-2 cursor-help">
                 <Tag className="w-4 h-4" />
-                Flair
+                {t("reddit.flair", "Flair")}
               </Label>
             </TooltipTrigger>
             <TooltipContent>
-              <p>Some subreddits require a flair - check the community rules</p>
+              <p>{t("reddit.flairTooltip", "Some subreddits require a flair - check the community rules")}</p>
             </TooltipContent>
           </Tooltip>
         </TooltipProvider>
         <Input
-          placeholder="Optional flair text"
+          placeholder={t("reddit.flairPlaceholder", "Optional flair text")}
           value={settings.flair}
           onChange={(e) => onChange({ flair: e.target.value })}
         />
@@ -264,8 +288,8 @@ export function RedditSettings({
           <div className="flex items-start gap-2">
             <EyeOff className="w-4 h-4 mt-0.5 text-muted-foreground" />
             <div>
-              <Label className="text-sm font-medium">Mark as Spoiler</Label>
-              <p className="text-xs text-muted-foreground">Blur content until clicked</p>
+              <Label className="text-sm font-medium">{t("reddit.markSpoiler", "Mark as Spoiler")}</Label>
+              <p className="text-xs text-muted-foreground">{t("reddit.markSpoilerSubtitle", "Blur content until clicked")}</p>
             </div>
           </div>
           <Switch
@@ -278,8 +302,8 @@ export function RedditSettings({
           <div className="flex items-start gap-2">
             <AlertTriangle className="w-4 h-4 mt-0.5 text-muted-foreground" />
             <div>
-              <Label className="text-sm font-medium">Mark as NSFW</Label>
-              <p className="text-xs text-muted-foreground">Not Safe For Work content</p>
+              <Label className="text-sm font-medium">{t("reddit.markNsfw", "Mark as NSFW")}</Label>
+              <p className="text-xs text-muted-foreground">{t("reddit.markNsfwSubtitle", "Not Safe For Work content")}</p>
             </div>
           </div>
           <Switch
@@ -292,8 +316,8 @@ export function RedditSettings({
           <div className="flex items-start gap-2">
             <Bell className="w-4 h-4 mt-0.5 text-muted-foreground" />
             <div>
-              <Label className="text-sm font-medium">Send reply notifications</Label>
-              <p className="text-xs text-muted-foreground">Get notified when someone replies</p>
+              <Label className="text-sm font-medium">{t("reddit.sendReplies", "Send reply notifications")}</Label>
+              <p className="text-xs text-muted-foreground">{t("reddit.sendRepliesSubtitle", "Get notified when someone replies")}</p>
             </div>
           </div>
           <Switch
@@ -306,7 +330,7 @@ export function RedditSettings({
       {/* Platform info */}
       <div className="p-3 bg-muted/30 rounded-lg border-t">
         <p className="text-xs text-muted-foreground">
-          <strong>Note:</strong> Reddit titles are limited to 300 characters. Self posts can have up to 40,000 characters in the body.
+          <strong>{t("reddit.notePrefix", "Note:")}</strong> {t("reddit.platformNote", "Reddit titles are limited to 300 characters. Self posts can have up to 40,000 characters in the body.")}
         </p>
       </div>
     </div>
