@@ -50,12 +50,19 @@ Same story. `feature_msg_whatsapp` and `feature_wa_evolution_qr_enabled` were bo
 
 ## Ask 3 — inbound media: this one was real, and it is now built
 
-You were right that this was the largest functional gap and right about why: the `media_url` on the webhook is a `graph.facebook.com` lookaside link that expires and needs a bearer token you do not hold. Storing it would persist a dead link.
+You were right that this was the largest functional gap. The reason differs by connection type, and for yours it is not the one usually quoted:
+
+- On a **Cloud API** account, `media_url` is a `graph.facebook.com` lookaside link that expires and needs a bearer token you do not hold.
+- On an **`evolution_qr`** account, which is what yours is, `media_url` is stored as `null` outright. The bytes live on the Evolution instance and are retrieved with its Baileys message id, which is not a wamid.
+
+So for your connection there is no URL to store and no provider id you can reuse. Either way the webhook gives you nothing fetchable, which is what the new endpoint fixes.
 
 Three things shipped:
 
 1. **`message.received` now carries `postora_message_id`**, a stable `msg_`-prefixed id. The existing `id` field is unchanged and is still the provider's wamid.
-2. **`GET /v1/conversations/{id}/messages` now returns a `media` object** on each message, with `type`, `mime_type`, `file_name` and `size_bytes`. It is `null` when the message has no attachment, never absent.
+2. **`GET /v1/conversations/{id}/messages` now returns a `media` object** on each message, with `type`, `mime_type`, `file_name` and `size_bytes`. The field is always present, never absent.
+
+   **`null` does not mean "no attachment".** It describes **inbound** attachments only, so an outbound message carrying media also reports `null`. Do not infer from `null` that a message had no file, or you will silently drop every attachment your own side sent. Outbound media is not currently reachable through the partner surface at all.
 3. **`GET /v1/messages/{id}/media`** returns a signed, Postora-origin URL for the bytes, needing scope `media:read`, which your key already has.
 
 The response states its own expiry, so you do not have to guess:
