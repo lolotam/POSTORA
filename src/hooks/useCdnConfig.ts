@@ -6,9 +6,15 @@ export type CdnStorageConfig = CdnConfig & {
   write_policy: { providers: CdnProvider[]; required: CdnProvider[] };
 };
 
+/**
+ * Used when the `cdn_storage` setting is missing or unreadable. Openinary is the
+ * primary provider, so it is what a failed read falls back to: defaulting to
+ * Cloudinary meant a transient settings error silently reinstated a provider the
+ * admin had turned off, against a cloud account that answers 401.
+ */
 export const DEFAULT_CDN_STORAGE_CONFIG: CdnStorageConfig = {
-  write_policy: { providers: ["cloudinary"], required: ["cloudinary"] },
-  read_preference: "cloudinary",
+  write_policy: { providers: ["openinary"], required: ["openinary"] },
+  read_preference: "openinary",
 };
 
 export function useCdnConfig() {

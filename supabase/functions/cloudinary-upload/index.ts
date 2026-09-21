@@ -41,10 +41,14 @@ async function getCdnPolicy(db: any): Promise<CdnPolicy> {
   const { data } = await db.from("app_settings").select("value").eq("key", "cdn_storage").maybeSingle();
   const value = data?.value || {};
   const policy = value?.write_policy;
+  // Openinary is the primary provider, so an unreadable setting falls back to
+  // it. Defaulting to Cloudinary let a transient read error reinstate a provider
+  // the admin had turned off — and mark it required, which then failed every
+  // upload as partial against a cloud account that answers 401.
   return {
-    providers: Array.isArray(policy?.providers) && policy.providers.length ? policy.providers : ["cloudinary"],
-    required: Array.isArray(policy?.required) && policy.required.length ? policy.required : ["cloudinary"],
-    readPreference: typeof value?.read_preference === "string" ? value.read_preference : "cloudinary",
+    providers: Array.isArray(policy?.providers) && policy.providers.length ? policy.providers : ["openinary"],
+    required: Array.isArray(policy?.required) && policy.required.length ? policy.required : ["openinary"],
+    readPreference: typeof value?.read_preference === "string" ? value.read_preference : "openinary",
     openinaryEnabled: value?.openinary?.enabled === true,
   };
 }
