@@ -84,26 +84,43 @@ The only verification a translation task has that a model cannot fake. It must:
 
 Wired as `npm run check:i18n`, and run at the end of every wave.
 
-## Waves
+## Waves — as executed
 
-Each wave is one Antigravity dispatch, reviewed and committed separately.
+Planned as seven; executed as seventeen. Two things forced the split. Feature
+areas turned out to be far larger than page counts suggested (Create Post alone
+is 27k lines across 89 files), and a delegated run degrades by silently skipping
+files rather than reporting it ran out of room, so each dispatch was held to
+roughly 5-8k lines. Sub-waves were cut along terminology boundaries, never by
+line count: all eleven platform settings panels stayed in one dispatch so they
+could not each invent their own Arabic for "audience" and "visibility".
 
-- **Wave 0 — foundation.** Add `"ar"` to `SUPPORTED_LANGUAGES`; create the locales
-  directory and the empty-declaration wiring for all namespaces above; write
-  `check-i18n-coverage.mjs` and the `check:i18n` script; add a language switcher
-  (header dropdown next to `ThemeToggle`, plus a control in Settings) — without one
-  Arabic is reachable only by `?lang=ar`; migrate `DashboardLayout` to the `nav`
-  namespace as the worked example; extend `src/i18n/__tests__/i18n.test.ts` for `ar`
-  and `dir === "rtl"`.
-- **Wave 1 — core posting.** Dashboard, CreatePost, Calendar, ScheduledPosts, History.
-- **Wave 2 — accounts and assets.** Profiles, Profile, ConnectionHealth, MediaLibrary,
-  Templates, Settings.
-- **Wave 3 — analytics and growth.** Analytics + `analytics/*`, AdManager, AdAnalytics,
-  BrandIntelligence(+Post), LeadsCRM.
-- **Wave 4 — automation.** `automation/*`, HumanAgentMode, `comments/*`.
-- **Wave 5 — messaging.** `messaging/*`, WhatsAppShop and `components/whatsapp/**`.
-- **Wave 6 — the tail.** Credits, UploadLimits, SmartScheduling, WhatsNew,
-  BlogPostDetail, Contact, Payment*, Subscription*.
+| Wave | Namespace | Files | Keys | Implementer |
+|---|---|---|---|---|
+| 0 foundation | `nav` | 5 | 51 | Antigravity |
+| 1a dashboard/calendar/history | `dashboard` `calendar` `history` | 28 | 310 | Antigravity |
+| 1b-i compose | `post` | 18 | 202 | Antigravity |
+| 1b-ii platform settings | `postsettings` | 15 | 527 | Antigravity |
+| 1b-iii media | `postmedia` | 24 | 371 | Antigravity |
+| 1b-iv previews | `postpreview` | 26 | 382 | Antigravity |
+| 2a accounts + settings | `accounts` | 19 | 437 | Cursor Grok |
+| 2b media library + templates | `assets` | 24 | 402 | Cursor Grok |
+| 3 analytics/ads/brand/leads | `analytics` | 38 | 428 | Cursor Grok |
+| 4 automation + comments | `automation` | 20 | 343 | Cursor Grok |
+| 5a WhatsApp tooling | `whatsapp` | 22 | 470 | Cursor Grok |
+| 5b inbox + conversations | `inbox` | 28 | 387 | Cursor Grok |
+| 5c AI agent + knowledge | `agent` | 18 | 336 | Cursor Grok |
+| 5d Threads mentions | `threads` | 22 | 142 | Cursor Grok |
+| 6 billing + content tail | `billing` | 10 | 177 | Cursor Grok |
+| shared | `common` | — | 29 | all waves |
+| pre-existing | `apikeys` | — | 53 | earlier work |
+
+Gemini 3.8 Flash High hit its individual quota (RESOURCE_EXHAUSTED 429) partway
+through Wave 2a; the remaining nine dispatches ran on Cursor Grok 4.6 Fast. The
+briefs are model-agnostic and needed no rewriting, but two harness facts did:
+cursor-agent re-emits `.claude/settings.json` hook commands as PowerShell and
+bash-evals them on Windows, killing every write path until the settings file is
+parked for the run, and its `.cmd` shim truncates arguments past ~8KB, so a
+brief must arrive on stdin.
 
 ## Per-wave gates
 
