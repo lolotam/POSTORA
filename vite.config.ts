@@ -77,6 +77,18 @@ export default defineConfig(({ mode }) => {
       VITE_SUPABASE_URL: "http://127.0.0.1:54321",
       VITE_SUPABASE_PUBLISHABLE_KEY: "test-publishable-key",
     },
+    // Vitest's default is 5s, which the heaviest component tests exceed only
+    // when the whole suite runs at once. DatabaseConnectorsManager,
+    // AiAgentManager and GeneratePartnerKeyDialog drive Radix dialogs through
+    // react-query and userEvent; each file passes in isolation in 1-5s, but
+    // under full-suite CPU contention a different handful times out on every
+    // run — eight files one run, six the next, never the same set. That made
+    // the suite unusable as a gate: a red run said nothing about the diff.
+    //
+    // This buys wall-clock for tests that already pass; it weakens no
+    // assertion. A test that hangs still fails, 20s later.
+    testTimeout: 20_000,
+    hookTimeout: 20_000,
   },
   };
 });
