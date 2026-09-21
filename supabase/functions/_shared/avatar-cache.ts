@@ -167,15 +167,29 @@ export async function fetchTwitterAvatarUrl(accessToken: string): Promise<string
 
 export async function fetchLinkedInAvatarUrl(accessToken: string): Promise<string | null> {
   try {
+    // `/v2/userinfo` needs the OpenID Connect product, which is not enabled on
+    // this app — `linkedin-oauth/index.ts` says so where it reads the same
+    // avatar, and the scopes requested there omit `openid profile`. Use the
+    // endpoint that connection actually uses, or every LinkedIn account reads
+    // back as having no picture.
     const response = await fetch(
-      "https://api.linkedin.com/v2/userinfo",
+      "https://api.linkedin.com/v2/me?projection=(id,profilePicture(displayImage~:playableStreams))",
       {
-        headers: { Authorization: `Bearer ${accessToken}` },
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "X-Restli-Protocol-Version": "2.0.0",
+        },
         signal: AbortSignal.timeout(8_000),
       }
     );
     const data = await response.json();
-    return data.picture || null;
+    if (!response.ok || data.error) {
+      console.error(`[avatar-cache] LinkedIn avatar fetch rejected: ${response.status}`);
+      return null;
+    }
+    // Elements run smallest to largest; the last one is the highest resolution.
+    const elements = data?.profilePicture?.["displayImage~"]?.elements;
+    return elements?.at(-1)?.identifiers?.[0]?.identifier ?? null;
   } catch (error) {
     console.error("[avatar-cache] Error fetching LinkedIn avatar:", error instanceof Error ? error.name : "UnknownError");
     return null;

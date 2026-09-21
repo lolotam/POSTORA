@@ -21,7 +21,6 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.57.4";
 import { verifyCronOrAdmin } from "../_shared/cron-auth.ts";
 import {
   cacheAvatarToCdn,
-  fetchBlueskyAvatarUrl,
   fetchFacebookAvatarUrl,
   fetchInstagramAvatarUrl,
   fetchLinkedInAvatarUrl,
@@ -46,19 +45,20 @@ interface AccountRow {
 
 /**
  * One fetcher per platform. Some read the profile straight off the token and
- * take no id; the rest address a specific page, user or actor. Bluesky's
- * `actor` parameter accepts the DID that `platform_user_id` holds, so the same
- * column serves both shapes.
+ * take no id; the rest address a specific page or user.
  *
- * A platform absent from this map is never scanned: WhatsApp avatars arrive
+ * A platform absent from this map is never scanned. WhatsApp avatars arrive
  * through the messaging webhooks rather than an OAuth profile call, so there is
- * nothing here to re-fetch them from.
+ * nothing here to re-fetch them from. Bluesky is out for a different reason:
+ * its OAuth tokens are DPoP-bound, so a read needs the private key that
+ * `bluesky-oauth` stored plus a freshly signed proof, and the shared helper
+ * sends a plain Bearer token that the server rejects. Listing it here would
+ * report those accounts as having no avatar rather than as unsupported.
  */
 const AVATAR_FETCHERS: Record<string, (account: AccountRow) => Promise<string | null>> = {
   facebook: (a) => fetchFacebookAvatarUrl(a.access_token!, a.platform_user_id),
   instagram: (a) => fetchInstagramAvatarUrl(a.access_token!, a.platform_user_id),
   threads: (a) => fetchThreadsAvatarUrl(a.access_token!, a.platform_user_id),
-  bluesky: (a) => fetchBlueskyAvatarUrl(a.access_token!, a.platform_user_id),
   tiktok: (a) => fetchTikTokAvatarUrl(a.access_token!),
   twitter: (a) => fetchTwitterAvatarUrl(a.access_token!),
   linkedin: (a) => fetchLinkedInAvatarUrl(a.access_token!),
