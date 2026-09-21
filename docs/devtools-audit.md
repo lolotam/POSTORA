@@ -157,9 +157,15 @@ regressions: all four pass in isolation **both** with these changes and with the
 
 ## E. Open items
 
-1. **38 media rows remain damaged** (2 users) from Library opens before this session. `format` could be
-   reconstructed from the file extension; `original_filename` and `duration` are gone. Needs a decision,
-   not an investigation.
+1. **38 media rows remain damaged** (2 users) from Library opens before this session.
+   `supabase/migrations/20260921180000_backfill_clobbered_media_metadata.sql` restores what is
+   recoverable — `format` from `mime_type` (which agrees with the file extension on all 38) and
+   `duration: null`, correct because every affected row is an image. `original_filename` is **not**
+   restored: intact rows pair it with a value that appears nowhere in `file_path`, so any derived value
+   would be a fabrication. Rehearsed against production inside a rolled-back transaction, then
+   **applied on 2026-09-21**: 38 in scope, 38 repaired, both guards passed, and `media_files` now
+   reports 0 rows missing `format`. 59 rows still carry no `original_filename` — the 38 repaired here,
+   whose value is unrecoverable, plus 21 whose upload never wrote one.
 2. **F6 accessibility** — six unlabelled form fields on `/post`.
 3. **F7 media pagination** — server-side filtering first, then `.range()`.
 4. **F8 `useAIRateLimit`** — move to React Query so the two consumers share one fetch and one timer.
