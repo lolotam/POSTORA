@@ -101,11 +101,26 @@ export async function fetchFacebookAvatarUrl(accessToken: string, pageId: string
 
 export async function fetchInstagramAvatarUrl(accessToken: string, igUserId: string): Promise<string | null> {
   try {
-    const response = await fetch(
-      `https://graph.facebook.com/v18.0/${igUserId}?fields=profile_picture_url&access_token=${accessToken}`,
-      { signal: AbortSignal.timeout(8_000) }
-    );
+    // Two connection flavours land in this column. Instagram Login mints `IGA…`
+    // tokens that only graph.instagram.com accepts, and which address their own
+    // owner as `me` rather than by id. Instagram Business via Facebook Login
+    // mints `EAA…` tokens that graph.facebook.com accepts against the IG user
+    // id. Sending either to the other host returns OAuthException 190,
+    // "Cannot parse access token" — which this helper used to swallow as
+    // "account has no avatar", so every Instagram-Login account silently kept
+    // its dead picture.
+    const url = accessToken.startsWith("IGA")
+      ? `https://graph.instagram.com/v21.0/me?fields=profile_picture_url&access_token=${accessToken}`
+      : `https://graph.facebook.com/v18.0/${igUserId}?fields=profile_picture_url&access_token=${accessToken}`;
+
+    const response = await fetch(url, { signal: AbortSignal.timeout(8_000) });
     const data = await response.json();
+    if (data.error) {
+      console.error(
+        `[avatar-cache] Instagram avatar fetch rejected for ${igUserId}: ${data.error.type} ${data.error.code}`
+      );
+      return null;
+    }
     return data.profile_picture_url || null;
   } catch (error) {
     // The token is in the URL and Deno embeds the URL in network errors — name only.
@@ -152,15 +167,29 @@ export async function fetchTwitterAvatarUrl(accessToken: string): Promise<string
 
 export async function fetchLinkedInAvatarUrl(accessToken: string): Promise<string | null> {
   try {
+    // `/v2/userinfo` needs the OpenID Connect product, which is not enabled on
+    // this app — `linkedin-oauth/index.ts` says so where it reads the same
+    // avatar, and the scopes requested there omit `openid profile`. Use the
+    // endpoint that connection actually uses, or every LinkedIn account reads
+    // back as having no picture.
     const response = await fetch(
-      "https://api.linkedin.com/v2/userinfo",
+      "https://api.linkedin.com/v2/me?projection=(id,profilePicture(displayImage~:playableStreams))",
       {
-        headers: { Authorization: `Bearer ${accessToken}` },
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "X-Restli-Protocol-Version": "2.0.0",
+        },
         signal: AbortSignal.timeout(8_000),
       }
     );
     const data = await response.json();
-    return data.picture || null;
+    if (!response.ok || data.error) {
+      console.error(`[avatar-cache] LinkedIn avatar fetch rejected: ${response.status}`);
+      return null;
+    }
+    // Elements run smallest to largest; the last one is the highest resolution.
+    const elements = data?.profilePicture?.["displayImage~"]?.elements;
+    return elements?.at(-1)?.identifiers?.[0]?.identifier ?? null;
   } catch (error) {
     console.error("[avatar-cache] Error fetching LinkedIn avatar:", error instanceof Error ? error.name : "UnknownError");
     return null;

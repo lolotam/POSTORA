@@ -66,9 +66,16 @@ export function CdnStorageSettings() {
   });
   const providers = current?.write_policy.providers ?? ["cloudinary"];
   const openinary = current?.openinary;
+  // The retirement gate below blocks turning Cloudinary off while objects exist
+  // only there. That protects reachable bytes; it cannot protect unreachable
+  // ones, and a dead provider would otherwise stay a write target forever. The
+  // override is per-session and deliberately not persisted.
+  const [gateOverridden, setGateOverridden] = useState(false);
+  const cloudinaryOnlyCount = counts?.cloudinaryOnly ?? 0;
+  const gateBlocks = cloudinaryOnlyCount > 0 && !gateOverridden;
   const update = (next: Partial<CdnStorageConfig>) => setDraft({ ...(current as CdnStorageConfig), ...next });
   const toggleProvider = (provider: "cloudinary" | "openinary", checked: boolean) => {
-    if (!counts || provider === "cloudinary" && !checked && counts.cloudinaryOnly > 0) return;
+    if (!counts || provider === "cloudinary" && !checked && gateBlocks) return;
     const next = checked ? [...new Set([...providers, provider])] : providers.filter((item) => item !== provider);
     const required = (current?.write_policy.required ?? []).filter((item) => next.includes(item));
     update({ write_policy: { providers: next, required } });
@@ -81,14 +88,18 @@ export function CdnStorageSettings() {
     <CardHeader><CardTitle>CDN storage</CardTitle></CardHeader>
     <CardContent className="space-y-6">
       <div><p className="text-sm font-medium">Write providers</p><p className="text-xs text-muted-foreground mb-3">Choose where new media is written.</p>
-        {(["cloudinary", "openinary"] as const).map((provider) => <div className="flex items-center justify-between py-2" key={provider}><Label className="capitalize">{provider}</Label><Switch checked={providers.includes(provider)} onCheckedChange={(checked) => toggleProvider(provider, checked)} disabled={!countsAvailable || provider === "cloudinary" && counts!.cloudinaryOnly > 0 && providers.includes("cloudinary")} /></div>)}
+        {(["cloudinary", "openinary"] as const).map((provider) => <div className="flex items-center justify-between py-2" key={provider}><Label className="capitalize">{provider}</Label><Switch checked={providers.includes(provider)} onCheckedChange={(checked) => toggleProvider(provider, checked)} disabled={!countsAvailable || provider === "cloudinary" && gateBlocks && providers.includes("cloudinary")} /></div>)}
       </div>
       <div><p className="text-sm font-medium">Read preference</p><p className="text-xs text-muted-foreground mb-3">This is the provider the app serves when it is ready.</p><RadioGroup value={current.read_preference ?? "cloudinary"} onValueChange={(value) => update({ read_preference: value as "cloudinary" | "openinary" })}>{["cloudinary", "openinary"].map((value) => <div className="flex items-center gap-2" key={value}><RadioGroupItem value={value} id={`cdn-read-${value}`} /><Label htmlFor={`cdn-read-${value}`} className="capitalize">{value}</Label></div>)}</RadioGroup></div>
       <div className="rounded-lg border p-4 space-y-2"><p className="font-medium">Retirement gate</p>
         {countsLoading && <p className="text-sm text-muted-foreground">Loading provider counts…</p>}
         {!countsLoading && !counts && <p className="text-sm text-destructive">Provider counts unavailable. Saving is disabled until they load.</p>}
         {counts && <><p className="text-sm">Cloudinary-only: {counts.cloudinaryOnly.toLocaleString()} {counts.cloudinaryOnly > 0 && <span className="text-destructive">← must reach 0</span>}</p><p className="text-sm">Both providers: {counts.both.toLocaleString()}</p><p className="text-sm">Openinary-only: {counts.openinaryOnly.toLocaleString()}</p></>}
-        <p className="text-xs text-muted-foreground">Disable Cloudinary means stop writing to it, never stop reading it.</p></div>
+        <p className="text-xs text-muted-foreground">Disable Cloudinary means stop writing to it, never stop reading it.</p>
+        {cloudinaryOnlyCount > 0 && <label className="flex items-start gap-2 pt-2 text-sm">
+          <input type="checkbox" className="mt-1" checked={gateOverridden} onChange={(event) => setGateOverridden(event.target.checked)} />
+          <span>Turn Cloudinary off anyway.<span className="block text-xs text-muted-foreground">The gate holds writes open for the {cloudinaryOnlyCount.toLocaleString()} object(s) stored only on Cloudinary. Check this only if that account is gone: an unreachable provider cannot be protected by writing more to it, and those objects stay readable either way.</span></span>
+        </label>}</div>
       <div className="space-y-2"><Label>Openinary server URL</Label><Input value={serverUrl || openinary?.serverUrl || ""} onChange={(event) => { setServerUrl(event.target.value); update({ openinary: { ...openinary, serverUrl: event.target.value } }); }} placeholder="https://openinary.example" /><p className="text-xs text-muted-foreground">Uploads use the edge-function server URL; this value must match it.</p><Button variant="outline" disabled={testing.isPending} onClick={() => testing.mutate()}>{testing.isPending ? "Testing…" : "Test connection"}</Button></div>
       <Button disabled={!canSave || saving.isPending} onClick={() => saving.mutate(current)}>Save CDN settings</Button>
     </CardContent>

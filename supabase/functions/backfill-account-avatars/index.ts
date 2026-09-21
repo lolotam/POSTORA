@@ -13,7 +13,9 @@
  * are skipped unless `force` is set.
  *
  * POST body (all optional):
- *   { "platforms": ["facebook","instagram"], "limit": 100, "dryRun": true, "force": false }
+ *   { "platforms": ["threads","pinterest"], "limit": 100, "dryRun": true, "force": false }
+ *
+ * Omitting `platforms` covers every platform in AVATAR_FETCHERS below.
  */
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.57.4";
 import { verifyCronOrAdmin } from "../_shared/cron-auth.ts";
@@ -21,6 +23,13 @@ import {
   cacheAvatarToCdn,
   fetchFacebookAvatarUrl,
   fetchInstagramAvatarUrl,
+  fetchLinkedInAvatarUrl,
+  fetchPinterestAvatarUrl,
+  fetchRedditAvatarUrl,
+  fetchThreadsAvatarUrl,
+  fetchTikTokAvatarUrl,
+  fetchTwitterAvatarUrl,
+  fetchYouTubeAvatarUrl,
 } from "../_shared/avatar-cache.ts";
 import { getOpeninaryConfig } from "../_shared/openinary.ts";
 import { corsHeaders } from "../_shared/cors.ts";
@@ -34,7 +43,31 @@ interface AccountRow {
   access_token: string | null;
 }
 
-const SUPPORTED = new Set(["facebook", "instagram"]);
+/**
+ * One fetcher per platform. Some read the profile straight off the token and
+ * take no id; the rest address a specific page or user.
+ *
+ * A platform absent from this map is never scanned. WhatsApp avatars arrive
+ * through the messaging webhooks rather than an OAuth profile call, so there is
+ * nothing here to re-fetch them from. Bluesky is out for a different reason:
+ * its OAuth tokens are DPoP-bound, so a read needs the private key that
+ * `bluesky-oauth` stored plus a freshly signed proof, and the shared helper
+ * sends a plain Bearer token that the server rejects. Listing it here would
+ * report those accounts as having no avatar rather than as unsupported.
+ */
+const AVATAR_FETCHERS: Record<string, (account: AccountRow) => Promise<string | null>> = {
+  facebook: (a) => fetchFacebookAvatarUrl(a.access_token!, a.platform_user_id),
+  instagram: (a) => fetchInstagramAvatarUrl(a.access_token!, a.platform_user_id),
+  threads: (a) => fetchThreadsAvatarUrl(a.access_token!, a.platform_user_id),
+  tiktok: (a) => fetchTikTokAvatarUrl(a.access_token!),
+  twitter: (a) => fetchTwitterAvatarUrl(a.access_token!),
+  linkedin: (a) => fetchLinkedInAvatarUrl(a.access_token!),
+  pinterest: (a) => fetchPinterestAvatarUrl(a.access_token!),
+  youtube: (a) => fetchYouTubeAvatarUrl(a.access_token!),
+  reddit: (a) => fetchRedditAvatarUrl(a.access_token!),
+};
+
+const SUPPORTED = new Set(Object.keys(AVATAR_FETCHERS));
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -90,9 +123,7 @@ Deno.serve(async (req) => {
       continue;
     }
 
-    const fresh = account.platform === "facebook"
-      ? await fetchFacebookAvatarUrl(account.access_token, account.platform_user_id)
-      : await fetchInstagramAvatarUrl(account.access_token, account.platform_user_id);
+    const fresh = await AVATAR_FETCHERS[account.platform](account);
 
     if (!fresh) {
       results.failed += 1;
