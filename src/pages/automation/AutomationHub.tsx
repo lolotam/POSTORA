@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+import "@/i18n";
 import { Link } from "react-router-dom";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { Icon3D, GradientHeading, GradientDivider, Reveal, GradientRingCard } from "@/components/fx";
@@ -6,53 +8,64 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 
 export default function AutomationHub() {
+  const { t } = useTranslation("automation");
+
   const cards = [
     {
-      title: "Agent Setup Portal",
-      subtitle: "Unified AI Assistant Studio",
-      description:
+      id: "agents",
+      title: t("hub.agents.title", "Agent Setup Portal"),
+      subtitle: t("hub.agents.subtitle", "Unified AI Assistant Studio"),
+      description: t(
+        "hub.agents.description",
         "Centralized configuration for your AI agents across WhatsApp, Facebook, Instagram, and Threads. Manage system prompts, knowledge base (RAG), e-commerce tools, and model routing.",
+      ),
       icon: Bot,
       variant: "violet" as const,
       path: "/automation/agents",
-      badge: "Flagship AI",
+      badge: t("hub.agents.badge", "Flagship AI"),
       features: [
-        "Multi-model routing (GPT-4o, Claude 3.5, Gemini 2.0)",
-        "Shared business knowledge base & PDF/Excel ingest",
-        "E-Commerce & CRM Tool Calling",
-        "Interactive test sandbox simulator",
+        { id: "routing", text: t("hub.agents.featureRouting", "Multi-model routing (GPT-4o, Claude 3.5, Gemini 2.0)") },
+        { id: "knowledge", text: t("hub.agents.featureKnowledge", "Shared business knowledge base & PDF/Excel ingest") },
+        { id: "tools", text: t("hub.agents.featureTools", "E-Commerce & CRM Tool Calling") },
+        { id: "sandbox", text: t("hub.agents.featureSandbox", "Interactive test sandbox simulator") },
       ],
     },
     {
-      title: "Messaging Automation",
-      subtitle: "Direct Inbound Conversations",
-      description:
+      id: "messaging",
+      title: t("hub.messaging.title", "Messaging Automation"),
+      subtitle: t("hub.messaging.subtitle", "Direct Inbound Conversations"),
+      description: t(
+        "hub.messaging.description",
         "Automate direct message replies, configure keyword rules, assign human agent handoffs, and select between internal AI or n8n workflows for WhatsApp, Messenger, IG, and Threads.",
+      ),
       icon: MessageSquare,
       variant: "sky" as const,
       path: "/automation/agents?surface=dms",
-      badge: "Inbound DMs",
+      badge: t("hub.messaging.badge", "Inbound DMs"),
       features: [
-        "Rule-based keyword auto-replies",
-        "Handler selection (Internal AI / n8n / Off)",
-        "WhatsApp quick replies & sequences",
-        "Human agent routing & triggers",
+        { id: "keywords", text: t("hub.messaging.featureKeywords", "Rule-based keyword auto-replies") },
+        { id: "handler", text: t("hub.messaging.featureHandler", "Handler selection (Internal AI / n8n / Off)") },
+        { id: "quick", text: t("hub.messaging.featureQuick", "WhatsApp quick replies & sequences") },
+        { id: "routing", text: t("hub.messaging.featureRouting", "Human agent routing & triggers") },
       ],
     },
     {
-      title: "Comments Automation",
-      subtitle: "Public Post Moderation & Replies",
-      description:
+      id: "comments",
+      title: t("hub.comments.title", "Comments Automation"),
+      subtitle: t("hub.comments.subtitle", "Public Post Moderation & Replies"),
+      description: t(
+        "hub.comments.description",
         "Automate responses to post comments on Facebook Pages, Instagram Media, and Threads. Auto-hide spam, filter profanity, and trigger high-converting comment-to-DM workflows.",
+      ),
       icon: MessageCircle,
       variant: "emerald" as const,
       path: "/automation/agents?surface=comments",
-      badge: "Public Posts",
+      badge: t("hub.comments.badge", "Public Posts"),
       features: [
-        "Post comment auto-replies",
-        "Spam and profanity auto-moderation",
-        "Comment-to-DM automation hooks",
-        "Multi-account rule assignments",
+        { id: "replies", text: t("hub.comments.featureReplies", "Post comment auto-replies") },
+        { id: "moderation", text: t("hub.comments.featureModeration", "Spam and profanity auto-moderation") },
+        { id: "hooks", text: t("hub.comments.featureHooks", "Comment-to-DM automation hooks") },
+        { id: "rules", text: t("hub.comments.featureRules", "Multi-account rule assignments") },
       ],
     },
   ];
@@ -67,14 +80,14 @@ export default function AutomationHub() {
               <div>
                 <div className="flex items-center gap-2">
                   <GradientHeading preset="violet-sky" size="xl" as="h1">
-                    Automation Hub
+                    {t("header.hub", "Automation Hub")}
                   </GradientHeading>
                   <Badge variant="outline" className="border-violet-500/30 text-violet-400 bg-violet-500/10 gap-1">
-                    <Cpu className="w-3.5 h-3.5" /> All-in-One Engine
+                    <Cpu className="w-3.5 h-3.5" /> {t("hub.engineBadge", "All-in-One Engine")}
                   </Badge>
                 </div>
                 <p className="text-sm md:text-base text-muted-foreground mt-1">
-                  Manage your AI agents, auto-replies, and communication rules across all connected platforms in one place
+                  {t("hub.subtitle", "Manage your AI agents, auto-replies, and communication rules across all connected platforms in one place")}
                 </p>
               </div>
             </div>
@@ -113,13 +126,13 @@ export default function AutomationHub() {
 
                   <div className="space-y-2 pt-2 border-t border-border/40">
                     <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                      Key Capabilities:
+                      {t("hub.capabilities", "Key Capabilities:")}
                     </p>
                     <ul className="space-y-1.5 text-xs text-muted-foreground">
-                      {card.features.map((f, i) => (
-                        <li key={i} className="flex items-center gap-2">
+                      {card.features.map((f) => (
+                        <li key={f.id} className="flex items-center gap-2">
                           <Zap className="w-3 h-3 text-primary shrink-0" />
-                          <span>{f}</span>
+                          <span>{f.text}</span>
                         </li>
                       ))}
                     </ul>
@@ -129,7 +142,7 @@ export default function AutomationHub() {
                 <div className="pt-6 mt-auto">
                   <Button asChild className="w-full gap-2 justify-between">
                     <Link to={card.path}>
-                      <span>Open {card.title}</span>
+                      <span>{t("hub.openCard", "Open {{title}}", { title: card.title })}</span>
                       <ArrowRight className="w-4 h-4" />
                     </Link>
                   </Button>

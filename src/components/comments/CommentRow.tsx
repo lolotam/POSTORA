@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+import "@/i18n";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
@@ -26,6 +28,7 @@ interface CommentRowProps {
 }
 
 function CommentHeader({ node }: { node: CommentNode }) {
+  const { t } = useTranslation("automation");
   const { entry: comment, depth } = node;
   const style = depthStyle(depth);
 
@@ -36,7 +39,7 @@ function CommentHeader({ node }: { node: CommentNode }) {
       <span className="text-xs text-muted-foreground">
         {formatDistanceToNow(new Date(comment.created_time), { addSuffix: true })}
       </span>
-      {comment.is_hidden && <Badge variant="secondary" className="text-xs">Hidden</Badge>}
+      {comment.is_hidden && <Badge variant="secondary" className="text-xs">{t("filters.hidden", "Hidden")}</Badge>}
       {comment.like_count != null && (
         <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
           <Heart className="h-3 w-3" />
@@ -52,10 +55,11 @@ function ReplyBox({ authorName, composer, commentId }: {
   composer: ReplyComposer;
   commentId: string;
 }) {
+  const { t } = useTranslation("automation");
   return (
     <div className="mt-2 flex gap-2">
       <Textarea
-        placeholder={`Reply to ${authorName}...`}
+        placeholder={t("form.replyPlaceholder", "Reply to {{name}}...", { name: authorName })}
         value={composer.text}
         onChange={(e) => composer.onChange(e.target.value)}
         className="min-h-[60px] text-sm"
@@ -63,7 +67,7 @@ function ReplyBox({ authorName, composer, commentId }: {
       <Button
         size="icon"
         className="shrink-0"
-        aria-label="Send reply"
+        aria-label={t("actions.sendReply", "Send reply")}
         disabled={!composer.text.trim() || composer.isPending}
         onClick={() => composer.onSubmit(commentId)}
       >

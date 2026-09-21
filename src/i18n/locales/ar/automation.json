@@ -1,0 +1,437 @@
+{
+  "actions": {
+    "activateMcp": "فعّل واربط بـ MCP Auto-Auth",
+    "addAgentTool": "أضف أداة للوكيل",
+    "claim": "استلم",
+    "connectHiggsfield": "اربط Higgsfield",
+    "copyJson": "انسخ JSON",
+    "customWebhook": "Webhook مخصص",
+    "deleteComment": "احذف التعليق",
+    "disconnectAccount": "افصل الحساب",
+    "disconnectNamed": "افصل {{name}}",
+    "hideComment": "اخفي التعليق",
+    "loadFromProject": "حمّل من المشروع",
+    "reload": "أعد التحميل",
+    "replyTo": "رد على {{name}}",
+    "resolve": "تم الحل",
+    "revoke": "اسحب",
+    "saveAndConnect": "احفظ واربط",
+    "sendReply": "ابعت الرد",
+    "shareWith": "شارك {{name}} مع {{account}}",
+    "syncToSheets": "زامن مع Sheets",
+    "testConnection": "اختبر الاتصال",
+    "unhideComment": "أظهر التعليق",
+    "youtubeDeleteHint": "YouTube بيسمح تحذف تعليقاتك بس — اخفيه بدال كده."
+  },
+  "agent": {
+    "badge": {
+      "both": "{{dms}} و {{comments}}"
+    },
+    "channelsAria": "قنوات التواصل",
+    "config": {
+      "multi": "إعداد وكيل متعدد الأسطح",
+      "surface": "إعداد وكيل {{surface}}"
+    },
+    "configDesc": {
+      "both": "اضبط تعليمات الذكاء الاصطناعي وقاعدة المعرفة (RAG) وموصلات قاعدة البيانات وحدود الرد لـ {{dms}} و {{comments}}.",
+      "single": "اضبط تعليمات الذكاء الاصطناعي وقاعدة المعرفة (RAG) وموصلات قاعدة البيانات وحدود الرد لـ {{surface}}."
+    },
+    "surface": {
+      "comments": "التعليقات",
+      "directMessagesLower": "الرسائل المباشرة",
+      "directMessaging": "الرسائل المباشرة",
+      "dms": "DMs",
+      "mentions": "المنشنات",
+      "mentionsLower": "المنشنات",
+      "postComments": "تعليقات المنشور",
+      "postCommentsLower": "تعليقات المنشور",
+      "replies": "الردود",
+      "repliesLower": "الردود"
+    }
+  },
+  "audience": {
+    "kpi": {
+      "enriched": "جهات مكتملة",
+      "topPlatform": "أقوى منصة",
+      "total": "كل الجهات",
+      "workflowLeads": "عملاء المسار"
+    },
+    "pageOf": "صفحة {{page}} من {{pageCount}}"
+  },
+  "category": {
+    "automation": "الأتمتة",
+    "databases": "قواعد البيانات",
+    "ecommerce": "التجارة والمدفوعات",
+    "productivity": "الإنتاجية والتطبيقات"
+  },
+  "comments": {
+    "channelsAria": "قنوات التعليقات",
+    "onPost": "على: {{message}}",
+    "replyMany": "{{count}} ردود",
+    "replyOne": "رد واحد"
+  },
+  "composio": {
+    "connectedAccount": "حساب مربوط",
+    "noWorkspace": "مفيش مساحة شغل للموصل ده لسه.",
+    "oauthHint": "ربط OAuth بضغطة واحدة",
+    "waitingAuth": "مستنيين التصريح — كمّل تسجيل الدخول في تاب Composio؛ الكرت هيتحدث لوحده.",
+    "wasDisconnected": "الاتصال ده اتفصل."
+  },
+  "connectors": {
+    "activeAttachHint": "التكاملات النشطة بتضيف أدوات مباشرة لوكلاء الذكاء الاصطناعي",
+    "activeToken": "توكن نشط",
+    "agentsCanUse": "الوكلاء اللي يقدروا يستخدموا ده",
+    "agentsThatCanUse": "الوكلاء اللي يقدروا يستخدموا ده: {{list}}",
+    "allAccountsLegacy": "كل الحسابات (قديم)",
+    "allConnectors": "كل الموصلات",
+    "anotherAccount": "حساب تاني",
+    "apiEndpoint": "API Endpoint",
+    "authorizedOauth": "تطبيق OAuth مصرّح",
+    "byoConnected": "توليد BYO مربوط",
+    "connectedAccountNamed": "الحساب المربوط: {{account}}",
+    "connectedCount": "{{count}} مربوط",
+    "directoryHint": "اربط متاجرك وبوابات الدفع وقواعد البيانات وسيرفرات التوليد بأدوات الماركة الأصلية.",
+    "everyAgent": "كل وكيل يقدر يستخدم الموصل ده. اربطه تاني على حساب واحد عشان تختار مين يوصله.",
+    "fullAccess": "صلاحية كاملة",
+    "legacyAllAccounts": "متاح لكل الحسابات (موصل قديم)",
+    "mcpEnabled": "⚡ MCP مفعّل",
+    "mcpReady": "⚡ جاهز لـ MCP",
+    "mcpReadyBadge": "موافق تلقائي وجاهز لـ MCP",
+    "noAdapter": "{{label}} — مفيش محوّل لسه",
+    "overviewHint": "كل موصل حسب الحساب المالك. افتح تاب أدوات الوكيل عشان تغيّر الإعداد أو المشاركة.",
+    "ownerTickHint": "الحساب ده مالك الموصل؛ فك العلامة هيغيّر المالك مش المشاركة.",
+    "quotaByo": "الحصة: فوترة BYO مباشرة",
+    "scopeAll": "كل الحسابات",
+    "scopes": "الصلاحيات: {{scopes}}",
+    "scopeShares": "الحساب والمشاركات",
+    "secret": {
+      "notSet": "{{field}} مش متسجل",
+      "set": "{{field}} ✓ متسجل"
+    },
+    "sharedFrom": "مشارك من",
+    "test": {
+      "failed": "فشل الاختبار — {{message}}",
+      "failedVendor": "فشل الاختبار — {{message}} (حالة المورّد {{status}})",
+      "lastFailed": "آخر اختبار فشل — {{error}}",
+      "lastPassed": "آخر اختبار نجح",
+      "okReadOnly": "الاتصال تمام — قراءة فقط",
+      "okReadOnlyCaps": "الاتصال تمام — قراءة فقط؛ القدرات: {{list}}",
+      "okWrite": "الاتصال تمام — الكتابة مفعّلة",
+      "okWriteCaps": "الاتصال تمام — الكتابة مفعّلة؛ القدرات: {{list}}"
+    },
+    "zeroCredits": "صفر رصيد Postora"
+  },
+  "dialog": {
+    "configureCredentials": "اضبط بيانات الدخول ومعاملات استدعاء الأداة.",
+    "connectorConfig": "إعداد الموصل",
+    "deleteCommentTitle": "تحذف التعليق؟",
+    "deleteMeta": "ده هيحذف التعليق نهائي. مينفعش ترجع فيه.",
+    "deleteWithReplies": "ده هيحذف التعليق نهائي. مينفعش ترجع فيه. {{count}} ردود هتتمسح معاه.",
+    "deleteWithReply": "ده هيحذف التعليق نهائي. مينفعش ترجع فيه. الرد هيتسحب معاه.",
+    "deleteYoutube": "ده هيشيل تعليقك من YouTube. مينفعش ترجع فيه.",
+    "disconnectConfirm": "افصل {{label}}",
+    "disconnectDesc": "أدوات الوكيل المبنية على الاتصال ده هتوقف لحد ما تربطه تاني.",
+    "disconnectNamed": "متأكد إنك عايز تفصل '{{name}}'؟",
+    "disconnectShared": "'{{name}}' مشارك من حساب تاني. الفصل هيحذفه من كل الحسابات. نكمّل؟",
+    "disconnectTitle": "تفصل {{label}}؟",
+    "higgsfieldOauth": "تصريح Higgsfield OAuth مباشر",
+    "higgsfieldOauthHint": "اربط حساب Higgsfield بتاعك بضغطة. التوليد كله بيتفوتر على Higgsfield ومش بياخد من حصة Postora.",
+    "revokeAccess": "متأكد إنك عايز تسحب صلاحية {{name}}؟"
+  },
+  "directory": {
+    "customRest": {
+      "description": "بيربط أي REST endpoint أو مسار n8n عشان يشغّل منطق الشغل ويرجع بيانات لحظية.",
+      "shortDesc": "اربط أي REST endpoint أو مسار n8n.",
+      "title": "REST / n8n Webhook مخصص"
+    },
+    "formula": {
+      "description": "بيحسب عروض أسعار ورسوم توصيل وخصومات كمية أو ضريبة حسب معطيات المحادثة.",
+      "shortDesc": "احسب عروض أسعار وتكلفة شحن وخصومات كمية.",
+      "title": "معادلات وحاسبة الأسعار"
+    },
+    "higgsfield": {
+      "description": "اربط حساب Higgsfield الشخصي. توليد BYO بيتفوتر على Higgsfield ومش بياخد من حصة خطة Postora.",
+      "shortDesc": "توليد BYO لفيديو الذكاء الاصطناعي وشيتات الشخصيات والصور.",
+      "title": "Higgsfield AI Studio"
+    },
+    "mcp": {
+      "description": "اربط أي سيرفر Model Context Protocol (MCP) مباشرة في تشغيل Postora من غير موافقة أدمن.",
+      "shortDesc": "أدوات Model Context Protocol وتكاملات وكلاء خارجية.",
+      "title": "سيرفر MCP مخصص"
+    },
+    "myfatoorah": {
+      "description": "تكامل بوابة MyFatoorah عشان تشيك حالة الدفع وفواتير العميل وتولّد روابط دفع فورية.",
+      "shortDesc": "حالة بوابة الدفع واستعلام الفواتير ومولّد رابط الدفع.",
+      "title": "MyFatoorah"
+    },
+    "mysql": {
+      "description": "اربط قواعد SQL مخصصة عبر Prisma أو Hasura أو Directus أو PostgREST لاستعلامات منظمة.",
+      "shortDesc": "استعلم قواعد SQL عبر Prisma أو Hasura أو PostgREST.",
+      "title": "PostgreSQL / MySQL API"
+    },
+    "salla": {
+      "description": "تكامل سلس مع Salla Merchant API لمتاجر السعودية والشرق الأوسط عشان المنتجات والأسعار وحالة الشحن.",
+      "shortDesc": "اربط Salla Merchant API لمتاجر الشرق الأوسط.",
+      "title": "Salla (سلة)"
+    },
+    "shopify": {
+      "description": "تكامل Shopify الرسمي للبحث في الكتالوج والمجموعات والمخزون وحالة تنفيذ الطلب.",
+      "shortDesc": "استعلم المنتجات والمخزون والطلبات عبر Storefront API.",
+      "title": "Shopify Storefront"
+    },
+    "stripe": {
+      "description": "اربط Stripe API عشان تشوف حالة دفع العميل وتفاصيل الفاتورة والاشتراكات في محادثات الدعم.",
+      "shortDesc": "استعلم فواتير العميل وPayment Intents وحالة الاشتراك.",
+      "title": "Stripe Payments"
+    },
+    "supabase": {
+      "description": "اتصال REST / PostgREST مباشر لجداول Supabase للمنتجات والمخزون وسجلات العملاء ودوال RPC.",
+      "shortDesc": "اتصال REST / RPC مباشر لجداول Supabase PostgreSQL.",
+      "title": "Supabase (PostgreSQL)"
+    },
+    "woocommerce": {
+      "description": "موصل WooCommerce REST API الرسمي للمنتجات والتنويعات والأسعار والمخزون وسجل الطلبات في الشات.",
+      "shortDesc": "اربط WooCommerce REST API للمنتجات والطلبات اللحظية.",
+      "title": "WooCommerce Store"
+    },
+    "zid": {
+      "description": "تكامل مباشر مع Zid Store Manager API للكتالوج والمخزون وإدارة طلبات العميل.",
+      "shortDesc": "اربط Zid Merchant API للبحث عن المنتجات وتتبع الطلبات.",
+      "title": "Zid (زد)"
+    }
+  },
+  "empty": {
+    "claimHint": "استلم محادثة من طابور الانتظار تحت عشان تبدأ.",
+    "noActiveConversations": "مفيش محادثات نشطة",
+    "noComments": "مفيش تعليقات",
+    "noCommentsHint": "التعليقات هتظهر هنا أول ما تتوفر.",
+    "noConnectors": "لسه مفيش موصلات مربوطة.",
+    "noContacts": "لسه مفيش جهات اتصال",
+    "noFacebook": "مفيش صفحات Facebook مربوطة",
+    "noFacebookHint": "اربط صفحة Facebook عشان تدير التعليقات.",
+    "noInstagram": "مفيش حسابات Instagram مربوطة",
+    "noInstagramHint": "اربط حساب Instagram عشان تدير التعليقات.",
+    "noServers": "لسه مفيش سيرفرات مربوطة",
+    "noServersHint": "اختار أي كرت فوق (Shopify أو WooCommerce أو Salla أو MyFatoorah أو Supabase أو Higgsfield) واضغط \"اربط\" عشان تفعّل أدوات المتجر.",
+    "noYoutube": "مفيش قنوات YouTube مربوطة",
+    "noYoutubeHint": "اربط قناة YouTube عشان تدير التعليقات."
+  },
+  "errors": {
+    "accountsSharing": "الحسابات المربوطة ماتحمّلتش، فالمشاركة مش هتتغيّر من هنا.",
+    "authUrl": "ماقدرناش نجيب رابط التصريح",
+    "channelReconnectHint": "اربط القناة دي تاني من الملفات عشان تفعّل التعليقات — YouTube بقى يطلب صلاحية التعليقات وقت الربط.",
+    "channelReconnectTitle": "القناة دي محتاجة إعادة ربط",
+    "chooseConnectedAccount": "اختار حساب {{label}} مربوط قبل ما تحفظ الأداة.",
+    "connectionsNone": "الاتصالات ماتحمّلتش، فمفيش حاجة تختارها هنا.",
+    "connectionsUnknown": "الاتصالات ماتحمّلتش، فحالة التطبيق ده مش معروفة.",
+    "connectionTestFailed": "اختبار الاتصال فشل.",
+    "descriptionRequired": "الوصف مطلوب — الذكاء الاصطناعي بيستخدمه عشان يقرر إمتى ينادي الأداة.",
+    "fieldRequired": "{{field}} مطلوب.",
+    "igAccessHint": "اربط Instagram تاني ووافق على صلاحيات إدارة التعليقات عشان نحمّل التعليقات والردود.",
+    "igAccessTitle": "تعليقات Instagram محتاجة صلاحية محدّثة",
+    "loadAccounts": "ماقدرناش نحمّل حساباتك المربوطة. إعداد الموصل مش متاح لحد ما القائمة تتحمل تاني.",
+    "loadComments": "ماقدرناش نحمّل تعليقات {{platform}}",
+    "loadContacts": "ماقدرناش نحمّل جهات الاتصال. {{message}}",
+    "platformNoComments": "المنصة مرجعَتش تعليقات للحساب ده.",
+    "readProject": "ماقدرناش نقرأ المشروع.",
+    "readTable": "ماقدرناش نقرأ \"{{table}}\".",
+    "readTables": "ماقدرناش نقرأ أي جدول من الجداول المكتوبة.",
+    "selectAccountFirst": "اختار حساب قبل ما تربط الأداة دي.",
+    "sharingNotListed": "مشاركة الموصلات ماتحمّلتش، فالموصلات المشاركة من حسابات تانية مش ظاهرة هنا. حدّث وجرّب تاني.",
+    "sharingRefresh": "مشاركة الموصلات ماتحمّلتش. حدّث وجرّب تاني.",
+    "sharingUnknown": "مشاركة الموصلات ماتحمّلتش، فوصول الحساب ظاهر كـ غير معروف. حدّث وجرّب تاني.",
+    "tagFilters": "فلاتر الوسوم مش متاحة: {{message}}",
+    "unknownError": "خطأ غير معروف"
+  },
+  "filters": {
+    "hidden": "مخفي",
+    "negative": "سلبي",
+    "neutral": "محايد",
+    "positive": "إيجابي",
+    "sentiment": "الانطباع",
+    "visibility": "الظهور",
+    "visible": "ظاهر"
+  },
+  "form": {
+    "capabilityPermissions": "صلاحيات القدرات",
+    "checkStock": "تشيك المخزون",
+    "connection": "الاتصال",
+    "connectorAccount": "حساب الموصل",
+    "connectorType": "نوع الموصل",
+    "endpointUrl": "API Endpoint / Webhook URL",
+    "enterField": "اكتب {{field}}",
+    "fixedToPreset": "ثابت على القالب",
+    "guardrailsHint": "افتراضيًا، استدعاء أداة الوكيل مقفول على وضع القراءة بس عشان نمنع تعديل المخزون أو الطلبات بالغلط.",
+    "guardrailsTitle": "حواجز القراءة فقط",
+    "isolationHint": "بيانات المتجر ومفاتيح API وسجلات الكاش معزولة تحت معرّف المستخدم بتاعك ({{id}}).",
+    "isolationTitle": "عزل المتجر متعدد المستأجرين",
+    "lookupOrders": "استعلام الطلبات",
+    "maxChats": "أقصى محادثات في نفس الوقت",
+    "mcpAutoApproved": "اتصال MCP موافق تلقائي",
+    "mcpAutoApprovedHint": "الموصل ده بيدعم Model Context Protocol الرسمي. تقدر تربطه مباشرة بـ Claude Desktop أو Cursor أو Windsurf أو Antigravity من غير مراجعة أدمن.",
+    "mcpJson": "JSON إعداد سيرفر MCP",
+    "quotaHint": "طلبات الأداة بتتنفّذ مباشرة تحت حصة اشتراكك من غير تأخير موافقة أدمن.",
+    "quotaTitle": "فوترة الحصة التلقائية",
+    "readOnly": "قراءة فقط",
+    "readOnlyGuard": "حارس القراءة فقط",
+    "readOnlyGuardHint": "يمنع أي عملية كتابة",
+    "removeSecret": "امسح السر المحفوظ من قاعدة البيانات",
+    "replyPlaceholder": "رد على {{name}}...",
+    "required": "مطلوب",
+    "searchConnectors": "دوّر في الموصلات...",
+    "searchProducts": "دور على المنتجات",
+    "selectAccount": "اختار حساب",
+    "smartCache": "كاش ذكي",
+    "smartCacheHint": "بيخزّن استعلامات المنتجات المتكررة",
+    "storedKeep": "متسجل — سيبه فاضي عشان تخلّيه",
+    "tabCredentials": "بيانات الدخول و API",
+    "tabMcp": "Model Context Protocol (MCP)",
+    "tabSecurity": "الأمان والعزل",
+    "toolName": "اسم الأداة (معرّف فريد)",
+    "toolPrompt": "تعليمات استدعاء أداة الذكاء الاصطناعي",
+    "toolPromptPlaceholder": "اشرح إمتى الوكيل ينادي الأداة دي..."
+  },
+  "header": {
+    "agentSetup": "بوابة إعداد الوكيل",
+    "audience": "الجمهور وجهات الاتصال",
+    "commentsManager": "إدارة التعليقات",
+    "connectedIntegrations": "التكاملات المربوطة والسيرفرات النشطة",
+    "directory": "دليل التكاملات والموصلات",
+    "hub": "مركز الأتمتة",
+    "humanAgent": "وضع الوكيل البشري",
+    "overview": "نظرة على الموصلات",
+    "workflow": "مسار التعليقات"
+  },
+  "hub": {
+    "agents": {
+      "badge": "ذكاء اصطناعي رئيسي",
+      "description": "إعداد مركزي لوكلاء الذكاء الاصطناعي على WhatsApp و Facebook و Instagram و Threads. أدِر تعليمات النظام وقاعدة المعرفة (RAG) وأدوات التجارة وتوجيه النماذج.",
+      "featureKnowledge": "قاعدة معرفة مشتركة ورفع PDF/Excel",
+      "featureRouting": "توجيه نماذج متعددة (GPT-4o و Claude 3.5 و Gemini 2.0)",
+      "featureSandbox": "محاكي تجربة تفاعلي",
+      "featureTools": "استدعاء أدوات التجارة و CRM",
+      "subtitle": "استوديو المساعد الذكي الموحّد",
+      "title": "بوابة إعداد الوكيل"
+    },
+    "capabilities": "القدرات الأساسية:",
+    "comments": {
+      "badge": "المنشورات العامة",
+      "description": "أتمت ردود تعليقات المنشورات على صفحات Facebook ووسائط Instagram و Threads. اخفي السبام وفلتر الألفاظ وفعّل مسارات التعليق-لرسالة عالية التحويل.",
+      "featureHooks": "ربط أتمتة التعليق-لرسالة",
+      "featureModeration": "إخفاء السبام والألفاظ تلقائي",
+      "featureReplies": "ردود تلقائية على تعليقات المنشور",
+      "featureRules": "تعيين قواعد لأكتر من حساب",
+      "subtitle": "إشراف وردود المنشورات العامة",
+      "title": "أتمتة التعليقات"
+    },
+    "engineBadge": "محرّك واحد للكل",
+    "messaging": {
+      "badge": "رسائل واردة",
+      "description": "أتمت ردود الرسائل المباشرة، اضبط قواعد الكلمات، حوّل للوكيل البشري، واختار بين الذكاء الداخلي أو مسارات n8n لـ WhatsApp و Messenger و IG و Threads.",
+      "featureHandler": "اختيار المعالج (ذكاء داخلي / n8n / إيقاف)",
+      "featureKeywords": "ردود تلقائية حسب الكلمات",
+      "featureQuick": "ردود سريعة وتسلسلات WhatsApp",
+      "featureRouting": "توجيه الوكيل البشري والمحفّزات",
+      "subtitle": "محادثات واردة مباشرة",
+      "title": "أتمتة الرسائل"
+    },
+    "openCard": "افتح {{title}}",
+    "subtitle": "أدِر وكلاء الذكاء الاصطناعي والردود التلقائية وقواعد التواصل على كل المنصات المربوطة من مكان واحد"
+  },
+  "human": {
+    "activeOfflineHint": "ادخل أونلاين عشان تستلم محادثات من الطابور.",
+    "activeOnlineHint": "المحادثات اللي بتتعامل معاها دلوقتي.",
+    "activeTitle": "محادثاتي النشطة",
+    "agentStatus": "حالة الوكيل",
+    "claimedAgo": "استُلمت {{time}}",
+    "goOnlineFirst": "ادخل أونلاين عشان تتسجل كوكيل قبل التعديل.",
+    "offline": "أوفلاين",
+    "online": "أونلاين",
+    "settingsTitle": "إعدادات الوكيل",
+    "stat": {
+      "active": "محادثاتي النشطة",
+      "avgResponse": "متوسط الرد",
+      "resolved": "اتحلّت النهاردة",
+      "waiting": "مستنية"
+    },
+    "subtitle": "خد المحادثات من بوتات الرد التلقائي",
+    "waitingHint": "محادثات من غير مسؤول على WhatsApp و Facebook و Instagram، من الحسابات المختارة فوق.",
+    "waitingTitle": "طابور الانتظار"
+  },
+  "models": {
+    "chosenByAdmin": "النماذج بيختارها الأدمن. أول واحد متاح بيتستخدم.",
+    "empty": "مفيش نموذج صور مضبوط لسه. الأدمن بيضبطه من الأدمن › إعداد الذكاء الاصطناعي.",
+    "fallback": "احتياطي",
+    "fallback2": "احتياطي 2",
+    "primary": "أساسي"
+  },
+  "picker": {
+    "noneYet": "مفيش حساب {{label}} مربوط لسه — اربطه من الإعدادات ← التكاملات الأول.",
+    "noWorkspace": "الحساب ده مفيش مساحة شغل؛ اربطه من الملفات الأول",
+    "selectAccount": "اختار حساب {{label}} مربوط"
+  },
+  "platform": {
+    "facebook": "Facebook",
+    "instagram": "Instagram",
+    "threads": "Threads",
+    "whatsapp": "WhatsApp",
+    "youtube": "YouTube"
+  },
+  "schema": {
+    "columnsPerTable": "الأعمدة اللي الوكيل بيقرأها، لكل جدول",
+    "deselectHint": "فك تحديد كل أعمدة الجدول بيوقف الوكيل عن قراءته خالص. عشان الجدول يرجع كل أعمدته، امسح حقل خريطة الأعمدة. أعمدة أقل = برومبت أصغر وردود أرخص.",
+    "enterKeyFirst": "اكتب رابط المشروع ومفتاح anon فوق الأول. للموصل المحفوظ المفتاح مش بيرجع ظاهر، فاكتبه تاني عشان تستخدم الاختيارات — أو كمّل الكتابة بإيدك.",
+    "pickLabel": "اختار الجداول والأعمدة من المشروع",
+    "showingCatalog": "ظاهر الجداول والأعمدة زي آخر قراءة من المشروع، مع التحديد المحفوظ معلّم. حمّل من المشروع عشان تحدّث.",
+    "showingSaved": "ظاهر التحديد المحفوظ بس. حمّل من المشروع عشان تشوف باقي الجداول والأعمدة.",
+    "tableAllSelected": "{{table}} (الكل محدد)",
+    "tableCountSelected": "{{table}} ({{count}} محدد)",
+    "tableListUnavailable": "المشروع ده بيعرض الجداول لمفتاح service_role بس، فأسماء الجداول جاية من الحقل فوق — الأعمدة تحت اتقرأت لحظي من كل جدول.",
+    "tablesSelected": "الجداول ({{count}} محدد)"
+  },
+  "status": {
+    "active": "نشط",
+    "activeInAgent": "نشط في الوكيل",
+    "activeTool": "أداة نشطة",
+    "authorized": "مصرّح",
+    "configuredDisabled": "مضبوط (معطّل)",
+    "connected": "مربوط",
+    "connectedAccount": "مربوط ({{account}})",
+    "disabled": "معطّل",
+    "readyToConnect": "جاهز للربط"
+  },
+  "toast": {
+    "claimed": "المحادثة استُلمت",
+    "claimFailed": "فشل استلام المحادثة",
+    "connected": "{{label}} اتربط",
+    "connectorConnected": "الموصل اتربط بتشغيل Postora AI",
+    "connectorDisconnected": "الموصل '{{name}}' اتفصل",
+    "connectorRemoved": "الموصل اتشال",
+    "connectorUpdated": "الموصل اتحدّث بنجاح",
+    "disconnected": "{{label}} اتفصل",
+    "disconnectFailed": "ماقدرناش نفصل {{label}}",
+    "higgsfieldDisconnected": "حساب Higgsfield اتفصل",
+    "higgsfieldDisconnectFailed": "فشل فصل Higgsfield",
+    "higgsfieldStartFailed": "فشل بدء ربط Higgsfield",
+    "mcpCopied": "إعداد MCP اتنسخ للحافظة",
+    "nowOffline": "بقيت أوفلاين",
+    "nowOfflineDesc": "الردود التلقائية هتتعامل مع الرسائل الواردة.",
+    "nowOnline": "بقيت أونلاين",
+    "nowOnlineDesc": "تقدر تستلم محادثات من الطابور دلوقتي.",
+    "resolved": "تم الحل",
+    "resolveFailed": "فشل إنهاء المحادثة",
+    "revokedAccess": "اتسحبت صلاحية {{name}}",
+    "revokeFailed": "فشل سحب صلاحية OAuth",
+    "saveFailed": "فشل الحفظ",
+    "settingsSaved": "الإعدادات اتحفظت",
+    "sharingChangeFailed": "مشاركة الموصل ماتغيّرتش",
+    "sharingUnavailable": "مشاركة الموصل مش متاحة لحد ما بيانات الحساب تتحمل.",
+    "startFailed": "ماقدرناش نبدأ اتصال {{label}}"
+  },
+  "workflow": {
+    "subtitle": "حوّل التعليقات لمحادثات. كلمة تحت منشورك تاخد رد عام، وعلى Facebook و Instagram رسالة خاصة واحدة بلينكك.",
+    "tabCreate": "أنشئ مسار",
+    "tabEdit": "عدّل المسار",
+    "tabPool": "المسارات"
+  }
+}

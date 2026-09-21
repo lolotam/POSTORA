@@ -1,4 +1,7 @@
 import { useState, useMemo, useEffect, useCallback } from "react";
+import { useTranslation } from "react-i18next";
+import "@/i18n";
+import type { TFunction } from "i18next";
 import { Link } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -576,34 +579,104 @@ interface ConnectionTestView {
   text: string;
 }
 
-function liveTestView(result: unknown): ConnectionTestView {
+function liveTestView(result: unknown, t: TFunction): ConnectionTestView {
   const record = (result ?? {}) as Record<string, unknown>;
   if (record.ok === true) {
     const capabilities = Array.isArray(record.capabilities) ? record.capabilities.map(String) : [];
     const readOnly = record.read_only !== false;
-    return {
-      ok: true,
-      live: true,
-      text: `Connection OK — ${readOnly ? "read-only" : "write enabled"}${
-        capabilities.length > 0 ? `; capabilities: ${capabilities.join(", ")}` : ""
-      }`,
-    };
+    const list = capabilities.join(", ");
+    if (readOnly && capabilities.length > 0) {
+      return { ok: true, live: true, text: t("connectors.test.okReadOnlyCaps", "Connection OK — read-only; capabilities: {{list}}", { list }) };
+    }
+    if (readOnly) {
+      return { ok: true, live: true, text: t("connectors.test.okReadOnly", "Connection OK — read-only") };
+    }
+    if (capabilities.length > 0) {
+      return { ok: true, live: true, text: t("connectors.test.okWriteCaps", "Connection OK — write enabled; capabilities: {{list}}", { list }) };
+    }
+    return { ok: true, live: true, text: t("connectors.test.okWrite", "Connection OK — write enabled") };
   }
   const error = record.error as { message?: unknown; vendor_status?: unknown } | undefined;
-  const message = typeof error?.message === "string" ? error.message : "The connection test failed.";
-  const vendorStatus = typeof error?.vendor_status === "number" ? ` (vendor status ${error.vendor_status})` : "";
-  return { ok: false, live: true, text: `Test failed — ${message}${vendorStatus}` };
+  const message = typeof error?.message === "string" ? error.message : t("errors.connectionTestFailed", "The connection test failed.");
+  if (typeof error?.vendor_status === "number") {
+    return { ok: false, live: true, text: t("connectors.test.failedVendor", "Test failed — {{message}} (vendor status {{status}})", { message, status: error.vendor_status }) };
+  }
+  return { ok: false, live: true, text: t("connectors.test.failed", "Test failed — {{message}}", { message }) };
 }
 
-function storedTestView(tool: AiAgentTool): ConnectionTestView | null {
+function storedTestView(tool: AiAgentTool, t: TFunction): ConnectionTestView | null {
   if (tool.last_test_ok === null || tool.last_test_ok === undefined) return null;
   return tool.last_test_ok
-    ? { ok: true, live: false, text: "Last test passed" }
+    ? { ok: true, live: false, text: t("connectors.test.lastPassed", "Last test passed") }
     : {
         ok: false,
         live: false,
-        text: `Last test failed — ${tool.last_test_error ?? "unknown error"}`,
+        text: t("connectors.test.lastFailed", "Last test failed — {{error}}", { error: tool.last_test_error ?? t("errors.unknownError", "unknown error") }),
       };
+}
+
+function directoryTitle(id: string, fallback: string, t: TFunction): string {
+  switch (id) {
+    case "shopify": return t("directory.shopify.title", "Shopify Storefront");
+    case "woocommerce": return t("directory.woocommerce.title", "WooCommerce Store");
+    case "salla": return t("directory.salla.title", "Salla (سلة)");
+    case "zid": return t("directory.zid.title", "Zid (زد)");
+    case "myfatoorah": return t("directory.myfatoorah.title", "MyFatoorah");
+    case "stripe": return t("directory.stripe.title", "Stripe Payments");
+    case "higgsfield": return t("directory.higgsfield.title", "Higgsfield AI Studio");
+    case "supabase": return t("directory.supabase.title", "Supabase (PostgreSQL)");
+    case "mysql_postgres": return t("directory.mysql.title", "PostgreSQL / MySQL API");
+    case "formula": return t("directory.formula.title", "Formulas & Price Calculator");
+    case "custom_rest": return t("directory.customRest.title", "Custom REST / n8n Webhook");
+    case "mcp_custom": return t("directory.mcp.title", "Custom MCP Server");
+    default: return fallback;
+  }
+}
+
+function directoryShortDesc(id: string, fallback: string, t: TFunction): string {
+  switch (id) {
+    case "shopify": return t("directory.shopify.shortDesc", "Query products, live inventory, and customer orders via Storefront API.");
+    case "woocommerce": return t("directory.woocommerce.shortDesc", "Connect WordPress WooCommerce REST API for live products and orders.");
+    case "salla": return t("directory.salla.shortDesc", "Connect Salla Merchant API for Middle East e-commerce stores.");
+    case "zid": return t("directory.zid.shortDesc", "Connect Zid Merchant API for product search and order tracking.");
+    case "myfatoorah": return t("directory.myfatoorah.shortDesc", "Payment gateway status, invoice queries, and payment link generator.");
+    case "stripe": return t("directory.stripe.shortDesc", "Query customer invoices, payment intents, and subscription status.");
+    case "higgsfield": return t("directory.higgsfield.shortDesc", "BYO generation for AI video, character sheets, and image creation.");
+    case "supabase": return t("directory.supabase.shortDesc", "Direct REST / RPC connection to your Supabase PostgreSQL tables.");
+    case "mysql_postgres": return t("directory.mysql.shortDesc", "Query custom SQL databases via Prisma, Hasura, or PostgREST.");
+    case "formula": return t("directory.formula.shortDesc", "Compute custom quotes, shipping costs, and volume discounts.");
+    case "custom_rest": return t("directory.customRest.shortDesc", "Connect any external REST endpoint or n8n automation workflow.");
+    case "mcp_custom": return t("directory.mcp.shortDesc", "Model Context Protocol tools and external agent integrations.");
+    default: return fallback;
+  }
+}
+
+function directoryDescription(id: string, fallback: string, t: TFunction): string {
+  switch (id) {
+    case "shopify": return t("directory.shopify.description", "Official Shopify integration for automated product catalog lookups, collection browsing, stock verification, and order fulfillment status.");
+    case "woocommerce": return t("directory.woocommerce.description", "Official WooCommerce REST API connector to query products, variations, live prices, stock levels, and order history directly in customer chats.");
+    case "salla": return t("directory.salla.description", "Seamless integration with Salla Merchant API for Saudi & Middle East e-commerce stores to query products, prices, and shipping status.");
+    case "zid": return t("directory.zid.description", "Direct integration with Zid Store Manager API for product catalog inquiries, inventory levels, and customer order management.");
+    case "myfatoorah": return t("directory.myfatoorah.description", "MyFatoorah payment gateway integration to check payment status, lookup customer invoices, and generate instant checkout payment links.");
+    case "stripe": return t("directory.stripe.description", "Connect to Stripe API to look up customer payment status, invoice details, and active subscriptions in customer support chats.");
+    case "higgsfield": return t("directory.higgsfield.description", "Connect your personal Higgsfield account. BYO generation bills Higgsfield directly and does not consume your Postora plan quota.");
+    case "supabase": return t("directory.supabase.description", "Direct REST / PostgREST connection to query your Supabase database tables for products, inventory, customer records, and custom RPC functions.");
+    case "mysql_postgres": return t("directory.mysql.description", "Connect to custom SQL databases through Prisma, Hasura, Directus, or PostgREST for structured schema queries.");
+    case "formula": return t("directory.formula.description", "Computes custom quotes, delivery fees, bulk tier discounts, or VAT calculations based on customer conversation parameters.");
+    case "custom_rest": return t("directory.customRest.description", "Connects to any external REST endpoint or n8n workflow to trigger background business logic and return live data.");
+    case "mcp_custom": return t("directory.mcp.description", "Connect any external Model Context Protocol (MCP) server directly into the Postora AI runtime with zero admin approval.");
+    default: return fallback;
+  }
+}
+
+function categoryLabel(key: string, fallback: string, t: TFunction): string {
+  switch (key) {
+    case "ecommerce_payments": return t("category.ecommerce", "E-Commerce & Payments");
+    case "productivity_crm": return t("category.productivity", "Productivity & Apps");
+    case "databases": return t("category.databases", "Databases");
+    case "automation": return t("category.automation", "Automation");
+    default: return fallback;
+  }
 }
 
 function useSafeProfile() {
@@ -616,6 +689,7 @@ function useSafeProfile() {
 }
 
 function ConnectorCredentialState({ tool }: { tool: AiAgentTool }) {
+  const { t } = useTranslation("automation");
   const secretFields = connectorDefinition(tool.connector_type).credentials.filter(
     (field) => field.kind === "secret",
   );
@@ -627,7 +701,9 @@ function ConnectorCredentialState({ tool }: { tool: AiAgentTool }) {
         const configured = (tool.configured_secret_fields ?? []).includes(field.key);
         return (
           <span key={field.key} className="rounded-md border border-border/60 px-2 py-1">
-            {field.label} {configured ? "✓ set" : "not set"}
+            {configured
+              ? t("connectors.secret.set", "{{field}} ✓ set", { field: field.label })
+              : t("connectors.secret.notSet", "{{field}} not set", { field: field.label })}
           </span>
         );
       })}
@@ -650,6 +726,7 @@ function ConnectorTestState({
   view: ConnectionTestView | null;
   onTest: () => void;
 }) {
+  const { t } = useTranslation("automation");
   const hasAdapter = shouldUseAdapter(tool);
   return (
     <div className="space-y-2 border-t border-border/40 pt-3">
@@ -663,11 +740,11 @@ function ConnectorTestState({
           className="h-8 text-xs gap-1.5 cursor-pointer"
         >
           {testing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Radio className="w-3.5 h-3.5" />}
-          Test connection
+          {t("actions.testConnection", "Test connection")}
         </Button>
       ) : (
         <p className="text-[11px] text-muted-foreground" data-testid={`no-adapter-${tool.id}`}>
-          {safeConnectorLabel(tool.connector_type)} — no adapter yet
+          {t("connectors.noAdapter", "{{label}} — no adapter yet", { label: safeConnectorLabel(tool.connector_type) })}
         </p>
       )}
       {view && (
@@ -691,6 +768,7 @@ function DatabaseConnectorsOverview({
   tools,
   isLoading,
 }: Pick<ReturnType<typeof useAiAgentTools>, "tools" | "isLoading">) {
+  const { t } = useTranslation("automation");
   const { links, linksReady, linksError } = useAiToolAccountLinks();
   const {
     data: socialAccounts = [],
@@ -725,15 +803,15 @@ function DatabaseConnectorsOverview({
   return (
     <div className="space-y-5">
       <div>
-        <h3 className="text-xl font-bold text-foreground">Connector overview</h3>
+        <h3 className="text-xl font-bold text-foreground">{t("header.overview", "Connector overview")}</h3>
         <p className="mt-1 text-sm text-muted-foreground">
-          Every connector by owning account. Open its agent Tools tab to change configuration or sharing.
+          {t("connectors.overviewHint", "Every connector by owning account. Open its agent Tools tab to change configuration or sharing.")}
         </p>
       </div>
 
       {(accountsError || linksError) && (
         <p className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
-          Connector sharing could not be loaded, so account access is shown as unknown. Refresh to try again.
+          {t("errors.sharingUnknown", "Connector sharing could not be loaded, so account access is shown as unknown. Refresh to try again.")}
         </p>
       )}
 
@@ -742,7 +820,7 @@ function DatabaseConnectorsOverview({
           readOnly hides the tool form, never the connection controls. */}
       {CATEGORY_TABS.filter((tab) => COMPOSIO_TYPES.some((type) => connectorDefinition(type).category === tab.key)).map((tab) => (
         <section key={tab.key} className="space-y-3">
-          <h4 className="font-semibold">{tab.label}</h4>
+          <h4 className="font-semibold">{categoryLabel(tab.key, tab.label, t)}</h4>
           <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
             {COMPOSIO_TYPES.filter((type) => connectorDefinition(type).category === tab.key).map((type) => (
               <ComposioConnectCard key={type} connectorType={type} workspaceId={workspaceId} />
@@ -754,7 +832,7 @@ function DatabaseConnectorsOverview({
       {groupedTools.length === 0 ? (
         <Card className="border-dashed">
           <CardContent className="py-10 text-center text-sm text-muted-foreground">
-            No connectors configured yet.
+            {t("empty.noConnectors", "No connectors configured yet.")}
           </CardContent>
         </Card>
       ) : (
@@ -769,7 +847,7 @@ function DatabaseConnectorsOverview({
               <div className="flex items-center gap-2">
                 {owner && <PlatformIcon platform={owner.platform} size="sm" />}
                 <h4 className="font-semibold">
-                  {owner ? accountLabel(owner) : "All accounts (legacy)"}
+                  {owner ? accountLabel(owner) : t("connectors.allAccountsLegacy", "All accounts (legacy)")}
                 </h4>
               </div>
               <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
@@ -787,20 +865,22 @@ function DatabaseConnectorsOverview({
                             <CardDescription>{connectorDefinition(tool.connector_type).label}</CardDescription>
                           </div>
                           <Badge variant="outline">
-                            {tool.scope === "all_accounts" ? "All accounts" : "Account + shares"}
+                            {tool.scope === "all_accounts" ? t("connectors.scopeAll", "All accounts") : t("connectors.scopeShares", "Account + shares")}
                           </Badge>
                         </div>
                       </CardHeader>
                       <CardContent className="space-y-3">
                         <p className="text-xs text-muted-foreground">
-                          Agents that can use this: {usableIds === null
-                            ? "Unknown"
-                            : usableIds
-                                .flatMap((id) => {
-                                  const account = accountsById.get(id);
-                                  return account ? [accountLabel(account)] : [];
-                                })
-                                .join(", ") || "None"}
+                          {t("connectors.agentsThatCanUse", "Agents that can use this: {{list}}", {
+                            list: usableIds === null
+                              ? t("common:unknown", "Unknown")
+                              : usableIds
+                                  .flatMap((id) => {
+                                    const account = accountsById.get(id);
+                                    return account ? [accountLabel(account)] : [];
+                                  })
+                                  .join(", ") || t("common:none", "None"),
+                          })}
                         </p>
                         <ConnectorCredentialState tool={tool} />
                         <ToolUsageLine accountId={tool.social_account_id} toolId={tool.id} />
@@ -809,7 +889,7 @@ function DatabaseConnectorsOverview({
                             className="inline-flex items-center gap-1 text-sm font-medium text-primary hover:underline"
                             to={`/automation/agents?platform=${owner.platform}&tab=tools&account=${owner.id}`}
                           >
-                            Edit <ExternalLink className="h-3.5 w-3.5" />
+                            {t("common:edit", "Edit")} <ExternalLink className="h-3.5 w-3.5" />
                           </Link>
                         )}
                       </CardContent>
@@ -903,6 +983,7 @@ function DatabaseConnectorsEditor({
     accountsError: unknown;
   };
 }) {
+  const { t } = useTranslation("automation");
   const profile = useSafeProfile();
   const { tools, isLoading, upsertTool, deleteTool } = toolState;
   const { links, linksReady, linksError, setToolAccounts } = linkState;
@@ -1029,10 +1110,10 @@ function DatabaseConnectorsEditor({
           return_to: "/settings?tab=integrations",
         },
       });
-      if (error || !data?.url) throw error ?? new Error(data?.error || "Could not retrieve authorization URL");
+      if (error || !data?.url) throw error ?? new Error(data?.error || t("errors.authUrl", "Could not retrieve authorization URL"));
       window.location.assign(data.url);
     } catch (error: unknown) {
-      toast.error(error instanceof Error ? error.message : "Failed to initiate Higgsfield connection");
+      toast.error(error instanceof Error ? error.message : t("toast.higgsfieldStartFailed", "Failed to initiate Higgsfield connection"));
       setHiggsfieldBusy(false);
     }
   };
@@ -1045,10 +1126,10 @@ function DatabaseConnectorsEditor({
       });
       setHiggsfieldConnected(false);
       setHiggsfieldAccount(null);
-      toast.success("Higgsfield account disconnected");
+      toast.success(t("toast.higgsfieldDisconnected", "Higgsfield account disconnected"));
       setDialogOpen(false);
     } catch (error: unknown) {
-      toast.error(error instanceof Error ? error.message : "Failed to disconnect Higgsfield");
+      toast.error(error instanceof Error ? error.message : t("toast.higgsfieldDisconnectFailed", "Failed to disconnect Higgsfield"));
     } finally {
       setHiggsfieldBusy(false);
     }
@@ -1109,11 +1190,11 @@ function DatabaseConnectorsEditor({
       });
 
       if (res.ok) {
-        toast.success(`Revoked access for ${clientName}`);
+        toast.success(t("toast.revokedAccess", "Revoked access for {{name}}", { name: clientName }));
         queryClient.invalidateQueries({ queryKey: ["oauth-authorized-clients"] });
       }
     } catch {
-      toast.error("Failed to revoke OAuth access");
+      toast.error(t("toast.revokeFailed", "Failed to revoke OAuth access"));
     }
   };
 
@@ -1290,7 +1371,7 @@ function DatabaseConnectorsEditor({
 
   const handleSave = () => {
     if (!accountId) {
-      setFormError("Select an account before connecting this tool.");
+      setFormError(t("errors.selectAccountFirst", "Select an account before connecting this tool."));
       return;
     }
     const fields = safeCredentialFields(form.connector_type);
@@ -1300,7 +1381,7 @@ function DatabaseConnectorsEditor({
     // (`connection_required`). Say so here rather than letting a URL error
     // stand in for it.
     if (composio && !form.connection_id) {
-      setFormError(`Choose a connected ${safeConnectorLabel(form.connector_type)} account before saving this tool.`);
+      setFormError(t("errors.chooseConnectedAccount", "Choose a connected {{label}} account before saving this tool.", { label: safeConnectorLabel(form.connector_type) }));
       return;
     }
     // When the registry declares a url credential field it IS the endpoint
@@ -1322,14 +1403,14 @@ function DatabaseConnectorsEditor({
       editingTool,
     );
     if (missingField) {
-      setFormError(`${missingField.label} is required.`);
+      setFormError(t("errors.fieldRequired", "{{field}} is required.", { field: missingField.label }));
       return;
     }
 
     const error =
       validateAiToolName(form.name) ||
       (composio ? null : validateAiToolUrl(rowUrl)) ||
-      (form.description.trim() ? null : "Description is required — the AI uses it to decide when to call the tool.");
+      (form.description.trim() ? null : t("errors.descriptionRequired", "Description is required — the AI uses it to decide when to call the tool."));
     if (error) {
       setFormError(error);
       return;
@@ -1393,7 +1474,7 @@ function DatabaseConnectorsEditor({
 
     upsertTool.mutate(payload, {
       onSuccess: () => {
-        toast.success(editingTool ? "Connector updated successfully" : "Connector connected to Postora AI runtime");
+        toast.success(editingTool ? t("toast.connectorUpdated", "Connector updated successfully") : t("toast.connectorConnected", "Connector connected to Postora AI runtime"));
         setDialogOpen(false);
       },
       onError: (mutationError) => setFormError(mutationError.message),
@@ -1407,7 +1488,7 @@ function DatabaseConnectorsEditor({
       const result = await callEdgeApi("ai-agent-adapters", "test_connection", {
         tool_id: tool.id,
       });
-      setTestResultViews((current) => ({ ...current, [tool.id]: liveTestView(result) }));
+      setTestResultViews((current) => ({ ...current, [tool.id]: liveTestView(result, t) }));
       // The adapter persists last_test_* on the row; a refetch keeps every
       // other surface (the Settings overview included) agreeing with the card.
       void queryClient.invalidateQueries({ queryKey: ["ai-agent-tools"] });
@@ -1417,7 +1498,7 @@ function DatabaseConnectorsEditor({
         [tool.id]: {
           ok: false,
           live: true,
-          text: `Test failed — ${error instanceof Error ? error.message : "The connection test failed."}`,
+          text: t("connectors.test.failed", "Test failed — {{message}}", { message: error instanceof Error ? error.message : t("errors.connectionTestFailed", "The connection test failed.") }),
         },
       }));
     } finally {
@@ -1431,7 +1512,7 @@ function DatabaseConnectorsEditor({
     checked: boolean,
   ) => {
     if (!setToolAccounts) {
-      toast.error("Connector sharing is unavailable until account data has loaded.");
+      toast.error(t("toast.sharingUnavailable", "Connector sharing is unavailable until account data has loaded."));
       return;
     }
     const socialAccountIds = nextToolSharing({
@@ -1445,7 +1526,7 @@ function DatabaseConnectorsEditor({
     try {
       await setToolAccounts.mutateAsync({ toolId: tool.id, socialAccountIds });
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Connector sharing could not be changed");
+      toast.error(error instanceof Error ? error.message : t("toast.sharingChangeFailed", "Connector sharing could not be changed"));
     } finally {
       setSharingToolIds((current) => current.filter((id) => id !== tool.id));
     }
@@ -1496,7 +1577,7 @@ function DatabaseConnectorsEditor({
   const copyMcpConfig = () => {
     navigator.clipboard.writeText(mcpConfigSnippet);
     setCopiedMcp(true);
-    toast.success("MCP configuration copied to clipboard");
+    toast.success(t("toast.mcpCopied", "MCP configuration copied to clipboard"));
     setTimeout(() => setCopiedMcp(false), 2000);
   };
 
@@ -1519,13 +1600,13 @@ function DatabaseConnectorsEditor({
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
             <div className="flex items-center gap-2">
-              <h3 className="text-xl font-bold text-foreground">Integrations & Connectors Directory</h3>
+              <h3 className="text-xl font-bold text-foreground">{t("header.directory", "Integrations & Connectors Directory")}</h3>
               <Badge variant="outline" className="border-primary/30 text-primary bg-primary/10 text-xs gap-1">
-                <Sparkles className="w-3 h-3" /> Auto-Approved & MCP Ready
+                <Sparkles className="w-3 h-3" /> {t("connectors.mcpReadyBadge", "Auto-Approved & MCP Ready")}
               </Badge>
             </div>
             <p className="text-sm text-muted-foreground mt-1">
-              Connect your e-commerce stores, payment gateways, databases, and AI generation servers with authentic brand tools.
+              {t("connectors.directoryHint", "Connect your e-commerce stores, payment gateways, databases, and AI generation servers with authentic brand tools.")}
             </p>
           </div>
 
@@ -1539,19 +1620,19 @@ function DatabaseConnectorsEditor({
               className="gap-1.5"
             >
               <Plus className="h-4 w-4" />
-              <span>Custom Webhook</span>
+              <span>{t("actions.customWebhook", "Custom Webhook")}</span>
             </Button>
           </div>
         </div>
 
         {accountsError ? (
           <p className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
-            Could not load your connected accounts. Connector configuration is unavailable until the list reloads.
+            {t("errors.loadAccounts", "Could not load your connected accounts. Connector configuration is unavailable until the list reloads.")}
           </p>
         ) : (
           accountsReady && selectableAccounts.length > 0 && (
             <div className="max-w-xs space-y-1.5">
-              <Label className="text-xs">Connector account</Label>
+              <Label className="text-xs">{t("form.connectorAccount", "Connector account")}</Label>
               <Select
                 value={accountId ?? ""}
                 onValueChange={(nextAccountId) => {
@@ -1560,7 +1641,7 @@ function DatabaseConnectorsEditor({
                 }}
               >
                 <SelectTrigger data-testid="connector-account">
-                  <SelectValue placeholder="Select account" />
+                  <SelectValue placeholder={t("form.selectAccount", "Select account")} />
                 </SelectTrigger>
                 <SelectContent>
                   {selectableAccounts.map((account) => (
@@ -1582,9 +1663,9 @@ function DatabaseConnectorsEditor({
             className="flex items-center gap-1.5 overflow-x-auto w-full sm:w-auto pb-1 sm:pb-0 scrollbar-none"
           >
             {([
-              { id: "all" as CategoryFilter, label: "All Connectors" },
-              ...CATEGORY_TABS.map((tab) => ({ id: tab.key as CategoryFilter, label: tab.label })),
-              { id: "mcp" as CategoryFilter, label: "⚡ MCP Ready" },
+              { id: "all" as CategoryFilter, label: t("connectors.allConnectors", "All Connectors") },
+              ...CATEGORY_TABS.map((tab) => ({ id: tab.key as CategoryFilter, label: categoryLabel(tab.key, tab.label, t) })),
+              { id: "mcp" as CategoryFilter, label: t("connectors.mcpReady", "⚡ MCP Ready") },
             ]).map((cat) => {
               const isActive = activeCategory === cat.id;
               return (
@@ -1609,7 +1690,7 @@ function DatabaseConnectorsEditor({
           <div className="relative w-full sm:w-64">
             <Search className="w-4 h-4 text-muted-foreground absolute left-3 top-1/2 -translate-y-1/2" />
             <Input
-              placeholder="Search connectors..."
+              placeholder={t("form.searchConnectors", "Search connectors...")}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="pl-9 h-9 text-xs rounded-xl bg-card/60"
@@ -1669,7 +1750,7 @@ function DatabaseConnectorsEditor({
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center justify-between gap-1.5">
                       <h4 className="font-bold text-sm sm:text-base text-foreground tracking-tight group-hover:text-primary transition-colors truncate">
-                        {preset.title}
+                        {directoryTitle(preset.id, preset.title, t)}
                       </h4>
 
                       {preset.supportsMcp && (
@@ -1681,18 +1762,18 @@ function DatabaseConnectorsEditor({
 
                     <div className="flex items-center gap-1.5 mt-0.5 mb-1.5">
                       <span className="text-[11px] font-medium text-muted-foreground">
-                        {CONNECTOR_CATEGORY_LABELS[connectorDefinition(preset.id).category]}
+                        {categoryLabel(connectorDefinition(preset.id).category, CONNECTOR_CATEGORY_LABELS[connectorDefinition(preset.id).category], t)}
                       </span>
                       {isConnected && (
                         <Badge className="bg-emerald-500/15 text-emerald-400 border-emerald-500/30 text-[9px] gap-1 py-0 h-4 shrink-0">
                           <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                          Connected
+                          {t("status.connected", "Connected")}
                         </Badge>
                       )}
                     </div>
 
                     <p className="text-xs text-muted-foreground line-clamp-2 leading-relaxed">
-                      {preset.shortDesc}
+                      {directoryShortDesc(preset.id, preset.shortDesc, t)}
                     </p>
                   </div>
                 </div>
@@ -1713,11 +1794,11 @@ function DatabaseConnectorsEditor({
                     <span>
                       {isConnected
                         ? isHiggs
-                          ? `Connected (${higgsfieldAccount?.split("@")[0] || "Active"})`
+                          ? t("status.connectedAccount", "Connected ({{account}})", { account: higgsfieldAccount?.split("@")[0] || t("status.active", "Active") })
                           : tool?.is_enabled
-                          ? "Active in AI Agent"
-                          : "Configured (Disabled)"
-                        : "Ready to Connect"}
+                          ? t("status.activeInAgent", "Active in AI Agent")
+                          : t("status.configuredDisabled", "Configured (Disabled)")
+                        : t("status.readyToConnect", "Ready to Connect")}
                     </span>
                   </div>
 
@@ -1731,11 +1812,11 @@ function DatabaseConnectorsEditor({
                   >
                     {isConnected ? (
                       <>
-                        <Pencil className="w-3.5 h-3.5 mr-1.5" /> Configure
+                        <Pencil className="w-3.5 h-3.5 mr-1.5" /> {t("common:configure", "Configure")}
                       </>
                     ) : (
                       <>
-                        <Plus className="w-4 h-4 mr-1.5 stroke-[2.5]" /> Connect
+                        <Plus className="w-4 h-4 mr-1.5 stroke-[2.5]" /> {t("common:connect", "Connect")}
                       </>
                     )}
                   </Button>
@@ -1765,14 +1846,14 @@ function DatabaseConnectorsEditor({
       <div className="pt-6 border-t border-border/50 space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
           <div className="flex items-center gap-2.5">
-            <h4 className="text-lg font-bold text-foreground">Connected Integrations & Active Servers</h4>
+            <h4 className="text-lg font-bold text-foreground">{t("header.connectedIntegrations", "Connected Integrations & Active Servers")}</h4>
             <Badge variant="outline" className="bg-emerald-500/10 text-emerald-400 border-emerald-500/30 text-xs gap-1">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-              {connectedCount} Connected
+              {t("connectors.connectedCount", "{{count}} Connected", { count: connectedCount })}
             </Badge>
           </div>
           <p className="text-xs text-muted-foreground">
-            Active integrations automatically attach live tool capabilities to your AI agents
+            {t("connectors.activeAttachHint", "Active integrations automatically attach live tool capabilities to your AI agents")}
           </p>
         </div>
 
@@ -1785,8 +1866,7 @@ function DatabaseConnectorsEditor({
             role="alert"
             className="rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-xs text-destructive"
           >
-            Connector sharing could not be loaded, so connectors shared from other accounts
-            are not listed here. Refresh to try again.
+            {t("errors.sharingNotListed", "Connector sharing could not be loaded, so connectors shared from other accounts are not listed here. Refresh to try again.")}
           </p>
         )}
 
@@ -1797,9 +1877,9 @@ function DatabaseConnectorsEditor({
                 <Database className="h-6 w-6" />
               </div>
               <div className="max-w-md space-y-1">
-                <h5 className="font-semibold text-sm text-foreground">No servers connected yet</h5>
+                <h5 className="font-semibold text-sm text-foreground">{t("empty.noServers", "No servers connected yet")}</h5>
                 <p className="text-xs text-muted-foreground">
-                  Select any card above (Shopify, WooCommerce, Salla, MyFatoorah, Supabase, or Higgsfield) and click "Connect" to activate live store tools.
+                  {t("empty.noServersHint", "Select any card above (Shopify, WooCommerce, Salla, MyFatoorah, Supabase, or Higgsfield) and click \"Connect\" to activate live store tools.")}
                 </p>
               </div>
             </CardContent>
@@ -1816,24 +1896,24 @@ function DatabaseConnectorsEditor({
                         <ConnectorBrandLogo id="higgsfield" className="w-7 h-7" />
                       </div>
                       <div>
-                        <CardTitle className="text-sm font-bold text-foreground">Higgsfield AI Studio</CardTitle>
+                        <CardTitle className="text-sm font-bold text-foreground">{t("directory.higgsfield.title", "Higgsfield AI Studio")}</CardTitle>
                         <CardDescription className="text-xs truncate max-w-[180px]">
-                          {higgsfieldAccount || "BYO Generation Connected"}
+                          {higgsfieldAccount || t("connectors.byoConnected", "BYO Generation Connected")}
                         </CardDescription>
                       </div>
                     </div>
 
                     <Badge className="bg-emerald-500/15 text-emerald-400 border-emerald-500/30 text-[10px] gap-1 py-0 h-5">
                       <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                      Connected
+                      {t("status.connected", "Connected")}
                     </Badge>
                   </div>
                 </CardHeader>
 
                 <CardContent className="p-4 pt-0 space-y-3">
                   <div className="p-2.5 rounded-xl bg-muted/40 text-[11px] text-muted-foreground flex items-center justify-between">
-                    <span>Quota: BYO Direct Billing</span>
-                    <span className="font-medium text-emerald-400">Zero Postora Credits</span>
+                    <span>{t("connectors.quotaByo", "Quota: BYO Direct Billing")}</span>
+                    <span className="font-medium text-emerald-400">{t("connectors.zeroCredits", "Zero Postora Credits")}</span>
                   </div>
 
                   <div className="flex items-center justify-between pt-2 border-t border-border/40">
@@ -1843,7 +1923,7 @@ function DatabaseConnectorsEditor({
                       className="h-8 text-xs font-semibold text-emerald-500 border-emerald-500/30 bg-emerald-500/10 hover:bg-emerald-500/20 gap-1.5"
                     >
                       <Check className="w-3.5 h-3.5" />
-                      <span>Connected</span>
+                      <span>{t("status.connected", "Connected")}</span>
                     </Button>
 
                     <Button
@@ -1853,7 +1933,7 @@ function DatabaseConnectorsEditor({
                       disabled={higgsfieldBusy}
                       className="h-8 text-xs text-rose-500 hover:text-rose-600 hover:bg-rose-500/10"
                     >
-                      <Unlink className="w-3.5 h-3.5 mr-1" /> Disconnect
+                      <Unlink className="w-3.5 h-3.5 mr-1" /> {t("common:disconnect", "Disconnect")}
                     </Button>
                   </div>
                 </CardContent>
@@ -1894,14 +1974,14 @@ function DatabaseConnectorsEditor({
                             {tool.name}
                           </CardTitle>
                           <CardDescription className="text-xs truncate max-w-[180px]">
-                            {preset.title}
+                            {directoryTitle(preset.id, preset.title, t)}
                           </CardDescription>
                         </div>
                       </div>
 
                       <Badge className="bg-emerald-500/15 text-emerald-400 border-emerald-500/30 text-[10px] gap-1 py-0 h-5">
                         <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                        Connected
+                        {t("status.connected", "Connected")}
                       </Badge>
                     </div>
 
@@ -1916,15 +1996,15 @@ function DatabaseConnectorsEditor({
                       >
                         <Share2 className="h-3 w-3 shrink-0" />
                         {legacyGlobal ? (
-                          <span>Available to all accounts (legacy connector)</span>
+                          <span>{t("connectors.legacyAllAccounts", "Available to all accounts (legacy connector)")}</span>
                         ) : (
                           <>
-                            <span>Shared from</span>
+                            <span>{t("connectors.sharedFrom", "Shared from")}</span>
                             {ownerAccount && (
                               <PlatformIcon platform={ownerAccount.platform as Platform} size="xs" />
                             )}
                             <span className="font-medium text-foreground/80">
-                              {ownerAccount ? accountLabel(ownerAccount) : "another account"}
+                              {ownerAccount ? accountLabel(ownerAccount) : t("connectors.anotherAccount", "another account")}
                             </span>
                           </>
                         )}
@@ -1934,8 +2014,8 @@ function DatabaseConnectorsEditor({
 
                   <CardContent className="p-4 pt-0 space-y-3">
                     <div className="p-2.5 rounded-xl bg-muted/40 text-[11px] text-muted-foreground flex items-center justify-between">
-                      <span className="font-mono truncate max-w-[160px]">{tool.url || "API Endpoint"}</span>
-                      <span className="font-medium text-emerald-400">{tool.is_enabled ? "Active Tool" : "Disabled"}</span>
+                      <span className="font-mono truncate max-w-[160px]">{tool.url || t("connectors.apiEndpoint", "API Endpoint")}</span>
+                      <span className="font-medium text-emerald-400">{tool.is_enabled ? t("status.activeTool", "Active Tool") : t("status.disabled", "Disabled")}</span>
                     </div>
 
                     <div className="flex items-center justify-between pt-2 border-t border-border/40">
@@ -1952,7 +2032,7 @@ function DatabaseConnectorsEditor({
                           className="h-8 text-xs font-semibold text-emerald-500 border-emerald-500/30 bg-emerald-500/10 hover:bg-emerald-500/20 gap-1.5 cursor-pointer"
                         >
                           <Check className="w-3.5 h-3.5 stroke-[3]" />
-                          <span>Connected</span>
+                          <span>{t("status.connected", "Connected")}</span>
                         </Button>
                       )}
 
@@ -1968,25 +2048,25 @@ function DatabaseConnectorsEditor({
                             onClick={() => handleCardClick(preset, tool)}
                             className="h-8 text-xs text-muted-foreground hover:text-foreground"
                           >
-                            <Pencil className="w-3 h-3 mr-1" /> Edit
+                            <Pencil className="w-3 h-3 mr-1" /> {t("common:edit", "Edit")}
                           </Button>
                         )}
                         <Button
                           variant="ghost"
                           size="icon"
                           className="h-8 w-8 text-rose-500 hover:text-rose-600 hover:bg-rose-500/10"
-                          aria-label={`Disconnect ${tool.name}`}
+                          aria-label={t("actions.disconnectNamed", "Disconnect {{name}}", { name: tool.name })}
                           onClick={() => {
                             // Deleting is not un-sharing: the row is gone for
                             // every account it reaches, including the one that
                             // connected it. Say so on a card this account does
                             // not own — untick the box below to just drop it.
                             const question = owned
-                              ? `Are you sure you want to disconnect '${tool.name}'?`
-                              : `'${tool.name}' is shared from another account. Disconnecting deletes it for every account. Continue?`;
+                              ? t("dialog.disconnectNamed", "Are you sure you want to disconnect '{{name}}'?", { name: tool.name })
+                              : t("dialog.disconnectShared", "'{{name}}' is shared from another account. Disconnecting deletes it for every account. Continue?", { name: tool.name });
                             if (confirm(question)) {
                               deleteTool.mutate(tool.id, {
-                                onSuccess: () => toast.success(`Connector '${tool.name}' disconnected`),
+                                onSuccess: () => toast.success(t("toast.connectorDisconnected", "Connector '{{name}}' disconnected", { name: tool.name })),
                               });
                             }
                           }}
@@ -2005,16 +2085,16 @@ function DatabaseConnectorsEditor({
                     <ConnectorTestState
                       tool={tool}
                       testing={testingToolIds.includes(tool.id)}
-                      view={testResultViews[tool.id] ?? storedTestView(tool)}
+                      view={testResultViews[tool.id] ?? storedTestView(tool, t)}
                       onTest={() => void runConnectionTest(tool)}
                     />
                     {accountsError ? (
                       <p className="border-t pt-3 text-xs text-destructive">
-                        Connected accounts could not be loaded, so sharing cannot be changed here.
+                        {t("errors.accountsSharing", "Connected accounts could not be loaded, so sharing cannot be changed here.")}
                       </p>
                     ) : linksError ? (
                       <p className="border-t pt-3 text-xs text-destructive">
-                        Connector sharing could not be loaded. Refresh to try again.
+                        {t("errors.sharingRefresh", "Connector sharing could not be loaded. Refresh to try again.")}
                       </p>
                     ) : legacyGlobal ? (
                       // A scope='all_accounts' row reaches every agent through
@@ -2022,14 +2102,13 @@ function DatabaseConnectorsEditor({
                       // draw ticks that no toggle can change (nextToolSharing
                       // only ever edits links).
                       <p className="border-t pt-3 text-xs text-muted-foreground">
-                        Every agent can use this connector. Reconnect it on one account to choose
-                        which agents it reaches.
+                        {t("connectors.everyAgent", "Every agent can use this connector. Reconnect it on one account to choose which agents it reaches.")}
                       </p>
                     ) : (
                       linksReady && accountsReady && shareAccounts.length > 0 && (
                         <div className="border-t pt-3">
                           <p className="mb-2 text-xs font-medium text-muted-foreground">
-                            Agents that can use this
+                            {t("connectors.agentsCanUse", "Agents that can use this")}
                           </p>
                           <div className="flex flex-wrap gap-x-4 gap-y-2">
                             {shareAccounts.map((account) => {
@@ -2037,7 +2116,7 @@ function DatabaseConnectorsEditor({
                               return (
                                 <label
                                   key={account.id}
-                                  title={isOwner ? "This account owns the connector; unticking it would change the owner, not sharing." : undefined}
+                                  title={isOwner ? t("connectors.ownerTickHint", "This account owns the connector; unticking it would change the owner, not sharing.") : undefined}
                                   className={cn(
                                     "flex items-center gap-2 text-sm",
                                     isOwner ? "cursor-not-allowed" : "cursor-pointer",
@@ -2049,7 +2128,7 @@ function DatabaseConnectorsEditor({
                                     onCheckedChange={(value) =>
                                       toggleToolShare(tool, account, value === true)
                                     }
-                                    aria-label={`Share ${tool.name} with ${accountLabel(account)}`}
+                                    aria-label={t("actions.shareWith", "Share {{name}} with {{account}}", { name: tool.name, account: accountLabel(account) })}
                                   />
                                   <PlatformIcon platform={account.platform as Platform} size="xs" />
                                   <span>{accountLabel(account)}</span>
@@ -2083,22 +2162,22 @@ function DatabaseConnectorsEditor({
                           {client.name}
                         </CardTitle>
                         <CardDescription className="text-xs truncate max-w-[180px]">
-                          Authorized OAuth App
+                          {t("connectors.authorizedOauth", "Authorized OAuth App")}
                         </CardDescription>
                       </div>
                     </div>
 
                     <Badge className="bg-emerald-500/15 text-emerald-400 border-emerald-500/30 text-[10px] gap-1 py-0 h-5">
                       <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                      Authorized
+                      {t("status.authorized", "Authorized")}
                     </Badge>
                   </div>
                 </CardHeader>
 
                 <CardContent className="p-4 pt-0 space-y-3">
                   <div className="p-2.5 rounded-xl bg-muted/40 text-[11px] text-muted-foreground flex items-center justify-between">
-                    <span>Scopes: {client.scopes?.join(", ") || "Full Access"}</span>
-                    <span className="font-medium text-emerald-400">Active Token</span>
+                    <span>{t("connectors.scopes", "Scopes: {{scopes}}", { scopes: client.scopes?.join(", ") || t("connectors.fullAccess", "Full Access") })}</span>
+                    <span className="font-medium text-emerald-400">{t("connectors.activeToken", "Active Token")}</span>
                   </div>
 
                   <div className="flex items-center justify-between pt-2 border-t border-border/40">
@@ -2108,20 +2187,20 @@ function DatabaseConnectorsEditor({
                       className="h-8 text-xs font-semibold text-emerald-500 border-emerald-500/30 bg-emerald-500/10 hover:bg-emerald-500/20 gap-1.5"
                     >
                       <Check className="w-3.5 h-3.5" />
-                      <span>Connected</span>
+                      <span>{t("status.connected", "Connected")}</span>
                     </Button>
 
                     <Button
                       variant="ghost"
                       size="sm"
                       onClick={() => {
-                        if (confirm(`Are you sure you want to revoke access for ${client.name}?`)) {
+                        if (confirm(t("dialog.revokeAccess", "Are you sure you want to revoke access for {{name}}?", { name: client.name }))) {
                           handleRevokeOAuth(client.id, client.name);
                         }
                       }}
                       className="h-8 text-xs text-rose-500 hover:text-rose-600 hover:bg-rose-500/10"
                     >
-                      <Unlink className="w-3.5 h-3.5 mr-1" /> Revoke
+                      <Unlink className="w-3.5 h-3.5 mr-1" /> {t("actions.revoke", "Revoke")}
                     </Button>
                   </div>
                 </CardContent>
@@ -2143,20 +2222,20 @@ function DatabaseConnectorsEditor({
               )}
               <div>
                 <DialogTitle className="text-lg flex items-center gap-2">
-                  <span>{selectedPreset?.title || "Connector Configuration"}</span>
+                  <span>{selectedPreset ? directoryTitle(selectedPreset.id, selectedPreset.title, t) : t("dialog.connectorConfig", "Connector Configuration")}</span>
                   {(editingTool || (selectedPreset?.id === "higgsfield" && higgsfieldConnected)) && (
                     <Badge className="bg-emerald-500/15 text-emerald-400 border-emerald-500/30 text-[10px]">
-                      Connected
+                      {t("status.connected", "Connected")}
                     </Badge>
                   )}
                   {selectedPreset?.supportsMcp && (
                     <Badge variant="outline" className="bg-violet-500/10 text-violet-400 border-violet-500/30 text-[10px]">
-                      ⚡ MCP Enabled
+                      {t("connectors.mcpEnabled", "⚡ MCP Enabled")}
                     </Badge>
                   )}
                 </DialogTitle>
                 <DialogDescription className="text-xs mt-0.5">
-                  {selectedPreset?.description || "Configure credentials and tool calling parameters."}
+                  {selectedPreset ? directoryDescription(selectedPreset.id, selectedPreset.description, t) : t("dialog.configureCredentials", "Configure credentials and tool calling parameters.")}
                 </DialogDescription>
               </div>
             </div>
@@ -2172,21 +2251,21 @@ function DatabaseConnectorsEditor({
               <div className="p-4 rounded-xl border border-border/60 bg-muted/20 space-y-3">
                 <div className="flex items-center justify-between">
                   <div>
-                    <h4 className="font-semibold text-sm text-foreground">Direct Higgsfield OAuth Authentication</h4>
+                    <h4 className="font-semibold text-sm text-foreground">{t("dialog.higgsfieldOauth", "Direct Higgsfield OAuth Authentication")}</h4>
                     <p className="text-xs text-muted-foreground mt-0.5">
-                      Connect your personal Higgsfield account with 1-click. All generation is billed to Higgsfield and does not consume Postora quota.
+                      {t("dialog.higgsfieldOauthHint", "Connect your personal Higgsfield account with 1-click. All generation is billed to Higgsfield and does not consume Postora quota.")}
                     </p>
                   </div>
                   {higgsfieldConnected && (
                     <Badge className="bg-emerald-500/15 text-emerald-400 border-emerald-500/30 text-xs">
-                      Active
+                      {t("status.active", "Active")}
                     </Badge>
                   )}
                 </div>
 
                 {higgsfieldConnected && higgsfieldAccount && (
                   <p className="text-xs font-mono text-emerald-400 bg-emerald-500/10 p-2 rounded-lg border border-emerald-500/20">
-                    Connected Account: {higgsfieldAccount}
+                    {t("connectors.connectedAccountNamed", "Connected Account: {{account}}", { account: higgsfieldAccount })}
                   </p>
                 )}
               </div>
@@ -2195,7 +2274,7 @@ function DatabaseConnectorsEditor({
 
               <div className="flex shrink-0 items-center justify-between border-t border-border/40 pt-4">
                 <Button variant="outline" size="sm" onClick={() => setDialogOpen(false)} className="text-xs h-8">
-                  Cancel
+                  {t("common:cancel", "Cancel")}
                 </Button>
 
                 {higgsfieldConnected ? (
@@ -2207,7 +2286,7 @@ function DatabaseConnectorsEditor({
                     className="text-xs h-8 text-rose-500 border-rose-500/30 hover:bg-rose-500/10"
                   >
                     {higgsfieldBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <Unlink className="w-3.5 h-3.5 mr-1" />}
-                    <span>Disconnect Account</span>
+                    <span>{t("actions.disconnectAccount", "Disconnect Account")}</span>
                   </Button>
                 ) : (
                   <Button
@@ -2217,7 +2296,7 @@ function DatabaseConnectorsEditor({
                     className="text-xs h-8 gap-1.5 bg-rose-600 hover:bg-rose-700 text-white"
                   >
                     {higgsfieldBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Link2 className="w-3.5 h-3.5" />}
-                    <span>Connect with Higgsfield</span>
+                    <span>{t("actions.connectHiggsfield", "Connect with Higgsfield")}</span>
                   </Button>
                 )}
               </div>
@@ -2235,13 +2314,13 @@ function DatabaseConnectorsEditor({
               >
                 <TabsList className="grid grid-cols-3 w-full bg-muted/60 h-9 p-1">
                   <TabsTrigger value="credentials" className="text-xs">
-                    Credentials & API
+                    {t("form.tabCredentials", "Credentials & API")}
                   </TabsTrigger>
                   <TabsTrigger value="mcp" disabled={!selectedPreset?.supportsMcp} className="text-xs">
-                    Model Context Protocol (MCP)
+                    {t("form.tabMcp", "Model Context Protocol (MCP)")}
                   </TabsTrigger>
                   <TabsTrigger value="overview" className="text-xs">
-                    Security & Isolation
+                    {t("form.tabSecurity", "Security & Isolation")}
                   </TabsTrigger>
                 </TabsList>
 
@@ -2256,7 +2335,7 @@ function DatabaseConnectorsEditor({
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div className="space-y-1.5">
                       <Label htmlFor="connector-tool-name" className="text-xs">
-                        Tool Name (Unique Identifier)
+                        {t("form.toolName", "Tool Name (Unique Identifier)")}
                       </Label>
                       <Input
                         id="connector-tool-name"
@@ -2269,20 +2348,20 @@ function DatabaseConnectorsEditor({
 
                     <div className="space-y-1.5">
                       <div className="flex items-center justify-between">
-                        <Label className="text-xs">Connector Type</Label>
+                        <Label className="text-xs">{t("form.connectorType", "Connector Type")}</Label>
                         <span className="text-[10px] text-muted-foreground flex items-center gap-1 font-normal">
-                          <Lock className="w-3 h-3" /> Fixed to preset
+                          <Lock className="w-3 h-3" /> {t("form.fixedToPreset", "Fixed to preset")}
                         </span>
                       </div>
                       <div className="h-9 px-3 rounded-md border border-input bg-muted/50 flex items-center justify-between gap-2 text-xs font-medium text-foreground cursor-not-allowed select-none">
                         <div className="flex items-center gap-2 truncate">
                           <ConnectorBrandLogo id={form.connector_type} className="w-4 h-4 shrink-0" />
                           <span className="truncate">
-                            {CONNECTOR_DIRECTORY.find((d) => d.id === form.connector_type)?.title || form.connector_type}
+                            {directoryTitle(form.connector_type, CONNECTOR_DIRECTORY.find((d) => d.id === form.connector_type)?.title || form.connector_type, t)}
                           </span>
                         </div>
                         <Badge variant="secondary" className="text-[9px] py-0 h-4 shrink-0 font-normal">
-                          Read-Only
+                          {t("form.readOnly", "Read-Only")}
                         </Badge>
                       </div>
                     </div>
@@ -2307,7 +2386,7 @@ function DatabaseConnectorsEditor({
                             {field.label}
                           </Label>
                           <span className="text-[10px] text-muted-foreground">
-                            {isStoredSecret ? "Stored — leave blank to keep" : field.required ? "Required" : null}
+                            {isStoredSecret ? t("form.storedKeep", "Stored — leave blank to keep") : field.required ? t("form.required", "Required") : null}
                           </span>
                         </div>
                         <Input
@@ -2326,7 +2405,7 @@ function DatabaseConnectorsEditor({
                             field.kind === "secret"
                               ? isStoredSecret
                                 ? "••••••••••••••••"
-                                : `Enter ${field.label}`
+                                : t("form.enterField", "Enter {{field}}", { field: field.label })
                               : field.help
                           }
                           className={cn("h-9", field.kind === "url" && "font-mono text-xs")}
@@ -2375,7 +2454,7 @@ function DatabaseConnectorsEditor({
                   {!urlCredentialField(form.connector_type) && !isComposioType(form.connector_type) && (
                     <div className="space-y-1.5">
                       <Label htmlFor="connector-endpoint-url" className="text-xs">
-                        API Endpoint / Webhook URL
+                        {t("form.endpointUrl", "API Endpoint / Webhook URL")}
                       </Label>
                       <Input
                         id="connector-endpoint-url"
@@ -2398,25 +2477,25 @@ function DatabaseConnectorsEditor({
                         onCheckedChange={(c) => setClearSecret(Boolean(c))}
                       />
                       <Label htmlFor="clear-secret-chk" className="text-xs text-muted-foreground cursor-pointer">
-                        Remove stored secret from database
+                        {t("form.removeSecret", "Remove stored secret from database")}
                       </Label>
                     </div>
                   )}
 
                   <div className="space-y-1.5">
-                    <Label className="text-xs">AI Tool Prompt & Trigger Instructions</Label>
+                    <Label className="text-xs">{t("form.toolPrompt", "AI Tool Prompt & Trigger Instructions")}</Label>
                     <Textarea
                       rows={2}
                       value={form.description}
                       onChange={(e) => setForm({ ...form, description: e.target.value })}
-                      placeholder="Explain when the AI agent should call this tool..."
+                      placeholder={t("form.toolPromptPlaceholder", "Explain when the AI agent should call this tool...")}
                       className="text-xs leading-relaxed resize-none"
                     />
                   </div>
 
                   {/* Capability Permissions */}
                   <div className="p-3 rounded-xl border border-border/60 bg-muted/20 space-y-2.5">
-                    <Label className="text-xs font-semibold text-foreground">Capability Permissions</Label>
+                    <Label className="text-xs font-semibold text-foreground">{t("form.capabilityPermissions", "Capability Permissions")}</Label>
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                       <div className="flex items-center gap-2">
                         <Checkbox
@@ -2425,7 +2504,7 @@ function DatabaseConnectorsEditor({
                           onCheckedChange={(c) => setForm({ ...form, permission_search_products: Boolean(c) })}
                         />
                         <Label htmlFor="perm-search" className="text-xs cursor-pointer">
-                          Search Products
+                          {t("form.searchProducts", "Search Products")}
                         </Label>
                       </div>
 
@@ -2436,7 +2515,7 @@ function DatabaseConnectorsEditor({
                           onCheckedChange={(c) => setForm({ ...form, permission_check_stock: Boolean(c) })}
                         />
                         <Label htmlFor="perm-stock" className="text-xs cursor-pointer">
-                          Check Stock
+                          {t("form.checkStock", "Check Stock")}
                         </Label>
                       </div>
 
@@ -2447,7 +2526,7 @@ function DatabaseConnectorsEditor({
                           onCheckedChange={(c) => setForm({ ...form, permission_lookup_orders: Boolean(c) })}
                         />
                         <Label htmlFor="perm-orders" className="text-xs cursor-pointer">
-                          Lookup Orders
+                          {t("form.lookupOrders", "Lookup Orders")}
                         </Label>
                       </div>
                     </div>
@@ -2457,8 +2536,8 @@ function DatabaseConnectorsEditor({
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
                     <div className="flex items-center justify-between p-2.5 rounded-xl border border-border/60 bg-muted/10">
                       <div className="space-y-0.5">
-                        <Label className="text-xs font-medium">Read-Only Guard</Label>
-                        <p className="text-[10px] text-muted-foreground">Disallows any write operations</p>
+                        <Label className="text-xs font-medium">{t("form.readOnlyGuard", "Read-Only Guard")}</Label>
+                        <p className="text-[10px] text-muted-foreground">{t("form.readOnlyGuardHint", "Disallows any write operations")}</p>
                       </div>
                       <Switch
                         checked={form.read_only_mode}
@@ -2468,8 +2547,8 @@ function DatabaseConnectorsEditor({
 
                     <div className="flex items-center justify-between p-2.5 rounded-xl border border-border/60 bg-muted/10">
                       <div className="space-y-0.5">
-                        <Label className="text-xs font-medium">Smart Cache</Label>
-                        <p className="text-[10px] text-muted-foreground">Caches repeated product queries</p>
+                        <Label className="text-xs font-medium">{t("form.smartCache", "Smart Cache")}</Label>
+                        <p className="text-[10px] text-muted-foreground">{t("form.smartCacheHint", "Caches repeated product queries")}</p>
                       </div>
                       <Switch
                         checked={form.enable_cache}
@@ -2484,19 +2563,19 @@ function DatabaseConnectorsEditor({
                   <div className="p-3.5 rounded-xl bg-violet-500/10 border border-violet-500/30 space-y-2">
                     <div className="flex items-center gap-2">
                   <Zap className="w-4 h-4 text-violet-400" />
-                  <h4 className="font-semibold text-xs text-foreground">Auto-Approved MCP Connection</h4>
+                  <h4 className="font-semibold text-xs text-foreground">{t("form.mcpAutoApproved", "Auto-Approved MCP Connection")}</h4>
                 </div>
                 <p className="text-xs text-muted-foreground leading-relaxed">
-                  This connector supports the official Model Context Protocol. You can connect it directly to Claude Desktop, Cursor, Windsurf, or Antigravity agents without needing admin review.
+                  {t("form.mcpAutoApprovedHint", "This connector supports the official Model Context Protocol. You can connect it directly to Claude Desktop, Cursor, Windsurf, or Antigravity agents without needing admin review.")}
                 </p>
               </div>
 
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <Label className="text-xs">MCP Server Configuration JSON</Label>
+                  <Label className="text-xs">{t("form.mcpJson", "MCP Server Configuration JSON")}</Label>
                   <Button variant="ghost" size="sm" onClick={copyMcpConfig} className="h-7 text-xs gap-1">
                     {copiedMcp ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                    <span>{copiedMcp ? "Copied" : "Copy JSON"}</span>
+                    <span>{copiedMcp ? t("common:copied", "Copied") : t("actions.copyJson", "Copy JSON")}</span>
                   </Button>
                 </div>
                 <pre className="p-3 rounded-xl bg-muted/60 border border-border/60 text-[11px] font-mono overflow-x-auto text-foreground">
@@ -2507,7 +2586,7 @@ function DatabaseConnectorsEditor({
               <div className="pt-2">
                 <Button onClick={handleMcpInstantActivate} className="w-full gap-2 text-xs bg-violet-600 hover:bg-violet-700">
                   <Zap className="w-4 h-4" />
-                  <span>Activate & Connect with MCP Auto-Auth</span>
+                  <span>{t("actions.activateMcp", "Activate & Connect with MCP Auto-Auth")}</span>
                 </Button>
               </div>
             </TabsContent>
@@ -2518,9 +2597,9 @@ function DatabaseConnectorsEditor({
                 <div className="flex items-start gap-2.5">
                   <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
                   <div>
-                    <h5 className="font-semibold text-foreground">Multi-Tenant Store Isolation</h5>
+                    <h5 className="font-semibold text-foreground">{t("form.isolationTitle", "Multi-Tenant Store Isolation")}</h5>
                     <p className="text-muted-foreground mt-0.5">
-                      Your store credentials, API keys, and cache records are strictly isolated under your user identifier (<code className="font-mono text-[10px] bg-background px-1 py-0.5 rounded">{profile?.id || "uid"}</code>).
+                      {t("form.isolationHint", "Your store credentials, API keys, and cache records are strictly isolated under your user identifier ({{id}}).", { id: profile?.id || "uid" })}
                     </p>
                   </div>
                 </div>
@@ -2528,9 +2607,9 @@ function DatabaseConnectorsEditor({
                 <div className="flex items-start gap-2.5">
                   <Lock className="w-4 h-4 text-sky-400 shrink-0 mt-0.5" />
                   <div>
-                    <h5 className="font-semibold text-foreground">Read-Only Guardrails</h5>
+                    <h5 className="font-semibold text-foreground">{t("form.guardrailsTitle", "Read-Only Guardrails")}</h5>
                     <p className="text-muted-foreground mt-0.5">
-                      By default, AI agent tool calling is locked in read-only mode to prevent unintended stock or order modifications.
+                      {t("form.guardrailsHint", "By default, AI agent tool calling is locked in read-only mode to prevent unintended stock or order modifications.")}
                     </p>
                   </div>
                 </div>
@@ -2538,9 +2617,9 @@ function DatabaseConnectorsEditor({
                 <div className="flex items-start gap-2.5">
                   <Clock className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
                   <div>
-                    <h5 className="font-semibold text-foreground">Automated Quota Billing</h5>
+                    <h5 className="font-semibold text-foreground">{t("form.quotaTitle", "Automated Quota Billing")}</h5>
                     <p className="text-muted-foreground mt-0.5">
-                      Tool requests execute directly under your account subscription quota with zero manual admin approval delays.
+                      {t("form.quotaHint", "Tool requests execute directly under your account subscription quota with zero manual admin approval delays.")}
                     </p>
                   </div>
                 </div>
@@ -2557,10 +2636,10 @@ function DatabaseConnectorsEditor({
                   variant="ghost"
                   size="sm"
                   onClick={() => {
-                    if (confirm(`Are you sure you want to disconnect '${editingTool.name}'?`)) {
+                    if (confirm(t("dialog.disconnectNamed", "Are you sure you want to disconnect '{{name}}'?", { name: editingTool.name }))) {
                       deleteTool.mutate(editingTool.id, {
                         onSuccess: () => {
-                          toast.success("Connector removed");
+                          toast.success(t("toast.connectorRemoved", "Connector removed"));
                           setDialogOpen(false);
                         },
                       });
@@ -2568,18 +2647,18 @@ function DatabaseConnectorsEditor({
                   }}
                   className="text-rose-500 hover:text-rose-600 hover:bg-rose-500/10 text-xs h-8"
                 >
-                  <Trash2 className="w-3.5 h-3.5 mr-1" /> Disconnect
+                  <Trash2 className="w-3.5 h-3.5 mr-1" /> {t("common:disconnect", "Disconnect")}
                 </Button>
               )}
             </div>
 
             <div className="flex items-center gap-2">
               <Button variant="outline" size="sm" onClick={() => setDialogOpen(false)} className="text-xs h-8">
-                Cancel
+                {t("common:cancel", "Cancel")}
               </Button>
               <Button size="sm" onClick={handleSave} disabled={upsertTool.isPending} className="text-xs h-8 gap-1.5">
                 {upsertTool.isPending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
-                <span>{editingTool ? "Save Changes" : "Save & Connect"}</span>
+                <span>{editingTool ? t("common:saveChanges", "Save Changes") : t("actions.saveAndConnect", "Save & Connect")}</span>
               </Button>
             </div>
           </div>

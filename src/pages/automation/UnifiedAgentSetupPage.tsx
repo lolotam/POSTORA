@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
+import "@/i18n";
 import { Navigate, useSearchParams } from "react-router-dom";
 import { motion } from "framer-motion";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
@@ -56,6 +58,7 @@ const PLATFORM_FLAG: Record<AiAgentPlatform, keyof ReturnType<typeof useFeatureF
 const COMMENTS_ONLY_PLATFORMS: ReadonlySet<AiAgentPlatform> = new Set(["youtube"]);
 
 export default function UnifiedAgentSetupPage() {
+  const { t } = useTranslation("automation");
   const [searchParams, setSearchParams] = useSearchParams();
   const [agentDirty, setAgentDirty] = useState(false);
   const { guard, pending, confirmDiscard, cancel } = useUnsavedChangesGuard(agentDirty);
@@ -69,6 +72,27 @@ export default function UnifiedAgentSetupPage() {
   }
 
   const selectedPlatformMeta = PLATFORMS.find((p) => p.id === platform) || PLATFORMS[0];
+
+  const dmsSurfaceLabel = selectedPlatformMeta.dmsLabel === "Mentions"
+    ? t("agent.surface.mentions", "Mentions")
+    : t("agent.surface.directMessaging", "Direct Messaging");
+  const commentsSurfaceLabel = selectedPlatformMeta.commentsLabel === "Replies"
+    ? t("agent.surface.replies", "Replies")
+    : selectedPlatformMeta.commentsLabel === "Comments"
+    ? t("agent.surface.comments", "Comments")
+    : t("agent.surface.postComments", "Post Comments");
+  const dmsBadgeLabel = selectedPlatformMeta.dmsLabel === "Mentions"
+    ? t("agent.surface.mentions", "Mentions")
+    : t("agent.surface.dms", "DMs");
+  const commentsBadgeLabel = selectedPlatformMeta.commentsLabel === "Replies"
+    ? t("agent.surface.replies", "Replies")
+    : t("agent.surface.comments", "Comments");
+  const dmsDescName = selectedPlatformMeta.dmsLabel === "Mentions"
+    ? t("agent.surface.mentionsLower", "mentions")
+    : t("agent.surface.directMessagesLower", "direct messages");
+  const commentsDescName = selectedPlatformMeta.commentsLabel === "Replies"
+    ? t("agent.surface.repliesLower", "replies")
+    : t("agent.surface.postCommentsLower", "post comments");
 
   // The query parameter is the PREFERENCE; what is shown is that preference
   // narrowed to what the platform can serve. See src/lib/agentSurface.ts.
@@ -175,7 +199,7 @@ export default function UnifiedAgentSetupPage() {
                 }}
               >
                 <h1 className="text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-black uppercase tracking-[0.18em] sm:tracking-[0.25em] md:tracking-[0.3em] bg-gradient-to-r from-violet-500 via-indigo-500 to-sky-500 dark:from-violet-400 dark:via-indigo-400 dark:to-sky-400 bg-clip-text text-transparent drop-shadow-sm text-center">
-                  Agent Setup Portal
+                  {t("header.agentSetup", "Agent Setup Portal")}
                 </h1>
               </motion.div>
             </div>
@@ -183,7 +207,7 @@ export default function UnifiedAgentSetupPage() {
             <div
               className="flex items-center justify-center gap-6 sm:gap-8 md:gap-10 lg:gap-12 px-4 py-3 sm:py-4 flex-wrap bg-transparent"
               role="tablist"
-              aria-label="Social Channels"
+              aria-label={t("agent.channelsAria", "Social Channels")}
             >
               {PLATFORMS.map((p) => {
                 const isSelected = platform === p.id;
@@ -227,7 +251,15 @@ export default function UnifiedAgentSetupPage() {
                             : "text-muted-foreground group-hover:text-foreground"
                         )}
                       >
-                        {p.label}
+                        {p.id === "whatsapp"
+                          ? t("platform.whatsapp", "WhatsApp")
+                          : p.id === "facebook"
+                          ? t("platform.facebook", "Facebook")
+                          : p.id === "instagram"
+                          ? t("platform.instagram", "Instagram")
+                          : p.id === "threads"
+                          ? t("platform.threads", "Threads")
+                          : t("platform.youtube", "YouTube")}
                       </span>
                     </div>
                   </button>
@@ -257,32 +289,33 @@ export default function UnifiedAgentSetupPage() {
                 <div>
                   <div className="flex items-center gap-2 flex-wrap">
                     <h3 className="font-bold text-base sm:text-lg text-foreground">
-                      {(() => {
-                        const dmsName = selectedPlatformMeta.dmsLabel ?? "Direct Messaging";
-                        const commentsName = selectedPlatformMeta.commentsLabel ?? "Post Comments";
-                        if (dmsActive && !commentsActive) return `${dmsName} Agent Configuration`;
-                        if (!dmsActive && commentsActive) return `${commentsName} Agent Configuration`;
-                        return "Multi-Surface Agent Configuration";
-                      })()}
+                      {dmsActive && !commentsActive
+                        ? t("agent.config.surface", "{{surface}} Agent Configuration", { surface: dmsSurfaceLabel })
+                        : !dmsActive && commentsActive
+                        ? t("agent.config.surface", "{{surface}} Agent Configuration", { surface: commentsSurfaceLabel })
+                        : t("agent.config.multi", "Multi-Surface Agent Configuration")}
                     </h3>
                     <Badge variant="outline" className="text-primary border-primary/30 bg-primary/10 text-xs">
-                      {selectedPlatformMeta.label}{" "}
+                      {selectedPlatformMeta.id === "whatsapp"
+                        ? t("platform.whatsapp", "WhatsApp")
+                        : selectedPlatformMeta.id === "facebook"
+                        ? t("platform.facebook", "Facebook")
+                        : selectedPlatformMeta.id === "instagram"
+                        ? t("platform.instagram", "Instagram")
+                        : selectedPlatformMeta.id === "threads"
+                        ? t("platform.threads", "Threads")
+                        : t("platform.youtube", "YouTube")}{" "}
                       {dmsActive && commentsActive
-                        ? `${selectedPlatformMeta.dmsLabel ?? "DMs"} & ${selectedPlatformMeta.commentsLabel ?? "Comments"}`
+                        ? t("agent.badge.both", "{{dms}} & {{comments}}", { dms: dmsBadgeLabel, comments: commentsBadgeLabel })
                         : dmsActive
-                        ? (selectedPlatformMeta.dmsLabel ?? "DMs")
-                        : (selectedPlatformMeta.commentsLabel ?? "Comments")}
+                        ? dmsBadgeLabel
+                        : commentsBadgeLabel}
                     </Badge>
                   </div>
                   <p className="text-xs text-muted-foreground mt-0.5">
-                    Configure AI instructions, knowledge base (RAG), database connectors, and reply thresholds for{" "}
-                    {(() => {
-                      const dmsName = (selectedPlatformMeta.dmsLabel ?? "direct messages").toLowerCase();
-                      const commentsName = (selectedPlatformMeta.commentsLabel ?? "post comments").toLowerCase();
-                      if (dmsActive && commentsActive) return `${dmsName} and ${commentsName}`;
-                      if (dmsActive) return dmsName;
-                      return commentsName;
-                    })()}.
+                    {dmsActive && commentsActive
+                      ? t("agent.configDesc.both", "Configure AI instructions, knowledge base (RAG), database connectors, and reply thresholds for {{dms}} and {{comments}}.", { dms: dmsDescName, comments: commentsDescName })
+                      : t("agent.configDesc.single", "Configure AI instructions, knowledge base (RAG), database connectors, and reply thresholds for {{surface}}.", { surface: dmsActive ? dmsDescName : commentsDescName })}
                   </p>
                 </div>
               </div>
@@ -302,7 +335,7 @@ export default function UnifiedAgentSetupPage() {
                     )}
                   >
                     <MessageSquare className="w-4 h-4 text-sky-400 shrink-0" />
-                    <span>{selectedPlatformMeta.dmsLabel ?? "Direct Messaging"}</span>
+                    <span>{dmsSurfaceLabel}</span>
                     {dmsActive && <CheckCircle2 className="w-3.5 h-3.5 text-primary ml-0.5 shrink-0" />}
                   </button>
                 )}
@@ -320,7 +353,7 @@ export default function UnifiedAgentSetupPage() {
                     )}
                   >
                     <MessageCircle className="w-4 h-4 text-emerald-400 shrink-0" />
-                    <span>{selectedPlatformMeta.commentsLabel ?? "Post Comments"}</span>
+                    <span>{commentsSurfaceLabel}</span>
                     {commentsActive && <CheckCircle2 className="w-3.5 h-3.5 text-primary ml-0.5 shrink-0" />}
                   </button>
                 )}

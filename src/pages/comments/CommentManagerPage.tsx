@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+import "@/i18n";
 import { Navigate, useNavigate, useSearchParams } from "react-router-dom";
 import { motion } from "framer-motion";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
@@ -8,33 +10,32 @@ import { useFeatureFlags } from "@/hooks/useFeatureFlags";
 import { GradientDivider, Reveal, GradientRingCard } from "@/components/fx";
 import { CheckCircle2, ExternalLink } from "lucide-react";
 import { PlatformIcon } from "@/components/PlatformIcon";
-import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 export type CommentPlatform = "facebook" | "instagram" | "threads" | "youtube";
 
 interface PlatformOption {
   id: CommentPlatform;
-  label: string;
   colorPreset: "sky" | "rose" | "violet";
   /** When true, clicking this platform navigates away instead of loading inline content */
   externalPath?: string;
 }
 
 const PLATFORMS: PlatformOption[] = [
-  { id: "facebook", label: "Facebook", colorPreset: "sky" },
-  { id: "instagram", label: "Instagram", colorPreset: "rose" },
+  { id: "facebook", colorPreset: "sky" },
+  { id: "instagram", colorPreset: "rose" },
   // Threads has its own dedicated page at /messaging/thread — redirect there
-  { id: "threads", label: "Threads", colorPreset: "violet", externalPath: "/messaging/thread" },
+  { id: "threads", colorPreset: "violet", externalPath: "/messaging/thread" },
   // GradientRingCard has no red preset; rose is the nearest, and adding one is not this tile's job.
-  { id: "youtube", label: "YouTube", colorPreset: "rose" },
+  { id: "youtube", colorPreset: "rose" },
 ];
 
 export default function CommentManagerPage() {
+  const { t } = useTranslation("automation");
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const { flags, isLoading: flagsLoading } = useFeatureFlags();
-  const { data: socialAccounts = [] } = useSocialAccounts();
+  useSocialAccounts();
 
   // The YouTube tile is flag-gated, and the flag stays off for admins too until the migration
   // that admits youtube rows has been applied by hand (see VISIBILITY_FLAG_KEYS).
@@ -80,7 +81,7 @@ export default function CommentManagerPage() {
                 }}
               >
                 <h1 className="text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-black uppercase tracking-[0.35em] sm:tracking-[0.48em] md:tracking-[0.6em] bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500 dark:from-emerald-400 dark:via-teal-400 dark:to-cyan-400 bg-clip-text text-transparent drop-shadow-sm text-center">
-                  Comments Manager
+                  {t("header.commentsManager", "Comments Manager")}
                 </h1>
               </motion.div>
             </div>
@@ -88,7 +89,7 @@ export default function CommentManagerPage() {
             <div
               className="flex items-center justify-center gap-6 sm:gap-8 md:gap-10 lg:gap-12 px-4 py-3 sm:py-4 flex-wrap bg-transparent"
               role="tablist"
-              aria-label="Comment Channels"
+              aria-label={t("comments.channelsAria", "Comment Channels")}
             >
               {platforms.map((p) => {
                 const isSelected = platform === p.id;
@@ -138,7 +139,13 @@ export default function CommentManagerPage() {
                             : "text-muted-foreground group-hover:text-foreground"
                         )}
                       >
-                        {p.label}
+                        {p.id === "facebook"
+                          ? t("platform.facebook", "Facebook")
+                          : p.id === "instagram"
+                          ? t("platform.instagram", "Instagram")
+                          : p.id === "threads"
+                          ? t("platform.threads", "Threads")
+                          : t("platform.youtube", "YouTube")}
                       </span>
                     </div>
                   </button>

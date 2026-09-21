@@ -1,4 +1,6 @@
 import { useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
+import "@/i18n";
 import { Comment, useReplyComment } from "@/hooks/useCommentInbox";
 import { buildCommentThreads } from "@/components/comments/commentTree";
 import { CommentThreadCard } from "@/components/comments/CommentThreadCard";
@@ -10,6 +12,7 @@ interface CommentListProps {
 }
 
 export function CommentList({ comments, socialAccountId, hiddenFilter }: CommentListProps) {
+  const { t } = useTranslation("automation");
   const [replyingTo, setReplyingTo] = useState<string | null>(null);
   const [replyText, setReplyText] = useState("");
   const replyMutation = useReplyComment();
@@ -47,8 +50,8 @@ export function CommentList({ comments, socialAccountId, hiddenFilter }: Comment
   if (threads.length === 0) {
     return (
       <div className="py-12 text-center text-muted-foreground">
-        <p className="text-lg font-medium">No comments found</p>
-        <p className="mt-1 text-sm">Comments will appear here when they are available.</p>
+        <p className="text-lg font-medium">{t("empty.noComments", "No comments found")}</p>
+        <p className="mt-1 text-sm">{t("empty.noCommentsHint", "Comments will appear here when they are available.")}</p>
       </div>
     );
   }

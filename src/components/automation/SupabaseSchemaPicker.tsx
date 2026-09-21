@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
+import "@/i18n";
 import { Loader2, RefreshCw, Table2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -101,6 +103,7 @@ export function SupabaseSchemaPicker({
   columnCatalog,
   onPatch,
 }: SupabaseSchemaPickerProps) {
+  const { t } = useTranslation("automation");
   const [introspection, setIntrospection] = useState<SupabaseIntrospection | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -215,11 +218,11 @@ export function SupabaseSchemaPicker({
       try {
         columnsByTable[table] = await fetchTableColumns(projectUrl, anonKey, schema, table);
       } catch (cause) {
-        failures.push(cause instanceof Error ? cause.message : `Could not read "${table}".`);
+        failures.push(cause instanceof Error ? cause.message : t("errors.readTable", "Could not read \"{{table}}\".", { table }));
       }
     }
     if (Object.keys(columnsByTable).length === 0) {
-      throw new Error(failures.join(" ") || "Could not read any of the named tables.");
+      throw new Error(failures.join(" ") || t("errors.readTables", "Could not read any of the named tables."));
     }
     // Partial success still helps; the tables that failed are said out loud.
     if (failures.length) setError(failures.join(" "));
@@ -245,11 +248,11 @@ export function SupabaseSchemaPicker({
           onPatch({ column_catalog: catalogPatch(sampled, selectedTables) });
         } catch (sampleCause) {
           setIntrospection(null);
-          setError(sampleCause instanceof Error ? sampleCause.message : "Could not read the project.");
+          setError(sampleCause instanceof Error ? sampleCause.message : t("errors.readProject", "Could not read the project."));
         }
       } else {
         setIntrospection(null);
-        setError(cause instanceof Error ? cause.message : "Could not read the project.");
+        setError(cause instanceof Error ? cause.message : t("errors.readProject", "Could not read the project."));
       }
     } finally {
       setLoading(false);
@@ -261,7 +264,7 @@ export function SupabaseSchemaPicker({
       <div className="flex items-center justify-between gap-2">
         <Label className="text-xs flex items-center gap-1.5">
           <Table2 className="w-3.5 h-3.5" />
-          Pick tables & columns from the project
+          {t("schema.pickLabel", "Pick tables & columns from the project")}
         </Label>
         <Button
           type="button"
@@ -274,29 +277,26 @@ export function SupabaseSchemaPicker({
           {loading
             ? <Loader2 className="w-3 h-3 animate-spin" />
             : <RefreshCw className="w-3 h-3" />}
-          <span className="ml-1">{introspection ? "Reload" : "Load from project"}</span>
+          <span className="ml-1">{introspection ? t("actions.reload", "Reload") : t("actions.loadFromProject", "Load from project")}</span>
         </Button>
       </div>
 
       {!ready && (
         <p className="text-[10px] text-muted-foreground">
-          Enter the project URL and anon key above first. For a saved connector the key is
-          never shown back, so re-enter it to use the pickers — or keep typing the fields by
-          hand.
+          {t("schema.enterKeyFirst", "Enter the project URL and anon key above first. For a saved connector the key is never shown back, so re-enter it to use the pickers — or keep typing the fields by hand.")}
         </p>
       )}
       {error && <p className="text-[10px] text-destructive">{error}</p>}
       {!introspection && view && (
         <p className="text-[10px] text-muted-foreground">
           {parseCatalog(columnCatalog)
-            ? "Showing the tables and columns as last read from the project, with the saved selection ticked. Load from project to refresh."
-            : "Showing the saved selection only. Load from project to see the other tables and columns."}
+            ? t("schema.showingCatalog", "Showing the tables and columns as last read from the project, with the saved selection ticked. Load from project to refresh.")
+            : t("schema.showingSaved", "Showing the saved selection only. Load from project to see the other tables and columns.")}
         </p>
       )}
       {tableListUnavailable && (
         <p className="text-[10px] text-muted-foreground">
-          This project only lists tables to its service_role key, so the table names come from
-          the field above — columns below were read live from each table.
+          {t("schema.tableListUnavailable", "This project only lists tables to its service_role key, so the table names come from the field above — columns below were read live from each table.")}
         </p>
       )}
 
@@ -304,7 +304,7 @@ export function SupabaseSchemaPicker({
         <div className="space-y-3">
           <div className="space-y-1">
             <p className="text-[10px] font-medium text-muted-foreground">
-              Tables ({selectedTables.length} selected)
+              {t("schema.tablesSelected", "Tables ({{count}} selected)", { count: selectedTables.length })}
             </p>
             <div className="grid grid-cols-2 gap-x-3 gap-y-1 max-h-40 overflow-y-auto">
               {view.tables.map((table) => (
@@ -323,13 +323,14 @@ export function SupabaseSchemaPicker({
           {selectedTables.length > 0 && (
             <div className="space-y-2">
               <p className="text-[10px] font-medium text-muted-foreground">
-                Columns the AI agent reads, per table
+                {t("schema.columnsPerTable", "Columns the AI agent reads, per table")}
               </p>
               {selectedTables.map((table) => (
                 <div key={table} className="space-y-1">
                   <p className="text-[10px] font-mono text-muted-foreground">
-                    {table} ({columnsFor(table).length === 0 ? "all" : columnsFor(table).length}
-                    {" selected"})
+                    {columnsFor(table).length === 0
+                      ? t("schema.tableAllSelected", "{{table}} (all selected)", { table })
+                      : t("schema.tableCountSelected", "{{table}} ({{count}} selected)", { table, count: columnsFor(table).length })}
                   </p>
                   <div className="grid grid-cols-2 gap-x-3 gap-y-1 max-h-32 overflow-y-auto">
                     {(view.columnsByTable[table] ?? []).map((column) => (
@@ -349,9 +350,7 @@ export function SupabaseSchemaPicker({
                 </div>
               ))}
               <p className="text-[10px] text-muted-foreground">
-                Deselecting every column for a table stops the agent reading that table at
-                all. To let a table return all its columns again, clear the column map field.
-                Fewer columns means smaller prompts and cheaper replies.
+                {t("schema.deselectHint", "Deselecting every column for a table stops the agent reading that table at all. To let a table return all its columns again, clear the column map field. Fewer columns means smaller prompts and cheaper replies.")}
               </p>
             </div>
           )}

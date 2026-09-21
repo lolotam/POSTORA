@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+import "@/i18n";
 import { Navigate, useSearchParams } from "react-router-dom";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -8,6 +10,7 @@ type Tab = "pool" | "create";
 
 /** Composition only. Everything it shows lives in the comment-workflow feature. */
 export default function CommentWorkflowPage() {
+  const { t } = useTranslation("automation");
   const { flags, isLoading } = useFeatureFlags();
   const [params, setParams] = useSearchParams();
 
@@ -32,17 +35,16 @@ export default function CommentWorkflowPage() {
     <DashboardLayout>
       <div className="w-full space-y-6 pb-12">
         <header className="space-y-1">
-          <h1 className="text-2xl font-bold">Comment Workflow</h1>
+          <h1 className="text-2xl font-bold">{t("header.workflow", "Comment Workflow")}</h1>
           <p className="text-sm text-muted-foreground">
-            Turn comments into conversations. A keyword under your post gets a public reply and,
-            on Facebook and Instagram, one private message with your link.
+            {t("workflow.subtitle", "Turn comments into conversations. A keyword under your post gets a public reply and, on Facebook and Instagram, one private message with your link.")}
           </p>
         </header>
 
         <Tabs value={tab} onValueChange={(next) => go(next as Tab)}>
           <TabsList>
-            <TabsTrigger value="pool">Workflows</TabsTrigger>
-            <TabsTrigger value="create">{editingRuleId ? "Edit workflow" : "Create workflow"}</TabsTrigger>
+            <TabsTrigger value="pool">{t("workflow.tabPool", "Workflows")}</TabsTrigger>
+            <TabsTrigger value="create">{editingRuleId ? t("workflow.tabEdit", "Edit workflow") : t("workflow.tabCreate", "Create workflow")}</TabsTrigger>
           </TabsList>
 
           <TabsContent value="pool" className="mt-4">

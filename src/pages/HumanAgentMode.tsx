@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+import "@/i18n";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { useFeatureFlags } from "@/hooks/useFeatureFlags";
 import { useAuth } from "@/hooks/useAuth";
@@ -26,6 +28,7 @@ function keyFor(conv: Conversation): string {
 }
 
 export default function HumanAgentMode() {
+  const { t } = useTranslation("automation");
   const { flags, isLoading: flagsLoading } = useFeatureFlags();
   const { session } = useAuth();
   const { myAgent, registerAgent, updateStatus, updateMaxConversations } = useWhatsAppAgents();
@@ -106,10 +109,10 @@ export default function HumanAgentMode() {
       await updateStatus.mutateAsync(checked ? "online" : "offline");
     }
     toast({
-      title: checked ? "You're now online" : "You're now offline",
+      title: checked ? t("toast.nowOnline", "You're now online") : t("toast.nowOffline", "You're now offline"),
       description: checked
-        ? "You can now claim conversations from the queue."
-        : "Auto-replies will handle incoming messages.",
+        ? t("toast.nowOnlineDesc", "You can now claim conversations from the queue.")
+        : t("toast.nowOfflineDesc", "Auto-replies will handle incoming messages."),
     });
   };
 
@@ -118,8 +121,8 @@ export default function HumanAgentMode() {
     assignConversation.mutate(
       { conversationId: conversationKey, agentId: myAgent.id },
       {
-        onSuccess: () => toast({ title: "Conversation claimed" }),
-        onError: (e) => toast({ title: "Failed to claim conversation", description: e.message, variant: "destructive" }),
+        onSuccess: () => toast({ title: t("toast.claimed", "Conversation claimed") }),
+        onError: (e) => toast({ title: t("toast.claimFailed", "Failed to claim conversation"), description: e.message, variant: "destructive" }),
       }
     );
   };
@@ -128,8 +131,8 @@ export default function HumanAgentMode() {
     unassignConversation.mutate(
       { conversationId: conversationKey },
       {
-        onSuccess: () => toast({ title: "Marked as resolved" }),
-        onError: (e) => toast({ title: "Failed to resolve", description: e.message, variant: "destructive" }),
+        onSuccess: () => toast({ title: t("toast.resolved", "Marked as resolved") }),
+        onError: (e) => toast({ title: t("toast.resolveFailed", "Failed to resolve"), description: e.message, variant: "destructive" }),
       }
     );
   };
@@ -143,17 +146,17 @@ export default function HumanAgentMode() {
             <div className="group flex items-center gap-4 min-w-0">
               <Icon3D icon={Headphones} variant="amber" size="md" />
               <div className="flex-1 min-w-0">
-                <GradientHeading preset="amber-rose-violet" size="lg" as="h1">Human Agent Mode</GradientHeading>
-                <p className="text-sm text-muted-foreground mt-1">Take over conversations from auto-reply bots</p>
+                <GradientHeading preset="amber-rose-violet" size="lg" as="h1">{t("header.humanAgent", "Human Agent Mode")}</GradientHeading>
+                <p className="text-sm text-muted-foreground mt-1">{t("human.subtitle", "Take over conversations from auto-reply bots")}</p>
               </div>
             </div>
             <div className="flex items-center gap-3 rounded-full border border-border/40 bg-card/60 backdrop-blur-md px-3 py-1.5">
-              <span className="text-sm text-muted-foreground">Agent Status</span>
+              <span className="text-sm text-muted-foreground">{t("human.agentStatus", "Agent Status")}</span>
               <Switch checked={isOnline} onCheckedChange={handleToggleOnline} />
               <Badge className={isOnline
                 ? "bg-gradient-to-r from-amber-500 via-orange-500 to-rose-500 text-white border-0"
                 : "bg-card/60 border border-border/40 text-muted-foreground"}>
-                {isOnline ? "Online" : "Offline"}
+                {isOnline ? t("human.online", "Online") : t("human.offline", "Offline")}
               </Badge>
             </div>
           </div>
@@ -185,12 +188,12 @@ export default function HumanAgentMode() {
         {/* Stats */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           {([
-            { label: "My Active Chats", value: myQueue.length, icon: MessageSquare, variant: "amber" as GradientKey },
-            { label: "Waiting", value: waitingQueue.length, icon: Clock, variant: "rose" as GradientKey },
-            { label: "Resolved Today", value: resolvedToday, icon: UserRound, variant: "violet" as GradientKey },
-            { label: "Avg Response", value: "—", icon: Clock, variant: "sky" as GradientKey },
+            { id: "active", label: t("human.stat.active", "My Active Chats"), value: myQueue.length, icon: MessageSquare, variant: "amber" as GradientKey },
+            { id: "waiting", label: t("human.stat.waiting", "Waiting"), value: waitingQueue.length, icon: Clock, variant: "rose" as GradientKey },
+            { id: "resolved", label: t("human.stat.resolved", "Resolved Today"), value: resolvedToday, icon: UserRound, variant: "violet" as GradientKey },
+            { id: "avg", label: t("human.stat.avgResponse", "Avg Response"), value: "—", icon: Clock, variant: "sky" as GradientKey },
           ]).map((stat, i) => (
-            <Reveal key={stat.label} delay={i * 60}>
+            <Reveal key={stat.id} delay={i * 60}>
               <div className="group rounded-2xl border border-border/40 bg-card/60 backdrop-blur-md p-4 flex items-center gap-3 transition-transform hover:-translate-y-0.5">
                 <Icon3D icon={stat.icon} variant={stat.variant} size="sm" />
                 <div>
@@ -208,17 +211,17 @@ export default function HumanAgentMode() {
             <div className="space-y-1 mb-4">
               <div className="flex items-center gap-2 text-base font-semibold">
                 <MessageSquare className="h-5 w-5 text-amber-500" />
-                My Active Conversations
+                {t("human.activeTitle", "My Active Conversations")}
               </div>
               <p className="text-sm text-muted-foreground">
-                {isOnline ? "Conversations you're currently handling." : "Go online to claim conversations from the queue."}
+                {isOnline ? t("human.activeOnlineHint", "Conversations you're currently handling.") : t("human.activeOfflineHint", "Go online to claim conversations from the queue.")}
               </p>
             </div>
             {myQueue.length === 0 ? (
               <div className="text-center py-6 text-muted-foreground">
                 <div className="group inline-flex mb-3"><Icon3D icon={Bot} variant="amber" size="lg" /></div>
-                <p className="font-medium mt-2">No active conversations</p>
-                <p className="text-sm mt-1">Claim a conversation from the waiting queue below to get started.</p>
+                <p className="font-medium mt-2">{t("empty.noActiveConversations", "No active conversations")}</p>
+                <p className="text-sm mt-1">{t("empty.claimHint", "Claim a conversation from the waiting queue below to get started.")}</p>
               </div>
             ) : (
               <div className="space-y-2">
@@ -226,16 +229,16 @@ export default function HumanAgentMode() {
                   <div key={assignment.id} className="flex items-center justify-between gap-3 rounded-xl border border-border/40 bg-card/40 p-3">
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
-                        <p className="font-medium truncate">{match?.conv.participant_name || "Unknown"}</p>
+                        <p className="font-medium truncate">{match?.conv.participant_name || t("common:unknown", "Unknown")}</p>
                         {match && <Badge variant="outline" className="text-xs shrink-0">{match.platform}</Badge>}
                       </div>
                       <p className="text-xs text-muted-foreground truncate">{match?.conv.last_message || ""}</p>
                       <p className="text-xs text-muted-foreground">
-                        Claimed {formatDistanceToNow(new Date(assignment.assigned_at), { addSuffix: true })}
+                        {t("human.claimedAgo", "Claimed {{time}}", { time: formatDistanceToNow(new Date(assignment.assigned_at), { addSuffix: true }) })}
                       </p>
                     </div>
                     <Button size="sm" variant="outline" onClick={() => handleResolve(assignment.conversation_id)}>
-                      Resolve
+                      {t("actions.resolve", "Resolve")}
                     </Button>
                   </div>
                 ))}
@@ -250,9 +253,9 @@ export default function HumanAgentMode() {
             <div className="space-y-1 mb-4">
               <div className="flex items-center gap-2 text-base font-semibold">
                 <Inbox className="h-5 w-5 text-rose-500" />
-                Waiting Queue
+                {t("human.waitingTitle", "Waiting Queue")}
               </div>
-              <p className="text-sm text-muted-foreground">Unclaimed conversations across WhatsApp, Facebook, and Instagram, from the accounts selected above.</p>
+              <p className="text-sm text-muted-foreground">{t("human.waitingHint", "Unclaimed conversations across WhatsApp, Facebook, and Instagram, from the accounts selected above.")}</p>
             </div>
             <WaitingQueueFilter
               platforms={availablePlatforms}
@@ -278,7 +281,7 @@ export default function HumanAgentMode() {
                       <p className="text-xs text-muted-foreground truncate">{conv.last_message}</p>
                     </div>
                     <Button size="sm" disabled={!isOnline || !myAgent} onClick={() => handleClaim(key)}>
-                      Claim
+                      {t("actions.claim", "Claim")}
                     </Button>
                   </div>
                 ))}
@@ -292,16 +295,16 @@ export default function HumanAgentMode() {
           <div className="rounded-2xl border border-border/40 bg-card/60 backdrop-blur-md p-6">
             <div className="flex items-center gap-2 text-base font-semibold mb-4">
               <Settings className="h-5 w-5 text-amber-500" />
-              Agent Settings
+              {t("human.settingsTitle", "Agent Settings")}
             </div>
             <div className="space-y-4">
             <div className="space-y-1.5">
-              <label className="text-sm font-medium">Max concurrent chats</label>
+              <label className="text-sm font-medium">{t("form.maxChats", "Max concurrent chats")}</label>
               <Select
                 value={String(myAgent?.max_conversations ?? 10)}
                 onValueChange={(v) => updateMaxConversations.mutate(Number(v), {
-                  onSuccess: () => toast({ title: "Settings saved" }),
-                  onError: (e) => toast({ title: "Failed to save", description: e.message, variant: "destructive" }),
+                  onSuccess: () => toast({ title: t("toast.settingsSaved", "Settings saved") }),
+                  onError: (e) => toast({ title: t("toast.saveFailed", "Failed to save"), description: e.message, variant: "destructive" }),
                 })}
                 disabled={!myAgent}
               >
@@ -315,7 +318,7 @@ export default function HumanAgentMode() {
                 </SelectContent>
               </Select>
               {!myAgent && (
-                <p className="text-xs text-muted-foreground">Go online to register as an agent before adjusting this.</p>
+                <p className="text-xs text-muted-foreground">{t("human.goOnlineFirst", "Go online to register as an agent before adjusting this.")}</p>
               )}
             </div>
             </div>

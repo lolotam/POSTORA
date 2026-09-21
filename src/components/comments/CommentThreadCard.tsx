@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+import "@/i18n";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { MessageSquare } from "lucide-react";
@@ -20,6 +22,7 @@ interface CommentThreadCardProps {
  * exchange"; the depth colour inside says who is answering whom.
  */
 export function CommentThreadCard({ thread, socialAccountId, composer }: CommentThreadCardProps) {
+  const { t } = useTranslation("automation");
   const { root, nodes, replyCount } = thread;
 
   return (
@@ -32,12 +35,14 @@ export function CommentThreadCard({ thread, socialAccountId, composer }: Comment
           {replyCount > 0 && (
             <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
               <MessageSquare className="h-3 w-3" />
-              {replyCount === 1 ? "1 reply" : `${replyCount} replies`}
+              {replyCount === 1
+                ? t("comments.replyOne", "1 reply")
+                : t("comments.replyMany", "{{count}} replies", { count: replyCount })}
             </span>
           )}
           {root.post_message && (
             <span className="ms-auto max-w-full truncate text-xs text-muted-foreground">
-              On: {root.post_message}
+              {t("comments.onPost", "On: {{message}}", { message: root.post_message })}
             </span>
           )}
         </div>

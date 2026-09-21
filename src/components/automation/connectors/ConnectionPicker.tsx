@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+import "@/i18n";
 import { Label } from "@/components/ui/label";
 import { useConnectorConnections } from "@/features/connectors";
 import { connectorDefinition, type ConnectorType } from "@/lib/connectorRegistry";
@@ -28,6 +30,7 @@ export function ConnectionPicker({
   value,
   onChange,
 }: ConnectionPickerProps) {
+  const { t } = useTranslation("automation");
   const connections = useConnectorConnections(workspaceId);
   const label = connectorDefinition(connectorType).label;
 
@@ -35,7 +38,7 @@ export function ConnectionPicker({
     if (isWorkspaceLoading) return null;
     return (
       <p className="text-xs text-destructive">
-        This account has no workspace; connect it from Profiles first
+        {t("picker.noWorkspace", "This account has no workspace; connect it from Profiles first")}
       </p>
     );
   }
@@ -46,14 +49,14 @@ export function ConnectionPicker({
 
   return (
     <div className="space-y-1.5">
-      <Label htmlFor="connector-connection" className="text-xs">Connection</Label>
+      <Label htmlFor="connector-connection" className="text-xs">{t("form.connection", "Connection")}</Label>
       <select
         id="connector-connection"
         className={SELECT_CLASS}
         value={value ?? ""}
         onChange={(event) => onChange(event.target.value === "" ? null : event.target.value)}
       >
-        <option value="">{connections.isLoading ? "Loading…" : `Select a connected ${label} account`}</option>
+        <option value="">{connections.isLoading ? t("common:loading", "Loading…") : t("picker.selectAccount", "Select a connected {{label}} account", { label })}</option>
         {options.map((row) => (
           <option key={row.id} value={row.id}>
             {row.external_account_label ?? row.id}
@@ -62,12 +65,12 @@ export function ConnectionPicker({
       </select>
       {connections.error ? (
         <p className="text-xs text-destructive">
-          Connections could not be loaded, so none can be chosen here.
+          {t("errors.connectionsNone", "Connections could not be loaded, so none can be chosen here.")}
         </p>
       ) : (
         !connections.isLoading && options.length === 0 && (
           <p className="text-xs text-muted-foreground">
-            No connected {label} account yet — connect one on Settings → Integrations first.
+            {t("picker.noneYet", "No connected {{label}} account yet — connect one on Settings → Integrations first.", { label })}
           </p>
         )
       )}
