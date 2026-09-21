@@ -50,25 +50,43 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // `onAuthStateChange` fires INITIAL_SESSION the moment it subscribes and
   // `getSession()` resolves with the same session a tick later, so both arms of
   // the effect below ask for the profile of the same user on every page load.
-  // Remember who has been asked for and let `refreshProfile` override it.
-  const profileRequestedForRef = useRef<string | null>(null);
+  // Hold the in-flight read so the second arm joins it instead of repeating it.
+  const profileRequestRef = useRef<{ userId: string; promise: Promise<boolean> } | null>(null);
 
-  const fetchProfile = async (userId: string, { force = false } = {}) => {
-    if (!force && profileRequestedForRef.current === userId) return;
-    profileRequestedForRef.current = userId;
-
+  /** Resolves true when a profile was stored, false when the read gave us nothing. */
+  const loadProfile = async (userId: string): Promise<boolean> => {
     const { data, error } = await supabase
       .from("profiles")
       .select(PROFILE_COLUMNS)
       .eq("id", userId)
       .maybeSingle();
 
-    if (!error && data) {
-      setProfile(data as Partial<Profile> as Profile);
-      return;
+    if (error) {
+      console.warn("Profile fetch failed:", error);
+      return false;
     }
-    // Nothing was stored, so a later render must be allowed to try again.
-    profileRequestedForRef.current = null;
+    if (!data) return false;
+
+    setProfile(data as Partial<Profile> as Profile);
+    return true;
+  };
+
+  const fetchProfile = async (userId: string, { force = false } = {}): Promise<void> => {
+    const inFlight = profileRequestRef.current;
+    if (!force && inFlight?.userId === userId) {
+      // Joining the in-flight read is what removes the duplicate request. If that
+      // read comes back empty we must still try: before the two arms were
+      // deduplicated, the second one was the retry, and dropping it would leave
+      // `profile` null until the next auth event.
+      if (await inFlight.promise) return;
+    }
+
+    const promise = loadProfile(userId);
+    profileRequestRef.current = { userId, promise };
+
+    if (!(await promise) && profileRequestRef.current?.promise === promise) {
+      profileRequestRef.current = null;
+    }
   };
 
   useEffect(() => {
@@ -85,7 +103,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           }, 0);
         } else {
           setProfile(null);
-          profileRequestedForRef.current = null;
+          profileRequestRef.current = null;
         }
       }
     );
@@ -157,7 +175,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
     setSession(null);
     setProfile(null);
-    profileRequestedForRef.current = null;
+    profileRequestRef.current = null;
   };
 
   const refreshProfile = async () => {
