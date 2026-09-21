@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -23,6 +24,7 @@ interface ListSection {
 }
 
 export function InteractiveMessageBuilder({ onSend, isPending }: InteractiveMessageBuilderProps) {
+  const { t } = useTranslation("inbox");
   const [open, setOpen] = useState(false);
   const [mode, setMode] = useState<"buttons" | "list">("buttons");
   const [bodyText, setBodyText] = useState("");
@@ -48,12 +50,12 @@ export function InteractiveMessageBuilder({ onSend, isPending }: InteractiveMess
   };
 
   const handleSend = () => {
-    if (!bodyText.trim()) { toast.error("Body text is required"); return; }
+    if (!bodyText.trim()) { toast.error(t("interactive.bodyRequired", "Body text is required")); return; }
 
     let payload: any;
 
     if (mode === "buttons") {
-      if (buttons.length === 0) { toast.error("Add at least one button"); return; }
+      if (buttons.length === 0) { toast.error(t("interactive.addAtLeastButton", "Add at least one button")); return; }
       payload = {
         type: "button",
         body: { text: bodyText },
@@ -68,7 +70,7 @@ export function InteractiveMessageBuilder({ onSend, isPending }: InteractiveMess
       };
     } else {
       const validSections = sections.filter(s => s.rows.some(r => r.title.trim()));
-      if (validSections.length === 0) { toast.error("Add at least one list item"); return; }
+      if (validSections.length === 0) { toast.error(t("interactive.addAtLeastItem", "Add at least one list item")); return; }
       payload = {
         type: "list",
         body: { text: bodyText },
@@ -96,41 +98,41 @@ export function InteractiveMessageBuilder({ onSend, isPending }: InteractiveMess
   return (
     <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (!o) reset(); }}>
       <DialogTrigger asChild>
-        <Button variant="ghost" size="icon" className="shrink-0 h-9 w-9" title="Interactive message">
+        <Button variant="ghost" size="icon" className="shrink-0 h-9 w-9" title={t("interactive.tooltip", "Interactive message")}>
           <LayoutList className="w-4 h-4" />
         </Button>
       </DialogTrigger>
       <DialogContent className="max-w-md max-h-[80vh] overflow-y-auto">
-        <DialogHeader><DialogTitle>Interactive Message</DialogTitle></DialogHeader>
+        <DialogHeader><DialogTitle>{t("interactive.title", "Interactive Message")}</DialogTitle></DialogHeader>
 
         <div className="flex gap-2 mb-4">
-          <Button variant={mode === "buttons" ? "default" : "outline"} size="sm" onClick={() => setMode("buttons")}>Reply Buttons</Button>
-          <Button variant={mode === "list" ? "default" : "outline"} size="sm" onClick={() => setMode("list")}>List Menu</Button>
+          <Button variant={mode === "buttons" ? "default" : "outline"} size="sm" onClick={() => setMode("buttons")}>{t("interactive.replyButtons", "Reply Buttons")}</Button>
+          <Button variant={mode === "list" ? "default" : "outline"} size="sm" onClick={() => setMode("list")}>{t("interactive.listMenu", "List Menu")}</Button>
         </div>
 
         <div className="space-y-3">
           <div>
-            <Label>Header (optional)</Label>
-            <Input placeholder="Header text" value={headerText} onChange={(e) => setHeaderText(e.target.value)} maxLength={60} />
+            <Label>{t("interactive.header", "Header (optional)")}</Label>
+            <Input placeholder={t("interactive.headerPlaceholder", "Header text")} value={headerText} onChange={(e) => setHeaderText(e.target.value)} maxLength={60} />
           </div>
           <div>
-            <Label>Body *</Label>
-            <Textarea placeholder="Message body text" value={bodyText} onChange={(e) => setBodyText(e.target.value)} rows={3} maxLength={1024} />
+            <Label>{t("interactive.body", "Body *")}</Label>
+            <Textarea placeholder={t("interactive.bodyPlaceholder", "Message body text")} value={bodyText} onChange={(e) => setBodyText(e.target.value)} rows={3} maxLength={1024} />
           </div>
           <div>
-            <Label>Footer (optional)</Label>
-            <Input placeholder="Footer text" value={footerText} onChange={(e) => setFooterText(e.target.value)} maxLength={60} />
+            <Label>{t("interactive.footer", "Footer (optional)")}</Label>
+            <Input placeholder={t("interactive.footerPlaceholder", "Footer text")} value={footerText} onChange={(e) => setFooterText(e.target.value)} maxLength={60} />
           </div>
 
           {mode === "buttons" && (
             <div>
               <div className="flex items-center justify-between mb-2">
-                <Label>Buttons (max 3)</Label>
+                <Label>{t("interactive.buttonsMax", "Buttons (max 3)")}</Label>
                 <span className="text-xs text-muted-foreground">{buttons.length}/3</span>
               </div>
               {buttons.map((btn, i) => (
                 <div key={i} className="flex gap-2 mb-2">
-                  <Input placeholder="Button title (max 20)" maxLength={20} value={btn.title} onChange={(e) => {
+                  <Input placeholder={t("interactive.buttonTitle", "Button title (max 20)")} maxLength={20} value={btn.title} onChange={(e) => {
                     const b = [...buttons]; b[i] = { ...b[i], title: e.target.value }; setButtons(b);
                   }} />
                   <Button variant="ghost" size="icon" className="h-9 w-9 shrink-0" onClick={() => setButtons(buttons.filter((_, j) => j !== i))}>
@@ -140,7 +142,7 @@ export function InteractiveMessageBuilder({ onSend, isPending }: InteractiveMess
               ))}
               {buttons.length < 3 && (
                 <Button variant="outline" size="sm" onClick={addButton} className="gap-1">
-                  <Plus className="h-3 w-3" /> Add Button
+                  <Plus className="h-3 w-3" /> {t("interactive.addButton", "Add Button")}
                 </Button>
               )}
             </div>
@@ -149,13 +151,13 @@ export function InteractiveMessageBuilder({ onSend, isPending }: InteractiveMess
           {mode === "list" && (
             <div>
               <div className="mb-2">
-                <Label>Menu Button Text</Label>
-                <Input placeholder="Select" value={buttonText} onChange={(e) => setButtonText(e.target.value)} maxLength={20} />
+                <Label>{t("interactive.menuButton", "Menu Button Text")}</Label>
+                <Input placeholder={t("interactive.select", "Select")} value={buttonText} onChange={(e) => setButtonText(e.target.value)} maxLength={20} />
               </div>
               {sections.map((sec, si) => (
                 <div key={si} className="border rounded-lg p-3 mb-2 space-y-2">
                   <div className="flex items-center justify-between">
-                    <Input placeholder="Section title" value={sec.title} onChange={(e) => {
+                    <Input placeholder={t("interactive.sectionTitle", "Section title")} value={sec.title} onChange={(e) => {
                       const s = [...sections]; s[si] = { ...s[si], title: e.target.value }; setSections(s);
                     }} className="text-sm" />
                     {sections.length > 1 && (
@@ -166,16 +168,16 @@ export function InteractiveMessageBuilder({ onSend, isPending }: InteractiveMess
                   </div>
                   {sec.rows.map((row, ri) => (
                     <div key={ri} className="pl-3 border-l-2 space-y-1">
-                      <Input placeholder="Item title (max 24)" maxLength={24} value={row.title} onChange={(e) => {
+                      <Input placeholder={t("interactive.itemTitle", "Item title (max 24)")} maxLength={24} value={row.title} onChange={(e) => {
                         const s = [...sections]; s[si].rows[ri] = { ...row, title: e.target.value }; setSections(s);
                       }} className="text-sm h-8" />
-                      <Input placeholder="Description (optional, max 72)" maxLength={72} value={row.description} onChange={(e) => {
+                      <Input placeholder={t("interactive.itemDesc", "Description (optional, max 72)")} maxLength={72} value={row.description} onChange={(e) => {
                         const s = [...sections]; s[si].rows[ri] = { ...row, description: e.target.value }; setSections(s);
                       }} className="text-xs h-7" />
                       {sec.rows.length > 1 && (
                         <Button variant="ghost" size="sm" className="h-5 text-xs" onClick={() => {
                           const s = [...sections]; s[si].rows = sec.rows.filter((_, j) => j !== ri); setSections(s);
-                        }}>Remove</Button>
+                        }}>{t("common:remove", "Remove")}</Button>
                       )}
                     </div>
                   ))}
@@ -183,14 +185,14 @@ export function InteractiveMessageBuilder({ onSend, isPending }: InteractiveMess
                     <Button variant="ghost" size="sm" className="text-xs gap-1" onClick={() => {
                       const s = [...sections]; s[si].rows.push({ id: `r_${Date.now()}`, title: "", description: "" }); setSections(s);
                     }}>
-                      <Plus className="h-3 w-3" /> Add Item
+                      <Plus className="h-3 w-3" /> {t("interactive.addItem", "Add Item")}
                     </Button>
                   )}
                 </div>
               ))}
               {sections.length < 10 && (
                 <Button variant="outline" size="sm" className="gap-1 text-xs" onClick={() => setSections([...sections, { title: "", rows: [{ id: `r_${Date.now()}`, title: "", description: "" }] }])}>
-                  <Plus className="h-3 w-3" /> Add Section
+                  <Plus className="h-3 w-3" /> {t("interactive.addSection", "Add Section")}
                 </Button>
               )}
             </div>
@@ -198,7 +200,7 @@ export function InteractiveMessageBuilder({ onSend, isPending }: InteractiveMess
 
           <Button onClick={handleSend} disabled={isPending} className="w-full">
             {isPending ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
-            Send Interactive Message
+            {t("interactive.send", "Send Interactive Message")}
           </Button>
         </div>
       </DialogContent>

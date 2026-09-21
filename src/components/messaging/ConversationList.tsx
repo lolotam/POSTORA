@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -44,6 +45,7 @@ export function ConversationList({
   absoluteTimes,
   onDelete,
 }: ConversationListProps) {
+  const { t } = useTranslation("inbox");
   const [localSearch, setLocalSearch] = useState("");
   const controlled = search !== undefined && onSearchChange !== undefined;
   const searchValue = controlled ? search : localSearch;
@@ -73,7 +75,7 @@ export function ConversationList({
         <div className="relative">
           <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
           <Input
-            placeholder="Search conversations..."
+            placeholder={t("conversation.search", "Search conversations...")}
             value={searchValue}
             onChange={(e) => setSearch(e.target.value)}
             className="pl-8 h-9"
@@ -85,7 +87,7 @@ export function ConversationList({
           <div className="flex flex-col items-center justify-center py-12 text-center px-4">
             <MessageCircle className="w-8 h-8 text-muted-foreground mb-2" />
             <p className="text-sm text-muted-foreground">
-              {searchValue ? "No conversations match your search" : "No conversations yet"}
+              {searchValue ? t("conversation.noMatch", "No conversations match your search") : t("conversation.empty", "No conversations yet")}
             </p>
           </div>
         ) : (
@@ -94,7 +96,7 @@ export function ConversationList({
               {onDelete && (
                 <button
                   type="button"
-                  aria-label={`Delete chat with ${conv.participant_name}`}
+                  aria-label={t("conversation.deleteWith", "Delete chat with {{name}}", { name: conv.participant_name })}
                   className="absolute right-1 top-1 z-10 rounded p-1 text-destructive opacity-0 hover:bg-muted focus-visible:opacity-100 group-hover:opacity-100"
                   onClick={(event) => {
                     event.stopPropagation();

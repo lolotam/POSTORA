@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -16,6 +17,7 @@ interface NewConversationDialogProps {
 }
 
 export function NewConversationDialog({ open, onOpenChange, socialAccountId, onSelectContact }: NewConversationDialogProps) {
+  const { t } = useTranslation("inbox");
   const { session } = useAuth();
   const [search, setSearch] = useState("");
 
@@ -60,13 +62,13 @@ export function NewConversationDialog({ open, onOpenChange, socialAccountId, onS
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <MessageSquare className="h-5 w-5 text-green-600" />
-            New Conversation
+            {t("newConversation.title", "New Conversation")}
           </DialogTitle>
         </DialogHeader>
         <div className="relative">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
-            placeholder="Search contacts by name or phone..."
+            placeholder={t("conversation.searchContacts", "Search contacts by name or phone...")}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="pl-9"
@@ -81,8 +83,8 @@ export function NewConversationDialog({ open, onOpenChange, socialAccountId, onS
           ) : filtered.length === 0 ? (
             <div className="text-center py-8 text-muted-foreground">
               <User className="h-8 w-8 mx-auto mb-2 opacity-50" />
-              <p className="text-sm">No contacts found</p>
-              <p className="text-xs mt-1">Add contacts in the Contacts tab first</p>
+              <p className="text-sm">{t("newConversation.noContacts", "No contacts found")}</p>
+              <p className="text-xs mt-1">{t("newConversation.addInContacts", "Add contacts in the Contacts tab first")}</p>
             </div>
           ) : (
             <div className="divide-y">

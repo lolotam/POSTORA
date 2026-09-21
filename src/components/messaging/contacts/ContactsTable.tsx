@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   Avatar,
   AvatarFallback,
@@ -76,6 +77,7 @@ export function ContactsTable({
   loading,
   selectedContacts,
 }: ContactsTableProps) {
+  const { t } = useTranslation("inbox");
   const pageIds = rows.map((r) => r.id);
   const allPageSelected = pageIds.length > 0 && pageIds.every((id) => selected.has(id));
   const somePageSelected = pageIds.some((id) => selected.has(id));
@@ -119,7 +121,7 @@ export function ContactsTable({
           ) : rows.length === 0 ? (
             <div className="text-center py-12 text-muted-foreground">
               <Users className="h-8 w-8 mx-auto mb-2 opacity-50" />
-              <p>No contacts found. Add contacts manually or import a CSV file.</p>
+              <p>{t("contacts.empty", "No contacts found. Add contacts manually or import a CSV file.")}</p>
             </div>
           ) : (
             <>
@@ -136,13 +138,13 @@ export function ContactsTable({
                               : false
                         }
                         onCheckedChange={togglePage}
-                        aria-label="Select all contacts on page"
+                        aria-label={t("contacts.selectAllPage", "Select all contacts on page")}
                       />
                     </TableHead>
-                    <TableHead>Name</TableHead>
-                    <TableHead>Phone</TableHead>
-                    <TableHead>Email</TableHead>
-                    <TableHead>Tags</TableHead>
+                    <TableHead>{t("contacts.name", "Name")}</TableHead>
+                    <TableHead>{t("contacts.phone", "Phone")}</TableHead>
+                    <TableHead>{t("contacts.email", "Email")}</TableHead>
+                    <TableHead>{t("contacts.tags", "Tags")}</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -209,7 +211,7 @@ export function ContactsTable({
               </Table>
               <div className="flex items-center justify-between px-4 py-3 border-t">
                 <p className="text-sm text-muted-foreground">
-                  Showing {from}–{to} of {total}
+                  {t("contacts.showingRange", "Showing {{from}}–{{to}} of {{total}}", { from, to, total })}
                 </p>
                 <div className="flex items-center gap-2">
                   <Button
@@ -219,7 +221,7 @@ export function ContactsTable({
                     onClick={() => onPageChange(page - 1)}
                   >
                     <ChevronLeft className="h-4 w-4" />
-                    Prev
+                    {t("contacts.prev", "Prev")}
                   </Button>
                   <span className="text-sm text-muted-foreground">
                     {page + 1} / {totalPages || 1}
@@ -230,7 +232,7 @@ export function ContactsTable({
                     disabled={page >= totalPages - 1}
                     onClick={() => onPageChange(page + 1)}
                   >
-                    Next
+                    {t("common:next", "Next")}
                     <ChevronRight className="h-4 w-4" />
                   </Button>
                 </div>
@@ -250,6 +252,7 @@ interface BulkActionsBarProps {
 }
 
 function BulkActionsBar({ selected, selectedContacts, onClear }: BulkActionsBarProps) {
+  const { t } = useTranslation("inbox");
   const { toast } = useToast();
   const { data: groups = [] } = useContactGroups();
   const { deleteContacts, addToGroup, removeFromGroup, addTag } =
@@ -262,29 +265,29 @@ function BulkActionsBar({ selected, selectedContacts, onClear }: BulkActionsBarP
   const handleDelete = async () => {
     try {
       await deleteContacts.mutateAsync(ids);
-      toast({ title: `${ids.length} contact${ids.length > 1 ? "s" : ""} deleted` });
+      toast({ title: ids.length > 1 ? t("toast.contactsDeletedMany", "{{count}} contacts deleted", { count: ids.length }) : t("toast.contactsDeletedOne", "{{count}} contact deleted", { count: ids.length }) });
       onClear();
       setDeleteOpen(false);
     } catch (e) {
-      toast({ title: "Delete failed", description: (e as Error).message, variant: "destructive" });
+      toast({ title: t("errors.deleteFailed", "Delete failed"), description: (e as Error).message, variant: "destructive" });
     }
   };
 
   const handleAddGroup = async (groupId: string) => {
     try {
       await addToGroup.mutateAsync({ groupId, contactIds: ids });
-      toast({ title: "Added to group" });
+      toast({ title: t("toast.addedToGroup", "Added to group") });
     } catch (e) {
-      toast({ title: "Failed", description: (e as Error).message, variant: "destructive" });
+      toast({ title: t("errors.failed", "Failed"), description: (e as Error).message, variant: "destructive" });
     }
   };
 
   const handleRemoveGroup = async (groupId: string) => {
     try {
       await removeFromGroup.mutateAsync({ groupId, contactIds: ids });
-      toast({ title: "Removed from group" });
+      toast({ title: t("toast.removedFromGroup", "Removed from group") });
     } catch (e) {
-      toast({ title: "Failed", description: (e as Error).message, variant: "destructive" });
+      toast({ title: t("errors.failed", "Failed"), description: (e as Error).message, variant: "destructive" });
     }
   };
 
@@ -293,10 +296,10 @@ function BulkActionsBar({ selected, selectedContacts, onClear }: BulkActionsBarP
     if (!tag) return;
     try {
       await addTag.mutateAsync({ tag, contactIds: ids });
-      toast({ title: `Tag "${tag}" added to ${ids.length} contacts` });
+      toast({ title: t("toast.tagAdded", "Tag \"{{tag}}\" added to {{count}} contacts", { tag, count: ids.length }) });
       setTagInput("");
     } catch (e) {
-      toast({ title: "Failed", description: (e as Error).message, variant: "destructive" });
+      toast({ title: t("errors.failed", "Failed"), description: (e as Error).message, variant: "destructive" });
     }
   };
 
@@ -306,14 +309,14 @@ function BulkActionsBar({ selected, selectedContacts, onClear }: BulkActionsBarP
   return (
     <div className="flex items-center gap-2 flex-wrap rounded-lg border bg-muted/50 p-2">
       <span className="text-sm font-medium px-2">
-        {selected.size} selected
+        {t("contacts.selected", "{{count}} selected", { count: selected.size })}
       </span>
 
       <div className="h-4 w-px bg-border" />
 
       <Select onValueChange={handleAddGroup}>
         <SelectTrigger className="h-8 w-[140px]">
-          <SelectValue placeholder="Add to group" />
+          <SelectValue placeholder={t("contacts.addToGroup", "Add to group")} />
         </SelectTrigger>
         <SelectContent>
           {groups.map((g) => (
@@ -326,7 +329,7 @@ function BulkActionsBar({ selected, selectedContacts, onClear }: BulkActionsBarP
 
       <Select onValueChange={handleRemoveGroup}>
         <SelectTrigger className="h-8 w-[150px]">
-          <SelectValue placeholder="Remove from group" />
+          <SelectValue placeholder={t("contacts.removeFromGroup", "Remove from group")} />
         </SelectTrigger>
         <SelectContent>
           {groups.map((g) => (
@@ -340,7 +343,7 @@ function BulkActionsBar({ selected, selectedContacts, onClear }: BulkActionsBarP
       <div className="flex items-center gap-1">
         <Input
           className="h-8 w-[120px]"
-          placeholder="Add tag..."
+          placeholder={t("contacts.addTag", "Add tag...")}
           value={tagInput}
           onChange={(e) => setTagInput(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && handleAddTag()}
@@ -352,7 +355,7 @@ function BulkActionsBar({ selected, selectedContacts, onClear }: BulkActionsBarP
 
       <ContactExportMenu
         getContacts={getSelectedFetcher}
-        label="Export selected"
+        label={t("contacts.exportSelected", "Export selected")}
         triggerSize="sm"
       >
         <Download className="h-3.5 w-3.5 mr-1" />
@@ -365,29 +368,29 @@ function BulkActionsBar({ selected, selectedContacts, onClear }: BulkActionsBarP
         onClick={() => setDeleteOpen(true)}
       >
         <Trash2 className="h-3.5 w-3.5 mr-1" />
-        Delete ({selected.size})
+        {t("contacts.deleteCount", "Delete ({{count}})", { count: selected.size })}
       </Button>
 
       <Button variant="ghost" size="sm" className="h-8" onClick={onClear}>
         <X className="h-3.5 w-3.5" />
-        Clear
+        {t("common:clear", "Clear")}
       </Button>
 
       <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete {selected.size} contacts?</AlertDialogTitle>
+            <AlertDialogTitle>{t("contacts.deleteMany", "Delete {{count}} contacts?", { count: selected.size })}</AlertDialogTitle>
             <AlertDialogDescription>
-              This action cannot be undone. These contacts will be permanently removed.
+              {t("contacts.deleteUndo", "This action cannot be undone. These contacts will be permanently removed.")}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel>{t("common:cancel", "Cancel")}</AlertDialogCancel>
             <AlertDialogAction
               onClick={handleDelete}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
-              Delete
+              {t("common:delete", "Delete")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

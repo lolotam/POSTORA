@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -13,7 +15,18 @@ import { Plus, Pencil, Trash2, Clock, MessageSquare, Loader2 } from "lucide-reac
 import { useWhatsAppAutoReplies, type AutoReplyInput } from "@/hooks/useWhatsAppAutoReplies";
 import { useMessengerAutoReplies, type MessengerPlatform } from "@/hooks/useMessengerAutoReplies";
 
-const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+function dayLabel(t: TFunction, index: number): string {
+  switch (index) {
+    case 0: return t("days.sun", "Sun");
+    case 1: return t("days.mon", "Mon");
+    case 2: return t("days.tue", "Tue");
+    case 3: return t("days.wed", "Wed");
+    case 4: return t("days.thu", "Thu");
+    case 5: return t("days.fri", "Fri");
+    case 6: return t("days.sat", "Sat");
+    default: return "";
+  }
+}
 
 function RuleForm({
   initial,
@@ -24,6 +37,7 @@ function RuleForm({
   onSubmit: (data: AutoReplyInput) => void;
   onCancel: () => void;
 }) {
+  const { t } = useTranslation("inbox");
   const [name, setName] = useState(initial?.name || "");
   const [ruleType, setRuleType] = useState<"away" | "keyword">(initial?.rule_type || "keyword");
   const [keywords, setKeywords] = useState(initial?.keywords?.join(", ") || "");
@@ -50,41 +64,41 @@ function RuleForm({
   return (
     <div className="space-y-4">
       <div>
-        <Label>Name</Label>
-        <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. After Hours Reply" />
+        <Label>{t("autoReply.name", "Name")}</Label>
+        <Input value={name} onChange={(e) => setName(e.target.value)} placeholder={t("autoReply.namePlaceholder", "e.g. After Hours Reply")} />
       </div>
       <div>
-        <Label>Rule Type</Label>
+        <Label>{t("autoReply.ruleType", "Rule Type")}</Label>
         <Select value={ruleType} onValueChange={(v) => setRuleType(v as "away" | "keyword")}>
           <SelectTrigger><SelectValue /></SelectTrigger>
           <SelectContent>
-            <SelectItem value="away">Away Message</SelectItem>
-            <SelectItem value="keyword">Keyword Trigger</SelectItem>
+            <SelectItem value="away">{t("autoReply.awayMessage", "Away Message")}</SelectItem>
+            <SelectItem value="keyword">{t("autoReply.keywordTrigger", "Keyword Trigger")}</SelectItem>
           </SelectContent>
         </Select>
       </div>
       {ruleType === "keyword" && (
         <div>
-          <Label>Keywords (comma-separated)</Label>
-          <Input value={keywords} onChange={(e) => setKeywords(e.target.value)} placeholder="hello, help, pricing" />
+          <Label>{t("autoReply.keywords", "Keywords (comma-separated)")}</Label>
+          <Input value={keywords} onChange={(e) => setKeywords(e.target.value)} placeholder={t("autoReply.keywordsPlaceholder", "hello, help, pricing")} />
         </div>
       )}
       {ruleType === "away" && (
         <>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <Label>Start Time</Label>
+              <Label>{t("autoReply.startTime", "Start Time")}</Label>
               <Input type="time" value={scheduleStart} onChange={(e) => setScheduleStart(e.target.value)} />
             </div>
             <div>
-              <Label>End Time</Label>
+              <Label>{t("autoReply.endTime", "End Time")}</Label>
               <Input type="time" value={scheduleEnd} onChange={(e) => setScheduleEnd(e.target.value)} />
             </div>
           </div>
           <div>
-            <Label>Active Days</Label>
+            <Label>{t("autoReply.activeDays", "Active Days")}</Label>
             <div className="flex flex-wrap gap-2 mt-1">
-              {DAYS.map((day, i) => (
+              {[0, 1, 2, 3, 4, 5, 6].map((i) => (
                 <label key={i} className="flex items-center gap-1.5 text-sm">
                   <Checkbox
                     checked={scheduleDays.includes(i)}
@@ -92,7 +106,7 @@ function RuleForm({
                       setScheduleDays(checked ? [...scheduleDays, i] : scheduleDays.filter((d) => d !== i))
                     }
                   />
-                  {day}
+                  {dayLabel(t, i)}
                 </label>
               ))}
             </div>
@@ -100,16 +114,16 @@ function RuleForm({
         </>
       )}
       <div>
-        <Label>Reply Message</Label>
-        <Textarea value={replyMessage} onChange={(e) => setReplyMessage(e.target.value)} placeholder="Thank you for reaching out..." rows={3} />
+        <Label>{t("autoReply.replyMessage", "Reply Message")}</Label>
+        <Textarea value={replyMessage} onChange={(e) => setReplyMessage(e.target.value)} placeholder={t("autoReply.replyPlaceholder", "Thank you for reaching out...")} rows={3} />
       </div>
       <div className="flex items-center gap-2">
         <Switch checked={isActive} onCheckedChange={setIsActive} />
-        <Label>Active</Label>
+        <Label>{t("autoReply.active", "Active")}</Label>
       </div>
       <div className="flex justify-end gap-2 pt-2">
-        <Button variant="outline" onClick={onCancel}>Cancel</Button>
-        <Button onClick={handleSubmit} disabled={!name.trim() || !replyMessage.trim()}>Save</Button>
+        <Button variant="outline" onClick={onCancel}>{t("common:cancel", "Cancel")}</Button>
+        <Button onClick={handleSubmit} disabled={!name.trim() || !replyMessage.trim()}>{t("common:save", "Save")}</Button>
       </div>
     </div>
   );
@@ -122,28 +136,22 @@ function RuleForm({
 //                          set to the Postora AI Agent.
 //   Threads             -- public replies and mentions only; it has no DM API.
 //   YouTube             -- video comments only; it has no private messages at all.
-const COPY = {
-  messageOnly: {
-    subtitle: "Set up automatic responses for incoming messages",
-    emptyState: "No auto-reply rules yet. Create one to automatically respond to messages.",
-  },
-  messageAndComment: {
-    subtitle: "Set up automatic responses for incoming messages and public comments",
-    emptyState: "No auto-reply rules yet. Create one to respond automatically to a message or a comment.",
-  },
-  commentOnly: {
-    subtitle: "Set up automatic public replies to comments and mentions",
-    emptyState: "No auto-reply rules yet. Create one to reply publicly when a comment or mention matches.",
-  },
-};
-
-function copyFor(platform?: MessengerPlatform) {
-  if (!platform) return COPY.messageOnly;
-  return platform === "threads" || platform === "youtube" ? COPY.commentOnly : COPY.messageAndComment;
-}
-
 export function AutoReplyManager({ platform }: { platform?: MessengerPlatform } = {}) {
-  const copy = copyFor(platform);
+  const { t } = useTranslation("inbox");
+  const copy = !platform
+    ? {
+        subtitle: t("autoReply.subtitleMessage", "Set up automatic responses for incoming messages"),
+        emptyState: t("autoReply.emptyMessage", "No auto-reply rules yet. Create one to automatically respond to messages."),
+      }
+    : platform === "threads" || platform === "youtube"
+    ? {
+        subtitle: t("autoReply.subtitleComment", "Set up automatic public replies to comments and mentions"),
+        emptyState: t("autoReply.emptyComment", "No auto-reply rules yet. Create one to reply publicly when a comment or mention matches."),
+      }
+    : {
+        subtitle: t("autoReply.subtitleMessageAndComment", "Set up automatic responses for incoming messages and public comments"),
+        emptyState: t("autoReply.emptyMessageAndComment", "No auto-reply rules yet. Create one to respond automatically to a message or a comment."),
+      };
   const whatsapp = useWhatsAppAutoReplies(!platform);
   const messenger = useMessengerAutoReplies(platform ?? "facebook", !!platform);
   const { rules, isLoading, createRule, updateRule, deleteRule, toggleRule } = platform ? messenger : whatsapp;
@@ -158,15 +166,15 @@ export function AutoReplyManager({ platform }: { platform?: MessengerPlatform } 
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-lg font-semibold">Auto-Reply Rules</h3>
+          <h3 className="text-lg font-semibold">{t("autoReply.title", "Auto-Reply Rules")}</h3>
           <p className="text-sm text-muted-foreground">{copy.subtitle}</p>
         </div>
         <Dialog open={showAdd} onOpenChange={setShowAdd}>
           <DialogTrigger asChild>
-            <Button className="gap-1.5"><Plus className="w-4 h-4" /> Add Rule</Button>
+            <Button className="gap-1.5"><Plus className="w-4 h-4" /> {t("autoReply.addRule", "Add Rule")}</Button>
           </DialogTrigger>
           <DialogContent>
-            <DialogHeader><DialogTitle>Create Auto-Reply Rule</DialogTitle></DialogHeader>
+            <DialogHeader><DialogTitle>{t("autoReply.createTitle", "Create Auto-Reply Rule")}</DialogTitle></DialogHeader>
             <RuleForm
               onSubmit={(data) => { createRule.mutate(data); setShowAdd(false); }}
               onCancel={() => setShowAdd(false)}
@@ -192,7 +200,7 @@ export function AutoReplyManager({ platform }: { platform?: MessengerPlatform } 
                     <div className="flex items-center gap-2 mb-1">
                       <h4 className="font-medium truncate">{rule.name}</h4>
                       <Badge variant={rule.rule_type === "away" ? "secondary" : "outline"} className="shrink-0">
-                        {rule.rule_type === "away" ? <><Clock className="w-3 h-3 mr-1" /> Away</> : "Keyword"}
+                        {rule.rule_type === "away" ? <><Clock className="w-3 h-3 mr-1" /> {t("autoReply.away", "Away")}</> : t("autoReply.keyword", "Keyword")}
                       </Badge>
                     </div>
                     <p className="text-sm text-muted-foreground line-clamp-2">{rule.reply_message}</p>
@@ -206,7 +214,7 @@ export function AutoReplyManager({ platform }: { platform?: MessengerPlatform } 
                     {rule.rule_type === "away" && rule.schedule_start && (
                       <p className="text-xs text-muted-foreground mt-1">
                         {rule.schedule_start} – {rule.schedule_end}
-                        {rule.schedule_days && ` • ${rule.schedule_days.map((d) => DAYS[d]).join(", ")}`}
+                        {rule.schedule_days && ` • ${rule.schedule_days.map((d) => dayLabel(t, d)).join(", ")}`}
                       </p>
                     )}
                   </div>
@@ -220,7 +228,7 @@ export function AutoReplyManager({ platform }: { platform?: MessengerPlatform } 
                         <Button variant="ghost" size="icon"><Pencil className="w-4 h-4" /></Button>
                       </DialogTrigger>
                       <DialogContent>
-                        <DialogHeader><DialogTitle>Edit Rule</DialogTitle></DialogHeader>
+                        <DialogHeader><DialogTitle>{t("autoReply.editTitle", "Edit Rule")}</DialogTitle></DialogHeader>
                         <RuleForm
                           initial={rule}
                           onSubmit={(data) => { updateRule.mutate({ id: rule.id, ...data }); setEditingId(null); }}

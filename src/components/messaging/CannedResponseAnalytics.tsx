@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
@@ -5,6 +6,7 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContaine
 import { Loader2, Zap, Bot, TrendingUp } from "lucide-react";
 
 export function CannedResponseAnalytics() {
+  const { t } = useTranslation("inbox");
   const { data: qrData, isLoading: qrLoading } = useQuery({
     queryKey: ["canned-response-analytics-qr"],
     queryFn: async () => {
@@ -100,7 +102,7 @@ export function CannedResponseAnalytics() {
               </div>
               <div>
                 <p className="text-2xl font-bold">{qrData?.total || 0}</p>
-                <p className="text-sm text-muted-foreground">Quick Replies Used</p>
+                <p className="text-sm text-muted-foreground">{t("analytics.quickRepliesUsed", "Quick Replies Used")}</p>
               </div>
             </div>
           </CardContent>
@@ -113,7 +115,7 @@ export function CannedResponseAnalytics() {
               </div>
               <div>
                 <p className="text-2xl font-bold">{arData?.total || 0}</p>
-                <p className="text-sm text-muted-foreground">Auto Replies Triggered</p>
+                <p className="text-sm text-muted-foreground">{t("analytics.autoRepliesTriggered", "Auto Replies Triggered")}</p>
               </div>
             </div>
           </CardContent>
@@ -126,7 +128,7 @@ export function CannedResponseAnalytics() {
               </div>
               <div>
                 <p className="text-2xl font-bold">{(qrData?.total || 0) + (arData?.total || 0)}</p>
-                <p className="text-sm text-muted-foreground">Total Automated Responses</p>
+                <p className="text-sm text-muted-foreground">{t("analytics.totalAutomated", "Total Automated Responses")}</p>
               </div>
             </div>
           </CardContent>
@@ -135,7 +137,7 @@ export function CannedResponseAnalytics() {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <Card>
-          <CardHeader><CardTitle>Top Quick Replies</CardTitle></CardHeader>
+          <CardHeader><CardTitle>{t("analytics.topQuickReplies", "Top Quick Replies")}</CardTitle></CardHeader>
           <CardContent>
             {(qrData?.topReplies?.length || 0) > 0 ? (
               <ResponsiveContainer width="100%" height={300}>
@@ -143,18 +145,18 @@ export function CannedResponseAnalytics() {
                   <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
                   <XAxis type="number" tick={{ fontSize: 12 }} />
                   <YAxis dataKey="name" type="category" tick={{ fontSize: 11 }} width={100} />
-                  <Tooltip formatter={(val: number) => [val, "Uses"]} />
+                  <Tooltip formatter={(val: number) => [val, t("analytics.uses", "Uses")]} />
                   <Bar dataKey="count" fill="hsl(var(--primary))" radius={[0, 4, 4, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             ) : (
-              <p className="text-center py-12 text-muted-foreground">No quick reply usage data yet.</p>
+              <p className="text-center py-12 text-muted-foreground">{t("analytics.noQuickReplyData", "No quick reply usage data yet.")}</p>
             )}
           </CardContent>
         </Card>
 
         <Card>
-          <CardHeader><CardTitle>Top Auto-Reply Rules</CardTitle></CardHeader>
+          <CardHeader><CardTitle>{t("analytics.topAutoRules", "Top Auto-Reply Rules")}</CardTitle></CardHeader>
           <CardContent>
             {(arData?.topRules?.length || 0) > 0 ? (
               <ResponsiveContainer width="100%" height={300}>
@@ -162,12 +164,12 @@ export function CannedResponseAnalytics() {
                   <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
                   <XAxis type="number" tick={{ fontSize: 12 }} />
                   <YAxis dataKey="name" type="category" tick={{ fontSize: 11 }} width={100} />
-                  <Tooltip formatter={(val: number) => [val, "Triggers"]} />
+                  <Tooltip formatter={(val: number) => [val, t("analytics.triggers", "Triggers")]} />
                   <Bar dataKey="count" fill="hsl(142, 71%, 45%)" radius={[0, 4, 4, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             ) : (
-              <p className="text-center py-12 text-muted-foreground">No auto-reply usage data yet.</p>
+              <p className="text-center py-12 text-muted-foreground">{t("analytics.noAutoReplyData", "No auto-reply usage data yet.")}</p>
             )}
           </CardContent>
         </Card>
@@ -175,7 +177,7 @@ export function CannedResponseAnalytics() {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <Card>
-          <CardHeader><CardTitle>Quick Reply Usage Over Time</CardTitle></CardHeader>
+          <CardHeader><CardTitle>{t("analytics.quickUsageOverTime", "Quick Reply Usage Over Time")}</CardTitle></CardHeader>
           <CardContent>
             {(qrData?.dailyData?.length || 0) > 0 ? (
               <ResponsiveContainer width="100%" height={250}>
@@ -188,13 +190,13 @@ export function CannedResponseAnalytics() {
                 </LineChart>
               </ResponsiveContainer>
             ) : (
-              <p className="text-center py-8 text-muted-foreground">No data yet.</p>
+              <p className="text-center py-8 text-muted-foreground">{t("analytics.noData", "No data yet.")}</p>
             )}
           </CardContent>
         </Card>
 
         <Card>
-          <CardHeader><CardTitle>Auto-Reply Triggers Over Time</CardTitle></CardHeader>
+          <CardHeader><CardTitle>{t("analytics.autoTriggersOverTime", "Auto-Reply Triggers Over Time")}</CardTitle></CardHeader>
           <CardContent>
             {(arData?.dailyData?.length || 0) > 0 ? (
               <ResponsiveContainer width="100%" height={250}>
@@ -207,7 +209,7 @@ export function CannedResponseAnalytics() {
                 </LineChart>
               </ResponsiveContainer>
             ) : (
-              <p className="text-center py-8 text-muted-foreground">No data yet.</p>
+              <p className="text-center py-8 text-muted-foreground">{t("analytics.noData", "No data yet.")}</p>
             )}
           </CardContent>
         </Card>

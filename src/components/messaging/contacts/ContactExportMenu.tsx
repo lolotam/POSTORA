@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -38,7 +39,9 @@ export function ContactExportMenu({
   triggerSize,
   children,
 }: ContactExportMenuProps) {
+  const { t } = useTranslation("inbox");
   const { toast } = useToast();
+  const buttonLabel = label ?? t("common:export", "Export");
 
   const handleCsv = async () => {
     try {
@@ -48,7 +51,7 @@ export function ContactExportMenu({
       downloadBlob(new Blob([csv], { type: "text/csv" }), "postora-contacts.csv");
     } catch (e) {
       toast({
-        title: "CSV export failed",
+        title: t("errors.csvExportFailed", "CSV export failed"),
         description: (e as Error).message,
         variant: "destructive",
       });
@@ -65,7 +68,7 @@ export function ContactExportMenu({
       XLSX.writeFile(wb, "postora-contacts.xlsx");
     } catch (e) {
       toast({
-        title: "Excel export failed",
+        title: t("errors.excelExportFailed", "Excel export failed"),
         description: (e as Error).message,
         variant: "destructive",
       });
@@ -79,7 +82,7 @@ export function ContactExportMenu({
       downloadBlob(new Blob([vcf], { type: "text/vcard" }), "postora-contacts.vcf");
     } catch (e) {
       toast({
-        title: "vCard export failed",
+        title: t("errors.vcardExportFailed", "vCard export failed"),
         description: (e as Error).message,
         variant: "destructive",
       });
@@ -91,22 +94,22 @@ export function ContactExportMenu({
       <DropdownMenuTrigger asChild>
         <Button variant="outline" size={triggerSize}>
           {children}
-          {label}
+          {buttonLabel}
           <ChevronDown className="h-3.5 w-3.5 ml-1" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
         <DropdownMenuItem onClick={handleCsv}>
           <FileText className="h-4 w-4 mr-2" />
-          Export as CSV
+          {t("export.csv", "Export as CSV")}
         </DropdownMenuItem>
         <DropdownMenuItem onClick={handleXlsx}>
           <FileSpreadsheet className="h-4 w-4 mr-2" />
-          Export as Excel (.xlsx)
+          {t("export.excel", "Export as Excel (.xlsx)")}
         </DropdownMenuItem>
         <DropdownMenuItem onClick={handleVCard}>
           <Contact className="h-4 w-4 mr-2" />
-          Export as vCard (.vcf)
+          {t("export.vcard", "Export as vCard (.vcf)")}
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

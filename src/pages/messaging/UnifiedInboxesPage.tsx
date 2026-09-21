@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { useSearchParams, Link } from "react-router-dom";
 import { Navigate } from "react-router-dom";
 import { motion } from "framer-motion";
@@ -48,6 +49,7 @@ const INBOX_PLATFORMS: PlatformTabOption[] = [
 ];
 
 export default function UnifiedInboxesPage() {
+  const { t } = useTranslation("inbox");
   const [searchParams, setSearchParams] = useSearchParams();
 
   const platformParam = searchParams.get("platform") as string;
@@ -91,7 +93,7 @@ export default function UnifiedInboxesPage() {
                 }}
               >
                 <h1 className="text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-black uppercase tracking-[0.18em] sm:tracking-[0.25em] md:tracking-[0.3em] bg-gradient-to-r from-blue-500 via-indigo-500 to-purple-500 dark:from-sky-400 dark:via-indigo-400 dark:to-fuchsia-400 bg-clip-text text-transparent drop-shadow-sm text-center">
-                  Unified Inboxes
+                  {t("unified.title", "Unified Inboxes")}
                 </h1>
               </motion.div>
             </div>
@@ -99,7 +101,7 @@ export default function UnifiedInboxesPage() {
             <div
               className="flex items-center justify-center gap-6 sm:gap-8 md:gap-10 lg:gap-12 px-4 py-3 sm:py-4 flex-wrap bg-transparent"
               role="tablist"
-              aria-label="Inbox Channels"
+              aria-label={t("unified.channelsAria", "Inbox Channels")}
             >
               {INBOX_PLATFORMS.map((p) => {
                 const isSelected = platform === p.id;
@@ -169,7 +171,7 @@ export default function UnifiedInboxesPage() {
                   >
                     <Link to="/messaging/whatsapp/conversations">
                       <PlatformIcon platform="whatsapp" size="sm" />
-                      <span>Open Full WhatsApp Studio</span>
+                      <span>{t("unified.openStudio", "Open Full WhatsApp Studio")}</span>
                       <ExternalLink className="w-4 h-4 ml-1" />
                     </Link>
                   </Button>

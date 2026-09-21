@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useWhatsAppWebhooks, WhatsAppWebhook } from "@/hooks/useWhatsAppWebhooks";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -12,6 +13,7 @@ import { Plus, Trash2, TestTube, Globe, Clock, AlertTriangle, Loader2, Pencil } 
 import { formatDistanceToNow } from "date-fns";
 
 export function WebhookManager() {
+  const { t } = useTranslation("inbox");
   const { webhooks, isLoading, createWebhook, updateWebhook, deleteWebhook, testWebhook } = useWhatsAppWebhooks();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingWebhook, setEditingWebhook] = useState<WhatsAppWebhook | null>(null);
@@ -49,34 +51,34 @@ export function WebhookManager() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-lg font-semibold">External Webhooks</h3>
-          <p className="text-sm text-muted-foreground">Forward inbound messages to Zapier, Make, HubSpot, or any URL</p>
+          <h3 className="text-lg font-semibold">{t("webhook.title", "External Webhooks")}</h3>
+          <p className="text-sm text-muted-foreground">{t("webhook.subtitle", "Forward inbound messages to Zapier, Make, HubSpot, or any URL")}</p>
         </div>
         <Dialog open={dialogOpen} onOpenChange={(o) => { setDialogOpen(o); if (!o) resetForm(); }}>
           <DialogTrigger asChild>
-            <Button size="sm" className="gap-1.5"><Plus className="w-4 h-4" />Add Webhook</Button>
+            <Button size="sm" className="gap-1.5"><Plus className="w-4 h-4" />{t("webhook.add", "Add Webhook")}</Button>
           </DialogTrigger>
           <DialogContent>
             <DialogHeader>
-              <DialogTitle>{editingWebhook ? "Edit Webhook" : "Add Webhook"}</DialogTitle>
+              <DialogTitle>{editingWebhook ? t("webhook.edit", "Edit Webhook") : t("webhook.add", "Add Webhook")}</DialogTitle>
             </DialogHeader>
             <div className="space-y-4">
               <div className="space-y-2">
-                <Label>Name</Label>
-                <Input placeholder="e.g. Zapier - New Lead" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+                <Label>{t("webhook.name", "Name")}</Label>
+                <Input placeholder={t("webhook.namePlaceholder", "e.g. Zapier - New Lead")} value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
               </div>
               <div className="space-y-2">
-                <Label>Webhook URL</Label>
-                <Input placeholder="https://hooks.zapier.com/..." value={form.url} onChange={(e) => setForm({ ...form, url: e.target.value })} />
+                <Label>{t("webhook.url", "Webhook URL")}</Label>
+                <Input placeholder={t("webhook.urlPlaceholder", "https://hooks.zapier.com/...")} value={form.url} onChange={(e) => setForm({ ...form, url: e.target.value })} />
               </div>
               <div className="space-y-2">
-                <Label>Signing Secret <span className="text-muted-foreground">(optional)</span></Label>
-                <Input placeholder="HMAC-SHA256 secret for payload verification" value={form.secret} onChange={(e) => setForm({ ...form, secret: e.target.value })} />
-                <p className="text-xs text-muted-foreground">If set, payloads are signed with X-Webhook-Signature header</p>
+                <Label>{t("webhook.secret", "Signing Secret")} <span className="text-muted-foreground">{t("webhook.optional", "(optional)")}</span></Label>
+                <Input placeholder={t("webhook.secretPlaceholder", "HMAC-SHA256 secret for payload verification")} value={form.secret} onChange={(e) => setForm({ ...form, secret: e.target.value })} />
+                <p className="text-xs text-muted-foreground">{t("webhook.secretHint", "If set, payloads are signed with X-Webhook-Signature header")}</p>
               </div>
               <Button onClick={handleSubmit} disabled={!form.name || !form.url || createWebhook.isPending || updateWebhook.isPending} className="w-full">
                 {(createWebhook.isPending || updateWebhook.isPending) && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
-                {editingWebhook ? "Save Changes" : "Create Webhook"}
+                {editingWebhook ? t("common:saveChanges", "Save Changes") : t("webhook.create", "Create Webhook")}
               </Button>
             </div>
           </DialogContent>
@@ -87,8 +89,8 @@ export function WebhookManager() {
         <Card>
           <CardContent className="flex flex-col items-center justify-center py-12 text-center">
             <Globe className="w-12 h-12 text-muted-foreground mb-3" />
-            <h4 className="font-medium">No webhooks configured</h4>
-            <p className="text-sm text-muted-foreground mt-1">Add a webhook to forward inbound messages to external services</p>
+            <h4 className="font-medium">{t("webhook.empty", "No webhooks configured")}</h4>
+            <p className="text-sm text-muted-foreground mt-1">{t("webhook.emptyHint", "Add a webhook to forward inbound messages to external services")}</p>
           </CardContent>
         </Card>
       ) : (
@@ -100,11 +102,11 @@ export function WebhookManager() {
                   <div className="flex items-center gap-3">
                     <CardTitle className="text-base">{wh.name}</CardTitle>
                     <Badge variant={wh.is_active ? "default" : "secondary"}>
-                      {wh.is_active ? "Active" : "Disabled"}
+                      {wh.is_active ? t("common:active", "Active") : t("common:disabled", "Disabled")}
                     </Badge>
                     {wh.failure_count >= 5 && (
                       <Badge variant="destructive" className="gap-1">
-                        <AlertTriangle className="w-3 h-3" />{wh.failure_count} failures
+                        <AlertTriangle className="w-3 h-3" />{t("webhook.failures", "{{count}} failures", { count: wh.failure_count })}
                       </Badge>
                     )}
                   </div>
@@ -120,7 +122,7 @@ export function WebhookManager() {
                     {wh.last_triggered_at && (
                       <span className="flex items-center gap-1">
                         <Clock className="w-3 h-3" />
-                        Last triggered {formatDistanceToNow(new Date(wh.last_triggered_at), { addSuffix: true })}
+                        {t("webhook.lastTriggered", "Last triggered {{time}}", { time: formatDistanceToNow(new Date(wh.last_triggered_at), { addSuffix: true }) })}
                       </span>
                     )}
                     {wh.last_status_code && (
@@ -128,11 +130,11 @@ export function WebhookManager() {
                         HTTP {wh.last_status_code}
                       </Badge>
                     )}
-                    {wh.secret && <Badge variant="outline" className="text-xs">HMAC signed</Badge>}
+                    {wh.secret && <Badge variant="outline" className="text-xs">{t("webhook.hmac", "HMAC signed")}</Badge>}
                   </div>
                   <div className="flex items-center gap-1">
                     <Button variant="ghost" size="sm" onClick={() => testWebhook.mutate(wh)} disabled={testWebhook.isPending}>
-                      <TestTube className="w-4 h-4 mr-1" />Test
+                      <TestTube className="w-4 h-4 mr-1" />{t("webhook.test", "Test")}
                     </Button>
                     <Button variant="ghost" size="sm" onClick={() => openEdit(wh)}>
                       <Pencil className="w-4 h-4" />
@@ -143,12 +145,12 @@ export function WebhookManager() {
                       </AlertDialogTrigger>
                       <AlertDialogContent>
                         <AlertDialogHeader>
-                          <AlertDialogTitle>Delete webhook?</AlertDialogTitle>
-                          <AlertDialogDescription>This will permanently remove "{wh.name}" and stop forwarding messages.</AlertDialogDescription>
+                          <AlertDialogTitle>{t("webhook.deleteConfirm", "Delete webhook?")}</AlertDialogTitle>
+                          <AlertDialogDescription>{t("webhook.deleteDesc", "This will permanently remove \"{{name}}\" and stop forwarding messages.", { name: wh.name })}</AlertDialogDescription>
                         </AlertDialogHeader>
                         <AlertDialogFooter>
-                          <AlertDialogCancel>Cancel</AlertDialogCancel>
-                          <AlertDialogAction onClick={() => deleteWebhook.mutate(wh.id)}>Delete</AlertDialogAction>
+                          <AlertDialogCancel>{t("common:cancel", "Cancel")}</AlertDialogCancel>
+                          <AlertDialogAction onClick={() => deleteWebhook.mutate(wh.id)}>{t("common:delete", "Delete")}</AlertDialogAction>
                         </AlertDialogFooter>
                       </AlertDialogContent>
                     </AlertDialog>

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useTranslation, Trans } from "react-i18next";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { motion } from "framer-motion";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
@@ -94,6 +95,7 @@ function useThreadsAccountOptions() {
 }
 
 export default function ThreadsMentions() {
+  const { t } = useTranslation("inbox");
   const navigate = useNavigate();
   const { data: accounts = [], isLoading: accountsLoading } = useThreadsAccountOptions();
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
@@ -153,7 +155,7 @@ export default function ThreadsMentions() {
                 }}
               >
                 <h1 className="text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-black uppercase tracking-[0.35em] sm:tracking-[0.48em] md:tracking-[0.6em] bg-gradient-to-r from-violet-500 via-indigo-500 to-purple-500 dark:from-violet-400 dark:via-indigo-400 dark:to-fuchsia-400 bg-clip-text text-transparent drop-shadow-sm text-center">
-                  Threads Mentions
+                  {t("threads.title", "Threads Mentions")}
                 </h1>
               </motion.div>
             </div>
@@ -161,7 +163,7 @@ export default function ThreadsMentions() {
             <div
               className="flex items-center justify-center gap-6 sm:gap-8 md:gap-10 lg:gap-12 px-4 py-3 sm:py-4 flex-wrap bg-transparent"
               role="tablist"
-              aria-label="Mention Channels"
+              aria-label={t("threads.channelsAria", "Mention Channels")}
             >
               {PLATFORMS.map((p) => {
                 const isSelected = p.id === "threads";
@@ -232,13 +234,13 @@ export default function ThreadsMentions() {
               <div className="flex flex-col items-center text-center space-y-4 py-6">
                 <div className="group"><Icon3D icon={AtSign} variant="indigo" size="lg" /></div>
                 <div>
-                  <h3 className="font-semibold">No Threads account connected</h3>
+                  <h3 className="font-semibold">{t("threads.noAccount", "No Threads account connected")}</h3>
                   <p className="text-sm text-muted-foreground mt-1">
-                    Connect a Threads account from Profiles to start tracking mentions.
+                    {t("threads.noAccountHint", "Connect a Threads account from Profiles to start tracking mentions.")}
                   </p>
                 </div>
                 <Button asChild className="bg-gradient-to-r from-indigo-500 via-violet-500 to-purple-500 text-white hover:opacity-90">
-                  <Link to="/profiles">Go to Profiles</Link>
+                  <Link to="/profiles">{t("threads.goProfiles", "Go to Profiles")}</Link>
                 </Button>
               </div>
             </GradientRingCard>
@@ -271,7 +273,7 @@ export default function ThreadsMentions() {
                         disabled={accountsLoading || accounts.length === 0}
                       >
                         <SelectTrigger className="w-full sm:w-[220px]">
-                          <SelectValue placeholder="Select Threads account">
+                            <SelectValue placeholder={t("accounts.selectThreads", "Select Threads account")}>
                             {selectedAccount && (
                               <span className="flex items-center gap-2">
                                 <Avatar className="h-5 w-5">
@@ -304,7 +306,7 @@ export default function ThreadsMentions() {
 
                       {selectedAccountId && unreadCount > 0 && (
                         <Badge variant="default" className="shrink-0 bg-gradient-to-r from-indigo-500 via-violet-500 to-purple-500 text-white border-0">
-                          {unreadCount} unread
+                          {t("threads.unreadCount", "{{count}} unread", { count: unreadCount })}
                         </Badge>
                       )}
                     </div>
@@ -312,11 +314,11 @@ export default function ThreadsMentions() {
                     <TabsList className="bg-card/50 backdrop-blur-md border border-border/40 rounded-xl p-1 h-auto [&>[data-state=active]]:bg-gradient-to-r [&>[data-state=active]]:from-indigo-500 [&>[data-state=active]]:via-violet-500 [&>[data-state=active]]:to-purple-500 [&>[data-state=active]]:text-white [&>[data-state=active]]:shadow-md">
                       <TabsTrigger value="mentions" className="rounded-lg">
                         <AtSign className="h-4 w-4 mr-1.5" />
-                        Mentions
+                        {t("threads.mentions", "Mentions")}
                       </TabsTrigger>
                       <TabsTrigger value="replies" className="rounded-lg">
                         <MessageCircle className="h-4 w-4 mr-1.5" />
-                        Replies
+                        {t("threads.replies", "Replies")}
                       </TabsTrigger>
                     </TabsList>
 
@@ -332,18 +334,17 @@ export default function ThreadsMentions() {
                         ) : (
                           <RefreshCw className="h-4 w-4 mr-2" />
                         )}
-                        Refresh
+                        {t("common:refresh", "Refresh")}
                       </Button>
                       {lastSyncedAt && (
                         <span className="text-xs text-muted-foreground hidden lg:inline">
-                          Last synced{" "}
-                          {formatDistanceToNow(new Date(lastSyncedAt), { addSuffix: true })}
+                          {t("threads.lastSynced", "Last synced {{time}}", { time: formatDistanceToNow(new Date(lastSyncedAt), { addSuffix: true }) })}
                         </span>
                       )}
                       <Button asChild variant="outline" size="sm" className="gap-2 border-indigo-500/30 hover:bg-indigo-500/10">
                         <Link to="/automation/agents?platform=threads&surface=dms">
                           <Sparkles className="w-4 h-4 text-indigo-400" />
-                          <span className="hidden sm:inline">AI & Automation Settings</span>
+                          <span className="hidden sm:inline">{t("threads.aiSettings", "AI & Automation Settings")}</span>
                           <span className="sm:hidden">AI</span>
                         </Link>
                       </Button>
@@ -387,10 +388,10 @@ export default function ThreadsMentions() {
                             <GradientRingCard variant="rose" padded={false} hoverLift={false} ringIntensity="subtle" innerClassName="p-6 text-center space-y-3">
                               <AlertTriangle className="h-6 w-6 text-rose-500 mx-auto" />
                               <p className="text-sm text-muted-foreground">
-                                Failed to load mentions.
+                                {t("threads.failedLoad", "Failed to load mentions.")}
                               </p>
                               <Button variant="outline" size="sm" className="border-rose-500/40 hover:bg-rose-500/10" onClick={() => refetch()}>
-                                Retry
+                                {t("common:retry", "Retry")}
                               </Button>
                             </GradientRingCard>
                           )}
@@ -400,10 +401,12 @@ export default function ThreadsMentions() {
                               <div className="flex flex-col items-center text-center space-y-3 py-4">
                                 <div className="group"><Icon3D icon={Inbox} variant="indigo" size="md" /></div>
                                 <p className="text-sm font-medium">
-                                  Mentions are not loaded yet.
+                                  {t("threads.notLoaded", "Mentions are not loaded yet.")}
                                 </p>
                                 <p className="text-xs text-muted-foreground">
-                                  Click <strong>Refresh</strong> to fetch the latest mentions from Threads. Results reset when you close the browser.
+                                  <Trans ns="inbox" i18nKey="threads.notLoadedHint" components={{ strong: <strong /> }}>
+                                    Click <strong>Refresh</strong> to fetch the latest mentions from Threads. Results reset when you close the browser.
+                                  </Trans>
                                 </p>
                               </div>
                             </GradientRingCard>
@@ -414,10 +417,12 @@ export default function ThreadsMentions() {
                               <div className="flex flex-col items-center text-center space-y-3 py-4">
                                 <div className="group"><Icon3D icon={Inbox} variant="indigo" size="md" /></div>
                                 <p className="text-sm font-medium">
-                                  No mentions found for this Threads account yet.
+                                  {t("threads.noMentions", "No mentions found for this Threads account yet.")}
                                 </p>
                                 <p className="text-xs text-muted-foreground">
-                                  Click <strong>Refresh</strong> to fetch the latest mentions from Threads.
+                                  <Trans ns="inbox" i18nKey="threads.noMentionsHint" components={{ strong: <strong /> }}>
+                                    Click <strong>Refresh</strong> to fetch the latest mentions from Threads.
+                                  </Trans>
                                 </p>
                               </div>
                             </GradientRingCard>
@@ -427,10 +432,10 @@ export default function ThreadsMentions() {
                             <div className="rounded-2xl border border-border/40 bg-card/60 backdrop-blur-md p-6 text-center space-y-3">
                               <Inbox className="h-6 w-6 text-muted-foreground mx-auto" />
                               <p className="text-sm text-muted-foreground">
-                                No mentions match your current filters.
+                                {t("threads.noMatch", "No mentions match your current filters.")}
                               </p>
                               <Button variant="outline" size="sm" className="border-violet-500/40 hover:bg-violet-500/10" onClick={reset}>
-                                Reset filters
+                                {t("threads.resetFilters", "Reset filters")}
                               </Button>
                             </div>
                           )}

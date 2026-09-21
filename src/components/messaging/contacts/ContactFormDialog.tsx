@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import {
@@ -44,6 +45,7 @@ const EMPTY = {
 };
 
 export function ContactFormDialog({ open, onOpenChange, contact, initialPhone }: ContactFormDialogProps) {
+  const { t } = useTranslation("inbox");
   const { session } = useAuth();
   const { toast } = useToast();
   const { createContact, updateContact } = useContactMutations();
@@ -87,7 +89,7 @@ export function ContactFormDialog({ open, onOpenChange, contact, initialPhone }:
       set("avatar_url")(url);
     } catch (e) {
       toast({
-        title: "Photo upload failed",
+        title: t("contacts.photoFailed", "Photo upload failed"),
         description: (e as Error).message,
         variant: "destructive",
       });
@@ -124,14 +126,14 @@ export function ContactFormDialog({ open, onOpenChange, contact, initialPhone }:
     try {
       if (contact) await updateContact.mutateAsync({ id: contact.id, ...payload });
       else await createContact.mutateAsync(payload);
-      toast({ title: contact ? "Contact updated" : "Contact added" });
+      toast({ title: contact ? t("contacts.updated", "Contact updated") : t("toast.contactAdded", "Contact added") });
       onOpenChange(false);
     } catch (e) {
       const msg = (e as Error).message;
       toast({
-        title: "Save failed",
+        title: t("contacts.saveFailed", "Save failed"),
         description: msg.includes("duplicate")
-          ? "A contact with this number already exists."
+          ? t("contacts.alreadyExists", "A contact with this number already exists.")
           : msg,
         variant: "destructive",
       });
@@ -145,7 +147,7 @@ export function ContactFormDialog({ open, onOpenChange, contact, initialPhone }:
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>{contact ? "Edit Contact" : "New Contact"}</DialogTitle>
+          <DialogTitle>{contact ? t("contacts.edit", "Edit Contact") : t("contacts.new", "New Contact")}</DialogTitle>
         </DialogHeader>
         <div className="space-y-4">
           <div className="flex justify-center">
@@ -154,7 +156,7 @@ export function ContactFormDialog({ open, onOpenChange, contact, initialPhone }:
               className="relative"
               onClick={() => fileRef.current?.click()}
               disabled={uploading}
-              aria-label={uploading ? "Uploading photo" : "Upload contact photo"}
+              aria-label={uploading ? t("contacts.uploadingPhoto", "Uploading photo") : t("contacts.uploadPhoto", "Upload contact photo")}
             >
               <Avatar className="h-20 w-20">
                 <AvatarImage src={form.avatar_url || undefined} />
@@ -181,14 +183,14 @@ export function ContactFormDialog({ open, onOpenChange, contact, initialPhone }:
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <Label>First name</Label>
+              <Label>{t("contacts.firstName", "First name")}</Label>
               <Input
                 value={form.first_name}
                 onChange={(e) => set("first_name")(e.target.value)}
               />
             </div>
             <div>
-              <Label>Last name</Label>
+              <Label>{t("contacts.lastName", "Last name")}</Label>
               <Input
                 value={form.last_name}
                 onChange={(e) => set("last_name")(e.target.value)}
@@ -196,18 +198,18 @@ export function ContactFormDialog({ open, onOpenChange, contact, initialPhone }:
             </div>
           </div>
           <div>
-            <Label>WhatsApp number *</Label>
+            <Label>{t("contacts.whatsappNumber", "WhatsApp number *")}</Label>
             <PhoneInput value={form.phone_number} onChange={set("phone_number")} />
           </div>
           <div>
-            <Label>Second phone</Label>
+            <Label>{t("contacts.secondPhone", "Second phone")}</Label>
             <PhoneInput
               value={form.phone_secondary}
               onChange={set("phone_secondary")}
             />
           </div>
           <div>
-            <Label>Email</Label>
+            <Label>{t("contacts.email", "Email")}</Label>
             <Input
               type="email"
               value={form.email}
@@ -216,14 +218,14 @@ export function ContactFormDialog({ open, onOpenChange, contact, initialPhone }:
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <Label>Company</Label>
+              <Label>{t("contacts.company", "Company")}</Label>
               <Input
                 value={form.company}
                 onChange={(e) => set("company")(e.target.value)}
               />
             </div>
             <div>
-              <Label>Job title</Label>
+              <Label>{t("contacts.jobTitle", "Job title")}</Label>
               <Input
                 value={form.job_title}
                 onChange={(e) => set("job_title")(e.target.value)}
@@ -231,7 +233,7 @@ export function ContactFormDialog({ open, onOpenChange, contact, initialPhone }:
             </div>
           </div>
           <div>
-            <Label>Street</Label>
+            <Label>{t("contacts.street", "Street")}</Label>
             <Input
               value={form.street}
               onChange={(e) => set("street")(e.target.value)}
@@ -239,11 +241,11 @@ export function ContactFormDialog({ open, onOpenChange, contact, initialPhone }:
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <Label>City</Label>
+              <Label>{t("contacts.city", "City")}</Label>
               <Input value={form.city} onChange={(e) => set("city")(e.target.value)} />
             </div>
             <div>
-              <Label>Country</Label>
+              <Label>{t("contacts.country", "Country")}</Label>
               <Input
                 value={form.country}
                 onChange={(e) => set("country")(e.target.value)}
@@ -252,7 +254,7 @@ export function ContactFormDialog({ open, onOpenChange, contact, initialPhone }:
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <Label>Birthday</Label>
+              <Label>{t("contacts.birthday", "Birthday")}</Label>
               <Input
                 type="date"
                 value={form.birthday}
@@ -260,7 +262,7 @@ export function ContactFormDialog({ open, onOpenChange, contact, initialPhone }:
               />
             </div>
             <div>
-              <Label>Website</Label>
+              <Label>{t("contacts.website", "Website")}</Label>
               <Input
                 value={form.website}
                 onChange={(e) => set("website")(e.target.value)}
@@ -268,18 +270,18 @@ export function ContactFormDialog({ open, onOpenChange, contact, initialPhone }:
             </div>
           </div>
           <div>
-            <Label>Notes</Label>
+            <Label>{t("contacts.notes", "Notes")}</Label>
             <Textarea
               value={form.notes}
               onChange={(e) => set("notes")(e.target.value)}
             />
           </div>
           <div>
-            <Label>Tags (comma-separated)</Label>
+            <Label>{t("contacts.tagsHint", "Tags (comma-separated)")}</Label>
             <Input
               value={form.tags}
               onChange={(e) => set("tags")(e.target.value)}
-              placeholder="vip, customer"
+              placeholder={t("contacts.tagsPlaceholder", "vip, customer")}
             />
           </div>
 
@@ -289,7 +291,7 @@ export function ContactFormDialog({ open, onOpenChange, contact, initialPhone }:
             disabled={!form.phone_number || pending || uploading}
           >
             {pending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
-            {contact ? "Save changes" : "Add contact"}
+            {contact ? t("common:saveChanges", "Save changes") : t("contacts.addContact", "Add contact")}
           </Button>
         </div>
       </DialogContent>

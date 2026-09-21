@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { platformLabel, resolveQueueFilter, type Platform, type QueueFilter } from "./queueFilter";
 
@@ -10,6 +11,7 @@ interface WaitingQueueFilterProps {
 }
 
 export function WaitingQueueFilter({ platforms, counts, totalCount, value, onChange }: WaitingQueueFilterProps) {
+  const { t } = useTranslation("inbox");
   if (platforms.length < 2) return null;
 
   // Re-resolve so the pressed chip always matches what the queue is showing,
@@ -18,7 +20,7 @@ export function WaitingQueueFilter({ platforms, counts, totalCount, value, onCha
   const active = resolveQueueFilter(value, platforms);
 
   const chips: { value: QueueFilter; label: string; count: number }[] = [
-    { value: "all", label: "All", count: totalCount },
+    { value: "all", label: t("common:all", "All"), count: totalCount },
     ...platforms.map((platform) => ({
       value: platform as QueueFilter,
       label: platformLabel(platform),
@@ -27,7 +29,7 @@ export function WaitingQueueFilter({ platforms, counts, totalCount, value, onCha
   ];
 
   return (
-    <div role="group" aria-label="Filter waiting queue by platform" className="mb-4 flex flex-wrap gap-2">
+    <div role="group" aria-label={t("queue.aria", "Filter waiting queue by platform")} className="mb-4 flex flex-wrap gap-2">
       {chips.map((chip) => {
         const isActive = active === chip.value;
         return (

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Facebook, Camera, MessageSquare, Loader2, Plus, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -24,6 +25,7 @@ interface MessagingInboxProps {
 type InboxTab = MessagingInboxPlatform | "whatsapp";
 
 export function MessagingInbox({ platform }: MessagingInboxProps) {
+  const { t } = useTranslation("inbox");
   const { flags } = useFeatureFlags();
   const { accounts, isLoading: accountsLoading } = useMessagingAccounts();
   const defaultTab: InboxTab = platform || (flags.msgFacebook ? "facebook" : flags.msgInstagram ? "instagram" : flags.msgWhatsapp ? "whatsapp" : "facebook");
@@ -112,19 +114,19 @@ export function MessagingInbox({ platform }: MessagingInboxProps) {
             {flags.msgFacebook && (
               <TabsTrigger value="facebook" className="gap-1.5">
                 <Facebook className="w-4 h-4" />
-                Facebook Messenger
+                {t("inbox.facebookMessenger", "Facebook Messenger")}
               </TabsTrigger>
             )}
             {flags.msgInstagram && (
               <TabsTrigger value="instagram" className="gap-1.5">
                 <Camera className="w-4 h-4" />
-                Instagram DMs
+                {t("inbox.instagramDms", "Instagram DMs")}
               </TabsTrigger>
             )}
             {flags.msgWhatsapp && (
               <TabsTrigger value="whatsapp" className="gap-1.5">
                 <MessageSquare className="w-4 h-4" />
-                WhatsApp Business
+                {t("inbox.whatsappBusiness", "WhatsApp Business")}
               </TabsTrigger>
             )}
           </TabsList>
@@ -145,7 +147,7 @@ export function MessagingInbox({ platform }: MessagingInboxProps) {
                 />
                 <Button size="sm" onClick={() => setNewConvOpen(true)} className="gap-1.5">
                   <Plus className="h-4 w-4" />
-                  New Conversation
+                  {t("inbox.newConversation", "New Conversation")}
                 </Button>
               </div>
               {selectedAccountId && (
@@ -224,13 +226,13 @@ export function MessagingInbox({ platform }: MessagingInboxProps) {
             <div className="flex items-start gap-3 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm">
               <AlertTriangle className="w-4 h-4 mt-0.5 text-amber-600 dark:text-amber-400 shrink-0" />
               <div className="flex-1">
-                <p className="font-medium text-amber-700 dark:text-amber-300">Instagram DMs need an extra permission</p>
+                <p className="font-medium text-amber-700 dark:text-amber-300">{t("inbox.igNeedPermission", "Instagram DMs need an extra permission")}</p>
                 <p className="text-amber-700/80 dark:text-amber-300/80 mt-0.5">
-                  Reconnect your Instagram account and approve messaging permissions so we can load your inbox.
+                  {t("inbox.igReconnect", "Reconnect your Instagram account and approve messaging permissions so we can load your inbox.")}
                 </p>
               </div>
               <Button asChild size="sm" variant="outline" className="border-amber-500/50">
-                <Link to="/profiles">Reconnect</Link>
+                <Link to="/profiles">{t("common:reconnect", "Reconnect")}</Link>
               </Button>
             </div>
           )}

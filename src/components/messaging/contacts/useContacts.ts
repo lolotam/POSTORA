@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+import i18next from "i18next";
 import { useMutation, useQuery, useQueryClient, keepPreviousData } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -96,6 +98,7 @@ export function useContactsPage(filters: ContactFilters) {
 export type ContactInput = Omit<ContactRecord, "id">;
 
 export function useContactMutations() {
+  const { t } = useTranslation("inbox");
   const { session } = useAuth();
   // Contacts are workspace-scoped: the insert policy checks workspace_role(workspace_id),
   // so a row without it is rejected by RLS before the NOT NULL constraint even runs.
@@ -109,8 +112,8 @@ export function useContactMutations() {
 
   const createContact = useMutation({
     mutationFn: async (input: ContactInput) => {
-      if (!session?.user?.id) throw new Error("Not authenticated");
-      if (!activeWorkspaceId) throw new Error("Select a workspace before adding contacts");
+      if (!session?.user?.id) throw new Error(t("errors.notAuthenticated", "Not authenticated"));
+      if (!activeWorkspaceId) throw new Error(t("errors.selectWorkspace", "Select a workspace before adding contacts"));
       const { error } = await supabase
         .from("whatsapp_contacts")
         .insert({ ...input, user_id: session.user.id, workspace_id: activeWorkspaceId } as never);
@@ -121,7 +124,7 @@ export function useContactMutations() {
 
   const updateContact = useMutation({
     mutationFn: async ({ id, ...input }: ContactRecord) => {
-      if (!session?.user?.id) throw new Error("Not authenticated");
+      if (!session?.user?.id) throw new Error(t("errors.notAuthenticated", "Not authenticated"));
       const { error } = await supabase.from("whatsapp_contacts").update(input as never).eq("id", id);
 
       if (error) throw error;
@@ -131,7 +134,7 @@ export function useContactMutations() {
 
   const deleteContacts = useMutation({
     mutationFn: async (ids: string[]) => {
-      if (!session?.user?.id) throw new Error("Not authenticated");
+      if (!session?.user?.id) throw new Error(t("errors.notAuthenticated", "Not authenticated"));
       const { error } = await supabase.from("whatsapp_contacts").delete().in("id", ids);
       if (error) throw error;
     },
@@ -140,7 +143,7 @@ export function useContactMutations() {
 
   const addToGroup = useMutation({
     mutationFn: async ({ groupId, contactIds }: { groupId: string; contactIds: string[] }) => {
-      if (!session?.user?.id) throw new Error("Not authenticated");
+      if (!session?.user?.id) throw new Error(t("errors.notAuthenticated", "Not authenticated"));
       const rows = contactIds.map((contact_id) => ({ group_id: groupId, contact_id }));
       const { error } = await supabase
         .from("whatsapp_contact_group_members")
@@ -152,7 +155,7 @@ export function useContactMutations() {
 
   const removeFromGroup = useMutation({
     mutationFn: async ({ groupId, contactIds }: { groupId: string; contactIds: string[] }) => {
-      if (!session?.user?.id) throw new Error("Not authenticated");
+      if (!session?.user?.id) throw new Error(t("errors.notAuthenticated", "Not authenticated"));
       const { error } = await supabase
         .from("whatsapp_contact_group_members")
         .delete()
@@ -165,7 +168,7 @@ export function useContactMutations() {
 
   const addTag = useMutation({
     mutationFn: async ({ tag, contactIds }: { tag: string; contactIds: string[] }) => {
-      if (!session?.user?.id) throw new Error("Not authenticated");
+      if (!session?.user?.id) throw new Error(t("errors.notAuthenticated", "Not authenticated"));
       const { data: contacts, error: fetchError } = await supabase
         .from("whatsapp_contacts")
         .select("id, tags")
@@ -187,6 +190,7 @@ export function useContactMutations() {
 }
 
 export function useGroupMutations() {
+  const { t } = useTranslation("inbox");
   const { session } = useAuth();
   const qc = useQueryClient();
   const invalidate = () => {
@@ -196,7 +200,7 @@ export function useGroupMutations() {
 
   const createGroup = useMutation({
     mutationFn: async (g: { name: string; description: string | null; color: string }) => {
-      if (!session?.user?.id) throw new Error("Not authenticated");
+      if (!session?.user?.id) throw new Error(t("errors.notAuthenticated", "Not authenticated"));
       const { error } = await supabase
         .from("whatsapp_contact_groups")
         .insert({ ...g, user_id: session.user.id });
@@ -212,7 +216,7 @@ export function useGroupMutations() {
       description: string | null;
       color: string;
     }) => {
-      if (!session?.user?.id) throw new Error("Not authenticated");
+      if (!session?.user?.id) throw new Error(t("errors.notAuthenticated", "Not authenticated"));
       const { id, ...rest } = g;
       const { error } = await supabase
         .from("whatsapp_contact_groups")
@@ -225,7 +229,7 @@ export function useGroupMutations() {
 
   const deleteGroup = useMutation({
     mutationFn: async (id: string) => {
-      if (!session?.user?.id) throw new Error("Not authenticated");
+      if (!session?.user?.id) throw new Error(t("errors.notAuthenticated", "Not authenticated"));
       const { error } = await supabase.from("whatsapp_contact_groups").delete().eq("id", id);
       if (error) throw error;
     },
@@ -238,7 +242,7 @@ export function useGroupMutations() {
 export async function uploadContactAvatar(file: File, userEmail: string): Promise<string> {
   const MAX_AVATAR_SIZE = 5 * 1024 * 1024;
   if (file.size > MAX_AVATAR_SIZE) {
-    throw new Error("Image must be 5\u202fMB or smaller");
+    throw new Error(i18next.t("errors.imageTooLarge", { ns: "inbox", defaultValue: "Image must be 5\u202fMB or smaller" }));
   }
   const img = await createImageBitmap(file);
   const side = Math.min(img.width, img.height);
@@ -249,7 +253,7 @@ export async function uploadContactAvatar(file: File, userEmail: string): Promis
   ctx.drawImage(img, (img.width - side) / 2, (img.height - side) / 2, side, side, 0, 0, 256, 256);
   const blob: Blob = await new Promise((resolve, reject) =>
     canvas.toBlob(
-      (b) => (b ? resolve(b) : reject(new Error("Image processing failed"))),
+      (b) => (b ? resolve(b) : reject(new Error(i18next.t("errors.imageProcessFailed", { ns: "inbox", defaultValue: "Image processing failed" })))),
       "image/jpeg",
       0.85,
     ),
@@ -257,7 +261,7 @@ export async function uploadContactAvatar(file: File, userEmail: string): Promis
   const base64 = await new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(reader.result as string);
-    reader.onerror = () => reject(new Error("Failed to read image"));
+    reader.onerror = () => reject(new Error(i18next.t("errors.imageReadFailed", { ns: "inbox", defaultValue: "Failed to read image" })));
     reader.readAsDataURL(blob);
   });
   const { data, error } = await supabase.functions.invoke("cloudinary-upload", {
@@ -270,6 +274,6 @@ export async function uploadContactAvatar(file: File, userEmail: string): Promis
     },
   });
   if (error) throw error;
-  if (!data?.url) throw new Error("Upload failed - no URL returned");
+  if (!data?.url) throw new Error(i18next.t("errors.uploadNoUrl", { ns: "inbox", defaultValue: "Upload failed - no URL returned" }));
   return data.url as string;
 }

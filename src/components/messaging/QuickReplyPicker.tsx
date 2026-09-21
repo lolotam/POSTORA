@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Input } from "@/components/ui/input";
@@ -12,6 +13,7 @@ interface QuickReplyPickerProps {
 }
 
 export function QuickReplyPicker({ onSelect }: QuickReplyPickerProps) {
+  const { t } = useTranslation("inbox");
   const { data: replies = [] } = useWhatsAppQuickReplies();
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -39,7 +41,7 @@ export function QuickReplyPicker({ onSelect }: QuickReplyPickerProps) {
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <Button variant="ghost" size="icon" className="shrink-0 h-9 w-9" title="Quick replies">
+        <Button variant="ghost" size="icon" className="shrink-0 h-9 w-9" title={t("quickReply.tooltip", "Quick replies")}>
           <Zap className="w-4 h-4" />
         </Button>
       </PopoverTrigger>
@@ -49,7 +51,7 @@ export function QuickReplyPicker({ onSelect }: QuickReplyPickerProps) {
             <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
             <Input
               ref={inputRef}
-              placeholder="Search quick replies..."
+              placeholder={t("quickReply.search", "Search quick replies...")}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className="pl-8 h-8 text-sm"
@@ -58,7 +60,7 @@ export function QuickReplyPicker({ onSelect }: QuickReplyPickerProps) {
         </div>
         <ScrollArea className="max-h-60">
           {filtered.length === 0 ? (
-            <p className="text-sm text-muted-foreground text-center py-4">No matches</p>
+            <p className="text-sm text-muted-foreground text-center py-4">{t("quickReply.noMatches", "No matches")}</p>
           ) : (
             <div className="p-1">
               {filtered.map((r) => (

@@ -1,4 +1,6 @@
 import { useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import {
   Dialog,
   DialogContent,
@@ -48,6 +50,29 @@ import {
   type CsvField,
 } from "./contactCodecs";
 import { useContactGroups, type ContactInput } from "./useContacts";
+import { countryLabel } from "./PhoneInput";
+
+function csvFieldLabel(t: TFunction, field: CsvField): string {
+  switch (field) {
+    case "first_name": return t("csvFields.first_name", "first name");
+    case "last_name": return t("csvFields.last_name", "last name");
+    case "display_name": return t("csvFields.display_name", "display name");
+    case "phone_number": return t("csvFields.phone_number", "phone number");
+    case "phone_secondary": return t("csvFields.phone_secondary", "phone secondary");
+    case "email": return t("csvFields.email", "email");
+    case "company": return t("csvFields.company", "company");
+    case "job_title": return t("csvFields.job_title", "job title");
+    case "street": return t("csvFields.street", "street");
+    case "city": return t("csvFields.city", "city");
+    case "country": return t("csvFields.country", "country");
+    case "birthday": return t("csvFields.birthday", "birthday");
+    case "website": return t("csvFields.website", "website");
+    case "notes": return t("csvFields.notes", "notes");
+    case "tags": return t("csvFields.tags", "tags");
+    case "avatar_url": return t("csvFields.avatar_url", "avatar url");
+    default: return field;
+  }
+}
 
 
 interface ContactImportDialogProps {
@@ -70,6 +95,7 @@ interface FailRow {
 type ImportRow = ContactInput & { _rawPhone: string };
 
 export function ContactImportDialog({ open, onOpenChange }: ContactImportDialogProps) {
+  const { t } = useTranslation("inbox");
   const { session } = useAuth();
   const { activeWorkspaceId } = useWhatsAppWorkspaceContext();
   const { toast } = useToast();
@@ -112,7 +138,7 @@ export function ContactImportDialog({ open, onOpenChange }: ContactImportDialogP
         setColumnMap(autoMapHeaders(headers));
         setStep("map");
       },
-      error: () => toast({ title: "Failed to parse CSV", variant: "destructive" }),
+      error: () => toast({ title: t("errors.csvParseFailed", "Failed to parse CSV"), variant: "destructive" }),
     });
   };
 
@@ -206,7 +232,7 @@ export function ContactImportDialog({ open, onOpenChange }: ContactImportDialogP
     const rejected = new Set((data ?? []).filter((r) => r.outcome !== "imported").map((r) => r.imported_phone));
     const fails = batch
       .filter((b) => rejected.has(b.phone_number))
-      .map((b) => ({ row: { phone: b._rawPhone, name: b.display_name || "" }, reason: "Already exists in another workspace" }));
+      .map((b) => ({ row: { phone: b._rawPhone, name: b.display_name || "" }, reason: t("errors.alreadyOtherWorkspace", "Already exists in another workspace") }));
     return { imported: batch.length - fails.length, fails };
   };
 
@@ -230,7 +256,7 @@ export function ContactImportDialog({ open, onOpenChange }: ContactImportDialogP
   const runImport = async () => {
     if (!session?.user?.id || !parsed) return;
     if (!activeWorkspaceId) {
-      toast({ title: "Select a workspace before importing contacts", variant: "destructive" });
+      toast({ title: t("errors.selectWorkspaceImport", "Select a workspace before importing contacts"), variant: "destructive" });
       return;
     }
     setStep("running");
@@ -253,8 +279,8 @@ export function ContactImportDialog({ open, onOpenChange }: ContactImportDialogP
         await addImportedToGroup(activeWorkspaceId, valid.map((v) => v.phone_number));
       }
     } catch (importError) {
-      const message = importError instanceof Error ? importError.message : "Import failed";
-      toast({ title: "Import failed", description: message, variant: "destructive" });
+      const message = importError instanceof Error ? importError.message : t("errors.importFailed", "Import failed");
+      toast({ title: t("errors.importFailed", "Import failed"), description: message, variant: "destructive" });
       setStep("map");
       return;
     }
@@ -300,10 +326,10 @@ export function ContactImportDialog({ open, onOpenChange }: ContactImportDialogP
       <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>
-            {step === "upload" && "Import Contacts from CSV"}
-            {step === "map" && "Map Columns"}
-            {step === "running" && "Importing..."}
-            {step === "done" && "Import Complete"}
+            {step === "upload" && t("import.title", "Import Contacts from CSV")}
+            {step === "map" && t("import.mapColumns", "Map Columns")}
+            {step === "running" && t("import.importing", "Importing...")}
+            {step === "done" && t("import.complete", "Import Complete")}
           </DialogTitle>
         </DialogHeader>
 
@@ -314,9 +340,9 @@ export function ContactImportDialog({ open, onOpenChange }: ContactImportDialogP
               className="border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors border-border hover:border-primary/50 w-full"
             >
               <Upload className="h-10 w-10 mx-auto mb-3 text-muted-foreground" />
-              <p className="font-medium">Click to select a CSV file</p>
+              <p className="font-medium">{t("import.clickCsv", "Click to select a CSV file")}</p>
               <p className="text-sm text-muted-foreground mt-1">
-                Header row required. Expected columns: phone_number, first_name, last_name, email, etc.
+                {t("import.csvHint", "Header row required. Expected columns: phone_number, first_name, last_name, email, etc.")}
               </p>
             </button>
             <input
@@ -333,12 +359,12 @@ export function ContactImportDialog({ open, onOpenChange }: ContactImportDialogP
           <div className="space-y-4">
             <div className="flex items-center gap-2 text-sm">
               <FileSpreadsheet className="h-4 w-4 text-muted-foreground" />
-              <span>{parsed.rows.length} rows · {parsed.headers.length} columns</span>
+              <span>{t("import.rowsCols", "{{rows}} rows · {{cols}} columns", { rows: parsed.rows.length, cols: parsed.headers.length })}</span>
             </div>
 
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <Label>Default country code</Label>
+                <Label>{t("import.defaultCountry", "Default country code")}</Label>
                 <Select value={defaultDial} onValueChange={setDefaultDial}>
                   <SelectTrigger>
                     <SelectValue />
@@ -346,20 +372,20 @@ export function ContactImportDialog({ open, onOpenChange }: ContactImportDialogP
                   <SelectContent className="max-h-60">
                     {COUNTRY_DIAL_CODES.map((c) => (
                       <SelectItem key={c.code} value={c.dial}>
-                        {c.flag} +{c.dial} {c.name}
+                        {c.flag} +{c.dial} {countryLabel(t, c.code, c.name)}
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
               </div>
               <div>
-                <Label>Add imported to group (optional)</Label>
+                <Label>{t("import.addToGroup", "Add imported to group (optional)")}</Label>
                 <Select value={targetGroupId} onValueChange={setTargetGroupId}>
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="none">No group</SelectItem>
+                    <SelectItem value="none">{t("import.noGroup", "No group")}</SelectItem>
                     {groups.map((g) => (
                       <SelectItem key={g.id} value={g.id}>
                         {g.name}
@@ -372,12 +398,12 @@ export function ContactImportDialog({ open, onOpenChange }: ContactImportDialogP
 
             <div className="space-y-2">
               <Label className="text-xs font-semibold uppercase text-muted-foreground">
-                Column mapping
+                {t("import.columnMapping", "Column mapping")}
               </Label>
               {CSV_FIELDS.map((field) => (
                 <div key={field} className="flex items-center gap-2">
                   <span className="w-32 text-sm capitalize shrink-0">
-                    {field.replace(/_/g, " ")}
+                    {csvFieldLabel(t, field)}
                   </span>
                   <Select
                     value={columnMap[field] !== undefined ? String(columnMap[field]) : "__none"}
@@ -392,7 +418,7 @@ export function ContactImportDialog({ open, onOpenChange }: ContactImportDialogP
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="__none">— Skip —</SelectItem>
+                      <SelectItem value="__none">{t("import.skip", "— Skip —")}</SelectItem>
                       {parsed.headers.map((h, i) => (
                         <SelectItem key={i} value={String(i)}>
                           {h}
@@ -409,8 +435,8 @@ export function ContactImportDialog({ open, onOpenChange }: ContactImportDialogP
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>Name</TableHead>
-                      <TableHead>Phone</TableHead>
+                      <TableHead>{t("import.name", "Name")}</TableHead>
+                      <TableHead>{t("import.phone", "Phone")}</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -429,24 +455,24 @@ export function ContactImportDialog({ open, onOpenChange }: ContactImportDialogP
               {previewInvalid > 0 && (
                 <Badge variant="destructive" className="gap-1">
                   <AlertCircle className="h-3 w-3" />
-                  {previewInvalid} invalid (no valid phone)
+                  {t("import.invalidPhone", "{{count}} invalid (no valid phone)", { count: previewInvalid })}
                 </Badge>
               )}
               <Badge variant="default" className="gap-1">
                 <CheckCircle2 className="h-3 w-3" />
-                {buildContacts.valid.length} valid
+                {t("import.valid", "{{count}} valid", { count: buildContacts.valid.length })}
               </Badge>
             </div>
 
             <div className="flex justify-between">
               <Button variant="outline" onClick={reset}>
-                Back
+                {t("common:back", "Back")}
               </Button>
               <Button
                 onClick={runImport}
                 disabled={buildContacts.valid.length === 0}
               >
-                Import {buildContacts.valid.length} contacts
+                {t("import.importN", "Import {{count}} contacts", { count: buildContacts.valid.length })}
               </Button>
             </div>
           </div>
@@ -456,7 +482,7 @@ export function ContactImportDialog({ open, onOpenChange }: ContactImportDialogP
           <div className="space-y-4 py-8">
             <Loader2 className="h-8 w-8 animate-spin mx-auto" />
             <Progress value={progress} />
-            <p className="text-center text-sm text-muted-foreground">{progress}%</p>
+            <p className="text-center text-sm text-muted-foreground">{t("import.percent", "{{progress}}%", { progress })}</p>
           </div>
         )}
 
@@ -464,25 +490,25 @@ export function ContactImportDialog({ open, onOpenChange }: ContactImportDialogP
           <div className="space-y-4">
             <div className="flex items-center gap-2">
               <CheckCircle2 className="h-5 w-5 text-green-500" />
-              <span className="font-medium">Import report</span>
+              <span className="font-medium">{t("import.report", "Import report")}</span>
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div className="rounded-lg border p-3">
                 <div className="text-2xl font-bold">{results.imported}</div>
-                <div className="text-sm text-muted-foreground">Imported / Updated</div>
+                <div className="text-sm text-muted-foreground">{t("import.importedUpdated", "Imported / Updated")}</div>
               </div>
               <div className="rounded-lg border p-3">
                 <div className="text-2xl font-bold text-amber-500">
                   {results.skippedInvalid}
                 </div>
-                <div className="text-sm text-muted-foreground">Skipped (invalid phone)</div>
+                <div className="text-sm text-muted-foreground">{t("import.skippedInvalid", "Skipped (invalid phone)")}</div>
               </div>
               {results.cleaned > 0 && (
                 <div className="rounded-lg border p-3">
                   <div className="text-2xl font-bold text-muted-foreground">
                     {results.cleaned}
                   </div>
-                  <div className="text-sm text-muted-foreground">Cleaned (bad birthday)</div>
+                  <div className="text-sm text-muted-foreground">{t("import.cleaned", "Cleaned (bad birthday)")}</div>
                 </div>
               )}
               {results.failed > 0 && (
@@ -490,7 +516,7 @@ export function ContactImportDialog({ open, onOpenChange }: ContactImportDialogP
                   <div className="text-2xl font-bold text-destructive">
                     {results.failed}
                   </div>
-                  <div className="text-sm text-muted-foreground">Failed</div>
+                  <div className="text-sm text-muted-foreground">{t("import.failed", "Failed")}</div>
                 </div>
               )}
             </div>
@@ -498,12 +524,12 @@ export function ContactImportDialog({ open, onOpenChange }: ContactImportDialogP
             {failRows.length > 0 && (
               <Button variant="outline" onClick={downloadErrors} className="w-full">
                 <Download className="h-4 w-4 mr-2" />
-                Download error report ({failRows.length} rows)
+                {t("import.downloadErrors", "Download error report ({{count}} rows)", { count: failRows.length })}
               </Button>
             )}
 
             <Button onClick={close} className="w-full">
-              Done
+              {t("common:done", "Done")}
             </Button>
           </div>
         )}

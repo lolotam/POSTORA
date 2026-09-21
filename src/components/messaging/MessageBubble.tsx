@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import { Trash2, FileIcon, Download, MapPin, Contact, Reply } from "lucide-react";
@@ -11,6 +12,7 @@ interface MessageBubbleProps {
 }
 
 function MediaRenderer({ attachments }: { attachments: Message["attachments"] }) {
+  const { t } = useTranslation("inbox");
   if (!attachments || attachments.length === 0) return null;
 
   return (
@@ -19,7 +21,7 @@ function MediaRenderer({ attachments }: { attachments: Message["attachments"] })
         <div key={i} className="mt-2">
           {att.image_data?.url && (
             <a href={att.image_data.url} target="_blank" rel="noopener noreferrer">
-              <img src={att.image_data.url} alt="attachment" className="rounded-lg max-w-full max-h-48 object-cover cursor-pointer hover:opacity-90 transition-opacity" />
+              <img src={att.image_data.url} alt={t("bubble.attachmentAlt", "attachment")} className="rounded-lg max-w-full max-h-48 object-cover cursor-pointer hover:opacity-90 transition-opacity" />
             </a>
           )}
           {att.video_data?.url && (
@@ -28,7 +30,7 @@ function MediaRenderer({ attachments }: { attachments: Message["attachments"] })
           {att.file_url && !att.image_data && !att.video_data && (
             <a href={att.file_url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 p-2 rounded-lg bg-background/50 hover:bg-background/80 transition-colors">
               <FileIcon className="h-4 w-4 shrink-0" />
-              <span className="text-xs underline truncate">{att.name || "Download file"}</span>
+              <span className="text-xs underline truncate">{att.name || t("bubble.downloadFile", "Download file")}</span>
               <Download className="h-3 w-3 shrink-0 ml-auto" />
             </a>
           )}

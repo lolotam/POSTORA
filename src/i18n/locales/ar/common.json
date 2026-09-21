@@ -14,9 +14,11 @@
   "create": "إنشاء",
   "createPost": "إنشاء منشور",
   "delete": "حذف",
+  "disabled": "متوقف",
   "done": "تم",
   "download": "تنزيل",
   "edit": "تعديل",
+  "export": "تصدير",
   "error": "خطأ",
   "loading": "جاري التحميل...",
   "move": "نقل",
@@ -37,12 +39,15 @@
   "upload": "رفع",
   "unknown": "غير معروف",
   "view": "عرض",
+  "active": "نشط",
   "status": {
+    "cancelled": "ملغي",
     "completed": "مكتمل",
     "failed": "فشل",
     "pending": "قيد الانتظار",
     "processing": "جاري المعالجة...",
     "scheduled": "مجدول",
+    "sent": "اتبعت",
     "success": "ناجح"
   }
 }

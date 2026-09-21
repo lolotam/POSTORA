@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -33,6 +34,7 @@ export function ConversationLabelChips({ conversationId }: { conversationId: str
 }
 
 export function ConversationLabelPicker({ conversationId }: ConversationLabelsProps) {
+  const { t } = useTranslation("inbox");
   const { labels, getLabelsForConversation, assignLabel, unassignLabel, createLabel } = useWhatsAppLabels();
   const [newName, setNewName] = useState("");
   const [newColor, setNewColor] = useState(LABEL_COLORS[0]);
@@ -52,7 +54,7 @@ export function ConversationLabelPicker({ conversationId }: ConversationLabelsPr
   const handleCreate = () => {
     if (!newName.trim()) return;
     createLabel.mutate({ name: newName.trim(), color: newColor }, {
-      onSuccess: () => { setNewName(""); setCreating(false); toast.success("Label created"); },
+      onSuccess: () => { setNewName(""); setCreating(false); toast.success(t("labels.created", "Label created")); },
       onError: (e: any) => toast.error(e.message),
     });
   };
@@ -60,12 +62,12 @@ export function ConversationLabelPicker({ conversationId }: ConversationLabelsPr
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <Button variant="ghost" size="icon" className="h-7 w-7" title="Labels">
+        <Button variant="ghost" size="icon" className="h-7 w-7" title={t("labels.title", "Labels")}>
           <Tag className="h-3.5 w-3.5" />
         </Button>
       </PopoverTrigger>
       <PopoverContent className="w-56 p-2" align="end">
-        <p className="text-xs font-medium mb-2 px-1">Labels</p>
+        <p className="text-xs font-medium mb-2 px-1">{t("labels.title", "Labels")}</p>
         <div className="space-y-1 max-h-40 overflow-y-auto">
           {labels.map((l) => (
             <button key={l.id} onClick={() => toggle(l)} className="flex items-center gap-2 w-full rounded px-2 py-1 text-sm hover:bg-muted transition-colors">
@@ -77,20 +79,20 @@ export function ConversationLabelPicker({ conversationId }: ConversationLabelsPr
         </div>
         {creating ? (
           <div className="mt-2 space-y-2 border-t pt-2">
-            <Input placeholder="Label name" value={newName} onChange={(e) => setNewName(e.target.value)} className="h-7 text-xs" />
+            <Input placeholder={t("labels.name", "Label name")} value={newName} onChange={(e) => setNewName(e.target.value)} className="h-7 text-xs" />
             <div className="flex gap-1">
               {LABEL_COLORS.map((c) => (
                 <button key={c} onClick={() => setNewColor(c)} className="w-5 h-5 rounded-full border-2 transition-all" style={{ backgroundColor: c, borderColor: c === newColor ? "var(--foreground)" : "transparent" }} />
               ))}
             </div>
             <div className="flex gap-1">
-              <Button size="sm" className="h-6 text-xs flex-1" onClick={handleCreate} disabled={createLabel.isPending}>Create</Button>
+              <Button size="sm" className="h-6 text-xs flex-1" onClick={handleCreate} disabled={createLabel.isPending}>{t("common:create", "Create")}</Button>
               <Button size="sm" variant="ghost" className="h-6 text-xs" onClick={() => setCreating(false)}><X className="h-3 w-3" /></Button>
             </div>
           </div>
         ) : (
           <Button variant="ghost" size="sm" className="w-full mt-1 h-7 text-xs gap-1" onClick={() => setCreating(true)}>
-            <Plus className="h-3 w-3" /> New Label
+            <Plus className="h-3 w-3" /> {t("labels.new", "New Label")}
           </Button>
         )}
       </PopoverContent>
@@ -99,12 +101,13 @@ export function ConversationLabelPicker({ conversationId }: ConversationLabelsPr
 }
 
 export function LabelFilter({ selectedLabelId, onSelect }: { selectedLabelId: string | null; onSelect: (id: string | null) => void }) {
+  const { t } = useTranslation("inbox");
   const { labels } = useWhatsAppLabels();
   if (labels.length === 0) return null;
 
   return (
     <div className="flex gap-1 flex-wrap px-3 pb-2">
-      <Badge variant={selectedLabelId === null ? "default" : "outline"} className="cursor-pointer text-xs" onClick={() => onSelect(null)}>All</Badge>
+      <Badge variant={selectedLabelId === null ? "default" : "outline"} className="cursor-pointer text-xs" onClick={() => onSelect(null)}>{t("common:all", "All")}</Badge>
       {labels.map((l) => (
         <Badge key={l.id} variant={selectedLabelId === l.id ? "default" : "outline"} className="cursor-pointer text-xs gap-1" onClick={() => onSelect(selectedLabelId === l.id ? null : l.id)}>
           <span className="w-2 h-2 rounded-full" style={{ backgroundColor: l.color }} />

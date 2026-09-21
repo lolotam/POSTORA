@@ -1,4 +1,6 @@
 import { useState, useRef, useEffect } from "react";
+import { useTranslation } from "react-i18next";
+import i18next from "i18next";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -27,7 +29,7 @@ async function callMessagingApi(action: string, body: Record<string, unknown>) {
   if (!session?.access_token) {
     const { data: refreshed } = await supabase.auth.refreshSession();
     session = refreshed.session;
-    if (!session?.access_token) throw new Error("Not authenticated");
+    if (!session?.access_token) throw new Error(i18next.t("errors.notAuthenticated", { ns: "inbox", defaultValue: "Not authenticated" }));
   }
   const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
   const anonKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
@@ -46,6 +48,7 @@ async function callMessagingApi(action: string, body: Record<string, unknown>) {
 }
 
 export function ConversationDetail({ conversation, socialAccountId, pageId, platform }: ConversationDetailProps) {
+  const { t } = useTranslation("inbox");
   const [messageText, setMessageText] = useState("");
   const [showSlashSuggestions, setShowSlashSuggestions] = useState(false);
   const [mediaPreview, setMediaPreview] = useState<{ file: File; url: string; type: string } | null>(null);
@@ -67,8 +70,8 @@ export function ConversationDetail({ conversation, socialAccountId, pageId, plat
         <div className="w-16 h-16 rounded-2xl bg-primary/10 flex items-center justify-center mb-4">
           <MessageCircle className="w-8 h-8 text-primary" />
         </div>
-        <h3 className="text-lg font-semibold mb-1">Select a conversation</h3>
-        <p className="text-sm text-muted-foreground">Choose a conversation from the list to view messages</p>
+        <h3 className="text-lg font-semibold mb-1">{t("conversation.select", "Select a conversation")}</h3>
+        <p className="text-sm text-muted-foreground">{t("conversation.chooseFromList", "Choose a conversation from the list to view messages")}</p>
       </div>
     );
   }
@@ -93,7 +96,7 @@ export function ConversationDetail({ conversation, socialAccountId, pageId, plat
         recipientId: conversation.participant_id,
       },
       {
-        onSuccess: () => { setMessageText(""); toast.success("Message sent"); },
+        onSuccess: () => { setMessageText(""); toast.success(t("conversation.messageSent", "Message sent")); },
         onError: (err) => toast.error(err.message),
       }
     );
@@ -105,7 +108,7 @@ export function ConversationDetail({ conversation, socialAccountId, pageId, plat
     try {
       // Upload to Supabase storage first
       const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error("Not authenticated");
+      if (!user) throw new Error(t("errors.notAuthenticated", "Not authenticated"));
       const ext = mediaPreview.file.name.split(".").pop() || "bin";
       const path = `whatsapp-media/${await buildPostoraFileName(user.id, ext)}`;
       const { data: uploadData, error: uploadError } = await supabase.storage.from("media").upload(path, mediaPreview.file);
@@ -138,11 +141,11 @@ export function ConversationDetail({ conversation, socialAccountId, pageId, plat
         });
       }
 
-      toast.success("Media sent");
+      toast.success(t("conversation.mediaSent", "Media sent"));
       setMediaPreview(null);
       setMessageText("");
     } catch (err: any) {
-      toast.error(err.message || "Failed to send media");
+      toast.error(err.message || t("conversation.sendFailed", "Failed to send media"));
     } finally {
       setSendingMedia(false);
     }
@@ -152,7 +155,7 @@ export function ConversationDetail({ conversation, socialAccountId, pageId, plat
     deleteMutation.mutate(
       { socialAccountId, messageId },
       {
-        onSuccess: () => toast.success("Message deleted"),
+        onSuccess: () => toast.success(t("conversation.messageDeleted", "Message deleted")),
         onError: (err) => toast.error(err.message),
       }
     );
@@ -203,7 +206,7 @@ export function ConversationDetail({ conversation, socialAccountId, pageId, plat
 
     // 16MB limit for WhatsApp
     if (file.size > 16 * 1024 * 1024) {
-      toast.error("File size must be under 16MB");
+      toast.error(t("conversation.fileTooBig", "File size must be under 16MB"));
       return;
     }
 
@@ -214,7 +217,7 @@ export function ConversationDetail({ conversation, socialAccountId, pageId, plat
 
   const handleSendInteractive = async (payload: any) => {
     if (platform !== "whatsapp") {
-      toast.error("Interactive messages are only supported on WhatsApp");
+      toast.error(t("conversation.interactiveOnlyWhatsApp", "Interactive messages are only supported on WhatsApp"));
       return;
     }
     try {
@@ -223,9 +226,9 @@ export function ConversationDetail({ conversation, socialAccountId, pageId, plat
         recipient_phone: conversation.participant_id,
         interactive: payload,
       });
-      toast.success("Interactive message sent");
+      toast.success(t("conversation.interactiveSent", "Interactive message sent"));
     } catch (err: any) {
-      toast.error(err.message || "Failed to send interactive message");
+      toast.error(err.message || t("conversation.sendInteractiveFailed", "Failed to send interactive message"));
     }
   };
 
@@ -247,7 +250,7 @@ export function ConversationDetail({ conversation, socialAccountId, pageId, plat
         <div>
           <p className="text-sm font-semibold">{conversation.participant_name}</p>
           <p className="text-xs text-muted-foreground">
-            {conversation.unread_count > 0 ? `${conversation.unread_count} unread` : "Active"}
+            {conversation.unread_count > 0 ? t("conversation.unread", "{{count}} unread", { count: conversation.unread_count }) : t("conversation.active", "Active")}
           </p>
         </div>
         {platform && (
@@ -269,7 +272,7 @@ export function ConversationDetail({ conversation, socialAccountId, pageId, plat
             <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
           </div>
         ) : sortedMessages.length === 0 ? (
-          <p className="text-sm text-muted-foreground text-center py-8">No messages in this conversation</p>
+          <p className="text-sm text-muted-foreground text-center py-8">{t("conversation.noMessages", "No messages in this conversation")}</p>
         ) : (
           sortedMessages.map((msg) => (
             <MessageBubble
@@ -288,7 +291,7 @@ export function ConversationDetail({ conversation, socialAccountId, pageId, plat
         <div className="px-3 pt-2 border-t">
           <div className="relative inline-block">
             {mediaPreview.type.startsWith("image/") ? (
-              <img src={mediaPreview.url} alt="preview" className="h-20 rounded-lg object-cover" />
+              <img src={mediaPreview.url} alt={t("conversation.previewAlt", "preview")} className="h-20 rounded-lg object-cover" />
             ) : mediaPreview.type.startsWith("video/") ? (
               <video src={mediaPreview.url} className="h-20 rounded-lg" />
             ) : (
@@ -326,16 +329,16 @@ export function ConversationDetail({ conversation, socialAccountId, pageId, plat
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start">
               <DropdownMenuItem onClick={() => handleFileSelect("image/*")} className="gap-2">
-                <Image className="h-4 w-4" /> Image
+                <Image className="h-4 w-4" /> {t("conversation.image", "Image")}
               </DropdownMenuItem>
               <DropdownMenuItem onClick={() => handleFileSelect("video/*")} className="gap-2">
-                <Video className="h-4 w-4" /> Video
+                <Video className="h-4 w-4" /> {t("conversation.video", "Video")}
               </DropdownMenuItem>
               <DropdownMenuItem onClick={() => handleFileSelect("audio/*")} className="gap-2">
-                <Mic className="h-4 w-4" /> Audio
+                <Mic className="h-4 w-4" /> {t("conversation.audio", "Audio")}
               </DropdownMenuItem>
               <DropdownMenuItem onClick={() => handleFileSelect("*/*")} className="gap-2">
-                <FileIcon className="h-4 w-4" /> Document
+                <FileIcon className="h-4 w-4" /> {t("conversation.document", "Document")}
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -350,7 +353,7 @@ export function ConversationDetail({ conversation, socialAccountId, pageId, plat
             value={messageText}
             onChange={handleMessageChange}
             onKeyDown={handleKeyDown}
-            placeholder={mediaPreview ? "Add a caption..." : "Type a message... (/ for quick replies)"}
+            placeholder={mediaPreview ? t("conversation.addCaption", "Add a caption...") : t("conversation.typeMessage", "Type a message... (/ for quick replies)")}
             className="min-h-[36px] max-h-24 resize-none"
             rows={1}
           />
