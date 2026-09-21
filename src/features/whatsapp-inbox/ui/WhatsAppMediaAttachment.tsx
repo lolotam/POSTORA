@@ -113,7 +113,7 @@ function DocumentCard({
           href={media.url}
           download={downloadFileName(filename, media.mime_type ?? attachment.mime_type, attachment)}
           onClick={(event) => { event.preventDefault(); onDownload?.(); }}
-          className="ml-auto inline-flex items-center gap-1 text-xs underline"
+          className="ms-auto inline-flex items-center gap-1 text-xs underline"
         >
           <Download className="h-3 w-3" />
           Download

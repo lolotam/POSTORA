@@ -88,7 +88,7 @@ export default function PublicProfile() {
         <div className="container max-w-2xl mx-auto px-4 py-12">
           <Link to="/">
             <Button variant="ghost" className="mb-8">
-              <ArrowLeft className="mr-2 h-4 w-4" />
+              <ArrowLeft className="me-2 h-4 w-4" />
               Back to Home
             </Button>
           </Link>
@@ -108,8 +108,8 @@ export default function PublicProfile() {
     <div className="min-h-screen bg-background">
       {/* Background Effects */}
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute top-0 left-1/4 w-96 h-96 bg-primary/10 rounded-full blur-[128px]" />
-        <div className="absolute bottom-0 right-1/4 w-80 h-80 bg-accent/10 rounded-full blur-[128px]" />
+        <div className="absolute top-0 start-1/4 w-96 h-96 bg-primary/10 rounded-full blur-[128px]" />
+        <div className="absolute bottom-0 end-1/4 w-80 h-80 bg-accent/10 rounded-full blur-[128px]" />
       </div>
 
       {/* Header */}

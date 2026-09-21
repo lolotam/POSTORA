@@ -134,7 +134,7 @@ export default function AdminSettings() {
                   <Icon className="w-4 h-4" />
                   {SETTINGS_TAB_LABELS[tab]}
                   {isSearching && counts[tab] > 0 && (
-                    <Badge variant="secondary" className="ml-1 px-1.5">
+                    <Badge variant="secondary" className="ms-1 px-1.5">
                       {counts[tab]}
                     </Badge>
                   )}

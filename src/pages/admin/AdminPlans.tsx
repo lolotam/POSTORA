@@ -207,7 +207,7 @@ export default function AdminPlans() {
           <Dialog open={isCreateOpen} onOpenChange={setIsCreateOpen}>
             <DialogTrigger asChild>
               <Button>
-                <Plus className="w-4 h-4 mr-2" />
+                <Plus className="w-4 h-4 me-2" />
                 Create Plan
               </Button>
             </DialogTrigger>
@@ -299,7 +299,7 @@ export default function AdminPlans() {
                   onClick={handleCreatePlan}
                   disabled={createPlanMutation.isPending || !!newPlanProfileLimitError}
                 >
-                  {createPlanMutation.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                  {createPlanMutation.isPending && <Loader2 className="w-4 h-4 me-2 animate-spin" />}
                   Create Plan
                 </Button>
               </DialogFooter>
@@ -471,7 +471,7 @@ export default function AdminPlans() {
                 Cancel
               </Button>
               <Button onClick={handleSaveEdit} disabled={updatePlanMutation.isPending || !!editPlanProfileLimitError}>
-                {updatePlanMutation.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                {updatePlanMutation.isPending && <Loader2 className="w-4 h-4 me-2 animate-spin" />}
                 Save Changes
               </Button>
             </DialogFooter>

@@ -9,7 +9,7 @@ const GoogleApiDisclosure = () => {
       <div className="container max-w-4xl py-12 px-4">
         <Link to="/">
           <Button variant="ghost" className="mb-8">
-            <ArrowLeft className="mr-2 h-4 w-4" />
+            <ArrowLeft className="me-2 h-4 w-4" />
             Back to Home
           </Button>
         </Link>
@@ -124,7 +124,7 @@ const GoogleApiDisclosure = () => {
                   <h3 className="font-semibold text-lg mb-2">YouTube Data API Scopes</h3>
 
                   <div className="space-y-4 mt-4">
-                    <div className="border-l-4 border-primary pl-4">
+                    <div className="border-l-4 border-primary ps-4">
                       <h4 className="font-semibold text-base">
                         <code className="bg-muted px-2 py-1 rounded text-sm">https://www.googleapis.com/auth/youtube.upload</code>
                       </h4>
@@ -135,7 +135,7 @@ const GoogleApiDisclosure = () => {
                       <p className="text-muted-foreground text-sm mt-2">
                         <strong>Justification — what we actually do with this scope:</strong>
                       </p>
-                      <ul className="list-disc list-inside text-muted-foreground text-sm mt-2 space-y-1 ml-4">
+                      <ul className="list-disc list-inside text-muted-foreground text-sm mt-2 space-y-1 ms-4">
                         <li>
                           <strong>Upload videos and Shorts</strong> to your channel with the title, description, tags,
                           category and privacy setting (public / unlisted / private) you choose in Postora.
@@ -152,7 +152,7 @@ const GoogleApiDisclosure = () => {
                       </p>
                     </div>
 
-                    <div className="border-l-4 border-primary pl-4">
+                    <div className="border-l-4 border-primary ps-4">
                       <h4 className="font-semibold text-base">
                         <code className="bg-muted px-2 py-1 rounded text-sm">https://www.googleapis.com/auth/youtube.readonly</code>
                       </h4>
@@ -162,7 +162,7 @@ const GoogleApiDisclosure = () => {
                       <p className="text-muted-foreground text-sm mt-2">
                         <strong>Justification — what we actually do with this scope:</strong>
                       </p>
-                      <ul className="list-disc list-inside text-muted-foreground text-sm mt-2 space-y-1 ml-4">
+                      <ul className="list-disc list-inside text-muted-foreground text-sm mt-2 space-y-1 ms-4">
                         <li>
                           <strong>Read basic channel info</strong> (channel name, channel ID, profile picture) at
                           connection time so we can show which YouTube account you connected and confirm the correct
@@ -175,7 +175,7 @@ const GoogleApiDisclosure = () => {
                       </ul>
                     </div>
 
-                    <div className="border-l-4 border-muted pl-4">
+                    <div className="border-l-4 border-muted ps-4">
                       <h4 className="font-semibold text-base">
                         <code className="bg-muted px-2 py-1 rounded text-sm">userinfo.profile</code> & <code className="bg-muted px-2 py-1 rounded text-sm">userinfo.email</code>
                       </h4>

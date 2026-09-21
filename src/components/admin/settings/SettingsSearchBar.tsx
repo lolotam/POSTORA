@@ -28,21 +28,21 @@ export function SettingsSearchBar({
   return (
     <div className="space-y-2">
       <div className="relative">
-        <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+        <Search className="w-4 h-4 absolute start-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
         <Input
           type="search"
           value={query}
           onChange={(e) => onQueryChange(e.target.value)}
           placeholder="Search settings — try “logo”, “tiktok”, or “model”"
           aria-label="Search settings"
-          className="pl-9 pr-9"
+          className="ps-9 pe-9"
         />
         {isSearching && (
           <Button
             type="button"
             variant="ghost"
             size="icon"
-            className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7"
+            className="absolute end-1 top-1/2 -translate-y-1/2 h-7 w-7"
             onClick={() => onQueryChange("")}
             aria-label="Clear search"
           >

@@ -59,14 +59,14 @@ export default function Dashboard() {
             {isAdmin && flags.marketeroButton && (
               <a href="https://marketero.postora.cloud" target="_blank" rel="noopener noreferrer">
                 <Button variant="outline" size="lg">
-                  <ExternalLink className="w-4 h-4 mr-2" />
+                  <ExternalLink className="w-4 h-4 me-2" />
                   Marketero
                 </Button>
               </a>
             )}
             <Link to="/post">
               <Button variant="gradient" size="lg">
-                <Plus className="w-4 h-4 mr-2" />
+                <Plus className="w-4 h-4 me-2" />
                 {t("common:createPost", "Create Post")}
               </Button>
             </Link>

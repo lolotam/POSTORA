@@ -43,7 +43,7 @@ export default function McpServer() {
           {title && <span className="text-xs text-gray-500">• {title}</span>}
         </div>
         <Button variant="ghost" size="sm" onClick={() => copy(code, id)} className="h-7 text-xs text-gray-300 hover:text-white hover:bg-white/10">
-          {copied === id ? <Check className="w-3 h-3 mr-1" /> : <Copy className="w-3 h-3 mr-1" />}
+          {copied === id ? <Check className="w-3 h-3 me-1" /> : <Copy className="w-3 h-3 me-1" />}
           {copied === id ? "Copied" : "Copy"}
         </Button>
       </div>
@@ -107,8 +107,8 @@ const resp = await openai.responses.create({
   return (
     <div className="min-h-screen bg-background relative overflow-hidden">
       <div aria-hidden className="pointer-events-none fixed inset-0 -z-10">
-        <div className="absolute -top-40 left-1/3 h-[480px] w-[480px] rounded-full bg-violet-500/10 blur-3xl" />
-        <div className="absolute top-1/2 -right-40 h-[420px] w-[420px] rounded-full bg-sky-500/10 blur-3xl" />
+        <div className="absolute -top-40 start-1/3 h-[480px] w-[480px] rounded-full bg-violet-500/10 blur-3xl" />
+        <div className="absolute top-1/2 -end-40 h-[420px] w-[420px] rounded-full bg-sky-500/10 blur-3xl" />
       </div>
 
       <div className="container mx-auto px-4 py-8 max-w-5xl">
@@ -251,10 +251,10 @@ const resp = await openai.responses.create({
         <div className="mt-10 text-center">
           <div className="flex flex-wrap items-center justify-center gap-3">
             <Button asChild>
-              <Link to="/docs/mcp-integration"><Sparkles className="w-4 h-4 mr-2" /> Full MCP integration & roadmap</Link>
+              <Link to="/docs/mcp-integration"><Sparkles className="w-4 h-4 me-2" /> Full MCP integration & roadmap</Link>
             </Button>
             <Button asChild variant="outline">
-              <Link to="/docs/n8n-integration"><BookOpen className="w-4 h-4 mr-2" /> REST API docs</Link>
+              <Link to="/docs/n8n-integration"><BookOpen className="w-4 h-4 me-2" /> REST API docs</Link>
             </Button>
           </div>
         </div>

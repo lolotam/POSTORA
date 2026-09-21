@@ -41,7 +41,7 @@ export function AccountAvatar({
       </Avatar>
       <span
         className={cn(
-          "absolute -bottom-0.5 -right-0.5 rounded-full bg-background ring-1 ring-border flex items-center justify-center shadow",
+          "absolute -bottom-0.5 -end-0.5 rounded-full bg-background ring-1 ring-border flex items-center justify-center shadow",
           s.badge,
         )}
       >

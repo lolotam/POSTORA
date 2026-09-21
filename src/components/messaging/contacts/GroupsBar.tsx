@@ -135,20 +135,20 @@ export function GroupsBar({ selectedGroup, onSelect }: GroupsBarProps) {
           </button>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <button className="ml-0.5 rounded-full p-1 hover:bg-muted">
+              <button className="ms-0.5 rounded-full p-1 hover:bg-muted">
                 <MoreVertical className="h-3 w-3" />
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start">
               <DropdownMenuItem onClick={() => openRename(g)}>
-                <Pencil className="h-3.5 w-3.5 mr-2" />
+                <Pencil className="h-3.5 w-3.5 me-2" />
                 {t("groups.renameEdit", "Rename / Edit")}
               </DropdownMenuItem>
               <DropdownMenuItem
                 className="text-destructive"
                 onClick={() => setDeleteId(g.id)}
               >
-                <Trash2 className="h-3.5 w-3.5 mr-2" />
+                <Trash2 className="h-3.5 w-3.5 me-2" />
                 {t("common:delete", "Delete")}
               </DropdownMenuItem>
             </DropdownMenuContent>
@@ -157,7 +157,7 @@ export function GroupsBar({ selectedGroup, onSelect }: GroupsBarProps) {
       ))}
 
       <Button variant="outline" size="sm" className="rounded-full" onClick={openCreate}>
-        <Plus className="h-3.5 w-3.5 mr-1" />
+        <Plus className="h-3.5 w-3.5 me-1" />
         {t("groups.new", "New group")}
       </Button>
 
@@ -210,7 +210,7 @@ export function GroupsBar({ selectedGroup, onSelect }: GroupsBarProps) {
                     style={{ backgroundColor: color }}
                   />
                 ))}
-                <FolderPlus className="h-4 w-4 text-muted-foreground ml-1" />
+                <FolderPlus className="h-4 w-4 text-muted-foreground ms-1" />
               </div>
             </div>
             <Button

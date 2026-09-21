@@ -405,7 +405,7 @@ export default function ConnectionHealth() {
                                         <TableHead>{t("health.table.webhookIdentity", "Webhook Identity")}</TableHead>
                                         <TableHead>{t("health.table.lastInbound", "Last Inbound Event")}</TableHead>
                                         <TableHead>{t("health.table.lastUpdated", "Last Updated")}</TableHead>
-                                        <TableHead className="text-right">{t("health.table.actions", "Actions")}</TableHead>
+                                        <TableHead className="text-end">{t("health.table.actions", "Actions")}</TableHead>
                                     </TableRow>
                                 </TableHeader>
                                 <TableBody>
@@ -498,7 +498,7 @@ export default function ConnectionHealth() {
                                                         {new Date(account.updated_at).toLocaleDateString()}
                                                     </span>
                                                 </TableCell>
-                                                <TableCell className="text-right">
+                                                <TableCell className="text-end">
                                                     <div className="flex items-center justify-end gap-2">
                                                         <Button
                                                             variant="outline"
@@ -511,7 +511,7 @@ export default function ConnectionHealth() {
                                                             ) : (
                                                                 <Zap className="w-4 h-4" />
                                                             )}
-                                                            <span className="ml-1.5 hidden sm:inline">{t("health.actions.test", "Test")}</span>
+                                                            <span className="ms-1.5 hidden sm:inline">{t("health.actions.test", "Test")}</span>
                                                         </Button>
                                                         {health.status === "expired" || health.status === "needs_reauth" ? (
                                                             <Button
@@ -526,7 +526,7 @@ export default function ConnectionHealth() {
                                                                 ) : (
                                                                     <RotateCcw className="w-4 h-4" />
                                                                 )}
-                                                                <span className="ml-1.5 hidden sm:inline">{t("health.actions.reconnect", "Reconnect")}</span>
+                                                                <span className="ms-1.5 hidden sm:inline">{t("health.actions.reconnect", "Reconnect")}</span>
                                                             </Button>
                                                         ) : (
                                                             <Button
@@ -540,7 +540,7 @@ export default function ConnectionHealth() {
                                                                 ) : (
                                                                     <RefreshCw className="w-4 h-4" />
                                                                 )}
-                                                                <span className="ml-1.5 hidden sm:inline">{t("common:refresh", "Refresh")}</span>
+                                                                <span className="ms-1.5 hidden sm:inline">{t("common:refresh", "Refresh")}</span>
                                                             </Button>
                                                         )}
                                                     </div>

@@ -668,7 +668,7 @@ export function SecuritySection() {
                 size="sm"
                 onClick={() => setPasswordDialogOpen(true)}
               >
-                <Key className="w-4 h-4 mr-2" />
+                <Key className="w-4 h-4 me-2" />
                 {isGoogleUser ? t("common:create", "Create") : t("security.password.change", "Change")}
               </Button>
             </div>
@@ -697,17 +697,17 @@ export function SecuritySection() {
                 <Button onClick={handleStartMfaEnrollment} disabled={isEnrollingMfa} size="sm">
                   {isEnrollingMfa ? (
                     <>
-                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      <Loader2 className="w-4 h-4 me-2 animate-spin" />
                       {t("security.mfa.settingUp", "Setting up...")}
                     </>
                   ) : mfaFactors.some(f => f.status === 'verified') ? (
                     <>
-                      <Smartphone className="w-4 h-4 mr-2" />
+                      <Smartphone className="w-4 h-4 me-2" />
                       {t("security.mfa.add", "Add authenticator")}
                     </>
                   ) : (
                     <>
-                      <Smartphone className="w-4 h-4 mr-2" />
+                      <Smartphone className="w-4 h-4 me-2" />
                       {t("security.mfa.enable", "Enable 2FA")}
                     </>
                   )}
@@ -800,17 +800,17 @@ export function SecuritySection() {
               >
                 {isGeneratingBackupCodes ? (
                   <>
-                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    <Loader2 className="w-4 h-4 me-2 animate-spin" />
                     {t("security.backup.generating", "Generating...")}
                   </>
                 ) : hasBackupCodes ? (
                   <>
-                    <RefreshCw className="w-4 h-4 mr-2" />
+                    <RefreshCw className="w-4 h-4 me-2" />
                     {t("security.backup.regenerate", "Regenerate")}
                   </>
                 ) : (
                   <>
-                    <Key className="w-4 h-4 mr-2" />
+                    <Key className="w-4 h-4 me-2" />
                     {t("security.backup.generateCodes", "Generate Codes")}
                   </>
                 )}
@@ -868,13 +868,13 @@ export function SecuritySection() {
                     value={newPassword}
                     onChange={(e) => setNewPassword(e.target.value)}
                     placeholder={t("security.form.passwordPlaceholder", "Enter new password")}
-                    className="pr-10"
+                    className="pe-10"
                     autoComplete="new-password"
                   />
                   <button
                     type="button"
                     onClick={() => setShowPassword(!showPassword)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                    className="absolute end-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
                   >
                     {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                   </button>
@@ -964,7 +964,7 @@ export function SecuritySection() {
             >
               {isChangingPassword ? (
                 <>
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  <Loader2 className="w-4 h-4 me-2 animate-spin" />
                   {t("common:saving", "Saving...")}
                 </>
               ) : pwStep === "password" ? (
@@ -1069,12 +1069,12 @@ export function SecuritySection() {
                     >
                       {uriCopied ? (
                         <>
-                          <Check className="w-4 h-4 mr-2 text-emerald-500" />
+                          <Check className="w-4 h-4 me-2 text-emerald-500" />
                           {t("security.mfa.copiedUri", "Copied URI")}
                         </>
                       ) : (
                         <>
-                          <Copy className="w-4 h-4 mr-2" />
+                          <Copy className="w-4 h-4 me-2" />
                           {t("security.mfa.copyUri", "Copy setup URI")}
                         </>
                       )}
@@ -1117,7 +1117,7 @@ export function SecuritySection() {
               >
                 {isVerifying ? (
                   <>
-                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    <Loader2 className="w-4 h-4 me-2 animate-spin" />
                     {t("security.mfa.verifying", "Verifying...")}
                   </>
                 ) : (
@@ -1172,12 +1172,12 @@ export function SecuritySection() {
               >
                 {backupCodesCopied ? (
                   <>
-                    <Check className="w-4 h-4 mr-2 text-emerald-500" />
+                    <Check className="w-4 h-4 me-2 text-emerald-500" />
                     {t("security.backupDialog.copied", "Copied!")}
                   </>
                 ) : (
                   <>
-                    <Copy className="w-4 h-4 mr-2" />
+                    <Copy className="w-4 h-4 me-2" />
                     {t("security.backupDialog.copyAll", "Copy All")}
                   </>
                 )}
@@ -1187,7 +1187,7 @@ export function SecuritySection() {
                 className="flex-1"
                 onClick={handleDownloadBackupCodes}
               >
-                <Download className="w-4 h-4 mr-2" />
+                <Download className="w-4 h-4 me-2" />
                 {t("common:download", "Download")}
               </Button>
             </div>

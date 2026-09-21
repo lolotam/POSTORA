@@ -20,18 +20,18 @@ export function MakeHero({ onDownloadAll }: MakeHeroProps) {
         </p>
         <div className="flex flex-wrap justify-center gap-4">
           <Button onClick={onDownloadAll} size="lg" className="bg-[#6E00FF] hover:bg-[#5A00D6]">
-            <Download className="w-4 h-4 mr-2" />
+            <Download className="w-4 h-4 me-2" />
             Download All JSON Configs
           </Button>
           <Link to="/api-keys">
             <Button variant="outline" size="lg">
-              <Key className="w-4 h-4 mr-2" />
+              <Key className="w-4 h-4 me-2" />
               Get API Key
             </Button>
           </Link>
           <Link to="/docs/playground">
             <Button variant="outline" size="lg">
-              <Terminal className="w-4 h-4 mr-2" />
+              <Terminal className="w-4 h-4 me-2" />
               API Playground
             </Button>
           </Link>

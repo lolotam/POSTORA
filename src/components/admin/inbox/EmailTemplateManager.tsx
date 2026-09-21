@@ -186,9 +186,9 @@ export function EmailTemplateManager({
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button variant="ghost" size="sm" className="text-xs">
-            <FileText className="h-3 w-3 mr-1" />
+            <FileText className="h-3 w-3 me-1" />
             Templates
-            <ChevronDown className="h-3 w-3 ml-1" />
+            <ChevronDown className="h-3 w-3 ms-1" />
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="w-[250px]">
@@ -213,12 +213,12 @@ export function EmailTemplateManager({
           <div className="border-t mt-1 pt-1">
             {(currentSubject || currentBody) && (
               <DropdownMenuItem onClick={handleSaveCurrentAsTemplate}>
-                <Plus className="h-3 w-3 mr-2" />
+                <Plus className="h-3 w-3 me-2" />
                 Save current as template
               </DropdownMenuItem>
             )}
             <DropdownMenuItem onClick={() => setDialogOpen(true)}>
-              <Edit2 className="h-3 w-3 mr-2" />
+              <Edit2 className="h-3 w-3 me-2" />
               Manage templates
             </DropdownMenuItem>
           </div>
@@ -254,7 +254,7 @@ export function EmailTemplateManager({
                           {template.subject || "(No subject)"}
                         </p>
                       </div>
-                      <div className="flex items-center gap-1 ml-2">
+                      <div className="flex items-center gap-1 ms-2">
                         <Button
                           variant="ghost"
                           size="sm"
@@ -333,7 +333,7 @@ export function EmailTemplateManager({
                   disabled={createMutation.isPending || updateMutation.isPending}
                 >
                   {(createMutation.isPending || updateMutation.isPending) && (
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    <Loader2 className="h-4 w-4 me-2 animate-spin" />
                   )}
                   {editingTemplate ? "Update" : "Create"}
                 </Button>

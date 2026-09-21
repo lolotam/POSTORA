@@ -67,8 +67,8 @@ export function ThreadsMentionConversation({ socialAccountId, threadsMediaId }: 
         onClick={() => setOpen((current) => !current)}
         aria-expanded={open}
       >
-        {open ? <ChevronDown className="h-3.5 w-3.5 mr-1.5" /> : <ChevronRight className="h-3.5 w-3.5 mr-1.5" />}
-        <MessagesSquare className="h-3.5 w-3.5 mr-1.5" />
+        {open ? <ChevronDown className="h-3.5 w-3.5 me-1.5" /> : <ChevronRight className="h-3.5 w-3.5 me-1.5" />}
+        <MessagesSquare className="h-3.5 w-3.5 me-1.5" />
         {open ? t("actions.hideConversation", "Hide conversation") : t("actions.showConversation", "Show conversation")}
       </Button>
 

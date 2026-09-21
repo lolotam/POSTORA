@@ -60,7 +60,7 @@ export function ResizeOptions({
               <SelectItem key={key} value={key}>
                 {resizeLabels[key as ResizeMode]}
                 {preset.width && preset.height && (
-                  <span className="text-muted-foreground ml-2">
+                  <span className="text-muted-foreground ms-2">
                     ({preset.width}×{preset.height})
                   </span>
                 )}

@@ -254,7 +254,7 @@ export function ConversationDetail({ conversation, socialAccountId, pageId, plat
           </p>
         </div>
         {platform && (
-          <div className="ml-auto">
+          <div className="ms-auto">
             {/* FB/IG use assignment_key: the webhook (which resolves the AI mode)
                 never sees Meta's own conversation id. */}
             <AiConversationModeSelect
@@ -303,7 +303,7 @@ export function ConversationDetail({ conversation, socialAccountId, pageId, plat
             <Button
               variant="destructive"
               size="icon"
-              className="absolute -top-2 -right-2 h-5 w-5 rounded-full"
+              className="absolute -top-2 -end-2 h-5 w-5 rounded-full"
               onClick={() => { URL.revokeObjectURL(mediaPreview.url); setMediaPreview(null); }}
             >
               <X className="h-3 w-3" />

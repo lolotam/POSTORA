@@ -221,12 +221,12 @@ export function MFASection() {
             <Button onClick={handleStartEnrollment} disabled={isEnrolling}>
               {isEnrolling ? (
                 <>
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  <Loader2 className="w-4 h-4 me-2 animate-spin" />
                   Setting up...
                 </>
               ) : (
                 <>
-                  <QrCode className="w-4 h-4 mr-2" />
+                  <QrCode className="w-4 h-4 me-2" />
                   Set up 2FA
                 </>
               )}
@@ -298,7 +298,7 @@ export function MFASection() {
               >
                 {isVerifying ? (
                   <>
-                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    <Loader2 className="w-4 h-4 me-2 animate-spin" />
                     Verifying...
                   </>
                 ) : (

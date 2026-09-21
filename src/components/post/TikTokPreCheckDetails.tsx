@@ -261,7 +261,7 @@ export function TikTokPreCheckDetails({
                         {getCheckIcon(check)}
                         <span className="font-medium text-sm">{check.label}</span>
                         {check.value && (
-                          <Badge variant="outline" className="ml-auto text-xs">
+                          <Badge variant="outline" className="ms-auto text-xs">
                             {check.value}
                           </Badge>
                         )}
@@ -304,7 +304,7 @@ export function TikTokPreCheckDetails({
                         {getCheckIcon(check)}
                         <span className="font-medium text-sm">{check.label}</span>
                         {check.value && (
-                          <Badge variant="outline" className="ml-auto text-xs">
+                          <Badge variant="outline" className="ms-auto text-xs">
                             {check.value}
                           </Badge>
                         )}
@@ -343,7 +343,7 @@ export function TikTokPreCheckDetails({
                       {getCheckIcon(check)}
                       <span className="font-medium text-sm">{check.label}</span>
                       {check.value && (
-                        <Badge variant="outline" className="ml-auto text-xs">
+                        <Badge variant="outline" className="ms-auto text-xs">
                           {check.value}
                         </Badge>
                       )}

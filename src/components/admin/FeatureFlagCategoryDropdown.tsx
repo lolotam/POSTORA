@@ -46,7 +46,7 @@ export function FeatureFlagCategoryDropdown({
             onClick={() => onChange(cat)}
             className={cat === currentCategory ? "font-semibold" : ""}
           >
-            <span className={`inline-block w-2 h-2 rounded-full mr-2 ${getCategoryColor(cat).split(" ")[0].replace("/15", "/60")}`} />
+            <span className={`inline-block w-2 h-2 rounded-full me-2 ${getCategoryColor(cat).split(" ")[0].replace("/15", "/60")}`} />
             {cat}
           </DropdownMenuItem>
         ))}

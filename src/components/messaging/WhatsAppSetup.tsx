@@ -387,7 +387,7 @@ export function WhatsAppSetup({ connectedAccounts }: WhatsAppSetupProps) {
         <div className={`grid gap-4 ${cloudApiEnabled && evolutionQrEnabled ? "md:grid-cols-3" : cloudApiEnabled || evolutionQrEnabled ? "md:grid-cols-2" : "md:grid-cols-1 max-w-2xl mx-auto"}`}>
           {/* Coexistence */}
           {!hideConnectButtons && <Card className="relative border-green-600/40">
-            <Badge className="absolute -top-2 right-4 bg-green-600 hover:bg-green-600">
+            <Badge className="absolute -top-2 end-4 bg-green-600 hover:bg-green-600">
               {t("setup.recommended", "Recommended")}
             </Badge>
             <CardHeader>
@@ -532,7 +532,7 @@ export function WhatsAppSetup({ connectedAccounts }: WhatsAppSetupProps) {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b">
-                    <th className="text-left py-2 font-medium">{t("setup.feature", "Feature")}</th>
+                    <th className="text-start py-2 font-medium">{t("setup.feature", "Feature")}</th>
                     <th className="text-center py-2 font-medium text-green-600">{t("setup.coexistence", "Coexistence")}</th>
                     <th className="text-center py-2 font-medium text-blue-600">{t("setup.cloudApi", "Cloud API")}</th>
                   </tr>
@@ -728,7 +728,7 @@ export function WhatsAppSetup({ connectedAccounts }: WhatsAppSetupProps) {
                 <p>
                   {t("setup.switchDesc", "Meta requires a fresh signup to switch modes. Here's what will happen:")}
                 </p>
-                <ol className="list-decimal pl-5 space-y-1">
+                <ol className="list-decimal ps-5 space-y-1">
                   <li>{t("setup.switchStep1", "This Cloud API connection will be disconnected.")}</li>
                   <li>{t("setup.switchStep2", "Postora's webhook subscription will be removed from your WABA.")}</li>
                   <li>

@@ -82,7 +82,7 @@ export default function BlogPostDetail() {
           </p>
           <Button asChild>
             <Link to="/whats-new">
-              <ArrowLeft className="w-4 h-4 mr-2" />
+              <ArrowLeft className="w-4 h-4 me-2" />
               {t("blog.actions.backToWhatsNew", "Back to What's New")}
             </Link>
           </Button>
@@ -104,7 +104,7 @@ export default function BlogPostDetail() {
             {t("blog.actions.backToWhatsNew", "Back to What's New")}
           </Link>
           <Button variant="outline" size="sm" onClick={handleShare}>
-            <Share2 className="w-4 h-4 mr-2" />
+            <Share2 className="w-4 h-4 me-2" />
             {t("common:share", "Share")}
           </Button>
         </div>
@@ -197,7 +197,7 @@ export default function BlogPostDetail() {
               {nextPost && (
                 <Link
                   to={`/whats-new/${nextPost.id}`}
-                  className="group p-4 rounded-xl border border-border hover:border-primary/50 hover:bg-muted/50 transition-all text-right"
+                  className="group p-4 rounded-xl border border-border hover:border-primary/50 hover:bg-muted/50 transition-all text-end"
                 >
                   <div className="flex items-center justify-end gap-2 text-sm text-muted-foreground mb-2">
                     {t("common:next", "Next")}

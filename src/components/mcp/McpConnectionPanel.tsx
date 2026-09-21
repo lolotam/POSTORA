@@ -96,7 +96,7 @@ function CopyBlock({ code, lang }: { code: string; lang: string }) {
       <div className="flex items-center justify-between px-4 py-2 border-b border-[#30363d] bg-[#161b22]">
         <span className="text-xs text-gray-400 font-mono">{lang}</span>
         <Button variant="ghost" size="sm" onClick={onCopy} className="h-7 text-xs text-gray-300 hover:text-white hover:bg-white/10">
-          {copied ? <Check className="w-3 h-3 mr-1" /> : <Copy className="w-3 h-3 mr-1" />}
+          {copied ? <Check className="w-3 h-3 me-1" /> : <Copy className="w-3 h-3 me-1" />}
           {copied ? "Copied" : "Copy"}
         </Button>
       </div>
@@ -210,9 +210,9 @@ export function McpConnectionPanel({ apiKey = "" }: { apiKey?: string }) {
           <table className="w-full text-sm">
             <thead className="bg-secondary/50">
               <tr>
-                <th className="text-left py-2 px-3 font-medium w-1/4">Tool</th>
-                <th className="text-left py-2 px-3 font-medium">Description</th>
-                <th className="text-left py-2 px-3 font-medium hidden md:table-cell w-1/4">REST equivalent</th>
+                <th className="text-start py-2 px-3 font-medium w-1/4">Tool</th>
+                <th className="text-start py-2 px-3 font-medium">Description</th>
+                <th className="text-start py-2 px-3 font-medium hidden md:table-cell w-1/4">REST equivalent</th>
               </tr>
             </thead>
             <tbody>

@@ -230,12 +230,12 @@ export default function TikTokCallback() {
               >
                 {isRetrying ? (
                   <>
-                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    <Loader2 className="w-4 h-4 me-2 animate-spin" />
                     Reconnecting...
                   </>
                 ) : (
                   <>
-                    <RefreshCw className="w-4 h-4 mr-2" />
+                    <RefreshCw className="w-4 h-4 me-2" />
                     Try Again
                   </>
                 )}

@@ -254,7 +254,7 @@ export function GeneralIdentitySettings() {
                   {field.isImage && (
                     <button
                       type="button"
-                      className="flex items-center gap-3 rounded-md border bg-muted/30 p-2 w-full text-left transition-opacity hover:opacity-80"
+                      className="flex items-center gap-3 rounded-md border bg-muted/30 p-2 w-full text-start transition-opacity hover:opacity-80"
                       onClick={() => {
                         const src = savedUrl || field.fallbackSrc;
                         if (src) setPreviewImage(src);

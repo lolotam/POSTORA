@@ -26,8 +26,8 @@ export default function LandingTrustedBy() {
       </motion.div>
 
       <div className="relative space-y-6">
-        <div className="absolute left-0 top-0 bottom-0 w-32 bg-gradient-to-r from-background to-transparent z-10 pointer-events-none" />
-        <div className="absolute right-0 top-0 bottom-0 w-32 bg-gradient-to-l from-background to-transparent z-10 pointer-events-none" />
+        <div className="absolute start-0 top-0 bottom-0 w-32 bg-gradient-to-r from-background to-transparent z-10 pointer-events-none" />
+        <div className="absolute end-0 top-0 bottom-0 w-32 bg-gradient-to-l from-background to-transparent z-10 pointer-events-none" />
 
         {/* Row 1 - CSS scroll */}
         <div className="overflow-hidden">

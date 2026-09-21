@@ -100,23 +100,23 @@ export function ThreadsRepliesTab({ accountId }: Props) {
       <Tabs defaultValue="top-level" className="w-full">
         <TabsList className="grid grid-cols-2 sm:grid-cols-5 w-full">
           <TabsTrigger value="top-level">
-            <MessageSquare className="h-3.5 w-3.5 mr-1.5" />
+            <MessageSquare className="h-3.5 w-3.5 me-1.5" />
             {t("filters.topLevel", "Top-level")}
           </TabsTrigger>
           <TabsTrigger value="conversation">
-            <MessagesSquare className="h-3.5 w-3.5 mr-1.5" />
+            <MessagesSquare className="h-3.5 w-3.5 me-1.5" />
             {t("tabs.conversation", "Conversation")}
           </TabsTrigger>
           <TabsTrigger value="mine">
-            <User className="h-3.5 w-3.5 mr-1.5" />
+            <User className="h-3.5 w-3.5 me-1.5" />
             {t("tabs.mine", "My Replies")}
           </TabsTrigger>
           <TabsTrigger value="pending">
-            <Clock className="h-3.5 w-3.5 mr-1.5" />
+            <Clock className="h-3.5 w-3.5 me-1.5" />
             {t("common:status.pending", "Pending")}
           </TabsTrigger>
           <TabsTrigger value="quota">
-            <Gauge className="h-3.5 w-3.5 mr-1.5" />
+            <Gauge className="h-3.5 w-3.5 me-1.5" />
             {t("tabs.quota", "Quota")}
           </TabsTrigger>
         </TabsList>

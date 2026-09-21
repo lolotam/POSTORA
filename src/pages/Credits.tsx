@@ -190,7 +190,7 @@ export default function Credits() {
                 </div>
                 <div>
                   <Badge className="bg-gradient-to-r from-green-500 to-emerald-500 text-white mb-2">
-                    <Crown className="w-3 h-3 mr-1" />
+                    <Crown className="w-3 h-3 me-1" />
                     {t("credits.admin.badge", "Admin")}
                   </Badge>
                   <p className="text-sm text-muted-foreground">
@@ -210,14 +210,14 @@ export default function Credits() {
                   className={`relative ${pack.popular ? "border-primary shadow-lg shadow-primary/10" : ""}`}
                 >
                   {pack.popular && (
-                    <Badge className="absolute -top-3 left-1/2 -translate-x-1/2 bg-primary text-primary-foreground">
+                    <Badge className="absolute -top-3 start-1/2 -translate-x-1/2 bg-primary text-primary-foreground">
                       {t("credits.packs.bestValue", "Best Value")}
                     </Badge>
                   )}
                   {packSavings[pack.id] && (
                     <Badge 
                       variant="secondary" 
-                      className="absolute -top-3 right-4 bg-green-500/10 text-green-600 border-green-500/30"
+                      className="absolute -top-3 end-4 bg-green-500/10 text-green-600 border-green-500/30"
                     >
                       {packSavings[pack.id]}
                     </Badge>

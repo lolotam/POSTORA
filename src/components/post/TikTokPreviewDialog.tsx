@@ -277,14 +277,14 @@ export function TikTokPreviewDialog({
                           className="absolute inset-0 flex items-center justify-center"
                         >
                           <div className="w-16 h-16 rounded-full bg-white/20 backdrop-blur-sm flex items-center justify-center">
-                            <Play className="w-8 h-8 text-white ml-1" />
+                            <Play className="w-8 h-8 text-white ms-1" />
                           </div>
                         </motion.button>
                       )}
                     </AnimatePresence>
 
                     {/* Bottom Controls */}
-                    <div className="absolute bottom-0 left-0 right-0 p-3 space-y-2 bg-gradient-to-t from-black/80 to-transparent">
+                    <div className="absolute bottom-0 start-0 end-0 p-3 space-y-2 bg-gradient-to-t from-black/80 to-transparent">
                       {/* Progress Bar */}
                       <div
                         className="h-1 bg-white/30 rounded-full cursor-pointer"
@@ -396,7 +396,7 @@ export function TikTokPreviewDialog({
                       TT
                     </div>
                   )}
-                  <div className="absolute -bottom-1 -right-1 w-4 h-4 bg-black rounded-full flex items-center justify-center">
+                  <div className="absolute -bottom-1 -end-1 w-4 h-4 bg-black rounded-full flex items-center justify-center">
                     <svg viewBox="0 0 24 24" className="w-2.5 h-2.5 text-white" fill="currentColor">
                       <path d="M19.59 6.69a4.83 4.83 0 0 1-3.77-4.25V2h-3.45v13.67a2.89 2.89 0 0 1-5.2 1.74 2.89 2.89 0 0 1 2.31-4.64 2.93 2.93 0 0 1 .88.13V9.4a6.84 6.84 0 0 0-1-.05A6.33 6.33 0 0 0 5 20.1a6.34 6.34 0 0 0 10.86-4.43v-7a8.16 8.16 0 0 0 4.77 1.52v-3.4a4.85 4.85 0 0 1-1-.1z"/>
                     </svg>
@@ -418,9 +418,9 @@ export function TikTokPreviewDialog({
                   onChange={(e) => onTitleChange?.(e.target.value)}
                   placeholder={t("tikTokDialog.titlePlaceholder", "Add a title that describes your video (optional - will use caption if empty)")}
                   maxLength={100}
-                  className="min-h-[60px] resize-none pr-16 border rounded-xl"
+                  className="min-h-[60px] resize-none pe-16 border rounded-xl"
                 />
-                <span className="absolute bottom-3 right-3 text-xs text-muted-foreground">
+                <span className="absolute bottom-3 end-3 text-xs text-muted-foreground">
                   {title.length}/100
                 </span>
               </div>
@@ -513,7 +513,7 @@ export function TikTokPreviewDialog({
                   <motion.div
                     animate={{ rotate: 360 }}
                     transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
-                    className="w-5 h-5 mr-2 border-2 border-white/30 border-t-white rounded-full"
+                    className="w-5 h-5 me-2 border-2 border-white/30 border-t-white rounded-full"
                   />
                   {t("tikTokDialog.uploading", "Uploading...")}
                 </>
@@ -665,7 +665,7 @@ export function TikTokPreviewDialog({
                       <motion.div
                         animate={{ rotate: 360 }}
                         transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
-                        className="w-5 h-5 mr-2 border-2 border-white/30 border-t-white rounded-full"
+                        className="w-5 h-5 me-2 border-2 border-white/30 border-t-white rounded-full"
                       />
                       {t("tikTokDialog.uploading", "Uploading...")}
                     </>

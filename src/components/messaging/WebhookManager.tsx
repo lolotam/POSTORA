@@ -77,7 +77,7 @@ export function WebhookManager() {
                 <p className="text-xs text-muted-foreground">{t("webhook.secretHint", "If set, payloads are signed with X-Webhook-Signature header")}</p>
               </div>
               <Button onClick={handleSubmit} disabled={!form.name || !form.url || createWebhook.isPending || updateWebhook.isPending} className="w-full">
-                {(createWebhook.isPending || updateWebhook.isPending) && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                {(createWebhook.isPending || updateWebhook.isPending) && <Loader2 className="w-4 h-4 me-2 animate-spin" />}
                 {editingWebhook ? t("common:saveChanges", "Save Changes") : t("webhook.create", "Create Webhook")}
               </Button>
             </div>
@@ -134,7 +134,7 @@ export function WebhookManager() {
                   </div>
                   <div className="flex items-center gap-1">
                     <Button variant="ghost" size="sm" onClick={() => testWebhook.mutate(wh)} disabled={testWebhook.isPending}>
-                      <TestTube className="w-4 h-4 mr-1" />{t("webhook.test", "Test")}
+                      <TestTube className="w-4 h-4 me-1" />{t("webhook.test", "Test")}
                     </Button>
                     <Button variant="ghost" size="sm" onClick={() => openEdit(wh)}>
                       <Pencil className="w-4 h-4" />

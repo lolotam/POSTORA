@@ -118,11 +118,11 @@ function DateField({
           variant="outline"
           size="sm"
           className={cn(
-            "h-8 justify-start text-left font-normal text-xs",
+            "h-8 justify-start text-start font-normal text-xs",
             !value && "text-muted-foreground",
           )}
         >
-          <CalendarIcon className="mr-2 h-3.5 w-3.5" />
+          <CalendarIcon className="me-2 h-3.5 w-3.5" />
           {value ? format(value, "MMM d, yyyy") : placeholder}
         </Button>
       </PopoverTrigger>
@@ -239,12 +239,12 @@ export function ThreadsRepliesFilterBar({ filters, onChange, total, shown }: Pro
             className="h-8 px-2 text-xs"
             onClick={() => onChange(defaultReplyFilters)}
           >
-            <X className="h-3.5 w-3.5 mr-1" />
+            <X className="h-3.5 w-3.5 me-1" />
             {t("common:reset", "Reset")}
           </Button>
         )}
 
-        <div className="ml-auto text-xs text-muted-foreground">
+        <div className="ms-auto text-xs text-muted-foreground">
           {t("filters.showing", "Showing {{shown}} of {{total}}", { shown, total })}
         </div>
       </div>

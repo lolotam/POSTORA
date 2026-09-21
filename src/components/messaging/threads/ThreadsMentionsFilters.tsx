@@ -76,12 +76,12 @@ export function ThreadsMentionsFilters({ filters, setFilters, reset, availableLa
           </Select>
 
           <div className="relative flex-1 min-w-[180px]">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+            <Search className="absolute start-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
             <Input
               value={filters.search}
               onChange={(e) => setFilters({ search: e.target.value })}
               placeholder={t("filters.searchAuthor", "Search author or text…")}
-              className="pl-8 h-9"
+              className="ps-8 h-9"
             />
           </div>
 
@@ -92,7 +92,7 @@ export function ThreadsMentionsFilters({ filters, setFilters, reset, availableLa
             className="h-9"
             onClick={() => setShowMore((s) => !s)}
           >
-            {showMore ? <ChevronUp className="h-4 w-4 mr-1.5" /> : <ChevronDown className="h-4 w-4 mr-1.5" />}
+            {showMore ? <ChevronUp className="h-4 w-4 me-1.5" /> : <ChevronDown className="h-4 w-4 me-1.5" />}
             {t("actions.more", "More")}
           </Button>
 
@@ -103,7 +103,7 @@ export function ThreadsMentionsFilters({ filters, setFilters, reset, availableLa
             className="h-9"
             onClick={reset}
           >
-            <RotateCcw className="h-3.5 w-3.5 mr-1.5" />
+            <RotateCcw className="h-3.5 w-3.5 me-1.5" />
             {t("common:reset", "Reset")}
           </Button>
         </div>
@@ -124,7 +124,7 @@ export function ThreadsMentionsFilters({ filters, setFilters, reset, availableLa
 
             {availableLabels.length > 0 && (
               <div className="flex flex-wrap items-center gap-1.5 flex-1 min-w-[200px]">
-                <span className="text-xs text-muted-foreground mr-1">{t("filters.labels", "Labels:")}</span>
+                <span className="text-xs text-muted-foreground me-1">{t("filters.labels", "Labels:")}</span>
                 {availableLabels.map((l) => {
                   const active = filters.labels.includes(l);
                   return (

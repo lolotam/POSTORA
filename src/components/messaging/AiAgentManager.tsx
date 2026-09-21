@@ -350,7 +350,7 @@ export function AiAgentManager({ platform = "whatsapp", initialAccountId = null,
 
           <div className="flex flex-col items-end gap-2">
             <Button onClick={save} disabled={!configLoaded || upsertConfig.isPending}>
-              {(upsertConfig.isPending || isLoading) && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              {(upsertConfig.isPending || isLoading) && <Loader2 className="me-2 h-4 w-4 animate-spin" />}
               {t("manager.saveSettings", "Save settings")}
             </Button>
             {!configLoaded && (

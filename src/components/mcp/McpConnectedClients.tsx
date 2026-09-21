@@ -123,7 +123,7 @@ export function McpConnectedClients() {
       <CardContent>
         {loading && sessions === null ? (
           <div className="flex items-center justify-center py-8 text-muted-foreground">
-            <Loader2 className="w-4 h-4 animate-spin mr-2" /> Loading…
+            <Loader2 className="w-4 h-4 animate-spin me-2" /> Loading…
           </div>
         ) : (sessions ?? []).filter((s) => !s.revoked_at).length === 0 ? (
           <div className="text-center py-8 text-sm text-muted-foreground border border-dashed rounded-lg">
@@ -171,7 +171,7 @@ export function McpConnectedClients() {
                       disabled={revoking === s.id}
                     >
                       {revoking === s.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
-                      <span className="ml-1.5 hidden sm:inline">Disconnect</span>
+                      <span className="ms-1.5 hidden sm:inline">Disconnect</span>
                     </Button>
                   )}
                 </li>

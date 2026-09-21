@@ -83,7 +83,7 @@ export function InstagramCarouselPreview({
             <Button
               variant="secondary"
               size="icon"
-              className="absolute left-2 top-1/2 -translate-y-1/2 h-7 w-7 rounded-full bg-background/80 hover:bg-background shadow-lg"
+              className="absolute start-2 top-1/2 -translate-y-1/2 h-7 w-7 rounded-full bg-background/80 hover:bg-background shadow-lg"
               onClick={goToPrevious}
             >
               <ChevronLeft className="h-4 w-4" />
@@ -93,7 +93,7 @@ export function InstagramCarouselPreview({
             <Button
               variant="secondary"
               size="icon"
-              className="absolute right-2 top-1/2 -translate-y-1/2 h-7 w-7 rounded-full bg-background/80 hover:bg-background shadow-lg"
+              className="absolute end-2 top-1/2 -translate-y-1/2 h-7 w-7 rounded-full bg-background/80 hover:bg-background shadow-lg"
               onClick={goToNext}
             >
               <ChevronRight className="h-4 w-4" />
@@ -101,7 +101,7 @@ export function InstagramCarouselPreview({
           )}
 
           {/* Slide indicator */}
-          <div className="absolute top-3 right-3 bg-background/80 backdrop-blur px-2 py-1 rounded text-xs font-medium">
+          <div className="absolute top-3 end-3 bg-background/80 backdrop-blur px-2 py-1 rounded text-xs font-medium">
             {currentIndex + 1}/{mediaFiles.length}
           </div>
         </div>
@@ -161,7 +161,7 @@ export function InstagramCarouselPreview({
             ) : (
               <video src={file.previewUrl} className="w-full h-full object-cover" muted />
             )}
-            <div className="absolute bottom-0.5 right-0.5 bg-black/60 text-white text-[8px] px-1 rounded">
+            <div className="absolute bottom-0.5 end-0.5 bg-black/60 text-white text-[8px] px-1 rounded">
               {idx + 1}
             </div>
           </button>

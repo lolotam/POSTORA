@@ -140,7 +140,7 @@ function FeedPreview({
     <div className="max-w-[280px]">
       <div className="relative bg-black rounded-[2rem] overflow-hidden aspect-[9/16] shadow-2xl border-4 border-gray-800">
         {/* Notch */}
-        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-24 h-6 bg-black rounded-b-2xl z-20" />
+        <div className="absolute top-0 start-1/2 -translate-x-1/2 w-24 h-6 bg-black rounded-b-2xl z-20" />
         
         {/* Video/Image Background */}
         <div className="absolute inset-0">
@@ -168,14 +168,14 @@ function FeedPreview({
         </div>
 
         {/* Top Navigation */}
-        <div className="absolute top-8 left-0 right-0 flex items-center justify-center gap-6 z-10">
+        <div className="absolute top-8 start-0 end-0 flex items-center justify-center gap-6 z-10">
           <span className="text-white/60 text-sm font-medium">{t("tikTokForYou.following", "Following")}</span>
           <span className="text-white text-sm font-bold border-b-2 border-white pb-1">{t("tikTokForYou.forYou", "For You")}</span>
-          <Search className="w-5 h-5 text-white absolute right-4" />
+          <Search className="w-5 h-5 text-white absolute end-4" />
         </div>
 
         {/* Right Side Actions */}
-        <div className="absolute right-3 bottom-24 flex flex-col items-center gap-5 z-10">
+        <div className="absolute end-3 bottom-24 flex flex-col items-center gap-5 z-10">
           {/* Profile Avatar */}
           <div className="relative">
             <Avatar className="h-11 w-11 border-2 border-white">
@@ -184,7 +184,7 @@ function FeedPreview({
                 {username[0]?.toUpperCase()}
               </AvatarFallback>
             </Avatar>
-            <div className="absolute -bottom-2 left-1/2 -translate-x-1/2 w-5 h-5 bg-red-500 rounded-full flex items-center justify-center">
+            <div className="absolute -bottom-2 start-1/2 -translate-x-1/2 w-5 h-5 bg-red-500 rounded-full flex items-center justify-center">
               <Plus className="w-3 h-3 text-white" />
             </div>
           </div>
@@ -228,7 +228,7 @@ function FeedPreview({
         </div>
 
         {/* Bottom Content */}
-        <div className="absolute bottom-20 left-3 right-16 z-10">
+        <div className="absolute bottom-20 start-3 end-16 z-10">
           {/* Username */}
           <div className="flex items-center gap-1 mb-2">
             <span className="text-white font-bold text-sm">@{username}</span>
@@ -253,7 +253,7 @@ function FeedPreview({
         </div>
 
         {/* Bottom Navigation Bar */}
-        <div className="absolute bottom-0 left-0 right-0 h-14 bg-black/90 flex items-center justify-around px-4 z-10">
+        <div className="absolute bottom-0 start-0 end-0 h-14 bg-black/90 flex items-center justify-around px-4 z-10">
           <div className="flex flex-col items-center">
             <Home className="w-5 h-5 text-white" fill="white" />
             <span className="text-white text-[10px] mt-0.5">{t("tikTokForYou.home", "Home")}</span>
@@ -294,10 +294,10 @@ function ProfilePreview({
     <div className="max-w-[280px]">
       <div className="relative bg-black rounded-[2rem] overflow-hidden aspect-[9/16] shadow-2xl border-4 border-gray-800">
         {/* Notch */}
-        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-24 h-6 bg-black rounded-b-2xl z-20" />
+        <div className="absolute top-0 start-1/2 -translate-x-1/2 w-24 h-6 bg-black rounded-b-2xl z-20" />
         
         {/* Profile Header */}
-        <div className="absolute top-8 left-0 right-0 px-4 z-10">
+        <div className="absolute top-8 start-0 end-0 px-4 z-10">
           <div className="flex items-center justify-center mb-4">
             <span className="text-white font-bold text-base">@{username}</span>
           </div>
@@ -343,7 +343,7 @@ function ProfilePreview({
         </div>
 
         {/* Video Grid */}
-        <div className="absolute top-[220px] left-0 right-0 bottom-14 px-0.5 z-10">
+        <div className="absolute top-[220px] start-0 end-0 bottom-14 px-0.5 z-10">
           <div className="grid grid-cols-3 gap-0.5">
             {/* Current video (highlighted) */}
             <div className="aspect-[9/16] relative bg-gray-800 overflow-hidden border-2 border-[#25f4ee]">
@@ -362,7 +362,7 @@ function ProfilePreview({
               ) : (
                 <div className="w-full h-full bg-gradient-to-br from-pink-500 to-purple-500" />
               )}
-              <div className="absolute bottom-1 left-1 flex items-center gap-0.5">
+              <div className="absolute bottom-1 start-1 flex items-center gap-0.5">
                 <Play className="w-2 h-2 text-white" fill="white" />
                 <span className="text-white text-[8px]">0</span>
               </div>
@@ -376,7 +376,7 @@ function ProfilePreview({
         </div>
 
         {/* Bottom Navigation Bar */}
-        <div className="absolute bottom-0 left-0 right-0 h-14 bg-black flex items-center justify-around px-4 z-10">
+        <div className="absolute bottom-0 start-0 end-0 h-14 bg-black flex items-center justify-around px-4 z-10">
           <div className="flex flex-col items-center">
             <Home className="w-5 h-5 text-white/60" />
             <span className="text-white/60 text-[10px] mt-0.5">{t("tikTokForYou.home", "Home")}</span>
@@ -440,7 +440,7 @@ function WebTVPreview({
         </div>
 
         {/* Top Bar */}
-        <div className="absolute top-0 left-0 right-0 p-3 bg-gradient-to-b from-black/60 to-transparent z-10">
+        <div className="absolute top-0 start-0 end-0 p-3 bg-gradient-to-b from-black/60 to-transparent z-10">
           <div className="flex items-center gap-2">
             <div className="w-6 h-6 bg-black rounded flex items-center justify-center">
               <svg viewBox="0 0 24 24" className="w-4 h-4 text-white" fill="currentColor">
@@ -452,7 +452,7 @@ function WebTVPreview({
         </div>
 
         {/* Bottom Info */}
-        <div className="absolute bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-black/80 to-transparent z-10">
+        <div className="absolute bottom-0 start-0 end-0 p-4 bg-gradient-to-t from-black/80 to-transparent z-10">
           <div className="flex items-start gap-3">
             <Avatar className="h-10 w-10 border border-white/20">
               {avatarUrl ? <AvatarImage src={avatarUrl} alt={username} /> : null}
@@ -470,7 +470,7 @@ function WebTVPreview({
         </div>
 
         {/* Right Side Actions */}
-        <div className="absolute right-3 top-1/2 -translate-y-1/2 flex flex-col gap-4 z-10">
+        <div className="absolute end-3 top-1/2 -translate-y-1/2 flex flex-col gap-4 z-10">
           <div className="flex flex-col items-center">
             <Heart className="w-6 h-6 text-white" />
             <span className="text-white text-[10px]">0</span>

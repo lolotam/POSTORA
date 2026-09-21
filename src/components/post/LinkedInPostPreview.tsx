@@ -89,7 +89,7 @@ export function LinkedInPostPreview({
             <p className="text-sm whitespace-pre-wrap break-words">
               {truncatedCaption}
               {caption.length > 200 && (
-                <span className="text-muted-foreground hover:text-[#0A66C2] hover:underline cursor-pointer ml-1">
+                <span className="text-muted-foreground hover:text-[#0A66C2] hover:underline cursor-pointer ms-1">
                   {t("linkedIn.seeMore", "...see more")}
                 </span>
               )}
@@ -122,7 +122,7 @@ export function LinkedInPostPreview({
         {/* Engagement Stats */}
         <div className="px-4 py-2 border-t flex items-center justify-between text-xs text-muted-foreground">
           <div className="flex items-center gap-1">
-            <div className="flex -space-x-1">
+            <div className="flex -space-x-1 rtl:space-x-reverse">
               <div className="w-4 h-4 rounded-full bg-[#0A66C2] flex items-center justify-center">
                 <ThumbsUp className="w-2.5 h-2.5 text-white" fill="white" />
               </div>
@@ -133,7 +133,7 @@ export function LinkedInPostPreview({
                 <span className="text-[8px]">👏</span>
               </div>
             </div>
-            <span className="ml-1">0</span>
+            <span className="ms-1">0</span>
           </div>
           <div className="flex items-center gap-3">
             <span>{t("linkedIn.commentsCount", "0 comments")}</span>

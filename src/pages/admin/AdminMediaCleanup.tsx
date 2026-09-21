@@ -209,12 +209,12 @@ export default function AdminMediaCleanup() {
               >
                 {isLoading ? (
                   <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    <Loader2 className="me-2 h-4 w-4 animate-spin" />
                     Scanning...
                   </>
                 ) : (
                   <>
-                    <Search className="mr-2 h-4 w-4" />
+                    <Search className="me-2 h-4 w-4" />
                     Scan for Orphaned Files
                   </>
                 )}
@@ -228,12 +228,12 @@ export default function AdminMediaCleanup() {
                 >
                   {isDeleting ? (
                     <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      <Loader2 className="me-2 h-4 w-4 animate-spin" />
                       Deleting...
                     </>
                   ) : (
                     <>
-                      <Trash2 className="mr-2 h-4 w-4" />
+                      <Trash2 className="me-2 h-4 w-4" />
                       Delete {orphanedFiles.length} Files
                     </>
                   )}
@@ -277,7 +277,7 @@ export default function AdminMediaCleanup() {
                   <AlertTriangle className="h-4 w-4" />
                   <AlertTitle>Errors</AlertTitle>
                   <AlertDescription>
-                    <ul className="list-disc pl-4 mt-2 space-y-1">
+                    <ul className="list-disc ps-4 mt-2 space-y-1">
                       {cleanupResult.errors.slice(0, 5).map((error, i) => (
                         <li key={i} className="text-sm">{error}</li>
                       ))}
@@ -372,7 +372,7 @@ export default function AdminMediaCleanup() {
                           >
                             {isVideo ? <Video className="w-8 h-8" /> : <Image className="w-8 h-8" />}
                           </div>
-                          <div className="absolute bottom-1 left-1 flex gap-0.5">
+                          <div className="absolute bottom-1 start-1 flex gap-0.5">
                             <Badge variant="secondary" className="text-[10px] px-1 py-0 opacity-90">
                               {isVideo ? "Video" : "Image"}
                             </Badge>
@@ -412,7 +412,7 @@ export default function AdminMediaCleanup() {
                   scanForOrphanedFiles();
                 }}
               >
-                <RefreshCw className="mr-2 h-4 w-4" />
+                <RefreshCw className="me-2 h-4 w-4" />
                 Scan All Ages
               </Button>
             </CardContent>

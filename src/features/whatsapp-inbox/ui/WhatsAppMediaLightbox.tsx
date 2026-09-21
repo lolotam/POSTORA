@@ -64,7 +64,7 @@ export function WhatsAppMediaLightbox({
                 variant="secondary"
                 aria-label="Previous image"
                 onClick={prev}
-                className="absolute left-3 top-1/2 -translate-y-1/2 rounded-full"
+                className="absolute start-3 top-1/2 -translate-y-1/2 rounded-full"
               >
                 <ChevronLeft className="h-5 w-5" />
               </Button>
@@ -74,7 +74,7 @@ export function WhatsAppMediaLightbox({
                 variant="secondary"
                 aria-label="Next image"
                 onClick={next}
-                className="absolute right-3 top-1/2 -translate-y-1/2 rounded-full"
+                className="absolute end-3 top-1/2 -translate-y-1/2 rounded-full"
               >
                 <ChevronRight className="h-5 w-5" />
               </Button>

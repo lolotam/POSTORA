@@ -161,13 +161,13 @@ export function InteractiveMessageBuilder({ onSend, isPending }: InteractiveMess
                       const s = [...sections]; s[si] = { ...s[si], title: e.target.value }; setSections(s);
                     }} className="text-sm" />
                     {sections.length > 1 && (
-                      <Button variant="ghost" size="icon" className="h-6 w-6 ml-2" onClick={() => setSections(sections.filter((_, j) => j !== si))}>
+                      <Button variant="ghost" size="icon" className="h-6 w-6 ms-2" onClick={() => setSections(sections.filter((_, j) => j !== si))}>
                         <X className="h-3 w-3" />
                       </Button>
                     )}
                   </div>
                   {sec.rows.map((row, ri) => (
-                    <div key={ri} className="pl-3 border-l-2 space-y-1">
+                    <div key={ri} className="ps-3 border-l-2 space-y-1">
                       <Input placeholder={t("interactive.itemTitle", "Item title (max 24)")} maxLength={24} value={row.title} onChange={(e) => {
                         const s = [...sections]; s[si].rows[ri] = { ...row, title: e.target.value }; setSections(s);
                       }} className="text-sm h-8" />
@@ -199,7 +199,7 @@ export function InteractiveMessageBuilder({ onSend, isPending }: InteractiveMess
           )}
 
           <Button onClick={handleSend} disabled={isPending} className="w-full">
-            {isPending ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
+            {isPending ? <Loader2 className="h-4 w-4 me-2 animate-spin" /> : null}
             {t("interactive.send", "Send Interactive Message")}
           </Button>
         </div>

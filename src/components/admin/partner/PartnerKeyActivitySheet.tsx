@@ -47,7 +47,7 @@ export function PartnerKeyActivitySheet({ partnerKey, open, onOpenChange }: Part
           <SheetTitle>Live activity — {partnerKey?.name ?? ""}</SheetTitle>
           <SheetDescription>Last 50 authenticated requests and the workspace's recent webhook deliveries. Refreshes every 15 s.</SheetDescription>
         </SheetHeader>
-        <ScrollArea className="mt-4 h-[calc(100vh-8rem)] pr-4">
+        <ScrollArea className="mt-4 h-[calc(100vh-8rem)] pe-4">
           <section className="space-y-2">
             <h3 className="text-sm font-semibold">Recent API requests</h3>
             {activity.error ? (
@@ -71,7 +71,7 @@ export function PartnerKeyActivitySheet({ partnerKey, open, onOpenChange }: Part
                       <TableCell className="font-mono text-xs">{endpointForAction(row.action)}</TableCell>
                       <TableCell>
                         <Badge variant={statusVariant(row.http_status)}>{row.http_status}</Badge>
-                        {row.error_code && <span className="ml-1 text-xs text-muted-foreground">{row.error_code}</span>}
+                        {row.error_code && <span className="ms-1 text-xs text-muted-foreground">{row.error_code}</span>}
                       </TableCell>
                       <TableCell className="font-mono text-xs">{row.request_id ?? DASH}</TableCell>
                       <TableCell className="text-xs">{row.latency_ms === null ? DASH : `${row.latency_ms} ms`}</TableCell>
@@ -106,7 +106,7 @@ export function PartnerKeyActivitySheet({ partnerKey, open, onOpenChange }: Part
                       <TableCell><Badge variant={deliveryVariant(d.status)}>{d.status}</Badge></TableCell>
                       <TableCell className="text-xs">{d.attempts}{d.status === "pending" ? ` · next ${stamp(d.next_attempt_at)}` : ""}</TableCell>
                       <TableCell className="max-w-[220px] truncate font-mono text-xs" title={d.webhook_url}>
-                        {d.webhook_url}{!d.webhook_is_active && <span className="ml-1 text-destructive">(disabled)</span>}
+                        {d.webhook_url}{!d.webhook_is_active && <span className="ms-1 text-destructive">(disabled)</span>}
                       </TableCell>
                       <TableCell className="max-w-[200px] truncate text-xs" title={d.last_error ?? undefined}>
                         {d.last_status_code ?? DASH}{d.last_error ? ` · ${d.last_error}` : ""}
@@ -142,7 +142,7 @@ export function PartnerKeyActivitySheet({ partnerKey, open, onOpenChange }: Part
                       <TableCell className="font-mono text-xs">{row.action_name}</TableCell>
                       <TableCell>
                         <Badge variant={connectorVariant(row.status)}>{row.status}</Badge>
-                        {row.error_code && <span className="ml-1 text-xs text-muted-foreground">{row.error_code}</span>}
+                        {row.error_code && <span className="ms-1 text-xs text-muted-foreground">{row.error_code}</span>}
                       </TableCell>
                       <TableCell className="text-xs">{row.latency_ms === null ? DASH : `${row.latency_ms} ms`}</TableCell>
                       <TableCell className="font-mono text-xs">{row.request_id ?? DASH}</TableCell>

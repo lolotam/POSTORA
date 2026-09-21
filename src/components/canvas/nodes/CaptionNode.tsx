@@ -133,14 +133,14 @@ function CaptionNodeComponent({ id, data, selected }: NodeProps) {
       </Handle>
 
       {/* Floating Label */}
-      <div className="absolute -top-8 left-6 flex items-center gap-1.5 px-2.5 py-1 bg-card/90 backdrop-blur-sm rounded-lg text-xs font-medium text-muted-foreground border border-border/50 z-10">
+      <div className="absolute -top-8 start-6 flex items-center gap-1.5 px-2.5 py-1 bg-card/90 backdrop-blur-sm rounded-lg text-xs font-medium text-muted-foreground border border-border/50 z-10">
         <ImageIcon className="h-3.5 w-3.5" />
         <span>Image Generator</span>
       </div>
 
       {/* Floating Toolbar - only when selected */}
       {selected && (
-        <div className="absolute -top-14 left-1/2 -translate-x-1/2 z-20">
+        <div className="absolute -top-14 start-1/2 -translate-x-1/2 z-20">
           <div className="flex items-center gap-0.5 px-1.5 py-1 bg-card/95 backdrop-blur-md border border-border/50 rounded-xl shadow-lg">
             <Tooltip>
               <TooltipTrigger asChild>
@@ -235,7 +235,7 @@ function CaptionNodeComponent({ id, data, selected }: NodeProps) {
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="absolute top-1 right-1 h-5 w-5 bg-background/80 hover:bg-destructive/20 rounded-full"
+                  className="absolute top-1 end-1 h-5 w-5 bg-background/80 hover:bg-destructive/20 rounded-full"
                   onClick={() => setReferenceImage(null)}
                 >
                   <X className="h-3 w-3" />
@@ -291,7 +291,7 @@ function CaptionNodeComponent({ id, data, selected }: NodeProps) {
               </SelectContent>
             </Select>
 
-            <div className="flex items-center gap-1 ml-auto">
+            <div className="flex items-center gap-1 ms-auto">
               <Button variant="ghost" size="icon" className="h-8 w-8 rounded-lg" onClick={() => setImageCount(Math.max(1, imageCount - 1))} disabled={imageCount <= 1}>
                 <Minus className="h-3 w-3" />
               </Button>

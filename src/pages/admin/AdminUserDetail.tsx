@@ -569,7 +569,7 @@ export default function AdminUserDetail() {
         <div className="text-center py-24 text-muted-foreground">
           <p>User not found.</p>
           <Button variant="outline" className="mt-4" onClick={() => navigate("/admin/users")}>
-            <ArrowLeft className="w-4 h-4 mr-2" /> Back to Users
+            <ArrowLeft className="w-4 h-4 me-2" /> Back to Users
           </Button>
         </div>
       </AdminLayout>

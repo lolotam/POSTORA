@@ -116,7 +116,7 @@ export default function PinterestCallback() {
           <p className="text-sm text-muted-foreground">{error}</p>
           
           {isPreviewUrl && (
-            <div className="mt-4 p-4 rounded-lg bg-muted/50 border border-border text-left space-y-3">
+            <div className="mt-4 p-4 rounded-lg bg-muted/50 border border-border text-start space-y-3">
               <p className="text-sm font-medium">Are you on a preview URL?</p>
               <p className="text-xs text-muted-foreground">
                 Pinterest OAuth requires connecting from the production site. 

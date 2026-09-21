@@ -117,7 +117,7 @@ export default function AdminNotifications() {
               <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
                 <DialogTrigger asChild>
                   <Button onClick={() => { resetForm(); setDialogOpen(true); }}>
-                    <Plus className="w-4 h-4 mr-2" />
+                    <Plus className="w-4 h-4 me-2" />
                     New Notification
                   </Button>
                 </DialogTrigger>
@@ -152,9 +152,9 @@ export default function AdminNotifications() {
                     </Button>
                     <Button onClick={handleSend} disabled={createNotification.isPending}>
                       {createNotification.isPending ? (
-                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                        <Loader2 className="w-4 h-4 me-2 animate-spin" />
                       ) : (
-                        <Send className="w-4 h-4 mr-2" />
+                        <Send className="w-4 h-4 me-2" />
                       )}
                       Send to All Users
                     </Button>
@@ -175,7 +175,7 @@ export default function AdminNotifications() {
                   Send your first notification to all users
                 </p>
                 <Button onClick={() => { resetForm(); setDialogOpen(true); }}>
-                  <Plus className="w-4 h-4 mr-2" />
+                  <Plus className="w-4 h-4 me-2" />
                   New Notification
                 </Button>
               </div>
@@ -232,7 +232,7 @@ export default function AdminNotifications() {
                 onClick={handleDelete}
                 className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               >
-                {deleteNotification.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                {deleteNotification.isPending && <Loader2 className="w-4 h-4 me-2 animate-spin" />}
                 Delete
               </AlertDialogAction>
             </AlertDialogFooter>

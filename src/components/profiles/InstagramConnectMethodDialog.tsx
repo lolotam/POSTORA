@@ -36,7 +36,7 @@ export function InstagramConnectMethodDialog({
           {/* Business Login — Direct */}
           <button
             onClick={onSelectBusinessLogin}
-            className="flex items-start gap-3 p-4 rounded-lg border border-primary/30 bg-primary/5 hover:bg-primary/10 transition-colors text-left"
+            className="flex items-start gap-3 p-4 rounded-lg border border-primary/30 bg-primary/5 hover:bg-primary/10 transition-colors text-start"
           >
             <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary/10">
               <Instagram className="h-5 w-5 text-primary" />
@@ -58,7 +58,7 @@ export function InstagramConnectMethodDialog({
           {instagramViaFacebookEnabled ? (
             <button
               onClick={onSelectFacebookPage}
-              className="flex items-start gap-3 p-4 rounded-lg border border-border hover:bg-muted/50 transition-colors text-left"
+              className="flex items-start gap-3 p-4 rounded-lg border border-border hover:bg-muted/50 transition-colors text-start"
             >
               <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-muted">
                 <Facebook className="h-5 w-5 text-muted-foreground" />
@@ -74,7 +74,7 @@ export function InstagramConnectMethodDialog({
               </div>
             </button>
           ) : (
-            <div className="flex items-start gap-3 p-4 rounded-lg border border-border bg-muted/30 text-left">
+            <div className="flex items-start gap-3 p-4 rounded-lg border border-border bg-muted/30 text-start">
               <div className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-muted">
                 <Info className="h-5 w-5 text-muted-foreground" />
               </div>

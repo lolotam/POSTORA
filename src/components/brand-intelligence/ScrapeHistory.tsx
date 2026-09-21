@@ -112,7 +112,7 @@ export function ScrapeHistory({ onReuse }: ScrapeHistoryProps) {
               onClick={() => deleteMutation.mutate(Array.from(selected))}
               disabled={deleteMutation.isPending}
             >
-              <Trash2 className="w-4 h-4 mr-1" />
+              <Trash2 className="w-4 h-4 me-1" />
               {t("history.deleteCount", "Delete {{count}}", { count: selected.size })}
             </Button>
           )}
@@ -122,12 +122,12 @@ export function ScrapeHistory({ onReuse }: ScrapeHistoryProps) {
         {/* Filters */}
         <div className="flex gap-2">
           <div className="relative flex-1 max-w-xs">
-            <Search className="absolute left-2.5 top-2.5 w-4 h-4 text-muted-foreground" />
+            <Search className="absolute start-2.5 top-2.5 w-4 h-4 text-muted-foreground" />
             <Input
               placeholder={t("form.searchUsername", "Search username...")}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-8 h-9 text-sm"
+              className="ps-8 h-9 text-sm"
             />
           </div>
           <Select value={platformFilter} onValueChange={setPlatformFilter}>
@@ -169,7 +169,7 @@ export function ScrapeHistory({ onReuse }: ScrapeHistoryProps) {
                   <TableHead className="text-center">{t("history.posts", "Posts")}</TableHead>
                   <TableHead>{t("history.strategy", "Strategy")}</TableHead>
                   <TableHead>{t("history.date", "Date")}</TableHead>
-                  <TableHead className="text-right">{t("history.actions", "Actions")}</TableHead>
+                  <TableHead className="text-end">{t("history.actions", "Actions")}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -218,7 +218,7 @@ export function ScrapeHistory({ onReuse }: ScrapeHistoryProps) {
                     <TableCell className="text-xs text-muted-foreground">
                       {session.created_at ? format(new Date(session.created_at), "MMM d, yyyy HH:mm") : "—"}
                     </TableCell>
-                    <TableCell className="text-right">
+                    <TableCell className="text-end">
                       <div className="flex justify-end gap-1">
                         <Button
                           variant="ghost"

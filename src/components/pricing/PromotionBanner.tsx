@@ -33,7 +33,7 @@ export function PromotionBanner({ remainingSlots = 100, isActive = true }: Promo
       >
         <button
           onClick={handleDismiss}
-          className="absolute top-3 right-3 text-muted-foreground hover:text-foreground transition-colors"
+          className="absolute top-3 end-3 text-muted-foreground hover:text-foreground transition-colors"
         >
           <X className="w-4 h-4" />
         </button>
@@ -57,7 +57,7 @@ export function PromotionBanner({ remainingSlots = 100, isActive = true }: Promo
             </div>
           </div>
 
-          <div className="flex items-center gap-2 md:ml-auto shrink-0">
+          <div className="flex items-center gap-2 md:ms-auto shrink-0">
             <Clock className="w-4 h-4 text-muted-foreground" />
             <span className="text-sm font-medium">
               <span className="text-primary font-bold">{remainingSlots}</span> spots remaining

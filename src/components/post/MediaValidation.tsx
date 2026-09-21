@@ -36,7 +36,7 @@ export function MediaValidation({ validation, className }: MediaValidationProps)
           </div>
           <ul className="space-y-1">
             {validation.errors.map((error, index) => (
-              <li key={index} className="text-xs text-destructive/80 pl-6">
+              <li key={index} className="text-xs text-destructive/80 ps-6">
                 • {error}
               </li>
             ))}
@@ -52,7 +52,7 @@ export function MediaValidation({ validation, className }: MediaValidationProps)
           </div>
           <ul className="space-y-1">
             {validation.warnings.map((warning, index) => (
-              <li key={index} className="text-xs text-amber-500/80 pl-6">
+              <li key={index} className="text-xs text-amber-500/80 ps-6">
                 • {warning}
               </li>
             ))}

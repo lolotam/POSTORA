@@ -66,20 +66,20 @@ export function ThreadsThreadPicker({ accountId, value, onChange }: Props) {
           className="w-full sm:w-[360px] justify-between"
           disabled={!accountId}
         >
-          <span className="truncate text-left">
+          <span className="truncate text-start">
             {value
               ? value.text?.slice(0, 60) || t("picker.threadFallback", "Thread {{id}}…", { id: value.id.slice(0, 8) })
               : t("picker.selectThread", "Select a thread to manage replies")}
           </span>
-          <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+          <ChevronsUpDown className="ms-2 h-4 w-4 shrink-0 opacity-50" />
         </Button>
       </PopoverTrigger>
       <PopoverContent className="w-[360px] p-0" align="start">
         <ScrollArea className="h-[360px]">
-          <div className="p-1 pr-2">
+          <div className="p-1 pe-2">
             {isLoading && (
               <div className="flex items-center justify-center py-6 text-sm text-muted-foreground">
-                <Loader2 className="h-4 w-4 mr-2 animate-spin" /> {t("picker.loading", "Loading threads…")}
+                <Loader2 className="h-4 w-4 me-2 animate-spin" /> {t("picker.loading", "Loading threads…")}
               </div>
             )}
 
@@ -111,9 +111,9 @@ export function ThreadsThreadPicker({ accountId, value, onChange }: Props) {
                       onChange(thread);
                       setOpen(false);
                     }}
-                    className="flex-1 min-w-0 flex items-start gap-2 text-left"
+                    className="flex-1 min-w-0 flex items-start gap-2 text-start"
                   >
-                    <span className="text-xs tabular-nums text-muted-foreground w-6 shrink-0 text-right pt-0.5">
+                    <span className="text-xs tabular-nums text-muted-foreground w-6 shrink-0 text-end pt-0.5">
                       {idx + 1}.
                     </span>
                     <Check
@@ -139,7 +139,7 @@ export function ThreadsThreadPicker({ accountId, value, onChange }: Props) {
                       target="_blank"
                       rel="noopener noreferrer"
                       onClick={(e) => e.stopPropagation()}
-                      className="ml-1 inline-flex items-center gap-1 text-xs text-primary hover:underline shrink-0 pt-0.5"
+                      className="ms-1 inline-flex items-center gap-1 text-xs text-primary hover:underline shrink-0 pt-0.5"
                       aria-label={t("actions.viewThreadAria", "View thread on Threads")}
                       title={t("actions.openOnThreads", "Open on Threads")}
                     >
@@ -155,7 +155,7 @@ export function ThreadsThreadPicker({ accountId, value, onChange }: Props) {
 
             {isFetchingNextPage && (
               <div className="flex items-center justify-center py-3 text-xs text-muted-foreground">
-                <Loader2 className="h-3 w-3 mr-2 animate-spin" /> {t("picker.loadingMore", "Loading more…")}
+                <Loader2 className="h-3 w-3 me-2 animate-spin" /> {t("picker.loadingMore", "Loading more…")}
               </div>
             )}
           </div>

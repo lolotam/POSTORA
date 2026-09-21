@@ -105,17 +105,17 @@ export function PostActions({
       >
         {isPosting ? (
           <>
-            <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+            <Loader2 className="w-4 h-4 me-2 animate-spin" />
             {scheduleEnabled ? t("actions.scheduling", "Scheduling...") : t("actions.publishing", "Publishing...")}
           </>
         ) : scheduleEnabled ? (
           <>
-            <Clock className="w-4 h-4 mr-2" />
+            <Clock className="w-4 h-4 me-2" />
             {scheduledAt ? t("actions.schedulePost", "Schedule Post") : t("actions.selectDateTime", "Select Date & Time")}
           </>
         ) : (
           <>
-            <Send className="w-4 h-4 mr-2" />
+            <Send className="w-4 h-4 me-2" />
             {t("actions.postNow", "Post Now")}
           </>
         )}

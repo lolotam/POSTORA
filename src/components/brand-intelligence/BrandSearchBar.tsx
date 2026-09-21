@@ -95,7 +95,7 @@ export function BrandSearchBar({ platform, onSearch, isLoading, scope }: BrandSe
         )}
       >
         <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+          <Search className="absolute start-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
           <Input
             value={input}
             onChange={(e) => {
@@ -114,7 +114,7 @@ export function BrandSearchBar({ platform, onSearch, isLoading, scope }: BrandSe
             }}
             placeholder={placeholder}
             className={cn(
-              "pl-10 h-11",
+              "ps-10 h-11",
               invalid && "border-destructive ring-destructive",
             )}
           />
@@ -139,12 +139,12 @@ export function BrandSearchBar({ platform, onSearch, isLoading, scope }: BrandSe
                   <li key={row.id} className="group flex items-center justify-between px-3 py-1.5 hover:bg-accent/60 cursor-pointer">
                     <button
                       type="button"
-                      className="flex-1 text-left text-sm truncate"
+                      className="flex-1 text-start text-sm truncate"
                       onClick={() => handlePick(row.query)}
                     >
                       @{row.query}
                       {row.use_count > 1 && (
-                        <span className="ml-2 text-[10px] text-muted-foreground">×{row.use_count}</span>
+                        <span className="ms-2 text-[10px] text-muted-foreground">×{row.use_count}</span>
                       )}
                     </button>
                     <button
@@ -170,9 +170,9 @@ export function BrandSearchBar({ platform, onSearch, isLoading, scope }: BrandSe
           className="h-11 px-6 bg-gradient-to-r from-violet-500 to-pink-500 hover:from-violet-600 hover:to-pink-600 text-white border-0"
         >
           {isLoading ? (
-            <Loader2 className="w-4 h-4 animate-spin mr-2" />
+            <Loader2 className="w-4 h-4 animate-spin me-2" />
           ) : (
-            <Search className="w-4 h-4 mr-2" />
+            <Search className="w-4 h-4 me-2" />
           )}
           {t("actions.analyze", "Analyze")}
         </Button>

@@ -236,7 +236,7 @@ export default function UnifiedAgentSetupPage() {
                         className="drop-shadow-[0_8px_10px_rgba(0,0,0,0.3)] transition-transform duration-300 group-hover:scale-110"
                       />
                       {isSelected && (
-                        <div className="absolute -top-2 -right-2 w-6 h-6 sm:w-7 sm:h-7 rounded-full bg-primary text-primary-foreground flex items-center justify-center shadow-lg shadow-primary/50 ring-2 ring-background animate-in zoom-in-50 duration-200">
+                        <div className="absolute -top-2 -end-2 w-6 h-6 sm:w-7 sm:h-7 rounded-full bg-primary text-primary-foreground flex items-center justify-center shadow-lg shadow-primary/50 ring-2 ring-background animate-in zoom-in-50 duration-200">
                           <CheckCircle2 className="w-4 h-4 sm:w-4.5 sm:h-4.5" />
                         </div>
                       )}
@@ -336,7 +336,7 @@ export default function UnifiedAgentSetupPage() {
                   >
                     <MessageSquare className="w-4 h-4 text-sky-400 shrink-0" />
                     <span>{dmsSurfaceLabel}</span>
-                    {dmsActive && <CheckCircle2 className="w-3.5 h-3.5 text-primary ml-0.5 shrink-0" />}
+                    {dmsActive && <CheckCircle2 className="w-3.5 h-3.5 text-primary ms-0.5 shrink-0" />}
                   </button>
                 )}
 
@@ -354,7 +354,7 @@ export default function UnifiedAgentSetupPage() {
                   >
                     <MessageCircle className="w-4 h-4 text-emerald-400 shrink-0" />
                     <span>{commentsSurfaceLabel}</span>
-                    {commentsActive && <CheckCircle2 className="w-3.5 h-3.5 text-primary ml-0.5 shrink-0" />}
+                    {commentsActive && <CheckCircle2 className="w-3.5 h-3.5 text-primary ms-0.5 shrink-0" />}
                   </button>
                 )}
               </div>

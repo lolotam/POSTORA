@@ -366,9 +366,9 @@ export function MediaUploadDialog({
                           <h4 className="font-medium truncate">{file.name}</h4>
                           <Badge variant="secondary" className="mt-1">
                             {file.type === "image" ? (
-                              <FileImage className="w-3 h-3 mr-1" />
+                              <FileImage className="w-3 h-3 me-1" />
                             ) : (
-                              <FileVideo className="w-3 h-3 mr-1" />
+                              <FileVideo className="w-3 h-3 me-1" />
                             )}
                             {file.type === "video" ? t("type.videoLower", "video") : file.type === "gif" ? t("type.gif", "gif") : t("type.imageLower", "image")}
                           </Badge>
@@ -413,7 +413,7 @@ export function MediaUploadDialog({
                       className="flex-1"
                       onClick={() => handleDownload(file)}
                     >
-                      <Download className="w-4 h-4 mr-2" />
+                      <Download className="w-4 h-4 me-2" />
                       {t("common:download", "Download")}
                     </Button>
                     <Button
@@ -422,7 +422,7 @@ export function MediaUploadDialog({
                       className="flex-1"
                       onClick={() => copyUrl(file.url)}
                     >
-                      <Copy className="w-4 h-4 mr-2" />
+                      <Copy className="w-4 h-4 me-2" />
                       {t("upload.copyUrl", "Copy URL")}
                     </Button>
                     <Button
@@ -476,7 +476,7 @@ export function MediaUploadDialog({
                   {t("upload.uploadingTo", "Uploading to: {{folder}}", { folder: currentFolder })}
                 </span>
               )}
-              <span className="ml-auto">
+              <span className="ms-auto">
                 <Trans
                   ns="assets"
                   i18nKey="upload.remaining"
@@ -533,7 +533,7 @@ export function MediaUploadDialog({
                             <span>{formatFileSize(file.size)}</span>
                             {isComplete && (
                               <Badge variant="secondary" className="text-emerald-600 bg-emerald-400/10">
-                                <Check className="w-3 h-3 mr-1" />
+                                <Check className="w-3 h-3 me-1" />
                                 {t("upload.uploaded", "Uploaded")}
                               </Badge>
                             )}
@@ -576,17 +576,17 @@ export function MediaUploadDialog({
               >
                 {uploading ? (
                   <>
-                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    <Loader2 className="w-4 h-4 me-2 animate-spin" />
                     {t("dialog.uploading", "Uploading...")}
                   </>
                 ) : files.length > 0 ? (
                   <>
-                    <Upload className="w-4 h-4 mr-2" />
+                    <Upload className="w-4 h-4 me-2" />
                     {t("upload.uploadCount", "Upload ({{count}})", { count: files.length })}
                   </>
                 ) : (
                   <>
-                    <Upload className="w-4 h-4 mr-2" />
+                    <Upload className="w-4 h-4 me-2" />
                     {t("common:upload", "Upload")}
                   </>
                 )}

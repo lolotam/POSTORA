@@ -49,7 +49,7 @@ export function TopicTagDebugView({ debug }: { debug: TopicTagDebug }) {
         <ChevronDown className="w-3 h-3" />
         <Hash className="w-3 h-3" />
         {t("debug.showTopicTagDebug", "Show topic tag debug")}
-        <Badge variant={headlineVariant} className="ml-1 text-[9px] h-4">
+        <Badge variant={headlineVariant} className="ms-1 text-[9px] h-4">
           {headlineLabel}
         </Badge>
       </CollapsibleTrigger>

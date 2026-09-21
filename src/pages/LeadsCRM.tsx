@@ -91,11 +91,11 @@ export default function LeadsCRM() {
             </div>
             <div className="flex gap-2">
               <Button variant="outline" size="sm" className="border-violet-500/40 hover:bg-violet-500/10" onClick={handleSyncForms} disabled={syncForms.isPending || !activeAccountId}>
-                {syncForms.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <Download className="h-4 w-4 mr-1" />}
+                {syncForms.isPending ? <Loader2 className="h-4 w-4 animate-spin me-1" /> : <Download className="h-4 w-4 me-1" />}
                 {t("actions.syncForms", "Sync Forms")}
               </Button>
               <Button size="sm" className="bg-gradient-to-r from-sky-500 via-violet-500 to-pink-500 text-white hover:opacity-90" onClick={handleSyncLeads} disabled={syncLeads.isPending || forms.length === 0}>
-                {syncLeads.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <RefreshCw className="h-4 w-4 mr-1" />}
+                {syncLeads.isPending ? <Loader2 className="h-4 w-4 animate-spin me-1" /> : <RefreshCw className="h-4 w-4 me-1" />}
                 {t("actions.syncLeads", "Sync Leads")}
               </Button>
             </div>

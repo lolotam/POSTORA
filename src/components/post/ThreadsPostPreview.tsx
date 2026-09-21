@@ -152,9 +152,9 @@ export function ThreadsPostPreview({
           </div>
 
           {/* Reply indicator */}
-          <div className="flex items-center gap-3 mt-3 pl-[52px]">
+          <div className="flex items-center gap-3 mt-3 ps-[52px]">
             {/* Small stacked avatars for replies */}
-            <div className="flex -space-x-2">
+            <div className="flex -space-x-2 rtl:space-x-reverse">
               <div className="w-5 h-5 rounded-full bg-muted border-2 border-background" />
               <div className="w-5 h-5 rounded-full bg-muted border-2 border-background" />
             </div>

@@ -115,10 +115,10 @@ export default function Pipelines() {
           </Select>
         ) : null}
 
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ms-auto flex items-center gap-2">
           {canConfigure ? (
             <Button variant="outline" size="sm" onClick={() => setSettingsOpen(true)}>
-              <Settings2 className="mr-2 h-4 w-4" />
+              <Settings2 className="me-2 h-4 w-4" />
               Stages
             </Button>
           ) : null}
@@ -130,7 +130,7 @@ export default function Pipelines() {
                 setDealDialogOpen(true);
               }}
             >
-              <Plus className="mr-2 h-4 w-4" />
+              <Plus className="me-2 h-4 w-4" />
               New deal
             </Button>
           ) : null}

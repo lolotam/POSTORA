@@ -93,7 +93,7 @@ export function EmailPreviewDialog({
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
         <Button variant="outline" size="sm" disabled={!htmlContent}>
-          <Eye className="h-4 w-4 mr-2" />
+          <Eye className="h-4 w-4 me-2" />
           Preview
         </Button>
       </DialogTrigger>

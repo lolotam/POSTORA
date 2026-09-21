@@ -45,7 +45,7 @@ export function ThreadsLabelsEditor({ labels, disabled, onChange }: Props) {
         <Badge
           key={l}
           variant="secondary"
-          className="gap-1 pr-1 group"
+          className="gap-1 pe-1 group"
         >
           <span>#{l}</span>
           {!disabled && (

@@ -151,7 +151,7 @@ export function WhatsAppExportDialog({
             </Button>
           )}
           <Button onClick={handleExport} disabled={isExporting || chats.length === 0}>
-            {isExporting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+            {isExporting ? <Loader2 className="me-2 h-4 w-4 animate-spin" /> : null}
             Export
           </Button>
         </DialogFooter>

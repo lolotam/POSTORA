@@ -273,7 +273,7 @@ export default function ThreadsAnalytics() {
             <AlertDialogFooter>
               <AlertDialogCancel>{t("common:cancel", "Cancel")}</AlertDialogCancel>
               <AlertDialogAction onClick={handleConfirmDelete} disabled={!!isDeletingId}>
-                {isDeletingId ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+                {isDeletingId ? <Loader2 className="w-4 h-4 animate-spin me-2" /> : null}
                 {t("common:delete", "Delete")}
               </AlertDialogAction>
             </AlertDialogFooter>

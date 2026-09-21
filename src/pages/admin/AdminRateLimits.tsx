@@ -479,7 +479,7 @@ export default function AdminRateLimits() {
               <Users className="w-4 h-4" />
               User Overrides
               {userOverrides.length > 0 && (
-                <Badge variant="secondary" className="ml-1">
+                <Badge variant="secondary" className="ms-1">
                   {userOverrides.length}
                 </Badge>
               )}
@@ -512,7 +512,7 @@ export default function AdminRateLimits() {
                             <TableHead>Hourly Limit</TableHead>
                             <TableHead>Daily Limit</TableHead>
                             <TableHead>Status</TableHead>
-                            <TableHead className="text-right">Actions</TableHead>
+                            <TableHead className="text-end">Actions</TableHead>
                           </TableRow>
                         </TableHeader>
                         <TableBody>
@@ -553,7 +553,7 @@ export default function AdminRateLimits() {
                                   {tier.is_active ? "Active" : "Disabled"}
                                 </Badge>
                               </TableCell>
-                              <TableCell className="text-right">
+                              <TableCell className="text-end">
                                 <Dialog
                                   open={editingTier?.id === tier.id}
                                   onOpenChange={(open) => {
@@ -641,7 +641,7 @@ export default function AdminRateLimits() {
                                         onClick={() => editingTier && updateTierLimit(editingTier)}
                                         disabled={isSaving}
                                       >
-                                        {isSaving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                                        {isSaving && <Loader2 className="w-4 h-4 me-2 animate-spin" />}
                                         Save Changes
                                       </Button>
                                     </DialogFooter>
@@ -679,7 +679,7 @@ export default function AdminRateLimits() {
                           <TableHead>Limit</TableHead>
                           <TableHead>Window</TableHead>
                           <TableHead>Status</TableHead>
-                          <TableHead className="text-right">Actions</TableHead>
+                          <TableHead className="text-end">Actions</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
@@ -708,7 +708,7 @@ export default function AdminRateLimits() {
                                 {setting.is_active ? "Active" : "Disabled"}
                               </Badge>
                             </TableCell>
-                            <TableCell className="text-right">
+                            <TableCell className="text-end">
                               <Dialog
                                 open={editingGlobal?.id === setting.id}
                                 onOpenChange={(open) => {
@@ -791,7 +791,7 @@ export default function AdminRateLimits() {
                                       onClick={() => editingGlobal && updateGlobalSetting(editingGlobal)}
                                       disabled={isSaving}
                                     >
-                                      {isSaving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                                      {isSaving && <Loader2 className="w-4 h-4 me-2 animate-spin" />}
                                       Save Changes
                                     </Button>
                                   </DialogFooter>
@@ -844,12 +844,12 @@ export default function AdminRateLimits() {
                         <Label>User</Label>
                         <div className="space-y-2">
                           <div className="relative">
-                            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                            <Search className="absolute start-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                             <Input
                               placeholder="Search users..."
                               value={searchQuery}
                               onChange={(e) => setSearchQuery(e.target.value)}
-                              className="pl-9"
+                              className="ps-9"
                             />
                           </div>
                           <Select value={selectedUserId} onValueChange={setSelectedUserId}>
@@ -944,7 +944,7 @@ export default function AdminRateLimits() {
                         Cancel
                       </Button>
                       <Button onClick={saveUserOverride} disabled={isSaving}>
-                        {isSaving && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                        {isSaving && <Loader2 className="w-4 h-4 me-2 animate-spin" />}
                         {editingUserOverride ? "Update Override" : "Create Override"}
                       </Button>
                     </DialogFooter>
@@ -967,7 +967,7 @@ export default function AdminRateLimits() {
                         <TableHead>Limit</TableHead>
                         <TableHead>Expires</TableHead>
                         <TableHead>Reason</TableHead>
-                        <TableHead className="text-right">Actions</TableHead>
+                        <TableHead className="text-end">Actions</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -1004,7 +1004,7 @@ export default function AdminRateLimits() {
                                 {override.reason || "-"}
                               </p>
                             </TableCell>
-                            <TableCell className="text-right">
+                            <TableCell className="text-end">
                               <div className="flex justify-end gap-1">
                                 <Button
                                   variant="ghost"

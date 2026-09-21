@@ -252,7 +252,7 @@ export function AiProvidersCard() {
               </div>
               <Button size="sm" className="w-full h-7 text-xs" disabled={!providerApiKey.trim() || savingProviderKey}
                 onClick={() => handleSaveProviderKey(selectedProvider.provider_code)}>
-                {savingProviderKey ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : null}
+                {savingProviderKey ? <Loader2 className="w-3 h-3 animate-spin me-1" /> : null}
                 Save & Test
               </Button>
             </div>
@@ -280,7 +280,7 @@ export function AiProvidersCard() {
                   </div>
                 </div>
                 <div className="flex items-center gap-3 shrink-0 ms-2">
-                  <div className="text-right text-[10px] text-muted-foreground">
+                  <div className="text-end text-[10px] text-muted-foreground">
                     {model.cost_per_1m_input_tokens ? <div>In: ${model.cost_per_1m_input_tokens}/1M</div> : null}
                     {model.cost_per_1m_output_tokens ? <div>Out: ${model.cost_per_1m_output_tokens}/1M</div> : null}
                   </div>
@@ -390,7 +390,7 @@ function ExternalServiceCard({ name, description, hasKey, onSaveKey, onTest, isS
           </div>
           <Button size="sm" className="w-full h-7 text-xs" disabled={!apiKey.trim() || isSaving}
             onClick={() => { onSaveKey(apiKey.trim()); setApiKey(''); }}>
-            {isSaving ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : null}
+            {isSaving ? <Loader2 className="w-3 h-3 animate-spin me-1" /> : null}
             Save & Test
           </Button>
         </div>

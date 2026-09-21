@@ -105,13 +105,13 @@ export function DealCard({
             <DropdownMenuContent align="end">
               {onOpenConversation && deal.conversation_cache_id ? (
                 <DropdownMenuItem onSelect={() => onOpenConversation(deal)}>
-                  <MessageSquare className="mr-2 h-4 w-4" />
+                  <MessageSquare className="me-2 h-4 w-4" />
                   {t("deal.openConversation", "Open conversation")}
                 </DropdownMenuItem>
               ) : null}
               {onEdit ? (
                 <DropdownMenuItem disabled={!canWrite} onSelect={() => onEdit(deal)}>
-                  <Pencil className="mr-2 h-4 w-4" />
+                  <Pencil className="me-2 h-4 w-4" />
                   {t("deal.edit", "Edit deal")}
                 </DropdownMenuItem>
               ) : null}
@@ -121,7 +121,7 @@ export function DealCard({
                   className="text-destructive"
                   onSelect={() => onDelete(deal)}
                 >
-                  <Trash2 className="mr-2 h-4 w-4" />
+                  <Trash2 className="me-2 h-4 w-4" />
                   {t("deal.delete", "Delete deal")}
                 </DropdownMenuItem>
               ) : null}

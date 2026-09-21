@@ -25,9 +25,9 @@ export function BlobHero({
   return (
     <div aria-hidden className={cn("absolute inset-0 -z-10 pointer-events-none", className)}>
       <div className={cn("absolute inset-0 bg-gradient-to-br", blobs.wash)} />
-      <div className={cn("absolute -top-40 -left-20 h-[28rem] w-[28rem] rounded-full blur-3xl animate-blob-drift", blobs.a)} />
-      <div className={cn("absolute -top-20 right-0 h-[24rem] w-[24rem] rounded-full blur-3xl animate-blob-drift animation-delay-200", blobs.b)} />
-      <div className={cn("absolute bottom-0 left-1/3 h-[20rem] w-[20rem] rounded-full blur-3xl animate-blob-drift animation-delay-300", blobs.c)} />
+      <div className={cn("absolute -top-40 -start-20 h-[28rem] w-[28rem] rounded-full blur-3xl animate-blob-drift", blobs.a)} />
+      <div className={cn("absolute -top-20 end-0 h-[24rem] w-[24rem] rounded-full blur-3xl animate-blob-drift animation-delay-200", blobs.b)} />
+      <div className={cn("absolute bottom-0 start-1/3 h-[20rem] w-[20rem] rounded-full blur-3xl animate-blob-drift animation-delay-300", blobs.c)} />
       {withDots && (
         <div
           className="absolute inset-0 opacity-[0.04] dark:opacity-[0.07]"

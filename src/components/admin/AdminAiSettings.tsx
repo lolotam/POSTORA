@@ -433,7 +433,7 @@ export function AdminAiSettings() {
                     ) : (
                       <RefreshCw className="w-4 h-4" />
                     )}
-                    <span className="ml-1">Refresh</span>
+                    <span className="ms-1">Refresh</span>
                   </Button>
                 )}
               </div>
@@ -462,12 +462,12 @@ export function AdminAiSettings() {
               {selectedProvider === "openrouter" && (
                 <div className="space-y-2">
                   <div className="relative max-w-md">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                    <Search className="absolute start-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                     <Input
                       placeholder="Search models..."
                       value={modelSearch}
                       onChange={(e) => setModelSearch(e.target.value)}
-                      className="pl-9"
+                      className="ps-9"
                     />
                   </div>
                   
@@ -588,12 +588,12 @@ export function AdminAiSettings() {
                 >
                   {testStatus === "testing" ? (
                     <>
-                      <Loader2 className="w-4 h-4 mr-1 animate-spin" />
+                      <Loader2 className="w-4 h-4 me-1 animate-spin" />
                       Testing...
                     </>
                   ) : (
                     <>
-                      <Play className="w-4 h-4 mr-1" />
+                      <Play className="w-4 h-4 me-1" />
                       Test
                     </>
                   )}
@@ -718,12 +718,12 @@ export function AdminAiSettings() {
                 <div className="space-y-2">
                   <Label className="text-xs">Fallback Model</Label>
                   <div className="relative">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                    <Search className="absolute start-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                     <Input
                       placeholder="Search models..."
                       value={fallbackModelSearch}
                       onChange={(e) => setFallbackModelSearch(e.target.value)}
-                      className="pl-9"
+                      className="ps-9"
                     />
                   </div>
                   {openRouterModels.length > 0 && (
@@ -823,12 +823,12 @@ export function AdminAiSettings() {
               >
                 {isSaving ? (
                   <>
-                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    <Loader2 className="w-4 h-4 me-2 animate-spin" />
                     Saving...
                   </>
                 ) : (
                   <>
-                    <Save className="w-4 h-4 mr-2" />
+                    <Save className="w-4 h-4 me-2" />
                     Save AI Settings
                   </>
                 )}

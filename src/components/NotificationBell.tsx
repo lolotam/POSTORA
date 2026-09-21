@@ -214,7 +214,7 @@ export function NotificationBell() {
         <Button variant="ghost" size="icon" className="relative h-9 w-9">
           <Bell className="h-5 w-5" />
           {totalUnreadCount > 0 && (
-            <span className="absolute -top-0.5 -right-0.5 h-4 w-4 rounded-full bg-destructive text-[10px] font-semibold text-destructive-foreground flex items-center justify-center">
+            <span className="absolute -top-0.5 -end-0.5 h-4 w-4 rounded-full bg-destructive text-[10px] font-semibold text-destructive-foreground flex items-center justify-center">
               {totalUnreadCount > 9 ? "9+" : totalUnreadCount}
             </span>
           )}
@@ -228,7 +228,7 @@ export function NotificationBell() {
                 <Mail className="h-3 w-3" />
                 Emails
                 {unreadEmailCount > 0 && (
-                  <Badge variant="destructive" className="ml-0.5 h-4 px-1 text-[10px]">
+                  <Badge variant="destructive" className="ms-0.5 h-4 px-1 text-[10px]">
                     {unreadEmailCount}
                   </Badge>
                 )}
@@ -239,7 +239,7 @@ export function NotificationBell() {
                 <MessageSquare className="h-3 w-3" />
                 Support
                 {openSupportCount > 0 && (
-                  <Badge variant="destructive" className="ml-0.5 h-4 px-1 text-[10px]">
+                  <Badge variant="destructive" className="ms-0.5 h-4 px-1 text-[10px]">
                     {openSupportCount}
                   </Badge>
                 )}
@@ -248,7 +248,7 @@ export function NotificationBell() {
             <TabsTrigger value="inbox" className="rounded-none data-[state=active]:border-b-2 data-[state=active]:border-primary text-xs px-2">
               Inbox
               {unreadNotifCount > 0 && (
-                <Badge variant="secondary" className="ml-1 h-4 px-1 text-[10px]">
+                <Badge variant="secondary" className="ms-1 h-4 px-1 text-[10px]">
                   {unreadNotifCount}
                 </Badge>
               )}
@@ -256,7 +256,7 @@ export function NotificationBell() {
             <TabsTrigger value="whats-new" className="rounded-none data-[state=active]:border-b-2 data-[state=active]:border-primary text-xs px-2">
               Updates
               {unreadBlogCount > 0 && (
-                <Badge variant="destructive" className="ml-1 h-4 px-1 text-[10px]">
+                <Badge variant="destructive" className="ms-1 h-4 px-1 text-[10px]">
                   {unreadBlogCount}
                 </Badge>
               )}
@@ -266,7 +266,7 @@ export function NotificationBell() {
                 <History className="h-3 w-3" />
                 Activity
                 {unreadActivityCount > 0 && (
-                  <Badge variant="secondary" className="ml-0.5 h-4 px-1 text-[10px]">
+                  <Badge variant="secondary" className="ms-0.5 h-4 px-1 text-[10px]">
                     {unreadActivityCount}
                   </Badge>
                 )}
@@ -276,7 +276,7 @@ export function NotificationBell() {
               <MessageCircle className="h-3 w-3" />
               DMs
               {unreadMessagesCount > 0 && (
-                <Badge variant="destructive" className="ml-0.5 h-4 px-1 text-[10px]">
+                <Badge variant="destructive" className="ms-0.5 h-4 px-1 text-[10px]">
                   {unreadMessagesCount}
                 </Badge>
               )}
@@ -311,7 +311,7 @@ export function NotificationBell() {
                           {!email.is_read && (
                             <span className="mt-1.5 h-2 w-2 rounded-full bg-destructive flex-shrink-0" />
                           )}
-                          <div className={cn("flex-1 min-w-0", email.is_read && "ml-4")}>
+                          <div className={cn("flex-1 min-w-0", email.is_read && "ms-4")}>
                             <p className="font-medium text-sm line-clamp-1">{email.from_email}</p>
                             <p className="text-sm text-foreground line-clamp-1 mt-0.5">
                               {email.subject || "(No subject)"}
@@ -435,7 +435,7 @@ export function NotificationBell() {
                         {!notification.is_read && (
                           <span className="mt-1.5 h-2 w-2 rounded-full bg-primary flex-shrink-0" />
                         )}
-                        <div className={cn("flex-1 min-w-0", notification.is_read && "ml-4")}>
+                        <div className={cn("flex-1 min-w-0", notification.is_read && "ms-4")}>
                           <p className="font-medium text-sm line-clamp-1">{notification.title}</p>
                           <p className="text-xs text-muted-foreground line-clamp-2 mt-0.5">
                             {notification.message}
@@ -492,7 +492,7 @@ export function NotificationBell() {
                           />
                         </div>
                       )}
-                      <div className={cn("flex-1 min-w-0", post.is_read && !post.cover_image_url && "ml-4")}>
+                      <div className={cn("flex-1 min-w-0", post.is_read && !post.cover_image_url && "ms-4")}>
                         <p className="font-medium text-sm line-clamp-2">{post.title}</p>
                         {post.excerpt && (
                           <p className="text-xs text-muted-foreground line-clamp-2 mt-0.5">
@@ -559,7 +559,7 @@ export function NotificationBell() {
                     className="text-xs text-muted-foreground hover:text-destructive"
                     onClick={clearActivityHistory}
                   >
-                    <Trash2 className="h-3 w-3 mr-1" />
+                    <Trash2 className="h-3 w-3 me-1" />
                     Clear
                   </Button>
                 )}
@@ -700,7 +700,7 @@ export function NotificationBell() {
                         className="px-4 py-3 hover:bg-muted/50 cursor-pointer transition-colors"
                         onClick={() => handleMessagingClick(platform)}
                       >
-                        <div className="flex items-start gap-2 ml-4">
+                        <div className="flex items-start gap-2 ms-4">
                           {isFb ? <Facebook className="h-4 w-4 mt-0.5 text-muted-foreground shrink-0" /> : isWa ? <MessageSquare className="h-4 w-4 mt-0.5 text-green-600 shrink-0" /> : <Camera className="h-4 w-4 mt-0.5 text-muted-foreground shrink-0" />}
                           <div className="flex-1 min-w-0">
                             <p className="text-sm line-clamp-1">{conv.participant_name}</p>

@@ -200,7 +200,7 @@ export function AutoReplyManager({ platform }: { platform?: MessengerPlatform } 
                     <div className="flex items-center gap-2 mb-1">
                       <h4 className="font-medium truncate">{rule.name}</h4>
                       <Badge variant={rule.rule_type === "away" ? "secondary" : "outline"} className="shrink-0">
-                        {rule.rule_type === "away" ? <><Clock className="w-3 h-3 mr-1" /> {t("autoReply.away", "Away")}</> : t("autoReply.keyword", "Keyword")}
+                        {rule.rule_type === "away" ? <><Clock className="w-3 h-3 me-1" /> {t("autoReply.away", "Away")}</> : t("autoReply.keyword", "Keyword")}
                       </Badge>
                     </div>
                     <p className="text-sm text-muted-foreground line-clamp-2">{rule.reply_message}</p>

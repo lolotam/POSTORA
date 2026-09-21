@@ -75,7 +75,7 @@ export default function McpIntegration() {
           {title && <span className="text-xs text-muted-foreground/70">• {title}</span>}
         </div>
         <Button variant="ghost" size="sm" onClick={() => copy(code, id)} className="h-7 text-xs">
-          {copied === id ? <Check className="w-3 h-3 mr-1" /> : <Copy className="w-3 h-3 mr-1" />}
+          {copied === id ? <Check className="w-3 h-3 me-1" /> : <Copy className="w-3 h-3 me-1" />}
           {copied === id ? "Copied" : "Copy"}
         </Button>
       </div>
@@ -122,9 +122,9 @@ Accept: application/json, text/event-stream
   return (
     <div className="min-h-screen bg-background relative overflow-hidden">
       <div aria-hidden className="pointer-events-none fixed inset-0 -z-10">
-        <div className="absolute -top-40 left-1/3 h-[480px] w-[480px] rounded-full bg-violet-500/10 blur-3xl" />
-        <div className="absolute top-1/2 -right-40 h-[420px] w-[420px] rounded-full bg-sky-500/10 blur-3xl" />
-        <div className="absolute bottom-0 left-0 h-[360px] w-[360px] rounded-full bg-rose-500/10 blur-3xl" />
+        <div className="absolute -top-40 start-1/3 h-[480px] w-[480px] rounded-full bg-violet-500/10 blur-3xl" />
+        <div className="absolute top-1/2 -end-40 h-[420px] w-[420px] rounded-full bg-sky-500/10 blur-3xl" />
+        <div className="absolute bottom-0 start-0 h-[360px] w-[360px] rounded-full bg-rose-500/10 blur-3xl" />
       </div>
 
       <div className="container mx-auto px-4 py-8 max-w-6xl">
@@ -328,7 +328,7 @@ Accept: application/json, text/event-stream
             {ROADMAP.map((e, i) => (
               <Reveal key={e.name} delay={0.025 * i}>
                 <Card className="relative bg-white/[0.03] ring-1 ring-white/10 backdrop-blur-xl border-0 h-full hover:ring-amber-400/40 transition-all">
-                  <div className="absolute top-2 right-2">
+                  <div className="absolute top-2 end-2">
                     <Badge className="bg-amber-500/15 text-amber-300 border border-amber-400/30 text-[10px]">soon</Badge>
                   </div>
                   <CardHeader className="pb-2">
@@ -356,9 +356,9 @@ Accept: application/json, text/event-stream
               </CardDescription>
             </CardHeader>
             <CardContent className="flex flex-wrap gap-3">
-              <Button asChild><Link to="/docs/mcp-server"><Plug className="w-4 h-4 mr-2" /> Client config</Link></Button>
-              <Button asChild variant="outline"><Link to="/docs/n8n-integration"><Workflow className="w-4 h-4 mr-2" /> REST API</Link></Button>
-              <Button asChild variant="outline"><Link to="/api-keys"><KeyRound className="w-4 h-4 mr-2" /> API keys</Link></Button>
+              <Button asChild><Link to="/docs/mcp-server"><Plug className="w-4 h-4 me-2" /> Client config</Link></Button>
+              <Button asChild variant="outline"><Link to="/docs/n8n-integration"><Workflow className="w-4 h-4 me-2" /> REST API</Link></Button>
+              <Button asChild variant="outline"><Link to="/api-keys"><KeyRound className="w-4 h-4 me-2" /> API keys</Link></Button>
             </CardContent>
           </GradientRingCard>
         </Reveal>

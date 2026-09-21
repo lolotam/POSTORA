@@ -197,12 +197,12 @@ export function ProfileSection({
               >
                 {isUploadingAvatar ? (
                   <>
-                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    <Loader2 className="w-4 h-4 me-2 animate-spin" />
                     {t("profile.picture.uploading", "Uploading...")}
                   </>
                 ) : (
                   <>
-                    <Upload className="w-4 h-4 mr-2" />
+                    <Upload className="w-4 h-4 me-2" />
                     {t("profile.picture.upload", "Upload Photo")}
                   </>
                 )}
@@ -285,7 +285,7 @@ export function ProfileSection({
         >
           {isSaving ? (
             <>
-              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+              <Loader2 className="w-4 h-4 me-2 animate-spin" />
               {t("common:saving", "Saving...")}
             </>
           ) : (

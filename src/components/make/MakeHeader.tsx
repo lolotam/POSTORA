@@ -22,7 +22,7 @@ export function MakeHeader({ isAuthenticated }: MakeHeaderProps) {
             <p className="text-xs text-muted-foreground">Custom App — Postora API</p>
           </div>
         </div>
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ms-auto flex items-center gap-2">
           {isAuthenticated && (
             <Link to="/api-keys">
               <Button size="sm" variant="outline">Get API Key</Button>

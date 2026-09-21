@@ -47,13 +47,13 @@ export const CookieConsent = () => {
   if (!isVisible) return null;
 
   return (
-    <div className="fixed bottom-0 left-0 right-0 z-50 p-4 animate-fade-in">
+    <div className="fixed bottom-0 start-0 end-0 z-50 p-4 animate-fade-in">
       <div className="container mx-auto max-w-4xl">
         <div className="relative bg-card border border-border rounded-2xl shadow-2xl p-6 backdrop-blur-xl">
           {/* Close button */}
           <button
             onClick={handleDismiss}
-            className="absolute top-4 right-4 text-muted-foreground hover:text-foreground transition-colors"
+            className="absolute top-4 end-4 text-muted-foreground hover:text-foreground transition-colors"
             aria-label="Dismiss cookie notice"
           >
             <X className="h-5 w-5" />

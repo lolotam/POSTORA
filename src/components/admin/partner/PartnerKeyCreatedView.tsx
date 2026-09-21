@@ -57,10 +57,10 @@ export function PartnerKeyCreatedView({ created, onDone }: PartnerKeyCreatedView
       </Alert>
       <div className="flex gap-2">
         <Input readOnly value={created.key} className="font-mono text-xs" aria-label="Partner API key" onFocus={(e) => e.currentTarget.select()} />
-        <Button type="button" variant="outline" onClick={copy}><Copy className="mr-1 h-4 w-4" /> Copy</Button>
+        <Button type="button" variant="outline" onClick={copy}><Copy className="me-1 h-4 w-4" /> Copy</Button>
       </div>
       <div className="flex justify-between">
-        <Button type="button" variant="secondary" onClick={download}><Download className="mr-1 h-4 w-4" /> Download credentials JSON</Button>
+        <Button type="button" variant="secondary" onClick={download}><Download className="me-1 h-4 w-4" /> Download credentials JSON</Button>
         <Button type="button" onClick={onDone}>I have saved the key</Button>
       </div>
     </div>

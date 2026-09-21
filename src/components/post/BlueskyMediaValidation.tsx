@@ -140,7 +140,7 @@ export function BlueskyMediaValidation({ files, className }: BlueskyMediaValidat
         )}
         <span className="text-muted-foreground">
           {images.length > 0 && (
-            <span className="inline-flex items-center gap-1 mr-2">
+            <span className="inline-flex items-center gap-1 me-2">
               <Image className="w-3 h-3" />
               {t("bluesky.imagesCount", "{{count}}/{{max}} images", { count: images.length, max: BLUESKY_SPECS.maxImages })}
             </span>

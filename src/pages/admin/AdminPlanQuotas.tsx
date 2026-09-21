@@ -124,14 +124,14 @@ export default function AdminPlanQuotas() {
       case "business":
         return (
           <Badge className="bg-gradient-to-r from-purple-500/20 to-pink-500/20 text-purple-600 border-purple-500/30">
-            <Crown className="w-3 h-3 mr-1" />
+            <Crown className="w-3 h-3 me-1" />
             Business
           </Badge>
         );
       case "pro":
         return (
           <Badge className="bg-gradient-to-r from-blue-500/20 to-cyan-500/20 text-blue-600 border-blue-500/30">
-            <Zap className="w-3 h-3 mr-1" />
+            <Zap className="w-3 h-3 me-1" />
             Pro
           </Badge>
         );

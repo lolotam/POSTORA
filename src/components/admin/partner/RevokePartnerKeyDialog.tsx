@@ -39,7 +39,7 @@ export function RevokePartnerKeyDialog({ keyName, open, onOpenChange, onConfirm,
             onClick={(e) => { e.preventDefault(); onConfirm(trimmed); }}
             className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
           >
-            {isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+            {isPending && <Loader2 className="me-2 h-4 w-4 animate-spin" />}
             Revoke key
           </AlertDialogAction>
         </AlertDialogFooter>

@@ -193,7 +193,7 @@ export function LinkedInSettings({
               variant="outline"
               className="w-full justify-between font-normal"
             >
-              <span className="truncate text-left">{triggerLabel}</span>
+              <span className="truncate text-start">{triggerLabel}</span>
               <ChevronDown className="w-4 h-4 opacity-60 shrink-0" />
             </Button>
           </PopoverTrigger>
@@ -239,7 +239,7 @@ export function LinkedInSettings({
                     <User className="w-3.5 h-3.5" />
                   </AvatarFallback>
                 </Avatar>
-                <div className="flex flex-col text-left">
+                <div className="flex flex-col text-start">
                   <span className="text-sm">{t("linkedin.personalProfile", "Personal Profile")}</span>
                   <span className="text-xs text-muted-foreground truncate max-w-[200px]">
                     {personalName}
@@ -281,7 +281,7 @@ export function LinkedInSettings({
                           {page.name.charAt(0).toUpperCase()}
                         </AvatarFallback>
                       </Avatar>
-                      <div className="flex flex-col text-left">
+                      <div className="flex flex-col text-start">
                         <span className="text-sm truncate max-w-[220px]">{page.name}</span>
                         {page.vanityName && (
                           <span className="text-xs text-muted-foreground truncate max-w-[220px]">

@@ -28,7 +28,7 @@ export function ConnectedAccounts({ accounts, isLoading }: ConnectedAccountsProp
         <Link to="/profiles">
           <Button variant="ghost" size="sm">
             {t("accounts.manage", "Manage")}
-            <ArrowUpRight className="w-4 h-4 ml-1" />
+            <ArrowUpRight className="w-4 h-4 ms-1" />
           </Button>
         </Link>
       </div>
@@ -65,7 +65,7 @@ export function ConnectedAccounts({ accounts, isLoading }: ConnectedAccountsProp
 
         <Link to="/profiles" className="block">
           <Button variant="outline" className="w-full mt-2">
-            <Plus className="w-4 h-4 mr-2" />
+            <Plus className="w-4 h-4 me-2" />
             {t("accounts.connectMore", "Connect More")}
           </Button>
         </Link>

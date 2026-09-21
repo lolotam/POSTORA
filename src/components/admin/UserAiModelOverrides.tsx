@@ -286,12 +286,12 @@ export function UserAiModelOverrides() {
               disabled={isSendingNotifications}
             >
               {isSendingNotifications ? (
-                <Loader2 className="w-4 h-4 mr-1 animate-spin" />
+                <Loader2 className="w-4 h-4 me-1 animate-spin" />
               ) : (
-                <Mail className="w-4 h-4 mr-1" />
+                <Mail className="w-4 h-4 me-1" />
               )}
               {expiringSoonCount > 0 && (
-                <Badge variant="destructive" className="mr-1 px-1 py-0 text-[10px]">
+                <Badge variant="destructive" className="me-1 px-1 py-0 text-[10px]">
                   {expiringSoonCount}
                 </Badge>
               )}
@@ -300,7 +300,7 @@ export function UserAiModelOverrides() {
             <Dialog open={dialogOpen} onOpenChange={(open) => { setDialogOpen(open); if (!open) resetForm(); }}>
               <DialogTrigger asChild>
                 <Button size="sm">
-                  <Plus className="w-4 h-4 mr-2" />
+                  <Plus className="w-4 h-4 me-2" />
                   Add Override
                 </Button>
               </DialogTrigger>
@@ -316,12 +316,12 @@ export function UserAiModelOverrides() {
                 <div className="space-y-2">
                   <label className="text-sm font-medium">Search User</label>
                   <div className="relative">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                    <Search className="absolute start-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                     <Input
                       placeholder="Search by email or name..."
                       value={searchTerm}
                       onChange={(e) => setSearchTerm(e.target.value)}
-                      className="pl-9"
+                      className="ps-9"
                     />
                   </div>
                 </div>
@@ -411,12 +411,12 @@ export function UserAiModelOverrides() {
                   {selectedProvider === "openrouter" && (
                     <div className="space-y-2">
                       <div className="relative">
-                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                        <Search className="absolute start-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                         <Input
                           placeholder="Search models..."
                           value={modelSearch}
                           onChange={(e) => setModelSearch(e.target.value)}
-                          className="pl-9"
+                          className="ps-9"
                         />
                       </div>
                       
@@ -477,9 +477,9 @@ export function UserAiModelOverrides() {
                   className="w-full"
                 >
                   {addOverrideMutation.isPending ? (
-                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    <Loader2 className="w-4 h-4 me-2 animate-spin" />
                   ) : (
-                    <Plus className="w-4 h-4 mr-2" />
+                    <Plus className="w-4 h-4 me-2" />
                   )}
                   Add Override
                 </Button>
@@ -518,7 +518,7 @@ export function UserAiModelOverrides() {
                       </Badge>
                       {isExpired(override.expires_at) && (
                         <Badge variant="destructive" className="text-xs">
-                          <AlertCircle className="w-3 h-3 mr-1" />
+                          <AlertCircle className="w-3 h-3 me-1" />
                           Expired
                         </Badge>
                       )}

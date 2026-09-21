@@ -8,7 +8,7 @@ const Privacy = () => {
       <div className="container max-w-4xl mx-auto px-4 py-12">
         <Link to="/">
           <Button variant="ghost" className="mb-8">
-            <ArrowLeft className="mr-2 h-4 w-4" />
+            <ArrowLeft className="me-2 h-4 w-4" />
             Back to Home
           </Button>
         </Link>
@@ -30,7 +30,7 @@ const Privacy = () => {
           <section>
             <h2 className="text-2xl font-semibold mb-4">2. Information We Collect</h2>
             <p className="text-muted-foreground leading-relaxed mb-4">Postora collects information that you provide directly to us, including:</p>
-            <ul className="list-disc list-inside text-muted-foreground space-y-2 ml-4">
+            <ul className="list-disc list-inside text-muted-foreground space-y-2 ms-4">
               <li>Account information (name, email address, password)</li>
               <li>Social media account credentials and OAuth access tokens</li>
               <li>Content you create, upload, or schedule through Postora</li>
@@ -42,7 +42,7 @@ const Privacy = () => {
             <p className="text-muted-foreground leading-relaxed mb-4">
               When you connect your YouTube account to Postora, we collect the following data through the YouTube API Services:
             </p>
-            <ul className="list-disc list-inside text-muted-foreground space-y-2 ml-4">
+            <ul className="list-disc list-inside text-muted-foreground space-y-2 ms-4">
               <li>YouTube channel information (channel ID, channel name, channel URL)</li>
               <li>YouTube channel profile picture/thumbnail</li>
               <li>OAuth access tokens and refresh tokens for API authentication</li>
@@ -65,7 +65,7 @@ const Privacy = () => {
             <p className="text-muted-foreground leading-relaxed mb-4">
               Postora uses Google OAuth 2.0 as an authentication method, allowing you to sign in or create an account using your Google credentials. When you sign in with Google, we collect the following basic profile information:
             </p>
-            <ul className="list-disc list-inside text-muted-foreground space-y-2 ml-4">
+            <ul className="list-disc list-inside text-muted-foreground space-y-2 ms-4">
               <li>Your name (as set in your Google account)</li>
               <li>Your email address</li>
               <li>Your Google profile picture</li>
@@ -78,7 +78,7 @@ const Privacy = () => {
           <section>
             <h2 className="text-2xl font-semibold mb-4">3. How We Use Your Information</h2>
             <p className="text-muted-foreground leading-relaxed mb-4">Postora uses the information we collect exclusively to provide and improve our services:</p>
-            <ul className="list-disc list-inside text-muted-foreground space-y-2 ml-4">
+            <ul className="list-disc list-inside text-muted-foreground space-y-2 ms-4">
               <li>Provide, maintain, and improve Postora's services</li>
               <li>Process and complete transactions</li>
               <li>Send you technical notices and support messages</li>
@@ -93,7 +93,7 @@ const Privacy = () => {
             <p className="text-muted-foreground leading-relaxed mb-4">
               Specifically for YouTube/Google user data, we use this information solely to:
             </p>
-            <ul className="list-disc list-inside text-muted-foreground space-y-2 ml-4">
+            <ul className="list-disc list-inside text-muted-foreground space-y-2 ms-4">
               <li>Upload and publish videos to your YouTube channel on your behalf</li>
               <li>Display your YouTube channel information within the Postora interface</li>
               <li>Authenticate your identity and maintain your connected account session</li>
@@ -103,7 +103,7 @@ const Privacy = () => {
             <p className="text-muted-foreground leading-relaxed mb-4">
               Postora does NOT use Google user data for any of the following prohibited purposes:
             </p>
-            <ul className="list-disc list-inside text-muted-foreground space-y-2 ml-4">
+            <ul className="list-disc list-inside text-muted-foreground space-y-2 ms-4">
               <li>Targeted, personalized, retargeted, or interest-based advertising</li>
               <li>Selling data to data brokers or third parties</li>
               <li>Providing data to information resellers</li>
@@ -119,7 +119,7 @@ const Privacy = () => {
             <p className="text-muted-foreground leading-relaxed mb-4">
               Postora does not sell, trade, or rent your personal information or Google user data to third parties. We may share your information only in the following limited circumstances:
             </p>
-            <ul className="list-disc list-inside text-muted-foreground space-y-2 ml-4">
+            <ul className="list-disc list-inside text-muted-foreground space-y-2 ms-4">
               <li><strong>With your connected social media platforms:</strong> To post content on your behalf as explicitly requested by you</li>
               <li><strong>Service providers:</strong> With trusted third-party service providers who assist us in operating our platform (e.g., cloud hosting), bound by confidentiality agreements</li>
               <li><strong>Legal requirements:</strong> When required by law, subpoena, or other legal process</li>
@@ -143,7 +143,7 @@ const Privacy = () => {
             <p className="text-muted-foreground leading-relaxed mb-4">
               You can revoke Postora's access to your YouTube account at any time by:
             </p>
-            <ul className="list-disc list-inside text-muted-foreground space-y-2 ml-4">
+            <ul className="list-disc list-inside text-muted-foreground space-y-2 ms-4">
               <li>Disconnecting your YouTube account from Postora in your account settings</li>
               <li>Visiting your{" "}
                 <a 
@@ -180,7 +180,7 @@ const Privacy = () => {
             <p className="text-muted-foreground leading-relaxed mb-4">
               To comply with LinkedIn's Developer Policies, we enforce strict data retention limits:
             </p>
-            <ul className="list-disc list-inside text-muted-foreground space-y-2 ml-4">
+            <ul className="list-disc list-inside text-muted-foreground space-y-2 ms-4">
               <li><strong>LinkedIn Member Profile Data:</strong> Any cached profile data is automatically permanently deleted from our servers within 24 hours of receipt.</li>
               <li><strong>LinkedIn Member Activity Data:</strong> Any fetched activity data (such as comments or likes on your posts) is dynamically displayed and permanently deleted from our servers within 48 hours.</li>
             </ul>
@@ -192,7 +192,7 @@ const Privacy = () => {
             <p className="text-muted-foreground leading-relaxed mb-4">
               WALEED PROLIFE LLC explicitly states that:
             </p>
-            <ul className="list-disc list-inside text-muted-foreground space-y-2 ml-4">
+            <ul className="list-disc list-inside text-muted-foreground space-y-2 ms-4">
               <li>We do not and will never sell, rent, or transfer LinkedIn data to any third-party data brokers, ad networks, or CRMs.</li>
               <li>We do not use LinkedIn data for lead generation, surveillance, or any external tracking.</li>
               <li>We do not allow the exporting of user activity data (e.g., exporting a list of commenters) outside the Postora platform.</li>
@@ -209,7 +209,7 @@ const Privacy = () => {
             <p className="text-muted-foreground leading-relaxed mb-4">
               Postora implements appropriate technical and organizational security measures to protect your personal data against unauthorized access, alteration, disclosure, or destruction:
             </p>
-            <ul className="list-disc list-inside text-muted-foreground space-y-2 ml-4">
+            <ul className="list-disc list-inside text-muted-foreground space-y-2 ms-4">
               <li>All data is transmitted using TLS/SSL encryption</li>
               <li>Access tokens and sensitive credentials are encrypted at rest</li>
               <li>We use industry-standard security practices and regularly review our security procedures</li>
@@ -223,7 +223,7 @@ const Privacy = () => {
             <p className="text-muted-foreground leading-relaxed mb-4">
               Postora retains your personal data for as long as your account is active or as needed to provide you services. Specifically:
             </p>
-            <ul className="list-disc list-inside text-muted-foreground space-y-2 ml-4">
+            <ul className="list-disc list-inside text-muted-foreground space-y-2 ms-4">
               <li>Account information is retained while your account remains active</li>
               <li>Social media access tokens are retained until you disconnect the account or tokens expire</li>
               <li>Post history and scheduled content are retained until you delete them or close your account</li>
@@ -232,7 +232,7 @@ const Privacy = () => {
             <p className="text-muted-foreground leading-relaxed mt-4 mb-4">
               <strong>Account Deletion:</strong> You may request deletion of your account and all associated data at any time by:
             </p>
-            <ul className="list-disc list-inside text-muted-foreground space-y-2 ml-4">
+            <ul className="list-disc list-inside text-muted-foreground space-y-2 ms-4">
               <li>Using the account deletion option in your Postora account settings</li>
               <li>Contacting our support team at privacy@postora.cloud</li>
             </ul>
@@ -246,7 +246,7 @@ const Privacy = () => {
             <p className="text-muted-foreground leading-relaxed mb-4">
               Postora integrates with third-party social media platforms. Each platform has its own privacy policy and terms of service. We encourage you to review the privacy policies of any third-party services you connect to Postora:
             </p>
-            <ul className="list-disc list-inside text-muted-foreground space-y-2 ml-4">
+            <ul className="list-disc list-inside text-muted-foreground space-y-2 ms-4">
               <li>
                 <a href="https://policies.google.com/privacy" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
                   Google Privacy Policy
@@ -278,7 +278,7 @@ const Privacy = () => {
           <section>
             <h2 className="text-2xl font-semibold mb-4">9. Your Rights</h2>
             <p className="text-muted-foreground leading-relaxed mb-4">You have the right to:</p>
-            <ul className="list-disc list-inside text-muted-foreground space-y-2 ml-4">
+            <ul className="list-disc list-inside text-muted-foreground space-y-2 ms-4">
               <li>Access and receive a copy of your personal data</li>
               <li>Rectify inaccurate personal data</li>
               <li>Request deletion of your personal data</li>

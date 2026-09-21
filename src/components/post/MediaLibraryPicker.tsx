@@ -432,12 +432,12 @@ export function MediaLibraryPicker({
         <div className="flex flex-wrap items-center gap-2 pb-3 border-b">
           {/* Search */}
           <div className="relative flex-1 min-w-[200px]">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+            <Search className="absolute start-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
             <Input
               placeholder={t("mediaLibrary.searchPlaceholder", "Search files...")}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-9 h-9"
+              className="ps-9 h-9"
             />
           </div>
 
@@ -517,22 +517,22 @@ export function MediaLibraryPicker({
                   <DropdownMenuItem key={platform} onClick={() => setSelectedPlatform(platform)}>
                     {platform === "_local" ? (
                       <>
-                        <HardDrive className="w-4 h-4 mr-2" />
+                        <HardDrive className="w-4 h-4 me-2" />
                         {t("mediaLibrary.localUploads", "Local Uploads")}
                       </>
                     ) : platform === "_cloudinary" ? (
                       <>
-                        <Upload className="w-4 h-4 mr-2" />
+                        <Upload className="w-4 h-4 me-2" />
                         {t("mediaLibrary.cloudinaryFiles", "Cloudinary Files")}
                       </>
                     ) : platform === "_processed" ? (
                       <>
-                        <Wand2 className="w-4 h-4 mr-2" />
+                        <Wand2 className="w-4 h-4 me-2" />
                         {t("mediaLibrary.processedFiles", "Processed Files")}
                       </>
                     ) : (
                       <>
-                        <PlatformIcon platform={platform as any} size="sm" className="mr-2" />
+                        <PlatformIcon platform={platform as any} size="sm" className="me-2" />
                         {platform.charAt(0).toUpperCase() + platform.slice(1)}
                       </>
                     )}
@@ -604,11 +604,11 @@ export function MediaLibraryPicker({
                   {t("mediaLibrary.allFiles", "All Files")}
                 </DropdownMenuItem>
                 <DropdownMenuItem onClick={() => setFilterType("image")}>
-                  <Image className="w-4 h-4 mr-2" />
+                  <Image className="w-4 h-4 me-2" />
                   {t("mediaLibrary.imagesOnly", "Images Only")}
                 </DropdownMenuItem>
                 <DropdownMenuItem onClick={() => setFilterType("video")}>
-                  <Video className="w-4 h-4 mr-2" />
+                  <Video className="w-4 h-4 me-2" />
                   {t("mediaLibrary.videosOnly", "Videos Only")}
                 </DropdownMenuItem>
               </DropdownMenuContent>
@@ -630,13 +630,13 @@ export function MediaLibraryPicker({
               <DropdownMenuItem onClick={() => setAspectRatioFilter("all")}>{t("mediaLibrary.allRatios", "All Ratios")}</DropdownMenuItem>
               <DropdownMenuSeparator />
               <DropdownMenuItem onClick={() => setAspectRatioFilter("square")}>
-                <Square className="w-4 h-4 mr-2" />{t("mediaLibrary.ratioSquare11", "Square (1:1)")}
+                <Square className="w-4 h-4 me-2" />{t("mediaLibrary.ratioSquare11", "Square (1:1)")}
               </DropdownMenuItem>
               <DropdownMenuItem onClick={() => setAspectRatioFilter("portrait")}>
-                <RectangleVertical className="w-4 h-4 mr-2" />{t("mediaLibrary.ratioPortrait", "Portrait")}
+                <RectangleVertical className="w-4 h-4 me-2" />{t("mediaLibrary.ratioPortrait", "Portrait")}
               </DropdownMenuItem>
               <DropdownMenuItem onClick={() => setAspectRatioFilter("landscape")}>
-                <RectangleHorizontal className="w-4 h-4 mr-2" />{t("mediaLibrary.ratioLandscape", "Landscape")}
+                <RectangleHorizontal className="w-4 h-4 me-2" />{t("mediaLibrary.ratioLandscape", "Landscape")}
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -719,7 +719,7 @@ export function MediaLibraryPicker({
               <Badge variant="secondary" className="gap-1 text-xs">
                 <Search className="w-3 h-3" />
                 "{searchQuery}"
-                <button onClick={() => setSearchQuery("")} className="ml-1 hover:text-destructive">
+                <button onClick={() => setSearchQuery("")} className="ms-1 hover:text-destructive">
                   <X className="w-3 h-3" />
                 </button>
               </Badge>
@@ -728,7 +728,7 @@ export function MediaLibraryPicker({
               <Badge variant="secondary" className="gap-1 text-xs">
                 <Calendar className="w-3 h-3" />
                 {format(selectedDate, "MMM d, yyyy")}
-                <button onClick={() => setSelectedDate(undefined)} className="ml-1 hover:text-destructive">
+                <button onClick={() => setSelectedDate(undefined)} className="ms-1 hover:text-destructive">
                   <X className="w-3 h-3" />
                 </button>
               </Badge>
@@ -742,7 +742,7 @@ export function MediaLibraryPicker({
                 {selectedPlatform === "_local" ? t("mediaLibrary.sourceLocal", "Local") : 
                  selectedPlatform === "_cloudinary" ? t("mediaLibrary.sourceCloudinary", "Cloudinary") :
                  selectedPlatform === "_processed" ? t("mediaLibrary.sourceProcessed", "Processed") : selectedPlatform}
-                <button onClick={() => setSelectedPlatform(null)} className="ml-1 hover:text-destructive">
+                <button onClick={() => setSelectedPlatform(null)} className="ms-1 hover:text-destructive">
                   <X className="w-3 h-3" />
                 </button>
               </Badge>
@@ -751,7 +751,7 @@ export function MediaLibraryPicker({
               <Badge variant="secondary" className="gap-1 text-xs">
                 <User className="w-3 h-3" />
                 {getAccountInfo(selectedAccountId)?.platform_username || t("mediaLibrary.accountFilter", "Account")}
-                <button onClick={() => setSelectedAccountId(null)} className="ml-1 hover:text-destructive">
+                <button onClick={() => setSelectedAccountId(null)} className="ms-1 hover:text-destructive">
                   <X className="w-3 h-3" />
                 </button>
               </Badge>
@@ -760,7 +760,7 @@ export function MediaLibraryPicker({
               <Badge variant="secondary" className="gap-1 text-xs">
                 {filterType === "image" ? <Image className="w-3 h-3" /> : <Video className="w-3 h-3" />}
                 {filterType}s
-                <button onClick={() => setFilterType("all")} className="ml-1 hover:text-destructive">
+                <button onClick={() => setFilterType("all")} className="ms-1 hover:text-destructive">
                   <X className="w-3 h-3" />
                 </button>
               </Badge>
@@ -773,7 +773,7 @@ export function MediaLibraryPicker({
                 {aspectRatioFilter === "square" ? t("mediaLibrary.ratioSquare", "Square") :
                  aspectRatioFilter === "portrait" ? t("mediaLibrary.ratioPortrait", "Portrait") :
                  t("mediaLibrary.ratioLandscape", "Landscape")}
-                <button onClick={() => setAspectRatioFilter("all")} className="ml-1 hover:text-destructive">
+                <button onClick={() => setAspectRatioFilter("all")} className="ms-1 hover:text-destructive">
                   <X className="w-3 h-3" />
                 </button>
               </Badge>
@@ -782,7 +782,7 @@ export function MediaLibraryPicker({
               <Badge variant="secondary" className="gap-1 text-xs">
                 <Filter className="w-3 h-3" />
                 {t("mediaLibrary.itemsCount", "{{count}} items", { count: itemsPerPage })}
-                <button onClick={() => setItemsPerPage(50)} className="ml-1 hover:text-destructive">
+                <button onClick={() => setItemsPerPage(50)} className="ms-1 hover:text-destructive">
                   <X className="w-3 h-3" />
                 </button>
               </Badge>
@@ -804,12 +804,12 @@ export function MediaLibraryPicker({
                 className="h-6 px-2"
                 onClick={() => navigateToFolder(crumb.path)}
               >
-                {i === 0 ? <Home className="w-3 h-3 mr-1" /> : null}
+                {i === 0 ? <Home className="w-3 h-3 me-1" /> : null}
                 {crumb.name}
               </Button>
             </div>
           ))}
-          <span className="ml-auto text-xs text-muted-foreground">
+          <span className="ms-auto text-xs text-muted-foreground">
             {filteredFiles.length === totalFilteredCount 
               ? t("mediaLibrary.totalFilesCount", "{{count}} files", { count: totalFilteredCount })
               : t("mediaLibrary.showingFilesCount", "Showing {{current}} of {{total}} files", { current: filteredFiles.length, total: totalFilteredCount })
@@ -898,7 +898,7 @@ export function MediaLibraryPicker({
                         {/* Selection indicator */}
                         <div
                           className={cn(
-                            "absolute top-1 right-1 w-5 h-5 rounded-full border-2 flex items-center justify-center transition-colors",
+                            "absolute top-1 end-1 w-5 h-5 rounded-full border-2 flex items-center justify-center transition-colors",
                             isSelected
                               ? "bg-primary border-primary text-primary-foreground"
                               : "bg-background/80 border-muted-foreground/50"
@@ -908,7 +908,7 @@ export function MediaLibraryPicker({
                         </div>
 
                         {/* Type & ratio badges */}
-                        <div className="absolute bottom-1 left-1 flex gap-0.5">
+                        <div className="absolute bottom-1 start-1 flex gap-0.5">
                           <Badge variant="secondary" className="text-[10px] px-1 py-0">
                             {file.file_type === "video" ? t("mediaLibrary.badgeVideo", "Video") : t("mediaLibrary.badgeImage", "Image")}
                           </Badge>
@@ -932,7 +932,7 @@ export function MediaLibraryPicker({
                         onClick={() => !isDisabled && toggleSelection(file.id)}
                         disabled={isDisabled}
                         className={cn(
-                          "w-full flex items-center gap-3 p-2 rounded-lg border transition-all text-left",
+                          "w-full flex items-center gap-3 p-2 rounded-lg border transition-all text-start",
                           isSelected
                             ? "border-primary bg-primary/5"
                             : "border-border hover:border-primary/50",
@@ -965,7 +965,7 @@ export function MediaLibraryPicker({
                           <p className="text-sm font-medium truncate">{fileName}</p>
                           <p className="text-xs text-muted-foreground flex items-center gap-1">
                             {file.file_type} • {file.created_at && format(new Date(file.created_at), "MMM d, yyyy")}
-                            {(() => { const label = getAspectRatioLabel(file.metadata?.width as number, file.metadata?.height as number); return label ? <Badge variant="secondary" className="text-[10px] px-1 py-0 ml-1">{label}</Badge> : null; })()}
+                            {(() => { const label = getAspectRatioLabel(file.metadata?.width as number, file.metadata?.height as number); return label ? <Badge variant="secondary" className="text-[10px] px-1 py-0 ms-1">{label}</Badge> : null; })()}
                           </p>
                         </div>
 
@@ -991,7 +991,7 @@ export function MediaLibraryPicker({
 
         {/* Footer */}
         <DialogFooter className="border-t pt-4">
-          <div className="flex items-center gap-2 mr-auto">
+          <div className="flex items-center gap-2 me-auto">
             <Badge variant="outline">
               {t("mediaLibrary.selectedCount", "{{count}} selected", { count: selectedIds.size })}
             </Badge>

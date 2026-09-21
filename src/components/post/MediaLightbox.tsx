@@ -90,7 +90,7 @@ export function MediaLightbox({
           <Button
             variant="ghost"
             size="icon"
-            className="absolute top-2 right-2 z-50 text-white hover:bg-white/20"
+            className="absolute top-2 end-2 z-50 text-white hover:bg-white/20"
             onClick={handleClose}
           >
             <X className="w-5 h-5" />
@@ -98,7 +98,7 @@ export function MediaLightbox({
 
           {/* Zoom controls - only for images */}
           {isImage && (
-            <div className="absolute top-2 left-1/2 -translate-x-1/2 z-50 flex items-center gap-1 bg-black/60 rounded-full px-2 py-1">
+            <div className="absolute top-2 start-1/2 -translate-x-1/2 z-50 flex items-center gap-1 bg-black/60 rounded-full px-2 py-1">
               <Button
                 variant="ghost"
                 size="icon"
@@ -138,7 +138,7 @@ export function MediaLightbox({
             <Button
               variant="ghost"
               size="icon"
-              className="absolute left-2 z-50 text-white hover:bg-white/20"
+              className="absolute start-2 z-50 text-white hover:bg-white/20"
               onClick={handlePrevious}
             >
               <ChevronLeft className="w-8 h-8" />
@@ -186,7 +186,7 @@ export function MediaLightbox({
             <Button
               variant="ghost"
               size="icon"
-              className="absolute right-2 z-50 text-white hover:bg-white/20"
+              className="absolute end-2 z-50 text-white hover:bg-white/20"
               onClick={handleNext}
             >
               <ChevronRight className="w-8 h-8" />
@@ -194,7 +194,7 @@ export function MediaLightbox({
           )}
 
           {/* Counter and keyboard hints */}
-          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2">
+          <div className="absolute bottom-4 start-1/2 -translate-x-1/2 flex flex-col items-center gap-2">
             {files.length > 1 && (
               <div className="bg-black/60 text-white text-sm px-3 py-1 rounded-full">
                 {currentIndex + 1} / {files.length}

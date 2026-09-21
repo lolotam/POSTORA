@@ -254,7 +254,7 @@ export function ScheduledEmailsManager() {
           </p>
         </div>
         <Button variant="outline" size="sm" onClick={fetchScheduledEmails}>
-          <RefreshCw className="w-4 h-4 mr-2" />
+          <RefreshCw className="w-4 h-4 me-2" />
           Refresh
         </Button>
       </div>

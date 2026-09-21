@@ -100,15 +100,15 @@ export default function Landing() {
     <div className="min-h-screen bg-background relative overflow-hidden scroll-smooth">
       {/* Background Effects */}
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute top-0 left-1/4 w-96 h-96 bg-primary/20 rounded-full blur-[128px]" />
-        <div className="absolute top-1/3 right-1/4 w-80 h-80 bg-accent/20 rounded-full blur-[128px]" />
-        <div className="absolute bottom-0 left-1/2 -translate-x-1/2 w-full h-1/2 bg-gradient-to-t from-primary/5 to-transparent" />
+        <div className="absolute top-0 start-1/4 w-96 h-96 bg-primary/20 rounded-full blur-[128px]" />
+        <div className="absolute top-1/3 end-1/4 w-80 h-80 bg-accent/20 rounded-full blur-[128px]" />
+        <div className="absolute bottom-0 start-1/2 -translate-x-1/2 w-full h-1/2 bg-gradient-to-t from-primary/5 to-transparent" />
         <FloatingParticles />
       </div>
 
       {/* Sticky Header */}
       <header
-        className={`fixed top-0 left-0 right-0 z-50 border-b transition-all duration-300 ${isScrolled
+        className={`fixed top-0 start-0 end-0 z-50 border-b transition-all duration-300 ${isScrolled
           ? "border-border bg-background/95 backdrop-blur-xl shadow-lg h-14"
           : "border-border/50 bg-background/50 backdrop-blur-xl h-16"
           }`}
@@ -147,13 +147,13 @@ export default function Landing() {
               <DropdownMenuContent align="end">
                 <DropdownMenuItem asChild>
                   <Link to="/auth" className="cursor-pointer">
-                    <Sparkles className="w-4 h-4 mr-2" />
+                    <Sparkles className="w-4 h-4 me-2" />
                     Postora
                   </Link>
                 </DropdownMenuItem>
                 <DropdownMenuItem asChild>
                   <a href="https://marketero.postora.cloud" target="_blank" rel="noopener noreferrer" className="cursor-pointer">
-                    <ExternalLink className="w-4 h-4 mr-2" />
+                    <ExternalLink className="w-4 h-4 me-2" />
                     Marketero
                   </a>
                 </DropdownMenuItem>
@@ -245,8 +245,8 @@ export default function Landing() {
               style={{ animationDelay: "0.4s" }}
             >
               {/* Gradient masks for smooth edges */}
-              <div className="absolute left-0 top-0 bottom-0 w-20 bg-gradient-to-r from-background to-transparent z-10 pointer-events-none" />
-              <div className="absolute right-0 top-0 bottom-0 w-20 bg-gradient-to-l from-background to-transparent z-10 pointer-events-none" />
+              <div className="absolute start-0 top-0 bottom-0 w-20 bg-gradient-to-r from-background to-transparent z-10 pointer-events-none" />
+              <div className="absolute end-0 top-0 bottom-0 w-20 bg-gradient-to-l from-background to-transparent z-10 pointer-events-none" />
 
               <div className="flex gap-8 animate-scroll-left w-max">
                 {duplicatedPlatforms.map((platform, index) => (

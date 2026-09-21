@@ -134,7 +134,7 @@ export function AccountSelectionSidebar({
                   checked={platformFilter.includes(platform)}
                   onCheckedChange={() => onPlatformFilterToggle(platform)}
                 >
-                  <PlatformIcon platform={platform} size="sm" className="mr-2" />
+                  <PlatformIcon platform={platform} size="sm" className="me-2" />
                   {getPlatformName(platform)}
                 </DropdownMenuCheckboxItem>
               ))}
@@ -165,7 +165,7 @@ export function AccountSelectionSidebar({
             <p className="text-xs text-muted-foreground max-w-xs">{t("accountSidebar.noAccountsDesc", "Connect your social media accounts to start publishing.")}</p>
             <Button size="sm" asChild className="bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500 text-white border-0 shadow-md shadow-emerald-500/30 hover:shadow-lg hover:shadow-emerald-500/50 hover:opacity-95 transition-all">
               <a href="/profiles">
-                <Plus className="w-4 h-4 mr-2" />
+                <Plus className="w-4 h-4 me-2" />
                 {t("accountSidebar.connectAccounts", "Connect Accounts")}
               </a>
             </Button>
@@ -205,7 +205,7 @@ export function AccountSelectionSidebar({
 
                 <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={(e) => handleDragEnd(e, platform as Platform)}>
                   <SortableContext items={accounts.map(acc => acc.id)} strategy={verticalListSortingStrategy}>
-                    <div className="space-y-1.5 pl-1">
+                    <div className="space-y-1.5 ps-1">
                       {accounts.map(({ id, platform: accPlatform, maxChars, username, avatarUrl, tokenExpired }) => (
                         <SortableAccountItem
                           key={id}
@@ -247,7 +247,7 @@ export function AccountSelectionSidebar({
                     <div key={platform} className="flex items-center gap-2 py-1.5 px-2 rounded-lg bg-muted/30 backdrop-blur-sm opacity-70">
                       <PlatformIcon platform={platform} size="sm" />
                       <span className="text-xs">{getPlatformName(platform)}</span>
-                      <Badge variant="outline" className="text-xs ml-auto">
+                      <Badge variant="outline" className="text-xs ms-auto">
                         {reason}
                       </Badge>
                     </div>

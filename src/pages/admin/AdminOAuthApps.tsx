@@ -247,7 +247,7 @@ export default function AdminOAuthApps() {
           <Dialog open={showAddApp} onOpenChange={setShowAddApp}>
             <DialogTrigger asChild>
               <Button>
-                <Plus className="w-4 h-4 mr-2" />
+                <Plus className="w-4 h-4 me-2" />
                 Add App
               </Button>
             </DialogTrigger>
@@ -290,7 +290,7 @@ export default function AdminOAuthApps() {
                   onClick={() => addAppMutation.mutate(newApp)}
                   disabled={!newApp.name || !newApp.client_id || addAppMutation.isPending}
                 >
-                  {addAppMutation.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                  {addAppMutation.isPending && <Loader2 className="w-4 h-4 me-2 animate-spin" />}
                   Register App
                 </Button>
               </DialogFooter>
@@ -361,7 +361,7 @@ export default function AdminOAuthApps() {
                           className="text-destructive hover:text-destructive"
                           onClick={() => setRejectingId(req.id)}
                         >
-                          <XCircle className="w-3 h-3 mr-1" />
+                          <XCircle className="w-3 h-3 me-1" />
                           Reject
                         </Button>
                         <Button
@@ -369,7 +369,7 @@ export default function AdminOAuthApps() {
                           onClick={() => approveRequestMutation.mutate(req)}
                           disabled={approveRequestMutation.isPending}
                         >
-                          <CheckCircle className="w-3 h-3 mr-1" />
+                          <CheckCircle className="w-3 h-3 me-1" />
                           Approve
                         </Button>
                       </>
@@ -444,7 +444,7 @@ export default function AdminOAuthApps() {
                         size="sm"
                         onClick={() => copyToClipboard(app.client_id)}
                       >
-                        <Copy className="w-3 h-3 mr-1" />
+                        <Copy className="w-3 h-3 me-1" />
                         Copy
                       </Button>
                     </div>
@@ -504,7 +504,7 @@ export default function AdminOAuthApps() {
                             })
                           }
                         >
-                          <Plus className="w-3 h-3 mr-1" />
+                          <Plus className="w-3 h-3 me-1" />
                           Add
                         </Button>
                       </div>

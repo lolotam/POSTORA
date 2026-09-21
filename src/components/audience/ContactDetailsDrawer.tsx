@@ -81,7 +81,7 @@ export function ContactDetailsDrawer({ contact, onClose }: { contact: SocialCont
               {draft.tags.map((tag) => (
                 <Badge key={tag} variant="outline">
                   {tag}
-                  <button type="button" aria-label={`Remove tag ${tag}`} className="ml-1" onClick={() => setDraft({ ...draft, tags: draft.tags.filter((t) => t !== tag) })}>×</button>
+                  <button type="button" aria-label={`Remove tag ${tag}`} className="ms-1" onClick={() => setDraft({ ...draft, tags: draft.tags.filter((t) => t !== tag) })}>×</button>
                 </Badge>
               ))}
             </div>

@@ -47,29 +47,29 @@ export function MediaSelectionBar({
             Deselect All
           </Button>
           <Button size="sm" onClick={onSendToPost}>
-            <Send className="w-4 h-4 mr-2" />
+            <Send className="w-4 h-4 me-2" />
             Send to Post
           </Button>
           <Button variant="outline" size="sm" onClick={onBatchRename}>
-            <Pencil className="w-4 h-4 mr-2" />
+            <Pencil className="w-4 h-4 me-2" />
             Batch Rename
           </Button>
           {allSelectedAreImages && (
             <Button variant="outline" size="sm" onClick={onBatchImageTools}>
-              <Wand2 className="w-4 h-4 mr-2" />
+              <Wand2 className="w-4 h-4 me-2" />
               Image Tools
             </Button>
           )}
           <Button variant="outline" size="sm" onClick={onMove}>
-            <Move className="w-4 h-4 mr-2" />
+            <Move className="w-4 h-4 me-2" />
             Move
           </Button>
           <Button variant="secondary" size="sm" onClick={onDownload}>
-            <Download className="w-4 h-4 mr-2" />
+            <Download className="w-4 h-4 me-2" />
             Download
           </Button>
           <Button variant="destructive" size="sm" onClick={onDelete}>
-            <Trash2 className="w-4 h-4 mr-2" />
+            <Trash2 className="w-4 h-4 me-2" />
             Delete
           </Button>
         </>

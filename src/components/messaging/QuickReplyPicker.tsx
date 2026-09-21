@@ -48,13 +48,13 @@ export function QuickReplyPicker({ onSelect }: QuickReplyPickerProps) {
       <PopoverContent className="w-72 p-0" align="start" side="top">
         <div className="p-2 border-b">
           <div className="relative">
-            <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
+            <Search className="absolute start-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
             <Input
               ref={inputRef}
               placeholder={t("quickReply.search", "Search quick replies...")}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="pl-8 h-8 text-sm"
+              className="ps-8 h-8 text-sm"
             />
           </div>
         </div>
@@ -67,7 +67,7 @@ export function QuickReplyPicker({ onSelect }: QuickReplyPickerProps) {
                 <button
                   key={r.id}
                   onClick={() => handleSelect(r.message)}
-                  className="w-full text-left px-3 py-2 rounded-md hover:bg-secondary/80 transition-colors"
+                  className="w-full text-start px-3 py-2 rounded-md hover:bg-secondary/80 transition-colors"
                 >
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-medium truncate">{r.title}</span>
@@ -101,13 +101,13 @@ export function SlashCommandSuggestions({ query, onSelect, visible }: SlashComma
   if (filtered.length === 0) return null;
 
   return (
-    <div className="absolute bottom-full left-0 right-0 mb-1 bg-popover border rounded-md shadow-md z-50 max-h-40 overflow-y-auto">
+    <div className="absolute bottom-full start-0 end-0 mb-1 bg-popover border rounded-md shadow-md z-50 max-h-40 overflow-y-auto">
       <div className="p-1">
         {filtered.map((r) => (
           <button
             key={r.id}
             onClick={() => onSelect(r.message)}
-            className="w-full text-left px-3 py-2 rounded-md hover:bg-secondary/80 transition-colors"
+            className="w-full text-start px-3 py-2 rounded-md hover:bg-secondary/80 transition-colors"
           >
             <div className="flex items-center gap-2">
               <Badge variant="secondary" className="text-[10px] font-mono">{r.shortcut}</Badge>

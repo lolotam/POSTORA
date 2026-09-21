@@ -24,13 +24,13 @@ export function DocsSidebar({ navItems, activeSection, onSectionClick }: DocsSid
                 <item.icon className="w-3.5 h-3.5" />
               </span>
               <span className="font-medium">{item.label}</span>
-              <ChevronRight className="w-3 h-3 ml-auto opacity-50 group-hover/nav:opacity-100 group-hover/nav:translate-x-0.5 transition-all" />
+              <ChevronRight className="w-3 h-3 ms-auto opacity-50 group-hover/nav:opacity-100 group-hover/nav:translate-x-0.5 transition-all" />
             </Link>
             {item.subItems && (
-              <div className="ml-7 mt-1 space-y-0.5 border-l border-gradient-violet pl-3 relative">
+              <div className="ms-7 mt-1 space-y-0.5 border-l border-gradient-violet ps-3 relative">
                 <span
                   aria-hidden
-                  className="absolute left-0 top-0 bottom-0 w-px bg-gradient-to-b from-violet-500/40 via-sky-500/30 to-transparent"
+                  className="absolute start-0 top-0 bottom-0 w-px bg-gradient-to-b from-violet-500/40 via-sky-500/30 to-transparent"
                 />
                 {item.subItems.map((sub) => (
                   <Link

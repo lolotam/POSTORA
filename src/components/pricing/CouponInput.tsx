@@ -29,12 +29,12 @@ export function CouponInput({ couponCode, setCouponCode }: CouponInputProps) {
   return (
     <div className="flex items-center gap-2">
       <div className="relative">
-        <Tag className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+        <Tag className="absolute start-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
         <Input
           placeholder="Enter promo code"
           value={couponCode}
           onChange={(e) => setCouponCode(e.target.value.toUpperCase())}
-          className="pl-9 w-48 uppercase"
+          className="ps-9 w-48 uppercase"
         />
       </div>
       <Button variant="ghost" size="icon" onClick={() => { setShowInput(false); setCouponCode(""); }}>

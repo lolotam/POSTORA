@@ -523,7 +523,7 @@ export function ContactImportDialog({ open, onOpenChange }: ContactImportDialogP
 
             {failRows.length > 0 && (
               <Button variant="outline" onClick={downloadErrors} className="w-full">
-                <Download className="h-4 w-4 mr-2" />
+                <Download className="h-4 w-4 me-2" />
                 {t("import.downloadErrors", "Download error report ({{count}} rows)", { count: failRows.length })}
               </Button>
             )}

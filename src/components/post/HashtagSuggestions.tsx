@@ -143,12 +143,12 @@ export function HashtagSuggestions({ caption, platform, onAddHashtags }: Hashtag
         >
           {isLoading ? (
             <>
-              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+              <Loader2 className="w-4 h-4 me-2 animate-spin" />
               {t("hashtags.generating", "Generating...")}
             </>
           ) : (
             <>
-              <Hash className="w-4 h-4 mr-2" />
+              <Hash className="w-4 h-4 me-2" />
               {t("hashtags.suggest", "Suggest Hashtags")}
             </>
           )}
@@ -162,9 +162,9 @@ export function HashtagSuggestions({ caption, platform, onAddHashtags }: Hashtag
               onClick={handleCopyAll}
             >
               {copiedAll ? (
-                <Check className="w-4 h-4 mr-1" />
+                <Check className="w-4 h-4 me-1" />
               ) : (
-                <Copy className="w-4 h-4 mr-1" />
+                <Copy className="w-4 h-4 me-1" />
               )}
               {copiedAll ? t("hashtags.copied", "Copied") : t("hashtags.copyAll", "Copy All")}
             </Button>

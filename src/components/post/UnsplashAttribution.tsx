@@ -29,7 +29,7 @@ export function UnsplashAttribution({
     return (
       <div
         className={cn(
-          "absolute bottom-0 left-0 right-0 p-2 bg-gradient-to-t from-black/70 to-transparent",
+          "absolute bottom-0 start-0 end-0 p-2 bg-gradient-to-t from-black/70 to-transparent",
           className
         )}
       >

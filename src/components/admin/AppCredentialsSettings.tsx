@@ -477,7 +477,7 @@ export function AppCredentialsSettings() {
                               <div className="relative">
                                 <Input
                                   type={showSecret[platform.key] ? "text" : "password"}
-                                  className="h-7 text-xs font-mono pr-8"
+                                  className="h-7 text-xs font-mono pe-8"
                                   placeholder="Leave empty to keep current"
                                   value={editValues.clientSecret}
                                   onChange={(e) => setEditValues((prev) => ({ ...prev, clientSecret: e.target.value }))}
@@ -485,7 +485,7 @@ export function AppCredentialsSettings() {
                                 <Button
                                   variant="ghost"
                                   size="sm"
-                                  className="absolute right-0 top-0 h-7 w-7 p-0"
+                                  className="absolute end-0 top-0 h-7 w-7 p-0"
                                   onClick={() => setShowSecret((prev) => ({ ...prev, [platform.key]: !prev[platform.key] }))}
                                 >
                                   {showSecret[platform.key] ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}

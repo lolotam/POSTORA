@@ -759,7 +759,7 @@ export function YouTubeSettings({
                         e.stopPropagation();
                         onDownloadThumbnail(thumb, `video-frame-${idx + 1}.jpg`);
                       }}
-                      className="absolute bottom-1 right-1 p-1.5 bg-black/70 hover:bg-black/90 rounded-md opacity-0 group-hover:opacity-100 transition-opacity"
+                      className="absolute bottom-1 end-1 p-1.5 bg-black/70 hover:bg-black/90 rounded-md opacity-0 group-hover:opacity-100 transition-opacity"
                       title={t("youtube.downloadThumbnail", "Download thumbnail")}
                     >
                       <Download className="w-3 h-3 text-white" />
@@ -768,7 +768,7 @@ export function YouTubeSettings({
                 ))
               ) : (
                 <div className="flex-1 flex items-center justify-center h-24 rounded-lg border border-dashed text-muted-foreground text-sm">
-                  <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                  <Loader2 className="w-4 h-4 animate-spin me-2" />
                   {t("youtube.generatingThumbnails", "Generating thumbnails...")}
                 </div>
               )}
@@ -806,7 +806,7 @@ export function YouTubeSettings({
                           e.stopPropagation();
                           onDownloadThumbnail(thumb, `ai-thumbnail-${idx + 1}.jpg`);
                         }}
-                        className="absolute bottom-1 right-1 p-1.5 bg-black/70 hover:bg-black/90 rounded-md opacity-0 group-hover:opacity-100 transition-opacity"
+                        className="absolute bottom-1 end-1 p-1.5 bg-black/70 hover:bg-black/90 rounded-md opacity-0 group-hover:opacity-100 transition-opacity"
                         title={t("youtube.downloadThumbnail", "Download thumbnail")}
                       >
                         <Download className="w-3 h-3 text-white" />
@@ -900,7 +900,7 @@ export function YouTubeSettings({
                         <button
                           type="button"
                           onClick={() => removeReferenceImage(index)}
-                          className="absolute top-0 right-0 w-4 h-4 rounded-full bg-background/80 hover:bg-destructive hover:text-destructive-foreground text-[10px] flex items-center justify-center transition-colors"
+                          className="absolute top-0 end-0 w-4 h-4 rounded-full bg-background/80 hover:bg-destructive hover:text-destructive-foreground text-[10px] flex items-center justify-center transition-colors"
                         >
                           <X className="w-2.5 h-2.5" />
                         </button>
@@ -921,12 +921,12 @@ export function YouTubeSettings({
                 >
                   {isGeneratingAiThumbnail ? (
                     <>
-                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      <Loader2 className="w-4 h-4 me-2 animate-spin" />
                       {t("youtube.generatingBtn", "Generating...")}
                     </>
                   ) : (
                     <>
-                      <Sparkles className="w-4 h-4 mr-2" />
+                      <Sparkles className="w-4 h-4 me-2" />
                       {t("youtube.generateThumbnailBtn", "Generate Thumbnail")}
                     </>
                   )}

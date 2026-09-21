@@ -28,7 +28,7 @@ export function AnalyticsHeader({ timeRange, onTimeRangeChange }: AnalyticsHeade
 
       <Select value={timeRange} onValueChange={onTimeRangeChange}>
         <SelectTrigger className="w-[180px]">
-          <Calendar className="w-4 h-4 mr-2" />
+          <Calendar className="w-4 h-4 me-2" />
           <SelectValue />
         </SelectTrigger>
         <SelectContent>

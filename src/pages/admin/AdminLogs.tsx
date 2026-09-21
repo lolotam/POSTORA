@@ -1016,8 +1016,8 @@ export default function AdminLogs() {
                 <div className="flex flex-col sm:flex-row gap-4">
                   <div className="flex-1">
                     <div className="relative">
-                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                      <Input placeholder="Search logs..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="pl-10" />
+                      <Search className="absolute start-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                      <Input placeholder="Search logs..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="ps-10" />
                     </div>
                   </div>
                   <Select value={selectedUserId} onValueChange={setSelectedUserId}>
@@ -1121,7 +1121,7 @@ export default function AdminLogs() {
                       {logs.map((log, index) => (
                         <div key={log.id} className={`p-4 hover:bg-muted/50 transition-colors ${selectedLogIds.has(log.id) ? "bg-primary/5" : ""}`}>
                           <div className="flex items-start gap-3">
-                            <span className="text-xs text-muted-foreground font-mono mt-1 min-w-[2rem] text-right">{index + 1}</span>
+                            <span className="text-xs text-muted-foreground font-mono mt-1 min-w-[2rem] text-end">{index + 1}</span>
                             <Checkbox
                               checked={selectedLogIds.has(log.id)}
                               onCheckedChange={() => toggleLogSelection(log.id)}
@@ -1243,7 +1243,7 @@ export default function AdminLogs() {
                 disabled={bulkDeleteMutation.isPending}
                 className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               >
-                {bulkDeleteMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+                {bulkDeleteMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin me-2" /> : null}
                 Delete
               </AlertDialogAction>
             </AlertDialogFooter>
@@ -1269,7 +1269,7 @@ export default function AdminLogs() {
                 disabled={deleteFilteredMutation.isPending}
                 className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               >
-                {deleteFilteredMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+                {deleteFilteredMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin me-2" /> : null}
                 Delete All Filtered
               </AlertDialogAction>
             </AlertDialogFooter>

@@ -225,7 +225,7 @@ export function TikTokProcessingStatus({
               >
                 <a href={postUrl} target="_blank" rel="noopener noreferrer">
                   {t("tikTokProcessing.viewPost", "View Post")}
-                  <ExternalLink className="w-3 h-3 ml-1" />
+                  <ExternalLink className="w-3 h-3 ms-1" />
                 </a>
               </Button>
             </div>

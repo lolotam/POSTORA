@@ -200,7 +200,7 @@ function AuthStatusDebug() {
           <Loader2 className="w-4 h-4 animate-spin" />
         ) : authStatus?.hasSession ? (
           <Badge className="bg-green-500/10 text-green-600 border-green-500/30">
-            <Shield className="w-3 h-3 mr-1" />
+            <Shield className="w-3 h-3 me-1" />
             Valid Session
           </Badge>
         ) : (
@@ -226,9 +226,9 @@ function AuthStatusDebug() {
         size="sm" 
         onClick={checkAuthStatus}
         disabled={isChecking}
-        className="ml-auto"
+        className="ms-auto"
       >
-        <RefreshCw className={`w-3 h-3 mr-1 ${isChecking ? 'animate-spin' : ''}`} />
+        <RefreshCw className={`w-3 h-3 me-1 ${isChecking ? 'animate-spin' : ''}`} />
         Refresh
       </Button>
     </div>
@@ -372,7 +372,7 @@ function SyncQuotasButton() {
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4 py-4">
-          <div className="flex items-center space-x-2">
+          <div className="flex items-center space-x-2 rtl:space-x-reverse">
             <Checkbox
               id="sync-all"
               checked={syncAll}
@@ -1020,21 +1020,21 @@ export default function AdminUsers() {
       case "admin":
         return (
           <Badge className="bg-primary/10 text-primary border-primary/30">
-            <Shield className="w-3 h-3 mr-1" />
+            <Shield className="w-3 h-3 me-1" />
             Admin
           </Badge>
         );
       case "subscriber":
         return (
           <Badge className="bg-amber-500/10 text-amber-600 border-amber-500/30">
-            <Crown className="w-3 h-3 mr-1" />
+            <Crown className="w-3 h-3 me-1" />
             Subscriber
           </Badge>
         );
       default:
         return (
           <Badge variant="secondary">
-            <User className="w-3 h-3 mr-1" />
+            <User className="w-3 h-3 me-1" />
             User
           </Badge>
         );
@@ -1045,7 +1045,7 @@ export default function AdminUsers() {
     if (role === "admin") {
       return (
         <Badge className="bg-gradient-to-r from-primary/20 to-purple-500/20 text-foreground border-primary/30">
-          <Shield className="w-3 h-3 mr-1" />
+          <Shield className="w-3 h-3 me-1" />
           Admin
         </Badge>
       );
@@ -1054,14 +1054,14 @@ export default function AdminUsers() {
       case "business":
         return (
           <Badge className="bg-gradient-to-r from-purple-500/20 to-pink-500/20 text-purple-600 border-purple-500/30">
-            <Crown className="w-3 h-3 mr-1" />
+            <Crown className="w-3 h-3 me-1" />
             Business
           </Badge>
         );
       case "pro":
         return (
           <Badge className="bg-gradient-to-r from-blue-500/20 to-cyan-500/20 text-blue-600 border-blue-500/30">
-            <Zap className="w-3 h-3 mr-1" />
+            <Zap className="w-3 h-3 me-1" />
             Pro
           </Badge>
         );
@@ -1101,7 +1101,7 @@ export default function AdminUsers() {
             </Button>
             <Select value={planFilter} onValueChange={setPlanFilter}>
               <SelectTrigger className="w-36">
-                <Zap className="w-4 h-4 mr-2" />
+                <Zap className="w-4 h-4 me-2" />
                 <SelectValue placeholder="Filter by plan" />
               </SelectTrigger>
               <SelectContent>
@@ -1124,7 +1124,7 @@ export default function AdminUsers() {
             )}
             <Select value={platformFilter} onValueChange={setPlatformFilter}>
               <SelectTrigger className="w-44">
-                <Filter className="w-4 h-4 mr-2" />
+                <Filter className="w-4 h-4 me-2" />
                 <SelectValue placeholder="Filter by platform" />
               </SelectTrigger>
               <SelectContent>
@@ -1150,12 +1150,12 @@ export default function AdminUsers() {
               </Button>
             )}
             <div className="relative w-72">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+              <Search className="absolute start-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
               <Input
                 placeholder="Search users..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-10"
+                className="ps-10"
               />
             </div>
           </div>
@@ -1287,7 +1287,7 @@ export default function AdminUsers() {
                                             <PlatformIcon platform={account.platform as Platform} size="xs" />
                                           </AvatarFallback>
                                         </Avatar>
-                                        <div className="absolute -bottom-0.5 -right-0.5">
+                                        <div className="absolute -bottom-0.5 -end-0.5">
                                           <PlatformIcon platform={account.platform as Platform} size="xs" />
                                         </div>
                                       </div>
@@ -1366,7 +1366,7 @@ export default function AdminUsers() {
                             <DropdownMenuContent align="end">
                             <Link to={`/admin/users/${user.id}`}>
                               <DropdownMenuItem>
-                                <Eye className="w-4 h-4 mr-2" />
+                                <Eye className="w-4 h-4 me-2" />
                                 View Details
                               </DropdownMenuItem>
                             </Link>
@@ -1388,7 +1388,7 @@ export default function AdminUsers() {
                               }}
                               disabled={user.role === "user" && user.plan_slug === "free"}
                             >
-                              <User className="w-4 h-4 mr-2" />
+                              <User className="w-4 h-4 me-2" />
                               Set as Free User
                             </DropdownMenuItem>
                             <DropdownMenuItem
@@ -1401,7 +1401,7 @@ export default function AdminUsers() {
                                 );
                               }}
                             >
-                              <Crown className="w-4 h-4 mr-2" />
+                              <Crown className="w-4 h-4 me-2" />
                               {user.role === "subscriber" ? "Change Plan" : "Set as Subscriber"}
                             </DropdownMenuItem>
                             <DropdownMenuItem
@@ -1414,12 +1414,12 @@ export default function AdminUsers() {
                               }
                               disabled={user.role === "admin"}
                             >
-                              <Shield className="w-4 h-4 mr-2" />
+                              <Shield className="w-4 h-4 me-2" />
                               Set as Admin
                             </DropdownMenuItem>
                             <DropdownMenuSeparator />
                             <DropdownMenuItem onClick={() => handleEditQuota(user)}>
-                              <Settings2 className="w-4 h-4 mr-2" />
+                              <Settings2 className="w-4 h-4 me-2" />
                               Edit Quotas
                             </DropdownMenuItem>
                             <DropdownMenuSeparator />
@@ -1427,7 +1427,7 @@ export default function AdminUsers() {
                               className="text-destructive"
                               onClick={() => setDeleteUser(user)}
                             >
-                              <Trash2 className="w-4 h-4 mr-2" />
+                              <Trash2 className="w-4 h-4 me-2" />
                               Delete User
                             </DropdownMenuItem>
                             </DropdownMenuContent>
@@ -1548,7 +1548,7 @@ export default function AdminUsers() {
               Cancel
             </Button>
             <Button onClick={handleSaveQuota} disabled={isUpdating || hasQuotaFieldErrors}>
-              {isUpdating && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+              {isUpdating && <Loader2 className="w-4 h-4 me-2 animate-spin" />}
               Save Changes
             </Button>
           </DialogFooter>
@@ -1661,7 +1661,7 @@ export default function AdminUsers() {
               Cancel
             </Button>
             <Button onClick={handleSaveBulkQuota} disabled={isBulkUpdating || hasQuotaFieldErrors}>
-              {isBulkUpdating && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+              {isBulkUpdating && <Loader2 className="w-4 h-4 me-2 animate-spin" />}
               Update {selectedUsers.length} User{selectedUsers.length > 1 ? 's' : ''}
             </Button>
           </DialogFooter>
@@ -1684,7 +1684,7 @@ export default function AdminUsers() {
               onClick={handleBulkDelete}
               disabled={isBulkDeleting}
             >
-              {isBulkDeleting && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+              {isBulkDeleting && <Loader2 className="w-4 h-4 me-2 animate-spin" />}
               Delete {selectedUsers.length} User{selectedUsers.length > 1 ? 's' : ''}
             </AlertDialogAction>
           </AlertDialogFooter>
@@ -1764,7 +1764,7 @@ export default function AdminUsers() {
                 });
               }}
             >
-              {changeRoleMutation.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+              {changeRoleMutation.isPending && <Loader2 className="w-4 h-4 me-2 animate-spin" />}
               Downgrade
             </AlertDialogAction>
           </AlertDialogFooter>
@@ -1843,7 +1843,7 @@ export default function AdminUsers() {
               }}
               disabled={changeRoleMutation.isPending || !selectedSubscriberPlan}
             >
-              {changeRoleMutation.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+              {changeRoleMutation.isPending && <Loader2 className="w-4 h-4 me-2 animate-spin" />}
               Assign {assignablePlans.find((plan) => plan.slug === selectedSubscriberPlan)?.name || "Plan"}
             </Button>
           </DialogFooter>

@@ -15,7 +15,7 @@ export function ContactsTable({ rows, onOpen, onDelete }: {
       <TableHeader>
         <TableRow>
           <TableHead>Contact</TableHead><TableHead>Source</TableHead><TableHead>Contact info</TableHead>
-          <TableHead>Engagement</TableHead><TableHead>Tags</TableHead><TableHead className="text-right">Actions</TableHead>
+          <TableHead>Engagement</TableHead><TableHead>Tags</TableHead><TableHead className="text-end">Actions</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -43,7 +43,7 @@ export function ContactsTable({ rows, onOpen, onDelete }: {
                 <div className="text-xs text-muted-foreground">{formatDistanceToNow(new Date(row.last_interacted_at), { addSuffix: true })}</div>
               </TableCell>
               <TableCell><div className="flex flex-wrap gap-1">{row.tags.map((t) => <Badge key={t} variant="outline">{t}</Badge>)}</div></TableCell>
-              <TableCell className="text-right">
+              <TableCell className="text-end">
                 {row.whatsapp_contact_id && (
                   // Same destination as the drawer's link (spec §3.4): the
                   // existing WhatsApp contacts page.

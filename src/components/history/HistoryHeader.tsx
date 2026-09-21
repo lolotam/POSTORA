@@ -83,7 +83,7 @@ export function HistoryHeader({
                 </Button>
               ) : (
                 <Button variant="outline" size="sm" onClick={onSelectAll} data-testid="select-all-btn">
-                  <CheckCircle2 className="w-4 h-4 mr-2" />
+                  <CheckCircle2 className="w-4 h-4 me-2" />
                   {t("header.selectAll", "Select All ({{count}})", { count: paginatedCount })}
                 </Button>
               )}

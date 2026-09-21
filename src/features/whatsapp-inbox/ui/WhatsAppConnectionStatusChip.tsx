@@ -78,7 +78,7 @@ export function WhatsAppConnectionStatusChip({
         <button
           type="button"
           aria-label="Connection details"
-          className="flex min-h-11 w-full items-center gap-2 px-4 py-2 text-left transition-colors hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#128C7E]"
+          className="flex min-h-11 w-full items-center gap-2 px-4 py-2 text-start transition-colors hover:bg-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#128C7E]"
         >
           <span className="h-2.5 w-2.5 shrink-0 rounded-full bg-green-500 ring-2 ring-green-500/20" aria-hidden="true" />
           <span className="min-w-0 truncate text-sm font-medium">
@@ -93,7 +93,7 @@ export function WhatsAppConnectionStatusChip({
           )}
           <ChevronDown
             className={cn(
-              "ml-auto h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200 motion-reduce:transition-none",
+              "ms-auto h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-200 motion-reduce:transition-none",
               expanded && "rotate-180",
             )}
             aria-hidden="true"

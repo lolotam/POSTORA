@@ -1688,12 +1688,12 @@ function DatabaseConnectorsEditor({
 
           {/* Search Bar */}
           <div className="relative w-full sm:w-64">
-            <Search className="w-4 h-4 text-muted-foreground absolute left-3 top-1/2 -translate-y-1/2" />
+            <Search className="w-4 h-4 text-muted-foreground absolute start-3 top-1/2 -translate-y-1/2" />
             <Input
               placeholder={t("form.searchConnectors", "Search connectors...")}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-9 h-9 text-xs rounded-xl bg-card/60"
+              className="ps-9 h-9 text-xs rounded-xl bg-card/60"
             />
           </div>
         </div>
@@ -1718,7 +1718,7 @@ function DatabaseConnectorsEditor({
                   }
                 }}
                 className={cn(
-                  "relative group flex flex-col justify-between p-5 rounded-2xl border transition-all duration-300 ease-out text-left cursor-pointer backdrop-blur-xl overflow-hidden",
+                  "relative group flex flex-col justify-between p-5 rounded-2xl border transition-all duration-300 ease-out text-start cursor-pointer backdrop-blur-xl overflow-hidden",
                   // 3D Glassmorphism, specular top highlight and multi-layered depth
                   "before:absolute before:inset-x-0 before:top-0 before:h-1/2 before:rounded-t-2xl before:bg-gradient-to-b before:from-white/30 before:via-white/5 before:to-transparent before:pointer-events-none",
                   isConnected
@@ -1740,7 +1740,7 @@ function DatabaseConnectorsEditor({
                       <ConnectorBrandLogo id={preset.id} className="w-8 h-8 sm:w-9 sm:h-9 drop-shadow-sm" />
                     </div>
                     {isConnected && (
-                      <div className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-emerald-500 text-white flex items-center justify-center shadow-md shadow-emerald-500/40 ring-2 ring-background animate-in zoom-in-50 duration-200">
+                      <div className="absolute -top-1.5 -end-1.5 w-5 h-5 rounded-full bg-emerald-500 text-white flex items-center justify-center shadow-md shadow-emerald-500/40 ring-2 ring-background animate-in zoom-in-50 duration-200">
                         <Check className="w-3 h-3 stroke-[3]" />
                       </div>
                     )}
@@ -1812,11 +1812,11 @@ function DatabaseConnectorsEditor({
                   >
                     {isConnected ? (
                       <>
-                        <Pencil className="w-3.5 h-3.5 mr-1.5" /> {t("common:configure", "Configure")}
+                        <Pencil className="w-3.5 h-3.5 me-1.5" /> {t("common:configure", "Configure")}
                       </>
                     ) : (
                       <>
-                        <Plus className="w-4 h-4 mr-1.5 stroke-[2.5]" /> {t("common:connect", "Connect")}
+                        <Plus className="w-4 h-4 me-1.5 stroke-[2.5]" /> {t("common:connect", "Connect")}
                       </>
                     )}
                   </Button>
@@ -1933,7 +1933,7 @@ function DatabaseConnectorsEditor({
                       disabled={higgsfieldBusy}
                       className="h-8 text-xs text-rose-500 hover:text-rose-600 hover:bg-rose-500/10"
                     >
-                      <Unlink className="w-3.5 h-3.5 mr-1" /> {t("common:disconnect", "Disconnect")}
+                      <Unlink className="w-3.5 h-3.5 me-1" /> {t("common:disconnect", "Disconnect")}
                     </Button>
                   </div>
                 </CardContent>
@@ -2036,7 +2036,7 @@ function DatabaseConnectorsEditor({
                         </Button>
                       )}
 
-                      <div className="ml-auto flex items-center gap-1">
+                      <div className="ms-auto flex items-center gap-1">
                         {/* Edit belongs to the owning account only. Saving from
                             anywhere else cannot update the row — the server
                             matches on (user, account, name) — so an Edit button
@@ -2048,7 +2048,7 @@ function DatabaseConnectorsEditor({
                             onClick={() => handleCardClick(preset, tool)}
                             className="h-8 text-xs text-muted-foreground hover:text-foreground"
                           >
-                            <Pencil className="w-3 h-3 mr-1" /> {t("common:edit", "Edit")}
+                            <Pencil className="w-3 h-3 me-1" /> {t("common:edit", "Edit")}
                           </Button>
                         )}
                         <Button
@@ -2200,7 +2200,7 @@ function DatabaseConnectorsEditor({
                       }}
                       className="h-8 text-xs text-rose-500 hover:text-rose-600 hover:bg-rose-500/10"
                     >
-                      <Unlink className="w-3.5 h-3.5 mr-1" /> {t("actions.revoke", "Revoke")}
+                      <Unlink className="w-3.5 h-3.5 me-1" /> {t("actions.revoke", "Revoke")}
                     </Button>
                   </div>
                 </CardContent>
@@ -2285,7 +2285,7 @@ function DatabaseConnectorsEditor({
                     disabled={higgsfieldBusy}
                     className="text-xs h-8 text-rose-500 border-rose-500/30 hover:bg-rose-500/10"
                   >
-                    {higgsfieldBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" /> : <Unlink className="w-3.5 h-3.5 mr-1" />}
+                    {higgsfieldBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin me-1" /> : <Unlink className="w-3.5 h-3.5 me-1" />}
                     <span>{t("actions.disconnectAccount", "Disconnect Account")}</span>
                   </Button>
                 ) : (
@@ -2647,7 +2647,7 @@ function DatabaseConnectorsEditor({
                   }}
                   className="text-rose-500 hover:text-rose-600 hover:bg-rose-500/10 text-xs h-8"
                 >
-                  <Trash2 className="w-3.5 h-3.5 mr-1" /> {t("common:disconnect", "Disconnect")}
+                  <Trash2 className="w-3.5 h-3.5 me-1" /> {t("common:disconnect", "Disconnect")}
                 </Button>
               )}
             </div>

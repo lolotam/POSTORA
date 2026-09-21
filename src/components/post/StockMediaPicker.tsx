@@ -1132,7 +1132,7 @@ export function StockMediaPicker({ open, onOpenChange, onSelect, photosOnly = fa
     loadingMore && (
       <div className="flex items-center justify-center py-4">
         <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
-        <span className="ml-2 text-xs text-muted-foreground">{t("stockMedia.loadingMore", "Loading more...")}</span>
+        <span className="ms-2 text-xs text-muted-foreground">{t("stockMedia.loadingMore", "Loading more...")}</span>
       </div>
     )
   );
@@ -1155,7 +1155,7 @@ export function StockMediaPicker({ open, onOpenChange, onSelect, photosOnly = fa
   const SourceBadge = ({ source }: { source: string }) => (
     <Badge 
       variant="secondary" 
-      className="absolute top-1 left-1 text-[8px] px-1 py-0 h-4 bg-black/50 text-white border-0 backdrop-blur-sm"
+      className="absolute top-1 start-1 text-[8px] px-1 py-0 h-4 bg-black/50 text-white border-0 backdrop-blur-sm"
     >
       {source}
     </Badge>
@@ -1231,8 +1231,8 @@ export function StockMediaPicker({ open, onOpenChange, onSelect, photosOnly = fa
           <TabsContent value="all-photos" className="flex-1 flex flex-col min-h-0 mt-0">
             <div className="flex gap-2 mb-3">
               <div className="relative flex-1">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                <Input placeholder={getSearchPlaceholder()} value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="pl-9" />
+                <Search className="absolute start-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                <Input placeholder={getSearchPlaceholder()} value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="ps-9" />
               </div>
               <Select value={combinedPhotoOrientation} onValueChange={(v) => setCombinedPhotoOrientation(v as CombinedOrientation)}>
                 <SelectTrigger className="w-[130px]"><SelectValue placeholder={t("stockMedia.orientationPlaceholder", "Orientation")} /></SelectTrigger>
@@ -1248,7 +1248,7 @@ export function StockMediaPicker({ open, onOpenChange, onSelect, photosOnly = fa
                         <img src={item.thumbnailUrl} alt={t("stockMedia.altPhoto", "Photo")} className="w-full h-full object-cover" loading="lazy" />
                         <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors" />
                         <SourceBadge source={item.source} />
-                        <div className="absolute bottom-0 left-0 right-0 p-1 bg-gradient-to-t from-black/60 to-transparent opacity-0 group-hover:opacity-100 transition-opacity">
+                        <div className="absolute bottom-0 start-0 end-0 p-1 bg-gradient-to-t from-black/60 to-transparent opacity-0 group-hover:opacity-100 transition-opacity">
                           <p className="text-[9px] text-white truncate">📷 {item.attribution}</p>
                         </div>
                       </button>
@@ -1265,8 +1265,8 @@ export function StockMediaPicker({ open, onOpenChange, onSelect, photosOnly = fa
             <TabsContent value="all-videos" className="flex-1 flex flex-col min-h-0 mt-0">
               <div className="flex gap-2 mb-3">
                 <div className="relative flex-1">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                  <Input placeholder={t("stockMedia.searchAllVideos", "Search all videos...")} value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="pl-9" />
+                  <Search className="absolute start-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                  <Input placeholder={t("stockMedia.searchAllVideos", "Search all videos...")} value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="ps-9" />
                 </div>
                 <Select value={combinedVideoOrientation} onValueChange={(v) => setCombinedVideoOrientation(v as CombinedOrientation)}>
                   <SelectTrigger className="w-[130px]"><SelectValue placeholder={t("stockMedia.orientationPlaceholder", "Orientation")} /></SelectTrigger>
@@ -1282,13 +1282,13 @@ export function StockMediaPicker({ open, onOpenChange, onSelect, photosOnly = fa
                           <img src={item.thumbnailUrl} alt={t("stockMedia.altVideoThumbnail", "Video thumbnail")} className="w-full h-full object-cover" loading="lazy" />
                           <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors" />
                           <SourceBadge source={item.source} />
-                          <div className="absolute top-1 right-1"><Video className="w-3 h-3 text-white drop-shadow-md" /></div>
+                          <div className="absolute top-1 end-1"><Video className="w-3 h-3 text-white drop-shadow-md" /></div>
                           {item.duration && (
-                            <div className="absolute bottom-1 right-1 bg-black/70 px-1 rounded text-[9px] text-white">
+                            <div className="absolute bottom-1 end-1 bg-black/70 px-1 rounded text-[9px] text-white">
                               {Math.floor(item.duration / 60)}:{(item.duration % 60).toString().padStart(2, '0')}
                             </div>
                           )}
-                          <div className="absolute bottom-0 left-0 right-0 p-1 bg-gradient-to-t from-black/60 to-transparent opacity-0 group-hover:opacity-100 transition-opacity">
+                          <div className="absolute bottom-0 start-0 end-0 p-1 bg-gradient-to-t from-black/60 to-transparent opacity-0 group-hover:opacity-100 transition-opacity">
                             <p className="text-[9px] text-white truncate">🎬 {item.attribution}</p>
                           </div>
                         </button>
@@ -1306,8 +1306,8 @@ export function StockMediaPicker({ open, onOpenChange, onSelect, photosOnly = fa
             <TabsContent value="all-gifs" className="flex-1 flex flex-col min-h-0 mt-0">
               <div className="flex gap-2 mb-3">
                 <div className="relative flex-1">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                  <Input placeholder={getSearchPlaceholder()} value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="pl-9" />
+                  <Search className="absolute start-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                  <Input placeholder={getSearchPlaceholder()} value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="ps-9" />
                 </div>
               </div>
               <ScrollArea className="h-[350px]" onScrollCapture={handleScroll}>
@@ -1319,7 +1319,7 @@ export function StockMediaPicker({ open, onOpenChange, onSelect, photosOnly = fa
                           <img src={item.thumbnailUrl} alt={item.title || t("stockMedia.altGif", "GIF")} className="w-full h-full object-cover" loading="lazy" />
                           <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors" />
                           <SourceBadge source={item.source} />
-                          <div className="absolute top-1 right-1"><Film className="w-3 h-3 text-white drop-shadow-md" /></div>
+                          <div className="absolute top-1 end-1"><Film className="w-3 h-3 text-white drop-shadow-md" /></div>
                         </button>
                       ))}
                     </div>
@@ -1334,8 +1334,8 @@ export function StockMediaPicker({ open, onOpenChange, onSelect, photosOnly = fa
           <TabsContent value="unsplash" className="flex-1 flex flex-col min-h-0 mt-0">
             <div className="flex gap-2 mb-3">
               <div className="relative flex-1">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                <Input placeholder={getSearchPlaceholder()} value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="pl-9" />
+                <Search className="absolute start-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                <Input placeholder={getSearchPlaceholder()} value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="ps-9" />
               </div>
               <Select value={unsplashOrientation} onValueChange={(v) => setUnsplashOrientation(v as UnsplashOrientation)}>
                 <SelectTrigger className="w-[130px]"><SelectValue placeholder={t("stockMedia.orientationPlaceholder", "Orientation")} /></SelectTrigger>
@@ -1351,7 +1351,7 @@ export function StockMediaPicker({ open, onOpenChange, onSelect, photosOnly = fa
                         <img src={getUnsplashPhotoThumbnail(photo)} alt={photo.alt_description || t("stockMedia.altPhoto", "Photo")} className="w-full h-full object-cover" loading="lazy" />
                         <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors" />
                         {/* Unsplash attribution - visible on hover per API guidelines */}
-                        <div className="absolute bottom-0 left-0 right-0 p-1.5 bg-gradient-to-t from-black/70 to-transparent opacity-0 group-hover:opacity-100 transition-opacity">
+                        <div className="absolute bottom-0 start-0 end-0 p-1.5 bg-gradient-to-t from-black/70 to-transparent opacity-0 group-hover:opacity-100 transition-opacity">
                           <p className="text-[9px] text-white/90 truncate leading-tight">
                             {t("stockMedia.photoByPrefix", "Photo by")}{" "}
                             <span 
@@ -1402,8 +1402,8 @@ export function StockMediaPicker({ open, onOpenChange, onSelect, photosOnly = fa
                 {/* Search and Category Filter */}
                 <div className="flex gap-2 mb-3">
                   <div className="relative flex-1">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                    <Input placeholder={getSearchPlaceholder()} value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="pl-9" />
+                    <Search className="absolute start-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                    <Input placeholder={getSearchPlaceholder()} value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="ps-9" />
                   </div>
                   <Select value={klipyCategory} onValueChange={setKlipyCategory}>
                     <SelectTrigger className="w-[140px]">
@@ -1451,8 +1451,8 @@ export function StockMediaPicker({ open, onOpenChange, onSelect, photosOnly = fa
                               <button key={clip.slug || index} type="button" onClick={() => handleSelectKlipyClip(clip)} className="relative aspect-video rounded-lg overflow-hidden border border-border hover:border-primary transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 group bg-muted">
                                 <img src={thumbnailUrl} alt={clip.title || t("stockMedia.altClip", "Clip")} className="w-full h-full object-cover" loading="lazy" />
                                 <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors" />
-                                <div className="absolute top-1 right-1"><Video className="w-3 h-3 text-white drop-shadow-md" /></div>
-                                {clip.title && (<div className="absolute bottom-0 left-0 right-0 p-1.5 bg-gradient-to-t from-black/70 to-transparent"><p className="text-[10px] text-white truncate">{clip.title}</p></div>)}
+                                <div className="absolute top-1 end-1"><Video className="w-3 h-3 text-white drop-shadow-md" /></div>
+                                {clip.title && (<div className="absolute bottom-0 start-0 end-0 p-1.5 bg-gradient-to-t from-black/70 to-transparent"><p className="text-[10px] text-white truncate">{clip.title}</p></div>)}
                               </button>
                             );
                           })}
@@ -1488,8 +1488,8 @@ export function StockMediaPicker({ open, onOpenChange, onSelect, photosOnly = fa
                 {/* Search and Category Filter */}
                 <div className="flex gap-2 mb-3">
                   <div className="relative flex-1">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                    <Input placeholder={getSearchPlaceholder()} value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="pl-9" />
+                    <Search className="absolute start-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                    <Input placeholder={getSearchPlaceholder()} value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="ps-9" />
                   </div>
                   {(giphySubTab === "gifs" || giphySubTab === "clips") && (
                     <Select value={giphyCategory} onValueChange={setGiphyCategory}>
@@ -1518,7 +1518,7 @@ export function StockMediaPicker({ open, onOpenChange, onSelect, photosOnly = fa
                               <button key={gif.id} type="button" onClick={() => handleSelectGiphyGif(gif)} className="relative aspect-square rounded-lg overflow-hidden border border-border hover:border-primary transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 group bg-muted">
                                 <img src={thumbnailUrl} alt={gif.title || t("stockMedia.altGif", "GIF")} className="w-full h-full object-cover" loading="lazy" />
                                 <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors" />
-                                <div className="absolute top-1 right-1"><Film className="w-3 h-3 text-white drop-shadow-md" /></div>
+                                <div className="absolute top-1 end-1"><Film className="w-3 h-3 text-white drop-shadow-md" /></div>
                               </button>
                             );
                           })}
@@ -1542,8 +1542,8 @@ export function StockMediaPicker({ open, onOpenChange, onSelect, photosOnly = fa
                               <button key={clip.id} type="button" onClick={() => handleSelectGiphyClip(clip)} className="relative aspect-video rounded-lg overflow-hidden border border-border hover:border-primary transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 group bg-muted">
                                 <img src={thumbnailUrl} alt={clip.title || t("stockMedia.altClip", "Clip")} className="w-full h-full object-cover" loading="lazy" />
                                 <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors" />
-                                <div className="absolute top-1 right-1"><Play className="w-3 h-3 text-white drop-shadow-md" /></div>
-                                {clip.title && (<div className="absolute bottom-0 left-0 right-0 p-1.5 bg-gradient-to-t from-black/70 to-transparent"><p className="text-[10px] text-white truncate">{clip.title}</p></div>)}
+                                <div className="absolute top-1 end-1"><Play className="w-3 h-3 text-white drop-shadow-md" /></div>
+                                {clip.title && (<div className="absolute bottom-0 start-0 end-0 p-1.5 bg-gradient-to-t from-black/70 to-transparent"><p className="text-[10px] text-white truncate">{clip.title}</p></div>)}
                               </button>
                             );
                           })}
@@ -1567,7 +1567,7 @@ export function StockMediaPicker({ open, onOpenChange, onSelect, photosOnly = fa
                               <button key={sticker.id} type="button" onClick={() => handleSelectGiphyGif(sticker)} className="relative aspect-square rounded-lg overflow-hidden border border-border hover:border-primary transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 group bg-muted">
                                 <img src={thumbnailUrl} alt={sticker.title || t("stockMedia.altSticker", "Sticker")} className="w-full h-full object-contain" loading="lazy" />
                                 <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors" />
-                                <div className="absolute top-1 right-1"><Sparkles className="w-3 h-3 text-white drop-shadow-md" /></div>
+                                <div className="absolute top-1 end-1"><Sparkles className="w-3 h-3 text-white drop-shadow-md" /></div>
                               </button>
                             );
                           })}
@@ -1586,8 +1586,8 @@ export function StockMediaPicker({ open, onOpenChange, onSelect, photosOnly = fa
             {photosOnly ? (
               <div className="flex flex-col flex-1 min-h-0">
                 <div className="relative mb-3">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                  <Input placeholder={t("stockMedia.searchPhotos", "Search photos...")} value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="pl-9" />
+                  <Search className="absolute start-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                  <Input placeholder={t("stockMedia.searchPhotos", "Search photos...")} value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="ps-9" />
                 </div>
                 <ScrollArea className="h-[350px]" onScrollCapture={handleScroll}>
                   {loading ? renderLoading() : error ? renderError() : pexelsPhotos.length === 0 ? renderEmpty(searchQuery ? t("stockMedia.noPhotosFound", "No photos found") : t("stockMedia.noCuratedPhotos", "No curated photos available")) : (
@@ -1597,7 +1597,7 @@ export function StockMediaPicker({ open, onOpenChange, onSelect, photosOnly = fa
                           <button key={photo.id} type="button" onClick={() => handleSelectPexelsPhoto(photo)} className="relative aspect-square rounded-lg overflow-hidden border border-border hover:border-primary transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 group bg-muted">
                             <img src={getPexelsPhotoThumbnail(photo)} alt={photo.alt || t("stockMedia.altPhoto", "Photo")} className="w-full h-full object-cover" loading="lazy" />
                             <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors" />
-                            <div className="absolute bottom-0 left-0 right-0 p-1 bg-gradient-to-t from-black/60 to-transparent opacity-0 group-hover:opacity-100 transition-opacity">
+                            <div className="absolute bottom-0 start-0 end-0 p-1 bg-gradient-to-t from-black/60 to-transparent opacity-0 group-hover:opacity-100 transition-opacity">
                               <p className="text-[9px] text-white truncate">📷 {photo.photographer}</p>
                             </div>
                           </button>
@@ -1617,8 +1617,8 @@ export function StockMediaPicker({ open, onOpenChange, onSelect, photosOnly = fa
 
                 <div className="flex gap-2 mb-3">
                   <div className="relative flex-1">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                    <Input placeholder={getSearchPlaceholder()} value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="pl-9" />
+                    <Search className="absolute start-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                    <Input placeholder={getSearchPlaceholder()} value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="ps-9" />
                   </div>
                   <Select value={pexelsOrientation} onValueChange={(v) => setPexelsOrientation(v as PexelsOrientation)}>
                     <SelectTrigger className="w-[130px]"><SelectValue placeholder={t("stockMedia.orientationPlaceholder", "Orientation")} /></SelectTrigger>
@@ -1635,7 +1635,7 @@ export function StockMediaPicker({ open, onOpenChange, onSelect, photosOnly = fa
                             <button key={photo.id} type="button" onClick={() => handleSelectPexelsPhoto(photo)} className="relative aspect-square rounded-lg overflow-hidden border border-border hover:border-primary transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 group bg-muted">
                               <img src={getPexelsPhotoThumbnail(photo)} alt={photo.alt || t("stockMedia.altPhoto", "Photo")} className="w-full h-full object-cover" loading="lazy" />
                               <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors" />
-                              <div className="absolute bottom-0 left-0 right-0 p-1 bg-gradient-to-t from-black/60 to-transparent opacity-0 group-hover:opacity-100 transition-opacity">
+                              <div className="absolute bottom-0 start-0 end-0 p-1 bg-gradient-to-t from-black/60 to-transparent opacity-0 group-hover:opacity-100 transition-opacity">
                                 <p className="text-[9px] text-white truncate">📷 {photo.photographer}</p>
                               </div>
                             </button>
@@ -1656,8 +1656,8 @@ export function StockMediaPicker({ open, onOpenChange, onSelect, photosOnly = fa
                             <button key={video.id} type="button" onClick={() => handleSelectPexelsVideo(video)} className="relative aspect-video rounded-lg overflow-hidden border border-border hover:border-primary transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 group bg-muted">
                               <img src={getPexelsVideoThumbnail(video)} alt={t("stockMedia.altVideoThumbnail", "Video thumbnail")} className="w-full h-full object-cover" loading="lazy" />
                               <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors" />
-                              <div className="absolute top-1 right-1"><Video className="w-3 h-3 text-white drop-shadow-md" /></div>
-                              <div className="absolute bottom-0 left-0 right-0 p-1 bg-gradient-to-t from-black/60 to-transparent opacity-0 group-hover:opacity-100 transition-opacity">
+                              <div className="absolute top-1 end-1"><Video className="w-3 h-3 text-white drop-shadow-md" /></div>
+                              <div className="absolute bottom-0 start-0 end-0 p-1 bg-gradient-to-t from-black/60 to-transparent opacity-0 group-hover:opacity-100 transition-opacity">
                                 <p className="text-[9px] text-white truncate">🎬 {video.user.name}</p>
                               </div>
                             </button>
@@ -1677,8 +1677,8 @@ export function StockMediaPicker({ open, onOpenChange, onSelect, photosOnly = fa
             {photosOnly ? (
               <div className="flex flex-col flex-1 min-h-0">
                 <div className="relative mb-3">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                  <Input placeholder={t("stockMedia.searchPhotos", "Search photos...")} value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="pl-9" />
+                  <Search className="absolute start-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                  <Input placeholder={t("stockMedia.searchPhotos", "Search photos...")} value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="ps-9" />
                 </div>
                 <ScrollArea className="h-[350px]" onScrollCapture={handleScroll}>
                   {loading ? renderLoading() : error ? renderError() : pixabayPhotos.length === 0 ? renderEmpty(searchQuery ? t("stockMedia.noPhotosFound", "No photos found") : t("stockMedia.noPopularPhotos", "No popular photos available")) : (
@@ -1688,7 +1688,7 @@ export function StockMediaPicker({ open, onOpenChange, onSelect, photosOnly = fa
                           <button key={photo.id} type="button" onClick={() => handleSelectPixabayPhoto(photo)} className="relative aspect-square rounded-lg overflow-hidden border border-border hover:border-primary transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 group bg-muted">
                             <img src={getPixabayPhotoThumbnail(photo)} alt={photo.tags || t("stockMedia.altPhoto", "Photo")} className="w-full h-full object-cover" loading="lazy" />
                             <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors" />
-                            <div className="absolute bottom-0 left-0 right-0 p-1 bg-gradient-to-t from-black/60 to-transparent opacity-0 group-hover:opacity-100 transition-opacity">
+                            <div className="absolute bottom-0 start-0 end-0 p-1 bg-gradient-to-t from-black/60 to-transparent opacity-0 group-hover:opacity-100 transition-opacity">
                               <p className="text-[9px] text-white truncate">📷 {photo.user}</p>
                             </div>
                           </button>
@@ -1709,8 +1709,8 @@ export function StockMediaPicker({ open, onOpenChange, onSelect, photosOnly = fa
 
                 <div className="flex gap-2 mb-3">
                   <div className="relative flex-1">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-                    <Input placeholder={getSearchPlaceholder()} value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="pl-9" />
+                    <Search className="absolute start-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                    <Input placeholder={getSearchPlaceholder()} value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="ps-9" />
                   </div>
                   <Select value={pixabayOrientation} onValueChange={(v) => setPixabayOrientation(v as PixabayOrientation)}>
                     <SelectTrigger className="w-[130px]"><SelectValue placeholder={t("stockMedia.orientationPlaceholder", "Orientation")} /></SelectTrigger>
@@ -1727,7 +1727,7 @@ export function StockMediaPicker({ open, onOpenChange, onSelect, photosOnly = fa
                             <button key={photo.id} type="button" onClick={() => handleSelectPixabayPhoto(photo)} className="relative aspect-square rounded-lg overflow-hidden border border-border hover:border-primary transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 group bg-muted">
                               <img src={getPixabayPhotoThumbnail(photo)} alt={photo.tags || t("stockMedia.altPhoto", "Photo")} className="w-full h-full object-cover" loading="lazy" />
                               <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors" />
-                              <div className="absolute bottom-0 left-0 right-0 p-1 bg-gradient-to-t from-black/60 to-transparent opacity-0 group-hover:opacity-100 transition-opacity">
+                              <div className="absolute bottom-0 start-0 end-0 p-1 bg-gradient-to-t from-black/60 to-transparent opacity-0 group-hover:opacity-100 transition-opacity">
                                 <p className="text-[9px] text-white truncate">📷 {photo.user}</p>
                               </div>
                             </button>
@@ -1748,8 +1748,8 @@ export function StockMediaPicker({ open, onOpenChange, onSelect, photosOnly = fa
                             <button key={video.id} type="button" onClick={() => handleSelectPixabayVideo(video)} className="relative aspect-video rounded-lg overflow-hidden border border-border hover:border-primary transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 group bg-muted">
                               <img src={getPixabayVideoThumbnail(video)} alt={t("stockMedia.altVideoThumbnail", "Video thumbnail")} className="w-full h-full object-cover" loading="lazy" />
                               <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors" />
-                              <div className="absolute top-1 right-1"><Video className="w-3 h-3 text-white drop-shadow-md" /></div>
-                              <div className="absolute bottom-0 left-0 right-0 p-1 bg-gradient-to-t from-black/60 to-transparent opacity-0 group-hover:opacity-100 transition-opacity">
+                              <div className="absolute top-1 end-1"><Video className="w-3 h-3 text-white drop-shadow-md" /></div>
+                              <div className="absolute bottom-0 start-0 end-0 p-1 bg-gradient-to-t from-black/60 to-transparent opacity-0 group-hover:opacity-100 transition-opacity">
                                 <p className="text-[9px] text-white truncate">🎬 {video.user}</p>
                               </div>
                             </button>
@@ -1770,8 +1770,8 @@ export function StockMediaPicker({ open, onOpenChange, onSelect, photosOnly = fa
                             <button key={gif.id} type="button" onClick={() => handleSelectPixabayGif(gif)} className="relative aspect-square rounded-lg overflow-hidden border border-border hover:border-primary transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 group bg-muted">
                               <img src={getPixabayPhotoThumbnail(gif)} alt={gif.tags || t("stockMedia.altGif", "GIF")} className="w-full h-full object-cover" loading="lazy" />
                               <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors" />
-                              <div className="absolute top-1 right-1"><Film className="w-3 h-3 text-white drop-shadow-md" /></div>
-                              <div className="absolute bottom-0 left-0 right-0 p-1 bg-gradient-to-t from-black/60 to-transparent opacity-0 group-hover:opacity-100 transition-opacity">
+                              <div className="absolute top-1 end-1"><Film className="w-3 h-3 text-white drop-shadow-md" /></div>
+                              <div className="absolute bottom-0 start-0 end-0 p-1 bg-gradient-to-t from-black/60 to-transparent opacity-0 group-hover:opacity-100 transition-opacity">
                                 <p className="text-[9px] text-white truncate">🎞️ {gif.user}</p>
                               </div>
                             </button>

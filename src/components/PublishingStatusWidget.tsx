@@ -70,7 +70,7 @@ export function PublishingStatusWidget({
           </Badge>
           {/* Pulse indicator */}
           <motion.div
-            className="absolute top-1 right-1 h-2 w-2 rounded-full bg-primary"
+            className="absolute top-1 end-1 h-2 w-2 rounded-full bg-primary"
             animate={{ scale: [1, 1.3, 1], opacity: [1, 0.5, 1] }}
             transition={{ duration: 1.5, repeat: Infinity }}
           />

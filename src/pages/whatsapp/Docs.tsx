@@ -86,7 +86,7 @@ export default function WhatsAppDocs() {
             </Link>
           </div>
         </div>
-        <div className="absolute right-0 bottom-0 top-0 w-1/3 bg-[radial-gradient(circle_at_bottom_right,_var(--tw-gradient-stops))] from-white/10 via-transparent to-transparent pointer-events-none" />
+        <div className="absolute end-0 bottom-0 top-0 w-1/3 bg-[radial-gradient(circle_at_bottom_right,_var(--tw-gradient-stops))] from-white/10 via-transparent to-transparent pointer-events-none" />
       </div>
 
       {/* Interactive Tabs */}
@@ -129,10 +129,10 @@ export default function WhatsAppDocs() {
                 </CardDescription>
               </CardHeader>
               <CardContent className="p-6 space-y-6">
-                <div className="relative pl-6 border-l-2 border-emerald-500/20 space-y-6">
+                <div className="relative ps-6 border-l-2 border-emerald-500/20 space-y-6">
                   {/* Step 1 */}
                   <div className="relative">
-                    <div className="absolute -left-[31px] top-0 flex h-4 w-4 items-center justify-center rounded-full bg-emerald-500 ring-4 ring-background text-[10px] font-bold text-white">1</div>
+                    <div className="absolute -start-[31px] top-0 flex h-4 w-4 items-center justify-center rounded-full bg-emerald-500 ring-4 ring-background text-[10px] font-bold text-white">1</div>
                     <h4 className="font-semibold text-foreground">Launch Embedded Signup</h4>
                     <p className="text-sm text-muted-foreground mt-1">
                       Navigate to <SectionLink path="setup">Setup</SectionLink> and click <strong>Connect with Coexistence</strong> (recommended for active phone apps) or <strong>Cloud API</strong>. A Meta onboarding popup opens.
@@ -140,7 +140,7 @@ export default function WhatsAppDocs() {
                   </div>
                   {/* Step 2 */}
                   <div className="relative">
-                    <div className="absolute -left-[31px] top-0 flex h-4 w-4 items-center justify-center rounded-full bg-emerald-500 ring-4 ring-background text-[10px] font-bold text-white">2</div>
+                    <div className="absolute -start-[31px] top-0 flex h-4 w-4 items-center justify-center rounded-full bg-emerald-500 ring-4 ring-background text-[10px] font-bold text-white">2</div>
                     <h4 className="font-semibold text-foreground">Scan QR & Share History</h4>
                     <p className="text-sm text-muted-foreground mt-1">
                       Scan the QR code with the WhatsApp Business app on your phone, and make sure to <strong>approve chat-history sharing</strong> on the screen the phone displays.
@@ -148,7 +148,7 @@ export default function WhatsAppDocs() {
                   </div>
                   {/* Step 3 */}
                   <div className="relative">
-                    <div className="absolute -left-[31px] top-0 flex h-4 w-4 items-center justify-center rounded-full bg-emerald-500 ring-4 ring-background text-[10px] font-bold text-white">3</div>
+                    <div className="absolute -start-[31px] top-0 flex h-4 w-4 items-center justify-center rounded-full bg-emerald-500 ring-4 ring-background text-[10px] font-bold text-white">3</div>
                     <h4 className="font-semibold text-foreground">Background Activation & Webhooks</h4>
                     <p className="text-sm text-muted-foreground mt-1">
                       The moment you complete the popup, Postora's backend exchanges the authorization code, registers your WABA, and automatically issues sync requests to Meta.
@@ -156,7 +156,7 @@ export default function WhatsAppDocs() {
                   </div>
                   {/* Step 4 */}
                   <div className="relative">
-                    <div className="absolute -left-[31px] top-0 flex h-4 w-4 items-center justify-center rounded-full bg-emerald-500 ring-4 ring-background text-[10px] font-bold text-white">4</div>
+                    <div className="absolute -start-[31px] top-0 flex h-4 w-4 items-center justify-center rounded-full bg-emerald-500 ring-4 ring-background text-[10px] font-bold text-white">4</div>
                     <h4 className="font-semibold text-foreground">Immediate Sync & Diagnostics</h4>
                     <p className="text-sm text-muted-foreground mt-1">
                       Your chats and contacts start populating the inbox. If sync fails, use the **Sync phone chats** diagnostics button in Setup within 24 hours.
@@ -373,7 +373,7 @@ export default function WhatsAppDocs() {
             </CardHeader>
             <CardContent className="p-0">
               <div className="overflow-x-auto">
-                <table className="w-full text-left text-sm border-collapse">
+                <table className="w-full text-start text-sm border-collapse">
                   <thead>
                     <tr className="border-b bg-muted/50">
                       <th className="p-4 font-semibold text-foreground">Channel</th>
@@ -533,7 +533,7 @@ export default function WhatsAppDocs() {
                   </AccordionTrigger>
                   <AccordionContent className="text-muted-foreground leading-relaxed text-sm pt-2">
                     This means the phone number currently has two-step verification active in the WhatsApp Business mobile application. To fix this:
-                    <ol className="list-decimal pl-5 mt-2 space-y-1 text-xs">
+                    <ol className="list-decimal ps-5 mt-2 space-y-1 text-xs">
                       <li>Open WhatsApp Business on your phone.</li>
                       <li>Navigate to Settings → Account → Two-step verification and **disable** it.</li>
                       <li>Go back to Postora Setup and reconnect the number. Once verified, you can re-enable the PIN inside the Meta App settings.</li>
@@ -546,7 +546,7 @@ export default function WhatsAppDocs() {
                   </AccordionTrigger>
                   <AccordionContent className="text-muted-foreground leading-relaxed text-sm pt-2">
                     Inbound messages arrive through the Meta webhook. If they stop showing:
-                    <ol className="list-decimal pl-5 mt-2 space-y-1 text-xs">
+                    <ol className="list-decimal ps-5 mt-2 space-y-1 text-xs">
                       <li>Ask an admin to check the webhook callback URL and verify token under Meta Developer Portal.</li>
                       <li>Ensure that your WhatsApp Business Account (WABA) is subscribed specifically to the <code>messages</code> webhook field.</li>
                     </ol>
@@ -558,7 +558,7 @@ export default function WhatsAppDocs() {
                   </AccordionTrigger>
                   <AccordionContent className="text-muted-foreground leading-relaxed text-sm pt-2">
                     This error indicates that history sharing permission was declined on the phone during the QR scan step. To resolve this:
-                    <ol className="list-decimal pl-5 mt-2 space-y-1 text-xs">
+                    <ol className="list-decimal ps-5 mt-2 space-y-1 text-xs">
                       <li>On your phone, open WhatsApp Business.</li>
                       <li>Navigate to Settings → Linked Devices (or Business Platforms) and **disconnect** Postora.</li>
                       <li>Restart the connection flow in Postora Setup, scan the QR code again, and make sure to **accept** chat history sharing when prompted.</li>

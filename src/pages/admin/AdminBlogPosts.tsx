@@ -190,7 +190,7 @@ export default function AdminBlogPosts() {
           <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
             <DialogTrigger asChild>
               <Button onClick={openCreateDialog}>
-                <Plus className="w-4 h-4 mr-2" />
+                <Plus className="w-4 h-4 me-2" />
                 New Post
               </Button>
             </DialogTrigger>
@@ -270,11 +270,11 @@ export default function AdminBlogPosts() {
                           <Button
                             variant="outline"
                             className={cn(
-                              "flex-1 justify-start text-left font-normal",
+                              "flex-1 justify-start text-start font-normal",
                               !formData.scheduled_at && "text-muted-foreground"
                             )}
                           >
-                            <CalendarIcon className="mr-2 h-4 w-4" />
+                            <CalendarIcon className="me-2 h-4 w-4" />
                             {formData.scheduled_at ? (
                               format(formData.scheduled_at, "PPP")
                             ) : (
@@ -326,7 +326,7 @@ export default function AdminBlogPosts() {
                   disabled={createPost.isPending || updatePost.isPending}
                 >
                   {(createPost.isPending || updatePost.isPending) && (
-                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    <Loader2 className="w-4 h-4 me-2 animate-spin" />
                   )}
                   {selectedPost ? "Update" : "Create"}
                 </Button>
@@ -347,7 +347,7 @@ export default function AdminBlogPosts() {
               Create your first post to share updates with users
             </p>
             <Button onClick={openCreateDialog}>
-              <Plus className="w-4 h-4 mr-2" />
+              <Plus className="w-4 h-4 me-2" />
               Create Post
             </Button>
           </div>
@@ -356,10 +356,10 @@ export default function AdminBlogPosts() {
             <table className="w-full">
               <thead className="bg-muted/50">
                 <tr>
-                  <th className="text-left px-4 py-3 text-sm font-medium">Title</th>
-                  <th className="text-left px-4 py-3 text-sm font-medium">Status</th>
-                  <th className="text-left px-4 py-3 text-sm font-medium">Date</th>
-                  <th className="text-right px-4 py-3 text-sm font-medium">Actions</th>
+                  <th className="text-start px-4 py-3 text-sm font-medium">Title</th>
+                  <th className="text-start px-4 py-3 text-sm font-medium">Status</th>
+                  <th className="text-start px-4 py-3 text-sm font-medium">Date</th>
+                  <th className="text-end px-4 py-3 text-sm font-medium">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y">
@@ -403,7 +403,7 @@ export default function AdminBlogPosts() {
                     <td className="px-4 py-3 text-sm text-muted-foreground">
                       {format(new Date(post.created_at), "MMM d, yyyy")}
                     </td>
-                    <td className="px-4 py-3 text-right">
+                    <td className="px-4 py-3 text-end">
                       <div className="flex items-center justify-end gap-2">
                         <Button
                           variant="ghost"
@@ -445,7 +445,7 @@ export default function AdminBlogPosts() {
                 onClick={handleDelete}
                 className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               >
-                {deletePost.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                {deletePost.isPending && <Loader2 className="w-4 h-4 me-2 animate-spin" />}
                 Delete
               </AlertDialogAction>
             </AlertDialogFooter>

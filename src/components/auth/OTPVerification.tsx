@@ -181,7 +181,7 @@ export function OTPVerification({ email, onVerified, onBack, type = "signup" }: 
         >
           {isVerifying ? (
             <>
-              <Loader2 className="w-4 h-4 animate-spin mr-2" />
+              <Loader2 className="w-4 h-4 animate-spin me-2" />
               Verifying...
             </>
           ) : (
@@ -204,17 +204,17 @@ export function OTPVerification({ email, onVerified, onBack, type = "signup" }: 
         >
           {isResending ? (
             <>
-              <Loader2 className="w-4 h-4 animate-spin mr-2" />
+              <Loader2 className="w-4 h-4 animate-spin me-2" />
               Sending...
             </>
           ) : cooldown > 0 ? (
             <>
-              <RefreshCw className="w-4 h-4 mr-2" />
+              <RefreshCw className="w-4 h-4 me-2" />
               Resend in {cooldown}s
             </>
           ) : (
             <>
-              <RefreshCw className="w-4 h-4 mr-2" />
+              <RefreshCw className="w-4 h-4 me-2" />
               Resend code
             </>
           )}
@@ -228,7 +228,7 @@ export function OTPVerification({ email, onVerified, onBack, type = "signup" }: 
           onClick={onBack}
           className="inline-flex items-center text-sm text-muted-foreground hover:text-foreground transition-colors"
         >
-          <ArrowLeft className="w-4 h-4 mr-1" />
+          <ArrowLeft className="w-4 h-4 me-1" />
           Back to sign up
         </button>
       </div>

@@ -523,7 +523,7 @@ export function MediaCropper({
                 >
                   {getRatioLabel(ratio.value, ratio.label)}
                   {recommendedRatios.includes(ratio.value) && (
-                    <Badge variant="secondary" className="text-xs ml-1">
+                    <Badge variant="secondary" className="text-xs ms-1">
                       {t("cropper.recommended", "Recommended")}
                     </Badge>
                   )}
@@ -619,10 +619,10 @@ export function MediaCropper({
                     key={pos}
                     className={cn(
                       "absolute w-3 h-3 bg-white rounded-full",
-                      pos === "top-left" && "top-0 left-0 -translate-x-1/2 -translate-y-1/2",
-                      pos === "top-right" && "top-0 right-0 translate-x-1/2 -translate-y-1/2",
-                      pos === "bottom-left" && "bottom-0 left-0 -translate-x-1/2 translate-y-1/2",
-                      pos === "bottom-right" && "bottom-0 right-0 translate-x-1/2 translate-y-1/2"
+                      pos === "top-left" && "top-0 start-0 -translate-x-1/2 -translate-y-1/2",
+                      pos === "top-right" && "top-0 end-0 translate-x-1/2 -translate-y-1/2",
+                      pos === "bottom-left" && "bottom-0 start-0 -translate-x-1/2 translate-y-1/2",
+                      pos === "bottom-right" && "bottom-0 end-0 translate-x-1/2 translate-y-1/2"
                     )}
                   />
                 ))}
@@ -697,7 +697,7 @@ export function MediaCropper({
                   )}>
                     {expectedResolution.width}×{expectedResolution.height}
                     {expectedResolution.upscaled && (
-                      <Badge variant="secondary" className="ml-2 text-[10px]">{t("cropper.upscaled", "Upscaled")}</Badge>
+                      <Badge variant="secondary" className="ms-2 text-[10px]">{t("cropper.upscaled", "Upscaled")}</Badge>
                     )}
                   </span>
                 </div>
@@ -708,11 +708,11 @@ export function MediaCropper({
 
         <DialogFooter className="gap-2">
           <Button variant="outline" onClick={handleReset}>
-            <RotateCcw className="w-4 h-4 mr-2" />
+            <RotateCcw className="w-4 h-4 me-2" />
             {t("cropper.reset", "Reset")}
           </Button>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
-            <X className="w-4 h-4 mr-2" />
+            <X className="w-4 h-4 me-2" />
             {t("common:cancel", "Cancel")}
           </Button>
           {/* Show warning if video is still uploading (no mediaFileId) */}
@@ -724,9 +724,9 @@ export function MediaCropper({
           ) : (
             <Button onClick={handleApplyCrop} disabled={isProcessing}>
               {isProcessing ? (
-                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                <Loader2 className="w-4 h-4 me-2 animate-spin" />
               ) : (
-                <Check className="w-4 h-4 mr-2" />
+                <Check className="w-4 h-4 me-2" />
               )}
               {t("cropper.applyCrop", "Apply Crop")}
             </Button>

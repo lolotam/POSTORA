@@ -258,7 +258,7 @@ export function MultiPlatformPreviewPanel({
           <Grid3X3 className="w-4 h-4" />
           <span className="hidden sm:inline">{t("multiPlatform.button", "Multi-Platform Preview")}</span>
           <span className="sm:hidden">{t("multiPlatform.previewAll", "Preview All")}</span>
-          <Badge variant="secondary" className="ml-1">
+          <Badge variant="secondary" className="ms-1">
             {selectedPlatforms.length}
           </Badge>
         </Button>

@@ -183,7 +183,7 @@ export function PostDetailDrawer({ post, isOpen, onClose, platformUsername, onDe
               </div>
             )}
             {durationLabel && (
-              <Badge variant="secondary" className="absolute bottom-2 right-2 bg-black/70 text-white border-0 text-xs">
+              <Badge variant="secondary" className="absolute bottom-2 end-2 bg-black/70 text-white border-0 text-xs">
                 ⏱ {durationLabel}
               </Badge>
             )}
@@ -254,7 +254,7 @@ export function PostDetailDrawer({ post, isOpen, onClose, platformUsername, onDe
                     <AlertDialogFooter>
                       <AlertDialogCancel>{t("common:cancel", "Cancel")}</AlertDialogCancel>
                       <AlertDialogAction onClick={handleDelete} disabled={isDeleting}>
-                        {isDeleting ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+                        {isDeleting ? <Loader2 className="w-4 h-4 animate-spin me-2" /> : null}
                         {t("common:delete", "Delete")}
                       </AlertDialogAction>
                     </AlertDialogFooter>

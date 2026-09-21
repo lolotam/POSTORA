@@ -342,7 +342,7 @@ export function TikTokSettings({
               <div className="flex items-center gap-3 p-3 bg-muted/30 rounded-lg border">
                 <Skeleton className="w-12 h-12 rounded-full" />
                 <Skeleton className="h-4 w-32" />
-                <Skeleton className="h-4 w-4 ml-auto" />
+                <Skeleton className="h-4 w-4 ms-auto" />
               </div>
             ) : (
               selectedAccounts.map((account) => {
@@ -377,7 +377,7 @@ export function TikTokSettings({
                           </div>
                         )}
                         {/* TikTok Badge Overlay */}
-                        <div className="absolute -bottom-1 -right-1 w-5 h-5 bg-black rounded-full flex items-center justify-center border-2 border-background">
+                        <div className="absolute -bottom-1 -end-1 w-5 h-5 bg-black rounded-full flex items-center justify-center border-2 border-background">
                           <svg viewBox="0 0 24 24" className="w-3 h-3 text-white" fill="currentColor">
                             <path d="M19.59 6.69a4.83 4.83 0 0 1-3.77-4.25V2h-3.45v13.67a2.89 2.89 0 0 1-5.2 1.74 2.89 2.89 0 0 1 2.31-4.64 2.93 2.93 0 0 1 .88.13V9.4a6.84 6.84 0 0 0-1-.05A6.33 6.33 0 0 0 5 20.1a6.34 6.34 0 0 0 10.86-4.43v-7a8.16 8.16 0 0 0 4.77 1.52v-3.4a4.85 4.85 0 0 1-1-.1z"/>
                           </svg>
@@ -573,7 +573,7 @@ export function TikTokSettings({
             </div>
             
             {settings.musicCheck && (
-              <div className="pl-4 border-l-2 border-muted">
+              <div className="ps-4 border-l-2 border-muted">
                 {isCheckingMusic ? (
                   <p className="text-xs text-muted-foreground flex items-center gap-1">
                     <Loader2 className="w-3 h-3 animate-spin" />
@@ -644,7 +644,7 @@ export function TikTokSettings({
             </span>
           </label>
           {!settings.consentAgreed && (
-            <p className="text-xs text-destructive pl-6">{t("tiktok.requiredToPost", "Required to post")}</p>
+            <p className="text-xs text-destructive ps-6">{t("tiktok.requiredToPost", "Required to post")}</p>
           )}
         </div>
 
@@ -727,7 +727,7 @@ export function TikTokSettings({
             animate={{ opacity: 1, x: 0 }}
             exit={{ opacity: 0, x: 20 }}
             transition={{ type: "spring", stiffness: 300, damping: 30 }}
-            className="w-full lg:w-[45%] lg:border-l lg:pl-4 pt-4 lg:pt-0 border-t lg:border-t-0 space-y-4"
+            className="w-full lg:w-[45%] lg:border-l lg:ps-4 pt-4 lg:pt-0 border-t lg:border-t-0 space-y-4"
           >
             <motion.div
               initial={{ opacity: 0, y: 10 }}

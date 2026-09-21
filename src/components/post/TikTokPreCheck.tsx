@@ -690,7 +690,7 @@ export function TikTokPreCheck({
             onClick={handleRerunCheck}
             disabled={isChecking}
           >
-            <RotateCcw className="w-3 h-3 mr-1" />
+            <RotateCcw className="w-3 h-3 me-1" />
             {t("tikTokPreCheck.recheck", "Re-check")}
           </Button>
           <TikTokPreCheckDetails
@@ -699,7 +699,7 @@ export function TikTokPreCheck({
             lastCheckedAt={lastCheckedAt}
           >
             <Button variant="ghost" size="sm" className="h-7 px-2 text-xs">
-              <Info className="w-3 h-3 mr-1" />
+              <Info className="w-3 h-3 me-1" />
               {t("tikTokPreCheck.details", "Details")}
             </Button>
           </TikTokPreCheckDetails>
@@ -818,7 +818,7 @@ export function TikTokPreCheck({
                           variant="outline"
                           disabled={!isFileUploaded}
                         >
-                          <RefreshCw className="w-4 h-4 mr-2" />
+                          <RefreshCw className="w-4 h-4 me-2" />
                           {t("tikTokPreCheck.transcodeBtn", "Transcode for TikTok")}
                         </Button>
                       )}

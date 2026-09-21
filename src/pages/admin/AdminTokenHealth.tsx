@@ -91,15 +91,15 @@ function getTokenStatus(expiresAt: string | null, platform: string, needsReauth?
 function getStatusBadge(status: TokenStatus) {
   switch (status) {
     case "healthy":
-      return <Badge className="bg-green-500/10 text-green-500 border-green-500/30"><CheckCircle className="w-3 h-3 mr-1" />Healthy</Badge>;
+      return <Badge className="bg-green-500/10 text-green-500 border-green-500/30"><CheckCircle className="w-3 h-3 me-1" />Healthy</Badge>;
     case "expiring":
-      return <Badge className="bg-yellow-500/10 text-yellow-500 border-yellow-500/30"><AlertTriangle className="w-3 h-3 mr-1" />Expiring Soon</Badge>;
+      return <Badge className="bg-yellow-500/10 text-yellow-500 border-yellow-500/30"><AlertTriangle className="w-3 h-3 me-1" />Expiring Soon</Badge>;
     case "expired":
-      return <Badge className="bg-red-500/10 text-red-500 border-red-500/30"><AlertCircle className="w-3 h-3 mr-1" />Expired</Badge>;
+      return <Badge className="bg-red-500/10 text-red-500 border-red-500/30"><AlertCircle className="w-3 h-3 me-1" />Expired</Badge>;
     case "needs_reauth":
-      return <Badge className="bg-red-600/10 text-red-600 border-red-600/30"><RotateCcw className="w-3 h-3 mr-1" />Needs Reconnect</Badge>;
+      return <Badge className="bg-red-600/10 text-red-600 border-red-600/30"><RotateCcw className="w-3 h-3 me-1" />Needs Reconnect</Badge>;
     default:
-      return <Badge variant="outline"><Clock className="w-3 h-3 mr-1" />Unknown</Badge>;
+      return <Badge variant="outline"><Clock className="w-3 h-3 me-1" />Unknown</Badge>;
   }
 }
 
@@ -635,14 +635,14 @@ export default function AdminTokenHealth() {
                     <p className="text-xs text-muted-foreground">Every 30 minutes</p>
                   </div>
                   <Badge className="bg-orange-500/10 text-orange-500 border-orange-500/30">
-                    <Zap className="w-3 h-3 mr-1" />
+                    <Zap className="w-3 h-3 me-1" />
                     30min
                   </Badge>
                 </div>
                 <div className="flex flex-wrap gap-1 mb-3">
                   {SHORT_LIVED_TOKEN_PLATFORMS.map(p => (
                     <Badge key={p} variant="outline" className="text-xs capitalize">
-                      <PlatformIcon platform={p as ExtendedPlatform} size="xs" className="mr-1" />
+                      <PlatformIcon platform={p as ExtendedPlatform} size="xs" className="me-1" />
                       {getPlatformName(p as ExtendedPlatform)}
                     </Badge>
                   ))}
@@ -667,14 +667,14 @@ export default function AdminTokenHealth() {
                     <p className="text-xs text-muted-foreground">Every hour (at :15)</p>
                   </div>
                   <Badge className="bg-blue-500/10 text-blue-500 border-blue-500/30">
-                    <Clock className="w-3 h-3 mr-1" />
+                    <Clock className="w-3 h-3 me-1" />
                     1hr
                   </Badge>
                 </div>
                 <div className="flex flex-wrap gap-1 mb-3">
                   {MEDIUM_LIVED_TOKEN_PLATFORMS.map(p => (
                     <Badge key={p} variant="outline" className="text-xs capitalize">
-                      <PlatformIcon platform={p as ExtendedPlatform} size="xs" className="mr-1" />
+                      <PlatformIcon platform={p as ExtendedPlatform} size="xs" className="me-1" />
                       {getPlatformName(p as ExtendedPlatform)}
                     </Badge>
                   ))}
@@ -699,14 +699,14 @@ export default function AdminTokenHealth() {
                     <p className="text-xs text-muted-foreground">Every 6 hours (at :30)</p>
                   </div>
                   <Badge className="bg-green-500/10 text-green-500 border-green-500/30">
-                    <Timer className="w-3 h-3 mr-1" />
+                    <Timer className="w-3 h-3 me-1" />
                     6hr
                   </Badge>
                 </div>
                 <div className="flex flex-wrap gap-1 mb-3">
                   {LONG_LIVED_TOKEN_PLATFORMS.map(p => (
                     <Badge key={p} variant="outline" className="text-xs capitalize">
-                      <PlatformIcon platform={p as ExtendedPlatform} size="xs" className="mr-1" />
+                      <PlatformIcon platform={p as ExtendedPlatform} size="xs" className="me-1" />
                       {getPlatformName(p as ExtendedPlatform)}
                     </Badge>
                   ))}
@@ -748,7 +748,7 @@ export default function AdminTokenHealth() {
                   </Badge>
                 </div>
                 <Badge className={`text-xs ${scheduleCategory.color}`}>
-                  <Gauge className="w-3 h-3 mr-1" />
+                  <Gauge className="w-3 h-3 me-1" />
                   {scheduleCategory.label} ({scheduleCategory.interval})
                 </Badge>
               </Card>
@@ -762,12 +762,12 @@ export default function AdminTokenHealth() {
             <div className="flex flex-col sm:flex-row gap-4">
               <div className="flex-1">
                 <div className="relative">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                  <Search className="absolute start-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                   <Input
                     placeholder="Search by username, email, or platform..."
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
-                    className="pl-10"
+                    className="ps-10"
                   />
                 </div>
               </div>
@@ -846,14 +846,14 @@ export default function AdminTokenHealth() {
                     <Checkbox
                       checked={selectedAccounts.size === filteredAccounts.length && filteredAccounts.length > 0}
                       onCheckedChange={selectAllFiltered}
-                      className="ml-1"
+                      className="ms-1"
                     />
                     <span className="w-10">Avatar</span>
                     <span className="flex-1">Account</span>
-                    <span className="w-32 text-right">Status</span>
-                    <span className="w-32 text-right">Failures</span>
-                    <span className="w-28 text-right">Last Attempt</span>
-                    <span className="w-28 text-right">Last Updated</span>
+                    <span className="w-32 text-end">Status</span>
+                    <span className="w-32 text-end">Failures</span>
+                    <span className="w-28 text-end">Last Attempt</span>
+                    <span className="w-28 text-end">Last Updated</span>
                     <span className="w-24 text-center">Alerts</span>
                     <span className="w-32 text-center">Actions</span>
                   </div>
@@ -894,7 +894,7 @@ export default function AdminTokenHealth() {
                         </div>
                         
                         {/* Status Badge */}
-                        <div className="w-32 text-right">
+                        <div className="w-32 text-end">
                           {getStatusBadge(account.status)}
                           <div className="mt-1 text-xs text-muted-foreground">
                             {account.token_expires_at ? (
@@ -912,7 +912,7 @@ export default function AdminTokenHealth() {
                         </div>
 
                         {/* Failure Count & Error */}
-                        <div className="w-32 text-right">
+                        <div className="w-32 text-end">
                           {account.failure_count > 0 && (
                             <div className="flex items-center gap-1 justify-end text-red-500 text-sm">
                               <AlertCircle className="w-3 h-3" />
@@ -927,7 +927,7 @@ export default function AdminTokenHealth() {
                         </div>
                         
                         {/* Last Refresh Attempt */}
-                        <div className="w-28 text-right text-xs text-muted-foreground">
+                        <div className="w-28 text-end text-xs text-muted-foreground">
                           <div className="flex items-center gap-1 justify-end">
                             <Timer className="w-3 h-3" />
                             Attempt
@@ -941,7 +941,7 @@ export default function AdminTokenHealth() {
                         </div>
                         
                         {/* Last Updated */}
-                        <div className="w-28 text-right text-xs text-muted-foreground">
+                        <div className="w-28 text-end text-xs text-muted-foreground">
                           <div className="flex items-center gap-1 justify-end">
                             <Clock className="w-3 h-3" />
                             Updated
@@ -1199,7 +1199,7 @@ export default function AdminTokenHealth() {
                 </Button>
               )}
 
-              <Badge variant="secondary" className="ml-auto text-xs">
+              <Badge variant="secondary" className="ms-auto text-xs">
                 {(() => {
                   const filtered = refreshHistory.filter(entry => {
                     if (historyPlatformFilter !== 'all' && entry.platform !== historyPlatformFilter) return false;
@@ -1266,37 +1266,37 @@ export default function AdminTokenHealth() {
                         <div className="w-24">
                           {entry.status === 'refreshed' && (
                             <Badge className="bg-green-500/10 text-green-500 border-green-500/30 text-[10px]">
-                              <CheckCircle className="w-3 h-3 mr-1" />Refreshed
+                              <CheckCircle className="w-3 h-3 me-1" />Refreshed
                             </Badge>
                           )}
                           {entry.status === 'failed' && (
                             <Badge className="bg-red-500/10 text-red-500 border-red-500/30 text-[10px]">
-                              <AlertCircle className="w-3 h-3 mr-1" />Failed
+                              <AlertCircle className="w-3 h-3 me-1" />Failed
                             </Badge>
                           )}
                           {entry.status === 'error' && (
                             <Badge className="bg-red-500/10 text-red-500 border-red-500/30 text-[10px]">
-                              <AlertCircle className="w-3 h-3 mr-1" />Error
+                              <AlertCircle className="w-3 h-3 me-1" />Error
                             </Badge>
                           )}
                           {entry.status === 'skipped' && (
                             <Badge variant="outline" className="text-[10px]">
-                              <Clock className="w-3 h-3 mr-1" />Skipped
+                              <Clock className="w-3 h-3 me-1" />Skipped
                             </Badge>
                           )}
                           {entry.status === 'already_refreshed' && (
                             <Badge className="bg-blue-500/10 text-blue-500 border-blue-500/30 text-[10px]">
-                              <CheckCircle className="w-3 h-3 mr-1" />Already
+                              <CheckCircle className="w-3 h-3 me-1" />Already
                             </Badge>
                           )}
                           {entry.status === 'cooldown' && (
                             <Badge className="bg-yellow-500/10 text-yellow-500 border-yellow-500/30 text-[10px]">
-                              <Timer className="w-3 h-3 mr-1" />Cooldown
+                              <Timer className="w-3 h-3 me-1" />Cooldown
                             </Badge>
                           )}
                           {entry.status === 'needs_reauth' && (
                             <Badge className="bg-red-600/10 text-red-600 border-red-600/30 text-[10px]">
-                              <RotateCcw className="w-3 h-3 mr-1" />Reauth
+                              <RotateCcw className="w-3 h-3 me-1" />Reauth
                             </Badge>
                           )}
                         </div>

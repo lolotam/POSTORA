@@ -103,7 +103,7 @@ export function HiggsfieldIntegrationCard({ onCatalogChanged }: { onCatalogChang
         <Badge variant={status?.connected ? "default" : "secondary"}>
           {status?.connected ? (
             <>
-              <CheckCircle2 className="mr-1 h-3 w-3" />
+              <CheckCircle2 className="me-1 h-3 w-3" />
               Connected
             </>
           ) : (
@@ -120,9 +120,9 @@ export function HiggsfieldIntegrationCard({ onCatalogChanged }: { onCatalogChang
         {!status?.connected ? (
           <Button onClick={() => void action("connect")} disabled={!!busy}>
             {busy === "connect" ? (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              <Loader2 className="me-2 h-4 w-4 animate-spin" />
             ) : (
-              <Link2 className="mr-2 h-4 w-4" />
+              <Link2 className="me-2 h-4 w-4" />
             )}
             Connect with Higgsfield
           </Button>
@@ -130,9 +130,9 @@ export function HiggsfieldIntegrationCard({ onCatalogChanged }: { onCatalogChang
           <>
             <Button variant="outline" onClick={() => void action("sync")} disabled={!!busy}>
               {busy === "sync" ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                <Loader2 className="me-2 h-4 w-4 animate-spin" />
               ) : (
-                <RefreshCw className="mr-2 h-4 w-4" />
+                <RefreshCw className="me-2 h-4 w-4" />
               )}
               Sync models
             </Button>
@@ -142,7 +142,7 @@ export function HiggsfieldIntegrationCard({ onCatalogChanged }: { onCatalogChang
               onClick={() => setConfirm(true)}
               disabled={!!busy}
             >
-              <Unlink className="mr-2 h-4 w-4" />
+              <Unlink className="me-2 h-4 w-4" />
               Disconnect
             </Button>
           </>

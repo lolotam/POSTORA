@@ -54,14 +54,14 @@ export default function UploadLimits() {
                 <TableHeader>
                   <TableRow>
                     <TableHead>{t("uploadLimits.table.network", "Social Network")}</TableHead>
-                    <TableHead className="text-right">{t("uploadLimits.table.cap", "Hard Cap (posts per 24h)")}</TableHead>
+                    <TableHead className="text-end">{t("uploadLimits.table.cap", "Hard Cap (posts per 24h)")}</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {platformLimits.map((item) => (
                     <TableRow key={item.id}>
                       <TableCell className="font-medium">{platformNames[item.id]}</TableCell>
-                      <TableCell className="text-right">
+                      <TableCell className="text-end">
                         <Badge variant="secondary">{item.cap}</Badge>
                       </TableCell>
                     </TableRow>

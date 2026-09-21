@@ -249,7 +249,7 @@ export function WhatsAppComposer({
               variant="destructive"
               size="icon"
               aria-label="Remove attachment"
-              className="absolute -right-2 -top-2 h-5 w-5 rounded-full"
+              className="absolute -end-2 -top-2 h-5 w-5 rounded-full"
               onClick={() => clearPreview(mediaPreview)}
             >
               <X className="h-3 w-3" />

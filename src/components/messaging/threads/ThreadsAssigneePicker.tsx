@@ -55,8 +55,8 @@ export function ThreadsAssigneePicker({ assignedTo, disabled, onChange }: Props)
           className="w-full justify-start font-normal h-8"
           onClick={() => onChange(null)}
         >
-          <UserCircle2 className="h-3.5 w-3.5 mr-2" />
-          <span className="flex-1 text-left">{t("assignee.unassigned", "Unassigned")}</span>
+          <UserCircle2 className="h-3.5 w-3.5 me-2" />
+          <span className="flex-1 text-start">{t("assignee.unassigned", "Unassigned")}</span>
           {isUnassigned && <Check className="h-3.5 w-3.5 text-primary" />}
         </Button>
         <Button
@@ -66,10 +66,10 @@ export function ThreadsAssigneePicker({ assignedTo, disabled, onChange }: Props)
           onClick={() => meId && onChange(meId)}
           disabled={!meId}
         >
-          <Avatar className="h-4 w-4 mr-2">
+          <Avatar className="h-4 w-4 me-2">
             <AvatarFallback className="text-[8px] bg-primary/10 text-primary">ME</AvatarFallback>
           </Avatar>
-          <span className="flex-1 text-left">{t("assignee.me", "Me")}</span>
+          <span className="flex-1 text-start">{t("assignee.me", "Me")}</span>
           {isMe && <Check className="h-3.5 w-3.5 text-primary" />}
         </Button>
       </PopoverContent>

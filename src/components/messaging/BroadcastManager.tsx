@@ -165,14 +165,14 @@ export function BroadcastManager() {
         <p className="text-sm text-muted-foreground">{t("broadcast.hint", "Send approved templates to multiple contacts at once")}</p>
         <Dialog open={createOpen} onOpenChange={setCreateOpen}>
           <DialogTrigger asChild>
-            <Button><Plus className="h-4 w-4 mr-2" />{t("broadcast.new", "New Broadcast")}</Button>
+            <Button><Plus className="h-4 w-4 me-2" />{t("broadcast.new", "New Broadcast")}</Button>
           </DialogTrigger>
           <DialogContent className="max-w-lg max-h-[90vh] overflow-hidden flex flex-col">
             <DialogHeader>
               <DialogTitle>{t("broadcast.createTitle", "Create Broadcast")}</DialogTitle>
               <DialogDescription>{t("broadcast.createDesc", "Send an approved template to selected contacts")}</DialogDescription>
             </DialogHeader>
-            <div className="space-y-4 flex-1 overflow-y-auto pr-1">
+            <div className="space-y-4 flex-1 overflow-y-auto pe-1">
               <div>
                 <Label>{t("broadcast.campaignName", "Campaign Name")}</Label>
                 <Input placeholder={t("broadcast.namePlaceholder", "e.g. January Promo")} value={name} onChange={(e) => setName(e.target.value)} />
@@ -250,7 +250,7 @@ export function BroadcastManager() {
                 disabled={!name || !templateName || selectedContacts.size === 0 || selectedContacts.size > 1000 || createBroadcast.isPending}
                 className="w-full"
               >
-                {createBroadcast.isPending ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Users className="h-4 w-4 mr-2" />}
+                {createBroadcast.isPending ? <Loader2 className="h-4 w-4 me-2 animate-spin" /> : <Users className="h-4 w-4 me-2" />}
                 {t("broadcast.createCount", "Create Broadcast ({{count}} recipients)", { count: selectedContacts.size })}
               </Button>
             </DialogFooter>
@@ -278,7 +278,7 @@ export function BroadcastManager() {
               }}
               disabled={sendBroadcast.isPending}
             >
-              {sendBroadcast.isPending ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Send className="h-4 w-4 mr-2" />}
+              {sendBroadcast.isPending ? <Loader2 className="h-4 w-4 me-2 animate-spin" /> : <Send className="h-4 w-4 me-2" />}
               {t("broadcast.confirmSend", "Confirm Send")}
             </Button>
           </DialogFooter>
@@ -328,7 +328,7 @@ export function BroadcastManager() {
                       {b.status === "pending" && (
                         <>
                           <Button size="sm" onClick={() => setConfirmSendId(b.id)} disabled={sendBroadcast.isPending}>
-                            <Send className="h-3 w-3 mr-1" />{t("broadcast.send", "Send")}
+                            <Send className="h-3 w-3 me-1" />{t("broadcast.send", "Send")}
                           </Button>
                           <Button size="sm" variant="ghost" onClick={() => deleteBroadcast.mutate(b.id)}>
                             <Trash2 className="h-3 w-3" />

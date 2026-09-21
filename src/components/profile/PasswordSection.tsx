@@ -249,14 +249,14 @@ export function PasswordSection({ userEmail }: PasswordSectionProps) {
                 value={currentPassword}
                 onChange={(e) => setCurrentPassword(e.target.value)}
                 placeholder="Enter current password (optional)"
-                className="pr-10"
+                className="pe-10"
                 autoComplete="current-password"
               />
               <Button
                 type="button"
                 variant="ghost"
                 size="icon"
-                className="absolute right-0 top-0 h-full px-3"
+                className="absolute end-0 top-0 h-full px-3"
                 onClick={() => setShowCurrentPassword(!showCurrentPassword)}
               >
                 {showCurrentPassword ? (
@@ -277,14 +277,14 @@ export function PasswordSection({ userEmail }: PasswordSectionProps) {
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
                 placeholder="Enter new password"
-                className="pr-10"
+                className="pe-10"
                 autoComplete="new-password"
               />
               <Button
                 type="button"
                 variant="ghost"
                 size="icon"
-                className="absolute right-0 top-0 h-full px-3"
+                className="absolute end-0 top-0 h-full px-3"
                 onClick={() => setShowNewPassword(!showNewPassword)}
               >
                 {showNewPassword ? (
@@ -305,14 +305,14 @@ export function PasswordSection({ userEmail }: PasswordSectionProps) {
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
                 placeholder="Confirm new password"
-                className="pr-10"
+                className="pe-10"
                 autoComplete="new-password"
               />
               <Button
                 type="button"
                 variant="ghost"
                 size="icon"
-                className="absolute right-0 top-0 h-full px-3"
+                className="absolute end-0 top-0 h-full px-3"
                 onClick={() => setShowConfirmPassword(!showConfirmPassword)}
               >
                 {showConfirmPassword ? (
@@ -328,7 +328,7 @@ export function PasswordSection({ userEmail }: PasswordSectionProps) {
             <Button onClick={startChange} disabled={isBusy}>
               {isBusy ? (
                 <>
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  <Loader2 className="w-4 h-4 me-2 animate-spin" />
                   Updating...
                 </>
               ) : (
@@ -362,7 +362,7 @@ export function PasswordSection({ userEmail }: PasswordSectionProps) {
           </div>
           <div className="flex gap-3">
             <Button onClick={confirmMfa} disabled={isBusy}>
-              {isBusy ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+              {isBusy ? <Loader2 className="w-4 h-4 me-2 animate-spin" /> : null}
               Confirm
             </Button>
             <Button variant="outline" onClick={reset}>Cancel</Button>
@@ -390,7 +390,7 @@ export function PasswordSection({ userEmail }: PasswordSectionProps) {
           </div>
           <div className="flex gap-3">
             <Button onClick={confirmOtp} disabled={isBusy}>
-              {isBusy ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}
+              {isBusy ? <Loader2 className="w-4 h-4 me-2 animate-spin" /> : null}
               Confirm
             </Button>
             <Button variant="outline" onClick={reset}>Cancel</Button>

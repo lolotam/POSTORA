@@ -306,7 +306,7 @@ export function ThreadsSettings({ settings, onChange, hasMedia, hasVideo = false
             </div>
           )}
           {settings.crossShareToIg && !crossShareDisabled && (
-            <div className="flex items-center justify-between pl-6">
+            <div className="flex items-center justify-between ps-6">
               <div className="flex items-start gap-2">
                 <EyeOff className="w-4 h-4 mt-0.5 text-muted-foreground" />
                 <div>
@@ -370,7 +370,7 @@ export function ThreadsSettings({ settings, onChange, hasMedia, hasVideo = false
             maxLength={1000}
             rows={2}
           />
-          <p className="text-xs text-muted-foreground text-right">
+          <p className="text-xs text-muted-foreground text-end">
             {settings.altText.length}/1000
           </p>
         </div>

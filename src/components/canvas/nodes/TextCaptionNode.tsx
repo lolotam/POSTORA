@@ -136,7 +136,7 @@ function TextCaptionNodeComponent({ id, data, selected }: NodeProps) {
       </Handle>
 
       {/* Floating Label with status */}
-      <div className="absolute -top-8 left-6 flex items-center gap-1.5 px-2.5 py-1 bg-card/90 backdrop-blur-sm rounded-lg text-xs font-medium text-muted-foreground border border-border/50 z-10">
+      <div className="absolute -top-8 start-6 flex items-center gap-1.5 px-2.5 py-1 bg-card/90 backdrop-blur-sm rounded-lg text-xs font-medium text-muted-foreground border border-border/50 z-10">
         <Type className="h-3.5 w-3.5" />
         <span>Caption</span>
         {isValid ? (
@@ -148,7 +148,7 @@ function TextCaptionNodeComponent({ id, data, selected }: NodeProps) {
 
       {/* Floating Toolbar */}
       {selected && (
-        <div className="absolute -top-14 left-1/2 -translate-x-1/2 z-20">
+        <div className="absolute -top-14 start-1/2 -translate-x-1/2 z-20">
           <div className="flex items-center gap-0.5 px-1.5 py-1 bg-card/95 backdrop-blur-md border border-border/50 rounded-xl shadow-lg">
             <Tooltip>
               <TooltipTrigger asChild>
@@ -251,7 +251,7 @@ function TextCaptionNodeComponent({ id, data, selected }: NodeProps) {
                   }}>{tag}</span>
                   <button
                     onClick={(e) => { e.stopPropagation(); setHashtags(h => h.filter((_, idx) => idx !== i)); }}
-                    className="ml-0.5 opacity-60 hover:opacity-100 hover:text-destructive"
+                    className="ms-0.5 opacity-60 hover:opacity-100 hover:text-destructive"
                   >
                     <X className="h-2.5 w-2.5" />
                   </button>
@@ -304,10 +304,10 @@ function TextCaptionNodeComponent({ id, data, selected }: NodeProps) {
             <span className="text-sm text-muted-foreground">{charCount} characters</span>
             <div className="flex gap-2">
               <Button variant="outline" size="sm" onClick={handleGenerateCaption} disabled={isGeneratingCaption}>
-                <Sparkles className="h-4 w-4 mr-1" /> AI Caption
+                <Sparkles className="h-4 w-4 me-1" /> AI Caption
               </Button>
               <Button variant="outline" size="sm" onClick={handleGenerateHashtags} disabled={isGeneratingHashtags}>
-                <Hash className="h-4 w-4 mr-1" /> Hashtags
+                <Hash className="h-4 w-4 me-1" /> Hashtags
               </Button>
             </div>
           </div>

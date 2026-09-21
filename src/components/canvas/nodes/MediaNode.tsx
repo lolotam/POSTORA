@@ -210,7 +210,7 @@ function MediaNodeComponent({ id, data, selected }: NodeProps) {
   return (
     <div className="relative">
       {/* Floating Label with status */}
-      <div className="absolute -top-8 left-6 flex items-center gap-1.5 px-2.5 py-1 bg-card/90 backdrop-blur-sm rounded-lg text-xs font-medium text-muted-foreground border border-border/50 z-10">
+      <div className="absolute -top-8 start-6 flex items-center gap-1.5 px-2.5 py-1 bg-card/90 backdrop-blur-sm rounded-lg text-xs font-medium text-muted-foreground border border-border/50 z-10">
         <Image className="h-3.5 w-3.5" />
         <span>Media</span>
         {isValid ? <Check className="h-3 w-3 text-green-500" /> : <AlertCircle className="h-3 w-3 text-amber-500" />}
@@ -218,7 +218,7 @@ function MediaNodeComponent({ id, data, selected }: NodeProps) {
 
       {/* Floating Toolbar */}
       {selected && (
-        <div className="absolute -top-14 left-1/2 -translate-x-1/2 z-20">
+        <div className="absolute -top-14 start-1/2 -translate-x-1/2 z-20">
           <div className="flex items-center gap-0.5 px-1.5 py-1 bg-card/95 backdrop-blur-md border border-border/50 rounded-xl shadow-lg">
             <Tooltip>
               <TooltipTrigger asChild>
@@ -288,15 +288,15 @@ function MediaNodeComponent({ id, data, selected }: NodeProps) {
                 <img src={primaryImage.url} alt={primaryImage.name} className="w-full h-full object-cover" />
               )}
               {primaryImage.width && primaryImage.height && (
-                <div className="absolute top-3 right-3 px-2 py-1 bg-black/60 backdrop-blur-sm rounded text-[11px] text-white font-medium">
+                <div className="absolute top-3 end-3 px-2 py-1 bg-black/60 backdrop-blur-sm rounded text-[11px] text-white font-medium">
                   {primaryImage.width} × {primaryImage.height}
                 </div>
               )}
-              <button onClick={() => setShowUploadPanel(true)} className="absolute bottom-3 left-3 flex items-center gap-1.5 px-3 py-1.5 bg-card/90 backdrop-blur-sm rounded-lg text-xs font-medium text-muted-foreground hover:text-foreground border border-border/50 transition-colors">
+              <button onClick={() => setShowUploadPanel(true)} className="absolute bottom-3 start-3 flex items-center gap-1.5 px-3 py-1.5 bg-card/90 backdrop-blur-sm rounded-lg text-xs font-medium text-muted-foreground hover:text-foreground border border-border/50 transition-colors">
                 <RefreshCw className="h-3 w-3" /> Replace
               </button>
               {mediaFiles.length > 1 && (
-                <div className="absolute bottom-3 right-3 px-2 py-1 bg-black/60 backdrop-blur-sm rounded text-[11px] text-white font-medium">
+                <div className="absolute bottom-3 end-3 px-2 py-1 bg-black/60 backdrop-blur-sm rounded text-[11px] text-white font-medium">
                   +{mediaFiles.length - 1} more
                 </div>
               )}
@@ -382,10 +382,10 @@ function MediaNodeComponent({ id, data, selected }: NodeProps) {
                 ) : (
                   <img src={file.url} alt={file.name} className="aspect-square object-cover" />
                 )}
-                <button onClick={() => removeFile(file.id)} className="absolute top-1 right-1 h-6 w-6 rounded-full bg-destructive/80 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                <button onClick={() => removeFile(file.id)} className="absolute top-1 end-1 h-6 w-6 rounded-full bg-destructive/80 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
                   <X className="h-3 w-3 text-white" />
                 </button>
-                <p className="absolute bottom-0 left-0 right-0 text-[10px] text-white bg-black/60 px-2 py-1 truncate">{file.name}</p>
+                <p className="absolute bottom-0 start-0 end-0 text-[10px] text-white bg-black/60 px-2 py-1 truncate">{file.name}</p>
               </div>
             ))}
           </div>

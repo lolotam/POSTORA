@@ -127,12 +127,12 @@ export function RetryAccountDialog({
               >
                 {isLoading ? (
                   <>
-                    <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                    <Loader2 className="w-4 h-4 animate-spin me-2" />
                     {t("retryDialog.retrying", "Retrying...")}
                   </>
                 ) : (
                   <>
-                    <RefreshCw className="w-4 h-4 mr-2" />
+                    <RefreshCw className="w-4 h-4 me-2" />
                     {t("retryDialog.retryCount", "Retry ({{count}})", { count: selectedAccountIds.length })}
                   </>
                 )}
@@ -241,7 +241,7 @@ export function RetryMediaDialog({
               >
                 {isUploading ? (
                   <>
-                    <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                    <Loader2 className="w-4 h-4 animate-spin me-2" />
                     {t("retryMediaDialog.uploading", "Uploading...")}
                   </>
                 ) : (

@@ -137,7 +137,7 @@ export function FeatureFlagScheduler() {
           </div>
           {!isAdding && (
             <Button size="sm" onClick={() => setIsAdding(true)}>
-              <Plus className="w-4 h-4 mr-2" />
+              <Plus className="w-4 h-4 me-2" />
               Schedule
             </Button>
           )}
@@ -196,11 +196,11 @@ export function FeatureFlagScheduler() {
                     <Button
                       variant="outline"
                       className={cn(
-                        "w-full justify-start text-left font-normal",
+                        "w-full justify-start text-start font-normal",
                         !selectedDate && "text-muted-foreground"
                       )}
                     >
-                      <CalendarIcon className="mr-2 h-4 w-4" />
+                      <CalendarIcon className="me-2 h-4 w-4" />
                       {selectedDate ? format(selectedDate, "PPP") : "Pick a date"}
                     </Button>
                   </PopoverTrigger>
@@ -235,7 +235,7 @@ export function FeatureFlagScheduler() {
                 disabled={!selectedFlag || !selectedDate || createScheduleMutation.isPending}
               >
                 {createScheduleMutation.isPending && (
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  <Loader2 className="w-4 h-4 me-2 animate-spin" />
                 )}
                 Create Schedule
               </Button>
@@ -283,7 +283,7 @@ export function FeatureFlagScheduler() {
                       <p className="text-xs text-muted-foreground">
                         {format(scheduledDate, "MMM d, yyyy 'at' h:mm a")}
                         {isPast && (
-                          <Badge variant="outline" className="ml-2 text-yellow-600 border-yellow-500/30">
+                          <Badge variant="outline" className="ms-2 text-yellow-600 border-yellow-500/30">
                             Pending execution
                           </Badge>
                         )}

@@ -58,7 +58,7 @@ export function WorkflowDiagrams({ onDownloadBasic, onDownloadComplete, onDownlo
                       <h4 className="font-semibold text-sm">{node.label}</h4>
                       <p className="text-xs text-muted-foreground">{node.desc}</p>
                     </Card>
-                    <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-2 h-2 rounded-full bg-primary/50 opacity-0 group-hover:opacity-100 transition-opacity" />
+                    <div className="absolute -bottom-1 start-1/2 -translate-x-1/2 w-2 h-2 rounded-full bg-primary/50 opacity-0 group-hover:opacity-100 transition-opacity" />
                   </div>
                   {i < 4 && <ArrowRight className="w-5 h-5 text-muted-foreground hidden lg:block animate-pulse" />}
                 </div>
@@ -66,7 +66,7 @@ export function WorkflowDiagrams({ onDownloadBasic, onDownloadComplete, onDownlo
             </div>
             <div className="mt-6 flex justify-center">
               <Button onClick={onDownloadBasic} variant="outline" size="sm" className="border-sky-500/50 hover:bg-sky-500/10">
-                <Download className="w-4 h-4 mr-2" />
+                <Download className="w-4 h-4 me-2" />
                 Download This Workflow
               </Button>
             </div>
@@ -132,7 +132,7 @@ export function WorkflowDiagrams({ onDownloadBasic, onDownloadComplete, onDownlo
             
             <div className="mt-6 flex justify-center">
               <Button onClick={onDownloadComplete} variant="outline" size="sm" className="border-violet-500/50 hover:bg-violet-500/10">
-                <Download className="w-4 h-4 mr-2" />
+                <Download className="w-4 h-4 me-2" />
                 Download This Workflow
               </Button>
             </div>
@@ -208,7 +208,7 @@ export function WorkflowDiagrams({ onDownloadBasic, onDownloadComplete, onDownlo
             
             <div className="mt-6 flex justify-center">
               <Button onClick={onDownloadAlerts} variant="outline" size="sm" className="border-amber-500/50 hover:bg-amber-500/10">
-                <Download className="w-4 h-4 mr-2" />
+                <Download className="w-4 h-4 me-2" />
                 Download This Workflow
               </Button>
             </div>

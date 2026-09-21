@@ -288,7 +288,7 @@ export function LocationAutocomplete({
           <button
             type="button"
             onClick={clearSelection}
-            className="ml-auto p-1 hover:bg-destructive/10 rounded transition-colors"
+            className="ms-auto p-1 hover:bg-destructive/10 rounded transition-colors"
           >
             <X className="w-3.5 h-3.5 text-muted-foreground" />
           </button>
@@ -301,7 +301,7 @@ export function LocationAutocomplete({
               <button
                 type="button"
                 onClick={() => navigate("/profiles")}
-                className="underline font-medium ml-1 hover:text-amber-700 dark:hover:text-amber-300"
+                className="underline font-medium ms-1 hover:text-amber-700 dark:hover:text-amber-300"
               >
                 {t("location.reconnectAccount", "Reconnect your account")}
               </button>
@@ -325,16 +325,16 @@ export function LocationAutocomplete({
           : t("location.defaultHelper", "Tag a location on your post.")}
       </p>
       <div className="relative">
-        <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+        <MapPin className="absolute start-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
         <Input
           placeholder={t("location.searchPlaceholder", "Search for a location...")}
           value={query}
           onChange={(e) => handleInputChange(e.target.value)}
           onFocus={() => (results.length > 0 || errorMessage || needsReconnect) && setShowDropdown(true)}
-          className="pl-9 pr-8"
+          className="ps-9 pe-8"
         />
         {loading && (
-          <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground animate-spin" />
+          <Loader2 className="absolute end-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground animate-spin" />
         )}
       </div>
 
@@ -384,7 +384,7 @@ export function LocationAutocomplete({
                 }}
                 aria-disabled={!selectable}
                 className={cn(
-                  "w-full text-left px-3 py-2 text-sm transition-colors flex items-center gap-2",
+                  "w-full text-start px-3 py-2 text-sm transition-colors flex items-center gap-2",
                   selectable
                     ? "hover:bg-accent cursor-pointer"
                     : "opacity-60 cursor-not-allowed hover:bg-transparent"
@@ -395,7 +395,7 @@ export function LocationAutocomplete({
                 <div className="truncate flex-1">
                   <span className="font-medium">{place.name}</span>
                   {(place.city || place.country) && (
-                    <span className="text-muted-foreground ml-1">
+                    <span className="text-muted-foreground ms-1">
                       {[place.city, place.country].filter(Boolean).join(", ")}
                     </span>
                   )}

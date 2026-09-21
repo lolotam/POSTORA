@@ -118,7 +118,7 @@ export function RequestBuilder(props: RequestBuilderProps) {
                   <Button key={platform} variant={isSelected ? "default" : "outline"} size="sm" onClick={() => togglePlatform(platform)} className="gap-2">
                     <PlatformIcon platform={platform} size="xs" />
                     {getPlatformName(platform)}
-                    {platformAccounts.length > 0 && <Badge variant="secondary" className="ml-1 text-xs">{platformAccounts.length}</Badge>}
+                    {platformAccounts.length > 0 && <Badge variant="secondary" className="ms-1 text-xs">{platformAccounts.length}</Badge>}
                   </Button>
                 );
               })}

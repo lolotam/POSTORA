@@ -162,7 +162,7 @@ export default function PlatformMediaMatrix() {
       <div className="bg-gradient-to-b from-primary/5 to-background border-b border-border">
         <div className="container mx-auto px-6 py-12">
           <Badge variant="secondary" className="mb-4">
-            <Layers className="w-3 h-3 mr-1" />
+            <Layers className="w-3 h-3 me-1" />
             Media Support Reference
           </Badge>
           <h1 className="text-3xl md:text-4xl font-bold mb-4">
@@ -227,7 +227,7 @@ export default function PlatformMediaMatrix() {
             <table className="w-full">
               <thead>
                 <tr className="bg-muted/50 border-b border-border">
-                  <th className="py-3 px-4 text-left text-sm font-semibold">Platform</th>
+                  <th className="py-3 px-4 text-start text-sm font-semibold">Platform</th>
                   <th className="py-3 px-4 text-center text-sm font-semibold">Text Only</th>
                   <th className="py-3 px-4 text-center text-sm font-semibold">
                     <div className="flex flex-col items-center">

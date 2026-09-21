@@ -318,7 +318,7 @@ export function EmailSignatureManager({
                   disabled={createMutation.isPending || updateMutation.isPending}
                 >
                   {(createMutation.isPending || updateMutation.isPending) && (
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    <Loader2 className="h-4 w-4 me-2 animate-spin" />
                   )}
                   {editingSignature ? "Update" : "Create"}
                 </Button>

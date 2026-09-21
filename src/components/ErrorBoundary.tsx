@@ -79,7 +79,7 @@ export class ErrorBoundary extends Component<Props, State> {
             <div className="flex gap-3">
               {!isChunkError && (
                 <Button variant="outline" onClick={this.handleRetry}>
-                  <RefreshCw className="w-4 h-4 mr-2" />
+                  <RefreshCw className="w-4 h-4 me-2" />
                   Try Again
                 </Button>
               )}
@@ -93,7 +93,7 @@ export class ErrorBoundary extends Component<Props, State> {
               </p>
             )}
             {import.meta.env.DEV && this.state.error && (
-              <details className="w-full text-left">
+              <details className="w-full text-start">
                 <summary className="text-xs text-muted-foreground cursor-pointer">
                   Error details
                 </summary>

@@ -57,7 +57,7 @@ export function UnmatchedObservationsPanel() {
                     <TableHead>Platform</TableHead>
                     <TableHead>Kind</TableHead>
                     <TableHead>Reason</TableHead>
-                    <TableHead className="text-right">Attempts</TableHead>
+                    <TableHead className="text-end">Attempts</TableHead>
                     <TableHead>Last seen</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -74,7 +74,7 @@ export function UnmatchedObservationsPanel() {
                           {row.reason === "account_inactive" ? "Disconnected account" : "Unknown recipient"}
                         </Badge>
                       </TableCell>
-                      <TableCell className="text-right">{row.attempts}</TableCell>
+                      <TableCell className="text-end">{row.attempts}</TableCell>
                       <TableCell className="text-xs text-muted-foreground">
                         {new Date(row.last_seen_at).toLocaleString()}
                       </TableCell>

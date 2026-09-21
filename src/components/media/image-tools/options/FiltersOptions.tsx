@@ -215,7 +215,7 @@ export function FiltersOptions({
           onClick={onReset}
           className="w-full"
         >
-          <RefreshCw className="w-3 h-3 mr-2" />
+          <RefreshCw className="w-3 h-3 me-2" />
           {t("imageTools.resetFilters", "Reset Filters")}
         </Button>
       )}

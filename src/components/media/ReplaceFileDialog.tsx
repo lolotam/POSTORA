@@ -277,12 +277,12 @@ export function ReplaceFileDialog({
           <Button onClick={handleReplace} disabled={!newFile || replacing}>
             {replacing ? (
               <>
-                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                <Loader2 className="w-4 h-4 me-2 animate-spin" />
                 {t("replace.replacing", "Replacing...")}
               </>
             ) : (
               <>
-                <Upload className="w-4 h-4 mr-2" />
+                <Upload className="w-4 h-4 me-2" />
                 {t("actions.replace", "Replace")}
               </>
             )}

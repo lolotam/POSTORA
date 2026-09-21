@@ -97,24 +97,24 @@ export function WhatsAppContactsContent() {
         </p>
         <div className="flex gap-2 flex-wrap">
           <Button variant="outline" onClick={() => setImportOpen(true)}>
-            <Upload className="h-4 w-4 mr-2" />
+            <Upload className="h-4 w-4 me-2" />
             {t("contacts.importCsv", "Import CSV")}
           </Button>
           <ContactExportMenu getContacts={exportFetcher} />
           <Button onClick={openAdd}>
-            <Plus className="h-4 w-4 mr-2" />
+            <Plus className="h-4 w-4 me-2" />
             {t("contacts.add", "Add Contact")}
           </Button>
         </div>
       </div>
 
       <div className="relative max-w-sm">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+        <Search className="absolute start-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
         <Input
           placeholder={t("contacts.search", "Search contacts...")}
           value={searchInput}
           onChange={(e) => setSearchInput(e.target.value)}
-          className="pl-9"
+          className="ps-9"
         />
       </div>
 

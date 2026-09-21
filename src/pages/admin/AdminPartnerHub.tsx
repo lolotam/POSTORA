@@ -41,7 +41,7 @@ export default function AdminPartnerHub() {
             <h1 className="text-2xl font-bold">Partner Hub</h1>
             <p className="text-sm text-muted-foreground">Partner API keys, quotas and live consumption across every workspace.</p>
           </div>
-          <Button onClick={() => setGenerateOpen(true)}><Plus className="mr-1 h-4 w-4" /> Generate partner key</Button>
+          <Button onClick={() => setGenerateOpen(true)}><Plus className="me-1 h-4 w-4" /> Generate partner key</Button>
         </div>
 
         <PartnerHubKpiCards overview={overview.data} connectorOverview={connectorOverview.data} connectorError={connectorOverview.error as Error | null} isLoading={overview.isLoading} error={overview.error as Error | null} />
@@ -54,7 +54,7 @@ export default function AdminPartnerHub() {
                 <CardDescription>Click a scope to filter. Quota bars turn amber at 80% and red at 95%.</CardDescription>
               </div>
               {activeScope && (
-                <Button variant="ghost" size="sm" onClick={() => setActiveScope(null)}><X className="mr-1 h-3.5 w-3.5" /> Clear filter: {activeScope}</Button>
+                <Button variant="ghost" size="sm" onClick={() => setActiveScope(null)}><X className="me-1 h-3.5 w-3.5" /> Clear filter: {activeScope}</Button>
               )}
             </div>
           </CardHeader>

@@ -157,7 +157,7 @@ export function CreatePostHeader({
       </AnimatePresence>
 
       {hasDraft && onDiscardDraft && (
-        <div className="absolute right-0 top-1/2 -translate-y-1/2">
+        <div className="absolute end-0 top-1/2 -translate-y-1/2">
           <Tooltip>
             <TooltipTrigger asChild>
               <Button

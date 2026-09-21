@@ -32,7 +32,7 @@ export default function UpscaleApi() {
           {title && <span className="text-xs text-gray-500">• {title}</span>}
         </div>
         <Button variant="ghost" size="sm" onClick={() => copyCode(code, id)} className="h-7 text-xs text-gray-300 hover:text-white hover:bg-white/10">
-          {copiedCode === id ? <Check className="w-3 h-3 mr-1" /> : <Copy className="w-3 h-3 mr-1" />}
+          {copiedCode === id ? <Check className="w-3 h-3 me-1" /> : <Copy className="w-3 h-3 me-1" />}
           {copiedCode === id ? "Copied!" : "Copy"}
         </Button>
       </div>

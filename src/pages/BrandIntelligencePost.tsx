@@ -209,8 +209,8 @@ export default function BrandIntelligencePost() {
             </p>
           </div>
           {hasTranscript && (
-            <Badge className="bg-gradient-to-r from-violet-500 to-pink-500 text-white border-0 ml-auto">
-              <Sparkles className="w-3 h-3 mr-1" /> {t("video.transcribed", "Transcribed")}
+            <Badge className="bg-gradient-to-r from-violet-500 to-pink-500 text-white border-0 ms-auto">
+              <Sparkles className="w-3 h-3 me-1" /> {t("video.transcribed", "Transcribed")}
             </Badge>
           )}
         </div>
@@ -285,7 +285,7 @@ export default function BrandIntelligencePost() {
                     <div className="relative">
                       {player}
                       {durationLabel && (
-                        <Badge variant="secondary" className="absolute bottom-2 right-2 bg-black/70 text-white border-0 text-xs">
+                        <Badge variant="secondary" className="absolute bottom-2 end-2 bg-black/70 text-white border-0 text-xs">
                           ⏱ {durationLabel}
                         </Badge>
                       )}

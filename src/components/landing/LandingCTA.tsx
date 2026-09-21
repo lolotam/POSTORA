@@ -24,7 +24,7 @@ export default function LandingCTA() {
               <a href="https://postora.cloud/auth?mode=signup">
                 <Button size="lg" variant="gradient">
                   Get Started for Free
-                  <ArrowRight className="w-4 h-4 ml-2" />
+                  <ArrowRight className="w-4 h-4 ms-2" />
                 </Button>
               </a>
             </Reveal>

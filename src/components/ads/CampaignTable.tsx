@@ -28,11 +28,11 @@ export function CampaignTable({ campaigns }: CampaignTableProps) {
             <TableHead>{t("ads.campaign", "Campaign")}</TableHead>
             <TableHead>{t("ads.status", "Status")}</TableHead>
             <TableHead>{t("ads.objective", "Objective")}</TableHead>
-            <TableHead className="text-right">{t("ads.impressions", "Impressions")}</TableHead>
-            <TableHead className="text-right">{t("ads.clicks", "Clicks")}</TableHead>
-            <TableHead className="text-right">{t("ads.ctr", "CTR")}</TableHead>
-            <TableHead className="text-right">{t("ads.spend", "Spend")}</TableHead>
-            <TableHead className="text-right">{t("ads.cpc", "CPC")}</TableHead>
+            <TableHead className="text-end">{t("ads.impressions", "Impressions")}</TableHead>
+            <TableHead className="text-end">{t("ads.clicks", "Clicks")}</TableHead>
+            <TableHead className="text-end">{t("ads.ctr", "CTR")}</TableHead>
+            <TableHead className="text-end">{t("ads.spend", "Spend")}</TableHead>
+            <TableHead className="text-end">{t("ads.cpc", "CPC")}</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -52,11 +52,11 @@ export function CampaignTable({ campaigns }: CampaignTableProps) {
                     <Badge variant={getStatusVariant(c.status)}>{c.status}</Badge>
                   </TableCell>
                   <TableCell className="text-xs text-muted-foreground capitalize">{c.objective?.replace(/_/g, " ").toLowerCase()}</TableCell>
-                  <TableCell className="text-right tabular-nums">{Number(insight?.impressions || 0).toLocaleString()}</TableCell>
-                  <TableCell className="text-right tabular-nums">{Number(insight?.clicks || 0).toLocaleString()}</TableCell>
-                  <TableCell className="text-right tabular-nums">{parseFloat(insight?.ctr || "0").toFixed(2)}%</TableCell>
-                  <TableCell className="text-right tabular-nums">${parseFloat(insight?.spend || "0").toFixed(2)}</TableCell>
-                  <TableCell className="text-right tabular-nums">${parseFloat(insight?.cpc || "0").toFixed(2)}</TableCell>
+                  <TableCell className="text-end tabular-nums">{Number(insight?.impressions || 0).toLocaleString()}</TableCell>
+                  <TableCell className="text-end tabular-nums">{Number(insight?.clicks || 0).toLocaleString()}</TableCell>
+                  <TableCell className="text-end tabular-nums">{parseFloat(insight?.ctr || "0").toFixed(2)}%</TableCell>
+                  <TableCell className="text-end tabular-nums">${parseFloat(insight?.spend || "0").toFixed(2)}</TableCell>
+                  <TableCell className="text-end tabular-nums">${parseFloat(insight?.cpc || "0").toFixed(2)}</TableCell>
                 </TableRow>
               );
             })

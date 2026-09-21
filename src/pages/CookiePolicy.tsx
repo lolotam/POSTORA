@@ -8,7 +8,7 @@ const CookiePolicy = () => {
       <div className="container max-w-4xl py-12 px-4">
         <Link to="/">
           <Button variant="ghost" className="mb-8">
-            <ArrowLeft className="mr-2 h-4 w-4" />
+            <ArrowLeft className="me-2 h-4 w-4" />
             Back to Home
           </Button>
         </Link>

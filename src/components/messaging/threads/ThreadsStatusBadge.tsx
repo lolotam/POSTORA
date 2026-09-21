@@ -83,8 +83,8 @@ export function ThreadsStatusBadge({ value, disabled, onChange }: Props) {
                 className="w-full justify-start font-normal h-8"
                 onClick={() => onChange(opt.value)}
               >
-                <OptIcon className="h-3.5 w-3.5 mr-2" />
-                <span className="flex-1 text-left">{labelFor(opt.value, opt.label)}</span>
+                <OptIcon className="h-3.5 w-3.5 me-2" />
+                <span className="flex-1 text-start">{labelFor(opt.value, opt.label)}</span>
                 {active && <Check className="h-3.5 w-3.5 text-primary" />}
               </Button>
             );

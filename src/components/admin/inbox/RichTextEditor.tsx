@@ -261,7 +261,7 @@ export const RichTextEditor = forwardRef<RichTextEditorRef, RichTextEditorProps>
         {/* Font Size */}
         <Select onValueChange={(val) => execCommand("fontSize", val)} disabled={isCodeMode}>
           <SelectTrigger className="h-8 w-[90px] text-xs" disabled={isCodeMode}>
-            <Type className="h-3 w-3 mr-1" />
+            <Type className="h-3 w-3 me-1" />
             <SelectValue placeholder="Size" />
           </SelectTrigger>
           <SelectContent>
@@ -345,7 +345,7 @@ export const RichTextEditor = forwardRef<RichTextEditorRef, RichTextEditorProps>
         <ToolbarButton onClick={insertLink} icon={Link} title="Insert Link" disabled={isCodeMode} />
 
         {/* Code Mode Toggle */}
-        <div className="ml-auto flex items-center gap-1">
+        <div className="ms-auto flex items-center gap-1">
           <Button
             type="button"
             variant={isCodeMode ? "default" : "ghost"}

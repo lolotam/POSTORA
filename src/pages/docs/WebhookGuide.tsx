@@ -356,7 +356,7 @@ if __name__ == '__main__':
                   <Button
                     variant="ghost"
                     size="sm"
-                    className="absolute top-2 right-2"
+                    className="absolute top-2 end-2"
                     onClick={() => copyCode(`{
   "operation": "upload_photos",
   "platforms": ["instagram", "facebook"],
@@ -407,7 +407,7 @@ if __name__ == '__main__':
                   <Button
                     variant="ghost"
                     size="sm"
-                    className="absolute top-2 right-2"
+                    className="absolute top-2 end-2"
                     onClick={() => copyCode(event.payload, `event-${index}`)}
                   >
                     {copiedCode === `event-${index}` ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
@@ -458,7 +458,7 @@ if __name__ == '__main__':
                     <Button
                       variant="ghost"
                       size="sm"
-                      className="absolute top-2 right-2 text-gray-400 hover:text-white"
+                      className="absolute top-2 end-2 text-gray-400 hover:text-white"
                       onClick={() => copyCode(n8nWebhookExample, "n8n")}
                     >
                       {copiedCode === "n8n" ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
@@ -488,7 +488,7 @@ if __name__ == '__main__':
                   <Button
                     variant="ghost"
                     size="sm"
-                    className="absolute top-2 right-2 text-gray-400 hover:text-white"
+                    className="absolute top-2 end-2 text-gray-400 hover:text-white"
                     onClick={() => copyCode(expressWebhookHandler, "nodejs")}
                   >
                     {copiedCode === "nodejs" ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
@@ -517,7 +517,7 @@ if __name__ == '__main__':
                   <Button
                     variant="ghost"
                     size="sm"
-                    className="absolute top-2 right-2 text-gray-400 hover:text-white"
+                    className="absolute top-2 end-2 text-gray-400 hover:text-white"
                     onClick={() => copyCode(pythonWebhookHandler, "python")}
                   >
                     {copiedCode === "python" ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
@@ -615,9 +615,9 @@ if __name__ == '__main__':
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b">
-                    <th className="text-left py-2 px-4 font-medium">Header</th>
-                    <th className="text-left py-2 px-4 font-medium">Description</th>
-                    <th className="text-left py-2 px-4 font-medium">Example</th>
+                    <th className="text-start py-2 px-4 font-medium">Header</th>
+                    <th className="text-start py-2 px-4 font-medium">Description</th>
+                    <th className="text-start py-2 px-4 font-medium">Example</th>
                   </tr>
                 </thead>
                 <tbody>

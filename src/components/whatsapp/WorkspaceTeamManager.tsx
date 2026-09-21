@@ -95,7 +95,7 @@ function MemberActions({ member, workspaceId, isLastOwner }: MemberActionsProps)
       <AlertDialog>
         <AlertDialogTrigger asChild>
           <Button variant="outline" size="sm" aria-label={t("team.removeAria", "Remove {{name}}", { name })}>
-            <UserMinus className="mr-2 h-4 w-4" />{t("team.remove", "Remove")}
+            <UserMinus className="me-2 h-4 w-4" />{t("team.remove", "Remove")}
           </Button>
         </AlertDialogTrigger>
         <AlertDialogContent>
@@ -182,7 +182,7 @@ function InviteMemberForm({ workspaceId }: { workspaceId: string }) {
         </Select>
       </div>
       <Button type="submit" disabled={inviteMember.isPending}>
-        {inviteMember.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <MailPlus className="mr-2 h-4 w-4" />}
+        {inviteMember.isPending ? <Loader2 className="me-2 h-4 w-4 animate-spin" /> : <MailPlus className="me-2 h-4 w-4" />}
         {t("team.invite", "Invite member")}
       </Button>
     </form>

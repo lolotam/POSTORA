@@ -321,7 +321,7 @@ export function WhatsAppConversationPane({
             {conversation.unread_count > 0 ? ` · ${conversation.unread_count} unread` : ""}
           </p>
         </div>
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ms-auto flex items-center gap-2">
           {/* whatsapp_contacts RLS allows writes to owner/admin/agent only; a viewer's save would fail. */}
           {activeRole !== "viewer" ? (
             <Button
@@ -401,7 +401,7 @@ export function WhatsAppConversationPane({
             type="button"
             data-testid="wa-new-messages"
             size="sm"
-            className="sticky bottom-4 left-1/2 z-10 -translate-x-1/2 rounded-full shadow-md"
+            className="sticky bottom-4 start-1/2 z-10 -translate-x-1/2 rounded-full shadow-md"
             onClick={jumpToLatest}
           >
             ↓ {newMessageCount} new messages

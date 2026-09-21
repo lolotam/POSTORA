@@ -502,7 +502,7 @@ export function BatchImageToolsDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex-1 overflow-y-auto space-y-4 pr-2">
+        <div className="flex-1 overflow-y-auto space-y-4 pe-2">
           {/* Feature Toggles */}
           <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 p-3 bg-muted/50 rounded-lg">
             <div className="flex items-center justify-between p-2 border rounded-md bg-background">
@@ -771,12 +771,12 @@ export function BatchImageToolsDialog({
           <Button onClick={handleProcess} disabled={processing}>
             {processing ? (
               <>
-                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                <Loader2 className="w-4 h-4 me-2 animate-spin" />
                 {t("batch.processingCount", "Processing {{current}}/{{total}}", { current: processingIndex + 1, total: files.length })}
               </>
             ) : (
               <>
-                <Wand2 className="w-4 h-4 mr-2" />
+                <Wand2 className="w-4 h-4 me-2" />
                 {t("batch.processCount", "Process {{count}} Images", { count: files.length })}
               </>
             )}

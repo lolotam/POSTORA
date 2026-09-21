@@ -82,7 +82,7 @@ export function WhatsAppCatalogContent() {
                 </Trans>
               </p>
             </div>
-            <div className="text-xs text-muted-foreground bg-background/60 border border-border rounded-md p-3 max-w-md mx-auto text-left space-y-1">
+            <div className="text-xs text-muted-foreground bg-background/60 border border-border rounded-md p-3 max-w-md mx-auto text-start space-y-1">
               <p className="font-medium text-foreground">{t("catalog.enableHow", "How to enable catalog access:")}</p>
               <ol className="list-decimal list-inside space-y-1">
                 <li>{t("catalog.enableStep1", "Open Meta Business Manager and convert / migrate your WABA to a regular Business account.")}</li>
@@ -98,7 +98,7 @@ export function WhatsAppCatalogContent() {
                 rel="noopener noreferrer"
               >
                 {t("catalog.openCommerce", "Open Commerce Manager")}
-                <ExternalLink className="h-3.5 w-3.5 ml-1.5" />
+                <ExternalLink className="h-3.5 w-3.5 ms-1.5" />
               </a>
             </Button>
           </CardContent>
@@ -171,7 +171,7 @@ export function WhatsAppCatalogContent() {
                   {product.url && (
                     <Button variant="ghost" size="sm" asChild>
                       <a href={product.url} target="_blank" rel="noopener noreferrer">
-                        <ExternalLink className="h-3 w-3 mr-1" />
+                        <ExternalLink className="h-3 w-3 me-1" />
                         {t("common:view", "View")}
                       </a>
                     </Button>

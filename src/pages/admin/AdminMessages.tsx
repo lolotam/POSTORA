@@ -129,11 +129,11 @@ export default function AdminMessages() {
   const getStatusBadge = (status: string) => {
     switch (status) {
       case "open":
-        return <Badge className="bg-blue-500/10 text-blue-600 border-blue-500/30"><Clock className="w-3 h-3 mr-1" />Open</Badge>;
+        return <Badge className="bg-blue-500/10 text-blue-600 border-blue-500/30"><Clock className="w-3 h-3 me-1" />Open</Badge>;
       case "in_progress":
-        return <Badge className="bg-amber-500/10 text-amber-600 border-amber-500/30"><AlertCircle className="w-3 h-3 mr-1" />In Progress</Badge>;
+        return <Badge className="bg-amber-500/10 text-amber-600 border-amber-500/30"><AlertCircle className="w-3 h-3 me-1" />In Progress</Badge>;
       case "resolved":
-        return <Badge className="bg-green-500/10 text-green-600 border-green-500/30"><Check className="w-3 h-3 mr-1" />Resolved</Badge>;
+        return <Badge className="bg-green-500/10 text-green-600 border-green-500/30"><Check className="w-3 h-3 me-1" />Resolved</Badge>;
       case "closed":
         return <Badge variant="secondary">Closed</Badge>;
       default:
@@ -323,9 +323,9 @@ export default function AdminMessages() {
                   disabled={!replyText.trim() || replyMutation.isPending}
                 >
                   {replyMutation.isPending ? (
-                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    <Loader2 className="w-4 h-4 me-2 animate-spin" />
                   ) : (
-                    <Send className="w-4 h-4 mr-2" />
+                    <Send className="w-4 h-4 me-2" />
                   )}
                   Send Reply
                 </Button>

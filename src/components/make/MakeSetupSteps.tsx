@@ -43,7 +43,7 @@ export function MakeSetupSteps() {
               <Link to={s.action.link}>
                 <Button variant="outline" size="sm">
                   {s.action.text}
-                  <ChevronRight className="w-3 h-3 ml-1" />
+                  <ChevronRight className="w-3 h-3 ms-1" />
                 </Button>
               </Link>
             )}

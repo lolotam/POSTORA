@@ -182,11 +182,11 @@ export function ComposioConnectCard({ connectorType, workspaceId, onConfigureToo
                 className="h-8 text-xs text-rose-500 hover:bg-rose-500/10 hover:text-rose-600"
                 onClick={() => setConfirmingDisconnect(true)}
               >
-                <Unlink className="mr-1 h-3.5 w-3.5" /> {t("common:disconnect", "Disconnect")}
+                <Unlink className="me-1 h-3.5 w-3.5" /> {t("common:disconnect", "Disconnect")}
               </Button>
               {onConfigureTool && (
                 <Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => onConfigureTool(connectorType)}>
-                  <Plus className="mr-1 h-3.5 w-3.5" /> {t("actions.addAgentTool", "Add agent tool")}
+                  <Plus className="me-1 h-3.5 w-3.5" /> {t("actions.addAgentTool", "Add agent tool")}
                 </Button>
               )}
             </>
@@ -223,7 +223,7 @@ export function ComposioConnectCard({ connectorType, workspaceId, onConfigureToo
               onClick={(event) => { event.preventDefault(); disconnect(); }}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
-              {revoke.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              {revoke.isPending && <Loader2 className="me-2 h-4 w-4 animate-spin" />}
               {t("dialog.disconnectConfirm", "Disconnect {{label}}", { label })}
             </AlertDialogAction>
           </AlertDialogFooter>

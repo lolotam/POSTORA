@@ -190,8 +190,8 @@ export function PlatformSettingsSection({
       <div className="rounded-xl border border-border bg-card/50">
         <CollapsibleTrigger className="w-full p-4 sm:p-6 flex items-center justify-between">
           <div>
-            <h3 className="font-semibold text-left">{t("section.title", "Platform-specific settings")}</h3>
-            <p className="text-xs text-muted-foreground text-left">{t("section.description", "Adjust requirements for each platform")}</p>
+            <h3 className="font-semibold text-start">{t("section.title", "Platform-specific settings")}</h3>
+            <p className="text-xs text-muted-foreground text-start">{t("section.description", "Adjust requirements for each platform")}</p>
           </div>
           <ChevronDown className={cn("w-5 h-5 transition-transform", isOpen && "rotate-180")} />
         </CollapsibleTrigger>

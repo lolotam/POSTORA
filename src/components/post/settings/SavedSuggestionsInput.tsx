@@ -102,7 +102,7 @@ export function SavedSuggestionsInput({
                     e.stopPropagation();
                     deleteSuggestion(s.id);
                   }}
-                  className="opacity-0 group-hover:opacity-100 transition-opacity ml-0.5 hover:text-destructive"
+                  className="opacity-0 group-hover:opacity-100 transition-opacity ms-0.5 hover:text-destructive"
                 >
                   <X className="w-3 h-3" />
                 </span>

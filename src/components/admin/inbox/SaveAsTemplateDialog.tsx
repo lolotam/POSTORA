@@ -72,7 +72,7 @@ export function SaveAsTemplateDialog({
           disabled={disabled || (!subject && !body)}
           title="Save current email as a reusable template"
         >
-          <Save className="h-4 w-4 mr-2" />
+          <Save className="h-4 w-4 me-2" />
           Save as Template
         </Button>
       </DialogTrigger>
@@ -124,12 +124,12 @@ export function SaveAsTemplateDialog({
           >
             {saveMutation.isPending ? (
               <>
-                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                <Loader2 className="h-4 w-4 me-2 animate-spin" />
                 Saving...
               </>
             ) : (
               <>
-                <Save className="h-4 w-4 mr-2" />
+                <Save className="h-4 w-4 me-2" />
                 Save Template
               </>
             )}

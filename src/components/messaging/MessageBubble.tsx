@@ -31,7 +31,7 @@ function MediaRenderer({ attachments }: { attachments: Message["attachments"] })
             <a href={att.file_url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 p-2 rounded-lg bg-background/50 hover:bg-background/80 transition-colors">
               <FileIcon className="h-4 w-4 shrink-0" />
               <span className="text-xs underline truncate">{att.name || t("bubble.downloadFile", "Download file")}</span>
-              <Download className="h-3 w-3 shrink-0 ml-auto" />
+              <Download className="h-3 w-3 shrink-0 ms-auto" />
             </a>
           )}
         </div>
@@ -84,7 +84,7 @@ export function MessageBubble({ message, isSent, onDelete }: MessageBubbleProps)
   );
 
   return (
-    <div className={cn("flex flex-col max-w-[75%] group", isSent ? "ml-auto items-end" : "items-start")}>
+    <div className={cn("flex flex-col max-w-[75%] group", isSent ? "ms-auto items-end" : "items-start")}>
       <span className="text-xs text-muted-foreground mb-1">{message.from?.name}</span>
       <div
         className={cn(
@@ -104,7 +104,7 @@ export function MessageBubble({ message, isSent, onDelete }: MessageBubbleProps)
           <Button
             variant="ghost"
             size="icon"
-            className="absolute -top-2 -right-8 opacity-0 group-hover:opacity-100 h-6 w-6 transition-opacity"
+            className="absolute -top-2 -end-8 opacity-0 group-hover:opacity-100 h-6 w-6 transition-opacity"
             onClick={() => onDelete(message.id)}
           >
             <Trash2 className="w-3 h-3 text-destructive" />

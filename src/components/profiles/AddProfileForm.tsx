@@ -25,12 +25,12 @@ export function AddProfileForm({
       </div>
       <div className="flex gap-3">
         <div className="flex-1 relative">
-          <User className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+          <User className="absolute start-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
           <Input
             placeholder="e.g. business_account, personal11"
             value={newProfileName}
             onChange={(e) => onNameChange(e.target.value)}
-            className="pl-10"
+            className="ps-10"
             onKeyDown={(e) => e.key === "Enter" && onSubmit()}
           />
         </div>
@@ -39,9 +39,9 @@ export function AddProfileForm({
           disabled={isPending || !newProfileName.trim()}
         >
           {isPending ? (
-            <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+            <Loader2 className="w-4 h-4 me-2 animate-spin" />
           ) : (
-            <Plus className="w-4 h-4 mr-2" />
+            <Plus className="w-4 h-4 me-2" />
           )}
           Add Profile
         </Button>

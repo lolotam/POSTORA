@@ -193,12 +193,12 @@ export function SubscriberSelector({
 
         {/* Search */}
         <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Search className="absolute start-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
             placeholder={activeTab === "subscribers" ? "Search subscribers..." : "Search users..."}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="pl-9"
+            className="ps-9"
           />
         </div>
 
@@ -211,7 +211,7 @@ export function SubscriberSelector({
               onClick={selectAll}
               disabled={filteredList.length === 0}
             >
-              <UserCheck className="h-4 w-4 mr-1" />
+              <UserCheck className="h-4 w-4 me-1" />
               Select All ({filteredList.length})
             </Button>
             <Button
@@ -274,7 +274,7 @@ export function SubscriberSelector({
                     <div className="text-sm text-muted-foreground truncate">
                       {user.email}
                       {user.plan_name && (
-                        <span className="ml-2 text-xs">• {user.plan_name}</span>
+                        <span className="ms-2 text-xs">• {user.plan_name}</span>
                       )}
                     </div>
                   </div>

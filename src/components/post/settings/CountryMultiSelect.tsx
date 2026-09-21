@@ -138,13 +138,13 @@ export function CountryMultiSelect({ value, onChange, placeholder, disabled = fa
               type="button"
               disabled={disabled}
               onClick={(e) => { e.stopPropagation(); removeCountry(code); }}
-              className="ml-0.5 hover:text-destructive"
+              className="ms-0.5 hover:text-destructive"
             >
               <X className="w-3 h-3" />
             </button>
           </Badge>
         ))}
-        <ChevronDown className="w-4 h-4 text-muted-foreground ml-auto self-center shrink-0" />
+        <ChevronDown className="w-4 h-4 text-muted-foreground ms-auto self-center shrink-0" />
       </div>
 
       {isOpen && (
@@ -170,7 +170,7 @@ export function CountryMultiSelect({ value, onChange, placeholder, disabled = fa
                 <button
                   key={country.code}
                   type="button"
-                  className="w-full text-left px-3 py-1.5 text-sm rounded-sm hover:bg-accent hover:text-accent-foreground transition-colors"
+                  className="w-full text-start px-3 py-1.5 text-sm rounded-sm hover:bg-accent hover:text-accent-foreground transition-colors"
                   onClick={(e) => { e.stopPropagation(); addCountry(country.code); }}
                 >
                   {country.code} — {country.name}

@@ -394,13 +394,13 @@ export function AiKnowledgeManager({
       <Tabs value={method} onValueChange={(value) => setMethod(value as KnowledgeMethod)}>
         <TabsList className="h-auto flex-wrap justify-start">
           <TabsTrigger value="manual">
-            <PencilLine className="mr-1.5 h-4 w-4" /> {t("knowledge.tabManual", "Manual profile")}
+            <PencilLine className="me-1.5 h-4 w-4" /> {t("knowledge.tabManual", "Manual profile")}
           </TabsTrigger>
           <TabsTrigger value="upload">
-            <Upload className="mr-1.5 h-4 w-4" /> {t("knowledge.tabUpload", "Upload files")}
+            <Upload className="me-1.5 h-4 w-4" /> {t("knowledge.tabUpload", "Upload files")}
           </TabsTrigger>
           <TabsTrigger value="website">
-            <Globe className="mr-1.5 h-4 w-4" /> {t("knowledge.tabWebsite", "Website scraping")}
+            <Globe className="me-1.5 h-4 w-4" /> {t("knowledge.tabWebsite", "Website scraping")}
           </TabsTrigger>
         </TabsList>
         <TabsContent value="manual" className="mt-4">

@@ -901,18 +901,18 @@ export function ImageToolsDialog({
                     onLoad={handleImageLoad}
                   />
                   {processedUrl && (
-                    <div className="absolute top-2 left-2 px-2 py-1 bg-background/80 backdrop-blur rounded text-xs font-medium">
+                    <div className="absolute top-2 start-2 px-2 py-1 bg-background/80 backdrop-blur rounded text-xs font-medium">
                       {t("imageTools.original", "Original")}
                     </div>
                   )}
                   {!processedUrl && livePreviewUrl && (
-                    <div className="absolute top-2 left-2 px-2 py-1 bg-primary/80 backdrop-blur rounded text-xs font-medium text-primary-foreground flex items-center gap-1">
+                    <div className="absolute top-2 start-2 px-2 py-1 bg-primary/80 backdrop-blur rounded text-xs font-medium text-primary-foreground flex items-center gap-1">
                       <Palette className="w-3 h-3" />
                       {t("imageTools.livePreview", "Live Preview")}
                     </div>
                   )}
                   {previewLoading && (
-                    <div className="absolute top-2 right-2 px-2 py-1 bg-background/80 backdrop-blur rounded text-xs font-medium flex items-center gap-1">
+                    <div className="absolute top-2 end-2 px-2 py-1 bg-background/80 backdrop-blur rounded text-xs font-medium flex items-center gap-1">
                       <Loader2 className="w-3 h-3 animate-spin" />
                       {t("common:loading", "Loading...")}
                     </div>
@@ -931,7 +931,7 @@ export function ImageToolsDialog({
                       className="w-full h-full object-contain"
                       draggable={false}
                     />
-                    <div className="absolute top-2 right-2 px-2 py-1 bg-background/80 backdrop-blur rounded text-xs font-medium">
+                    <div className="absolute top-2 end-2 px-2 py-1 bg-background/80 backdrop-blur rounded text-xs font-medium">
                       {t("imageTools.processed", "Processed")}
                     </div>
                   </div>
@@ -943,7 +943,7 @@ export function ImageToolsDialog({
                     className="absolute top-0 bottom-0 w-1 bg-primary cursor-ew-resize"
                     style={{ left: `${comparePosition}%`, transform: "translateX(-50%)" }}
                   >
-                    <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-8 h-8 bg-primary rounded-full flex items-center justify-center shadow-lg">
+                    <div className="absolute top-1/2 start-1/2 -translate-x-1/2 -translate-y-1/2 w-8 h-8 bg-primary rounded-full flex items-center justify-center shadow-lg">
                       <div className="flex gap-0.5">
                         <div className="w-0.5 h-3 bg-primary-foreground rounded" />
                         <div className="w-0.5 h-3 bg-primary-foreground rounded" />
@@ -996,7 +996,7 @@ export function ImageToolsDialog({
                       </div>
                       
                       <div className={cn(
-                        "absolute -top-9 left-1/2 -translate-x-1/2 px-3 py-1.5 rounded-md text-sm font-medium whitespace-nowrap shadow-lg",
+                        "absolute -top-9 start-1/2 -translate-x-1/2 px-3 py-1.5 rounded-md text-sm font-medium whitespace-nowrap shadow-lg",
                         cropOverlayInfo.isCropMode 
                           ? "bg-destructive text-destructive-foreground" 
                           : "bg-primary text-primary-foreground"
@@ -1005,24 +1005,24 @@ export function ImageToolsDialog({
                       </div>
                       
                       <div className={cn(
-                        "absolute -top-1 -left-1 w-4 h-4 border-t-2 border-l-2",
+                        "absolute -top-1 -start-1 w-4 h-4 border-t-2 border-l-2",
                         cropOverlayInfo.isCropMode ? "border-destructive" : "border-primary"
                       )} />
                       <div className={cn(
-                        "absolute -top-1 -right-1 w-4 h-4 border-t-2 border-r-2",
+                        "absolute -top-1 -end-1 w-4 h-4 border-t-2 border-r-2",
                         cropOverlayInfo.isCropMode ? "border-destructive" : "border-primary"
                       )} />
                       <div className={cn(
-                        "absolute -bottom-1 -left-1 w-4 h-4 border-b-2 border-l-2",
+                        "absolute -bottom-1 -start-1 w-4 h-4 border-b-2 border-l-2",
                         cropOverlayInfo.isCropMode ? "border-destructive" : "border-primary"
                       )} />
                       <div className={cn(
-                        "absolute -bottom-1 -right-1 w-4 h-4 border-b-2 border-r-2",
+                        "absolute -bottom-1 -end-1 w-4 h-4 border-b-2 border-r-2",
                         cropOverlayInfo.isCropMode ? "border-destructive" : "border-primary"
                       )} />
                       
                       <div className={cn(
-                        "absolute -bottom-9 left-1/2 -translate-x-1/2 px-3 py-1 rounded text-xs font-medium whitespace-nowrap",
+                        "absolute -bottom-9 start-1/2 -translate-x-1/2 px-3 py-1 rounded text-xs font-medium whitespace-nowrap",
                         "bg-background/95 backdrop-blur text-foreground shadow-md"
                       )}>
                         {cropOverlayInfo.isCropMode ? (
@@ -1083,12 +1083,12 @@ export function ImageToolsDialog({
               >
                 {processing || uploading ? (
                   <>
-                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    <Loader2 className="w-4 h-4 me-2 animate-spin" />
                     {uploading ? t("dialog.uploading", "Uploading...") : t("common:status.processing", "Processing...")}
                   </>
                 ) : (
                   <>
-                    <Wand2 className="w-4 h-4 mr-2" />
+                    <Wand2 className="w-4 h-4 me-2" />
                     {t("imageTools.processImage", "Process Image")}
                   </>
                 )}
@@ -1103,17 +1103,17 @@ export function ImageToolsDialog({
                   setComparePosition(50);
                 }}
               >
-                <RefreshCw className="w-4 h-4 mr-2" />
+                <RefreshCw className="w-4 h-4 me-2" />
                 {t("actions.tryAgain", "Try Again")}
               </Button>
               <Button variant="secondary" onClick={handleDownload}>
-                <Download className="w-4 h-4 mr-2" />
+                <Download className="w-4 h-4 me-2" />
                 {t("common:download", "Download")}
               </Button>
               <Button onClick={handleSaveAsNew} disabled={saving}>
                 {saving ? (
                   <>
-                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    <Loader2 className="w-4 h-4 me-2 animate-spin" />
                     {t("common:saving", "Saving...")}
                   </>
                 ) : (

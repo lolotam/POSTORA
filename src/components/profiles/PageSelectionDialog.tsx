@@ -104,12 +104,12 @@ export function PageSelectionDialog({
 
         <div className="space-y-3">
           <div className="relative">
-            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Search className="absolute start-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input
               placeholder="Search pages..."
               value={pageSearchQuery}
               onChange={(e) => onPageSearchChange(e.target.value)}
-              className="pl-9"
+              className="ps-9"
             />
           </div>
 
@@ -121,7 +121,7 @@ export function PageSelectionDialog({
             No pages match your search.
           </div>
         ) : (
-          <div className="max-h-[60vh] space-y-6 overflow-y-auto pr-1">
+          <div className="max-h-[60vh] space-y-6 overflow-y-auto pe-1">
             {filteredPages.length > 0 && (
               <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
                 {filteredPages.map((page) => {
@@ -147,7 +147,7 @@ export function PageSelectionDialog({
                           </div>
                         )}
                         {page.has_instagram && (
-                          <span className="absolute -right-1 -top-1 rounded-full border border-pink-500/40 bg-gradient-to-r from-purple-500/30 to-pink-500/30 px-2 py-0.5 text-[10px] font-medium text-pink-500 backdrop-blur-sm">
+                          <span className="absolute -end-1 -top-1 rounded-full border border-pink-500/40 bg-gradient-to-r from-purple-500/30 to-pink-500/30 px-2 py-0.5 text-[10px] font-medium text-pink-500 backdrop-blur-sm">
                             IG
                           </span>
                         )}
@@ -203,7 +203,7 @@ export function PageSelectionDialog({
                               <Loader2 className="h-6 w-6 animate-spin text-primary" />
                             </div>
                           )}
-                          <span className="absolute -right-1 -top-1 rounded-full border border-pink-500/40 bg-gradient-to-r from-purple-500/30 to-pink-500/30 px-2 py-0.5 text-[10px] font-medium text-pink-500 backdrop-blur-sm">
+                          <span className="absolute -end-1 -top-1 rounded-full border border-pink-500/40 bg-gradient-to-r from-purple-500/30 to-pink-500/30 px-2 py-0.5 text-[10px] font-medium text-pink-500 backdrop-blur-sm">
                             IG
                           </span>
                         </div>

@@ -562,12 +562,12 @@ export default function ScheduledPosts() {
                 <Icon3D icon={Filter} variant="cyan" size="sm" />
               </div>
               <div className="relative flex-1 max-w-md">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-cyan-500/80" />
+                <Search className="absolute start-3 top-1/2 -translate-y-1/2 w-4 h-4 text-cyan-500/80" />
                 <Input
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                   placeholder={t("filters.searchPlaceholder", "Search scheduled posts...")}
-                  className="pl-10 rounded-full bg-background/60 backdrop-blur border-border/60 focus-visible:ring-cyan-500/40"
+                  className="ps-10 rounded-full bg-background/60 backdrop-blur border-border/60 focus-visible:ring-cyan-500/40"
                 />
               </div>
           
@@ -966,11 +966,11 @@ export default function ScheduledPosts() {
                       <Button
                         variant="outline"
                         className={cn(
-                          "w-full justify-start text-left font-normal",
+                          "w-full justify-start text-start font-normal",
                           !editScheduledDate && "text-muted-foreground"
                         )}
                       >
-                        <CalendarIcon className="mr-2 h-4 w-4" />
+                        <CalendarIcon className="me-2 h-4 w-4" />
                         {editScheduledDate ? format(editScheduledDate, "PPP") : t("editDialog.pickDate", "Pick a date")}
                       </Button>
                     </PopoverTrigger>
@@ -1006,7 +1006,7 @@ export default function ScheduledPosts() {
             <Button onClick={handleSaveEdit} disabled={isSaving}>
               {isSaving ? (
                 <>
-                  <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                  <Loader2 className="w-4 h-4 animate-spin me-2" />
                   {t("common:saving", "Saving...")}
                 </>
               ) : (
@@ -1035,7 +1035,7 @@ export default function ScheduledPosts() {
             >
               {isCancelling ? (
                 <>
-                  <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                  <Loader2 className="w-4 h-4 animate-spin me-2" />
                   {t("cancelDialog.cancelling", "Cancelling...")}
                 </>
               ) : (
@@ -1063,7 +1063,7 @@ export default function ScheduledPosts() {
             >
               {isBulkCancelling ? (
                 <>
-                  <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                  <Loader2 className="w-4 h-4 animate-spin me-2" />
                   {t("bulk.cancelling", "Cancelling...")}
                 </>
               ) : (
@@ -1095,11 +1095,11 @@ export default function ScheduledPosts() {
                     <Button
                       variant="outline"
                       className={cn(
-                        "w-full justify-start text-left font-normal",
+                        "w-full justify-start text-start font-normal",
                         !bulkScheduledDate && "text-muted-foreground"
                       )}
                     >
-                      <CalendarIcon className="mr-2 h-4 w-4" />
+                      <CalendarIcon className="me-2 h-4 w-4" />
                       {bulkScheduledDate ? format(bulkScheduledDate, "PPP") : t("editDialog.pickDate", "Pick a date")}
                     </Button>
                   </PopoverTrigger>
@@ -1137,7 +1137,7 @@ export default function ScheduledPosts() {
             >
               {isBulkRescheduling ? (
                 <>
-                  <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                  <Loader2 className="w-4 h-4 animate-spin me-2" />
                   {t("bulk.rescheduling", "Rescheduling...")}
                 </>
               ) : (

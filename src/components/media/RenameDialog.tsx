@@ -227,7 +227,7 @@ export function RenameFileDialog({
           <Button onClick={handleRename} disabled={!newName.trim() || renaming}>
             {renaming ? (
               <>
-                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                <Loader2 className="w-4 h-4 me-2 animate-spin" />
                 {t("rename.renaming", "Renaming...")}
               </>
             ) : (
@@ -414,7 +414,7 @@ export function RenameFolderDialog({
           <Button onClick={handleRename} disabled={!newName.trim() || renaming}>
             {renaming ? (
               <>
-                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                <Loader2 className="w-4 h-4 me-2 animate-spin" />
                 {t("rename.renaming", "Renaming...")}
               </>
             ) : (

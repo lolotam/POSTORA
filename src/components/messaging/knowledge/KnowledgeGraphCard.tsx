@@ -36,7 +36,7 @@ export function KnowledgeGraphCard({
       </CardHeader>
       <CardContent className="flex flex-wrap gap-2">
         <Button variant="outline" disabled={busy} onClick={onGenerate}>
-          {busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+          {busy && <Loader2 className="me-2 h-4 w-4 animate-spin" />}
           {t("knowledge.generateExports", "Generate exports")}
         </Button>
         {graphExport?.html_url && (
@@ -47,9 +47,9 @@ export function KnowledgeGraphCard({
             onClick={() => onOpen("html")}
           >
             {resolving ? (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              <Loader2 className="me-2 h-4 w-4 animate-spin" />
             ) : (
-              <ExternalLink className="mr-2 h-4 w-4" />
+              <ExternalLink className="me-2 h-4 w-4" />
             )}
             {t("knowledge.openGraph", "Open graph")}
           </Button>
@@ -62,9 +62,9 @@ export function KnowledgeGraphCard({
             onClick={() => onOpen("vault")}
           >
             {resolving ? (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              <Loader2 className="me-2 h-4 w-4 animate-spin" />
             ) : (
-              <FileArchive className="mr-2 h-4 w-4" />
+              <FileArchive className="me-2 h-4 w-4" />
             )}
             {t("knowledge.vaultDownload", "Download vault")}
           </Button>

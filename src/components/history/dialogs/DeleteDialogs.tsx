@@ -42,7 +42,7 @@ export function DeletePostDialog({
             disabled={isDeleting}
             className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
           >
-            {isDeleting ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+            {isDeleting ? <Loader2 className="w-4 h-4 animate-spin me-2" /> : null}
             {t("common:delete", "Delete")}
           </AlertDialogAction>
         </AlertDialogFooter>
@@ -84,7 +84,7 @@ export function BulkDeleteDialog({
             disabled={isDeleting}
             className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
           >
-            {isDeleting ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+            {isDeleting ? <Loader2 className="w-4 h-4 animate-spin me-2" /> : null}
             {t("dialogs.deleteAll", "Delete All")}
           </AlertDialogAction>
         </AlertDialogFooter>

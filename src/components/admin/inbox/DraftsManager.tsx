@@ -111,7 +111,7 @@ export function DraftsManager({ onEditDraft }: DraftsManagerProps) {
                 key={draft.id}
                 onClick={() => setSelectedDraftId(draft.id)}
                 className={cn(
-                  "w-full text-left p-4 hover:bg-muted/50 transition-colors",
+                  "w-full text-start p-4 hover:bg-muted/50 transition-colors",
                   selectedDraftId === draft.id && "bg-muted"
                 )}
               >
@@ -227,7 +227,7 @@ export function DraftsManager({ onEditDraft }: DraftsManagerProps) {
                 onClick={() => onEditDraft(selectedDraft)}
                 className="w-full"
               >
-                <PenLine className="w-4 h-4 mr-2" />
+                <PenLine className="w-4 h-4 me-2" />
                 Continue Editing
               </Button>
             </div>

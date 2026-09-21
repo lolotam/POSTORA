@@ -463,13 +463,13 @@ export function ThreadsKeywordSearchPanel() {
       {/* Search input */}
       <div className="flex gap-2">
         <div className="relative flex-1">
-          <InputIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+          <InputIcon className="absolute start-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
           <Input
             placeholder={isTagMode ? t("keyword.placeholderTag", "Enter a topic tag (e.g. coffee)...") : t("keyword.placeholderKeyword", "Enter a keyword to search...")}
             value={keyword}
             onChange={(e) => setKeyword(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && handleSearch()}
-            className="pl-9"
+            className="ps-9"
           />
         </div>
         <Button onClick={handleSearch} disabled={isLoading || keyword.trim().length < 2} className="gap-2">
@@ -581,12 +581,12 @@ export function ThreadsKeywordSearchPanel() {
         <div className="space-y-1 flex flex-col items-center">
           <label className="text-xs text-muted-foreground text-center block">{t("filters.authorUsername", "Author username")}</label>
           <div className="relative">
-            <AtSign className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
+            <AtSign className="absolute start-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
             <Input
               placeholder={t("filters.optionalNoAt", "optional, no @")}
               value={authorUsername}
               onChange={(e) => setAuthorUsername(e.target.value)}
-              className="h-8 pl-8 w-44"
+              className="h-8 ps-8 w-44"
             />
           </div>
         </div>
@@ -648,7 +648,7 @@ export function ThreadsKeywordSearchPanel() {
           {recent.length > 0 ? (
             <div className="flex flex-wrap gap-1.5">
               {recent.map((r) => (
-                <div key={r.id} className="group inline-flex items-center gap-1 rounded-full border border-border bg-background hover:bg-accent hover:border-primary/40 text-xs pl-2.5 pr-1 py-1 transition-all hover:shadow-sm">
+                <div key={r.id} className="group inline-flex items-center gap-1 rounded-full border border-border bg-background hover:bg-accent hover:border-primary/40 text-xs ps-2.5 pe-1 py-1 transition-all hover:shadow-sm">
                   <button
                     onClick={() => replayRecent(r)}
                     className="flex items-center gap-1.5"
@@ -661,7 +661,7 @@ export function ThreadsKeywordSearchPanel() {
                   </button>
                   <button
                     onClick={() => removeRecent(r.id)}
-                    className="opacity-0 group-hover:opacity-100 ml-0.5 p-0.5 rounded-full hover:bg-destructive/15 hover:text-destructive transition-all"
+                    className="opacity-0 group-hover:opacity-100 ms-0.5 p-0.5 rounded-full hover:bg-destructive/15 hover:text-destructive transition-all"
                     aria-label={t("common:remove", "Remove")}
                   >
                     <X className="w-3 h-3" />
@@ -721,7 +721,7 @@ export function ThreadsKeywordSearchPanel() {
                         <span className="text-xs text-muted-foreground">
                           {post.timestamp ? format(new Date(post.timestamp), "MMM d, yyyy") : ""}
                         </span>
-                        <div className="ml-auto flex items-center gap-1.5">
+                        <div className="ms-auto flex items-center gap-1.5">
                           <Button
                             size="sm"
                             variant="ghost"

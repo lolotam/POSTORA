@@ -67,8 +67,8 @@ export default function LandingTestimonials() {
 
       {/* Desktop: Infinite scroll rows */}
       <div className="hidden md:block relative">
-        <div className="absolute left-0 top-0 bottom-0 w-24 bg-gradient-to-r from-background to-transparent z-10 pointer-events-none" />
-        <div className="absolute right-0 top-0 bottom-0 w-24 bg-gradient-to-l from-background to-transparent z-10 pointer-events-none" />
+        <div className="absolute start-0 top-0 bottom-0 w-24 bg-gradient-to-r from-background to-transparent z-10 pointer-events-none" />
+        <div className="absolute end-0 top-0 bottom-0 w-24 bg-gradient-to-l from-background to-transparent z-10 pointer-events-none" />
 
         <div className="overflow-hidden mb-6">
           <div className="flex gap-6 animate-scroll-left hover:[animation-play-state:paused] w-max">
@@ -90,9 +90,9 @@ export default function LandingTestimonials() {
       {/* Mobile: Manual carousel */}
       <div className="md:hidden px-6">
         <Carousel opts={{ align: "start", loop: true }} className="w-full">
-          <CarouselContent className="-ml-4">
+          <CarouselContent className="-ms-4">
             {testimonials.map((testimonial, index) => (
-              <CarouselItem key={index} className="pl-4 basis-[85%]">
+              <CarouselItem key={index} className="ps-4 basis-[85%]">
                 <div className="p-6 rounded-2xl border border-border/60 bg-card/85 backdrop-blur-md shadow-md">
                   <Quote className="w-8 h-8 text-violet-500/50 mb-4" />
                   <p className="text-sm text-muted-foreground mb-4 line-clamp-4">

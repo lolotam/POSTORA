@@ -85,11 +85,11 @@ export function HiggsfieldConnectionCard() {
           disabled={busy}
         >
           {busy ? (
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            <Loader2 className="me-2 h-4 w-4 animate-spin" />
           ) : connected ? (
-            <Unlink className="mr-2 h-4 w-4" />
+            <Unlink className="me-2 h-4 w-4" />
           ) : (
-            <Link2 className="mr-2 h-4 w-4" />
+            <Link2 className="me-2 h-4 w-4" />
           )}
           {connected ? t("higgsfield.actions.disconnect", "Disconnect") : t("higgsfield.actions.connect", "Connect with Higgsfield")}
         </Button>

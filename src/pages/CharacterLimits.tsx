@@ -134,8 +134,8 @@ export default function CharacterLimits() {
                     <table className="w-full text-sm border border-border rounded-lg overflow-hidden">
                       <thead className="bg-secondary/50">
                         <tr>
-                          <th className="text-left py-3 px-4 font-medium">Property</th>
-                          <th className="text-left py-3 px-4 font-medium">Description</th>
+                          <th className="text-start py-3 px-4 font-medium">Property</th>
+                          <th className="text-start py-3 px-4 font-medium">Description</th>
                         </tr>
                       </thead>
                       <tbody>

@@ -521,7 +521,7 @@ export function TwitterSettings({
         </div>
 
         {settings.pollEnabled && (
-          <div className="space-y-3 pl-4 border-l-2 border-primary/30">
+          <div className="space-y-3 ps-4 border-l-2 border-primary/30">
             {settings.pollOptions.map((option, idx) => (
               <div key={idx} className="flex items-center gap-2">
                 <Input
@@ -556,7 +556,7 @@ export function TwitterSettings({
                 size="sm"
                 onClick={() => onChange({ pollOptions: [...settings.pollOptions, ""] })}
               >
-                <Plus className="w-4 h-4 mr-2" />
+                <Plus className="w-4 h-4 me-2" />
                 {t("twitter.addOption", "Add option")}
               </Button>
             )}

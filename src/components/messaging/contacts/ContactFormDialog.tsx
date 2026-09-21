@@ -164,7 +164,7 @@ export function ContactFormDialog({ open, onOpenChange, contact, initialPhone }:
                   {initials || <Camera className="h-6 w-6" />}
                 </AvatarFallback>
               </Avatar>
-              <span className="absolute bottom-0 right-0 rounded-full bg-primary p-1.5 text-primary-foreground">
+              <span className="absolute bottom-0 end-0 rounded-full bg-primary p-1.5 text-primary-foreground">
                 {uploading ? (
                   <Loader2 className="h-3 w-3 animate-spin" />
                 ) : (
@@ -290,7 +290,7 @@ export function ContactFormDialog({ open, onOpenChange, contact, initialPhone }:
             onClick={save}
             disabled={!form.phone_number || pending || uploading}
           >
-            {pending ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+            {pending ? <Loader2 className="h-4 w-4 animate-spin me-2" /> : null}
             {contact ? t("common:saveChanges", "Save changes") : t("contacts.addContact", "Add contact")}
           </Button>
         </div>

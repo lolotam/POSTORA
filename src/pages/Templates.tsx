@@ -212,7 +212,7 @@ export default function Templates() {
           <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
             <DialogTrigger asChild>
               <Button variant="gradient" onClick={openCreateDialog}>
-                <Plus className="w-4 h-4 mr-2" />
+                <Plus className="w-4 h-4 me-2" />
                 {t("templates.newTemplate", "New Template")}
               </Button>
             </DialogTrigger>
@@ -290,7 +290,7 @@ export default function Templates() {
                 >
                   {isSaving ? (
                     <>
-                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      <Loader2 className="w-4 h-4 me-2 animate-spin" />
                       {t("common:saving", "Saving...")}
                     </>
                   ) : editingTemplate ? (
@@ -306,12 +306,12 @@ export default function Templates() {
 
         {/* Search */}
         <div className="relative max-w-md">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+          <Search className="absolute start-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
           <Input
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder={t("form.searchTemplates", "Search templates...")}
-            className="pl-10"
+            className="ps-10"
           />
         </div>
 
@@ -333,7 +333,7 @@ export default function Templates() {
             </p>
             {!searchQuery && (
               <Button onClick={openCreateDialog}>
-                <Plus className="w-4 h-4 mr-2" />
+                <Plus className="w-4 h-4 me-2" />
                 {t("templates.createTitle", "Create Template")}
               </Button>
             )}
@@ -417,7 +417,7 @@ export default function Templates() {
 
                 <Link to={`/post?template=${template.id}`}>
                   <Button variant="outline" size="sm" className="w-full mt-4">
-                    <Send className="w-4 h-4 mr-2" />
+                    <Send className="w-4 h-4 me-2" />
                     {t("actions.useTemplate", "Use Template")}
                   </Button>
                 </Link>

@@ -38,7 +38,7 @@ export function RecentPosts({ posts, isLoading }: RecentPostsProps) {
         <Link to="/history">
           <Button variant="ghost" size="sm">
             {t("recentPosts.viewAll", "View All")}
-            <ArrowUpRight className="w-4 h-4 ml-1" />
+            <ArrowUpRight className="w-4 h-4 ms-1" />
           </Button>
         </Link>
       </div>
@@ -52,7 +52,7 @@ export function RecentPosts({ posts, isLoading }: RecentPostsProps) {
             <p className="text-muted-foreground">{t("recentPosts.noPosts", "No posts yet. Create your first post!")}</p>
             <Link to="/post">
               <Button variant="outline" className="mt-4">
-                <Plus className="w-4 h-4 mr-2" />
+                <Plus className="w-4 h-4 me-2" />
                 {t("common:createPost", "Create Post")}
               </Button>
             </Link>

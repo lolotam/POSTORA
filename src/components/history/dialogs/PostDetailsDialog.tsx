@@ -225,7 +225,7 @@ export function PostDetailsDialog({
                       disabled={downloading}
                       className="h-7 text-xs"
                     >
-                      <DownloadCloud className="w-3.5 h-3.5 mr-1.5" />
+                      <DownloadCloud className="w-3.5 h-3.5 me-1.5" />
                       {downloading ? t("details.downloading", "Downloading...") : t("details.downloadAll", "Download All")}
                     </Button>
                   )}
@@ -248,7 +248,7 @@ export function PostDetailsDialog({
                         />
                       )}
                       {/* Action buttons */}
-                      <div className="absolute top-2 right-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <div className="absolute top-2 end-2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                         <button
                           onClick={() => handleDownloadSingle(m)}
                           className="p-1.5 bg-black/50 hover:bg-black/70 rounded-lg transition-colors"

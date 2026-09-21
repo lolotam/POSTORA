@@ -372,7 +372,7 @@ export function WhatsAppDiagnostics({ socialAccountId, phoneNumberId }: WhatsApp
                     className="w-full justify-between mt-1 font-normal"
                   >
                     {testPhone ? `+${testPhone.replace(/\D/g, "")}` : t("diagnostics.selectPhone", "Select or type a phone number…")}
-                    <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                    <ChevronsUpDown className="ms-2 h-4 w-4 shrink-0 opacity-50" />
                   </Button>
                 </PopoverTrigger>
                 <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
@@ -401,12 +401,12 @@ export function WhatsAppDiagnostics({ socialAccountId, phoneNumberId }: WhatsApp
                             >
                               <Check
                                 className={cn(
-                                  "mr-2 h-4 w-4",
+                                  "me-2 h-4 w-4",
                                   typedDigits === opt.phone ? "opacity-100" : "opacity-0"
                                 )}
                               />
                               <span className="flex-1 truncate">{opt.label}</span>
-                              <Badge variant="outline" className="ml-2 text-[10px] capitalize">
+                              <Badge variant="outline" className="ms-2 text-[10px] capitalize">
                                 {opt.source === "contact" ? t("diagnostics.sourceContact", "contact") : t("diagnostics.sourceConversation", "conversation")}
                               </Badge>
                             </CommandItem>
@@ -422,7 +422,7 @@ export function WhatsAppDiagnostics({ socialAccountId, phoneNumberId }: WhatsApp
                               setPickerOpen(false);
                             }}
                           >
-                            <Send className="mr-2 h-4 w-4" />
+                            <Send className="me-2 h-4 w-4" />
                             {t("diagnostics.useNumber", "Use this number: +{{phone}}", { phone: typedDigits })}
                           </CommandItem>
                         </CommandGroup>

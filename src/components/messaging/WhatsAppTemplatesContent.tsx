@@ -234,12 +234,12 @@ export function WhatsAppTemplatesContent() {
         <p className="text-sm text-muted-foreground">{t("templates.hint", "Manage your Meta-approved message templates")}</p>
         <div className="flex gap-2">
           <Button variant="outline" onClick={() => syncMutation.mutate()} disabled={syncMutation.isPending}>
-            <RefreshCw className={`h-4 w-4 mr-2 ${syncMutation.isPending ? "animate-spin" : ""}`} />
+            <RefreshCw className={`h-4 w-4 me-2 ${syncMutation.isPending ? "animate-spin" : ""}`} />
             {t("templates.sync", "Sync from Meta")}
           </Button>
           <Dialog open={createOpen} onOpenChange={(open) => { setCreateOpen(open); if (!open) resetForm(); }}>
             <DialogTrigger asChild>
-              <Button><Plus className="h-4 w-4 mr-2" />{t("templates.create", "Create Template")}</Button>
+              <Button><Plus className="h-4 w-4 me-2" />{t("templates.create", "Create Template")}</Button>
             </DialogTrigger>
             <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
               <DialogHeader><DialogTitle>{t("templates.createTitle", "Create Message Template")}</DialogTitle></DialogHeader>
@@ -389,7 +389,7 @@ export function WhatsAppTemplatesContent() {
                 </div>
 
                 <Button onClick={() => createMutation.mutate()} disabled={!newTemplate.name || !newTemplate.bodyText || createMutation.isPending} className="w-full">
-                  {createMutation.isPending ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Plus className="h-4 w-4 mr-2" />}
+                  {createMutation.isPending ? <Loader2 className="h-4 w-4 me-2 animate-spin" /> : <Plus className="h-4 w-4 me-2" />}
                   {t("templates.submit", "Submit for Review")}
                 </Button>
               </div>
@@ -436,7 +436,7 @@ export function WhatsAppTemplatesContent() {
                       </TableCell>
                       <TableCell><Badge variant="outline">{categoryLabel(tmpl.category, t)}</Badge></TableCell>
                       <TableCell>{languageLabel(tmpl.language, t)}</TableCell>
-                      <TableCell className="text-xs text-muted-foreground space-x-1">
+                      <TableCell className="text-xs text-muted-foreground space-x-1 rtl:space-x-reverse">
                         {headerComp && <Badge variant="outline" className="text-xs gap-0.5">{headerComp.format === "TEXT" ? t("templates.textHeader", "Text Header") : headerComp.format}</Badge>}
                         {buttonsComp && <Badge variant="outline" className="text-xs">{buttonsComp.buttons?.length || 0} btn</Badge>}
                         {!headerComp && !buttonsComp && (

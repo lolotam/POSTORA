@@ -141,7 +141,7 @@ export function PlatformAccountMultiSelect({
                   >
                     <Checkbox checked={checked} className="pointer-events-none" />
                     <PlatformIcon platform={p} size="sm" />
-                    <span className="flex-1 text-left">{getPlatformName(p)}</span>
+                    <span className="flex-1 text-start">{getPlatformName(p)}</span>
                     {checked && <Check className="w-3.5 h-3.5 text-primary" />}
                   </button>
                 );
@@ -205,7 +205,7 @@ export function PlatformAccountMultiSelect({
                             name={a.platform_username}
                             size="sm"
                           />
-                          <span className="flex-1 text-left truncate">
+                          <span className="flex-1 text-start truncate">
                             @{a.platform_username || "account"}
                           </span>
                         </button>

@@ -72,7 +72,7 @@ export function ConversationLabelPicker({ conversationId }: ConversationLabelsPr
           {labels.map((l) => (
             <button key={l.id} onClick={() => toggle(l)} className="flex items-center gap-2 w-full rounded px-2 py-1 text-sm hover:bg-muted transition-colors">
               <span className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: l.color }} />
-              <span className="flex-1 text-left truncate">{l.name}</span>
+              <span className="flex-1 text-start truncate">{l.name}</span>
               {assignedIds.has(l.id) && <Check className="h-3.5 w-3.5 text-primary" />}
             </button>
           ))}

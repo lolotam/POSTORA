@@ -133,7 +133,7 @@ export function RateLimitIndicator({
           )}
           <span className="font-medium">{label}</span>
         </div>
-        <div className="text-xs font-medium space-x-2">
+        <div className="text-xs font-medium space-x-2 rtl:space-x-reverse">
           {limitPerHour > 0 && (
             <span className={cn(isHourlyLimited ? "text-destructive" : "text-muted-foreground")}>
               {t("rateLimit.perHour", { remaining: remainingHour, limit: limitPerHour, defaultValue: `${remainingHour}/${limitPerHour}/hr` })}

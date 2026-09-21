@@ -178,7 +178,7 @@ export default function AdminCoupons() {
           <Dialog open={isCreateOpen} onOpenChange={setIsCreateOpen}>
             <DialogTrigger asChild>
               <Button>
-                <Plus className="w-4 h-4 mr-2" />
+                <Plus className="w-4 h-4 me-2" />
                 Create Coupon
               </Button>
             </DialogTrigger>
@@ -256,7 +256,7 @@ export default function AdminCoupons() {
                   Cancel
                 </Button>
                 <Button onClick={handleCreateCoupon} disabled={createCouponMutation.isPending || !newCoupon.code}>
-                  {createCouponMutation.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+                  {createCouponMutation.isPending && <Loader2 className="w-4 h-4 me-2 animate-spin" />}
                   Create
                 </Button>
               </DialogFooter>

@@ -120,7 +120,7 @@ export default function EcommerceWhatsAppApi() {
             Create and submit these templates once in Meta Business Manager →
             WhatsApp Manager → Message Templates. Postora calls them by name.
           </p>
-          <ul className="text-sm space-y-1 list-disc pl-5">
+          <ul className="text-sm space-y-1 list-disc ps-5">
             <li><code>order_confirmation_v1</code> — name, order #, total, items</li>
             <li><code>order_invoice_v1</code> — name, order #, total (header: PDF)</li>
             <li><code>order_shipped_v1</code> — name, order #, tracking URL</li>

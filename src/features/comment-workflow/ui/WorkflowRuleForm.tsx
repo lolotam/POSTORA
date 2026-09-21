@@ -228,7 +228,7 @@ export function WorkflowRuleForm({ ruleId, onDone }: WorkflowRuleFormProps) {
                 disabled={count === 0 && !selected}
                 onClick={() => choosePlatform(platform)}
                 className={cn(
-                  "flex items-center gap-3 rounded-lg border p-3 text-left transition-colors",
+                  "flex items-center gap-3 rounded-lg border p-3 text-start transition-colors",
                   selected ? "border-primary bg-primary/5" : "hover:bg-muted/50",
                   count === 0 && !selected && "cursor-not-allowed opacity-50",
                 )}

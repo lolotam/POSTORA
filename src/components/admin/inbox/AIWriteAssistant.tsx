@@ -124,12 +124,12 @@ export function AIWriteAssistant({
       <DialogTrigger asChild>
         {mode === "rewrite" ? (
           <Button variant={buttonVariant} size={buttonSize}>
-            <Wand2 className="h-4 w-4 mr-2" />
+            <Wand2 className="h-4 w-4 me-2" />
             AI Rewrite
           </Button>
         ) : (
           <Button variant={buttonVariant} size={buttonSize}>
-            <Sparkles className="h-4 w-4 mr-2" />
+            <Sparkles className="h-4 w-4 me-2" />
             Help me write
           </Button>
         )}
@@ -178,7 +178,7 @@ export function AIWriteAssistant({
                 )}
               >
                 <FileText className="h-4 w-4" />
-                <div className="text-left">
+                <div className="text-start">
                   <div className="font-medium">Plain Text</div>
                   <div className="text-xs text-muted-foreground">Simple formatted email</div>
                 </div>
@@ -194,7 +194,7 @@ export function AIWriteAssistant({
                 )}
               >
                 <Code2 className="h-4 w-4" />
-                <div className="text-left">
+                <div className="text-start">
                   <div className="font-medium">HTML Template</div>
                   <div className="text-xs text-muted-foreground">Styled with design</div>
                 </div>
@@ -213,7 +213,7 @@ export function AIWriteAssistant({
                     type="button"
                     onClick={() => setTemplate(t.value)}
                     className={cn(
-                      "flex flex-col px-3 py-2 rounded-lg border text-sm transition-colors text-left",
+                      "flex flex-col px-3 py-2 rounded-lg border text-sm transition-colors text-start",
                       template === t.value
                         ? "border-primary bg-primary/10 text-primary"
                         : "border-muted hover:bg-muted"
@@ -257,12 +257,12 @@ export function AIWriteAssistant({
           <Button onClick={handleGenerate} disabled={aiMutation.isPending}>
             {aiMutation.isPending ? (
               <>
-                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                <Loader2 className="h-4 w-4 me-2 animate-spin" />
                 {mode === "rewrite" ? "Rewriting..." : "Generating..."}
               </>
             ) : (
               <>
-                <Sparkles className="h-4 w-4 mr-2" />
+                <Sparkles className="h-4 w-4 me-2" />
                 {mode === "rewrite" ? "Rewrite" : "Generate"} {outputFormat === "html" ? "HTML" : ""}
               </>
             )}

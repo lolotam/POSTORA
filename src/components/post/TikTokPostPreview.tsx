@@ -89,12 +89,12 @@ export function TikTokPostPreview({
         </h4>
         {isVideo ? (
           <Badge variant="secondary" className="text-xs">
-            <Play className="w-3 h-3 mr-1" />
+            <Play className="w-3 h-3 me-1" />
             {t("tikTokPost.videoBadge", "Video")}
           </Badge>
         ) : (
           <Badge variant="secondary" className="text-xs">
-            <ImageIcon className="w-3 h-3 mr-1" />
+            <ImageIcon className="w-3 h-3 me-1" />
             {t("tikTokPost.photoBadge", "Photo")}
           </Badge>
         )}
@@ -128,23 +128,23 @@ export function TikTokPostPreview({
         <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent pointer-events-none" />
 
         {/* Content Labels */}
-        <div className="absolute top-3 left-3 right-3 flex flex-wrap gap-1.5">
+        <div className="absolute top-3 start-3 end-3 flex flex-wrap gap-1.5">
           {aiGenerated && (
             <Badge variant="secondary" className="text-[10px] bg-black/50 backdrop-blur-sm">
-              <Sparkles className="w-2.5 h-2.5 mr-1" />
+              <Sparkles className="w-2.5 h-2.5 me-1" />
               {t("tikTokPost.aiGenerated", "AI-generated")}
             </Badge>
           )}
           {getContentLabel() && (
             <Badge variant="secondary" className="text-[10px] bg-black/50 backdrop-blur-sm">
-              <Tag className="w-2.5 h-2.5 mr-1" />
+              <Tag className="w-2.5 h-2.5 me-1" />
               {getContentLabel()}
             </Badge>
           )}
         </div>
 
         {/* Creator Info & Caption */}
-        <div className="absolute bottom-3 left-3 right-10 space-y-1.5">
+        <div className="absolute bottom-3 start-3 end-10 space-y-1.5">
           {/* Username */}
           <p className="text-white text-xs font-bold">
             @{creatorInfo?.creator_username || creatorInfo?.creator_nickname || "username"}
@@ -163,7 +163,7 @@ export function TikTokPostPreview({
         </div>
 
         {/* Right Side Interaction Icons */}
-        <div className="absolute right-2 bottom-16 flex flex-col items-center gap-3">
+        <div className="absolute end-2 bottom-16 flex flex-col items-center gap-3">
           {/* Avatar */}
           {creatorInfo?.creator_avatar_url ? (
             <img 

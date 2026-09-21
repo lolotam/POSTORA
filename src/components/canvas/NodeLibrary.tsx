@@ -22,7 +22,7 @@ export function NodeLibrary({ onDragStart }: NodeLibraryProps) {
 
   if (isCollapsed) {
     return (
-      <div className="absolute left-4 top-1/2 -translate-y-1/2 z-10">
+      <div className="absolute start-4 top-1/2 -translate-y-1/2 z-10">
         <div className="relative bg-card/70 backdrop-blur-xl ring-1 ring-white/10 rounded-2xl shadow-2xl p-2 space-y-2">
           <div aria-hidden className="pointer-events-none absolute -inset-0.5 rounded-2xl bg-gradient-to-br from-violet-500/20 via-fuchsia-500/10 to-sky-500/20 blur opacity-60 -z-10" />
           <Tooltip>
@@ -70,7 +70,7 @@ export function NodeLibrary({ onDragStart }: NodeLibraryProps) {
   }
 
   return (
-    <div className="absolute left-4 top-4 bottom-4 z-10 w-[240px]">
+    <div className="absolute start-4 top-4 bottom-4 z-10 w-[240px]">
       <div className="relative h-full">
         <div aria-hidden className="pointer-events-none absolute -inset-0.5 rounded-2xl bg-gradient-to-br from-violet-500/30 via-fuchsia-500/10 to-sky-500/30 blur opacity-60" />
         <div className="relative h-full bg-card/70 backdrop-blur-xl ring-1 ring-white/10 rounded-2xl shadow-2xl flex flex-col overflow-hidden">

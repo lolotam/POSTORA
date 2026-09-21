@@ -492,7 +492,7 @@ export const ComposeEmail = forwardRef<ComposeEmailRef, {}>(function ComposeEmai
       {!isReplyMode && (
         <DialogTrigger asChild>
           <Button>
-            <Plus className="w-4 h-4 mr-2" />
+            <Plus className="w-4 h-4 me-2" />
             Compose Email
           </Button>
         </DialogTrigger>
@@ -505,7 +505,7 @@ export const ComposeEmail = forwardRef<ComposeEmailRef, {}>(function ComposeEmai
         <div className="grid gap-4 py-4">
           {/* From Address */}
           <div className="flex items-center gap-4">
-            <Label htmlFor="from" className="w-16 text-right text-muted-foreground">
+            <Label htmlFor="from" className="w-16 text-end text-muted-foreground">
               From
             </Label>
             <Select value={fromAddress} onValueChange={setFromAddress}>
@@ -524,7 +524,7 @@ export const ComposeEmail = forwardRef<ComposeEmailRef, {}>(function ComposeEmai
 
           {/* To Emails */}
           <div className="flex items-center gap-4">
-            <Label htmlFor="to" className="w-16 text-right text-muted-foreground">
+            <Label htmlFor="to" className="w-16 text-end text-muted-foreground">
               To
             </Label>
             <div className="flex-1 flex items-center gap-2">
@@ -556,7 +556,7 @@ export const ComposeEmail = forwardRef<ComposeEmailRef, {}>(function ComposeEmai
           {showCcBcc && (
             <>
               <div className="flex items-center gap-4">
-                <Label htmlFor="cc" className="w-16 text-right text-muted-foreground">
+                <Label htmlFor="cc" className="w-16 text-end text-muted-foreground">
                   Cc
                 </Label>
                 <EmailAutocomplete
@@ -568,7 +568,7 @@ export const ComposeEmail = forwardRef<ComposeEmailRef, {}>(function ComposeEmai
                 />
               </div>
               <div className="flex items-center gap-4">
-                <Label htmlFor="bcc" className="w-16 text-right text-muted-foreground">
+                <Label htmlFor="bcc" className="w-16 text-end text-muted-foreground">
                   Bcc
                 </Label>
                 <EmailAutocomplete
@@ -584,7 +584,7 @@ export const ComposeEmail = forwardRef<ComposeEmailRef, {}>(function ComposeEmai
 
           {/* Subject */}
           <div className="flex items-center gap-4">
-            <Label htmlFor="subject" className="w-16 text-right text-muted-foreground">
+            <Label htmlFor="subject" className="w-16 text-end text-muted-foreground">
               Subject
             </Label>
             <Input
@@ -634,7 +634,7 @@ export const ComposeEmail = forwardRef<ComposeEmailRef, {}>(function ComposeEmai
                 htmlContent={body}
                 fromAddress={fromAddress}
               />
-              <div className="ml-auto">
+              <div className="ms-auto">
                 <EmailSignatureManager
                   selectedSignatureId={selectedSignature?.id}
                   onSelectSignature={setSelectedSignature}
@@ -670,7 +670,7 @@ export const ComposeEmail = forwardRef<ComposeEmailRef, {}>(function ComposeEmai
                         className="text-xs h-7"
                         title="Insert at cursor position"
                       >
-                        <MousePointer className="h-3 w-3 mr-1" />
+                        <MousePointer className="h-3 w-3 me-1" />
                         {sig.name}
                         {sig.is_default && " ★"}
                       </Button>
@@ -689,7 +689,7 @@ export const ComposeEmail = forwardRef<ComposeEmailRef, {}>(function ComposeEmai
                   ))}
                 </div>
                 <p className="text-xs text-muted-foreground mt-1">
-                  <MousePointer className="h-3 w-3 inline mr-1" />= at cursor, 
+                  <MousePointer className="h-3 w-3 inline me-1" />= at cursor, 
                   <ArrowDown className="h-3 w-3 inline mx-1" />= at end
                 </p>
               </div>
@@ -732,9 +732,9 @@ export const ComposeEmail = forwardRef<ComposeEmailRef, {}>(function ComposeEmai
               onClick={() => sendEmailMutation.mutate()}
             >
               {sendEmailMutation.isPending ? (
-                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                <Loader2 className="w-4 h-4 me-2 animate-spin" />
               ) : (
-                <Send className="w-4 h-4 mr-2" />
+                <Send className="w-4 h-4 me-2" />
               )}
               {scheduledAt ? "Schedule Email" : "Send Now"}
             </Button>
@@ -784,9 +784,9 @@ export const ComposeEmail = forwardRef<ComposeEmailRef, {}>(function ComposeEmai
                 disabled={saveDraftMutation.isPending}
               >
                 {saveDraftMutation.isPending && !saveDraftMutation.variables?.silent ? (
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  <Loader2 className="w-4 h-4 me-2 animate-spin" />
                 ) : (
-                  <PenLine className="w-4 h-4 mr-2" />
+                  <PenLine className="w-4 h-4 me-2" />
                 )}
                 {isDraftMode ? "Update Draft" : "Save Draft"}
               </Button>

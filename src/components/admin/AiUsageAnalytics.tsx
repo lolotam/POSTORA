@@ -415,7 +415,7 @@ export function AiUsageAnalytics() {
                       </SelectContent>
                     </Select>
                   </div>
-                  <div className="text-right">
+                  <div className="text-end">
                     <p className="text-xs text-muted-foreground">Current model</p>
                     <p className="text-sm font-medium">
                       {modelPricingMap[currentModel]?.name || currentModel}
@@ -479,7 +479,7 @@ export function AiUsageAnalytics() {
                           {modelPricingMap[currentModel]?.name} vs {modelPricingMap[comparisonModel]?.name}
                         </p>
                       </div>
-                      <div className="text-right">
+                      <div className="text-end">
                         {(() => {
                           const currentTotal = estimatedCost30Days;
                           const comparisonTotal = (estimatedTokens30Days / 1000) * (comparisonPricePerK || 0);

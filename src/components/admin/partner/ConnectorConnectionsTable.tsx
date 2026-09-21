@@ -85,12 +85,12 @@ export function ConnectorConnectionsTable() {
                   <TableCell className="max-w-[200px] truncate text-xs">{row.external_account_label ?? DASH}</TableCell>
                   <TableCell>
                     <Badge variant={statusVariant(row.status)}>{row.status}</Badge>
-                    {row.failure_code && <span className="ml-1 text-xs text-muted-foreground">{row.failure_code}</span>}
+                    {row.failure_code && <span className="ms-1 text-xs text-muted-foreground">{row.failure_code}</span>}
                   </TableCell>
                   <TableCell className="text-xs">{row.dependent_tools}</TableCell>
                   <TableCell className="text-xs">{stamp(row.connected_at)}</TableCell>
                   <TableCell className="text-xs">{stamp(row.last_used_at)}</TableCell>
-                  <TableCell className="text-right">
+                  <TableCell className="text-end">
                     {row.status !== "revoked" && (
                       <Button variant="ghost" size="sm" className="h-8 text-xs text-rose-500 hover:bg-rose-500/10 hover:text-rose-600" onClick={() => setTarget(row)}>
                         Revoke
@@ -121,7 +121,7 @@ export function ConnectorConnectionsTable() {
               onClick={(event) => { event.preventDefault(); confirmRevoke(); }}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
-              {revoke.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              {revoke.isPending && <Loader2 className="me-2 h-4 w-4 animate-spin" />}
               Revoke connection
             </AlertDialogAction>
           </AlertDialogFooter>

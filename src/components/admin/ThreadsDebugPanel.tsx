@@ -80,7 +80,7 @@ export function ThreadsDebugPanel({ accounts }: ThreadsDebugPanelProps) {
             </SelectContent>
           </Select>
           <Button size="sm" onClick={runDryRun} disabled={loading || !accountId}>
-            {loading ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : null}
+            {loading ? <Loader2 className="w-3.5 h-3.5 me-1 animate-spin" /> : null}
             Run dry-run
           </Button>
         </div>
@@ -96,7 +96,7 @@ export function ThreadsDebugPanel({ accounts }: ThreadsDebugPanelProps) {
                 <Badge className="bg-emerald-500/10 text-emerald-600">cross-share would be sent</Badge>
               ) : (
                 <Badge className="bg-amber-500/10 text-amber-700 dark:text-amber-400">
-                  <AlertTriangle className="w-3 h-3 mr-1" />
+                  <AlertTriangle className="w-3 h-3 me-1" />
                   cross-share skipped: {result.crossShareSkipReason || "n/a"}
                 </Badge>
               )}

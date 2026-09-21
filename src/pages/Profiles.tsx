@@ -258,7 +258,7 @@ export default function Profiles() {
               <GradientHeading as="h2" preset="violet-sky" size="lg">
                 {t("profiles.header.connectedAccounts", "Connected Accounts")}
               </GradientHeading>
-              <Badge variant="secondary" className="ml-1">{t("profiles.header.totalAccounts", "{{count}} Total", { count: totalAccounts })}</Badge>
+              <Badge variant="secondary" className="ms-1">{t("profiles.header.totalAccounts", "{{count}} Total", { count: totalAccounts })}</Badge>
               <Button
                 variant="ghost"
                 size="icon"
@@ -294,7 +294,7 @@ export default function Profiles() {
                           )}
                         >
                           {betaPlatforms[config.platform] && (
-                            <Badge className="absolute -top-2.5 left-1/2 -translate-x-1/2 bg-amber-500/20 text-amber-600 border-amber-500/30 text-[9px] px-1.5 py-0 leading-tight">{t("profiles.badge.beta", "Beta")}</Badge>
+                            <Badge className="absolute -top-2.5 start-1/2 -translate-x-1/2 bg-amber-500/20 text-amber-600 border-amber-500/30 text-[9px] px-1.5 py-0 leading-tight">{t("profiles.badge.beta", "Beta")}</Badge>
                           )}
                           <PlatformIcon platform={config.platform} size="lg" />
                           <Badge

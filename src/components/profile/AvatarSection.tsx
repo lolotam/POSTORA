@@ -158,12 +158,12 @@ export function AvatarSection({ userId, avatarUrl, fullName, onRefresh }: Avatar
             >
               {isUploading ? (
                 <>
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  <Loader2 className="w-4 h-4 me-2 animate-spin" />
                   Uploading...
                 </>
               ) : (
                 <>
-                  <Upload className="w-4 h-4 mr-2" />
+                  <Upload className="w-4 h-4 me-2" />
                   Upload Photo
                 </>
               )}

@@ -237,9 +237,9 @@ export function ApiEndpointsSection() {
                 <table className="w-full text-sm border border-border rounded-lg">
                   <thead className="bg-secondary/50">
                     <tr>
-                      <th className="text-left py-3 px-4">Field</th>
-                      <th className="text-left py-3 px-4">Type</th>
-                      <th className="text-left py-3 px-4">Example Value</th>
+                      <th className="text-start py-3 px-4">Field</th>
+                      <th className="text-start py-3 px-4">Type</th>
+                      <th className="text-start py-3 px-4">Example Value</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -317,9 +317,9 @@ export function ApiEndpointsSection() {
             <table className="w-full text-sm border border-border rounded-lg">
               <thead className="bg-secondary/50">
                 <tr>
-                  <th className="text-left py-3 px-4">Parameter</th>
-                  <th className="text-left py-3 px-4">Type</th>
-                  <th className="text-left py-3 px-4">Description</th>
+                  <th className="text-start py-3 px-4">Parameter</th>
+                  <th className="text-start py-3 px-4">Type</th>
+                  <th className="text-start py-3 px-4">Description</th>
                 </tr>
               </thead>
               <tbody>
@@ -394,9 +394,9 @@ export function ApiEndpointsSection() {
             <table className="w-full text-sm border border-border rounded-lg">
               <thead className="bg-secondary/50">
                 <tr>
-                  <th className="text-left py-3 px-4">Parameter</th>
-                  <th className="text-left py-3 px-4">Type</th>
-                  <th className="text-left py-3 px-4">Description</th>
+                  <th className="text-start py-3 px-4">Parameter</th>
+                  <th className="text-start py-3 px-4">Type</th>
+                  <th className="text-start py-3 px-4">Description</th>
                 </tr>
               </thead>
               <tbody>

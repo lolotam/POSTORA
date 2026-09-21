@@ -46,7 +46,7 @@ export function PublishingStatusIndicator({ publishingPosts }: PublishingStatusI
             <div className="flex items-center gap-3">
               <div className="relative">
                 <Loader2 className="w-5 h-5 text-primary animate-spin" />
-                <span className="absolute -top-1 -right-1 w-2 h-2 bg-primary rounded-full animate-pulse" />
+                <span className="absolute -top-1 -end-1 w-2 h-2 bg-primary rounded-full animate-pulse" />
               </div>
               <span className="font-medium text-foreground">
                 {t("indicator.publishingPosts", "Publishing {{count}} post(s)...", { count: posts.length })}

@@ -58,7 +58,7 @@ export function WhatsAppCoexistenceSetupBanner() {
             the WhatsApp Business mobile app — otherwise the Cloud API cannot register the number.
           </Trans>
         </p>
-        <ol className="list-decimal pl-5 text-muted-foreground space-y-1">
+        <ol className="list-decimal ps-5 text-muted-foreground space-y-1">
           <li>
             <Trans ns="whatsapp" i18nKey="banner.step1" components={{ strong: <strong /> }}>
               Open <strong>WhatsApp Business</strong> on the phone where this number is active.
@@ -102,12 +102,12 @@ export function WhatsAppCoexistenceSetupBanner() {
                 >
                   {register.isPending ? (
                     <>
-                      <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                      <Loader2 className="me-2 h-3.5 w-3.5 animate-spin" />
                       {t("banner.verifying", "Verifying…")}
                     </>
                   ) : (
                     <>
-                      <CheckCircle2 className="mr-2 h-3.5 w-3.5" />
+                      <CheckCircle2 className="me-2 h-3.5 w-3.5" />
                       {t("banner.verify", "Verify registration")}
                     </>
                   )}

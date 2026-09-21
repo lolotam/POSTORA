@@ -95,20 +95,20 @@ export function ContactExportMenu({
         <Button variant="outline" size={triggerSize}>
           {children}
           {buttonLabel}
-          <ChevronDown className="h-3.5 w-3.5 ml-1" />
+          <ChevronDown className="h-3.5 w-3.5 ms-1" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
         <DropdownMenuItem onClick={handleCsv}>
-          <FileText className="h-4 w-4 mr-2" />
+          <FileText className="h-4 w-4 me-2" />
           {t("export.csv", "Export as CSV")}
         </DropdownMenuItem>
         <DropdownMenuItem onClick={handleXlsx}>
-          <FileSpreadsheet className="h-4 w-4 mr-2" />
+          <FileSpreadsheet className="h-4 w-4 me-2" />
           {t("export.excel", "Export as Excel (.xlsx)")}
         </DropdownMenuItem>
         <DropdownMenuItem onClick={handleVCard}>
-          <Contact className="h-4 w-4 mr-2" />
+          <Contact className="h-4 w-4 me-2" />
           {t("export.vcard", "Export as vCard (.vcf)")}
         </DropdownMenuItem>
       </DropdownMenuContent>

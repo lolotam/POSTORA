@@ -73,7 +73,7 @@ export function WhatsAppMessageBubble({
   const revoked = Boolean(message.revoked_at);
 
   const body = (
-    <div className={cn("flex max-w-[75%] flex-col", isSent ? "ml-auto items-end" : "items-start")}>
+    <div className={cn("flex max-w-[75%] flex-col", isSent ? "ms-auto items-end" : "items-start")}>
       <span className="mb-1 text-xs text-muted-foreground">{message.from?.name}</span>
       <div
         className={cn(

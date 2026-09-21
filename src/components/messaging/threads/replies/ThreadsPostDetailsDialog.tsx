@@ -39,7 +39,7 @@ export function ThreadsPostDetailsDialog({ accountId, postId, open, onOpenChange
 
         {isLoading && (
           <div className="flex items-center justify-center py-8 text-muted-foreground">
-            <Loader2 className="h-5 w-5 animate-spin mr-2" />
+            <Loader2 className="h-5 w-5 animate-spin me-2" />
             {t("dialog.loadingPost", "Loading post…")}
           </div>
         )}
@@ -91,7 +91,7 @@ export function ThreadsPostDetailsDialog({ accountId, postId, open, onOpenChange
           {data?.permalink && (
             <Button asChild variant="outline" size="sm">
               <a href={data.permalink} target="_blank" rel="noopener noreferrer">
-                <ExternalLink className="h-3.5 w-3.5 mr-1.5" />
+                <ExternalLink className="h-3.5 w-3.5 me-1.5" />
                 {t("actions.openOnThreads", "Open on Threads")}
               </a>
             </Button>

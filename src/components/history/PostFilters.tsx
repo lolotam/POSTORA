@@ -192,7 +192,7 @@ export function PostFilters({
         </DropdownMenu>
 
         {/* Items per page */}
-        <div className="flex items-center gap-2 ml-auto" data-testid="items-per-page">
+        <div className="flex items-center gap-2 ms-auto" data-testid="items-per-page">
           <span className="text-xs text-muted-foreground hidden sm:inline">{t("filters.show", "Show")}</span>
           <Select
             value={itemsPerPage.toString()}

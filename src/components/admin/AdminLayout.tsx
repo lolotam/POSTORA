@@ -76,7 +76,7 @@ export function AdminLayout({ children }: AdminLayoutProps) {
           <Link to="/" className="flex items-center">
             <Logo />
           </Link>
-          <span className="ml-2 text-xs font-medium text-primary bg-primary/10 px-2 py-0.5 rounded">
+          <span className="ms-2 text-xs font-medium text-primary bg-primary/10 px-2 py-0.5 rounded">
             Admin
           </span>
         </div>

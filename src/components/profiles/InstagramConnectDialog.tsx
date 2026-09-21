@@ -41,7 +41,7 @@ export function InstagramConnectDialog({
             type="button"
             disabled={disabled}
             onClick={() => onSelect("direct")}
-            className="flex items-start gap-3 rounded-lg border p-4 text-left transition hover:border-primary hover:bg-accent disabled:opacity-50"
+            className="flex items-start gap-3 rounded-lg border p-4 text-start transition hover:border-primary hover:bg-accent disabled:opacity-50"
           >
             <Instagram className="mt-1 h-5 w-5 text-[#E1306C]" />
             <div>
@@ -57,7 +57,7 @@ export function InstagramConnectDialog({
             type="button"
             disabled={disabled}
             onClick={() => onSelect("facebook_business")}
-            className="flex items-start gap-3 rounded-lg border p-4 text-left transition hover:border-primary hover:bg-accent disabled:opacity-50"
+            className="flex items-start gap-3 rounded-lg border p-4 text-start transition hover:border-primary hover:bg-accent disabled:opacity-50"
           >
             <Facebook className="mt-1 h-5 w-5 text-[#1877F2]" />
             <div>

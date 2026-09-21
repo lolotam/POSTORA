@@ -49,7 +49,7 @@ export function PartnerKeysTable({ keys, isLoading, error, activeScope, onToggle
             <TableHead>Status</TableHead>
             <TableHead>Created</TableHead>
             <TableHead>Last used</TableHead>
-            <TableHead className="text-right">Actions</TableHead>
+            <TableHead className="text-end">Actions</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -72,13 +72,13 @@ export function PartnerKeysTable({ keys, isLoading, error, activeScope, onToggle
               </TableCell>
               <TableCell className="text-xs">{when(key.created_at)}</TableCell>
               <TableCell className="text-xs">{when(key.last_used_at)}</TableCell>
-              <TableCell className="text-right">
+              <TableCell className="text-end">
                 <div className="flex justify-end gap-1">
                   <Button size="sm" variant="outline" onClick={() => onViewActivity(key)}>
-                    <Activity className="mr-1 h-3.5 w-3.5" /> View live activity
+                    <Activity className="me-1 h-3.5 w-3.5" /> View live activity
                   </Button>
                   <Button size="sm" variant="ghost" className="text-destructive" disabled={key.status !== "active"} onClick={() => onRevoke(key)}>
-                    <Ban className="mr-1 h-3.5 w-3.5" /> Revoke key
+                    <Ban className="me-1 h-3.5 w-3.5" /> Revoke key
                   </Button>
                 </div>
               </TableCell>

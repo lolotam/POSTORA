@@ -90,7 +90,7 @@ export function FilterToolbar({ filters, onChange, maxEngagement }: FilterToolba
           step={100}
           className="flex-1"
         />
-        <span className="text-xs font-mono w-12 text-right">
+        <span className="text-xs font-mono w-12 text-end">
           {filters.minEngagement > 0 ? filters.minEngagement.toLocaleString() : "0"}
         </span>
       </div>

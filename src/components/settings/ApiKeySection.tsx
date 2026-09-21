@@ -77,12 +77,12 @@ export function ApiKeySection() {
               <Input
                 value={apiKey}
                 readOnly
-                className="pr-20 font-mono text-sm"
+                className="pe-20 font-mono text-sm"
               />
               <Button
                 variant="ghost"
                 size="sm"
-                className="absolute right-1 top-1/2 -translate-y-1/2"
+                className="absolute end-1 top-1/2 -translate-y-1/2"
                 onClick={handleCopyApiKey}
               >
                 {copied ? (

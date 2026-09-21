@@ -90,7 +90,7 @@ export function DraggableReferenceImage({
         <div
           {...attributes}
           {...listeners}
-          className="absolute top-0 left-0 w-full h-5 bg-gradient-to-b from-background/80 to-transparent flex items-center justify-center cursor-grab active:cursor-grabbing z-10"
+          className="absolute top-0 start-0 w-full h-5 bg-gradient-to-b from-background/80 to-transparent flex items-center justify-center cursor-grab active:cursor-grabbing z-10"
         >
           <GripVertical className="w-3 h-3 text-muted-foreground" />
         </div>
@@ -99,7 +99,7 @@ export function DraggableReferenceImage({
         <TooltipProvider delayDuration={300}>
           <Tooltip>
             <TooltipTrigger asChild>
-              <div className="absolute bottom-0.5 left-0.5 w-4 h-4 rounded-full bg-primary text-primary-foreground text-[10px] font-medium flex items-center justify-center z-10">
+              <div className="absolute bottom-0.5 start-0.5 w-4 h-4 rounded-full bg-primary text-primary-foreground text-[10px] font-medium flex items-center justify-center z-10">
                 {index + 1}
               </div>
             </TooltipTrigger>
@@ -120,7 +120,7 @@ export function DraggableReferenceImage({
         {/* Remove button */}
         <button
           onClick={() => onRemove(image.id)}
-          className="absolute top-0.5 right-0.5 w-5 h-5 rounded-full bg-background/80 hover:bg-destructive hover:text-destructive-foreground text-xs flex items-center justify-center transition-colors z-20"
+          className="absolute top-0.5 end-0.5 w-5 h-5 rounded-full bg-background/80 hover:bg-destructive hover:text-destructive-foreground text-xs flex items-center justify-center transition-colors z-20"
         >
           <X className="w-3 h-3" />
         </button>
@@ -133,7 +133,7 @@ export function DraggableReferenceImage({
           onValueChange={(value: ReferenceType) => onTypeChange(image.id, value)}
         >
           <SelectTrigger className="h-6 w-[52px] text-[10px] px-1">
-            <TypeIcon className="w-3 h-3 mr-0.5" />
+            <TypeIcon className="w-3 h-3 me-0.5" />
             <SelectValue />
           </SelectTrigger>
           <SelectContent className="bg-background border border-border z-50">

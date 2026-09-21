@@ -151,8 +151,8 @@ export function TikTokConfirmDialog({
                     {isVideo ? t("postpreview:tikTokConfirm.videoPost", "Video post") : t("postpreview:tikTokConfirm.photoPost", "Photo post")}
                   </p>
                 </div>
-                <Badge variant="secondary" className="ml-auto">
-                  {isVideo ? <Video className="w-3 h-3 mr-1" /> : <ImageIcon className="w-3 h-3 mr-1" />}
+                <Badge variant="secondary" className="ms-auto">
+                  {isVideo ? <Video className="w-3 h-3 me-1" /> : <ImageIcon className="w-3 h-3 me-1" />}
                   {t("postpreview:tikTokConfirm.filesCount", { count: mediaFiles.length, defaultValue: `${mediaFiles.length} ${mediaFiles.length === 1 ? "file" : "files"}` })}
                 </Badge>
               </div>

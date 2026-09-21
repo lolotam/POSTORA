@@ -75,7 +75,7 @@ export function UpgradeModal({
               <Crown className="w-4 h-4 text-primary" />
               Upgrade benefits include:
             </div>
-            <ul className="text-sm text-muted-foreground space-y-2 ml-6">
+            <ul className="text-sm text-muted-foreground space-y-2 ms-6">
               <li className="flex items-center gap-2">
                 <Zap className="w-3 h-3 text-primary" /> Unlimited profiles
               </li>

@@ -195,7 +195,7 @@ export function DefaultModelSelector({
                     disabled={isSaving || !paramsDirty}
                     onClick={() => onSetAdminParams(primaryRow.id, paramDraft)}
                   >
-                    {isSaving ? <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" /> : null}
+                    {isSaving ? <Loader2 className="me-2 h-3.5 w-3.5 animate-spin" /> : null}
                     Save parameters
                   </Button>
                 </div>

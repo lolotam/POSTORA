@@ -28,7 +28,7 @@ export default function PinterestApi() {
           {title && <span className="text-xs text-gray-500">• {title}</span>}
         </div>
         <Button variant="ghost" size="sm" onClick={() => copy(code, id)} className="h-7 text-xs text-gray-300 hover:text-white hover:bg-white/10">
-          {copiedId === id ? <Check className="w-3 h-3 mr-1" /> : <Copy className="w-3 h-3 mr-1" />}
+          {copiedId === id ? <Check className="w-3 h-3 me-1" /> : <Copy className="w-3 h-3 me-1" />}
           {copiedId === id ? "Copied!" : "Copy"}
         </Button>
       </div>
@@ -863,9 +863,9 @@ export default function PinterestApi() {
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b">
-                      <th className="text-left py-2 font-medium">Setting</th>
-                      <th className="text-left py-2 font-medium">JSON Method</th>
-                      <th className="text-left py-2 font-medium">Form-Data Method</th>
+                      <th className="text-start py-2 font-medium">Setting</th>
+                      <th className="text-start py-2 font-medium">JSON Method</th>
+                      <th className="text-start py-2 font-medium">Form-Data Method</th>
                     </tr>
                   </thead>
                   <tbody>

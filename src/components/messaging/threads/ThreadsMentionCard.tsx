@@ -199,9 +199,9 @@ export function ThreadsMentionCard({
               onClick={() => onMarkRead(mention.id)}
             >
               {isUpdating ? (
-                <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+                <Loader2 className="h-3.5 w-3.5 me-1.5 animate-spin" />
               ) : (
-                <Check className="h-3.5 w-3.5 mr-1.5" />
+                <Check className="h-3.5 w-3.5 me-1.5" />
               )}
               {t("actions.markAsRead", "Mark as Read")}
             </Button>
@@ -213,7 +213,7 @@ export function ThreadsMentionCard({
               disabled={isUpdating}
               onClick={() => onArchive(mention.id)}
             >
-              <Archive className="h-3.5 w-3.5 mr-1.5" />
+              <Archive className="h-3.5 w-3.5 me-1.5" />
               {t("actions.archive", "Archive")}
             </Button>
           )}
@@ -224,7 +224,7 @@ export function ThreadsMentionCard({
               disabled={isReplying}
               onClick={() => setComposerOpen(true)}
             >
-              <Reply className="h-3.5 w-3.5 mr-1.5" />
+              <Reply className="h-3.5 w-3.5 me-1.5" />
               {mention.has_reply ? t("actions.replyAgain", "Reply again") : t("actions.reply", "Reply")}
             </Button>
           )}
@@ -235,7 +235,7 @@ export function ThreadsMentionCard({
                 target="_blank"
                 rel="noopener noreferrer"
               >
-                <ExternalLink className="h-3.5 w-3.5 mr-1.5" />
+                <ExternalLink className="h-3.5 w-3.5 me-1.5" />
                 {t("actions.openInThreads", "Open in Threads")}
               </a>
             </Button>

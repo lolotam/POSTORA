@@ -58,7 +58,7 @@ export function MediaLightboxDialog({
                 size="icon"
                 variant="secondary"
                 onClick={prev}
-                className="absolute left-3 top-1/2 -translate-y-1/2 rounded-full bg-background/80 backdrop-blur"
+                className="absolute start-3 top-1/2 -translate-y-1/2 rounded-full bg-background/80 backdrop-blur"
                 aria-label="Previous"
               >
                 <ChevronLeft className="w-5 h-5" />
@@ -67,12 +67,12 @@ export function MediaLightboxDialog({
                 size="icon"
                 variant="secondary"
                 onClick={next}
-                className="absolute right-3 top-1/2 -translate-y-1/2 rounded-full bg-background/80 backdrop-blur"
+                className="absolute end-3 top-1/2 -translate-y-1/2 rounded-full bg-background/80 backdrop-blur"
                 aria-label="Next"
               >
                 <ChevronRight className="w-5 h-5" />
               </Button>
-              <div className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full bg-background/80 backdrop-blur px-3 py-1 text-xs font-medium tabular-nums">
+              <div className="absolute bottom-3 start-1/2 -translate-x-1/2 rounded-full bg-background/80 backdrop-blur px-3 py-1 text-xs font-medium tabular-nums">
                 {safeIndex + 1} / {items.length}
               </div>
             </>

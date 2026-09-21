@@ -245,7 +245,7 @@ export function DashboardLayout({ children, contentClassName, noPadding = false,
       <header className="app-topnav sticky top-0 z-50 w-full border-b border-border bg-background/80 backdrop-blur-xl">
         <div className="flex h-14 md:h-16 items-center px-3 md:px-6 w-full">
           {/* Logo */}
-          <Link to="/" className="flex items-center mr-4 md:mr-8 shrink-0">
+          <Link to="/" className="flex items-center me-4 md:me-8 shrink-0">
             <Logo size="sm" showText className="hidden sm:flex" />
             <Logo size="sm" showText={false} className="sm:hidden" />
           </Link>
@@ -299,7 +299,7 @@ export function DashboardLayout({ children, contentClassName, noPadding = false,
                         >
                           <div className="absolute inset-0 rounded-lg bg-gradient-to-r from-primary/5 via-primary/10 to-primary/5" />
                           <motion.div
-                            className="absolute bottom-0 left-1/2 -translate-x-1/2 h-[2px] bg-gradient-to-r from-transparent via-primary to-transparent rounded-full"
+                            className="absolute bottom-0 start-1/2 -translate-x-1/2 h-[2px] bg-gradient-to-r from-transparent via-primary to-transparent rounded-full"
                             initial={{ width: "0%" }}
                             animate={{ width: "60%" }}
                             transition={{ delay: 0.1, duration: 0.3 }}
@@ -309,7 +309,7 @@ export function DashboardLayout({ children, contentClassName, noPadding = false,
                       <span className="relative z-10"><item.icon className={cn("h-4 w-4 shrink-0", isActive && "text-primary")} /></span>
                       <span className="relative z-10">{item.label}</span>
                       {item.path === "/scheduled" && scheduledCount > 0 && (
-                        <span className="relative z-10 ml-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 text-[10px] font-bold text-white px-1">
+                        <span className="relative z-10 ms-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 text-[10px] font-bold text-white px-1">
                           {scheduledCount}
                         </span>
                       )}
@@ -317,7 +317,7 @@ export function DashboardLayout({ children, contentClassName, noPadding = false,
                         <TooltipProvider>
                           <Tooltip>
                             <TooltipTrigger asChild>
-                              <span className="relative z-10 flex items-center gap-0.5 ml-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-500/20 text-amber-600 dark:text-amber-400 cursor-help">
+                              <span className="relative z-10 flex items-center gap-0.5 ms-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-500/20 text-amber-600 dark:text-amber-400 cursor-help">
                                 <EyeOff className="h-2.5 w-2.5" />
                                 {t("badge.hidden", "Hidden")}
                               </span>
@@ -354,7 +354,7 @@ export function DashboardLayout({ children, contentClassName, noPadding = false,
                         >
                           <div className="absolute inset-0 rounded-lg bg-gradient-to-r from-primary/5 via-primary/10 to-primary/5" />
                           <motion.div
-                            className="absolute bottom-0 left-1/2 -translate-x-1/2 h-[2px] bg-gradient-to-r from-transparent via-primary to-transparent rounded-full"
+                            className="absolute bottom-0 start-1/2 -translate-x-1/2 h-[2px] bg-gradient-to-r from-transparent via-primary to-transparent rounded-full"
                             initial={{ width: "0%" }}
                             animate={{ width: "60%" }}
                             transition={{ delay: 0.1, duration: 0.3 }}
@@ -363,9 +363,9 @@ export function DashboardLayout({ children, contentClassName, noPadding = false,
                       )}
                       <span className="relative z-10"><dropdown.icon className={cn("h-4 w-4 shrink-0", active && "text-primary")} /></span>
                       <span className="relative z-10">{dropdown.label}</span>
-                      <ChevronDown className="relative z-10 h-3 w-3 ml-0.5 opacity-60" />
+                      <ChevronDown className="relative z-10 h-3 w-3 ms-0.5 opacity-60" />
                       {dropdown.basePath === "/post" && scheduledCount > 0 && (
-                        <span className="relative z-10 ml-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 text-[10px] font-bold text-white px-1">
+                        <span className="relative z-10 ms-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 text-[10px] font-bold text-white px-1">
                           {scheduledCount}
                         </span>
                       )}
@@ -386,7 +386,7 @@ export function DashboardLayout({ children, contentClassName, noPadding = false,
                             <child.icon className="h-4 w-4" />
                             {child.label}
                             {child.path === "/scheduled" && scheduledCount > 0 && (
-                              <span className="ml-auto flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 text-[10px] font-bold text-white px-1">
+                              <span className="ms-auto flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 text-[10px] font-bold text-white px-1">
                                 {scheduledCount}
                               </span>
                             )}
@@ -401,7 +401,7 @@ export function DashboardLayout({ children, contentClassName, noPadding = false,
           </nav>
 
           {/* Right Side Actions */}
-          <div className="flex items-center gap-1.5 md:gap-2 ml-auto">
+          <div className="flex items-center gap-1.5 md:gap-2 ms-auto">
             <PublishingStatusWidget
               publishingPosts={publishingPosts}
               isPublishing={isPublishing}
@@ -448,8 +448,8 @@ export function DashboardLayout({ children, contentClassName, noPadding = false,
                         )}
                         onClick={!isAdmin && isFree ? () => navigate("/pricing") : undefined}
                       >
-                        {isAdmin && <Shield className="h-2.5 w-2.5 mr-0.5" />}
-                        {!isAdmin && (isPro || isBusiness) && <Crown className="h-2.5 w-2.5 mr-0.5" />}
+                        {isAdmin && <Shield className="h-2.5 w-2.5 me-0.5" />}
+                        {!isAdmin && (isPro || isBusiness) && <Crown className="h-2.5 w-2.5 me-0.5" />}
                         {isAdmin ? t("badge.admin", "Admin") : (isFree ? t("badge.upgrade", "Upgrade") : planName)}
                       </Badge>
                     </div>
@@ -487,9 +487,9 @@ export function DashboardLayout({ children, contentClassName, noPadding = false,
                   className="text-destructive focus:text-destructive cursor-pointer"
                 >
                   {isLoggingOut ? (
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    <Loader2 className="h-4 w-4 me-2 animate-spin" />
                   ) : (
-                    <LogOut className="h-4 w-4 mr-2" />
+                    <LogOut className="h-4 w-4 me-2" />
                   )}
                   {t("userMenu.logout", "Logout")}
                 </DropdownMenuItem>
@@ -584,7 +584,7 @@ export function DashboardLayout({ children, contentClassName, noPadding = false,
                       <button
                         onClick={() => setMobileExpandedDropdown(expanded ? null : dropdown.basePath)}
                         className={cn(
-                          "flex items-center gap-3 px-4 py-3 rounded-lg transition-colors duration-200 w-full text-left",
+                          "flex items-center gap-3 px-4 py-3 rounded-lg transition-colors duration-200 w-full text-start",
                           active
                             ? "bg-primary/10 text-primary"
                             : "text-muted-foreground hover:text-foreground hover:bg-secondary"
@@ -603,7 +603,7 @@ export function DashboardLayout({ children, contentClassName, noPadding = false,
                             transition={{ duration: 0.2 }}
                             className="overflow-hidden"
                           >
-                            <div className="pl-8 space-y-0.5 py-1">
+                            <div className="ps-8 space-y-0.5 py-1">
                               {dropdown.children.map((child) => {
                                 const childActive = location.pathname === child.path || (child.path.includes("?") && (location.pathname + location.search) === child.path);
                                 return (

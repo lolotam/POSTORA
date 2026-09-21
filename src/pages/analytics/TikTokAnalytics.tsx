@@ -136,7 +136,7 @@ export default function TikTokAnalytics() {
             {t("errors.missingScopeBody", "This account is missing the user.info.stats or video.list scope. Please reconnect TikTok to grant the new permissions.")}
           </p>
           <Button size="sm" variant="outline" className="border-rose-500/40 hover:bg-rose-500/10" onClick={() => navigate("/profiles")}>
-            <Plug className="w-3.5 h-3.5 mr-2" /> {t("actions.reconnectTikTok", "Reconnect TikTok")}
+            <Plug className="w-3.5 h-3.5 me-2" /> {t("actions.reconnectTikTok", "Reconnect TikTok")}
           </Button>
         </GradientRingCard>
       );
@@ -149,7 +149,7 @@ export default function TikTokAnalytics() {
           </div>
           <p className="text-xs text-muted-foreground">{t("errors.tokenExpiredBody", "Please reconnect this TikTok account to refresh your access.")}</p>
           <Button size="sm" variant="outline" className="border-rose-500/40 hover:bg-rose-500/10" onClick={() => navigate("/profiles")}>
-            <Plug className="w-3.5 h-3.5 mr-2" /> {t("actions.reconnectTikTok", "Reconnect TikTok")}
+            <Plug className="w-3.5 h-3.5 me-2" /> {t("actions.reconnectTikTok", "Reconnect TikTok")}
           </Button>
         </GradientRingCard>
       );
@@ -193,7 +193,7 @@ export default function TikTokAnalytics() {
                     : "border-amber-500/40 text-amber-500",
                 )}
               >
-                {isApi ? <ShieldCheck className="w-3 h-3 mr-1" /> : <Bot className="w-3 h-3 mr-1" />}
+                {isApi ? <ShieldCheck className="w-3 h-3 me-1" /> : <Bot className="w-3 h-3 me-1" />}
                 {isApi ? t("header.officialApi", "Official TikTok API") : t("header.apifyScraper", "Apify Scraper")}
               </Badge>
             )}
@@ -247,7 +247,7 @@ export default function TikTokAnalytics() {
                     {t("empty.connectTikTokHint", "Official TikTok API mode is active. Connect a TikTok account to view its real analytics.")}
                   </p>
                   <Button onClick={() => navigate("/profiles")} className="bg-gradient-to-r from-rose-500 via-pink-500 to-fuchsia-500 text-white hover:opacity-90">
-                    <Plug className="w-4 h-4 mr-2" /> {t("actions.connectTikTok", "Connect TikTok")}
+                    <Plug className="w-4 h-4 me-2" /> {t("actions.connectTikTok", "Connect TikTok")}
                   </Button>
               </div>
               </GradientRingCard>

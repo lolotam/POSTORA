@@ -122,7 +122,7 @@ export default function TikTokPublish() {
                 )}
                 <p className="text-xs text-zinc-400">Connected Account</p>
               </div>
-              {creatorInfoLoading && <Loader2 className="w-4 h-4 animate-spin text-zinc-400 ml-auto" />}
+              {creatorInfoLoading && <Loader2 className="w-4 h-4 animate-spin text-zinc-400 ms-auto" />}
             </div>
 
             {/* Daily Posting Limit */}
@@ -349,7 +349,7 @@ function CommercialDisclosure({
         </div>
 
         {discloseContent && (
-          <div className="space-y-3 pl-1 pt-2 border-t border-zinc-100 dark:border-zinc-800">
+          <div className="space-y-3 ps-1 pt-2 border-t border-zinc-100 dark:border-zinc-800">
             {disclosureInvalid && (
               <p className="text-xs text-amber-600 dark:text-amber-400 font-medium">
                 You must select at least one option below.
@@ -719,7 +719,7 @@ function PublishSection({ accountId, username, creatorInfo }: { accountId: strin
             placeholder="Title (shown at the top of your video caption)"
             className="bg-zinc-50 dark:bg-zinc-900 border-zinc-200 dark:border-zinc-700"
           />
-          <p className="text-xs text-zinc-400 text-right">{title.length}/150</p>
+          <p className="text-xs text-zinc-400 text-end">{title.length}/150</p>
         </div>
 
         {/* Description */}
@@ -733,7 +733,7 @@ function PublishSection({ accountId, username, creatorInfo }: { accountId: strin
             placeholder="Description (appended after the title; shown together as one caption on TikTok)"
             className="w-full rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-900 px-3 py-2 text-sm text-zinc-900 dark:text-white placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-300 dark:focus:ring-zinc-600 resize-none"
           />
-          <p className="text-xs text-zinc-400 text-right">{caption.length}/2050</p>
+          <p className="text-xs text-zinc-400 text-end">{caption.length}/2050</p>
         </div>
 
         {/* Privacy — Dynamic from API */}
@@ -1026,7 +1026,7 @@ function ScheduleSection({ accountId, username, creatorInfo }: { accountId: stri
           placeholder="Title (shown at the top of your video caption)"
           className="bg-zinc-50 dark:bg-zinc-900 border-zinc-200 dark:border-zinc-700"
         />
-        <p className="text-xs text-zinc-400 text-right">{title.length}/150</p>
+        <p className="text-xs text-zinc-400 text-end">{title.length}/150</p>
       </div>
 
       {/* Description */}
@@ -1040,7 +1040,7 @@ function ScheduleSection({ accountId, username, creatorInfo }: { accountId: stri
           placeholder="Description (appended after the title; shown together as one caption on TikTok)"
           className="w-full rounded-lg border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-900 px-3 py-2 text-sm text-zinc-900 dark:text-white placeholder:text-zinc-400 focus:outline-none focus:ring-2 focus:ring-zinc-300 dark:focus:ring-zinc-600 resize-none"
         />
-        <p className="text-xs text-zinc-400 text-right">{caption.length}/2050</p>
+        <p className="text-xs text-zinc-400 text-end">{caption.length}/2050</p>
       </div>
 
       {/* Privacy — Dynamic from API */}

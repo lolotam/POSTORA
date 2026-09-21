@@ -190,7 +190,7 @@ export function ThreadsReplyComposerDialog({
               onClick={() => setPickerOpen(true)}
               disabled={createReply.isPending}
             >
-              <ImagePlus className="mr-2 h-4 w-4" />
+              <ImagePlus className="me-2 h-4 w-4" />
               {t("actions.chooseFromLibrary", "Choose from Library")}
             </Button>
           )}
@@ -267,9 +267,9 @@ export function ThreadsReplyComposerDialog({
             disabled={createReply.isPending || (trimmed.length === 0 && !attached)}
           >
             {createReply.isPending ? (
-              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+              <Loader2 className="h-4 w-4 me-2 animate-spin" />
             ) : (
-              <Send className="h-4 w-4 mr-2" />
+              <Send className="h-4 w-4 me-2" />
             )}
             {t("actions.sendReply", "Send Reply")}
           </Button>

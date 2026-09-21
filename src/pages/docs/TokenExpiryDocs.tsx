@@ -165,7 +165,7 @@ export default function TokenExpiryDocs() {
         <div className="container mx-auto px-6 py-16">
           <div className="max-w-3xl">
             <Badge className="mb-4 bg-primary/10 text-primary border-primary/30">
-              <Clock className="w-3 h-3 mr-1" />
+              <Clock className="w-3 h-3 me-1" />
               OAuth Token Reference
             </Badge>
             <h1 className="text-4xl md:text-5xl font-bold mb-4">
@@ -286,11 +286,11 @@ export default function TokenExpiryDocs() {
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="border-b bg-muted/50">
-                        <th className="text-left p-4 font-semibold">Platform</th>
-                        <th className="text-left p-4 font-semibold">Access Token</th>
-                        <th className="text-left p-4 font-semibold">Refresh Token</th>
-                        <th className="text-left p-4 font-semibold">Refresh Window</th>
-                        <th className="text-left p-4 font-semibold">Priority</th>
+                        <th className="text-start p-4 font-semibold">Platform</th>
+                        <th className="text-start p-4 font-semibold">Access Token</th>
+                        <th className="text-start p-4 font-semibold">Refresh Token</th>
+                        <th className="text-start p-4 font-semibold">Refresh Window</th>
+                        <th className="text-start p-4 font-semibold">Priority</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -312,17 +312,17 @@ export default function TokenExpiryDocs() {
                           <td className="p-4">
                             {platform.critical ? (
                               <Badge className="bg-red-500/10 text-red-500 border-red-500/30">
-                                <Zap className="w-3 h-3 mr-1" />
+                                <Zap className="w-3 h-3 me-1" />
                                 Hourly
                               </Badge>
                             ) : platform.category === "medium" ? (
                               <Badge className="bg-yellow-500/10 text-yellow-500 border-yellow-500/30">
-                                <Clock className="w-3 h-3 mr-1" />
+                                <Clock className="w-3 h-3 me-1" />
                                 Daily
                               </Badge>
                             ) : (
                               <Badge className="bg-green-500/10 text-green-500 border-green-500/30">
-                                <Shield className="w-3 h-3 mr-1" />
+                                <Shield className="w-3 h-3 me-1" />
                                 Weekly
                               </Badge>
                             )}
@@ -345,7 +345,7 @@ export default function TokenExpiryDocs() {
               <Accordion type="single" collapsible className="w-full">
                 {tokenExpiryData.map((platform) => (
                   <AccordionItem key={platform.platform} value={platform.platform}>
-                    <AccordionTrigger className="text-left hover:no-underline">
+                    <AccordionTrigger className="text-start hover:no-underline">
                       <div className="flex items-center gap-3">
                         <PlatformIcon platform={platform.platform} size="sm" />
                         <span className="font-medium">{platform.name}</span>

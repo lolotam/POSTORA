@@ -421,7 +421,7 @@ function PlatformNodeComponent({ id, data, selected }: NodeProps) {
   return (
     <div className="relative">
       {/* Floating Label with status */}
-      <div className="absolute -top-8 left-6 flex items-center gap-1.5 px-2.5 py-1 bg-card/90 backdrop-blur-sm rounded-lg text-xs font-medium text-muted-foreground border border-border/50 z-10">
+      <div className="absolute -top-8 start-6 flex items-center gap-1.5 px-2.5 py-1 bg-card/90 backdrop-blur-sm rounded-lg text-xs font-medium text-muted-foreground border border-border/50 z-10">
         <Share2 className="h-3.5 w-3.5" />
         <span>Publisher</span>
         {enabledCount > 0 ? (
@@ -433,7 +433,7 @@ function PlatformNodeComponent({ id, data, selected }: NodeProps) {
 
       {/* Floating Toolbar */}
       {selected && (
-        <div className="absolute -top-14 left-1/2 -translate-x-1/2 z-20">
+        <div className="absolute -top-14 start-1/2 -translate-x-1/2 z-20">
           <div className="flex items-center gap-0.5 px-1.5 py-1 bg-card/95 backdrop-blur-md border border-border/50 rounded-xl shadow-lg">
             <button className="h-7 w-7 rounded-lg flex items-center justify-center hover:bg-primary/20 hover:text-primary transition-colors" onClick={handlePublish}>
               <Send className="h-3.5 w-3.5" />
@@ -489,12 +489,12 @@ function PlatformNodeComponent({ id, data, selected }: NodeProps) {
           <div className="flex items-center gap-2 relative">
             <Handle type="target" position={Position.Left} id="caption"
               className={cn("!w-3.5 !h-3.5 !border-2 !bg-card !rounded-full !-left-[8px]", "!border-blue-500 hover:!bg-blue-500/20", "transition-colors")} />
-            <span className="text-[11px] text-muted-foreground pl-1">Caption <span className="text-destructive">*</span></span>
+            <span className="text-[11px] text-muted-foreground ps-1">Caption <span className="text-destructive">*</span></span>
           </div>
           <div className="flex items-center gap-2 relative">
             <Handle type="target" position={Position.Left} id="media"
               className={cn("!w-3.5 !h-3.5 !border-2 !bg-card !rounded-full !-left-[8px]", "!border-purple-500 hover:!bg-purple-500/20", "transition-colors")} />
-            <span className="text-[11px] text-muted-foreground pl-1">Media</span>
+            <span className="text-[11px] text-muted-foreground ps-1">Media</span>
           </div>
         </div>
 
@@ -504,7 +504,7 @@ function PlatformNodeComponent({ id, data, selected }: NodeProps) {
             Connected Accounts {enabledCount > 0 && <span className="text-green-500">({enabledCount} selected)</span>}
           </p>
           <ScrollArea className="max-h-[350px]">
-            <div className="space-y-2 pr-2">
+            <div className="space-y-2 pe-2">
               {availablePlatforms.length === 0 ? (
                 <div className="text-center py-4">
                   <p className="text-xs text-muted-foreground mb-2">No connected accounts</p>

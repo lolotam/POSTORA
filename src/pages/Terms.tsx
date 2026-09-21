@@ -8,7 +8,7 @@ const Terms = () => {
       <div className="container max-w-4xl mx-auto px-4 py-12">
         <Link to="/">
           <Button variant="ghost" className="mb-8">
-            <ArrowLeft className="mr-2 h-4 w-4" />
+            <ArrowLeft className="me-2 h-4 w-4" />
             Back to Home
           </Button>
         </Link>
@@ -37,7 +37,7 @@ const Terms = () => {
           <section>
             <h2 className="text-2xl font-semibold mb-4">3. Account Registration</h2>
             <p className="text-muted-foreground leading-relaxed mb-4">To use Postora, you must:</p>
-            <ul className="list-disc list-inside text-muted-foreground space-y-2 ml-4">
+            <ul className="list-disc list-inside text-muted-foreground space-y-2 ms-4">
               <li>Be at least 18 years of age</li>
               <li>Provide accurate and complete registration information</li>
               <li>Maintain the security of your account credentials</li>
@@ -56,7 +56,7 @@ const Terms = () => {
             <p className="text-muted-foreground leading-relaxed mb-4">
               Postora uses YouTube API Services to enable you to upload and publish videos to your YouTube channel. By connecting your YouTube account to Postora:
             </p>
-            <ul className="list-disc list-inside text-muted-foreground space-y-2 ml-4">
+            <ul className="list-disc list-inside text-muted-foreground space-y-2 ms-4">
               <li>You agree to be bound by the{" "}
                 <a 
                   href="https://www.youtube.com/t/terms" 
@@ -94,7 +94,7 @@ const Terms = () => {
           <section>
             <h2 className="text-2xl font-semibold mb-4">5. User Content</h2>
             <p className="text-muted-foreground leading-relaxed mb-4">You retain ownership of all content you create and post through Postora. However, you grant Postora a license to:</p>
-            <ul className="list-disc list-inside text-muted-foreground space-y-2 ml-4">
+            <ul className="list-disc list-inside text-muted-foreground space-y-2 ms-4">
               <li>Store and process your content to provide our services</li>
               <li>Display content within the Postora platform interface</li>
               <li>Transmit content to connected social media platforms</li>
@@ -107,7 +107,7 @@ const Terms = () => {
           <section>
             <h2 className="text-2xl font-semibold mb-4">6. Prohibited Uses</h2>
             <p className="text-muted-foreground leading-relaxed mb-4">You agree not to use Postora to:</p>
-            <ul className="list-disc list-inside text-muted-foreground space-y-2 ml-4">
+            <ul className="list-disc list-inside text-muted-foreground space-y-2 ms-4">
               <li>Violate any applicable laws or regulations</li>
               <li>Post content that is illegal, harmful, threatening, abusive, or defamatory</li>
               <li>Infringe on intellectual property rights of others</li>
@@ -124,7 +124,7 @@ const Terms = () => {
             <p className="text-muted-foreground leading-relaxed mb-4">
               Your use of Postora to interact with third-party platforms is subject to each platform's own terms of service and policies. You agree to comply with:
             </p>
-            <ul className="list-disc list-inside text-muted-foreground space-y-2 ml-4">
+            <ul className="list-disc list-inside text-muted-foreground space-y-2 ms-4">
               <li>
                 <a href="https://www.youtube.com/t/terms" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
                   YouTube Terms of Service
@@ -161,7 +161,7 @@ const Terms = () => {
             <p className="text-muted-foreground leading-relaxed mb-4">
               As a user of Postora, you agree that you will NOT:
             </p>
-            <ul className="list-disc list-inside text-muted-foreground space-y-2 ml-4">
+            <ul className="list-disc list-inside text-muted-foreground space-y-2 ms-4">
               <li>Use our platform to send automated spam, bulk messages, or unsolicited promotional content.</li>
               <li>Attempt to scrape, export, or permanently store user data, comments, or interactions fetched from LinkedIn.</li>
               <li>Use Postora to build a database of LinkedIn members for recruitment, sales, or lead-generation purposes.</li>

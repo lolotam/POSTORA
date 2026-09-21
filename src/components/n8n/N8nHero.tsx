@@ -13,9 +13,9 @@ export function N8nHero({ onDownloadComplete, onDownloadBasic }: N8nHeroProps) {
     <section className="relative overflow-hidden border-b border-border/60">
       {/* Background orbs */}
       <div aria-hidden className="pointer-events-none absolute inset-0">
-        <div className="absolute -top-24 -left-24 h-72 w-72 rounded-full bg-violet-500/15 blur-3xl" />
-        <div className="absolute -bottom-24 -right-24 h-72 w-72 rounded-full bg-fuchsia-500/15 blur-3xl" />
-        <div className="absolute top-1/2 left-1/2 h-96 w-96 -translate-x-1/2 -translate-y-1/2 rounded-full bg-rose-500/10 blur-3xl" />
+        <div className="absolute -top-24 -start-24 h-72 w-72 rounded-full bg-violet-500/15 blur-3xl" />
+        <div className="absolute -bottom-24 -end-24 h-72 w-72 rounded-full bg-fuchsia-500/15 blur-3xl" />
+        <div className="absolute top-1/2 start-1/2 h-96 w-96 -translate-x-1/2 -translate-y-1/2 rounded-full bg-rose-500/10 blur-3xl" />
       </div>
 
       <div className="container relative mx-auto px-6 py-20 text-center">
@@ -37,22 +37,22 @@ export function N8nHero({ onDownloadComplete, onDownloadBasic }: N8nHeroProps) {
           <GradientRingCard variant="violet" hoverLift={false} padded={false} className="max-w-3xl mx-auto">
             <div className="flex flex-wrap justify-center gap-3 p-5">
               <Button onClick={onDownloadComplete} size="lg" className="bg-gradient-to-r from-violet-500 via-fuchsia-500 to-pink-500 text-white shadow-lg shadow-violet-500/30 hover:opacity-90">
-                <Download className="w-4 h-4 mr-2" />
+                <Download className="w-4 h-4 me-2" />
                 Complete Workflow
               </Button>
               <Button onClick={onDownloadBasic} size="lg" variant="outline" className="border-violet-500/50 hover:bg-violet-500/10">
-                <Download className="w-4 h-4 mr-2" />
+                <Download className="w-4 h-4 me-2" />
                 Basic Workflow
               </Button>
               <Link to="/api-keys">
                 <Button variant="outline" size="lg" className="border-border/70">
-                  <Key className="w-4 h-4 mr-2" />
+                  <Key className="w-4 h-4 me-2" />
                   Get API Key
                 </Button>
               </Link>
               <Link to="/docs/playground">
                 <Button variant="outline" size="lg" className="border-border/70">
-                  <Terminal className="w-4 h-4 mr-2" />
+                  <Terminal className="w-4 h-4 me-2" />
                   API Playground
                 </Button>
               </Link>

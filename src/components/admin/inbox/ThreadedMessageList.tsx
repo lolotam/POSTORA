@@ -157,7 +157,7 @@ export function ThreadedMessageList({
             >
               {onToggleThread && (
                 <div
-                  className="flex items-center pl-3 cursor-pointer flex-shrink-0"
+                  className="flex items-center ps-3 cursor-pointer flex-shrink-0"
                   onClick={(e) => e.stopPropagation()}
                 >
                   <Checkbox
@@ -169,7 +169,7 @@ export function ThreadedMessageList({
               )}
               <button
                 onClick={() => onSelectThread(thread)}
-                className="flex-1 text-left p-4 hover:bg-muted/50 transition-colors"
+                className="flex-1 text-start p-4 hover:bg-muted/50 transition-colors"
               >
                 <div className="flex items-start gap-3">
                   {/* Direction indicator */}

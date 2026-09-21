@@ -350,7 +350,7 @@ export default function AdminLaunchChecklist() {
                   {completedCount} of {totalItems} items completed
                 </CardDescription>
               </div>
-              <div className="text-right">
+              <div className="text-end">
                 <div className="text-3xl font-bold">{Math.round(progressPercent)}%</div>
                 <div className="text-sm text-muted-foreground">
                   {allCriticalDone ? (

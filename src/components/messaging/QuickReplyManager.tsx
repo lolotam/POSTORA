@@ -118,7 +118,7 @@ export function QuickReplyManager() {
                 <p className="text-xs text-muted-foreground mt-1">{t("quickReply.shortcutHint", "Type this in chat to quickly find this reply")}</p>
               </div>
               <Button onClick={handleSave} disabled={isSaving} className="w-full">
-                {isSaving ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+                {isSaving ? <Loader2 className="w-4 h-4 animate-spin me-2" /> : null}
                 {editId ? t("quickReply.update", "Update") : t("common:create", "Create")}
               </Button>
             </div>

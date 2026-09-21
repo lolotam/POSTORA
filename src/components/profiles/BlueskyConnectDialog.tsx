@@ -113,7 +113,7 @@ export function BlueskyConnectDialog({
             <TabsTrigger value="oauth" className="flex items-center gap-1.5">
               <Shield className="h-3.5 w-3.5" />
               OAuth
-              <Badge variant="secondary" className="ml-1 text-[10px] px-1.5 py-0 bg-primary/10 text-primary">
+              <Badge variant="secondary" className="ms-1 text-[10px] px-1.5 py-0 bg-primary/10 text-primary">
                 Recommended
               </Badge>
             </TabsTrigger>
@@ -169,12 +169,12 @@ export function BlueskyConnectDialog({
                 <Button type="submit" disabled={isConnecting || !onOAuthConnect}>
                   {isConnecting ? (
                     <>
-                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      <Loader2 className="w-4 h-4 me-2 animate-spin" />
                       Connecting...
                     </>
                   ) : (
                     <>
-                      <Shield className="w-4 h-4 mr-2" />
+                      <Shield className="w-4 h-4 me-2" />
                       Connect with OAuth
                     </>
                   )}
@@ -250,7 +250,7 @@ export function BlueskyConnectDialog({
                 <Button type="submit" disabled={isConnecting}>
                   {isConnecting ? (
                     <>
-                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      <Loader2 className="w-4 h-4 me-2 animate-spin" />
                       Connecting...
                     </>
                   ) : (

@@ -92,7 +92,7 @@ export function SortableMediaItem({
         <div
           {...attributes}
           {...listeners}
-          className="absolute top-2 left-2 z-20 bg-black/60 rounded p-1 cursor-grab active:cursor-grabbing opacity-0 group-hover:opacity-100 transition-opacity"
+          className="absolute top-2 start-2 z-20 bg-black/60 rounded p-1 cursor-grab active:cursor-grabbing opacity-0 group-hover:opacity-100 transition-opacity"
         >
           <GripVertical className="w-4 h-4 text-white" />
         </div>
@@ -100,7 +100,7 @@ export function SortableMediaItem({
 
       {/* Alt text indicator */}
       {file.uploaded && isImageOrGif && file.altText && (
-        <div className="absolute top-2 left-10 z-20 bg-blue-500/90 rounded px-1.5 py-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+        <div className="absolute top-2 start-10 z-20 bg-blue-500/90 rounded px-1.5 py-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
           <span className="text-[10px] text-white font-medium">ALT</span>
         </div>
       )}
@@ -123,7 +123,7 @@ export function SortableMediaItem({
 
       {/* Size warnings */}
       {sizeCheck && !sizeCheck.valid && sizeCheck.warnings.length > 0 && (
-        <div className="absolute bottom-0 left-0 right-0 p-1.5 bg-gradient-to-t from-black/70 to-transparent">
+        <div className="absolute bottom-0 start-0 end-0 p-1.5 bg-gradient-to-t from-black/70 to-transparent">
           <div className="flex flex-wrap gap-1">
             {sizeCheck.warnings.map((warning, idx) => (
               <Badge key={idx} variant="destructive" className="text-[10px] px-1 py-0">
@@ -136,7 +136,7 @@ export function SortableMediaItem({
 
       {file.uploaded ? (
         <>
-          <div className="absolute top-2 right-2 bg-green-500/90 rounded-full p-1">
+          <div className="absolute top-2 end-2 bg-green-500/90 rounded-full p-1">
             <CheckCircle2 className="w-4 h-4 text-white" />
           </div>
           <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2 flex-wrap p-2">
@@ -146,7 +146,7 @@ export function SortableMediaItem({
               className="h-8"
               onClick={onOpenLightbox}
             >
-              <Maximize2 className="w-4 h-4 mr-1" />
+              <Maximize2 className="w-4 h-4 me-1" />
               {t("sortable.view", "View")}
             </Button>
             {isImageOrGif && onEditAltText && (
@@ -156,7 +156,7 @@ export function SortableMediaItem({
                 className="h-8"
                 onClick={() => onEditAltText(file)}
               >
-                <FileText className="w-4 h-4 mr-1" />
+                <FileText className="w-4 h-4 me-1" />
                 {t("sortable.alt", "Alt")}
               </Button>
             )}
@@ -167,7 +167,7 @@ export function SortableMediaItem({
                 className="h-8"
                 onClick={() => onOpenCropper(file)}
               >
-                <Crop className="w-4 h-4 mr-1" />
+                <Crop className="w-4 h-4 me-1" />
                 {t("sortable.crop", "Crop")}
               </Button>
             )}
@@ -180,7 +180,7 @@ export function SortableMediaItem({
                 className="h-8"
                 onClick={() => onOpenCropper(file)}
               >
-                <Crop className="w-4 h-4 mr-1" />
+                <Crop className="w-4 h-4 me-1" />
                 {t("sortable.crop", "Crop")}
               </Button>
             )}
@@ -191,7 +191,7 @@ export function SortableMediaItem({
                 className="h-8"
                 onClick={() => onOpenCompressor(file)}
               >
-                <Shrink className="w-4 h-4 mr-1" />
+                <Shrink className="w-4 h-4 me-1" />
                 {t("sortable.compress", "Compress")}
               </Button>
             )}

@@ -49,7 +49,7 @@ export function DayDetailDialog({
           </DialogTitle>
         </DialogHeader>
 
-        <div className="space-y-3 pt-4 max-h-[60vh] overflow-y-auto pr-1">
+        <div className="space-y-3 pt-4 max-h-[60vh] overflow-y-auto pe-1">
           {posts.length === 0 ? (
             <div className="text-center py-10 group">
               <div className="inline-flex flex-col items-center gap-3">
@@ -107,7 +107,7 @@ export function DayDetailDialog({
                           </div>
                         )}
                       </div>
-                      <div className="text-right shrink-0 space-y-1.5">
+                      <div className="text-end shrink-0 space-y-1.5">
                         <div className="flex items-center justify-end gap-1 text-xs font-medium tabular-nums px-2 py-1 rounded-full bg-card/70 border border-border/60">
                           <Clock className="w-3 h-3" />
                           {post.scheduled_at &&

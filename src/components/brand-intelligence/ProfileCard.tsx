@@ -104,7 +104,7 @@ export function ProfileCard({ profile, isLoading }: ProfileCardProps) {
     <Card className="overflow-hidden animate-[fadeSlideDown_0.5s_ease-out] relative border-0 bg-gradient-to-r from-violet-500/10 via-pink-500/10 to-violet-500/10">
       <div className="absolute inset-0 rounded-lg border border-violet-500/20" />
       <CardContent className="p-6 relative">
-        <Badge variant="secondary" className="absolute top-4 right-4 gap-1">
+        <Badge variant="secondary" className="absolute top-4 end-4 gap-1">
           <PlatformIcon className="w-3 h-3" />
           {profile.platform === "instagram" ? t("brand.instagram", "Instagram")
             : profile.platform === "threads" ? t("brand.threads", "Threads")
@@ -125,7 +125,7 @@ export function ProfileCard({ profile, isLoading }: ProfileCardProps) {
               </AvatarFallback>
             </Avatar>
             {profile.isVerified && (
-              <BadgeCheck className="absolute -bottom-1 -right-1 w-6 h-6 text-primary fill-primary" />
+              <BadgeCheck className="absolute -bottom-1 -end-1 w-6 h-6 text-primary fill-primary" />
             )}
           </div>
           <div className="min-w-0">

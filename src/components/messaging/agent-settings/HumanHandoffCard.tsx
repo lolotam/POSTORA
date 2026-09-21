@@ -71,7 +71,7 @@ export function HumanHandoffCard({
           <Label>{t("handoff.adminPhones", "Admin phone numbers")}</Label>
           <div className="flex flex-wrap gap-2 rounded-md border p-3">
             {phones.map((phone) => (
-              <Badge key={phone} variant="secondary" className="gap-1 pr-1">
+              <Badge key={phone} variant="secondary" className="gap-1 pe-1">
                 {phone}
                 <button
                   type="button"
@@ -100,7 +100,7 @@ export function HumanHandoffCard({
               placeholder="+96550000000"
             />
             <Button type="button" variant="outline" onClick={onAddPhone}>
-              <Plus className="mr-1 h-4 w-4" /> {t("common:add", "Add")}
+              <Plus className="me-1 h-4 w-4" /> {t("common:add", "Add")}
             </Button>
           </div>
           <p className="text-sm text-muted-foreground">

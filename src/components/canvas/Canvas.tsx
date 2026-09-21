@@ -403,11 +403,11 @@ function CanvasInner() {
           {/* Background halos for depth */}
           <div
             aria-hidden
-            className="pointer-events-none absolute -top-32 -left-32 h-[420px] w-[420px] rounded-full bg-gradient-to-br from-violet-500/20 via-fuchsia-500/10 to-transparent blur-3xl z-0"
+            className="pointer-events-none absolute -top-32 -start-32 h-[420px] w-[420px] rounded-full bg-gradient-to-br from-violet-500/20 via-fuchsia-500/10 to-transparent blur-3xl z-0"
           />
           <div
             aria-hidden
-            className="pointer-events-none absolute -bottom-32 -right-32 h-[420px] w-[420px] rounded-full bg-gradient-to-br from-sky-500/20 via-cyan-500/10 to-transparent blur-3xl z-0"
+            className="pointer-events-none absolute -bottom-32 -end-32 h-[420px] w-[420px] rounded-full bg-gradient-to-br from-sky-500/20 via-cyan-500/10 to-transparent blur-3xl z-0"
           />
           <ReactFlow
             nodes={nodes}

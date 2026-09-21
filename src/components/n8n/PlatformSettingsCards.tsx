@@ -115,7 +115,7 @@ export function PlatformSettingsCards() {
                 {platform.settings.map((setting) => (
                   <div key={setting.code} className="flex justify-between gap-3 border-b border-border/40 last:border-b-0 py-1.5">
                     <code className="text-primary truncate">{setting.code}</code>
-                    <span className="text-muted-foreground text-right">{setting.type}</span>
+                    <span className="text-muted-foreground text-end">{setting.type}</span>
                   </div>
                 ))}
               </div>

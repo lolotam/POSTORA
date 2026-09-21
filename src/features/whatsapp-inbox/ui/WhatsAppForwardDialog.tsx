@@ -87,7 +87,7 @@ export function WhatsAppForwardDialog({
                     onClick={() => void pick(target)}
                     className="h-auto w-full justify-between rounded-none border-b px-3 py-2.5"
                   >
-                    <span className="min-w-0 text-left">
+                    <span className="min-w-0 text-start">
                       <span className="block truncate text-sm font-medium">{target.label}</span>
                       <span className="text-xs text-muted-foreground">+{target.phone}</span>
                     </span>

@@ -304,7 +304,7 @@ export function KnowledgeSourcesPanel({
                     }
                   >
                     {["pending", "processing"].includes(source.status) && (
-                      <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                      <Loader2 className="me-1 h-3 w-3 animate-spin" />
                     )}
                     {sourceStatusLabel(source.status, t)}
                     {source.status === "ready" ? t("knowledge.chunksSuffix", " · {{count}} chunks", { count: source.chunk_count }) : ""}

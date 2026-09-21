@@ -128,7 +128,7 @@ export function CommentManagerPanel({ platform }: CommentManagerPanelProps) {
           onClick={() => refetch()}
           disabled={isFetching}
         >
-          {isFetching ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <RefreshCw className="h-4 w-4 mr-1" />}
+          {isFetching ? <Loader2 className="h-4 w-4 animate-spin me-1" /> : <RefreshCw className="h-4 w-4 me-1" />}
           {t("common:refresh", "Refresh")}
         </Button>
       </div>

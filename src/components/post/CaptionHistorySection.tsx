@@ -95,7 +95,7 @@ export function CaptionHistorySection({ onUseCaption }: CaptionHistorySectionPro
               {t("captionHistory.empty", "Saved captions will appear here.")}
             </p>
           ) : (
-            <div className="space-y-2 max-h-[280px] overflow-y-auto pr-1">
+            <div className="space-y-2 max-h-[280px] overflow-y-auto pe-1">
               {history.map((item) => (
                 <div
                   key={item.id}
@@ -134,10 +134,10 @@ export function CaptionHistorySection({ onUseCaption }: CaptionHistorySectionPro
                       />
                       <div className="flex gap-2 justify-end">
                         <Button size="sm" variant="ghost" onClick={cancelEdit}>
-                          <X className="w-3 h-3 mr-1" /> {t("common:cancel", "Cancel")}
+                          <X className="w-3 h-3 me-1" /> {t("common:cancel", "Cancel")}
                         </Button>
                         <Button size="sm" onClick={saveEdit} disabled={!editText.trim()}>
-                          <Check className="w-3 h-3 mr-1" /> {t("common:save", "Save")}
+                          <Check className="w-3 h-3 me-1" /> {t("common:save", "Save")}
                         </Button>
                       </div>
                     </div>
@@ -156,7 +156,7 @@ export function CaptionHistorySection({ onUseCaption }: CaptionHistorySectionPro
                           className="h-7 text-xs"
                           onClick={() => onUseCaption(item.caption)}
                         >
-                          <Check className="w-3 h-3 mr-1" /> {t("captionHistory.use", "Use")}
+                          <Check className="w-3 h-3 me-1" /> {t("captionHistory.use", "Use")}
                         </Button>
                         <Button
                           size="sm"
@@ -164,7 +164,7 @@ export function CaptionHistorySection({ onUseCaption }: CaptionHistorySectionPro
                           className="h-7 text-xs"
                           onClick={() => startEdit(item)}
                         >
-                          <Pencil className="w-3 h-3 mr-1" /> {t("captionHistory.edit", "Edit")}
+                          <Pencil className="w-3 h-3 me-1" /> {t("captionHistory.edit", "Edit")}
                         </Button>
                         <Button
                           size="sm"
@@ -172,7 +172,7 @@ export function CaptionHistorySection({ onUseCaption }: CaptionHistorySectionPro
                           className="h-7 text-xs"
                           onClick={() => handleCopy(item.caption)}
                         >
-                          <Copy className="w-3 h-3 mr-1" /> {t("captionHistory.copy", "Copy")}
+                          <Copy className="w-3 h-3 me-1" /> {t("captionHistory.copy", "Copy")}
                         </Button>
                         <Button
                           size="sm"
@@ -180,7 +180,7 @@ export function CaptionHistorySection({ onUseCaption }: CaptionHistorySectionPro
                           className="h-7 text-xs text-destructive hover:text-destructive"
                           onClick={() => setConfirmDeleteId(item.id)}
                         >
-                          <Trash2 className="w-3 h-3 mr-1" /> {t("common:delete", "Delete")}
+                          <Trash2 className="w-3 h-3 me-1" /> {t("common:delete", "Delete")}
                         </Button>
                       </div>
                     </>

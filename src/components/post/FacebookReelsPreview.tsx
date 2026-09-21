@@ -61,14 +61,14 @@ export function FacebookReelsPreview({
         <div className="absolute inset-0 bg-gradient-to-b from-black/20 via-transparent to-black/70" />
 
         {/* Facebook Reels logo */}
-        <div className="absolute top-4 left-4 flex items-center gap-1">
+        <div className="absolute top-4 start-4 flex items-center gap-1">
           <div className="bg-[#1877F2] rounded-sm px-1.5 py-0.5">
             <span className="text-white text-xs font-bold">{t("facebookReels.reelsLabel", "Reels")}</span>
           </div>
         </div>
 
         {/* Right side actions */}
-        <div className="absolute right-3 bottom-28 flex flex-col items-center gap-5 z-10">
+        <div className="absolute end-3 bottom-28 flex flex-col items-center gap-5 z-10">
           <div className="flex flex-col items-center text-white">
             <Heart className="w-7 h-7" />
             <span className="text-xs mt-1">0</span>
@@ -99,7 +99,7 @@ export function FacebookReelsPreview({
         </div>
 
         {/* Bottom info */}
-        <div className="absolute bottom-4 left-3 right-16 text-white z-10">
+        <div className="absolute bottom-4 start-3 end-16 text-white z-10">
           <div className="flex items-center gap-2 mb-2">
             <Avatar className="h-8 w-8 border-2 border-white">
               {avatarUrl ? <AvatarImage src={avatarUrl} alt={displayUsername} /> : null}

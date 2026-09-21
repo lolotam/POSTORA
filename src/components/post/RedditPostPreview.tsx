@@ -117,7 +117,7 @@ export function RedditPostPreview({
               )}
               {spoiler && (
                 <Badge variant="secondary" className="text-[10px] px-1.5 py-0 font-bold bg-muted-foreground/20">
-                  <EyeOff className="w-2.5 h-2.5 mr-0.5" />
+                  <EyeOff className="w-2.5 h-2.5 me-0.5" />
                   {t("reddit.spoiler", "SPOILER")}
                 </Badge>
               )}
@@ -141,7 +141,7 @@ export function RedditPostPreview({
                   )}
                 </p>
                 {caption.length > 300 && (
-                  <div className="absolute bottom-0 left-0 right-0 h-8 bg-gradient-to-t from-background to-transparent" />
+                  <div className="absolute bottom-0 start-0 end-0 h-8 bg-gradient-to-t from-background to-transparent" />
                 )}
               </div>
             )}

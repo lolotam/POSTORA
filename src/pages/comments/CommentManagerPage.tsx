@@ -119,12 +119,12 @@ export default function CommentManagerPage() {
                       />
                       {/* External link indicator for Threads */}
                       {p.externalPath && (
-                        <div className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-muted border border-border/60 flex items-center justify-center shadow-sm">
+                        <div className="absolute -top-2 -end-2 w-5 h-5 rounded-full bg-muted border border-border/60 flex items-center justify-center shadow-sm">
                           <ExternalLink className="w-2.5 h-2.5 text-muted-foreground" />
                         </div>
                       )}
                       {isSelected && !p.externalPath && (
-                        <div className="absolute -top-2 -right-2 w-6 h-6 sm:w-7 sm:h-7 rounded-full bg-primary text-primary-foreground flex items-center justify-center shadow-lg shadow-primary/50 ring-2 ring-background animate-in zoom-in-50 duration-200">
+                        <div className="absolute -top-2 -end-2 w-6 h-6 sm:w-7 sm:h-7 rounded-full bg-primary text-primary-foreground flex items-center justify-center shadow-lg shadow-primary/50 ring-2 ring-background animate-in zoom-in-50 duration-200">
                           <CheckCircle2 className="w-4 h-4 sm:w-4.5 sm:h-4.5" />
                         </div>
                       )}

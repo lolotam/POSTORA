@@ -238,7 +238,7 @@ export function MessageDetail({ message, onDelete, onReply, onForward }: Message
                         target="_blank"
                         rel="noopener noreferrer"
                         download={attachment.filename}
-                        className="ml-1 text-primary hover:text-primary/80"
+                        className="ms-1 text-primary hover:text-primary/80"
                         title="Download"
                       >
                         <Download className="w-4 h-4" />
@@ -265,9 +265,9 @@ export function MessageDetail({ message, onDelete, onReply, onForward }: Message
               size="sm"
             >
               {isFetchingContent ? (
-                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                <Loader2 className="w-4 h-4 me-2 animate-spin" />
               ) : (
-                <RefreshCw className="w-4 h-4 mr-2" />
+                <RefreshCw className="w-4 h-4 me-2" />
               )}
               {isFetchingContent ? "Fetching..." : "Fetch content from Resend"}
             </Button>
@@ -299,7 +299,7 @@ export function MessageDetail({ message, onDelete, onReply, onForward }: Message
             })} 
             className="flex-1"
           >
-            <Reply className="w-4 h-4 mr-2" />
+            <Reply className="w-4 h-4 me-2" />
             Reply
           </Button>
         )}
@@ -327,7 +327,7 @@ export function MessageDetail({ message, onDelete, onReply, onForward }: Message
             }}
             className="flex-1"
           >
-            <Forward className="w-4 h-4 mr-2" />
+            <Forward className="w-4 h-4 me-2" />
             {isInbound ? "Forward" : "Resend"}
           </Button>
         )}

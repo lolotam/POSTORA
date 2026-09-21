@@ -65,12 +65,12 @@ export function InstagramSelectionDialog({
         </DialogHeader>
 
         <div className="relative">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Search className="absolute start-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             placeholder="Search by username or Page"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="pl-9"
+            className="ps-9"
           />
         </div>
 
@@ -122,7 +122,7 @@ export function InstagramSelectionDialog({
                     via {acc.facebook_page_name}
                   </div>
                   {isConnected && (
-                    <span className="absolute right-2 top-2 rounded-full bg-green-500/15 px-2 py-0.5 text-[10px] font-medium text-green-600">
+                    <span className="absolute end-2 top-2 rounded-full bg-green-500/15 px-2 py-0.5 text-[10px] font-medium text-green-600">
                       Connected
                     </span>
                   )}

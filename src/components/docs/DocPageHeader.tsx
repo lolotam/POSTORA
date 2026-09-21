@@ -70,8 +70,8 @@ export function DocPageHeader({
       {/* Hero */}
       <section className="relative overflow-hidden border-b border-border/40">
         <div aria-hidden className="pointer-events-none absolute inset-0">
-          <div className={`absolute -top-24 -left-24 h-72 w-72 rounded-full bg-gradient-to-br ${ctaGradient} opacity-10 blur-3xl`} />
-          <div className={`absolute -bottom-24 -right-24 h-72 w-72 rounded-full bg-gradient-to-br ${ctaGradient} opacity-10 blur-3xl`} />
+          <div className={`absolute -top-24 -start-24 h-72 w-72 rounded-full bg-gradient-to-br ${ctaGradient} opacity-10 blur-3xl`} />
+          <div className={`absolute -bottom-24 -end-24 h-72 w-72 rounded-full bg-gradient-to-br ${ctaGradient} opacity-10 blur-3xl`} />
         </div>
         <div className="container relative mx-auto px-6 py-12 max-w-5xl">
           <Link to="/n8n" className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground mb-6 transition-colors">

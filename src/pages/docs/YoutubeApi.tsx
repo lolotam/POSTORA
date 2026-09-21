@@ -29,7 +29,7 @@ export default function YoutubeApi() {
           {title && <span className="text-xs text-gray-500">• {title}</span>}
         </div>
         <Button variant="ghost" size="sm" onClick={() => copy(code, id)} className="h-7 text-xs text-gray-300 hover:text-white hover:bg-white/10">
-          {copiedId === id ? <Check className="w-3 h-3 mr-1" /> : <Copy className="w-3 h-3 mr-1" />}
+          {copiedId === id ? <Check className="w-3 h-3 me-1" /> : <Copy className="w-3 h-3 me-1" />}
           {copiedId === id ? "Copied!" : "Copy"}
         </Button>
       </div>

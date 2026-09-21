@@ -45,13 +45,13 @@ export function QuickStartSteps({ steps }: QuickStartStepsProps) {
                   s.action.onClick ? (
                     <Button variant="outline" size="sm" className="border-border/70" onClick={() => s.action!.onClick!()}>
                       {s.action.text}
-                      <ChevronRight className="w-3 h-3 ml-1" />
+                      <ChevronRight className="w-3 h-3 ms-1" />
                     </Button>
                   ) : s.action.link ? (
                     <Link to={s.action.link}>
                       <Button variant="outline" size="sm" className="border-border/70">
                         {s.action.text}
-                        <ChevronRight className="w-3 h-3 ml-1" />
+                        <ChevronRight className="w-3 h-3 ms-1" />
                       </Button>
                     </Link>
                   ) : null

@@ -73,12 +73,12 @@ export function ConversationList({
     <div className="flex flex-col h-full">
       <div className="p-3 border-b">
         <div className="relative">
-          <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+          <Search className="absolute start-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
           <Input
             placeholder={t("conversation.search", "Search conversations...")}
             value={searchValue}
             onChange={(e) => setSearch(e.target.value)}
-            className="pl-8 h-9"
+            className="ps-8 h-9"
           />
         </div>
       </div>
@@ -97,7 +97,7 @@ export function ConversationList({
                 <button
                   type="button"
                   aria-label={t("conversation.deleteWith", "Delete chat with {{name}}", { name: conv.participant_name })}
-                  className="absolute right-1 top-1 z-10 rounded p-1 text-destructive opacity-0 hover:bg-muted focus-visible:opacity-100 group-hover:opacity-100"
+                  className="absolute end-1 top-1 z-10 rounded p-1 text-destructive opacity-0 hover:bg-muted focus-visible:opacity-100 group-hover:opacity-100"
                   onClick={(event) => {
                     event.stopPropagation();
                     onDelete(conv);
@@ -110,7 +110,7 @@ export function ConversationList({
               onClick={() => (selectionMode ? onToggleSelect?.(conv) : onSelect(conv))}
               aria-pressed={selectionMode ? selectedIds?.has(conv.id) === true : undefined}
               className={cn(
-                "w-full flex items-start gap-3 p-3 text-left hover:bg-accent/50 transition-colors border-b",
+                "w-full flex items-start gap-3 p-3 text-start hover:bg-accent/50 transition-colors border-b",
                 selectedId === conv.id && "bg-accent",
                 conv.unread_count > 0 && "font-medium"
               )}
@@ -137,7 +137,7 @@ export function ConversationList({
                   <span className={cn("text-sm truncate", conv.unread_count > 0 && "font-semibold")}>
                     {conv.participant_name}
                   </span>
-                  <span className="text-[10px] text-muted-foreground shrink-0 ml-2">
+                  <span className="text-[10px] text-muted-foreground shrink-0 ms-2">
                     {!conv.last_message_time
                       ? ""
                       : absoluteTimes

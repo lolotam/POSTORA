@@ -183,8 +183,8 @@ export function ProfilesHeader({ profileCount, isAdmin }: ProfilesHeaderProps) {
         {/* Platform Access Overview — Glassmorphism */}
         {flags.platformAccess && (
           <GradientRingCard variant="violet" innerClassName="p-6 space-y-6 overflow-hidden">
-            <div className="absolute -top-24 -right-24 w-48 h-48 bg-violet-500/10 rounded-full blur-3xl pointer-events-none" />
-            <div className="absolute -bottom-16 -left-16 w-40 h-40 bg-emerald-500/10 rounded-full blur-3xl pointer-events-none" />
+            <div className="absolute -top-24 -end-24 w-48 h-48 bg-violet-500/10 rounded-full blur-3xl pointer-events-none" />
+            <div className="absolute -bottom-16 -start-16 w-40 h-40 bg-emerald-500/10 rounded-full blur-3xl pointer-events-none" />
 
             <div className="relative flex items-center justify-between">
               <div className="flex items-center gap-3">

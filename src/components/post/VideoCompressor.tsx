@@ -334,7 +334,7 @@ export function VideoCompressor({
 
         <DialogFooter className="gap-2">
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isCompressing}>
-            <X className="w-4 h-4 mr-2" />
+            <X className="w-4 h-4 me-2" />
             {t("common:cancel", "Cancel")}
           </Button>
           <Button
@@ -342,9 +342,9 @@ export function VideoCompressor({
             disabled={isCompressing || !mediaFileId || (mode === "targetSize" && !targetSizeMB)}
           >
             {isCompressing ? (
-              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+              <Loader2 className="w-4 h-4 me-2 animate-spin" />
             ) : (
-              <Check className="w-4 h-4 mr-2" />
+              <Check className="w-4 h-4 me-2" />
             )}
             {t("compressor.compressBtn", "Compress Video")}
           </Button>

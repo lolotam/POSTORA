@@ -271,7 +271,7 @@ export function ManualProfilePanel({
               size="sm"
               onClick={() => onProfileChange({ ...profile, faqs: [...faqs, { q: "", a: "" }] })}
             >
-              <Plus className="mr-1 h-4 w-4" /> {t("knowledge.addQuestion", "Add a question")}
+              <Plus className="me-1 h-4 w-4" /> {t("knowledge.addQuestion", "Add a question")}
             </Button>
           </div>
 
@@ -306,7 +306,7 @@ export function ManualProfilePanel({
           </div>
 
           <Button onClick={onSave} disabled={saveDisabled}>
-            {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+            {saving && <Loader2 className="me-2 h-4 w-4 animate-spin" />}
             {t("knowledge.saveAndIndex", "Save & index")}
           </Button>
         </CardContent>

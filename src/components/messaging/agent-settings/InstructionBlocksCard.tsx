@@ -74,7 +74,7 @@ export function InstructionBlocksCard({ behavior, updateBehavior }: BehaviorCard
           disabled={blocks.length >= MAX_BLOCKS}
           onClick={() => updateBehavior("instruction_blocks", [...blocks, { title: "", body: "" }])}
         >
-          <Plus className="mr-1 h-4 w-4" /> {t("instructions.add", "Add an instruction block")}
+          <Plus className="me-1 h-4 w-4" /> {t("instructions.add", "Add an instruction block")}
         </Button>
         {blocks.length >= MAX_BLOCKS && (
           <p className="text-xs text-muted-foreground">

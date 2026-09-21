@@ -37,7 +37,7 @@ export function TypingTagline() {
       <p className="text-sm font-medium tracking-wide bg-gradient-to-r from-primary via-purple-500 to-pink-500 bg-clip-text text-transparent inline">
         {tagline.slice(0, charIndex)}
       </p>
-      <span className="inline-block w-[2px] h-4 ml-0.5 bg-primary animate-pulse align-text-bottom" />
+      <span className="inline-block w-[2px] h-4 ms-0.5 bg-primary animate-pulse align-text-bottom" />
     </div>
   );
 }

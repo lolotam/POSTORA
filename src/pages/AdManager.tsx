@@ -93,7 +93,7 @@ export default function AdManager() {
                   <span tabIndex={0} className="inline-flex">
                     <DialogTrigger asChild>
                       <Button size="sm" className="bg-gradient-to-r from-rose-500 via-pink-500 to-fuchsia-500 text-white hover:opacity-90 disabled:bg-none disabled:bg-muted disabled:text-muted-foreground" disabled={!activeAdAccountId || adAccountsLoading}>
-                        {adAccountsLoading ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <Plus className="h-4 w-4 mr-1" />}
+                        {adAccountsLoading ? <Loader2 className="h-4 w-4 animate-spin me-1" /> : <Plus className="h-4 w-4 me-1" />}
                         {t("actions.newCampaign", "New Campaign")}
                       </Button>
                     </DialogTrigger>
@@ -145,7 +145,7 @@ export default function AdManager() {
                   <Input type="number" value={newBudget} onChange={(e) => setNewBudget(e.target.value)} placeholder="10" />
                 </div>
                 <Button onClick={handleCreate} disabled={!newName || !newObjective || createCampaign.isPending} className="w-full bg-gradient-to-r from-rose-500 via-pink-500 to-fuchsia-500 text-white hover:opacity-90">
-                  {createCampaign.isPending ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null}
+                  {createCampaign.isPending ? <Loader2 className="h-4 w-4 animate-spin me-1" /> : null}
                   {t("ads.createCampaign", "Create Campaign")}
                 </Button>
               </div>
@@ -227,8 +227,8 @@ export default function AdManager() {
                     <TableHead>{t("ads.name", "Name")}</TableHead>
                     <TableHead>{t("ads.status", "Status")}</TableHead>
                     <TableHead>{t("ads.objective", "Objective")}</TableHead>
-                    <TableHead className="text-right">{t("ads.budget", "Budget")}</TableHead>
-                    <TableHead className="text-right">{t("history.actions", "Actions")}</TableHead>
+                    <TableHead className="text-end">{t("ads.budget", "Budget")}</TableHead>
+                    <TableHead className="text-end">{t("history.actions", "Actions")}</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -252,10 +252,10 @@ export default function AdManager() {
                           </Badge>
                         </TableCell>
                         <TableCell className="text-xs capitalize">{c.objective?.replace(/_/g, " ").toLowerCase()}</TableCell>
-                        <TableCell className="text-right tabular-nums">
+                        <TableCell className="text-end tabular-nums">
                           {c.daily_budget ? t("ads.budgetPerDay", "${{amount}}/day", { amount: (parseInt(c.daily_budget) / 100).toFixed(2) }) : "—"}
                         </TableCell>
-                        <TableCell className="text-right">
+                        <TableCell className="text-end">
                           <div className="flex justify-end gap-1">
                             {c.status === "ACTIVE" ? (
                               <Button size="icon" variant="ghost" className="h-8 w-8 text-amber-500 hover:bg-amber-500/10"

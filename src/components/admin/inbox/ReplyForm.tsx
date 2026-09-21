@@ -130,7 +130,7 @@ export function ReplyForm({
 
       <div className="grid gap-4">
         <div className="flex items-center gap-4">
-          <Label htmlFor="from" className="w-16 text-right text-muted-foreground text-sm">
+          <Label htmlFor="from" className="w-16 text-end text-muted-foreground text-sm">
             From
           </Label>
           <Select value={fromAddress} onValueChange={setFromAddress}>
@@ -148,14 +148,14 @@ export function ReplyForm({
         </div>
 
         <div className="flex items-center gap-4">
-          <Label htmlFor="to" className="w-16 text-right text-muted-foreground text-sm">
+          <Label htmlFor="to" className="w-16 text-end text-muted-foreground text-sm">
             To
           </Label>
           <Input id="to" value={toEmail} disabled className="bg-muted flex-1" />
         </div>
 
         <div className="flex items-center gap-4">
-          <Label htmlFor="subject" className="w-16 text-right text-muted-foreground text-sm">
+          <Label htmlFor="subject" className="w-16 text-end text-muted-foreground text-sm">
             Subject
           </Label>
           <Input
@@ -209,9 +209,9 @@ export function ReplyForm({
           disabled={!body.trim() || sendReplyMutation.isPending}
         >
           {sendReplyMutation.isPending ? (
-            <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+            <Loader2 className="w-4 h-4 me-2 animate-spin" />
           ) : (
-            <Send className="w-4 h-4 mr-2" />
+            <Send className="w-4 h-4 me-2" />
           )}
           Send Reply
         </Button>

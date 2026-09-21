@@ -63,7 +63,7 @@ export function PostCard({ post, index, onClick, hasContent, canDelete, isDeleti
           )}
 
           {/* Top badges */}
-          <div className="absolute top-1.5 left-1.5 flex gap-1">
+          <div className="absolute top-1.5 start-1.5 flex gap-1">
             <Badge variant="outline" className={`text-[10px] px-1.5 py-0 border ${badge.className}`}>
               {post.mediaType === "REEL" ? t("posts.reel", "REEL")
                 : post.mediaType === "IMAGE" ? t("posts.image", "IMAGE")
@@ -77,7 +77,7 @@ export function PostCard({ post, index, onClick, hasContent, canDelete, isDeleti
               </Badge>
             )}
           </div>
-          <div className="absolute top-1.5 right-1.5">
+          <div className="absolute top-1.5 end-1.5">
             <Badge variant="secondary" className={`text-[10px] px-1.5 py-0 ${isHot ? "text-orange-400" : ""}`}>
               {isHot && "🔥 "}{post.engagementScore.toLocaleString()}
             </Badge>

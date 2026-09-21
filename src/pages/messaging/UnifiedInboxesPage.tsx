@@ -130,7 +130,7 @@ export default function UnifiedInboxesPage() {
                         className="drop-shadow-[0_8px_10px_rgba(0,0,0,0.3)] transition-transform duration-300 group-hover:scale-110"
                       />
                       {isSelected && (
-                        <div className="absolute -top-2 -right-2 w-6 h-6 sm:w-7 sm:h-7 rounded-full bg-primary text-primary-foreground flex items-center justify-center shadow-lg shadow-primary/50 ring-2 ring-background animate-in zoom-in-50 duration-200">
+                        <div className="absolute -top-2 -end-2 w-6 h-6 sm:w-7 sm:h-7 rounded-full bg-primary text-primary-foreground flex items-center justify-center shadow-lg shadow-primary/50 ring-2 ring-background animate-in zoom-in-50 duration-200">
                           <CheckCircle2 className="w-4 h-4 sm:w-4.5 sm:h-4.5" />
                         </div>
                       )}
@@ -172,7 +172,7 @@ export default function UnifiedInboxesPage() {
                     <Link to="/messaging/whatsapp/conversations">
                       <PlatformIcon platform="whatsapp" size="sm" />
                       <span>{t("unified.openStudio", "Open Full WhatsApp Studio")}</span>
-                      <ExternalLink className="w-4 h-4 ml-1" />
+                      <ExternalLink className="w-4 h-4 ms-1" />
                     </Link>
                   </Button>
                 </div>

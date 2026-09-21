@@ -199,12 +199,12 @@ export function ConnectionTroubleshooter({ className }: ConnectionTroubleshooter
                     </div>
                     {config.isConfigured ? (
                       <Badge className="bg-green-500/10 text-green-600 border-green-500/30">
-                        <CheckCircle2 className="w-3 h-3 mr-1" />
+                        <CheckCircle2 className="w-3 h-3 me-1" />
                         Configured
                       </Badge>
                     ) : (
                       <Badge variant="outline" className="text-amber-600 border-amber-500/30">
-                        <AlertCircle className="w-3 h-3 mr-1" />
+                        <AlertCircle className="w-3 h-3 me-1" />
                         Domain Not Registered
                       </Badge>
                     )}
@@ -269,7 +269,7 @@ export function ConnectionTroubleshooter({ className }: ConnectionTroubleshooter
                 <div className="flex items-center justify-between">
                   <h4 className="font-medium">Recent OAuth Errors</h4>
                   <Button variant="ghost" size="sm" onClick={clearErrors}>
-                    <RefreshCw className="w-3 h-3 mr-1" />
+                    <RefreshCw className="w-3 h-3 me-1" />
                     Clear
                   </Button>
                 </div>
@@ -279,7 +279,7 @@ export function ConnectionTroubleshooter({ className }: ConnectionTroubleshooter
                       <div className="flex items-center gap-2 mb-1">
                         <PlatformIcon platform={error.platform} className="w-4 h-4" />
                         <span className="font-medium">{getPlatformName(error.platform)}</span>
-                        <span className="text-xs text-muted-foreground ml-auto">
+                        <span className="text-xs text-muted-foreground ms-auto">
                           {error.timestamp.toLocaleTimeString()}
                         </span>
                       </div>
@@ -325,7 +325,7 @@ export function ConnectionTroubleshooter({ className }: ConnectionTroubleshooter
                     target="_blank"
                     rel="noopener noreferrer"
                   >
-                    <ExternalLink className="w-3 h-3 mr-1" />
+                    <ExternalLink className="w-3 h-3 me-1" />
                     Bluesky OAuth Docs
                   </a>
                 </Button>
@@ -335,7 +335,7 @@ export function ConnectionTroubleshooter({ className }: ConnectionTroubleshooter
                     target="_blank"
                     rel="noopener noreferrer"
                   >
-                    <ExternalLink className="w-3 h-3 mr-1" />
+                    <ExternalLink className="w-3 h-3 me-1" />
                     Meta App Settings
                   </a>
                 </Button>

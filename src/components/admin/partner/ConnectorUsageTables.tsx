@@ -113,7 +113,7 @@ export function ConnectorUsageTables() {
                     <TableRow key={row.partner_key_id}>
                       <TableCell className="text-xs">
                         {row.key_name ?? DASH}
-                        {row.key_prefix && <span className="ml-1 font-mono text-muted-foreground">{row.key_prefix}</span>}
+                        {row.key_prefix && <span className="ms-1 font-mono text-muted-foreground">{row.key_prefix}</span>}
                       </TableCell>
                       <TableCell className="text-xs">{row.workspace_name ?? DASH}</TableCell>
                       <TableCell className="text-xs">{row.calls}</TableCell>

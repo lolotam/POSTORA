@@ -123,15 +123,15 @@ function ThemeOptionLabel({
         style={{ backgroundColor: theme.preview.bg }}
       >
         <div
-          className="absolute top-2 left-2 w-8 h-8 rounded-lg"
+          className="absolute top-2 start-2 w-8 h-8 rounded-lg"
           style={{ backgroundColor: theme.preview.primary }}
         />
         <div
-          className="absolute bottom-2 right-2 w-12 h-4 rounded"
+          className="absolute bottom-2 end-2 w-12 h-4 rounded"
           style={{ backgroundColor: theme.preview.accent }}
         />
         <div
-          className="absolute top-2 right-2 w-6 h-6 rounded-full opacity-60"
+          className="absolute top-2 end-2 w-6 h-6 rounded-full opacity-60"
           style={{
             background: `radial-gradient(circle, ${theme.preview.primary} 0%, transparent 70%)`,
           }}
@@ -153,7 +153,7 @@ function ThemeOptionLabel({
 
       {/* Selected Indicator */}
       {isSelected && (
-        <div className="absolute top-2 right-2 w-5 h-5 rounded-full bg-primary flex items-center justify-center">
+        <div className="absolute top-2 end-2 w-5 h-5 rounded-full bg-primary flex items-center justify-center">
           <svg className="w-3 h-3 text-primary-foreground" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
           </svg>

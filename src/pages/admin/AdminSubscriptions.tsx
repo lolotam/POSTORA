@@ -491,11 +491,11 @@ export default function AdminSubscriptions() {
           <TabsContent value="subscriptions" className="space-y-6">
             <div className="flex justify-end gap-2">
               <Button variant="outline" onClick={() => setBackfillDialogOpen(true)}>
-                <Download className="w-4 h-4 mr-2" />
+                <Download className="w-4 h-4 me-2" />
                 Backfill from Stripe
               </Button>
               <Button variant="outline" onClick={() => refetch()}>
-                <RefreshCw className="w-4 h-4 mr-2" />
+                <RefreshCw className="w-4 h-4 me-2" />
                 Refresh
               </Button>
             </div>
@@ -546,7 +546,7 @@ export default function AdminSubscriptions() {
                 <CardContent>
                   <div className="text-2xl font-bold">{newThisMonth.length}</div>
                   <div className="flex items-center text-xs text-green-600">
-                    <ArrowUpRight className="w-3 h-3 mr-1" />
+                    <ArrowUpRight className="w-3 h-3 me-1" />
                     New subscriptions
                   </div>
                 </CardContent>
@@ -584,12 +584,12 @@ export default function AdminSubscriptions() {
                   </div>
                   <div className="flex items-center gap-2">
                     <div className="relative">
-                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                      <Search className="absolute start-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                       <Input
                         placeholder="Search by email or name..."
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
-                        className="pl-9 w-64"
+                        className="ps-9 w-64"
                       />
                     </div>
                     <Select value={statusFilter} onValueChange={setStatusFilter}>
@@ -679,7 +679,7 @@ export default function AdminSubscriptions() {
                                       onClick={() => handleOpenPortal(sub.stripe_customer_id!, sub.id)}
                                       disabled={portalLoadingId === sub.id}
                                     >
-                                      <ExternalLink className="w-4 h-4 mr-2" />
+                                      <ExternalLink className="w-4 h-4 me-2" />
                                       {portalLoadingId === sub.id ? "Opening..." : "Manage in Portal"}
                                     </DropdownMenuItem>
                                     <DropdownMenuItem
@@ -710,11 +710,11 @@ export default function AdminSubscriptions() {
           <TabsContent value="credits" className="space-y-6">
             <div className="flex justify-end gap-2">
               <Button variant="outline" onClick={() => setCreditAddDialogOpen(true)}>
-                <Plus className="w-4 h-4 mr-2" />
+                <Plus className="w-4 h-4 me-2" />
                 Add Credits
               </Button>
               <Button variant="outline" onClick={() => refetchCredits()}>
-                <RefreshCw className="w-4 h-4 mr-2" />
+                <RefreshCw className="w-4 h-4 me-2" />
                 Refresh
               </Button>
             </div>
@@ -761,7 +761,7 @@ export default function AdminSubscriptions() {
                 <CardContent>
                   <div className="text-2xl font-bold">{totalCreditsPurchased.toLocaleString()}</div>
                   <p className="text-xs text-green-600">
-                    <ArrowUpRight className="w-3 h-3 inline mr-1" />
+                    <ArrowUpRight className="w-3 h-3 inline me-1" />
                     All time
                   </p>
                 </CardContent>
@@ -794,12 +794,12 @@ export default function AdminSubscriptions() {
                     </CardDescription>
                   </div>
                   <div className="relative">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                    <Search className="absolute start-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                     <Input
                       placeholder="Search by email or name..."
                       value={creditSearchQuery}
                       onChange={(e) => setCreditSearchQuery(e.target.value)}
-                      className="pl-9 w-64"
+                      className="ps-9 w-64"
                     />
                   </div>
                 </div>
@@ -838,7 +838,7 @@ export default function AdminSubscriptions() {
                           </TableCell>
                           <TableCell>
                             <Badge className={credit.balance > 0 ? "bg-green-500/10 text-green-600" : "bg-muted"}>
-                              <Zap className="w-3 h-3 mr-1" />
+                              <Zap className="w-3 h-3 me-1" />
                               {credit.balance.toLocaleString()}
                             </Badge>
                           </TableCell>
@@ -866,7 +866,7 @@ export default function AdminSubscriptions() {
                                   setCreditAmount(0);
                                   setCreditEditDialogOpen(true);
                                 }}>
-                                  <Edit className="w-4 h-4 mr-2" />
+                                  <Edit className="w-4 h-4 me-2" />
                                   Adjust Credits
                                 </DropdownMenuItem>
                               </DropdownMenuContent>
@@ -935,7 +935,7 @@ export default function AdminSubscriptions() {
             >
               {updateSubscriptionMutation.isPending ? (
                 <>
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  <Loader2 className="w-4 h-4 me-2 animate-spin" />
                   Saving...
                 </>
               ) : (
@@ -991,7 +991,7 @@ export default function AdminSubscriptions() {
             >
               {updateCreditsMutation.isPending ? (
                 <>
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  <Loader2 className="w-4 h-4 me-2 animate-spin" />
                   Saving...
                 </>
               ) : (
@@ -1051,12 +1051,12 @@ export default function AdminSubscriptions() {
             >
               {addCreditsByEmailMutation.isPending ? (
                 <>
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  <Loader2 className="w-4 h-4 me-2 animate-spin" />
                   Adding...
                 </>
               ) : (
                 <>
-                  <Plus className="w-4 h-4 mr-2" />
+                  <Plus className="w-4 h-4 me-2" />
                   Add Credits
                 </>
               )}
@@ -1100,12 +1100,12 @@ export default function AdminSubscriptions() {
             >
               {isBackfilling ? (
                 <>
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  <Loader2 className="w-4 h-4 me-2 animate-spin" />
                   Syncing...
                 </>
               ) : (
                 <>
-                  <Download className="w-4 h-4 mr-2" />
+                  <Download className="w-4 h-4 me-2" />
                   Backfill Subscription
                 </>
               )}

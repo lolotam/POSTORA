@@ -321,12 +321,12 @@ export function BatchRenameDialog({
           >
             {isRenaming ? (
               <>
-                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                <Loader2 className="w-4 h-4 me-2 animate-spin" />
                 {t("rename.renaming", "Renaming...")}
               </>
             ) : (
               <>
-                <FileEdit className="w-4 h-4 mr-2" />
+                <FileEdit className="w-4 h-4 me-2" />
                 {t("rename.renameCount", "Rename {{count}} Files", { count: files.length })}
               </>
             )}

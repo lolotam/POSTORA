@@ -193,7 +193,7 @@ export function ReferencePresets({ currentImages, onLoadPreset }: ReferencePrese
                     </p>
                   </div>
                   {/* Preview thumbnails */}
-                  <div className="flex -space-x-1 ml-2">
+                  <div className="flex -space-x-1 rtl:space-x-reverse ms-2">
                     {preset.reference_images.slice(0, 3).map((img, i) => (
                       <div
                         key={i}
@@ -216,7 +216,7 @@ export function ReferencePresets({ currentImages, onLoadPreset }: ReferencePrese
                 <Button
                   variant="ghost"
                   size="sm"
-                  className="h-8 w-8 p-0 opacity-0 group-hover:opacity-100 transition-opacity mr-1"
+                  className="h-8 w-8 p-0 opacity-0 group-hover:opacity-100 transition-opacity me-1"
                   onClick={(e) => {
                     e.preventDefault();
                     e.stopPropagation();
@@ -234,7 +234,7 @@ export function ReferencePresets({ currentImages, onLoadPreset }: ReferencePrese
             onClick={() => setIsSaveDialogOpen(true)}
             className="cursor-pointer"
           >
-            <Save className="w-4 h-4 mr-2" />
+            <Save className="w-4 h-4 me-2" />
             {t("referencePresets.saveCurrent", "Save Current as Preset")}
           </DropdownMenuItem>
         </DropdownMenuContent>
@@ -274,7 +274,7 @@ export function ReferencePresets({ currentImages, onLoadPreset }: ReferencePrese
               {t("common:cancel", "Cancel")}
             </Button>
             <Button onClick={handleSave} disabled={savePresetMutation.isPending}>
-              {savePresetMutation.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+              {savePresetMutation.isPending && <Loader2 className="w-4 h-4 me-2 animate-spin" />}
               {t("referencePresets.saveBtn", "Save Preset")}
             </Button>
           </DialogFooter>
@@ -296,7 +296,7 @@ export function ReferencePresets({ currentImages, onLoadPreset }: ReferencePrese
               onClick={() => deletePresetId && deletePresetMutation.mutate(deletePresetId)}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
-              {deletePresetMutation.isPending && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
+              {deletePresetMutation.isPending && <Loader2 className="w-4 h-4 me-2 animate-spin" />}
               {t("common:delete", "Delete")}
             </AlertDialogAction>
           </AlertDialogFooter>

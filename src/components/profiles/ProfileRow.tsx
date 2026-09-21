@@ -356,10 +356,10 @@ export function ProfileRow({
                     >
                       <PlatformIcon platform={account.platform} size="sm" />
                       {(expired || needsReauth) && (
-                        <div className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-destructive" />
+                        <div className="absolute -top-1 -end-1 w-2 h-2 rounded-full bg-destructive" />
                       )}
                       {!expired && !needsReauth && expiringSoon && (
-                        <div className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-amber-500" />
+                        <div className="absolute -top-1 -end-1 w-2 h-2 rounded-full bg-amber-500" />
                       )}
                     </div>
                   );
@@ -451,24 +451,24 @@ export function ProfileRow({
                               const meta = account.account_metadata as Record<string, unknown> | null;
                               const isBusinessLogin = account.ig_auth_type === "business_login" || meta?.token_type === "long_lived";
                               return isBusinessLogin ? (
-                                <Badge variant="secondary" className="ml-1 h-4 text-[9px] px-1 bg-green-500/10 text-green-600 border-green-500/30">Direct</Badge>
+                                <Badge variant="secondary" className="ms-1 h-4 text-[9px] px-1 bg-green-500/10 text-green-600 border-green-500/30">Direct</Badge>
                               ) : (
-                                <Badge variant="secondary" className="ml-1 h-4 text-[9px] px-1 bg-blue-500/10 text-blue-600 border-blue-500/30">via FB</Badge>
+                                <Badge variant="secondary" className="ms-1 h-4 text-[9px] px-1 bg-blue-500/10 text-blue-600 border-blue-500/30">via FB</Badge>
                               );
                             })()
                           )}
                           {isConnected ? (
                             needsReauth ? (
-                              <RefreshCw className="w-3 h-3 ml-0.5" />
+                              <RefreshCw className="w-3 h-3 ms-0.5" />
                             ) : (
-                              <X className="w-3 h-3 ml-0.5 text-destructive" />
+                              <X className="w-3 h-3 ms-0.5 text-destructive" />
                             )
                           ) : isTikTokBlocked ? (
-                            <Crown className="w-3 h-3 ml-0.5 text-amber-500" />
+                            <Crown className="w-3 h-3 ms-0.5 text-amber-500" />
                           ) : hasAccess && config.available ? (
-                            <CheckCircle className="w-3 h-3 ml-0.5 text-green-500" />
+                            <CheckCircle className="w-3 h-3 ms-0.5 text-green-500" />
                           ) : !hasAccess ? (
-                            <Lock className="w-3 h-3 ml-0.5 text-amber-500" />
+                            <Lock className="w-3 h-3 ms-0.5 text-amber-500" />
                           ) : null}
                         </button>
                       </TooltipTrigger>
@@ -504,7 +504,7 @@ export function ProfileRow({
         </TableCell>
 
         {/* Whitelabel Column */}
-        <TableCell className="text-right">
+        <TableCell className="text-end">
           <Button
             variant="outline"
             size="sm"

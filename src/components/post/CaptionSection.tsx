@@ -235,7 +235,7 @@ export function CaptionSection({
                   size="sm"
                   className="h-7 text-xs gap-1.5 bg-gradient-to-r from-sky-500/15 to-violet-500/15 text-sky-700 dark:text-sky-300 border border-sky-400/40 hover:from-sky-500 hover:to-violet-500 hover:text-white hover:shadow-md hover:shadow-sky-500/30 transition-all"
                 >
-                  <Sparkles className="w-3 h-3 mr-1" />
+                  <Sparkles className="w-3 h-3 me-1" />
                   {t("caption.generateAi", "Generate with AI")}
                 </Button>
               </DialogTrigger>
@@ -256,7 +256,7 @@ export function CaptionSection({
                         resetTimeDay={captionLimit.resetTimeDay}
                         label={t("caption.rateLimitLabel", "Caption Generation")}
                         compact
-                        className="ml-auto"
+                        className="ms-auto"
                       />
                     )}
                   </DialogTitle>
@@ -342,14 +342,14 @@ export function CaptionSection({
                   >
                     {isGeneratingCaption ? (
                       <>
-                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                        <Loader2 className="w-4 h-4 me-2 animate-spin" />
                         {t("caption.generatingOptions", "Generating 5 options...")}
                       </>
                     ) : isRateLimited ? (
                       t("caption.rateLimitReached", "Rate limit reached")
                     ) : (
                       <>
-                        <Sparkles className="w-4 h-4 mr-2" />
+                        <Sparkles className="w-4 h-4 me-2" />
                         {t("caption.generateFive", "Generate 5 Captions")}
                       </>
                     )}
@@ -367,7 +367,7 @@ export function CaptionSection({
                   {captionOptions.length > 0 && (
                     <div className="space-y-2">
                       <Label className="text-sm">{t("caption.pickCaption", "Pick a caption:")}</Label>
-                      <div className="space-y-2 max-h-[300px] overflow-y-auto pr-1">
+                      <div className="space-y-2 max-h-[300px] overflow-y-auto pe-1">
                         {captionOptions.map((opt, index) => {
                           const isSaved = savedIndices.has(index);
                           return (

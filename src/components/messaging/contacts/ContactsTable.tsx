@@ -198,7 +198,7 @@ export function ContactsTable({
                                 variant="secondary"
                                 className="text-xs"
                               >
-                                <Tag className="h-3 w-3 mr-1" />
+                                <Tag className="h-3 w-3 me-1" />
                                 {tag}
                               </Badge>
                             ))}
@@ -358,7 +358,7 @@ function BulkActionsBar({ selected, selectedContacts, onClear }: BulkActionsBarP
         label={t("contacts.exportSelected", "Export selected")}
         triggerSize="sm"
       >
-        <Download className="h-3.5 w-3.5 mr-1" />
+        <Download className="h-3.5 w-3.5 me-1" />
       </ContactExportMenu>
 
       <Button
@@ -367,7 +367,7 @@ function BulkActionsBar({ selected, selectedContacts, onClear }: BulkActionsBarP
         className="h-8 text-destructive hover:text-destructive"
         onClick={() => setDeleteOpen(true)}
       >
-        <Trash2 className="h-3.5 w-3.5 mr-1" />
+        <Trash2 className="h-3.5 w-3.5 me-1" />
         {t("contacts.deleteCount", "Delete ({{count}})", { count: selected.size })}
       </Button>
 

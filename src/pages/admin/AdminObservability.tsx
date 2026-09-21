@@ -477,7 +477,7 @@ export default function AdminObservability() {
                 setLastRefreshed(new Date());
               }}
             >
-              <RefreshCw className="w-4 h-4 mr-2" />
+              <RefreshCw className="w-4 h-4 me-2" />
               Refresh Now
             </Button>
           </div>
@@ -703,11 +703,11 @@ export default function AdminObservability() {
                     <TableHeader>
                       <TableRow>
                         <TableHead>Function</TableHead>
-                        <TableHead className="text-right">Total Calls</TableHead>
-                        <TableHead className="text-right">Success Rate</TableHead>
-                        <TableHead className="text-right">Avg Time</TableHead>
-                        <TableHead className="text-right">Max Time</TableHead>
-                        <TableHead className="text-right">Errors</TableHead>
+                        <TableHead className="text-end">Total Calls</TableHead>
+                        <TableHead className="text-end">Success Rate</TableHead>
+                        <TableHead className="text-end">Avg Time</TableHead>
+                        <TableHead className="text-end">Max Time</TableHead>
+                        <TableHead className="text-end">Errors</TableHead>
                         <TableHead>Last Called</TableHead>
                       </TableRow>
                     </TableHeader>
@@ -720,8 +720,8 @@ export default function AdminObservability() {
                               {metric.function_name}
                             </div>
                           </TableCell>
-                          <TableCell className="text-right">{metric.total_calls.toLocaleString()}</TableCell>
-                          <TableCell className="text-right">
+                          <TableCell className="text-end">{metric.total_calls.toLocaleString()}</TableCell>
+                          <TableCell className="text-end">
                             <Badge 
                               variant="secondary" 
                               className={
@@ -733,13 +733,13 @@ export default function AdminObservability() {
                               {metric.success_rate}%
                             </Badge>
                           </TableCell>
-                          <TableCell className="text-right">{Math.round(metric.avg_duration_ms)}ms</TableCell>
-                          <TableCell className="text-right">
+                          <TableCell className="text-end">{Math.round(metric.avg_duration_ms)}ms</TableCell>
+                          <TableCell className="text-end">
                             <span className={metric.max_duration_ms > 5000 ? "text-red-500" : ""}>
                               {Math.round(metric.max_duration_ms)}ms
                             </span>
                           </TableCell>
-                          <TableCell className="text-right">
+                          <TableCell className="text-end">
                             {metric.error_count > 0 ? (
                               <Badge variant="destructive">{metric.error_count}</Badge>
                             ) : (
@@ -766,7 +766,7 @@ export default function AdminObservability() {
               <AlertTriangle className="w-4 h-4" />
               Alert History
               {activeAlerts > 0 && (
-                <Badge variant="destructive" className="ml-1 h-5 px-1.5">
+                <Badge variant="destructive" className="ms-1 h-5 px-1.5">
                   {activeAlerts}
                 </Badge>
               )}
@@ -819,7 +819,7 @@ export default function AdminObservability() {
                                 </Badge>
                                 {alert.is_resolved ? (
                                   <Badge variant="secondary" className="text-xs bg-green-500/10 text-green-600">
-                                    <Check className="w-3 h-3 mr-1" />
+                                    <Check className="w-3 h-3 me-1" />
                                     Resolved
                                   </Badge>
                                 ) : (
@@ -843,7 +843,7 @@ export default function AdminObservability() {
                                 onClick={() => resolveAlertMutation.mutate(alert.id)}
                                 disabled={resolveAlertMutation.isPending}
                               >
-                                <Check className="w-4 h-4 mr-1" />
+                                <Check className="w-4 h-4 me-1" />
                                 Resolve
                               </Button>
                             )}
@@ -869,7 +869,7 @@ export default function AdminObservability() {
                   <Dialog open={isAddAlertOpen} onOpenChange={setIsAddAlertOpen}>
                     <DialogTrigger asChild>
                       <Button size="sm">
-                        <Plus className="w-4 h-4 mr-2" />
+                        <Plus className="w-4 h-4 me-2" />
                         Add Rule
                       </Button>
                     </DialogTrigger>
@@ -1018,7 +1018,7 @@ export default function AdminObservability() {
                           disabled={!newAlert.name || createAlertMutation.isPending}
                         >
                           {createAlertMutation.isPending ? (
-                            <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                            <Loader2 className="w-4 h-4 me-2 animate-spin" />
                           ) : null}
                           Create Rule
                         </Button>

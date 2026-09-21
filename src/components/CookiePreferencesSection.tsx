@@ -153,7 +153,7 @@ export const CookiePreferencesSection = () => {
           <Button onClick={handleSavePreferences} disabled={isSaving}>
             {isSaving ? (
               <>
-                <Check className="w-4 h-4 mr-2" />
+                <Check className="w-4 h-4 me-2" />
                 Saved!
               </>
             ) : (

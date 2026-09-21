@@ -275,11 +275,11 @@ export function CanvasToolbar({
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
           <DropdownMenuItem onClick={onClear} disabled={nodeCount === 0}>
-            <Trash2 className="h-4 w-4 mr-2 text-destructive" />
+            <Trash2 className="h-4 w-4 me-2 text-destructive" />
             Clear canvas
           </DropdownMenuItem>
           <DropdownMenuItem onClick={onShowShortcuts}>
-            <Keyboard className="h-4 w-4 mr-2" />
+            <Keyboard className="h-4 w-4 me-2" />
             Keyboard shortcuts
           </DropdownMenuItem>
         </DropdownMenuContent>

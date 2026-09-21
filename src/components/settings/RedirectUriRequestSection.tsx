@@ -125,7 +125,7 @@ export function RedirectUriRequestSection() {
                   {apps?.map((app) => (
                     <SelectItem key={app.id} value={app.id}>
                       {app.name}
-                      {app.description && <span className="text-muted-foreground ml-2">— {app.description}</span>}
+                      {app.description && <span className="text-muted-foreground ms-2">— {app.description}</span>}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -147,9 +147,9 @@ export function RedirectUriRequestSection() {
             disabled={!selectedAppId || !redirectUri.startsWith("https://") || submitMutation.isPending}
           >
             {submitMutation.isPending ? (
-              <Loader2 className="h-4 w-4 animate-spin mr-2" />
+              <Loader2 className="h-4 w-4 animate-spin me-2" />
             ) : (
-              <Send className="h-4 w-4 mr-2" />
+              <Send className="h-4 w-4 me-2" />
             )}
             {t("redirect.actions.submit", "Submit Request")}
           </Button>

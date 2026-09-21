@@ -187,7 +187,7 @@ export function PinterestSettings({
                     disabled={loadingBoards}
                     className="h-7 text-xs"
                   >
-                    <RefreshCw className={cn("w-3 h-3 mr-1", loadingBoards && "animate-spin")} />
+                    <RefreshCw className={cn("w-3 h-3 me-1", loadingBoards && "animate-spin")} />
                     {t("pinterest.refresh", "Refresh")}
                   </Button>
                 </div>
@@ -205,7 +205,7 @@ export function PinterestSettings({
                   <div className="flex items-center justify-between w-full">
                     <span>{board.name}</span>
                     {board.pin_count !== undefined && (
-                      <span className="text-xs text-muted-foreground ml-2">{t("pinterest.pinsCount", "({{count}} pins)", { count: board.pin_count })}</span>
+                      <span className="text-xs text-muted-foreground ms-2">{t("pinterest.pinsCount", "({{count}} pins)", { count: board.pin_count })}</span>
                     )}
                   </div>
                 </SelectItem>

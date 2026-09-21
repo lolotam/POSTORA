@@ -371,7 +371,7 @@ print(response.json())`} />
 
               <Accordion type="single" collapsible className="w-full">
                 <AccordionItem value="instagram">
-                  <AccordionTrigger className="text-left"><div className="flex items-center gap-3"><PlatformIcon platform="instagram" size="sm" />Instagram</div></AccordionTrigger>
+                  <AccordionTrigger className="text-start"><div className="flex items-center gap-3"><PlatformIcon platform="instagram" size="sm" />Instagram</div></AccordionTrigger>
                   <AccordionContent>
                     <ul className="list-disc list-inside text-muted-foreground space-y-1 text-sm">
                       <li>Supports photos, carousels (up to 10 images), and Reels</li>
@@ -381,7 +381,7 @@ print(response.json())`} />
                   </AccordionContent>
                 </AccordionItem>
                 <AccordionItem value="tiktok">
-                  <AccordionTrigger className="text-left"><div className="flex items-center gap-3"><PlatformIcon platform="tiktok" size="sm" />TikTok</div></AccordionTrigger>
+                  <AccordionTrigger className="text-start"><div className="flex items-center gap-3"><PlatformIcon platform="tiktok" size="sm" />TikTok</div></AccordionTrigger>
                   <AccordionContent>
                     <ul className="list-disc list-inside text-muted-foreground space-y-1 text-sm">
                       <li>Videos and photo carousels</li>
@@ -391,7 +391,7 @@ print(response.json())`} />
                   </AccordionContent>
                 </AccordionItem>
                 <AccordionItem value="youtube">
-                  <AccordionTrigger className="text-left"><div className="flex items-center gap-3"><PlatformIcon platform="youtube" size="sm" />YouTube</div></AccordionTrigger>
+                  <AccordionTrigger className="text-start"><div className="flex items-center gap-3"><PlatformIcon platform="youtube" size="sm" />YouTube</div></AccordionTrigger>
                   <AccordionContent>
                     <ul className="list-disc list-inside text-muted-foreground space-y-1 text-sm">
                       <li>Supports Videos and YouTube Shorts</li>
@@ -401,7 +401,7 @@ print(response.json())`} />
                   </AccordionContent>
                 </AccordionItem>
                 <AccordionItem value="threads">
-                  <AccordionTrigger className="text-left"><div className="flex items-center gap-3"><PlatformIcon platform="threads" size="sm" />Threads</div></AccordionTrigger>
+                  <AccordionTrigger className="text-start"><div className="flex items-center gap-3"><PlatformIcon platform="threads" size="sm" />Threads</div></AccordionTrigger>
                   <AccordionContent>
                     <ul className="list-disc list-inside text-muted-foreground space-y-1 text-sm">
                       <li>Text posts with up to 500 characters</li>
@@ -411,7 +411,7 @@ print(response.json())`} />
                   </AccordionContent>
                 </AccordionItem>
                 <AccordionItem value="bluesky">
-                  <AccordionTrigger className="text-left"><div className="flex items-center gap-3"><PlatformIcon platform="bluesky" size="sm" />Bluesky</div></AccordionTrigger>
+                  <AccordionTrigger className="text-start"><div className="flex items-center gap-3"><PlatformIcon platform="bluesky" size="sm" />Bluesky</div></AccordionTrigger>
                   <AccordionContent>
                     <ul className="list-disc list-inside text-muted-foreground space-y-1 text-sm">
                       <li>Posts up to 300 characters</li>
@@ -421,7 +421,7 @@ print(response.json())`} />
                   </AccordionContent>
                 </AccordionItem>
                 <AccordionItem value="reddit">
-                  <AccordionTrigger className="text-left"><div className="flex items-center gap-3"><PlatformIcon platform="reddit" size="sm" />Reddit</div></AccordionTrigger>
+                  <AccordionTrigger className="text-start"><div className="flex items-center gap-3"><PlatformIcon platform="reddit" size="sm" />Reddit</div></AccordionTrigger>
                   <AccordionContent>
                     <ul className="list-disc list-inside text-muted-foreground space-y-1 text-sm">
                       <li>Text, link, and image posts</li>
@@ -537,7 +537,7 @@ print(response.json())`} />
               <Accordion type="single" collapsible className="w-full rounded-2xl border border-border/60 bg-card/40 backdrop-blur-md px-4">
                 {faqItems.map((item, i) => (
                   <AccordionItem key={i} value={`faq-${i}`} className="border-border/40">
-                    <AccordionTrigger className="text-left hover:text-violet-600 dark:hover:text-violet-300">
+                    <AccordionTrigger className="text-start hover:text-violet-600 dark:hover:text-violet-300">
                       <span className="flex items-center gap-2">
                         <HelpCircle className="w-4 h-4 text-violet-500" />
                         {item.q}

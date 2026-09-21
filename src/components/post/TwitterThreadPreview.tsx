@@ -111,12 +111,12 @@ export function TwitterThreadPreview({
         </Badge>
       </div>
 
-      <div className="space-y-3 max-h-[400px] overflow-y-auto pr-2">
+      <div className="space-y-3 max-h-[400px] overflow-y-auto pe-2">
         {numberedTweets.map((tweet, index) => (
           <div key={index} className="relative">
             {/* Thread connector line */}
             {index < numberedTweets.length - 1 && (
-              <div className="absolute left-5 top-12 bottom-0 w-0.5 bg-border -mb-3" />
+              <div className="absolute start-5 top-12 bottom-0 w-0.5 bg-border -mb-3" />
             )}
             
             <Card className="bg-card/50 border-border/50">
@@ -147,7 +147,7 @@ export function TwitterThreadPreview({
                     <div className="flex items-center gap-1 mt-2 text-xs text-muted-foreground">
                       <span>{t("twitterThread.charsCount", { count: tweet.length, defaultValue: `${tweet.length} chars` })}</span>
                       {tweet.length > 280 && (
-                        <Badge variant="destructive" className="text-[10px] ml-2">
+                        <Badge variant="destructive" className="text-[10px] ms-2">
                           {t("twitterThread.overLimit", "Over limit!")}
                         </Badge>
                       )}

@@ -66,7 +66,7 @@ export function MediaPreviewDialog({
     <Dialog open={!!file} onOpenChange={() => onClose()}>
       <DialogContent className="max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
         <DialogHeader>
-          <DialogTitle className="flex items-center justify-between pr-8">
+          <DialogTitle className="flex items-center justify-between pe-8">
             <span className="truncate">{getFileDisplayName(file)}</span>
           </DialogTitle>
         </DialogHeader>
@@ -144,7 +144,7 @@ export function MediaPreviewDialog({
                     size="sm"
                     onClick={() => onDownload(file)}
                   >
-                    <Download className="w-4 h-4 mr-2" />
+                    <Download className="w-4 h-4 me-2" />
                     Download
                   </Button>
                   <Button
@@ -152,7 +152,7 @@ export function MediaPreviewDialog({
                     size="sm"
                     onClick={() => onCopyLink(file)}
                   >
-                    <Link className="w-4 h-4 mr-2" />
+                    <Link className="w-4 h-4 me-2" />
                     Copy Link
                   </Button>
                   <Button
@@ -160,7 +160,7 @@ export function MediaPreviewDialog({
                     size="sm"
                     onClick={() => onRename(file)}
                   >
-                    <Pencil className="w-4 h-4 mr-2" />
+                    <Pencil className="w-4 h-4 me-2" />
                     Rename
                   </Button>
                   <Button
@@ -168,7 +168,7 @@ export function MediaPreviewDialog({
                     size="sm"
                     onClick={() => onShare(file)}
                   >
-                    <Share2 className="w-4 h-4 mr-2" />
+                    <Share2 className="w-4 h-4 me-2" />
                     Share
                   </Button>
                   <Button
@@ -176,7 +176,7 @@ export function MediaPreviewDialog({
                     size="sm"
                     onClick={() => onMove(file.id)}
                   >
-                    <Move className="w-4 h-4 mr-2" />
+                    <Move className="w-4 h-4 me-2" />
                     Move
                   </Button>
                   <Button
@@ -184,7 +184,7 @@ export function MediaPreviewDialog({
                     size="sm"
                     onClick={() => onReplace(file)}
                   >
-                    <RefreshCw className="w-4 h-4 mr-2" />
+                    <RefreshCw className="w-4 h-4 me-2" />
                     Replace
                   </Button>
                   {file.file_type === "image" && (
@@ -194,7 +194,7 @@ export function MediaPreviewDialog({
                         size="sm"
                         onClick={() => onImageTools(file)}
                       >
-                        <Wand2 className="w-4 h-4 mr-2" />
+                        <Wand2 className="w-4 h-4 me-2" />
                         Image Tools
                       </Button>
                       <Button
@@ -202,7 +202,7 @@ export function MediaPreviewDialog({
                         size="sm"
                         onClick={() => onBgRemoval(file)}
                       >
-                        <Scissors className="w-4 h-4 mr-2" />
+                        <Scissors className="w-4 h-4 me-2" />
                         Remove BG
                       </Button>
                     </>
@@ -215,7 +215,7 @@ export function MediaPreviewDialog({
                       onDelete(file.id);
                     }}
                   >
-                    <Trash2 className="w-4 h-4 mr-2" />
+                    <Trash2 className="w-4 h-4 me-2" />
                     Delete
                   </Button>
                 </div>

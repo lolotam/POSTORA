@@ -14,14 +14,14 @@ export function SectionTitle({ children, id, preset = "violet-sky", className }:
     <h2
       id={id}
       className={cn(
-        "relative pl-4 text-2xl md:text-3xl font-bold mb-4 scroll-mt-20 tracking-tight",
+        "relative ps-4 text-2xl md:text-3xl font-bold mb-4 scroll-mt-20 tracking-tight",
         className,
       )}
     >
       <span
         aria-hidden
         className={cn(
-          "absolute left-0 top-1.5 bottom-1.5 w-1 rounded-full bg-gradient-to-b",
+          "absolute start-0 top-1.5 bottom-1.5 w-1 rounded-full bg-gradient-to-b",
           HEADING_PRESETS[preset],
         )}
       />

@@ -84,11 +84,11 @@ export function SchedulePicker({ scheduledAt, onScheduleChange }: SchedulePicker
               <Button
                 variant="outline"
                 className={cn(
-                  "w-full justify-start text-left font-normal bg-card/40 backdrop-blur-sm border-amber-400/30 hover:border-amber-400/60 hover:bg-card/60 transition-all",
+                  "w-full justify-start text-start font-normal bg-card/40 backdrop-blur-sm border-amber-400/30 hover:border-amber-400/60 hover:bg-card/60 transition-all",
                   !selectedDate && "text-muted-foreground"
                 )}
               >
-                <CalendarIcon className="mr-2 h-4 w-4 text-amber-500" />
+                <CalendarIcon className="me-2 h-4 w-4 text-amber-500" />
                 {selectedDate ? format(selectedDate, "PPP") : <span>{t("schedulePicker.pickDate", "Pick a date")}</span>}
               </Button>
             </PopoverTrigger>

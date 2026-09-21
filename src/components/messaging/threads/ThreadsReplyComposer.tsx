@@ -47,7 +47,7 @@ export function ThreadsReplyComposer({ isPending, onCancel, onSubmit }: Props) {
             onClick={onCancel}
             disabled={isPending}
           >
-            <X className="h-3.5 w-3.5 mr-1.5" />
+            <X className="h-3.5 w-3.5 me-1.5" />
             {t("common:cancel", "Cancel")}
           </Button>
           <Button
@@ -57,9 +57,9 @@ export function ThreadsReplyComposer({ isPending, onCancel, onSubmit }: Props) {
             disabled={disabled}
           >
             {isPending ? (
-              <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+              <Loader2 className="h-3.5 w-3.5 me-1.5 animate-spin" />
             ) : (
-              <Send className="h-3.5 w-3.5 mr-1.5" />
+              <Send className="h-3.5 w-3.5 me-1.5" />
             )}
             {t("actions.sendReply", "Send Reply")}
           </Button>

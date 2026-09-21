@@ -132,7 +132,7 @@ export function YouTubeAISuggestions({ type, context, secondaryContext, onSelect
                   className="cursor-pointer transition-all hover:scale-105 text-xs"
                   onClick={() => handleSelect(idx)}
                 >
-                  {selectedIndex === idx && <Check className="w-3 h-3 mr-1" />}
+                  {selectedIndex === idx && <Check className="w-3 h-3 me-1" />}
                   {tagSet}
                 </Badge>
               ))}
@@ -143,7 +143,7 @@ export function YouTubeAISuggestions({ type, context, secondaryContext, onSelect
                 key={idx}
                 type="button"
                 onClick={() => handleSelect(idx)}
-                className={`w-full text-left p-2.5 rounded-lg border text-sm transition-all ${
+                className={`w-full text-start p-2.5 rounded-lg border text-sm transition-all ${
                   selectedIndex === idx
                     ? "border-primary bg-primary/5 ring-1 ring-primary/30"
                     : "border-border hover:border-primary/40 hover:bg-secondary/50"

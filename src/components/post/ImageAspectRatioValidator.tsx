@@ -216,7 +216,7 @@ export function ImageAspectRatioValidator({
                   <Button
                     variant="ghost"
                     size="sm"
-                    className="h-5 px-1 ml-1"
+                    className="h-5 px-1 ms-1"
                     onClick={() => onCropRequest(suggestion)}
                   >
                     <Crop className="w-3 h-3" />

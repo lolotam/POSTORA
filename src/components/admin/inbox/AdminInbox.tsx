@@ -161,7 +161,7 @@ export function AdminInbox() {
       <div className="flex flex-col items-center justify-center h-[600px] gap-4">
         <p className="text-destructive">Error loading messages: {error}</p>
         <Button onClick={() => refetch()} variant="outline">
-          <RefreshCw className="w-4 h-4 mr-2" />
+          <RefreshCw className="w-4 h-4 me-2" />
           Retry
         </Button>
       </div>
@@ -176,7 +176,7 @@ export function AdminInbox() {
             <Mail className="w-4 h-4" />
             Inbox
             {unreadCount > 0 && (
-              <span className="ml-1 px-1.5 py-0.5 text-xs font-medium bg-primary text-primary-foreground rounded-full">
+              <span className="ms-1 px-1.5 py-0.5 text-xs font-medium bg-primary text-primary-foreground rounded-full">
                 {unreadCount}
               </span>
             )}
@@ -185,7 +185,7 @@ export function AdminInbox() {
             <FileEdit className="w-4 h-4" />
             Drafts
             {draftCount > 0 && (
-              <span className="ml-1 px-1.5 py-0.5 text-xs font-medium bg-amber-500 text-white rounded-full">
+              <span className="ms-1 px-1.5 py-0.5 text-xs font-medium bg-amber-500 text-white rounded-full">
                 {draftCount}
               </span>
             )}
@@ -202,7 +202,7 @@ export function AdminInbox() {
               <AlertDialog>
                 <AlertDialogTrigger asChild>
                   <Button variant="destructive" size="sm">
-                    <Trash2 className="w-4 h-4 mr-2" />
+                    <Trash2 className="w-4 h-4 me-2" />
                     Delete {selectedThreadIds.size}
                   </Button>
                 </AlertDialogTrigger>
@@ -263,12 +263,12 @@ export function AdminInbox() {
               onClick={() => syncDeliveryStatuses()}
               disabled={isSyncingDeliveryStatuses}
             >
-              <RotateCcw className={cn("w-4 h-4 mr-2", isSyncingDeliveryStatuses && "animate-spin")} />
+              <RotateCcw className={cn("w-4 h-4 me-2", isSyncingDeliveryStatuses && "animate-spin")} />
               {isSyncingDeliveryStatuses ? "Syncing..." : "Sync status"}
             </Button>
             {unreadCount > 0 && (
               <Button variant="outline" size="sm" onClick={markAllAsRead}>
-                <CheckCheck className="w-4 h-4 mr-2" />
+                <CheckCheck className="w-4 h-4 me-2" />
                 Mark all read
               </Button>
             )}
@@ -278,7 +278,7 @@ export function AdminInbox() {
               onClick={() => refetch()}
               disabled={isRefetching}
             >
-              <RefreshCw className={cn("w-4 h-4 mr-2", isRefetching && "animate-spin")} />
+              <RefreshCw className={cn("w-4 h-4 me-2", isRefetching && "animate-spin")} />
               {isRefetching ? "Refreshing..." : "Refresh"}
             </Button>
           </div>
@@ -288,18 +288,18 @@ export function AdminInbox() {
       <TabsContent value="inbox" className="mt-0 space-y-4">
         {/* Search Bar */}
         <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Search className="absolute start-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
             placeholder="Search by sender, subject, or content..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="pl-9 pr-9"
+            className="ps-9 pe-9"
           />
           {searchQuery && (
             <Button
               variant="ghost"
               size="sm"
-              className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7 p-0"
+              className="absolute end-1 top-1/2 -translate-y-1/2 h-7 w-7 p-0"
               onClick={() => setSearchQuery("")}
             >
               <X className="h-4 w-4" />

@@ -142,9 +142,9 @@ export function RedditSettings({
           </Tooltip>
         </TooltipProvider>
         <div className="relative">
-          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">r/</span>
+          <span className="absolute start-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">r/</span>
           <Input
-            className="pl-7"
+            className="ps-7"
             placeholder="subreddit_name"
             value={settings.subreddit}
             onChange={(e) => {

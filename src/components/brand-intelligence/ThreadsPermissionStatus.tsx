@@ -118,7 +118,7 @@ export function ThreadsPermissionStatus({ feature }: ThreadsPermissionStatusProp
         )}
         <div className="flex gap-2 pt-1 flex-wrap">
           <Button size="sm" variant="outline" onClick={() => navigate("/profiles")}>
-            <RefreshCw className="w-3.5 h-3.5 mr-1.5" /> {t("actions.reconnectThreads", "Reconnect Threads")}
+            <RefreshCw className="w-3.5 h-3.5 me-1.5" /> {t("actions.reconnectThreads", "Reconnect Threads")}
           </Button>
           <Button size="sm" variant="ghost" onClick={() => refetch()}>
             {t("actions.recheckCapabilities", "Re-check capabilities")}
@@ -129,7 +129,7 @@ export function ThreadsPermissionStatus({ feature }: ThreadsPermissionStatusProp
             rel="noreferrer"
             className="inline-flex items-center text-xs text-muted-foreground hover:text-foreground"
           >
-            {t("permissions.docs", "Meta Threads docs")} <ExternalLink className="w-3 h-3 ml-1" />
+            {t("permissions.docs", "Meta Threads docs")} <ExternalLink className="w-3 h-3 ms-1" />
           </a>
         </div>
         {caps.username && (

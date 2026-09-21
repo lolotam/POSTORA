@@ -112,7 +112,7 @@ export function ThreadsReplyRow({ accountId, node, showApproval, onReplyClick }:
                         onClick={() => approve.mutate(reply.id)}
                         disabled={approve.isPending}
                       >
-                        <Check className="h-3.5 w-3.5 mr-1" />
+                        <Check className="h-3.5 w-3.5 me-1" />
                         {t("actions.approve", "Approve")}
                       </Button>
                       <Button
@@ -122,7 +122,7 @@ export function ThreadsReplyRow({ accountId, node, showApproval, onReplyClick }:
                         onClick={() => reject.mutate(reply.id)}
                         disabled={reject.isPending}
                       >
-                        <XIcon className="h-3.5 w-3.5 mr-1" />
+                        <XIcon className="h-3.5 w-3.5 me-1" />
                         {t("actions.reject", "Reject")}
                       </Button>
                     </>
@@ -133,7 +133,7 @@ export function ThreadsReplyRow({ accountId, node, showApproval, onReplyClick }:
                       className="h-7 px-2 text-xs"
                       onClick={() => onReplyClick(reply)}
                     >
-                      <ReplyIcon className="h-3.5 w-3.5 mr-1" />
+                      <ReplyIcon className="h-3.5 w-3.5 me-1" />
                       {t("actions.reply", "Reply")}
                     </Button>
                   ) : null}
@@ -141,7 +141,7 @@ export function ThreadsReplyRow({ accountId, node, showApproval, onReplyClick }:
                   {reply.permalink && (
                     <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" asChild>
                       <a href={reply.permalink} target="_blank" rel="noopener noreferrer">
-                        <ExternalLink className="h-3.5 w-3.5 mr-1" />
+                        <ExternalLink className="h-3.5 w-3.5 me-1" />
                         {t("common:view", "View")}
                       </a>
                     </Button>
@@ -159,14 +159,14 @@ export function ThreadsReplyRow({ accountId, node, showApproval, onReplyClick }:
                           onClick={() => unhide.mutate(reply.id)}
                           disabled={unhide.isPending}
                         >
-                          <Eye className="h-4 w-4 mr-2" /> {t("actions.unhideReply", "Unhide reply")}
+                          <Eye className="h-4 w-4 me-2" /> {t("actions.unhideReply", "Unhide reply")}
                         </DropdownMenuItem>
                       ) : (
                         <DropdownMenuItem
                           onClick={() => hide.mutate(reply.id)}
                           disabled={hide.isPending}
                         >
-                          <EyeOff className="h-4 w-4 mr-2" /> {t("actions.hideReply", "Hide reply")}
+                          <EyeOff className="h-4 w-4 me-2" /> {t("actions.hideReply", "Hide reply")}
                         </DropdownMenuItem>
                       )}
                     </DropdownMenuContent>

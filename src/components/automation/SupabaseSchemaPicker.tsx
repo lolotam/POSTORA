@@ -277,7 +277,7 @@ export function SupabaseSchemaPicker({
           {loading
             ? <Loader2 className="w-3 h-3 animate-spin" />
             : <RefreshCw className="w-3 h-3" />}
-          <span className="ml-1">{introspection ? t("actions.reload", "Reload") : t("actions.loadFromProject", "Load from project")}</span>
+          <span className="ms-1">{introspection ? t("actions.reload", "Reload") : t("actions.loadFromProject", "Load from project")}</span>
         </Button>
       </div>
 

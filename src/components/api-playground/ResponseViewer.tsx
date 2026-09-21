@@ -64,12 +64,12 @@ export function ResponseViewer({ requestBody, generateCurl, response, copiedCode
             <CardTitle className="text-lg flex items-center gap-2">
               <Eye className="w-4 h-4" /> Response
               {response && (
-                <Badge variant={response.success ? "default" : "destructive"} className="ml-2">
+                <Badge variant={response.success ? "default" : "destructive"} className="ms-2">
                   {response.status}
                 </Badge>
               )}
               {response?.duration && (
-                <Badge variant="outline" className="ml-1 gap-1">
+                <Badge variant="outline" className="ms-1 gap-1">
                   <Clock className="w-3 h-3" /> {response.duration}ms
                 </Badge>
               )}

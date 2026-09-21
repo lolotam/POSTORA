@@ -237,7 +237,7 @@ export function BestTimeSuggestions({
               className="w-full"
               disabled={selectedPlatforms.length === 0}
             >
-              <Sparkles className="w-4 h-4 mr-2" />
+              <Sparkles className="w-4 h-4 me-2" />
               {t("bestTimes.getSuggestions", "Get Suggestions for {{count}} Platform(s)", { count: selectedPlatforms.length })}
             </Button>
           )}
@@ -273,7 +273,7 @@ export function BestTimeSuggestions({
                         </p>
                       </div>
                     </div>
-                    <div className="text-right">
+                    <div className="text-end">
                       <Badge
                         variant={
                           suggestion.score >= 90

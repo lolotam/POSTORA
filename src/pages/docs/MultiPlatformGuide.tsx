@@ -35,7 +35,7 @@ export default function MultiPlatformGuide() {
           {title && <span className="text-xs text-gray-500">• {title}</span>}
         </div>
         <Button variant="ghost" size="sm" onClick={() => copyCode(code, id)} className="h-7 text-xs text-gray-300 hover:text-white hover:bg-white/10">
-          {copiedCode === id ? <Check className="w-3 h-3 mr-1" /> : <Copy className="w-3 h-3 mr-1" />}
+          {copiedCode === id ? <Check className="w-3 h-3 me-1" /> : <Copy className="w-3 h-3 me-1" />}
           {copiedCode === id ? "Copied!" : "Copy"}
         </Button>
       </div>
@@ -597,7 +597,7 @@ export default function MultiPlatformGuide() {
                 <p className="text-sm text-muted-foreground mb-2">
                   Pinterest's standard API does not support carousel pins. When you provide multiple images:
                 </p>
-                <ul className="text-sm text-muted-foreground space-y-1 ml-4 list-disc">
+                <ul className="text-sm text-muted-foreground space-y-1 ms-4 list-disc">
                   <li>Each image creates a <strong>separate pin</strong> on the same board</li>
                   <li>Pins get numbered titles: "My Post (1/3)", "My Post (2/3)", etc.</li>
                   <li>All pins share the same description, link, and settings</li>
@@ -613,7 +613,7 @@ export default function MultiPlatformGuide() {
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b">
-                      <th className="text-left py-2 pr-4">Platform</th>
+                      <th className="text-start py-2 pe-4">Platform</th>
                       <th className="text-center py-2 px-4">Single Image</th>
                       <th className="text-center py-2 px-4">Carousel/Multi</th>
                       <th className="text-center py-2 px-4">Video</th>
@@ -621,43 +621,43 @@ export default function MultiPlatformGuide() {
                   </thead>
                   <tbody>
                     <tr className="border-b">
-                      <td className="py-2 pr-4 flex items-center gap-2"><PlatformIcon platform="instagram" size="sm" /> Instagram</td>
+                      <td className="py-2 pe-4 flex items-center gap-2"><PlatformIcon platform="instagram" size="sm" /> Instagram</td>
                       <td className="text-center py-2 px-4"><CheckCircle2 className="w-4 h-4 text-green-500 mx-auto" /></td>
                       <td className="text-center py-2 px-4"><CheckCircle2 className="w-4 h-4 text-green-500 mx-auto" /></td>
                       <td className="text-center py-2 px-4"><CheckCircle2 className="w-4 h-4 text-green-500 mx-auto" /></td>
                     </tr>
                     <tr className="border-b">
-                      <td className="py-2 pr-4 flex items-center gap-2"><PlatformIcon platform="facebook" size="sm" /> Facebook</td>
+                      <td className="py-2 pe-4 flex items-center gap-2"><PlatformIcon platform="facebook" size="sm" /> Facebook</td>
                       <td className="text-center py-2 px-4"><CheckCircle2 className="w-4 h-4 text-green-500 mx-auto" /></td>
                       <td className="text-center py-2 px-4"><CheckCircle2 className="w-4 h-4 text-green-500 mx-auto" /></td>
                       <td className="text-center py-2 px-4"><CheckCircle2 className="w-4 h-4 text-green-500 mx-auto" /></td>
                     </tr>
                     <tr className="border-b">
-                      <td className="py-2 pr-4 flex items-center gap-2"><PlatformIcon platform="twitter" size="sm" /> Twitter/X</td>
+                      <td className="py-2 pe-4 flex items-center gap-2"><PlatformIcon platform="twitter" size="sm" /> Twitter/X</td>
                       <td className="text-center py-2 px-4"><CheckCircle2 className="w-4 h-4 text-green-500 mx-auto" /></td>
                       <td className="text-center py-2 px-4"><CheckCircle2 className="w-4 h-4 text-green-500 mx-auto" /></td>
                       <td className="text-center py-2 px-4"><CheckCircle2 className="w-4 h-4 text-green-500 mx-auto" /></td>
                     </tr>
                     <tr className="border-b">
-                      <td className="py-2 pr-4 flex items-center gap-2"><PlatformIcon platform="linkedin" size="sm" /> LinkedIn</td>
+                      <td className="py-2 pe-4 flex items-center gap-2"><PlatformIcon platform="linkedin" size="sm" /> LinkedIn</td>
                       <td className="text-center py-2 px-4"><CheckCircle2 className="w-4 h-4 text-green-500 mx-auto" /></td>
                       <td className="text-center py-2 px-4"><CheckCircle2 className="w-4 h-4 text-green-500 mx-auto" /></td>
                       <td className="text-center py-2 px-4"><CheckCircle2 className="w-4 h-4 text-green-500 mx-auto" /></td>
                     </tr>
                     <tr className="border-b">
-                      <td className="py-2 pr-4 flex items-center gap-2"><PlatformIcon platform="pinterest" size="sm" /> Pinterest</td>
+                      <td className="py-2 pe-4 flex items-center gap-2"><PlatformIcon platform="pinterest" size="sm" /> Pinterest</td>
                       <td className="text-center py-2 px-4"><CheckCircle2 className="w-4 h-4 text-green-500 mx-auto" /></td>
                       <td className="text-center py-2 px-4"><span className="text-xs text-amber-500">Separate pins</span></td>
                       <td className="text-center py-2 px-4"><CheckCircle2 className="w-4 h-4 text-green-500 mx-auto" /></td>
                     </tr>
                     <tr className="border-b">
-                      <td className="py-2 pr-4 flex items-center gap-2"><PlatformIcon platform="tiktok" size="sm" /> TikTok</td>
+                      <td className="py-2 pe-4 flex items-center gap-2"><PlatformIcon platform="tiktok" size="sm" /> TikTok</td>
                       <td className="text-center py-2 px-4"><span className="text-xs text-muted-foreground">Limited</span></td>
                       <td className="text-center py-2 px-4"><span className="text-xs text-muted-foreground">—</span></td>
                       <td className="text-center py-2 px-4"><CheckCircle2 className="w-4 h-4 text-green-500 mx-auto" /></td>
                     </tr>
                     <tr>
-                      <td className="py-2 pr-4 flex items-center gap-2"><PlatformIcon platform="youtube" size="sm" /> YouTube</td>
+                      <td className="py-2 pe-4 flex items-center gap-2"><PlatformIcon platform="youtube" size="sm" /> YouTube</td>
                       <td className="text-center py-2 px-4"><span className="text-xs text-muted-foreground">—</span></td>
                       <td className="text-center py-2 px-4"><span className="text-xs text-muted-foreground">—</span></td>
                       <td className="text-center py-2 px-4"><CheckCircle2 className="w-4 h-4 text-green-500 mx-auto" /></td>
@@ -735,7 +735,7 @@ export default function MultiPlatformGuide() {
                   <CardContent className="pt-6 flex items-center gap-3">
                     <PlatformIcon platform={item.platform} className="w-6 h-6" />
                     <span className="font-medium capitalize">{item.platform}</span>
-                    <ChevronRight className="w-4 h-4 ml-auto text-muted-foreground" />
+                    <ChevronRight className="w-4 h-4 ms-auto text-muted-foreground" />
                   </CardContent>
                 </Card>
               </Link>

@@ -9,16 +9,16 @@ export function ParamTable({ params }: ParamTableProps) {
         <table className="w-full text-sm">
           <thead className="bg-gradient-to-r from-emerald-500/15 via-cyan-500/10 to-sky-500/10">
             <tr className="border-b border-emerald-400/20">
-              <th className="text-left py-3 px-4 font-semibold text-emerald-700 dark:text-emerald-300 uppercase tracking-wider text-xs">
+              <th className="text-start py-3 px-4 font-semibold text-emerald-700 dark:text-emerald-300 uppercase tracking-wider text-xs">
                 Parameter
               </th>
-              <th className="text-left py-3 px-4 font-semibold text-emerald-700 dark:text-emerald-300 uppercase tracking-wider text-xs">
+              <th className="text-start py-3 px-4 font-semibold text-emerald-700 dark:text-emerald-300 uppercase tracking-wider text-xs">
                 Type
               </th>
-              <th className="text-left py-3 px-4 font-semibold text-emerald-700 dark:text-emerald-300 uppercase tracking-wider text-xs">
+              <th className="text-start py-3 px-4 font-semibold text-emerald-700 dark:text-emerald-300 uppercase tracking-wider text-xs">
                 Required
               </th>
-              <th className="text-left py-3 px-4 font-semibold text-emerald-700 dark:text-emerald-300 uppercase tracking-wider text-xs">
+              <th className="text-start py-3 px-4 font-semibold text-emerald-700 dark:text-emerald-300 uppercase tracking-wider text-xs">
                 Description
               </th>
             </tr>

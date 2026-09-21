@@ -28,7 +28,7 @@ export function ThreadsRepliesPermissionAlert({ reason }: Props) {
         <Button asChild size="sm" variant="outline">
           <Link to="/profiles">
             {t("permission.reconnectCta", "Reconnect Threads")}
-            <ExternalLink className="ml-2 h-3.5 w-3.5" />
+            <ExternalLink className="ms-2 h-3.5 w-3.5" />
           </Link>
         </Button>
       </AlertDescription>

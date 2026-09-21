@@ -76,7 +76,7 @@ export function TimezoneSection({ userId, initialTimezone, onRefresh }: Timezone
         <Button onClick={handleSave} disabled={isSaving || !hasChanged}>
           {isSaving ? (
             <>
-              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+              <Loader2 className="w-4 h-4 me-2 animate-spin" />
               Saving...
             </>
           ) : (

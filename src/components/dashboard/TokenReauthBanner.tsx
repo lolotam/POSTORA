@@ -123,7 +123,7 @@ export function TokenReauthBanner() {
                   onClick={() => handleDismiss(account.id)}
                   className="text-muted-foreground hover:text-foreground"
                 >
-                  <X className="w-3 h-3 mr-1" />
+                  <X className="w-3 h-3 me-1" />
                   {t("reauth.dismiss", "Dismiss")}
                 </Button>
                 <Button
@@ -133,12 +133,12 @@ export function TokenReauthBanner() {
                 >
                   {connectingPlatform === account.platform ? (
                     <>
-                      <RefreshCw className="w-3 h-3 mr-1 animate-spin" />
+                      <RefreshCw className="w-3 h-3 me-1 animate-spin" />
                       {t("reauth.connecting", "Connecting...")}
                     </>
                   ) : (
                     <>
-                      <RefreshCw className="w-3 h-3 mr-1" />
+                      <RefreshCw className="w-3 h-3 me-1" />
                       {t("reauth.reconnect", "Reconnect")}
                     </>
                   )}

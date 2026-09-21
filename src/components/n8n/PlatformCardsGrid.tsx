@@ -186,7 +186,7 @@ export function PlatformCardsGrid({ cards = n8nPlatformCards }: PlatformCardsGri
               </div>
               <div className="mt-5 flex items-center text-sm font-medium bg-clip-text text-transparent bg-gradient-to-r from-violet-500 via-fuchsia-500 to-pink-500">
                 View Documentation
-                <ChevronRight className="w-4 h-4 ml-1 text-fuchsia-500" />
+                <ChevronRight className="w-4 h-4 ms-1 text-fuchsia-500" />
               </div>
             </GradientRingCard>
           </Link>

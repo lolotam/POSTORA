@@ -151,12 +151,12 @@ export function GIFPickerDialog({ open, onOpenChange, onSelect }: GIFPickerDialo
 
           {/* Search input */}
           <div className="relative mb-3">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+            <Search className="absolute start-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
             <Input
               placeholder={activeTab === "gifs" ? t("gifPicker.searchGifs", "Search GIFs...") : t("gifPicker.searchClips", "Search Clips...")}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-9"
+              className="ps-9"
               autoFocus
             />
           </div>
@@ -240,11 +240,11 @@ export function GIFPickerDialog({ open, onOpenChange, onSelect }: GIFPickerDialo
                         />
                         <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors" />
                         {clip.title && (
-                          <div className="absolute bottom-0 left-0 right-0 p-1.5 bg-gradient-to-t from-black/70 to-transparent">
+                          <div className="absolute bottom-0 start-0 end-0 p-1.5 bg-gradient-to-t from-black/70 to-transparent">
                             <p className="text-[10px] text-white truncate">{clip.title}</p>
                           </div>
                         )}
-                        <div className="absolute top-1 right-1">
+                        <div className="absolute top-1 end-1">
                           <Video className="w-3 h-3 text-white drop-shadow-md" />
                         </div>
                       </button>

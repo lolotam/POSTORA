@@ -224,7 +224,7 @@ function InstagramPreview({
             />
           )}
           {mediaFiles.length > 1 && (
-            <div className="absolute top-3 right-3 bg-background/80 backdrop-blur px-2 py-1 rounded text-xs font-medium">
+            <div className="absolute top-3 end-3 bg-background/80 backdrop-blur px-2 py-1 rounded text-xs font-medium">
               1/{mediaFiles.length}
             </div>
           )}
@@ -428,7 +428,7 @@ function TikTokPreview({
       {previewMode === "feed" && (
         <div className="max-w-[280px] mx-auto bg-black rounded-[2rem] overflow-hidden aspect-[9/16] relative border-4 border-gray-800">
           {/* Status bar */}
-          <div className="absolute top-0 left-0 right-0 z-20 flex items-center justify-between px-4 py-2 text-white text-xs">
+          <div className="absolute top-0 start-0 end-0 z-20 flex items-center justify-between px-4 py-2 text-white text-xs">
             <span>8:00</span>
             <div className="flex items-center gap-1">
               <span>📶</span>
@@ -459,7 +459,7 @@ function TikTokPreview({
           )}
 
           {/* Top navigation */}
-          <div className="absolute top-8 left-0 right-0 z-10 flex items-center justify-center gap-4 text-white/70">
+          <div className="absolute top-8 start-0 end-0 z-10 flex items-center justify-center gap-4 text-white/70">
             <span className="text-sm">{t("postPreview.following", "Following")}</span>
             <span className="text-sm font-semibold text-white border-b-2 border-white pb-0.5">{t("postPreview.forYou", "For You")}</span>
           </div>
@@ -468,7 +468,7 @@ function TikTokPreview({
           <div className="absolute inset-0 bg-gradient-to-b from-black/30 via-transparent to-black/80" />
 
           {/* Right side actions */}
-          <div className="absolute right-3 bottom-24 flex flex-col items-center gap-4 z-10">
+          <div className="absolute end-3 bottom-24 flex flex-col items-center gap-4 z-10">
             <div className="relative">
               <Avatar className="h-11 w-11 border-2 border-white">
                 {avatarUrl ? (
@@ -476,7 +476,7 @@ function TikTokPreview({
                 ) : null}
                 <AvatarFallback className="bg-primary text-primary-foreground text-xs">{username[0]?.toUpperCase()}</AvatarFallback>
               </Avatar>
-              <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-5 h-5 bg-[#fe2c55] rounded-full flex items-center justify-center text-white text-xs">+</div>
+              <div className="absolute -bottom-1 start-1/2 -translate-x-1/2 w-5 h-5 bg-[#fe2c55] rounded-full flex items-center justify-center text-white text-xs">+</div>
             </div>
             <div className="flex flex-col items-center text-white">
               <Heart className="w-7 h-7" fill="white" />
@@ -497,7 +497,7 @@ function TikTokPreview({
           </div>
 
           {/* Bottom caption */}
-          <div className="absolute bottom-16 left-3 right-16 text-white z-10">
+          <div className="absolute bottom-16 start-3 end-16 text-white z-10">
             <p className="font-semibold text-sm">@{username}</p>
             {caption && (
               <p className="text-xs mt-1 line-clamp-2">{caption}</p>
@@ -509,7 +509,7 @@ function TikTokPreview({
           </div>
 
           {/* Bottom nav */}
-          <div className="absolute bottom-0 left-0 right-0 bg-black/90 flex items-center justify-around py-2 z-10">
+          <div className="absolute bottom-0 start-0 end-0 bg-black/90 flex items-center justify-around py-2 z-10">
             <div className="flex flex-col items-center text-white">
               <span className="text-lg">🏠</span>
               <span className="text-[10px]">{t("postPreview.home", "Home")}</span>
@@ -599,7 +599,7 @@ function TikTokPreview({
               ) : (
                 <div className="w-full h-full bg-gradient-to-br from-gray-200 to-gray-300 dark:from-gray-700 dark:to-gray-600" />
               )}
-              <div className="absolute bottom-1 left-1 text-white text-[8px] flex items-center gap-0.5">
+              <div className="absolute bottom-1 start-1 text-white text-[8px] flex items-center gap-0.5">
                 <span>▶</span>
                 <span>0</span>
               </div>
@@ -641,7 +641,7 @@ function TikTokPreview({
             <div className="absolute inset-0 bg-gradient-to-b from-transparent to-black/60" />
 
             {/* Right side actions */}
-            <div className="absolute right-4 top-1/2 -translate-y-1/2 flex flex-col items-center gap-5">
+            <div className="absolute end-4 top-1/2 -translate-y-1/2 flex flex-col items-center gap-5">
               <Avatar className="h-10 w-10 border-2 border-white">
                 {avatarUrl ? (
                   <AvatarImage src={avatarUrl} alt={username} />
@@ -655,7 +655,7 @@ function TikTokPreview({
             </div>
 
             {/* Caption overlay */}
-            <div className="absolute bottom-4 left-4 right-16 text-white">
+            <div className="absolute bottom-4 start-4 end-16 text-white">
               <p className="font-bold text-sm">@{username}</p>
               <p className="text-xs mt-1 line-clamp-2 opacity-90">{caption}</p>
             </div>

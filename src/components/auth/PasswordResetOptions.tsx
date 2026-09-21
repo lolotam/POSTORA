@@ -130,7 +130,7 @@ export function PasswordResetOptions({ onBack, onSuccess }: PasswordResetOptions
         <div className="space-y-2">
           <Label htmlFor="reset-email">Email</Label>
           <div className="relative">
-            <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+            <Mail className="absolute start-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
             <Input
               id="reset-email"
               type="email"
@@ -139,7 +139,7 @@ export function PasswordResetOptions({ onBack, onSuccess }: PasswordResetOptions
               onChange={(event) => setEmail(event.target.value)}
               required
               disabled={isLoading}
-              className={`pl-10 ${errors.email ? "border-destructive" : ""}`}
+              className={`ps-10 ${errors.email ? "border-destructive" : ""}`}
             />
           </div>
           {errors.email && <p className="text-xs text-destructive">{errors.email}</p>}
@@ -148,7 +148,7 @@ export function PasswordResetOptions({ onBack, onSuccess }: PasswordResetOptions
         <Button type="submit" variant="gradient" className="w-full" size="lg" disabled={isLoading}>
           {isLoading ? (
             <>
-              <Loader2 className="w-4 h-4 animate-spin mr-2" />
+              <Loader2 className="w-4 h-4 animate-spin me-2" />
               Sending...
             </>
           ) : (
@@ -162,7 +162,7 @@ export function PasswordResetOptions({ onBack, onSuccess }: PasswordResetOptions
             onClick={onBack}
             className="inline-flex items-center text-sm text-muted-foreground hover:text-foreground"
           >
-            <ArrowLeft className="w-4 h-4 mr-1" />
+            <ArrowLeft className="w-4 h-4 me-1" />
             Back to sign in
           </button>
         </div>
@@ -241,7 +241,7 @@ export function PasswordResetOptions({ onBack, onSuccess }: PasswordResetOptions
         <Button onClick={verify} variant="gradient" className="w-full" size="lg" disabled={isLoading}>
           {isLoading ? (
             <>
-              <Loader2 className="w-4 h-4 animate-spin mr-2" />
+              <Loader2 className="w-4 h-4 animate-spin me-2" />
               Verifying...
             </>
           ) : (
@@ -265,7 +265,7 @@ export function PasswordResetOptions({ onBack, onSuccess }: PasswordResetOptions
             onClick={onBack}
             className="inline-flex items-center text-sm text-muted-foreground hover:text-foreground"
           >
-            <ArrowLeft className="w-4 h-4 mr-1" />
+            <ArrowLeft className="w-4 h-4 me-1" />
             Back to sign in
           </button>
         </div>

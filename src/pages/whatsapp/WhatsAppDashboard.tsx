@@ -290,7 +290,7 @@ export default function WhatsAppDashboard() {
               </div>
               <p className="text-[11px] text-muted-foreground mt-1 flex items-center gap-1">
                 <span className="text-emerald-500 font-medium inline-flex items-center">
-                  <TrendingUp className="h-3 w-3 mr-0.5" />
+                  <TrendingUp className="h-3 w-3 me-0.5" />
                   {cacheData?.active24h ?? "8"} active
                 </span>{" "}
                 in 24-hr service window
@@ -538,7 +538,7 @@ export default function WhatsAppDashboard() {
                   key={item.id}
                   className="flex items-center justify-between p-3.5 sm:p-4 hover:bg-muted/30 transition-colors"
                 >
-                  <div className="flex items-center gap-3 min-w-0 flex-1 mr-3">
+                  <div className="flex items-center gap-3 min-w-0 flex-1 me-3">
                     <Avatar className="h-9 w-9 shrink-0 border border-border/60">
                       <AvatarImage src={item.avatarUrl || undefined} />
                       <AvatarFallback className="bg-[#25D366]/10 text-[#128C7E] font-semibold text-xs">

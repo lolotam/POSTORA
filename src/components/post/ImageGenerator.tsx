@@ -443,7 +443,7 @@ export function ImageGenerator({ onImageGenerated, buttonClassName }: ImageGener
                   resetTimeDay={imageLimit.resetTimeDay}
                   label={t("imageGen.rateLimitLabel", "Image Generation")}
                   compact
-                  className="ml-auto"
+                  className="ms-auto"
                 />
               )}
             </DialogTitle>
@@ -629,7 +629,7 @@ export function ImageGenerator({ onImageGenerated, buttonClassName }: ImageGener
             >
               {isGenerating ? (
                 <>
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  <Loader2 className="w-4 h-4 me-2 animate-spin" />
                   {tiers.some((t) => SLOW_MODELS.has(t.model_id))
                     ? t("imageGen.generatingSlow", "Generating… up to 2 minutes")
                     : t("imageGen.generating", "Generating...")}
@@ -638,7 +638,7 @@ export function ImageGenerator({ onImageGenerated, buttonClassName }: ImageGener
                 t("imageGen.rateLimitReached", "Rate limit reached")
               ) : (
                 <>
-                  <Sparkles className="w-4 h-4 mr-2" />
+                  <Sparkles className="w-4 h-4 me-2" />
                   {t("imageGen.generateBtn", "Generate Image")}
                 </>
               )}
@@ -657,11 +657,11 @@ export function ImageGenerator({ onImageGenerated, buttonClassName }: ImageGener
                   </div>
                   <div className="flex gap-3">
                     <Button onClick={handleUseImage} className="flex-1 bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500 text-white shadow-md shadow-emerald-500/30 hover:shadow-emerald-500/50 border-0">
-                      <ImagePlus className="w-4 h-4 mr-2" />
+                      <ImagePlus className="w-4 h-4 me-2" />
                       {t("imageGen.useImage", "Use Image")}
                     </Button>
                     <Button variant="outline" onClick={handleDownload} className="bg-card/50 backdrop-blur-sm border-border/50 hover:border-emerald-400/60">
-                      <Download className="w-4 h-4 mr-2" />
+                      <Download className="w-4 h-4 me-2" />
                       {t("imageGen.download", "Download")}
                     </Button>
                   </div>

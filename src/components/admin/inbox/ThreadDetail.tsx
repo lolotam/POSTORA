@@ -81,7 +81,7 @@ function SingleMessage({ message, isExpanded, onToggle, isLatest }: SingleMessag
       >
         {/* Message Header - Always visible */}
         <CollapsibleTrigger asChild>
-          <button className="w-full p-4 flex items-start gap-3 hover:bg-muted/50 transition-colors text-left">
+          <button className="w-full p-4 flex items-start gap-3 hover:bg-muted/50 transition-colors text-start">
             <div
               className={cn(
                 "mt-0.5 p-1 rounded-full flex-shrink-0",
@@ -166,7 +166,7 @@ function SingleMessage({ message, isExpanded, onToggle, isLatest }: SingleMessag
                             target="_blank"
                             rel="noopener noreferrer"
                             download={attachment.filename}
-                            className="ml-1 text-primary hover:text-primary/80"
+                            className="ms-1 text-primary hover:text-primary/80"
                             title="Download"
                             onClick={(e) => e.stopPropagation()}
                           >
@@ -355,7 +355,7 @@ export function ThreadDetail({
             }
             className="flex-1"
           >
-            <Reply className="w-4 h-4 mr-2" />
+            <Reply className="w-4 h-4 me-2" />
             Reply
           </Button>
         )}
@@ -388,7 +388,7 @@ export function ThreadDetail({
             }}
             className="flex-1"
           >
-            <Forward className="w-4 h-4 mr-2" />
+            <Forward className="w-4 h-4 me-2" />
             {isInbound ? "Forward" : "Resend"}
           </Button>
         )}

@@ -307,7 +307,7 @@ export function UserFeatureOverrides() {
           <Dialog open={dialogOpen} onOpenChange={(open) => { setDialogOpen(open); if (!open) resetForm(); }}>
             <DialogTrigger asChild>
               <Button size="sm">
-                <Plus className="w-4 h-4 mr-2" />
+                <Plus className="w-4 h-4 me-2" />
                 Add Override
               </Button>
             </DialogTrigger>
@@ -329,12 +329,12 @@ export function UserFeatureOverrides() {
                   <div className="space-y-2">
                     <label className="text-sm font-medium">Search User</label>
                     <div className="relative">
-                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                      <Search className="absolute start-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                       <Input
                         placeholder="Search by email or name..."
                         value={searchTerm}
                         onChange={(e) => setSearchTerm(e.target.value)}
-                        className="pl-9"
+                        className="ps-9"
                       />
                     </div>
                   </div>
@@ -414,9 +414,9 @@ export function UserFeatureOverrides() {
                     className="w-full"
                   >
                     {addOverrideMutation.isPending ? (
-                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      <Loader2 className="w-4 h-4 me-2 animate-spin" />
                     ) : (
-                      <Plus className="w-4 h-4 mr-2" />
+                      <Plus className="w-4 h-4 me-2" />
                     )}
                     Add Override
                   </Button>
@@ -482,9 +482,9 @@ export function UserFeatureOverrides() {
                     className="w-full"
                   >
                     {bulkImportMutation.isPending ? (
-                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      <Loader2 className="w-4 h-4 me-2 animate-spin" />
                     ) : (
-                      <Upload className="w-4 h-4 mr-2" />
+                      <Upload className="w-4 h-4 me-2" />
                     )}
                     Import Overrides
                   </Button>
@@ -522,7 +522,7 @@ export function UserFeatureOverrides() {
                       </Badge>
                       {expired && (
                         <Badge variant="destructive" className="text-xs">
-                          <AlertCircle className="w-3 h-3 mr-1" />
+                          <AlertCircle className="w-3 h-3 me-1" />
                           Expired
                         </Badge>
                       )}
@@ -539,7 +539,7 @@ export function UserFeatureOverrides() {
                       )}
                     </div>
                   </div>
-                  <div className="flex items-center gap-2 ml-4">
+                  <div className="flex items-center gap-2 ms-4">
                     <Switch
                       checked={override.enabled}
                       onCheckedChange={(checked) =>

@@ -138,7 +138,7 @@ export function CalendarGrid({
                   />
                 ))}
                 {dayPosts.length > 3 && (
-                  <div className="text-xs text-emerald-600/80 dark:text-emerald-300/80 pl-1 font-medium">
+                  <div className="text-xs text-emerald-600/80 dark:text-emerald-300/80 ps-1 font-medium">
                     {t("grid.more", "+{{count}} more", { count: dayPosts.length - 3 })}
                   </div>
                 )}
@@ -162,7 +162,7 @@ export function CalendarGrid({
             {t("grid.today", "Today")}
           </span>
         </div>
-        <div className="flex items-center gap-2 ml-auto">
+        <div className="flex items-center gap-2 ms-auto">
           <GripVertical className="w-4 h-4" />
           <span>{t("grid.dragHint", "Drag to reschedule")}</span>
         </div>

@@ -181,7 +181,7 @@ export function WhatsAppMessageContextMenu({
             type="button"
             aria-label="Message actions"
             className={cn(
-              "absolute right-0 top-6 z-10 rounded-md p-1 text-muted-foreground opacity-0",
+              "absolute end-0 top-6 z-10 rounded-md p-1 text-muted-foreground opacity-0",
               "hover:bg-muted hover:text-foreground group-hover:opacity-100 focus-visible:opacity-100",
             )}
           >

@@ -231,7 +231,7 @@ export function SubscriptionSection() {
             <span className="text-sm">
               <span className="font-medium">{t("subscription.auth.issue", "Session verification issue:")}</span> {t("subscription.auth.issueDesc", "We couldn't verify your subscription with Stripe. This is usually a temporary login/session issue, not a billing problem. Your subscription data is shown from our records.")}
             </span>
-            <div className="flex items-center gap-2 ml-4 shrink-0">
+            <div className="flex items-center gap-2 ms-4 shrink-0">
               <Button size="sm" variant="outline" onClick={handleRefreshSession} className="gap-1">
                 <RefreshCw className="w-3 h-3" />
                 {t("common:refresh", "Refresh")}
@@ -404,7 +404,7 @@ export function SubscriptionSection() {
                     >
                       {isCancelling ? (
                         <>
-                          <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                          <Loader2 className="w-4 h-4 me-2 animate-spin" />
                           {t("subscription.actions.cancelling", "Cancelling...")}
                         </>
                       ) : (

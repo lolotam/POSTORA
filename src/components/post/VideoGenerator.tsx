@@ -127,7 +127,7 @@ export function VideoGenerator({
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
         <Button type="button" variant="outline" className={triggerClassName}>
-          <Clapperboard className="mr-2 h-4 w-4" />
+          <Clapperboard className="me-2 h-4 w-4" />
           {finalTriggerLabel}
         </Button>
       </DialogTrigger>
@@ -271,7 +271,7 @@ export function VideoGenerator({
           >
             {submitting || job.isPolling ? (
               <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                <Loader2 className="me-2 h-4 w-4 animate-spin" />
                 {job.isPolling
                   ? t("videoGen.renderingSeconds", "Rendering… {{seconds}}s", { seconds: job.elapsedSeconds })
                   : t("videoGen.submitting", "Submitting…")}

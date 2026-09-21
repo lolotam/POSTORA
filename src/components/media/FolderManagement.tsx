@@ -166,7 +166,7 @@ export function CreateFolderDialog({
           <Button onClick={handleCreate} disabled={!folderName.trim() || creating}>
             {creating ? (
               <>
-                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                <Loader2 className="w-4 h-4 me-2 animate-spin" />
                 {t("folders.creating", "Creating...")}
               </>
             ) : (
@@ -413,7 +413,7 @@ export function MoveFileDialog({
           <Button onClick={handleMove} disabled={moving || selectedFolder === null}>
             {moving ? (
               <>
-                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                <Loader2 className="w-4 h-4 me-2 animate-spin" />
                 {t("folders.moving", "Moving...")}
               </>
             ) : (

@@ -177,7 +177,7 @@ export function GeneratePartnerKeyDialog({ open, onOpenChange }: GeneratePartner
             <div className="flex justify-end gap-2">
               <Button type="button" variant="outline" onClick={() => close(false)}>Cancel</Button>
               <Button type="button" onClick={submit} disabled={!canSubmit}>
-                {create.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                {create.isPending && <Loader2 className="me-2 h-4 w-4 animate-spin" />}
                 Generate key
               </Button>
             </div>

@@ -220,7 +220,7 @@ export function BlueskyPostPreview({
         {/* Back Header */}
         <div className="flex items-center gap-3 p-3 border-b">
           <span className="text-sm font-medium">{t("bluesky.backPost", "← Post")}</span>
-          <div className="ml-auto">
+          <div className="ms-auto">
             <MoreHorizontal className="w-5 h-5 text-muted-foreground" />
           </div>
         </div>
@@ -253,7 +253,7 @@ export function BlueskyPostPreview({
               <p className="text-[15px] whitespace-pre-wrap break-words leading-relaxed">
                 {truncatedCaption}
                 {caption.length > 300 && (
-                  <span className="text-sky-500 hover:underline cursor-pointer ml-1">
+                  <span className="text-sky-500 hover:underline cursor-pointer ms-1">
                     {t("bluesky.showMore", "Show more")}
                   </span>
                 )}
@@ -272,7 +272,7 @@ export function BlueskyPostPreview({
                   playsInline
                   controls
                 />
-                <Badge className="absolute top-2 right-2 bg-black/70 text-white text-xs">
+                <Badge className="absolute top-2 end-2 bg-black/70 text-white text-xs">
                   {t("bluesky.videoBadge", "Video")}
                 </Badge>
               </div>

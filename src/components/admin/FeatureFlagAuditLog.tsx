@@ -71,7 +71,7 @@ export function FeatureFlagAuditLog() {
             No activity recorded yet
           </p>
         ) : (
-          <ScrollArea className="h-[300px] pr-4">
+          <ScrollArea className="h-[300px] pe-4">
             <div className="space-y-3">
               {logs.map((log) => (
                 <div

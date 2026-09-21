@@ -29,7 +29,7 @@ export function MessageList({ messages, selectedId, onSelect }: MessageListProps
             key={message.id}
             onClick={() => onSelect(message)}
             className={cn(
-              "w-full text-left p-4 hover:bg-muted/50 transition-colors",
+              "w-full text-start p-4 hover:bg-muted/50 transition-colors",
               selectedId === message.id && "bg-muted",
               !message.is_read && message.direction === "inbound" && "bg-primary/5"
             )}

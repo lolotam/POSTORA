@@ -495,7 +495,7 @@ export function BackgroundRemovalDialog({
                     className="w-full h-full object-contain"
                     draggable={false}
                   />
-                  <div className="absolute top-2 left-2 px-2 py-1 bg-background/80 backdrop-blur rounded text-xs font-medium">
+                  <div className="absolute top-2 start-2 px-2 py-1 bg-background/80 backdrop-blur rounded text-xs font-medium">
                     {t("bgRemoval.original", "Original")}
                   </div>
                 </div>
@@ -512,7 +512,7 @@ export function BackgroundRemovalDialog({
                       className="w-full h-full object-contain"
                       draggable={false}
                     />
-                    <div className="absolute top-2 right-2 px-2 py-1 bg-background/80 backdrop-blur rounded text-xs font-medium">
+                    <div className="absolute top-2 end-2 px-2 py-1 bg-background/80 backdrop-blur rounded text-xs font-medium">
                       {t("bgRemoval.removed", "Removed")}
                     </div>
                   </div>
@@ -524,7 +524,7 @@ export function BackgroundRemovalDialog({
                     className="absolute top-0 bottom-0 w-1 bg-primary cursor-ew-resize"
                     style={{ left: `${comparePosition}%`, transform: "translateX(-50%)" }}
                   >
-                    <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-8 h-8 bg-primary rounded-full flex items-center justify-center shadow-lg">
+                    <div className="absolute top-1/2 start-1/2 -translate-x-1/2 -translate-y-1/2 w-8 h-8 bg-primary rounded-full flex items-center justify-center shadow-lg">
                       <div className="flex gap-0.5">
                         <div className="w-0.5 h-3 bg-primary-foreground rounded" />
                         <div className="w-0.5 h-3 bg-primary-foreground rounded" />
@@ -578,12 +578,12 @@ export function BackgroundRemovalDialog({
               >
                 {processing || uploading ? (
                   <>
-                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    <Loader2 className="w-4 h-4 me-2 animate-spin" />
                     {uploading ? t("dialog.uploading", "Uploading...") : t("common:status.processing", "Processing...")}
                   </>
                 ) : (
                   <>
-                    <Scissors className="w-4 h-4 mr-2" />
+                    <Scissors className="w-4 h-4 me-2" />
                     {t("bgRemoval.title", "Remove Background")}
                   </>
                 )}
@@ -598,17 +598,17 @@ export function BackgroundRemovalDialog({
                   setComparePosition(50);
                 }}
               >
-                <RefreshCw className="w-4 h-4 mr-2" />
+                <RefreshCw className="w-4 h-4 me-2" />
                 {t("actions.tryAgain", "Try Again")}
               </Button>
               <Button variant="secondary" onClick={handleDownload}>
-                <Download className="w-4 h-4 mr-2" />
+                <Download className="w-4 h-4 me-2" />
                 {t("common:download", "Download")}
               </Button>
               <Button onClick={handleSaveAsNew} disabled={saving}>
                 {saving ? (
                   <>
-                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    <Loader2 className="w-4 h-4 me-2 animate-spin" />
                     {t("common:saving", "Saving...")}
                   </>
                 ) : (

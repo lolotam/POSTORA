@@ -42,11 +42,11 @@ export function FailureAlertsSection({ onDownloadAlerts, onDownloadSlackOnly }: 
             <p className="text-muted-foreground mb-4">Choose the workflow that fits your needs:</p>
             <div className="flex flex-wrap gap-3">
               <Button onClick={onDownloadAlerts} className="bg-gradient-to-r from-amber-500 via-orange-500 to-rose-500 text-white shadow-md shadow-amber-500/30 hover:opacity-90">
-                <Download className="w-4 h-4 mr-2" />
+                <Download className="w-4 h-4 me-2" />
                 Slack + Email (Recommended)
               </Button>
               <Button onClick={onDownloadSlackOnly} variant="outline" className="border-amber-500/50 hover:bg-amber-500/10">
-                <Download className="w-4 h-4 mr-2" />
+                <Download className="w-4 h-4 me-2" />
                 Slack Only
               </Button>
             </div>

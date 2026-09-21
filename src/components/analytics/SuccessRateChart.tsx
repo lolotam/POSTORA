@@ -28,7 +28,7 @@ export function SuccessRateChart({ data, overallSuccessRate }: SuccessRateChartP
       <div className="flex items-center gap-2 mb-6">
         <Target className="w-5 h-5 text-primary" />
         <h3 className="font-semibold">{t("charts.successOverTime", "Success Rate Over Time")}</h3>
-        <span className="ml-auto text-2xl font-bold text-emerald-500">
+        <span className="ms-auto text-2xl font-bold text-emerald-500">
           {overallSuccessRate}%
         </span>
       </div>

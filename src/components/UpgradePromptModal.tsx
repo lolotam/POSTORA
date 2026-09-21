@@ -94,7 +94,7 @@ export function UpgradePromptModal({
               <Crown className="w-4 h-4 text-primary" />
               Upgrade to Pro and get:
             </div>
-            <ul className="text-sm text-muted-foreground space-y-2 ml-6">
+            <ul className="text-sm text-muted-foreground space-y-2 ms-6">
               <li className="flex items-center gap-2">
                 <Zap className="w-3 h-3 text-primary" /> 15 social profiles
               </li>

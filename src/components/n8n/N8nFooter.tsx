@@ -14,7 +14,7 @@ export function N8nFooter() {
             <Link to="/privacy" className="text-sm text-muted-foreground hover:text-foreground transition-colors">Privacy</Link>
             <Link to="/terms" className="text-sm text-muted-foreground hover:text-foreground transition-colors">Terms</Link>
           </div>
-          <p className="text-sm text-muted-foreground text-center md:text-right">© 2026 Postora. A product developed and operated by WALEED PROLIFE LLC. All rights reserved.</p>
+          <p className="text-sm text-muted-foreground text-center md:text-end">© 2026 Postora. A product developed and operated by WALEED PROLIFE LLC. All rights reserved.</p>
         </div>
       </div>
     </footer>

@@ -80,7 +80,7 @@ export function MediaAltTextEditor({
               maxLength={1000}
               rows={3}
             />
-            <p className="text-xs text-muted-foreground text-right">
+            <p className="text-xs text-muted-foreground text-end">
               {altText.length}/1000
             </p>
           </div>

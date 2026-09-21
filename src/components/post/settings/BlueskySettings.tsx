@@ -268,7 +268,7 @@ export function BlueskySettings({ settings, onChange, hasMedia, selectedAccounts
             maxLength={2000}
             rows={2}
           />
-          <p className="text-xs text-muted-foreground text-right">
+          <p className="text-xs text-muted-foreground text-end">
             {settings.altText.length}/2000
           </p>
         </div>
@@ -393,7 +393,7 @@ export function BlueskySettings({ settings, onChange, hasMedia, selectedAccounts
               type="button"
               onClick={() => handleOptionSelect("anyone")}
               className={cn(
-                "w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-colors text-left",
+                "w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-colors text-start",
                 replySettings.selectedOption === "anyone"
                   ? "bg-primary/10 border border-primary/30"
                   : "bg-secondary/50 hover:bg-secondary/80 border border-transparent"
@@ -418,7 +418,7 @@ export function BlueskySettings({ settings, onChange, hasMedia, selectedAccounts
               type="button"
               onClick={() => handleOptionSelect("nobody")}
               className={cn(
-                "w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-colors text-left",
+                "w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-colors text-start",
                 replySettings.selectedOption === "nobody"
                   ? "bg-primary/10 border border-primary/30"
                   : "bg-secondary/50 hover:bg-secondary/80 border border-transparent"
@@ -443,7 +443,7 @@ export function BlueskySettings({ settings, onChange, hasMedia, selectedAccounts
               type="button"
               onClick={() => handleOptionSelect("following")}
               className={cn(
-                "w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-colors text-left",
+                "w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-colors text-start",
                 replySettings.selectedOption === "following"
                   ? "bg-primary/10 border border-primary/30"
                   : "bg-secondary/50 hover:bg-secondary/80 border border-transparent"
@@ -468,7 +468,7 @@ export function BlueskySettings({ settings, onChange, hasMedia, selectedAccounts
               type="button"
               onClick={() => handleOptionSelect("mentioned")}
               className={cn(
-                "w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-colors text-left",
+                "w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-colors text-start",
                 replySettings.selectedOption === "mentioned"
                   ? "bg-primary/10 border border-primary/30"
                   : "bg-secondary/50 hover:bg-secondary/80 border border-transparent"
@@ -494,7 +494,7 @@ export function BlueskySettings({ settings, onChange, hasMedia, selectedAccounts
                 type="button"
                 onClick={() => handleOptionSelect("list")}
                 className={cn(
-                  "w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-colors text-left",
+                  "w-full flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-colors text-start",
                   replySettings.selectedOption === "list"
                     ? "bg-primary/10 border border-primary/30"
                     : "bg-secondary/50 hover:bg-secondary/80 border border-transparent"
@@ -522,7 +522,7 @@ export function BlueskySettings({ settings, onChange, hasMedia, selectedAccounts
                       fetchBlueskyLists();
                     }}
                     disabled={loadingLists}
-                    className="ml-auto h-6 px-2"
+                    className="ms-auto h-6 px-2"
                   >
                     <RefreshCw className={cn("w-3 h-3", loadingLists && "animate-spin")} />
                   </Button>
@@ -531,7 +531,7 @@ export function BlueskySettings({ settings, onChange, hasMedia, selectedAccounts
 
               {/* Lists dropdown when "list" option is selected */}
               {replySettings.selectedOption === "list" && (
-                <div className="ml-6 space-y-2">
+                <div className="ms-6 space-y-2">
                   {loadingLists ? (
                     <div className="flex items-center gap-2 text-sm text-muted-foreground py-2">
                       <Loader2 className="w-4 h-4 animate-spin" />

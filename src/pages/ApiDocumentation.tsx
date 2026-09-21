@@ -21,7 +21,7 @@ export default function ApiDocumentation() {
               <p className="text-xs text-muted-foreground">v1 — REST API for automation platforms</p>
             </div>
           </div>
-          <div className="ml-auto flex items-center gap-2">
+          <div className="ms-auto flex items-center gap-2">
             <Badge variant="outline" className="text-xs">Version 1.0</Badge>
             <Button size="sm" variant="outline" asChild>
               <a href="/docs/n8n-integration" className="flex items-center gap-1.5"><Zap className="w-3.5 h-3.5" /> n8n Guide</a>
@@ -89,7 +89,7 @@ export default function ApiDocumentation() {
           <p className="text-muted-foreground mb-4">All responses include rate limit headers: <code className="text-xs bg-muted px-1.5 py-0.5 rounded">X-RateLimit-Limit</code>, <code className="text-xs bg-muted px-1.5 py-0.5 rounded">X-RateLimit-Remaining</code>, <code className="text-xs bg-muted px-1.5 py-0.5 rounded">X-RateLimit-Reset</code>.</p>
           <div className="overflow-x-auto border border-border rounded-lg">
             <table className="w-full text-sm">
-              <thead className="bg-secondary/50"><tr><th className="text-left py-3 px-4 font-medium">Endpoint</th><th className="text-left py-3 px-4 font-medium">Limit</th><th className="text-left py-3 px-4 font-medium">Window</th></tr></thead>
+              <thead className="bg-secondary/50"><tr><th className="text-start py-3 px-4 font-medium">Endpoint</th><th className="text-start py-3 px-4 font-medium">Limit</th><th className="text-start py-3 px-4 font-medium">Window</th></tr></thead>
               <tbody>{rateLimits.map((r, i) => (<tr key={i} className="border-t border-border"><td className="py-3 px-4 font-mono text-xs">{r.endpoint}</td><td className="py-3 px-4">{r.limit}</td><td className="py-3 px-4 text-muted-foreground">{r.window}</td></tr>))}</tbody>
             </table>
           </div>
@@ -102,7 +102,7 @@ export default function ApiDocumentation() {
           <CodeBlock lang="json" code={JSON.stringify({ success: false, error: { code: "ERROR_CODE", message: "Human-readable message", details: {} } }, null, 2)} />
           <div className="overflow-x-auto border border-border rounded-lg mt-4">
             <table className="w-full text-sm">
-              <thead className="bg-secondary/50"><tr><th className="text-left py-3 px-4 font-medium">Code</th><th className="text-left py-3 px-4 font-medium">HTTP Status</th><th className="text-left py-3 px-4 font-medium">Description</th></tr></thead>
+              <thead className="bg-secondary/50"><tr><th className="text-start py-3 px-4 font-medium">Code</th><th className="text-start py-3 px-4 font-medium">HTTP Status</th><th className="text-start py-3 px-4 font-medium">Description</th></tr></thead>
               <tbody>{errorCodes.map((e, i) => (<tr key={i} className="border-t border-border"><td className="py-3 px-4 font-mono text-xs text-primary">{e.code}</td><td className="py-3 px-4"><Badge variant="outline">{e.status}</Badge></td><td className="py-3 px-4 text-muted-foreground">{e.description}</td></tr>))}</tbody>
             </table>
           </div>
@@ -115,7 +115,7 @@ export default function ApiDocumentation() {
           <CodeBlock lang="text" code={`X-Postora-Event: post.completed\nX-Postora-Timestamp: 2026-03-28T12:05:00Z\nContent-Type: application/json`} />
           <div className="overflow-x-auto border border-border rounded-lg mt-4">
             <table className="w-full text-sm">
-              <thead className="bg-secondary/50"><tr><th className="text-left py-3 px-4 font-medium">Event</th><th className="text-left py-3 px-4 font-medium">Description</th></tr></thead>
+              <thead className="bg-secondary/50"><tr><th className="text-start py-3 px-4 font-medium">Event</th><th className="text-start py-3 px-4 font-medium">Description</th></tr></thead>
               <tbody>{webhookEvents.map((w, i) => (<tr key={i} className="border-t border-border"><td className="py-3 px-4 font-mono text-xs text-primary">{w.event}</td><td className="py-3 px-4 text-muted-foreground">{w.description}</td></tr>))}</tbody>
             </table>
           </div>

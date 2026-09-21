@@ -66,11 +66,11 @@ export default function SmartScheduling() {
         {/* Background halos */}
         <div
           aria-hidden
-          className="pointer-events-none absolute -top-32 -left-32 h-[420px] w-[420px] rounded-full bg-gradient-to-br from-violet-500/20 via-fuchsia-500/10 to-transparent blur-3xl -z-10"
+          className="pointer-events-none absolute -top-32 -start-32 h-[420px] w-[420px] rounded-full bg-gradient-to-br from-violet-500/20 via-fuchsia-500/10 to-transparent blur-3xl -z-10"
         />
         <div
           aria-hidden
-          className="pointer-events-none absolute -top-24 -right-32 h-[420px] w-[420px] rounded-full bg-gradient-to-br from-sky-500/20 via-cyan-500/10 to-transparent blur-3xl -z-10"
+          className="pointer-events-none absolute -top-24 -end-32 h-[420px] w-[420px] rounded-full bg-gradient-to-br from-sky-500/20 via-cyan-500/10 to-transparent blur-3xl -z-10"
         />
 
         <div className="max-w-5xl mx-auto space-y-8">
@@ -112,7 +112,7 @@ export default function SmartScheduling() {
                 </div>
                 {historyCount > 0 && (
                   <Badge className="h-7 bg-gradient-to-r from-violet-500/20 via-fuchsia-500/20 to-pink-500/20 ring-1 ring-violet-400/30 text-foreground border-0">
-                    <Sparkles className="h-3 w-3 mr-1 text-violet-400" />
+                    <Sparkles className="h-3 w-3 me-1 text-violet-400" />
                     {t("smart.basedOn", "Based on {{count}} past posts", { count: historyCount })}
                   </Badge>
                 )}
@@ -158,7 +158,7 @@ export default function SmartScheduling() {
                           className="w-full mt-4 bg-gradient-to-r from-violet-500 via-fuchsia-500 to-pink-500 text-white border-0 shadow-lg shadow-violet-500/30 hover:shadow-violet-500/50 hover:brightness-110"
                           onClick={() => window.location.href = `/post?schedule=${slot.day}&time=${slot.hour}`}
                         >
-                          <Sparkles className="h-3.5 w-3.5 mr-1.5" />
+                          <Sparkles className="h-3.5 w-3.5 me-1.5" />
                           {t("smart.actions.schedulePost", "Schedule Post")}
                         </Button>
                       </div>

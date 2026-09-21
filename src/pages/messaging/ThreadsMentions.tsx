@@ -195,12 +195,12 @@ export default function ThreadsMentions() {
                       />
                       {/* External link indicator for platforms served elsewhere */}
                       {p.externalPath && (
-                        <div className="absolute -top-2 -right-2 w-5 h-5 rounded-full bg-muted border border-border/60 flex items-center justify-center shadow-sm">
+                        <div className="absolute -top-2 -end-2 w-5 h-5 rounded-full bg-muted border border-border/60 flex items-center justify-center shadow-sm">
                           <ExternalLink className="w-2.5 h-2.5 text-muted-foreground" />
                         </div>
                       )}
                       {isSelected && (
-                        <div className="absolute -top-2 -right-2 w-6 h-6 sm:w-7 sm:h-7 rounded-full bg-primary text-primary-foreground flex items-center justify-center shadow-lg shadow-primary/50 ring-2 ring-background animate-in zoom-in-50 duration-200">
+                        <div className="absolute -top-2 -end-2 w-6 h-6 sm:w-7 sm:h-7 rounded-full bg-primary text-primary-foreground flex items-center justify-center shadow-lg shadow-primary/50 ring-2 ring-background animate-in zoom-in-50 duration-200">
                           <CheckCircle2 className="w-4 h-4 sm:w-4.5 sm:h-4.5" />
                         </div>
                       )}
@@ -313,16 +313,16 @@ export default function ThreadsMentions() {
 
                     <TabsList className="bg-card/50 backdrop-blur-md border border-border/40 rounded-xl p-1 h-auto [&>[data-state=active]]:bg-gradient-to-r [&>[data-state=active]]:from-indigo-500 [&>[data-state=active]]:via-violet-500 [&>[data-state=active]]:to-purple-500 [&>[data-state=active]]:text-white [&>[data-state=active]]:shadow-md">
                       <TabsTrigger value="mentions" className="rounded-lg">
-                        <AtSign className="h-4 w-4 mr-1.5" />
+                        <AtSign className="h-4 w-4 me-1.5" />
                         {t("threads.mentions", "Mentions")}
                       </TabsTrigger>
                       <TabsTrigger value="replies" className="rounded-lg">
-                        <MessageCircle className="h-4 w-4 mr-1.5" />
+                        <MessageCircle className="h-4 w-4 me-1.5" />
                         {t("threads.replies", "Replies")}
                       </TabsTrigger>
                     </TabsList>
 
-                    <div className="flex items-center gap-2 sm:ml-auto flex-wrap">
+                    <div className="flex items-center gap-2 sm:ms-auto flex-wrap">
                       <Button
                         onClick={handleRefresh}
                         disabled={!selectedAccountId || refresh.isPending}
@@ -330,9 +330,9 @@ export default function ThreadsMentions() {
                         className="bg-gradient-to-r from-indigo-500 via-violet-500 to-purple-500 text-white hover:opacity-90"
                       >
                         {refresh.isPending ? (
-                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                          <Loader2 className="h-4 w-4 me-2 animate-spin" />
                         ) : (
-                          <RefreshCw className="h-4 w-4 mr-2" />
+                          <RefreshCw className="h-4 w-4 me-2" />
                         )}
                         {t("common:refresh", "Refresh")}
                       </Button>

@@ -136,21 +136,21 @@ function getStatusBadge(status: OperationStatus, t: (key: string, fallback: stri
     case "completed":
       return (
         <Badge className="bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500/20">
-          <CheckCircle2 className="w-3 h-3 mr-1" />
+          <CheckCircle2 className="w-3 h-3 me-1" />
           {t("common:status.completed", "Completed")}
         </Badge>
       );
     case "processing":
       return (
         <Badge className="bg-blue-500/10 text-blue-500 hover:bg-blue-500/20">
-          <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+          <Loader2 className="w-3 h-3 me-1 animate-spin" />
           {t("common:status.processing", "Processing")}
         </Badge>
       );
     case "failed":
       return (
         <Badge className="bg-destructive/10 text-destructive hover:bg-destructive/20">
-          <XCircle className="w-3 h-3 mr-1" />
+          <XCircle className="w-3 h-3 me-1" />
           {t("common:status.failed", "Failed")}
         </Badge>
       );
@@ -518,7 +518,7 @@ export function MediaOperationsHistory() {
             size="sm"
             onClick={() => setDeleteDialogOpen(true)}
           >
-            <Trash2 className="w-4 h-4 mr-2" />
+            <Trash2 className="w-4 h-4 me-2" />
             {t("mediaOps.deleteCount", "Delete ({{count}})", { count: selectedOperations.size })}
           </Button>
         )}
@@ -672,9 +672,9 @@ export function MediaOperationsHistory() {
                                 className="h-8 px-2"
                               >
                                 {expandedOperations.has(op.id) ? (
-                                  <ChevronDown className="w-4 h-4 mr-1" />
+                                  <ChevronDown className="w-4 h-4 me-1" />
                                 ) : (
-                                  <ChevronRight className="w-4 h-4 mr-1" />
+                                  <ChevronRight className="w-4 h-4 me-1" />
                                 )}
                                 <Info className="w-4 h-4" />
                               </Button>
@@ -747,7 +747,7 @@ export function MediaOperationsHistory() {
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
               {deleteMutation.isPending ? (
-                <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                <Loader2 className="w-4 h-4 animate-spin me-2" />
               ) : null}
               {t("common:delete", "Delete")}
             </AlertDialogAction>
@@ -771,7 +771,7 @@ export function MediaOperationsHistory() {
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
               {clearAllMutation.isPending ? (
-                <Loader2 className="w-4 h-4 animate-spin mr-2" />
+                <Loader2 className="w-4 h-4 animate-spin me-2" />
               ) : null}
               {t("mediaOps.clearAll", "Clear All")}
             </AlertDialogAction>

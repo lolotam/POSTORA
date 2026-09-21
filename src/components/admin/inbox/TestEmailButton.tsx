@@ -117,7 +117,7 @@ export function TestEmailButton() {
     }}>
       <DialogTrigger asChild>
         <Button variant="outline" size="sm">
-          <FlaskConical className="w-4 h-4 mr-2" />
+          <FlaskConical className="w-4 h-4 me-2" />
           Test Email
         </Button>
       </DialogTrigger>
@@ -201,12 +201,12 @@ export function TestEmailButton() {
           <Button onClick={handleTest} disabled={testMutation.isPending}>
             {testMutation.isPending ? (
               <>
-                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                <Loader2 className="w-4 h-4 me-2 animate-spin" />
                 Sending...
               </>
             ) : (
               <>
-                <FlaskConical className="w-4 h-4 mr-2" />
+                <FlaskConical className="w-4 h-4 me-2" />
                 Send Test
               </>
             )}

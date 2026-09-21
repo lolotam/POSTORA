@@ -75,7 +75,7 @@ export default function LandingPricing() {
               innerClassName="flex flex-col p-6 md:p-7"
             >
               {plan.popular && (
-                <div className="absolute -top-3 left-1/2 -translate-x-1/2">
+                <div className="absolute -top-3 start-1/2 -translate-x-1/2">
                   <span className="px-3 py-1 rounded-full bg-gradient-to-r from-violet-500 to-pink-500 text-white text-xs font-medium shadow-lg shadow-violet-500/30">
                     Most Popular
                   </span>
@@ -98,7 +98,7 @@ export default function LandingPricing() {
 
               <div className="flex items-baseline gap-1 mb-6">
                 {plan.originalPrice && (
-                  <span className="text-lg text-muted-foreground line-through mr-1">{plan.originalPrice}</span>
+                  <span className="text-lg text-muted-foreground line-through me-1">{plan.originalPrice}</span>
                 )}
                 <span className="text-4xl font-bold tracking-tight">{plan.price}</span>
                 <span className="text-muted-foreground text-sm">/{plan.period}</span>

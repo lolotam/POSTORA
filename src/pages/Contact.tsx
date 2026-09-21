@@ -124,7 +124,7 @@ export default function Contact() {
               {t("contact.success.desc", "Thank you for reaching out. We've received your message and will get back to you shortly.")}
             </p>
             <Button onClick={handleSendAnother} variant="outline">
-              <MessageSquare className="w-4 h-4 mr-2" />
+              <MessageSquare className="w-4 h-4 me-2" />
               {t("contact.actions.sendAnother", "Send Another Message")}
             </Button>
           </div>
@@ -137,7 +137,7 @@ export default function Contact() {
                     {t("contact.form.email", "Email")} <span className="text-destructive">*</span>
                   </Label>
                   <div className="relative">
-                    <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                    <Mail className="absolute start-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                     <Input
                       id="email"
                       type="email"
@@ -145,7 +145,7 @@ export default function Contact() {
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
                       disabled={isSubmitting}
-                      className="pl-9"
+                      className="ps-9"
                       required
                     />
                   </div>
@@ -156,7 +156,7 @@ export default function Contact() {
                     {t("contact.form.mobile", "Mobile")} <span className="text-muted-foreground text-xs">{t("contact.form.optional", "(optional)")}</span>
                   </Label>
                   <div className="relative">
-                    <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                    <Phone className="absolute start-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                     <Input
                       id="mobile"
                       type="tel"
@@ -164,7 +164,7 @@ export default function Contact() {
                       value={mobile}
                       onChange={(e) => setMobile(e.target.value)}
                       disabled={isSubmitting}
-                      className="pl-9"
+                      className="ps-9"
                     />
                   </div>
                 </div>
@@ -207,9 +207,9 @@ export default function Contact() {
               disabled={isSubmitting || !email.trim() || !subject.trim() || !message.trim()}
             >
               {isSubmitting ? (
-                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                <Loader2 className="w-4 h-4 me-2 animate-spin" />
               ) : (
-                <Send className="w-4 h-4 mr-2" />
+                <Send className="w-4 h-4 me-2" />
               )}
               {isSubmitting ? t("contact.actions.sending", "Sending...") : t("contact.actions.send", "Send Message")}
             </Button>

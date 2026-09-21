@@ -155,7 +155,7 @@ export default function ConnectAuthorize() {
           <Button className="w-full" onClick={handleApprove} disabled={isApproving}>
             {isApproving ? (
               <>
-                <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                <Loader2 className="h-4 w-4 animate-spin me-2" />
                 Saving...
               </>
             ) : (

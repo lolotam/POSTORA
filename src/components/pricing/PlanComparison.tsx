@@ -52,7 +52,7 @@ export function PlanComparison({ plans, tierLimits }: PlanComparisonProps) {
         <table className="w-full">
           <thead>
             <tr className="border-b bg-muted/50">
-              <th className="text-left p-4 font-medium">Feature</th>
+              <th className="text-start p-4 font-medium">Feature</th>
               {plans.map((plan) => (
                 <th key={plan.id} className="text-center p-4 font-medium">{plan.name}</th>
               ))}

@@ -100,7 +100,7 @@ export function LocationDebugView({ debug }: { debug: LocationDebug }) {
         <MapPin className="w-3 h-3" />
         {t("debug.showLocationDebug", "Show location debug")}
         {finalMeta && (
-          <Badge variant={finalMeta.variant} className="ml-1 text-[9px] h-4">
+          <Badge variant={finalMeta.variant} className="ms-1 text-[9px] h-4">
             {finalMeta.label}
           </Badge>
         )}
@@ -145,7 +145,7 @@ export function LocationDebugView({ debug }: { debug: LocationDebug }) {
               <Row label="Meta /media create">
                 <YesNoBadge value={debug.meta_media_create_success} />
                 {debug.meta_media_create_error && (
-                  <span className="text-destructive ml-2">{errMsg(debug.meta_media_create_error)}</span>
+                  <span className="text-destructive ms-2">{errMsg(debug.meta_media_create_error)}</span>
                 )}
               </Row>
               <Row label="Retried w/o location">
@@ -177,13 +177,13 @@ export function LocationDebugView({ debug }: { debug: LocationDebug }) {
               <Row label="Container create">
                 <YesNoBadge value={debug.create_container_success} />
                 {debug.create_container_error && (
-                  <span className="text-destructive ml-2">{errMsg(debug.create_container_error)}</span>
+                  <span className="text-destructive ms-2">{errMsg(debug.create_container_error)}</span>
                 )}
               </Row>
               <Row label="Publish">
                 <YesNoBadge value={debug.publish_success} />
                 {debug.publish_error && (
-                  <span className="text-destructive ml-2">{errMsg(debug.publish_error)}</span>
+                  <span className="text-destructive ms-2">{errMsg(debug.publish_error)}</span>
                 )}
               </Row>
             </>

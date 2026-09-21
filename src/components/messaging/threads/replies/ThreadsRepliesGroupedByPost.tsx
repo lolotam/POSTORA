@@ -92,7 +92,7 @@ export function ThreadsRepliesGroupedByPost({ accountId, replies, onReplyClick }
                   <Button
                     variant="ghost"
                     size="sm"
-                    className="h-6 px-2 text-xs ml-auto"
+                    className="h-6 px-2 text-xs ms-auto"
                     onClick={() => refetch(postId)}
                   >
                     {t("common:retry", "Retry")}
@@ -163,7 +163,7 @@ function PostHeader({ accountId, postId, totalCount, myCount, onDetails }: PostH
           {post?.permalink && (
             <Button asChild variant="ghost" size="sm" className="h-7 px-2 text-xs">
               <a href={post.permalink} target="_blank" rel="noopener noreferrer">
-                <ExternalLink className="h-3.5 w-3.5 mr-1.5" />
+                <ExternalLink className="h-3.5 w-3.5 me-1.5" />
                 {t("common:open", "Open")}
               </a>
             </Button>
@@ -174,7 +174,7 @@ function PostHeader({ accountId, postId, totalCount, myCount, onDetails }: PostH
             className="h-7 px-2 text-xs"
             onClick={onDetails}
           >
-            <FileText className="h-3.5 w-3.5 mr-1.5" />
+            <FileText className="h-3.5 w-3.5 me-1.5" />
             {t("actions.details", "Details")}
           </Button>
         </div>

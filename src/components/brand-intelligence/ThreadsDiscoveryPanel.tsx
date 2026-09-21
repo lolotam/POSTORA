@@ -222,7 +222,7 @@ export function ThreadsDiscoveryPanel() {
 
       <div className="flex gap-2">
         <div className="relative flex-1">
-          <AtSign className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+          <AtSign className="absolute start-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
           <Input
             placeholder={t("discovery.usernamePlaceholder", "Enter a Threads username...")}
             value={username}
@@ -238,7 +238,7 @@ export function ThreadsDiscoveryPanel() {
               if (e.key === "Enter") handleSearch();
               if (e.key === "Escape") setHistoryOpen(false);
             }}
-            className="pl-9"
+            className="ps-9"
           />
           {historyOpen && searchHistory.items.length > 0 && (
             <div
@@ -259,7 +259,7 @@ export function ThreadsDiscoveryPanel() {
                   <li key={row.id} className="group flex items-center justify-between px-3 py-1.5 hover:bg-accent/60 cursor-pointer">
                     <button
                       type="button"
-                      className="flex-1 text-left text-sm truncate"
+                      className="flex-1 text-start text-sm truncate"
                       onClick={() => {
                         setUsername(row.query);
                         handleSearch(row.query);
@@ -267,7 +267,7 @@ export function ThreadsDiscoveryPanel() {
                     >
                       @{row.query}
                       {row.use_count > 1 && (
-                        <span className="ml-2 text-[10px] text-muted-foreground">×{row.use_count}</span>
+                        <span className="ms-2 text-[10px] text-muted-foreground">×{row.use_count}</span>
                       )}
                     </button>
                     <button
@@ -354,7 +354,7 @@ export function ThreadsDiscoveryPanel() {
                       <span className="text-xs text-muted-foreground">
                         {post.timestamp ? format(new Date(post.timestamp), "MMM d, yyyy") : ""}
                       </span>
-                      <div className="flex items-center gap-1.5 ml-auto">
+                      <div className="flex items-center gap-1.5 ms-auto">
                         {post.permalink && (
                           <a
                             href={post.permalink}
@@ -402,7 +402,7 @@ export function ThreadsDiscoveryPanel() {
                               <AlertDialogFooter>
                                 <AlertDialogCancel>{t("common:cancel", "Cancel")}</AlertDialogCancel>
                                 <AlertDialogAction onClick={() => handleDeletePost(post.id)} disabled={actionLoadingId === post.id}>
-                                  {actionLoadingId === post.id ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : null}
+                                  {actionLoadingId === post.id ? <Loader2 className="w-4 h-4 animate-spin me-2" /> : null}
                                   {t("common:delete", "Delete")}
                                 </AlertDialogAction>
                               </AlertDialogFooter>

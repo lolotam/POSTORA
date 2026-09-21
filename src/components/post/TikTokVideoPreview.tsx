@@ -43,7 +43,7 @@ export function TikTokVideoPreview({
       <div className="max-w-[280px] mx-auto">
         <div className="relative bg-black rounded-[2rem] overflow-hidden aspect-[9/16] shadow-2xl border-4 border-gray-800">
           {/* Notch */}
-          <div className="absolute top-0 left-1/2 -translate-x-1/2 w-24 h-6 bg-black rounded-b-2xl z-20" />
+          <div className="absolute top-0 start-1/2 -translate-x-1/2 w-24 h-6 bg-black rounded-b-2xl z-20" />
           
           {/* Video/Image Background */}
           <div className="absolute inset-0">
@@ -71,14 +71,14 @@ export function TikTokVideoPreview({
           </div>
 
           {/* Top Navigation */}
-          <div className="absolute top-8 left-0 right-0 flex items-center justify-center gap-6 z-10">
+          <div className="absolute top-8 start-0 end-0 flex items-center justify-center gap-6 z-10">
             <span className="text-white/60 text-sm font-medium">{t("tiktokVideo.following", "Following")}</span>
             <span className="text-white text-sm font-bold border-b-2 border-white pb-1">{t("tiktokVideo.forYou", "For You")}</span>
-            <Search className="w-5 h-5 text-white absolute right-4" />
+            <Search className="w-5 h-5 text-white absolute end-4" />
           </div>
 
           {/* Right Side Actions */}
-          <div className="absolute right-3 bottom-24 flex flex-col items-center gap-5 z-10">
+          <div className="absolute end-3 bottom-24 flex flex-col items-center gap-5 z-10">
             {/* Profile Avatar */}
             <div className="relative">
               <Avatar className="h-11 w-11 border-2 border-white">
@@ -87,7 +87,7 @@ export function TikTokVideoPreview({
                   {username[0]?.toUpperCase()}
                 </AvatarFallback>
               </Avatar>
-              <div className="absolute -bottom-2 left-1/2 -translate-x-1/2 w-5 h-5 bg-red-500 rounded-full flex items-center justify-center">
+              <div className="absolute -bottom-2 start-1/2 -translate-x-1/2 w-5 h-5 bg-red-500 rounded-full flex items-center justify-center">
                 <Plus className="w-3 h-3 text-white" />
               </div>
             </div>
@@ -131,7 +131,7 @@ export function TikTokVideoPreview({
           </div>
 
           {/* Bottom Content */}
-          <div className="absolute bottom-20 left-3 right-16 z-10">
+          <div className="absolute bottom-20 start-3 end-16 z-10">
             {/* Username */}
             <div className="flex items-center gap-1 mb-2">
               <span className="text-white font-bold text-sm">@{username}</span>
@@ -156,7 +156,7 @@ export function TikTokVideoPreview({
           </div>
 
           {/* Bottom Navigation Bar */}
-          <div className="absolute bottom-0 left-0 right-0 h-14 bg-black/90 flex items-center justify-around px-4 z-10">
+          <div className="absolute bottom-0 start-0 end-0 h-14 bg-black/90 flex items-center justify-around px-4 z-10">
             <div className="flex flex-col items-center">
               <Home className="w-5 h-5 text-white" fill="white" />
               <span className="text-white text-[10px] mt-0.5">{t("tiktokVideo.home", "Home")}</span>

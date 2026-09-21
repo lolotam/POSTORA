@@ -26,7 +26,7 @@ export function AiCreditsSection() {
     <div className="space-y-8">
       <div className="text-center space-y-4">
         <Badge variant="secondary" className="mb-4">
-          <Sparkles className="w-3 h-3 mr-1" />
+          <Sparkles className="w-3 h-3 me-1" />
           AI Credits
         </Badge>
         <h2 className="text-3xl md:text-4xl font-bold tracking-tight">Power Up Your Content</h2>
@@ -46,7 +46,7 @@ export function AiCreditsSection() {
             }`}
           >
             {pack.popular && (
-              <Badge className="absolute -top-2.5 left-1/2 -translate-x-1/2 bg-primary text-primary-foreground text-xs">
+              <Badge className="absolute -top-2.5 start-1/2 -translate-x-1/2 bg-primary text-primary-foreground text-xs">
                 Best Value
               </Badge>
             )}

@@ -120,7 +120,7 @@ export function EmailScheduler({
         <Popover open={isOpen} onOpenChange={handleOpenChange}>
           <PopoverTrigger asChild>
             <Button variant="outline" size="sm" className="text-xs">
-              <Clock className="h-3 w-3 mr-1" />
+              <Clock className="h-3 w-3 me-1" />
               Schedule Send
             </Button>
           </PopoverTrigger>

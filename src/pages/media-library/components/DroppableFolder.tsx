@@ -58,7 +58,7 @@ export function DroppableFolder({
           <Button
             size="icon"
             variant="secondary"
-            className="absolute top-2 right-2 h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
+            className="absolute top-2 end-2 h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
             onClick={(e) => e.stopPropagation()}
           >
             <MoreVertical className="w-3 h-3" />
@@ -66,7 +66,7 @@ export function DroppableFolder({
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="bg-background">
           <DropdownMenuItem onClick={() => onRename(folder)}>
-            <Pencil className="w-4 h-4 mr-2" />
+            <Pencil className="w-4 h-4 me-2" />
             Rename
           </DropdownMenuItem>
           <DropdownMenuSeparator />
@@ -74,7 +74,7 @@ export function DroppableFolder({
             className="text-destructive"
             onClick={() => onDelete(folder)}
           >
-            <Trash2 className="w-4 h-4 mr-2" />
+            <Trash2 className="w-4 h-4 me-2" />
             Delete
           </DropdownMenuItem>
         </DropdownMenuContent>

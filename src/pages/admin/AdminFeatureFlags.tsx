@@ -358,11 +358,11 @@ export default function AdminFeatureFlags() {
             {topTab === "feature-flags" && (
               <>
                 <Button variant="outline" size="sm" onClick={handleAddCategory}>
-                  <Plus className="w-4 h-4 mr-2" />
+                  <Plus className="w-4 h-4 me-2" />
                   New Category
                 </Button>
                 <Button variant="outline" size="sm" onClick={handleRefreshAllFlags} disabled={isRefreshing}>
-                  {isRefreshing ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
+                  {isRefreshing ? <Loader2 className="w-4 h-4 me-2 animate-spin" /> : <RefreshCw className="w-4 h-4 me-2" />}
                   Refresh All Users
                 </Button>
               </>

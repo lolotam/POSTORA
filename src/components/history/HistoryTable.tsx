@@ -248,7 +248,7 @@ export function HistoryTable({
             <TableHead className="min-w-[100px] max-w-[180px]">{t("table.caption", "Caption")}</TableHead>
             <TableHead className="w-24">{t("table.status", "Status")}</TableHead>
             <TableHead className="min-w-[140px]">{t("table.postLink", "Post Link")}</TableHead>
-            <TableHead className="w-20 text-right">{t("table.actions", "Actions")}</TableHead>
+            <TableHead className="w-20 text-end">{t("table.actions", "Actions")}</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -488,7 +488,7 @@ export function HistoryTable({
                     <span className="text-xs text-muted-foreground">—</span>
                   )}
                 </TableCell>
-                <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
+                <TableCell className="text-end" onClick={(e) => e.stopPropagation()}>
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
                       <Button

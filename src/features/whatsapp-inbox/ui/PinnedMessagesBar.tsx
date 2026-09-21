@@ -30,7 +30,7 @@ export function PinnedMessagesBar({
             <li key={item.message_row_id}>
               <button
                 type="button"
-                className="w-full truncate rounded-md px-2 py-1 text-left text-sm hover:bg-muted"
+                className="w-full truncate rounded-md px-2 py-1 text-start text-sm hover:bg-muted"
                 onClick={() => {
                   if (loaded) {
                     onScrollTo(item.message_row_id);

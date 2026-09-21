@@ -98,23 +98,23 @@ export function FeatureFlagIndicator() {
         variant="outline"
         size="sm"
         onClick={() => setIsVisible(true)}
-        className="fixed bottom-4 right-4 z-50 shadow-lg bg-background border-primary/20"
+        className="fixed bottom-4 end-4 z-50 shadow-lg bg-background border-primary/20"
       >
-        <Eye className="w-4 h-4 mr-2" />
+        <Eye className="w-4 h-4 me-2" />
         Show Flags
       </Button>
     );
   }
 
   return (
-    <div className="fixed bottom-4 right-4 z-50 w-72 shadow-xl rounded-lg border bg-background/95 backdrop-blur-sm">
+    <div className="fixed bottom-4 end-4 z-50 w-72 shadow-xl rounded-lg border bg-background/95 backdrop-blur-sm">
       <Collapsible open={isOpen} onOpenChange={setIsOpen}>
         <div className="flex items-center justify-between p-3 border-b">
           <CollapsibleTrigger asChild>
             <Button variant="ghost" size="sm" className="flex-1 justify-start gap-2 p-0 h-auto hover:bg-transparent">
               {isOpen ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
               <span className="font-medium text-sm">Feature Flags</span>
-              <Badge variant="secondary" className="ml-auto">
+              <Badge variant="secondary" className="ms-auto">
                 {activeCount}/{totalCount}
               </Badge>
             </Button>
@@ -122,7 +122,7 @@ export function FeatureFlagIndicator() {
           <Button
             variant="ghost"
             size="icon"
-            className="h-6 w-6 ml-2"
+            className="h-6 w-6 ms-2"
             onClick={() => setIsVisible(false)}
           >
             <EyeOff className="w-3.5 h-3.5" />
@@ -139,12 +139,12 @@ export function FeatureFlagIndicator() {
                 <span className="text-sm">{FLAG_LABELS[key]}</span>
                 {enabled ? (
                   <Badge variant="default" className="bg-green-500/20 text-green-600 border-green-500/30 hover:bg-green-500/20">
-                    <Check className="w-3 h-3 mr-1" />
+                    <Check className="w-3 h-3 me-1" />
                     On
                   </Badge>
                 ) : (
                   <Badge variant="secondary" className="bg-destructive/10 text-destructive border-destructive/20">
-                    <X className="w-3 h-3 mr-1" />
+                    <X className="w-3 h-3 me-1" />
                     Off
                   </Badge>
                 )}

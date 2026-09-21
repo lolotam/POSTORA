@@ -86,7 +86,7 @@ function ParamControl({ param, value, onChange, disabled }: ParamControlProps) {
   if (param.type === "bool") {
     return (
       <div className="flex items-center justify-between rounded-md border border-border px-3 py-2">
-        <div className="space-y-0.5 pr-3">
+        <div className="space-y-0.5 pe-3">
           {label}
           {param.description && (
             <p className="text-[11px] text-muted-foreground">{param.description}</p>

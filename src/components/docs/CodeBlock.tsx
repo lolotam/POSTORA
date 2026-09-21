@@ -37,7 +37,7 @@ export function CodeBlock({ code, language, id }: CodeBlockProps) {
                 : "text-slate-300 hover:text-white hover:bg-white/10"
             }`}
           >
-            {isCopied ? <Check className="w-3 h-3 mr-1" /> : <Copy className="w-3 h-3 mr-1" />}
+            {isCopied ? <Check className="w-3 h-3 me-1" /> : <Copy className="w-3 h-3 me-1" />}
             {isCopied ? "Copied!" : "Copy"}
           </Button>
         </div>

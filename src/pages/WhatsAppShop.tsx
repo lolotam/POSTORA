@@ -91,7 +91,7 @@ export default function WhatsAppShop() {
           <Dialog open={createOpen} onOpenChange={setCreateOpen}>
             <DialogTrigger asChild>
               <Button size="sm" className="bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500 text-white hover:opacity-90">
-                <Plus className="h-4 w-4 mr-1" /> {t("shop.addProduct", "Add Product")}
+                <Plus className="h-4 w-4 me-1" /> {t("shop.addProduct", "Add Product")}
               </Button>
             </DialogTrigger>
             <DialogContent className="bg-card/85 backdrop-blur-xl border-border/50">
@@ -163,7 +163,7 @@ export default function WhatsAppShop() {
                   <TableHead>{t("shop.product", "Product")}</TableHead>
                   <TableHead>{t("shop.price", "Price")}</TableHead>
                   <TableHead>{t("shop.status", "Status")}</TableHead>
-                  <TableHead className="text-right">{t("shop.actions", "Actions")}</TableHead>
+                  <TableHead className="text-end">{t("shop.actions", "Actions")}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -201,7 +201,7 @@ export default function WhatsAppShop() {
                           {p.status === "active" ? t("shop.statusActive", "active") : t("shop.statusDraft", "draft")}
                         </Badge>
                       </TableCell>
-                      <TableCell className="text-right">
+                      <TableCell className="text-end">
                         <Button size="icon" variant="ghost" className="h-8 w-8 text-rose-500 hover:bg-rose-500/10" onClick={() => handleDelete(p.id)}>
                           <Trash2 className="h-4 w-4" />
                         </Button>

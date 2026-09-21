@@ -372,7 +372,7 @@ export function UploadMethodSelector({
                     <button
                       type="button"
                       onClick={tItem.onClick}
-                      className="block w-full text-left h-full"
+                      className="block w-full text-start h-full"
                     >
                       <GradientRingCard
                         variant={tItem.variant}

@@ -299,7 +299,7 @@ export function BulkScheduler() {
               className="mt-3"
               onClick={downloadTemplate}
             >
-              <Download className="w-4 h-4 mr-2" />
+              <Download className="w-4 h-4 me-2" />
               {t("bulkScheduler.downloadTemplate", "Download Template")}
             </Button>
           </Card>
@@ -425,12 +425,12 @@ export function BulkScheduler() {
                 >
                   {isProcessing ? (
                     <>
-                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      <Loader2 className="w-4 h-4 me-2 animate-spin" />
                       {t("bulkScheduler.schedulingProgress", "Scheduling...")}
                     </>
                   ) : (
                     <>
-                      <CheckCircle2 className="w-4 h-4 mr-2" />
+                      <CheckCircle2 className="w-4 h-4 me-2" />
                       {t("bulkScheduler.scheduleBtn", "Schedule {{count}} Posts", { count: pendingCount })}
                     </>
                   )}
