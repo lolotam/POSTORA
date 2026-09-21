@@ -1,16 +1,16 @@
-# Graph Report - Postora_new  (2026-09-19)
+# Graph Report - i18n-arabic  (2026-09-21)
 
 ## Corpus Check
-- 2643 files · ~3,937,074 words
+- 2573 files · ~4,002,769 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 18094 nodes · 37320 edges · 1489 communities (1201 shown, 288 thin omitted)
-- Extraction: 99% EXTRACTED · 1% INFERRED · 0% AMBIGUOUS · INFERRED: 322 edges (avg confidence: 0.76)
+- 17708 nodes · 38546 edges · 1311 communities (1026 shown, 285 thin omitted)
+- Extraction: 99% EXTRACTED · 1% INFERRED · 0% AMBIGUOUS · INFERRED: 375 edges (avg confidence: 0.76)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `238ba2f4`
+- Built from commit: `841912cb`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -422,6 +422,7 @@
 - higgsfieldOAuthReturn.ts
 - PinterestCallback.tsx
 - index.ts
+- index.ts
 - HiggsfieldMcpClient
 - Query
 - index.ts
@@ -656,9 +657,6 @@
 - 20260820130000_higgsfield_oauth_and_generation.sql
 - 20260820140000_openinary_dual_cloud.sql
 - Task 10 Report: Live-verify the Threads mentions avatar pipeline
-- Task 4 Report: Add Facebook comment avatars — backend field expansion
-- Pages
-- Common Tasks
 - Recent Features
 - graphify reference: add a URL and watch a folder
 - graphify reference: commit hook and native CLAUDE.md integration
@@ -711,6 +709,7 @@
 - Technical Stack
 - UI Components
 - Backend API — Endpoint Classification Matrix
+- README.md
 - 5. Adding an AI agent layer
 - author
 - n8n-workflow
@@ -742,6 +741,9 @@
 - 20260413233204_c683ced4-67a1-4a8b-a0f6-6229e477d2db.sql
 - 20260601224925_ca73c2f6-aa24-4ba5-8603-3dbb5d29865b.sql
 - 20260703000001_create_messenger_auto_replies.sql
+- 20260821140000_whatsapp_history_import_functions.sql
+- 20260823140200_quota_readers_use_arbiter.sql
+- 20260823140300_quota_writers_clear_overrides.sql
 - 20260825190000_whatsapp_message_flags.sql
 - partner_api_test.sql
 - Environment Variables
@@ -754,24 +756,18 @@
 - Boundary-Based Debugging and Root Cause Attribution in Design and Project Management
 - Unified OAuth Security and Endpoint Standards via Feedback Loops
 - Unified Security and Operational Protocols via Design and Project Feedback Loops
-- Narrative
-- Narrative
-- Orchestrator-Driven, Phase-Based Verification and Commit Guardrails
 - Orchestrator-Driven Verification and Guardrails Across Facts, Design, and Project Domains
 - Narrative
 - Narrative
 - Narrative
 - Narrative
-- Project Management: Retrospectives and Review Process — Structural Summary
-- Environment Variables
 - findings-media.md
-- findings-stt.md
 - media-review.md
 - stt-review.md
-- Component Patterns
-- Edge Functions Reference
-- Error Handling
-- Response Formats
+- class-variance-authority
+- TikTokPreCheck.tsx
+- anthropic-adapter.ts
+- socialContactsRepository.test.ts
 - Get Accounts
 - 9. Product Architecture
 - 1. Dashboard (Home)
@@ -806,13 +802,14 @@
 - 20260116232454_9024bccb-7dcd-42c5-a083-69e1ec02f789.sql
 - 20260117222833_2a45407a-2859-426a-8bda-5942eb543419.sql
 - 20260117225556_e53ae889-6c3c-4c5d-a928-f93231c260b3.sql
+- 20260323191339_22349d2a-c1cf-4e0f-bccc-156c397f3b02.sql
 - 20260324044938_4ab05e3c-7d53-4a99-9e24-484253c3097a.sql
 - 20260413211836_96c0779a-62c3-4cd8-8439-a96ff3c6e895.sql
 - 20260413214314_dc16debe-abef-4aa1-9191-2acdfdc17d15.sql
 - 20260413235159_7c74416b-436e-4eb4-ace4-953bdb98132e.sql
 - 20260414001251_f66668ca-c9c6-4c36-a32e-8bf0d72cf429.sql
 - 20260414001446_c8045e32-5483-41ea-892b-47b058f20146.sql
-- 20260414003827_ac707635-2c3d-4dba-b670-6475e64dc202.sql
+- DatabaseConnectorsManager.sharing.test.tsx
 - 20260414202812_dac18e00-a9b1-42d9-ad29-69e90bb61ebc.sql
 - 20260418203613_8a73bb4b-70ad-4520-9d35-50a0d4700e1f.sql
 - 20260419202638_8d7e4b89-a9fb-40cd-b068-0d784d3cbf03.sql
@@ -821,14 +818,15 @@
 - 20260713100000_add_bge_m3_embedding_pilot.sql
 - 20260716123000_live_messaging_events.sql
 - 20260804120000_enforce_post_quotas.sql
+- 20260820160000_openinary_backfill_helpers.sql
 - 20260821090000_evolution_qr_support.sql
 - 20260822120000_social_inbox_events_threads.sql
 - 20260823140000_plan_quota_columns.sql
+- 20260825090200_webhook_observability_read_functions.sql
 - 20260825130000_media_understanding_quota.sql
 - backend-proxy.mjs
 - extraction-spec.md
 - 1. Prime Directive
-- 22. Canonical Contract Rule
 - 31. TypeScript Rules
 - 45. Agent Workflow for Every Task
 - 4. Mandatory Dependency Direction
@@ -836,7 +834,7 @@
 - _index.md
 - _index.md
 - class-variance-authority
-- date-fns
+- GeneratePartnerKeyDialog
 - @dnd-kit/sortable
 - @dnd-kit/utilities
 - POSTORA Partner API
@@ -844,14 +842,14 @@
 - fflate
 - @hookform/resolvers
 - input-otp
-- papaparse
+- index.ts
 - qrcode
-- @radix-ui/react-accordion
+- BgRemovalOptions.tsx
 - @radix-ui/react-aspect-ratio
 - @radix-ui/react-avatar
 - @radix-ui/react-dropdown-menu
 - @radix-ui/react-hover-card
-- @radix-ui/react-popover
+- isTokenExpired
 - navigation-menu.tsx
 - @radix-ui/react-scroll-area
 - @radix-ui/react-select
@@ -861,16 +859,14 @@
 - @radix-ui/react-tabs
 - @radix-ui/react-toast
 - @radix-ui/react-toggle
-- react-day-picker
 - react-dom
-- react-hook-form
+- index.ts
 - react-resizable-panels
 - recharts
 - @sentry/react
-- sonner
 - tailwind-merge
 - tailwindcss-animate
-- @tanstack/react-query
+- ConnectorConnectionsTable
 - vaul
 - @xyflow/react
 - zod
@@ -881,7 +877,7 @@
 - 5b2298bd7a51182c3af528cd26bf04f6ef1b42a5.md
 - 61015e81163b21df96438229275394398220b34b.md
 - 6517b11a4826d05adec5755eaaf39206a32decad.md
-- 74f30939fdc2966c867ba61521280fc27aabd2bc.md
+- ContactDetailsDrawer
 - 765853d0f158bb92e252b87ebc28e1a5b97316ad.md
 - 79e8ad5c5cf4d225c260544f1ac8c68f70c8ee8d.md
 - 9b92c47aee6727497822648e3aaf52986b84b7dd.md
@@ -889,16 +885,14 @@
 - POSTORA Partner API
 - campaign-calendar.md
 - deploy-oauth-fixes.sh
-- PageLoader.tsx
 - index.ts
 - index.ts
 - index.ts
 - index.ts
-- index.test.ts
 - planQuotasContract.test.ts
 - index.ts
 - index.ts
-- 20260623_facebook_pending_selections.sql
+- AiKnowledgeManager.tabs.test.tsx
 - 20260624_instagram_pending_selections.sql
 - 20260627180000_stripe_webhook_events.sql
 - 20260627_brand_search_history.sql
@@ -906,6 +900,9 @@
 - 20260712120000_ai_agent_allowed_models.sql
 - 20260712120500_ai_agent_fallback_models.sql
 - 20260712160000_ai_knowledge_graph_exports.sql
+- 20260712170000_ai_knowledge_graph_reconcile.sql
+- 20260712190000_ai_knowledge_excel_queue.sql
+- 20260101204719_f75ceeea-2d43-4e92-bb4d-4a4763367a39.sql
 - 20260101232253_29d740d3-9f7c-423c-937a-bb7522d84438.sql
 - 20260102022140_22381c59-9dd5-4129-a6e9-aa137a799e19.sql
 - 20260106122033_93c26b53-95f0-45f1-b988-f1c2c09bb478.sql
@@ -929,8 +926,6 @@
 - 20260116234253_35926a53-dd4e-4a2e-b57f-0e1d1a91e877.sql
 - 20260118003143_b1f95525-b8a7-4b43-9932-25c0c0328cec.sql
 - 20260118012006_27fbd75d-ec95-4649-9533-200df7e2a79a.sql
-- 20260129025826_f83a99d9-52b6-4b08-a45e-c3530ed5453f.sql
-- 20260205000000_update_notification_defaults.sql
 - 20260313183950_6c911775-48f3-4738-a278-cf8856cee30e.sql
 - 20260316092244_7d09e5f4-21c8-4560-ba99-de02f3669e84.sql
 - 20260319113349_d27a1ed7-4b68-44f3-b9aa-ff2db9c6bcbc.sql
@@ -945,6 +940,7 @@
 - 20260410171349_875dbd3e-aa61-4117-a01f-e9fbff93d41c.sql
 - 20260413174023_d2e6d9da-10ff-4e73-996d-95449efbb11b.sql
 - 20260414000921_13f91893-8d70-48cf-bdd5-5ec65ee89110.sql
+- 20260416120424_54d76f5c-8ab4-431a-b09c-5d33ad70a164.sql
 - 20260419194547_587c52e6-7431-4bff-b357-b22ce71a292f.sql
 - 20260419213228_7c1b6f60-b868-4086-b91c-f331e61bd503.sql
 - 20260419214711_ba823493-7d34-4431-a4f0-5ed0c32f03e8.sql
@@ -953,19 +949,22 @@
 - 20260423165524_5db83a2e-d268-445e-a681-2bd3d0540a2b.sql
 - 20260516183311_274d49a4-df39-4ffc-a94b-409483ba68aa.sql
 - 20260704000001_add_messaging_cache_participant_id.sql
-- 20260705120000_media_upload_counters.sql
 - 20260711090000_whatsapp_contacts_mobile_fields.sql
+- 20260712020000_ai_match_chunks_fn.sql
 - 20260713100001_rollback_bge_m3_embedding_pilot.sql
 - 20260820170000_provider_api_keys_meta.sql
 - 20260820180000_ai_models_metadata.sql
 - 20260820190000_higgsfield_connections_meta.sql
 - 20260820200000_ai_models_admin_params.sql
 - 20260821120000_whatsapp_evolution_sync_state.sql
+- 20260821130000_whatsapp_sync_claim.sql
+- 20260822090000_import_whatsapp_contacts_to_workspace.sql
+- 20260823140100_effective_user_quotas.sql
 - 20260823140400_backfill_user_quota_overrides.sql
+- 20260824000000_evolution_qr_activation_merges_duplicate_numbers.sql
 - 20260825090000_webhook_unmatched_observations.sql
 - 20260825120000_ai_agent_tools_connector_fields.sql
 - 20260825120000_inbound_media_understanding.sql
-- 20260827100000_ai_agent_allowed_models.sql
 - 20260827100100_ai_agent_fallback_models.sql
 - 20260827200000_automation_dispatch_log.sql
 - task-10-brief.md
@@ -976,151 +975,118 @@
 - task-4-brief.md
 - task-5-brief.md
 - task-6-brief.md
-- task-7-brief.md
 - task-8-brief.md
 - task-9-brief.md
 - task-1-brief.md
 - task-2-brief.md
 - task-3-brief.md
 - task-4-brief.md
-- task-5-brief.md
-- task-6-brief.md
-- task-7-brief.md
 - task-8-brief.md
-- task-9-brief.md
 - error-context.md
 - error-context.md
 - error-context.md
 - error-context.md
 - error-context.md
+- assistant_response_rules.abstract.md
+- assistant_response_rules.overview.md
+- codex_delegate_skill_and_orchestration_workflow.abstract.md
+- codex_delegate_skill_and_review_workflow.abstract.md
+- context.abstract.md
+- context.overview.md
+- preservation_and_curation_rules.abstract.md
+- preservation_and_curation_rules.overview.md
+- test_review_rules.abstract.md
+- test_review_rules.overview.md
+- writing_plans_skill_protocol.abstract.md
+- context.abstract.md
+- context.overview.md
+- postora_api_integration_guide.overview.md
+- context.abstract.md
+- context.overview.md
+- api_oauth_workflow.abstract.md
+- api_oauth_workflow.overview.md
+- context.abstract.md
+- context.overview.md
+- instagram_messaging_debug_investigation_2026_06_20.abstract.md
+- instagram_messaging_debug_investigation_2026_06_20.overview.md
+- oauth_token_refresh_endpoint.abstract.md
+- oauth_token_refresh_endpoint.overview.md
+- oauth_token_refresh_guide.abstract.md
+- oauth_token_refresh_guide.overview.md
+- oauth_token_refresh_implementation.abstract.md
+- oauth_token_refresh_implementation.overview.md
+- oauth_token_refresh_protocols.abstract.md
+- oauth_token_refresh_protocols_and_implementation.abstract.md
+- oauth_token_refresh_protocols_and_implementation.overview.md
+- AiKnowledgeManager.openExport.test.tsx
+- oauth_token_refresh_update.abstract.md
+- ai_api_provider_root_cause_and_fix_workflow_2026_06_24.abstract.md
+- ai_api_provider_root_cause_and_fix_workflow_2026_06_24.overview.md
+- cloudflare_workers_ai_provider_credential_fix_2026_06_22.abstract.md
+- codex_delegate_endpoint_hardening_and_phase_audit_2026_06_21.overview.md
 - platformSpecs
 - index.test.ts
-- index.test.ts
-- index.ts
-- DocumentTitle.tsx
-- TikTokCreatorInfo
-- useRealtimeQueryInvalidation.ts
 - useYouTubeThumbnails.video.test.tsx
-- FeatureFlagCategoryDropdown.tsx
+- errorExplanations.ts
+- UpscaleOptions.tsx
+- WebsitePanel.test.tsx
+- limiterPolicy.test.ts
+- BlueskyMediaValidation.tsx
+- breadcrumb.tsx
+- drawer.tsx
+- navigation-menu.tsx
+- index.ts
+- youtubeComposioOptions.ts
+- ContactDetailsDrawer
+- useAsyncAction.ts
+- AiKnowledgeManager.tabs.test.tsx
+- 1. Dashboard (Home)
+- ThemeApplier.tsx
+- authenticated.test.ts
+- WebsitePanel.test.tsx
+- input-otp.tsx
+- cmdk
+- index.ts
+- postProcessingClaim.ts
+- GeneratePartnerKeyDialog.test.tsx
+- TokenReauthBanner.instagram.test.tsx
+- useWhatsAppReconnect.test.ts
+- index.ts
+- class-variance-authority
+- DocumentTitle.tsx
 - input-otp.tsx
 - useYouTubeThumbnails.test.tsx
-- useAiGenerationJob.ts
-- index.ts
 - 9. Local Development Setup
 - index.ts
 - Waleed Task Summary, User Journey & Agent Prompting Guide
-- 2. Analytics
-- CouponInput.tsx
-- @radix-ui/react-radio-group
-- 20260828150000_account_scoped_agents_contract.sql
-- 20260828190000_account_configs_prepare.sql
-- @dnd-kit/sortable
-- 20260828200000_account_configs_contract.sql
 - index.ts
-- index.ts
-- index.ts
-- LocationDebugView.tsx
-- AiKnowledgeManager.guards.test.tsx
-- 20260830120100_partner_audit_logs.sql
-- AutomationHandlerCard.test.tsx
 - ScheduledPostMedia.test.tsx
-- index.ts
-- 2026-08-30-agent-setup-correctness-glm-review.md
-- 2026-08-30-per-account-connectors-glm-review.md
-- 9. Local Development Setup
 - TokenReauthBanner.instagram.test.tsx
-- NavLink.tsx
-- ProtectedRoute.tsx
-- fflate
-- 20260830120000_partner_api_key_accounts.sql
-- partner_api_tenancy_negative.sql
-- /v1 CORS is decided at the gateway, not in the function
-- 10. Production Build & Deployment
 - AiKnowledgeManager.sharing.test.tsx
-- chatLinks.ts
 - agentConfigLookup.ts
-- 20260901120000_partner_dispatch_intents.sql
 - public.enforce_post_quota_on_insert
-- public.user_roles
-- public.workflows
-- Decision: suspend `send_template` on the Partner API alias (0A)
 - PinnedMessagesBar.tsx
-- suspension.test.ts
-- storage.objects
-- public.media_file_providers
 - useAiGenerationJob.ts
-- 20260831170000_partner_api_credential_lifecycle.sql
-- auth.sso_providers
 - d8Containment.test.ts
-- 20260831140000_connector_secret_reclaim.sql
 - regenerate-baseline.sh
-- partner_api_dispatch_intents.sql
-- partnerWebhookDelivery.ts
 - regenerate-openapi-baseline.sh
-- FIXTURES.md
 - migration.test.ts
 - usePartnerHub.ts
 - isValidUuid
 - Pipelines
 - LeadsCRM.tsx
-- whatsappMessageView.ts
 - generate-postman.ts
-- chain.e2e.test.ts
 - Postora Partner API v1 — agent hand-off bundle
 - index.ts
 - posts.test.ts
-- Phase 8, first tranche — the posts surface and `post.scheduled`
-- MemberActions
-- PartnerKeyActivitySheet
-- Admin Partner Hub & Usage Monitoring — Design
-- media.test.ts
-- useWhatsAppAgents.ts
-- D10 — the media control matrix, filled in
-- The webhook producer ledger, and the database-write inventory behind it
-- notificationHistoryStore.ts
-- types.ts
-- Phase 6 — messaging and account events: what was certified, and how
-- Phase 9 — rich-media messaging: the door, and the substrate
-- 1.0.0 — 2026-09-02
-- Docs.tsx
-- HiggsfieldMcpClient
 - text
-- D5 — the webhook substrate: occurrence identity, rotation, and what is *not* advertised
-- D9 — the publishing seam: what 7.0 found, and what it changes
 - 1.0.0 — 2026-09-02
-- Runbook — the partner webhook delivery worker
 - QuotaUsageBar.tsx
-- ContactExportMenu.tsx
-- tokenExpiryConstants.ts
-- 20260902120000_partner_webhooks.sql
-- 20260902130000_partner_webhook_phase6_events.sql
-- Phase 10 — GA & developer experience: what was decided, what was built, what was not
 - Integration Guide — End-to-End
-- DocumentTitle.tsx
-- types.ts
-- 20260902200000_admin_partner_hub.sql
-- Integration Guide — End-to-End
-- PartnerHubKpiCards.tsx
 - authenticated.test.ts
 - ByteBudget
-- FakeQuery
-- Partner API Certification — Phase 10 GA
-- Postora Partner API — Contract & Tooling
-- API Keys — Lifecycle
-- Authentication
-- Errors
-- Getting Started
-- Idempotency
-- Messaging
-- Versioning and Compatibility
-- Webhooks
-- youtubeComposioOptions.ts
 - partnerKeyMint.ts
 - firecrawl.ts
-- ThreadsInsightsPanel.tsx
-- index.ts
-- DraggableReferenceImage.tsx
-- 20260902170000_partner_usage_counters.sql
 - Getting Started
 - API Keys — Lifecycle
 - Authentication
@@ -1129,144 +1095,101 @@
 - Versioning and Compatibility
 - Errors
 - Idempotency
-- Media
-- Pagination
-- Quotas
-- Rate Limits
-- CreatePostTabs.tsx
 - partnerScopes.ts
-- YouTube Comments — Comment Manager, AI Agent, Comment Workflows
 - Media
 - Pagination
 - Rate Limits
 - Quotas
-- Deprecations
-- Publishing
-- Postora Partner API v1 — Developer Documentation
-- Social Accounts
 - CreatePostTabs.tsx
-- Runbook — YouTube comments rollout
 - buildCredentialsFile
-- whatsappInboxRoute.ts
-- 20260902150000_partner_api_posts.sql
-- FakeQuery
 - Deprecations
 - Publishing
 - Postora Partner API v1 — Developer Documentation
-- Scopes
-- 20260902180000_partner_key_environment.sql
-- ai.md
-- analytics.md
-- contacts.md
-- oauth.md
 - PageLoader.tsx
-- 20260901190000_partner_media.sql
-- 20260902160000_partner_media_scan_state.sql
-- publishing_seam.sql
 - index.ts
 - gather_change_context.sh
 - ThreadsRepliesFilterBar.tsx
-- Access Control
 - WorkflowPool.test.tsx
 - item
-- ProtectedRoute.tsx
 - index.ts
 - Query
 - AdminNotificationSettings.tsx
 - SheetsSyncDialog.test.tsx
-- isTokenExpired
 - useYouTubeThumbnails.test.tsx
-- 20260904120000_comment_workflow.sql
-- youtubeCommentCapability.ts
-- index.ts
-- WebsitePanel.test.tsx
 - AudiencePage.test.tsx
-- plan-r2-selfcontained.md
-- 20260904120000_social_contacts.sql
-- Access Control
 - PostCard.test.tsx
-- 20260905110000_knowledge_website_sources.sql
-- 20260905120000_knowledge_queue_eligibility.sql
-- AdminPartnerHub.test.tsx
-- 20260904150000_youtube_comments.sql
-- 20260904160000_connector_call_source_audience.sql
-- 20260905090000_comment_workflow_stats_last_error.sql
 - index.ts
-- CanvasPage.tsx
-- date-fns
 - PartnerHubKpiCards.test.tsx
 - fflate
-- 20260907180000_messaging_cache_participant_avatar_checked_at.sql
-- 20260906120000_whatsapp_evolution_sync_outcome.sql
 
 ## God Nodes (most connected - your core abstractions)
 1. `cn()` - 414 edges
-2. `Button` - 372 edges
+2. `Button` - 374 edges
 3. `useAuth()` - 338 edges
-4. `useToast()` - 281 edges
-5. `supabase` - 274 edges
+4. `useToast()` - 279 edges
+5. `supabase` - 275 edges
 6. `Badge` - 223 edges
 7. `Card` - 176 edges
 8. `CardContent` - 157 edges
-9. `Input` - 144 edges
+9. `Input` - 146 edges
 10. `Label` - 130 edges
 
 ## Surprising Connections (you probably didn't know these)
-- `useCookieConsent()` --indirect_call--> `stored()`  [INFERRED]
-  src/components/CookieConsent.tsx → supabase/functions/user-ai-providers/handler.test.ts
 - `GeneratePartnerKeyDialog()` --indirect_call--> `env()`  [INFERRED]
   src/components/admin/partner/GeneratePartnerKeyDialog.tsx → supabase/functions/_shared/knowledgeEmbeddings.test.ts
 - `from()` --indirect_call--> `table()`  [INFERRED]
   supabase/functions/_shared/automationDispatchLog.test.ts → src/components/audience/__tests__/ContactsTable.test.tsx
 - `from()` --indirect_call--> `table()`  [INFERRED]
   supabase/functions/_shared/whatsappPartnerOps.test.ts → src/components/audience/__tests__/ContactsTable.test.tsx
-- `wrapper()` --references--> `react`  [EXTRACTED]
-  src/hooks/__tests__/usePlanQuotas.test.tsx → package.json
+- `dependencies()` --indirect_call--> `values()`  [INFERRED]
+  supabase/functions/composio-connect/handler.test.ts → src/components/scheduled/scheduledMediaControls.ts
+- `AiRoutingCard()` --indirect_call--> `preference()`  [INFERRED]
+  src/features/ai-providers/ui/AiRoutingCard.tsx → supabase/functions/_shared/ai-user-routing.test.ts
 
 ## Import Cycles
 - 3-file cycle: `src/components/messaging/ConversationList.tsx -> src/features/whatsapp-inbox/index.ts -> src/features/whatsapp-inbox/ui/WhatsAppInboxScreen.tsx -> src/components/messaging/ConversationList.tsx`
 
-## Communities (1489 total, 288 thin omitted)
+## Communities (1311 total, 285 thin omitted)
 
 ### Community 0 - "badge.tsx"
-Cohesion: 0.03
-Nodes (104): ConnectorConnectionsTable(), stamp(), statusVariant(), WINDOWS, PartnerKeyActivitySheetProps, PartnerKeysTable(), STATUS_VARIANT, when() (+96 more)
+Cohesion: 0.04
+Nodes (42): builder(), AI_AGENT_TOOLS, BOUND_ACCOUNTS, CALL_LOGS, COMPOSIO_ENV, CONNECTIONS, connectLinkReq(), DEFAULT_KEY_ROW (+34 more)
 
 ### Community 1 - "utils.ts"
-Cohesion: 0.07
-Nodes (35): ResolvedModelCards(), ResolvedTier, TIER_LABELS, tier(), DraggableReferenceImage(), DraggableReferenceImageProps, ReferenceImage, ReferenceType (+27 more)
+Cohesion: 0.47
+Nodes (4): db, query(), scalar(), write()
 
 ### Community 2 - "button.tsx"
-Cohesion: 0.05
-Nodes (62): errorTypeFor(), groupThreadsByVideo(), VideoGroup, view(), YouTubeReplyView, YouTubeThreadView, ingestPolledComment(), PolledCommentInput (+54 more)
+Cohesion: 0.12
+Nodes (27): Call, callComposio(), callNative(), callYouTube(), connectorCallMeta(), deleteOwnComment(), fail(), getYouTubeComment() (+19 more)
 
 ### Community 3 - "supabase"
 Cohesion: 0.07
-Nodes (34): AccountSelectorProps, callMessagingApi(), ConversationDetail(), MessageBubble(), MessageBubbleProps, MessagingInboxPlatform, WhatsAppCoexistenceSetupBanner(), WhatsAppSetupProps (+26 more)
+Nodes (41): AccountSelector(), callMessagingApi(), ConversationDetail(), ConversationDetailProps, ConversationLabelChips(), ConversationLabelPicker(), ConversationLabelsProps, LABEL_COLORS (+33 more)
 
 ### Community 4 - "client.ts"
 Cohesion: 0.07
-Nodes (33): AiProvidersGateway, Capability, KeyStatus, ProviderCode, ProviderModel, PROVIDERS, RoutingMode, RoutingPreference (+25 more)
+Nodes (37): formatFileSize(), TikTokPreCheckDetails(), AiProvidersGateway, Capability, KeyStatus, ProviderCode, ProviderModel, PROVIDERS (+29 more)
 
 ### Community 5 - "AnimatedRoutes.tsx"
 Cohesion: 0.02
 Nodes (131): AdAnalytics, AdManager, AdminAnalytics, AdminBlogPosts, AdminCoupons, AdminDashboard, AdminFeatureFlags, AdminHiggsfieldCallback (+123 more)
 
 ### Community 6 - "AdminRateLimits.tsx"
-Cohesion: 0.05
-Nodes (41): File map, Global Constraints, Hybrid AI Agent Connectors (Composio + Tracking) Implementation Plan, Self-review (done at authoring), Slice A — Database & telemetry, Slice B — Composio bridge, Slice C — Runtime & Partner API, Slice D — UI & Partner Hub (+33 more)
+Cohesion: 0.01
+Nodes (89): auth.audit_log_entries, auth.instances, auth.mfa_amr_claims, auth.oauth_clients, auth.oauth_consents, auth.refresh_tokens, auth.schema_migrations, auth.sessions (+81 more)
 
 ### Community 7 - "index.ts"
 Cohesion: 0.09
 Nodes (33): ACTIONS, AdminClient, createRateLimiter(), DbResult, deleteKey(), Dependencies, dispatch(), failure() (+25 more)
 
 ### Community 8 - "useToast"
-Cohesion: 0.01
-Nodes (95): auth.audit_log_entries, auth.instances, auth.mfa_amr_claims, auth.oauth_clients, auth.oauth_consents, auth.refresh_tokens, auth.schema_migrations, auth.sessions (+87 more)
+Cohesion: 0.06
+Nodes (85): automationWrite(), context(), createAutoReplyRoute(), deleteAgentToolRoute(), deleteAutoReplyRoute(), failure(), getAgentConfigRoute(), getAudienceRoute() (+77 more)
 
 ### Community 9 - "PlatformSettingsSection.tsx"
-Cohesion: 0.16
-Nodes (12): DealCardProps, DealDialogProps, PipelineBoardProps, PipelineSettingsDialogProps, NEW_LEAD, stage(), WON, CreateDealInput (+4 more)
+Cohesion: 0.07
+Nodes (36): ComposioToolFailure, executeComposioTool(), isRecord(), refusalOutput(), redactKnownSecrets(), createDependencies(), throwDatabaseError(), probeComposioYouTubeAccount() (+28 more)
 
 ### Community 10 - "PostDetailsDialog.tsx"
 Cohesion: 0.03
@@ -1274,87 +1197,87 @@ Nodes (81): auth.identities, auth.mfa_challenges, auth.mfa_factors, auth.one_tim
 
 ### Community 11 - "usePostForm.tsx"
 Cohesion: 0.08
-Nodes (25): AI Agent Setup Restructure Implementation Plan, File Structure, Global Constraints, Outcome (2026-09-05), Self-Review, Slice 1 — Knowledge tab shell, Slice 2 — Settings tab cards, Slice 3 — Structured profile and agent behavior (+17 more)
+Nodes (37): table(), from(), stubApiLogs(), from(), fixture(), database(), CommentActionAccount, stubFetch() (+29 more)
 
 ### Community 12 - "cors.ts"
 Cohesion: 0.06
 Nodes (34): HealthCheckResult, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_URL, testFacebookConnection(), testInstagramConnection(), checkYouTubeProviderHealth(), YouTubeHealthAccount, YouTubeHealthResult (+26 more)
 
 ### Community 13 - "ImageToolsDialog.tsx"
-Cohesion: 0.12
-Nodes (36): ARTISTIC_FILTERS, CROP_MODES, QUALITY_PRESETS, RESIZE_PRESETS, FeatureToggles(), ImageToolsDialog(), BgRemovalOptions(), BgRemovalOptionsProps (+28 more)
+Cohesion: 0.10
+Nodes (40): ARTISTIC_FILTERS, CROP_MODES, QUALITY_PRESETS, RESIZE_PRESETS, FeatureToggles(), ImageToolsDialog(), BgRemovalOptions(), BgRemovalOptionsProps (+32 more)
 
 ### Community 14 - "cacheAvatarToCloudinary"
 Cohesion: 0.06
-Nodes (41): createDependencies(), FbPage, IgCandidate, jsonResponse(), META_SCOPES, persistOneIgAccount(), exchangeAndPersist(), IG_SCOPES (+33 more)
+Nodes (39): FbPage, IgCandidate, jsonResponse(), META_SCOPES, persistOneIgAccount(), exchangeAndPersist(), IG_SCOPES, InstagramProfile (+31 more)
 
 ### Community 15 - "cn"
-Cohesion: 0.02
-Nodes (93): DeliveryStatus, DeliveryStatusBadge(), DeliveryStatusBadgeProps, MessageMetadata, statusConfig, EmailScheduler(), EmailSchedulerProps, ScopeBadges() (+85 more)
+Cohesion: 0.17
+Nodes (11): Menubar, MenubarCheckboxItem, MenubarContent, MenubarItem, MenubarLabel, MenubarRadioItem, MenubarSeparator, MenubarShortcut() (+3 more)
 
 ### Community 16 - "Platform"
 Cohesion: 0.06
-Nodes (59): table(), values(), from(), accountRefusal(), activateConnection(), ActivationInput, callbackLedger(), externalAccountMetadata() (+51 more)
+Nodes (40): accountRefusal(), activateConnection(), ActivationInput, callbackLedger(), externalAccountMetadata(), findFreshActiveAccount(), firstString(), listYouTubeChannels() (+32 more)
 
 ### Community 17 - "AiAgentManager.tsx"
-Cohesion: 0.04
-Nodes (48): 0. Why this exists, 10. Explicitly out of scope, 11. Resolved: adapters get their own function, 12.1 Owning account, plus explicit shares, 12.2 Editing the shares, 12.3 Two tools, one function name — decide it here, 12.4 What sharing does **not** do, 12. A connector shared with other accounts (+40 more)
+Cohesion: 0.03
+Nodes (64): media_file_providers_updated_at, public.update_updated_at_column(), set_ai_model_preferences_updated_at, set_ai_models_updated_at, set_ai_providers_updated_at, set_app_credentials_updated_at, set_system_settings_updated_at, set_threads_mentions_updated_at (+56 more)
 
 ### Community 18 - "inboundMediaUnderstanding.ts"
-Cohesion: 0.05
-Nodes (70): AGENT_TEXT_LABELS, canonicalProvider(), composeAgentText(), logSkippedUnderstanding(), MODE_KINDS, modeAllows(), neutralizeFence(), PipelineAccount (+62 more)
+Cohesion: 0.09
+Nodes (37): abortError(), attemptGemini(), attemptTier(), attemptWhisper(), bareMime(), callElevenLabs(), callGemini(), callWhisper() (+29 more)
 
 ### Community 19 - "Profiles.tsx"
-Cohesion: 0.05
-Nodes (46): attachComposioTools(), composioToolParameters(), describeInputKeys(), INPUT_META_KEYS, inputProperties(), mergedInputProperties(), ACCOUNT, composioTool() (+38 more)
+Cohesion: 0.06
+Nodes (57): getAccount(), listAccounts(), present(), BoundAccount, fetchBoundAccounts(), selectBoundAccounts(), AssignmentRow, assignmentSchema (+49 more)
 
 ### Community 20 - "ScheduledPosts.tsx"
-Cohesion: 0.07
-Nodes (28): builder(), stub(), ACCOUNT_ROW, KEY_ROW, MEDIA_ROWS, PNG_B64, PNG_BYTES, send() (+20 more)
+Cohesion: 0.14
+Nodes (21): MediaValidation(), MediaValidationProps, buildSourceKey(), DEFAULT_TIKTOK_REQUIREMENTS, mergeWithCachedChecksWhenMetaMissing(), PreCheckCache, readCache(), TikTokPreCheck() (+13 more)
 
 ### Community 21 - "index.ts"
 Cohesion: 0.11
-Nodes (41): ALLOWED_WEBHOOK_EVENTS, apiError(), authenticateApiKey(), checkRateLimit(), commentActionResponse(), downloadAndUploadMedia(), handleCommentDelete(), handleCommentHide() (+33 more)
+Nodes (42): ALLOWED_WEBHOOK_EVENTS, apiError(), authenticateApiKey(), checkRateLimit(), commentActionResponse(), handleCommentDelete(), handleCommentHide(), handleCommentReply() (+34 more)
 
 ### Community 22 - "whatsappRevoke.ts"
-Cohesion: 0.04
-Nodes (38): EvolutionApi, EvolutionApiError, EvolutionSendResult, canRevokeRow(), isAlreadyRevokedProviderResponse(), isRevokeSuccessBody(), isSyntheticProviderId(), remoteJidForRow() (+30 more)
+Cohesion: 0.06
+Nodes (36): EvolutionSendResult, canRevokeRow(), isAlreadyRevokedProviderResponse(), isRevokeSuccessBody(), isSyntheticProviderId(), remoteJidForRow(), remoteNumberFromConversationId(), RevokeMessageRequest (+28 more)
 
 ### Community 23 - "DashboardLayout.tsx"
-Cohesion: 0.03
-Nodes (85): FeatureFlagIndicator(), FLAG_LABELS, AdInsightsChart(), AdInsightsChartProps, METRIC_CONFIG, PlatformNodeComponent(), CommentManagerPanel(), accounts (+77 more)
+Cohesion: 0.07
+Nodes (39): asTimeoutIfComposioTimedOut(), isVideo(), publishYouTubeViaComposio(), readVideoBytes(), safeTitle(), stringArrayMetadata(), stringMetadata(), account (+31 more)
 
 ### Community 24 - "index.ts"
-Cohesion: 0.05
-Nodes (58): addThreadNumbers(), base64UrlEncode(), checkFacebookPlaceEligibility(), compressCloudinaryImageUrl(), compressMediaUrlsForPlatform(), corsHeaders, downloadMediaAsArrayBuffer(), downloadMediaAsBlob() (+50 more)
+Cohesion: 0.06
+Nodes (56): addThreadNumbers(), base64UrlEncode(), checkFacebookPlaceEligibility(), compressCloudinaryImageUrl(), compressMediaUrlsForPlatform(), corsHeaders, downloadMediaAsArrayBuffer(), downloadMediaAsBlob() (+48 more)
 
 ### Community 25 - "BrandIntelligence.tsx"
-Cohesion: 0.04
-Nodes (92): BrandSearchBar(), BrandSearchBarProps, extractUsername(), ContentGenerationPanel(), ContentGenerationPanelProps, PromptCard(), DEFAULT_FILTERS, FilterToolbar() (+84 more)
+Cohesion: 0.10
+Nodes (41): jsonResponse(), acceptInvitation(), ActionContext, ApiError, assertOwnerCanChange(), AuthenticatedCaller, canChangeOwnership(), canManageWorkspace() (+33 more)
 
 ### Community 26 - "index.ts"
-Cohesion: 0.09
-Nodes (28): CaptionHistorySection(), CaptionSection(), CaptionSectionProps, platformLimits, CharacterCounter(), CharacterCounterProps, platformLimits, HashtagSuggestions() (+20 more)
+Cohesion: 0.03
+Nodes (107): ResolvedModelCards(), TIER_KEYS, TikTokAccount, TikTokAccountSelector(), TikTokAccountSelectorProps, DisplayInfo, info(), ThreadsErrorCard() (+99 more)
 
 ### Community 27 - "Topic: project"
-Cohesion: 0.03
-Nodes (62): end_to_end_testing_facts.md, Facts, Facts, Facts, Facts, Facts, Facts, Facts (+54 more)
+Cohesion: 0.06
+Nodes (61): ThreadsMentionCard(), AdminOAuthApps(), McpIntegration(), AGENT_MODEL_KEYS, buildAdminNotifier(), buildCommentReplySender(), buildReplySender(), buildWhatsAppTextSender() (+53 more)
 
 ### Community 28 - "Topic: project"
-Cohesion: 0.03
-Nodes (61): end_to_end_testing_facts.md, Facts, Facts, Facts, Facts, Facts, Facts, Facts (+53 more)
+Cohesion: 0.04
+Nodes (48): 0. Why this exists, 10. Explicitly out of scope, 11. Resolved: adapters get their own function, 12.1 Owning account, plus explicit shares, 12.2 Editing the shares, 12.3 Two tools, one function name — decide it here, 12.4 What sharing does **not** do, 12. A connector shared with other accounts (+40 more)
 
 ### Community 29 - "Topic: project"
-Cohesion: 0.03
-Nodes (61): end_to_end_testing_facts.md, Facts, Facts, Facts, Facts, Facts, Facts, Facts (+53 more)
+Cohesion: 0.04
+Nodes (48): 1.1 Display Creator Nickname ✅, 1.2 Block Posting When Limit Reached ✅, 1.3 Validate Video Duration ✅, 1.4 Daily Limit Display ✅, 1. Audit Initial State (CRITICAL), 1. Creator Info API Requirements ✅ COMPLIANT, 2.1 Privacy Dropdown with API Options ✅, 2.2 No Default Privacy Value ⚠️ POTENTIAL ISSUE (+40 more)
 
 ### Community 30 - "workspaceService.ts"
-Cohesion: 0.04
-Nodes (64): memberName(), MembersList(), jsonResponse(), WorkspaceRole, callerSupabase(), createSupabaseWorkspaceClient(), DatabaseError, escapeHtml() (+56 more)
+Cohesion: 0.05
+Nodes (25): memberName(), MembersList(), AuthResult, WorkspaceRole, authenticate(), callerSupabase(), createSupabaseWorkspaceClient(), DatabaseError (+17 more)
 
 ### Community 31 - "index.ts"
-Cohesion: 0.08
-Nodes (24): Accepted — and what changed, Departure 1 — the durable unit is the inbound work item, not the generated reply, Departure 2 — replay needs delivery idempotency, which does not exist yet, Departure 3 — `threads-poll-replies` does not call the agent, Durable Reply Outbox Implementation Plan, File Structure, Global Constraints, Rejected — with evidence (+16 more)
+Cohesion: 0.04
+Nodes (47): 1. Security-first backend helpers exist, 2. Sensitive logging protection is already centralized, 3. Client-facing backend errors have a sanitizer, 4. Validation is moving toward schemas, 5. Shared backend extraction has begun, Architectural effect, Better design, Clean Architecture Assessment (+39 more)
 
 ### Community 32 - "AdminOAuthVerification.tsx"
 Cohesion: 0.08
@@ -1362,7 +1285,7 @@ Nodes (42): AdminOAuthVerification(), blueskyCategoryInfo, blueskyChecklistItems
 
 ### Community 33 - "useConversationExport.ts"
 Cohesion: 0.07
-Nodes (50): RFC-4180, ExportChatProgress, ExportChatState, ExportChatTarget, ExportFormat, ExportProgress, FetchedChat, isAbort() (+42 more)
+Nodes (51): RFC-4180, ExportChatProgress, ExportChatState, ExportChatTarget, ExportFormat, ExportProgress, FetchedChat, isAbort() (+43 more)
 
 ### Community 34 - "useFeatureFlags"
 Cohesion: 0.10
@@ -1370,59 +1293,59 @@ Nodes (26): ACK_BY_NUMBER, AckStatus, AckUpdate, ackUpdates(), InboxAckStatus, i
 
 ### Community 35 - "useAuth"
 Cohesion: 0.05
-Nodes (38): 0. Why this exists, 10.1 Data, 10.2 Connect, 10.3 Publish, 10.4 Capability parity (D10, fail-closed), 10.5 Health and refresh, 10.6 Known limits (recorded, not solved), 10. YouTube via Composio (publishing provider) (+30 more)
+Nodes (43): 0.3, and what it found, 0. Progress log, 0A — Emergency: the live duplicate-send window, 0B — Make correctness checkable, 0C — Contract and security groundwork, 0D — External, 1. How this plan is ordered, 2.1 Prerequisites, per deliverable (+35 more)
 
 ### Community 36 - "WhatsAppVoiceComposer.tsx"
-Cohesion: 0.05
-Nodes (24): MediaRecorderCtor, RecorderState, rmsLevel(), FakeAudioContext, FakeMediaRecorder, useVoiceRecorder(), VoiceRecorder, canRecordForMode() (+16 more)
+Cohesion: 0.06
+Nodes (21): MediaRecorderCtor, RecorderState, rmsLevel(), FakeAudioContext, FakeMediaRecorder, useVoiceRecorder(), VoiceRecorder, finitePositive() (+13 more)
 
 ### Community 37 - "WhatsAppComposer.tsx"
 Cohesion: 0.06
 Nodes (40): RFC-1918, assertFetchableUrl(), base64Digit(), ByteSpan, CloudGraphFetcher, CREDENTIALED_HOST_SUFFIXES, CREDENTIALED_POLICY, decodeBase64BytesCapped() (+32 more)
 
 ### Community 38 - "n8nMessagingDispatch.ts"
-Cohesion: 0.04
-Nodes (59): MetaCommentInput, normalizeMetaCommentChange(), toIso(), CommentRoute, CommentRoutingDeps, routeComment(), ACCOUNT, COMMENT (+51 more)
+Cohesion: 0.07
+Nodes (40): describeDispatchSubject(), DispatchLogSubject, readString(), recordN8nDispatch(), commentEnvelope, from(), messageEnvelope, aliasEvent() (+32 more)
 
 ### Community 39 - "devDependencies"
 Cohesion: 0.04
 Nodes (53): autoprefixer, eslint, @eslint/js, eslint-plugin-react-hooks, eslint-plugin-react-refresh, globals, jsdom, lovable-tagger (+45 more)
 
 ### Community 40 - "useWhatsAppWorkspace.ts"
-Cohesion: 0.08
-Nodes (38): queryClient, WhatsAppWorkspaceContextValue, InviteMemberForm(), isInvitationRole(), isWorkspaceRole(), MemberActions(), PendingInvitations(), roleLabel() (+30 more)
+Cohesion: 0.10
+Nodes (32): queryClient, InviteMemberForm(), isInvitationRole(), isWorkspaceRole(), MemberActions(), PendingInvitations(), roleLabel(), WorkspaceTeamManager() (+24 more)
 
 ### Community 41 - "useWhatsAppPipelines.ts"
-Cohesion: 0.09
-Nodes (29): contactQueryKey(), ContactRow, DEAL_CARD_SELECT, dealCard(), dealCardQuery(), DealCardQueryRow, DealInsert, DealRow (+21 more)
+Cohesion: 0.07
+Nodes (46): DealFormValues, PipelineSettingsDialog(), mocks, contactQueryKey(), ContactRow, CreateDealInput, DEAL_CARD_SELECT, dealCard() (+38 more)
 
 ### Community 42 - "index.ts"
-Cohesion: 0.32
-Nodes (10): CANCELLABLE, cancelOutboxRow(), deliverGeneratedReply(), deliverStoredReply(), OutboxEntry, releaseAfterError(), sendAndSettle(), takeOutboxRow() (+2 more)
+Cohesion: 0.10
+Nodes (34): ComposioExecutionDependencies, CONNECTION, context(), ledgerAdmin(), LedgerState, RecordedExecute, SHEETS_TOOL, ComposioReadyTool (+26 more)
 
 ### Community 43 - "TikTok Content Posting API - UX Compliance Gap Analysis"
-Cohesion: 0.04
-Nodes (48): 1.1 Display Creator Nickname ✅, 1.2 Block Posting When Limit Reached ✅, 1.3 Validate Video Duration ✅, 1.4 Daily Limit Display ✅, 1. Audit Initial State (CRITICAL), 1. Creator Info API Requirements ✅ COMPLIANT, 2.1 Privacy Dropdown with API Options ✅, 2.2 No Default Privacy Value ⚠️ POTENTIAL ISSUE (+40 more)
+Cohesion: 0.05
+Nodes (39): 1. The six automation surfaces at a glance, 2. Current implementation notes (verified against code), 3. Recommended setup order (user journey), 4. Practical use cases per section, 5. Adding an AI agent layer, 6. n8n integration, 7. Suitable business types, 8. Onboarding checklist (per business) (+31 more)
 
 ### Community 44 - "whatsappWorkspaceAccess.ts"
-Cohesion: 0.07
-Nodes (27): FakeClient, FakeQuery, FakeRow, formerlyLeakingActions, WHATSAPP_ACTION_MINIMUM_ROLE, WhatsAppAction, WhatsAppActionAccessRequest, withWhatsAppActionAccess() (+19 more)
+Cohesion: 0.05
+Nodes (35): FakeClient, FakeQuery, FakeRow, formerlyLeakingActions, WHATSAPP_ACTION_MINIMUM_ROLE, WhatsAppAction, WhatsAppActionAccessRequest, withWhatsAppActionAccess() (+27 more)
 
 ### Community 45 - "cron-auth.ts"
 Cohesion: 0.04
-Nodes (42): corsHeaders, ExpiringOverride, RESEND_API_KEY, AlertConfig, HealthSnapshot, corsHeaders, BlogPost, corsHeaders (+34 more)
+Nodes (48): corsHeaders, ExpiringOverride, RESEND_API_KEY, AlertConfig, HealthSnapshot, corsHeaders, BlogPost, corsHeaders (+40 more)
 
 ### Community 46 - "index.ts"
-Cohesion: 0.08
-Nodes (43): CategoryFilter, COMPOSIO_TYPES, composioPreset(), ConnectionTestView, CONNECTOR_DIRECTORY, ConnectorCredentialState(), ConnectorTestState(), DatabaseConnectorsEditor() (+35 more)
+Cohesion: 0.05
+Nodes (41): 10. Entitlement enforcement (G5), 11. Phasing, 12. Testing, 13. Deployment, 14. Risks, 15. Out of scope, 1. Why this exists, 2.1 What the Partner API already has (+33 more)
 
 ### Community 47 - "POSTORA Clean Architecture Audit"
-Cohesion: 0.04
-Nodes (47): 1. Security-first backend helpers exist, 2. Sensitive logging protection is already centralized, 3. Client-facing backend errors have a sanitizer, 4. Validation is moving toward schemas, 5. Shared backend extraction has begun, Architectural effect, Better design, Clean Architecture Assessment (+39 more)
+Cohesion: 0.05
+Nodes (41): 10. Testing and acceptance, 11. Open questions, 12. Correction log, 12. Edge Function Prime Rule, 13. Never Do These in a New Edge Function, 14. Edge Function Authentication, 15. Edge Function Validation, 1. Problem (+33 more)
 
 ### Community 48 - "WorkspaceTeamManager.tsx"
-Cohesion: 0.03
-Nodes (64): media_file_providers_updated_at, public.update_updated_at_column(), set_ai_model_preferences_updated_at, set_ai_models_updated_at, set_ai_providers_updated_at, set_app_credentials_updated_at, set_system_settings_updated_at, set_threads_mentions_updated_at (+56 more)
+Cohesion: 0.05
+Nodes (41): 10. Testing and acceptance, 11. Open questions, 12. Correction log, 12. Edge Function Prime Rule, 13. Never Do These in a New Edge Function, 14. Edge Function Authentication, 15. Edge Function Validation, 1. Problem (+33 more)
 
 ### Community 49 - "POSTORA_PARTNER_API_PRD_v1.0.md"
 Cohesion: 0.04
@@ -1434,19 +1357,19 @@ Nodes (46): 10. Proposed Repository Structure, 11. API Versioning, 13. Authoriza
 
 ### Community 51 - "dependencies"
 Cohesion: 0.04
-Nodes (45): clsx, cmdk, @dnd-kit/core, input-otp, lucide-react, next-themes, dependencies, clsx (+37 more)
+Nodes (47): clsx, date-fns, @dnd-kit/core, framer-motion, i18next, i18next-browser-languagedetector, lucide-react, dependencies (+39 more)
 
 ### Community 52 - "WhatsAppContactsContent.tsx"
-Cohesion: 0.08
-Nodes (50): fetchOneHop(), readJson(), REDIRECT_STATUSES, safeVendorFetch(), buildUrl(), callSupabase(), decodeJwtPayload(), supabaseAdapter (+42 more)
+Cohesion: 0.10
+Nodes (35): EvolutionApiError, WhatsAppNumberContext, configuredPairingApi(), createProviderInstance(), definiteRejection(), endSession(), extractQr(), extractState() (+27 more)
 
 ### Community 53 - "ports.ts"
-Cohesion: 0.08
-Nodes (33): DeleteConversationRequest, ForwardMessageRequest, ForwardMessageResponse, GetConversationStateRequest, GetMessagesPageRequest, GetMessagesPageResponse, GetWhatsAppMediaRequest, GetWhatsAppMediaResponse (+25 more)
+Cohesion: 0.06
+Nodes (34): DeleteConversationRequest, ForwardMessageRequest, ForwardMessageResponse, GetConversationStateRequest, GetMessagesPageRequest, GetMessagesPageResponse, GetWhatsAppMediaRequest, GetWhatsAppMediaResponse (+26 more)
 
 ### Community 54 - "whatsappMediaResolver.ts"
-Cohesion: 0.10
-Nodes (32): getFileDisplayName(), COMMON_RATIOS, gcd(), getAspectRatioLabel(), DownloadProgressBar(), DownloadProgressBarProps, DraggableMediaCard(), DraggableMediaCardProps (+24 more)
+Cohesion: 0.03
+Nodes (98): CATEGORY_LAST_RESORT, CATEGORY_MODALITY, TierSelector(), TierSelectorProps, ModelParamControls(), ModelParamControlsProps, ParamControlProps, ParamValues (+90 more)
 
 ### Community 55 - "higgsfield-oauth.ts"
 Cohesion: 0.10
@@ -1457,132 +1380,132 @@ Cohesion: 0.10
 Nodes (20): 1. 🛍️ متجر المحادثة والدفع الفوري (Social & WhatsApp In-Chat Commerce), 2. 🎬 محرك تحويل الفيديوهات الطويلة إلى ريلز وشورتس (AI Video Repurposing & Viral Clipper), 3. 🎯 حملات المتابعة التلقائية والبث عبر الواتساب (WhatsApp Drip Sequences & Smart Broadcasts), 4. 🕵️ رادار التريندات وجاسوس المنافسين (Viral Trend Radar & Competitor Intelligence), 5. ⭐ إدارة ومضاعفة تقييمات الشركات وجوجل ماب (Google Reviews Booster & Reputation Hub), Postora Future Killer Features: Strategic & Architecture Roadmap, أ. القيمة المضافة (The "Why"), أ. القيمة المضافة (The "Why") (+12 more)
 
 ### Community 57 - "whatsappPipeline.ts"
-Cohesion: 0.12
-Nodes (26): DealUpdate, validatedDeal(), stages, amountIssues(), applyOptimisticDealMove(), contactIssues(), currencyIssues(), DealChangesValidationResult (+18 more)
+Cohesion: 0.09
+Nodes (38): DealCard(), formatActivity(), formatAmount(), contactLabel(), DealDialog(), translateDealIssue(), PipelineBoard(), StageColumn() (+30 more)
 
 ### Community 58 - "WhatsAppInboxApi"
-Cohesion: 0.07
-Nodes (39): CATEGORY_LAST_RESORT, CATEGORY_MODALITY, DefaultModelSelector(), primarySpecFor(), TierSelector(), TierSelectorProps, ModelParamControls(), callApi() (+31 more)
+Cohesion: 0.10
+Nodes (31): digestOf(), getMedia(), postMedia(), present(), readUpload(), UploadPayload, ascii(), canonicalise() (+23 more)
 
 ### Community 59 - "index.ts"
-Cohesion: 0.05
-Nodes (41): AdminClient, ConfigScopeQuery, ConfigWriteScope, NamedAccountId, parseNamedAccountId(), resolveConfigWriteAccount(), resolveOwnedAccountId(), rowId() (+33 more)
+Cohesion: 0.11
+Nodes (22): connectorDefinition, AccountRow, CredentialVault, deleteAccountScopedTool(), ExistingToolRow, isUniqueViolation(), listToolsForUser(), parseUpsertToolInput() (+14 more)
 
 ### Community 60 - "Postora Partner API — Specification v1"
 Cohesion: 0.05
-Nodes (41): 10. Testing and acceptance, 11. Open questions, 12. Correction log, 12. Edge Function Prime Rule, 13. Never Do These in a New Edge Function, 14. Edge Function Authentication, 15. Edge Function Validation, 1. Problem (+33 more)
+Nodes (41): File map, Global Constraints, Hybrid AI Agent Connectors (Composio + Tracking) Implementation Plan, Self-review (done at authoring), Slice A — Database & telemetry, Slice B — Composio bridge, Slice C — Runtime & Partner API, Slice D — UI & Partner Hub (+33 more)
 
 ### Community 61 - "Postora Partner API — Specification v1"
 Cohesion: 0.05
-Nodes (41): 10. Testing and acceptance, 11. Open questions, 12. Correction log, 12. Edge Function Prime Rule, 13. Never Do These in a New Edge Function, 14. Edge Function Authentication, 15. Edge Function Validation, 1. Problem (+33 more)
+Nodes (40): 10. Hook Rules, 12. Edge Function Prime Rule, 13. Never Do These in a New Edge Function, 14. Edge Function Authentication, 15. Edge Function Validation, 16. Edge Function Error Handling, 17. Logging Rules, 18. Social Platform Adapter Rule (+32 more)
 
 ### Community 62 - "inboundMediaFetchers.ts"
 Cohesion: 0.08
 Nodes (39): selectFetcher(), abortAfter(), asRecord(), ByteBudget, defaultFetchers(), extensionFor(), fetchBytes(), FetchBytesResult (+31 more)
 
 ### Community 63 - "AdminLogs.tsx"
-Cohesion: 0.07
-Nodes (39): asTimeoutIfComposioTimedOut(), isVideo(), publishYouTubeViaComposio(), readVideoBytes(), safeTitle(), stringArrayMetadata(), stringMetadata(), account (+31 more)
-
-### Community 64 - "ARCHITECTURE.md"
-Cohesion: 0.05
-Nodes (40): 10. Hook Rules, 12. Edge Function Prime Rule, 13. Never Do These in a New Edge Function, 14. Edge Function Authentication, 15. Edge Function Validation, 16. Edge Function Error Handling, 17. Logging Rules, 18. Social Platform Adapter Rule (+32 more)
-
-### Community 65 - "OAuth & Token Refresh Technical Guide"
 Cohesion: 0.05
 Nodes (39): 1. Facebook / Instagram, 2. TikTok, 3. YouTube (Google), 4. Twitter/X, 5. LinkedIn, 6. Pinterest, 7. Threads, 8. Bluesky (+31 more)
 
+### Community 64 - "ARCHITECTURE.md"
+Cohesion: 0.05
+Nodes (38): Backend, Code Standards, Contact & Resources, Current Critical Issues, Database Schema (Key Tables), Development Guidelines, Edge Function Development, Edge Functions Reference (+30 more)
+
+### Community 65 - "OAuth & Token Refresh Technical Guide"
+Cohesion: 0.05
+Nodes (38): 0. Why this exists, 10.1 Data, 10.2 Connect, 10.3 Publish, 10.4 Capability parity (D10, fail-closed), 10.5 Health and refresh, 10.6 Known limits (recorded, not solved), 10. YouTube via Composio (publishing provider) (+30 more)
+
 ### Community 66 - "useAiAgentTools.ts"
-Cohesion: 0.06
-Nodes (30): 1.1 Scope by platform, 1.2 How this differs from the existing Leads CRM, 1.3 Value, 1. Executive Summary & Core Concept, 2.1 Navigation placement, 2.2 Page structure (`src/pages/automation/AudiencePage.tsx`), 2. Information Architecture & Navigation, 3.1 Tenancy decision (+22 more)
+Cohesion: 0.05
+Nodes (36): 1. The callers never delivered replies, 2. Three users hold configs, not two, 3. Replaying the allow-list seed would undo an admin decision, 3a — storage, 3b — admin UI, 3c — runtime cutover, 3d — the per-user pickers come out, 3e — what becomes of `ai_agent_allowed_models` (+28 more)
 
 ### Community 67 - "ThreadsRepliesTab.tsx"
-Cohesion: 0.14
-Nodes (25): applyReplyFilters(), Props, ThreadsRepliesTab(), ThreadsReplyComposerDialog(), formatDuration(), ThreadsReplyQuotaCard(), Props, ThreadsThreadPicker() (+17 more)
+Cohesion: 0.11
+Nodes (30): applyReplyFilters(), DateField(), defaultReplyFilters, HasRepliesFilter, Props, ReplyFilters, SortBy, StatusFilter (+22 more)
 
 ### Community 68 - "index.ts"
-Cohesion: 0.08
-Nodes (43): runInBackground(), EvolutionQrAccount, extractOwnerJid(), extractProfileName(), findOwnedEvolutionAccount(), loadAccountMetadata(), mergeDisplayName(), normalizeConnectionName() (+35 more)
+Cohesion: 0.07
+Nodes (45): runInBackground(), ConnectionSnapshot, emitConnectionTransition(), EvolutionQrAccount, extractOwnerJid(), extractProfileName(), findOwnedEvolutionAccount(), loadAccountConnection() (+37 more)
 
 ### Community 69 - "Postora - External Developer Technical Guide"
 Cohesion: 0.05
-Nodes (38): Backend, Code Standards, Contact & Resources, Current Critical Issues, Database Schema (Key Tables), Development Guidelines, Edge Function Development, Edge Functions Reference (+30 more)
+Nodes (36): createEvolutionApi(), createRequestBody(), EvolutionApi, EvolutionApiOptions, EvolutionAudioInput, EvolutionCreateInstanceInput, EvolutionEvent, EvolutionMediaInput (+28 more)
 
 ### Community 70 - "openinary.ts"
 Cohesion: 0.07
 Nodes (41): CleanupResult, corsHeaders, OrphanedFilePayload, corsHeaders, DeleteRequest, DeleteResponse, corsHeaders, RenameRequest (+33 more)
 
 ### Community 71 - "Orchestrator-Driven Verification and Guardrails Across Facts, Design, and Project Domains"
-Cohesion: 0.05
-Nodes (38): codex_delegate_endpoint_hardening_and_phase_audit_2026_06_21.md, codex_delegate_orchestration_and_usage_facts.md, codex_delegate_rlm_skill_and_migration_plan_process.md, codex_delegate_skill_and_api_migration_verification_protocol.md, codex_delegate_skill_and_orchestration_workflow.md, codex_delegate_skill_and_orchestrator_process.md, codex_delegate_skill_and_postora_migration_verification_protocol.md, context.md (+30 more)
+Cohesion: 0.09
+Nodes (25): HourData, PlatformSuccessChart(), PlatformSuccessChartProps, PlatformSuccessRate, PostingActivityChart(), PostingActivityChartProps, StatusData, StatusDistributionChart() (+17 more)
 
 ### Community 72 - "6. Decision ledger"
 Cohesion: 0.05
 Nodes (37): 10. Testing and acceptance, 11. Open questions, 12. Correction log, 1. Problem, 2. Relationship to other documents, 3.1 What is built, 3.2 What the API exposes, 3.3 What is specified or required but missing (+29 more)
 
 ### Community 73 - "Analytics.tsx"
-Cohesion: 0.02
-Nodes (118): HourData, PlatformSuccessChart(), PlatformSuccessChartProps, PlatformSuccessRate, PostingActivityChart(), PostingActivityChartProps, StatusData, StatusDistributionChart() (+110 more)
+Cohesion: 0.11
+Nodes (28): createWebhook(), deleteWebhook(), getWebhook(), Invalid, listWebhooks(), loadWebhook(), mintSecret(), pathWebhookId() (+20 more)
 
 ### Community 74 - "NotificationBell.tsx"
-Cohesion: 0.05
-Nodes (52): createDependencies(), createUserClient(), throwDatabaseError(), ConnectError, initiateConnection(), recordRefusal(), refreshConnectionSchema(), revokeConnection() (+44 more)
+Cohesion: 0.08
+Nodes (29): loadOwnedTarget(), normalizeHandle(), ReconnectError, ReconnectErrorCode, reconnectErrorParam(), ReconnectIdentity, ReconnectIdentityPolicy, ReconnectRequest (+21 more)
 
 ### Community 75 - "Design"
-Cohesion: 0.05
-Nodes (36): 1. The callers never delivered replies, 2. Three users hold configs, not two, 3. Replaying the allow-list seed would undo an admin decision, 3a — storage, 3b — admin UI, 3c — runtime cutover, 3d — the per-user pickers come out, 3e — what becomes of `ai_agent_allowed_models` (+28 more)
-
-### Community 76 - "index.ts"
-Cohesion: 0.09
-Nodes (28): callGoogleGenerateContent(), callOpenAIImages(), fetchReference(), GenerateImageSchema, generateWithModel(), getSystemSettingModel(), HARDCODED_FALLBACK, importReferences() (+20 more)
-
-### Community 77 - "DefaultModelSelector.tsx"
-Cohesion: 0.16
-Nodes (16): failureText(), persistConnectionTestOutcome(), RecordedUpdate, TestOutcomeAdmin, createAdapterDependencies(), boundaryLog(), executeAdapterRequest(), handleAdapterRequest() (+8 more)
-
-### Community 78 - "commentAutomation.ts"
-Cohesion: 0.03
-Nodes (98): adminToolDefinitions, createScheduledPost(), executeAdminTool(), getPostingSummary(), listConnectedAccounts(), searchPosts(), AdapterRequestInput, AGENT_MODEL_KEYS (+90 more)
-
-### Community 79 - "Core Features & User Flows"
 Cohesion: 0.06
 Nodes (34): 10. Admin Dashboard (`/admin`), 11. User Management (`/admin/users`), 12. Subscription Management (`/admin/subscriptions`), 13. Plan Builder (`/admin/plans`), 14. Blog/Announcements (`/admin/blog`), 1. Authentication Flow (`/auth`), 1. Content Creator, 2. Dashboard (`/dashboard`) (+26 more)
 
-### Community 80 - "WhatsAppMediaAttachment.tsx"
+### Community 76 - "index.ts"
+Cohesion: 0.08
+Nodes (29): callGoogleGenerateContent(), callOpenAIImages(), fetchReference(), GenerateImageSchema, generateWithModel(), getSystemSettingModel(), HARDCODED_FALLBACK, importReferences() (+21 more)
+
+### Community 77 - "DefaultModelSelector.tsx"
+Cohesion: 0.18
+Nodes (24): asYouTubeAccount(), callGraph(), deleteComment(), failure(), Fetcher, fromYouTube(), GraphOutcome, hideComment() (+16 more)
+
+### Community 78 - "commentAutomation.ts"
 Cohesion: 0.05
-Nodes (39): MEDIA_UNAVAILABLE, WhatsAppAttachment, WhatsAppAttachmentKind, WhatsAppResolvedMedia, chunkSorted(), RequestMediaMeta, Probe(), useWhatsAppMedia() (+31 more)
+Nodes (51): FeatureFlagIndicator(), FLAG_LABELS, CreditBalanceIndicator(), LanguageToggle(), DashboardLayoutProps, NavEntry, NavItemDirect, NavItemDropdown (+43 more)
+
+### Community 79 - "Core Features & User Flows"
+Cohesion: 0.07
+Nodes (27): KnowledgeGraphCardProps, CRAWL_STAGES, crawlLabel(), CrawlProgress(), DOWNLOADABLE_SOURCE_TYPES, KnowledgeSourcesPanel(), KnowledgeSourcesPanelProps, NamedAccount (+19 more)
+
+### Community 80 - "WhatsAppMediaAttachment.tsx"
+Cohesion: 0.07
+Nodes (30): MEDIA_UNAVAILABLE, WhatsAppAttachment, WhatsAppAttachmentKind, WhatsAppResolvedMedia, chunkSorted(), RequestMediaMeta, Probe(), useWhatsAppMedia() (+22 more)
 
 ### Community 81 - "test-utils.tsx"
 Cohesion: 0.11
 Nodes (28): mockPlatformPosts, mockPosts, mockAuth, mockNavigate, mockPosts, mockSocialAccounts, mockSocialAccounts, mockSocialProfiles (+20 more)
 
 ### Community 82 - "whatsappSyncEngine.ts"
-Cohesion: 0.14
-Nodes (17): corsHeaders, handleRefreshSuccess(), refreshSingleAccount(), SocialAccountWithDetails, account, refreshBlueskyToken(), refreshFacebookToken(), refreshInstagramBusinessToken() (+9 more)
+Cohesion: 0.06
+Nodes (57): corsHeaders, nextFailureCount(), shouldEscalateToReauth(), AnySupabase, handleRefreshFailure(), handleRefreshSuccess(), isPermanentAuthError(), PERMANENT_AUTH_ERRORS (+49 more)
 
 ### Community 83 - "YouTube OAuth Verification Guide"
 Cohesion: 0.06
 Nodes (33): 1. Detect `invalid_grant` Errors, 2. User-Facing Reconnect Prompt, 3. Proactive Token Monitoring, 4. Reduce Refresh Frequency (Temporary), Affected Code Files, APIs & Services → Credentials, APIs & Services → Library, APIs & Services → OAuth consent screen (+25 more)
 
 ### Community 84 - "WhatsAppInboxScreen.tsx"
-Cohesion: 0.06
-Nodes (34): DashboardLayout(), getUserMenuItems(), CouponInput(), PlanCard(), PlanCardProps, planIcons, planVariants, PlanComparison() (+26 more)
+Cohesion: 0.15
+Nodes (18): canRecordForMode(), MIME_PREFERENCE, pickRecordingMimeType(), interactiveMessageCapability, interactiveMessageDisabledLabel(), InteractiveMessageDisabledReason, isSyntheticProviderId(), revokeCapability (+10 more)
 
 ### Community 85 - "useWhatsAppMessages.ts"
-Cohesion: 0.04
-Nodes (40): Canvas(), defaultEdgeOptions, edgeTypes, nodeTypes, CanvasToolbar(), DeleteNodeDialog(), KeyboardShortcutsDialog(), KeyboardShortcutsDialogProps (+32 more)
+Cohesion: 0.09
+Nodes (24): CreatePostHeaderProps, MediaSummaryBanner(), MediaUploadArea(), SchedulingSection(), SchedulingSectionProps, PostStep, StepProgressBar(), StepProgressBarProps (+16 more)
 
 ### Community 86 - "index.ts"
-Cohesion: 0.05
-Nodes (28): client, keyId, overlapMinutes, predecessorEnv, PROD_ROW, refusal(), STAGING_ROW, WS_A_KEY (+20 more)
+Cohesion: 0.06
+Nodes (31): 1. Summary, 2.10 Secrets / env management, 2.11 Logging & error handling, 2.12 n8n API, 2.1 Authentication & session, 2.2 OAuth flows, 2.3 Webhooks, 2.4 Scheduled / cron functions (+23 more)
 
 ### Community 87 - "3. Phases"
-Cohesion: 0.05
-Nodes (43): 0.3, and what it found, 0. Progress log, 0A — Emergency: the live duplicate-send window, 0B — Make correctness checkable, 0C — Contract and security groundwork, 0D — External, 1. How this plan is ordered, 2.1 Prerequisites, per deliverable (+35 more)
+Cohesion: 0.06
+Nodes (31): 10. AI bot for partner data — deferred, and why, 11. Postora UI, 12. Webhook security, 13. Danat-Mostakbal integration — step by step, 13a.1 Egress verification — executed 2026-08-13, both directions PASS, 13a. Deployment topology — two separate servers, 14. Testing, 15. Deployment sequencing (+23 more)
 
 ### Community 88 - "facebookSdk.ts"
-Cohesion: 0.07
-Nodes (48): xlsx, claimSource(), defaultDependencies, deleteChunksFrom(), downloadSource(), embedChunksResumably(), failSource(), handleWorkerRequest() (+40 more)
+Cohesion: 0.09
+Nodes (37): xlsx, claimSource(), defaultDependencies, deleteChunksFrom(), embedChunksResumably(), failSource(), handleWorkerRequest(), message() (+29 more)
 
 ### Community 89 - "index.ts"
 Cohesion: 0.09
@@ -1590,146 +1513,146 @@ Nodes (32): shouldDispatchInboundMessage(), BuildInput, buildObservation(), flus
 
 ### Community 90 - "knowledgeEmbeddings.ts"
 Cohesion: 0.06
-Nodes (57): deps(), accountRetrievalRpcName(), assertEmbeddingDimensions(), assertSelectionOwnsColumns(), claimEmbeddingColumnOwnership(), columnOwnerKey(), ColumnOwners, configuredValue() (+49 more)
+Nodes (56): tier(), deps(), accountRetrievalRpcName(), assertEmbeddingDimensions(), assertSelectionOwnsColumns(), columnOwnerKey(), ColumnOwners, configuredValue() (+48 more)
 
 ### Community 91 - "Orchestrator-Driven Verification and Guardrails Across Facts, Design, and Project Domains"
 Cohesion: 0.06
-Nodes (32): codex_delegate_endpoint_hardening_and_phase_audit_2026_06_21.md, codex_delegate_orchestration_and_usage_facts.md, codex_delegate_rlm_skill_and_migration_plan_process.md, codex_delegate_skill_and_api_migration_verification_protocol.md, codex_delegate_skill_and_orchestration_workflow.md, codex_delegate_skill_and_orchestrator_process.md, codex_delegate_skill_and_postora_migration_verification_protocol.md, context.md (+24 more)
+Nodes (30): 1. Shared CORS Helpers, 1. UpscaleOptions Component, 2. FeatureToggles Component, 2. Unified Upscale Edge Function, 3. Cloudinary URL Builder (utils.ts), 3. Supabase Config (TOML), 4. Calling the Upscaler from Your Dialog, Admin Settings Card Component (+22 more)
 
 ### Community 92 - "Postora Security Hardening Audit — 2026-06"
 Cohesion: 0.06
-Nodes (31): 1. Summary, 2.10 Secrets / env management, 2.11 Logging & error handling, 2.12 n8n API, 2.1 Authentication & session, 2.2 OAuth flows, 2.3 Webhooks, 2.4 Scheduled / cron functions (+23 more)
+Nodes (30): Follow-ups (not in this plan), Global Constraints, Manual verification, Module layout, Phase 1 — Layout, chrome, and the collapsed rail, Phase 2 — Media, Phase 3 — Paging, scroll anchoring, mark-read, Phase 4 — Per-message actions (+22 more)
 
 ### Community 93 - "Postora WhatsApp Partner API — Design (v2)"
 Cohesion: 0.06
-Nodes (31): 10. AI bot for partner data — deferred, and why, 11. Postora UI, 12. Webhook security, 13. Danat-Mostakbal integration — step by step, 13a.1 Egress verification — executed 2026-08-13, both directions PASS, 13a. Deployment topology — two separate servers, 14. Testing, 15. Deployment sequencing (+23 more)
+Nodes (30): 1.1 Scope by platform, 1.2 How this differs from the existing Leads CRM, 1.3 Value, 1. Executive Summary & Core Concept, 2.1 Navigation placement, 2.2 Page structure (`src/pages/automation/AudiencePage.tsx`), 2. Information Architecture & Navigation, 3.1 Tenancy decision (+22 more)
 
 ### Community 95 - "Image Upscaler Implementation Guide"
 Cohesion: 0.06
-Nodes (30): 1. Shared CORS Helpers, 1. UpscaleOptions Component, 2. FeatureToggles Component, 2. Unified Upscale Edge Function, 3. Cloudinary URL Builder (utils.ts), 3. Supabase Config (TOML), 4. Calling the Upscaler from Your Dialog, Admin Settings Card Component (+22 more)
-
-### Community 96 - "WhatsApp Chat Overhaul Implementation Plan"
-Cohesion: 0.06
-Nodes (30): Follow-ups (not in this plan), Global Constraints, Manual verification, Module layout, Phase 1 — Layout, chrome, and the collapsed rail, Phase 2 — Media, Phase 3 — Paging, scroll anchoring, mark-read, Phase 4 — Per-message actions (+22 more)
-
-### Community 97 - "Social Media Connection Testing Plan"
-Cohesion: 0.06
 Nodes (30): Common Issues, Common Issues, Common Issues to Watch, Connection Test, Connection Test, Connection Test, Connection Test, Connection Test (+22 more)
 
-### Community 98 - "_index.md"
+### Community 96 - "WhatsApp Chat Overhaul Implementation Plan"
 Cohesion: 0.07
-Nodes (29): codex_delegate_endpoint_hardening_and_phase_audit_2026_06_21.md, codex_delegate_orchestration_and_usage_facts.md, codex_delegate_rlm_skill_and_migration_plan_process.md, codex_delegate_skill_and_api_migration_verification_protocol.md, codex_delegate_skill_and_orchestration_workflow.md, codex_delegate_skill_and_orchestrator_process.md, codex_delegate_skill_and_postora_migration_verification_protocol.md, context.md (+21 more)
+Nodes (30): AiAgentManagerProps, AiConversationModeSelect(), jobStatusLabel(), WebsiteSetupDrafts(), callMessagingApi, config, edgeApi, props (+22 more)
 
-### Community 99 - "3. Feature 2 — Openinary dual-cloud storage"
+### Community 97 - "Social Media Connection Testing Plan"
 Cohesion: 0.07
 Nodes (29): 0.1 Product decisions (user, 2026-08-20), 0. Scope, 1. What is *not* a copy — the two architectural gaps, 2.1 Ported from source (~6,600 lines), 2.2 Migration, 2.3 Two connection types, 2.4 Generation, 2.5 Where generated media lands (Codex §5.1) (+21 more)
 
+### Community 98 - "_index.md"
+Cohesion: 0.07
+Nodes (28): Alignment with the existing shared-ops layer, Debate round 1 — verdict table, Debate round 2 — verdict table, Failure convention, File Structure, Global Constraints, Modified files, New files (+20 more)
+
+### Community 99 - "3. Feature 2 — Openinary dual-cloud storage"
+Cohesion: 0.07
+Nodes (28): 10. Risks, 1. Problem, 2. Goal, 3. Requirements and assumptions, 4.1 [R2] CORRECTION — Kong does forward a client-supplied bearer token, 4.2 Model-driven pagination is not viable on its own, 4.3 [R2] The timeout fix must not be global, 4.4 `redactSensitive` mangles customer data (+20 more)
+
 ### Community 100 - "useMessaging.ts"
-Cohesion: 0.05
-Nodes (73): autoMapHeaders(), ContactRecord, contactsToCsvRows(), contactsToVCardFile(), contactToVCard(), COUNTRY_DIAL_CODES, CSV_FIELDS, CsvField (+65 more)
+Cohesion: 0.12
+Nodes (18): Probe(), SelectionProbe(), workspaces, LoadingProbe(), personalWorkspace, agent, owner, storedWorkspaceId() (+10 more)
 
 ### Community 101 - "WhatsAppInboxScreen.test.tsx"
 Cohesion: 0.14
 Nodes (24): GetConversationStateResponse, emptyState(), patchFlag(), renderActions(), useWhatsAppMessageActions(), applyConversationState(), tagConversation(), useWhatsAppMessages() (+16 more)
 
 ### Community 102 - "index.ts"
-Cohesion: 0.05
-Nodes (63): SystemPromptParams, boundedWebsiteInput(), ClaimedJob, processWebsiteSetup(), SAFE_SETUP_ERRORS, safeSetupFailure(), SetupDiagnostic, SetupInput (+55 more)
+Cohesion: 0.12
+Nodes (23): issueSchema, issueWorkspaceKey(), refuse(), revokeWorkspaceKey(), AUTHED, BODY, PLATFORM_ROUTES, AttemptSettlement (+15 more)
 
 ### Community 103 - "sidebar.tsx"
 Cohesion: 0.08
 Nodes (25): Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupAction, SidebarGroupContent, SidebarGroupLabel, SidebarHeader (+17 more)
 
 ### Community 104 - "commentActions.ts"
-Cohesion: 0.08
-Nodes (40): collectPaged(), corsHeaders, graphJson(), processAutoReplies(), asYouTubeAccount(), callGraph(), CommentActionAccount, CommentActionResult (+32 more)
+Cohesion: 0.09
+Nodes (29): partner_audit_logs_assert_tenancy_trg, public.create_default_whatsapp_pipeline(), public.is_workspace_member(), public.messaging_cache, public.move_whatsapp_deal(), public.partner_api_idempotency, public.partner_api_key_accounts, public.partner_api_keys (+21 more)
 
 ### Community 105 - "3. Requirements"
 Cohesion: 0.07
-Nodes (27): 1.1 `/admin/plan-quotas` is write-only, 1.2 Eight hardcoded copies of the same table, kept in sync by overwrite, 1.3 The client and the database disagree by construction, 1.4 The same number lives on two admin screens, 1. Problem, 2. Live data (verified before designing the backfill), 3. Requirements, 4. Ownership boundary (the rule this spec establishes) (+19 more)
+Nodes (27): A1. The Supabase connector's five fields, A2. Host validation — no domain allow-list exists anywhere, A2a. Save-time / execution-time field split, A3. The only Supabase-specific credential check is on key *shape*, A4. Table allow-list — genuinely enforced server-side, A5. Column list — enforced, with two gaps, A5a. One column list serves every allowed table, A6. Read/write, row limit, RPC (+19 more)
 
 ### Community 106 - "Inbound Media Understanding for the WhatsApp AI Agent — Spec"
 Cohesion: 0.07
-Nodes (27): 10. Open questions, 1. Problem, 2.1 The defect, 2.2 Scale — measured, not assumed, 2.3 Transport distribution — determines what to build first, 2.4 `transcribe-media` requires a user JWT, 2.5 The existing downloader sends no auth header, 2.6 Evolution QR exposes no media URL (+19 more)
+Nodes (27): 1.1 `/admin/plan-quotas` is write-only, 1.2 Eight hardcoded copies of the same table, kept in sync by overwrite, 1.3 The client and the database disagree by construction, 1.4 The same number lives on two admin screens, 1. Problem, 2. Live data (verified before designing the backfill), 3. Requirements, 4. Ownership boundary (the rule this spec establishes) (+19 more)
 
 ### Community 107 - "Postora Frontend Test Report for Lovable.dev"
 Cohesion: 0.07
-Nodes (27): Analytics Page (`src/pages/Analytics.tsx`), 📋 Complete List of Failing Tests, Create Post Page (`src/pages/CreatePost.tsx`), 🔴 Critical Issues Requiring Code Fixes, Dashboard Page (`src/pages/Dashboard.tsx`), 📊 Executive Summary, 🎯 Expected Results After Fixes, Fix Test Credentials (+19 more)
+Nodes (27): 10. Open questions, 1. Problem, 2.1 The defect, 2.2 Scale — measured, not assumed, 2.3 Transport distribution — determines what to build first, 2.4 `transcribe-media` requires a user JWT, 2.5 The existing downloader sends no auth header, 2.6 Evolution QR exposes no media URL (+19 more)
 
 ### Community 108 - "index.ts"
-Cohesion: 0.16
-Nodes (18): isMessagingPlatform(), MESSAGING_PLATFORMS, metadataString(), resolveWebhookIdentity(), WebhookIdentityAccount, fetchInboundActivity(), fetchUnmatchedObservations(), fetchWebhookSubscriptions() (+10 more)
+Cohesion: 0.13
+Nodes (22): isMessagingPlatform(), MESSAGING_PLATFORMS, metadataString(), resolveWebhookIdentity(), WebhookIdentityAccount, fetchInboundActivity(), fetchUnmatchedObservations(), fetchWebhookSubscriptions() (+14 more)
 
 ### Community 109 - "higgsfield-mcp.ts"
-Cohesion: 0.13
-Nodes (28): NotificationBell(), AdminEmail, useAdminEmailNotifications(), AdminNotification, BlogPost, useAdminNotifications(), useBlogPost(), useBlogPosts() (+20 more)
+Cohesion: 0.11
+Nodes (32): WhatsAppAnalyticsContent(), NotificationBell(), AdminEmail, useAdminEmailNotifications(), useMessagingAccounts(), AdminNotification, BlogPost, useAdminNotifications() (+24 more)
 
 ### Community 110 - "higgsfield-model-spec.ts"
-Cohesion: 0.06
-Nodes (42): partner_audit_logs_assert_tenancy_trg, public.ai_agent_configs, public.create_ai_knowledge_source(), public.create_default_whatsapp_pipeline(), public.is_workspace_member(), public.messaging_cache, public.move_whatsapp_deal(), public.partner_api_idempotency (+34 more)
+Cohesion: 0.07
+Nodes (27): Analytics Page (`src/pages/Analytics.tsx`), 📋 Complete List of Failing Tests, Create Post Page (`src/pages/CreatePost.tsx`), 🔴 Critical Issues Requiring Code Fixes, Dashboard Page (`src/pages/Dashboard.tsx`), 📊 Executive Summary, 🎯 Expected Results After Fixes, Fix Test Credentials (+19 more)
 
 ### Community 111 - "Testing Guide"
 Cohesion: 0.07
 Nodes (27): Basic Test Structure, CI/CD Integration, Common Issues, Component Tests, Coverage Report, Debug Single Test, Debugging Tests, E2E Tests (`src/test/e2e/`) (+19 more)
 
 ### Community 112 - "What You Must Do When Invoked"
-Cohesion: 0.07
-Nodes (26): For /graphify add and --watch, For /graphify query, For the commit hook and native AGENTS.md integration, For --update and --cluster-only, /graphify, Honesty Rules, Interpreter guard for subcommands, Part A - Structural extraction for code files (+18 more)
+Cohesion: 0.03
+Nodes (146): AdminInbox(), MessageFilter, ComposeEmail, ComposeEmailRef, DraftData, ForwardData, ReplyData, DeliveryStatus (+138 more)
 
 ### Community 113 - "Spec — WhatsApp Business chat experience overhaul"
 Cohesion: 0.07
-Nodes (26): 1. Context, 2.1 Frontend, 2.2 Backend, 2.3 Production stack (verified live), 2. Evidence base, 3. Root causes, 4. Platform capability matrix, 5.1 Layout and chrome (L) (+18 more)
+Nodes (26): For /graphify add and --watch, For /graphify query, For the commit hook and native AGENTS.md integration, For --update and --cluster-only, /graphify, Honesty Rules, Interpreter guard for subcommands, Part A - Structural extraction for code files (+18 more)
 
 ### Community 114 - "CommentRow.tsx"
 Cohesion: 0.05
 Nodes (22): useWhatsAppInboxApi(), WhatsAppInboxApi, WhatsAppInboxApiContext, Downloaded, makeApi(), messageAt(), conversation, FakeMediaRecorder (+14 more)
 
 ### Community 115 - "useThreadsMentions.ts"
-Cohesion: 0.07
-Nodes (47): Props, ThreadsAssigneePicker(), Ctx, noop, ThreadsAuthorAvatarProvider(), useThreadsAuthorAvatarContext(), ThreadsLabelsEditor(), ThreadsMentionCard() (+39 more)
+Cohesion: 0.41
+Nodes (9): callAnthropic(), callAnthropicJson(), contentBlocks(), fromAnthropicResponse(), JsonRecord, record(), toAnthropicRequest(), toolChoice() (+1 more)
 
 ### Community 116 - "GIFPickerDialog.tsx"
-Cohesion: 0.18
-Nodes (19): GIFPickerDialog(), fetchClipsByCategory(), fetchGifsByCategory(), fetchTrendingClips(), fetchTrendingGifs(), getClipEmbedUrl(), getClipThumbnailUrl(), getCustomerId() (+11 more)
+Cohesion: 0.15
+Nodes (24): GIFPickerDialog(), GIFPickerDialogProps, TabType, StockMediaPicker(), useDebounce(), fetchClipsByCategory(), fetchGifsByCategory(), fetchTrendingClips() (+16 more)
 
 ### Community 117 - "Pricing.tsx"
 Cohesion: 0.10
-Nodes (26): isDailyCapReached(), AutoReplyMatch, AutoReplyRule, byAgeThenId(), isWithinSchedule(), matchAutoReplyRule(), matchesKeyword(), WEDNESDAY_AFTERNOON (+18 more)
+Nodes (27): isDailyCapReached(), processAutoReplies(), AutoReplyMatch, AutoReplyRule, byAgeThenId(), isWithinSchedule(), matchAutoReplyRule(), matchesKeyword() (+19 more)
 
 ### Community 118 - "createLogger"
-Cohesion: 0.05
-Nodes (39): createLogger(), fetchUserContext(), logAuthEvent(), LogCategory, LogEntry, LogLevel, logPostEvent(), logToDatabase() (+31 more)
+Cohesion: 0.04
+Nodes (61): createLogger(), fetchUserContext(), logAuthEvent(), LogCategory, LogEntry, LogLevel, logPostEvent(), logToDatabase() (+53 more)
 
 ### Community 119 - "messageSend.ts"
 Cohesion: 0.11
 Nodes (22): buildWhatsAppPayload(), EVOLUTION_MEDIA_TYPES, evolutionMediaInput(), EvolutionMediaType, Fetcher, isEvolutionMediaType(), MessageSendAccount, OutboundMessageType (+14 more)
 
 ### Community 120 - "whatsappConversationState.ts"
-Cohesion: 0.08
-Nodes (33): asIso(), conversationFilterIds(), ConversationStateRequest, ConversationStateView, getWhatsAppConversationState(), loadMutableOverlay(), loadPinnedBar(), loadViewerFlags() (+25 more)
+Cohesion: 0.12
+Nodes (21): asIso(), conversationFilterIds(), ConversationStateRequest, ConversationStateView, getWhatsAppConversationState(), loadMutableOverlay(), loadPinnedBar(), loadViewerFlags() (+13 more)
 
 ### Community 121 - "Verified starting state"
-Cohesion: 0.08
-Nodes (24): Commit discipline, Environment prerequisites, Execution order, Gates, Handoff — deployment is the user's call, Scope boundaries, WhatsApp Workspace CRM — Implementation Plan, 1. The migration cannot apply (+16 more)
+Cohesion: 0.07
+Nodes (26): 1. Context, 2.1 Frontend, 2.2 Backend, 2.3 Production stack (verified live), 2. Evidence base, 3. Root causes, 4. Platform capability matrix, 5.1 Layout and chrome (L) (+18 more)
 
 ### Community 122 - "Documentation.tsx"
-Cohesion: 0.08
-Nodes (23): CommentAccountRef, CommentAuthorRef, isOwnComment(), metadataString(), ownIds(), fb, ig, th (+15 more)
+Cohesion: 0.10
+Nodes (19): MetaCommentInput, normalizeMetaCommentChange(), toIso(), CommentRoute, CommentRoutingDeps, routeComment(), ACCOUNT, COMMENT (+11 more)
 
 ### Community 123 - "mediaUrl.ts"
-Cohesion: 0.05
-Nodes (50): AccountAvatar(), AspectRatioFilter, ColumnsPerRow, FilterType, ItemsPerPage, MediaFile, MediaLibraryPicker(), MediaLibraryPickerProps (+42 more)
+Cohesion: 0.16
+Nodes (16): CdnConfig, CdnProvider, getMediaThumbnailUrl(), MediaFileUrlRow, MediaProviderRow, MediaTransformOptions, MediaUrlConfig, resolveBaseUrl() (+8 more)
 
 ### Community 124 - "giphyApi.ts"
 Cohesion: 0.11
 Nodes (23): fetchClipsByCategory(), fetchGifsByCategory(), fetchTrendingClips(), fetchTrendingGifs(), fetchTrendingStickers(), getClipThumbnailUrl(), getClipVideoUrl(), getFullUrl() (+15 more)
 
 ### Community 125 - "tools.ts"
-Cohesion: 0.12
-Nodes (15): 1. What was actually wrong, 2. Design decisions (settled in debate), 3. The work, in three PRs plus one security PR, 4. Traps for the implementer, 5. Deploy order for PR2 (expand → deploy → contract → frontend), 6. Deployment note, D1 — `ai-knowledge` storage bucket is public (genuine cross-user exposure, CONFIRMED LIVE), D2 — every uploaded knowledge file is on a public Cloudinary URL (genuine, larger than D1) (+7 more)
+Cohesion: 0.11
+Nodes (27): public.ai_agent_configs, public.ai_knowledge_chunks, public.ai_knowledge_entities, public.ai_knowledge_relations, public.ai_knowledge_source_accounts, public.ai_knowledge_sources, public.claim_ai_knowledge_excel_source(), public.create_ai_knowledge_source() (+19 more)
 
 ### Community 126 - "Postora — Backend API Reference"
-Cohesion: 0.07
+Cohesion: 0.08
 Nodes (25): 11.1 Provider resolution, 11.2 Endpoints summary, 11.3 Image governance, 11. AI generation endpoints reference, 12. Utility / admin / debug endpoints reference, 14. Common database side effects, 15. Known caveats & limitations, 16. Operator debugging notes (+17 more)
 
 ### Community 127 - "8. Detailed function reference"
@@ -1737,64 +1660,64 @@ Cohesion: 0.08
 Nodes (25): 8.10 `manage-cron-jobs`, 8.11 `manage-oauth-redirects`, 8.12 `threads-debug-publish-check`, 8.13 `whatsapp-config-test`, 8.14 `test-ai-model`, 8.15 `analyze-log`, 8.16 `check-connection-health`, 8.17 `refresh-tokens` (+17 more)
 
 ### Community 128 - "Ranked hypotheses"
-Cohesion: 0.08
-Nodes (24): 0. The single most important architectural fact, 1. Full ordered condition list: Meta POST → n8n webhook URL called (Q1), 2. Which conditions can hold while the comment still shows in the UI? (Q2), 3. Default of `comment_automation_handler` (Q3), 4. Does `isOwnComment` skip the page's own comments? (Q4), 5. Old-node (v1.2.1) subscriptions and `comment.received` (Q5), 6. Per-subscription `platform` / `social_account_id` filters (Q6), 7. Can `runInBackground` drop the dispatch? (Q7) (+16 more)
+Cohesion: 0.05
+Nodes (42): AdminAiSettings(), AIProvider, ApiKeyStatus, formatPricing(), GOOGLE_MODELS, OpenRouterModel, TestResult, TestStatus (+34 more)
 
 ### Community 129 - "WhatsApp Direct QR: ID Normalization, `fromMe` Persistence, and Historical Chat Sync"
 Cohesion: 0.08
-Nodes (24): Accepted - and why they were real, Additional ordering rule, Cause A - no history import, Cause B - `platform_user_id` violates the digits-only invariant, Cause C - `fromMe` messages are discarded, Commit 1 - JID normalization (bug fix), Commit 2 - `fromMe` persistence (bug fix), Commit 3 - historical chat and contact sync (feature) (+16 more)
+Nodes (24): Commit discipline, Environment prerequisites, Execution order, Gates, Handoff — deployment is the user's call, Scope boundaries, WhatsApp Workspace CRM — Implementation Plan, 1. The migration cannot apply (+16 more)
 
 ### Community 130 - "Feature B — WhatsApp Direct QR Connect"
 Cohesion: 0.08
-Nodes (24): 0.1 Apply the two migrations, 0.2 Set the Supabase secrets, 0.3 Deploy the edge functions, 0.4 Confirm the background primitive is live, 0.5 Set Evolution's own env (Feature B only), 0. Prerequisites — none of this works until these are done, A1. Register a webhook and capture the secret, A2. Trigger on a real inbound message (+16 more)
+Nodes (25): File map, Global Constraints, Self-review, Slice A — backend foundation (Deno), Slice B — database (Muse Spark lane), Slice C — frontend, Slice D — docs and rollout, Task 10: Migration `20260904150000_youtube_comments.sql` (+17 more)
 
 ### Community 131 - "compilerOptions"
 Cohesion: 0.08
-Nodes (24): DOM, DOM.Iterable, ES2020, compilerOptions, allowImportingTsExtensions, isolatedModules, jsx, lib (+16 more)
+Nodes (24): compilerOptions, allowImportingTsExtensions, isolatedModules, jsx, lib, module, moduleDetection, moduleResolution (+16 more)
 
 ### Community 132 - "popover.tsx"
 Cohesion: 0.05
 Nodes (37): Also open, Execution, File structure, Ground rules for every task, Per-account connectors — implementation plan, PR-2 — the connector registry, PR-3 — Migration A (owner applies by hand), PR-4 — writes become account-scoped (+29 more)
 
 ### Community 133 - "higgsfieldModelSpecs.ts"
-Cohesion: 0.11
-Nodes (26): VideoGenerator(), AiGenerationJobState, AiJobStatus, INITIAL, useAiGenerationJob(), buildVideoPrompt(), CAMERA_MOTION_PRESETS, CameraMotionPreset (+18 more)
+Cohesion: 0.12
+Nodes (26): ParamControl(), VideoGenerator(), AiGenerationJobState, AiJobStatus, INITIAL, useAiGenerationJob(), defaultParamsFor(), getHiggsfieldModelSpec() (+18 more)
 
 ### Community 134 - "PlatformMediaMatrix.tsx"
-Cohesion: 0.10
-Nodes (18): ChangePasswordRequest, decodeJwtPayload(), verifyJwt(), NOTE: we no longer gate OTP issuance on MFA enrolment. verify-reset-otp, SendOTPRequest, checkIpRateLimit(), checkRateLimit(), checkRateLimitRpc() (+10 more)
+Cohesion: 0.08
+Nodes (37): CodeBlock(), CodeBlockProps, aiFeatures, apiEndpoints, docsNavItems, faqItems, featureCards, httpStatusCodes (+29 more)
 
 ### Community 135 - "index.ts"
 Cohesion: 0.11
-Nodes (27): AccountRow, AgentConfigForEscalation, handToHuman(), invokeAgent(), loadAccount(), loadAgentConfig(), loadContext(), OutboxRow (+19 more)
+Nodes (26): AccountRow, AgentConfigForEscalation, invokeAgent(), loadAccount(), loadAgentConfig(), loadContext(), OutboxRow, processRow() (+18 more)
 
 ### Community 136 - "index.ts"
-Cohesion: 0.03
-Nodes (89): AdvancedCard(), AgentIdentityCard(), BusinessGoalsCard(), GuardrailsCard(), HumanHandoffCard(), HumanHandoffCardProps, InstructionBlocksCard(), AgentCardProps (+81 more)
+Cohesion: 0.07
+Nodes (35): hiddenFilledPolicyCount(), industryLabel(), ManualProfilePanel(), ManualProfilePanelProps, policyLabel(), policyPlaceholder(), draftFieldLabel(), DraftReview() (+27 more)
 
 ### Community 137 - "index.ts"
 Cohesion: 0.21
 Nodes (21): RFC-8414, admin, base64UrlEncode(), corsHeaders, handleAuthCodeGrant(), handleAuthorizationDetails(), handleAuthorize(), handleConsent() (+13 more)
 
 ### Community 138 - "Admin Dashboard - Postora"
-Cohesion: 0.10
-Nodes (19): Admin Dashboard - Postora, Admin Email Addresses, Admin-Related Functions, Appendix, Authentication, Authorization, Core Admin Tables, Data Protection (+11 more)
+Cohesion: 0.08
+Nodes (25): AI Agent Setup Restructure Implementation Plan, File Structure, Global Constraints, Outcome (2026-09-05), Self-Review, Slice 1 — Knowledge tab shell, Slice 2 — Settings tab cards, Slice 3 — Structured profile and agent behavior (+17 more)
 
 ### Community 139 - "Postora Cloud 30-Day Content Plan"
 Cohesion: 0.08
-Nodes (23): 1. Pain Point To Solution, 2. AI Productivity, 30-Day Calendar, 3. Automation And API, 4. Trust And Compliance, 5. Offer And Conversion, Content Pillars, CTA Map (+15 more)
+Nodes (24): 0. The single most important architectural fact, 1. Full ordered condition list: Meta POST → n8n webhook URL called (Q1), 2. Which conditions can hold while the comment still shows in the UI? (Q2), 3. Default of `comment_automation_handler` (Q3), 4. Does `isOwnComment` skip the page's own comments? (Q4), 5. Old-node (v1.2.1) subscriptions and `comment.received` (Q5), 6. Per-subscription `platform` / `social_account_id` filters (Q6), 7. Can `runInBackground` drop the dispatch? (Q7) (+16 more)
 
 ### Community 140 - "WhatsAppPageHeader.tsx"
-Cohesion: 0.15
-Nodes (15): fetchEditorialPhotos(), fetchFromUnsplash(), getPhotoFullSize(), getPhotographerUrl(), getPhotoThumbnail(), getRandomPhotos(), getUnsplashUrl(), searchPhotos() (+7 more)
+Cohesion: 0.11
+Nodes (22): attachComposioTools(), composioToolParameters(), describeInputKeys(), INPUT_META_KEYS, inputProperties(), mergedInputProperties(), ACCOUNT, composioTool() (+14 more)
 
 ### Community 141 - "TikTokPreCheck.tsx"
-Cohesion: 0.11
-Nodes (21): AccountRow, CredentialVault, deleteAccountScopedTool(), ExistingToolRow, isUniqueViolation(), listToolsForUser(), parseUpsertToolInput(), RESERVED_TOOL_NAMES (+13 more)
+Cohesion: 0.08
+Nodes (24): 1. State, 2.1 The migrations cannot rebuild the database — 0.6 is blocked, 2.2 There is no migration ledger, 2.3 Danat is the user's own other project, and it is switched off, 2.4 `partner_audit_logs` has zero writers, 2.5 The "exhaustive" error-code table has drifted three times, 2. Things that are true and not in the repo, 3. How to work in this repo (+16 more)
 
 ### Community 142 - "rate-limiter.ts"
-Cohesion: 0.07
-Nodes (27): A1. The Supabase connector's five fields, A2. Host validation — no domain allow-list exists anywhere, A2a. Save-time / execution-time field split, A3. The only Supabase-specific credential check is on key *shape*, A4. Table allow-list — genuinely enforced server-side, A5. Column list — enforced, with two gaps, A5a. One column list serves every allowed table, A6. Read/write, row limit, RPC (+19 more)
+Cohesion: 0.08
+Nodes (24): Accepted — and what changed, Departure 1 — the durable unit is the inbound work item, not the generated reply, Departure 2 — replay needs delivery idempotency, which does not exist yet, Departure 3 — `threads-poll-replies` does not call the agent, Durable Reply Outbox Implementation Plan, File Structure, Global Constraints, Rejected — with evidence (+16 more)
 
 ### Community 143 - "media-helpers.ts"
 Cohesion: 0.09
@@ -1802,123 +1725,119 @@ Nodes (12): getMediaType(), isGifUrl(), isImageUrl(), isVideoUrl(), PollingOptio
 
 ### Community 144 - "Fix round 1/5 — admin bypass parity for `increment_media_uploads`"
 Cohesion: 0.08
-Nodes (23): Checksums for chunked transport (local file == host file == container file), Checksums for chunked transport (local file == host file == container file), Cleanup, Commit, Concerns, Concerns, Covering tests added to `/tmp/t3.sql` (transported as `/tmp/t3fix.sql`), Finding (from coordinator review) (+15 more)
+Nodes (24): Accepted - and why they were real, Additional ordering rule, Cause A - no history import, Cause B - `platform_user_id` violates the digits-only invariant, Cause C - `fromMe` messages are discarded, Commit 1 - JID normalization (bug fix), Commit 2 - `fromMe` persistence (bug fix), Commit 3 - historical chat and contact sync (feature) (+16 more)
 
 ### Community 145 - "Postora"
-Cohesion: 0.08
-Nodes (24): 10. Production Build & Deployment, 11. Current Self-Hosting / Database Setup, 12. External Integrations, 14. Testing & Quality, 16. Known Issues / Technical Debt, 17. Useful Commands, 19. Maintenance Checklist, 20. Final Summary (+16 more)
+Cohesion: 0.09
+Nodes (21): 11. Current Self-Hosting / Database Setup, 12. External Integrations, 14. Testing & Quality, 16. Known Issues / Technical Debt, 17. Useful Commands, 19. Maintenance Checklist, 20. Final Summary, 4. Folder Structure (+13 more)
 
 ### Community 146 - "3. Ranked hypotheses and production checks"
-Cohesion: 0.09
-Nodes (22): 10 — Dispatcher registry query failed, fan-out deadline skipped it, or URL dedupe altered fan-out (low), 11 — Meta request/signature/body never reached the eligible loop (low because other webhook evidence is absent), 1 — Comments handler is `off`, missing/invalid, or `internal` (very high likelihood), 1. Full ordered gate list: Meta POST to n8n callback, 2 — v1.2.1/old subscription does not include `comment.received` (very high if the installed node is old), 2. Which failures coexist with a visible Comment Manager row?, 3. Ranked hypotheses and production checks, 3 — The Page authored the comment (high when the admin commented “as Page”) (+14 more)
+Cohesion: 0.08
+Nodes (24): 0.1 Apply the two migrations, 0.2 Set the Supabase secrets, 0.3 Deploy the edge functions, 0.4 Confirm the background primitive is live, 0.5 Set Evolution's own env (Feature B only), 0. Prerequisites — none of this works until these are done, A1. Register a webhook and capture the secret, A2. Trigger on a real inbound message (+16 more)
 
 ### Community 147 - "7. Frontend Components"
 Cohesion: 0.09
-Nodes (23): 7.10 `AIWriteAssistant.tsx` (~274 lines), 7.11 `EmailAutocomplete.tsx` (~245 lines), 7.12 `EmailAttachments.tsx` (~227 lines), 7.13 `EmailScheduler.tsx` (~186 lines), 7.14 `EmailSignatureManager.tsx` (~349 lines), 7.15 `EmailTemplateManager.tsx` (~339 lines), 7.16 `EmailPreviewDialog.tsx` (~155 lines), 7.17 `SaveAsTemplateDialog.tsx` (~139 lines) (+15 more)
+Nodes (19): body(), ADAPTER_ENV, AI_AGENT_TOOLS, code(), COMPOSIO_BODY, CONNECTIONS, DEFAULT_KEY_ROW, FetchCall (+11 more)
 
 ### Community 148 - "Investigation Report + Implementation Plan"
-Cohesion: 0.09
-Nodes (22): Appendix — key source locations, Executive summary, Files for the follow-up implementation task, Fix 1 — Chat pane (required code), Fix 2 — n8n WhatsApp trigger, How the system is wired (shared context), Implementation notes for Claude Code, Investigation Report + Implementation Plan (+14 more)
+Cohesion: 0.11
+Nodes (20): defaultParamsFor(), getHiggsfieldModelSpec(), HIGGSFIELD_MODEL_SPECS, HiggsfieldModelSpec, IMAGE_SPECS, mergeModelSpec(), missingRequiredParams(), ModelParamSpec (+12 more)
 
 ### Community 149 - "2. Defect A — proven root cause"
-Cohesion: 0.09
-Nodes (22): 1. Result, 2. Defect A — proven root cause, 3. Defect B — `api_logs` writes and rate limiting are silently dead (new finding), 4. Guidance for the fix, 5. Adjacent risk worth one look, 6. What is still open, Caveat, Deployment (+14 more)
+Cohesion: 0.08
+Nodes (23): 10. Feature flag and rollout, 11. Acceptance criteria, 12. Open decisions, 1. Summary, 2. Current state (verified against the repository on 2026-09-06), 3. Goals, 4. Non-goals, 5.1 `user_ai_provider_keys` (+15 more)
 
 ### Community 150 - "PR2 — Task B: WhatsApp Direct QR Connect (`evolution_qr`)"
-Cohesion: 0.09
-Nodes (22): 0. Verified ground truth, A1. Background execution — `_shared/background.ts`, A2. Dispatcher — `_shared/n8nMessagingDispatch.ts`, A3. Registry — `n8n-api/index.ts`, A4. Fan-out wiring, A5. Automation ownership — explicit opt-in, A6. Reply endpoint — `POST /api/v1/messages/reply`, A7. n8n node (vendored copy only) (+14 more)
+Cohesion: 0.08
+Nodes (23): 1. Pain Point To Solution, 2. AI Productivity, 30-Day Calendar, 3. Automation And API, 4. Trust And Compliance, 5. Offer And Conversion, Content Pillars, CTA Map (+15 more)
 
 ### Community 151 - "Global Constraints"
 Cohesion: 0.09
-Nodes (22): Assumed, not verified — confirm during implementation, Deployment (after all tasks pass review), Global Constraints, Hard prerequisites, Known-accepted risks, Mandatory gates before every commit, Plan 1 of 3, Postora: WhatsApp Partner API Foundation — Implementation Plan (+14 more)
+Nodes (22): 10 — Dispatcher registry query failed, fan-out deadline skipped it, or URL dedupe altered fan-out (low), 11 — Meta request/signature/body never reached the eligible loop (low because other webhook evidence is absent), 1 — Comments handler is `off`, missing/invalid, or `internal` (very high likelihood), 1. Full ordered gate list: Meta POST to n8n callback, 2 — v1.2.1/old subscription does not include `comment.received` (very high if the installed node is old), 2. Which failures coexist with a visible Comment Manager row?, 3. Ranked hypotheses and production checks, 3 — The Page authored the comment (high when the admin commented “as Page”) (+14 more)
 
 ### Community 152 - "20260726000001_supercharge_postora_wacrm_chatwoot.sql"
-Cohesion: 0.16
-Nodes (22): public.create_default_whatsapp_pipeline(), public.ensure_personal_workspace(), public.is_workspace_member(), public.messaging_cache, public.move_whatsapp_deal(), public.prevent_last_workspace_owner(), public.set_whatsapp_workspace_updated_at(), public.whatsapp_agents (+14 more)
+Cohesion: 0.09
+Nodes (23): 7.10 `AIWriteAssistant.tsx` (~274 lines), 7.11 `EmailAutocomplete.tsx` (~245 lines), 7.12 `EmailAttachments.tsx` (~227 lines), 7.13 `EmailScheduler.tsx` (~186 lines), 7.14 `EmailSignatureManager.tsx` (~349 lines), 7.15 `EmailTemplateManager.tsx` (~339 lines), 7.16 `EmailPreviewDialog.tsx` (~155 lines), 7.17 `SaveAsTemplateDialog.tsx` (~139 lines) (+15 more)
 
 ### Community 153 - "Answers to the 7 brief questions"
 Cohesion: 0.09
-Nodes (21): 1. Credential/account owner UUID mismatch, 1. TENANCY, 2. IDEMPOTENCY DROP, 2. Stale or auto-deactivated registration, 3. Meta `messages` subscription missing or failed, 3. SSRF GUARD, 4. Checked-in npm `dist` is stale, 4. STALE REGISTRATION (+13 more)
+Nodes (22): Appendix — key source locations, Executive summary, Files for the follow-up implementation task, Fix 1 — Chat pane (required code), Fix 2 — n8n WhatsApp trigger, How the system is wired (shared context), Implementation notes for Claude Code, Investigation Report + Implementation Plan (+14 more)
 
 ### Community 154 - "Decisions"
 Cohesion: 0.09
-Nodes (21): Architecture, D10 — bounded public input, no empty replies, D1 — `ReplyRequest` gains an optional `comment_id`, D2 — `conversation_id` is per (post, commenter), D3 — the daily cap is re-scoped for comments, D4 — auto-reply matching is extracted, sending is not, D5 — Threads mentions take the internal path, not just replies, D6 — comment cooldown is database-backed, not in-memory (+13 more)
+Nodes (22): 1. Result, 2. Defect A — proven root cause, 3. Defect B — `api_logs` writes and rate limiting are silently dead (new finding), 4. Guidance for the fix, 5. Adjacent risk worth one look, 6. What is still open, Caveat, Deployment (+14 more)
 
 ### Community 155 - "compilerOptions"
 Cohesion: 0.09
 Nodes (21): compilerOptions, declaration, esModuleInterop, forceConsistentCasingInFileNames, lib, module, moduleResolution, outDir (+13 more)
 
 ### Community 156 - "index.ts"
-Cohesion: 0.07
-Nodes (53): AdminOAuthApps(), McpIntegration(), buildGraphHtml(), buildObsidianNotes(), ExportEntity, ExportRelation, noteName(), entityFrom() (+45 more)
+Cohesion: 0.10
+Nodes (33): entityFrom(), GraphEntity, GraphExtraction, GraphRelation, normalizeGraphExtraction(), relationFrom(), AdminClient, buildWebsiteSourceName() (+25 more)
 
 ### Community 157 - "PlatformNode.tsx"
 Cohesion: 0.08
 Nodes (35): platformSupportsPrivateReply(), claimUsage(), CommentWorkflowDeps, CommentWorkflowInput, CommentWorkflowOutcome, composeDm(), finalizeEvent(), loadActiveRules() (+27 more)
 
 ### Community 158 - "StockMediaPicker.tsx"
-Cohesion: 0.13
-Nodes (21): COMBINED_ORIENTATIONS, CombinedGifItem, CombinedOrientation, CombinedPhotoItem, CombinedVideoItem, GiphySubTab, KlipySubTab, MainTab (+13 more)
+Cohesion: 0.12
+Nodes (22): COMBINED_ORIENTATIONS, CombinedGifItem, CombinedOrientation, CombinedPhotoItem, CombinedVideoItem, GiphySubTab, KlipySubTab, MainTab (+14 more)
 
 ### Community 159 - "EvolutionApi"
-Cohesion: 0.03
-Nodes (104): AccountAvatarProps, AccountItem, AccountSelectionSidebar(), AccountSelectionSidebarProps, ParsedPost, ConnectedAccount, AspectRatioSuggestion, ImageAspectRatioValidator() (+96 more)
-
-### Community 160 - "index.ts"
-Cohesion: 0.13
-Nodes (20): InteractiveMessageBuilder(), interactiveMessageCapability, interactiveMessageDisabledLabel(), InteractiveMessageDisabledReason, isSyntheticProviderId(), revokeCapability, revokeDisabledLabel(), revokeDisabledReason (+12 more)
+Cohesion: 0.02
+Nodes (219): AccountAvatar(), AccountAvatarProps, sizeMap, CATEGORY_COLORS, FeatureFlagCategoryDropdown(), FeatureFlagCategoryDropdownProps, getCategoryColor(), Account (+211 more)
 
 ### Community 161 - "File structure"
-Cohesion: 0.10
-Nodes (20): File structure, n8n Comment Trigger & Automation Handler Implementation Plan, Self-review, Task 0: Land the pending trigger-robustness work in the node repo, Task 10: Web app — `useAutomationHandlers` hook, Task 11: Web app — `AutomationHandlerCard` + mount on three pages, Task 12: Node — shared webhook lifecycle helpers + Comment Trigger, Task 13: Node — Comment resource (Reply / Hide / Delete) (+12 more)
+Cohesion: 0.09
+Nodes (22): 0. Verified ground truth, A1. Background execution — `_shared/background.ts`, A2. Dispatcher — `_shared/n8nMessagingDispatch.ts`, A3. Registry — `n8n-api/index.ts`, A4. Fan-out wiring, A5. Automation ownership — explicit opt-in, A6. Reply endpoint — `POST /api/v1/messages/reply`, A7. n8n node (vendored copy only) (+14 more)
 
 ### Community 162 - "1. Contact Avatar Cloudinary Upload"
-Cohesion: 0.10
-Nodes (20): 1. Contact Avatar Cloudinary Upload, 2. Contact <-> Conversation Sync, 3. WhatsApp Coexistence Field Subscription, 4. Scheduled Posts Debug, Acceptance criteria, Acceptance criteria, Acceptance criteria, Acceptance criteria (+12 more)
+Cohesion: 0.09
+Nodes (22): Assumed, not verified — confirm during implementation, Deployment (after all tasks pass review), Global Constraints, Hard prerequisites, Known-accepted risks, Mandatory gates before every commit, Plan 1 of 3, Postora: WhatsApp Partner API Foundation — Implementation Plan (+14 more)
 
 ### Community 163 - "Postora Ollama bge-m3 Production Migration Tracker"
-Cohesion: 0.10
-Nodes (20): Completed, Confirmed Production Facts, Current Status, Existing RAG, Files Introduced or Updated by `1a17495b`, Infrastructure, Next Decision, Objective (+12 more)
+Cohesion: 0.09
+Nodes (22): File map, Global Constraints, Self-review, Slice 1 — Database (Muse Spark lane), Slice 2 — Ingest (Codex lane), Slice 3 — Frontend (Codex lane), Slice 4 — Phase 3 (Codex lane, after Slices 1–3 are merged), Slice 5 — Gates, deploy, wrap-up (+14 more)
 
 ### Community 164 - "pixabayApi.ts"
 Cohesion: 0.15
 Nodes (20): fetchPopularGifs(), fetchPopularPhotos(), fetchPopularVideos(), filterPhotosByOrientation(), filterVideosByOrientation(), getPhotoFullSize(), getPhotoOrientation(), getPhotoThumbnail() (+12 more)
 
 ### Community 165 - "threadsCommentIngest.ts"
-Cohesion: 0.31
-Nodes (9): Base64MediaFailure, Base64MediaOutcome, decodePrefix(), isDecodableBase64(), matches(), normalizeBase64Media(), Signature, SIGNATURES (+1 more)
+Cohesion: 0.19
+Nodes (17): downloadAndUploadMedia(), handleCreatePost(), handleUploadMedia(), parseArrayField(), uploadFileFromBase64(), uploadFileFromUrl(), uploadToCloudinary(), Base64MediaFailure (+9 more)
 
 ### Community 166 - "threads-debug.ts"
-Cohesion: 0.20
-Nodes (9): Evidence (root cause, proven before any fix), File Structure, Global Constraints, Inbound media: Facebook/Instagram wiring + PDF support, Task 1: Documents pass the understanding module, Task 2: The pipeline admits documents and platform-declared kinds, Task 3: Both WhatsApp webhooks admit documents, Task 4: Facebook and Instagram call the pipeline (+1 more)
+Cohesion: 0.16
+Nodes (22): public.create_default_whatsapp_pipeline(), public.ensure_personal_workspace(), public.is_workspace_member(), public.messaging_cache, public.move_whatsapp_deal(), public.prevent_last_workspace_owner(), public.set_whatsapp_workspace_updated_at(), public.whatsapp_agents (+14 more)
 
 ### Community 167 - "whatsappPartnerOps.ts"
 Cohesion: 0.19
 Nodes (10): base64UrlEncode(), CallbackResult, completeBlueskyCallback(), discoverAuthServer(), generateCodeChallenge(), generateCodeVerifier(), generateDPoPProof(), importPrivateKey() (+2 more)
 
 ### Community 168 - "_index.md"
-Cohesion: 0.10
-Nodes (19): API Integration (api/_index.md), Assistant Guidelines (guidelines/_index.md), assistant/_index.md, Boundary-Based Debugging and Root Cause Attribution, design/_index.md, Evidence, Evidence, facts/_index.md (+11 more)
+Cohesion: 0.07
+Nodes (55): BrandSearchBar(), BrandSearchBarProps, extractUsername(), ContentGenerationPanelProps, FilterToolbar(), FilterToolbarProps, MEDIA_BADGES, PostCard() (+47 more)
 
 ### Community 169 - "Part A — Openinary"
-Cohesion: 0.10
-Nodes (19): Before you start — read this or half the steps will look broken, If something fails, J10. Your own connection **[2nd account]**, J11. Disconnect, J12. Non-admin cannot reach admin controls **[2nd account]**, J1. The CDN card loads, J2. Test connection, J3. The retirement gate reads correctly (+11 more)
+Cohesion: 0.09
+Nodes (21): 1. Credential/account owner UUID mismatch, 1. TENANCY, 2. IDEMPOTENCY DROP, 2. Stale or auto-deactivated registration, 3. Meta `messages` subscription missing or failed, 3. SSRF GUARD, 4. Checked-in npm `dist` is stale, 4. STALE REGISTRATION (+13 more)
 
 ### Community 170 - "Runbook — Enable Google OAuth sign-in in GoTrue (auth provider)"
-Cohesion: 0.10
-Nodes (19): 1. Symptom, 2. Root cause, 3.1 `.env` — added `GOOGLE_REDIRECT_URI`, 3.2 `docker-compose.yml` — added 4 GoTrue environment variables, 3. Files changed (server-side), 4. Redeploy, 5. Validation, 6. Google Cloud Console — manual step required (+11 more)
+Cohesion: 0.09
+Nodes (21): Architecture, D10 — bounded public input, no empty replies, D1 — `ReplyRequest` gains an optional `comment_id`, D2 — `conversation_id` is per (post, commenter), D3 — the daily cap is re-scoped for comments, D4 — auto-reply matching is extracted, sending is not, D5 — Threads mentions take the internal path, not just replies, D6 — comment cooldown is database-backed, not in-memory (+13 more)
 
 ### Community 171 - "n8n Comment Trigger, Comment Resource & Automation Handler — Design"
-Cohesion: 0.10
-Nodes (19): §1 Event contract & dispatcher (backend), §2 Webhook subscription & comment API (`n8n-api`), §3 n8n node (apply to both local copies), §4 Automation handler UI (web app), §5 Error handling, tests, deploy, Allowed events, Call sites, Envelope (+11 more)
+Cohesion: 0.08
+Nodes (33): AGENT_TEXT_LABELS, canonicalProvider(), composeAgentText(), logSkippedUnderstanding(), MODE_KINDS, modeAllows(), neutralizeFence(), PipelineAccount (+25 more)
 
 ### Community 172 - "useCommentInbox.ts"
-Cohesion: 0.15
+Cohesion: 0.16
 Nodes (18): backfillOrThrow(), backfillWhatsAppParticipantAvatars(), CacheAvatarFn, contactNumberFromConversationId(), DEADLINE, deadlinePassed(), enrichOnce(), enrichWhatsAppParticipantAvatar() (+10 more)
 
 ### Community 173 - "ThreadsMentionCard.tsx"
 Cohesion: 0.05
-Nodes (52): ComposioExecutionDependencies, ComposioToolFailure, executeComposioTool(), isRecord(), refusalOutput(), CONNECTION, context(), ledgerAdmin() (+44 more)
+Nodes (56): adminToolDefinitions, createScheduledPost(), executeAdminTool(), getPostingSummary(), listConnectedAccounts(), searchPosts(), modelOutageApology(), pickEscalationAgent() (+48 more)
 
 ### Community 174 - "higgsfieldJobPayload.ts"
 Cohesion: 0.18
@@ -1929,196 +1848,196 @@ Cohesion: 0.14
 Nodes (13): CLEARED_QUOTA_OVERRIDES, logStep(), PRICE_TO_PLAN, sendSubscriptionEmail(), STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, QuotaOverrideClearInput, shouldClearQuotaOverrides() (+5 more)
 
 ### Community 176 - "Spec — Unify platform-wide rate limiting under AdminRateLimits"
-Cohesion: 0.11
-Nodes (18): 1. Problem, 2. Already done on this branch (verified, not re-implemented), 3. Requirements, 4. Non-goals, 5. Deployment (from AGENTS.md runbook), 6. Acceptance criteria, 7. Codex round-1 objections and disposition, 8. Codex round-2 objections and disposition (+10 more)
+Cohesion: 0.10
+Nodes (20): File structure, n8n Comment Trigger & Automation Handler Implementation Plan, Self-review, Task 0: Land the pending trigger-robustness work in the node repo, Task 10: Web app — `useAutomationHandlers` hook, Task 11: Web app — `AutomationHandlerCard` + mount on three pages, Task 12: Node — shared webhook lifecycle helpers + Comment Trigger, Task 13: Node — Comment resource (Reply / Hide / Delete) (+12 more)
 
 ### Community 177 - "Spec — WhatsApp QR naming & history sweep, Higgsfield consent logo"
-Cohesion: 0.11
-Nodes (18): 1. Facts verified before writing (three briefed claims, two wrong), 2. Part 1 — Prompt for a connection name on QR connect, 3. Part 2 — White-label the linked-device name (deployment only), 4. Part 3 — Paginate the WhatsApp history sweep, 5. Part 4 — Postora logo on the Higgsfield consent screen, 6. Codex round-1 objections and disposition, 6b. Codex round-2 objections and disposition, 7. Acceptance criteria (+10 more)
+Cohesion: 0.10
+Nodes (20): Admin Partner Hub Implementation Plan, Deployment (orchestrator, after CodexBot approval, before merge), File map, Slice A — database, Slice B — edge ledger columns, Slice C — frontend, Task 10: `PartnerKeysTable` + `RevokePartnerKeyDialog`, Task 11: `GeneratePartnerKeyDialog` + `PartnerKeyCreatedView` (+12 more)
 
 ### Community 178 - "2.2 Part B — Upload `Media Source` dropdown (single source per node)"
-Cohesion: 0.11
-Nodes (18): 1.1 Instagram/Facebook Story crash — `"Could not get parameter"`, 1.2 Upload node lacks a media-source selector, 1. Problem, 2.1 Part A — targeted caption fix with explicit validation, 2.2 Part B — Upload `Media Source` dropdown (single source per node), 2.3 Part C — Backend `GET /api/v1/media/:id` (shipped now), 2. Design, 3. Tests (+10 more)
+Cohesion: 0.10
+Nodes (20): File map, Global Constraints, Task 10: Delete a chat, Task 11: Media — download on every kind, video and PDF lightbox, Task 12: Thread layout — day separators, absolute list times, header phone, wallpaper, Task 13: Add / edit contact from the thread header, Task 14: Gates and guard passes, Task 15: Ops, deploy, verify (+12 more)
 
 ### Community 179 - "Avatar support for Facebook conversations, comment manager, and Threads replies"
-Cohesion: 0.11
-Nodes (18): 1. Facebook conversation avatars — confirmed code bug, fixable, 2. Instagram comment-manager avatars — Meta platform limitation, best-effort only, 3. Facebook comment-manager avatars — feasible today, no extra permission, 4. Threads mentions avatars — pipeline already correct; DB has 2 stale legacy rows, 5. Threads reply avatars — hard Meta API limitation, not buildable as originally scoped, A. Fix Facebook conversation avatar field bug (`supabase/functions/messaging-api/index.ts`), Avatar support for Facebook conversations, comment manager, and Threads replies, B. Facebook comment-manager avatars (`supabase/functions/comment-manager/index.ts`, `src/hooks/useCommentInbox.ts`, `src/components/comments/CommentList.tsx`) (+10 more)
+Cohesion: 0.10
+Nodes (20): 1. Contact Avatar Cloudinary Upload, 2. Contact <-> Conversation Sync, 3. WhatsApp Coexistence Field Subscription, 4. Scheduled Posts Debug, Acceptance criteria, Acceptance criteria, Acceptance criteria, Acceptance criteria (+12 more)
 
 ### Community 180 - "check-edge-env-drift.mjs"
 Cohesion: 0.11
 Nodes (15): codeVars, composeCandidates, __dirname, envExample, envExampleNames, envExamplePath, functionsDir, ignoredCodeVars (+7 more)
 
 ### Community 181 - "AIConfigurationTab.tsx"
-Cohesion: 0.13
-Nodes (19): AnySupabase, isPermanentAuthError(), PERMANENT_AUTH_ERRORS, probeComposioYouTubeAccount(), refreshAndCacheAvatar(), RefreshResult, mayStartAnotherAccount(), probeYouTubeProvider() (+11 more)
+Cohesion: 0.10
+Nodes (20): Completed, Confirmed Production Facts, Current Status, Existing RAG, Files Introduced or Updated by `1a17495b`, Infrastructure, Next Decision, Objective (+12 more)
 
 ### Community 182 - "useAIConfiguration.ts"
-Cohesion: 0.07
-Nodes (48): AdminAiAgentSection(), AGENT_PROVIDER_CODES, DefaultModelSelectorProps, AiCategoryCard(), ChatModelsCard(), EmbeddingModelsCard(), ImageGenerationCard(), SearchModelsCard() (+40 more)
+Cohesion: 0.18
+Nodes (14): AiProvidersCard(), isOAuthProvider(), AIConfigData, emptyCategoryDefaults, emptyCategoryFallbacks, MODEL_CATEGORIES, parseDefault(), parseSettingsRows() (+6 more)
 
 ### Community 183 - "errorTracking.ts"
-Cohesion: 0.17
-Nodes (9): captureError(), initSentry(), captureException(), ErrorReport, generateErrorId(), getStoredErrorReports(), getStoredErrors(), initErrorTracking() (+1 more)
+Cohesion: 0.08
+Nodes (19): drive(), routes, drive(), fixture(), routes, RULE, drive(), fixture() (+11 more)
 
 ### Community 184 - "WhatsAppConversationPane.tsx"
-Cohesion: 0.11
-Nodes (20): defaultParamsFor(), getHiggsfieldModelSpec(), HIGGSFIELD_MODEL_SPECS, HiggsfieldModelSpec, IMAGE_SPECS, mergeModelSpec(), missingRequiredParams(), ModelParamSpec (+12 more)
+Cohesion: 0.18
+Nodes (12): AdminClient, ConfigScopeQuery, ConfigWriteScope, NamedAccountId, resolveConfigWriteAccount(), resolveOwnedAccountId(), rowId(), ScopedConfigWrite (+4 more)
 
 ### Community 185 - "ThreadsRepliesGroupedByPost.tsx"
 Cohesion: 0.06
-Nodes (63): completeIdempotency(), markIndeterminate(), PartnerKeyRecord, confirmQuota(), indeterminateQuota(), isMissingTelemetryColumn(), LEDGER_TELEMETRY_COLUMNS, RateLimitDecision (+55 more)
+Nodes (66): confirmQuota(), indeterminateQuota(), releaseQuota(), runAttemptAndTerminate(), withTimeout(), dispatchPartnerTemplate(), errorBody(), PartnerDispatchDeps (+58 more)
 
 ### Community 186 - "pexelsApi.ts"
 Cohesion: 0.15
 Nodes (18): fetchCuratedPhotos(), fetchPopularVideos(), filterPhotosByOrientation(), filterVideosByOrientation(), getPhotoFullSize(), getPhotoOrientation(), getPhotoThumbnail(), getVideoOrientation() (+10 more)
 
 ### Community 187 - "index.ts"
-Cohesion: 0.12
-Nodes (19): BackgroundRemovalDialog(), BatchImageToolsDialog(), BatchRenameDialog(), getBaseName(), getExtension(), getNumberSuffix(), CreateFolderDialog(), DeleteFolderDialog() (+11 more)
+Cohesion: 0.11
+Nodes (26): ThreadsMentionCardProps, Props, Props, Props, AssignedFilter, DEFAULT_FILTERS, HasReplyFilter, loadStoredFilters() (+18 more)
 
 ### Community 188 - "index.ts"
-Cohesion: 0.05
-Nodes (57): accountId, admin, badScopes, environment, inserted, name, rawQuota, scopes (+49 more)
+Cohesion: 0.03
+Nodes (98): client, keyId, overlapMinutes, predecessorEnv, PROD_ROW, refusal(), STAGING_ROW, corsHeaders (+90 more)
 
 ### Community 189 - "threads-reply-helpers.ts"
-Cohesion: 0.06
-Nodes (43): createEvolutionApi(), createRequestBody(), EvolutionApiOptions, EvolutionAudioInput, EvolutionCreateInstanceInput, EvolutionEvent, EvolutionMediaInput, EvolutionRevokeKey (+35 more)
+Cohesion: 0.16
+Nodes (24): ActionSchema, consumeBackupCode(), createAdminClient(), executeAction(), getAuthenticatedUserId(), getBearerToken(), getNormalizedStoreCodes(), getPepper() (+16 more)
 
 ### Community 190 - "File Structure"
-Cohesion: 0.11
-Nodes (17): File Structure, Global Constraints, Self-Review, SQL Rehearsal Harness, Task 10: Edge functions stop writing plan values, Task 11: Tier resolution in `n8n-api`, Task 12: Guard pass and final gates, Task 1: Plan entitlement columns (+9 more)
+Cohesion: 0.10
+Nodes (19): Admin Dashboard - Postora, Admin Email Addresses, Admin-Related Functions, Appendix, Authentication, Authorization, Core Admin Tables, Data Protection (+11 more)
 
 ### Community 191 - "Findings"
-Cohesion: 0.11
-Nodes (17): Counts by severity, Executive summary, Findings, MCP-SEC-001 — OAuth scopes are recorded but never enforced, MCP-SEC-002 — Authorization-code redemption and refresh-token rotation are non-atomic, MCP-SEC-003 — Refresh grants bypass confidential-client authentication, MCP-SEC-004 — Dynamic Client Registration is anonymous and unbounded, MCP-SEC-005 — No application-level rate limiting on token, revocation, or registration endpoints (+9 more)
+Cohesion: 0.10
+Nodes (19): Before you start — read this or half the steps will look broken, If something fails, J10. Your own connection **[2nd account]**, J11. Disconnect, J12. Non-admin cannot reach admin controls **[2nd account]**, J1. The CDN card loads, J2. Test connection, J3. The retirement gate reads correctly (+11 more)
 
 ### Community 192 - "Postora.node.ts"
 Cohesion: 0.18
 Nodes (14): describeBinaryError(), fetchFollowingSafeRedirects(), isPrivateOrReservedHost(), isValidUuid(), mediaSourceOptions, normalizeList(), parseCommaSeparatedList(), platformOptions (+6 more)
 
 ### Community 193 - "PROJECT_AGENT.md — POSTORA Project Context for Coding Agents"
-Cohesion: 0.11
-Nodes (17): Agent stop conditions, Architecture decision hierarchy, Compatibility philosophy, Core stack, Existing architecture, Existing patterns that should be preserved, High-risk areas, Known architectural hotspots (+9 more)
+Cohesion: 0.10
+Nodes (19): 1. Symptom, 2. Root cause, 3.1 `.env` — added `GOOGLE_REDIRECT_URI`, 3.2 `docker-compose.yml` — added 4 GoTrue environment variables, 3. Files changed (server-side), 4. Redeploy, 5. Validation, 6. Google Cloud Console — manual step required (+11 more)
 
 ### Community 194 - "compilerOptions"
 Cohesion: 0.11
-Nodes (17): ES2023, vite.config.ts, compilerOptions, allowImportingTsExtensions, isolatedModules, lib, module, moduleDetection (+9 more)
+Nodes (17): compilerOptions, allowImportingTsExtensions, isolatedModules, lib, module, moduleDetection, moduleResolution, noEmit (+9 more)
 
 ### Community 195 - "Postora Future Roadmap & Subscription Plan"
-Cohesion: 0.11
-Nodes (17): Business ($49/month), Competitors Reference, Database Changes Needed, Enterprise (Custom), Feature Roadmap, Free Tier, Implementation Priority, New Tables (+9 more)
+Cohesion: 0.10
+Nodes (19): §1 Event contract & dispatcher (backend), §2 Webhook subscription & comment API (`n8n-api`), §3 n8n node (apply to both local copies), §4 Automation handler UI (web app), §5 Error handling, tests, deploy, Allowed events, Call sites, Envelope (+11 more)
 
 ### Community 196 - "Landing.tsx"
-Cohesion: 0.13
-Nodes (14): 1. Problem, 2. Goals, 3. Non-goals, 4. Constraints discovered in the codebase (these shape the design), 5.1 Data model, 5.2 Prompt wiring, 5.3 Component structure, 5.4 Website scraping flow (+6 more)
+Cohesion: 0.17
+Nodes (16): errorTypeFor(), groupThreadsByVideo(), VideoGroup, view(), YouTubeReplyView, YouTubeThreadView, PolledCommentInput, PolledYouTubeComment (+8 more)
 
 ### Community 197 - "text"
-Cohesion: 0.22
-Nodes (15): FALLBACK_RATE_LIMITS, fetchGlobalSetting(), fetchPlanSlug(), fetchTierLimit(), fetchUserOverride(), GlobalSettingRow, overrideLive(), RateLimitDeps (+7 more)
+Cohesion: 0.11
+Nodes (17): CommentDeps, YouTubeCommentAccount, YouTubeCommentsDeps, PollCandidate, PollSelection, selectPollableChannels(), SCOPES, PollAccount (+9 more)
 
 ### Community 198 - "usePostRetry.ts"
-Cohesion: 0.34
-Nodes (12): deleteFailedPlatformPosts(), deleteMediaFiles(), deletePlatformPost(), deletePostById(), invalidatePostQueries(), invokeProcessPost(), PlatformResult, PostWithResults (+4 more)
+Cohesion: 0.29
+Nodes (13): deleteFailedPlatformPosts(), deleteMediaFiles(), deletePlatformPost(), deletePostById(), invalidatePostQueries(), invokeProcessPost(), PlatformResult, PostWithResults (+5 more)
 
 ### Community 199 - "cloudinary-email-helper.ts"
 Cohesion: 0.14
 Nodes (11): corsHeaders, corsHeaders, fetchAndStoreAttachments(), corsHeaders, fetchAndStoreAttachments(), IMPORTANT: Inbound emails must be fetched from the Receiving API, arrayBufferToBase64(), CloudinaryUploadResult (+3 more)
 
 ### Community 200 - "evolutionApi.ts"
-Cohesion: 0.08
-Nodes (24): 1. State, 2.1 The migrations cannot rebuild the database — 0.6 is blocked, 2.2 There is no migration ledger, 2.3 Danat is the user's own other project, and it is switched off, 2.4 `partner_audit_logs` has zero writers, 2.5 The "exhaustive" error-code table has drifted three times, 2. Things that are true and not in the repo, 3. How to work in this repo (+16 more)
+Cohesion: 0.33
+Nodes (3): NEW_LEAD, stage(), WON
 
 ### Community 201 - "Task 2 Report: `effective_user_quotas()` arbiter"
 Cohesion: 0.11
-Nodes (17): Checksum table (byte-fidelity, every transported file), Cleanup, Concerns, Files changed, Final apply of corrected migration + grant re-check, Final clean re-run (after fixture cleanup, corrected migration), First migration apply + re-run (intermediate failure — test fixture bug, not migration bug), Grant audit (A14) — literal brief SQL vs. actual state (+9 more)
+Nodes (18): English, In short, Things you should know, Try it yourself, What changed, What did not change, أشياء تحتاج تعرفها, التجربة الأولى: حماية الكتابة (فيها شي تضغطه) (+10 more)
 
 ### Community 202 - "components.json"
-Cohesion: 0.12
-Nodes (16): aliases, components, hooks, lib, ui, utils, rsc, $schema (+8 more)
+Cohesion: 0.11
+Nodes (17): aliases, components, hooks, lib, ui, utils, iconLibrary, rsc (+9 more)
 
 ### Community 203 - "Edge Runtime Environment Runbook"
-Cohesion: 0.12
-Nodes (16): 1. Add to the manifest, 2. Add to `.env.example`, 3. Add to the production `.env`, 4. Confirm the compose injects it, 5. Restart ONLY the functions container, 6. Run the server env checker, 7. Run endpoint smoke tests, Architecture: the single source of truth (+8 more)
+Cohesion: 0.11
+Nodes (18): 1. Problem, 2. Already done on this branch (verified, not re-implemented), 3. Requirements, 4. Non-goals, 5. Deployment (from AGENTS.md runbook), 6. Acceptance criteria, 7. Codex round-1 objections and disposition, 8. Codex round-2 objections and disposition (+10 more)
 
 ### Community 204 - "Dashboard Sections"
-Cohesion: 0.12
-Nodes (17): 10. Token Health, 12. OAuth Verification, 13. Settings, 14. Email Inbox, 2. Analytics, Dashboard Sections, Data Persistence, Data Sources (+9 more)
+Cohesion: 0.11
+Nodes (18): 1. Facts verified before writing (three briefed claims, two wrong), 2. Part 1 — Prompt for a connection name on QR connect, 3. Part 2 — White-label the linked-device name (deployment only), 4. Part 3 — Paginate the WhatsApp history sweep, 5. Part 4 — Postora logo on the Higgsfield consent screen, 6. Codex round-1 objections and disposition, 6b. Codex round-2 objections and disposition, 7. Acceptance criteria (+10 more)
 
 ### Community 205 - "Spec — Space-free account handles and an enriched `sender` in messaging payloads"
-Cohesion: 0.12
-Nodes (16): 1. Problem, 2. Blast radius (verified by grep — this is the part that makes it a break, not a fix), 3. Requirements, 4. Non-goals, 5. Acceptance criteria, 6. Open risk to state in the PR, 7. Codex round-1 objections and disposition, 8. Codex round-2 objections and disposition (+8 more)
+Cohesion: 0.11
+Nodes (18): 1.1 Instagram/Facebook Story crash — `"Could not get parameter"`, 1.2 Upload node lacks a media-source selector, 1. Problem, 2.1 Part A — targeted caption fix with explicit validation, 2.2 Part B — Upload `Media Source` dropdown (single source per node), 2.3 Part C — Backend `GET /api/v1/media/:id` (shipped now), 2. Design, 3. Tests (+10 more)
 
 ### Community 206 - "carousel.tsx"
 Cohesion: 0.15
 Nodes (13): testimonials, Carousel, CarouselApi, CarouselContent, CarouselContext, CarouselContextProps, CarouselItem, CarouselNext (+5 more)
 
 ### Community 207 - "Docs.tsx"
-Cohesion: 0.23
-Nodes (11): whatsappLegacyTabTarget(), WhatsAppNavItem, whatsappNavItems, whatsappRetiredRoutes, whatsappSectionDescriptions, whatsappSectionRoute(), WhatsAppNavList(), WhatsAppNavListProps (+3 more)
+Cohesion: 0.21
+Nodes (12): whatsappLegacyTabTarget(), WhatsAppNavItem, whatsappNavItems, whatsappRetiredRoutes, whatsappSectionDescriptions, whatsappSectionRoute(), navLabel(), WhatsAppNavList() (+4 more)
 
 ### Community 208 - "unsplashApi.ts"
-Cohesion: 0.12
-Nodes (15): AI_AGENT_TOOLS, BOUND_ACCOUNTS, CALL_LOGS, COMPOSIO_ENV, CONNECTIONS, connectLinkReq(), DEFAULT_KEY_ROW, Filter (+7 more)
+Cohesion: 0.11
+Nodes (18): 1. Facebook conversation avatars — confirmed code bug, fixable, 2. Instagram comment-manager avatars — Meta platform limitation, best-effort only, 3. Facebook comment-manager avatars — feasible today, no extra permission, 4. Threads mentions avatars — pipeline already correct; DB has 2 stale legacy rows, 5. Threads reply avatars — hard Meta API limitation, not buildable as originally scoped, A. Fix Facebook conversation avatar field bug (`supabase/functions/messaging-api/index.ts`), Avatar support for Facebook conversations, comment manager, and Threads replies, B. Facebook comment-manager avatars (`supabase/functions/comment-manager/index.ts`, `src/hooks/useCommentInbox.ts`, `src/components/comments/CommentList.tsx`) (+10 more)
 
 ### Community 209 - "Final whole-branch review — fix report"
-Cohesion: 0.12
-Nodes (16): Anything not fixed / deliberately left alone, C1 (CRITICAL) — dunning silently downgrades paying customers, C2 (CRITICAL) — AdminUsers.tsx silently downgrades users an admin merely opens and saves, `deno check` on every edge function touched, `deno test --allow-all supabase/functions/n8n-api/`, `deno test --allow-all supabase/functions/stripe-webhook/`, Final whole-branch review — fix report, Full gate output (final run, all fixes applied) (+8 more)
+Cohesion: 0.11
+Nodes (17): File Structure, Global Constraints, Self-Review, SQL Rehearsal Harness, Task 10: Edge functions stop writing plan values, Task 11: Tier resolution in `n8n-api`, Task 12: Guard pass and final gates, Task 1: Plan entitlement columns (+9 more)
 
 ### Community 210 - "7. Edge Functions index"
 Cohesion: 0.12
-Nodes (16): 7.10 Tokens / health (4), 7.11 Billing (7), 7.12 Email (9), 7.13 Admin / ops (8), 7.14 MFA & password (3), 7.15 Public API & misc (2), 7.1 Auth / OAuth (12), 7.2 Posting pipeline (5) (+8 more)
+Nodes (16): 7.10 Tokens / health (4), 7.11 Billing (7), 7.12 Email (9), 7.13 Admin / ops (8), 7.14 MFA & password (2), 7.15 Public API & misc (2), 7.1 Auth / OAuth (12), 7.2 Posting pipeline (5) (+8 more)
 
 ### Community 211 - "Handover — Higgsfield OAuth callback never lands as connected"
-Cohesion: 0.12
-Nodes (15): Agent notes, Also in the working tree (continue or trim), Delete — do NOT commit, Handover — Higgsfield OAuth callback never lands as connected, Intended OAuth path (do not reinvent), Keep these (they are the routing fix), Live evidence (Contabo / self-hosted Supabase), Live infra already touched (+7 more)
+Cohesion: 0.11
+Nodes (17): Counts by severity, Executive summary, Findings, MCP-SEC-001 — OAuth scopes are recorded but never enforced, MCP-SEC-002 — Authorization-code redemption and refresh-token rotation are non-atomic, MCP-SEC-003 — Refresh grants bypass confidential-client authentication, MCP-SEC-004 — Dynamic Client Registration is anonymous and unbounded, MCP-SEC-005 — No application-level rate limiting on token, revocation, or registration endpoints (+9 more)
 
 ### Community 212 - "Phase 3 — one global three-slot control"
-Cohesion: 0.12
-Nodes (15): AI Agent Model Selection Implementation Plan, File Structure, Global Constraints, Phase 1 — a delivery floor under the model chain, Phase 2 — migrations for the manual-sql objects, Phase 3 — one global three-slot control, Post-plan follow-ups (not in scope), Task 1: Exhaustion error, apology strings, and the deadline arithmetic (+7 more)
+Cohesion: 0.11
+Nodes (17): Agent stop conditions, Architecture decision hierarchy, Compatibility philosophy, Core stack, Existing architecture, Existing patterns that should be preserved, High-risk areas, Known architectural hotspots (+9 more)
 
 ### Community 213 - "index.ts"
-Cohesion: 0.11
-Nodes (26): CommentActions(), CommentActionsProps, CommentList(), CommentListProps, CommentThreadCard(), buildCommentThreads(), invokeMock, renderComments() (+18 more)
+Cohesion: 0.13
+Nodes (22): CommentActions(), invokeMock, renderComments(), useQuerySpy, wrapper(), COMMENT_LIST_ACTION, parseComments(), parseIgComments() (+14 more)
 
 ### Community 214 - "20260106100309_e63e2d61-a5cf-4530-8ef5-a0da5c477c5b.sql"
-Cohesion: 0.17
-Nodes (15): on_auth_user_created_role, public.app_settings, public.coupons, public.get_user_role(), public.handle_new_user_role(), public.has_role(), public.subscription_plans, public.support_messages (+7 more)
+Cohesion: 0.11
+Nodes (17): Business ($49/month), Competitors Reference, Database Changes Needed, Enterprise (Custom), Feature Roadmap, Free Tier, Implementation Priority, New Tables (+9 more)
 
 ### Community 215 - "Permission Categories"
-Cohesion: 0.12
-Nodes (15): 1. Publishing (3 permissions), 2. Messaging (6 permissions), 3. Analytics / Insights (5 permissions), 4. Comments / Engagement (4 permissions), 5. Page / Account Management (4 permissions), 6. User Identity (5 permissions), 7. Advertising (2 permissions), 8. Leads (1 permission) (+7 more)
+Cohesion: 0.19
+Nodes (17): AdminAiAgentSection(), AGENT_PROVIDER_CODES, DefaultModelSelector(), primarySpecFor(), AiCategoryCard(), ChatModelsCard(), EmbeddingModelsCard(), ImageGenerationCard() (+9 more)
 
 ### Community 216 - "Eight video performance/security claims, measured against Postora"
-Cohesion: 0.13
-Nodes (14): 1. Caching — already done, in a different place, 2. Over-fetching — real, plus a flavor the video misses, 3. Indexes — the inverse problem, 4. N+1 — not the read pattern, 5. Connection pooling — inverted, 6. Images — the one warning fully realized, 7. Redis — mostly does not map, 8. npm audit — and why `--production` will not help here (+6 more)
+Cohesion: 0.12
+Nodes (14): { fromMock, rpcMock, singleMock, user }, AIRateLimitDatabase, DEFAULT_STATE, RateLimitState, TierLimit, UseAIRateLimitReturn, CompositeTypes, Constants (+6 more)
 
 ### Community 217 - "Plan — Make inbound-webhook failures visible"
-Cohesion: 0.13
-Nodes (14): 3a. `_shared/unmatchedWebhookObservation.ts` (new), 3b. `facebook-instagram-webhook/index.ts`, 3c. `whatsapp-webhook/index.ts`, Plan — Make inbound-webhook failures visible, Risks, Step 1 — Migration: rollup table, writer, retention, Step 2 — Migration: read functions, Step 3 — Edge functions (+6 more)
+Cohesion: 0.16
+Nodes (14): WhatsAppCoexistenceSetupBanner(), ChromeProbe(), useWhatsAppChrome(), WhatsAppChromeContext, WhatsAppChromeContextValue, WhatsAppChromeProvider(), readCollapsedPreference(), WhatsAppLayoutContent() (+6 more)
 
 ### Community 218 - "Process-Post Refactoring Summary"
-Cohesion: 0.13
-Nodes (14): Architecture Constraints, Benefits, Changes Made, File Structure, Future Improvements (Recommended), Metrics, Overview, Phase 1: Shared Module Extraction (Completed) (+6 more)
+Cohesion: 0.12
+Nodes (19): collector(), DM, NONE, quietAdmin(), target(), activeOverrideMode(), clampTimeoutMinutes(), ConversationModeRow (+11 more)
 
 ### Community 219 - "Spec — Make inbound-webhook failures visible"
-Cohesion: 0.13
-Nodes (14): Acceptance criteria, Deferred, Deployment, Goal, Non-goals, Problem, R1 — Record unroutable inbound webhook events, R2 — Show the user their registered triggers (both registries) (+6 more)
+Cohesion: 0.12
+Nodes (16): Assembly, Debate round 1 — Codex astra 6 medium, read-only, 2026-09-09, Deployment note for the orchestrator, Global constraints, Knowledge UX and graph export — Implementation Plan, Out of scope for every slice, Slice A, Slice B — one assignment, tasks 2 then 3 (+8 more)
 
 ### Community 220 - "devDependencies"
 Cohesion: 0.13
-Nodes (15): gulp, jest, devDependencies, gulp, jest, @n8n/node-cli, ts-jest, @types/jest (+7 more)
+Nodes (15): devDependencies, gulp, jest, @n8n/node-cli, ts-jest, @types/jest, @types/node, typescript (+7 more)
 
 ### Community 221 - "n8n-nodes-postora"
-Cohesion: 0.13
-Nodes (13): Account, API Endpoint, Binary Data Details, Credentials, Installation, License, Media, Media Source Options (+5 more)
+Cohesion: 0.12
+Nodes (16): 1. Add to the manifest, 2. Add to `.env.example`, 3. Add to the production `.env`, 4. Confirm the compose injects it, 5. Restart ONLY the functions container, 6. Run the server env checker, 7. Run endpoint smoke tests, Architecture: the single source of truth (+8 more)
 
 ### Community 222 - "scripts"
-Cohesion: 0.13
-Nodes (14): name, private, scripts, build, build:dev, check:edge-env, check:edge-env:local, dev (+6 more)
+Cohesion: 0.12
+Nodes (15): name, private, scripts, build, build:dev, check:edge-env, check:edge-env:local, check:i18n (+7 more)
 
 ### Community 223 - "App.tsx"
-Cohesion: 0.09
-Nodes (22): ActivityStoreScope(), QueryCacheAuthScope(), AnimatedRoutes(), VideoProcessingDebugPanel(), Toaster(), ToasterProps, DebugInfo, useVideoProcessingDebug() (+14 more)
+Cohesion: 0.11
+Nodes (19): ActivityStoreScope(), QueryCacheAuthScope(), AnimatedRoutes(), DocumentTitle(), metaForPath(), ROUTE_META, setMeta(), mockSettings() (+11 more)
 
 ### Community 224 - "ApiDocumentation.tsx"
 Cohesion: 0.19
@@ -2126,79 +2045,79 @@ Nodes (10): CodeBlock(), MethodBadge(), Endpoint, endpoints, ErrorCode, errorCod
 
 ### Community 225 - "ContentGenerationPanel.tsx"
 Cohesion: 0.05
-Nodes (51): chatCompletion(), userTier, corsHeaders, EmailAssistantRequest, htmlTemplates, stylePrompts, extractWithRouting(), corsHeaders (+43 more)
+Nodes (52): chatCompletion(), userTier, corsHeaders, EmailAssistantRequest, htmlTemplates, stylePrompts, boundedWebsiteInput(), ClaimedJob (+44 more)
 
 ### Community 226 - "Canvas.tsx"
-Cohesion: 0.04
-Nodes (102): CATEGORY_COLORS, FeatureFlagCategoryDropdown(), FeatureFlagCategoryDropdownProps, getCategoryColor(), AdminInbox(), MessageFilter, ForwardData, ReplyData (+94 more)
+Cohesion: 0.07
+Nodes (28): Canvas(), CanvasInner(), defaultEdgeOptions, edgeTypes, nodeTypes, DeleteNodeDialog(), KeyboardShortcutsDialog(), KeyboardShortcutsDialogProps (+20 more)
 
 ### Community 227 - "TikTokPreCheckDetails.tsx"
-Cohesion: 0.14
-Nodes (13): Agent Setup Correctness Implementation Plan, Background the engineer needs, File Structure, Gate commands, Out of scope for this plan, Task 1: Server-side guard against blanking writes, Task 2: Reset the form only on a real account change, Task 3: Dropped — deliberately, and here is why (+5 more)
+Cohesion: 0.12
+Nodes (17): 12. OAuth Verification, 13. Settings, 14. Email Inbox, 18. Launch Checklist, 3. Users Management, Categories, Dashboard Sections, Data Persistence (+9 more)
 
 ### Community 228 - "PipelineBoard.test.tsx"
-Cohesion: 0.16
-Nodes (24): ActionSchema, consumeBackupCode(), createAdminClient(), executeAction(), getAuthenticatedUserId(), getBearerToken(), getNormalizedStoreCodes(), getPepper() (+16 more)
+Cohesion: 0.10
+Nodes (18): ChangePasswordRequest, decodeJwtPayload(), verifyJwt(), NOTE: we no longer gate OTP issuance on MFA enrolment. verify-reset-otp, SendOTPRequest, checkIpRateLimit(), checkRateLimit(), checkRateLimitRpc() (+10 more)
 
 ### Community 229 - "useSubscription.dunning.test.tsx"
-Cohesion: 0.12
+Cohesion: 0.13
 Nodes (6): ChainCall, FLUENT_METHODS, FluentChain, FluentMethodName, mockedFrom, mockedInvoke
 
 ### Community 230 - "useYouTubeThumbnails.tsx"
-Cohesion: 0.14
-Nodes (13): §1 — Explicit timeouts, §2 — Structured error propagation, §3 — Reduce the token-in-URL leak, per endpoint, §4 — Concurrency: deferred, deliberately, A per-request timeout does not bound the sweep, 🔴 A transient failure must never latch the account, Evidence, Gates (+5 more)
+Cohesion: 0.12
+Nodes (16): 1. Problem, 2. Blast radius (verified by grep — this is the part that makes it a break, not a fix), 3. Requirements, 4. Non-goals, 5. Acceptance criteria, 6. Open risk to state in the PR, 7. Codex round-1 objections and disposition, 8. Codex round-2 objections and disposition (+8 more)
 
 ### Community 231 - "index.ts"
 Cohesion: 0.08
 Nodes (31): attachmentList(), describeAttachment(), firstReadableAttachment(), InboundAttachment, leadPlaceholder(), META_ATTACHMENT_KINDS, META_ATTACHMENT_PLACEHOLDERS, noteUnreadAttachments() (+23 more)
 
 ### Community 232 - "index.ts"
-Cohesion: 0.13
-Nodes (20): ENVELOPES, extractToolPayload(), findJobId(), findOutputUrl(), isRecord(), JobSnapshot, JobState, levels() (+12 more)
+Cohesion: 0.11
+Nodes (21): ENVELOPES, extractToolPayload(), findJobId(), findOutputUrl(), isRecord(), JobSnapshot, JobState, levels() (+13 more)
 
 ### Community 233 - "SDD ledger — plan: docs/specs/2026-08-23-unified-plan-quotas-plan.md"
-Cohesion: 0.13
-Nodes (14): Codex debate round 1 (user-requested, execution paused after pre-flight), Codex round 1 result — 15 objections, ALL ACCEPTED, Controller's own findings while Codex ran, Cross-task rows (tasks sharing a file or interface), MANDATE (user, mid-run), Parallel phase (user-directed): opencode + zai-coding-plan/glm-5.3, Per-task self-consistency rows, Pre-flight conflict scan (+6 more)
+Cohesion: 0.12
+Nodes (11): codeKeysByNs, config, configPath, defaultNsMatch, __dirname, localesDir, namespaces, nsArrayMatch (+3 more)
 
 ### Community 234 - "Codex Implementation Brief — Postora AI Agent: Knowledge Graph (GraphRAG) + follow-ups"
-Cohesion: 0.14
-Nodes (13): 0. GROUND RULES — read before writing any code, 1. ARCHITECTURE — the AI customer-service agent knowledge system, 2. HISTORY — already DONE (do NOT redo these), 3. CONCEPTUAL CORRECTION — read before Phase B, 4. REMAINING WORK, 5. DELIVERY & REVIEW CHECKLIST (what Claude will verify when you finish), 6. Quick reference — endpoints & keys, Codex Implementation Brief — Postora AI Agent: Knowledge Graph (GraphRAG) + follow-ups (+5 more)
+Cohesion: 0.18
+Nodes (14): ContactPatch, deleteContact(), fetchContactStats(), fetchDistinctTags(), findWhatsAppContactByPhone(), from, rpc, updateContact() (+6 more)
 
 ### Community 235 - "1. Ranked candidate root causes"
-Cohesion: 0.14
-Nodes (13): #1 (Instagram — near-certain, proven code gap in origin/main): IGID routing miss — the webhook's `entry.id` can never match any stored column, 1. Ranked candidate root causes, #2 (all platforms, if n8n runs node ≤ 1.1.15): stale/mis-scoped registration never refreshed by the old `checkExists`, 2. Answers to the seven numbered questions, #3 (all platforms): tenancy split — API-key user ≠ social-account owner, 3. Single best hypothesis, #4 (all platforms, deployment state): edge functions container predates `6092253c`, 4. Recommended fixes (description only — DO NOT APPLY) (+5 more)
+Cohesion: 0.12
+Nodes (15): 2a. Show when each file was embedded, 2b. Download a specific file, Global constraints, Knowledge UX and graph export — Design Specification, Non-goals, Non-goals, Non-goals, Requirements (+7 more)
 
 ### Community 236 - "6. Decision ledger"
-Cohesion: 0.14
-Nodes (14): 6. Decision ledger, D10 — Media: reuse the existing pipeline **only against a documented control matrix** **(R1, revised)**, D11 — Account selection in REST requests **(R1, new)**, D12 — Partner credential lifecycle is in v1 scope **(R1, new)**, D13 — Provider dispatch must be durable before the call **(R1, new)**, D1 — API shape: REST `/v1` resources, with the action endpoint retained as a frozen alias, D2 — Error envelope: adopt the PRD's structure, keep `retryable` **(R1, revised)**, D3 — Scope vocabulary: generic scopes, and **reissue** rather than alias **(R1, revised)** (+6 more)
+Cohesion: 0.12
+Nodes (15): Agent notes, Also in the working tree (continue or trim), Delete — do NOT commit, Handover — Higgsfield OAuth callback never lands as connected, Intended OAuth path (do not reinvent), Keep these (they are the routing fix), Live evidence (Contabo / self-hosted Supabase), Live infra already touched (+7 more)
 
 ### Community 237 - "6. Decision ledger"
-Cohesion: 0.14
-Nodes (14): 6. Decision ledger, D10 — Media: reuse the existing pipeline **only against a documented control matrix** **(R1, revised)**, D11 — Account selection in REST requests **(R1, new)**, D12 — Partner credential lifecycle is in v1 scope **(R1, new)**, D13 — Provider dispatch must be durable before the call **(R1, new)**, D1 — API shape: REST `/v1` resources, with the action endpoint retained as a frozen alias, D2 — Error envelope: adopt the PRD's structure, keep `retryable` **(R1, revised)**, D3 — Scope vocabulary: generic scopes, and **reissue** rather than alias **(R1, revised)** (+6 more)
+Cohesion: 0.12
+Nodes (15): 1. What was actually wrong, 2. Design decisions (settled in debate), 3. The work, in three PRs plus one security PR, 4. Traps for the implementer, 5. Deploy order for PR2 (expand → deploy → contract → frontend), 6. Deployment note, D1 — `ai-knowledge` storage bucket is public (genuine cross-user exposure, CONFIRMED LIVE), D2 — every uploaded knowledge file is on a public Cloudinary URL (genuine, larger than D1) (+7 more)
 
 ### Community 238 - "6. Decision ledger"
-Cohesion: 0.14
-Nodes (14): 6. Decision ledger, D10 — Media: reuse the existing pipeline **only against a documented control matrix** **(R1, revised)**, D11 — Account selection in REST requests **(R1, new)**, D12 — Partner credential lifecycle is in v1 scope **(R1, new)**, D13 — Provider dispatch must be durable before the call **(R1, new)**, D1 — API shape: REST `/v1` resources, with the action endpoint retained as a frozen alias, D2 — Error envelope: adopt the PRD's structure, keep `retryable` **(R1, revised)**, D3 — Scope vocabulary: generic scopes, and **reissue** rather than alias **(R1, revised)** (+6 more)
+Cohesion: 0.12
+Nodes (15): AI Agent Model Selection Implementation Plan, File Structure, Global Constraints, Phase 1 — a delivery floor under the model chain, Phase 2 — migrations for the manual-sql objects, Phase 3 — one global three-slot control, Post-plan follow-ups (not in scope), Task 1: Exhaustion error, apology strings, and the deadline arithmetic (+7 more)
 
 ### Community 239 - "6. Decision ledger"
-Cohesion: 0.14
-Nodes (14): 6. Decision ledger, D10 — Media: reuse the existing pipeline **only against a documented control matrix** **(R1, revised)**, D11 — Account selection in REST requests **(R1, new)**, D12 — Partner credential lifecycle is in v1 scope **(R1, new)**, D13 — Provider dispatch must be durable before the call **(R1, new)**, D1 — API shape: REST `/v1` resources, with the action endpoint retained as a frozen alias, D2 — Error envelope: adopt the PRD's structure, keep `retryable` **(R1, revised)**, D3 — Scope vocabulary: generic scopes, and **reissue** rather than alias **(R1, revised)** (+6 more)
+Cohesion: 0.17
+Nodes (15): on_auth_user_created_role, public.app_settings, public.coupons, public.get_user_role(), public.handle_new_user_role(), public.has_role(), public.subscription_plans, public.support_messages (+7 more)
 
 ### Community 240 - "Runbook: Fix `Error 400: invalid_request` / `kong:8000` redirect leak"
-Cohesion: 0.14
-Nodes (13): 1. Pre-flight on the VPS, 2. Sync the 5 patched OAuth functions, 3. Confirm/append required env vars, 4. Restart ONLY the functions container, 5. Verify env actually reached the container, 6. Verify the live OAuth URL, 7. Real OAuth round-trip, 8. Rollback (+5 more)
+Cohesion: 0.16
+Nodes (16): create_workflow_version_trigger, public.coupon_redemptions, public.coupons, public.create_workflow_version(), public.credit_transactions, public.deployment_logs, public.is_coupon_valid(), public.profiles (+8 more)
 
 ### Community 241 - "Implementation plan — Unified rate limits"
-Cohesion: 0.14
-Nodes (13): Delegation map, Implementation plan — Unified rate limits, Risks, Step 0 — Branch, Step 1 — Seed migration, Step 2 — Resolver module, Step 3 — Tests, Step 4 — Admin UI (+5 more)
+Cohesion: 0.12
+Nodes (15): 1. Publishing (3 permissions), 2. Messaging (6 permissions), 3. Analytics / Insights (5 permissions), 4. Comments / Engagement (4 permissions), 5. Page / Account Management (4 permissions), 6. User Identity (5 permissions), 7. Advertising (2 permissions), 8. Leads (1 permission) (+7 more)
 
 ### Community 242 - "Comment/Thread Avatar Support Implementation Plan"
-Cohesion: 0.14
-Nodes (13): Comment/Thread Avatar Support Implementation Plan, Self-review notes, Task 10: Live-verify the Threads mentions avatar pipeline, Task 11: Guard pass, final verification, and report, Task 1: Add `participant_id` column to `messaging_cache`, Task 2: Fix the Facebook conversation avatar field bug, Task 3: Deploy `messaging-api` and verify the Facebook avatar fix live, Task 4: Add Facebook comment avatars — backend field expansion (+5 more)
+Cohesion: 0.06
+Nodes (40): accountId, admin, badScopes, environment, inserted, name, rawQuota, scopes (+32 more)
 
 ### Community 243 - "WhatsApp Contacts Manager — Design"
-Cohesion: 0.14
-Nodes (13): 1. Data model, 2. UI decomposition, 3. Bulk operations, 4. CSV import wizard, 5. Export, 6. Avatars, 7. Performance / caching, 8. Error handling (+5 more)
+Cohesion: 0.09
+Nodes (25): BodySchema, ComposioExecutor, ConnectorBinding, ConnectorResolution, contactLabel(), ContactRow, createDependencies(), getSpreadsheetInfo() (+17 more)
 
 ### Community 244 - "index.ts"
 Cohesion: 0.22
@@ -2209,16 +2128,16 @@ Cohesion: 0.36
 Nodes (7): NetworkStatusIndicator(), getConnection(), getConnectionInfo(), NavigatorWithConnection, NetworkInformation, NetworkStatus, useNetworkStatus()
 
 ### Community 246 - "Calendar.tsx"
-Cohesion: 0.07
-Nodes (46): ConnectorUsageLine(), ConnectorUsageLineProps, ToolUsageLine(), rpc, USAGE, YouTubeConnectMethodDialogProps, aggregateUsage(), formatUsageLine() (+38 more)
+Cohesion: 0.06
+Nodes (56): ComposioConnectCard(), currentConnection(), ConnectorUsageLine(), ConnectorUsageLineProps, ToolUsageLine(), rpc, USAGE, openTab (+48 more)
 
 ### Community 247 - "logging.ts"
-Cohesion: 0.15
-Nodes (12): 1. `useDirtyForm` — the state primitive, 2. `useUnsavedChangesGuard` — the transition gate, 3. Wiring, 4. `UnsavedChangesDialog`, Design, Gates, Noted, not touched, Scope (+4 more)
+Cohesion: 0.06
+Nodes (42): cacheParticipantAvatar(), corsHeaders, deleteCredentials(), fetchParticipantProfile(), getCachedParticipantAvatar(), gracefulError(), graphFetch(), jsonResponse() (+34 more)
 
 ### Community 248 - "index.ts"
-Cohesion: 0.07
-Nodes (29): WhatsAppSetup(), mockSearchParams, mockSetSearchParams, mockToast, invoke, toastSpy, useWhatsAppConnect(), useWhatsAppDisconnect() (+21 more)
+Cohesion: 0.10
+Nodes (21): mockSearchParams, mockSetSearchParams, mockToast, buildDiagnostics(), classifyFailure(), facebookLogin(), FacebookLoginResponse, FacebookLoginResult (+13 more)
 
 ### Community 249 - "errorSanitizer.ts"
 Cohesion: 0.30
@@ -2229,148 +2148,148 @@ Cohesion: 0.19
 Nodes (10): CloudApiCredentials, CredentialResolution, isCloudApiAccount(), resolveWhatsAppCloudCredentials(), cloudAccount, qrAccount, WhatsAppAccountRow, corsHeaders (+2 more)
 
 ### Community 251 - "syncUserQuotas.ts"
-Cohesion: 0.06
-Nodes (27): BroadcastManager(), BusinessProfileManager(), CannedResponseAnalytics(), QuickReplyManager(), QuickReplyPicker(), SlashCommandSuggestions(), WebhookManager(), WhatsAppAnalyticsContent() (+19 more)
+Cohesion: 0.12
+Nodes (4): CannedResponseAnalytics(), WhatsAppCatalogContent(), WhatsAppPageHeader(), WhatsAppPageHeaderProps
 
 ### Community 252 - "index.ts"
-Cohesion: 0.04
-Nodes (66): CreatePostHeaderProps, getTargetResolution(), MediaCropper(), CompressorState, CropperState, MediaEditorDialogs(), MediaEditorDialogsProps, OperationType (+58 more)
+Cohesion: 0.11
+Nodes (15): matchPattern(), pathSegments(), resolveV1Route(), ACCOUNT_ROW, aliasScenario(), AliasScenarioResult, doc, DOC_PATH (+7 more)
 
 ### Community 253 - "20260712000000_ai_agent_foundation.sql"
-Cohesion: 0.16
-Nodes (13): public.ai_agent_configs, public.ai_agent_logs, public.ai_agent_tools, public.ai_conversation_modes, public.ai_knowledge_chunks, public.ai_knowledge_sources, public.ai_thread_messages, public.ai_threads (+5 more)
+Cohesion: 0.13
+Nodes (14): Global Constraints, Revision 3 corrections — these OVERRIDE the task bodies below, Self-review, Supabase Full-Table Reads Implementation Plan, Task 10: Usage guide, investigation record, and the full gate, Task 1: Settings resolution helpers, Task 2: Per-table column map, failing closed, Task 3: Filters restricted to the resolved columns (+6 more)
 
 ### Community 254 - "3. Gate results (verbatim)"
-Cohesion: 0.14
-Nodes (13): 1. Fix six pre-existing red tests, 2. Guard skills, 3. Gate results (verbatim), clean-code-guard, Concerns, `deno test --allow-all supabase/functions/n8n-api/`, `deno test --allow-all supabase/functions/_shared/planQuotasContract.test.ts`, `deno test --allow-all supabase/functions/stripe-webhook/` (+5 more)
+Cohesion: 0.13
+Nodes (14): 1. Caching — already done, in a different place, 2. Over-fetching — real, plus a flavor the video misses, 3. Indexes — the inverse problem, 4. N+1 — not the read pattern, 5. Connection pooling — inverted, 6. Images — the one warning fully realized, 7. Redis — mostly does not map, 8. npm audit — and why `--production` will not help here (+6 more)
 
 ### Community 255 - "Task 4 Report: Quota writers stop writing limits"
-Cohesion: 0.14
-Nodes (13): Checksums for chunked transport (local file == host file == container file), Cleanup, Commit, Concerns, Grants — confirmed unchanged, GREEN (after the migration was applied), Migration file, RED (before the migration existed, against the pre-fix functions) (+5 more)
+Cohesion: 0.13
+Nodes (14): 3a. `_shared/unmatchedWebhookObservation.ts` (new), 3b. `facebook-instagram-webhook/index.ts`, 3c. `whatsapp-webhook/index.ts`, Plan — Make inbound-webhook failures visible, Risks, Step 1 — Migration: rollup table, writer, retention, Step 2 — Migration: read functions, Step 3 — Edge functions (+6 more)
 
 ### Community 256 - "Postora Test Report"
-Cohesion: 0.14
-Nodes (13): ✅ All Passing Test Files, CI/CD, Component Tests, E2E Tests, Hook Tests, How to Run, Integration Tests, ⚠️ Partial Failures (+5 more)
+Cohesion: 0.13
+Nodes (14): Deployment holes to close in PR B/C, Explicitly not in scope, Goal, Known, deferred, Plan — per-account agent configuration (PR2/PR3 completion), PR A — make knowledge visibility explicit, PR B-1 — prepare (details), PR B — split in two, because the constraint must drop last (+6 more)
 
 ### Community 257 - "Postora - AI Coding Assistant Context"
-Cohesion: 0.18
-Nodes (10): Admin User, Database Functions, Edge Functions, graphify, Key Hooks, Postora - AI Coding Assistant Context, Project Overview, Project Structure (+2 more)
+Cohesion: 0.13
+Nodes (14): Architecture Constraints, Benefits, Changes Made, File Structure, Future Improvements (Recommended), Metrics, Overview, Phase 1: Shared Module Extraction (Completed) (+6 more)
 
 ### Community 258 - "Admin/Subscription Tables"
-Cohesion: 0.15
-Nodes (13): `admin_notifications`, Admin/Subscription Tables, `api_logs`, `app_settings`, `backup_codes`, `blog_posts`, `coupons`, `subscription_plans` (+5 more)
+Cohesion: 0.13
+Nodes (14): Acceptance criteria, Deferred, Deployment, Goal, Non-goals, Problem, R1 — Record unroutable inbound webhook events, R2 — Show the user their registered triggers (both registries) (+6 more)
 
 ### Community 259 - "Postora - AI Coding Assistant Context"
-Cohesion: 0.15
-Nodes (12): Admin User, Database Functions, Delegating to another agent (Codex / Grok / OpenCode / Antigravity), Edge Functions, graphify, Key Hooks, Postora - AI Coding Assistant Context, Project Overview (+4 more)
+Cohesion: 0.13
+Nodes (14): 1. Problem, 2. Goals, 3. Non-goals, 4. Constraints discovered in the codebase (these shape the design), 5.1 Data model, 5.2 Prompt wiring, 5.3 Component structure, 5.4 Website scraping flow (+6 more)
 
 ### Community 260 - "Admin/Subscription Tables"
-Cohesion: 0.15
-Nodes (13): `admin_notifications`, Admin/Subscription Tables, `api_logs`, `app_settings`, `backup_codes`, `blog_posts`, `coupons`, `subscription_plans` (+5 more)
+Cohesion: 0.13
+Nodes (13): Account, API Endpoint, Binary Data Details, Credentials, Installation, License, Media, Media Source Options (+5 more)
 
 ### Community 261 - "Postora — Complete Project Context & Marketing Bible"
 Cohesion: 0.15
-Nodes (12): 13. Admin and Operations Suite, 16. Roadmap Highlights, 17. Glossary, 1. Executive Snapshot, 5. Supported Platforms (11), Admin Modules, Appendix: Quick Reference URLs, Confirmed In-Progress / Planned (+4 more)
+Nodes (15): AnySupabase, exchangeForLongLivedToken(), FacebookPage, FB_OAUTH_SCOPES, fetchFacebookPages(), fetchStandaloneInstagramAccounts(), handleFacebookGetCallback(), isInstagramViaFacebookEnabled() (+7 more)
 
 ### Community 262 - "Create Post"
-Cohesion: 0.15
-Nodes (13): Async / Advanced Fields, Core Fields, Create Post, Create Post Response, Facebook Fields, Global / Cross-Platform Fields, Instagram Fields, LinkedIn Fields (+5 more)
+Cohesion: 0.19
+Nodes (10): embeddingModelNote(), recordedEmbeddingWidth(), STORABLE_EMBEDDING_WIDTHS, MODELS, OWNERS, PROVIDERS, embeddingColumnForWidth(), EmbeddingColumnOwners (+2 more)
 
 ### Community 263 - "Runbook — Google OAuth Verification Submission Checklist (YouTube scopes)"
-Cohesion: 0.15
-Nodes (12): 0. Important — what Lovable cannot do, 1. Pre-flight (must all be true before submitting), 2. Confirm actual requested scopes from code, 3. Scope justifications (drop-in copy), 4. Demo video requirements, 5. YouTube API Services compliance (separate from OAuth review), 6. Submission form, 7. What changes after approval (+4 more)
+Cohesion: 0.14
+Nodes (13): 0. GROUND RULES — read before writing any code, 1. ARCHITECTURE — the AI customer-service agent knowledge system, 2. HISTORY — already DONE (do NOT redo these), 3. CONCEPTUAL CORRECTION — read before Phase B, 4. REMAINING WORK, 5. DELIVERY & REVIEW CHECKLIST (what Claude will verify when you finish), 6. Quick reference — endpoints & keys, Codex Implementation Brief — Postora AI Agent: Knowledge Graph (GraphRAG) + follow-ups (+5 more)
 
 ### Community 264 - "WhatsApp Contacts Manager Implementation Plan"
-Cohesion: 0.15
-Nodes (12): Task 10: ContactExportMenu + shell rewrite, Task 11: Quality gates, Task 12: Deploy + live verification, Task 1: Migration — extend whatsapp_contacts, Task 2: contactCodecs — pure logic + tests (TDD), Task 3: xlsx dependency (USER GATE), Task 4: useContacts hooks, Task 5: PhoneInput component (+4 more)
+Cohesion: 0.14
+Nodes (13): #1 (Instagram — near-certain, proven code gap in origin/main): IGID routing miss — the webhook's `entry.id` can never match any stored column, 1. Ranked candidate root causes, #2 (all platforms, if n8n runs node ≤ 1.1.15): stale/mis-scoped registration never refreshed by the old `checkExists`, 2. Answers to the seven numbered questions, #3 (all platforms): tenancy split — API-key user ≠ social-account owner, 3. Single best hypothesis, #4 (all platforms, deployment state): edge functions container predates `6092253c`, 4. Recommended fixes (description only — DO NOT APPLY) (+5 more)
 
 ### Community 265 - "Global Constraints"
-Cohesion: 0.15
-Nodes (12): Danat ↔ Postora WhatsApp Integration — Implementation Plan, Global Constraints, Mandatory gates before every commit, Plan dependency — read before starting, Task 1: Add the `postora` provider to the enum and config, Task 2: The Postora provider, Task 3: Route WhatsApp sends through Postora when it is the enabled provider, Task 4: Stop the drain job from re-sending indeterminate results (+4 more)
+Cohesion: 0.14
+Nodes (14): 6. Decision ledger, D10 — Media: reuse the existing pipeline **only against a documented control matrix** **(R1, revised)**, D11 — Account selection in REST requests **(R1, new)**, D12 — Partner credential lifecycle is in v1 scope **(R1, new)**, D13 — Provider dispatch must be durable before the call **(R1, new)**, D1 — API shape: REST `/v1` resources, with the action endpoint retained as a frozen alias, D2 — Error envelope: adopt the PRD's structure, keep `retryable` **(R1, revised)**, D3 — Scope vocabulary: generic scopes, and **reissue** rather than alias **(R1, revised)** (+6 more)
 
 ### Community 266 - "2. Page Content & Structure"
-Cohesion: 0.15
-Nodes (12): 1. Goal, 2. Page Content & Structure, 3. UI/UX Design System & Tokens, 4. Verification Plan, Automated Tests, Manual Verification, Tab 1: Connection & Sync (History Phasing & QR Steps), Tab 2: Chatbot Builder (Level 1 vs Level 2) (+4 more)
+Cohesion: 0.14
+Nodes (14): 6. Decision ledger, D10 — Media: reuse the existing pipeline **only against a documented control matrix** **(R1, revised)**, D11 — Account selection in REST requests **(R1, new)**, D12 — Partner credential lifecycle is in v1 scope **(R1, new)**, D13 — Provider dispatch must be durable before the call **(R1, new)**, D1 — API shape: REST `/v1` resources, with the action endpoint retained as a frozen alias, D2 — Error envelope: adopt the PRD's structure, keep `retryable` **(R1, revised)**, D3 — Scope vocabulary: generic scopes, and **reissue** rather than alias **(R1, revised)** (+6 more)
 
 ### Community 267 - "seed-test-data.ts"
 Cohesion: 0.24
 Nodes (12): cleanupTestData(), createPlatformPosts(), createTestPosts(), createTestProfile(), createTestQuotas(), createTestSocialAccounts(), getOrCreateTestUser(), seedTestData() (+4 more)
 
 ### Community 268 - "partnerApiKeys.ts"
-Cohesion: 0.15
-Nodes (15): AnySupabase, exchangeForLongLivedToken(), FacebookPage, FB_OAUTH_SCOPES, fetchFacebookPages(), fetchStandaloneInstagramAccounts(), handleFacebookGetCallback(), isInstagramViaFacebookEnabled() (+7 more)
+Cohesion: 0.18
+Nodes (12): DEPTH_STYLES, depthIndent(), depthStyle, CommentHeader(), CommentRow(), CommentRowProps, CommentNode, TopicTagDebug (+4 more)
 
 ### Community 269 - "index.ts"
 Cohesion: 0.21
 Nodes (9): corsHeaders, getOpenAIKeyFromDB(), runTranscription(), transcribeWithDeepgram(), transcribeWithGoogle(), transcribeWithOpenAI(), TranscriptionApiError, TranscriptionResult (+1 more)
 
 ### Community 270 - "index.ts"
-Cohesion: 0.12
-Nodes (13): body(), ADAPTER_ENV, AI_AGENT_TOOLS, code(), COMPOSIO_BODY, CONNECTIONS, DEFAULT_KEY_ROW, FetchCall (+5 more)
+Cohesion: 0.14
+Nodes (14): 6. Decision ledger, D10 — Media: reuse the existing pipeline **only against a documented control matrix** **(R1, revised)**, D11 — Account selection in REST requests **(R1, new)**, D12 — Partner credential lifecycle is in v1 scope **(R1, new)**, D13 — Provider dispatch must be durable before the call **(R1, new)**, D1 — API shape: REST `/v1` resources, with the action endpoint retained as a frozen alias, D2 — Error envelope: adopt the PRD's structure, keep `retryable` **(R1, revised)**, D3 — Scope vocabulary: generic scopes, and **reissue** rather than alias **(R1, revised)** (+6 more)
 
 ### Community 271 - "20260118021442_ec0932b8-9899-471d-a4ce-e23bd6b9ae20.sql"
-Cohesion: 0.23
-Nodes (11): public.node_execution_logs, public.workflow_comments, public.workflow_executions, public.workflow_schedules, public.workflow_templates, public.workflow_versions, public.workflow_webhooks, public.workflows (+3 more)
+Cohesion: 0.14
+Nodes (14): 6. Decision ledger, D10 — Media: reuse the existing pipeline **only against a documented control matrix** **(R1, revised)**, D11 — Account selection in REST requests **(R1, new)**, D12 — Partner credential lifecycle is in v1 scope **(R1, new)**, D13 — Provider dispatch must be durable before the call **(R1, new)**, D1 — API shape: REST `/v1` resources, with the action endpoint retained as a frozen alias, D2 — Error envelope: adopt the PRD's structure, keep `retryable` **(R1, revised)**, D3 — Scope vocabulary: generic scopes, and **reissue** rather than alias **(R1, revised)** (+6 more)
 
 ### Community 272 - "CodeRabbit PR #28 review — round 1 fixes"
-Cohesion: 0.15
-Nodes (12): CodeRabbit PR #28 review — round 1 fixes, Disagreements / notes for adjudication, F10 — `any` casts in a test, F1 — `increment_media_uploads` TOCTOU race, F2 — `sync-user-quotas` strands dunning customers, F3 — Stripe Basil API moved `current_period_end`, F4 — `set_user_quotas_for_plan` clears overrides on every call, F5 — `past_due` not propagated everywhere (+4 more)
+Cohesion: 0.14
+Nodes (13): 3.2 The durable pre-call boundary, 3.3 Takeover never re-dispatches, 3.4 Reconciliation, and conservative refusal, Action safety, Brief — Phase 3, deliverables 3.2 through 3.7, Gates — run in this order, it is load-bearing, Report contract, Stage 1 — 3.2, 3.3, 3.4 (+5 more)
 
 ### Community 273 - "Task 2 Report: Fix Facebook Conversation Avatar Field Bug"
-Cohesion: 0.15
-Nodes (12): Commit Details, Edit 1: fetchParticipantProfile Function (lines 176-200), Edit 2: cacheParticipantAvatar Function (lines 246-263), Files Changed, Implementation Details, No Concerns, Post-Merge Actions, Summary (+4 more)
+Cohesion: 0.14
+Nodes (13): 1. The verdict, first, 2. The state machine, 3. Why a separate table, 4. What 3.2 must change in the send path, 5. The exit gate, 6. What would change this decision, 7. Sources, D13 — the dispatch state machine, and the reconciliation verdict (+5 more)
 
 ### Community 274 - "compilerOptions"
 Cohesion: 0.15
 Nodes (12): compilerOptions, allowJs, noImplicitAny, noUnusedLocals, noUnusedParameters, paths, skipLibCheck, strictNullChecks (+4 more)
 
 ### Community 275 - "Postora Partner API — Specification v1"
-Cohesion: 0.17
-Nodes (12): 10. Testing and acceptance, 11. Open questions, 1. Problem, 2. Relationship to other documents, 4. Goals, 5. Non-goals for v1, 7.1 Cross-cutting conventions, 7. Target v1 surface (+4 more)
+Cohesion: 0.14
+Nodes (13): 1. Pre-flight on the VPS, 2. Sync the 5 patched OAuth functions, 3. Confirm/append required env vars, 4. Restart ONLY the functions container, 5. Verify env actually reached the container, 6. Verify the live OAuth URL, 7. Real OAuth round-trip, 8. Rollback (+5 more)
 
 ### Community 276 - "Postora Partner API — Specification v1"
-Cohesion: 0.17
-Nodes (12): 10. Testing and acceptance, 11. Open questions, 1. Problem, 2. Relationship to other documents, 4. Goals, 5. Non-goals for v1, 7.1 Cross-cutting conventions, 7. Target v1 surface (+4 more)
+Cohesion: 0.14
+Nodes (13): Delegation map, Implementation plan — Unified rate limits, Risks, Step 0 — Branch, Step 1 — Seed migration, Step 2 — Resolver module, Step 3 — Tests, Step 4 — Admin UI (+5 more)
 
 ### Community 277 - "Postora Partner API — Implementation Plan"
-Cohesion: 0.17
-Nodes (12): 1. How this plan is ordered, 2. Dependency graph, 4. Risk register, 5. What this plan deliberately does not do, 6. Per-phase working agreement, 7. Open items carried from the spec, 8. Correction log, Defect risks (+4 more)
+Cohesion: 0.14
+Nodes (13): Comment/Thread Avatar Support Implementation Plan, Self-review notes, Task 10: Live-verify the Threads mentions avatar pipeline, Task 11: Guard pass, final verification, and report, Task 1: Add `participant_id` column to `messaging_cache`, Task 2: Fix the Facebook conversation avatar field bug, Task 3: Deploy `messaging-api` and verify the Facebook avatar fix live, Task 4: Add Facebook comment avatars — backend field expansion (+5 more)
 
 ### Community 278 - "Postora Partner API — Specification v1"
-Cohesion: 0.17
-Nodes (12): 10. Testing and acceptance, 11. Open questions, 1. Problem, 2. Relationship to other documents, 4. Goals, 5. Non-goals for v1, 7.1 Cross-cutting conventions, 7. Target v1 surface (+4 more)
+Cohesion: 0.14
+Nodes (13): Agent Setup Correctness Implementation Plan, Background the engineer needs, File Structure, Gate commands, Out of scope for this plan, Task 1: Server-side guard against blanking writes, Task 2: Reset the form only on a real account change, Task 3: Dropped — deliberately, and here is why (+5 more)
 
 ### Community 279 - "Postora Partner API — Specification v1"
-Cohesion: 0.17
-Nodes (12): 10. Testing and acceptance, 11. Open questions, 1. Problem, 2. Relationship to other documents, 4. Goals, 5. Non-goals for v1, 7.1 Cross-cutting conventions, 7. Target v1 surface (+4 more)
+Cohesion: 0.14
+Nodes (12): Live acceptance, Outcome, Proven failures and fixes, Retained data and workspace state, Validation and deployment, Website agent setup: production acceptance, 2026-09-06, Global Constraints, Ledger (+4 more)
 
 ### Community 280 - "Postora Partner API — Implementation Plan"
-Cohesion: 0.17
-Nodes (12): 1. How this plan is ordered, 2. Dependency graph, 4. Risk register, 5. What this plan deliberately does not do, 6. Per-phase working agreement, 7. Open items carried from the spec, 8. Correction log, Defect risks (+4 more)
+Cohesion: 0.14
+Nodes (13): 1. Data model, 2. UI decomposition, 3. Bulk operations, 4. CSV import wizard, 5. Export, 6. Avatars, 7. Performance / caching, 8. Error handling (+5 more)
 
 ### Community 281 - "Architecture & Component Breakdown"
-Cohesion: 0.17
-Nodes (11): 1. Infrastructure (Dokploy on Contabo VPS), 2. Database Schema Updates (`supabase/migrations/`), 3. Backend Bridge (`supabase/functions/whatsapp-evolution-bridge/` & `messaging-api`), 4. Inbound Webhook Listener (`supabase/functions/whatsapp-evolution-webhook/`), 5. Frontend UI: Connection Modal & Risk Acceptance (`src/components/`), 6. n8n Community Node Bridge Compatibility, Architecture & Component Breakdown, Objective (+3 more)
+Cohesion: 0.14
+Nodes (13): §1 — Explicit timeouts, §2 — Structured error propagation, §3 — Reduce the token-in-URL leak, per endpoint, §4 — Concurrency: deferred, deliberately, A per-request timeout does not bound the sweep, 🔴 A transient failure must never latch the account, Evidence, Gates (+5 more)
 
 ### Community 282 - "4. Full Feature Catalog"
-Cohesion: 0.17
-Nodes (12): 4. Full Feature Catalog, A. Publishing & Scheduling, B. AI Suite, C. Unified Messaging Inbox, D. Analytics & Intelligence, E. Media Library, F. WhatsApp Mini-App (Standalone Sub-Product), G. Subscriptions & Billing (+4 more)
+Cohesion: 0.14
+Nodes (13): 1. What this is, 2. Where it sits in the pipeline, 3. Matching, 4. Execution, 5. Media, 6. Database, 7. Frontend, 8. Testing (+5 more)
 
 ### Community 283 - "Inbound Media Understanding — Implementation Plan"
-Cohesion: 0.17
-Nodes (11): 1. Ordering principle, 2. Dependencies, 3. Phases, 4. Risk register, 5. What this plan does not do, 6. Working agreement, 7. Open questions carried from the spec, Inbound Media Understanding — Implementation Plan (+3 more)
+Cohesion: 0.16
+Nodes (13): public.ai_agent_configs, public.ai_agent_logs, public.ai_agent_tools, public.ai_conversation_modes, public.ai_knowledge_chunks, public.ai_knowledge_sources, public.ai_thread_messages, public.ai_threads (+5 more)
 
 ### Community 284 - "File Structure"
-Cohesion: 0.17
-Nodes (11): AI Provider Endpoint Test Fixes Implementation Plan, File Structure, Root-Cause Evidence (gathered via systematic-debugging Phase 1), Self-Review, Task 1: Fix Perplexity (`max_tokens` minimum), Task 2: Fix Firecrawl (endpoint does not exist), Task 3: Fix MiniMax (use model list, not chat), Task 4: Fix Z AI (use model list; correct models) (+3 more)
+Cohesion: 0.14
+Nodes (13): ✅ All Passing Test Files, CI/CD, Component Tests, E2E Tests, Hook Tests, How to Run, Integration Tests, ⚠️ Partial Failures (+5 more)
 
 ### Community 285 - "react"
-Cohesion: 0.09
-Nodes (22): File map, Global Constraints, Self-review, Slice 1 — Database (Muse Spark lane), Slice 2 — Ingest (Codex lane), Slice 3 — Frontend (Codex lane), Slice 4 — Phase 3 (Codex lane, after Slices 1–3 are merged), Slice 5 — Gates, deploy, wrap-up (+14 more)
+Cohesion: 0.13
+Nodes (19): CommentActionsProps, CommentList(), CommentListProps, ReplyComposer, CommentThreadCard(), CommentThreadCardProps, buildCommentThreads(), CommentThread (+11 more)
 
 ### Community 286 - "Refactoring Plan V2 - Comprehensive Code Audit"
-Cohesion: 0.17
-Nodes (12): 3.1 `useFeatureFlags.tsx` (~350 lines), 3.2 `Canvas.tsx` (~423 lines), ✅ Benefits After Refactoring, Critical Files (>700 lines) - Immediate Priority, Executive Summary, 📊 File Size Audit, High Priority Files (400-700 lines), Moderate Priority Files (300-400 lines) (+4 more)
+Cohesion: 0.15
+Nodes (20): emptyQueueCopy(), Platform, PLATFORM_LABELS, platformLabel(), QueueFilter, resolveQueueFilter(), WaitingQueueFilter(), WaitingQueueFilterProps (+12 more)
 
 ### Community 287 - "check-edge-env-local.mjs"
 Cohesion: 0.17
@@ -2389,12 +2308,12 @@ Cohesion: 0.20
 Nodes (10): ChartConfig, ChartContainer, ChartContext, ChartContextProps, ChartLegendContent, ChartStyle(), ChartTooltipContent, escapeCSSSelectorId() (+2 more)
 
 ### Community 291 - "useWhatsAppWorkspaceContext"
-Cohesion: 0.11
-Nodes (17): dependencies(), jsonResponse(), PROBE_FAILURE, PROBE_INPUT, PROBE_SUCCESS, ProbeLedgerState, request(), SUPABASE_ANON_KEY (+9 more)
+Cohesion: 0.07
+Nodes (35): dependencies(), jsonResponse(), pagedTool(), pagingFetch(), PROBE_FAILURE, PROBE_INPUT, PROBE_SUCCESS, ProbeLedgerState (+27 more)
 
 ### Community 292 - "index.ts"
-Cohesion: 0.08
-Nodes (23): 10. Feature flag and rollout, 11. Acceptance criteria, 12. Open decisions, 1. Summary, 2. Current state (verified against the repository on 2026-09-06), 3. Goals, 4. Non-goals, 5.1 `user_ai_provider_keys` (+15 more)
+Cohesion: 0.15
+Nodes (12): Bounds, Components, Decisions taken, Known gap, Nightly knowledge-graph refresh, Ordering, Release order, What did not need changing (+4 more)
 
 ### Community 293 - "index.ts"
 Cohesion: 0.19
@@ -2405,52 +2324,52 @@ Cohesion: 0.20
 Nodes (8): formatBubbleTime(), TickKind, tickKindFor(), inboxAttachments(), isInboxAttachment(), WhatsAppMessageBubble(), WhatsAppMessageBubbleProps, WhatsAppStatusTicks()
 
 ### Community 295 - "20260101204652_6e5eea09-77c9-43dc-a699-686c8769f753.sql"
-Cohesion: 0.24
-Nodes (11): on_auth_user_created, public.api_logs, public.handle_new_user(), public.media_files, public.platform_posts, public.posts, public.profiles, public.social_accounts (+3 more)
+Cohesion: 0.15
+Nodes (12): Config: `_shared/agentConfigOps.ts`, Data model (additive, migration `20260913120000_escalation_ttl.sql`), Decisions (from brainstorming, 2026-09-13), Escalation: `ai-agent-reply/tools.ts` `escalateConversation`, Escalation fallback and timeout — design, Frontend, Goal, One shared reader: `supabase/functions/_shared/conversationModeOverride.ts` (+4 more)
 
 ### Community 296 - "Task 5 report: capability-preserving backfill of `user_quotas`"
-Cohesion: 0.17
-Nodes (11): A5 tie-break value-assertion (deferred finding) — run BEFORE the migration,, Before/after invariant detail, Checksums (all sha256, local vs. remote — all matched), Cleanup, Concerns / follow-ups, Final backfilled state (matches the brief's predicted outcome exactly), Migration applied, then GREEN + post-invariant + tie-break post-check — VERBATIM, RED (before the migration existed) — VERBATIM (+3 more)
+Cohesion: 0.15
+Nodes (13): `admin_notifications`, Admin/Subscription Tables, `api_logs`, `app_settings`, `backup_codes`, `blog_posts`, `coupons`, `subscription_plans` (+5 more)
 
 ### Community 297 - "Task 3 Report: Deploy `messaging-api` and verify the Facebook avatar fix live"
-Cohesion: 0.17
-Nodes (11): Browser UI check — SKIPPED, DB verification, Step 1: Backup currently-deployed file, Step 2: Copy updated file to server and verify hash, Step 3: Move into functions volume and verify, Step 4: Restart functions container, Step 5: Smoke test, Step 6: Verify live (+3 more)
+Cohesion: 0.15
+Nodes (13): `admin_notifications`, Admin/Subscription Tables, `api_logs`, `app_settings`, `backup_codes`, `blog_posts`, `coupons`, `subscription_plans` (+5 more)
 
 ### Community 298 - "13. Platform-specific metadata reference"
 Cohesion: 0.18
 Nodes (11): 13. Platform-specific metadata reference, Facebook — `metadata.platform_settings.facebook`, Instagram — `metadata.platform_settings.instagram`, LinkedIn — `metadata.platform_settings.linkedin`, Pinterest — `metadata.platform_settings.pinterest`, `platform_posts.response_data`, `social_accounts.account_metadata`, Threads — `metadata.platform_settings.threads` (+3 more)
 
 ### Community 299 - "3. Phases"
-Cohesion: 0.18
-Nodes (11): 3. Phases, Phase 10 — GA, Phase 1 — Foundation hardening, Phase 2 — Read surface, Phase 3 — Text and template send, Phase 4 — Media, Phase 5 — Webhook substrate, Phase 6 — Messaging and account events (+3 more)
+Cohesion: 0.15
+Nodes (12): Admin User, Database Functions, Delegating to another agent (Codex / Grok / OpenCode / Antigravity), Edge Functions, graphify, Key Hooks, Postora - AI Coding Assistant Context, Project Overview (+4 more)
 
 ### Community 300 - "3. Phases"
-Cohesion: 0.18
-Nodes (11): 3. Phases, Phase 10 — GA, Phase 1 — Foundation hardening, Phase 2 — Read surface, Phase 3 — Text and template send, Phase 4 — Media, Phase 5 — Webhook substrate, Phase 6 — Messaging and account events (+3 more)
+Cohesion: 0.15
+Nodes (12): 1. Credential handling (spec §9.4, §9.5, D8 posture), 2. Tenancy (spec §9.1, D4), 3. Idempotency and quota under a hostile or buggy client (spec §10, D13), 4. Outbound call surface (spec §9.7 — SSRF), 5. Rate limiting (spec D7, §3.3.2), 6. Logging and redaction (spec §9.8) — checked, not assumed, 7. What is not defended because it does not exist yet, 8. Threats this review missed on its first pass (+4 more)
 
 ### Community 301 - "Admin Email Inbox — Complete Implementation Guide"
-Cohesion: 0.18
-Nodes (10): 10. File Tree Summary, 1. Architecture Overview, 3. Supabase Secrets Required, 6.1 `useAdminInbox.ts`, 6.2 `useAdminEmailNotifications.ts`, 6. Hooks (Data Layer), 8. Storage Bucket, 9. config.toml (+2 more)
+Cohesion: 0.15
+Nodes (12): Attribution order, Blast radius, Certification: `post.scheduled` only, Decision A — addressability is an explicit binding, not an inferred tenant, Decision B — `post.scheduled` is produced by a database trigger, Migrations for the owner to apply, Occurrence identity, Phase 8, first tranche — the posts surface and `post.scheduled` (+4 more)
 
 ### Community 302 - "50. Implementation Roadmap"
 Cohesion: 0.18
 Nodes (11): 50. Implementation Roadmap, Phase 0 - Freeze the contract direction, Phase 1 - Partner API Foundation, Phase 2 - Messaging, Phase 3 - Webhook Platform, Phase 4 - Publishing, Phase 5 - Contacts & Analytics, Phase 6 - OAuth & App Installations (+3 more)
 
 ### Community 303 - "Deploy Edge Function to Self-Hosted Supabase"
-Cohesion: 0.15
-Nodes (13): 0. Preferred: deploy straight from git (no workstation upload), 1. One-function deploy (common case), 2. All-functions deploy (refactor touched many), 3. Smoke tests, 4. Rollback, 5. Env sanity (only if logs show `X not configured`), 6. Signal in Lovable chat, Auditing existing drift (+5 more)
+Cohesion: 0.12
+Nodes (16): 0. Preferred: deploy straight from git (no workstation upload), 1. One-function deploy (common case), 2. All-functions deploy (refactor touched many), 3. Smoke tests, 4. Rollback, 5. Env sanity (only if logs show `X not configured`), 6. Signal in Lovable chat, Auditing existing drift (+8 more)
 
 ### Community 304 - "File Structure"
-Cohesion: 0.18
-Nodes (10): Acceptance Criteria, File Structure, Fix Token Re-auth Health-Flag Reset Implementation Plan, Notes, Root Cause (Confirmed via Pattern Analysis), Task 1: Fix tiktok-oauth reset block, Task 2: Fix pinterest-oauth reset block, Task 3: Fix twitter-oauth reset block (+2 more)
+Cohesion: 0.15
+Nodes (12): 13. Admin and Operations Suite, 16. Roadmap Highlights, 17. Glossary, 1. Executive Snapshot, 5. Supported Platforms (11), Admin Modules, Appendix: Quick Reference URLs, Confirmed In-Progress / Planned (+4 more)
 
 ### Community 305 - "Plan: Scheduled Posts Disappear — Wrong Account Logged In"
-Cohesion: 0.18
-Nodes (10): Decision, Evidence, Fix, Issue, Option A (User Action — Immediate), Option B (User Action — Long Term), Option C (Code Change — UX Improvement), Plan: Scheduled Posts Disappear — Wrong Account Logged In (+2 more)
+Cohesion: 0.15
+Nodes (13): Async / Advanced Fields, Core Fields, Create Post, Create Post Response, Facebook Fields, Global / Cross-Platform Fields, Instagram Fields, LinkedIn Fields (+5 more)
 
 ### Community 306 - "Workspaces, roles and the CRM"
-Cohesion: 0.18
-Nodes (11): Architecture, Authorization, Chat deep links, Deployment note, Invitations, Later phases, Pipelines and deals, Roles (+3 more)
+Cohesion: 0.15
+Nodes (12): 0. Important — what Lovable cannot do, 1. Pre-flight (must all be true before submitting), 2. Confirm actual requested scopes from code, 3. Scope justifications (drop-in copy), 4. Demo video requirements, 5. YouTube API Services compliance (separate from OAuth review), 6. Submission form, 7. What changes after approval (+4 more)
 
 ### Community 307 - "50. Implementation Roadmap"
 Cohesion: 0.18
@@ -2461,24 +2380,24 @@ Cohesion: 0.18
 Nodes (11): 13. Security Notes, API authorization, Auth protection, CORS setup, Database access rules, File upload restrictions, Input validation, Known gaps / TODOs (+3 more)
 
 ### Community 309 - "useResolvedImageModels.ts"
-Cohesion: 0.13
-Nodes (12): ACCOUNT_ROW, aliasScenario(), AliasScenarioResult, doc, DOC_PATH, KEY_ROW, stubClient(), StubOptions (+4 more)
+Cohesion: 0.20
+Nodes (15): LeadCard(), LeadCardProps, STATUS_OPTIONS, LeadFilters(), LeadFiltersProps, Lead, LeadForm, useLeadForms() (+7 more)
 
 ### Community 310 - "ExtendedPlatform"
-Cohesion: 0.11
-Nodes (22): CATEGORY_TABS, typesInCategory(), AuthStrategy, composioBinding, CONNECTOR_CAPABILITY_NAMES, CONNECTOR_CATEGORY_LABELS, CONNECTOR_DEFINITIONS, CONNECTOR_TYPES (+14 more)
+Cohesion: 0.04
+Nodes (72): ComposioConnectCardProps, ConnectionPicker(), ConnectionPickerProps, ACTIVE_SHEETS, from, CategoryFilter, categoryLabel(), COMPOSIO_TYPES (+64 more)
 
 ### Community 311 - "index.ts"
-Cohesion: 0.16
-Nodes (15): formatDuration(), getOperationIcon(), getStatusBadge(), MediaOperationsHistory(), OperationFullDetails(), CreateOperationParams, getOperationTypeLabel(), MediaOperation (+7 more)
+Cohesion: 0.15
+Nodes (12): Task 10: ContactExportMenu + shell rewrite, Task 11: Quality gates, Task 12: Deploy + live verification, Task 1: Migration — extend whatsapp_contacts, Task 2: contactCodecs — pure logic + tests (TDD), Task 3: xlsx dependency (USER GATE), Task 4: useContacts hooks, Task 5: PhoneInput component (+4 more)
 
 ### Community 312 - "TokenExpiryDocs.tsx"
 Cohesion: 0.02
-Nodes (200): AdminAiSettings(), AIProvider, ApiKeyStatus, formatPricing(), GOOGLE_MODELS, OpenRouterModel, TestResult, TestStatus (+192 more)
+Nodes (179): AIWriteAssistant(), AIWriteAssistantProps, EMAIL_STYLES, EMAIL_TEMPLATES, EmailStyle, EmailTemplate, OutputFormat, EmailSignature (+171 more)
 
 ### Community 313 - "MakeIntegration.tsx"
-Cohesion: 0.17
-Nodes (15): b64urlEncode(), b64urlJson(), callPartnerApi(), FULL_SCOPES, makeProviderStub(), makeWebhookFetcher(), mintServiceJwt(), postgrestFetch() (+7 more)
+Cohesion: 0.15
+Nodes (12): Danat ↔ Postora WhatsApp Integration — Implementation Plan, Global Constraints, Mandatory gates before every commit, Plan dependency — read before starting, Task 1: Add the `postora` provider to the enum and config, Task 2: The Postora provider, Task 3: Route WhatsApp sends through Postora when it is the enabled provider, Task 4: Stop the drain job from re-sending indeterminate results (+4 more)
 
 ### Community 314 - "scheduledMediaControls.ts"
 Cohesion: 0.25
@@ -2493,324 +2412,332 @@ Cohesion: 0.24
 Nodes (10): Toast, ToastAction, ToastActionElement, ToastClose, ToastDescription, ToastProps, ToastTitle, toastVariants (+2 more)
 
 ### Community 317 - "SmartScheduling.tsx"
-Cohesion: 0.18
-Nodes (13): accountCanAttemptRefresh(), metaRefreshStrategy, metaTokenTooYoungToRefresh(), CRON_EXCLUDED_PLATFORMS, getRefreshWindowSeconds(), isCronExcludedPlatform(), isShortLivedPlatform(), PLATFORM_REFRESH_CONFIG (+5 more)
+Cohesion: 0.15
+Nodes (12): A. Per-platform census — active accounts, B. The account the owner reconnected at 17:51 today, FIX PLAN (minimal, root-cause), Production evidence (self-hosted PG, container `postorasupabase-supabase-j8axyh-supabase-db`), RC1 — CONFIRMED. `refresh-tokens` treats "platform has no refresh token" as an auth failure., RC2 — CONFIRMED. The flag is a one-way latch that no Facebook OAuth path clears., RC3 — CONFIRMED (contributing). Reconnect mode never reaches the Facebook handler., Reconnect-stays-red — Claude's independent investigation (+4 more)
 
 ### Community 318 - "HumanAgentMode.tsx"
-Cohesion: 0.83
-Nodes (3): public.claim_agent_replies(), public.enqueue_agent_reply(), public.pending_agent_replies
+Cohesion: 0.15
+Nodes (12): 1. Goal, 2. Page Content & Structure, 3. UI/UX Design System & Tokens, 4. Verification Plan, Automated Tests, Manual Verification, Tab 1: Connection & Sync (History Phasing & QR Steps), Tab 2: Chatbot Builder (Level 1 vs Level 2) (+4 more)
 
 ### Community 319 - "isValidUuid"
 Cohesion: 0.15
 Nodes (9): admin, charsPerMinute, Chunk, column, expectedModel, maxChars, priorityUsers, serviceKey (+1 more)
 
 ### Community 320 - "partnerApiIdempotency.ts"
-Cohesion: 0.06
-Nodes (94): getAccount(), listAccounts(), present(), resolveWhatsAppAccount(), V1AuthedContext, BoundAccount, boundAccountIds(), fetchBoundAccounts() (+86 more)
+Cohesion: 0.05
+Nodes (123): agentWrite(), assignConversationRoute(), context(), createAgentRoute(), deleteAgentRoute(), failure(), getAgentRoute(), getAssignmentRoute() (+115 more)
 
 ### Community 321 - "20260813120000_partner_api_foundation.sql"
+Cohesion: 0.15
+Nodes (12): 1. `useDirtyForm` — the state primitive, 2. `useUnsavedChangesGuard` — the transition gate, 3. Wiring, 4. `UnsavedChangesDialog`, Design, Gates, Noted, not touched, Scope (+4 more)
+
+### Community 322 - "Task 1 Report: Add `participant_id` column to `messaging_cache`"
+Cohesion: 0.15
+Nodes (12): 0. Facts established before design (2026-09-04, production), 10. Delegation lanes, 1. Auth and scopes, 2. Ingest: `youtube-poll-comments`, 3. Provider adapter: `_shared/youtubeComments.ts`, 4. Comment Manager (`/comments`), 5. AI agent setup (`/automation/agents`), 6. Comment workflows (+4 more)
+
+### Community 323 - "Task 5 Implementation Report: Add Facebook comment avatars — frontend parsing and type"
+Cohesion: 0.23
+Nodes (11): public.node_execution_logs, public.workflow_comments, public.workflow_executions, public.workflow_schedules, public.workflow_templates, public.workflow_versions, public.workflow_webhooks, public.workflows (+3 more)
+
+### Community 324 - "Narrative"
+Cohesion: 0.15
+Nodes (12): Is the harness actually a gate?, Known limitations, Other deliberate trades, Regenerating the baseline, Running locally, supabase/tests — Postgres integration harness, The baseline contract, The limitation — read this (+4 more)
+
+### Community 325 - "Narrative"
+Cohesion: 0.14
+Nodes (15): MediaLibraryPickerProps, MediaLightbox(), MediaLightboxProps, ZOOM_LEVELS, ProcessingJob, UploadMethodSelectorProps, ProcessingJobsContextType, mockRevokeObjectURL (+7 more)
+
+### Community 326 - "Narrative"
+Cohesion: 0.27
+Nodes (12): authHeaders(), CrawlStatus, fetchWithTimeout(), firecrawlCancelCrawl(), firecrawlCrawlStatus(), FirecrawlError, FirecrawlPage, firecrawlScrape() (+4 more)
+
+### Community 327 - "Narrative"
+Cohesion: 0.17
+Nodes (11): Code review (requesting-code-review, orchestrator subagent, 2026-09-13) — verdicts, Debate round 1 — verdict table (Codex astra 6 high, read-only relay, 2026-09-13), Escalation Fallback and Timeout Implementation Plan, File structure, Global Constraints, Release (orchestrator only; not a delegated task), Task 1: Migration (Migrations lane — Muse Spark), Task 2: Shared override reader and escalation decision (pure module) (+3 more)
+
+### Community 328 - "Narrative"
+Cohesion: 0.17
+Nodes (12): 10. Testing and acceptance, 11. Open questions, 1. Problem, 2. Relationship to other documents, 4. Goals, 5. Non-goals for v1, 7.1 Cross-cutting conventions, 7. Target v1 surface (+4 more)
+
+### Community 329 - "Narrative"
+Cohesion: 0.17
+Nodes (12): 10. Testing and acceptance, 11. Open questions, 1. Problem, 2. Relationship to other documents, 4. Goals, 5. Non-goals for v1, 7.1 Cross-cutting conventions, 7. Target v1 surface (+4 more)
+
+### Community 330 - "Narrative"
+Cohesion: 0.17
+Nodes (12): 1. How this plan is ordered, 2. Dependency graph, 4. Risk register, 5. What this plan deliberately does not do, 6. Per-phase working agreement, 7. Open items carried from the spec, 8. Correction log, Defect risks (+4 more)
+
+### Community 331 - "Narrative"
+Cohesion: 0.17
+Nodes (12): 10. Testing and acceptance, 11. Open questions, 1. Problem, 2. Relationship to other documents, 4. Goals, 5. Non-goals for v1, 7.1 Cross-cutting conventions, 7. Target v1 surface (+4 more)
+
+### Community 332 - "Narrative"
+Cohesion: 0.17
+Nodes (12): 10. Testing and acceptance, 11. Open questions, 1. Problem, 2. Relationship to other documents, 4. Goals, 5. Non-goals for v1, 7.1 Cross-cutting conventions, 7. Target v1 surface (+4 more)
+
+### Community 333 - "Narrative"
+Cohesion: 0.17
+Nodes (12): 1. How this plan is ordered, 2. Dependency graph, 4. Risk register, 5. What this plan deliberately does not do, 6. Per-phase working agreement, 7. Open items carried from the spec, 8. Correction log, Defect risks (+4 more)
+
+### Community 334 - "Narrative"
+Cohesion: 0.17
+Nodes (11): 1. Infrastructure (Dokploy on Contabo VPS), 2. Database Schema Updates (`supabase/migrations/`), 3. Backend Bridge (`supabase/functions/whatsapp-evolution-bridge/` & `messaging-api`), 4. Inbound Webhook Listener (`supabase/functions/whatsapp-evolution-webhook/`), 5. Frontend UI: Connection Modal & Risk Acceptance (`src/components/`), 6. n8n Community Node Bridge Compatibility, Architecture & Component Breakdown, Objective (+3 more)
+
+### Community 335 - "Narrative"
+Cohesion: 0.17
+Nodes (12): 4. Full Feature Catalog, A. Publishing & Scheduling, B. AI Suite, C. Unified Messaging Inbox, D. Analytics & Intelligence, E. Media Library, F. WhatsApp Mini-App (Standalone Sub-Product), G. Subscriptions & Billing (+4 more)
+
+### Community 336 - "Narrative"
+Cohesion: 0.17
+Nodes (11): 1. Apply the migration (before merging), 2. Merge the PR, 3. Verify the edge-function deploy, 4. Refresh the existing Composio YouTube connection, 5. Enable the flag, 6. Reconnect a native channel, 7. First poll seeds, second poll dispatches, 8. Live checks (+3 more)
+
+### Community 337 - "Narrative"
+Cohesion: 0.17
+Nodes (11): 1. Ordering principle, 2. Dependencies, 3. Phases, 4. Risk register, 5. What this plan does not do, 6. Working agreement, 7. Open questions carried from the spec, Inbound Media Understanding — Implementation Plan (+3 more)
+
+### Community 338 - "Narrative"
+Cohesion: 0.17
+Nodes (11): Deferred (noted, not in this change), Evidence, Plan, Root causes, Slice A — one WhatsApp chat UI (frontend), Slice B — avatar enrichment (edge + migration), Slice C — resolver observability (edge), Symptoms (user report, after PR #158 shipped) (+3 more)
+
+### Community 339 - "Narrative"
+Cohesion: 0.17
+Nodes (11): AI Provider Endpoint Test Fixes Implementation Plan, File Structure, Root-Cause Evidence (gathered via systematic-debugging Phase 1), Self-Review, Task 1: Fix Perplexity (`max_tokens` minimum), Task 2: Fix Firecrawl (endpoint does not exist), Task 3: Fix MiniMax (use model list, not chat), Task 4: Fix Z AI (use model list; correct models) (+3 more)
+
+### Community 340 - "Narrative"
+Cohesion: 0.17
+Nodes (11): Definition of done, Delivery order and lanes, Goal, PR breakdown, Slice 1 — Migration, harness suite, registration (Muse Spark), Slice 2 — Shared adapters, routing, agent loop, captions (Codex), Slice 3 — `user-ai-providers` Edge Function (Codex), Slice 4 — Frontend (Codex) (+3 more)
+
+### Community 341 - "Narrative"
+Cohesion: 0.17
+Nodes (11): 10. Out of scope, 1. Goal, 2. What already exists (verified 2026-09-02), 3. Decisions and assumptions, 4. Data layer, 5. Edge change (`partner-api`), 6. Frontend, 7. Security invariants (+3 more)
+
+### Community 342 - "Narrative"
+Cohesion: 0.17
+Nodes (11): 1. Problem, with evidence, 2. Scope, 3. Architecture and placement, 4. Data flow changes, 5. Error handling, 6. Testing, 7. Delivery order and ops, 8. Known limits (+3 more)
+
+### Community 343 - "Narrative"
+Cohesion: 0.24
+Nodes (11): on_auth_user_created, public.api_logs, public.handle_new_user(), public.media_files, public.platform_posts, public.posts, public.profiles, public.social_accounts (+3 more)
+
+### Community 344 - "Narrative"
+Cohesion: 0.18
+Nodes (10): Behaviour, Explicitly rejected, Follow-up found during review (not fixed here), Gates, Human Agent: nav relocation + waiting-queue platform filter, Invariants, Out of scope, Slice 1 — nav relocation (DONE, by orchestrator) (+2 more)
+
+### Community 345 - "Narrative"
+Cohesion: 0.18
+Nodes (10): Arabic (Egyptian) localisation of the Postora dashboard, Goal, Namespace scheme, Per-wave gates, Risks, The gate: `scripts/check-i18n-coverage.mjs`, The i18n contract (non-negotiable — it is why `src/i18n/index.ts` reads as it does), Translation register (+2 more)
+
+### Community 346 - "Narrative"
+Cohesion: 0.18
+Nodes (10): Admin User, Database Functions, Edge Functions, graphify, Key Hooks, Postora - AI Coding Assistant Context, Project Overview, Project Structure (+2 more)
+
+### Community 347 - "Narrative"
+Cohesion: 0.18
+Nodes (11): 3. Phases, Phase 10 — GA, Phase 1 — Foundation hardening, Phase 2 — Read surface, Phase 3 — Text and template send, Phase 4 — Media, Phase 5 — Webhook substrate, Phase 6 — Messaging and account events (+3 more)
+
+### Community 348 - "Narrative"
+Cohesion: 0.18
+Nodes (11): 3. Phases, Phase 10 — GA, Phase 1 — Foundation hardening, Phase 2 — Read surface, Phase 3 — Text and template send, Phase 4 — Media, Phase 5 — Webhook substrate, Phase 6 — Messaging and account events (+3 more)
+
+### Community 349 - "Narrative"
+Cohesion: 0.18
+Nodes (10): 10. File Tree Summary, 1. Architecture Overview, 3. Supabase Secrets Required, 6.1 `useAdminInbox.ts`, 6.2 `useAdminEmailNotifications.ts`, 6. Hooks (Data Layer), 8. Storage Bucket, 9. config.toml (+2 more)
+
+### Community 350 - "Narrative"
+Cohesion: 0.18
+Nodes (10): D10 — the media control matrix, filled in, D13 is unchanged, and that is the point, Malware handling — the row that could not be answered, and what was done, Max size, per type, Storage — the third gap, Tenant ownership — the second gap, The allowlist, and what is deliberately not on it, The matrix (+2 more)
+
+### Community 351 - "Narrative"
+Cohesion: 0.18
+Nodes (10): 0. Why this document exists, and what it found, 1. The inventory, 2. The ledger, 3. What Phase 6 has to build, now that the shape is known, 4. Corrections this document makes to the spec, `account.connected` / `.disconnected` — activation transitions, `account.reauthorization_required` — the transition is `needs_reauth` false → true, `message.received` / `message.accepted` — the `whatsapp_messages` insert (+2 more)
+
+### Community 352 - "Narrative"
+Cohesion: 0.18
+Nodes (10): Acceptance Criteria, File Structure, Fix Token Re-auth Health-Flag Reset Implementation Plan, Notes, Root Cause (Confirmed via Pattern Analysis), Task 1: Fix tiktok-oauth reset block, Task 2: Fix pinterest-oauth reset block, Task 3: Fix twitter-oauth reset block (+2 more)
+
+### Community 353 - "Narrative"
+Cohesion: 0.18
+Nodes (10): Decision, Evidence, Fix, Issue, Option A (User Action — Immediate), Option B (User Action — Long Term), Option C (Code Change — UX Improvement), Plan: Scheduled Posts Disappear — Wrong Account Logged In (+2 more)
+
+### Community 354 - "Narrative"
+Cohesion: 0.18
+Nodes (10): Global Constraints, Meta-Platform `needs_reauth` False Positive — Implementation Plan, Task 1: Port the production admin-auth hotfix into the repo, Task 2: Teach the platform config which platforms use refresh tokens, Task 3: Route exchange-only platforms past the missing-refresh-token guard, Task 3b: Send each Instagram account to the right exchange endpoint, Task 4: Clear the health flags on a Facebook Page reconnect, Task 5: Stop dropping reconnect options in the frontend (+2 more)
+
+### Community 355 - "Bug 3 (NEW, live blocker) — QR pairs but the account never activates"
+Cohesion: 0.18
+Nodes (11): 2.1 `HistoryTable.tsx` (466 lines), 2.2 `BulkScheduler.tsx` (430 lines), 3.1 `useFeatureFlags.tsx` (~350 lines), 3.2 `Canvas.tsx` (~423 lines), ✅ Benefits After Refactoring, Executive Summary, 🟠 Priority 2: High Priority (400-700 lines), 🟡 Priority 3: Moderate Priority (300-400 lines) (+3 more)
+
+### Community 356 - "Postora API Integration Guide"
 Cohesion: 0.25
 Nodes (5): public.partner_api_idempotency, public.partner_api_keys, public.partner_api_rate_buckets, public.partner_api_usage, public.social_accounts
 
-### Community 322 - "Task 1 Report: Add `participant_id` column to `messaging_cache`"
-Cohesion: 0.18
-Nodes (10): Files Changed, Implementation Steps, Status, Step 1: Created Migration File, Step 2: Applied Migration to Production, Step 3: Verification Query, Step 4: Commit, Summary (+2 more)
-
-### Community 323 - "Task 5 Implementation Report: Add Facebook comment avatars — frontend parsing and type"
-Cohesion: 0.18
-Nodes (10): 1. Comment Interface Update, 2. parsePageComments Parser Logic Update, Changes Implemented, Commit, Files Changed, Notes, Summary, Task 5 Implementation Report: Add Facebook comment avatars — frontend parsing and type (+2 more)
-
-### Community 324 - "Narrative"
-Cohesion: 0.20
-Nodes (9): Dependencies, Examples, Facts, Highlights, Narrative, Raw Concept, Reason, Rules (+1 more)
-
-### Community 325 - "Narrative"
-Cohesion: 0.20
-Nodes (9): Dependencies, Examples, Facts, Highlights, Narrative, Raw Concept, Reason, Rules (+1 more)
-
-### Community 326 - "Narrative"
-Cohesion: 0.20
-Nodes (9): Dependencies, Examples, Facts, Highlights, Narrative, Raw Concept, Reason, Rules (+1 more)
-
-### Community 327 - "Narrative"
-Cohesion: 0.20
-Nodes (9): Dependencies, Examples, Facts, Highlights, Narrative, Raw Concept, Reason, Rules (+1 more)
-
-### Community 328 - "Narrative"
-Cohesion: 0.20
-Nodes (9): Dependencies, Examples, Facts, Highlights, Narrative, Raw Concept, Reason, Rules (+1 more)
-
-### Community 329 - "Narrative"
-Cohesion: 0.20
-Nodes (9): Dependencies, Examples, Facts, Highlights, Narrative, Raw Concept, Reason, Rules (+1 more)
-
-### Community 330 - "Narrative"
-Cohesion: 0.20
-Nodes (9): Dependencies, Examples, Facts, Highlights, Narrative, Raw Concept, Reason, Rules (+1 more)
-
-### Community 331 - "Narrative"
-Cohesion: 0.20
-Nodes (9): Dependencies, Examples, Facts, Highlights, Narrative, Raw Concept, Reason, Rules (+1 more)
-
-### Community 332 - "Narrative"
-Cohesion: 0.20
-Nodes (9): Dependencies, Examples, Facts, Highlights, Narrative, Raw Concept, Reason, Rules (+1 more)
-
-### Community 333 - "Narrative"
-Cohesion: 0.20
-Nodes (9): Dependencies, Examples, Facts, Highlights, Narrative, Raw Concept, Reason, Rules (+1 more)
-
-### Community 334 - "Narrative"
-Cohesion: 0.20
-Nodes (9): Dependencies, Examples, Facts, Highlights, Narrative, Raw Concept, Reason, Rules (+1 more)
-
-### Community 335 - "Narrative"
-Cohesion: 0.20
-Nodes (9): Dependencies, Examples, Facts, Highlights, Narrative, Raw Concept, Reason, Rules (+1 more)
-
-### Community 336 - "Narrative"
-Cohesion: 0.20
-Nodes (9): Dependencies, Examples, Facts, Highlights, Narrative, Raw Concept, Reason, Rules (+1 more)
-
-### Community 337 - "Narrative"
-Cohesion: 0.20
-Nodes (9): Dependencies, Examples, Facts, Highlights, Narrative, Raw Concept, Reason, Rules (+1 more)
-
-### Community 338 - "Narrative"
-Cohesion: 0.20
-Nodes (9): Dependencies, Examples, Facts, Highlights, Narrative, Raw Concept, Reason, Rules (+1 more)
-
-### Community 339 - "Narrative"
-Cohesion: 0.20
-Nodes (9): Dependencies, Examples, Facts, Highlights, Narrative, Raw Concept, Reason, Rules (+1 more)
-
-### Community 340 - "Narrative"
-Cohesion: 0.20
-Nodes (9): Dependencies, Examples, Facts, Highlights, Narrative, Raw Concept, Reason, Rules (+1 more)
-
-### Community 341 - "Narrative"
-Cohesion: 0.20
-Nodes (9): Dependencies, Examples, Facts, Highlights, Narrative, Raw Concept, Reason, Rules (+1 more)
-
-### Community 342 - "Narrative"
-Cohesion: 0.20
-Nodes (9): Dependencies, Examples, Facts, Highlights, Narrative, Raw Concept, Reason, Rules (+1 more)
-
-### Community 343 - "Narrative"
-Cohesion: 0.20
-Nodes (9): Dependencies, Examples, Facts, Highlights, Narrative, Raw Concept, Reason, Rules (+1 more)
-
-### Community 344 - "Narrative"
-Cohesion: 0.20
-Nodes (9): Dependencies, Examples, Facts, Highlights, Narrative, Raw Concept, Reason, Rules (+1 more)
-
-### Community 345 - "Narrative"
-Cohesion: 0.20
-Nodes (9): Dependencies, Examples, Facts, Highlights, Narrative, Raw Concept, Reason, Rules (+1 more)
-
-### Community 346 - "Narrative"
-Cohesion: 0.20
-Nodes (9): Dependencies, Examples, Facts, Highlights, Narrative, Raw Concept, Reason, Rules (+1 more)
-
-### Community 347 - "Narrative"
-Cohesion: 0.20
-Nodes (9): Dependencies, Examples, Facts, Highlights, Narrative, Raw Concept, Reason, Rules (+1 more)
-
-### Community 348 - "Narrative"
-Cohesion: 0.20
-Nodes (9): Dependencies, Examples, Facts, Highlights, Narrative, Raw Concept, Reason, Rules (+1 more)
-
-### Community 349 - "Narrative"
-Cohesion: 0.20
-Nodes (9): Dependencies, Examples, Facts, Highlights, Narrative, Raw Concept, Reason, Rules (+1 more)
-
-### Community 350 - "Narrative"
-Cohesion: 0.20
-Nodes (9): Dependencies, Examples, Facts, Highlights, Narrative, Raw Concept, Reason, Rules (+1 more)
-
-### Community 351 - "Narrative"
-Cohesion: 0.20
-Nodes (9): Dependencies, Examples, Facts, Highlights, Narrative, Raw Concept, Reason, Rules (+1 more)
-
-### Community 352 - "Narrative"
-Cohesion: 0.20
-Nodes (9): Dependencies, Examples, Facts, Highlights, Narrative, Raw Concept, Reason, Rules (+1 more)
-
-### Community 353 - "Narrative"
-Cohesion: 0.20
-Nodes (9): Dependencies, Examples, Facts, Highlights, Narrative, Raw Concept, Reason, Rules (+1 more)
-
-### Community 354 - "Narrative"
-Cohesion: 0.20
-Nodes (9): Dependencies, Examples, Facts, Highlights, Narrative, Raw Concept, Reason, Rules (+1 more)
-
-### Community 355 - "Bug 3 (NEW, live blocker) — QR pairs but the account never activates"
-Cohesion: 0.20
-Nodes (9): Bug 1 — Higgsfield consent logo, Bug 2 — Linked device shows `Google Chrome (Evolution API)`, Bug 3 (NEW, live blocker) — QR pairs but the account never activates, Evidence chain, Fix (two parts), Proven root cause, Symptom, Verification of three production defects — evidence log (+1 more)
-
-### Community 356 - "Postora API Integration Guide"
-Cohesion: 0.20
-Nodes (9): API Endpoints, Authentication, `GET /api/v1/posts`, Get Post History, Postora API Integration Guide, Rate Limits, Response, Support (+1 more)
-
 ### Community 357 - "Runbook — Google OAuth "Unverified app" warning (Test-mode bypass)"
-Cohesion: 0.20
-Nodes (9): 1. What this screen means, 2. Who is affected, 3. Add yourself and teammates as Test Users (Google Cloud Console), 4. Bypass path for added Test Users, 5. Limits of Testing mode, 6. Validation, 7. Manual actions Lovable cannot perform, Final status (+1 more)
+Cohesion: 0.05
+Nodes (49): AiKnowledgeManager(), KnowledgeMethod, KnowledgeGraphCard(), UploadPanel(), invoke, knowledge, upsertConfig, invoke (+41 more)
 
 ### Community 358 - "Plan: xsellpointkw's "Missing" Scheduled Posts Are Already Published"
-Cohesion: 0.20
-Nodes (9): Code Change, Evidence, Files to Change, Fix, Issue, Plan: xsellpointkw's "Missing" Scheduled Posts Are Already Published, Root Cause (Confirmed via DB), Timeline (+1 more)
+Cohesion: 0.17
+Nodes (14): SortableMediaItem(), SortableMediaItemProps, VideoMetadata, VideoPreview(), VideoPreviewProps, AspectRatioConfig, AspectRatioValidation, checkFileSizeForPlatforms() (+6 more)
 
 ### Community 359 - "Scheduled Card Media Controls Design"
 Cohesion: 0.20
-Nodes (9): Carousel Preview, Data Flow, Existing Model, Folder Control, Out Of Scope, Post Type Badges, Scheduled Card Media Controls Design, Scope (+1 more)
+Nodes (9): Ask 1 — human agents: nothing to enable, Ask 2 — WhatsApp numbers: nothing to enable, Ask 3 — inbound media: this one was real, and it is now built, Ask 4 — the WABA id: there is none, and there never will be for this account, Checked against this repository, so you do not have to re-derive it, Postora → wasl: the integration is unblocked, and three of the four asks needed something other than what was asked for, Suggested order to verify, The real cause: every partner key was refused, for everyone (+1 more)
 
 ### Community 360 - "Spec: Scheduled Posts — Account Visibility Indicator"
 Cohesion: 0.20
-Nodes (9): 1. Account Badge, 2. Helpful Empty State, 3. Non-Disruptive, Design, Files Changed, Goal, Spec: Scheduled Posts — Account Visibility Indicator, Testing (+1 more)
+Nodes (9): Analysis Playbook, Building the journey from evidence, Contents, Merged is not deployed, Mining review threads, Reading a diff for user impact, Tracing a component to a route, What the collector cannot tell you (+1 more)
 
 ### Community 361 - "WhatsApp Automation & AI-Agent Guide"
-Cohesion: 0.14
-Nodes (14): 1. The six automation surfaces at a glance, 2. Current implementation notes (verified against code), 3. Recommended setup order (user journey), 4. Practical use cases per section, 5. Adding an AI agent layer, 6. n8n integration, 7. Suitable business types, 8. Onboarding checklist (per business) (+6 more)
+Cohesion: 0.20
+Nodes (9): Arabic Style Guide, English section, Glossary, Numbers, Punctuation and direction, Register: MSA backbone, Gulf warmth, Stay in this band, Structure that survives skimming (+1 more)
 
 ### Community 362 - "WhatsApp Setup Guide (self-hosted)"
 Cohesion: 0.20
-Nodes (10): 1.1 Facebook Login for Business → Settings, 1.2 Facebook Login for Business → Configurations, 1.3 App Review → Permissions and Features, 1.4 WhatsApp → Configuration → Webhooks, 1. Meta App Dashboard, 2. Edge-function secrets, 3. `app_settings` rows (SQL), 4. What happens on connect (`whatsapp-oauth`) (+2 more)
+Nodes (9): Bundled resources, Step 1 — Establish what you are explaining, Step 2 — Classify every change by what the user can see, Step 3 — Find the risk the reader would care about, Step 4 — Write the report, Step 5 — The next-task prompt, only when it is earned, Task Analysis, Bilingual Explanation & User Journey, The rule that makes this skill work (+1 more)
 
 ### Community 363 - "Refactoring Plan for Maintainability and Scalability"
 Cohesion: 0.20
-Nodes (8): Benefits After Refactoring, Create New Shared Components:, Create Shared Hooks: ✅ COMPLETE, Implementation Order, Metrics Summary, Notes, Priority 3: Shared Component Extraction, Refactoring Plan for Maintainability and Scalability
+Nodes (9): Dependencies, Examples, Facts, Highlights, Narrative, Raw Concept, Reason, Rules (+1 more)
 
 ### Community 364 - "create-partner-key.ts"
-Cohesion: 0.11
-Nodes (18): English, In short, Things you should know, Try it yourself, What changed, What did not change, أشياء تحتاج تعرفها, التجربة الأولى: حماية الكتابة (فيها شي تضغطه) (+10 more)
+Cohesion: 0.20
+Nodes (9): Dependencies, Examples, Facts, Highlights, Narrative, Raw Concept, Reason, Rules (+1 more)
 
 ### Community 365 - "AdminRateLimits.labels.test.ts"
-Cohesion: 0.22
-Nodes (8): 1. Schema and harness suite — `22acbf63`, 2. Matcher, adapter, engine — `1033e29c`, 3. Ingestion wiring — `f9fcb5a2`, 4. Frontend — `e130368b`, Comment Workflow — Implementation Record, Order of work, Remaining, in order, What the reviews changed
+Cohesion: 0.20
+Nodes (9): Dependencies, Examples, Facts, Highlights, Narrative, Raw Concept, Reason, Rules (+1 more)
+
+### Community 366 - "ErrorBoundary.tsx"
+Cohesion: 0.20
+Nodes (9): Dependencies, Examples, Facts, Highlights, Narrative, Raw Concept, Reason, Rules (+1 more)
 
 ### Community 367 - "useWhatsAppAutoReplies.ts"
-Cohesion: 0.21
-Nodes (11): AutoReplyManager(), copyFor(), emptyRules, AutoReplyRule, AutoReplyRuleInput, useAutoReplyRules(), MessengerPlatform, useMessengerAutoReplies() (+3 more)
+Cohesion: 0.19
+Nodes (12): AutoReplyManager(), dayLabel(), RuleForm(), emptyRules, AutoReplyRule, AutoReplyRuleInput, useAutoReplyRules(), MessengerPlatform (+4 more)
 
 ### Community 368 - "validateWebhookTarget"
-Cohesion: 0.05
-Nodes (54): isActionSuspended(), digestOf(), getMedia(), postMedia(), present(), readUpload(), UploadPayload, buildMediaSend() (+46 more)
+Cohesion: 0.24
+Nodes (11): assertToolSharesBound(), setToolAccounts(), SetToolAccountsInput, setWorkspaceToolAccounts(), SharingAdminClient, SharingQuery, fakeAdmin(), OWNED (+3 more)
+
+### Community 369 - "index.ts"
+Cohesion: 0.20
+Nodes (9): Dependencies, Examples, Facts, Highlights, Narrative, Raw Concept, Reason, Rules (+1 more)
 
 ### Community 370 - "20260323193759_617e4e0d-f514-41d3-a039-9c20c451e71d.sql"
-Cohesion: 0.31
-Nodes (9): public.ai_model_preferences, public.ai_models, public.ai_providers, public.get_active_ai_model_config(), public.system_settings, set_ai_model_preferences_updated_at, set_ai_models_updated_at, set_ai_providers_updated_at (+1 more)
+Cohesion: 0.20
+Nodes (9): Dependencies, Examples, Facts, Highlights, Narrative, Raw Concept, Reason, Rules (+1 more)
 
 ### Community 371 - "CodeRabbit round 2 — fixes report"
 Cohesion: 0.20
-Nodes (9): CodeRabbit round 2 — fixes report, Disagreements / things not changed, Files changed, Gates, R1 — `handle_subscription_change()` OLD-not-assigned on INSERT (Major, potentially production-breaking), R2 — enforcement ignores the subscription query's own pending state (Major), R3 — the F6 test mocked the pending window away (proof for R2), R4 — quota values above PostgreSQL `integer` max are accepted (Minor) (+1 more)
+Nodes (9): Dependencies, Examples, Facts, Highlights, Narrative, Raw Concept, Reason, Rules (+1 more)
 
 ### Community 372 - "CodeRabbit round 3 — fixes report"
 Cohesion: 0.20
-Nodes (9): CodeRabbit round 3 — fixes report, Defect 1: render-phase ref writes, Defect 1 (render-phase writes) — not captured by a test, Defect 2: cleanup flushes at the wrong time, Finding — render-phase ref writes + wrong-timed cleanup flush (Major), Fix, Gates, Provability — read this before trusting the "failing-then-passing" claim below (+1 more)
+Nodes (9): Dependencies, Examples, Facts, Highlights, Narrative, Raw Concept, Reason, Rules (+1 more)
 
 ### Community 373 - "Task 1 report — Plan entitlement columns"
 Cohesion: 0.20
-Nodes (9): A15 — both replay-guard cases, A1 verification — dropped `user_quotas` defaults, A6 deviation — forced by empirical replay failure (read this), Concerns, Step 2/3 — VERBATIM failing output (RED), Step 4/5 — VERBATIM passing output (GREEN), Task 1 report — Plan entitlement columns, Transport note (+1 more)
+Nodes (9): Dependencies, Examples, Facts, Highlights, Narrative, Raw Concept, Reason, Rules (+1 more)
 
 ### Community 374 - "graphify reference: extra exports and benchmark"
-Cohesion: 0.22
-Nodes (8): graphify reference: extra exports and benchmark, Step 6b - Wiki (only if --wiki flag), Step 7 - Neo4j export (only if --neo4j or --neo4j-push flag), Step 7a - FalkorDB export (only if --falkordb or --falkordb-push flag), Step 7b - SVG export (only if --svg flag), Step 7c - GraphML export (only if --graphml flag), Step 7d - MCP server (only if --mcp flag), Step 8 - Token reduction benchmark (only if total_words > 5000)
+Cohesion: 0.20
+Nodes (9): Dependencies, Examples, Facts, Highlights, Narrative, Raw Concept, Reason, Rules (+1 more)
 
 ### Community 375 - "10. Posting pipeline reference"
 Cohesion: 0.22
 Nodes (9): 10.1 Composer → DB, 10.2 Dispatch (`process-post`), 10.3 `platform_posts` row contract, 10.4 Real-time, 10.5 Scheduler (`process-scheduled-posts`), 10.6 Stories pathway, 10.7 Pinterest 3-step async, 10.8 Threads safety nets (+1 more)
 
 ### Community 376 - "Narrative"
-Cohesion: 0.22
-Nodes (8): Dependencies, Facts, Highlights, Narrative, Raw Concept, Reason, Rules, Structure
+Cohesion: 0.20
+Nodes (9): Dependencies, Examples, Facts, Highlights, Narrative, Raw Concept, Reason, Rules (+1 more)
 
 ### Community 377 - "OAuth Integration and Debugging Structural Summary"
-Cohesion: 0.22
-Nodes (8): Debugging and Root Cause Analysis, Drill-Down Entry References, Key Components and Relationships, OAuth Integration and Debugging Structural Summary, OAuth Workflow and Token Refresh, Overview, Patterns, Rules, and Best Practices, Summary
+Cohesion: 0.20
+Nodes (9): Dependencies, Examples, Facts, Highlights, Narrative, Raw Concept, Reason, Rules (+1 more)
 
 ### Community 378 - "Narrative"
-Cohesion: 0.22
-Nodes (8): Dependencies, Facts, Highlights, Narrative, Raw Concept, Reason, Rules, Structure
+Cohesion: 0.20
+Nodes (9): Dependencies, Examples, Facts, Highlights, Narrative, Raw Concept, Reason, Rules (+1 more)
 
 ### Community 379 - "Narrative"
-Cohesion: 0.22
-Nodes (8): Dependencies, Facts, Highlights, Narrative, Raw Concept, Reason, Rules, Structure
+Cohesion: 0.20
+Nodes (9): Dependencies, Examples, Facts, Highlights, Narrative, Raw Concept, Reason, Rules (+1 more)
 
 ### Community 380 - "Narrative"
-Cohesion: 0.22
-Nodes (8): Dependencies, Examples, Highlights, Narrative, Raw Concept, Reason, Rules, Structure
+Cohesion: 0.20
+Nodes (9): Dependencies, Examples, Facts, Highlights, Narrative, Raw Concept, Reason, Rules (+1 more)
 
 ### Community 381 - "Narrative"
-Cohesion: 0.22
-Nodes (8): Dependencies, Facts, Highlights, Narrative, Raw Concept, Reason, Rules, Structure
+Cohesion: 0.20
+Nodes (9): Dependencies, Examples, Facts, Highlights, Narrative, Raw Concept, Reason, Rules (+1 more)
 
 ### Community 382 - "Narrative"
-Cohesion: 0.22
-Nodes (8): Dependencies, Examples, Facts, Highlights, Narrative, Raw Concept, Reason, Structure
+Cohesion: 0.20
+Nodes (9): Dependencies, Examples, Facts, Highlights, Narrative, Raw Concept, Reason, Rules (+1 more)
 
 ### Community 383 - "Narrative"
-Cohesion: 0.22
-Nodes (8): Dependencies, Facts, Highlights, Narrative, Raw Concept, Reason, Rules, Structure
+Cohesion: 0.20
+Nodes (9): Dependencies, Examples, Facts, Highlights, Narrative, Raw Concept, Reason, Rules (+1 more)
 
 ### Community 384 - "Narrative"
-Cohesion: 0.22
-Nodes (8): Dependencies, Facts, Highlights, Narrative, Raw Concept, Reason, Rules, Structure
+Cohesion: 0.20
+Nodes (9): 0. The mechanism, once, 1. `message.received` (6.1), 2. `message.accepted` (6.2), 3. `message.delivered` / `.read` / `.failed` (6.3), 4. `account.reauthorization_required` (6.4), 5. What was NOT certified: `account.connected` / `.disconnected`, 6. Per-event latency (6.5), as published, 7. Corrections this phase makes to the spec (+1 more)
 
 ### Community 385 - "Narrative"
-Cohesion: 0.22
-Nodes (8): Dependencies, Facts, Highlights, Narrative, Raw Concept, Reason, Rules, Structure
+Cohesion: 0.20
+Nodes (9): 9.2 — the capability matrix, decided at the door, 9.3 — the scan-state substrate, A test casualty, and why it was re-pinned, Owner ratification still required, Phase 9 — rich-media messaging: the door, and the substrate, Review round (Codex on PR #127), The fix, The problem, with the exact old order (+1 more)
 
 ### Community 386 - "Narrative"
-Cohesion: 0.22
-Nodes (8): Dependencies, Facts, Highlights, Narrative, Raw Concept, Reason, Rules, Structure
+Cohesion: 0.20
+Nodes (9): 1.0.0 — 2026-09-02, Added, Added, Changed, Changed, Changelog, Deprecated, Security (+1 more)
 
 ### Community 387 - "Narrative"
-Cohesion: 0.22
-Nodes (8): Dependencies, Facts, Highlights, Narrative, Raw Concept, Reason, Rules, Structure
+Cohesion: 0.20
+Nodes (9): Bug 1 — Higgsfield consent logo, Bug 2 — Linked device shows `Google Chrome (Evolution API)`, Bug 3 (NEW, live blocker) — QR pairs but the account never activates, Evidence chain, Fix (two parts), Proven root cause, Symptom, Verification of three production defects — evidence log (+1 more)
 
 ### Community 388 - "Narrative"
-Cohesion: 0.22
-Nodes (8): Dependencies, Facts, Highlights, Narrative, Raw Concept, Reason, Rules, Structure
+Cohesion: 0.20
+Nodes (9): API Endpoints, Authentication, `GET /api/v1/posts`, Get Post History, Postora API Integration Guide, Rate Limits, Response, Support (+1 more)
 
 ### Community 389 - "Narrative"
-Cohesion: 0.22
-Nodes (8): Dependencies, Facts, Highlights, Narrative, Raw Concept, Reason, Rules, Structure
+Cohesion: 0.20
+Nodes (9): 1. What this screen means, 2. Who is affected, 3. Add yourself and teammates as Test Users (Google Cloud Console), 4. Bypass path for added Test Users, 5. Limits of Testing mode, 6. Validation, 7. Manual actions Lovable cannot perform, Final status (+1 more)
 
 ### Community 390 - "Narrative"
-Cohesion: 0.22
-Nodes (8): Dependencies, Facts, Highlights, Narrative, Raw Concept, Reason, Rules, Structure
+Cohesion: 0.20
+Nodes (9): Code Change, Evidence, Files to Change, Fix, Issue, Plan: xsellpointkw's "Missing" Scheduled Posts Are Already Published, Root Cause (Confirmed via DB), Timeline (+1 more)
 
 ### Community 391 - "3. Phases"
-Cohesion: 0.22
-Nodes (9): 3. Phases, Phase 0 — Prerequisites, Phase 1 — Foundation hardening, Phase 2 — Read surface, Phase 3 — Send path, Phase 4 — Webhook platform, Phase 5 — Publishing, Phase 6 — Media (+1 more)
+Cohesion: 0.20
+Nodes (9): Evidence (root cause, proven before any fix), File Structure, Global Constraints, Inbound media: Facebook/Instagram wiring + PDF support, Task 1: Documents pass the understanding module, Task 2: The pipeline admits documents and platform-declared kinds, Task 3: Both WhatsApp webhooks admit documents, Task 4: Facebook and Instagram call the pipeline (+1 more)
 
 ### Community 392 - "3. Phases"
-Cohesion: 0.22
-Nodes (9): 3. Phases, Phase 0 — Prerequisites, Phase 1 — Foundation hardening, Phase 2 — Read surface, Phase 3 — Send path, Phase 4 — Webhook platform, Phase 5 — Publishing, Phase 6 — Media (+1 more)
+Cohesion: 0.20
+Nodes (9): Carousel Preview, Data Flow, Existing Model, Folder Control, Out Of Scope, Post Type Badges, Scheduled Card Media Controls Design, Scope (+1 more)
 
 ### Community 393 - "TASK: Implement Real-Time Social Media Messaging Trigger & Reply in Postora and n8n Community Node"
-Cohesion: 0.22
-Nodes (8): Architecture & Scope of Work, Critical Safety & Production Rules, Deliverables, Goal, Phase 1: Postora Backend - Webhook Event Dispatcher, Phase 2: Postora Backend - Outbound Message Reply Endpoint, Phase 3: n8n Community Node Updates (`Postora-n8n-community-node`), TASK: Implement Real-Time Social Media Messaging Trigger & Reply in Postora and n8n Community Node
+Cohesion: 0.20
+Nodes (9): 1. Account Badge, 2. Helpful Empty State, 3. Non-Disruptive, Design, Files Changed, Goal, Spec: Scheduled Posts — Account Visibility Indicator, Testing (+1 more)
 
 ### Community 394 - "AI Agent Improvements"
-Cohesion: 0.22
-Nodes (8): 0. How to read this document, 10. Suggested sequencing, 2. Master priority list (all cores, ranked), 8. Cross-cutting / infrastructure, AI Agent Improvements, Ranking criteria, Sources for external-platform claims, The one-line strategic read
+Cohesion: 0.20
+Nodes (8): Benefits After Refactoring, Create New Shared Components:, Create Shared Hooks: ✅ COMPLETE, Implementation Order, Metrics Summary, Notes, Priority 3: Shared Component Extraction, Refactoring Plan for Maintainability and Scalability
 
 ### Community 395 - "46. Testing Strategy"
 Cohesion: 0.22
 Nodes (9): 46.1 Contract tests, 46.2 Authentication tests, 46.3 Tenant-isolation tests, 46.4 Idempotency tests, 46.5 Webhook tests, 46.6 Quota/rate-limit tests, 46.7 Provider adapter tests, 46.8 E2E certification (+1 more)
 
 ### Community 396 - "File Structure"
-Cohesion: 0.22
-Nodes (8): File Structure, Postora n8n Webhooks Implementation Plan, Self-Review, Task 1: Secure Backend Webhook Targets, Task 2: Add Webhook Actions And Media Get, Task 3: Add The Postora Trigger, Task 4: Build, Document, And Synchronize Both Copies, Task 5: Deploy And Release Version 1.1.14
+Cohesion: 0.31
+Nodes (9): public.ai_model_preferences, public.ai_models, public.ai_providers, public.get_active_ai_model_config(), public.system_settings, set_ai_model_preferences_updated_at, set_ai_models_updated_at, set_ai_providers_updated_at (+1 more)
 
 ### Community 398 - "Feature 5: Instagram/Facebook Shop Integration"
-Cohesion: 0.22
-Nodes (9): Database, Edge Function Actions, Feature 5: Instagram/Facebook Shop Integration, Integration Points, New Files, Overview, Permissions Used, Revenue Model (+1 more)
+Cohesion: 0.24
+Nodes (4): public.admin_connector_overview(), public.ai_agent_tools, public.connector_connections, public.revoke_connector_connection()
 
 ### Community 399 - "package.json"
 Cohesion: 0.22
-Nodes (8): description, files, homepage, dist, license, main, name, version
+Nodes (8): description, files, homepage, license, main, name, version, dist
 
 ### Community 400 - "46. Testing Strategy"
 Cohesion: 0.22
@@ -2824,25 +2751,25 @@ Nodes (9): 15. Development Roadmap, Phase 1 – Documentation & Environment Clea
 Cohesion: 0.44
 Nodes (6): die(), has_env_file_in_functions(), insert_env_file(), log(), recreate_functions(), reconcile-edge-functions-env.sh script
 
-### Community 404 - "useNetworkStatus.ts"
-Cohesion: 0.15
-Nodes (12): A. Per-platform census — active accounts, B. The account the owner reconnected at 17:51 today, FIX PLAN (minimal, root-cause), Production evidence (self-hosted PG, container `postorasupabase-supabase-j8axyh-supabase-db`), RC1 — CONFIRMED. `refresh-tokens` treats "platform has no refresh token" as an auth failure., RC2 — CONFIRMED. The flag is a one-way latch that no Facebook OAuth path clears., RC3 — CONFIRMED (contributing). Reconnect mode never reaches the Facebook handler., Reconnect-stays-red — Claude's independent investigation (+4 more)
-
 ### Community 405 - "higgsfieldOAuthReturn.ts"
-Cohesion: 0.20
-Nodes (21): authAndResolveAccount(), classifyMetaErrorPayload(), classifyMetaResult(), corsHeaders, isPermanentMetaError(), jsonErr(), jsonOk(), metaFetch() (+13 more)
+Cohesion: 0.18
+Nodes (12): CommentActionResult, graphBase(), getPageTokenForMessaging(), getSendCredentials(), isDirectInstagramAccount(), PrivateReplyAccount, sendPrivateReply(), FACEBOOK (+4 more)
 
 ### Community 407 - "index.ts"
-Cohesion: 0.13
-Nodes (14): Deployment holes to close in PR B/C, Explicitly not in scope, Goal, Known, deferred, Plan — per-account agent configuration (PR2/PR3 completion), PR A — make knowledge visibility explicit, PR B-1 — prepare (details), PR B — split in two, because the constraint must drop last (+6 more)
+Cohesion: 0.30
+Nodes (9): grantedScopes(), splitScopeString(), cases, YouTubeCapabilityAccount, youtubeCommentCapability, dropGrantedScope(), readMetadata(), recordGrantedScopes() (+1 more)
+
+### Community 408 - "index.ts"
+Cohesion: 0.48
+Nodes (5): isNonPublicHost(), isPrivateIpv4(), isPrivateIpv6(), UrlCheck, validateKnowledgeUrl()
 
 ### Community 409 - "HiggsfieldMcpClient"
-Cohesion: 0.20
-Nodes (12): parseList(), SupabaseSchemaPicker(), SupabaseSchemaPickerProps, toggled(), { fetchSupabaseIntrospection, fetchTableColumns, TableListUnavailableError }, INTROSPECTION, fetchSupabaseIntrospection(), fetchTableColumns() (+4 more)
+Cohesion: 0.18
+Nodes (16): catalogPatch(), parseCatalog(), parseColumnMap(), parseList(), SupabaseSchemaPicker(), SupabaseSchemaPickerProps, toggled(), { fetchSupabaseIntrospection, fetchTableColumns, TableListUnavailableError } (+8 more)
 
 ### Community 410 - "Query"
-Cohesion: 0.18
-Nodes (9): connectorVariant(), deliveryVariant(), PartnerKeyActivitySheet(), stamp(), statusVariant(), KEY, rpc, ACTION_ENDPOINTS (+1 more)
+Cohesion: 0.13
+Nodes (13): connectorVariant(), deliveryVariant(), PartnerKeyActivitySheet(), stamp(), statusVariant(), KEY, rpc, ACTION_ENDPOINTS (+5 more)
 
 ### Community 411 - "index.ts"
 Cohesion: 0.22
@@ -2853,140 +2780,136 @@ Cohesion: 0.22
 Nodes (8): Authentication Model, Backend Scope, Base URL, Constraints, Endpoint Groups, Postora Backend API PRD, Product, Required Test Coverage
 
 ### Community 413 - "Core Tables"
-Cohesion: 0.25
-Nodes (8): Core Tables, Database Schema, `media_files`, `platform_posts`, `posts`, `profiles`, `social_accounts`, `social_profiles`
+Cohesion: 0.22
+Nodes (8): graphify reference: extra exports and benchmark, Step 6b - Wiki (only if --wiki flag), Step 7 - Neo4j export (only if --neo4j or --neo4j-push flag), Step 7a - FalkorDB export (only if --falkordb or --falkordb-push flag), Step 7b - SVG export (only if --svg flag), Step 7c - GraphML export (only if --graphml flag), Step 7d - MCP server (only if --mcp flag), Step 8 - Token reduction benchmark (only if total_words > 5000)
 
 ### Community 414 - "Narrative"
-Cohesion: 0.25
-Nodes (7): Dependencies, Highlights, Narrative, Raw Concept, Reason, Rules, Structure
+Cohesion: 0.22
+Nodes (8): Dependencies, Facts, Highlights, Narrative, Raw Concept, Reason, Rules, Structure
 
 ### Community 415 - "_index.md"
-Cohesion: 0.25
-Nodes (7): Evidence, Evidence, Orchestrator-Driven, Phase-Based Verification and Commit Guardrails, orchestrator-driven-phase-based-verification-and-commit-guardrails.md, Orchestrator-Driven Verification and Commit Guardrails, orchestrator-driven-verification-and-commit-guardrails.md, orchestrator-driven-verification-and-guardrails-across-facts-design-and-project-.md
+Cohesion: 0.22
+Nodes (8): Dependencies, Facts, Highlights, Narrative, Raw Concept, Reason, Rules, Structure
 
 ### Community 416 - "end_to_end_testing_facts.md"
-Cohesion: 0.25
-Nodes (7): Dependencies, Facts, Highlights, Narrative, Raw Concept, Reason, Structure
+Cohesion: 0.22
+Nodes (8): Dependencies, Facts, Highlights, Narrative, Raw Concept, Reason, Rules, Structure
 
 ### Community 417 - "project_fact_short_context_2026_06_29.md"
-Cohesion: 0.25
-Nodes (7): Dependencies, Facts, Highlights, Narrative, Raw Concept, Reason, Structure
+Cohesion: 0.22
+Nodes (8): Dependencies, Examples, Highlights, Narrative, Raw Concept, Reason, Rules, Structure
 
 ### Community 418 - "Narrative"
-Cohesion: 0.25
-Nodes (7): Dependencies, Highlights, Narrative, Raw Concept, Reason, Rules, Structure
+Cohesion: 0.22
+Nodes (8): Dependencies, Facts, Highlights, Narrative, Raw Concept, Reason, Rules, Structure
 
 ### Community 419 - "oauth_token_refresh_update.md"
-Cohesion: 0.25
-Nodes (7): Dependencies, Facts, Highlights, Narrative, Raw Concept, Reason, Structure
+Cohesion: 0.22
+Nodes (9): 3. Phases, Phase 0 — Prerequisites, Phase 1 — Foundation hardening, Phase 2 — Read surface, Phase 3 — Send path, Phase 4 — Webhook platform, Phase 5 — Publishing, Phase 6 — Media (+1 more)
 
 ### Community 420 - "codex_delegate_orchestration_and_verification_protocol.md"
-Cohesion: 0.25
-Nodes (7): Dependencies, Facts, Highlights, Narrative, Raw Concept, Reason, Structure
+Cohesion: 0.22
+Nodes (9): 3. Phases, Phase 0 — Prerequisites, Phase 1 — Foundation hardening, Phase 2 — Read surface, Phase 3 — Send path, Phase 4 — Webhook platform, Phase 5 — Publishing, Phase 6 — Media (+1 more)
 
 ### Community 421 - "postora_platform_facts.md"
-Cohesion: 0.25
-Nodes (7): Dependencies, Facts, Highlights, Narrative, Raw Concept, Reason, Structure
+Cohesion: 0.22
+Nodes (8): 1. The problem, stated exactly, 2. What this task must produce, 3. The fact that decides the phase — RE-VERIFY IT, DO NOT QUOTE IT, 4. Schema direction — decided in advance, justify or object, 5. The exit gate, and what it binds, 6. Required reading, 7. Report contract, Brief — Phase 3.1: settle the D13 dispatch state machine
 
 ### Community 422 - "project_fact_bulk_extraction_2026_06_24.md"
-Cohesion: 0.25
-Nodes (7): Dependencies, Facts, Highlights, Narrative, Raw Concept, Reason, Structure
+Cohesion: 0.22
+Nodes (8): 0. The one thing to read if you read nothing else, 1. Rotation (5.9): the secret is captured at enqueue, not read at send, 2. Redirects at delivery: followed, revalidated per hop, and bounded, 3. Worker sizing (open item 4), decided as a default rather than blocked on, 4. What is constrained rather than built (the 5.4 rows), 5. What this phase does **not** advertise, D5 — the webhook substrate: occurrence identity, rotation, and what is *not* advertised, `event_id` is not the same thing, and the difference is partner-visible
 
 ### Community 423 - "project_fact_short_context_2026_07_05.md"
-Cohesion: 0.25
-Nodes (7): Dependencies, Facts, Highlights, Narrative, Raw Concept, Reason, Structure
+Cohesion: 0.22
+Nodes (8): 1. The 7.0 inventory, 2. What this PR builds: 7.4, 3. Why 7.2 and 7.3 are a separate PR, 4. 7.5 moves to Phase 8 — ratified, not deferred by default, D9 — the publishing seam: what 7.0 found, and what it changes, How the crash-test exit criterion is satisfied with the event uncertified, Schedule rows — created **only in the browser**, Terminal `platform_posts` status — 5 commit points, all in one file
 
 ### Community 424 - "sprint_13_retro.md"
-Cohesion: 0.25
-Nodes (7): Dependencies, Facts, Highlights, Narrative, Raw Concept, Reason, Structure
+Cohesion: 0.22
+Nodes (8): Architecture & Scope of Work, Critical Safety & Production Rules, Deliverables, Goal, Phase 1: Postora Backend - Webhook Event Dispatcher, Phase 2: Postora Backend - Outbound Message Reply Endpoint, Phase 3: n8n Community Node Updates (`Postora-n8n-community-node`), TASK: Implement Real-Time Social Media Messaging Trigger & Reply in Postora and n8n Community Node
 
 ### Community 425 - "MCP Routing Guide (use the RIGHT tool for each task)"
-Cohesion: 0.25
-Nodes (8): 1. Database / Backend — `supabase_postora_mcp`, 2. Hosting / Deployment — `dokploy-contaboo-mcp`, 3. Server / SSH — `ssh-contabo-mcp`, 4. Frontend UI verification — Playwright MCP (`puppeteer`/`playwright`), 5. Frontend E2E (optional) — `puppeteer` MCP, Decision matrix, Known gotcha, MCP Routing Guide (use the RIGHT tool for each task)
+Cohesion: 0.22
+Nodes (8): 0. How to read this document, 10. Suggested sequencing, 2. Master priority list (all cores, ranked), 8. Cross-cutting / infrastructure, AI Agent Improvements, Ranking criteria, Sources for external-platform claims, The one-line strategic read
 
 ### Community 426 - "Core Tables"
-Cohesion: 0.25
-Nodes (8): Core Tables, Database Schema, `media_files`, `platform_posts`, `posts`, `profiles`, `social_accounts`, `social_profiles`
+Cohesion: 0.22
+Nodes (8): 1. Copy the worker code into the functions volume, 2. Add the compose service, 3. Start and verify, 4. Only now apply migration section D, Deploy the ai-knowledge-excel-worker as a container, ⚠️ ORDER MATTERS — read before applying the migration, Paths, Rollback
 
 ### Community 427 - "Debug brief: n8n Postora Comment Trigger never fires for a Facebook comment"
-Cohesion: 0.25
-Nodes (7): Debug brief: n8n Postora Comment Trigger never fires for a Facebook comment, Output, Repo, Specific questions to answer with evidence, Symptom (observed by the user, 2026-08-22), Where to look (read all of these fully), Your job
+Cohesion: 0.22
+Nodes (8): 0. Prerequisites the function will not tell you about, 1. Deploy, 2. Verify the deploy, 3. Is it draining?, 4. An endpoint was auto-disabled, 5. Stop deliveries during an incident, 6. Sizing, and when to revisit it, Runbook — the partner webhook delivery worker
 
 ### Community 428 - "Investigation brief: Postora n8n Trigger receives no message events"
-Cohesion: 0.25
-Nodes (7): Deliverable, Investigation brief: Postora n8n Trigger receives no message events, Known architecture facts (verified already — do not re-derive, build on them), Repos / paths (Windows), Specific questions to answer with evidence, Symptom (reported by user), Your task
+Cohesion: 0.22
+Nodes (8): File Structure, Postora n8n Webhooks Implementation Plan, Self-Review, Task 1: Secure Backend Webhook Targets, Task 2: Add Webhook Actions And Media Get, Task 3: Add The Postora Trigger, Task 4: Build, Document, And Synchronize Both Copies, Task 5: Deploy And Release Version 1.1.14
 
 ### Community 429 - "Postora Admin Dashboard - Complete Implementation Guide"
-Cohesion: 0.25
-Nodes (7): Admin Layout & Access Control, AdminLayout Component Pattern, Architecture Overview, Cron Jobs Setup, Postora Admin Dashboard - Complete Implementation Guide, Summary, Table of Contents
+Cohesion: 0.22
+Nodes (8): Global Constraints, Meta Token Refresh Hardening — Implementation Plan, Task 1: Meta error classification, Task 2: Adapters — POST body, timeout, structured outcome, Task 3: Escalate permanent Meta failures immediately, Task 4: Bound the whole sweep, and close the second leak, Task 5 (DEFERRED — do not implement in this batch): the concurrency claim, Task 6: Deploy and verify against production
 
 ### Community 430 - "Instagram DMs never reach the n8n trigger — autoverse511@gmail.com (2026-08-24)"
-Cohesion: 0.25
-Nodes (7): Account under investigation, Fix for the user, Instagram DMs never reach the n8n trigger — autoverse511@gmail.com (2026-08-24), Product gap worth fixing, Root cause 1 — the DMs are going to a different Instagram account, Root cause 2 — no n8n trigger is registered at all, What is NOT broken
+Cohesion: 0.22
+Nodes (8): 1. Schema and harness suite — `22acbf63`, 2. Matcher, adapter, engine — `1033e29c`, 3. Ingestion wiring — `f9fcb5a2`, 4. Frontend — `e130368b`, Comment Workflow — Implementation Record, Order of work, Remaining, in order, What the reviews changed
 
 ### Community 431 - "3. Unique Selling Points (USPs)"
-Cohesion: 0.25
-Nodes (8): 3. Unique Selling Points (USPs), USP #1: 11 Platforms in One Dashboard, USP #2: No Channel Tax — Radical Pricing, USP #3: AI-Native, Not AI-Bolted-On, USP #4: Unified Messaging Inbox (3 Platforms), USP #5: Public API + n8n Node + Make.com Integration, USP #6: Self-Hosted Supabase — Operational Control, USP #7: Operations & Observability Suite (Built-in)
+Cohesion: 0.22
+Nodes (8): Alternatives, Architecture and data flow, Current release status, Error and progress behavior, Implementation sequence and acceptance, Proven behavior and production repair, Recommended user flow, Website URL to business and agent setup
 
 ### Community 432 - "5. Core 3 — Messaging + AI agent: future features"
-Cohesion: 0.25
-Nodes (8): 5.1 Long-context memory — **P0**, 5.2 Action tools that close the loop — **P1**, 5.3 Agent quality metrics — **P1**, 5.4 Multilingual agent — **P2**, 5.5 Prompt versioning + A/B testing — **P2**, 5.6 Voice notes — **P2**, 5.7 Additional channels — **P2/P3**, 5. Core 3 — Messaging + AI agent: future features
+Cohesion: 0.22
+Nodes (9): Database, Edge Function Actions, Feature 5: Instagram/Facebook Shop Integration, Integration Points, New Files, Overview, Permissions Used, Revenue Model (+1 more)
 
 ### Community 433 - "4. Product Principles"
 Cohesion: 0.25
 Nodes (8): 4.1 Public API, private implementation, 4.2 OpenAPI-first, 4.3 Least privilege, 4.4 Tenant isolation is server-authoritative, 4.5 Backward compatibility, 4.6 Idempotency for side effects, 4.7 Incremental architecture, 4. Product Principles
 
 ### Community 434 - "WhatsApp Docs Page Recreation Implementation Plan"
-Cohesion: 0.25
-Nodes (7): Task 1: Generate and Set Up Visual Assets, Task 2: Build Interactive Tabs & Header Layout, Task 3: Implement Connection & Sync Content (Tab 1), Task 4: Implement Chatbot Builder & 24h Window Content (Tab 2), Task 5: Implement Automated Messaging & Team Inbox Content (Tabs 3 & 4), Task 6: Implement Troubleshooting Accordions & Diagnostics (Tab 5), WhatsApp Docs Page Recreation Implementation Plan
-
-### Community 435 - "Plan: WhatsApp Messaging Fixes + Scheduled Posts Debug"
-Cohesion: 0.25
-Nodes (7): Constraints, Issue 1: Contact Avatar Upload RLS Violation, Issue 2: Contacts <-> Conversations Sync, Issue 3: WhatsApp Coexistence Chat Thread Sync, Issue 4: Scheduled Posts Disappeared (P0), Plan: WhatsApp Messaging Fixes + Scheduled Posts Debug, Task Breakdown
+Cohesion: 0.42
+Nodes (7): public.claim_partner_webhook_deliveries(), public.partner_webhook_backlog(), public.partner_webhook_deliveries, public.partner_webhooks, public.redrive_partner_webhook_deliveries(), public.rotate_partner_webhook_secret(), public.settle_partner_webhook_delivery()
 
 ### Community 436 - "Ollama bge-m3 Production Migration Implementation Plan"
-Cohesion: 0.25
-Nodes (7): Ollama bge-m3 Production Migration Implementation Plan, Self-Review, Task 1: Complete Shared Retrieval Routing, Task 2: Verify and Deliver the Runtime, Task 3: Apply the Reversible Pilot Schema, Task 4: Backfill and Evaluate, Task 5: Controlled Cutover, Verification, and Push
+Cohesion: 0.27
+Nodes (11): CaptionSectionProps, UnsplashAttributionAlertProps, useUnsplashAttribution(), UseUnsplashAttributionReturn, appendAttribution(), generateAttributionText(), getRequiredAttribution(), hasValidAttribution() (+3 more)
 
 ### Community 437 - "Spec: Scheduled Posts Empty State — Link to History"
 Cohesion: 0.25
-Nodes (7): 1. Improved Empty State, 2. Non-Disruptive, Design, Files Changed, Goal, Spec: Scheduled Posts Empty State — Link to History, Why This Fix Is Safe
+Nodes (8): Core Tables, Database Schema, `media_files`, `platform_posts`, `posts`, `profiles`, `social_accounts`, `social_profiles`
 
 ### Community 438 - "AI Knowledge Excel Worker Design"
 Cohesion: 0.25
-Nodes (7): Acceptance Criteria, AI Knowledge Excel Worker Design, Architecture, Data Flow, Problem, Safety, Scope
+Nodes (7): Dependencies, Highlights, Narrative, Raw Concept, Reason, Rules, Structure
 
 ### Community 439 - "Live Messaging Realtime Design"
 Cohesion: 0.25
-Nodes (7): Design, Goal, Live Messaging Realtime Design, Non-Goals, Root Cause, Scope, Validation
+Nodes (7): Dependencies, Facts, Highlights, Narrative, Raw Concept, Reason, Structure
 
 ### Community 440 - "Postora n8n Webhooks Design"
 Cohesion: 0.25
-Nodes (7): Architecture, Data Flow, Error Handling And Tests, Goal, Postora n8n Webhooks Design, Release, Scope
+Nodes (7): Dependencies, Facts, Highlights, Narrative, Raw Concept, Reason, Structure
 
 ### Community 441 - "Feature 6: Smart Scheduling with Audience Insights"
 Cohesion: 0.25
-Nodes (8): AI Prompt Enhancement, Changes, Database, Feature 6: Smart Scheduling with Audience Insights, Graph API Calls (added to suggest-best-times), Overview, Permissions Used, Revenue Model
+Nodes (8): 1. Database / Backend — `supabase_postora_mcp`, 2. Hosting / Deployment — `dokploy-contaboo-mcp`, 3. Server / SSH — `ssh-contabo-mcp`, 4. Frontend UI verification — Playwright MCP (`puppeteer`/`playwright`), 5. Frontend E2E (optional) — `puppeteer` MCP, Decision matrix, Known gotcha, MCP Routing Guide (use the RIGHT tool for each task)
 
 ### Community 442 - "Feature 7: Human Agent Mode"
 Cohesion: 0.25
-Nodes (8): Changes, Database Migration, Feature 7: Human Agent Mode, Messenger API Change, Overview, Permissions Used, Revenue Model, UI Components
+Nodes (8): Core Tables, Database Schema, `media_files`, `platform_posts`, `posts`, `profiles`, `social_accounts`, `social_profiles`
 
 ### Community 443 - "Feature 3: Ad Analytics Dashboard (Read-Only)"
 Cohesion: 0.25
-Nodes (8): Database, Edge Function Actions, Feature 3: Ad Analytics Dashboard (Read-Only), New Files, Overview, Permissions Used, Revenue Model, Routing
+Nodes (7): Debug brief: n8n Postora Comment Trigger never fires for a Facebook comment, Output, Repo, Specific questions to answer with evidence, Symptom (observed by the user, 2026-08-22), Where to look (read all of these fully), Your job
 
 ### Community 444 - "Feature 1: Comment Manager (Unified Inbox)"
 Cohesion: 0.25
-Nodes (8): Database Migration, Edge Function Actions, Feature 1: Comment Manager (Unified Inbox), New Files, Overview, Permissions Used, Revenue Model, Routing
+Nodes (7): Deliverable, Investigation brief: Postora n8n Trigger receives no message events, Known architecture facts (verified already — do not re-derive, build on them), Repos / paths (Windows), Specific questions to answer with evidence, Symptom (reported by user), Your task
 
 ### Community 445 - "Feature 2: Lead Forms CRM"
 Cohesion: 0.25
-Nodes (8): Database Migration, Edge Function Actions, Feature 2: Lead Forms CRM, New Files, Overview, Permissions Used, Revenue Model, Routing
+Nodes (7): Admin Layout & Access Control, AdminLayout Component Pattern, Architecture Overview, Cron Jobs Setup, Postora Admin Dashboard - Complete Implementation Guide, Summary, Table of Contents
 
 ### Community 446 - "Feature 4: Ad Campaign Manager"
 Cohesion: 0.25
-Nodes (8): Database Migration, Edge Function Extensions (extend `ads-analytics/index.ts`), Feature 4: Ad Campaign Manager, New Files, Overview, Permissions Used, Revenue Model, Routing
+Nodes (7): 1. Company Overview, 2. Core Products & Services, 3. Supported Platforms & Capabilities, 4. Subscriptions & Pricing Tiers, 5. Frequently Asked Questions (FAQs), 6. Support Channels, Postora Business Profile & Knowledge Base
 
 ### Community 447 - "4. Product Principles"
 Cohesion: 0.25
@@ -3002,39 +2925,39 @@ Nodes (8): 8. Environment Variables, Frontend (Vite-exposed), Google / YouTube, 
 
 ### Community 450 - "🔴 Priority 1: Critical Refactoring (>700 lines)"
 Cohesion: 0.25
-Nodes (8): 1.1 `process-post/index.ts` (4,077 lines), 1.2 `useProfileOAuth.tsx` (958 lines), 1.3 `TikTokPreCheck.tsx` (828 lines), 1.4 `usePostForm.tsx` (765 lines), 1.5 `usePlatformSettings.tsx` (659 lines), 1.6 `CreatePost.tsx` (636 lines), 1.7 `useHistoryActions.tsx` (593 lines), 🔴 Priority 1: Critical Refactoring (>700 lines)
+Nodes (7): 10.1 — the usage counters, and the product decision that gated them, 10.3 / 10.2 / 10.4 / 10.6 — contract, Postman, documentation, 10.5 — environment-bound keys, 10.8 — the chain test is not the certification, Delegation record, Known gaps carried forward, Phase 10 — GA & developer experience: what was decided, what was built, what was not
 
 ### Community 451 - "migrate-knowledge-assets.mjs"
-Cohesion: 0.26
-Nodes (10): nextFailureCount(), shouldEscalateToReauth(), handleRefreshFailure(), isPermanentMetaError(), META_PERMANENT_SUBCODES, META_RATE_LIMIT_CODES, MetaProviderError, MetaRefreshOutcome (+2 more)
+Cohesion: 0.25
+Nodes (7): Connectors and tools, Errors and what to do about them, `GET /v1/connectors`, Metering, `POST /v1/connectors/{type}/connect-link`, `POST /v1/tools/execute`, What a key can see and run
 
 ### Community 452 - "useResolvedImageModels.ts"
-Cohesion: 0.30
-Nodes (10): corsHeaders, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_URL, forbidden(), invalidBody(), json(), JsonBody, missingConfig() (+2 more)
+Cohesion: 0.22
+Nodes (9): ConnectedAccounts(), ConnectedAccountsProps, Post, RecentPosts(), RecentPostsProps, StatCards(), TypingTagline(), usePostStats() (+1 more)
 
 ### Community 453 - "useOAuthConsent.ts"
-Cohesion: 0.23
-Nodes (11): cloudinaryFolderForEmail(), KnowledgeFileLocation, KnowledgeFileOwner, knowledgeStorageObjectPath(), KnowledgeStorageReader, knowledgeStorageRef(), locateKnowledgeFile(), ownedStoragePath() (+3 more)
+Cohesion: 0.27
+Nodes (9): embedBatch(), embedWithOllama(), Fetcher, OllamaEmbeddingOptions, OllamaEmbedResponse, parseOllamaEmbeddings(), retryableNetworkError(), retryableStatus() (+1 more)
 
 ### Community 454 - "useWhatsAppBusinessProfile.ts"
-Cohesion: 0.19
-Nodes (9): ComposioConnectCardProps, ConnectionPicker(), ConnectionPickerProps, ACTIVE_SHEETS, from, ConnectorDirectoryItem, InitiateConnectionInput, useConnectorConnections() (+1 more)
+Cohesion: 0.25
+Nodes (7): 1. Get a key, 2. List accounts, 3. Upload media (if sending media), 4. Send a text message, 5. Subscribe to webhooks, 6. Receive events and reconcile, Integration Guide — End-to-End
 
 ### Community 455 - "notificationHistoryStore.ts"
-Cohesion: 0.06
-Nodes (39): AppCredentialsSettings(), CredentialStatus, extractWaValue(), PlatformConfig, PLATFORMS, PlatformSecrets, STATUS_DOT, STATUS_PILL (+31 more)
+Cohesion: 0.16
+Nodes (10): DownloadOutcome, DownloadOwner, from(), resolveSourceDownload(), SignerLike, SourceQuery, SourceReader, SourceRow (+2 more)
 
 ### Community 456 - "index.ts"
-Cohesion: 0.27
-Nodes (10): DealCard(), formatActivity(), formatAmount(), PipelineBoard(), StageColumn(), stageTone(), stageTotal(), groupDealsByStage() (+2 more)
+Cohesion: 0.25
+Nodes (7): Account under investigation, Fix for the user, Instagram DMs never reach the n8n trigger — autoverse511@gmail.com (2026-08-24), Product gap worth fixing, Root cause 1 — the DMs are going to a different Instagram account, Root cause 2 — no n8n trigger is registered at all, What is NOT broken
 
 ### Community 457 - "ErrorBoundary.tsx"
 Cohesion: 0.23
 Nodes (6): AccountByIdQuery, AccountScopedRequest, AdminClient, resolveAgentAccountId(), Filters, REQUEST_BASE
 
 ### Community 458 - "FakeQuery"
-Cohesion: 0.12
-Nodes (20): AutomationHandler, COMMENT_AUTOMATION_HANDLERS, CommentAutomationHandler, MESSAGE_AUTOMATION_HANDLERS, readKey(), resolveAutomationHandler(), resolveCommentAutomationHandler(), grantedScopes() (+12 more)
+Cohesion: 0.25
+Nodes (8): 3. Unique Selling Points (USPs), USP #1: 11 Platforms in One Dashboard, USP #2: No Channel Tax — Radical Pricing, USP #3: AI-Native, Not AI-Bolted-On, USP #4: Unified Messaging Inbox (3 Platforms), USP #5: Public API + n8n Node + Make.com Integration, USP #6: Self-Hosted Supabase — Operational Control, USP #7: Operations & Observability Suite (Built-in)
 
 ### Community 459 - "index.ts"
 Cohesion: 0.36
@@ -3042,111 +2965,107 @@ Nodes (5): corsHeaders, fetchProfile(), fetchVideos(), json(), refreshTikTokToke
 
 ### Community 460 - "Task 7: Add Instagram comment avatars — frontend parsing"
 Cohesion: 0.25
-Nodes (7): Commit, Files Changed, Implementation Details, Summary, Task 7: Add Instagram comment avatars — frontend parsing, Type-Check Result, Validation
+Nodes (8): 5.1 Long-context memory — **P0**, 5.2 Action tools that close the loop — **P1**, 5.3 Agent quality metrics — **P1**, 5.4 Multilingual agent — **P2**, 5.5 Prompt versioning + A/B testing — **P2**, 5.6 Voice notes — **P2**, 5.7 Additional channels — **P2/P3**, 5. Core 3 — Messaging + AI agent: future features
 
 ### Community 461 - "Task 8 Report: Render commenter avatars in the comment list UI"
 Cohesion: 0.25
-Nodes (7): Browser / visual verification, clean-code-guard, Commit, Files changed, Task 8 Report: Render commenter avatars in the comment list UI, tsc output, What was implemented
+Nodes (7): Task 1: Generate and Set Up Visual Assets, Task 2: Build Interactive Tabs & Header Layout, Task 3: Implement Connection & Sync Content (Tab 1), Task 4: Implement Chatbot Builder & 24h Window Content (Tab 2), Task 5: Implement Automated Messaging & Team Inbox Content (Tabs 3 & 4), Task 6: Implement Troubleshooting Accordions & Diagnostics (Tab 5), WhatsApp Docs Page Recreation Implementation Plan
 
 ### Community 462 - "Task 9 Report: Deploy `comment-manager` and verify both platforms live"
 Cohesion: 0.25
-Nodes (7): Facebook comment avatars — CONFIRMED WORKING, Instagram comment avatars (DM-overlap, best-effort) — NO ERROR, NO TEST DATA, Step 6: Live verification, Step 7: Cleanup, Steps 1-5: Deploy, Summary, Task 9 Report: Deploy `comment-manager` and verify both platforms live
+Nodes (7): Constraints, Issue 1: Contact Avatar Upload RLS Violation, Issue 2: Contacts <-> Conversations Sync, Issue 3: WhatsApp Coexistence Chat Thread Sync, Issue 4: Scheduled Posts Disappeared (P0), Plan: WhatsApp Messaging Fixes + Scheduled Posts Debug, Task Breakdown
 
 ### Community 463 - "Task Execution Workflow (MANDATORY)"
-Cohesion: 0.29
-Nodes (7): After the task, before committing, Before starting any task, Deployment, n8n community node workflow, Task Execution Workflow (MANDATORY), While working, Wrap-up (always)
+Cohesion: 0.25
+Nodes (7): Ollama bge-m3 Production Migration Implementation Plan, Self-Review, Task 1: Complete Shared Retrieval Routing, Task 2: Verify and Deliver the Runtime, Task 3: Apply the Reversible Pilot Schema, Task 4: Backfill and Evaluate, Task 5: Controlled Cutover, Verification, and Push
 
 ### Community 464 - "Postora Product Marketing Context"
-Cohesion: 0.29
-Nodes (6): Claim Safety, ICP, Positioning, Postora Product Marketing Context, Primary Marketing Angles, Product
+Cohesion: 0.25
+Nodes (7): Agent Setup Unsaved-Changes Guard — Implementation Plan, Global Constraints, Task 1: `useDirtyForm`, Task 2: `useUnsavedChangesGuard`, Task 3: The dialog, and guarding the account selector, Task 4: Guard the transitions that remount the child, Task 5: Land it
 
 ### Community 465 - "postora_platform_facts.md"
-Cohesion: 0.29
-Nodes (6): Facts, Highlights, Narrative, Raw Concept, Reason, Structure
+Cohesion: 0.25
+Nodes (7): 1. Improved Empty State, 2. Non-Disruptive, Design, Files Changed, Goal, Spec: Scheduled Posts Empty State — Link to History, Why This Fix Is Safe
 
 ### Community 466 - "Narrative"
-Cohesion: 0.29
-Nodes (6): Dependencies, Highlights, Narrative, Raw Concept, Reason, Structure
+Cohesion: 0.25
+Nodes (7): Acceptance Criteria, AI Knowledge Excel Worker Design, Architecture, Data Flow, Problem, Safety, Scope
 
 ### Community 467 - "project_fact_short_context_2026_06_29.md"
-Cohesion: 0.29
-Nodes (6): Facts, Highlights, Narrative, Raw Concept, Reason, Structure
+Cohesion: 0.25
+Nodes (7): Design, Goal, Live Messaging Realtime Design, Non-Goals, Root Cause, Scope, Validation
 
 ### Community 468 - "Task Execution Workflow (MANDATORY)"
-Cohesion: 0.29
-Nodes (7): After the task, before committing, Before starting any task, Deployment, n8n community node workflow, Task Execution Workflow (MANDATORY), While working, Wrap-up (always)
+Cohesion: 0.25
+Nodes (7): Architecture, Data Flow, Error Handling And Tests, Goal, Postora n8n Webhooks Design, Release, Scope
 
 ### Community 469 - "Postora Partner API — Implementation Plan"
-Cohesion: 0.29
-Nodes (7): 1. How this plan is ordered, 2. Dependency graph, 4. Risk register, 5. What this plan deliberately does not do, 6. Per-phase working agreement, 7. Open items carried from the spec, Postora Partner API — Implementation Plan
+Cohesion: 0.25
+Nodes (8): AI Prompt Enhancement, Changes, Database, Feature 6: Smart Scheduling with Audience Insights, Graph API Calls (added to suggest-best-times), Overview, Permissions Used, Revenue Model
 
 ### Community 470 - "Postora Partner API — Implementation Plan"
-Cohesion: 0.29
-Nodes (7): 1. How this plan is ordered, 2. Dependency graph, 4. Risk register, 5. What this plan deliberately does not do, 6. Per-phase working agreement, 7. Open items carried from the spec, Postora Partner API — Implementation Plan
+Cohesion: 0.25
+Nodes (8): Changes, Database Migration, Feature 7: Human Agent Mode, Messenger API Change, Overview, Permissions Used, Revenue Model, UI Components
 
 ### Community 471 - "Section-Specific Tables"
-Cohesion: 0.29
-Nodes (7): Core Admin Tables, Coupons, Database Schema Reference, Email Inbox, Observability, Section-Specific Tables, System Logs
+Cohesion: 0.25
+Nodes (8): Database, Edge Function Actions, Feature 3: Ad Analytics Dashboard (Read-Only), New Files, Overview, Permissions Used, Revenue Model, Routing
 
 ### Community 472 - "2. Database Schema"
-Cohesion: 0.29
-Nodes (7): 2.1 `admin_inbox_messages` (Core Table), 2.2 `email_drafts`, 2.3 `email_signatures`, 2.4 `email_templates`, 2.5 `email_contacts`, 2.6 `scheduled_emails`, 2. Database Schema
+Cohesion: 0.25
+Nodes (8): Database Migration, Edge Function Actions, Feature 1: Comment Manager (Unified Inbox), New Files, Overview, Permissions Used, Revenue Model, Routing
 
 ### Community 473 - "5. Edge Functions (Backend)"
-Cohesion: 0.29
-Nodes (7): 5.1 `send-inbox-email/index.ts`, 5.2 `resend-webhook/index.ts`, 5.3 `fetch-email-content/index.ts`, 5.4 `ai-email-assistant/index.ts`, 5.5 `sync-resend-delivery-status/index.ts`, 5.6 `process-scheduled-emails/index.ts`, 5. Edge Functions (Backend)
+Cohesion: 0.25
+Nodes (8): Database Migration, Edge Function Actions, Feature 2: Lead Forms CRM, New Files, Overview, Permissions Used, Revenue Model, Routing
 
 ### Community 474 - "14. Integrations and Public API"
-Cohesion: 0.29
-Nodes (7): 14. Integrations and Public API, Endpoints (Highlights), Make.com Integration, MCP Server, n8n Community Node, Public API, Webhooks
+Cohesion: 0.25
+Nodes (8): Database Migration, Edge Function Extensions (extend `ads-analytics/index.ts`), Feature 4: Ad Campaign Manager, New Files, Overview, Permissions Used, Revenue Model, Routing
 
 ### Community 475 - "FAQ"
-Cohesion: 0.29
-Nodes (7): Can I post without uploading media first?, Can I select accounts by username instead of UUID?, FAQ, How do I post to a specific Facebook Page?, How do I post YouTube Shorts?, What content types are accepted for uploads?, What media formats are supported?
-
-### Community 476 - "Upload Media"
-Cohesion: 0.29
-Nodes (7): Method 1: Upload via URL (JSON), Method 2: Upload via Base64 (JSON), Method 3: Direct File Upload (Multipart), `POST /api/v1/upload-media`, Upload Media, Upload Media — Request Fields, Upload Response
+Cohesion: 0.25
+Nodes (8): 1.1 `process-post/index.ts` (4,077 lines), 1.2 `useProfileOAuth.tsx` (958 lines), 1.3 `TikTokPreCheck.tsx` (828 lines), 1.4 `usePostForm.tsx` (765 lines), 1.5 `usePlatformSettings.tsx` (659 lines), 1.6 `CreatePost.tsx` (636 lines), 1.7 `useHistoryActions.tsx` (593 lines), 🔴 Priority 1: Critical Refactoring (>700 lines)
 
 ### Community 477 - "6. Core 4 — Comment manager + AI comment automation: future features"
-Cohesion: 0.29
-Nodes (7): 6.1 Comment persistence + webhook-first ingest — **P0**, 6.2 AI comment triage — **P1**, 6.3 Unified Social Inbox — **P1**, 6.4 Platform parity — **P0 → P1**, 6.5 Comment analytics — **P2**, 6.6 Bulk moderation + keyword rules — **P2**, 6. Core 4 — Comment manager + AI comment automation: future features
+Cohesion: 0.36
+Nodes (6): public.comment_workflow_events, public.comment_workflow_rule_stats, public.comment_workflow_rules, public.comment_workflow_usage, update_comment_workflow_events_updated_at, update_comment_workflow_rules_updated_at
 
 ### Community 478 - "7. Core 5 — Marketing API: future features"
-Cohesion: 0.29
-Nodes (7): 7.1 Complete the ad object chain — **P0**, 7.2 Boost post — **P0**, 7.3 Audiences — **P1**, 7.4 Conversions API — **P1**, 7.5 Ads AI agent — **P2**, 7.6 Additional ad platforms — **P3**, 7. Core 5 — Marketing API: future features
+Cohesion: 0.32
+Nodes (6): auth.users, public.ai_agent_configs, public.ai_knowledge_chunks, public.ai_knowledge_source_accounts, public.ai_knowledge_sources, public.social_accounts
 
 ### Community 479 - "9. YouTube Comment Reply Manager — implementation plan"
-Cohesion: 0.29
-Nodes (7): 9.1 The headline constraint: OAuth scope, 9.2 The second constraint: quota, 9.3 Architecture — reuse what already works, 9.4 Work breakdown, 9.5 Platform semantics that differ from Meta — do not assume parity, 9.6 Definition of done, 9. YouTube Comment Reply Manager — implementation plan
+Cohesion: 0.14
+Nodes (12): ACCOUNT_ROW, codeFrom(), doc, DOC_PATH, EMIT_PATTERNS, KEY_ROW, PARTNER_SURFACE, RATE_HEADERS (+4 more)
 
 ### Community 480 - "18. Publishing API"
 Cohesion: 0.29
 Nodes (7): 18.1 Create draft, 18.2 Read post, 18.3 Publish, 18.4 Schedule, 18.5 Cancel schedule, 18.6 Status, 18. Publishing API
 
 ### Community 481 - "Threads webhook: verify token + field subscription"
-Cohesion: 0.29
-Nodes (6): End-to-end check, How to confirm you have this problem, Meta App Dashboard (manual, cannot be automated), Reading the rejection logs, Required environment variable, Threads webhook: verify token + field subscription
+Cohesion: 0.08
+Nodes (32): CreatedKeyDisplay, PartnerKeyCreatedView(), PartnerKeyCreatedViewProps, CREATED, FEATURE_META, ThreadsPermissionStatus(), ThreadsPermissionStatusProps, Props (+24 more)
 
 ### Community 482 - "Changing the Higgsfield consent-screen logo"
 Cohesion: 0.29
-Nodes (6): Changing the Higgsfield consent-screen logo, Note on the delivered bytes, Procedure, The only lever: the bytes at the registered URL, The step that cannot be automated: purge Cloudflare, Why the registration cannot be updated
+Nodes (8): PlatformMetadata, LinkedInAccount, LinkedInDestination, LinkedInDestinationSelection, listLinkedInDestinations(), normalizeLinkedInDestinationSelections(), selectedLinkedInDestinationIds(), accountMetadata
 
 ### Community 483 - "Live Messaging Realtime Implementation Plan"
-Cohesion: 0.29
-Nodes (6): Live Messaging Realtime Implementation Plan, Task 1: Add Event Persistence, Task 2: Add Client Realtime Hooks, Task 3: Make WhatsApp and Threads Live, Task 4: Support URL Tabs, Task 5: Verify and Deliver
+Cohesion: 0.18
+Nodes (15): AGENT_GOALS, AGENT_RESPONSE_LENGTHS, AGENT_TONES, AgentBehaviorError, AgentGoal, AgentInstructionBlock, AgentResponseLength, AgentTone (+7 more)
 
 ### Community 484 - "Plan"
-Cohesion: 0.29
-Nodes (6): Deliverables checklist, Final status target, Plan, Task 1 — Knowledge tab flashing / not loading (Facebook + WhatsApp + Instagram), Task 2 — Move model selection to Admin, allow multi-model + fallbacks per user, Task 3 — WhatsApp nav restructure: add "Automation" group (UI only)
+Cohesion: 0.20
+Nodes (14): downloadSource(), downloadSourceFile(), cloudinaryFolderForEmail(), downloadKnowledgeFile(), KnowledgeFileLocation, KnowledgeFileOwner, knowledgeStorageObjectPath(), KnowledgeStorageReader (+6 more)
 
 ### Community 485 - "18. Publishing API"
 Cohesion: 0.29
 Nodes (7): 18.1 Create draft, 18.2 Read post, 18.3 Publish, 18.4 Schedule, 18.5 Cancel schedule, 18.6 Status, 18. Publishing API
 
 ### Community 486 - "10. Production Build & Deployment"
-Cohesion: 0.10
-Nodes (20): File map, Global Constraints, Task 10: Delete a chat, Task 11: Media — download on every kind, video and PDF lightbox, Task 12: Thread layout — day separators, absolute list times, header phone, wallpaper, Task 13: Add / edit contact from the thread header, Task 14: Gates and guard passes, Task 15: Ops, deploy, verify (+12 more)
+Cohesion: 0.43
+Nodes (5): Ctx, noop, ThreadsAuthorAvatarProvider(), ThreadsAuthorAvatarResolver, useThreadsAuthorAvatars()
 
 ### Community 487 - "3. Project Architecture"
 Cohesion: 0.29
@@ -3157,8 +3076,8 @@ Cohesion: 0.29
 Nodes (7): 7. Database Blueprint, Billing & quotas, Config, AI & observability, Core tables, Database functions / triggers, Messaging, notifications & content, Storage buckets
 
 ### Community 489 - "ThreadsAuthorAvatarContext.tsx"
-Cohesion: 0.39
-Nodes (6): collectStrings(), credentialRepresentations(), redactConnectorOutput(), replaceCredentialValues(), redactSensitive(), SENSITIVE_KEY_PATTERNS
+Cohesion: 0.05
+Nodes (77): ADAPTERS, connectorFailure(), enabledCapabilities(), executeConnector(), safeLog(), fetchOneHop(), readJson(), REDIRECT_STATUSES (+69 more)
 
 ### Community 490 - "PageTransition.tsx"
 Cohesion: 0.33
@@ -3169,8 +3088,8 @@ Cohesion: 0.27
 Nodes (10): base64UrlDecode(), base64UrlEncode(), buildSignedState(), completeOAuth(), hmacSha256Base64Url(), LINKEDIN_CLIENT_ID, LINKEDIN_CLIENT_SECRET, SUPABASE_SERVICE_ROLE_KEY (+2 more)
 
 ### Community 492 - "index.ts"
-Cohesion: 0.08
-Nodes (25): File map, Global Constraints, Self-review, Slice A — backend foundation (Deno), Slice B — database (Muse Spark lane), Slice C — frontend, Slice D — docs and rollout, Task 10: Migration `20260904150000_youtube_comments.sql` (+17 more)
+Cohesion: 0.18
+Nodes (14): b64urlEncode(), b64urlJson(), callPartnerApi(), FULL_SCOPES, makeProviderStub(), mintServiceJwt(), postgrestFetch(), rawJwtSecret (+6 more)
 
 ### Community 493 - "index.ts"
 Cohesion: 0.33
@@ -3186,7 +3105,7 @@ Nodes (6): corsHeaders, generateUserReconnectEmail(), getPlatformDisplayName(), 
 
 ### Community 496 - "FakeQuery"
 Cohesion: 0.02
-Nodes (140): ADMIN_EMAIL_TOGGLES, AdminNotificationSettings(), ALL_KEYS, EmailToggle, parseSettingValue(), USER_EMAIL_TOGGLES, ThreadsDebugPanel(), CaptionNodeComponent() (+132 more)
+Nodes (199): ADMIN_EMAIL_TOGGLES, AdminNotificationSettings(), ALL_KEYS, EmailToggle, parseSettingValue(), USER_EMAIL_TOGGLES, FeatureFlagAuditLog(), FeatureFlagScheduler() (+191 more)
 
 ### Community 497 - "index.ts"
 Cohesion: 0.33
@@ -3197,144 +3116,144 @@ Cohesion: 0.38
 Nodes (6): ALLOWED_EVENT_TYPES, constantTimeEqual(), corsHeaders, updateParentPostStatus(), updatePlatformPostStatus(), verifyTikTokSignature()
 
 ### Community 499 - "20260112200222_e726343f-46a4-449c-abac-98aa3e05979e.sql"
-Cohesion: 0.38
-Nodes (4): on_subscription_change, public.can_upload_media(), public.increment_media_uploads(), user_quotas
+Cohesion: 0.29
+Nodes (6): Acceptance commands and final output, Additional checks, Behavior and limits, Changed files, Conversation assignment verification, Deployment status
 
 ### Community 500 - "20260413173217_9a04ec64-014b-49a8-b6bc-d973c14cacd9.sql"
-Cohesion: 0.38
-Nodes (6): public.whatsapp_contact_group_members, public.whatsapp_contact_groups, public.whatsapp_contacts, public.whatsapp_message_analytics, update_whatsapp_contact_groups_updated_at, update_whatsapp_contacts_updated_at
+Cohesion: 0.29
+Nodes (7): After the task, before committing, Before starting any task, Deployment, n8n community node workflow, Task Execution Workflow (MANDATORY), While working, Wrap-up (always)
 
 ### Community 501 - "graphify reference: query, path, explain"
-Cohesion: 0.33
-Nodes (5): For /graphify explain, For /graphify path, graphify reference: query, path, explain, Step 0 — Constrained query expansion (REQUIRED before traversal), Step 1 — Traversal
+Cohesion: 0.29
+Nodes (6): Claim Safety, ICP, Positioning, Postora Product Marketing Context, Primary Marketing Angles, Product
 
 ### Community 502 - "20. Quick API Debug Checklist"
 Cohesion: 0.33
 Nodes (6): 20. Quick API Debug Checklist, Admin credential problems, AI generation failures, Auth failures, Connect / reconnect failures, Publish failures
 
 ### Community 503 - "33. Testing Rules"
-Cohesion: 0.33
-Nodes (6): 33. Testing Rules, Application, Domain, E2E, Infrastructure, UI
+Cohesion: 0.29
+Nodes (6): Facts, Highlights, Narrative, Raw Concept, Reason, Structure
 
 ### Community 504 - "Structural Summary: Design Domain (Level d2)"
-Cohesion: 0.33
-Nodes (5): API Integration (api/_index.md), Boundary-Based Debugging and Root Cause Attribution, OAuth Integration and Debugging (oauth/_index.md), Structural Summary: Design Domain (Level d2), Unified Security and Operational Protocols via Feedback Loops
+Cohesion: 0.29
+Nodes (7): After the task, before committing, Before starting any task, Deployment, n8n community node workflow, Task Execution Workflow (MANDATORY), While working, Wrap-up (always)
 
 ### Community 505 - "Narrative"
-Cohesion: 0.33
-Nodes (6): Dependencies, Examples, Highlights, Narrative, Rules, Structure
+Cohesion: 0.29
+Nodes (7): 1. How this plan is ordered, 2. Dependency graph, 4. Risk register, 5. What this plan deliberately does not do, 6. Per-phase working agreement, 7. Open items carried from the spec, Postora Partner API — Implementation Plan
 
 ### Community 506 - "Narrative"
-Cohesion: 0.33
-Nodes (6): Dependencies, Examples, Highlights, Narrative, Rules, Structure
+Cohesion: 0.29
+Nodes (7): 1. How this plan is ordered, 2. Dependency graph, 4. Risk register, 5. What this plan deliberately does not do, 6. Per-phase working agreement, 7. Open items carried from the spec, Postora Partner API — Implementation Plan
 
 ### Community 507 - "Narrative"
-Cohesion: 0.33
-Nodes (6): Dependencies, Examples, Highlights, Narrative, Rules, Structure
+Cohesion: 0.29
+Nodes (7): Core Admin Tables, Coupons, Database Schema Reference, Email Inbox, Observability, Section-Specific Tables, System Logs
 
 ### Community 508 - "Narrative"
-Cohesion: 0.33
-Nodes (6): Dependencies, Examples, Highlights, Narrative, Rules, Structure
+Cohesion: 0.29
+Nodes (7): 2.1 `admin_inbox_messages` (Core Table), 2.2 `email_drafts`, 2.3 `email_signatures`, 2.4 `email_templates`, 2.5 `email_contacts`, 2.6 `scheduled_emails`, 2. Database Schema
 
 ### Community 509 - "Narrative"
-Cohesion: 0.33
-Nodes (6): Dependencies, Examples, Highlights, Narrative, Rules, Structure
+Cohesion: 0.29
+Nodes (7): 5.1 `send-inbox-email/index.ts`, 5.2 `resend-webhook/index.ts`, 5.3 `fetch-email-content/index.ts`, 5.4 `ai-email-assistant/index.ts`, 5.5 `sync-resend-delivery-status/index.ts`, 5.6 `process-scheduled-emails/index.ts`, 5. Edge Functions (Backend)
 
 ### Community 510 - "Narrative"
-Cohesion: 0.33
-Nodes (6): Dependencies, Examples, Highlights, Narrative, Rules, Structure
+Cohesion: 0.29
+Nodes (6): 1. Agent Identity & Role, 2. Tone & Voice, 3. Core Instructions & Rules, 4. Handling Complaints & Escalations, 5. Conversational Style Guidelines, Postora Customer Support Agent - Persona & Instructions
 
 ### Community 511 - "Narrative"
-Cohesion: 0.33
-Nodes (6): Dependencies, Examples, Highlights, Narrative, Rules, Structure
+Cohesion: 0.29
+Nodes (6): Corrections from adversarial review (2026-08-31), Decision, Decision: CORS `Access-Control-Allow-Origin: *` on the Partner API (0.10), What the current headers are, What would change the answer, Why `*` is defensible HERE — verified, not assumed
 
 ### Community 512 - "Narrative"
-Cohesion: 0.33
-Nodes (6): Dependencies, Examples, Highlights, Narrative, Rules, Structure
+Cohesion: 0.29
+Nodes (6): Consequences for the eventual /v1 CORS decision (0.10's `/v1` half), /v1 CORS is decided at the gateway, not in the function, What actually happens, What was intended, What would change the answer, Why this matters
 
 ### Community 513 - "Narrative"
-Cohesion: 0.33
-Nodes (6): Dependencies, Examples, Highlights, Narrative, Rules, Structure
+Cohesion: 0.29
+Nodes (7): 14. Integrations and Public API, Endpoints (Highlights), Make.com Integration, MCP Server, n8n Community Node, Public API, Webhooks
 
 ### Community 514 - "Narrative"
-Cohesion: 0.33
-Nodes (6): Dependencies, Examples, Highlights, Narrative, Rules, Structure
+Cohesion: 0.29
+Nodes (7): Can I post without uploading media first?, Can I select accounts by username instead of UUID?, FAQ, How do I post to a specific Facebook Page?, How do I post YouTube Shorts?, What content types are accepted for uploads?, What media formats are supported?
 
 ### Community 515 - "Narrative"
-Cohesion: 0.33
-Nodes (6): Dependencies, Examples, Highlights, Narrative, Rules, Structure
+Cohesion: 0.29
+Nodes (7): Method 1: Upload via URL (JSON), Method 2: Upload via Base64 (JSON), Method 3: Direct File Upload (Multipart), `POST /api/v1/upload-media`, Upload Media, Upload Media — Request Fields, Upload Response
 
 ### Community 516 - "Narrative"
-Cohesion: 0.33
-Nodes (6): Dependencies, Examples, Highlights, Narrative, Rules, Structure
+Cohesion: 0.29
+Nodes (7): 6.1 Comment persistence + webhook-first ingest — **P0**, 6.2 AI comment triage — **P1**, 6.3 Unified Social Inbox — **P1**, 6.4 Platform parity — **P0 → P1**, 6.5 Comment analytics — **P2**, 6.6 Bulk moderation + keyword rules — **P2**, 6. Core 4 — Comment manager + AI comment automation: future features
 
 ### Community 517 - "Narrative"
-Cohesion: 0.33
-Nodes (6): Dependencies, Examples, Highlights, Narrative, Rules, Structure
+Cohesion: 0.29
+Nodes (7): 7.1 Complete the ad object chain — **P0**, 7.2 Boost post — **P0**, 7.3 Audiences — **P1**, 7.4 Conversions API — **P1**, 7.5 Ads AI agent — **P2**, 7.6 Additional ad platforms — **P3**, 7. Core 5 — Marketing API: future features
 
 ### Community 518 - "Narrative"
-Cohesion: 0.33
-Nodes (6): Dependencies, Examples, Highlights, Narrative, Rules, Structure
+Cohesion: 0.29
+Nodes (7): 9.1 The headline constraint: OAuth scope, 9.2 The second constraint: quota, 9.3 Architecture — reuse what already works, 9.4 Work breakdown, 9.5 Platform semantics that differ from Meta — do not assume parity, 9.6 Definition of done, 9. YouTube Comment Reply Manager — implementation plan
 
 ### Community 519 - "Narrative"
-Cohesion: 0.33
-Nodes (6): Dependencies, Examples, Highlights, Narrative, Rules, Structure
+Cohesion: 0.29
+Nodes (6): End-to-end check, How to confirm you have this problem, Meta App Dashboard (manual, cannot be automated), Reading the rejection logs, Required environment variable, Threads webhook: verify token + field subscription
 
 ### Community 520 - "Narrative"
-Cohesion: 0.33
-Nodes (6): Dependencies, Examples, Highlights, Narrative, Rules, Structure
+Cohesion: 0.29
+Nodes (6): Changing the Higgsfield consent-screen logo, Note on the delivered bytes, Procedure, The only lever: the bytes at the registered URL, The step that cannot be automated: purge Cloudflare, Why the registration cannot be updated
 
 ### Community 521 - "Narrative"
-Cohesion: 0.33
-Nodes (6): Dependencies, Examples, Highlights, Narrative, Rules, Structure
+Cohesion: 0.29
+Nodes (6): Live Messaging Realtime Implementation Plan, Task 1: Add Event Persistence, Task 2: Add Client Realtime Hooks, Task 3: Make WhatsApp and Threads Live, Task 4: Support URL Tabs, Task 5: Verify and Deliver
 
 ### Community 522 - "Narrative"
-Cohesion: 0.33
-Nodes (6): Dependencies, Examples, Highlights, Narrative, Rules, Structure
+Cohesion: 0.29
+Nodes (6): Deliverables checklist, Final status target, Plan, Task 1 — Knowledge tab flashing / not loading (Facebook + WhatsApp + Instagram), Task 2 — Move model selection to Admin, allow multi-model + fallbacks per user, Task 3 — WhatsApp nav restructure: add "Automation" group (UI only)
 
 ### Community 523 - "Narrative"
-Cohesion: 0.33
-Nodes (6): Dependencies, Examples, Highlights, Narrative, Rules, Structure
+Cohesion: 0.38
+Nodes (4): on_subscription_change, public.can_upload_media(), public.increment_media_uploads(), user_quotas
 
 ### Community 524 - "Narrative"
-Cohesion: 0.33
-Nodes (6): Dependencies, Examples, Highlights, Narrative, Rules, Structure
+Cohesion: 0.38
+Nodes (6): public.whatsapp_contact_group_members, public.whatsapp_contact_groups, public.whatsapp_contacts, public.whatsapp_message_analytics, update_whatsapp_contact_groups_updated_at, update_whatsapp_contacts_updated_at
 
 ### Community 525 - "Narrative"
-Cohesion: 0.33
-Nodes (6): Dependencies, Examples, Highlights, Narrative, Rules, Structure
+Cohesion: 0.38
+Nodes (6): partner_dispatch_intents_assert_tenancy_trg, partner_dispatch_intents_assert_transition_trg, public.partner_dispatch_intents, public.partner_dispatch_intents_assert_tenancy(), public.partner_dispatch_intents_assert_transition(), update_partner_dispatch_intents_updated_at
 
 ### Community 526 - "Narrative"
-Cohesion: 0.33
-Nodes (6): Dependencies, Examples, Highlights, Narrative, Rules, Structure
+Cohesion: 0.38
+Nodes (7): public.ai_model_preferences, public.ai_models, public.ai_providers, public.claim_agent_replies(), public.enforce_post_quota_on_insert(), public.pending_agent_replies, trg_enforce_post_quota_on_insert
 
 ### Community 527 - "Narrative"
 Cohesion: 0.33
-Nodes (6): Dependencies, Examples, Highlights, Narrative, Rules, Structure
+Nodes (7): public.get_my_notifications(), public.get_user_role(), public.has_role(), public.mark_all_notifications_read(), public.notification_reads, public.system_notifications, public.user_roles
 
 ### Community 528 - "Narrative"
-Cohesion: 0.33
-Nodes (6): Dependencies, Examples, Highlights, Narrative, Rules, Structure
+Cohesion: 0.29
+Nodes (7): public.node_execution_logs, public.workflow_comments, public.workflow_executions, public.workflow_schedules, public.workflow_versions, public.workflow_webhooks, public.workflows
 
 ### Community 529 - "Narrative"
-Cohesion: 0.33
-Nodes (6): Dependencies, Examples, Highlights, Narrative, Rules, Structure
+Cohesion: 0.14
+Nodes (11): mockCreateObjectURL, mockInvoke, mockRevokeObjectURL, mockToast, mockCreateObjectURL, mockInvoke, mockRevokeObjectURL, mockToast (+3 more)
 
 ### Community 530 - "Narrative"
-Cohesion: 0.33
-Nodes (6): Dependencies, Examples, Highlights, Narrative, Rules, Structure
+Cohesion: 0.19
+Nodes (13): getInitialDraftState(), MediaLibrarySelection, PostDraftState, IMPORTANT: also switch previewUrl to the stable Cloudinary https: URL and, usePostForm(), compressImage(), optimizeForSize(), analyzeMedia() (+5 more)
 
 ### Community 531 - "Narrative"
-Cohesion: 0.33
-Nodes (6): Dependencies, Examples, Highlights, Narrative, Rules, Structure
+Cohesion: 0.17
+Nodes (14): fetchEditorialPhotos(), fetchFromUnsplash(), getPhotoFullSize(), getPhotographerUrl(), getPhotoThumbnail(), getRandomPhotos(), searchPhotos(), trackDownload() (+6 more)
 
 ### Community 532 - "Narrative"
 Cohesion: 0.33
-Nodes (6): Dependencies, Examples, Highlights, Narrative, Rules, Structure
+Nodes (5): For /graphify explain, For /graphify path, graphify reference: query, path, explain, Step 0 — Constrained query expansion (REQUIRED before traversal), Step 1 — Traversal
 
 ### Community 533 - "Narrative"
 Cohesion: 0.33
-Nodes (6): Dependencies, Examples, Highlights, Narrative, Rules, Structure
+Nodes (6): 33. Testing Rules, Application, Domain, E2E, Infrastructure, UI
 
 ### Community 534 - "project_fact_short_context_2026_06_22.md"
 Cohesion: 0.33
@@ -3342,107 +3261,107 @@ Nodes (5): Highlights, Narrative, Raw Concept, Reason, Structure
 
 ### Community 535 - "Narrative"
 Cohesion: 0.33
-Nodes (6): Dependencies, Examples, Highlights, Narrative, Rules, Structure
+Nodes (6): 1. Data Fetching with TanStack Query, 2. Admin Role Check, 3. Real-time Subscriptions, Core Technologies, Key Patterns, Tech Stack & Patterns
 
 ### Community 536 - "Narrative"
 Cohesion: 0.33
-Nodes (6): Dependencies, Examples, Highlights, Narrative, Rules, Structure
+Nodes (6): 4.1 Domain Setup, 4.2 Sending Addresses, 4.3 Inbound Email (Receiving), 4.4 Webhook Configuration, 4.5 API Key, 4. Resend.com Configuration
 
 ### Community 537 - "Narrative"
 Cohesion: 0.33
-Nodes (6): Dependencies, Examples, Highlights, Narrative, Rules, Structure
+Nodes (5): Certification table (per POSTORA-PARTNER-API-IMPLEMENTATION-PLAN.md Phase 10 — GA), Failure cases → scenario mapping, Partner API Certification — Phase 10 GA, What a real certification run must do, What IS in place today
 
 ### Community 538 - "Narrative"
 Cohesion: 0.33
-Nodes (6): Dependencies, Examples, Highlights, Narrative, Rules, Structure
+Nodes (5): Drift gate, Files in `docs/api/`, Postora Partner API — Contract & Tooling, Regenerating the Postman files, Versioning
 
 ### Community 539 - "Narrative"
 Cohesion: 0.33
-Nodes (6): Dependencies, Examples, Highlights, Narrative, Rules, Structure
+Nodes (5): Decision, Decision: suspend `send_template` on the Partner API alias (0A), Reason, Restoration condition, What a caller sees
 
 ### Community 540 - "Narrative"
 Cohesion: 0.33
-Nodes (6): Dependencies, Examples, Highlights, Narrative, Rules, Structure
+Nodes (5): API Keys — Lifecycle, Issue, Revoke, Rotate with overlap, What a partner must do at rotation
 
 ### Community 541 - "Narrative"
 Cohesion: 0.33
-Nodes (6): Dependencies, Examples, Highlights, Narrative, Rules, Structure
+Nodes (5): Authentication, Expiry and revocation, Header, Key prefixes and environments, Non-enumerable 401
 
 ### Community 542 - "Narrative"
 Cohesion: 0.33
-Nodes (6): Dependencies, Examples, Highlights, Narrative, Rules, Structure
+Nodes (5): Envelope, Errors, Request ID for support, Retry verdict, Where the codes live
 
 ### Community 543 - "Narrative"
 Cohesion: 0.33
-Nodes (6): Dependencies, Examples, Highlights, Narrative, Rules, Structure
+Nodes (5): 1. Obtain a key, 2. First call, 3. Read the request ID, Getting Started, Next steps
 
 ### Community 544 - "Narrative"
 Cohesion: 0.33
-Nodes (6): Dependencies, Examples, Highlights, Narrative, Rules, Structure
+Nodes (5): Idempotency, In-progress, Indeterminate, Same key + different body → conflict, Same key + same body → replay
 
 ### Community 545 - "Narrative"
 Cohesion: 0.33
-Nodes (6): Dependencies, Examples, Highlights, Narrative, Rules, Structure
+Nodes (5): D13 delivery guarantee, Messaging, QR-mode and capability matrix, Send, Template sends currently suspended
 
 ### Community 546 - "Narrative"
 Cohesion: 0.33
-Nodes (6): Dependencies, Examples, Highlights, Narrative, Rules, Structure
+Nodes (5): Deprecation window, How the drift gate enforces it, Versioning and Compatibility, What is additive and needs no migration, What is breaking
 
 ### Community 547 - "Narrative"
 Cohesion: 0.33
-Nodes (6): Dependencies, Examples, Highlights, Narrative, Rules, Structure
+Nodes (5): Certified event types, Dedupe, retries, ordering, Signature verification, Subscribe, Webhooks
 
 ### Community 548 - "Narrative"
 Cohesion: 0.33
-Nodes (6): Dependencies, Examples, Highlights, Narrative, Rules, Structure
+Nodes (5): Fix, One-off repair of the live data, Root cause, The rows, WhatsApp inbox shows 2 threads after a re-pair — evidence log
 
 ### Community 549 - "Narrative"
 Cohesion: 0.33
-Nodes (6): Dependencies, Examples, Highlights, Narrative, Rules, Structure
+Nodes (6): 8. Competitor Analysis and Attack Angles, Buffer, Hootsuite, Later, SocialPilot, Sprout Social
 
 ### Community 550 - "project_fact_short_context_2026_06_22.md"
 Cohesion: 0.33
-Nodes (5): Highlights, Narrative, Raw Concept, Reason, Structure
+Nodes (6): For AI Agents, For Contributors, For Marketers, For Sales, For Support, How To Use This Document
 
 ### Community 551 - "Key Patterns"
 Cohesion: 0.33
-Nodes (6): 1. Data Fetching with TanStack Query, 2. Admin Role Check, 3. Real-time Subscriptions, Core Technologies, Key Patterns, Tech Stack & Patterns
+Nodes (6): Code Examples, cURL — Full Multi-Platform Post, Python Example, Schedule a Post for Later, TypeScript / JavaScript — PostoraClient Class, Usage Example — Complete Workflow
 
 ### Community 552 - "4. Resend.com Configuration"
 Cohesion: 0.33
-Nodes (6): 4.1 Domain Setup, 4.2 Sending Addresses, 4.3 Inbound Email (Receiving), 4.4 Webhook Configuration, 4.5 API Key, 4. Resend.com Configuration
+Nodes (6): Delete Webhook — `DELETE /api/v1/webhooks/:id`, List Webhooks — `GET /api/v1/webhooks`, Register Webhook — `POST /api/v1/webhooks`, Test Webhook — `POST /api/v1/webhooks/test`, Webhook Payload Format, Webhooks
 
 ### Community 553 - "WhatsApp inbox shows 2 threads after a re-pair — evidence log"
 Cohesion: 0.33
-Nodes (5): Fix, One-off repair of the live data, Root cause, The rows, WhatsApp inbox shows 2 threads after a re-pair — evidence log
+Nodes (6): 1. Where we stand today (verified snapshot), Core 1 — Autoposting (Postora + n8n), Core 2 — Analytics, Core 3 — Messaging centre + AI agent for DMs, Core 4 — Comment manager + AI comment automation, Core 5 — Marketing API (Meta Ads)
 
 ### Community 554 - "8. Competitor Analysis and Attack Angles"
 Cohesion: 0.33
-Nodes (6): 8. Competitor Analysis and Attack Angles, Buffer, Hootsuite, Later, SocialPilot, Sprout Social
+Nodes (6): 3.1 Split `process-post` into per-platform modules — **P1**, 3.2 Approval workflows — **P2**, 3.3 Performance-informed content generation — **P2**, 3.4 Predictive best-time-to-post — **P2**, 3.5 Auto-repurposing agent — **P3**, 3. Core 1 — Autoposting: future features
 
 ### Community 555 - "How To Use This Document"
 Cohesion: 0.33
-Nodes (6): For AI Agents, For Contributors, For Marketers, For Sales, For Support, How To Use This Document
+Nodes (6): 4.1 Analytics warehouse + scheduled collector — **P0, highest structural priority**, 4.2 AI analytics agent — **P1**, 4.3 Analytics parity for the remaining platforms — **P2**, 4.4 Cross-platform unified dashboard + export — **P2**, 4.5 Competitor benchmarking — **P2**, 4. Core 2 — Analytics: future features
 
 ### Community 556 - "Code Examples"
 Cohesion: 0.33
-Nodes (6): Code Examples, cURL — Full Multi-Platform Post, Python Example, Schedule a Post for Later, TypeScript / JavaScript — PostoraClient Class, Usage Example — Complete Workflow
+Nodes (6): AI Usage Analytics, Dark Theme Variants, Detailed Feature Specifications, Features, Metrics, Theme Selector
 
 ### Community 557 - "Webhooks"
 Cohesion: 0.33
-Nodes (6): Delete Webhook — `DELETE /api/v1/webhooks/:id`, List Webhooks — `GET /api/v1/webhooks`, Register Webhook — `POST /api/v1/webhooks`, Test Webhook — `POST /api/v1/webhooks/test`, Webhook Payload Format, Webhooks
+Nodes (5): AI Knowledge Excel Worker Implementation Plan, Task 1: Add Atomic Queue Claiming, Task 2: Queue Excel Requests From the Edge Function, Task 3: Add the Deno Excel Worker, Task 4: Deploy the Worker and Recover the Failed Source
 
 ### Community 558 - "1. Where we stand today (verified snapshot)"
 Cohesion: 0.33
-Nodes (6): 1. Where we stand today (verified snapshot), Core 1 — Autoposting (Postora + n8n), Core 2 — Analytics, Core 3 — Messaging centre + AI agent for DMs, Core 4 — Comment manager + AI comment automation, Core 5 — Marketing API (Meta Ads)
+Nodes (5): 1. Connection Details Overview, 2. Setting Up Your Local `.env` File, 3. How the Self-Hosted Supabase Stack Works, 4. Guidelines for Lovable / Frontend Updates, Lovable Development Connection & Migration Instructions
 
 ### Community 559 - "3. Core 1 — Autoposting: future features"
 Cohesion: 0.33
-Nodes (6): 3.1 Split `process-post` into per-platform modules — **P1**, 3.2 Approval workflows — **P2**, 3.3 Performance-informed content generation — **P2**, 3.4 Predictive best-time-to-post — **P2**, 3.5 Auto-repurposing agent — **P3**, 3. Core 1 — Autoposting: future features
+Nodes (6): scripts, build, dev, lint, prepublishOnly, test
 
 ### Community 560 - "4. Core 2 — Analytics: future features"
 Cohesion: 0.33
-Nodes (6): 4.1 Analytics warehouse + scheduled collector — **P0, highest structural priority**, 4.2 AI analytics agent — **P1**, 4.3 Analytics parity for the remaining platforms — **P2**, 4.4 Cross-platform unified dashboard + export — **P2**, 4.5 Competitor benchmarking — **P2**, 4. Core 2 — Analytics: future features
+Nodes (6): 🚀 Implementation Phases, Phase 1: Foundation (Week 1-2), Phase 2: OAuth System (Week 3-4), Phase 3: Post Creation (Week 5-6), Phase 4: Components (Week 7-8), Phase 5: Edge Functions (Week 9-10)
 
 ### Community 561 - "7. Target Users"
 Cohesion: 0.33
@@ -3450,15 +3369,15 @@ Nodes (6): 7.1 Private integration developers, 7.2 E-commerce platforms, 7.3 Aut
 
 ### Community 562 - "AI Usage Analytics"
 Cohesion: 0.33
-Nodes (6): AI Usage Analytics, Dark Theme Variants, Detailed Feature Specifications, Features, Metrics, Theme Selector
+Nodes (5): `.env.example` is the safe template, `.env` is local only, Rotate anything that was ever committed, Security Notes, Self-hosted Supabase endpoints
 
 ### Community 563 - "AI Knowledge Excel Worker Implementation Plan"
 Cohesion: 0.33
-Nodes (5): AI Knowledge Excel Worker Implementation Plan, Task 1: Add Atomic Queue Claiming, Task 2: Queue Excel Requests From the Edge Function, Task 3: Add the Deno Excel Worker, Task 4: Deploy the Worker and Recover the Failed Source
+Nodes (3): public.credit_transactions, public.user_credits, update_user_credits_updated_at
 
 ### Community 564 - "Lovable Development Connection & Migration Instructions"
-Cohesion: 0.33
-Nodes (5): 1. Connection Details Overview, 2. Setting Up Your Local `.env` File, 3. How the Self-Hosted Supabase Stack Works, 4. Guidelines for Lovable / Frontend Updates, Lovable Development Connection & Migration Instructions
+Cohesion: 0.40
+Nodes (5): public.email_contacts, public.email_signatures, public.scheduled_emails, update_email_signatures_updated_at, update_scheduled_emails_updated_at
 
 ### Community 565 - "keywords"
 Cohesion: 0.33
@@ -3469,8 +3388,8 @@ Cohesion: 0.33
 Nodes (6): n8n, credentials, n8nNodesApiVersion, nodes, dist/credentials/PostoraApi.credentials.js, dist/nodes/Postora/Postora.node.js
 
 ### Community 567 - "scripts"
-Cohesion: 0.33
-Nodes (6): scripts, build, dev, lint, prepublishOnly, test
+Cohesion: 0.40
+Nodes (5): public.observability_alert_configs, public.observability_alert_history, public.observability_health_snapshots, public.observability_metrics, update_alert_configs_updated_at
 
 ### Community 568 - "7. Target Users"
 Cohesion: 0.33
@@ -3485,24 +3404,20 @@ Cohesion: 0.33
 Nodes (6): 2. Tech Stack, Authentication & Authorization, Backend, Database, Frontend, Infrastructure / Hosting
 
 ### Community 571 - "🚀 Implementation Phases"
-Cohesion: 0.33
-Nodes (6): 🚀 Implementation Phases, Phase 1: Foundation (Week 1-2), Phase 2: OAuth System (Week 3-4), Phase 3: Post Creation (Week 5-6), Phase 4: Components (Week 7-8), Phase 5: Edge Functions (Week 9-10)
+Cohesion: 0.47
+Nodes (5): public.whatsapp_agents, public.whatsapp_assignment_history, public.whatsapp_conversation_assignments, update_whatsapp_agents_updated_at, update_whatsapp_assignments_updated_at
 
 ### Community 572 - "Security Notes"
-Cohesion: 0.33
-Nodes (5): `.env.example` is the safe template, `.env` is local only, Rotate anything that was ever committed, Security Notes, Self-hosted Supabase endpoints
+Cohesion: 0.47
+Nodes (5): partner_api_keys_workspace_is_immutable_trg, partner_audit_logs_assert_tenancy_trg, public.partner_api_keys_workspace_is_immutable(), public.partner_audit_logs, public.partner_audit_logs_assert_tenancy()
 
 ### Community 573 - "higgsfieldModels.ts"
-Cohesion: 0.06
-Nodes (27): DatabaseConnectorsManager(), ACCOUNTS, CONNECTION, deleteTool, from, rpc, tools, upsertTool (+19 more)
-
-### Community 574 - "UnifiedInboxesPage.tsx"
-Cohesion: 0.18
-Nodes (10): Global Constraints, Meta-Platform `needs_reauth` False Positive — Implementation Plan, Task 1: Port the production admin-auth hotfix into the repo, Task 2: Teach the platform config which platforms use refresh tokens, Task 3: Route exchange-only platforms past the missing-refresh-token guard, Task 3b: Send each Instagram account to the right exchange endpoint, Task 4: Clear the health flags on a Facebook Page reconnect, Task 5: Stop dropping reconnect options in the frontend (+2 more)
+Cohesion: 0.17
+Nodes (9): ACCOUNTS, deleteTool, links, setToolAccounts, socialAccounts, toolCard(), toolCardElement(), tools (+1 more)
 
 ### Community 575 - "router.ts"
-Cohesion: 0.16
-Nodes (16): create_workflow_version_trigger, public.coupon_redemptions, public.coupons, public.create_workflow_version(), public.credit_transactions, public.deployment_logs, public.is_coupon_valid(), public.profiles (+8 more)
+Cohesion: 0.33
+Nodes (6): objects_update_create_prefix, storage.buckets, storage.objects, storage.objects_update_prefix_trigger(), storage.prefixes, storage.search_legacy_v1()
 
 ### Community 576 - "index.ts"
 Cohesion: 0.33
@@ -3514,79 +3429,79 @@ Nodes (5): corsHeaders, getUserMessage(), handlePublish(), handleStatus(), TIKTO
 
 ### Community 578 - "20260113181820_48500ec2-e2c3-4c76-8e30-524b5835a265.sql"
 Cohesion: 0.33
-Nodes (3): public.credit_transactions, public.user_credits, update_user_credits_updated_at
+Nodes (6): public.count_openinary_backfill_remaining(), public.get_cdn_provider_counts(), public.get_openinary_backfill_batch(), public.media_file_providers, public.media_files, public.media_operations_history
 
 ### Community 579 - "20260116150117_09c6e0ab-dd70-400f-84b9-66e477878cf8.sql"
-Cohesion: 0.40
-Nodes (5): public.email_contacts, public.email_signatures, public.scheduled_emails, update_email_signatures_updated_at, update_scheduled_emails_updated_at
+Cohesion: 0.28
+Nodes (11): allPlatforms, availablePlatforms, ExtendedPlatform, isPlatformType(), MEDIA_REQUIRED_PLATFORMS, platformCharLimits, platformWarnings, TIKTOK_PHOTO_WARNING (+3 more)
 
 ### Community 580 - "20260129044551_6ea3761e-74a0-43ea-b8f3-ba993335fefe.sql"
-Cohesion: 0.40
-Nodes (5): public.observability_alert_configs, public.observability_alert_history, public.observability_health_snapshots, public.observability_metrics, update_alert_configs_updated_at
+Cohesion: 0.18
+Nodes (9): ACCOUNTS, { callEdgeApi }, deleteTool, links, openCreateDialog(), renderManager(), setToolAccounts, tools (+1 more)
 
 ### Community 581 - "20260413234250_b395c5e3-36eb-4c94-b994-ed9c4684587b.sql"
-Cohesion: 0.47
-Nodes (5): public.whatsapp_agents, public.whatsapp_assignment_history, public.whatsapp_conversation_assignments, update_whatsapp_agents_updated_at, update_whatsapp_assignments_updated_at
+Cohesion: 0.19
+Nodes (13): ThreadsPostDetailsDialog(), discoverPostIds(), FRAME_STYLES, hashIndex(), PostHeader(), PostHeaderProps, Props, ThreadsRepliesGroupedByPost() (+5 more)
 
 ### Community 582 - "Task 6 Report: Add Instagram comment avatars — DM-overlap backend lookup"
 Cohesion: 0.33
-Nodes (5): Files changed, Issues or concerns, Task 6 Report: Add Instagram comment avatars — DM-overlap backend lookup, Verification, What was implemented
+Nodes (8): CONVERSATIONS, resolveFromRoute(), buildInboxRoute(), buildInboxRouteParams(), InboxRouteSelection, parseInboxRoute(), validId(), withInboxRoute()
 
 ### Community 583 - "Releasing the Postora n8n community node"
-Cohesion: 0.40
-Nodes (4): Deployment model, Node capabilities snapshot (as of v1.1.11, 2026-07-03 — verify against source), Release process, Releasing the Postora n8n community node
+Cohesion: 0.19
+Nodes (13): listSourceAccounts(), parseSetSourceVisibilityInput(), QueryBuilder, QueryOutcome, RpcCapable, setSourceVisibility(), SetSourceVisibilityInput, SourceAccountView (+5 more)
 
 ### Community 584 - "3. Required Feature Structure"
-Cohesion: 0.40
-Nodes (5): 3. Required Feature Structure, application, domain, infrastructure, ui
+Cohesion: 0.11
+Nodes (16): AccountSelectorProps, WhatsAppSetupProps, account, conversation, fakeApi, renderPane(), renderUnreadPane(), renderWithProviders() (+8 more)
 
 ### Community 585 - "Structural Summary: Assistant Guidelines and Verbatim Preservation Protocols"
-Cohesion: 0.40
-Nodes (4): Assistant Guidelines (guidelines/_index.md), Key Relationships and Patterns, Structural Summary: Assistant Guidelines and Verbatim Preservation Protocols, Verbatim Rule and Attribution Preservation (verbatim-rule-and-attribution-preservation-across-domains.md, verbatim-rule-and-attribution-preservation-across-knowledge-domains.md, verbatim-rule-and-attribution-preservation-for-auditability.md)
+Cohesion: 0.67
+Nodes (4): buildVideoPrompt(), CAMERA_MOTION_PRESETS, CameraMotionPreset, getCameraMotionPreset()
 
 ### Community 586 - "Topic: oauth"
 Cohesion: 0.40
-Nodes (4): Key Concepts, Overview, Related Topics, Topic: oauth
+Nodes (4): Constraints, Conversation Assignment Implementation Plan, Steps, Validation outcome
 
 ### Community 587 - "Narrative"
 Cohesion: 0.40
-Nodes (5): Dependencies, Highlights, Narrative, Rules, Structure
+Nodes (4): Deployment model, Node capabilities snapshot (as of v1.1.11, 2026-07-03 — verify against source), Release process, Releasing the Postora n8n community node
 
 ### Community 588 - "Narrative"
 Cohesion: 0.40
-Nodes (5): Dependencies, Highlights, Narrative, Rules, Structure
+Nodes (4): Common failures, Output Template, Structure, Worked example — the opening of a real report
 
 ### Community 589 - "Topic: project"
 Cohesion: 0.40
-Nodes (4): Key Concepts, Overview, Related Topics, Topic: project
+Nodes (5): 3. Required Feature Structure, application, domain, infrastructure, ui
 
 ### Community 590 - "Narrative"
 Cohesion: 0.40
-Nodes (5): Dependencies, Highlights, Narrative, Rules, Structure
+Nodes (4): Key Concepts, Overview, Related Topics, Topic: oauth
 
 ### Community 591 - "Narrative"
 Cohesion: 0.40
-Nodes (5): Dependencies, Highlights, Narrative, Rules, Structure
+Nodes (4): Key Concepts, Overview, Related Topics, Topic: project
 
 ### Community 592 - "Narrative"
 Cohesion: 0.40
-Nodes (5): Dependencies, Highlights, Narrative, Rules, Structure
+Nodes (5): 3.1 What is built, 3.2 What the API exposes, 3.3 What is specified or required but missing, 3.4 Live production state, 3. Verified current state
 
 ### Community 593 - "Narrative"
 Cohesion: 0.40
-Nodes (5): Dependencies, Highlights, Narrative, Rules, Structure
+Nodes (5): 0A — Emergency: the live duplicate-send window, 0B — Make correctness checkable, 0C — Contract and security groundwork, 0D — External, Phase 0 — Prerequisites and emergency hardening
 
 ### Community 594 - "3. Verified current state"
 Cohesion: 0.40
-Nodes (5): 3.1 What is built, 3.2 What the API exposes, 3.3 What is specified or required but missing, 3.4 Live production state, 3. Verified current state
+Nodes (5): 12. Correction log, v1.0 — 2026-08-25 — initial draft, v1.0a — 2026-08-25 — CI finding, v1.1 — 2026-08-25 — review round 1 (Codex `gpt-5.6-sol`, high effort), v1.2 — 2026-08-25 — plan review round 1, spec consequences
 
 ### Community 595 - "Phase 0 — Prerequisites and emergency hardening"
 Cohesion: 0.40
-Nodes (5): 0A — Emergency: the live duplicate-send window, 0B — Make correctness checkable, 0C — Contract and security groundwork, 0D — External, Phase 0 — Prerequisites and emergency hardening
+Nodes (5): 3.1 What is built, 3.2 What the API exposes, 3.3 What is specified or required but missing, 3.4 Live production state, 3. Verified current state
 
 ### Community 596 - "12. Correction log"
 Cohesion: 0.40
-Nodes (5): 12. Correction log, v1.0 — 2026-08-25 — initial draft, v1.0a — 2026-08-25 — CI finding, v1.1 — 2026-08-25 — review round 1 (Codex `gpt-5.6-sol`, high effort), v1.2 — 2026-08-25 — plan review round 1, spec consequences
+Nodes (4): Context you must accept as verified (queried against production 2026-08-25), Output format — findings only, no rewrite, Required reading (read these files before responding), Your task
 
 ### Community 597 - "3. Verified current state"
 Cohesion: 0.40
@@ -3594,51 +3509,51 @@ Nodes (5): 3.1 What is built, 3.2 What the API exposes, 3.3 What is specified or
 
 ### Community 598 - "partner-api-spec-review-r1.md"
 Cohesion: 0.40
-Nodes (4): Context you must accept as verified (queried against production 2026-08-25), Output format — findings only, no rewrite, Required reading (read these files before responding), Your task
+Nodes (5): 0A — Emergency: the live duplicate-send window, 0B — Make correctness checkable, 0C — Contract and security groundwork, 0D — External, Phase 0 — Prerequisites and emergency hardening
 
 ### Community 599 - "3. Verified current state"
 Cohesion: 0.40
-Nodes (5): 3.1 What is built, 3.2 What the API exposes, 3.3 What is specified or required but missing, 3.4 Live production state, 3. Verified current state
+Nodes (5): 12. Correction log, v1.0 — 2026-08-25 — initial draft, v1.0a — 2026-08-25 — CI finding, v1.1 — 2026-08-25 — review round 1 (Codex `gpt-5.6-sol`, high effort), v1.2 — 2026-08-25 — plan review round 1, spec consequences
 
 ### Community 600 - "Phase 0 — Prerequisites and emergency hardening"
 Cohesion: 0.40
-Nodes (5): 0A — Emergency: the live duplicate-send window, 0B — Make correctness checkable, 0C — Contract and security groundwork, 0D — External, Phase 0 — Prerequisites and emergency hardening
+Nodes (5): 3.1 What is built, 3.2 What the API exposes, 3.3 What is specified or required but missing, 3.4 Live production state, 3. Verified current state
 
 ### Community 601 - "12. Correction log"
 Cohesion: 0.40
-Nodes (5): 12. Correction log, v1.0 — 2026-08-25 — initial draft, v1.0a — 2026-08-25 — CI finding, v1.1 — 2026-08-25 — review round 1 (Codex `gpt-5.6-sol`, high effort), v1.2 — 2026-08-25 — plan review round 1, spec consequences
+Nodes (5): 1. Role Verification, 2. Never Store Roles on Profiles Table, 3. Audit Logging, 4. Input Validation, Security Best Practices
 
 ### Community 602 - "3. Verified current state"
 Cohesion: 0.40
-Nodes (5): 3.1 What is built, 3.2 What the API exposes, 3.3 What is specified or required but missing, 3.4 Live production state, 3. Verified current state
+Nodes (5): Features, Implementation, Purpose, Section: Email Inbox, Sending Emails (Edge Function)
 
 ### Community 603 - "Security Best Practices"
 Cohesion: 0.40
-Nodes (5): 1. Role Verification, 2. Never Store Roles on Profiles Table, 3. Audit Logging, 4. Input Validation, Security Best Practices
+Nodes (4): Allowlist and size limits, Media, Scan states, Upload then reference
 
 ### Community 604 - "Section: Email Inbox"
 Cohesion: 0.40
-Nodes (5): Features, Implementation, Purpose, Section: Email Inbox, Sending Emails (Edge Function)
+Nodes (4): Cursors, Pagination, Parameters, Response
 
 ### Community 605 - "10. Yearly Marketing Strategy"
 Cohesion: 0.40
-Nodes (5): 10. Yearly Marketing Strategy, Q1: Disruptor Launch, Q2: Automation Ecosystem, Q3: Agency Scaling, Q4: Performance Proof
+Nodes (4): Errors, Meters, Quotas, What is charged
 
 ### Community 606 - "12. Tech Stack and Architecture"
 Cohesion: 0.40
-Nodes (5): 12. Tech Stack and Architecture, Backend, External Integrations, Frontend, Infrastructure
+Nodes (4): Errors, Headers, Rate Limits, Why reads may proceed during a limiter outage while writes refuse
 
 ### Community 607 - "15. Proof Points and Recent Wins"
 Cohesion: 0.40
-Nodes (5): 15. Proof Points and Recent Wins, Meta App Approvals (2026-07-04), Operational Proof, Production Stability (2026-07-19), Recent Feature Ships
+Nodes (5): 10. Yearly Marketing Strategy, Q1: Disruptor Launch, Q2: Automation Ecosystem, Q3: Agency Scaling, Q4: Performance Proof
 
 ### Community 608 - "9. Strong Points and Defensible Moats"
 Cohesion: 0.40
-Nodes (5): 9. Strong Points and Defensible Moats, Distribution Moats, Pricing Moats, Product Moats, Technical Moats
+Nodes (5): 12. Tech Stack and Architecture, Backend, External Integrations, Frontend, Infrastructure
 
 ### Community 609 - "⚠️ Important: Media Requirements & Known Limitations"
 Cohesion: 0.40
-Nodes (5): Complete Safe Flow (Recommended), Debugging Empty Media Posts, ⚠️ Important: Media Requirements & Known Limitations, Known Issue: Some Platforms Reject CDN URLs, Media is Required for Most Platforms
+Nodes (5): 15. Proof Points and Recent Wins, Meta App Approvals (2026-07-04), Operational Proof, Production Stability (2026-07-19), Recent Feature Ships
 
 ### Community 610 - "15. Messaging API"
 Cohesion: 0.40
@@ -3654,23 +3569,23 @@ Nodes (5): 41. Clean Architecture Rules for Partner API, Application may depend 
 
 ### Community 613 - "11. System Logs"
 Cohesion: 0.40
-Nodes (5): 11. System Logs, Data Sources, Features, Log Categories, Log Levels
+Nodes (5): 9. Strong Points and Defensible Moats, Distribution Moats, Pricing Moats, Product Moats, Technical Moats
 
 ### Community 614 - "16. Rate Limits"
 Cohesion: 0.40
-Nodes (5): 16. Rate Limits, Data Sources, Endpoints, Features, Rate Limit Properties
+Nodes (5): Complete Safe Flow (Recommended), Debugging Empty Media Posts, ⚠️ Important: Media Requirements & Known Limitations, Known Issue: Some Platforms Reject CDN URLs, Media is Required for Most Platforms
 
 ### Community 615 - "Adversarial review"
 Cohesion: 0.40
-Nodes (4): Adversarial review, P0 — Must fix before implementation, P1 — Should fix, P2 — Nit
+Nodes (5): 11. System Logs, Data Sources, Features, Log Categories, Log Levels
 
 ### Community 616 - "Postora WhatsApp vs MazBot — feature comparison"
 Cohesion: 0.40
-Nodes (4): Feature matrix, Gaps — MazBot has it, Postora does not, Postora advantages over MazBot, Postora WhatsApp vs MazBot — feature comparison
+Nodes (5): 16. Rate Limits, Data Sources, Endpoints, Features, Rate Limit Properties
 
 ### Community 617 - "Monetization Features — Detailed Implementation Plan"
 Cohesion: 0.40
-Nodes (4): Feature Flags, Implementation Order, Monetization Features — Detailed Implementation Plan, Total Impact
+Nodes (4): Adversarial review, P0 — Must fix before implementation, P1 — Should fix, P2 — Nit
 
 ### Community 618 - "15. Messaging API"
 Cohesion: 0.40
@@ -3690,291 +3605,279 @@ Nodes (5): 6. API Endpoints, Architecture, Common response conventions, Endpoint
 
 ### Community 622 - "Priority 1: Critical Files (High Complexity)"
 Cohesion: 0.40
-Nodes (5): 1. `src/pages/Documentation.tsx` ✅ COMPLETE, 2. `src/pages/N8nIntegration.tsx` ✅ COMPLETE, 3. `src/pages/CreatePost.tsx` ✅ COMPLETE, 4. `supabase/functions/process-post/index.ts` ✅ COMPLETE (Reorganized), Priority 1: Critical Files (High Complexity)
+Nodes (4): Feature Flags, Implementation Order, Monetization Features — Detailed Implementation Plan, Total Impact
 
 ### Community 623 - "✅ Completed Phases"
 Cohesion: 0.40
-Nodes (5): ✅ Completed Phases, ✅ New Edge Functions Created, ✅ Phase 1: Documentation.tsx Refactoring (COMPLETE), ✅ Phase 2: CreatePost.tsx Refactoring (COMPLETE), ✅ Phase 3: process-post Edge Function (COMPLETE)
+Nodes (5): 1. `src/pages/Documentation.tsx` ✅ COMPLETE, 2. `src/pages/N8nIntegration.tsx` ✅ COMPLETE, 3. `src/pages/CreatePost.tsx` ✅ COMPLETE, 4. `supabase/functions/process-post/index.ts` ✅ COMPLETE (Reorganized), Priority 1: Critical Files (High Complexity)
 
 ### Community 624 - "Shared Hooks Usage"
 Cohesion: 0.40
-Nodes (5): Shared Hooks Usage, useAsyncAction, useCopyToClipboard, useDebounce, usePagination
+Nodes (5): ✅ Completed Phases, ✅ New Edge Functions Created, ✅ Phase 1: Documentation.tsx Refactoring (COMPLETE), ✅ Phase 2: CreatePost.tsx Refactoring (COMPLETE), ✅ Phase 3: process-post Edge Function (COMPLETE)
 
 ### Community 625 - "📝 Code Comment Guidelines"
 Cohesion: 0.40
-Nodes (5): 📝 Code Comment Guidelines, File Header, Function Comments, Inline Comments, Section Headers
+Nodes (5): Shared Hooks Usage, useAsyncAction, useCopyToClipboard, useDebounce, usePagination
 
 ### Community 626 - "validateDeal"
 Cohesion: 0.10
 Nodes (15): ACCOUNTS, { callEdgeApi }, deleteTool, FAIL_RESULT, links, OK_RESULT, openEdit(), REST (+7 more)
 
 ### Community 627 - "useAiAgentTools.ts"
-Cohesion: 0.17
-Nodes (11): Deferred (noted, not in this change), Evidence, Plan, Root causes, Slice A — one WhatsApp chat UI (frontend), Slice B — avatar enrichment (edge + migration), Slice C — resolver observability (edge), Symptoms (user report, after PR #158 shipped) (+3 more)
+Cohesion: 0.40
+Nodes (5): 📝 Code Comment Guidelines, File Header, Function Comments, Inline Comments, Section Headers
 
 ### Community 628 - "lazyWithRetry.ts"
-Cohesion: 0.16
-Nodes (14): ErrorBoundary, Props, State, ComponentModule, LazyImporter, lazyWithRetry(), CHUNK_ERROR_PATTERNS, installStaleChunkListener() (+6 more)
+Cohesion: 0.09
+Nodes (23): ErrorBoundary, Props, State, ComponentModule, LazyImporter, lazyWithRetry(), captureError(), initSentry() (+15 more)
 
 ### Community 629 - "edgeFunctionThenableCatch.test.ts"
 Cohesion: 0.60
 Nodes (3): BUILDER_METHODS, chainCallsBuilderMethod(), findBuilderCatches()
 
 ### Community 630 - "knowledgeExportUrls.ts"
-Cohesion: 0.03
-Nodes (90): AnalyticsStatCardsProps, TikTokAccountSelector(), CalendarGrid(), CalendarGridProps, DraggedPost, Post, CalendarHeader(), CalendarHeaderProps (+82 more)
+Cohesion: 0.05
+Nodes (58): AnalyticsStatCardsProps, CalendarHeaderProps, DEFAULT_VARIANTS, StatCardData, StatCardsProps, DocPageHeaderProps, DocsHeroProps, PRESET_FOR_VARIANT (+50 more)
 
 ### Community 631 - "index.ts"
-Cohesion: 0.40
-Nodes (4): CheckMFARequest, CheckMFAResponse, corsHeaders, NON_ENUMERATING_RESPONSE
+Cohesion: 0.80
+Nodes (4): public.ai_knowledge_entities, public.ai_knowledge_relations, public.match_ai_knowledge_graph_relations(), public.prune_ai_knowledge_entities()
 
 ### Community 632 - "index.ts"
 Cohesion: 0.40
 Nodes (3): corsHeaders, CREDIT_PACKS, STRIPE_SECRET_KEY
 
 ### Community 634 - "20260712150000_ai_knowledge_graph.sql"
-Cohesion: 0.80
-Nodes (4): public.ai_knowledge_entities, public.ai_knowledge_relations, public.match_ai_knowledge_graph_relations(), public.prune_ai_knowledge_entities()
-
-### Community 635 - "20260107000440_13482c12-c969-4ba6-91be-158858661d9f.sql"
 Cohesion: 0.50
 Nodes (4): public.admin_notifications, public.blog_posts, public.user_notification_reads, update_blog_posts_updated_at
 
-### Community 636 - "20260109090754_f35d02aa-e11b-40e0-9eea-5cb7c23a636d.sql"
+### Community 635 - "20260107000440_13482c12-c969-4ba6-91be-158858661d9f.sql"
 Cohesion: 0.40
 Nodes (3): public.profiles, public.referrals, set_user_referral_code
 
-### Community 637 - "20260408075144_bbc04d2a-6e52-47fa-a9fe-ccb387c79d07.sql"
+### Community 636 - "20260109090754_f35d02aa-e11b-40e0-9eea-5cb7c23a636d.sql"
 Cohesion: 0.50
 Nodes (4): public.messaging_cache, public.validate_messaging_cache_platform(), trg_validate_messaging_cache_platform, update_messaging_cache_updated_at
 
-### Community 638 - "20260414203224_f33e00a2-7e5b-460f-b555-2cc285ed0e50.sql"
+### Community 637 - "20260408075144_bbc04d2a-6e52-47fa-a9fe-ccb387c79d07.sql"
 Cohesion: 0.50
 Nodes (4): public.lead_forms, public.leads, update_lead_forms_updated_at, update_leads_updated_at
 
-### Community 639 - "20260702000001_recreate_auth_user_triggers.sql"
+### Community 638 - "20260414203224_f33e00a2-7e5b-460f-b555-2cc285ed0e50.sql"
 Cohesion: 0.40
 Nodes (4): on_auth_user_created, on_auth_user_created_role, on_profile_created_quota, set_user_referral_code
 
-### Community 640 - "20260820130000_higgsfield_oauth_and_generation.sql"
+### Community 639 - "20260702000001_recreate_auth_user_triggers.sql"
 Cohesion: 0.50
 Nodes (4): public.ai_providers, public.higgsfield_connection_status, public.higgsfield_connections, public.provider_api_keys
 
-### Community 641 - "20260820140000_openinary_dual_cloud.sql"
+### Community 640 - "20260820130000_higgsfield_oauth_and_generation.sql"
 Cohesion: 0.60
 Nodes (4): media_file_providers_updated_at, public.get_cdn_provider_counts(), public.media_file_providers, public.media_files
 
 ### Community 642 - "Task 10 Report: Live-verify the Threads mentions avatar pipeline"
 Cohesion: 0.40
-Nodes (4): Conclusion: inconclusive by live evidence, no code change made, Database re-check, Task 10 Report: Live-verify the Threads mentions avatar pipeline, What was attempted
-
-### Community 643 - "Task 4 Report: Add Facebook comment avatars — backend field expansion"
-Cohesion: 0.40
-Nodes (4): Commit, Edit Made, Files Changed, Task 4 Report: Add Facebook comment avatars — backend field expansion
-
-### Community 644 - "Pages"
-Cohesion: 0.50
-Nodes (4): Admin Pages (Admin role only), Dashboard Pages (Authenticated), Pages, Public Pages
-
-### Community 645 - "Common Tasks"
-Cohesion: 0.50
-Nodes (4): Check Logs, Common Tasks, Deploy Edge Function, Run Locally
+Nodes (5): auth.flow_state, auth.saml_providers, auth.saml_relay_states, auth.sso_domains, auth.sso_providers
 
 ### Community 646 - "Recent Features"
-Cohesion: 0.50
-Nodes (4): Notification System, Recent Features, TikTok UX Compliance (CreatePost.tsx), Two-Factor Authentication (Settings.tsx)
+Cohesion: 0.07
+Nodes (36): AdInsightsChart(), AdInsightsChartProps, CampaignTable(), CampaignTableProps, getStatusVariant(), CommentFilters(), CommentManagerPanel(), CommentManagerPanelProps (+28 more)
 
 ### Community 647 - "graphify reference: add a URL and watch a folder"
-Cohesion: 0.50
-Nodes (3): For /graphify add, For --watch, graphify reference: add a URL and watch a folder
+Cohesion: 0.30
+Nodes (10): corsHeaders, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_URL, forbidden(), invalidBody(), json(), JsonBody, missingConfig() (+2 more)
 
 ### Community 648 - "graphify reference: commit hook and native CLAUDE.md integration"
-Cohesion: 0.50
-Nodes (3): For git commit hook, For native CLAUDE.md integration, graphify reference: commit hook and native CLAUDE.md integration
+Cohesion: 0.20
+Nodes (8): MessagingCapability, MODE_MATRIX, NULL_MODE_MATRIX, OK, PartnerConnectionMode, PartnerMessageType, KNOWN_MODES, TYPES
 
 ### Community 649 - "graphify reference: incremental update and cluster-only"
-Cohesion: 0.50
-Nodes (3): For --cluster-only, For --update (incremental re-extraction), graphify reference: incremental update and cluster-only
+Cohesion: 0.08
+Nodes (46): SystemPromptParams, SetupDiagnostic, ConfigSnapshot, documentUrl(), fieldValue(), mergeDraft(), parseDraft(), parseExtractedDraft() (+38 more)
 
 ### Community 650 - "6. Common logging & diagnostic conventions"
 Cohesion: 0.50
 Nodes (4): 6.1 `system_logs` table, 6.2 Named events worth grepping, 6.3 Other diagnostic stores, 6. Common logging & diagnostic conventions
 
 ### Community 651 - "11. Supabase Frontend Rules"
-Cohesion: 0.50
-Nodes (4): 11. Supabase Frontend Rules, Never, Prefer, Security
+Cohesion: 0.18
+Nodes (7): ACCOUNTS, CONNECTION, deleteTool, from, rpc, tools, upsertTool
 
 ### Community 652 - "Topic: guidelines"
-Cohesion: 0.50
-Nodes (3): Key Concepts, Overview, Topic: guidelines
-
-### Community 653 - "_index.md"
-Cohesion: 0.50
-Nodes (3): Assistant Guidelines (guidelines/context.md), Relationships and Structure, Test Review Rules (guidelines/test_review_rules.md)
-
-### Community 654 - "Narrative"
-Cohesion: 0.50
-Nodes (4): Dependencies, Highlights, Narrative, Structure
-
-### Community 655 - "Narrative"
-Cohesion: 0.50
-Nodes (4): Dependencies, Highlights, Narrative, Structure
-
-### Community 656 - "Narrative"
-Cohesion: 0.50
-Nodes (4): Dependencies, Highlights, Narrative, Structure
-
-### Community 657 - "Narrative"
-Cohesion: 0.50
-Nodes (4): Dependencies, Highlights, Narrative, Structure
-
-### Community 658 - "Narrative"
-Cohesion: 0.50
-Nodes (4): Dependencies, Highlights, Narrative, Structure
-
-### Community 659 - "Narrative"
-Cohesion: 0.50
-Nodes (4): Dependencies, Highlights, Narrative, Structure
-
-### Community 660 - "Project Management: Retrospectives and Review Process — Structural Summary"
-Cohesion: 0.50
-Nodes (3): Project Management: Retrospectives and Review Process — Structural Summary, Retrospectives, Review Process
-
-### Community 661 - "Topic: retrospectives"
-Cohesion: 0.50
-Nodes (3): Key Concepts, Overview, Topic: retrospectives
-
-### Community 662 - "Pages"
-Cohesion: 0.50
-Nodes (4): Admin Pages (Admin role only), Dashboard Pages (Authenticated), Pages, Public Pages
-
-### Community 663 - "Common Tasks"
-Cohesion: 0.50
-Nodes (4): Check Logs, Common Tasks, Deploy Edge Function, Run Locally
-
-### Community 665 - "Recent Features"
-Cohesion: 0.50
-Nodes (4): Notification System, Recent Features, TikTok UX Compliance (CreatePost.tsx), Two-Factor Authentication (Settings.tsx)
-
-### Community 666 - "findings-plan-r1.md"
-Cohesion: 0.50
-Nodes (3): OUTPUT FORMAT - findings only, no rewrite, do not summarise the documents back to me, TASK - review the PLAN (the SPEC is inlined after it, as reference for decision IDs D1-D13), Verified production/repo facts (2026-08-25). Accept as true; you may dispute conclusions.
-
-### Community 667 - "12. Correction log"
-Cohesion: 0.50
-Nodes (4): 12. Correction log, v1.0 — 2026-08-25 — initial draft, v1.0a — 2026-08-25 — CI finding, v1.1 — 2026-08-25 — review round 1 (Codex `gpt-5.6-sol`, high effort)
-
-### Community 668 - "findings-plan-r2.md"
 Cohesion: 0.25
 Nodes (4): corsHeaders, EVENT_TEMPLATES, EventName, RATE_LIMIT
 
+### Community 653 - "_index.md"
+Cohesion: 0.08
+Nodes (25): CommentAccountRef, CommentAuthorRef, isOwnComment(), metadataString(), ownIds(), fb, ig, th (+17 more)
+
+### Community 655 - "Narrative"
+Cohesion: 0.33
+Nodes (6): public.set_whatsapp_workspace_updated_at(), whatsapp_deals_set_updated_at, whatsapp_pipeline_stages_set_updated_at, whatsapp_pipelines_set_updated_at, workspace_members_set_updated_at, workspaces_set_updated_at
+
+### Community 656 - "Narrative"
+Cohesion: 0.40
+Nodes (3): migrationUrl, NEW_EVENTS, PRE_EXISTING_EVENTS
+
+### Community 657 - "Narrative"
+Cohesion: 0.40
+Nodes (3): FUNCTIONS, migrationUrl, TABLES
+
+### Community 658 - "Narrative"
+Cohesion: 0.50
+Nodes (3): Human agent CRUD implementation plan, Operational behavior, Verification results
+
+### Community 659 - "Narrative"
+Cohesion: 0.50
+Nodes (4): Admin Pages (Admin role only), Dashboard Pages (Authenticated), Pages, Public Pages
+
+### Community 660 - "Project Management: Retrospectives and Review Process — Structural Summary"
+Cohesion: 0.50
+Nodes (4): Check Logs, Common Tasks, Deploy Edge Function, Run Locally
+
+### Community 661 - "Topic: retrospectives"
+Cohesion: 0.50
+Nodes (4): Notification System, Recent Features, TikTok UX Compliance (CreatePost.tsx), Two-Factor Authentication (Settings.tsx)
+
+### Community 662 - "Pages"
+Cohesion: 0.50
+Nodes (3): For /graphify add, For --watch, graphify reference: add a URL and watch a folder
+
+### Community 663 - "Common Tasks"
+Cohesion: 0.50
+Nodes (3): For git commit hook, For native CLAUDE.md integration, graphify reference: commit hook and native CLAUDE.md integration
+
+### Community 665 - "Recent Features"
+Cohesion: 0.50
+Nodes (3): For --cluster-only, For --update (incremental re-extraction), graphify reference: incremental update and cluster-only
+
+### Community 666 - "findings-plan-r1.md"
+Cohesion: 0.50
+Nodes (4): 11. Supabase Frontend Rules, Never, Prefer, Security
+
+### Community 667 - "12. Correction log"
+Cohesion: 0.50
+Nodes (3): Key Concepts, Overview, Topic: guidelines
+
+### Community 668 - "findings-plan-r2.md"
+Cohesion: 0.50
+Nodes (3): Key Concepts, Overview, Topic: retrospectives
+
 ### Community 669 - "plan-r1-selfcontained.md"
 Cohesion: 0.50
-Nodes (3): OUTPUT FORMAT - findings only, no rewrite, do not summarise the documents back to me, TASK - review the PLAN (the SPEC is inlined after it, as reference for decision IDs D1-D13), Verified production/repo facts (2026-08-25). Accept as true; you may dispute conclusions.
+Nodes (4): Admin Pages (Admin role only), Dashboard Pages (Authenticated), Pages, Public Pages
 
 ### Community 670 - "12. Correction log"
 Cohesion: 0.50
-Nodes (4): 12. Correction log, v1.0 — 2026-08-25 — initial draft, v1.0a — 2026-08-25 — CI finding, v1.1 — 2026-08-25 — review round 1 (Codex `gpt-5.6-sol`, high effort)
+Nodes (4): Check Logs, Common Tasks, Deploy Edge Function, Run Locally
 
 ### Community 671 - "plan-r2-selfcontained.md"
-Cohesion: 0.16
-Nodes (14): ContactsTable(), buildMetaAudienceCsv(), ContactFilters, contactLabel(), ContactPlatform, ContactSource, CSV_COLUMNS, csvCell() (+6 more)
+Cohesion: 0.17
+Nodes (15): ContactsTable(), ExportMenu(), buildContactsCsv(), buildMetaAudienceCsv(), contactLabel(), ContactPlatform, ContactSource, CSV_COLUMNS (+7 more)
 
 ### Community 673 - "Section: Dashboard"
 Cohesion: 0.50
-Nodes (4): Features, Implementation, Purpose, Section: Dashboard
+Nodes (4): Notification System, Recent Features, TikTok UX Compliance (CreatePost.tsx), Two-Factor Authentication (Settings.tsx)
 
 ### Community 674 - "Section: System Logs"
 Cohesion: 0.50
-Nodes (4): Features, Implementation, Purpose, Section: System Logs
+Nodes (4): 12. Correction log, v1.0 — 2026-08-25 — initial draft, v1.0a — 2026-08-25 — CI finding, v1.1 — 2026-08-25 — review round 1 (Codex `gpt-5.6-sol`, high effort)
 
 ### Community 675 - "Section: Observability"
 Cohesion: 0.50
-Nodes (4): Features, Implementation, Purpose, Section: Observability
+Nodes (3): OUTPUT FORMAT - findings only, no rewrite, do not summarise the documents back to me, TASK - review the PLAN (the SPEC is inlined after it, as reference for decision IDs D1-D13), Verified production/repo facts (2026-08-25). Accept as true; you may dispute conclusions.
 
 ### Community 676 - "Section: Analytics"
 Cohesion: 0.50
-Nodes (4): Features, Implementation, Purpose, Section: Analytics
+Nodes (3): OUTPUT FORMAT - findings only, no rewrite, no summary of the documents, What happened in round 1, YOUR ROUND 2 TASK - do NOT repeat round 1 findings. Judge the FIXES.
 
 ### Community 677 - "Section: Users"
 Cohesion: 0.50
-Nodes (4): Features, Implementation, Purpose, Section: Users
+Nodes (4): 12. Correction log, v1.0 — 2026-08-25 — initial draft, v1.0a — 2026-08-25 — CI finding, v1.1 — 2026-08-25 — review round 1 (Codex `gpt-5.6-sol`, high effort)
 
 ### Community 678 - "Section: Coupons"
 Cohesion: 0.50
-Nodes (4): Features, Implementation, Purpose, Section: Coupons
+Nodes (3): OUTPUT FORMAT - findings only, no rewrite, do not summarise the documents back to me, TASK - review the PLAN (the SPEC is inlined after it, as reference for decision IDs D1-D13), Verified production/repo facts (2026-08-25). Accept as true; you may dispute conclusions.
 
 ### Community 679 - "Key Integration Points"
 Cohesion: 0.50
-Nodes (4): From Addresses, Key Integration Points, Query Keys (TanStack Query), Realtime Subscriptions
+Nodes (3): OUTPUT FORMAT - findings only, no rewrite, no summary of the documents, What happened in round 1, YOUR ROUND 2 TASK - do NOT repeat round 1 findings. Judge the FIXES.
 
 ### Community 680 - "11. Content Pillars and Messaging"
 Cohesion: 0.50
-Nodes (4): 11. Content Pillars and Messaging, 12 Core Content Pillars, Brand Voice Adjectives, Forbidden Messaging
+Nodes (4): Features, Implementation, Purpose, Section: Dashboard
 
 ### Community 681 - "2. Product Identity and Positioning"
 Cohesion: 0.50
-Nodes (4): 2. Product Identity and Positioning, Brand Voice, What Postora IS, What Postora IS NOT
+Nodes (4): Features, Implementation, Purpose, Section: System Logs
 
 ### Community 682 - "6. Pricing Strategy"
 Cohesion: 0.50
-Nodes (4): 6. Pricing Strategy, Live Pricing Tiers, Pricing Philosophy, Pricing Wedge (Marketing)
+Nodes (4): Features, Implementation, Purpose, Section: Observability
 
 ### Community 683 - "7. Ideal Customer Profile (ICP)"
 Cohesion: 0.50
-Nodes (4): 7. Ideal Customer Profile (ICP), Primary ICP: Modern Creator-Operators, Secondary ICP: Lean Agencies, Tertiary ICP: SMB Marketing Teams
+Nodes (4): Features, Implementation, Purpose, Section: Analytics
 
 ### Community 684 - "Quick Start"
 Cohesion: 0.50
-Nodes (4): Base URL, Minimal Example — Upload Image + Publish to Instagram, Quick Start, Where to Find Your API Key
+Nodes (4): Features, Implementation, Purpose, Section: Users
 
 ### Community 685 - "Integration Patterns"
 Cohesion: 0.50
-Nodes (4): Integration Patterns, Pattern 1: "Send to Postora" Button, Pattern 2: Scheduled Batch Posting, Pattern 3: Webhook-Based Status Tracking
+Nodes (4): Features, Implementation, Purpose, Section: Coupons
 
 ### Community 686 - "12. Authentication"
 Cohesion: 0.50
 Nodes (4): 12.1 Partner API keys, 12.2 OAuth 2.0, 12.3 Never authenticate partners with, 12. Authentication
 
+### Community 687 - "index.ts"
+Cohesion: 0.27
+Nodes (8): CalendarGrid(), CalendarGridProps, DraggedPost, Post, CalendarHeader(), DayDetailDialog(), ScheduledPostCard(), DraggedPost
+
 ### Community 688 - "17. Media Cleanup"
 Cohesion: 0.27
-Nodes (9): embedBatch(), embedWithOllama(), Fetcher, OllamaEmbeddingOptions, OllamaEmbedResponse, parseOllamaEmbeddings(), retryableNetworkError(), retryableStatus() (+1 more)
+Nodes (8): BusinessProfileManager(), verticalLabel(), getAuthHeaders(), profileRequestError(), TERMINAL_PROFILE_CODES, useWhatsAppBusinessProfile(), WhatsAppBusinessProfile, WhatsAppProfileError
 
 ### Community 689 - "18. Launch Checklist"
 Cohesion: 0.50
-Nodes (4): 18. Launch Checklist, Categories, Data Persistence, Features
+Nodes (4): From Addresses, Key Integration Points, Query Keys (TanStack Query), Realtime Subscriptions
 
 ### Community 690 - "4. Subscriptions"
 Cohesion: 0.50
-Nodes (4): 4. Subscriptions, Data Sources, Features, Statuses
+Nodes (3): Deprecations, Frozen action alias — `POST /functions/v1/partner-api`, Legacy `whatsapp:*` scopes
 
 ### Community 691 - "5. Plans Builder"
 Cohesion: 0.50
-Nodes (4): 5. Plans Builder, Data Sources, Features, Plan Properties
+Nodes (3): Events, Posts — only API-created posts are addressable, Publishing
 
 ### Community 692 - "7. Coupons"
 Cohesion: 0.50
-Nodes (4): 7. Coupons, Coupon Properties, Data Sources, Features
+Nodes (3): Implementing with an AI agent, Pages, Postora Partner API v1 — Developer Documentation
 
 ### Community 693 - "8. Blog Posts ("What's New")"
 Cohesion: 0.50
-Nodes (4): 8. Blog Posts ("What's New"), Data Sources, Features, Post Properties
+Nodes (3): Binding model, List and get, Social Accounts
 
 ### Community 694 - "9. Notifications"
 Cohesion: 0.50
-Nodes (4): 9. Notifications, Data Sources, Features, Notification Properties
+Nodes (4): 11. Content Pillars and Messaging, 12 Core Content Pillars, Brand Voice Adjectives, Forbidden Messaging
 
 ### Community 695 - "Technical Stack"
 Cohesion: 0.50
-Nodes (4): Backend, External Services, Frontend, Technical Stack
+Nodes (4): 2. Product Identity and Positioning, Brand Voice, What Postora IS, What Postora IS NOT
 
 ### Community 696 - "UI Components"
 Cohesion: 0.50
-Nodes (4): Charts (Recharts), Common Components, Layout, UI Components
+Nodes (4): 6. Pricing Strategy, Live Pricing Tiers, Pricing Philosophy, Pricing Wedge (Marketing)
 
 ### Community 697 - "Backend API — Endpoint Classification Matrix"
 Cohesion: 0.50
-Nodes (3): Backend API — Endpoint Classification Matrix, Operator follow-ups, Scope of this pass
+Nodes (4): 7. Ideal Customer Profile (ICP), Primary ICP: Modern Creator-Operators, Secondary ICP: Lean Agencies, Tertiary ICP: SMB Marketing Teams
+
+### Community 698 - "README.md"
+Cohesion: 0.50
+Nodes (4): Base URL, Minimal Example — Upload Image + Publish to Instagram, Quick Start, Where to Find Your API Key
 
 ### Community 699 - "5. Adding an AI agent layer"
 Cohesion: 0.21
@@ -3982,7 +3885,7 @@ Nodes (14): MODEL_CARD_KEYWORDS, SettingsSectionId, SettingsSearchBarProps, coun
 
 ### Community 700 - "author"
 Cohesion: 0.50
-Nodes (4): author, email, name, url
+Nodes (4): Integration Patterns, Pattern 1: "Send to Postora" Button, Pattern 2: Scheduled Batch Posting, Pattern 3: Webhook-Based Status Tracking
 
 ### Community 701 - "n8n-workflow"
 Cohesion: 0.50
@@ -3994,11 +3897,11 @@ Nodes (4): 12.1 Partner API keys, 12.2 OAuth 2.0, 12.3 Never authenticate partne
 
 ### Community 703 - "Postora 30-Day Campaign Scheduling Summary"
 Cohesion: 0.50
-Nodes (3): Daily Asset Rule, Postora 30-Day Campaign Scheduling Summary, Posts
+Nodes (4): 10. Token Health, Data Sources, Features, Token Statuses
 
 ### Community 704 - "Priority 2: Medium Complexity Files"
 Cohesion: 0.50
-Nodes (4): 5. `src/hooks/useProfileOAuth.tsx`, 6. `src/pages/Settings.tsx`, 7. `src/components/history/HistoryTable.tsx`, Priority 2: Medium Complexity Files
+Nodes (4): 15. Support Messages, Data Sources, Features, Message Statuses
 
 ### Community 705 - "upload_logos.js"
 Cohesion: 0.83
@@ -4009,19 +3912,19 @@ Cohesion: 0.83
 Nodes (3): main(), resolveConfig(), uploadLogo()
 
 ### Community 708 - "Deploy the ai-knowledge-excel-worker as a container"
-Cohesion: 0.22
-Nodes (8): 1. Copy the worker code into the functions volume, 2. Add the compose service, 3. Start and verify, 4. Only now apply migration section D, Deploy the ai-knowledge-excel-worker as a container, ⚠️ ORDER MATTERS — read before applying the migration, Paths, Rollback
+Cohesion: 0.50
+Nodes (4): 17. Media Cleanup, Data Sources, Features, Settings
 
 ### Community 709 - "useAsyncAction.ts"
-Cohesion: 0.02
-Nodes (151): FeatureFlagAuditLog(), FeatureFlagCard(), FeatureFlagScheduler(), FLAG_OPTIONS, EmailPreviewDialog(), EmailPreviewDialogProps, VIEW_SIZES, ViewMode (+143 more)
+Cohesion: 0.16
+Nodes (15): getMediaFolderLabel(), getScheduledPostTypes(), MediaFolderOption, normalizedTypes(), ScheduledPostType, TYPE_ORDER, values(), ScheduledPostMediaProps (+7 more)
 
 ### Community 712 - "resetNonEnumerating.test.ts"
 Cohesion: 0.83
 Nodes (3): assertGenericExistenceMessage(), assertTokenAbsent(), readSource()
 
 ### Community 713 - "index.test.ts"
-Cohesion: 0.23
+Cohesion: 0.24
 Nodes (7): CALLER_JWT, FOREIGN_ACCOUNT_ID, OWNED_ACCOUNT_ID, SERVICE_ROLE_KEY, integrationTest(), rawAnonKey, rawSupabaseUrl
 
 ### Community 715 - "index.test.ts"
@@ -4036,169 +3939,205 @@ Nodes (3): ANON_KEY, CALLER_JWT, SUPABASE_URL
 Cohesion: 0.50
 Nodes (3): corsHeaders, EmailAttachment, SendEmailRequest
 
+### Community 720 - "20260627213616_rate_limit_buckets.sql"
+Cohesion: 0.50
+Nodes (4): 7. Coupons, Coupon Properties, Data Sources, Features
+
 ### Community 721 - "20260101224551_fcccf7b5-0de7-4ec9-9f98-1c2937905e32.sql"
 Cohesion: 0.50
-Nodes (3): public.social_accounts, public.social_profiles, update_social_profiles_updated_at
+Nodes (4): 4. Subscriptions, Data Sources, Features, Statuses
+
+### Community 722 - "20260107002249_015840e0-6f59-44cf-b00b-a512c8569413.sql"
+Cohesion: 0.50
+Nodes (4): 5. Plans Builder, Data Sources, Features, Plan Properties
 
 ### Community 723 - "20260109072954_d14e4ca3-eeb0-4c28-b3c1-ea0a28e2b7c6.sql"
-Cohesion: 0.67
-Nodes (3): on_profile_created_quota, public.handle_new_user_quota(), public.user_quotas
+Cohesion: 0.50
+Nodes (4): 8. Blog Posts ("What's New"), Data Sources, Features, Post Properties
+
+### Community 724 - "20260116235209_ef8d102b-9abb-4721-80b1-144d6138e270.sql"
+Cohesion: 0.50
+Nodes (4): 9. Notifications, Data Sources, Features, Notification Properties
 
 ### Community 725 - "20260324013145_58e93514-87ec-4785-befb-d2d740c10819.sql"
+Cohesion: 0.67
+Nodes (3): 2. Analytics, Data Sources, Features
+
+### Community 726 - "20260410153623_7566b6ba-2ba1-42fd-b152-f45447733798.sql"
 Cohesion: 0.50
-Nodes (3): brand_scrape_cache, brand_scrape_sessions, generated_content_collections
+Nodes (4): Backend, External Services, Frontend, Technical Stack
 
 ### Community 727 - "20260413233204_c683ced4-67a1-4a8b-a0f6-6229e477d2db.sql"
-Cohesion: 0.67
-Nodes (3): public.whatsapp_broadcast_recipients, public.whatsapp_broadcasts, update_whatsapp_broadcasts_updated_at
+Cohesion: 0.50
+Nodes (4): Charts (Recharts), Common Components, Layout, UI Components
 
 ### Community 728 - "20260601224925_ca73c2f6-aa24-4ba5-8603-3dbb5d29865b.sql"
-Cohesion: 0.83
-Nodes (3): public.mcp_oauth_authorizations, public.mcp_oauth_clients, public.mcp_oauth_tokens
+Cohesion: 0.50
+Nodes (3): Backend API — Endpoint Classification Matrix, Operator follow-ups, Scope of this pass
 
 ### Community 729 - "20260703000001_create_messenger_auto_replies.sql"
 Cohesion: 0.50
-Nodes (3): public.messenger_auto_replies, public.messenger_auto_reply_usage, update_messenger_auto_replies_updated_at
+Nodes (3): Blocking findings, Non-blocking findings, What the plan got right
+
+### Community 730 - "20260821140000_whatsapp_history_import_functions.sql"
+Cohesion: 0.50
+Nodes (3): Disagreements, Findings, What the spec got right
+
+### Community 731 - "20260823140200_quota_readers_use_arbiter.sql"
+Cohesion: 0.50
+Nodes (4): author, email, name, url
+
+### Community 732 - "20260823140300_quota_writers_clear_overrides.sql"
+Cohesion: 0.50
+Nodes (3): Daily Asset Rule, Postora 30-Day Campaign Scheduling Summary, Posts
 
 ### Community 733 - "20260825190000_whatsapp_message_flags.sql"
-Cohesion: 0.67
-Nodes (3): public.whatsapp_message_flags, public.whatsapp_messages, set_wa_message_flags_updated_at
+Cohesion: 0.50
+Nodes (4): 5. `src/hooks/useProfileOAuth.tsx`, 6. `src/pages/Settings.tsx`, 7. `src/components/history/HistoryTable.tsx`, Priority 2: Medium Complexity Files
 
-### Community 735 - "Environment Variables"
-Cohesion: 0.67
-Nodes (3): Edge Functions (Supabase Secrets), Environment Variables, Frontend (`.env`)
+### Community 734 - "partner_api_test.sql"
+Cohesion: 0.50
+Nodes (4): Critical Files (>700 lines) - Immediate Priority, 📊 File Size Audit, High Priority Files (400-700 lines), Moderate Priority Files (300-400 lines)
+
+### Community 736 - "graphify reference: GitHub clone and cross-repo merge"
+Cohesion: 0.50
+Nodes (3): public.social_accounts, public.social_profiles, update_social_profiles_updated_at
 
 ### Community 738 - "0. How This File Relates to the Other Agent Docs"
 Cohesion: 0.67
-Nodes (3): 0. How This File Relates to the Other Agent Docs, Precedence, Verification status of the claims in this file
+Nodes (3): on_profile_created_quota, public.handle_new_user_quota(), public.user_quotas
 
-### Community 745 - "Narrative"
-Cohesion: 0.67
-Nodes (3): Highlights, Narrative, Structure
+### Community 740 - "Verbatim Rule and Attribution Preservation Across Knowledge Domains"
+Cohesion: 0.50
+Nodes (3): brand_scrape_cache, brand_scrape_sessions, generated_content_collections
 
-### Community 746 - "Narrative"
+### Community 742 - "Boundary-Based Debugging and Root Cause Attribution in Design and Project Management"
 Cohesion: 0.67
-Nodes (3): Highlights, Narrative, Structure
+Nodes (3): public.whatsapp_broadcast_recipients, public.whatsapp_broadcasts, update_whatsapp_broadcasts_updated_at
+
+### Community 743 - "Unified OAuth Security and Endpoint Standards via Feedback Loops"
+Cohesion: 0.83
+Nodes (3): public.mcp_oauth_authorizations, public.mcp_oauth_clients, public.mcp_oauth_tokens
+
+### Community 744 - "Unified Security and Operational Protocols via Design and Project Feedback Loops"
+Cohesion: 0.50
+Nodes (3): public.messenger_auto_replies, public.messenger_auto_reply_usage, update_messenger_auto_replies_updated_at
+
+### Community 748 - "Orchestrator-Driven Verification and Guardrails Across Facts, Design, and Project Domains"
+Cohesion: 0.67
+Nodes (3): public.whatsapp_message_flags, public.whatsapp_messages, set_wa_message_flags_updated_at
 
 ### Community 749 - "Narrative"
-Cohesion: 0.67
-Nodes (3): Highlights, Narrative, Structure
-
-### Community 750 - "Narrative"
-Cohesion: 0.67
-Nodes (3): Highlights, Narrative, Structure
-
-### Community 751 - "Narrative"
-Cohesion: 0.67
-Nodes (3): Highlights, Narrative, Structure
+Cohesion: 0.83
+Nodes (3): public.claim_agent_replies(), public.enqueue_agent_reply(), public.pending_agent_replies
 
 ### Community 752 - "Narrative"
-Cohesion: 0.67
-Nodes (3): Highlights, Narrative, Structure
+Cohesion: 0.50
+Nodes (3): public.social_contacts, public.whatsapp_contacts, update_social_contacts_updated_at
 
-### Community 753 - "Project Management: Retrospectives and Review Process — Structural Summary"
-Cohesion: 0.67
-Nodes (3): Project Management: Retrospectives and Review Process — Structural Summary, Retrospectives, Review Process
+### Community 757 - "media-review.md"
+Cohesion: 0.33
+Nodes (7): clientIpFromHeaders(), isValidUuid(), normalizeIp(), ip(), parseSubscriptionFilters(), SUBSCRIPTION_PLATFORMS, SubscriptionFilters
 
-### Community 754 - "Environment Variables"
-Cohesion: 0.67
-Nodes (3): Edge Functions (Supabase Secrets), Environment Variables, Frontend (`.env`)
+### Community 758 - "stt-review.md"
+Cohesion: 0.05
+Nodes (48): GradientDivider(), DashboardLayout(), AI_AGENT_TABS, AiAgentTab, MessagingInbox(), ALL_FLAGS_ENABLED, DEFAULT_FLAGS, DEFAULT_TITLE_SETTINGS (+40 more)
 
-### Community 759 - "Component Patterns"
-Cohesion: 0.67
-Nodes (3): Component Patterns, Data Table with Pagination, Reusable Stat Card
+### Community 759 - "class-variance-authority"
+Cohesion: 0.25
+Nodes (7): classifyComposioError(), classifyGoogleError(), firstReason(), QUOTA_REASONS, cases, YouTubeErrorClass, YouTubeToolFailure
 
-### Community 760 - "Edge Functions Reference"
-Cohesion: 0.67
-Nodes (3): Edge Functions Reference, observability-alerts, observability-collector
+### Community 760 - "TikTokPreCheck.tsx"
+Cohesion: 0.29
+Nodes (7): 10. Production Build & Deployment, Build, Database migrations, Deployment (Dokploy on Contabo VPS), Production env requirements, Reverse proxy / SSL, Run (Docker)
 
-### Community 761 - "Error Handling"
-Cohesion: 0.67
-Nodes (3): Common Error Scenarios, Error Handling, Retry Logic with Exponential Backoff
+### Community 761 - "anthropic-adapter.ts"
+Cohesion: 0.24
+Nodes (8): QuickReplyManager(), QuickReplyPicker(), SlashCommandSuggestions(), QuickReply, useCreateQuickReply(), useDeleteQuickReply(), useUpdateQuickReply(), useWhatsAppQuickReplies()
 
-### Community 762 - "Response Formats"
-Cohesion: 0.67
-Nodes (3): Error Responses, Response Formats, Success Responses
-
-### Community 763 - "Get Accounts"
-Cohesion: 0.67
-Nodes (3): Get Accounts, `GET /api/v1/accounts`, Response
+### Community 762 - "socialContactsRepository.test.ts"
+Cohesion: 0.18
+Nodes (8): downloadBlob, fetchAllContacts, EMPTY_FILTERS, findWhatsAppContactByPhone, listContacts, toasts, updateContact, useSocialContacts()
 
 ### Community 764 - "9. Product Architecture"
 Cohesion: 0.67
 Nodes (3): 9.1 Logical architecture, 9.2 Edge Function rule, 9. Product Architecture
 
 ### Community 765 - "1. Dashboard (Home)"
-Cohesion: 0.12
-Nodes (19): Props, ThreadsConversationTimeline(), Props, Props, ThreadsReplyList(), Props, buildThreadsReplyThreads(), ThreadsReplyThread (+11 more)
-
-### Community 766 - "3. Users Management"
-Cohesion: 0.67
-Nodes (3): 3. Users Management, Data Sources, Features
+Cohesion: 0.31
+Nodes (8): Props, ThreadsConversationTimeline(), Props, buildThreadsReplyThreads(), ThreadsReplyThread, Props, ThreadsThreadCard(), ThreadsReply
 
 ### Community 767 - "6. Plan Quotas"
-Cohesion: 0.25
-Nodes (8): fetchPinterestUser(), PINTEREST_APP_ID, PINTEREST_APP_SECRET, pinterestMetadata(), PinterestTokenData, reconnectPinterestAccount(), savePinterestAccount(), SupabaseClient
+Cohesion: 0.67
+Nodes (3): Delegating to another agent (Codex / Grok / OpenCode / Antigravity), 📐 Required reading before you touch code, Reviewing a pull request (Codex code review)
 
 ### Community 769 - "repository"
 Cohesion: 0.67
-Nodes (3): repository, type, url
+Nodes (3): Edge Functions (Supabase Secrets), Environment Variables, Frontend (`.env`)
 
 ### Community 770 - "9. Product Architecture"
 Cohesion: 0.67
 Nodes (3): 9.1 Logical architecture, 9.2 Edge Function rule, 9. Product Architecture
 
-### Community 771 - "🟠 Priority 2: High Priority (400-700 lines)"
+### Community 787 - "20260101220229_32f676bc-ac15-4b12-8519-4fabfb58d534.sql"
 Cohesion: 0.67
-Nodes (3): 2.1 `HistoryTable.tsx` (466 lines), 2.2 `BulkScheduler.tsx` (430 lines), 🟠 Priority 2: High Priority (400-700 lines)
+Nodes (3): 0. How This File Relates to the Other Agent Docs, Precedence, Verification status of the claims in this file
 
-### Community 775 - "ProtectedRoute.tsx"
-Cohesion: 0.14
-Nodes (13): 3.2 The durable pre-call boundary, 3.3 Takeover never re-dispatches, 3.4 Reconciliation, and conservative refusal, Action safety, Brief — Phase 3, deliverables 3.2 through 3.7, Gates — run in this order, it is load-bearing, Report contract, Stage 1 — 3.2, 3.3, 3.4 (+5 more)
+### Community 796 - "20260116221437_d0cf4acd-7ea9-4d5f-abac-abc2e5cdc750.sql"
+Cohesion: 0.67
+Nodes (3): Edge Functions (Supabase Secrets), Environment Variables, Frontend (`.env`)
 
-### Community 832 - "class-variance-authority"
-Cohesion: 0.22
-Nodes (8): Global Constraints, Meta Token Refresh Hardening — Implementation Plan, Task 1: Meta error classification, Task 2: Adapters — POST body, timeout, structured outcome, Task 3: Escalate permanent Meta failures immediately, Task 4: Bound the whole sweep, and close the second leak, Task 5 (DEFERRED — do not implement in this batch): the concurrency claim, Task 6: Deploy and verify against production
+### Community 801 - "20260324044938_4ab05e3c-7d53-4a99-9e24-484253c3097a.sql"
+Cohesion: 0.67
+Nodes (3): Component Patterns, Data Table with Pagination, Reusable Stat Card
 
-### Community 833 - "date-fns"
-Cohesion: 0.29
-Nodes (7): ExportMenu(), downloadBlob, fetchAllContacts, buildContactsCsv(), EMPTY_FILTERS, downloadBlob(), fetchAllContacts()
+### Community 802 - "20260413211836_96c0779a-62c3-4cd8-8439-a96ff3c6e895.sql"
+Cohesion: 0.67
+Nodes (3): Edge Functions Reference, observability-alerts, observability-collector
 
-### Community 834 - "@dnd-kit/sortable"
-Cohesion: 0.33
-Nodes (7): DocumentTitle(), metaForPath(), ROUTE_META, setMeta(), mockSettings(), AppSettings, useAppSettings()
+### Community 804 - "20260413235159_7c74416b-436e-4eb4-ace4-953bdb98132e.sql"
+Cohesion: 0.67
+Nodes (3): Common Error Scenarios, Error Handling, Retry Logic with Exponential Backoff
 
-### Community 839 - "fflate"
-Cohesion: 0.14
-Nodes (13): 1. What this is, 2. Where it sits in the pipeline, 3. Matching, 4. Execution, 5. Media, 6. Database, 7. Frontend, 8. Testing (+5 more)
+### Community 805 - "20260414001251_f66668ca-c9c6-4c36-a32e-8bf0d72cf429.sql"
+Cohesion: 0.67
+Nodes (3): Error Responses, Response Formats, Success Responses
 
-### Community 841 - "input-otp"
-Cohesion: 0.20
-Nodes (9): DateField(), defaultReplyFilters, HasRepliesFilter, Props, ReplyFilters, SortBy, StatusFilter, ThreadsRepliesFilterBar() (+1 more)
+### Community 806 - "20260414001446_c8045e32-5483-41ea-892b-47b058f20146.sql"
+Cohesion: 0.67
+Nodes (3): Get Accounts, `GET /api/v1/accounts`, Response
 
-### Community 842 - "papaparse"
-Cohesion: 0.25
-Nodes (6): fetchContactStats(), listContacts(), search(), searchArgs(), from, rpc
-
-### Community 843 - "qrcode"
-Cohesion: 0.18
-Nodes (9): parseSetToolAccountsInput(), setToolAccounts(), SetToolAccountsInput, SharingAdminClient, SharingQuery, fakeAdmin(), OWNED, Row (+1 more)
-
-### Community 844 - "@radix-ui/react-accordion"
+### Community 807 - "DatabaseConnectorsManager.sharing.test.tsx"
 Cohesion: 0.40
-Nodes (3): contact, mutate, waMatch
+Nodes (3): from, getUser, invoke
+
+### Community 808 - "20260414202812_dac18e00-a9b1-42d9-ad29-69e90bb61ebc.sql"
+Cohesion: 0.12
+Nodes (19): activeAccount, composioClient(), pending, redirectResult(), resultOf(), setup(), twoChannels, youtubeOverrides() (+11 more)
+
+### Community 809 - "20260418203613_8a73bb4b-70ad-4520-9d35-50a0d4700e1f.sql"
+Cohesion: 0.67
+Nodes (3): 6. Plan Quotas, Data Sources, Features
+
+### Community 810 - "20260419202638_8d7e4b89-a9fb-40cd-b068-0d784d3cbf03.sql"
+Cohesion: 0.67
+Nodes (3): repository, type, url
+
+### Community 833 - "GeneratePartnerKeyDialog"
+Cohesion: 0.03
+Nodes (118): FeatureFlagCard(), FeatureFlagCardProps, Source, CanvasToolbar(), CaptionNodeComponent(), NodeFloatingToolbar, NodeFloatingToolbarProps, TextCaptionNodeComponent() (+110 more)
+
+### Community 838 - "embla-carousel-react"
+Cohesion: 0.50
+Nodes (4): Access Control, Admin User, Authentication Requirements, Route Protection
+
+### Community 842 - "index.ts"
+Cohesion: 0.38
+Nodes (8): sendWebhookNotifications(), isInternalHostname(), isUnsafeIpv4(), isUnsafeIpv6(), postWebhook(), PostWebhookOptions, validateWebhookTarget(), WebhookFetcher
 
 ### Community 847 - "@radix-ui/react-dropdown-menu"
 Cohesion: 0.24
 Nodes (8): AdminRateLimits(), ENDPOINT_CATEGORY_ORDER, ENDPOINT_LABELS, endpointEnforcesDailyTierLimit(), endpointEnforcesTierLimits(), groupByEndpointCategory(), TIER_ENFORCING_ENDPOINTS, SEEDED_ENDPOINTS
-
-### Community 848 - "@radix-ui/react-hover-card"
-Cohesion: 0.14
-Nodes (12): Live acceptance, Outcome, Proven failures and fixes, Retained data and workspace state, Validation and deployment, Website agent setup: production acceptance, 2026-09-06, Global Constraints, Ledger (+4 more)
-
-### Community 849 - "@radix-ui/react-popover"
-Cohesion: 0.14
-Nodes (13): duplicatedPlatforms, Landing(), LandingCTA, LandingDashboardMockup, LandingFAQ, LandingFeatures, LandingPricing, LandingTestimonials (+5 more)
 
 ### Community 850 - "navigation-menu.tsx"
 Cohesion: 0.43
@@ -4208,261 +4147,161 @@ Nodes (7): calculateEngagementScore(), corsHeaders, scrapeFacebook(), scrapeInst
 Cohesion: 0.50
 Nodes (5): OAuthReturnHandler(), DEDICATED_OAUTH_CALLBACK_PATHS, higgsfieldCallbackRescuePath(), isHiggsfieldOAuthCallback(), shouldForwardSocialOAuthToProfiles()
 
-### Community 853 - "@radix-ui/react-separator"
-Cohesion: 0.29
-Nodes (4): ACCOUNTS, invoke, knowledge, upsertConfig
+### Community 867 - "tailwindcss-animate"
+Cohesion: 0.76
+Nodes (6): healthcheck(), log(), probe_changed_functions(), rollback(), postora-edge-deploy.sh script, sync_volume()
 
-### Community 859 - "react-day-picker"
+### Community 868 - "ConnectorConnectionsTable"
+Cohesion: 0.22
+Nodes (7): ConnectorConnectionsTable(), stamp(), statusVariant(), CONNECTIONS, rpc, revokeConnection(), useAdminRevokeConnection()
+
+### Community 870 - "@xyflow/react"
+Cohesion: 0.21
+Nodes (13): DefaultModelSelectorProps, ResolvedTier, AIModel, AIProvider, CategoryDefaults, CategoryFallbacks, CategoryFallbacks2, DefaultModel (+5 more)
+
+### Community 879 - "ContactDetailsDrawer"
+Cohesion: 0.33
+Nodes (5): row, SocialContact, ContactExport, ContactsPage, SearchRow
+
+### Community 1029 - "context.overview.md"
+Cohesion: 0.33
+Nodes (4): AgentConfigScope, loadAgentConfigForAccount(), CONFIG, Filters
+
+### Community 1038 - "oauth_token_refresh_protocols.abstract.md"
+Cohesion: 0.44
+Nodes (7): createToastHelpers(), showErrorToast(), showInfoToast(), showSuccessToast(), showToastWithDuration(), showWarningToast(), ToastFunction
+
+### Community 1132 - "index.test.ts"
+Cohesion: 0.22
+Nodes (8): corsHeaders, STRIPE_SECRET_KEY, CLEARED_QUOTA_OVERRIDES, logStep(), PRICE_TO_PLAN, resolveSubscriptionPeriod(), syncUserQuotas(), Call
+
+### Community 1214 - "limiterPolicy.test.ts"
+Cohesion: 0.22
+Nodes (5): ACCOUNT_ROW, KEY_ROW, LIMITER_DOWN, LIMITER_OK, RATE_HEADERS
+
+### Community 1215 - "BlueskyMediaValidation.tsx"
+Cohesion: 0.32
+Nodes (7): BLUESKY_SPECS, BlueskyMediaValidation(), BlueskyMediaValidationProps, formatSize(), MediaFile, validateBlueskyMedia(), ValidationResult
+
+### Community 1216 - "breadcrumb.tsx"
+Cohesion: 0.25
+Nodes (7): Breadcrumb, BreadcrumbEllipsis(), BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator()
+
+### Community 1217 - "drawer.tsx"
+Cohesion: 0.25
+Nodes (6): DrawerContent, DrawerDescription, DrawerFooter(), DrawerHeader(), DrawerOverlay, DrawerTitle
+
+### Community 1218 - "navigation-menu.tsx"
+Cohesion: 0.25
+Nodes (7): NavigationMenu, NavigationMenuContent, NavigationMenuIndicator, NavigationMenuList, NavigationMenuTrigger, navigationMenuTriggerStyle, NavigationMenuViewport
+
+### Community 1219 - "index.ts"
+Cohesion: 0.29
+Nodes (3): collectPaged(), corsHeaders, graphJson()
+
+### Community 1220 - "youtubeComposioOptions.ts"
+Cohesion: 0.36
+Nodes (6): nonEmptyArray(), nonEmptyString(), unsupportedCases, YOUTUBE_COMPOSIO_UNSUPPORTED_OPTION_KEYS, YouTubeComposioMetadata, youtubeOptionsUnsupportedOnComposio()
+
+### Community 1221 - "ContactDetailsDrawer"
+Cohesion: 0.29
+Nodes (5): ContactDetailsDrawer(), toDraft(), contact, mutate, waMatch
+
+### Community 1222 - "useAsyncAction.ts"
+Cohesion: 0.50
+Nodes (3): useAsyncAction(), UseAsyncActionOptions, UseAsyncActionReturn
+
+### Community 1223 - "AiKnowledgeManager.tabs.test.tsx"
 Cohesion: 0.29
 Nodes (4): invoke, knowledge, successToast, upsertConfig
 
-### Community 862 - "react-resizable-panels"
-Cohesion: 0.17
-Nodes (11): Definition of done, Delivery order and lanes, Goal, PR breakdown, Slice 1 — Migration, harness suite, registration (Muse Spark), Slice 2 — Shared adapters, routing, agent loop, captions (Codex), Slice 3 — `user-ai-providers` Edge Function (Codex), Slice 4 — Frontend (Codex) (+3 more)
+### Community 1224 - "1. Dashboard (Home)"
+Cohesion: 0.67
+Nodes (3): 1. Dashboard (Home), Data Sources, Features
 
-### Community 864 - "@sentry/react"
-Cohesion: 0.17
-Nodes (11): 1. Problem, with evidence, 2. Scope, 3. Architecture and placement, 4. Data flow changes, 5. Error handling, 6. Testing, 7. Delivery order and ops, 8. Known limits (+3 more)
+### Community 1225 - "ThemeApplier.tsx"
+Cohesion: 0.52
+Nodes (4): ThemeApplier(), parseSettingValue(), useAppTheme(), useDarkTheme()
 
-### Community 867 - "tailwindcss-animate"
-Cohesion: 0.87
-Nodes (5): healthcheck(), log(), rollback(), postora-edge-deploy.sh script, sync_volume()
+### Community 1228 - "input-otp.tsx"
+Cohesion: 0.40
+Nodes (4): InputOTP, InputOTPGroup, InputOTPSeparator, InputOTPSlot
 
-### Community 868 - "@tanstack/react-query"
-Cohesion: 0.29
-Nodes (8): PlatformMetadata, LinkedInAccount, LinkedInDestination, LinkedInDestinationSelection, listLinkedInDestinations(), normalizeLinkedInDestinationSelections(), selectedLinkedInDestinationIds(), accountMetadata
-
-### Community 887 - "PageLoader.tsx"
-Cohesion: 0.14
-Nodes (13): 1. The verdict, first, 2. The state machine, 3. Why a separate table, 4. What 3.2 must change in the send path, 5. The exit gate, 6. What would change this decision, 7. Sources, D13 — the dispatch state machine, and the reconciliation verdict (+5 more)
-
-### Community 896 - "index.test.ts"
-Cohesion: 0.10
-Nodes (21): AdminFactory, authErrorToResponse(), errorCodeOf(), RequestTiming, KEY_ROW, StubOpts, usageRowFor(), V1AuthedHandler (+13 more)
-
-### Community 1132 - "index.test.ts"
-Cohesion: 0.20
-Nodes (9): corsHeaders, STRIPE_SECRET_KEY, CLEARED_QUOTA_OVERRIDES, logStep(), PRICE_TO_PLAN, resolveSubscriptionPeriod(), syncUserQuotas(), Call (+1 more)
-
-### Community 1244 - "index.ts"
-Cohesion: 0.14
-Nodes (12): ACCOUNT_ROW, codeFrom(), doc, DOC_PATH, EMIT_PATTERNS, KEY_ROW, PARTNER_SURFACE, RATE_HEADERS (+4 more)
+### Community 1230 - "index.ts"
+Cohesion: 0.40
+Nodes (3): CLEARED_QUOTA_OVERRIDES, PRICE_TO_PLAN, STRIPE_SECRET_KEY
 
 ### Community 1245 - "DocumentTitle.tsx"
 Cohesion: 0.06
 Nodes (17): AiAgentManager(), mergeUntouchedFields(), toFormValues(), upsertConfig, upsertConfig, loadedConfig, upsertConfig, configs (+9 more)
 
-### Community 1246 - "TikTokCreatorInfo"
-Cohesion: 0.50
-Nodes (4): 9. Local Development Setup, Edge function local notes, Prerequisites, Steps
-
-### Community 1247 - "useRealtimeQueryInvalidation.ts"
-Cohesion: 0.25
-Nodes (7): Agent Setup Unsaved-Changes Guard — Implementation Plan, Global Constraints, Task 1: `useDirtyForm`, Task 2: `useUnsavedChangesGuard`, Task 3: The dialog, and guarding the account selector, Task 4: Guard the transitions that remount the child, Task 5: Land it
-
-### Community 1248 - "useYouTubeThumbnails.video.test.tsx"
-Cohesion: 0.24
-Nodes (14): public.ai_knowledge_chunks, public.ai_knowledge_entities, public.ai_knowledge_relations, public.ai_knowledge_source_accounts, public.ai_knowledge_sources, public.claim_ai_knowledge_excel_source(), public.match_ai_knowledge_chunks(), public.match_ai_knowledge_chunks_bge_m3() (+6 more)
-
-### Community 1249 - "FeatureFlagCategoryDropdown.tsx"
-Cohesion: 0.15
-Nodes (12): 1. Credential handling (spec §9.4, §9.5, D8 posture), 2. Tenancy (spec §9.1, D4), 3. Idempotency and quota under a hostile or buggy client (spec §10, D13), 4. Outbound call surface (spec §9.7 — SSRF), 5. Rate limiting (spec D7, §3.3.2), 6. Logging and redaction (spec §9.8) — checked, not assumed, 7. What is not defended because it does not exist yet, 8. Threats this review missed on its first pass (+4 more)
-
 ### Community 1251 - "useYouTubeThumbnails.test.tsx"
 Cohesion: 0.20
 Nodes (12): base64UrlDecode(), base64UrlEncode(), buildSignedState(), completeOAuth(), GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, hmacSha256Base64Url(), NoYouTubeChannelError (+4 more)
 
-### Community 1252 - "useAiGenerationJob.ts"
-Cohesion: 0.20
-Nodes (9): Analysis Playbook, Building the journey from evidence, Contents, Merged is not deployed, Mining review threads, Reading a diff for user impact, Tracing a component to a route, What the collector cannot tell you (+1 more)
-
-### Community 1253 - "index.ts"
-Cohesion: 0.15
-Nodes (12): Is the harness actually a gate?, Known limitations, Other deliberate trades, Regenerating the baseline, Running locally, supabase/tests — Postgres integration harness, The baseline contract, The limitation — read this (+4 more)
-
 ### Community 1254 - "9. Local Development Setup"
 Cohesion: 0.17
-Nodes (17): lookupMessage(), SheetsSyncDialog(), row, SocialContact, AssertRowShape, ContactExport, ContactsPage, ContactStats (+9 more)
+Nodes (17): lookupMessage(), SheetsSyncDialog(), downloadBlob(), AssertRowShape, ContactStats, fetchAllContacts(), fetchSpreadsheetInfo(), GoogleSheetsConnection (+9 more)
 
 ### Community 1255 - "index.ts"
-Cohesion: 0.03
-Nodes (121): sizeMap, TikTokAccount, TikTokAccountSelectorProps, DEPTH_STYLES, depthIndent(), depthStyle, CommentFilters(), CommentManagerPanelProps (+113 more)
+Cohesion: 0.09
+Nodes (41): autoMapHeaders(), ContactRecord, contactsToCsvRows(), contactsToVCardFile(), contactToVCard(), COUNTRY_DIAL_CODES, CSV_FIELDS, CsvField (+33 more)
 
 ### Community 1256 - "Waleed Task Summary, User Journey & Agent Prompting Guide"
-Cohesion: 0.22
-Nodes (16): CommentWorkflowMatchType, CommentWorkflowPlatform, Described, RuleRow, supportsPrivateReply(), dmCharacterBudget(), EMPTY_RULE_FORM, RuleFormErrors (+8 more)
-
-### Community 1257 - "2. Analytics"
-Cohesion: 0.67
-Nodes (3): Delegating to another agent (Codex / Grok / OpenCode / Antigravity), 📐 Required reading before you touch code, Reviewing a pull request (Codex code review)
-
-### Community 1258 - "CouponInput.tsx"
-Cohesion: 0.11
-Nodes (32): AccountSelector(), ConversationDetailProps, ConversationLabelChips(), ConversationLabelPicker(), ConversationLabelsProps, LABEL_COLORS, LabelFilter(), ConversationList() (+24 more)
-
-### Community 1259 - "@radix-ui/react-radio-group"
-Cohesion: 0.38
-Nodes (5): blankedFields(), GUARDED_FIELDS, GuardedField, isBlank(), STORED
-
-### Community 1260 - "20260828150000_account_scoped_agents_contract.sql"
-Cohesion: 0.20
-Nodes (9): Arabic Style Guide, English section, Glossary, Numbers, Punctuation and direction, Register: MSA backbone, Gulf warmth, Stay in this band, Structure that survives skimming (+1 more)
-
-### Community 1274 - "index.ts"
-Cohesion: 0.38
-Nodes (7): public.ai_model_preferences, public.ai_models, public.ai_providers, public.claim_agent_replies(), public.enforce_post_quota_on_insert(), public.pending_agent_replies, trg_enforce_post_quota_on_insert
+Cohesion: 0.21
+Nodes (17): accountNoun(), accountPlaceholder(), CommentWorkflowMatchType, CommentWorkflowPlatform, supportsPrivateReply(), dmCharacterBudget(), EMPTY_RULE_FORM, RuleFormErrors (+9 more)
 
 ### Community 1276 - "index.ts"
 Cohesion: 0.15
 Nodes (22): Any, buildContext(), buildLlmsTxt(), BundleInputs, CONTEXT_PATH, demote(), DEV_DIR, endpointTable() (+14 more)
 
-### Community 1277 - "LocationDebugView.tsx"
-Cohesion: 0.32
-Nodes (7): BLUESKY_SPECS, BlueskyMediaValidation(), BlueskyMediaValidationProps, formatSize(), MediaFile, validateBlueskyMedia(), ValidationResult
-
-### Community 1278 - "AiKnowledgeManager.guards.test.tsx"
-Cohesion: 0.20
-Nodes (9): Bundled resources, Step 1 — Establish what you are explaining, Step 2 — Classify every change by what the user can see, Step 3 — Find the risk the reader would care about, Step 4 — Write the report, Step 5 — The next-task prompt, only when it is earned, Task Analysis, Bilingual Explanation & User Journey, The rule that makes this skill work (+1 more)
-
-### Community 1279 - "20260830120100_partner_audit_logs.sql"
-Cohesion: 0.47
-Nodes (5): partner_api_keys_workspace_is_immutable_trg, partner_audit_logs_assert_tenancy_trg, public.partner_api_keys_workspace_is_immutable(), public.partner_audit_logs, public.partner_audit_logs_assert_tenancy()
-
-### Community 1280 - "AutomationHandlerCard.test.tsx"
-Cohesion: 0.22
-Nodes (8): 1. The problem, stated exactly, 2. What this task must produce, 3. The fact that decides the phase — RE-VERIFY IT, DO NOT QUOTE IT, 4. Schema direction — decided in advance, justify or object, 5. The exit gate, and what it binds, 6. Required reading, 7. Report contract, Brief — Phase 3.1: settle the D13 dispatch state machine
-
 ### Community 1281 - "ScheduledPostMedia.test.tsx"
-Cohesion: 0.08
-Nodes (28): AiKnowledgeManager(), invoke, knowledge, upsertConfig, AI_KNOWLEDGE_ACCEPT, aiKnowledgeContentType(), aiKnowledgeObjectPath(), AiKnowledgeSourceType (+20 more)
-
-### Community 1283 - "index.ts"
-Cohesion: 0.50
-Nodes (3): OUTPUT FORMAT - findings only, no rewrite, no summary of the documents, What happened in round 1, YOUR ROUND 2 TASK - do NOT repeat round 1 findings. Judge the FIXES.
-
-### Community 1284 - "2026-08-30-agent-setup-correctness-glm-review.md"
-Cohesion: 0.50
-Nodes (3): Blocking findings, Non-blocking findings, What the plan got right
-
-### Community 1285 - "2026-08-30-per-account-connectors-glm-review.md"
-Cohesion: 0.50
-Nodes (3): Disagreements, Findings, What the spec got right
-
-### Community 1286 - "9. Local Development Setup"
-Cohesion: 0.25
-Nodes (7): 1. Company Overview, 2. Core Products & Services, 3. Supported Platforms & Capabilities, 4. Subscriptions & Pricing Tiers, 5. Frequently Asked Questions (FAQs), 6. Support Channels, Postora Business Profile & Knowledge Base
+Cohesion: 0.13
+Nodes (14): AGENT_SHARING_PLATFORMS, nextToolSharing(), ScopedTool, ToolAccountLink, toolLinkIds(), AGENTS, ALL, FB_A (+6 more)
 
 ### Community 1287 - "TokenReauthBanner.instagram.test.tsx"
 Cohesion: 0.32
 Nodes (4): fail(), LC_ALL, prod_like(), db-harness.sh script
 
-### Community 1289 - "NavLink.tsx"
-Cohesion: 0.29
-Nodes (6): 1. Agent Identity & Role, 2. Tone & Voice, 3. Core Instructions & Rules, 4. Handling Complaints & Escalations, 5. Conversational Style Guidelines, Postora Customer Support Agent - Persona & Instructions
-
-### Community 1290 - "ProtectedRoute.tsx"
-Cohesion: 0.23
-Nodes (11): ThreadsPostDetailsDialog(), discoverPostIds(), FRAME_STYLES, hashIndex(), PostHeader(), PostHeaderProps, ThreadsRepliesGroupedByPost(), Props (+3 more)
-
-### Community 1291 - "fflate"
-Cohesion: 0.29
-Nodes (6): Corrections from adversarial review (2026-08-31), Decision, Decision: CORS `Access-Control-Allow-Origin: *` on the Partner API (0.10), What the current headers are, What would change the answer, Why `*` is defensible HERE — verified, not assumed
-
-### Community 1295 - "/v1 CORS is decided at the gateway, not in the function"
-Cohesion: 0.29
-Nodes (6): Consequences for the eventual /v1 CORS decision (0.10's `/v1` half), /v1 CORS is decided at the gateway, not in the function, What actually happens, What was intended, What would change the answer, Why this matters
-
-### Community 1296 - "10. Production Build & Deployment"
-Cohesion: 0.24
-Nodes (4): public.admin_connector_overview(), public.ai_agent_tools, public.connector_connections, public.revoke_connector_connection()
-
 ### Community 1297 - "AiKnowledgeManager.sharing.test.tsx"
-Cohesion: 0.10
-Nodes (17): ComposioConnectCard(), currentConnection(), assign, BASE, Connection, fetchMock, from, openTab (+9 more)
-
-### Community 1298 - "chatLinks.ts"
-Cohesion: 0.25
-Nodes (7): Connectors and tools, Errors and what to do about them, `GET /v1/connectors`, Metering, `POST /v1/connectors/{type}/connect-link`, `POST /v1/tools/execute`, What a key can see and run
+Cohesion: 0.18
+Nodes (7): assign, BASE, Connection, fetchMock, from, openTab, rpc
 
 ### Community 1299 - "agentConfigLookup.ts"
-Cohesion: 0.17
-Nodes (10): ConnectorUsageTables(), ms(), typeLabel(), BY_KEY, BY_TYPE, rpc, fetchConnectorUsageByKey(), fetchConnectorUsageByType() (+2 more)
-
-### Community 1300 - "20260901120000_partner_dispatch_intents.sql"
-Cohesion: 0.38
-Nodes (6): partner_dispatch_intents_assert_tenancy_trg, partner_dispatch_intents_assert_transition_trg, public.partner_dispatch_intents, public.partner_dispatch_intents_assert_tenancy(), public.partner_dispatch_intents_assert_transition(), update_partner_dispatch_intents_updated_at
+Cohesion: 0.22
+Nodes (9): ConnectorUsageTables(), ms(), typeLabel(), WINDOWS, BY_KEY, BY_TYPE, rpc, useConnectorUsageByKey() (+1 more)
 
 ### Community 1301 - "public.enforce_post_quota_on_insert"
-Cohesion: 0.32
-Nodes (5): ExportUrlTarget, parseExportUrlTarget(), StorageClient, storagePathTarget(), OWNER
-
-### Community 1302 - "public.user_roles"
-Cohesion: 0.33
-Nodes (7): public.get_my_notifications(), public.get_user_role(), public.has_role(), public.mark_all_notifications_read(), public.notification_reads, public.system_notifications, public.user_roles
-
-### Community 1303 - "public.workflows"
-Cohesion: 0.29
-Nodes (7): public.node_execution_logs, public.workflow_comments, public.workflow_executions, public.workflow_schedules, public.workflow_versions, public.workflow_webhooks, public.workflows
-
-### Community 1304 - "Decision: suspend `send_template` on the Partner API alias (0A)"
-Cohesion: 0.33
-Nodes (5): Decision, Decision: suspend `send_template` on the Partner API alias (0A), Reason, Restoration condition, What a caller sees
+Cohesion: 0.08
+Nodes (36): ENTITIES, RELATIONS, render(), GraphActivity, isAfter(), isRenderableHost(), PublishedExport, RefreshReason (+28 more)
 
 ### Community 1305 - "PinnedMessagesBar.tsx"
 Cohesion: 0.09
-Nodes (31): canStartAnotherWave(), deliverOne(), DeliveryRow, Fetcher, loadTargets(), reportBacklog(), runWebhookWorker(), settle() (+23 more)
-
-### Community 1306 - "suspension.test.ts"
-Cohesion: 0.10
-Nodes (20): Admin Partner Hub Implementation Plan, Deployment (orchestrator, after CodexBot approval, before merge), File map, Slice A — database, Slice B — edge ledger columns, Slice C — frontend, Task 10: `PartnerKeysTable` + `RevokePartnerKeyDialog`, Task 11: `GeneratePartnerKeyDialog` + `PartnerKeyCreatedView` (+12 more)
-
-### Community 1307 - "storage.objects"
-Cohesion: 0.33
-Nodes (6): objects_update_create_prefix, storage.buckets, storage.objects, storage.objects_update_prefix_trigger(), storage.prefixes, storage.search_legacy_v1()
-
-### Community 1308 - "public.media_file_providers"
-Cohesion: 0.33
-Nodes (6): public.count_openinary_backfill_remaining(), public.get_cdn_provider_counts(), public.get_openinary_backfill_batch(), public.media_file_providers, public.media_files, public.media_operations_history
+Nodes (30): canStartAnotherWave(), deliverOne(), DeliveryRow, Fetcher, loadTargets(), reportBacklog(), runWebhookWorker(), settle() (+22 more)
 
 ### Community 1309 - "useAiGenerationJob.ts"
-Cohesion: 0.06
-Nodes (45): AddProfileForm(), BlueskyConnectDialog(), BLUESKY_REDIRECT_URIS, ConnectionTroubleshooter(), ConnectionTroubleshooterProps, FACEBOOK_REQUIRED_DOMAINS, OAuthError, PlatformOAuthConfig (+37 more)
-
-### Community 1311 - "auth.sso_providers"
-Cohesion: 0.40
-Nodes (5): auth.flow_state, auth.saml_providers, auth.saml_relay_states, auth.sso_domains, auth.sso_providers
-
-### Community 1317 - "partnerWebhookDelivery.ts"
-Cohesion: 0.22
-Nodes (8): Alternatives, Architecture and data flow, Current release status, Error and progress behavior, Implementation sequence and acceptance, Proven behavior and production repair, Recommended user flow, Website URL to business and agent setup
+Cohesion: 0.02
+Nodes (203): AdminLayout(), AdminLayoutProps, sidebarItems, AiUsageAnalytics(), PartnerKeyActivitySheetProps, PartnerKeysTable(), STATUS_VARIANT, when() (+195 more)
 
 ### Community 1327 - "usePartnerHub.ts"
-Cohesion: 0.14
-Nodes (24): fetchConnectorConnections(), fetchConnectorOverview(), fetchKeyActivity(), fetchKeyConnectorActivity(), fetchKeyDeliveries(), fetchKeys(), fetchOverview(), fetchTargets() (+16 more)
+Cohesion: 0.15
+Nodes (22): createPartnerKey(), fetchConnectorConnections(), fetchConnectorOverview(), fetchConnectorUsageByKey(), fetchConnectorUsageByType(), fetchKeyConnectorActivity(), fetchKeys(), fetchOverview() (+14 more)
 
 ### Community 1328 - "isValidUuid"
 Cohesion: 0.19
-Nodes (20): CommentWorkflowRule, CommentWorkflowRuleInput, CommentWorkflowStats, createRule(), deleteRule(), fetchAttachableMedia(), fetchChannelVideos(), fetchRecentPosts() (+12 more)
+Nodes (22): CommentWorkflowRule, CommentWorkflowRuleInput, CommentWorkflowStats, Described, describeScope(), describeTrigger(), RuleRow, createRule() (+14 more)
 
 ### Community 1329 - "Pipelines"
 Cohesion: 0.29
 Nodes (7): Connectors and tools, Errors and what to do about them, `GET /v1/connectors`, Metering, `POST /v1/connectors/{type}/connect-link`, `POST /v1/tools/execute`, What a key can see and run
 
 ### Community 1331 - "LeadsCRM.tsx"
-Cohesion: 0.21
-Nodes (13): ACCOUNT_NOUN, ACCOUNT_PLACEHOLDER, accountNoun(), accountPlaceholder(), connectedAccountsFor(), connectedCountByPlatform(), isAccountConnected(), reconnectNeededCount() (+5 more)
-
-### Community 1332 - "whatsappMessageView.ts"
-Cohesion: 0.36
-Nodes (6): nonEmptyArray(), nonEmptyString(), unsupportedCases, YOUTUBE_COMPOSIO_UNSUPPORTED_OPTION_KEYS, YouTubeComposioMetadata, youtubeOptionsUnsupportedOnComposio()
+Cohesion: 0.16
+Nodes (16): ACCOUNT_NOUN, ACCOUNT_PLACEHOLDER, connectedAccountsFor(), connectedCountByPlatform(), isAccountConnected(), reconnectNeededCount(), SelectableAccount, COMMENT_WORKFLOW_PLATFORMS (+8 more)
 
 ### Community 1333 - "generate-postman.ts"
 Cohesion: 0.23
 Nodes (11): Any, buildCollection(), buildEnvironments(), deref(), isObj(), pathParametersOf(), placeholderForSchema(), resolveSchema() (+3 more)
-
-### Community 1334 - "chain.e2e.test.ts"
-Cohesion: 0.50
-Nodes (4): 17. Media Cleanup, Data Sources, Features, Settings
 
 ### Community 1335 - "Postora Partner API v1 — agent hand-off bundle"
 Cohesion: 0.17
@@ -4472,173 +4311,33 @@ Nodes (11): AI, Analytics, Contacts, Endpoints (served today), Error codes, OAut
 Cohesion: 0.17
 Nodes (18): PartnerHubKpiCardsProps, PartnerKeysTableProps, base, revoked, PartnerEnvironment, AdminConnectorConnectionRow, ConnectorOverview, ConnectorUsageByKeyRow (+10 more)
 
-### Community 1338 - "Phase 8, first tranche — the posts surface and `post.scheduled`"
-Cohesion: 0.15
-Nodes (12): Attribution order, Blast radius, Certification: `post.scheduled` only, Decision A — addressability is an explicit binding, not an inferred tenant, Decision B — `post.scheduled` is produced by a database trigger, Migrations for the owner to apply, Occurrence identity, Phase 8, first tranche — the posts surface and `post.scheduled` (+4 more)
-
-### Community 1339 - "MemberActions"
-Cohesion: 0.10
-Nodes (18): AutomationHandlerCardProps, COMMENT_OPTIONS, HandlerOption, HandlerRowProps, MEDIA_UNDERSTANDING_OPTIONS, MESSAGE_OPTIONS, accounts, handlers (+10 more)
-
-### Community 1340 - "PartnerKeyActivitySheet"
-Cohesion: 0.15
-Nodes (20): ContactDetailsDrawer(), toDraft(), ContactFilters(), ContactPatch, deleteContact(), fetchDistinctTags(), findWhatsAppContactByPhone(), updateContact() (+12 more)
-
-### Community 1342 - "Admin Partner Hub & Usage Monitoring — Design"
-Cohesion: 0.17
-Nodes (11): 10. Out of scope, 1. Goal, 2. What already exists (verified 2026-09-02), 3. Decisions and assumptions, 4. Data layer, 5. Edge change (`partner-api`), 6. Frontend, 7. Security invariants (+3 more)
-
-### Community 1344 - "media.test.ts"
-Cohesion: 0.32
-Nodes (6): auth.users, public.ai_agent_configs, public.ai_knowledge_chunks, public.ai_knowledge_source_accounts, public.ai_knowledge_sources, public.social_accounts
-
-### Community 1345 - "useWhatsAppAgents.ts"
-Cohesion: 0.24
-Nodes (7): ALL_PROFILE_METRICS, corsHeaders, ENGLISH_DESCRIPTIONS, ENGLISH_TITLES, fetchProfileTimeSeries(), fetchProfileTotals(), TIME_SERIES_METRICS
-
-### Community 1346 - "D10 — the media control matrix, filled in"
-Cohesion: 0.18
-Nodes (10): D10 — the media control matrix, filled in, D13 is unchanged, and that is the point, Malware handling — the row that could not be answered, and what was done, Max size, per type, Storage — the third gap, Tenant ownership — the second gap, The allowlist, and what is deliberately not on it, The matrix (+2 more)
-
-### Community 1347 - "The webhook producer ledger, and the database-write inventory behind it"
-Cohesion: 0.18
-Nodes (10): 0. Why this document exists, and what it found, 1. The inventory, 2. The ledger, 3. What Phase 6 has to build, now that the shape is known, 4. Corrections this document makes to the spec, `account.connected` / `.disconnected` — activation transitions, `account.reauthorization_required` — the transition is `needs_reauth` false → true, `message.received` / `message.accepted` — the `whatsapp_messages` insert (+2 more)
-
-### Community 1348 - "notificationHistoryStore.ts"
-Cohesion: 0.67
-Nodes (3): 6. Plan Quotas, Data Sources, Features
-
-### Community 1352 - "Phase 6 — messaging and account events: what was certified, and how"
-Cohesion: 0.20
-Nodes (9): 0. The mechanism, once, 1. `message.received` (6.1), 2. `message.accepted` (6.2), 3. `message.delivered` / `.read` / `.failed` (6.3), 4. `account.reauthorization_required` (6.4), 5. What was NOT certified: `account.connected` / `.disconnected`, 6. Per-event latency (6.5), as published, 7. Corrections this phase makes to the spec (+1 more)
-
-### Community 1353 - "Phase 9 — rich-media messaging: the door, and the substrate"
-Cohesion: 0.20
-Nodes (9): 9.2 — the capability matrix, decided at the door, 9.3 — the scan-state substrate, A test casualty, and why it was re-pinned, Owner ratification still required, Phase 9 — rich-media messaging: the door, and the substrate, Review round (Codex on PR #127), The fix, The problem, with the exact old order (+1 more)
-
-### Community 1354 - "1.0.0 — 2026-09-02"
-Cohesion: 0.20
-Nodes (9): 1.0.0 — 2026-09-02, Added, Added, Changed, Changed, Changelog, Deprecated, Security (+1 more)
-
-### Community 1355 - "Docs.tsx"
-Cohesion: 0.38
-Nodes (8): sendWebhookNotifications(), isInternalHostname(), isUnsafeIpv4(), isUnsafeIpv6(), postWebhook(), PostWebhookOptions, validateWebhookTarget(), WebhookFetcher
-
-### Community 1356 - "HiggsfieldMcpClient"
-Cohesion: 0.52
-Nodes (4): ThemeApplier(), parseSettingValue(), useAppTheme(), useDarkTheme()
-
 ### Community 1357 - "text"
 Cohesion: 0.48
 Nodes (5): decodeOAuthState(), encodeOAuthState(), fromBase64Url(), PinterestOAuthState, toBase64Url()
-
-### Community 1358 - "D5 — the webhook substrate: occurrence identity, rotation, and what is *not* advertised"
-Cohesion: 0.22
-Nodes (8): 0. The one thing to read if you read nothing else, 1. Rotation (5.9): the secret is captured at enqueue, not read at send, 2. Redirects at delivery: followed, revalidated per hop, and bounded, 3. Worker sizing (open item 4), decided as a default rather than blocked on, 4. What is constrained rather than built (the 5.4 rows), 5. What this phase does **not** advertise, D5 — the webhook substrate: occurrence identity, rotation, and what is *not* advertised, `event_id` is not the same thing, and the difference is partner-visible
-
-### Community 1359 - "D9 — the publishing seam: what 7.0 found, and what it changes"
-Cohesion: 0.22
-Nodes (8): 1. The 7.0 inventory, 2. What this PR builds: 7.4, 3. Why 7.2 and 7.3 are a separate PR, 4. 7.5 moves to Phase 8 — ratified, not deferred by default, D9 — the publishing seam: what 7.0 found, and what it changes, How the crash-test exit criterion is satisfied with the event uncertified, Schedule rows — created **only in the browser**, Terminal `platform_posts` status — 5 commit points, all in one file
 
 ### Community 1360 - "1.0.0 — 2026-09-02"
 Cohesion: 0.22
 Nodes (9): 1.0.0 — 2026-09-02, Added, Added, Changed, Changed, Changelog, Deprecated, Security (+1 more)
 
-### Community 1361 - "Runbook — the partner webhook delivery worker"
-Cohesion: 0.22
-Nodes (8): 0. Prerequisites the function will not tell you about, 1. Deploy, 2. Verify the deploy, 3. Is it draining?, 4. An endpoint was auto-disabled, 5. Stop deliveries during an incident, 6. Sizing, and when to revisit it, Runbook — the partner webhook delivery worker
-
 ### Community 1362 - "QuotaUsageBar.tsx"
 Cohesion: 0.39
 Nodes (5): QuotaUsageBar(), QuotaUsageBarProps, TONE_CLASS, quotaPercent(), quotaTone
-
-### Community 1366 - "20260902120000_partner_webhooks.sql"
-Cohesion: 0.42
-Nodes (7): public.claim_partner_webhook_deliveries(), public.partner_webhook_backlog(), public.partner_webhook_deliveries, public.partner_webhooks, public.redrive_partner_webhook_deliveries(), public.rotate_partner_webhook_secret(), public.settle_partner_webhook_delivery()
-
-### Community 1368 - "Phase 10 — GA & developer experience: what was decided, what was built, what was not"
-Cohesion: 0.25
-Nodes (7): 10.1 — the usage counters, and the product decision that gated them, 10.3 / 10.2 / 10.4 / 10.6 — contract, Postman, documentation, 10.5 — environment-bound keys, 10.8 — the chain test is not the certification, Delegation record, Known gaps carried forward, Phase 10 — GA & developer experience: what was decided, what was built, what was not
-
-### Community 1369 - "Integration Guide — End-to-End"
-Cohesion: 0.25
-Nodes (7): 1. Get a key, 2. List accounts, 3. Upload media (if sending media), 4. Send a text message, 5. Subscribe to webhooks, 6. Receive events and reconcile, Integration Guide — End-to-End
-
-### Community 1370 - "DocumentTitle.tsx"
-Cohesion: 0.16
-Nodes (11): MakeHeader(), MakeHeaderProps, MakeHero(), MakeHeroProps, MakeModules(), createPostParams, listAccountsParams, listPostsParams (+3 more)
-
-### Community 1371 - "types.ts"
-Cohesion: 0.12
-Nodes (14): AI_AGENT_TABS, AiAgentTab, useUnsavedChangesGuard(), AgentSurfaceSelection, AgentSurfaceState, resolveAgentSurface(), flags, managerProps (+6 more)
 
 ### Community 1374 - "Integration Guide — End-to-End"
 Cohesion: 0.29
 Nodes (7): 1. Get a key, 2. List accounts, 3. Upload media (if sending media), 4. Send a text message, 5. Subscribe to webhooks, 6. Receive events and reconcile, Integration Guide — End-to-End
 
-### Community 1375 - "PartnerHubKpiCards.tsx"
-Cohesion: 0.48
-Nodes (5): isNonPublicHost(), isPrivateIpv4(), isPrivateIpv6(), UrlCheck, validateKnowledgeUrl()
-
 ### Community 1376 - "authenticated.test.ts"
-Cohesion: 0.29
-Nodes (7): react, react, useCarousel(), useChart(), useFormField(), SidebarContext, useSidebar()
+Cohesion: 0.25
+Nodes (8): react, react, TikTokPreview(), useCarousel(), useChart(), useFormField(), SidebarContext, useSidebar()
 
 ### Community 1377 - "ByteBudget"
 Cohesion: 0.67
 Nodes (3): Binding model, List and get, Social Accounts
 
-### Community 1378 - "FakeQuery"
-Cohesion: 0.40
-Nodes (3): CLEARED_QUOTA_OVERRIDES, PRICE_TO_PLAN, STRIPE_SECRET_KEY
-
-### Community 1379 - "Partner API Certification — Phase 10 GA"
-Cohesion: 0.33
-Nodes (5): Certification table (per POSTORA-PARTNER-API-IMPLEMENTATION-PLAN.md Phase 10 — GA), Failure cases → scenario mapping, Partner API Certification — Phase 10 GA, What a real certification run must do, What IS in place today
-
-### Community 1380 - "Postora Partner API — Contract & Tooling"
-Cohesion: 0.33
-Nodes (5): Drift gate, Files in `docs/api/`, Postora Partner API — Contract & Tooling, Regenerating the Postman files, Versioning
-
-### Community 1381 - "API Keys — Lifecycle"
-Cohesion: 0.33
-Nodes (5): API Keys — Lifecycle, Issue, Revoke, Rotate with overlap, What a partner must do at rotation
-
-### Community 1382 - "Authentication"
-Cohesion: 0.33
-Nodes (5): Authentication, Expiry and revocation, Header, Key prefixes and environments, Non-enumerable 401
-
-### Community 1383 - "Errors"
-Cohesion: 0.33
-Nodes (5): Envelope, Errors, Request ID for support, Retry verdict, Where the codes live
-
-### Community 1384 - "Getting Started"
-Cohesion: 0.33
-Nodes (5): 1. Obtain a key, 2. First call, 3. Read the request ID, Getting Started, Next steps
-
-### Community 1385 - "Idempotency"
-Cohesion: 0.33
-Nodes (5): Idempotency, In-progress, Indeterminate, Same key + different body → conflict, Same key + same body → replay
-
-### Community 1386 - "Messaging"
-Cohesion: 0.33
-Nodes (5): D13 delivery guarantee, Messaging, QR-mode and capability matrix, Send, Template sends currently suspended
-
-### Community 1387 - "Versioning and Compatibility"
-Cohesion: 0.33
-Nodes (5): Deprecation window, How the drift gate enforces it, Versioning and Compatibility, What is additive and needs no migration, What is breaking
-
-### Community 1388 - "Webhooks"
-Cohesion: 0.33
-Nodes (5): Certified event types, Dedupe, retries, ordering, Signature verification, Subscribe, Webhooks
-
-### Community 1389 - "youtubeComposioOptions.ts"
-Cohesion: 0.50
-Nodes (4): 15. Support Messages, Data Sources, Features, Message Statuses
-
 ### Community 1390 - "partnerKeyMint.ts"
-Cohesion: 0.19
-Nodes (9): GeneratePartnerKeyDialog(), rpc, TARGETS, generatePartnerKey(), hashPartnerKey(), KEY_PREFIX_BY_ENVIRONMENT, MintedPartnerKey, createPartnerKey() (+1 more)
+Cohesion: 0.53
+Nodes (4): generatePartnerKey(), hashPartnerKey(), KEY_PREFIX_BY_ENVIRONMENT, MintedPartnerKey
 
 ### Community 1391 - "firecrawl.ts"
 Cohesion: 0.62
@@ -4676,30 +4375,6 @@ Nodes (5): Envelope, Errors, Request ID for support, Retry verdict, Where the co
 Cohesion: 0.40
 Nodes (5): Idempotency, In-progress, Indeterminate, Same key + different body → conflict, Same key + same body → replay
 
-### Community 1404 - "Media"
-Cohesion: 0.40
-Nodes (4): Allowlist and size limits, Media, Scan states, Upload then reference
-
-### Community 1405 - "Pagination"
-Cohesion: 0.40
-Nodes (4): Cursors, Pagination, Parameters, Response
-
-### Community 1406 - "Quotas"
-Cohesion: 0.40
-Nodes (4): Errors, Meters, Quotas, What is charged
-
-### Community 1407 - "Rate Limits"
-Cohesion: 0.40
-Nodes (4): Errors, Headers, Rate Limits, Why reads may proceed during a limiter outage while writes refuse
-
-### Community 1408 - "CreatePostTabs.tsx"
-Cohesion: 0.40
-Nodes (4): Common failures, Output Template, Structure, Worked example — the opening of a real report
-
-### Community 1410 - "YouTube Comments — Comment Manager, AI Agent, Comment Workflows"
-Cohesion: 0.15
-Nodes (12): 0. Facts established before design (2026-09-04, production), 10. Delegation lanes, 1. Auth and scopes, 2. Ingest: `youtube-poll-comments`, 3. Provider adapter: `_shared/youtubeComments.ts`, 4. Comment Manager (`/comments`), 5. AI agent setup (`/automation/agents`), 6. Comment workflows (+4 more)
-
 ### Community 1412 - "Media"
 Cohesion: 0.50
 Nodes (4): Allowlist and size limits, Media, Scan states, Upload then reference
@@ -4716,37 +4391,13 @@ Nodes (4): Errors, Headers, Rate Limits, Why reads may proceed during a limiter 
 Cohesion: 0.50
 Nodes (4): Errors, Meters, Quotas, What is charged
 
-### Community 1416 - "Deprecations"
-Cohesion: 0.50
-Nodes (3): Deprecations, Frozen action alias — `POST /functions/v1/partner-api`, Legacy `whatsapp:*` scopes
-
-### Community 1417 - "Publishing"
-Cohesion: 0.50
-Nodes (3): Events, Posts — only API-created posts are addressable, Publishing
-
-### Community 1418 - "Postora Partner API v1 — Developer Documentation"
-Cohesion: 0.50
-Nodes (3): Implementing with an AI agent, Pages, Postora Partner API v1 — Developer Documentation
-
-### Community 1419 - "Social Accounts"
-Cohesion: 0.50
-Nodes (3): Binding model, List and get, Social Accounts
-
 ### Community 1420 - "CreatePostTabs.tsx"
-Cohesion: 0.18
-Nodes (13): WhatsAppPinnedMessage, DayGroup, dayLabel(), formatListTime(), groupByDay(), localDayKey(), anchorOffsetAfterPrepend(), shouldStickToBottom() (+5 more)
-
-### Community 1422 - "Runbook — YouTube comments rollout"
-Cohesion: 0.17
-Nodes (11): 1. Apply the migration (before merging), 2. Merge the PR, 3. Verify the edge-function deploy, 4. Refresh the existing Composio YouTube connection, 5. Enable the flag, 6. Reconnect a native channel, 7. First poll seeds, second poll dispatches, 8. Live checks (+3 more)
+Cohesion: 0.16
+Nodes (15): WhatsAppPinnedMessage, DayGroup, dayLabel(), formatListTime(), groupByDay(), localDayKey(), anchorOffsetAfterPrepend(), shouldStickToBottom() (+7 more)
 
 ### Community 1423 - "buildCredentialsFile"
 Cohesion: 0.29
 Nodes (11): apply, cloudinaryDestroy(), cloudinaryFolderForEmail(), contentTypeFor(), destroy, main(), migrateOne(), MIME_BY_EXTENSION (+3 more)
-
-### Community 1424 - "whatsappInboxRoute.ts"
-Cohesion: 0.67
-Nodes (3): 1. Dashboard (Home), Data Sources, Features
 
 ### Community 1428 - "Deprecations"
 Cohesion: 0.67
@@ -4765,8 +4416,8 @@ Cohesion: 0.83
 Nodes (3): note(), section(), gather_change_context.sh script
 
 ### Community 1455 - "WorkflowPool.test.tsx"
-Cohesion: 0.18
-Nodes (10): explainWorkflowError(), KNOWN, describeScope(), describeTrigger(), hooks, remove, RULES, setActive (+2 more)
+Cohesion: 0.33
+Nodes (5): hooks, remove, RULES, setActive, STATS
 
 ### Community 1460 - "Query"
 Cohesion: 0.33
@@ -4776,57 +4427,33 @@ Nodes (4): FREE_ROW, fromMock, PlansRow, wrapper()
 Cohesion: 0.25
 Nodes (5): fetchSpreadsheetInfo, listGoogleSheetsConnections, syncContactsToSheet, TABS, toasts
 
-### Community 1463 - "isTokenExpired"
-Cohesion: 0.67
-Nodes (3): getToastError(), parseApiError(), ParsedError
-
-### Community 1466 - "20260904120000_comment_workflow.sql"
-Cohesion: 0.36
-Nodes (6): public.comment_workflow_events, public.comment_workflow_rule_stats, public.comment_workflow_rules, public.comment_workflow_usage, update_comment_workflow_events_updated_at, update_comment_workflow_rules_updated_at
-
-### Community 1467 - "youtubeCommentCapability.ts"
-Cohesion: 0.48
-Nodes (5): cases, grantedScopes(), splitScopeString(), YouTubeCapabilityAccount, youtubeCommentCapability
-
 ### Community 1474 - "AudiencePage.test.tsx"
 Cohesion: 0.40
 Nodes (4): flagState, roleState, rows, useSocialContacts
 
-### Community 1477 - "plan-r2-selfcontained.md"
-Cohesion: 0.50
-Nodes (3): OUTPUT FORMAT - findings only, no rewrite, no summary of the documents, What happened in round 1, YOUR ROUND 2 TASK - do NOT repeat round 1 findings. Judge the FIXES.
-
-### Community 1479 - "20260904120000_social_contacts.sql"
-Cohesion: 0.50
-Nodes (3): public.social_contacts, public.whatsapp_contacts, update_social_contacts_updated_at
-
-### Community 1481 - "Access Control"
-Cohesion: 0.50
-Nodes (4): Access Control, Admin User, Authentication Requirements, Route Protection
-
 ### Community 1502 - "PartnerHubKpiCards.test.tsx"
 Cohesion: 0.03
-Nodes (161): AdminLayout(), AdminLayoutProps, sidebarItems, AuditLogEntry, FLAG_LABELS, FeatureFlagCardProps, ScheduledChange, ScheduledEmail (+153 more)
+Nodes (151): DbModel, UsageData, AppCredentialsSettings(), CredentialStatus, extractWaValue(), PlatformConfig, PLATFORMS, PlatformSecrets (+143 more)
 
 ## Knowledge Gaps
-- **8054 isolated node(s):** `WATCHED`, `normalized`, `WATCHED`, `normalized`, `$schema` (+8049 more)
+- **7370 isolated node(s):** `WATCHED`, `normalized`, `WATCHED`, `normalized`, `$schema` (+7365 more)
   These have ≤1 connection - possible missing edges or undocumented components.
-- **288 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **285 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `cn()` connect `cn` to `badge.tsx`, `utils.ts`, `supabase`, `ProtectedRoute.tsx`, `ImageToolsDialog.tsx`, `DashboardLayout.tsx`, `BrandIntelligence.tsx`, `index.ts`, `useAiGenerationJob.ts`, `StockMediaPicker.tsx`, `EvolutionApi`, `index.ts`, `chart.tsx`, `WhatsAppVoiceComposer.tsx`, `FakeQuery`, `index.ts`, `whatsappMediaResolver.ts`, `index.ts`, `TokenExpiryDocs.tsx`, `WhatsAppInboxApi`, `index.ts`, `form.tsx`, `toast.tsx`, `ThreadsRepliesTab.tsx`, `useAsyncAction.ts`, `notificationHistoryStore.ts`, `Analytics.tsx`, `input-otp`, `carousel.tsx`, `Docs.tsx`, `QuotaUsageBar.tsx`, `WhatsAppInboxScreen.tsx`, `useWhatsAppMessages.ts`, `types.ts`, `PartnerHubKpiCards.test.tsx`, `App.tsx`, `Canvas.tsx`, `index.ts`, `sidebar.tsx`, `Waleed Task Summary, User Journey & Agent Prompting Guide`, `CouponInput.tsx`, `higgsfield-mcp.ts`, `FakeQuery`, `useThreadsMentions.ts`, `ThreadsInsightsPanel.tsx`, `knowledgeExportUrls.ts`, `mediaUrl.ts`, `index.ts`?**
-  _High betweenness centrality (0.045) - this node is a cross-community bridge._
-- **Why does `useAuth()` connect `useAsyncAction.ts` to `badge.tsx`, `utils.ts`, `supabase`, `AnimatedRoutes.tsx`, `index.ts`, `DashboardLayout.tsx`, `BrandIntelligence.tsx`, `index.ts`, `useAiGenerationJob.ts`, `EvolutionApi`, `useWhatsAppPipelines.ts`, `index.ts`, `whatsappMediaResolver.ts`, `index.ts`, `TokenExpiryDocs.tsx`, `WhatsAppInboxApi`, `MemberActions`, `PartnerKeyActivitySheet`, `higgsfieldModels.ts`, `index.ts`, `ThreadsRepliesTab.tsx`, `notificationHistoryStore.ts`, `Analytics.tsx`, `WhatsAppInboxScreen.tsx`, `@radix-ui/react-select`, `index.ts`, `PartnerHubKpiCards.test.tsx`, `App.tsx`, `Canvas.tsx`, `useMessaging.ts`, `index.ts`, `CouponInput.tsx`, `index.ts`, `higgsfield-mcp.ts`, `syncUserQuotas.ts`, `FakeQuery`, `useThreadsMentions.ts`, `knowledgeExportUrls.ts`, `Calendar.tsx`, `mediaUrl.ts`, `index.ts`?**
+- **Why does `useAuth()` connect `FakeQuery` to `supabase`, `client.ts`, `AnimatedRoutes.tsx`, `PlatformMediaMatrix.tsx`, `Recent Features`, `Narrative`, `index.ts`, `useAiGenerationJob.ts`, `Refactoring Plan V2 - Comprehensive Code Audit`, `EvolutionApi`, `_index.md`, `useWhatsAppPipelines.ts`, `useResolvedImageModels.ts`, `ExtendedPlatform`, `whatsappMediaResolver.ts`, `TokenExpiryDocs.tsx`, `index.ts`, `GeneratePartnerKeyDialog`, `ThreadsRepliesTab.tsx`, `useResolvedImageModels.ts`, `commentAutomation.ts`, `Core Features & User Flows`, `@radix-ui/react-select`, `index.ts`, `Eight video performance/security claims, measured against Postora`, `PartnerHubKpiCards.test.tsx`, `App.tsx`, `WhatsApp Chat Overhaul Implementation Plan`, `Threads webhook: verify token + field subscription`, `index.ts`, `Codex Implementation Brief — Postora AI Agent: Knowledge Graph (GraphRAG) + follow-ups`, `index.ts`, `higgsfield-mcp.ts`, `What You Must Do When Invoked`, `stt-review.md`, `Calendar.tsx`, `knowledgeExportUrls.ts`, `anthropic-adapter.ts`, `socialContactsRepository.test.ts`?**
+  _High betweenness centrality (0.049) - this node is a cross-community bridge._
+- **Why does `cn()` connect `GeneratePartnerKeyDialog` to `Ranked hypotheses`, `supabase`, `PlatformMediaMatrix.tsx`, `Recent Features`, `partnerApiKeys.ts`, `ImageToolsDialog.tsx`, `oauth_token_refresh_protocols.abstract.md`, `cn`, `ScheduledPosts.tsx`, `index.ts`, `useAiGenerationJob.ts`, `StockMediaPicker.tsx`, `EvolutionApi`, `chart.tsx`, `WhatsAppVoiceComposer.tsx`, `FakeQuery`, `_index.md`, `index.ts`, `useResolvedImageModels.ts`, `ExtendedPlatform`, `whatsappMediaResolver.ts`, `TokenExpiryDocs.tsx`, `form.tsx`, `toast.tsx`, `index.ts`, `breadcrumb.tsx`, `drawer.tsx`, `navigation-menu.tsx`, `ThreadsRepliesTab.tsx`, `20260413234250_b395c5e3-36eb-4c94-b994-ed9c4684587b.sql`, `Narrative`, `3. Required Feature Structure`, `input-otp.tsx`, `commentAutomation.ts`, `carousel.tsx`, `Docs.tsx`, `QuotaUsageBar.tsx`, `WhatsAppInboxScreen.tsx`, `useWhatsAppMessages.ts`, `Plan — Make inbound-webhook failures visible`, `PartnerHubKpiCards.test.tsx`, `authenticated.test.ts`, `Threads webhook: verify token + field subscription`, `Canvas.tsx`, `Plan: xsellpointkw's "Missing" Scheduled Posts Are Already Published`, `sidebar.tsx`, `Waleed Task Summary, User Journey & Agent Prompting Guide`, `higgsfield-mcp.ts`, `FakeQuery`, `What You Must Do When Invoked`, `GIFPickerDialog.tsx`, `ThreadsInsightsPanel.tsx`, `knowledgeExportUrls.ts`, `stt-review.md`?**
+  _High betweenness centrality (0.043) - this node is a cross-community bridge._
+- **Why does `errorResponse()` connect `cors.ts` to `ContentGenerationPanel.tsx`, `index.ts`, `cron-auth.ts`, `FakeQuery`, `whatsappSyncEngine.ts`, `index.ts`?**
   _High betweenness centrality (0.035) - this node is a cross-community bridge._
-- **Why does `useToast()` connect `FakeQuery` to `badge.tsx`, `utils.ts`, `higgsfieldModelSpecs.ts`, `ImageToolsDialog.tsx`, `DashboardLayout.tsx`, `BrandIntelligence.tsx`, `index.ts`, `useAiGenerationJob.ts`, `EvolutionApi`, `usePartnerHub.ts`, `whatsappMediaResolver.ts`, `TokenExpiryDocs.tsx`, `WhatsAppInboxApi`, `index.ts`, `toast.tsx`, `useAsyncAction.ts`, `usePostRetry.ts`, `notificationHistoryStore.ts`, `Analytics.tsx`, `@radix-ui/react-dropdown-menu`, `WhatsAppInboxScreen.tsx`, `useWhatsAppMessages.ts`, `PartnerHubKpiCards.test.tsx`, `authenticated.test.ts`, `Canvas.tsx`, `useMessaging.ts`, `index.ts`, `higgsfield-mcp.ts`, `partnerKeyMint.ts`, `knowledgeExportUrls.ts`, `mediaUrl.ts`, `index.ts`?**
-  _High betweenness centrality (0.024) - this node is a cross-community bridge._
 - **What connects `WATCHED`, `normalized`, `WATCHED` to the rest of the system?**
-  _8065 weakly-connected nodes found - possible documentation gaps or missing edges._
+  _7381 weakly-connected nodes found - possible documentation gaps or missing edges._
 - **Should `badge.tsx` be split into smaller, more focused modules?**
-  _Cohesion score 0.030325932923948983 - nodes in this community are weakly interconnected._
-- **Should `utils.ts` be split into smaller, more focused modules?**
-  _Cohesion score 0.07149758454106281 - nodes in this community are weakly interconnected._
+  _Cohesion score 0.04421768707482993 - nodes in this community are weakly interconnected._
 - **Should `button.tsx` be split into smaller, more focused modules?**
-  _Cohesion score 0.0490506329113924 - nodes in this community are weakly interconnected._
+  _Cohesion score 0.12121212121212122 - nodes in this community are weakly interconnected._
+- **Should `supabase` be split into smaller, more focused modules?**
+  _Cohesion score 0.06641604010025062 - nodes in this community are weakly interconnected._
