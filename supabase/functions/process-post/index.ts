@@ -1371,7 +1371,7 @@ Deno.serve(async (req) => {
     // Generate URLs for media files (provider-aware: prefer the delivery URL of the
     // read-preference provider, fall back to the other provider, then legacy paths).
     const mediaUrls: string[] = [];
-    let readPreference = "cloudinary";
+    let readPreference = "openinary";
     try {
       const { data: cdnSetting } = await supabase
         .from("app_settings")
@@ -1382,7 +1382,7 @@ Deno.serve(async (req) => {
         readPreference = cdnSetting.value.read_preference;
       }
     } catch (e) {
-      console.warn("[process-post] cdn_storage read failed, defaulting read_preference to cloudinary:", e);
+      console.warn("[process-post] cdn_storage read failed, defaulting read_preference to openinary:", e);
     }
 
     // Provider state per media file (single query for the whole post). Rows are
