@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+import "@/i18n";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -25,14 +27,22 @@ export function PipelineSettingsDialog({
   onOpenChange,
   stages,
 }: PipelineSettingsDialogProps) {
+  const { t } = useTranslation("whatsapp");
+
+  const stageTypeLabel = (stageType: string) => {
+    if (stageType === "won") return t("pipeline.stageWon", "won");
+    if (stageType === "lost") return t("pipeline.stageLost", "lost");
+    if (stageType === "open") return t("pipeline.stageOpen", "open");
+    return stageType;
+  };
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Pipeline stages</DialogTitle>
+          <DialogTitle>{t("pipeline.settingsTitle", "Pipeline stages")}</DialogTitle>
           <DialogDescription>
-            A stage's outcome comes from its type, not its name, so renaming a stage never
-            changes how deals are counted.
+            {t("pipeline.settingsDesc", "A stage's outcome comes from its type, not its name, so renaming a stage never changes how deals are counted.")}
           </DialogDescription>
         </DialogHeader>
 
@@ -49,14 +59,14 @@ export function PipelineSettingsDialog({
                 />
                 <span className="text-sm font-medium">{stage.name}</span>
               </div>
-              <Badge variant="outline">{stage.stage_type}</Badge>
+              <Badge variant="outline">{stageTypeLabel(stage.stage_type)}</Badge>
             </li>
           ))}
         </ul>
 
         <div className="flex justify-end">
           <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Close
+            {t("common:close", "Close")}
           </Button>
         </div>
       </DialogContent>

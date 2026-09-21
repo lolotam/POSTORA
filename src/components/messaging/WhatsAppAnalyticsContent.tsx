@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+import "@/i18n";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useMessagingAccounts } from "@/hooks/useMessaging";
 import { useQuery } from "@tanstack/react-query";
@@ -6,6 +8,7 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContaine
 import { MessageSquare, Send, Users, Clock, BarChart3, Loader2, ArrowDownLeft, ArrowUpRight } from "lucide-react";
 
 export function WhatsAppAnalyticsContent() {
+  const { t } = useTranslation("whatsapp");
   const { accounts } = useMessagingAccounts();
   const waAccount = accounts.find((a) => a.platform === "whatsapp");
 
@@ -115,7 +118,7 @@ export function WhatsAppAnalyticsContent() {
     return (
       <div className="py-12 text-center text-muted-foreground">
         <BarChart3 className="h-12 w-12 mx-auto mb-4 opacity-50" />
-        <p>No WhatsApp Business account connected.</p>
+        <p>{t("empty.noAccount", "No WhatsApp Business account connected.")}</p>
       </div>
     );
   }
@@ -135,7 +138,7 @@ export function WhatsAppAnalyticsContent() {
               </div>
               <div>
                 <p className="text-2xl font-bold">{cacheStats?.totalConversations || 0}</p>
-                <p className="text-sm text-muted-foreground">Total Conversations</p>
+                <p className="text-sm text-muted-foreground">{t("analytics.totalConversations", "Total Conversations")}</p>
               </div>
             </div>
           </CardContent>
@@ -148,7 +151,7 @@ export function WhatsAppAnalyticsContent() {
               </div>
               <div>
                 <p className="text-2xl font-bold">{cacheStats?.totalUnread || 0}</p>
-                <p className="text-sm text-muted-foreground">Unread Messages</p>
+                <p className="text-sm text-muted-foreground">{t("analytics.unread", "Unread Messages")}</p>
               </div>
             </div>
           </CardContent>
@@ -161,7 +164,7 @@ export function WhatsAppAnalyticsContent() {
               </div>
               <div>
                 <p className="text-2xl font-bold">{cacheStats?.recentMessages || 0}</p>
-                <p className="text-sm text-muted-foreground">Active Today</p>
+                <p className="text-sm text-muted-foreground">{t("analytics.activeToday", "Active Today")}</p>
               </div>
             </div>
           </CardContent>
@@ -174,7 +177,7 @@ export function WhatsAppAnalyticsContent() {
               </div>
               <div>
                 <p className="text-2xl font-bold">{msgStats?.avgResponseStr || "—"}</p>
-                <p className="text-sm text-muted-foreground">Avg Response Time</p>
+                <p className="text-sm text-muted-foreground">{t("analytics.avgResponse", "Avg Response Time")}</p>
               </div>
             </div>
           </CardContent>
@@ -187,7 +190,7 @@ export function WhatsAppAnalyticsContent() {
               </div>
               <div>
                 <p className="text-2xl font-bold">{msgStats?.inboundCount || 0}</p>
-                <p className="text-sm text-muted-foreground">Received</p>
+                <p className="text-sm text-muted-foreground">{t("analytics.received", "Received")}</p>
               </div>
             </div>
           </CardContent>
@@ -200,7 +203,7 @@ export function WhatsAppAnalyticsContent() {
               </div>
               <div>
                 <p className="text-2xl font-bold">{msgStats?.outboundCount || 0}</p>
-                <p className="text-sm text-muted-foreground">Sent</p>
+                <p className="text-sm text-muted-foreground">{t("analytics.sent", "Sent")}</p>
               </div>
             </div>
           </CardContent>
@@ -209,7 +212,7 @@ export function WhatsAppAnalyticsContent() {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <Card>
-          <CardHeader><CardTitle>Conversations Over Time</CardTitle></CardHeader>
+          <CardHeader><CardTitle>{t("analytics.conversationsOverTime", "Conversations Over Time")}</CardTitle></CardHeader>
           <CardContent>
             {(cacheStats?.chartData?.length || 0) > 0 ? (
               <ResponsiveContainer width="100%" height={300}>
@@ -223,14 +226,14 @@ export function WhatsAppAnalyticsContent() {
               </ResponsiveContainer>
             ) : (
               <div className="text-center py-12 text-muted-foreground">
-                <p>No conversation data yet.</p>
+                <p>{t("analytics.noConversationData", "No conversation data yet.")}</p>
               </div>
             )}
           </CardContent>
         </Card>
 
         <Card>
-          <CardHeader><CardTitle>Peak Hours</CardTitle></CardHeader>
+          <CardHeader><CardTitle>{t("analytics.peakHours", "Peak Hours")}</CardTitle></CardHeader>
           <CardContent>
             {(msgStats?.peakHoursData?.some(d => d.messages > 0)) ? (
               <ResponsiveContainer width="100%" height={300}>
@@ -244,7 +247,7 @@ export function WhatsAppAnalyticsContent() {
               </ResponsiveContainer>
             ) : (
               <div className="text-center py-12 text-muted-foreground">
-                <p>No message data yet. Peak hours will show as messages flow in.</p>
+                <p>{t("analytics.noMessageData", "No message data yet. Peak hours will show as messages flow in.")}</p>
               </div>
             )}
           </CardContent>

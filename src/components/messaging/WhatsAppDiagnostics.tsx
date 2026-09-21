@@ -1,4 +1,7 @@
 import { useState, useMemo } from "react";
+import { Trans, useTranslation } from "react-i18next";
+import "@/i18n";
+import type { TFunction } from "i18next";
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -37,7 +40,7 @@ async function callApi(action: string, body: Record<string, unknown>) {
   if (!session?.access_token) {
     const { data: refreshed } = await supabase.auth.refreshSession();
     session = refreshed.session;
-    if (!session?.access_token) throw new Error("Not authenticated");
+    if (!session?.access_token) throw new Error("NOT_AUTHENTICATED");
   }
   const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
   const anonKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
@@ -79,27 +82,33 @@ function parseConversationPhone(conversationId: string): string | null {
  * Map a raw Meta WhatsApp error message into something actionable.
  * Returns null when no friendly mapping is known.
  */
-function mapWhatsAppError(raw: string): string | null {
+function mapWhatsAppError(raw: string, t: TFunction): string | null {
   if (!raw) return null;
   if (raw.includes("131058") || raw.toLowerCase().includes("hello world templates can only be sent from the public test numbers")) {
-    return "Meta only allows the 'hello_world' template to be sent from Public Test Numbers. Your business number must use one of YOUR own approved templates instead. Open WhatsApp Manager → Message Templates, copy an approved template name (e.g. one you submitted), and use that name here.";
+    return t("diagnostics.error131058", "Meta only allows the 'hello_world' template to be sent from Public Test Numbers. Your business number must use one of YOUR own approved templates instead. Open WhatsApp Manager → Message Templates, copy an approved template name (e.g. one you submitted), and use that name here.");
   }
   if (raw.includes("131047")) {
-    return "Recipient is outside the 24-hour customer service window. Send an approved Template Message instead of freeform text.";
+    return t("diagnostics.error131047", "Recipient is outside the 24-hour customer service window. Send an approved Template Message instead of freeform text.");
   }
   if (raw.includes("131026")) {
-    return "Recipient hasn't accepted WhatsApp's new Terms or the number is not a valid WhatsApp user.";
+    return t("diagnostics.error131026", "Recipient hasn't accepted WhatsApp's new Terms or the number is not a valid WhatsApp user.");
   }
   if (raw.includes("132000") || raw.includes("132001") || raw.includes("132005")) {
-    return "Template parameters/format don't match the approved template. Re-check parameter count and language code.";
+    return t("diagnostics.error132000", "Template parameters/format don't match the approved template. Re-check parameter count and language code.");
   }
   if (raw.includes("190") || raw.toLowerCase().includes("access token")) {
-    return "WhatsApp access token is invalid or expired. Reconnect the WhatsApp account.";
+    return t("diagnostics.error190", "WhatsApp access token is invalid or expired. Reconnect the WhatsApp account.");
   }
   return null;
 }
 
+function friendlyError(message: string, t: TFunction) {
+  if (message === "NOT_AUTHENTICATED") return t("errors.notAuthenticated", "Not authenticated");
+  return mapWhatsAppError(message, t) || message;
+}
+
 export function WhatsAppDiagnostics({ socialAccountId, phoneNumberId }: WhatsAppDiagnosticsProps) {
+  const { t } = useTranslation("whatsapp");
   const [testPhone, setTestPhone] = useState("");
   const [testMessage, setTestMessage] = useState("Hello from Postora! 🚀");
   const [templateName, setTemplateName] = useState("");
@@ -165,7 +174,7 @@ export function WhatsAppDiagnostics({ socialAccountId, phoneNumberId }: WhatsApp
   };
 
   const handleSendText = async () => {
-    if (!testPhone.trim()) return toast.error("Enter a recipient phone number");
+    if (!testPhone.trim()) return toast.error(t("diagnostics.enterPhone", "Enter a recipient phone number"));
     setLoading("text");
     const normalizedPhone = testPhone.replace(/\D/g, "");
     try {
@@ -176,8 +185,8 @@ export function WhatsAppDiagnostics({ socialAccountId, phoneNumberId }: WhatsApp
       });
       if (data.error) throw new Error(data.error);
       const wamid = data.message_id;
-      addResult({ status: "success", message: `Text sent to ${testPhone}`, data, timestamp: new Date().toISOString() });
-      toast.success("Text message sent!");
+      addResult({ status: "success", message: t("diagnostics.textSent", "Text sent to {{phone}}", { phone: testPhone }), data, timestamp: new Date().toISOString() });
+      toast.success(t("diagnostics.textSentToast", "Text message sent!"));
 
       // Re-fetch after 2.5s to see if Meta marked it failed (e.g. 131047 outside 24h)
       if (wamid) {
@@ -188,18 +197,18 @@ export function WhatsAppDiagnostics({ socialAccountId, phoneNumberId }: WhatsApp
             .eq("message_id", wamid)
             .maybeSingle();
           if (msgRow?.status === "failed") {
-            const friendly = msgRow.error_message || "Meta rejected delivery.";
-            toast.error(`Delivery failed: ${friendly}`, { duration: 9000 });
+            const friendly = msgRow.error_message || t("diagnostics.metaRejectedShort", "Meta rejected delivery.");
+            toast.error(t("diagnostics.deliveryFailed", "Delivery failed: {{reason}}", { reason: friendly }), { duration: 9000 });
             addResult({
               status: "error",
-              message: `Meta rejected delivery (code ${msgRow.error_code || "?"}): ${friendly}`,
+              message: t("diagnostics.metaRejected", "Meta rejected delivery (code {{code}}): {{reason}}", { code: msgRow.error_code || "?", reason: friendly }),
               timestamp: new Date().toISOString(),
             });
           }
         }, 2500);
       }
     } catch (err: any) {
-      const friendly = mapWhatsAppError(err.message) || err.message;
+      const friendly = friendlyError(err.message, t);
       addResult({ status: "error", message: friendly, timestamp: new Date().toISOString() });
       toast.error(friendly, { duration: 10000 });
     } finally {
@@ -208,8 +217,8 @@ export function WhatsAppDiagnostics({ socialAccountId, phoneNumberId }: WhatsApp
   };
 
   const handleSendTemplate = async () => {
-    if (!testPhone.trim()) return toast.error("Enter a recipient phone number");
-    if (!templateName.trim()) return toast.error("Enter an approved template name");
+    if (!testPhone.trim()) return toast.error(t("diagnostics.enterPhone", "Enter a recipient phone number"));
+    if (!templateName.trim()) return toast.error(t("diagnostics.enterTemplate", "Enter an approved template name"));
     setLoading("template");
     try {
       const data = await callApi("whatsapp_send_template", {
@@ -219,10 +228,10 @@ export function WhatsAppDiagnostics({ socialAccountId, phoneNumberId }: WhatsApp
         template_language: templateLang,
       });
       if (data.error) throw new Error(data.error);
-      addResult({ status: "success", message: `Template "${templateName}" sent to ${testPhone}`, data, timestamp: new Date().toISOString() });
-      toast.success("Template message sent!");
+      addResult({ status: "success", message: t("diagnostics.templateSent", "Template \"{{name}}\" sent to {{phone}}", { name: templateName, phone: testPhone }), data, timestamp: new Date().toISOString() });
+      toast.success(t("diagnostics.templateSentToast", "Template message sent!"));
     } catch (err: any) {
-      const friendly = mapWhatsAppError(err.message) || err.message;
+      const friendly = friendlyError(err.message, t);
       addResult({ status: "error", message: friendly, timestamp: new Date().toISOString() });
       toast.error(friendly, { duration: 10000 });
     } finally {
@@ -238,11 +247,12 @@ export function WhatsAppDiagnostics({ socialAccountId, phoneNumberId }: WhatsApp
       });
       if (data.error) throw new Error(data.error);
       const count = data.templates?.length || 0;
-      addResult({ status: "success", message: `Found ${count} templates`, data: data.templates, timestamp: new Date().toISOString() });
-      toast.success(`Found ${count} templates`);
+      addResult({ status: "success", message: t("diagnostics.foundTemplates", "Found {{count}} templates", { count }), data: data.templates, timestamp: new Date().toISOString() });
+      toast.success(t("diagnostics.foundTemplates", "Found {{count}} templates", { count }));
     } catch (err: any) {
-      addResult({ status: "error", message: err.message, timestamp: new Date().toISOString() });
-      toast.error(err.message);
+      const friendly = friendlyError(err.message, t);
+      addResult({ status: "error", message: friendly, timestamp: new Date().toISOString() });
+      toast.error(friendly);
     } finally {
       setLoading(null);
     }
@@ -277,11 +287,12 @@ export function WhatsAppDiagnostics({ socialAccountId, phoneNumberId }: WhatsApp
       };
 
       const data = await callWebhookTest(simulatedPayload);
-      addResult({ status: "success", message: "Simulated webhook sent — check messaging_cache for new conversation", data, timestamp: new Date().toISOString() });
-      toast.success("Webhook simulation sent!");
+      addResult({ status: "success", message: t("diagnostics.webhookSent", "Simulated webhook sent — check messaging_cache for new conversation"), data, timestamp: new Date().toISOString() });
+      toast.success(t("diagnostics.webhookSentToast", "Webhook simulation sent!"));
     } catch (err: any) {
-      addResult({ status: "error", message: err.message, timestamp: new Date().toISOString() });
-      toast.error(err.message);
+      const friendly = friendlyError(err.message, t);
+      addResult({ status: "error", message: friendly, timestamp: new Date().toISOString() });
+      toast.error(friendly);
     } finally {
       setLoading(null);
     }
@@ -294,11 +305,12 @@ export function WhatsAppDiagnostics({ socialAccountId, phoneNumberId }: WhatsApp
         social_account_id: socialAccountId,
       });
       if (data.error) throw new Error(data.error);
-      addResult({ status: "success", message: "Phone number registered successfully", data, timestamp: new Date().toISOString() });
-      toast.success("Phone number registered!");
+      addResult({ status: "success", message: t("diagnostics.registerSuccess", "Phone number registered successfully"), data, timestamp: new Date().toISOString() });
+      toast.success(t("diagnostics.registerToast", "Phone number registered!"));
     } catch (err: any) {
-      addResult({ status: "error", message: err.message, timestamp: new Date().toISOString() });
-      toast.error(err.message);
+      const friendly = friendlyError(err.message, t);
+      addResult({ status: "error", message: friendly, timestamp: new Date().toISOString() });
+      toast.error(friendly);
     } finally {
       setLoading(null);
     }
@@ -312,11 +324,12 @@ export function WhatsAppDiagnostics({ socialAccountId, phoneNumberId }: WhatsApp
       });
       if (data.error) throw new Error(data.error);
       const count = data.conversations?.length || 0;
-      addResult({ status: "success", message: `Found ${count} cached conversations`, data: data.conversations, timestamp: new Date().toISOString() });
-      toast.success(`Found ${count} conversations`);
+      addResult({ status: "success", message: t("diagnostics.foundConversations", "Found {{count}} cached conversations", { count }), data: data.conversations, timestamp: new Date().toISOString() });
+      toast.success(t("diagnostics.foundConversationsToast", "Found {{count}} conversations", { count }));
     } catch (err: any) {
-      addResult({ status: "error", message: err.message, timestamp: new Date().toISOString() });
-      toast.error(err.message);
+      const friendly = friendlyError(err.message, t);
+      addResult({ status: "error", message: friendly, timestamp: new Date().toISOString() });
+      toast.error(friendly);
     } finally {
       setLoading(null);
     }
@@ -330,25 +343,25 @@ export function WhatsAppDiagnostics({ socialAccountId, phoneNumberId }: WhatsApp
       <CardHeader>
         <CardTitle className="text-base flex items-center gap-2">
           <TestTube className="w-5 h-5" />
-          WhatsApp Diagnostics
+          {t("diagnostics.title", "WhatsApp Diagnostics")}
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <span>Account ID: <code className="bg-muted px-1 rounded">{socialAccountId.slice(0, 8)}...</code></span>
-          <span>Phone ID: <code className="bg-muted px-1 rounded">{phoneNumberId}</code></span>
+          <span>{t("diagnostics.accountId", "Account ID:")} <code className="bg-muted px-1 rounded">{socialAccountId.slice(0, 8)}...</code></span>
+          <span>{t("diagnostics.phoneId", "Phone ID:")} <code className="bg-muted px-1 rounded">{phoneNumberId}</code></span>
         </div>
 
         <Tabs defaultValue="send">
           <TabsList className="grid w-full grid-cols-3">
-            <TabsTrigger value="send">Send Test</TabsTrigger>
-            <TabsTrigger value="webhook">Simulate Webhook</TabsTrigger>
-            <TabsTrigger value="query">Query</TabsTrigger>
+            <TabsTrigger value="send">{t("diagnostics.sendTest", "Send Test")}</TabsTrigger>
+            <TabsTrigger value="webhook">{t("diagnostics.simulateWebhook", "Simulate Webhook")}</TabsTrigger>
+            <TabsTrigger value="query">{t("diagnostics.query", "Query")}</TabsTrigger>
           </TabsList>
 
           <TabsContent value="send" className="space-y-3 mt-3">
             <div>
-              <Label className="text-xs">Recipient Phone (with country code)</Label>
+              <Label className="text-xs">{t("diagnostics.recipient", "Recipient Phone (with country code)")}</Label>
               <Popover open={pickerOpen} onOpenChange={setPickerOpen}>
                 <PopoverTrigger asChild>
                   <Button
@@ -358,25 +371,25 @@ export function WhatsAppDiagnostics({ socialAccountId, phoneNumberId }: WhatsApp
                     aria-expanded={pickerOpen}
                     className="w-full justify-between mt-1 font-normal"
                   >
-                    {testPhone ? `+${testPhone.replace(/\D/g, "")}` : "Select or type a phone number…"}
+                    {testPhone ? `+${testPhone.replace(/\D/g, "")}` : t("diagnostics.selectPhone", "Select or type a phone number…")}
                     <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
                   </Button>
                 </PopoverTrigger>
                 <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
                   <Command shouldFilter={true}>
                     <CommandInput
-                      placeholder="Search contacts or type a number…"
+                      placeholder={t("diagnostics.searchPhone", "Search contacts or type a number…")}
                       value={testPhone}
                       onValueChange={setTestPhone}
                     />
                     <CommandList>
                       <CommandEmpty>
                         {typedDigits.length >= 6
-                          ? "No saved contact — type to use a new number."
-                          : "No saved contacts yet."}
+                          ? t("diagnostics.emptyContactsType", "No saved contact — type to use a new number.")
+                          : t("diagnostics.emptyContacts", "No saved contacts yet.")}
                       </CommandEmpty>
                       {recipientOptions.length > 0 && (
-                        <CommandGroup heading="Saved contacts & past conversations">
+                        <CommandGroup heading={t("diagnostics.savedContacts", "Saved contacts & past conversations")}>
                           {recipientOptions.map((opt) => (
                             <CommandItem
                               key={opt.phone}
@@ -394,14 +407,14 @@ export function WhatsAppDiagnostics({ socialAccountId, phoneNumberId }: WhatsApp
                               />
                               <span className="flex-1 truncate">{opt.label}</span>
                               <Badge variant="outline" className="ml-2 text-[10px] capitalize">
-                                {opt.source}
+                                {opt.source === "contact" ? t("diagnostics.sourceContact", "contact") : t("diagnostics.sourceConversation", "conversation")}
                               </Badge>
                             </CommandItem>
                           ))}
                         </CommandGroup>
                       )}
                       {showCustomEntry && (
-                        <CommandGroup heading="Use new number">
+                        <CommandGroup heading={t("diagnostics.customNumber", "Use new number")}>
                           <CommandItem
                             value={`__custom__ ${typedDigits}`}
                             onSelect={() => {
@@ -410,7 +423,7 @@ export function WhatsAppDiagnostics({ socialAccountId, phoneNumberId }: WhatsApp
                             }}
                           >
                             <Send className="mr-2 h-4 w-4" />
-                            Use this number: +{typedDigits}
+                            {t("diagnostics.useNumber", "Use this number: +{{phone}}", { phone: typedDigits })}
                           </CommandItem>
                         </CommandGroup>
                       )}
@@ -420,7 +433,7 @@ export function WhatsAppDiagnostics({ socialAccountId, phoneNumberId }: WhatsApp
               </Popover>
             </div>
             <div>
-              <Label className="text-xs">Text Message</Label>
+              <Label className="text-xs">{t("diagnostics.textLabel", "Text Message")}</Label>
               <Textarea
                 value={testMessage}
                 onChange={(e) => setTestMessage(e.target.value)}
@@ -430,49 +443,50 @@ export function WhatsAppDiagnostics({ socialAccountId, phoneNumberId }: WhatsApp
             </div>
             <Button onClick={handleSendText} disabled={loading === "text"} size="sm" className="gap-1.5">
               {loading === "text" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
-              Send Text Message
+              {t("diagnostics.sendText", "Send Text Message")}
             </Button>
 
             <div className="border-t pt-3 space-y-2">
-              <Label className="text-xs">Template Name (one of YOUR approved templates)</Label>
+              <Label className="text-xs">{t("diagnostics.templateName", "Template Name (one of YOUR approved templates)")}</Label>
               <div className="flex gap-2">
-                <Input value={templateName} onChange={(e) => setTemplateName(e.target.value)} placeholder="e.g. order_confirmation" />
+                <Input value={templateName} onChange={(e) => setTemplateName(e.target.value)} placeholder={t("diagnostics.templateNamePlaceholder", "e.g. order_confirmation")} />
                 <Input value={templateLang} onChange={(e) => setTemplateLang(e.target.value)} placeholder="en_US" className="w-24" />
               </div>
               <div className="flex gap-2">
                 <Button onClick={handleSendTemplate} disabled={loading === "template"} size="sm" variant="outline" className="gap-1.5">
                   {loading === "template" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
-                  Send Template Message
+                  {t("diagnostics.sendTemplate", "Send Template Message")}
                 </Button>
                 <Button onClick={handleListTemplates} disabled={loading === "templates"} size="sm" variant="ghost" className="gap-1.5">
                   {loading === "templates" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
-                  List my templates
+                  {t("diagnostics.listMyTemplates", "List my templates")}
                 </Button>
               </div>
               <p className="text-[11px] text-muted-foreground">
-                <strong>Don't use <code>hello_world</code></strong> — Meta only allows it from Public Test Numbers (error 131058). Use one of your own approved templates from WhatsApp Manager. If freeform text fails with "outside 24h window" (131047), a template is also required.
+                <Trans ns="whatsapp" i18nKey="diagnostics.dontUseHelloWorld" components={{ strong: <strong />, code: <code /> }}>
+                  <strong>Don't use <code>hello_world</code></strong> — Meta only allows it from Public Test Numbers (error 131058). Use one of your own approved templates from WhatsApp Manager. If freeform text fails with "outside 24h window" (131047), a template is also required.
+                </Trans>
               </p>
             </div>
           </TabsContent>
 
           <TabsContent value="webhook" className="space-y-3 mt-3">
             <p className="text-xs text-muted-foreground">
-              Simulates an inbound WhatsApp message webhook from a test number (96550000000).
-              This will create a conversation in the messaging_cache table.
+              {t("diagnostics.tabWebhookHint", "Simulates an inbound WhatsApp message webhook from a test number (96550000000). This will create a conversation in the messaging_cache table.")}
             </p>
             <Button onClick={handleSimulateWebhook} disabled={loading === "webhook"} size="sm" className="gap-1.5">
               {loading === "webhook" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
-              Simulate Inbound Message
+              {t("diagnostics.simulateInbound", "Simulate Inbound Message")}
             </Button>
 
             <div className="border-t pt-3 space-y-2">
-              <Label className="text-xs font-semibold">Phone Registration</Label>
+              <Label className="text-xs font-semibold">{t("diagnostics.phoneRegistration", "Phone Registration")}</Label>
               <p className="text-xs text-muted-foreground">
-                Register your WhatsApp phone number with the Cloud API. Required before sending messages (fixes error 133010).
+                {t("diagnostics.phoneRegistrationHint", "Register your WhatsApp phone number with the Cloud API. Required before sending messages (fixes error 133010).")}
               </p>
               <Button onClick={handleRegisterPhone} disabled={loading === "register"} size="sm" variant="outline" className="gap-1.5">
                 {loading === "register" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Zap className="w-3.5 h-3.5" />}
-                Register Phone Number
+                {t("diagnostics.registerPhone", "Register Phone Number")}
               </Button>
             </div>
           </TabsContent>
@@ -481,11 +495,11 @@ export function WhatsAppDiagnostics({ socialAccountId, phoneNumberId }: WhatsApp
             <div className="flex gap-2">
               <Button onClick={handleListConversations} disabled={loading === "convos"} size="sm" variant="outline" className="gap-1.5">
                 {loading === "convos" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
-                List Conversations
+                {t("diagnostics.listConversations", "List Conversations")}
               </Button>
               <Button onClick={handleListTemplates} disabled={loading === "templates"} size="sm" variant="outline" className="gap-1.5">
                 {loading === "templates" ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
-                List Templates
+                {t("diagnostics.listTemplates", "List Templates")}
               </Button>
             </div>
           </TabsContent>
@@ -494,7 +508,7 @@ export function WhatsAppDiagnostics({ socialAccountId, phoneNumberId }: WhatsApp
         {/* Results Log */}
         {results.length > 0 && (
           <div className="border-t pt-3 space-y-2">
-            <h4 className="text-xs font-semibold text-muted-foreground">Test Results</h4>
+            <h4 className="text-xs font-semibold text-muted-foreground">{t("diagnostics.testResults", "Test Results")}</h4>
             <div className="max-h-48 overflow-y-auto space-y-1.5">
               {results.map((r, i) => (
                 <div key={i} className="flex items-start gap-2 text-xs p-2 rounded bg-muted/30">

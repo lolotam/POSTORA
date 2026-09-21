@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+import "@/i18n";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { GripVertical, MessageSquare, MoreVertical, Pencil, Trash2 } from "lucide-react";
@@ -57,12 +59,13 @@ export function DealCard({
   onOpenConversation,
   sortable = true,
 }: DealCardProps) {
+  const { t } = useTranslation("whatsapp");
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: deal.id,
     disabled: !sortable || !canWrite,
   });
 
-  const contactName = deal.contact?.display_name || deal.contact?.phone_number || "Unknown contact";
+  const contactName = deal.contact?.display_name || deal.contact?.phone_number || t("deal.unknownContact", "Unknown contact");
   const amountLabel = formatAmount(deal.amount, deal.currency);
   const activityLabel = formatActivity(deal.conversation?.last_message_at);
   const otherStages = stages.filter((stage) => stage.id !== currentStageId);
@@ -80,7 +83,7 @@ export function DealCard({
             <button
               type="button"
               className="mt-0.5 cursor-grab text-muted-foreground"
-              aria-label={`Drag ${deal.title}`}
+              aria-label={t("deal.drag", "Drag {{title}}", { title: deal.title })}
               {...attributes}
               {...listeners}
             >
@@ -95,7 +98,7 @@ export function DealCard({
 
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="ghost" size="icon" className="h-7 w-7" aria-label={`Deal actions for ${deal.title}`}>
+              <Button variant="ghost" size="icon" className="h-7 w-7" aria-label={t("deal.menuAria", "Deal actions for {{title}}", { title: deal.title })}>
                 <MoreVertical className="h-4 w-4" />
               </Button>
             </DropdownMenuTrigger>
@@ -103,13 +106,13 @@ export function DealCard({
               {onOpenConversation && deal.conversation_cache_id ? (
                 <DropdownMenuItem onSelect={() => onOpenConversation(deal)}>
                   <MessageSquare className="mr-2 h-4 w-4" />
-                  Open conversation
+                  {t("deal.openConversation", "Open conversation")}
                 </DropdownMenuItem>
               ) : null}
               {onEdit ? (
                 <DropdownMenuItem disabled={!canWrite} onSelect={() => onEdit(deal)}>
                   <Pencil className="mr-2 h-4 w-4" />
-                  Edit deal
+                  {t("deal.edit", "Edit deal")}
                 </DropdownMenuItem>
               ) : null}
               {onDelete ? (
@@ -119,7 +122,7 @@ export function DealCard({
                   onSelect={() => onDelete(deal)}
                 >
                   <Trash2 className="mr-2 h-4 w-4" />
-                  Delete deal
+                  {t("deal.delete", "Delete deal")}
                 </DropdownMenuItem>
               ) : null}
             </DropdownMenuContent>
@@ -130,7 +133,7 @@ export function DealCard({
             native select is the baseline that works on touch, with a keyboard and
             with a screen reader. It is deliberately not a custom popup. */}
         <label className="sr-only" htmlFor={`move-${deal.id}`}>
-          Move {deal.title} to stage
+          {t("deal.moveLabel", "Move {{title}} to stage", { title: deal.title })}
         </label>
         <select
           id={`move-${deal.id}`}
@@ -142,7 +145,7 @@ export function DealCard({
             if (target) onMoveToStage(deal, target);
           }}
         >
-          <option value="">Move to stage…</option>
+          <option value="">{t("deal.moveToStage", "Move to stage…")}</option>
           {otherStages.map((stage) => (
             <option key={stage.id} value={stage.id}>
               {stage.name}
@@ -152,7 +155,7 @@ export function DealCard({
 
         <div className="flex flex-wrap items-center gap-2">
           {amountLabel ? <Badge variant="secondary">{amountLabel}</Badge> : null}
-          {deal.assigned_to ? <Badge variant="outline">Assigned</Badge> : null}
+          {deal.assigned_to ? <Badge variant="outline">{t("deal.assigned", "Assigned")}</Badge> : null}
           {activityLabel ? (
             <span className="flex items-center gap-1 text-xs text-muted-foreground">
               <MessageSquare className="h-3 w-3" />

@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+import "@/i18n";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -12,7 +14,27 @@ const statusConfig: Record<string, { icon: React.ReactNode; variant: "default" |
   failed: { icon: <XCircle className="h-3 w-3" />, variant: "destructive" },
 };
 
+function statusLabel(status: string, t: (key: string, fallback: string) => string) {
+  switch (status) {
+    case "pending":
+      return t("status.pending", "pending");
+    case "sending":
+      return t("status.sending", "sending");
+    case "completed":
+      return t("status.completed", "completed");
+    case "failed":
+      return t("status.failed", "failed");
+    case "sent":
+      return t("status.sent", "sent");
+    case "delivered":
+      return t("status.delivered", "delivered");
+    default:
+      return status;
+  }
+}
+
 export function BroadcastStatus({ broadcast }: { broadcast: WhatsAppBroadcast }) {
+  const { t } = useTranslation("whatsapp");
   const { data: recipients = [], isLoading } = useWhatsAppBroadcastRecipients(broadcast.id);
   const total = broadcast.recipient_count || 1;
   const progress = ((broadcast.sent_count + broadcast.failed_count) / total) * 100;
@@ -23,16 +45,16 @@ export function BroadcastStatus({ broadcast }: { broadcast: WhatsAppBroadcast })
         <div className="flex items-center justify-between">
           <CardTitle className="text-base">{broadcast.name}</CardTitle>
           <Badge variant={broadcast.status === "completed" ? "default" : broadcast.status === "failed" ? "destructive" : "secondary"}>
-            {broadcast.status}
+            {statusLabel(broadcast.status, t)}
           </Badge>
         </div>
-        <p className="text-sm text-muted-foreground">Template: {broadcast.template_name}</p>
+        <p className="text-sm text-muted-foreground">{t("broadcast.templateLabel", "Template: {{name}}", { name: broadcast.template_name })}</p>
       </CardHeader>
       <CardContent className="space-y-4">
         {broadcast.status === "sending" && (
           <div className="space-y-2">
             <div className="flex justify-between text-sm">
-              <span>Progress</span>
+              <span>{t("broadcast.progress", "Progress")}</span>
               <span>{Math.round(progress)}%</span>
             </div>
             <Progress value={progress} className="h-2" />
@@ -42,19 +64,19 @@ export function BroadcastStatus({ broadcast }: { broadcast: WhatsAppBroadcast })
         <div className="grid grid-cols-4 gap-3 text-center">
           <div className="p-2 rounded-lg bg-secondary/50">
             <p className="text-lg font-semibold">{broadcast.recipient_count}</p>
-            <p className="text-xs text-muted-foreground">Total</p>
+            <p className="text-xs text-muted-foreground">{t("broadcast.total", "Total")}</p>
           </div>
           <div className="p-2 rounded-lg bg-secondary/50">
             <p className="text-lg font-semibold text-green-600">{broadcast.sent_count}</p>
-            <p className="text-xs text-muted-foreground">Sent</p>
+            <p className="text-xs text-muted-foreground">{t("broadcast.sent", "Sent")}</p>
           </div>
           <div className="p-2 rounded-lg bg-secondary/50">
             <p className="text-lg font-semibold text-blue-600">{broadcast.delivered_count}</p>
-            <p className="text-xs text-muted-foreground">Delivered</p>
+            <p className="text-xs text-muted-foreground">{t("broadcast.delivered", "Delivered")}</p>
           </div>
           <div className="p-2 rounded-lg bg-secondary/50">
             <p className="text-lg font-semibold text-destructive">{broadcast.failed_count}</p>
-            <p className="text-xs text-muted-foreground">Failed</p>
+            <p className="text-xs text-muted-foreground">{t("broadcast.failed", "Failed")}</p>
           </div>
         </div>
 
@@ -67,10 +89,10 @@ export function BroadcastStatus({ broadcast }: { broadcast: WhatsAppBroadcast })
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Phone</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Sent At</TableHead>
-                  <TableHead>Error</TableHead>
+                  <TableHead>{t("broadcast.phone", "Phone")}</TableHead>
+                  <TableHead>{t("broadcast.status", "Status")}</TableHead>
+                  <TableHead>{t("broadcast.sentAt", "Sent At")}</TableHead>
+                  <TableHead>{t("broadcast.error", "Error")}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -81,7 +103,7 @@ export function BroadcastStatus({ broadcast }: { broadcast: WhatsAppBroadcast })
                       <TableCell className="font-mono text-sm">{r.phone_number}</TableCell>
                       <TableCell>
                         <Badge variant={cfg.variant} className="gap-1 text-xs">
-                          {cfg.icon} {r.status}
+                          {cfg.icon} {statusLabel(r.status, t)}
                         </Badge>
                       </TableCell>
                       <TableCell className="text-sm text-muted-foreground">

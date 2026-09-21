@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
+import "@/i18n";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Plus, Search, Upload } from "lucide-react";
@@ -17,6 +19,7 @@ import { ContactImportDialog } from "./contacts/ContactImportDialog";
 import { ContactExportMenu } from "./contacts/ContactExportMenu";
 
 export function WhatsAppContactsContent() {
+  const { t } = useTranslation("whatsapp");
   const { session } = useAuth();
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
@@ -69,9 +72,9 @@ export function WhatsAppContactsContent() {
       .select("*")
       .order("display_name", { ascending: true, nullsFirst: false });
     if (search) {
-      const t = `%${search.replace(/[%_]/g, "\\$&").replace(/,/g, " ")}%`;
+      const pattern = `%${search.replace(/[%_]/g, "\\$&").replace(/,/g, " ")}%`;
       q = q.or(
-        `display_name.ilike.${t},phone_number.ilike.${t},email.ilike.${t},company.ilike.${t}`,
+        `display_name.ilike.${pattern},phone_number.ilike.${pattern},email.ilike.${pattern},company.ilike.${pattern}`,
       );
     }
     if (groupId !== "all") {
@@ -90,17 +93,17 @@ export function WhatsAppContactsContent() {
     <div className="space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-4">
         <p className="text-sm text-muted-foreground">
-          {total} contacts · {groups.length} groups
+          {t("contacts.summary", "{{contacts}} contacts · {{groups}} groups", { contacts: total, groups: groups.length })}
         </p>
         <div className="flex gap-2 flex-wrap">
           <Button variant="outline" onClick={() => setImportOpen(true)}>
             <Upload className="h-4 w-4 mr-2" />
-            Import CSV
+            {t("contacts.importCsv", "Import CSV")}
           </Button>
           <ContactExportMenu getContacts={exportFetcher} />
           <Button onClick={openAdd}>
             <Plus className="h-4 w-4 mr-2" />
-            Add Contact
+            {t("contacts.add", "Add Contact")}
           </Button>
         </div>
       </div>
@@ -108,7 +111,7 @@ export function WhatsAppContactsContent() {
       <div className="relative max-w-sm">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
         <Input
-          placeholder="Search contacts..."
+          placeholder={t("contacts.search", "Search contacts...")}
           value={searchInput}
           onChange={(e) => setSearchInput(e.target.value)}
           className="pl-9"

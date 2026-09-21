@@ -1,4 +1,6 @@
 import { useMemo, useState } from "react";
+import { Trans, useTranslation } from "react-i18next";
+import "@/i18n";
 import { AlertTriangle, CheckCircle2, Loader2, ShieldOff } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -11,6 +13,7 @@ import { toast } from "sonner";
  * 2-step verification) and exposes a manual "Verify registration" button.
  */
 export function WhatsAppCoexistenceSetupBanner() {
+  const { t } = useTranslation("whatsapp");
   const { accounts } = useMessagingAccounts();
   const register = useWhatsAppRegisterPhone();
   const [dismissed, setDismissed] = useState(false);
@@ -30,9 +33,9 @@ export function WhatsAppCoexistenceSetupBanner() {
   const handleVerify = async (socialAccountId: string, label: string) => {
     try {
       await register.mutateAsync({ socialAccountId });
-      toast.success(`${label} is now registered with the Cloud API. You can send messages.`);
+      toast.success(t("banner.registered", "{{label}} is now registered with the Cloud API. You can send messages.", { label }));
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Registration failed";
+      const msg = err instanceof Error ? err.message : t("errors.registrationFailed", "Registration failed");
       toast.error(msg, { duration: 12000 });
     }
   };
@@ -41,20 +44,42 @@ export function WhatsAppCoexistenceSetupBanner() {
     <Alert className="border-destructive/30 bg-destructive/5">
       <AlertTriangle className="h-4 w-4 text-destructive" />
       <AlertTitle className="text-destructive">
-        One-time setup needed for WhatsApp Coexistence
+        {t("banner.title", "One-time setup needed for WhatsApp Coexistence")}
       </AlertTitle>
       <AlertDescription className="space-y-3 text-sm">
         <p className="text-muted-foreground">
-          Your number was onboarded via <strong>Coexistence</strong>. Before you can send messages
-          through Postora, Meta requires you to <strong>turn off two-step verification</strong> in
-          the WhatsApp Business mobile app — otherwise the Cloud API cannot register the number.
+          <Trans
+            ns="whatsapp"
+            i18nKey="banner.body"
+            components={{ strong: <strong /> }}
+          >
+            Your number was onboarded via <strong>Coexistence</strong>. Before you can send messages
+            through Postora, Meta requires you to <strong>turn off two-step verification</strong> in
+            the WhatsApp Business mobile app — otherwise the Cloud API cannot register the number.
+          </Trans>
         </p>
         <ol className="list-decimal pl-5 text-muted-foreground space-y-1">
-          <li>Open <strong>WhatsApp Business</strong> on the phone where this number is active.</li>
-          <li>Go to <strong>Settings → Account → Two-step verification</strong>.</li>
-          <li>Tap <strong>Turn off</strong> (enter your existing 6-digit PIN).</li>
-          <li>Come back here and click <strong>Verify registration</strong> below.</li>
-          <li>After success, you may re-enable 2-step verification in the mobile app.</li>
+          <li>
+            <Trans ns="whatsapp" i18nKey="banner.step1" components={{ strong: <strong /> }}>
+              Open <strong>WhatsApp Business</strong> on the phone where this number is active.
+            </Trans>
+          </li>
+          <li>
+            <Trans ns="whatsapp" i18nKey="banner.step2" components={{ strong: <strong /> }}>
+              Go to <strong>Settings → Account → Two-step verification</strong>.
+            </Trans>
+          </li>
+          <li>
+            <Trans ns="whatsapp" i18nKey="banner.step3" components={{ strong: <strong /> }}>
+              Tap <strong>Turn off</strong> (enter your existing 6-digit PIN).
+            </Trans>
+          </li>
+          <li>
+            <Trans ns="whatsapp" i18nKey="banner.step4" components={{ strong: <strong /> }}>
+              Come back here and click <strong>Verify registration</strong> below.
+            </Trans>
+          </li>
+          <li>{t("banner.step5", "After success, you may re-enable 2-step verification in the mobile app.")}</li>
         </ol>
 
         <div className="space-y-2 pt-1">
@@ -78,12 +103,12 @@ export function WhatsAppCoexistenceSetupBanner() {
                   {register.isPending ? (
                     <>
                       <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
-                      Verifying…
+                      {t("banner.verifying", "Verifying…")}
                     </>
                   ) : (
                     <>
                       <CheckCircle2 className="mr-2 h-3.5 w-3.5" />
-                      Verify registration
+                      {t("banner.verify", "Verify registration")}
                     </>
                   )}
                 </Button>
@@ -94,7 +119,7 @@ export function WhatsAppCoexistenceSetupBanner() {
 
         <div className="flex justify-end pt-1">
           <Button variant="ghost" size="sm" onClick={() => setDismissed(true)}>
-            Dismiss for now
+            {t("banner.dismiss", "Dismiss for now")}
           </Button>
         </div>
       </AlertDescription>

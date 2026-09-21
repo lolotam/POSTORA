@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
+import "@/i18n";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -21,7 +23,23 @@ interface Contact {
   name: string | null;
 }
 
+function broadcastStatusLabel(status: string, t: (key: string, fallback: string) => string) {
+  switch (status) {
+    case "pending":
+      return t("status.pending", "pending");
+    case "sending":
+      return t("status.sending", "sending");
+    case "completed":
+      return t("status.completed", "completed");
+    case "failed":
+      return t("status.failed", "failed");
+    default:
+      return status;
+  }
+}
+
 export function BroadcastManager() {
+  const { t } = useTranslation("whatsapp");
   const { broadcasts, isLoading, createBroadcast, sendBroadcast, deleteBroadcast } = useWhatsAppBroadcasts();
   const { accounts } = useMessagingAccounts();
   const waAccount = accounts.find((a) => a.platform === "whatsapp");
@@ -136,7 +154,7 @@ export function BroadcastManager() {
     return (
       <div className="py-12 text-center text-muted-foreground">
         <Radio className="h-12 w-12 mx-auto mb-4 opacity-50" />
-        <p>No WhatsApp Business account connected.</p>
+        <p>{t("empty.noAccount", "No WhatsApp Business account connected.")}</p>
       </div>
     );
   }
@@ -144,43 +162,43 @@ export function BroadcastManager() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <p className="text-sm text-muted-foreground">Send approved templates to multiple contacts at once</p>
+        <p className="text-sm text-muted-foreground">{t("broadcast.hint", "Send approved templates to multiple contacts at once")}</p>
         <Dialog open={createOpen} onOpenChange={setCreateOpen}>
           <DialogTrigger asChild>
-            <Button><Plus className="h-4 w-4 mr-2" />New Broadcast</Button>
+            <Button><Plus className="h-4 w-4 mr-2" />{t("broadcast.new", "New Broadcast")}</Button>
           </DialogTrigger>
           <DialogContent className="max-w-lg max-h-[90vh] overflow-hidden flex flex-col">
             <DialogHeader>
-              <DialogTitle>Create Broadcast</DialogTitle>
-              <DialogDescription>Send an approved template to selected contacts</DialogDescription>
+              <DialogTitle>{t("broadcast.createTitle", "Create Broadcast")}</DialogTitle>
+              <DialogDescription>{t("broadcast.createDesc", "Send an approved template to selected contacts")}</DialogDescription>
             </DialogHeader>
             <div className="space-y-4 flex-1 overflow-y-auto pr-1">
               <div>
-                <Label>Campaign Name</Label>
-                <Input placeholder="e.g. January Promo" value={name} onChange={(e) => setName(e.target.value)} />
+                <Label>{t("broadcast.campaignName", "Campaign Name")}</Label>
+                <Input placeholder={t("broadcast.namePlaceholder", "e.g. January Promo")} value={name} onChange={(e) => setName(e.target.value)} />
               </div>
 
               <div>
-                <Label>Template</Label>
+                <Label>{t("broadcast.template", "Template")}</Label>
                 <Select value={templateName} onValueChange={setTemplateName}>
-                  <SelectTrigger><SelectValue placeholder="Select approved template" /></SelectTrigger>
+                  <SelectTrigger><SelectValue placeholder={t("broadcast.templatePlaceholder", "Select approved template")} /></SelectTrigger>
                   <SelectContent>
-                    {templates.map((t: any) => (
-                      <SelectItem key={t.id || t.name} value={t.name}>{t.name}</SelectItem>
+                    {templates.map((tmpl: any) => (
+                      <SelectItem key={tmpl.id || tmpl.name} value={tmpl.name}>{tmpl.name}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
                 {templates.length === 0 && (
-                  <p className="text-xs text-muted-foreground mt-1">No approved templates. Sync templates first.</p>
+                  <p className="text-xs text-muted-foreground mt-1">{t("broadcast.noApprovedTemplates", "No approved templates. Sync templates first.")}</p>
                 )}
               </div>
 
               <div>
-                <Label>Filter by Group</Label>
+                <Label>{t("broadcast.filterGroup", "Filter by Group")}</Label>
                 <Select value={filterGroup} onValueChange={(v) => { setFilterGroup(v); setSelectedContacts(new Set()); }}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="all">All Contacts</SelectItem>
+                    <SelectItem value="all">{t("broadcast.allContacts", "All Contacts")}</SelectItem>
                     {groups.map((g: any) => (
                       <SelectItem key={g.id} value={g.id}>{g.name}</SelectItem>
                     ))}
@@ -190,20 +208,20 @@ export function BroadcastManager() {
 
               <div>
                 <div className="flex items-center justify-between mb-2">
-                  <Label>Recipients ({selectedContacts.size} selected)</Label>
+                  <Label>{t("broadcast.recipients", "Recipients ({{count}} selected)", { count: selectedContacts.size })}</Label>
                   <Button variant="ghost" size="sm" onClick={selectAll}>
-                    {selectedContacts.size === filteredContacts.length ? "Deselect All" : "Select All"}
+                    {selectedContacts.size === filteredContacts.length ? t("broadcast.deselectAll", "Deselect All") : t("broadcast.selectAll", "Select All")}
                   </Button>
                 </div>
                 {selectedContacts.size > 1000 && (
                   <div className="flex items-center gap-2 p-2 rounded-md bg-destructive/10 text-destructive text-sm mb-2">
                     <AlertTriangle className="h-4 w-4 shrink-0" />
-                    Max 1000 recipients per broadcast
+                    {t("broadcast.maxRecipients", "Max 1000 recipients per broadcast")}
                   </div>
                 )}
                 <ScrollArea className="h-[200px] rounded-md border p-2">
                   {filteredContacts.length === 0 ? (
-                    <p className="text-sm text-muted-foreground text-center py-4">No contacts found</p>
+                    <p className="text-sm text-muted-foreground text-center py-4">{t("broadcast.noContacts", "No contacts found")}</p>
                   ) : (
                     <div className="space-y-1">
                       {filteredContacts.map((c) => (
@@ -233,7 +251,7 @@ export function BroadcastManager() {
                 className="w-full"
               >
                 {createBroadcast.isPending ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Users className="h-4 w-4 mr-2" />}
-                Create Broadcast ({selectedContacts.size} recipients)
+                {t("broadcast.createCount", "Create Broadcast ({{count}} recipients)", { count: selectedContacts.size })}
               </Button>
             </DialogFooter>
           </DialogContent>
@@ -244,13 +262,13 @@ export function BroadcastManager() {
       <Dialog open={!!confirmSendId} onOpenChange={(open) => !open && setConfirmSendId(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Send Broadcast?</DialogTitle>
+            <DialogTitle>{t("broadcast.sendConfirm", "Send Broadcast?")}</DialogTitle>
             <DialogDescription>
-              This will send the template to all recipients. This action cannot be undone.
+              {t("broadcast.sendConfirmDesc", "This will send the template to all recipients. This action cannot be undone.")}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setConfirmSendId(null)}>Cancel</Button>
+            <Button variant="outline" onClick={() => setConfirmSendId(null)}>{t("common:cancel", "Cancel")}</Button>
             <Button
               onClick={() => {
                 if (confirmSendId) {
@@ -261,7 +279,7 @@ export function BroadcastManager() {
               disabled={sendBroadcast.isPending}
             >
               {sendBroadcast.isPending ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Send className="h-4 w-4 mr-2" />}
-              Confirm Send
+              {t("broadcast.confirmSend", "Confirm Send")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -275,7 +293,7 @@ export function BroadcastManager() {
         <Card>
           <CardContent className="py-12 text-center text-muted-foreground">
             <Radio className="h-8 w-8 mx-auto mb-2 opacity-50" />
-            <p>No broadcasts yet. Create one to send templates to multiple contacts.</p>
+            <p>{t("broadcast.empty", "No broadcasts yet. Create one to send templates to multiple contacts.")}</p>
           </CardContent>
         </Card>
       ) : (
@@ -285,7 +303,7 @@ export function BroadcastManager() {
               {expandedId === b.id ? (
                 <div className="space-y-2">
                   <BroadcastStatus broadcast={b} />
-                  <Button variant="ghost" size="sm" onClick={() => setExpandedId(null)}>Collapse</Button>
+                  <Button variant="ghost" size="sm" onClick={() => setExpandedId(null)}>{t("broadcast.collapse", "Collapse")}</Button>
                 </div>
               ) : (
                 <Card className="cursor-pointer hover:border-primary/30 transition-colors" onClick={() => setExpandedId(b.id)}>
@@ -295,7 +313,7 @@ export function BroadcastManager() {
                       <div className="min-w-0">
                         <p className="font-medium truncate">{b.name}</p>
                         <p className="text-xs text-muted-foreground">
-                          {b.template_name} · {b.recipient_count} recipients · {new Date(b.created_at).toLocaleDateString()}
+                          {t("broadcast.subtitle", "{{template}} · {{count}} recipients · {{date}}", { template: b.template_name, count: b.recipient_count, date: new Date(b.created_at).toLocaleDateString() })}
                         </p>
                       </div>
                     </div>
@@ -305,12 +323,12 @@ export function BroadcastManager() {
                         b.status === "sending" ? "secondary" :
                         b.status === "failed" ? "destructive" : "outline"
                       }>
-                        {b.status}
+                        {broadcastStatusLabel(b.status, t)}
                       </Badge>
                       {b.status === "pending" && (
                         <>
                           <Button size="sm" onClick={() => setConfirmSendId(b.id)} disabled={sendBroadcast.isPending}>
-                            <Send className="h-3 w-3 mr-1" />Send
+                            <Send className="h-3 w-3 mr-1" />{t("broadcast.send", "Send")}
                           </Button>
                           <Button size="sm" variant="ghost" onClick={() => deleteBroadcast.mutate(b.id)}>
                             <Trash2 className="h-3 w-3" />

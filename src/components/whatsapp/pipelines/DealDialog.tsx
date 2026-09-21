@@ -1,4 +1,7 @@
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
+import "@/i18n";
+import type { TFunction } from "i18next";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -47,8 +50,27 @@ export interface DealDialogProps {
   onSubmit: (values: DealFormValues) => void;
 }
 
-function contactLabel(contact: WorkspaceContactOption) {
-  return contact.display_name || contact.phone_number || "Unknown contact";
+function contactLabel(contact: WorkspaceContactOption, t: TFunction) {
+  return contact.display_name || contact.phone_number || t("deal.unknownContact", "Unknown contact");
+}
+
+function translateDealIssue(issue: DealValidationIssue, t: TFunction): string {
+  if (issue.field === "contactId" && issue.code === "required") {
+    return t("deal.validation.contactId_required", "A contact is required");
+  }
+  if (issue.field === "title" && issue.code === "required") {
+    return t("deal.validation.title_required", "A deal title is required");
+  }
+  if (issue.field === "amount" && issue.code === "finite") {
+    return t("deal.validation.amount_finite", "Amount must be a finite number");
+  }
+  if (issue.field === "amount" && issue.code === "non_negative") {
+    return t("deal.validation.amount_non_negative", "Amount cannot be negative");
+  }
+  if (issue.field === "currency" && issue.code === "format") {
+    return t("deal.validation.currency_format", "Currency must be a 3-letter code");
+  }
+  return issue.message;
 }
 
 export function DealDialog({
@@ -62,6 +84,7 @@ export function DealDialog({
   isSubmitting = false,
   onSubmit,
 }: DealDialogProps) {
+  const { t } = useTranslation("whatsapp");
   const [contactId, setContactId] = useState("");
   const [title, setTitle] = useState("");
   const [amount, setAmount] = useState("0");
@@ -79,8 +102,10 @@ export function DealDialog({
     setIssues([]);
   }, [defaultStageId, deal, open, stages]);
 
-  const issueFor = (field: DealValidationIssue["field"]) =>
-    issues.find((issue) => issue.field === field)?.message;
+  const issueFor = (field: DealValidationIssue["field"]) => {
+    const issue = issues.find((item) => item.field === field);
+    return issue ? translateDealIssue(issue, t) : undefined;
+  };
 
   const handleSubmit = (event: React.FormEvent) => {
     event.preventDefault();
@@ -108,20 +133,20 @@ export function DealDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>{deal ? "Edit deal" : "New deal"}</DialogTitle>
+          <DialogTitle>{deal ? t("deal.editTitle", "Edit deal") : t("deal.newTitle", "New deal")}</DialogTitle>
           <DialogDescription>
-            Deals are linked to a contact so they can open the right conversation.
+            {t("deal.description", "Deals are linked to a contact so they can open the right conversation.")}
           </DialogDescription>
         </DialogHeader>
 
         <form className="space-y-4" onSubmit={handleSubmit}>
           <div className="space-y-2">
-            <Label htmlFor="deal-title">Title</Label>
+            <Label htmlFor="deal-title">{t("deal.title", "Title")}</Label>
             <Input
               id="deal-title"
               value={title}
               onChange={(event) => setTitle(event.target.value)}
-              placeholder="Renewal for Acme"
+              placeholder={t("deal.titlePlaceholder", "Renewal for Acme")}
             />
             {issueFor("title") ? (
               <p className="text-xs text-destructive">{issueFor("title")}</p>
@@ -129,15 +154,15 @@ export function DealDialog({
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="deal-contact">Contact</Label>
+            <Label htmlFor="deal-contact">{t("deal.contact", "Contact")}</Label>
             <Select value={contactId} onValueChange={setContactId}>
               <SelectTrigger id="deal-contact">
-                <SelectValue placeholder="Select a contact" />
+                <SelectValue placeholder={t("deal.selectContact", "Select a contact")} />
               </SelectTrigger>
               <SelectContent>
                 {contacts.map((contact) => (
                   <SelectItem key={contact.id} value={contact.id}>
-                    {contactLabel(contact)}
+                    {contactLabel(contact, t)}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -149,7 +174,7 @@ export function DealDialog({
 
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-2">
-              <Label htmlFor="deal-amount">Amount</Label>
+              <Label htmlFor="deal-amount">{t("deal.amount", "Amount")}</Label>
               <Input
                 id="deal-amount"
                 type="number"
@@ -163,7 +188,7 @@ export function DealDialog({
               ) : null}
             </div>
             <div className="space-y-2">
-              <Label htmlFor="deal-currency">Currency</Label>
+              <Label htmlFor="deal-currency">{t("deal.currency", "Currency")}</Label>
               <Input
                 id="deal-currency"
                 value={currency}
@@ -177,10 +202,10 @@ export function DealDialog({
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="deal-stage">Stage</Label>
+            <Label htmlFor="deal-stage">{t("deal.stage", "Stage")}</Label>
             <Select value={stageId} onValueChange={setStageId}>
               <SelectTrigger id="deal-stage">
-                <SelectValue placeholder="Select a stage" />
+                <SelectValue placeholder={t("deal.selectStage", "Select a stage")} />
               </SelectTrigger>
               <SelectContent>
                 {stages.map((stage) => (
@@ -194,10 +219,10 @@ export function DealDialog({
 
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
-              Cancel
+              {t("common:cancel", "Cancel")}
             </Button>
             <Button type="submit" disabled={isSubmitting}>
-              {deal ? "Save deal" : "Create deal"}
+              {deal ? t("deal.save", "Save deal") : t("deal.create", "Create deal")}
             </Button>
           </DialogFooter>
         </form>

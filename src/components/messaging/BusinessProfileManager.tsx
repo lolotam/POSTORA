@@ -1,4 +1,6 @@
 import { useState, useEffect } from "react";
+import { useTranslation } from "react-i18next";
+import "@/i18n";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -25,7 +27,32 @@ const VERTICAL_LABELS: Record<string, string> = {
   RESTAURANT: "Restaurant", NOT_A_BIZ: "Not a Business", OTHER: "Other",
 };
 
+function verticalLabel(code: string, t: (key: string, fallback: string) => string) {
+  switch (code) {
+    case "AUTOMOTIVE": return t("vertical.AUTOMOTIVE", "Automotive");
+    case "BEAUTY": return t("vertical.BEAUTY", "Beauty & Spa");
+    case "APPAREL": return t("vertical.APPAREL", "Apparel & Clothing");
+    case "EDU": return t("vertical.EDU", "Education");
+    case "ENTERTAIN": return t("vertical.ENTERTAIN", "Entertainment");
+    case "EVENT_PLAN": return t("vertical.EVENT_PLAN", "Event Planning");
+    case "FINANCE": return t("vertical.FINANCE", "Finance");
+    case "GROCERY": return t("vertical.GROCERY", "Grocery");
+    case "GOVT": return t("vertical.GOVT", "Government");
+    case "HOTEL": return t("vertical.HOTEL", "Hotel & Lodging");
+    case "HEALTH": return t("vertical.HEALTH", "Health & Medical");
+    case "NONPROFIT": return t("vertical.NONPROFIT", "Non-Profit");
+    case "PROF_SERVICES": return t("vertical.PROF_SERVICES", "Professional Services");
+    case "RETAIL": return t("vertical.RETAIL", "Retail");
+    case "TRAVEL": return t("vertical.TRAVEL", "Travel & Tourism");
+    case "RESTAURANT": return t("vertical.RESTAURANT", "Restaurant");
+    case "NOT_A_BIZ": return t("vertical.NOT_A_BIZ", "Not a Business");
+    case "OTHER": return t("vertical.OTHER", "Other");
+    default: return VERTICAL_LABELS[code] || code;
+  }
+}
+
 export function BusinessProfileManager() {
+  const { t } = useTranslation("whatsapp");
   const { profile, isLoading, error, updateProfile, isUpdating } = useWhatsAppBusinessProfile();
 
   const [about, setAbout] = useState("");
@@ -87,14 +114,13 @@ export function BusinessProfileManager() {
         <CardContent className="flex flex-col items-center gap-3 py-10 text-center">
           <QrCode className="h-8 w-8 text-purple-600" />
           <div className="space-y-1">
-            <p className="font-medium">Business profile needs a Cloud API connection</p>
+            <p className="font-medium">{t("profile.cloudOnly", "Business profile needs a Cloud API connection")}</p>
             <p className="mx-auto max-w-md text-sm text-muted-foreground">
-              This number is connected with Direct QR, which runs a self-hosted WhatsApp session.
-              Meta only stores a business profile for numbers connected through the Cloud API.
+              {t("profile.cloudOnlyDesc", "This number is connected with Direct QR, which runs a self-hosted WhatsApp session. Meta only stores a business profile for numbers connected through the Cloud API.")}
             </p>
           </div>
           <Button asChild variant="outline" size="sm">
-            <Link to="/messaging/whatsapp/setup">Review connection modes</Link>
+            <Link to="/messaging/whatsapp/setup">{t("profile.reviewModes", "Review connection modes")}</Link>
           </Button>
         </CardContent>
       </Card>
@@ -105,7 +131,7 @@ export function BusinessProfileManager() {
     return (
       <Card>
         <CardContent className="py-8 text-center">
-          <p className="text-destructive">Failed to load profile: {(error as Error).message}</p>
+          <p className="text-destructive">{t("errors.profileLoad", "Failed to load profile: {{message}}", { message: (error as Error).message })}</p>
         </CardContent>
       </Card>
     );
@@ -119,13 +145,13 @@ export function BusinessProfileManager() {
           <div className="flex items-center gap-4">
             <Avatar className="w-16 h-16">
               {profile?.profile_picture_url ? (
-                <AvatarImage src={profile.profile_picture_url} alt="Business profile" />
+                <AvatarImage src={profile.profile_picture_url} alt={t("profile.pictureAlt", "Business profile")} />
               ) : null}
               <AvatarFallback><Building2 className="w-8 h-8" /></AvatarFallback>
             </Avatar>
             <div>
-              <CardTitle>Business Profile</CardTitle>
-              <CardDescription>Manage your WhatsApp Business profile visible to customers</CardDescription>
+              <CardTitle>{t("profile.title", "Business Profile")}</CardTitle>
+              <CardDescription>{t("profile.subtitle", "Manage your WhatsApp Business profile visible to customers")}</CardDescription>
             </div>
           </div>
         </CardHeader>
@@ -134,20 +160,20 @@ export function BusinessProfileManager() {
       {/* Profile Fields */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-lg">Profile Details</CardTitle>
+          <CardTitle className="text-lg">{t("profile.details", "Profile Details")}</CardTitle>
         </CardHeader>
         <CardContent className="space-y-5">
           {/* About */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
-              <Label htmlFor="about">About</Label>
+              <Label htmlFor="about">{t("form.about", "About")}</Label>
               <span className="text-xs text-muted-foreground">{about.length}/139</span>
             </div>
             <Input
               id="about"
               value={about}
               onChange={(e) => setAbout(e.target.value.slice(0, 139))}
-              placeholder="Brief description shown under your business name"
+              placeholder={t("form.aboutPlaceholder", "Brief description shown under your business name")}
               maxLength={139}
             />
           </div>
@@ -155,14 +181,14 @@ export function BusinessProfileManager() {
           {/* Description */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
-              <Label htmlFor="description">Description</Label>
+              <Label htmlFor="description">{t("form.description", "Description")}</Label>
               <span className="text-xs text-muted-foreground">{description.length}/512</span>
             </div>
             <Textarea
               id="description"
               value={description}
               onChange={(e) => setDescription(e.target.value.slice(0, 512))}
-              placeholder="Detailed business description"
+              placeholder={t("form.descriptionPlaceholder", "Detailed business description")}
               maxLength={512}
               rows={4}
             />
@@ -170,34 +196,34 @@ export function BusinessProfileManager() {
 
           {/* Address */}
           <div className="space-y-2">
-            <Label htmlFor="address">Address</Label>
+            <Label htmlFor="address">{t("form.address", "Address")}</Label>
             <Input
               id="address"
               value={address}
               onChange={(e) => setAddress(e.target.value)}
-              placeholder="Business address"
+              placeholder={t("form.addressPlaceholder", "Business address")}
             />
           </div>
 
           {/* Email */}
           <div className="space-y-2">
-            <Label htmlFor="email">Email</Label>
+            <Label htmlFor="email">{t("form.email", "Email")}</Label>
             <Input
               id="email"
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              placeholder="Business email"
+              placeholder={t("form.emailPlaceholder", "Business email")}
             />
           </div>
 
           {/* Websites */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
-              <Label>Websites</Label>
+              <Label>{t("profile.websites", "Websites")}</Label>
               {websites.length < 2 && (
                 <Button type="button" variant="ghost" size="sm" onClick={addWebsite} className="gap-1 h-7 text-xs">
-                  <Plus className="w-3 h-3" /> Add
+                  <Plus className="w-3 h-3" /> {t("profile.addWebsite", "Add")}
                 </Button>
               )}
             </div>
@@ -206,7 +232,7 @@ export function BusinessProfileManager() {
                 <Input
                   value={url}
                   onChange={(e) => updateWebsite(idx, e.target.value)}
-                  placeholder="https://example.com"
+                  placeholder={t("form.websitePlaceholder", "https://example.com")}
                   type="url"
                 />
                 <Button type="button" variant="ghost" size="icon" onClick={() => removeWebsite(idx)} className="shrink-0">
@@ -215,20 +241,20 @@ export function BusinessProfileManager() {
               </div>
             ))}
             {websites.length === 0 && (
-              <p className="text-sm text-muted-foreground">No websites added. You can add up to 2.</p>
+              <p className="text-sm text-muted-foreground">{t("profile.noWebsites", "No websites added. You can add up to 2.")}</p>
             )}
           </div>
 
           {/* Industry / Vertical */}
           <div className="space-y-2">
-            <Label>Industry</Label>
+            <Label>{t("form.industry", "Industry")}</Label>
             <Select value={vertical} onValueChange={setVertical}>
               <SelectTrigger>
-                <SelectValue placeholder="Select industry" />
+                <SelectValue placeholder={t("form.industryPlaceholder", "Select industry")} />
               </SelectTrigger>
               <SelectContent>
                 {VERTICALS.map((v) => (
-                  <SelectItem key={v} value={v}>{VERTICAL_LABELS[v] || v}</SelectItem>
+                  <SelectItem key={v} value={v}>{verticalLabel(v, t)}</SelectItem>
                 ))}
               </SelectContent>
             </Select>
@@ -238,7 +264,7 @@ export function BusinessProfileManager() {
           <div className="pt-2">
             <Button onClick={handleSave} disabled={isUpdating} className="gap-2">
               {isUpdating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-              Save Profile
+              {t("profile.save", "Save Profile")}
             </Button>
           </div>
         </CardContent>

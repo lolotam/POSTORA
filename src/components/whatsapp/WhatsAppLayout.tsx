@@ -1,4 +1,6 @@
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
+import "@/i18n";
 import { ArrowLeft, MessageCircle, Menu, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { Link, Navigate, Outlet, useLocation } from "react-router-dom";
 import { WhatsAppCoexistenceSetupBanner } from "@/components/messaging/WhatsAppCoexistenceSetupBanner";
@@ -25,6 +27,7 @@ function readCollapsedPreference(): boolean {
 }
 
 function WhatsAppLayoutContent() {
+  const { t } = useTranslation("whatsapp");
   const { flags, isLoading } = useFeatureFlags();
   const { pathname } = useLocation();
   const { compact, immersive } = useWhatsAppChrome();
@@ -76,14 +79,14 @@ function WhatsAppLayoutContent() {
                     <Button
                       variant="ghost"
                       size="icon"
-                      aria-label="Open WhatsApp navigation"
+                      aria-label={t("header.openNav", "Open WhatsApp navigation")}
                       className="text-white hover:bg-white/20 hover:text-white lg:hidden"
                     >
                       <Menu className="h-5 w-5" />
                     </Button>
                   </SheetTrigger>
                   <SheetContent side="left" className="w-72 overflow-y-auto p-4">
-                    <SheetTitle className="mb-4 text-base">WhatsApp Business</SheetTitle>
+                    <SheetTitle className="mb-4 text-base">{t("header.title", "WhatsApp Business")}</SheetTitle>
                     <WhatsAppNavList onNavigate={() => setDrawerOpen(false)} />
                   </SheetContent>
                 </Sheet>
@@ -98,7 +101,7 @@ function WhatsAppLayoutContent() {
                 </div>
                 <div>
                   <h1 className={cn("font-semibold leading-tight transition-all duration-200 motion-reduce:transition-none", compact ? "text-base" : "text-lg")}>
-                    WhatsApp Business
+                    {t("header.title", "WhatsApp Business")}
                   </h1>
                   <p
                     className={cn(
@@ -106,7 +109,7 @@ function WhatsAppLayoutContent() {
                       compact ? "max-h-0 opacity-0" : "max-h-6 opacity-100",
                     )}
                   >
-                    Conversations, automation, commerce, and diagnostics
+                    {t("header.subtitle", "Conversations, automation, commerce, and diagnostics")}
                   </p>
                 </div>
               </div>
@@ -117,7 +120,7 @@ function WhatsAppLayoutContent() {
                   className="inline-flex w-fit items-center gap-1.5 rounded-lg bg-white/10 px-2.5 py-1.5 text-xs font-medium text-white transition-colors hover:bg-white/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/80"
                 >
                   <ArrowLeft className="h-3.5 w-3.5" />
-                  All Inboxes
+                  {t("header.allInboxes", "All Inboxes")}
                 </Link>
               </div>
             </div>
@@ -141,14 +144,14 @@ function WhatsAppLayoutContent() {
                   size="sm"
                   onClick={() => setCollapsed((previous) => !previous)}
                   aria-expanded={!collapsed}
-                  aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+                  aria-label={collapsed ? t("header.expandSidebar", "Expand sidebar") : t("header.collapseSidebar", "Collapse sidebar")}
                   className={cn(
                     "text-muted-foreground",
                     collapsed ? "h-9 w-9 p-0 justify-center rounded-xl" : "w-full gap-2 px-3"
                   )}
                 >
                   {collapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
-                  {!collapsed && <span>Collapse</span>}
+                  {!collapsed && <span>{t("header.collapse", "Collapse")}</span>}
                 </Button>
               </div>
             </aside>

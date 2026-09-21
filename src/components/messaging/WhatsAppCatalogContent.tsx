@@ -1,3 +1,5 @@
+import { Trans, useTranslation } from "react-i18next";
+import "@/i18n";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { useWhatsAppCatalog, CatalogProduct } from "@/hooks/useWhatsAppCatalog";
@@ -40,6 +42,7 @@ async function callMessagingApi(action: string, body: Record<string, unknown>) {
 }
 
 export function WhatsAppCatalogContent() {
+  const { t } = useTranslation("whatsapp");
   const { catalog, products, isLoading, error, waAccount } = useWhatsAppCatalog();
   const [sendingProduct, setSendingProduct] = useState<string | null>(null);
 
@@ -47,7 +50,7 @@ export function WhatsAppCatalogContent() {
     return (
       <div className="py-12 text-center text-muted-foreground">
         <ShoppingBag className="h-12 w-12 mx-auto mb-4 opacity-50" />
-        <p>No WhatsApp Business account connected.</p>
+        <p>{t("empty.noAccount", "No WhatsApp Business account connected.")}</p>
       </div>
     );
   }
@@ -68,22 +71,24 @@ export function WhatsAppCatalogContent() {
               <AlertTriangle className="h-6 w-6 text-amber-600" />
             </div>
             <div className="space-y-2">
-              <h3 className="text-lg font-semibold">Catalog not available for this account type</h3>
+              <h3 className="text-lg font-semibold">{t("catalog.smbTitle", "Catalog not available for this account type")}</h3>
               <p className="text-sm text-muted-foreground max-w-md mx-auto">
-                Your WhatsApp Business Account is registered as an{" "}
-                <strong>SMB (Small Business)</strong> account. Meta does not allow the
-                Catalog / Commerce API on SMB accounts — it's only available on{" "}
-                <strong>Enterprise</strong> WhatsApp Business Accounts linked to a
-                Commerce Catalog in Meta Business Manager.
+                <Trans ns="whatsapp" i18nKey="catalog.smbBody" components={{ strong: <strong /> }}>
+                  Your WhatsApp Business Account is registered as an{" "}
+                  <strong>SMB (Small Business)</strong> account. Meta does not allow the
+                  Catalog / Commerce API on SMB accounts — it's only available on{" "}
+                  <strong>Enterprise</strong> WhatsApp Business Accounts linked to a
+                  Commerce Catalog in Meta Business Manager.
+                </Trans>
               </p>
             </div>
             <div className="text-xs text-muted-foreground bg-background/60 border border-border rounded-md p-3 max-w-md mx-auto text-left space-y-1">
-              <p className="font-medium text-foreground">How to enable catalog access:</p>
+              <p className="font-medium text-foreground">{t("catalog.enableHow", "How to enable catalog access:")}</p>
               <ol className="list-decimal list-inside space-y-1">
-                <li>Open Meta Business Manager and convert / migrate your WABA to a regular Business account.</li>
-                <li>Create a Commerce Catalog in Commerce Manager.</li>
-                <li>Link the catalog to your WhatsApp Business Account.</li>
-                <li>Reconnect WhatsApp here from the Profile tab.</li>
+                <li>{t("catalog.enableStep1", "Open Meta Business Manager and convert / migrate your WABA to a regular Business account.")}</li>
+                <li>{t("catalog.enableStep2", "Create a Commerce Catalog in Commerce Manager.")}</li>
+                <li>{t("catalog.enableStep3", "Link the catalog to your WhatsApp Business Account.")}</li>
+                <li>{t("catalog.enableStep4", "Reconnect WhatsApp here from the Profile tab.")}</li>
               </ol>
             </div>
             <Button variant="outline" size="sm" asChild>
@@ -92,7 +97,7 @@ export function WhatsAppCatalogContent() {
                 target="_blank"
                 rel="noopener noreferrer"
               >
-                Open Commerce Manager
+                {t("catalog.openCommerce", "Open Commerce Manager")}
                 <ExternalLink className="h-3.5 w-3.5 ml-1.5" />
               </a>
             </Button>
@@ -104,7 +109,7 @@ export function WhatsAppCatalogContent() {
     return (
       <div className="py-12 text-center text-muted-foreground">
         <ShoppingBag className="h-12 w-12 mx-auto mb-4 opacity-50" />
-        <p>Could not load catalog. Make sure your WhatsApp Business Account has a catalog configured.</p>
+        <p>{t("catalog.loadFailed", "Could not load catalog. Make sure your WhatsApp Business Account has a catalog configured.")}</p>
         <p className="text-xs mt-2">{msg}</p>
       </div>
     );
@@ -114,8 +119,8 @@ export function WhatsAppCatalogContent() {
     return (
       <div className="py-12 text-center text-muted-foreground">
         <ShoppingBag className="h-12 w-12 mx-auto mb-4 opacity-50" />
-        <p>No catalog found for this WhatsApp Business Account.</p>
-        <p className="text-sm mt-2">Set up a catalog in Meta Business Suite to get started.</p>
+        <p>{t("catalog.noCatalog", "No catalog found for this WhatsApp Business Account.")}</p>
+        <p className="text-sm mt-2">{t("catalog.noCatalogHint", "Set up a catalog in Meta Business Suite to get started.")}</p>
       </div>
     );
   }
@@ -124,9 +129,11 @@ export function WhatsAppCatalogContent() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-lg font-semibold">Product Catalog</h3>
+          <h3 className="text-lg font-semibold">{t("catalog.title", "Product Catalog")}</h3>
           <p className="text-sm text-muted-foreground">
-            {products.length} product{products.length !== 1 ? "s" : ""} • Catalog ID: {catalog.catalog_id}
+            {products.length === 1
+              ? t("catalog.countOne", "{{count}} product • Catalog ID: {{id}}", { count: products.length, id: catalog.catalog_id })
+              : t("catalog.countMany", "{{count}} products • Catalog ID: {{id}}", { count: products.length, id: catalog.catalog_id })}
           </p>
         </div>
       </div>
@@ -134,7 +141,7 @@ export function WhatsAppCatalogContent() {
       {products.length === 0 ? (
         <div className="py-12 text-center text-muted-foreground">
           <Package className="h-12 w-12 mx-auto mb-4 opacity-50" />
-          <p>No products in this catalog yet.</p>
+          <p>{t("catalog.empty", "No products in this catalog yet.")}</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
@@ -165,7 +172,7 @@ export function WhatsAppCatalogContent() {
                     <Button variant="ghost" size="sm" asChild>
                       <a href={product.url} target="_blank" rel="noopener noreferrer">
                         <ExternalLink className="h-3 w-3 mr-1" />
-                        View
+                        {t("common:view", "View")}
                       </a>
                     </Button>
                   )}

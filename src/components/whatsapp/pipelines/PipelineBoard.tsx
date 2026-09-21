@@ -1,4 +1,6 @@
 import { useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
+import "@/i18n";
 import {
   DndContext,
   DragOverlay,
@@ -76,12 +78,13 @@ function StageColumn({
   onDeleteDeal?: (deal: WhatsAppDeal) => void;
   onOpenConversation?: (deal: WhatsAppDeal) => void;
 }) {
+  const { t } = useTranslation("whatsapp");
   const { setNodeRef } = useDroppable({ id: stage.id });
 
   return (
     <section
       className={`flex w-72 shrink-0 flex-col rounded-lg border ${stageTone(stage)} bg-muted/30`}
-      aria-label={`${stage.name} stage`}
+      aria-label={t("pipeline.stageAria", "{{name}} stage", { name: stage.name })}
       data-testid={`stage-column-${stage.id}`}
     >
       <header className="flex items-center justify-between gap-2 border-b p-3">
@@ -93,7 +96,7 @@ function StageColumn({
       </header>
 
       <p className="px-3 pt-2 text-xs text-muted-foreground">
-        Total {stageTotal(deals).toLocaleString()}
+        {t("pipeline.total", "Total {{amount}}", { amount: stageTotal(deals).toLocaleString() })}
       </p>
 
       <ScrollArea className="max-h-[60vh]">
@@ -114,7 +117,7 @@ function StageColumn({
             ))}
           </SortableContext>
           {deals.length === 0 ? (
-            <p className="py-6 text-center text-xs text-muted-foreground">No deals</p>
+            <p className="py-6 text-center text-xs text-muted-foreground">{t("empty.noDeals", "No deals")}</p>
           ) : null}
         </div>
       </ScrollArea>

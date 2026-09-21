@@ -1,4 +1,6 @@
 import { useState, useMemo } from "react";
+import { useTranslation } from "react-i18next";
+import "@/i18n";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { useFeatureFlags } from "@/hooks/useFeatureFlags";
 import { Navigate } from "react-router-dom";
@@ -26,6 +28,7 @@ interface Product {
 }
 
 export default function WhatsAppShop() {
+  const { t } = useTranslation("whatsapp");
   const { flags, isLoading: flagsLoading } = useFeatureFlags();
   const [products, setProducts] = useState<Product[]>([]);
   const [createOpen, setCreateOpen] = useState(false);
@@ -58,12 +61,12 @@ export default function WhatsAppShop() {
     setProducts((prev) => [product, ...prev]);
     setCreateOpen(false);
     setNewProduct({ name: "", description: "", price: "", imageUrl: "" });
-    toast({ title: "Product added", description: "Product saved as draft. Connect WhatsApp Commerce API to sync." });
+    toast({ title: t("shop.productAdded", "Product added"), description: t("shop.productAddedDesc", "Product saved as draft. Connect WhatsApp Commerce API to sync.") });
   };
 
   const handleDelete = (id: string) => {
     setProducts((prev) => prev.filter((p) => p.id !== id));
-    toast({ title: "Product removed" });
+    toast({ title: t("shop.productRemoved", "Product removed") });
   };
 
   const handleToggleStatus = (id: string) => {
@@ -81,42 +84,42 @@ export default function WhatsAppShop() {
             <div className="group flex items-center gap-4 min-w-0">
               <Icon3D icon={ShoppingBag} variant="emerald" size="md" />
               <div className="flex-1 min-w-0">
-                <GradientHeading preset="emerald-cyan-sky" size="lg" as="h1">WhatsApp Shop</GradientHeading>
-                <p className="text-sm text-muted-foreground mt-1">Manage your product catalog for WhatsApp Commerce</p>
+                <GradientHeading preset="emerald-cyan-sky" size="lg" as="h1">{t("shop.title", "WhatsApp Shop")}</GradientHeading>
+                <p className="text-sm text-muted-foreground mt-1">{t("shop.subtitle", "Manage your product catalog for WhatsApp Commerce")}</p>
               </div>
             </div>
           <Dialog open={createOpen} onOpenChange={setCreateOpen}>
             <DialogTrigger asChild>
               <Button size="sm" className="bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500 text-white hover:opacity-90">
-                <Plus className="h-4 w-4 mr-1" /> Add Product
+                <Plus className="h-4 w-4 mr-1" /> {t("shop.addProduct", "Add Product")}
               </Button>
             </DialogTrigger>
             <DialogContent className="bg-card/85 backdrop-blur-xl border-border/50">
               <DialogHeader>
                 <DialogTitle className="flex items-center gap-3">
                   <span className="group inline-flex"><Icon3D icon={Package} variant="emerald" size="sm" /></span>
-                  Add Product
+                  {t("shop.addProduct", "Add Product")}
                 </DialogTitle>
               </DialogHeader>
               <div className="space-y-4">
                 <div className="space-y-1.5">
-                  <Label>Product Name</Label>
-                  <Input value={newProduct.name} onChange={(e) => setNewProduct({ ...newProduct, name: e.target.value })} placeholder="Product name" />
+                  <Label>{t("shop.name", "Product Name")}</Label>
+                  <Input value={newProduct.name} onChange={(e) => setNewProduct({ ...newProduct, name: e.target.value })} placeholder={t("shop.namePlaceholder", "Product name")} />
                 </div>
                 <div className="space-y-1.5">
-                  <Label>Description</Label>
-                  <Textarea value={newProduct.description} onChange={(e) => setNewProduct({ ...newProduct, description: e.target.value })} placeholder="Product description..." />
+                  <Label>{t("shop.description", "Description")}</Label>
+                  <Textarea value={newProduct.description} onChange={(e) => setNewProduct({ ...newProduct, description: e.target.value })} placeholder={t("shop.descriptionPlaceholder", "Product description...")} />
                 </div>
                 <div className="space-y-1.5">
-                  <Label>Price (USD)</Label>
+                  <Label>{t("shop.priceUsd", "Price (USD)")}</Label>
                   <Input type="number" value={newProduct.price} onChange={(e) => setNewProduct({ ...newProduct, price: e.target.value })} placeholder="9.99" />
                 </div>
                 <div className="space-y-1.5">
-                  <Label>Image URL</Label>
+                  <Label>{t("shop.imageUrl", "Image URL")}</Label>
                   <Input value={newProduct.imageUrl} onChange={(e) => setNewProduct({ ...newProduct, imageUrl: e.target.value })} placeholder="https://..." />
                 </div>
                 <Button onClick={handleCreate} disabled={!newProduct.name || !newProduct.price} className="w-full bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500 text-white hover:opacity-90">
-                  Add Product
+                  {t("shop.addProduct", "Add Product")}
                 </Button>
               </div>
             </DialogContent>
@@ -128,11 +131,11 @@ export default function WhatsAppShop() {
         {/* Stats */}
         <div className="grid grid-cols-3 gap-4">
           {([
-            { label: "Total Products", value: stats.total, icon: Package, variant: "emerald" as GradientKey },
-            { label: "Active", value: stats.active, icon: Eye, variant: "sky" as GradientKey },
-            { label: "Draft", value: stats.draft, icon: Edit, variant: "amber" as GradientKey },
+            { id: "total", label: t("shop.totalProducts", "Total Products"), value: stats.total, icon: Package, variant: "emerald" as GradientKey },
+            { id: "active", label: t("shop.active", "Active"), value: stats.active, icon: Eye, variant: "sky" as GradientKey },
+            { id: "draft", label: t("shop.draft", "Draft"), value: stats.draft, icon: Edit, variant: "amber" as GradientKey },
           ]).map((s, i) => (
-            <Reveal key={s.label} delay={i * 60}>
+            <Reveal key={s.id} delay={i * 60}>
               <div className="group rounded-2xl border border-border/40 bg-card/60 backdrop-blur-md p-4 flex items-center gap-3 transition-transform hover:-translate-y-0.5">
                 <Icon3D icon={s.icon} variant={s.variant} size="sm" />
                 <div>
@@ -150,17 +153,17 @@ export default function WhatsAppShop() {
           <div className="p-6 pb-3">
             <div className="flex items-center gap-2 text-base font-semibold">
               <Package className="h-4 w-4 text-emerald-500" />
-              Product Catalog
+              {t("shop.productCatalog", "Product Catalog")}
             </div>
-            <p className="text-sm text-muted-foreground mt-1">Products will sync to WhatsApp Commerce when connected.</p>
+            <p className="text-sm text-muted-foreground mt-1">{t("shop.productCatalogHint", "Products will sync to WhatsApp Commerce when connected.")}</p>
           </div>
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Product</TableHead>
-                  <TableHead>Price</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
+                  <TableHead>{t("shop.product", "Product")}</TableHead>
+                  <TableHead>{t("shop.price", "Price")}</TableHead>
+                  <TableHead>{t("shop.status", "Status")}</TableHead>
+                  <TableHead className="text-right">{t("shop.actions", "Actions")}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -168,8 +171,8 @@ export default function WhatsAppShop() {
                   <TableRow>
                     <TableCell colSpan={4} className="text-center text-muted-foreground py-12">
                       <div className="group inline-flex mb-3"><Icon3D icon={ShoppingBag} variant="emerald" size="lg" /></div>
-                      <p className="font-medium mt-2">No products yet</p>
-                      <p className="text-sm mt-1">Add products to your WhatsApp catalog.</p>
+                      <p className="font-medium mt-2">{t("shop.empty", "No products yet")}</p>
+                      <p className="text-sm mt-1">{t("shop.emptyHint", "Add products to your WhatsApp catalog.")}</p>
                     </TableCell>
                   </TableRow>
                 ) : (
@@ -195,7 +198,7 @@ export default function WhatsAppShop() {
                             : "cursor-pointer bg-card/60 backdrop-blur border border-border/40"}
                           onClick={() => handleToggleStatus(p.id)}
                         >
-                          {p.status}
+                          {p.status === "active" ? t("shop.statusActive", "active") : t("shop.statusDraft", "draft")}
                         </Badge>
                       </TableCell>
                       <TableCell className="text-right">
@@ -216,9 +219,9 @@ export default function WhatsAppShop() {
             <div className="flex items-start gap-3">
               <span className="group inline-flex shrink-0"><Icon3D icon={DollarSign} variant="emerald" size="sm" /></span>
               <div>
-                <h3 className="text-sm font-semibold">WhatsApp Commerce Integration</h3>
+                <h3 className="text-sm font-semibold">{t("shop.commerceTitle", "WhatsApp Commerce Integration")}</h3>
                 <p className="text-sm text-muted-foreground mt-1">
-                  To fully sync products with WhatsApp, you'll need to connect a Facebook Commerce catalog via the Meta Business Suite. Products added here will be synced once the Commerce API is connected.
+                  {t("shop.commerceHint", "To fully sync products with WhatsApp, you'll need to connect a Facebook Commerce catalog via the Meta Business Suite. Products added here will be synced once the Commerce API is connected.")}
                 </p>
               </div>
             </div>
