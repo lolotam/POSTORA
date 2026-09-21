@@ -1,5 +1,17 @@
 import "@testing-library/jest-dom";
+import { configure } from "@testing-library/react";
 import { vi } from "vitest";
+
+// `findBy*` and `waitFor` use testing-library's own timeout, which defaults to
+// 1000ms and is not affected by vitest's testTimeout. The heaviest component
+// tests drive Radix dialogs through react-query, and under full-suite CPU
+// contention a query has not resolved within a second - so a different couple
+// of files failed every run with "Unable to find role=..." while all of them
+// passed in isolation.
+//
+// This waits longer for something that does arrive; it asserts nothing extra.
+// An element that never renders still fails the test, just later.
+configure({ asyncUtilTimeout: 10_000 });
 
 // Mock matchMedia for responsive tests
 Object.defineProperty(window, "matchMedia", {
