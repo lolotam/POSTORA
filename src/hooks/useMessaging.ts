@@ -118,10 +118,19 @@ export function useMessagingAccounts() {
   return { accounts, isLoading };
 }
 
+/**
+ * Default cadence for an inbox the user is looking at. Callers that only need a
+ * badge — the notification bell, which mounts on every authenticated route —
+ * should pass something far longer while their UI is closed: MESSENGER and
+ * INSTAGRAM `list_conversations` are Graph API round trips, so this interval is
+ * paid to Meta on every open tab. WhatsApp reads Postora's own cache.
+ */
+export const CONVERSATIONS_REFETCH_MS = 30_000;
+
 export function useConversations(
   socialAccountId: string | null,
   messagingPlatform: string,
-  options?: { silent?: boolean; search?: string },
+  options?: { silent?: boolean; search?: string; refetchInterval?: number },
 ) {
   const { session } = useAuth();
   // Server-side search exists only for the WhatsApp cache; Graph conversations keep the
@@ -153,7 +162,7 @@ export function useConversations(
       }
     },
     enabled: !!socialAccountId,
-    refetchInterval: 30000,
+    refetchInterval: options?.refetchInterval ?? CONVERSATIONS_REFETCH_MS,
     retry: options?.silent ? false : 1,
   });
   useRealtimeQueryInvalidation({

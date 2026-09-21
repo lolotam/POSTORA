@@ -5,6 +5,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useCdnConfig } from "@/hooks/useCdnConfig";
 import { resolveMediaPublicUrl } from "@/lib/mediaUrl";
+import { mergeHealedDimensions } from "@/lib/mediaMetadata";
 import { useAuth } from "@/hooks/useAuth";
 import {
   Dialog,
@@ -115,11 +116,28 @@ export function MediaLibraryPicker({
   const healedIdsRef = useRef<Set<string>>(new Set());
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
-  const healMetadata = useCallback((fileId: string, width: number, height: number) => {
+  const healMetadata = useCallback((
+    fileId: string,
+    width: number,
+    height: number,
+    existingMetadata: MediaFile["metadata"],
+  ) => {
     if (healedIdsRef.current.has(fileId)) return;
     healedIdsRef.current.add(fileId);
-    supabase.from("media_files").update({ metadata: { width, height } } as any).eq("id", fileId).then(() => {
-      queryClient.invalidateQueries({ queryKey: ["media-files-picker"] });
+    const metadata = mergeHealedDimensions(existingMetadata, width, height);
+    supabase.from("media_files").update({ metadata } as any).eq("id", fileId).then(({ error }) => {
+      if (error) {
+        // Let a later render retry rather than leaving the row permanently unhealed.
+        healedIdsRef.current.delete(fileId);
+        return;
+      }
+      // Patch the one row instead of invalidating: an invalidation refetches the
+      // whole folder listing once per healed image, which is what turned opening
+      // the picker into a refetch cascade. The dimensions are already known here.
+      queryClient.setQueriesData<MediaFile[]>(
+        { queryKey: ["media-files-picker"] },
+        (files) => files?.map((file) => (file.id === fileId ? { ...file, metadata } : file)),
+      );
     });
   }, [queryClient]);
   const [searchQuery, setSearchQuery] = useState("");
@@ -883,7 +901,7 @@ export function MediaLibraryPicker({
                             className="w-full h-full object-cover"
                             muted
                             preload="metadata"
-                            onLoadedMetadata={(e) => { if (!file.metadata?.width) { const vid = e.currentTarget; if (vid.videoWidth > 0) healMetadata(file.id, vid.videoWidth, vid.videoHeight); } }}
+                            onLoadedMetadata={(e) => { if (!file.metadata?.width) { const vid = e.currentTarget; if (vid.videoWidth > 0) healMetadata(file.id, vid.videoWidth, vid.videoHeight, file.metadata); } }}
                           />
                         ) : (
                           <img
@@ -891,7 +909,7 @@ export function MediaLibraryPicker({
                             alt=""
                             className="w-full h-full object-cover"
                             loading="lazy"
-                            onLoad={(e) => { if (!file.metadata?.width) { const img = e.currentTarget; if (img.naturalWidth > 0) healMetadata(file.id, img.naturalWidth, img.naturalHeight); } }}
+                            onLoad={(e) => { if (!file.metadata?.width) { const img = e.currentTarget; if (img.naturalWidth > 0) healMetadata(file.id, img.naturalWidth, img.naturalHeight, file.metadata); } }}
                           />
                         )}
 
@@ -947,7 +965,7 @@ export function MediaLibraryPicker({
                               className="w-full h-full object-cover"
                               muted
                               preload="metadata"
-                              onLoadedMetadata={(e) => { if (!file.metadata?.width) { const vid = e.currentTarget; if (vid.videoWidth > 0) healMetadata(file.id, vid.videoWidth, vid.videoHeight); } }}
+                              onLoadedMetadata={(e) => { if (!file.metadata?.width) { const vid = e.currentTarget; if (vid.videoWidth > 0) healMetadata(file.id, vid.videoWidth, vid.videoHeight, file.metadata); } }}
                             />
                           ) : (
                             <img
@@ -955,7 +973,7 @@ export function MediaLibraryPicker({
                               alt=""
                               className="w-full h-full object-cover"
                               loading="lazy"
-                              onLoad={(e) => { if (!file.metadata?.width) { const img = e.currentTarget; if (img.naturalWidth > 0) healMetadata(file.id, img.naturalWidth, img.naturalHeight); } }}
+                              onLoad={(e) => { if (!file.metadata?.width) { const img = e.currentTarget; if (img.naturalWidth > 0) healMetadata(file.id, img.naturalWidth, img.naturalHeight, file.metadata); } }}
                             />
                           )}
                         </div>
