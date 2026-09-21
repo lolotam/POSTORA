@@ -139,7 +139,7 @@ export default function HumanAgentMode() {
 
   return (
     <DashboardLayout>
-      <div className="max-w-4xl mx-auto space-y-6">
+      <div className="space-y-6">
         {/* Header */}
         <Reveal>
           <div className="flex items-center justify-between flex-wrap gap-4">

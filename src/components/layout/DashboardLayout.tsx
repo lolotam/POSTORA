@@ -144,14 +144,11 @@ export function DashboardLayout({ children, contentClassName, noPadding = false,
           { icon: CalendarDays, label: t("sidebar.scheduled", "Scheduled"), path: "/scheduled" },
           { icon: CalendarDays, label: t("sidebar.calendar", "Calendar"), path: "/calendar" },
           ...(flags.smartScheduling ? [{ icon: Sparkles, label: t("sidebar.smartSchedule", "Smart Schedule"), path: "/smart-scheduling" }] : []),
+          ...(showCanvas ? [{ icon: PenTool, label: t("sidebar.canvas", "Canvas"), path: "/canvas" }] : []),
         ],
       },
       { type: "link", icon: Users, label: t("sidebar.users", "Users"), path: "/profiles" },
     ];
-
-    if (showCanvas) {
-      entries.push({ type: "link", icon: PenTool, label: t("sidebar.canvas", "Canvas"), path: "/canvas" });
-    }
 
     const analyticsChildren = [
       ...(flags.analyticsFacebook ? [{ icon: Facebook, label: t("sidebar.facebook", "Facebook"), path: "/analytics/facebook" }] : []),
@@ -244,11 +241,113 @@ export function DashboardLayout({ children, contentClassName, noPadding = false,
       {/* Top Header Navigation */}
       <header className="app-topnav sticky top-0 z-50 w-full border-b border-border bg-background/80 backdrop-blur-xl">
         <div className="flex h-14 md:h-16 items-center px-3 md:px-6 w-full">
-          {/* Logo */}
-          <Link to="/" className="flex items-center me-4 md:me-8 shrink-0">
-            <Logo size="sm" showText className="hidden sm:flex" />
-            <Logo size="sm" showText={false} className="sm:hidden" />
-          </Link>
+          {/* Account actions — first in DOM, so they sit at the inline start:
+              left in English, right in Arabic. */}
+          <div className="flex items-center gap-1.5 md:gap-2 me-4 md:me-6 shrink-0">
+            <PublishingStatusWidget
+              publishingPosts={publishingPosts}
+              isPublishing={isPublishing}
+            />
+            <CreditBalanceIndicator />
+            <NotificationBell />
+            <ThemeToggle />
+            <LanguageToggle />
+
+            {/* User Menu */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" className="flex items-center gap-2 h-9 px-2 rounded-full">
+                  <Avatar className="h-8 w-8">
+                    <AvatarImage src={profile?.avatar_url || ""} alt={profile?.full_name || t("header.user", "User")} referrerPolicy="no-referrer" />
+                    <AvatarFallback className="text-xs bg-primary/10 text-primary font-semibold">
+                      {userInitials}
+                    </AvatarFallback>
+                  </Avatar>
+                  <ChevronDown className="h-3.5 w-3.5 text-muted-foreground hidden md:block" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-56 bg-background border-border">
+                <DropdownMenuLabel className="font-normal">
+                  <div className="flex items-center gap-3">
+                    <Avatar className="h-10 w-10">
+                      <AvatarImage src={profile?.avatar_url || ""} alt={profile?.full_name || t("header.user", "User")} referrerPolicy="no-referrer" />
+                      <AvatarFallback className="text-sm bg-primary/10 text-primary font-semibold">
+                        {userInitials}
+                      </AvatarFallback>
+                    </Avatar>
+                    <div className="flex flex-col space-y-1">
+                      <p className="text-sm font-medium">{profile?.full_name || t("header.user", "User")}</p>
+                      <p className="text-xs text-muted-foreground truncate max-w-[140px]">
+                        {profile?.email}
+                      </p>
+                      <Badge 
+                        variant={isAdmin ? "default" : (isPro || isBusiness ? "default" : "destructive")}
+                        className={cn(
+                          "text-[10px] px-1.5 py-0 h-4 w-fit font-semibold",
+                          isAdmin && "bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600 text-white border-0",
+                          !isAdmin && (isPro || isBusiness) && "bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white border-0",
+                          !isAdmin && isFree && "cursor-pointer hover:bg-destructive/90"
+                        )}
+                        onClick={!isAdmin && isFree ? () => navigate("/pricing") : undefined}
+                      >
+                        {isAdmin && <Shield className="h-2.5 w-2.5 me-0.5" />}
+                        {!isAdmin && (isPro || isBusiness) && <Crown className="h-2.5 w-2.5 me-0.5" />}
+                        {isAdmin ? t("badge.admin", "Admin") : (isFree ? t("badge.upgrade", "Upgrade") : planName)}
+                      </Badge>
+                    </div>
+                  </div>
+                </DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                {userMenuItems.map((item) => (
+                    <DropdownMenuItem key={item.path} asChild>
+                      <Link to={item.path} className="flex items-center gap-2 cursor-pointer">
+                        <item.icon className="h-4 w-4" />
+                        {item.label}
+                      </Link>
+                    </DropdownMenuItem>
+                ))}
+                <DropdownMenuSeparator />
+                <DropdownMenuItem asChild>
+                  <Link to="/settings" className="flex items-center gap-2 cursor-pointer">
+                    <Settings className="h-4 w-4" />
+                    {t("userMenu.settings", "Settings")}
+                  </Link>
+                </DropdownMenuItem>
+                <DropdownMenuSeparator />
+                {isAdmin && (
+                  <DropdownMenuItem asChild>
+                    <Link to="/admin" className="flex items-center gap-2 cursor-pointer text-primary">
+                      <Shield className="h-4 w-4" />
+                      {t("userMenu.adminDashboard", "Admin Dashboard")}
+                    </Link>
+                  </DropdownMenuItem>
+                )}
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  onClick={handleLogout}
+                  disabled={isLoggingOut}
+                  className="text-destructive focus:text-destructive cursor-pointer"
+                >
+                  {isLoggingOut ? (
+                    <Loader2 className="h-4 w-4 me-2 animate-spin" />
+                  ) : (
+                    <LogOut className="h-4 w-4 me-2" />
+                  )}
+                  {t("userMenu.logout", "Logout")}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+
+            {/* Mobile Menu Button */}
+            <Button
+              variant="ghost"
+              size="icon"
+              className="lg:hidden h-9 w-9"
+              onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+            >
+              {mobileMenuOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
+            </Button>
+          </div>
 
           {/* Desktop Navigation */}
           <nav className="hidden lg:flex items-center justify-center gap-0.5 flex-1 relative">
@@ -374,17 +473,20 @@ export function DashboardLayout({ children, contentClassName, noPadding = false,
                   <DropdownMenuContent align="start" className="w-48">
                     {dropdown.children.map((child) => {
                       const childActive = location.pathname === child.path || (child.path.includes("?") && (location.pathname + location.search) === child.path);
+                      const childHidden = isCanvasHiddenFromUsers(child.path);
                       return (
                         <DropdownMenuItem key={child.path} asChild>
                           <Link
                             to={child.path}
                             className={cn(
                               "flex items-center gap-2 cursor-pointer",
-                              childActive && "text-primary font-semibold"
+                              childActive && "text-primary font-semibold",
+                              childHidden && "border border-dashed border-amber-500/50"
                             )}
                           >
                             <child.icon className="h-4 w-4" />
                             {child.label}
+                            {childHidden && <EyeOff className="h-3 w-3 text-amber-500" />}
                             {child.path === "/scheduled" && scheduledCount > 0 && (
                               <span className="ms-auto flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 text-[10px] font-bold text-white px-1">
                                 {scheduledCount}
@@ -400,112 +502,13 @@ export function DashboardLayout({ children, contentClassName, noPadding = false,
             })}
           </nav>
 
-          {/* Right Side Actions */}
-          <div className="flex items-center gap-1.5 md:gap-2 ms-auto">
-            <PublishingStatusWidget
-              publishingPosts={publishingPosts}
-              isPublishing={isPublishing}
-            />
-            <CreditBalanceIndicator />
-            <NotificationBell />
-            <ThemeToggle />
-            <LanguageToggle />
+          {/* Logo — last in DOM, so it sits at the inline end: right in
+              English, left in Arabic. */}
+          <Link to="/" className="flex items-center ms-auto shrink-0">
+            <Logo size="sm" showText className="hidden sm:flex" />
+            <Logo size="sm" showText={false} className="sm:hidden" />
+          </Link>
 
-            {/* User Menu */}
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="ghost" className="flex items-center gap-2 h-9 px-2 rounded-full">
-                  <Avatar className="h-8 w-8">
-                    <AvatarImage src={profile?.avatar_url || ""} alt={profile?.full_name || t("header.user", "User")} referrerPolicy="no-referrer" />
-                    <AvatarFallback className="text-xs bg-primary/10 text-primary font-semibold">
-                      {userInitials}
-                    </AvatarFallback>
-                  </Avatar>
-                  <ChevronDown className="h-3.5 w-3.5 text-muted-foreground hidden md:block" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-56 bg-background border-border">
-                <DropdownMenuLabel className="font-normal">
-                  <div className="flex items-center gap-3">
-                    <Avatar className="h-10 w-10">
-                      <AvatarImage src={profile?.avatar_url || ""} alt={profile?.full_name || t("header.user", "User")} referrerPolicy="no-referrer" />
-                      <AvatarFallback className="text-sm bg-primary/10 text-primary font-semibold">
-                        {userInitials}
-                      </AvatarFallback>
-                    </Avatar>
-                    <div className="flex flex-col space-y-1">
-                      <p className="text-sm font-medium">{profile?.full_name || t("header.user", "User")}</p>
-                      <p className="text-xs text-muted-foreground truncate max-w-[140px]">
-                        {profile?.email}
-                      </p>
-                      <Badge 
-                        variant={isAdmin ? "default" : (isPro || isBusiness ? "default" : "destructive")}
-                        className={cn(
-                          "text-[10px] px-1.5 py-0 h-4 w-fit font-semibold",
-                          isAdmin && "bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600 text-white border-0",
-                          !isAdmin && (isPro || isBusiness) && "bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white border-0",
-                          !isAdmin && isFree && "cursor-pointer hover:bg-destructive/90"
-                        )}
-                        onClick={!isAdmin && isFree ? () => navigate("/pricing") : undefined}
-                      >
-                        {isAdmin && <Shield className="h-2.5 w-2.5 me-0.5" />}
-                        {!isAdmin && (isPro || isBusiness) && <Crown className="h-2.5 w-2.5 me-0.5" />}
-                        {isAdmin ? t("badge.admin", "Admin") : (isFree ? t("badge.upgrade", "Upgrade") : planName)}
-                      </Badge>
-                    </div>
-                  </div>
-                </DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                {userMenuItems.map((item) => (
-                    <DropdownMenuItem key={item.path} asChild>
-                      <Link to={item.path} className="flex items-center gap-2 cursor-pointer">
-                        <item.icon className="h-4 w-4" />
-                        {item.label}
-                      </Link>
-                    </DropdownMenuItem>
-                ))}
-                <DropdownMenuSeparator />
-                <DropdownMenuItem asChild>
-                  <Link to="/settings" className="flex items-center gap-2 cursor-pointer">
-                    <Settings className="h-4 w-4" />
-                    {t("userMenu.settings", "Settings")}
-                  </Link>
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
-                {isAdmin && (
-                  <DropdownMenuItem asChild>
-                    <Link to="/admin" className="flex items-center gap-2 cursor-pointer text-primary">
-                      <Shield className="h-4 w-4" />
-                      {t("userMenu.adminDashboard", "Admin Dashboard")}
-                    </Link>
-                  </DropdownMenuItem>
-                )}
-                <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  onClick={handleLogout}
-                  disabled={isLoggingOut}
-                  className="text-destructive focus:text-destructive cursor-pointer"
-                >
-                  {isLoggingOut ? (
-                    <Loader2 className="h-4 w-4 me-2 animate-spin" />
-                  ) : (
-                    <LogOut className="h-4 w-4 me-2" />
-                  )}
-                  {t("userMenu.logout", "Logout")}
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-
-            {/* Mobile Menu Button */}
-            <Button
-              variant="ghost"
-              size="icon"
-              className="lg:hidden h-9 w-9"
-              onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-            >
-              {mobileMenuOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
-            </Button>
-          </div>
         </div>
 
         {/* Mobile Navigation */}

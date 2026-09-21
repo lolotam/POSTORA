@@ -1,4 +1,4 @@
-import { ReactNode, useEffect } from "react";
+import { ReactNode, useEffect, useState } from "react";
 import { useNavigate, useLocation, Link } from "react-router-dom";
 import { useUserRole } from "@/hooks/useUserRole";
 import { useAuth } from "@/hooks/useAuth";
@@ -6,8 +6,36 @@ import { Logo } from "@/components/Logo";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Loader2, LayoutDashboard, Users, CreditCard, Package, Ticket, Settings, MessageSquare, ChevronLeft, Newspaper, Bell, Youtube, ScrollText, HeartPulse, BarChart3, Rocket, Gauge, Trash2, Sliders, Inbox, Activity, ToggleLeft, TrendingUp, KeyRound, Handshake } from "lucide-react";
+import { PanelLeftClose, PanelLeftOpen, PanelLeft, Loader2, LayoutDashboard, Users, CreditCard, Package, Ticket, Settings, MessageSquare, ChevronLeft, Newspaper, Bell, Youtube, ScrollText, HeartPulse, BarChart3, Rocket, Gauge, Trash2, Sliders, Inbox, Activity, ToggleLeft, TrendingUp, KeyRound, Handshake } from "lucide-react";
 import { cn } from "@/lib/utils";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+
+/**
+ * Three widths, not a boolean. "expanded" and "icons" both keep the rail on
+ * screen; "hidden" gives the page its full width, which is what the wide admin
+ * tables and the inbox actually need. Persisted because an admin who collapsed
+ * the rail meant it for the session, not for one route change.
+ */
+type SidebarState = "expanded" | "icons" | "hidden";
+
+const SIDEBAR_STORAGE_KEY = "postora.admin.sidebar";
+
+function readStoredSidebarState(): SidebarState {
+  // Wrapped: a private window or blocked site data throws on access rather
+  // than returning null, and that must not take the whole admin down.
+  try {
+    const stored = localStorage.getItem(SIDEBAR_STORAGE_KEY);
+    if (stored === "expanded" || stored === "icons" || stored === "hidden") return stored;
+  } catch {
+    /* fall through to the default */
+  }
+  return "expanded";
+}
 
 interface AdminLayoutProps {
   children: ReactNode;
@@ -45,6 +73,16 @@ export function AdminLayout({ children }: AdminLayoutProps) {
   const navigate = useNavigate();
   const location = useLocation();
 
+  const [sidebar, setSidebar] = useState<SidebarState>(readStoredSidebarState);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(SIDEBAR_STORAGE_KEY, sidebar);
+    } catch {
+      /* a viewer with site data blocked simply does not get persistence */
+    }
+  }, [sidebar]);
+
   useEffect(() => {
     if (!authLoading && !roleLoading) {
       if (!user) {
@@ -68,70 +106,130 @@ export function AdminLayout({ children }: AdminLayoutProps) {
   }
 
   return (
-    <div className="min-h-screen flex bg-background">
-      {/* Sidebar */}
-      <aside className="w-64 border-r bg-card flex flex-col">
-        {/* Logo */}
-        <div className="h-16 flex items-center px-6 border-b">
-          <Link to="/" className="flex items-center">
-            <Logo />
-          </Link>
-          <span className="ms-2 text-xs font-medium text-primary bg-primary/10 px-2 py-0.5 rounded">
-            Admin
-          </span>
-        </div>
+    <div className="h-screen flex bg-background overflow-hidden">
+      {/* Sidebar — h-screen + shrink-0 so the rail runs the full height of the
+          viewport and the page scrolls inside <main> rather than behind it. */}
+      {sidebar !== "hidden" && (
+        <aside
+          className={cn(
+            "border-e bg-card flex flex-col h-screen shrink-0 transition-[width] duration-200",
+            sidebar === "icons" ? "w-16" : "w-64"
+          )}
+        >
+          {/* Logo */}
+          <div className={cn("h-16 flex items-center border-b shrink-0", sidebar === "icons" ? "justify-center px-2" : "px-6")}>
+            <Link to="/" className="flex items-center">
+              <Logo showText={sidebar !== "icons"} />
+            </Link>
+            {sidebar !== "icons" && (
+              <span className="ms-2 text-xs font-medium text-primary bg-primary/10 px-2 py-0.5 rounded">
+                Admin
+              </span>
+            )}
+          </div>
 
-        {/* Navigation */}
-        <ScrollArea className="flex-1 py-4">
-          <nav className="px-3 space-y-1">
-            {sidebarItems.map((item) => {
-              const isActive = location.pathname === item.href;
-              return (
-                <Link
-                  key={item.href}
-                  to={item.href}
-                  className={cn(
-                    "flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors",
-                    isActive
-                      ? "bg-primary text-primary-foreground"
-                      : "text-muted-foreground hover:bg-muted hover:text-foreground"
-                  )}
-                >
-                  <item.icon className="w-5 h-5" />
-                  {item.label}
-                </Link>
-              );
-            })}
-          </nav>
-        </ScrollArea>
+          {/* Navigation */}
+          <ScrollArea className="flex-1 py-4">
+            <nav className={cn("space-y-1", sidebar === "icons" ? "px-2" : "px-3")}>
+              {sidebarItems.map((item) => {
+                const isActive = location.pathname === item.href;
+                const link = (
+                  <Link
+                    to={item.href}
+                    className={cn(
+                      "flex items-center rounded-lg text-sm font-medium transition-colors",
+                      sidebar === "icons" ? "justify-center px-2 py-2.5" : "gap-3 px-3 py-2.5",
+                      isActive
+                        ? "bg-primary text-primary-foreground"
+                        : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                    )}
+                  >
+                    <item.icon className="w-5 h-5 shrink-0" />
+                    {sidebar !== "icons" && item.label}
+                  </Link>
+                );
+                // Collapsed to icons the label is the only thing identifying a
+                // destination, so it has to survive as a tooltip.
+                return sidebar === "icons" ? (
+                  <TooltipProvider key={item.href} delayDuration={0}>
+                    <Tooltip>
+                      <TooltipTrigger asChild>{link}</TooltipTrigger>
+                      <TooltipContent side="right">{item.label}</TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                ) : (
+                  <div key={item.href}>{link}</div>
+                );
+              })}
+            </nav>
+          </ScrollArea>
 
-        {/* Back to App */}
-        <div className="p-4 border-t">
-          <Button
-            variant="ghost"
-            className="w-full justify-start gap-2"
-            onClick={() => navigate("/dashboard")}
-          >
-            <ChevronLeft className="w-4 h-4" />
-            Back to App
-          </Button>
-        </div>
-      </aside>
+          {/* Back to App */}
+          <div className={cn("border-t shrink-0", sidebar === "icons" ? "p-2" : "p-4")}>
+            <Button
+              variant="ghost"
+              className={cn("w-full gap-2", sidebar === "icons" ? "justify-center px-0" : "justify-start")}
+              onClick={() => navigate("/dashboard")}
+              title={sidebar === "icons" ? "Back to App" : undefined}
+            >
+              <ChevronLeft className="w-4 h-4 rtl-flip shrink-0" />
+              {sidebar !== "icons" && "Back to App"}
+            </Button>
+          </div>
+        </aside>
+      )}
 
-      {/* Main Content */}
-      <div className="flex-1 flex flex-col">
+      {/* Main Content — min-w-0 so a wide admin table scrolls inside <main>
+          instead of stretching the flex row and pushing the rail off screen. */}
+      <div className="flex-1 flex flex-col min-w-0 h-screen">
         {/* Header */}
-        <header className="h-16 border-b flex items-center justify-between px-6">
-          <h1 className="text-lg font-semibold">
-            {sidebarItems.find((item) => item.href === location.pathname)?.label || "Admin"}
-          </h1>
+        <header className="h-16 border-b flex items-center justify-between px-6 shrink-0">
+          <div className="flex items-center gap-3 min-w-0">
+            {/* The only way back when the rail is hidden, so it lives in the
+                header rather than in the sidebar it controls. */}
+            <Button
+              variant="ghost"
+              size="icon"
+              className="shrink-0"
+              onClick={() =>
+                setSidebar((current) =>
+                  current === "expanded" ? "icons" : current === "icons" ? "hidden" : "expanded"
+                )
+              }
+              aria-label={
+                sidebar === "expanded"
+                  ? "Collapse sidebar to icons"
+                  : sidebar === "icons"
+                    ? "Hide sidebar"
+                    : "Show sidebar"
+              }
+              title={
+                sidebar === "expanded"
+                  ? "Collapse to icons"
+                  : sidebar === "icons"
+                    ? "Hide sidebar"
+                    : "Show sidebar"
+              }
+            >
+              {sidebar === "expanded" ? (
+                <PanelLeftClose className="w-5 h-5 rtl-flip" />
+              ) : sidebar === "icons" ? (
+                <PanelLeft className="w-5 h-5 rtl-flip" />
+              ) : (
+                <PanelLeftOpen className="w-5 h-5 rtl-flip" />
+              )}
+            </Button>
+            <h1 className="text-lg font-semibold truncate">
+              {sidebarItems.find((item) => item.href === location.pathname)?.label || "Admin"}
+            </h1>
+          </div>
           <div className="flex items-center gap-4">
             <ThemeToggle />
           </div>
         </header>
 
         {/* Content */}
-        <main className="flex-1 p-6 overflow-auto">
+        <main className="flex-1 p-6 overflow-auto min-h-0">
           {children}
         </main>
       </div>

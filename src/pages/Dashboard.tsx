@@ -77,11 +77,12 @@ export default function Dashboard() {
         <StatCards stats={statsData} isLoading={statsLoading} />
 
         <div className="grid lg:grid-cols-3 gap-6">
-          {/* Recent Posts */}
-          <RecentPosts posts={recentPosts} isLoading={postsLoading} />
-
-          {/* Connected Accounts */}
+          {/* Connected Accounts — first in DOM, so it sits at the inline start:
+              left in English, right in Arabic. */}
           <ConnectedAccounts accounts={accounts} isLoading={accountsLoading} />
+
+          {/* Recent Posts — spans the remaining two columns. */}
+          <RecentPosts posts={recentPosts} isLoading={postsLoading} />
         </div>
       </div>
     </DashboardLayout>

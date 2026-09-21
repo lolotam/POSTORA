@@ -29,7 +29,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import { Loader2, RefreshCw, CheckCheck, Mail, Clock, ArrowDownLeft, ArrowUpRight, Inbox, Search, X, FileEdit, RotateCcw, Trash2 } from "lucide-react";
+import { PanelLeftClose, PanelLeftOpen, Loader2, RefreshCw, CheckCheck, Mail, Clock, ArrowDownLeft, ArrowUpRight, Inbox, Search, X, FileEdit, RotateCcw, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 type MessageFilter = "all" | "received" | "sent";
@@ -56,6 +56,9 @@ export function AdminInbox() {
   const [activeTab, setActiveTab] = useState("inbox");
   const [messageFilter, setMessageFilter] = useState<MessageFilter>("all");
   const [searchQuery, setSearchQuery] = useState("");
+  // Collapsing the thread rail is a reading-mode choice, not navigation, so it
+  // is deliberately per-mount rather than persisted.
+  const [threadsCollapsed, setThreadsCollapsed] = useState(false);
   const [selectedThreadIds, setSelectedThreadIds] = useState<Set<string>>(new Set());
 
   // Fetch draft count
@@ -169,7 +172,7 @@ export function AdminInbox() {
   }
 
   return (
-    <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
+    <Tabs value={activeTab} onValueChange={setActiveTab} className="flex flex-col h-full space-y-4">
       <div className="flex items-center justify-between">
         <TabsList>
           <TabsTrigger value="inbox" className="gap-2">
@@ -285,9 +288,24 @@ export function AdminInbox() {
         )}
       </div>
 
-      <TabsContent value="inbox" className="mt-0 space-y-4">
+      <TabsContent value="inbox" className="mt-0 flex-1 min-h-0 flex flex-col gap-4">
         {/* Search Bar */}
-        <div className="relative">
+        <div className="flex items-center gap-2 shrink-0">
+          <Button
+            variant="outline"
+            size="icon"
+            className="shrink-0"
+            onClick={() => setThreadsCollapsed((collapsed) => !collapsed)}
+            aria-label={threadsCollapsed ? "Show conversation list" : "Hide conversation list"}
+            title={threadsCollapsed ? "Show conversation list" : "Hide conversation list"}
+          >
+            {threadsCollapsed ? (
+              <PanelLeftOpen className="h-4 w-4 rtl-flip" />
+            ) : (
+              <PanelLeftClose className="h-4 w-4 rtl-flip" />
+            )}
+          </Button>
+          <div className="relative flex-1">
           <Search className="absolute start-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
             placeholder="Search by sender, subject, or content..."
@@ -305,10 +323,19 @@ export function AdminInbox() {
               <X className="h-4 w-4" />
             </Button>
           )}
+          </div>
         </div>
 
-        <div className="flex gap-4 h-[calc(100vh-340px)] min-h-[500px]">
-          <div className="w-1/3 min-w-[300px] border rounded-lg overflow-hidden bg-card">
+        {/* flex-1 + min-h-0 instead of a viewport calc: the panels now grow to
+            the bottom of <main>, and the old h-[calc(100vh-340px)] guessed at a
+            chrome height that changes whenever the toolbar above wraps. */}
+        <div className="flex gap-4 flex-1 min-h-0">
+          <div
+            className={cn(
+              "border rounded-lg overflow-hidden bg-card transition-[width] duration-200 shrink-0",
+              threadsCollapsed ? "w-0 border-0 opacity-0 pointer-events-none" : "w-1/3 min-w-[300px]"
+            )}
+          >
             <ThreadedMessageList
               messages={filteredMessages}
               selectedThreadId={selectedThread?.id}
@@ -318,7 +345,8 @@ export function AdminInbox() {
               onToggleAll={handleToggleAll}
             />
           </div>
-          <div className="flex-1 border rounded-lg overflow-hidden bg-card">
+          {/* min-w-0 so a long subject line cannot push the rail off screen. */}
+          <div className="flex-1 min-w-0 border rounded-lg overflow-hidden bg-card">
             <ThreadDetail
               thread={selectedThread}
               onDelete={(id) => {
