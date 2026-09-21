@@ -1,5 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { cacheAvatarToCloudinary } from "../_shared/avatar-cache.ts";
+import { cacheAvatarToCdn } from "../_shared/avatar-cache.ts";
 import { authenticateCaller } from "../_shared/auth-helper.ts";
 import { createOAuthState, verifyOAuthState } from "../_shared/oauthState.ts";
 import {
@@ -159,7 +159,7 @@ async function saveThreadsAccount(
   const safeUserId = profileData.id;
   const username = profileData.username || `threads_${safeUserId}`;
   const rawAvatarUrl = profileData.threads_profile_picture_url;
-  const avatarUrl = await cacheAvatarToCloudinary(rawAvatarUrl, user_id, "threads", safeUserId);
+  const avatarUrl = await cacheAvatarToCdn(rawAvatarUrl, user_id, "threads", safeUserId);
 
   // Probe granted permissions/capabilities so the UI can tell what this token can do.
   const grantedScopes: string[] = [];

@@ -9,7 +9,7 @@ import { buildEvolutionMessageRow, remoteNumberFor } from "../_shared/evolutionM
 import { importEvolutionHistory } from "../_shared/whatsappSyncEngine.ts";
 import { ackUpdates, statusesAdvancedBy } from "../_shared/evolutionMessageAck.ts";
 import { createEvolutionApi } from "../_shared/evolutionApi.ts";
-import { cacheAvatarToCloudinary } from "../_shared/avatar-cache.ts";
+import { cacheAvatarToCdn } from "../_shared/avatar-cache.ts";
 import {
   enrichWhatsAppParticipantAvatar,
   WEBHOOK_AVATAR_DEADLINE_MS,
@@ -170,7 +170,7 @@ async function persistEvolutionMessage(
   await enrichWhatsAppParticipantAvatar(
     {
       admin,
-      cacheAvatar: cacheAvatarToCloudinary,
+      cacheAvatar: cacheAvatarToCdn,
       deadlineAt: Date.now() + WEBHOOK_AVATAR_DEADLINE_MS,
       fetchProfilePictureUrl: (name, number) =>
         createEvolutionApi().fetchProfilePictureUrl(name, number),

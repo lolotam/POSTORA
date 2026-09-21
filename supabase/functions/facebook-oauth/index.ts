@@ -1,5 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { cacheAvatarToCloudinary } from "../_shared/avatar-cache.ts";
+import { cacheAvatarToCdn } from "../_shared/avatar-cache.ts";
 import { authenticateCaller } from "../_shared/auth-helper.ts";
 import { createOAuthState, verifyOAuthState } from "../_shared/oauthState.ts";
 
@@ -724,7 +724,7 @@ Deno.serve(async (req) => {
       );
       const pictureData = await pictureResponse.json();
       const rawAvatarUrl = pictureData.data?.url || null;
-      const avatarUrl = await cacheAvatarToCloudinary(rawAvatarUrl, user_id, "facebook", selectedPage.id);
+      const avatarUrl = await cacheAvatarToCdn(rawAvatarUrl, user_id, "facebook", selectedPage.id);
 
       const { token: longLivedPageToken, expiresAt: tokenExpiresAt } = await exchangeForLongLivedToken(selectedPage.access_token);
       // Also exchange user token for long-lived version (for ad account access)
@@ -778,7 +778,7 @@ Deno.serve(async (req) => {
         const igUser = await igResponse.json();
 
         if (!igUser.error) {
-          const cachedIgAvatar = await cacheAvatarToCloudinary(
+          const cachedIgAvatar = await cacheAvatarToCdn(
             igUser.profile_picture_url,
             user_id,
             "instagram",
@@ -1040,7 +1040,7 @@ Deno.serve(async (req) => {
 
       const { token: longLivedToken, expiresAt } = await exchangeForLongLivedToken(provider_token);
 
-      const avatarUrl = await cacheAvatarToCloudinary(
+      const avatarUrl = await cacheAvatarToCdn(
         instagram_profile_picture || null,
         user_id,
         "instagram",

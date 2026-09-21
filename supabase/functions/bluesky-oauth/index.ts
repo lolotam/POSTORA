@@ -1,5 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { cacheAvatarToCloudinary } from "../_shared/avatar-cache.ts";
+import { cacheAvatarToCdn } from "../_shared/avatar-cache.ts";
 import { createLogger } from "../_shared/logging.ts";
 import { authenticateCaller } from "../_shared/auth-helper.ts";
 
@@ -302,7 +302,7 @@ async function completeBlueskyCallback(
   const profileData = await profileResponse.json();
   const username = profileData.handle || stateHandle;
   const displayName = profileData.displayName;
-  const avatarUrl = await cacheAvatarToCloudinary(profileData.avatar, stateUserId, "bluesky", did);
+  const avatarUrl = await cacheAvatarToCdn(profileData.avatar, stateUserId, "bluesky", did);
 
   const { error: dbError } = await supabase
     .from("social_accounts")
@@ -594,7 +594,7 @@ Deno.serve(async (req) => {
       const displayName = profileData.displayName;
 
       // Cache avatar to Cloudinary for permanent storage
-      const avatarUrl = await cacheAvatarToCloudinary(rawAvatarUrl, user_id, "bluesky", did);
+      const avatarUrl = await cacheAvatarToCdn(rawAvatarUrl, user_id, "bluesky", did);
 
       // Atomic upsert - prevents race conditions and ensures only 1 row per user/platform/account
       const { error: dbError } = await supabase

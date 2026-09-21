@@ -1,6 +1,6 @@
 // Best-effort Direct-QR participant avatars. Evolution's findChats/findContacts leave
 // profilePicUrl null; the live picture is a separate fetch whose pps.whatsapp.net URL
-// expires. cacheAvatarToCloudinary returns that original URL on upload failure, so a
+// expires. cacheAvatarToCdn returns that original URL on upload failure, so a
 // durable persist has to be a Cloudinary hostname that is not the source.
 //
 // checked_at is a negative cache for a confirmed miss (the contact hid their picture).

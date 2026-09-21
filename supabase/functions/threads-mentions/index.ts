@@ -1,6 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { authenticateCaller } from "../_shared/auth-helper.ts";
-import { cacheAvatarToCloudinary } from "../_shared/avatar-cache.ts";
+import { cacheAvatarToCdn } from "../_shared/avatar-cache.ts";
 import { buildMentionEnvelope, dispatchN8nEvent } from "../_shared/n8nMessagingDispatch.ts";
 import { ingestThreadsComment } from "../_shared/threadsCommentIngest.ts";
 
@@ -231,7 +231,7 @@ Deno.serve(async (req) => {
             const profJson = await profRes.json().catch(() => ({}));
             if (profRes.ok && typeof profJson?.threads_profile_picture_url === "string") {
               const raw = profJson.threads_profile_picture_url as string;
-              const cached = await cacheAvatarToCloudinary(
+              const cached = await cacheAvatarToCdn(
                 raw,
                 userId,
                 "threads-author",

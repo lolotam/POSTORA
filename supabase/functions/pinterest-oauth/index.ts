@@ -1,5 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { cacheAvatarToCloudinary } from "../_shared/avatar-cache.ts";
+import { cacheAvatarToCdn } from "../_shared/avatar-cache.ts";
 import { authenticateCaller } from "../_shared/auth-helper.ts";
 import { createOAuthState, verifyOAuthState } from "../_shared/oauthState.ts";
 
@@ -105,7 +105,7 @@ async function savePinterestAccount(
   const tokenExpiresAt = new Date(
     Date.now() + (expires_in ?? 2592000) * 1000,
   ).toISOString();
-  const avatarUrl = await cacheAvatarToCloudinary(
+  const avatarUrl = await cacheAvatarToCdn(
     userData.profile_image,
     user_id,
     "pinterest",
@@ -191,7 +191,7 @@ async function reconnectPinterestAccount(
   const tokenExpiresAt = new Date(
     Date.now() + (expires_in ?? 2592000) * 1000,
   ).toISOString();
-  const avatarUrl = await cacheAvatarToCloudinary(
+  const avatarUrl = await cacheAvatarToCdn(
     userData.profile_image,
     expected_user_id,
     "pinterest",

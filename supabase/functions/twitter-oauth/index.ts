@@ -1,5 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { cacheAvatarToCloudinary } from "../_shared/avatar-cache.ts";
+import { cacheAvatarToCdn } from "../_shared/avatar-cache.ts";
 import { authenticateCaller } from "../_shared/auth-helper.ts";
 
 import { restrictedCorsHeaders } from "../_shared/cors.ts";
@@ -440,7 +440,7 @@ async function completeOAuth(params: {
 
   // Cache avatar to Cloudinary for permanent storage
   const largerAvatarUrl = rawAvatarUrl?.replace("_normal", "_400x400") ?? null;
-  const avatarUrl = await cacheAvatarToCloudinary(largerAvatarUrl, params.user_id, "twitter", twitterUserId);
+  const avatarUrl = await cacheAvatarToCdn(largerAvatarUrl, params.user_id, "twitter", twitterUserId);
 
   const isReconnect = params.mode === "reconnect" && !!params.social_account_id;
 

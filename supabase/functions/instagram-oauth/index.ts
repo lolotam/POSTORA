@@ -10,7 +10,7 @@
  */
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { cacheAvatarToCloudinary } from "../_shared/avatar-cache.ts";
+import { cacheAvatarToCdn } from "../_shared/avatar-cache.ts";
 import { authenticateCaller } from "../_shared/auth-helper.ts";
 import { createOAuthState, verifyOAuthState } from "../_shared/oauthState.ts";
 
@@ -173,7 +173,7 @@ async function exchangeAndPersist(
   // one broken surface for another.
   const igScopedId = profileData.user_id ? String(profileData.user_id) : null;
   const username = profileData.username || `ig_${igUserId}`;
-  const avatarUrl = await cacheAvatarToCloudinary(
+  const avatarUrl = await cacheAvatarToCdn(
     profileData.profile_picture_url,
     user_id,
     "instagram",

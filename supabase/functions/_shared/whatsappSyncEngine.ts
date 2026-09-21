@@ -7,7 +7,7 @@
 
 import type { EvolutionApi } from "./evolutionApi.ts";
 import { addressableJid, buildEvolutionMessageRow, remoteNumberFor } from "./evolutionMessage.ts";
-import { cacheAvatarToCloudinary } from "./avatar-cache.ts";
+import { cacheAvatarToCdn } from "./avatar-cache.ts";
 import { backfillWhatsAppParticipantAvatars } from "./whatsappAvatarEnrichment.ts";
 import { enqueuePartnerWebhookEvent } from "./partnerWebhookEvents.ts";
 
@@ -338,7 +338,7 @@ export async function syncEvolutionHistory(deps: {
   // spend the whole sync budget before a single message is imported.
   await backfillWhatsAppParticipantAvatars({
     admin,
-    cacheAvatar: cacheAvatarToCloudinary,
+    cacheAvatar: cacheAvatarToCdn,
     deadlineAt: Math.min(deadlineAt, Date.now() + AVATAR_BACKFILL_BUDGET_MS),
     fetchProfilePictureUrl: (name, number) => api.fetchProfilePictureUrl(name, number),
   }, {

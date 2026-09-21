@@ -1,6 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { isDirectInstagramAccount, getPageTokenForMessaging, getSendCredentials } from "../_shared/messengerCredentials.ts";
-import { cacheAvatarToCloudinary } from "../_shared/avatar-cache.ts";
+import { cacheAvatarToCdn } from "../_shared/avatar-cache.ts";
 import { WhatsAppAccessError, type WhatsAppAccountAccess, type WhatsAppWorkspaceAccessClient } from "../_shared/whatsappWorkspaceAccess.ts";
 import { withWhatsAppActionAccess } from "./whatsappAccess.ts";
 import {
@@ -334,7 +334,7 @@ Deno.serve(async (req) => {
     // then records it in messaging_cache so getCachedParticipantAvatar can serve it
     // without hitting Meta again until the TTL expires.
     async function cacheParticipantAvatar(req: ParticipantAvatarRequest, profilePic: string): Promise<string | null> {
-      const cachedUrl = await cacheAvatarToCloudinary(profilePic, user.id, req.account.platform, req.participant.id);
+      const cachedUrl = await cacheAvatarToCdn(profilePic, user.id, req.account.platform, req.participant.id);
 
       await adminClient.from("messaging_cache").upsert(
         {

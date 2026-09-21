@@ -8,7 +8,7 @@
 // ingestThreadsComment so a comment seen twice still fires once.
 // Mirrors whatsapp-webhook patterns. verify_jwt = false (public endpoint).
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { cacheAvatarToCloudinary } from "../_shared/avatar-cache.ts";
+import { cacheAvatarToCdn } from "../_shared/avatar-cache.ts";
 import { runInBackground } from "../_shared/background.ts";
 import { ingestThreadsComment } from "../_shared/threadsCommentIngest.ts";
 import {
@@ -293,7 +293,7 @@ Deno.serve(async (req) => {
         const profJson = await profRes.json().catch(() => ({}));
         if (profRes.ok && typeof profJson?.threads_profile_picture_url === "string") {
           const raw = profJson.threads_profile_picture_url as string;
-          const cached = await cacheAvatarToCloudinary(
+          const cached = await cacheAvatarToCdn(
             raw,
             account.user_id,
             "threads-author",

@@ -1,103 +1,81 @@
 /**
  * Avatar Caching Helper
- * 
- * Caches social media profile avatars to Cloudinary so they never expire.
- * Platform CDN URLs (Facebook, Instagram, TikTok) typically expire after hours/days.
- * By uploading to Cloudinary, we get permanent URLs.
+ *
+ * Platform CDN URLs expire: Meta signs them and they start returning 403 within
+ * days, which is why avatars are re-hosted rather than linked.
+ *
+ * This used to upload to Cloudinary. That account was disabled, so every URL it
+ * had ever written began returning 401 and the UI silently fell back to a
+ * generic platform glyph everywhere an account avatar should appear. Uploads now
+ * go to Openinary, which is the only image host this project still runs.
  */
-
-interface CloudinaryUploadResult {
-  success: boolean;
-  url?: string;
-  publicId?: string;
-  error?: string;
-}
+import {
+  getOpeninaryConfig,
+  openinaryTarget,
+  uploadToOpeninary,
+  deleteFromOpeninary,
+} from "./openinary.ts";
 
 /**
- * Uploads an avatar image from a source URL to Cloudinary
- * @param sourceUrl - The temporary CDN URL from the social platform
- * @param userId - The Postora user ID
- * @param platform - The social platform (facebook, instagram, tiktok, etc.)
- * @param platformUserId - The platform-specific user/page ID
- * @returns The permanent Cloudinary URL or null if caching fails
+ * Re-hosts an avatar and returns a permanent URL.
+ *
+ * Returns the source URL unchanged when Openinary is not configured or the
+ * upload fails: a stale avatar beats losing the account row's only picture, and
+ * every caller writes the result straight into social_accounts.avatar_url.
+ *
+ * @param sourceUrl       short-lived CDN URL from the platform
+ * @param userId          Postora user id, used to scope the stored path
+ * @param platform        facebook, instagram, tiktok, ...
+ * @param platformUserId  platform-side page/user id
  */
-export async function cacheAvatarToCloudinary(
+export async function cacheAvatarToCdn(
   sourceUrl: string | null | undefined,
   userId: string,
   platform: string,
   platformUserId: string
 ): Promise<string | null> {
-  if (!sourceUrl) {
-    console.log(`[avatar-cache] No source URL provided for ${platform}/${platformUserId}`);
-    return null;
+  if (!sourceUrl) return null;
+
+  const config = getOpeninaryConfig();
+  if (!config) {
+    console.warn("[avatar-cache] Openinary not configured, leaving the source URL in place");
+    return sourceUrl;
   }
 
-  const cloudName = Deno.env.get("CLOUDINARY_CLOUD_NAME");
-  const apiKey = Deno.env.get("CLOUDINARY_API_KEY");
-  const apiSecret = Deno.env.get("CLOUDINARY_API_SECRET");
-
-  if (!cloudName || !apiKey || !apiSecret) {
-    console.warn("[avatar-cache] Cloudinary credentials not configured, skipping avatar caching");
-    return sourceUrl; // Return original URL as fallback
-  }
+  // Same path scheme the Cloudinary version used, so a re-run overwrites in
+  // place rather than scattering a second copy per account.
+  const { folder, baseName } = openinaryTarget(
+    `avatars/${userId}/${platform}_${platformUserId}`,
+    config.folderPrefix
+  );
 
   try {
-    console.log(`[avatar-cache] Caching avatar for ${platform}/${platformUserId}`);
+    // No requiredExtension: the helper sniffs it from the response content type.
+    // Forcing one 400s whenever a platform serves webp where we assumed jpg.
+    let result = await uploadToOpeninary(config, sourceUrl, folder, baseName);
 
-    // Create a consistent public ID for this avatar
-    // Format: avatars/{userId}/{platform}_{platformUserId}
-    const folder = `avatars/${userId}`;
-    const publicId = `${platform}_${platformUserId}`;
-    const timestamp = Math.floor(Date.now() / 1000);
-
-    // Build signature
-    const signatureParams = [
-      `folder=${folder}`,
-      `overwrite=true`,
-      `public_id=${publicId}`,
-      `timestamp=${timestamp}`,
-    ].sort().join("&");
-
-    // Create SHA-1 signature
-    const encoder = new TextEncoder();
-    const data = encoder.encode(signatureParams + apiSecret);
-    const hashBuffer = await crypto.subtle.digest("SHA-1", data);
-    const hashArray = Array.from(new Uint8Array(hashBuffer));
-    const signature = hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
-
-    // Upload to Cloudinary using the source URL
-    const uploadUrl = `https://api.cloudinary.com/v1_1/${cloudName}/image/upload`;
-
-    const formData = new FormData();
-    formData.append("file", sourceUrl); // Cloudinary accepts URLs directly
-    formData.append("api_key", apiKey);
-    formData.append("timestamp", timestamp.toString());
-    formData.append("signature", signature);
-    formData.append("folder", folder);
-    formData.append("public_id", publicId);
-    formData.append("overwrite", "true");
-
-    const uploadResponse = await fetch(uploadUrl, {
-      method: "POST",
-      body: formData,
-      signal: AbortSignal.timeout(8_000),
-    });
-
-    if (!uploadResponse.ok) {
-      const errorText = await uploadResponse.text();
-      console.error(`[avatar-cache] Cloudinary upload failed: ${errorText}`);
-      return sourceUrl; // Return original URL as fallback
+    // Openinary treats an existing path with different bytes as a collision and
+    // renames it, which the helper reports as failure because the renamed path
+    // is unreachable by the deterministic read URL. An avatar legitimately
+    // changes, so clear the old object and store the new one once.
+    if (!result.success && result.error?.includes("collision rename")) {
+      if (result.path) await deleteFromOpeninary(config, result.path);
+      await deleteFromOpeninary(config, `${folder}/${baseName}.jpg`);
+      await deleteFromOpeninary(config, `${folder}/${baseName}.png`);
+      await deleteFromOpeninary(config, `${folder}/${baseName}.webp`);
+      result = await uploadToOpeninary(config, sourceUrl, folder, baseName);
     }
 
-    const result = await uploadResponse.json();
-    console.log(`[avatar-cache] Avatar cached successfully: ${result.secure_url}`);
-    
-    return result.secure_url;
+    if (!result.success || !result.url) {
+      console.error(`[avatar-cache] Upload failed for ${platform}/${platformUserId}: ${result.error}`);
+      return sourceUrl;
+    }
+    return result.url;
   } catch (error) {
-    // Log error.name only: Deno embeds full request URLs in network error messages, and
-    // the fetchers below carry live access tokens in those URLs.
-    console.error(`[avatar-cache] Error caching avatar:`, error instanceof Error ? error.name : "UnknownError");
-    return sourceUrl; // Return original URL as fallback
+    // error.name only: Deno puts the full request URL in network error messages,
+    // and the fetchers below carry live access tokens in theirs.
+    console.error("[avatar-cache] Error caching avatar:", error instanceof Error ? error.name : "UnknownError");
+    return sourceUrl;
   }
 }
 

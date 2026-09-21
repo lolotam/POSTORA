@@ -1,5 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { cacheAvatarToCloudinary } from "../_shared/avatar-cache.ts";
+import { cacheAvatarToCdn } from "../_shared/avatar-cache.ts";
 import { authenticateCaller } from "../_shared/auth-helper.ts";
 import { createOAuthState, verifyOAuthState } from "../_shared/oauthState.ts";
 
@@ -106,7 +106,7 @@ async function saveTikTokAccount(
 
   const usernameForDisplay = displayName || tiktokUsername || open_id;
   const avatarUrl = rawAvatarUrl
-    ? await cacheAvatarToCloudinary(rawAvatarUrl, user_id, "tiktok", open_id)
+    ? await cacheAvatarToCdn(rawAvatarUrl, user_id, "tiktok", open_id)
     : null;
 
   const tokenExpiresAt = new Date(
@@ -209,7 +209,7 @@ async function reconnectTikTokAccount(
 
   const usernameForDisplay = displayName || tiktokUsername || open_id;
   const avatarUrl = rawAvatarUrl
-    ? await cacheAvatarToCloudinary(rawAvatarUrl, expected_user_id, "tiktok", open_id)
+    ? await cacheAvatarToCdn(rawAvatarUrl, expected_user_id, "tiktok", open_id)
     : row.avatar_url ?? null;
   const tokenExpiresAt = new Date(
     Date.now() + (expires_in ?? 86400) * 1000,

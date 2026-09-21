@@ -12,7 +12,7 @@
  */
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { cacheAvatarToCloudinary } from "../_shared/avatar-cache.ts";
+import { cacheAvatarToCdn } from "../_shared/avatar-cache.ts";
 import { authenticateCaller } from "../_shared/auth-helper.ts";
 import { createOAuthState, verifyOAuthState } from "../_shared/oauthState.ts";
 
@@ -193,7 +193,7 @@ async function persistOneIgAccount(
   expires_in: number,
   granted_scopes: string[] = [],
 ): Promise<{ success: boolean; error?: string }> {
-  const avatarUrl = await cacheAvatarToCloudinary(
+  const avatarUrl = await cacheAvatarToCdn(
     candidate.ig_profile_picture_url ?? undefined,
     user_id,
     "instagram",

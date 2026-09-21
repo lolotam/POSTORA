@@ -38,7 +38,7 @@ import {
 } from '../_shared/social-auth.ts';
 
 import {
-  cacheAvatarToCloudinary,
+  cacheAvatarToCdn,
   fetchFacebookAvatarUrl,
   fetchInstagramAvatarUrl,
   fetchTikTokAvatarUrl,
@@ -212,7 +212,7 @@ async function refreshAndCacheAvatar(
 
     if (freshAvatarUrl) {
       // Cache to Cloudinary for permanent storage
-      const cachedUrl = await cacheAvatarToCloudinary(
+      const cachedUrl = await cacheAvatarToCdn(
         freshAvatarUrl,
         account.user_id,
         account.platform,
