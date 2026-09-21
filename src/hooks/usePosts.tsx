@@ -68,6 +68,41 @@ export function usePosts(limit?: number) {
   });
 }
 
+/**
+ * Count of posts still queued to go out, for the sidebar badge.
+ *
+ * Deliberately a `head` count rather than a slice of `usePosts()`: the layout is
+ * mounted on every authenticated route, and reading the full post list there
+ * downloaded every column of every post the user has ever created just to
+ * produce one number.
+ *
+ * The key stays under the `"posts"` prefix so the ten call sites that already
+ * run `invalidateQueries({ queryKey: ["posts"] })` after scheduling, rescheduling
+ * or deleting keep refreshing this badge, as they did when it read `usePosts()`.
+ */
+export function useScheduledPostCount() {
+  const { user } = useAuth();
+
+  return useQuery({
+    queryKey: ["posts", user?.id, "scheduled_count"],
+    queryFn: async () => {
+      if (!user) return 0;
+
+      const { count, error } = await supabase
+        .from("posts")
+        .select("id", { count: "exact", head: true })
+        .eq("user_id", user.id)
+        .in("status", ["pending", "scheduled"])
+        .gt("scheduled_at", new Date().toISOString());
+
+      if (error) throw error;
+      return count ?? 0;
+    },
+    enabled: !!user,
+    retry: false,
+  });
+}
+
 export function usePostsWithResults(limit?: number) {
   const { user } = useAuth();
 

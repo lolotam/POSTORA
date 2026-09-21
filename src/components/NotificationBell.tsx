@@ -27,7 +27,15 @@ import { useUserRole } from "@/hooks/useUserRole";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { useNotificationHistoryStore, ActivityNotification } from "@/stores/notificationHistoryStore";
-import { useMessagingAccounts, useConversations, useMarkConversationRead } from "@/hooks/useMessaging";
+import {
+  useMessagingAccounts,
+  useConversations,
+  useMarkConversationRead,
+  CONVERSATIONS_REFETCH_MS,
+} from "@/hooks/useMessaging";
+
+/** Badge-only cadence while the bell popover is closed. */
+const BELL_CLOSED_REFETCH_MS = 5 * 60_000;
 
 export function NotificationBell() {
   const [open, setOpen] = useState(false);
@@ -70,9 +78,17 @@ export function NotificationBell() {
   const firstFbAccount = messagingAccounts.find((a) => a.platform === "facebook");
   const firstIgAccount = messagingAccounts.find((a) => a.platform === "instagram");
   const firstWaAccount = messagingAccounts.find((a) => a.platform === "whatsapp");
-  const { data: fbConversations = [] } = useConversations(firstFbAccount?.id || null, "MESSENGER", { silent: true });
-  const { data: igConversations = [] } = useConversations(firstIgAccount?.id || null, "INSTAGRAM", { silent: true });
-  const { data: waConversations = [] } = useConversations(firstWaAccount?.id || null, "WHATSAPP", { silent: true });
+  // The bell mounts on every authenticated route, so its cadence is what the
+  // whole app pays. Closed, it only feeds an unread badge and a realtime
+  // subscription already invalidates it when a message lands, so poll slowly;
+  // open, the list is on screen and gets the normal inbox cadence.
+  const conversationsPolling = {
+    silent: true,
+    refetchInterval: open ? CONVERSATIONS_REFETCH_MS : BELL_CLOSED_REFETCH_MS,
+  };
+  const { data: fbConversations = [] } = useConversations(firstFbAccount?.id || null, "MESSENGER", conversationsPolling);
+  const { data: igConversations = [] } = useConversations(firstIgAccount?.id || null, "INSTAGRAM", conversationsPolling);
+  const { data: waConversations = [] } = useConversations(firstWaAccount?.id || null, "WHATSAPP", conversationsPolling);
   const unreadMessagesCount = [...fbConversations, ...igConversations, ...waConversations].reduce((sum, c) => sum + (c.unread_count || 0), 0);
 
   // Push notifications

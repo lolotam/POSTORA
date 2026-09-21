@@ -1,6 +1,7 @@
 import { useState, useMemo, useRef, useCallback } from "react";
 import { useTranslation, Trans } from "react-i18next";
 import { getAspectRatioLabel } from "@/lib/aspectRatioUtils";
+import { mergeHealedDimensions } from "@/lib/mediaMetadata";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
@@ -149,7 +150,7 @@ function MediaThumbnail({
   file: MediaFile;
   size: number;
   openinaryOrigin?: string;
-  onHeal: (fileId: string, width: number, height: number) => void;
+  onHeal: (fileId: string, width: number, height: number, existingMetadata: MediaFile["metadata"]) => void;
 }) {
   const src = file.file_type === "image" ? getMediaThumbnailUrl(file.publicUrl, size, openinaryOrigin) : file.publicUrl;
   const shouldHeal = !file.metadata?.width && src === file.publicUrl;
@@ -163,7 +164,7 @@ function MediaThumbnail({
         preload="metadata"
         onLoadedMetadata={(e) => {
           const vid = e.currentTarget;
-          if (shouldHeal && vid.videoWidth > 0) onHeal(file.id, vid.videoWidth, vid.videoHeight);
+          if (shouldHeal && vid.videoWidth > 0) onHeal(file.id, vid.videoWidth, vid.videoHeight, file.metadata);
         }}
       />
     );
@@ -178,7 +179,7 @@ function MediaThumbnail({
       decoding="async"
       onLoad={(e) => {
         const img = e.currentTarget;
-        if (shouldHeal && img.naturalWidth > 0) onHeal(file.id, img.naturalWidth, img.naturalHeight);
+        if (shouldHeal && img.naturalWidth > 0) onHeal(file.id, img.naturalWidth, img.naturalHeight, file.metadata);
       }}
     />
   );
@@ -243,11 +244,28 @@ export default function MediaLibrary() {
 
   const healedIdsRef = useRef<Set<string>>(new Set());
 
-  const healMetadata = useCallback((fileId: string, width: number, height: number) => {
+  const healMetadata = useCallback((
+    fileId: string,
+    width: number,
+    height: number,
+    existingMetadata: MediaFile["metadata"],
+  ) => {
     if (healedIdsRef.current.has(fileId)) return;
     healedIdsRef.current.add(fileId);
-    supabase.from("media_files").update({ metadata: { width, height } } as any).eq("id", fileId).then(() => {
-      queryClient.invalidateQueries({ queryKey: ["media-files"] });
+    const metadata = mergeHealedDimensions(existingMetadata, width, height);
+    supabase.from("media_files").update({ metadata } as any).eq("id", fileId).then(({ error }) => {
+      if (error) {
+        // Let a later render retry rather than leaving the row permanently unhealed.
+        healedIdsRef.current.delete(fileId);
+        return;
+      }
+      // Patch the one row instead of invalidating: an invalidation refetches the
+      // whole (deliberately unpaginated) listing once per healed image, which is
+      // what turned opening this page into a refetch cascade.
+      queryClient.setQueriesData<MediaFile[]>(
+        { queryKey: ["media-files"] },
+        (files) => files?.map((file) => (file.id === fileId ? { ...file, metadata } : file)),
+      );
     });
   }, [queryClient]);
 

@@ -1,0 +1,132 @@
+{
+  "note": "media_files.metadata before and after one media-Library open, 2026-09-21T08:39Z, production. Generated-from-uuid filenames redacted.",
+  "rows_damaged": 9,
+  "rows": [
+    {
+      "media_file_id": "4b3b929f-8f4b-48a0-8708-278c65984740",
+      "before": {
+        "width": null,
+        "format": "jpg",
+        "height": null,
+        "duration": null,
+        "original_filename": "<uuid>_<uuid>"
+      },
+      "after_clobber": {
+        "width": 1024,
+        "height": 1024
+      }
+    },
+    {
+      "media_file_id": "be70445e-1ea9-4c64-a739-2a6205444019",
+      "before": {
+        "width": null,
+        "format": "jpg",
+        "height": null,
+        "duration": null,
+        "original_filename": "<uuid>_<uuid>"
+      },
+      "after_clobber": {
+        "width": 1024,
+        "height": 1024
+      }
+    },
+    {
+      "media_file_id": "7acf0b4c-b00c-496d-bad7-c31fedde14de",
+      "before": {
+        "width": null,
+        "format": "jpg",
+        "height": null,
+        "duration": null,
+        "original_filename": "<uuid>_<uuid>"
+      },
+      "after_clobber": {
+        "width": 1024,
+        "height": 1024
+      }
+    },
+    {
+      "media_file_id": "7b0d7e4a-f9ca-472c-b239-e92fd6a0266e",
+      "before": {
+        "width": null,
+        "format": "png",
+        "height": null,
+        "duration": null,
+        "original_filename": "<uuid>_<uuid>"
+      },
+      "after_clobber": {
+        "width": 1024,
+        "height": 1024
+      }
+    },
+    {
+      "media_file_id": "e6c036ce-1fd5-45b6-a139-3c87c0ac92a8",
+      "before": {
+        "width": null,
+        "format": "png",
+        "height": null,
+        "duration": null,
+        "original_filename": "<uuid>_<uuid>"
+      },
+      "after_clobber": {
+        "width": 1024,
+        "height": 1024
+      }
+    },
+    {
+      "media_file_id": "176f9e3d-ad99-45cc-91b6-cf713b4a1487",
+      "before": {
+        "width": null,
+        "format": "png",
+        "height": null,
+        "duration": null,
+        "original_filename": "<uuid>_<uuid>"
+      },
+      "after_clobber": {
+        "width": 1024,
+        "height": 1024
+      }
+    },
+    {
+      "media_file_id": "16c0fb79-d00e-42a2-aaa1-daf96cbf7d25",
+      "before": {
+        "width": null,
+        "format": "png",
+        "height": null,
+        "duration": null,
+        "original_filename": "app_logo"
+      },
+      "after_clobber": {
+        "width": 500,
+        "height": 500
+      }
+    },
+    {
+      "media_file_id": "02769d28-1342-4a50-9cee-a2ca4ccf9354",
+      "before": {
+        "width": null,
+        "format": "png",
+        "height": null,
+        "duration": null,
+        "original_filename": "app_favicon"
+      },
+      "after_clobber": {
+        "width": 50,
+        "height": 50
+      }
+    },
+    {
+      "media_file_id": "e35fb6ac-b7a8-488e-a9a6-397ecd9b161a",
+      "before": {
+        "width": null,
+        "format": "png",
+        "height": null,
+        "duration": null,
+        "original_filename": "<uuid>_<uuid>"
+      },
+      "after_clobber": {
+        "width": 1024,
+        "height": 1024
+      }
+    }
+  ]
+}

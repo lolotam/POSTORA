@@ -1,6 +1,6 @@
 import { useState, useMemo } from "react";
 import { useTranslation } from "react-i18next";
-import { usePosts } from "@/hooks/usePosts";
+import { useScheduledPostCount } from "@/hooks/usePosts";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import { Logo } from "@/components/Logo";
@@ -109,11 +109,7 @@ export function DashboardLayout({ children, contentClassName, noPadding = false,
   const { planName, isPro, isBusiness, isFree } = useSubscription();
   const { publishingPosts, isPublishing } = usePublishing();
   const { flags, isLoading: flagsLoading } = useFeatureFlags();
-  const { data: allPosts = [] } = usePosts();
-  const scheduledCount = useMemo(() =>
-    allPosts.filter(p => p.scheduled_at && new Date(p.scheduled_at) > new Date() && (p.status === "pending" || p.status === "scheduled")).length,
-    [allPosts]
-  );
+  const { data: scheduledCount = 0 } = useScheduledPostCount();
 
   const showCanvas = isAdmin || (!flagsLoading && flags.canvas);
 
