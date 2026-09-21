@@ -1,0 +1,305 @@
+{
+  "blog": {
+    "actions": {
+      "backToWhatsNew": "رجوع لإيه الجديد"
+    },
+    "badge": {
+      "update": "تحديث"
+    },
+    "empty": {
+      "notFound": "المنشور مش موجود",
+      "notFoundDesc": "المنشور اللي بتدور عليه مش موجود أو اتشال."
+    },
+    "header": {
+      "moreUpdates": "تحديثات أكتر"
+    },
+    "toast": {
+      "linkCopied": "تم نسخ الرابط!",
+      "linkCopiedDesc": "تم نسخ رابط المنشور"
+    }
+  },
+  "contact": {
+    "actions": {
+      "send": "ابعت الرسالة",
+      "sendAnother": "ابعت رسالة تانية",
+      "sending": "جاري الإرسال..."
+    },
+    "footer": {
+      "previousMessages": "تقدر تشوف رسائلك السابقة من إعدادات الحساب."
+    },
+    "form": {
+      "email": "الإيميل",
+      "emailPlaceholder": "your@email.com",
+      "message": "الرسالة",
+      "messagePlaceholder": "قولنا أكتر...",
+      "mobile": "الموبايل",
+      "mobilePlaceholder": "+1 234 567 8900",
+      "optional": "(اختياري)",
+      "subject": "العنوان",
+      "subjectPlaceholder": "الرسالة دي عن إيه؟"
+    },
+    "header": {
+      "subtitle": "عندك سؤال أو ملاحظة أو محتاج مساعدة؟ ابعتلنا رسالة وهنرد في أقرب وقت.",
+      "title": "تواصل معنا"
+    },
+    "success": {
+      "desc": "شكراً لتواصلك. استلمنا رسالتك وهنرد عليك قريب.",
+      "title": "الرسالة اتبعتت!"
+    },
+    "toast": {
+      "failed": "فشل الإرسال",
+      "failedDesc": "حصل خطأ.",
+      "invalidEmail": "إيميل غلط",
+      "invalidEmailDesc": "اكتب إيميل صحيح.",
+      "missingFields": "فيه خانات ناقصة",
+      "missingFieldsDesc": "املأ العنوان والرسالة.",
+      "notAuthenticated": "مش مسجّل دخول",
+      "notAuthenticatedDesc": "سجّل دخول عشان تبعت رسالة.",
+      "sent": "الرسالة اتبعتت!",
+      "sentDesc": "هنرد عليك في أقرب وقت."
+    }
+  },
+  "credits": {
+    "actions": {
+      "buyNow": "اشتري دلوقتي",
+      "processing": "جاري المعالجة..."
+    },
+    "admin": {
+      "badge": "أدمن",
+      "desc": "كأدمن، عندك وصول غير محدود لكل ميزات الذكاء الاصطناعي. مش محتاج تشتري رصيد."
+    },
+    "balance": {
+      "aiCredits": "رصيد الذكاء الاصطناعي",
+      "label": "رصيدك",
+      "unlimitedAccess": "وصول غير محدود"
+    },
+    "costs": {
+      "captions": "الأوصاف",
+      "hashtags": "الهاشتاجات",
+      "images": "الصور",
+      "oneCredit": "نقطة واحدة",
+      "twoCredits": "نقطتين",
+      "unlimited": "غير محدود"
+    },
+    "errors": {
+      "createSession": "فشلنا في إنشاء جلسة الدفع",
+      "noCheckoutUrl": "مفيش رابط دفع رجع",
+      "pleaseLogIn": "سجّل دخول عشان تشتري رصيد"
+    },
+    "faq": {
+      "expireA": "لأ! الرصيد بتاعك مش بينتهي وتقدر تستخدمه في أي وقت.",
+      "expireQ": "الرصيد بينتهي؟",
+      "refundA": "بسبب طبيعة الرصيد الرقمية، مش بنقدر نرجع الفلوس بعد الشراء.",
+      "refundQ": "ينفع أسترجع فلوسي؟",
+      "runOutA": "هتفضل تستخدم ميزات الذكاء الاصطناعي المشمولة في اشتراكك. الرصيد للإضافة فوق حدود خطتك.",
+      "runOutQ": "إيه اللي يحصل لو الرصيد خلص؟",
+      "title": "أسئلة شائعة"
+    },
+    "header": {
+      "badge": "رصيد الذكاء الاصطناعي",
+      "subtitle": "اشتري رصيد ذكاء اصطناعي لتوليد الأوصاف، واقتراح الهاشتاجات، وإنشاء الصور. الرصيد مش بينتهي!",
+      "title": "قوّي محتواك"
+    },
+    "packs": {
+      "bestValue": "أفضل قيمة",
+      "choose": "اختار باقة رصيد",
+      "credits100": "100 نقطة",
+      "credits200": "200 نقطة",
+      "credits50": "50 نقطة",
+      "perCredit": "${{price}} للنقطة",
+      "save10": "وفّر 10%",
+      "save20": "وفّر 20%"
+    },
+    "toast": {
+      "purchaseFailed": "فشل الشراء",
+      "startCheckoutFailed": "فشلنا في بدء الدفع"
+    },
+    "transactions": {
+      "bonus": "رصيد إضافي",
+      "purchased": "شراء رصيد",
+      "refund": "استرجاع",
+      "title": "آخر العمليات",
+      "used": "استخدام رصيد"
+    }
+  },
+  "payment": {
+    "actions": {
+      "backToCredits": "رجوع للرصيد",
+      "checkAgain": "راجع تاني",
+      "createPost": "أنشئ منشور",
+      "viewBalance": "عرض رصيدك"
+    },
+    "errors": {
+      "noSession": "مفيش معرّف جلسة",
+      "verifyFailed": "فشلنا في التحقق من الدفع"
+    },
+    "processing": {
+      "desc": "الدفع لسه بيتعالج. راجع تاني بعد شوية.",
+      "title": "جاري معالجة الدفع"
+    },
+    "success": {
+      "credits": "نقطة",
+      "desc": "اتضاف رصيد الذكاء الاصطناعي لحسابك.",
+      "emailSent": "ابعتنالك إيميل تأكيد على بريدك المسجّل.",
+      "newBalance": "الرصيد الجديد: {{count}} نقطة",
+      "title": "تم الدفع بنجاح!",
+      "useThem": "استخدمهم للأوصاف والهاشتاجات وتوليد الصور"
+    },
+    "toast": {
+      "creditsAdded": "اتضاف {{count}} نقطة لحسابك.",
+      "success": "تم الدفع بنجاح!"
+    },
+    "verifying": "بنتحقق من الدفع..."
+  },
+  "pricing": {
+    "billing": {
+      "monthly": "شهري",
+      "saveUpTo": "وفّر لحد 17%",
+      "yearly": "سنوي"
+    },
+    "errors": {
+      "createCheckout": "فشلنا في إنشاء جلسة الدفع",
+      "noCheckoutUrl": "مفيش رابط دفع رجع",
+      "pleaseLogIn": "سجّل دخول عشان تشترك"
+    },
+    "footer": {
+      "questions": "عندك أسئلة؟ <docs>شوف التوثيق</docs> أو <support>تواصل مع الدعم</support>"
+    },
+    "header": {
+      "badge": "الأسعار",
+      "subtitle": "ابدأ مجاناً، ورقّي لما تكون جاهز. كل الخطط فيها الميزات الأساسية.",
+      "title": "اختار خطتك"
+    },
+    "toast": {
+      "alreadyDesc": "أنت بالفعل على خطة {{name}}.",
+      "alreadyTitle": "مشترك بالفعل",
+      "amountDiscount": "تم تطبيق خصم ${{amount}}",
+      "checkoutFailed": "فشل الدفع",
+      "couponApplied": "تم تطبيق الكوبون!",
+      "percentDiscount": "تم تطبيق خصم {{percent}}%",
+      "startCheckoutFailed": "فشلنا في بدء الدفع"
+    }
+  },
+  "smart": {
+    "actions": {
+      "schedulePost": "جدولة منشور"
+    },
+    "basedOn": "بناءً على {{count}} منشور سابق",
+    "form": {
+      "platform": "المنصة"
+    },
+    "header": {
+      "bestTimes": "أفضل أوقات النشر",
+      "subtitle": "أوقات نشر مقترحة بالذكاء الاصطناعي حسب بيانات المجال وسجلك",
+      "title": "الجدولة الذكية"
+    },
+    "info": {
+      "body": "الجدولة الذكية بتحلل أبحاث المجال وسجل النشر بتاعك وتقترح أفضل أوقات لكل منصة. النتيجة بتعكس التفاعل المتوقع. كل ما تنشر أكتر، الاقتراحات بتبقى أخص ليك.",
+      "title": "إزاي بتشتغل"
+    },
+    "platforms": {
+      "facebook": "Facebook",
+      "instagram": "Instagram",
+      "linkedin": "LinkedIn",
+      "pinterest": "Pinterest",
+      "threads": "Threads",
+      "tiktok": "TikTok",
+      "twitter": "Twitter/X",
+      "youtube": "YouTube"
+    }
+  },
+  "subscriptionCancel": {
+    "actions": {
+      "backToPricing": "رجوع للأسعار",
+      "goToDashboard": "روح للوحة التحكم"
+    },
+    "desc": "مفيش مشكلة! الإلغاء حصل وماتخصمنالكش حاجة. تقدر ترقّي لـ Pro في أي وقت لما تكون جاهز.",
+    "title": "تم إلغاء الاشتراك"
+  },
+  "subscriptionSuccess": {
+    "actions": {
+      "checkSettings": "راجع الإعدادات",
+      "createFirstPost": "أنشئ أول منشور",
+      "manageProfiles": "إدارة الحسابات",
+      "tryAgain": "حاول تاني"
+    },
+    "error": {
+      "desc": "مش قدرنا نتحقق من اشتراكك. ممكن الدفع لسه بيتعالج.",
+      "title": "مشكلة في التحقق"
+    },
+    "session": "الجلسة: {{id}}...",
+    "success": {
+      "desc": "اشتراكك اشتغل دلوقتي. عندك كل الميزات المميزة بما فيها حسابات أكتر، حدود نشر أعلى، وأدوات الذكاء الاصطناعي.",
+      "title": "أهلاً بيك في Pro!"
+    },
+    "verifying": {
+      "desc": "استنى شوية وإحنا بنأكد الدفع.",
+      "title": "بنتحقق من اشتراكك..."
+    }
+  },
+  "uploadLimits": {
+    "caps": {
+      "desc": "عشان نحمي حساباتك المرتبطة ونلتزم بقواعد كل شبكة، بنطبّق حدود قصوى بنافذة 24 ساعة متجددة.",
+      "title": "الحدود القصوى لكل شبكة"
+    },
+    "extra": {
+      "duplicate": "محتوى مكرر/مشابه خلال 48 ساعة لتقليل خطر السبام",
+      "media": "فحوصات الميديا والمحتوى حسب إرشادات كل شبكة",
+      "mentions": "حدود المنشن عشان نتجنب السلوك المزعج",
+      "title": "فحوصات محتوى إضافية"
+    },
+    "header": {
+      "subtitle": "افهم حدود النشر عشان تحمي حساباتك وتفضل ملتزم.",
+      "title": "حدود الرفع"
+    },
+    "how": {
+      "scheduled": "<strong>المنشورات المجدولة:</strong> الحدود بتتعاد وقت التنفيذ؛ لو الحد وصل، النشر هيترفض.",
+      "scope": "<strong>النطاق:</strong> لكل حساب مرتبط. الحدود دي مش عامة على حسابك كله.",
+      "title": "إزاي بتشتغل",
+      "whatCounts": "<strong>إيه اللي بيتحسب:</strong> المنشورات الناجحة المسجّلة للحساب/الشبكة دي خلال آخر 24 ساعة."
+    },
+    "platforms": {
+      "facebook": "Facebook",
+      "instagram": "Instagram",
+      "linkedin": "LinkedIn",
+      "pinterest": "Pinterest",
+      "tiktok": "TikTok",
+      "twitter": "X (Twitter)",
+      "youtube": "YouTube"
+    },
+    "reached": {
+      "desc": "لما الحد يوصل، هتستقبل خطأ 429 Too Many Requests:",
+      "title": "لما الحد يوصل"
+    },
+    "table": {
+      "cap": "الحد الأقصى (منشور/24س)",
+      "network": "الشبكة"
+    }
+  },
+  "whatsNew": {
+    "actions": {
+      "readMore": "اقرأ أكتر"
+    },
+    "badge": {
+      "latest": "الأحدث",
+      "new": "جديد",
+      "updates": "تحديثات"
+    },
+    "empty": {
+      "desc": "راجع تاني بعدين عشان آخر الأخبار والتحديثات",
+      "title": "لسه مفيش تحديثات"
+    },
+    "header": {
+      "subtitle": "آخر التحديثات والميزات والتحسينات في Postora",
+      "title": "إيه الجديد"
+    },
+    "lastUpdated": "آخر تحديث {{time}}",
+    "previousUpdates": "تحديثات سابقة",
+    "scheduled": {
+      "count": "{{count}} مجدول",
+      "for": "مجدول لـ {{time}}",
+      "previewOnly": "معاينة فقط",
+      "title": "منشورات مجدولة (معاينة الأدمن)"
+    }
+  }
+}

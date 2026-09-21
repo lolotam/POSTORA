@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { Button } from "@/components/ui/button";
 import { CheckCircle, Loader2, Sparkles, AlertCircle } from "lucide-react";
@@ -10,6 +11,7 @@ import { supabase } from "@/integrations/supabase/client";
 type VerificationStatus = "loading" | "success" | "error";
 
 export default function SubscriptionSuccess() {
+  const { t } = useTranslation("billing");
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const queryClient = useQueryClient();
@@ -82,8 +84,8 @@ export default function SubscriptionSuccess() {
       <DashboardLayout>
         <div className="flex flex-col items-center justify-center min-h-[60vh] text-center">
           <Loader2 className="w-12 h-12 animate-spin text-primary mb-4" />
-          <h1 className="text-2xl font-bold mb-2">Verifying your subscription...</h1>
-          <p className="text-muted-foreground">Please wait while we confirm your payment.</p>
+          <h1 className="text-2xl font-bold mb-2">{t("subscriptionSuccess.verifying.title", "Verifying your subscription...")}</h1>
+          <p className="text-muted-foreground">{t("subscriptionSuccess.verifying.desc", "Please wait while we confirm your payment.")}</p>
         </div>
       </DashboardLayout>
     );
@@ -97,23 +99,23 @@ export default function SubscriptionSuccess() {
             <AlertCircle className="w-10 h-10 text-destructive" />
           </div>
 
-          <h1 className="text-3xl font-bold mb-2">Verification Issue</h1>
+          <h1 className="text-3xl font-bold mb-2">{t("subscriptionSuccess.error.title", "Verification Issue")}</h1>
           <p className="text-muted-foreground mb-4 max-w-md">
-            {errorMessage || "We couldn't verify your subscription. Your payment may still be processing."}
+            {errorMessage || t("subscriptionSuccess.error.desc", "We couldn't verify your subscription. Your payment may still be processing.")}
           </p>
 
           <div className="flex gap-4">
             <Button onClick={handleRetry} variant="outline">
-              Try Again
+              {t("subscriptionSuccess.actions.tryAgain", "Try Again")}
             </Button>
             <Button onClick={() => navigate("/settings")}>
-              Check Settings
+              {t("subscriptionSuccess.actions.checkSettings", "Check Settings")}
             </Button>
           </div>
 
           {sessionId && (
             <p className="text-xs text-muted-foreground mt-8">
-              Session: {sessionId.slice(0, 20)}...
+              {t("subscriptionSuccess.session", "Session: {{id}}...", { id: sessionId.slice(0, 20) })}
             </p>
           )}
         </div>
@@ -128,25 +130,24 @@ export default function SubscriptionSuccess() {
           <CheckCircle className="w-10 h-10 text-green-500" />
         </div>
 
-        <h1 className="text-3xl font-bold mb-2">Welcome to Pro!</h1>
+        <h1 className="text-3xl font-bold mb-2">{t("subscriptionSuccess.success.title", "Welcome to Pro!")}</h1>
         <p className="text-muted-foreground mb-8 max-w-md">
-          Your subscription is now active. You have access to all premium features including
-          more profiles, higher posting limits, and AI-powered tools.
+          {t("subscriptionSuccess.success.desc", "Your subscription is now active. You have access to all premium features including more profiles, higher posting limits, and AI-powered tools.")}
         </p>
 
         <div className="flex gap-4">
           <Button onClick={() => navigate("/post")} className="gap-2">
             <Sparkles className="w-4 h-4" />
-            Create Your First Post
+            {t("subscriptionSuccess.actions.createFirstPost", "Create Your First Post")}
           </Button>
           <Button variant="outline" onClick={() => navigate("/profiles")}>
-            Manage Profiles
+            {t("subscriptionSuccess.actions.manageProfiles", "Manage Profiles")}
           </Button>
         </div>
 
         {sessionId && (
           <p className="text-xs text-muted-foreground mt-8">
-            Session: {sessionId.slice(0, 20)}...
+            {t("subscriptionSuccess.session", "Session: {{id}}...", { id: sessionId.slice(0, 20) })}
           </p>
         )}
       </div>

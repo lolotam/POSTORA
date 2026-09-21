@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
+import { useTranslation, Trans } from "react-i18next";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
@@ -26,6 +27,7 @@ interface TierRateLimit {
 }
 
 export default function Pricing() {
+  const { t } = useTranslation("billing");
   const [isYearly, setIsYearly] = useState(false);
   const [loadingPlanId, setLoadingPlanId] = useState<string | null>(null);
   const [couponCode, setCouponCode] = useState("");
@@ -52,7 +54,7 @@ export default function Pricing() {
     if (!user) { navigate("/auth"); return; }
     if (plan.slug === "free") return;
     if (plan.slug === planSlug) {
-      toast({ title: "Already subscribed", description: `You're already on the ${plan.name} plan.` });
+      toast({ title: t("pricing.toast.alreadyTitle", "Already subscribed"), description: t("pricing.toast.alreadyDesc", "You're already on the {{name}} plan.", { name: plan.name }) });
       return;
     }
 
@@ -61,33 +63,33 @@ export default function Pricing() {
 
     try {
       const { data: { session } } = await supabase.auth.getSession();
-      if (!session?.access_token) throw new Error("Please log in to subscribe");
+      if (!session?.access_token) throw new Error(t("pricing.errors.pleaseLogIn", "Please log in to subscribe"));
 
       const referralCode = localStorage.getItem("referral_code");
       const response = await supabase.functions.invoke("stripe-checkout", {
         body: { plan_id: plan.id, price_type: isYearly ? "yearly" : "monthly", coupon_code: couponCode.trim() || undefined, referral_code: referralCode || undefined },
       });
 
-      if (response.error) throw new Error(response.error.message || "Failed to create checkout session");
+      if (response.error) throw new Error(response.error.message || t("pricing.errors.createCheckout", "Failed to create checkout session"));
 
       if (response.data?.discount_applied) {
         toast({
-          title: "Coupon applied!",
+          title: t("pricing.toast.couponApplied", "Coupon applied!"),
           description: response.data.discount_percent
-            ? `${response.data.discount_percent}% discount applied`
-            : `$${response.data.discount_amount} discount applied`,
+            ? t("pricing.toast.percentDiscount", "{{percent}}% discount applied", { percent: response.data.discount_percent })
+            : t("pricing.toast.amountDiscount", "${{amount}} discount applied", { amount: response.data.discount_amount }),
         });
       }
 
       const { url } = response.data;
-      if (!url) throw new Error("No checkout URL returned");
+      if (!url) throw new Error(t("pricing.errors.noCheckoutUrl", "No checkout URL returned"));
 
       if (checkoutWindow) { checkoutWindow.location.href = url; checkoutWindow.focus(); }
       else { window.location.href = url; }
     } catch (error) {
       if (checkoutWindow) checkoutWindow.close();
       console.error("Checkout error:", error);
-      toast({ title: "Checkout failed", description: error instanceof Error ? error.message : "Failed to start checkout", variant: "destructive" });
+      toast({ title: t("pricing.toast.checkoutFailed", "Checkout failed"), description: error instanceof Error ? error.message : t("pricing.toast.startCheckoutFailed", "Failed to start checkout"), variant: "destructive" });
     } finally {
       setLoadingPlanId(null);
     }
@@ -110,21 +112,21 @@ export default function Pricing() {
         <section className="relative overflow-hidden rounded-3xl py-12 md:py-16 px-6 text-center">
           <BlobHero preset="sky-violet-pink" />
           <Reveal>
-            <Badge variant="secondary" className="mb-4">Pricing</Badge>
+            <Badge variant="secondary" className="mb-4">{t("pricing.header.badge", "Pricing")}</Badge>
             <GradientHeading as="h1" preset="sky-violet-pink" size="2xl">
-              Choose Your Plan
+              {t("pricing.header.title", "Choose Your Plan")}
             </GradientHeading>
             <p className="mt-4 text-lg text-muted-foreground max-w-2xl mx-auto">
-              Start for free, upgrade when you're ready. All plans include our core features.
+              {t("pricing.header.subtitle", "Start for free, upgrade when you're ready. All plans include our core features.")}
             </p>
           </Reveal>
 
           <div className="flex items-center justify-center gap-4 pt-6 relative">
-            <Label htmlFor="billing-toggle" className={!isYearly ? "font-semibold" : "text-muted-foreground"}>Monthly</Label>
+            <Label htmlFor="billing-toggle" className={!isYearly ? "font-semibold" : "text-muted-foreground"}>{t("pricing.billing.monthly", "Monthly")}</Label>
             <Switch id="billing-toggle" checked={isYearly} onCheckedChange={setIsYearly} />
             <div className="flex items-center gap-2">
-              <Label htmlFor="billing-toggle" className={isYearly ? "font-semibold" : "text-muted-foreground"}>Yearly</Label>
-              <Badge variant="default" className="bg-green-500/10 text-green-600 border-green-500/30">Save up to 17%</Badge>
+              <Label htmlFor="billing-toggle" className={isYearly ? "font-semibold" : "text-muted-foreground"}>{t("pricing.billing.yearly", "Yearly")}</Label>
+              <Badge variant="default" className="bg-green-500/10 text-green-600 border-green-500/30">{t("pricing.billing.saveUpTo", "Save up to 17%")}</Badge>
             </div>
           </div>
 
@@ -160,10 +162,15 @@ export default function Pricing() {
 
         <div className="text-center py-8">
           <p className="text-muted-foreground">
-            Have questions?{" "}
-            <a href="https://postora.cloud/docs" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">Check our documentation</a>
-            {" "}or{" "}
-            <a href="mailto:support@postora.cloud" className="text-primary hover:underline">contact support</a>
+            <Trans
+              ns="billing"
+              i18nKey="pricing.footer.questions"
+              defaults="Have questions? <docs>Check our documentation</docs> or <support>contact support</support>"
+              components={{
+                docs: <a href="https://postora.cloud/docs" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline" />,
+                support: <a href="mailto:support@postora.cloud" className="text-primary hover:underline" />,
+              }}
+            />
           </p>
         </div>
       </div>

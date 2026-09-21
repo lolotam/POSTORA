@@ -1,4 +1,5 @@
 import { useParams, Link } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { useBlogPost, useBlogPosts, useMarkBlogPostRead } from "@/hooks/useNotifications";
 import { format, formatDistanceToNow } from "date-fns";
@@ -11,6 +12,7 @@ import { useEffect, useMemo } from "react";
 import { useToast } from "@/hooks/use-toast";
 
 export default function BlogPostDetail() {
+  const { t } = useTranslation("billing");
   const { id } = useParams<{ id: string }>();
   const { data: post, isLoading, error } = useBlogPost(id);
   const { data: allPosts = [] } = useBlogPosts(true);
@@ -53,7 +55,7 @@ export default function BlogPostDetail() {
       }
     } else {
       await navigator.clipboard.writeText(url);
-      toast({ title: "Link copied!", description: "Post link copied to clipboard" });
+      toast({ title: t("blog.toast.linkCopied", "Link copied!"), description: t("blog.toast.linkCopiedDesc", "Post link copied to clipboard") });
     }
   };
 
@@ -74,14 +76,14 @@ export default function BlogPostDetail() {
           <div className="w-16 h-16 rounded-full bg-muted mx-auto flex items-center justify-center mb-4">
             <Newspaper className="w-8 h-8 text-muted-foreground" />
           </div>
-          <h1 className="text-2xl font-bold mb-4">Post not found</h1>
+          <h1 className="text-2xl font-bold mb-4">{t("blog.empty.notFound", "Post not found")}</h1>
           <p className="text-muted-foreground mb-6">
-            The post you're looking for doesn't exist or has been removed.
+            {t("blog.empty.notFoundDesc", "The post you're looking for doesn't exist or has been removed.")}
           </p>
           <Button asChild>
             <Link to="/whats-new">
               <ArrowLeft className="w-4 h-4 mr-2" />
-              Back to What's New
+              {t("blog.actions.backToWhatsNew", "Back to What's New")}
             </Link>
           </Button>
         </div>
@@ -99,11 +101,11 @@ export default function BlogPostDetail() {
             className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors"
           >
             <ArrowLeft className="w-4 h-4" />
-            Back to What's New
+            {t("blog.actions.backToWhatsNew", "Back to What's New")}
           </Link>
           <Button variant="outline" size="sm" onClick={handleShare}>
             <Share2 className="w-4 h-4 mr-2" />
-            Share
+            {t("common:share", "Share")}
           </Button>
         </div>
 
@@ -122,7 +124,7 @@ export default function BlogPostDetail() {
           {/* Header */}
           <header className="mb-8">
             <Badge variant="secondary" className="mb-4">
-              Update
+              {t("blog.badge.update", "Update")}
             </Badge>
             <h1 className="text-3xl sm:text-4xl font-bold mb-4">{post.title}</h1>
             <div className="flex flex-wrap items-center gap-4 text-sm text-muted-foreground">
@@ -185,7 +187,7 @@ export default function BlogPostDetail() {
                 >
                   <div className="flex items-center gap-2 text-sm text-muted-foreground mb-2">
                     <ChevronLeft className="w-4 h-4" />
-                    Previous
+                    {t("common:previous", "Previous")}
                   </div>
                   <p className="font-medium group-hover:text-primary transition-colors line-clamp-1">
                     {prevPost.title}
@@ -198,7 +200,7 @@ export default function BlogPostDetail() {
                   className="group p-4 rounded-xl border border-border hover:border-primary/50 hover:bg-muted/50 transition-all text-right"
                 >
                   <div className="flex items-center justify-end gap-2 text-sm text-muted-foreground mb-2">
-                    Next
+                    {t("common:next", "Next")}
                     <ChevronRight className="w-4 h-4" />
                   </div>
                   <p className="font-medium group-hover:text-primary transition-colors line-clamp-1">
@@ -215,7 +217,7 @@ export default function BlogPostDetail() {
           <>
             <Separator className="my-12" />
             <section>
-              <h2 className="text-2xl font-bold mb-6">More Updates</h2>
+              <h2 className="text-2xl font-bold mb-6">{t("blog.header.moreUpdates", "More Updates")}</h2>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 {relatedPosts.map((relatedPost) => (
                   <Link

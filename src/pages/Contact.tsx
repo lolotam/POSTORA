@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -10,6 +11,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { Loader2, Send, Mail, MessageSquare, CheckCircle2, Phone } from "lucide-react";
 
 export default function Contact() {
+  const { t } = useTranslation("billing");
   const [email, setEmail] = useState("");
   const [mobile, setMobile] = useState("");
   const [subject, setSubject] = useState("");
@@ -35,8 +37,8 @@ export default function Contact() {
 
     if (!user) {
       toast({
-        title: "Not authenticated",
-        description: "Please log in to send a message.",
+        title: t("contact.toast.notAuthenticated", "Not authenticated"),
+        description: t("contact.toast.notAuthenticatedDesc", "Please log in to send a message."),
         variant: "destructive",
       });
       return;
@@ -44,8 +46,8 @@ export default function Contact() {
 
     if (!email.trim() || !validateEmail(email.trim())) {
       toast({
-        title: "Invalid email",
-        description: "Please enter a valid email address.",
+        title: t("contact.toast.invalidEmail", "Invalid email"),
+        description: t("contact.toast.invalidEmailDesc", "Please enter a valid email address."),
         variant: "destructive",
       });
       return;
@@ -53,8 +55,8 @@ export default function Contact() {
 
     if (!subject.trim() || !message.trim()) {
       toast({
-        title: "Missing fields",
-        description: "Please fill in both subject and message.",
+        title: t("contact.toast.missingFields", "Missing fields"),
+        description: t("contact.toast.missingFieldsDesc", "Please fill in both subject and message."),
         variant: "destructive",
       });
       return;
@@ -77,14 +79,14 @@ export default function Contact() {
 
       setSubmitted(true);
       toast({
-        title: "Message sent!",
-        description: "We'll get back to you as soon as possible.",
+        title: t("contact.toast.sent", "Message sent!"),
+        description: t("contact.toast.sentDesc", "We'll get back to you as soon as possible."),
       });
     } catch (error) {
       console.error("Error sending message:", error);
       toast({
-        title: "Failed to send",
-        description: error instanceof Error ? error.message : "Something went wrong.",
+        title: t("contact.toast.failed", "Failed to send"),
+        description: error instanceof Error ? error.message : t("contact.toast.failedDesc", "Something went wrong."),
         variant: "destructive",
       });
     } finally {
@@ -106,9 +108,9 @@ export default function Contact() {
           <div className="w-16 h-16 rounded-full bg-primary/10 flex items-center justify-center mx-auto mb-4">
             <Mail className="w-8 h-8 text-primary" />
           </div>
-          <h1 className="text-3xl font-bold">Contact Us</h1>
+          <h1 className="text-3xl font-bold">{t("contact.header.title", "Contact Us")}</h1>
           <p className="text-muted-foreground mt-2">
-            Have a question, feedback, or need help? Send us a message and we'll respond as soon as possible.
+            {t("contact.header.subtitle", "Have a question, feedback, or need help? Send us a message and we'll respond as soon as possible.")}
           </p>
         </div>
 
@@ -117,13 +119,13 @@ export default function Contact() {
             <div className="w-16 h-16 rounded-full bg-emerald-500/10 flex items-center justify-center mx-auto mb-4">
               <CheckCircle2 className="w-8 h-8 text-emerald-500" />
             </div>
-            <h2 className="text-xl font-semibold mb-2">Message Sent!</h2>
+            <h2 className="text-xl font-semibold mb-2">{t("contact.success.title", "Message Sent!")}</h2>
             <p className="text-muted-foreground mb-6">
-              Thank you for reaching out. We've received your message and will get back to you shortly.
+              {t("contact.success.desc", "Thank you for reaching out. We've received your message and will get back to you shortly.")}
             </p>
             <Button onClick={handleSendAnother} variant="outline">
               <MessageSquare className="w-4 h-4 mr-2" />
-              Send Another Message
+              {t("contact.actions.sendAnother", "Send Another Message")}
             </Button>
           </div>
         ) : (
@@ -132,14 +134,14 @@ export default function Contact() {
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="space-y-2">
                   <Label htmlFor="email">
-                    Email <span className="text-destructive">*</span>
+                    {t("contact.form.email", "Email")} <span className="text-destructive">*</span>
                   </Label>
                   <div className="relative">
                     <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                     <Input
                       id="email"
                       type="email"
-                      placeholder="your@email.com"
+                      placeholder={t("contact.form.emailPlaceholder", "your@email.com")}
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
                       disabled={isSubmitting}
@@ -151,14 +153,14 @@ export default function Contact() {
 
                 <div className="space-y-2">
                   <Label htmlFor="mobile">
-                    Mobile <span className="text-muted-foreground text-xs">(optional)</span>
+                    {t("contact.form.mobile", "Mobile")} <span className="text-muted-foreground text-xs">{t("contact.form.optional", "(optional)")}</span>
                   </Label>
                   <div className="relative">
                     <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                     <Input
                       id="mobile"
                       type="tel"
-                      placeholder="+1 234 567 8900"
+                      placeholder={t("contact.form.mobilePlaceholder", "+1 234 567 8900")}
                       value={mobile}
                       onChange={(e) => setMobile(e.target.value)}
                       disabled={isSubmitting}
@@ -170,11 +172,11 @@ export default function Contact() {
 
               <div className="space-y-2">
                 <Label htmlFor="subject">
-                  Subject <span className="text-destructive">*</span>
+                  {t("contact.form.subject", "Subject")} <span className="text-destructive">*</span>
                 </Label>
                 <Input
                   id="subject"
-                  placeholder="What's this about?"
+                  placeholder={t("contact.form.subjectPlaceholder", "What's this about?")}
                   value={subject}
                   onChange={(e) => setSubject(e.target.value)}
                   disabled={isSubmitting}
@@ -184,11 +186,11 @@ export default function Contact() {
 
               <div className="space-y-2">
                 <Label htmlFor="message">
-                  Message <span className="text-destructive">*</span>
+                  {t("contact.form.message", "Message")} <span className="text-destructive">*</span>
                 </Label>
                 <Textarea
                   id="message"
-                  placeholder="Tell us more..."
+                  placeholder={t("contact.form.messagePlaceholder", "Tell us more...")}
                   value={message}
                   onChange={(e) => setMessage(e.target.value)}
                   rows={6}
@@ -209,14 +211,14 @@ export default function Contact() {
               ) : (
                 <Send className="w-4 h-4 mr-2" />
               )}
-              {isSubmitting ? "Sending..." : "Send Message"}
+              {isSubmitting ? t("contact.actions.sending", "Sending...") : t("contact.actions.send", "Send Message")}
             </Button>
           </form>
         )}
 
         {/* Additional info */}
         <div className="text-center text-sm text-muted-foreground">
-          <p>You can also view your previous messages in your account settings.</p>
+          <p>{t("contact.footer.previousMessages", "You can also view your previous messages in your account settings.")}</p>
         </div>
       </div>
     </DashboardLayout>

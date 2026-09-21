@@ -1,4 +1,5 @@
-import { useState, useMemo } from "react";
+import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { useFeatureFlags } from "@/hooks/useFeatureFlags";
 import { Navigate } from "react-router-dom";
@@ -14,15 +15,15 @@ import { GradientDivider } from "@/components/fx/GradientDivider";
 import { Reveal } from "@/components/fx/Reveal";
 
 const PLATFORMS = [
-  { value: "facebook", label: "Facebook" },
-  { value: "instagram", label: "Instagram" },
-  { value: "tiktok", label: "TikTok" },
-  { value: "twitter", label: "Twitter/X" },
-  { value: "linkedin", label: "LinkedIn" },
-  { value: "youtube", label: "YouTube" },
-  { value: "pinterest", label: "Pinterest" },
-  { value: "threads", label: "Threads" },
-];
+  "facebook",
+  "instagram",
+  "tiktok",
+  "twitter",
+  "linkedin",
+  "youtube",
+  "pinterest",
+  "threads",
+] as const;
 
 function getScoreColor(score: number) {
   if (score >= 90) return "bg-emerald-500/10 text-emerald-400 border-emerald-500/30 ring-1 ring-emerald-500/20";
@@ -39,9 +40,21 @@ function getScoreVariant(score: number): "emerald" | "sky" | "amber" | "violet" 
 }
 
 export default function SmartScheduling() {
+  const { t } = useTranslation("billing");
   const { flags, isLoading: flagsLoading } = useFeatureFlags();
   const [platform, setPlatform] = useState("instagram");
   const { suggestions, historyCount } = useSmartScheduling(platform);
+
+  const platformLabels: Record<(typeof PLATFORMS)[number], string> = {
+    facebook: t("smart.platforms.facebook", "Facebook"),
+    instagram: t("smart.platforms.instagram", "Instagram"),
+    tiktok: t("smart.platforms.tiktok", "TikTok"),
+    twitter: t("smart.platforms.twitter", "Twitter/X"),
+    linkedin: t("smart.platforms.linkedin", "LinkedIn"),
+    youtube: t("smart.platforms.youtube", "YouTube"),
+    pinterest: t("smart.platforms.pinterest", "Pinterest"),
+    threads: t("smart.platforms.threads", "Threads"),
+  };
 
   if (!flagsLoading && !flags.smartScheduling) {
     return <Navigate to="/dashboard" replace />;
@@ -67,10 +80,10 @@ export default function SmartScheduling() {
               <Icon3D icon={Sparkles} variant="violet" size="md" />
               <div className="flex-1 min-w-0">
                 <GradientHeading preset="sky-violet-pink" size="lg" as="h1">
-                  Smart Scheduling
+                  {t("smart.header.title", "Smart Scheduling")}
                 </GradientHeading>
                 <p className="text-sm text-muted-foreground mt-1">
-                  AI-powered optimal posting times based on industry data and your history
+                  {t("smart.header.subtitle", "AI-powered optimal posting times based on industry data and your history")}
                 </p>
               </div>
             </div>
@@ -84,15 +97,15 @@ export default function SmartScheduling() {
               <div className="flex items-end gap-4 flex-wrap">
                 <div className="space-y-1.5">
                   <span className="text-[10px] font-semibold uppercase tracking-wider bg-clip-text text-transparent bg-gradient-to-r from-sky-400 via-violet-400 to-pink-400">
-                    Platform
+                    {t("smart.form.platform", "Platform")}
                   </span>
                   <Select value={platform} onValueChange={setPlatform}>
                     <SelectTrigger className="w-[220px] h-9 bg-white/5 ring-1 ring-white/10 border-0">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      {PLATFORMS.map((p) => (
-                        <SelectItem key={p.value} value={p.value}>{p.label}</SelectItem>
+                      {PLATFORMS.map((value) => (
+                        <SelectItem key={value} value={value}>{platformLabels[value]}</SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
@@ -100,7 +113,7 @@ export default function SmartScheduling() {
                 {historyCount > 0 && (
                   <Badge className="h-7 bg-gradient-to-r from-violet-500/20 via-fuchsia-500/20 to-pink-500/20 ring-1 ring-violet-400/30 text-foreground border-0">
                     <Sparkles className="h-3 w-3 mr-1 text-violet-400" />
-                    Based on {historyCount} past posts
+                    {t("smart.basedOn", "Based on {{count}} past posts", { count: historyCount })}
                   </Badge>
                 )}
               </div>
@@ -113,7 +126,7 @@ export default function SmartScheduling() {
               <div className="flex items-center gap-3 mb-4">
                 <Icon3D icon={TrendingUp} variant="emerald" size="sm" />
                 <GradientHeading preset="emerald-cyan-sky" size="lg" as="h2">
-                  Best Times to Post
+                  {t("smart.header.bestTimes", "Best Times to Post")}
                 </GradientHeading>
               </div>
             </Reveal>
@@ -146,7 +159,7 @@ export default function SmartScheduling() {
                           onClick={() => window.location.href = `/post?schedule=${slot.day}&time=${slot.hour}`}
                         >
                           <Sparkles className="h-3.5 w-3.5 mr-1.5" />
-                          Schedule Post
+                          {t("smart.actions.schedulePost", "Schedule Post")}
                         </Button>
                       </div>
                     </GradientRingCard>
@@ -163,10 +176,10 @@ export default function SmartScheduling() {
                 <Icon3D icon={Info} variant="sky" size="sm" />
                 <div className="flex-1 min-w-0">
                   <h3 className="text-sm font-semibold bg-clip-text text-transparent bg-gradient-to-r from-sky-400 to-violet-400 mb-1">
-                    How it works
+                    {t("smart.info.title", "How it works")}
                   </h3>
                   <p className="text-xs text-muted-foreground leading-relaxed">
-                    Smart Scheduling analyzes industry research data and your posting history to suggest the best times to post on each platform. Scores reflect predicted engagement levels. As you post more, suggestions become more personalized.
+                    {t("smart.info.body", "Smart Scheduling analyzes industry research data and your posting history to suggest the best times to post on each platform. Scores reflect predicted engagement levels. As you post more, suggestions become more personalized.")}
                   </p>
                 </div>
               </div>

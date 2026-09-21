@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
 import { useBlogPosts, useScheduledBlogPosts } from "@/hooks/useNotifications";
 import { format, formatDistanceToNow } from "date-fns";
@@ -9,6 +10,7 @@ import { cn } from "@/lib/utils";
 import { useUserRole } from "@/hooks/useUserRole";
 
 export default function WhatsNew() {
+  const { t } = useTranslation("billing");
   const { data: posts = [], isLoading } = useBlogPosts(true);
   const { data: scheduledPosts = [], isLoading: isLoadingScheduled } = useScheduledBlogPosts();
   const { isAdmin } = useUserRole();
@@ -25,17 +27,17 @@ export default function WhatsNew() {
           <div>
             <div className="flex items-center gap-2 mb-2">
               <Sparkles className="w-5 h-5 text-primary" />
-              <Badge variant="secondary">Updates</Badge>
+              <Badge variant="secondary">{t("whatsNew.badge.updates", "Updates")}</Badge>
             </div>
-            <h1 className="text-3xl font-bold">What's New</h1>
+            <h1 className="text-3xl font-bold">{t("whatsNew.header.title", "What's New")}</h1>
             <p className="text-muted-foreground mt-1">
-              Latest updates, features, and improvements to Postora
+              {t("whatsNew.header.subtitle", "Latest updates, features, and improvements to Postora")}
             </p>
           </div>
           {posts.length > 0 && (
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <Calendar className="w-4 h-4" />
-              <span>Last updated {formatDistanceToNow(new Date(posts[0].created_at), { addSuffix: true })}</span>
+              <span>{t("whatsNew.lastUpdated", "Last updated {{time}}", { time: formatDistanceToNow(new Date(posts[0].created_at), { addSuffix: true }) })}</span>
             </div>
           )}
         </div>
@@ -45,9 +47,9 @@ export default function WhatsNew() {
           <div className="rounded-xl border-2 border-dashed border-primary/30 bg-primary/5 p-6">
             <div className="flex items-center gap-2 mb-4">
               <Clock className="w-5 h-5 text-primary" />
-              <h3 className="font-semibold text-primary">Scheduled Posts (Admin Preview)</h3>
+              <h3 className="font-semibold text-primary">{t("whatsNew.scheduled.title", "Scheduled Posts (Admin Preview)")}</h3>
               <Badge variant="outline" className="text-xs">
-                {scheduledPosts.length} scheduled
+                {t("whatsNew.scheduled.count", "{{count}} scheduled", { count: scheduledPosts.length })}
               </Badge>
             </div>
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
@@ -58,7 +60,7 @@ export default function WhatsNew() {
                 >
                   <div className="flex items-center gap-2 mb-2">
                     <Eye className="w-3 h-3 text-muted-foreground" />
-                    <span className="text-xs text-muted-foreground">Preview only</span>
+                    <span className="text-xs text-muted-foreground">{t("whatsNew.scheduled.previewOnly", "Preview only")}</span>
                   </div>
                   <h4 className="font-medium text-sm line-clamp-2 mb-2">{post.title}</h4>
                   {post.excerpt && (
@@ -69,9 +71,11 @@ export default function WhatsNew() {
                   <div className="flex items-center gap-1 text-xs text-primary">
                     <Clock className="w-3 h-3" />
                     <span>
-                      Scheduled for {post.scheduled_at 
-                        ? format(new Date(post.scheduled_at), "MMM d, yyyy 'at' h:mm a")
-                        : "Unknown"}
+                      {t("whatsNew.scheduled.for", "Scheduled for {{time}}", {
+                        time: post.scheduled_at
+                          ? format(new Date(post.scheduled_at), "MMM d, yyyy 'at' h:mm a")
+                          : t("common:unknown", "Unknown"),
+                      })}
                     </span>
                   </div>
                 </div>
@@ -89,9 +93,9 @@ export default function WhatsNew() {
             <div className="w-16 h-16 rounded-full bg-secondary mx-auto flex items-center justify-center mb-4">
               <Newspaper className="w-8 h-8 text-muted-foreground" />
             </div>
-            <h3 className="text-lg font-medium mb-2">No updates yet</h3>
+            <h3 className="text-lg font-medium mb-2">{t("whatsNew.empty.title", "No updates yet")}</h3>
             <p className="text-muted-foreground">
-              Check back later for the latest news and updates
+              {t("whatsNew.empty.desc", "Check back later for the latest news and updates")}
             </p>
           </div>
         ) : (
@@ -117,9 +121,9 @@ export default function WhatsNew() {
                     !featuredPost.cover_image_url && "md:col-span-2"
                   )}>
                     <div className="flex items-center gap-2 mb-4">
-                      <Badge variant="default" className="bg-primary">Latest</Badge>
+                      <Badge variant="default" className="bg-primary">{t("whatsNew.badge.latest", "Latest")}</Badge>
                       {!featuredPost.is_read && (
-                        <Badge variant="destructive" className="text-xs">New</Badge>
+                        <Badge variant="destructive" className="text-xs">{t("whatsNew.badge.new", "New")}</Badge>
                       )}
                     </div>
                     <h2 className="text-2xl sm:text-3xl font-bold mb-3 group-hover:text-primary transition-colors">
@@ -135,7 +139,7 @@ export default function WhatsNew() {
                         {format(new Date(featuredPost.created_at), "MMMM d, yyyy")}
                       </p>
                       <span className="text-primary font-medium text-sm flex items-center gap-1 group-hover:gap-2 transition-all">
-                        Read more <ArrowRight className="w-4 h-4" />
+                        {t("whatsNew.actions.readMore", "Read more")} <ArrowRight className="w-4 h-4" />
                       </span>
                     </div>
                   </div>
@@ -146,7 +150,7 @@ export default function WhatsNew() {
             {/* Other Posts Grid */}
             {otherPosts.length > 0 && (
               <div>
-                <h3 className="text-lg font-semibold mb-4">Previous Updates</h3>
+                <h3 className="text-lg font-semibold mb-4">{t("whatsNew.previousUpdates", "Previous Updates")}</h3>
                 <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
                   {otherPosts.map((post) => (
                     <Link
