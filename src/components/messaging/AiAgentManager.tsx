@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
+import "@/i18n";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -104,6 +106,7 @@ interface AiAgentManagerProps {
 }
 
 export function AiAgentManager({ platform = "whatsapp", initialAccountId = null, activeTab, onTabChange, surface = "both", onDirtyChange }: AiAgentManagerProps = {}) {
+  const { t } = useTranslation("agent");
   const { data: socialAccounts = [] } = useSocialAccounts();
   // Same selection pattern as AutomationHandlerCard: the first active account
   // on the platform until the user chooses, and never an id that is not in
@@ -223,11 +226,11 @@ export function AiAgentManager({ platform = "whatsapp", initialAccountId = null,
   const addPhone = () => {
     const phone = normalizeE164Phone(phoneInput);
     if (!phone) {
-      setPhoneError("Enter a valid international number starting with +.");
+      setPhoneError(t("manager.phoneInvalid", "Enter a valid international number starting with +."));
       return;
     }
     if ((form.admin_phone_numbers || []).includes(phone)) {
-      setPhoneError("This phone number is already listed.");
+      setPhoneError(t("manager.phoneDuplicate", "This phone number is already listed."));
       return;
     }
     update("admin_phone_numbers", [...(form.admin_phone_numbers || []), phone]);
@@ -238,7 +241,7 @@ export function AiAgentManager({ platform = "whatsapp", initialAccountId = null,
   const save = () => {
     const invalid = (form.admin_phone_numbers || []).filter((phone) => !normalizeE164Phone(phone));
     if (invalid.length > 0) {
-      setPhoneError(`Invalid phone number: ${invalid[0]}`);
+      setPhoneError(t("manager.phoneInvalidListed", "Invalid phone number: {{phone}}", { phone: invalid[0] }));
       return;
     }
     // Both are captured now, because the callback runs later and the user may have moved
@@ -260,14 +263,14 @@ export function AiAgentManager({ platform = "whatsapp", initialAccountId = null,
     upsertConfig.mutate({ ...form, confirm_clear: clearedAField || undefined }, {
       onSuccess: () => {
         if (accountIdRef.current === savedAccountId) setBaseline(savedForm);
-        toast.success("AI agent settings saved");
+        toast.success(t("toast.saved", "AI agent settings saved"));
       },
       onError: (error) =>
         toast.error(
           // The 409 names database columns; users get a sentence instead.
           error.message?.includes("Refusing to clear")
-            ? "That would erase the saved persona or business profile. Clear the field and save again to confirm."
-            : error.message || "Could not save AI agent settings",
+            ? t("toast.clearRefused", "That would erase the saved persona or business profile. Clear the field and save again to confirm.")
+            : error.message || t("toast.saveError", "Could not save AI agent settings"),
         ),
     });
   };
@@ -285,11 +288,11 @@ export function AiAgentManager({ platform = "whatsapp", initialAccountId = null,
       className="space-y-4"
     >
       <TabsList className="h-auto flex-wrap justify-start">
-        <TabsTrigger value="settings">Settings</TabsTrigger>
-        <TabsTrigger value="knowledge">Knowledge</TabsTrigger>
-        <TabsTrigger value="tools">Tools</TabsTrigger>
-        <TabsTrigger value="test">Test</TabsTrigger>
-        <TabsTrigger value="logs">Logs</TabsTrigger>
+        <TabsTrigger value="settings">{t("tabs.settings", "Settings")}</TabsTrigger>
+        <TabsTrigger value="knowledge">{t("tabs.knowledge", "Knowledge")}</TabsTrigger>
+        <TabsTrigger value="tools">{t("tabs.tools", "Tools")}</TabsTrigger>
+        <TabsTrigger value="test">{t("tabs.test", "Test")}</TabsTrigger>
+        <TabsTrigger value="logs">{t("tabs.logs", "Logs")}</TabsTrigger>
       </TabsList>
 
       <TabsContent value="settings" className="mt-0">
@@ -301,7 +304,7 @@ export function AiAgentManager({ platform = "whatsapp", initialAccountId = null,
           {accounts.length > 1 && (
             <Select value={accountId ?? ""} onValueChange={(next) => guard(() => setSelectedAccountId(next))}>
               <SelectTrigger className="w-full max-w-xs" data-testid="agent-account">
-                <SelectValue placeholder="Select account" />
+                <SelectValue placeholder={t("manager.selectAccount", "Select account")} />
               </SelectTrigger>
               <SelectContent>
                 {accounts.map((account) => (
@@ -348,13 +351,13 @@ export function AiAgentManager({ platform = "whatsapp", initialAccountId = null,
           <div className="flex flex-col items-end gap-2">
             <Button onClick={save} disabled={!configLoaded || upsertConfig.isPending}>
               {(upsertConfig.isPending || isLoading) && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Save settings
+              {t("manager.saveSettings", "Save settings")}
             </Button>
             {!configLoaded && (
               <p className="text-sm text-muted-foreground" data-testid="save-blocked-reason">
                 {error
-                  ? `The agent configuration could not be loaded, so saving is disabled — a blank form must not overwrite the stored persona. (${error instanceof Error ? error.message : "read failed"})`
-                  : "Loading this account's agent configuration — saving is disabled until it loads."}
+                  ? t("manager.saveBlockedError", "The agent configuration could not be loaded, so saving is disabled — a blank form must not overwrite the stored persona. ({{message}})", { message: error instanceof Error ? error.message : t("manager.readFailed", "read failed") })
+                  : t("manager.saveBlockedLoading", "Loading this account's agent configuration — saving is disabled until it loads.")}
               </p>
             )}
           </div>

@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
+import "@/i18n";
 import { Bot, HelpCircle } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -16,12 +18,6 @@ import {
 } from "@/lib/agentProfile";
 import type { BehaviorCardProps } from "./types";
 
-const MODE_DESCRIPTIONS: Record<AiAgentMode, string> = {
-  ai_first: "The assistant replies first and hands off when needed.",
-  human_first: "A team member replies first; the assistant stays on standby.",
-  human_then_ai: "A team member gets the first chance, then AI handles the fallback.",
-};
-
 const ESCALATION_TIMEOUT_TOOLTIP =
   "How long an escalated conversation stays with your team before the override expires and the account default applies again, so the AI can resume answering new messages.";
 const ESCALATION_TIMEOUT_HELP =
@@ -36,6 +32,7 @@ function displayValue(minutes: number, unit: TimeoutUnit): number {
 }
 
 function EscalationTimeoutField({ minutes, onChange }: { minutes: number; onChange: (minutes: number) => void }) {
+  const { t } = useTranslation("agent");
   // The stored value is always whole minutes; the unit is display state.
   // Switching the unit never changes the stored value (debate finding 15).
   const [unit, setUnit] = useState<TimeoutUnit>(minutes >= 60 && minutes % 60 === 0 ? "hours" : "minutes");
@@ -75,15 +72,15 @@ function EscalationTimeoutField({ minutes, onChange }: { minutes: number; onChan
   return (
     <div className="space-y-1.5 pt-1">
       <div className="flex items-center gap-1.5">
-        <Label htmlFor="escalation-timeout">Escalation fallback timeout</Label>
+        <Label htmlFor="escalation-timeout">{t("identity.escalationTimeout", "Escalation fallback timeout")}</Label>
         <TooltipProvider>
           <Tooltip>
             <TooltipTrigger asChild>
-              <button type="button" aria-label="What the escalation timeout does" className="text-muted-foreground">
+              <button type="button" aria-label={t("identity.escalationTimeoutAria", "What the escalation timeout does")} className="text-muted-foreground">
                 <HelpCircle className="h-3.5 w-3.5" />
               </button>
             </TooltipTrigger>
-            <TooltipContent className="max-w-xs">{ESCALATION_TIMEOUT_TOOLTIP}</TooltipContent>
+            <TooltipContent className="max-w-xs">{t("identity.escalationTooltip", ESCALATION_TIMEOUT_TOOLTIP)}</TooltipContent>
           </Tooltip>
         </TooltipProvider>
       </div>
@@ -100,39 +97,75 @@ function EscalationTimeoutField({ minutes, onChange }: { minutes: number; onChan
           onBlur={() => setDraft(String(displayValue(minutes, unit)))}
         />
         <Select value={unit} onValueChange={(value) => changeUnit(value as TimeoutUnit)}>
-          <SelectTrigger className="w-28" aria-label="Timeout unit"><SelectValue /></SelectTrigger>
+          <SelectTrigger className="w-28" aria-label={t("identity.timeoutUnitAria", "Timeout unit")}><SelectValue /></SelectTrigger>
           <SelectContent>
-            <SelectItem value="minutes">Minutes</SelectItem>
-            <SelectItem value="hours">Hours</SelectItem>
+            <SelectItem value="minutes">{t("identity.minutes", "Minutes")}</SelectItem>
+            <SelectItem value="hours">{t("identity.hours", "Hours")}</SelectItem>
           </SelectContent>
         </Select>
       </div>
-      <p className="text-sm text-muted-foreground">{ESCALATION_TIMEOUT_HELP}</p>
+      <p className="text-sm text-muted-foreground">{t("identity.escalationHelp", ESCALATION_TIMEOUT_HELP)}</p>
     </div>
   );
 }
 
 export function AgentIdentityCard({ form, update, behavior, updateBehavior }: BehaviorCardProps) {
+  const { t } = useTranslation("agent");
   const selectedMode = (form.default_mode || "human_then_ai") as AiAgentMode;
+
+  const modeDescription = (mode: AiAgentMode) => {
+    switch (mode) {
+      case "ai_first":
+        return t("identity.modeAiFirstDesc", "The assistant replies first and hands off when needed.");
+      case "human_first":
+        return t("identity.modeHumanFirstDesc", "A team member replies first; the assistant stays on standby.");
+      case "human_then_ai":
+        return t("identity.modeHumanThenAiDesc", "A team member gets the first chance, then AI handles the fallback.");
+    }
+  };
+
+  const toneCopy = (value: AgentTone, label: string, hint: string) => {
+    switch (value) {
+      case "friendly_professional":
+        return { label: t("identity.toneFriendly", label), hint: t("identity.toneFriendlyHint", hint) };
+      case "formal":
+        return { label: t("identity.toneFormal", label), hint: t("identity.toneFormalHint", hint) };
+      case "enthusiastic":
+        return { label: t("identity.toneEnthusiastic", label), hint: t("identity.toneEnthusiasticHint", hint) };
+      case "concise":
+        return { label: t("identity.toneConcise", label), hint: t("identity.toneConciseHint", hint) };
+    }
+  };
+
+  const lengthCopy = (value: AgentResponseLength, label: string, hint: string) => {
+    switch (value) {
+      case "short":
+        return { label: t("identity.responseShort", label), hint: t("identity.responseShortHint", hint) };
+      case "medium":
+        return { label: t("identity.responseMedium", label), hint: t("identity.responseMediumHint", hint) };
+      case "detailed":
+        return { label: t("identity.responseDetailed", label), hint: t("identity.responseDetailedHint", hint) };
+    }
+  };
 
   return (
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
-          <Bot className="h-5 w-5" /> Agent identity and voice
+          <Bot className="h-5 w-5" /> {t("identity.title", "Agent identity and voice")}
         </CardTitle>
         <CardDescription>
-          Whether the assistant runs, who answers first, and how it sounds when it does.
+          {t("identity.description", "Whether the assistant runs, who answers first, and how it sounds when it does.")}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
         <div className="flex items-center justify-between gap-4 rounded-lg border p-4">
           <div>
             <Label htmlFor="ai-agent-enabled" className="text-base">
-              Enable AI agent
+              {t("identity.enable", "Enable AI agent")}
             </Label>
             <p className="text-sm text-muted-foreground">
-              Allow this agent to participate according to the selected mode.
+              {t("identity.enableHint", "Allow this agent to participate according to the selected mode.")}
             </p>
           </div>
           <Switch
@@ -144,7 +177,7 @@ export function AgentIdentityCard({ form, update, behavior, updateBehavior }: Be
 
         <div className="grid gap-5 md:grid-cols-2">
           <div className="space-y-2">
-            <Label>Default engagement mode</Label>
+            <Label>{t("identity.defaultMode", "Default engagement mode")}</Label>
             <Select
               value={selectedMode}
               onValueChange={(value) => update("default_mode", value as AiAgentMode)}
@@ -153,12 +186,12 @@ export function AgentIdentityCard({ form, update, behavior, updateBehavior }: Be
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="ai_first">AI First</SelectItem>
-                <SelectItem value="human_first">Human First</SelectItem>
-                <SelectItem value="human_then_ai">Human then AI fallback</SelectItem>
+                <SelectItem value="ai_first">{t("identity.modeAiFirst", "AI First")}</SelectItem>
+                <SelectItem value="human_first">{t("identity.modeHumanFirst", "Human First")}</SelectItem>
+                <SelectItem value="human_then_ai">{t("identity.modeHumanThenAi", "Human then AI fallback")}</SelectItem>
               </SelectContent>
             </Select>
-            <p className="text-sm text-muted-foreground">{MODE_DESCRIPTIONS[selectedMode]}</p>
+            <p className="text-sm text-muted-foreground">{modeDescription(selectedMode)}</p>
             {selectedMode !== "human_first" && (
               <EscalationTimeoutField
                 minutes={form.escalation_timeout_minutes ?? 240}
@@ -167,7 +200,7 @@ export function AgentIdentityCard({ form, update, behavior, updateBehavior }: Be
             )}
           </div>
           <div className="space-y-2">
-            <Label>Language</Label>
+            <Label>{t("identity.language", "Language")}</Label>
             <Select
               value={form.language_mode || "auto"}
               onValueChange={(value) => update("language_mode", value as AiAgentLanguageMode)}
@@ -176,47 +209,50 @@ export function AgentIdentityCard({ form, update, behavior, updateBehavior }: Be
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="auto">Auto-detect (Arabic/English)</SelectItem>
-                <SelectItem value="ar">Arabic only</SelectItem>
-                <SelectItem value="en">English only</SelectItem>
+                <SelectItem value="auto">{t("identity.languageAuto", "Auto-detect (Arabic/English)")}</SelectItem>
+                <SelectItem value="ar">{t("identity.languageAr", "Arabic only")}</SelectItem>
+                <SelectItem value="en">{t("identity.languageEn", "English only")}</SelectItem>
               </SelectContent>
             </Select>
             <p className="text-sm text-muted-foreground">
-              Choose whether replies follow the customer&apos;s language automatically.
+              {t("identity.languageHint", "Choose whether replies follow the customer's language automatically.")}
             </p>
           </div>
         </div>
 
         <div className="grid gap-5 md:grid-cols-2">
           <div className="space-y-2">
-            <Label>Tone of voice</Label>
+            <Label>{t("identity.toneOfVoice", "Tone of voice")}</Label>
             <RadioGroup
               value={behavior.tone ?? ""}
               onValueChange={(value) => updateBehavior("tone", value as AgentTone)}
               className="gap-2"
             >
-              {TONE_OPTIONS.map((option) => (
-                <label
-                  key={option.value}
-                  className="flex cursor-pointer items-start gap-2.5 rounded-md border p-2.5"
-                >
-                  <RadioGroupItem
-                    value={option.value}
-                    id={`tone-${option.value}`}
-                    aria-label={`${option.label}. ${option.hint}`}
-                    className="mt-0.5"
-                  />
-                  <span>
-                    <span className="block text-sm font-medium">{option.label}</span>
-                    <span className="block text-xs text-muted-foreground">{option.hint}</span>
-                  </span>
-                </label>
-              ))}
+              {TONE_OPTIONS.map((option) => {
+                const copy = toneCopy(option.value, option.label, option.hint);
+                return (
+                  <label
+                    key={option.value}
+                    className="flex cursor-pointer items-start gap-2.5 rounded-md border p-2.5"
+                  >
+                    <RadioGroupItem
+                      value={option.value}
+                      id={`tone-${option.value}`}
+                      aria-label={t("identity.optionAria", "{{label}}. {{hint}}", { label: copy.label, hint: copy.hint })}
+                      className="mt-0.5"
+                    />
+                    <span>
+                      <span className="block text-sm font-medium">{copy.label}</span>
+                      <span className="block text-xs text-muted-foreground">{copy.hint}</span>
+                    </span>
+                  </label>
+                );
+              })}
             </RadioGroup>
           </div>
 
           <div className="space-y-2">
-            <Label>Reply length</Label>
+            <Label>{t("identity.replyLength", "Reply length")}</Label>
             <RadioGroup
               value={behavior.response_length ?? ""}
               onValueChange={(value) =>
@@ -224,23 +260,26 @@ export function AgentIdentityCard({ form, update, behavior, updateBehavior }: Be
               }
               className="gap-2"
             >
-              {RESPONSE_LENGTH_OPTIONS.map((option) => (
-                <label
-                  key={option.value}
-                  className="flex cursor-pointer items-start gap-2.5 rounded-md border p-2.5"
-                >
-                  <RadioGroupItem
-                    value={option.value}
-                    id={`length-${option.value}`}
-                    aria-label={`${option.label}. ${option.hint}`}
-                    className="mt-0.5"
-                  />
-                  <span>
-                    <span className="block text-sm font-medium">{option.label}</span>
-                    <span className="block text-xs text-muted-foreground">{option.hint}</span>
-                  </span>
-                </label>
-              ))}
+              {RESPONSE_LENGTH_OPTIONS.map((option) => {
+                const copy = lengthCopy(option.value, option.label, option.hint);
+                return (
+                  <label
+                    key={option.value}
+                    className="flex cursor-pointer items-start gap-2.5 rounded-md border p-2.5"
+                  >
+                    <RadioGroupItem
+                      value={option.value}
+                      id={`length-${option.value}`}
+                      aria-label={t("identity.optionAria", "{{label}}. {{hint}}", { label: copy.label, hint: copy.hint })}
+                      className="mt-0.5"
+                    />
+                    <span>
+                      <span className="block text-sm font-medium">{copy.label}</span>
+                      <span className="block text-xs text-muted-foreground">{copy.hint}</span>
+                    </span>
+                  </label>
+                );
+              })}
             </RadioGroup>
           </div>
         </div>

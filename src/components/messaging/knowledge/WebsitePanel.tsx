@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
+import "@/i18n";
 import { Globe, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -33,12 +35,16 @@ export function WebsitePanel({
   submitting,
   onSubmit,
 }: WebsitePanelProps) {
+  const { t } = useTranslation("agent");
   const [url, setUrl] = useState("");
   const [mode, setMode] = useState<"page" | "site">("page");
   const [limit, setLimit] = useState(DEFAULT_LIMIT);
   const [scope, setScope] = useState<"account" | "all">("account");
   const [error, setError] = useState<string | null>(null);
   const [generateSetup, setGenerateSetup] = useState(true);
+
+  const pageOnly = t("knowledge.scrapePageOnly", "This page only");
+  const wholeSite = t("knowledge.scrapeWholeSite", "Whole site");
 
   const submit = () => {
     const trimmed = url.trim();
@@ -47,11 +53,11 @@ export function WebsitePanel({
     // that list in two places is how the two drift apart and one starts
     // accepting what the other refuses.
     if (!trimmed) {
-      setError("Enter the address of the page you want to scrape.");
+      setError(t("knowledge.scrapeNeedUrl", "Enter the address of the page you want to scrape."));
       return;
     }
     if (!trimmed.startsWith("https://")) {
-      setError("The address must start with https://");
+      setError(t("knowledge.scrapeHttps", "The address must start with https://"));
       return;
     }
     setError(null);
@@ -62,16 +68,15 @@ export function WebsitePanel({
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
-          <Globe className="h-5 w-5" /> Scrape a website
+          <Globe className="h-5 w-5" /> {t("knowledge.scrapeTitle", "Scrape a website")}
         </CardTitle>
         <CardDescription>
-          Pull your public pages into the agent&apos;s knowledge. Progress appears in the sources
-          list below.
+          {t("knowledge.scrapeDescription", "Pull your public pages into the agent's knowledge. Progress appears in the sources list below.")}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-5">
         <div className="space-y-1.5">
-          <Label htmlFor="scrape-url">Website address</Label>
+          <Label htmlFor="scrape-url">{t("knowledge.scrapeAddress", "Website address")}</Label>
           <Input
             id="scrape-url"
             value={url}
@@ -85,26 +90,26 @@ export function WebsitePanel({
         </div>
 
         <div className="space-y-2">
-          <Label>What to scrape</Label>
+          <Label>{t("knowledge.scrapeWhat", "What to scrape")}</Label>
           <RadioGroup
             value={mode}
             onValueChange={(value) => setMode(value as "page" | "site")}
             className="gap-2"
           >
             <label className="flex cursor-pointer items-center gap-2.5 rounded-md border p-2.5 text-sm">
-              <RadioGroupItem value="page" id="scrape-mode-page" aria-label="This page only" />
-              <span>This page only</span>
+              <RadioGroupItem value="page" id="scrape-mode-page" aria-label={pageOnly} />
+              <span>{pageOnly}</span>
             </label>
             <label className="flex cursor-pointer items-center gap-2.5 rounded-md border p-2.5 text-sm">
-              <RadioGroupItem value="site" id="scrape-mode-site" aria-label="Whole site" />
-              <span>Whole site</span>
+              <RadioGroupItem value="site" id="scrape-mode-site" aria-label={wholeSite} />
+              <span>{wholeSite}</span>
             </label>
           </RadioGroup>
         </div>
 
         {mode === "site" && (
           <div className="space-y-1.5">
-            <Label htmlFor="scrape-limit">Maximum pages</Label>
+            <Label htmlFor="scrape-limit">{t("knowledge.scrapeMaxPages", "Maximum pages")}</Label>
             <Input
               id="scrape-limit"
               type="number"
@@ -115,24 +120,25 @@ export function WebsitePanel({
               className="w-full max-w-[10rem]"
             />
             <p className="text-xs text-muted-foreground">
-              Each page is scraped and indexed separately — a large site costs credits and takes a
-              few minutes.
+              {t("knowledge.scrapeLimitHint", "Each page is scraped and indexed separately — a large site costs credits and takes a few minutes.")}
             </p>
           </div>
         )}
 
         {accountId && (
           <div className="space-y-1.5">
-            <Label htmlFor="scrape-scope">Available to</Label>
+            <Label htmlFor="scrape-scope">{t("knowledge.uploadAvailableTo", "Available to")}</Label>
             <Select value={scope} onValueChange={(value) => setScope(value as "account" | "all")}>
               <SelectTrigger id="scrape-scope" className="w-full max-w-xs">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="account">
-                  {selectedAccountLabel ? `Only ${selectedAccountLabel}` : "Only this account"}
+                  {selectedAccountLabel
+                    ? t("knowledge.onlyAccount", "Only {{account}}", { account: selectedAccountLabel })
+                    : t("knowledge.onlyThisAccount", "Only this account")}
                 </SelectItem>
-                <SelectItem value="all">All accounts</SelectItem>
+                <SelectItem value="all">{t("knowledge.allAccounts", "All accounts")}</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -142,21 +148,23 @@ export function WebsitePanel({
           <div className="space-y-2">
             <label className="flex items-center gap-2 text-sm font-medium">
               <Checkbox checked={generateSetup} onCheckedChange={(checked) => setGenerateSetup(checked === true)} />
-              Generate business and agent setup
+              {t("knowledge.generateSetup", "Generate business and agent setup")}
             </label>
             <p className="text-sm text-muted-foreground">
-              Review extracted business details and suggested replies before saving to {selectedAccountLabel || "this account"}.
+              {t("knowledge.reviewHint", "Review extracted business details and suggested replies before saving to {{account}}.", {
+                account: selectedAccountLabel || t("knowledge.thisAccount", "this account"),
+              })}
             </p>
           </div>
         ) : (
           <p className="text-sm text-muted-foreground">
-            Select a connected account to generate and apply business and agent settings. You can still index website knowledge here.
+            {t("knowledge.scrapeSelectAccount", "Select a connected account to generate and apply business and agent settings. You can still index website knowledge here.")}
           </p>
         )}
 
         <Button onClick={submit} disabled={submitting}>
           {submitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-          Start scraping &amp; indexing
+          {t("knowledge.scrapeStart", "Start scraping & indexing")}
         </Button>
       </CardContent>
     </Card>

@@ -40,6 +40,7 @@
   "unknown": "غير معروف",
   "view": "عرض",
   "active": "نشط",
+  "add": "إضافة",
   "status": {
     "cancelled": "ملغي",
     "completed": "مكتمل",

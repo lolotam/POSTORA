@@ -1,4 +1,6 @@
 import { useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
+import "@/i18n";
 import { Bot, Loader2, Send, ShieldCheck } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -29,6 +31,7 @@ export function AiAgentTestChat({
   // to -- without it every account on a platform shared one test history.
   accountId?: string | null;
 }) {
+  const { t } = useTranslation("agent");
   const [turns, setTurns] = useState<TestTurn[]>([]);
   const [input, setInput] = useState("");
   const [actAsAdmin, setActAsAdmin] = useState(false);
@@ -55,12 +58,12 @@ export function AiAgentTestChat({
             toolCalls: (data.tool_calls || []).map((call: { name: string }) => call.name),
             escalated: data.escalated,
           }
-        : { role: "assistant", content: "", skipped: data.skipped || data.error || "no reply" };
+        : { role: "assistant", content: "", skipped: data.skipped || data.error || t("test.fallbackNoReply", "no reply") };
       setTurns((current) => [...current, turn]);
     } catch (error) {
       setTurns((current) => [
         ...current,
-        { role: "assistant", content: "", skipped: error instanceof Error ? error.message : "Request failed" },
+        { role: "assistant", content: "", skipped: error instanceof Error ? error.message : t("test.requestFailed", "Request failed") },
       ]);
     } finally {
       setSending(false);
@@ -73,14 +76,14 @@ export function AiAgentTestChat({
       <CardHeader>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <CardTitle>Test the agent</CardTitle>
+            <CardTitle>{t("test.title", "Test the agent")}</CardTitle>
             <CardDescription>
-              Uses your real knowledge base and settings. Nothing is sent to customers.
+              {t("test.description", "Uses your real knowledge base and settings. Nothing is sent to customers.")}
             </CardDescription>
           </div>
           <div className="flex items-center gap-2">
             <ShieldCheck className="h-4 w-4 text-muted-foreground" />
-            <Label htmlFor="act-as-admin" className="text-sm">Act as admin</Label>
+            <Label htmlFor="act-as-admin" className="text-sm">{t("test.actAsAdmin", "Act as admin")}</Label>
             <Switch id="act-as-admin" checked={actAsAdmin} onCheckedChange={setActAsAdmin} />
           </div>
         </div>
@@ -89,7 +92,7 @@ export function AiAgentTestChat({
         <div className="max-h-96 min-h-40 space-y-3 overflow-y-auto rounded-md border p-3">
           {turns.length === 0 && (
             <p className="py-8 text-center text-sm text-muted-foreground">
-              Send a message the way a customer would — in Arabic or English.
+              {t("test.empty", "Send a message the way a customer would — in Arabic or English.")}
             </p>
           )}
           {turns.map((turn, index) => (
@@ -107,11 +110,11 @@ export function AiAgentTestChat({
                     {(turn.toolCalls || []).map((name, toolIndex) => (
                       <Badge key={toolIndex} variant="outline" className="text-[10px]">{name}</Badge>
                     ))}
-                    {turn.escalated && <Badge variant="secondary" className="text-[10px]">escalated</Badge>}
+                    {turn.escalated && <Badge variant="secondary" className="text-[10px]">{t("test.escalated", "escalated")}</Badge>}
                   </div>
                 )}
                 {turn.skipped ? (
-                  <span className="italic text-muted-foreground">No reply — {turn.skipped}</span>
+                  <span className="italic text-muted-foreground">{t("test.noReply", "No reply — {{reason}}", { reason: turn.skipped })}</span>
                 ) : (
                   <span className="whitespace-pre-wrap">{turn.content}</span>
                 )}
@@ -137,7 +140,7 @@ export function AiAgentTestChat({
                 send();
               }
             }}
-            placeholder="e.g. كم سعر التوصيل؟ or How much is delivery?"
+            placeholder={t("test.placeholder", "e.g. كم سعر التوصيل؟ or How much is delivery?")}
             disabled={sending}
           />
           <Button onClick={send} disabled={sending || !input.trim()}>

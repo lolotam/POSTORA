@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+import "@/i18n";
 import { ExternalLink, FileArchive, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -21,24 +23,27 @@ export function KnowledgeGraphCard({
   onGenerate,
   onOpen,
 }: KnowledgeGraphCardProps) {
+  const { t } = useTranslation("agent");
+  const refreshTitle = t("knowledge.refreshLink", "Regenerate exports to refresh this link");
+
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Knowledge graph</CardTitle>
+        <CardTitle>{t("knowledge.graphTitle", "Knowledge graph")}</CardTitle>
         <CardDescription>
-          Generate inspection exports from the knowledge currently indexed for this business.
+          {t("knowledge.graphDescription", "Generate inspection exports from the knowledge currently indexed for this business.")}
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-wrap gap-2">
         <Button variant="outline" disabled={busy} onClick={onGenerate}>
           {busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-          Generate exports
+          {t("knowledge.generateExports", "Generate exports")}
         </Button>
         {graphExport?.html_url && (
           <Button
             variant="secondary"
             disabled={unresolvable.html || resolving}
-            title={unresolvable.html ? "Regenerate exports to refresh this link" : undefined}
+            title={unresolvable.html ? refreshTitle : undefined}
             onClick={() => onOpen("html")}
           >
             {resolving ? (
@@ -46,14 +51,14 @@ export function KnowledgeGraphCard({
             ) : (
               <ExternalLink className="mr-2 h-4 w-4" />
             )}
-            Open graph
+            {t("knowledge.openGraph", "Open graph")}
           </Button>
         )}
         {graphExport?.vault_url && (
           <Button
             variant="secondary"
             disabled={unresolvable.vault || resolving}
-            title={unresolvable.vault ? "Regenerate exports to refresh this link" : undefined}
+            title={unresolvable.vault ? refreshTitle : undefined}
             onClick={() => onOpen("vault")}
           >
             {resolving ? (
@@ -61,7 +66,7 @@ export function KnowledgeGraphCard({
             ) : (
               <FileArchive className="mr-2 h-4 w-4" />
             )}
-            Download vault
+            {t("knowledge.vaultDownload", "Download vault")}
           </Button>
         )}
       </CardContent>

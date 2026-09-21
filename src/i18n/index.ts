@@ -34,6 +34,7 @@ import analytics from "./locales/ar/analytics.json";
 import automation from "./locales/ar/automation.json";
 import whatsapp from "./locales/ar/whatsapp.json";
 import inbox from "./locales/ar/inbox.json";
+import agent from "./locales/ar/agent.json";
 
 /** Languages with copy behind them. Anything detected outside this list resolves to `en`. */
 export const SUPPORTED_LANGUAGES = ["en", "ar"] as const;
@@ -50,7 +51,7 @@ void i18next
     // and the language never resolves, which leaves i18next.dir() guessing from
     // an empty code. Region subtags fold onto their base language instead.
     nonExplicitSupportedLngs: true,
-    ns: ["common", "nav", "apikeys", "dashboard", "calendar", "history", "post", "postsettings", "postmedia", "postpreview", "accounts", "assets", "analytics", "automation", "whatsapp", "inbox"],
+    ns: ["common", "nav", "apikeys", "dashboard", "calendar", "history", "post", "postsettings", "postmedia", "postpreview", "accounts", "assets", "analytics", "automation", "whatsapp", "inbox", "agent"],
     defaultNS: "common",
     resources: {
       en: {
@@ -70,6 +71,7 @@ void i18next
         automation: {},
         whatsapp: {},
         inbox: {},
+        agent: {},
       },
       ar: {
         common,
@@ -88,6 +90,7 @@ void i18next
         automation,
         whatsapp,
         inbox,
+        agent,
       },
     },
     // React escapes interpolated values already; escaping here would double-encode.

@@ -1,4 +1,7 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
+import "@/i18n";
+import type { TFunction } from "i18next";
 import { ChevronDown, Loader2, Plus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -46,6 +49,68 @@ const POLICY_PLACEHOLDERS: Record<BusinessPolicyKey, string> = {
   leasing: "e.g. viewings Sat-Thu, 1 year minimum, 2 months deposit",
 };
 
+function industryLabel(value: BusinessIndustry, fallback: string, t: TFunction): string {
+  switch (value) {
+    case "ecommerce": return t("knowledge.industryEcommerce", fallback);
+    case "retail": return t("knowledge.industryRetail", fallback);
+    case "clinic": return t("knowledge.industryClinic", fallback);
+    case "dental": return t("knowledge.industryDental", fallback);
+    case "pharmacy": return t("knowledge.industryPharmacy", fallback);
+    case "beauty": return t("knowledge.industryBeauty", fallback);
+    case "fitness": return t("knowledge.industryFitness", fallback);
+    case "restaurant": return t("knowledge.industryRestaurant", fallback);
+    case "cafe": return t("knowledge.industryCafe", fallback);
+    case "hotel": return t("knowledge.industryHotel", fallback);
+    case "real_estate": return t("knowledge.industryRealEstate", fallback);
+    case "b2b_services": return t("knowledge.industryB2b", fallback);
+    case "agency": return t("knowledge.industryAgency", fallback);
+    case "education": return t("knowledge.industryEducation", fallback);
+    case "legal": return t("knowledge.industryLegal", fallback);
+    case "finance": return t("knowledge.industryFinance", fallback);
+    case "automotive": return t("knowledge.industryAutomotive", fallback);
+    case "logistics": return t("knowledge.industryLogistics", fallback);
+    case "travel": return t("knowledge.industryTravel", fallback);
+    case "events": return t("knowledge.industryEvents", fallback);
+    case "home_services": return t("knowledge.industryHomeServices", fallback);
+    case "saas": return t("knowledge.industrySaas", fallback);
+    case "other": return t("knowledge.industryOther", fallback);
+  }
+}
+
+function policyLabel(key: BusinessPolicyKey, fallback: string, t: TFunction): string {
+  switch (key) {
+    case "returns": return t("knowledge.policyReturns", fallback);
+    case "shipping": return t("knowledge.policyShipping", fallback);
+    case "warranty": return t("knowledge.policyWarranty", fallback);
+    case "payment_methods": return t("knowledge.policyPayment", fallback);
+    case "delivery": return t("knowledge.policyDelivery", fallback);
+    case "booking": return t("knowledge.policyBooking", fallback);
+    case "cancellation": return t("knowledge.policyCancellation", fallback);
+    case "opening_hours": return t("knowledge.policyHours", fallback);
+    case "menu": return t("knowledge.policyMenu", fallback);
+    case "insurance": return t("knowledge.policyInsurance", fallback);
+    case "service_area": return t("knowledge.policyServiceArea", fallback);
+    case "leasing": return t("knowledge.policyLeasing", fallback);
+  }
+}
+
+function policyPlaceholder(key: BusinessPolicyKey, fallback: string, t: TFunction): string {
+  switch (key) {
+    case "returns": return t("knowledge.policyReturnsPh", fallback);
+    case "shipping": return t("knowledge.policyShippingPh", fallback);
+    case "warranty": return t("knowledge.policyWarrantyPh", fallback);
+    case "payment_methods": return t("knowledge.policyPaymentPh", fallback);
+    case "delivery": return t("knowledge.policyDeliveryPh", fallback);
+    case "booking": return t("knowledge.policyBookingPh", fallback);
+    case "cancellation": return t("knowledge.policyCancellationPh", fallback);
+    case "opening_hours": return t("knowledge.policyHoursPh", fallback);
+    case "menu": return t("knowledge.policyMenuPh", fallback);
+    case "insurance": return t("knowledge.policyInsurancePh", fallback);
+    case "service_area": return t("knowledge.policyServiceAreaPh", fallback);
+    case "leasing": return t("knowledge.policyLeasingPh", fallback);
+  }
+}
+
 /** A filled field the selected type no longer shows: kept, not indexed. */
 function hiddenFilledPolicyCount(profile: BusinessProfile): number {
   const visible = new Set(policyKeysForIndustry(profile.industry));
@@ -77,6 +142,7 @@ export function ManualProfilePanel({
   onSyncCatalog,
   catalogBusy,
 }: ManualProfilePanelProps) {
+  const { t } = useTranslation("agent");
   const [previewOpen, setPreviewOpen] = useState(false);
   const preview = renderBusinessProfileText(profile);
 
@@ -102,26 +168,25 @@ export function ManualProfilePanel({
     <div className="space-y-4">
       <Card>
         <CardHeader>
-          <CardTitle>Business profile</CardTitle>
+          <CardTitle>{t("knowledge.profileTitle", "Business profile")}</CardTitle>
           <CardDescription>
-            What the assistant knows about your business. Everything here is indexed and
-            searchable, so fill in what customers actually ask about.
+            {t("knowledge.profileDescription", "What the assistant knows about your business. Everything here is indexed and searchable, so fill in what customers actually ask about.")}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-5">
           <div className="space-y-1.5">
-            <Label htmlFor="profile-industry">Business type</Label>
+            <Label htmlFor="profile-industry">{t("knowledge.businessType", "Business type")}</Label>
             <Select
               value={profile.industry ?? ""}
               onValueChange={(value) => setField("industry", value as BusinessIndustry)}
             >
               <SelectTrigger id="profile-industry" className="w-full max-w-sm">
-                <SelectValue placeholder="Choose the closest match" />
+                <SelectValue placeholder={t("knowledge.chooseMatch", "Choose the closest match")} />
               </SelectTrigger>
               <SelectContent>
                 {INDUSTRY_OPTIONS.map((option) => (
                   <SelectItem key={option.value} value={option.value}>
-                    {option.label}
+                    {industryLabel(option.value, option.label, t)}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -129,13 +194,13 @@ export function ManualProfilePanel({
           </div>
 
           <div className="space-y-1.5">
-            <Label htmlFor="profile-products">Products and services</Label>
+            <Label htmlFor="profile-products">{t("knowledge.products", "Products and services")}</Label>
             <Textarea
               id="profile-products"
               value={profile.products ?? ""}
               onChange={(event) => setField("products", event.target.value)}
               rows={4}
-              placeholder="What you sell, the ranges you carry, anything you are known for."
+              placeholder={t("knowledge.productsPlaceholder", "What you sell, the ranges you carry, anything you are known for.")}
             />
           </div>
 
@@ -143,46 +208,47 @@ export function ManualProfilePanel({
             <div className="grid gap-4 md:grid-cols-2">
               {policyKeys.map((key) => (
                 <div key={key} className="space-y-1.5">
-                  <Label htmlFor={`profile-${key}`}>{POLICY_LABELS[key]}</Label>
+                  <Label htmlFor={`profile-${key}`}>{policyLabel(key, POLICY_LABELS[key], t)}</Label>
                   <Textarea
                     id={`profile-${key}`}
                     value={profile.policies?.[key] ?? ""}
                     onChange={(event) => setPolicy(key, event.target.value)}
                     rows={2}
-                    placeholder={POLICY_PLACEHOLDERS[key]}
+                    placeholder={policyPlaceholder(key, POLICY_PLACEHOLDERS[key], t)}
                   />
                 </div>
               ))}
             </div>
             <p className="text-xs text-muted-foreground">
-              These fields match the selected business type.
+              {t("knowledge.profileFieldsHint", "These fields match the selected business type.")}
               {hiddenFilled > 0 &&
-                ` ${hiddenFilled} filled ${hiddenFilled === 1 ? "field" : "fields"} for other business types ${hiddenFilled === 1 ? "is" : "are"} kept but not indexed.`}
+                (hiddenFilled === 1
+                  ? ` ${t("knowledge.hiddenFieldsOne", "{{count}} filled field for other business types is kept but not indexed.", { count: hiddenFilled })}`
+                  : ` ${t("knowledge.hiddenFieldsMany", "{{count}} filled fields for other business types are kept but not indexed.", { count: hiddenFilled })}`)}
             </p>
           </div>
 
           <div className="space-y-2">
-            <Label>Frequently asked questions</Label>
+            <Label>{t("knowledge.faqs", "Frequently asked questions")}</Label>
             {faqs.length === 0 && (
               <p className="text-sm text-muted-foreground">
-                No FAQs yet. These are the highest-value thing you can add — they answer customers
-                in your own words.
+                {t("knowledge.emptyFaqs", "No FAQs yet. These are the highest-value thing you can add — they answer customers in your own words.")}
               </p>
             )}
             {faqs.map((faq, index) => (
               <div key={index} className="space-y-2 rounded-md border p-3">
                 <div className="flex items-start gap-2">
                   <Input
-                    aria-label={`Question ${index + 1}`}
+                    aria-label={t("knowledge.questionAria", "Question {{n}}", { n: index + 1 })}
                     value={faq.q}
                     onChange={(event) => setFaq(index, { q: event.target.value })}
-                    placeholder="Do you ship outside Kuwait?"
+                    placeholder={t("knowledge.questionPlaceholder", "Do you ship outside Kuwait?")}
                   />
                   <Button
                     type="button"
                     size="icon"
                     variant="ghost"
-                    aria-label={`Remove question ${index + 1}`}
+                    aria-label={t("knowledge.removeQuestion", "Remove question {{n}}", { n: index + 1 })}
                     onClick={() =>
                       onProfileChange({ ...profile, faqs: faqs.filter((_, i) => i !== index) })
                     }
@@ -191,11 +257,11 @@ export function ManualProfilePanel({
                   </Button>
                 </div>
                 <Textarea
-                  aria-label={`Answer ${index + 1}`}
+                  aria-label={t("knowledge.answerAria", "Answer {{n}}", { n: index + 1 })}
                   value={faq.a}
                   onChange={(event) => setFaq(index, { a: event.target.value })}
                   rows={2}
-                  placeholder="Yes, across the GCC. Delivery takes 3-5 working days."
+                  placeholder={t("knowledge.answerPlaceholder", "Yes, across the GCC. Delivery takes 3-5 working days.")}
                 />
               </div>
             ))}
@@ -205,18 +271,18 @@ export function ManualProfilePanel({
               size="sm"
               onClick={() => onProfileChange({ ...profile, faqs: [...faqs, { q: "", a: "" }] })}
             >
-              <Plus className="mr-1 h-4 w-4" /> Add a question
+              <Plus className="mr-1 h-4 w-4" /> {t("knowledge.addQuestion", "Add a question")}
             </Button>
           </div>
 
           <div className="space-y-1.5">
-            <Label htmlFor="profile-notes">Additional notes</Label>
+            <Label htmlFor="profile-notes">{t("knowledge.notes", "Additional notes")}</Label>
             <Textarea
               id="profile-notes"
               value={profile.notes ?? ""}
               onChange={(event) => setField("notes", event.target.value)}
               rows={4}
-              placeholder="Describe your business, products, policies, and FAQs."
+              placeholder={t("knowledge.notesPlaceholder", "Describe your business, products, policies, and FAQs.")}
             />
           </div>
 
@@ -227,21 +293,21 @@ export function ManualProfilePanel({
               onClick={() => setPreviewOpen((open) => !open)}
               aria-expanded={previewOpen}
             >
-              <span>Preview what the assistant will read</span>
+              <span>{t("knowledge.preview", "Preview what the assistant will read")}</span>
               <ChevronDown
                 className={`h-4 w-4 transition-transform ${previewOpen ? "rotate-180" : ""}`}
               />
             </button>
             {previewOpen && (
               <pre className="max-h-64 overflow-auto whitespace-pre-wrap border-t px-3 py-2 text-xs text-muted-foreground">
-                {preview || "Nothing yet — the fields above are all empty."}
+                {preview || t("knowledge.emptyPreview", "Nothing yet — the fields above are all empty.")}
               </pre>
             )}
           </div>
 
           <Button onClick={onSave} disabled={saveDisabled}>
             {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-            Save &amp; index
+            {t("knowledge.saveAndIndex", "Save & index")}
           </Button>
         </CardContent>
       </Card>
@@ -249,11 +315,11 @@ export function ManualProfilePanel({
       {showCatalog && (
         <Card>
           <CardHeader>
-            <CardTitle>WhatsApp catalog</CardTitle>
+            <CardTitle>{t("knowledge.catalogTitle", "WhatsApp catalog")}</CardTitle>
             <CardDescription>
               {hasCatalogAccount && catalog?.catalog_id
-                ? "Sync products for AI product answers."
-                : "Connect a WhatsApp account with a catalog to sync products."}
+                ? t("knowledge.catalogSyncHint", "Sync products for AI product answers.")
+                : t("knowledge.catalogConnect", "Connect a WhatsApp account with a catalog to sync products.")}
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -261,7 +327,7 @@ export function ManualProfilePanel({
               onClick={onSyncCatalog}
               disabled={!hasCatalogAccount || !catalog?.catalog_id || catalogBusy}
             >
-              Sync catalog
+              {t("knowledge.syncCatalog", "Sync catalog")}
             </Button>
           </CardContent>
         </Card>

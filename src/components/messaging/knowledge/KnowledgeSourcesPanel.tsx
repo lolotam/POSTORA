@@ -1,4 +1,7 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
+import "@/i18n";
+import type { TFunction } from "i18next";
 import { Check, Circle, Download, Loader2, Pencil, RefreshCw, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
@@ -34,13 +37,14 @@ function sourceHasFile(sourceType: string): boolean {
 }
 
 function IndexedBadge({ status, indexedAt }: { status: AiKnowledgeSource["status"]; indexedAt: string | null }) {
+  const { t } = useTranslation("agent");
   if (status !== "ready") return null;
   if (!indexedAt) return null;
   const date = new Date(indexedAt);
   if (Number.isNaN(date.getTime())) return null;
   return (
     <Badge variant="outline" title={date.toLocaleString()}>
-      Indexed {date.toLocaleDateString()}
+      {t("knowledge.indexed", "Indexed {{date}}", { date: date.toLocaleDateString() })}
     </Badge>
   );
 }
@@ -59,7 +63,16 @@ const CRAWL_STAGES = [
   { key: "embedding", label: "Indexing into the vector database" },
 ] as const;
 
+function crawlLabel(key: (typeof CRAWL_STAGES)[number]["key"], fallback: string, t: TFunction): string {
+  switch (key) {
+    case "crawling": return t("knowledge.crawlCrawling", fallback);
+    case "extracting": return t("knowledge.crawlExtracting", fallback);
+    case "embedding": return t("knowledge.crawlEmbedding", fallback);
+  }
+}
+
 function CrawlProgress({ metadata }: { metadata: Record<string, unknown> | null | undefined }) {
+  const { t } = useTranslation("agent");
   const stage = String(metadata?.stage ?? "crawling");
   const current = CRAWL_STAGES.findIndex((entry) => entry.key === stage);
   const done = Number(metadata?.pages_done ?? NaN);
@@ -80,13 +93,23 @@ function CrawlProgress({ metadata }: { metadata: Record<string, unknown> | null 
             <Circle className="h-3 w-3 text-muted-foreground/40" />
           )}
           <span className={index <= current ? "text-foreground" : "text-muted-foreground"}>
-            {entry.label}
+            {crawlLabel(entry.key, entry.label, t)}
             {index === current && showCount ? ` (${done}/${total})` : ""}
           </span>
         </div>
       ))}
     </div>
   );
+}
+
+function sourceStatusLabel(status: AiKnowledgeSource["status"], t: TFunction): string {
+  switch (status) {
+    case "pending": return t("common:status.pending", "pending");
+    case "processing": return t("common:status.processing", "processing");
+    case "failed": return t("common:status.failed", "failed");
+    case "ready": return t("knowledge.statusReady", "ready");
+    default: return status;
+  }
 }
 
 export interface KnowledgeSourcesPanelProps {
@@ -136,6 +159,7 @@ export function KnowledgeSourcesPanel({
   onRename,
   onToggleShare,
 }: KnowledgeSourcesPanelProps) {
+  const { t } = useTranslation("agent");
   // One row editable at a time; the draft is local until Save so a stray
   // keystroke never reaches the server.
   const [renaming, setRenaming] = useState<{ id: string; draft: string } | null>(null);
@@ -165,19 +189,29 @@ export function KnowledgeSourcesPanel({
       const url = await requestSourceDownloadUrl(sourceId);
       window.location.assign(url);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not download source");
+      toast.error(error instanceof Error ? error.message : t("toast.downloadFailed", "Could not download source"));
     } finally {
       markDownloading(sourceId, false);
     }
   };
 
+  const accountCountLabel = (count: number) =>
+    count === 1
+      ? t("knowledge.oneAccount", "{{count}} account", { count })
+      : t("knowledge.nAccounts", "{{count}} accounts", { count });
+
+  const reingestTitle = (sourceType: string) => {
+    if (sourceType === "catalog") return t("knowledge.reingestCatalog", "Use Sync catalog");
+    if (sourceType === "website") return t("knowledge.reingestWebsite", "Delete and scrape the address again to refresh a website");
+    return t("knowledge.reingest", "Re-ingest");
+  };
+
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Sources in the vector database</CardTitle>
+        <CardTitle>{t("knowledge.sourcesTitle", "Sources in the vector database")}</CardTitle>
         <CardDescription>
-          Everything the agent can actually read. Live status, chunk counts, and which agents each
-          source reaches.
+          {t("knowledge.sourcesDescription", "Everything the agent can actually read. Live status, chunk counts, and which agents each source reaches.")}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -187,13 +221,13 @@ export function KnowledgeSourcesPanel({
           // Say the list is unreliable rather than render an unfiltered or
           // over-filtered one, either of which reads as fact.
           <p className="text-sm text-destructive">
-            Could not check which sources this account can use. Refresh to try again.
+            {t("knowledge.couldNotCheckSources", "Could not check which sources this account can use. Refresh to try again.")}
           </p>
         ) : sources.length === 0 ? (
           <p className="text-sm text-muted-foreground">
             {allSourcesCount === 0
-              ? "No knowledge sources yet."
-              : "No sources are available to this account yet."}
+              ? t("knowledge.sourcesEmptyAll", "No knowledge sources yet.")
+              : t("knowledge.sourcesEmptyAccount", "No sources are available to this account yet.")}
           </p>
         ) : (
           sources.map((source) => (
@@ -208,7 +242,7 @@ export function KnowledgeSourcesPanel({
                     onSubmit={(event) => { event.preventDefault(); submitRename(source); }}
                   >
                     <Input
-                      aria-label="Source name"
+                      aria-label={t("knowledge.sourceName", "Source name")}
                       autoFocus
                       maxLength={120}
                       className="h-8 w-72"
@@ -217,9 +251,9 @@ export function KnowledgeSourcesPanel({
                       onKeyDown={(event) => { if (event.key === "Escape") setRenaming(null); }}
                     />
                     <Button type="submit" size="sm" className="h-8" disabled={busy}>
-                      Save
+                      {t("common:save", "Save")}
                     </Button>
-                    <Button type="button" size="icon" variant="ghost" className="h-8 w-8" aria-label="Cancel rename" onClick={() => setRenaming(null)}>
+                    <Button type="button" size="icon" variant="ghost" className="h-8 w-8" aria-label={t("knowledge.cancelRename", "Cancel rename")} onClick={() => setRenaming(null)}>
                       <X className="h-4 w-4" />
                     </Button>
                   </form>
@@ -228,8 +262,8 @@ export function KnowledgeSourcesPanel({
                     {displaySourceTitle(source.file_name, socialAccounts)}
                     <button
                       type="button"
-                      aria-label="Rename source"
-                      title="Rename"
+                      aria-label={t("knowledge.renameSource", "Rename source")}
+                      title={t("common:rename", "Rename")}
                       className="text-muted-foreground hover:text-foreground"
                       disabled={busy}
                       onClick={() => setRenaming({
@@ -252,15 +286,13 @@ export function KnowledgeSourcesPanel({
                       checkbox strip below immediately contradicts. */}
                   <Badge variant={source.visibility === "shared" ? "outline" : "secondary"}>
                     {source.visibility === "shared"
-                      ? "All accounts"
+                      ? t("knowledge.allAccounts", "All accounts")
                       : accountsReady
-                        ? `${(sharedBySource.get(source.id) ?? []).length} account${
-                            (sharedBySource.get(source.id) ?? []).length === 1 ? "" : "s"
-                          }`
+                        ? accountCountLabel((sharedBySource.get(source.id) ?? []).length)
                         : // The count is derived from the accounts list; without
                           // it, "0 accounts" would be a claim rather than a
                           // reading. Say only what is still known.
-                          "Some accounts"}
+                          t("knowledge.someAccounts", "Some accounts")}
                   </Badge>
                   <Badge
                     variant={
@@ -274,13 +306,13 @@ export function KnowledgeSourcesPanel({
                     {["pending", "processing"].includes(source.status) && (
                       <Loader2 className="mr-1 h-3 w-3 animate-spin" />
                     )}
-                    {source.status}
-                    {source.status === "ready" ? ` · ${source.chunk_count} chunks` : ""}
+                    {sourceStatusLabel(source.status, t)}
+                    {source.status === "ready" ? t("knowledge.chunksSuffix", " · {{count}} chunks", { count: source.chunk_count }) : ""}
                     {/* A large file is indexed in resumable slices and sits
                         `pending` between them; the running count is what tells
                         a slow file apart from a stuck one. */}
                     {["pending", "processing"].includes(source.status) && source.chunk_count > 0
-                      ? ` · ${source.chunk_count} chunks so far`
+                      ? t("knowledge.chunksSoFarSuffix", " · {{count}} chunks so far", { count: source.chunk_count })
                       : ""}
                   </Badge>
                   <IndexedBadge status={source.status} indexedAt={source.indexed_at} />
@@ -296,9 +328,9 @@ export function KnowledgeSourcesPanel({
                   <Button
                     size="icon"
                     variant="outline"
-                    aria-label="Download source"
+                    aria-label={t("knowledge.downloadSource", "Download source")}
                     disabled={busy || downloadingIds.has(source.id)}
-                    title="Download"
+                    title={t("common:download", "Download")}
                     onClick={() => void downloadSource(source.id)}
                   >
                     {downloadingIds.has(source.id) ? (
@@ -315,19 +347,13 @@ export function KnowledgeSourcesPanel({
                 <Button
                   size="icon"
                   variant="outline"
-                  aria-label="Re-ingest source"
+                  aria-label={t("knowledge.reingestSource", "Re-ingest source")}
                   disabled={
                     source.source_type === "catalog" ||
                     source.source_type === "website" ||
                     busy
                   }
-                  title={
-                    source.source_type === "catalog"
-                      ? "Use Sync catalog"
-                      : source.source_type === "website"
-                        ? "Delete and scrape the address again to refresh a website"
-                        : "Re-ingest"
-                  }
+                  title={reingestTitle(source.source_type)}
                   onClick={() => onReingest(source)}
                 >
                   <RefreshCw className="h-4 w-4" />
@@ -335,7 +361,7 @@ export function KnowledgeSourcesPanel({
                 <Button
                   size="icon"
                   variant="destructive"
-                  aria-label="Delete source"
+                  aria-label={t("knowledge.deleteSource", "Delete source")}
                   disabled={busy}
                   onClick={() => onDelete(source)}
                 >
@@ -357,8 +383,7 @@ export function KnowledgeSourcesPanel({
                 // account read tells the user sharing is unavailable, when in
                 // fact the page simply does not know who to offer.
                 <p className="mt-3 w-full border-t pt-3 text-xs text-destructive">
-                  Could not load your connected accounts, so sharing cannot be changed here.
-                  Refresh to try again.
+                  {t("knowledge.accountsCouldNotLoad", "Could not load your connected accounts, so sharing cannot be changed here. Refresh to try again.")}
                 </p>
               ) : (
                 linksReady &&
@@ -366,7 +391,7 @@ export function KnowledgeSourcesPanel({
                 shareAccounts.length > 1 && (
                   <div className="mt-3 w-full border-t pt-3">
                     <p className="mb-2 text-xs font-medium text-muted-foreground">
-                      Agents that can read this
+                      {t("knowledge.agentsThatCanRead", "Agents that can read this")}
                     </p>
                     <div className="flex flex-wrap gap-x-4 gap-y-2">
                       {shareAccounts.map((account) => (
@@ -380,7 +405,10 @@ export function KnowledgeSourcesPanel({
                             onCheckedChange={(value) =>
                               onToggleShare(source, account, value === true)
                             }
-                            aria-label={`Share ${displaySourceTitle(source.file_name, socialAccounts)} with ${accountLabel(account)}`}
+                            aria-label={t("knowledge.shareWith", "Share {{source}} with {{account}}", {
+                              source: displaySourceTitle(source.file_name, socialAccounts),
+                              account: accountLabel(account),
+                            })}
                           />
                           {/* Safe narrowing: agentAccounts already filtered to
                               the four agent platforms, all of which are members

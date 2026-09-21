@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+import "@/i18n";
 import { Plus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -9,6 +11,7 @@ import type { BehaviorCardProps } from "./types";
 const MAX_BLOCKS = 10;
 
 export function InstructionBlocksCard({ behavior, updateBehavior }: BehaviorCardProps) {
+  const { t } = useTranslation("agent");
   const blocks = behavior.instruction_blocks ?? [];
 
   const setBlock = (index: number, patch: { title?: string; body?: string }) =>
@@ -20,33 +23,31 @@ export function InstructionBlocksCard({ behavior, updateBehavior }: BehaviorCard
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base">Advanced instruction blocks</CardTitle>
+        <CardTitle className="text-base">{t("instructions.title", "Advanced instruction blocks")}</CardTitle>
         <CardDescription>
-          Named rules for specific situations. Each is given to the assistant under its own
-          heading.
+          {t("instructions.description", "Named rules for specific situations. Each is given to the assistant under its own heading.")}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
         {blocks.length === 0 && (
           <p className="text-sm text-muted-foreground">
-            No blocks yet. Useful for things like how to talk about pricing, or how to handle a
-            return request.
+            {t("instructions.empty", "No blocks yet. Useful for things like how to talk about pricing, or how to handle a return request.")}
           </p>
         )}
         {blocks.map((block, index) => (
           <div key={index} className="space-y-2 rounded-md border p-3">
             <div className="flex items-start gap-2">
               <Input
-                aria-label={`Block ${index + 1} title`}
+                aria-label={t("instructions.titleAria", "Block {{n}} title", { n: index + 1 })}
                 value={block.title}
                 onChange={(event) => setBlock(index, { title: event.target.value })}
-                placeholder="Pricing"
+                placeholder={t("instructions.titlePlaceholder", "Pricing")}
               />
               <Button
                 type="button"
                 size="icon"
                 variant="ghost"
-                aria-label={`Remove block ${index + 1}`}
+                aria-label={t("instructions.removeBlock", "Remove block {{n}}", { n: index + 1 })}
                 onClick={() =>
                   updateBehavior(
                     "instruction_blocks",
@@ -58,11 +59,11 @@ export function InstructionBlocksCard({ behavior, updateBehavior }: BehaviorCard
               </Button>
             </div>
             <Textarea
-              aria-label={`Block ${index + 1} instructions`}
+              aria-label={t("instructions.bodyAria", "Block {{n}} instructions", { n: index + 1 })}
               value={block.body}
               onChange={(event) => setBlock(index, { body: event.target.value })}
               rows={3}
-              placeholder="Never quote a price without checking the connector first."
+              placeholder={t("instructions.bodyPlaceholder", "Never quote a price without checking the connector first.")}
             />
           </div>
         ))}
@@ -73,11 +74,11 @@ export function InstructionBlocksCard({ behavior, updateBehavior }: BehaviorCard
           disabled={blocks.length >= MAX_BLOCKS}
           onClick={() => updateBehavior("instruction_blocks", [...blocks, { title: "", body: "" }])}
         >
-          <Plus className="mr-1 h-4 w-4" /> Add an instruction block
+          <Plus className="mr-1 h-4 w-4" /> {t("instructions.add", "Add an instruction block")}
         </Button>
         {blocks.length >= MAX_BLOCKS && (
           <p className="text-xs text-muted-foreground">
-            {MAX_BLOCKS} blocks is the limit. Merge two before adding another.
+            {t("instructions.limit", "{{count}} blocks is the limit. Merge two before adding another.", { count: MAX_BLOCKS })}
           </p>
         )}
       </CardContent>

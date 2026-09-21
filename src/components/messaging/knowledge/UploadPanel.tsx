@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+import "@/i18n";
 import { Loader2, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -22,19 +24,20 @@ export function UploadPanel({
   uploading,
   onFileSelected,
 }: UploadPanelProps) {
+  const { t } = useTranslation("agent");
+
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Upload knowledge file</CardTitle>
+        <CardTitle>{t("knowledge.uploadTitle", "Upload knowledge file")}</CardTitle>
         <CardDescription>
-          Spreadsheets (CSV/XLSX/XLS), PDFs, text files (TXT/MD), and images (PNG/JPG/WEBP — text
-          is extracted automatically).
+          {t("knowledge.uploadDescription", "Spreadsheets (CSV/XLSX/XLS), PDFs, text files (TXT/MD), and images (PNG/JPG/WEBP — text is extracted automatically).")}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
         {accountId && (
           <div className="space-y-1.5">
-            <Label htmlFor="upload-scope">Available to</Label>
+            <Label htmlFor="upload-scope">{t("knowledge.uploadAvailableTo", "Available to")}</Label>
             <Select
               value={uploadScope}
               onValueChange={(value) => onUploadScopeChange(value as "account" | "all")}
@@ -44,13 +47,15 @@ export function UploadPanel({
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="account">
-                  {selectedAccountLabel ? `Only ${selectedAccountLabel}` : "Only this account"}
+                  {selectedAccountLabel
+                    ? t("knowledge.onlyAccount", "Only {{account}}", { account: selectedAccountLabel })
+                    : t("knowledge.onlyThisAccount", "Only this account")}
                 </SelectItem>
-                <SelectItem value="all">All accounts</SelectItem>
+                <SelectItem value="all">{t("knowledge.allAccounts", "All accounts")}</SelectItem>
               </SelectContent>
             </Select>
             <p className="text-xs text-muted-foreground">
-              Applies to the next file you upload. Existing files keep the scope they were given.
+              {t("knowledge.uploadScopeHint", "Applies to the next file you upload. Existing files keep the scope they were given.")}
             </p>
           </div>
         )}
@@ -62,7 +67,7 @@ export function UploadPanel({
               ) : (
                 <Upload className="mr-2 h-4 w-4" />
               )}
-              Upload file
+              {t("knowledge.uploadFile", "Upload file")}
             </span>
           </Button>
           <input

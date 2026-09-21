@@ -1,3 +1,5 @@
+import { useTranslation } from "react-i18next";
+import "@/i18n";
 import { Plus, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -25,13 +27,16 @@ export function HumanHandoffCard({
   onAddPhone,
   onRemovePhone,
 }: HumanHandoffCardProps) {
+  const { t } = useTranslation("agent");
   const phones = form.admin_phone_numbers || [];
+  const onRequestLabel = t("handoff.onRequest", "Hand off when the customer asks for a person");
+  const onLowConfidenceLabel = t("handoff.onLowConfidence", "Hand off when the assistant cannot answer");
 
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base">Human handoff</CardTitle>
-        <CardDescription>Who takes over when the assistant cannot answer.</CardDescription>
+        <CardTitle className="text-base">{t("handoff.title", "Human handoff")}</CardTitle>
+        <CardDescription>{t("handoff.description", "Who takes over when the assistant cannot answer.")}</CardDescription>
       </CardHeader>
       <CardContent className="space-y-5">
         {/* Real switches, unlike the locked guard rows next door: each of these
@@ -40,22 +45,22 @@ export function HumanHandoffCard({
         <div className="space-y-3">
           <div className="flex items-center justify-between gap-4 rounded-md border p-3">
             <Label htmlFor="handoff-on-request" className="font-normal">
-              Hand off when the customer asks for a person
+              {onRequestLabel}
             </Label>
             <Switch
               id="handoff-on-request"
-              aria-label="Hand off when the customer asks for a person"
+              aria-label={onRequestLabel}
               checked={form.handoff_on_request ?? true}
               onCheckedChange={(checked) => update("handoff_on_request", checked)}
             />
           </div>
           <div className="flex items-center justify-between gap-4 rounded-md border p-3">
             <Label htmlFor="handoff-on-low-confidence" className="font-normal">
-              Hand off when the assistant cannot answer
+              {onLowConfidenceLabel}
             </Label>
             <Switch
               id="handoff-on-low-confidence"
-              aria-label="Hand off when the assistant cannot answer"
+              aria-label={onLowConfidenceLabel}
               checked={form.handoff_on_low_confidence ?? true}
               onCheckedChange={(checked) => update("handoff_on_low_confidence", checked)}
             />
@@ -63,14 +68,14 @@ export function HumanHandoffCard({
         </div>
 
         <div className="space-y-2">
-          <Label>Admin phone numbers</Label>
+          <Label>{t("handoff.adminPhones", "Admin phone numbers")}</Label>
           <div className="flex flex-wrap gap-2 rounded-md border p-3">
             {phones.map((phone) => (
               <Badge key={phone} variant="secondary" className="gap-1 pr-1">
                 {phone}
                 <button
                   type="button"
-                  aria-label={`Remove ${phone}`}
+                  aria-label={t("handoff.removePhone", "Remove {{phone}}", { phone })}
                   className="rounded-sm p-0.5 hover:bg-muted"
                   onClick={() => onRemovePhone(phone)}
                 >
@@ -79,7 +84,7 @@ export function HumanHandoffCard({
               </Badge>
             ))}
             {phones.length === 0 && (
-              <span className="text-sm text-muted-foreground">No admin numbers added.</span>
+              <span className="text-sm text-muted-foreground">{t("handoff.noNumbers", "No admin numbers added.")}</span>
             )}
           </div>
           <div className="flex gap-2">
@@ -95,12 +100,11 @@ export function HumanHandoffCard({
               placeholder="+96550000000"
             />
             <Button type="button" variant="outline" onClick={onAddPhone}>
-              <Plus className="mr-1 h-4 w-4" /> Add
+              <Plus className="mr-1 h-4 w-4" /> {t("common:add", "Add")}
             </Button>
           </div>
           <p className="text-sm text-muted-foreground">
-            These numbers receive access to operational tools during customer conversations, and
-            are notified when a conversation is handed off.
+            {t("handoff.phonesHint", "These numbers receive access to operational tools during customer conversations, and are notified when a conversation is handed off.")}
           </p>
           {phoneError && <p className="text-sm text-destructive">{phoneError}</p>}
         </div>

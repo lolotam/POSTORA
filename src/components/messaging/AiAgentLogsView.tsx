@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
+import "@/i18n";
 import { Bot, Loader2, Workflow } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { Badge } from "@/components/ui/badge";
@@ -13,9 +15,9 @@ import {
   useAgentActivity,
 } from "@/hooks/useAgentActivity";
 
-function statusBadge(log: AiAgentLog) {
-  if (log.status === "sent") return <Badge>sent</Badge>;
-  if (log.status === "error") return <Badge variant="destructive">error</Badge>;
+function statusBadge(log: AiAgentLog, sentLabel: string, errorLabel: string) {
+  if (log.status === "sent") return <Badge>{sentLabel}</Badge>;
+  if (log.status === "error") return <Badge variant="destructive">{errorLabel}</Badge>;
   return (
     <Badge variant="secondary">
       {log.status}
@@ -24,16 +26,16 @@ function statusBadge(log: AiAgentLog) {
   );
 }
 
-function SourceBadge({ source }: { source: AgentActivity["source"] }) {
+function SourceBadge({ source, postoraLabel, n8nLabel }: { source: AgentActivity["source"]; postoraLabel: string; n8nLabel: string }) {
   return source === "postora" ? (
     <Badge variant="outline" className="gap-1 border-primary/40 text-primary">
       <Bot className="h-3 w-3" />
-      Postora agent
+      {postoraLabel}
     </Badge>
   ) : (
     <Badge variant="outline" className="gap-1 border-amber-500/50 text-amber-700 dark:text-amber-300">
       <Workflow className="h-3 w-3" />
-      n8n
+      {n8nLabel}
     </Badge>
   );
 }
@@ -43,11 +45,12 @@ function ActivityMeta({ children }: { children: React.ReactNode }) {
 }
 
 function PostoraEntry({ log }: { log: AiAgentLog }) {
+  const { t } = useTranslation("agent");
   return (
     <>
       <div className="flex flex-wrap items-center gap-2">
-        <SourceBadge source="postora" />
-        {statusBadge(log)}
+        <SourceBadge source="postora" postoraLabel={t("logs.postoraBadge", "Postora agent")} n8nLabel={t("logs.n8nBadge", "n8n")} />
+        {statusBadge(log, t("logs.sent", "sent"), t("logs.error", "error"))}
         {(log.tool_calls || []).map((call, index) => (
           <Badge key={`${log.id}-tool-${index}`} variant="outline">
             {call.name}
@@ -55,21 +58,21 @@ function PostoraEntry({ log }: { log: AiAgentLog }) {
         ))}
         <ActivityMeta>
           {formatDistanceToNow(new Date(log.created_at), { addSuffix: true })}
-          {log.latency_ms ? ` · ${(log.latency_ms / 1000).toFixed(1)}s` : ""}
+          {log.latency_ms ? t("logs.latency", " · {{seconds}}s", { seconds: (log.latency_ms / 1000).toFixed(1) }) : ""}
           {log.prompt_tokens
-            ? ` · ${(log.prompt_tokens || 0) + (log.completion_tokens || 0)} tokens`
+            ? t("logs.tokensSuffix", " · {{count}} tokens", { count: (log.prompt_tokens || 0) + (log.completion_tokens || 0) })
             : ""}
         </ActivityMeta>
       </div>
       {log.inbound_text && (
         <p className="text-sm">
-          <span className="font-medium text-muted-foreground">Customer: </span>
+          <span className="font-medium text-muted-foreground">{t("logs.customer", "Customer: ")}</span>
           <span className="line-clamp-2">{log.inbound_text}</span>
         </p>
       )}
       {log.reply_text && (
         <p className="text-sm">
-          <span className="font-medium text-muted-foreground">AI: </span>
+          <span className="font-medium text-muted-foreground">{t("logs.replyLabel", "AI: ")}</span>
           <span className="line-clamp-3">{log.reply_text}</span>
         </p>
       )}
@@ -81,48 +84,57 @@ function PostoraEntry({ log }: { log: AiAgentLog }) {
 }
 
 function N8nEntry({ dispatch }: { dispatch: AgentActivity & { source: "n8n" } }) {
+  const { t } = useTranslation("agent");
   const { destination_count: destinations, event, inbound_text, created_at } = dispatch.dispatch;
   const delivered = destinations ?? 0;
 
   return (
     <>
       <div className="flex flex-wrap items-center gap-2">
-        <SourceBadge source="n8n" />
+        <SourceBadge source="n8n" postoraLabel={t("logs.postoraBadge", "Postora agent")} n8nLabel={t("logs.n8nBadge", "n8n")} />
         {delivered > 0 ? (
           <Badge variant="secondary">
-            {delivered === 1 ? "1 workflow" : `${delivered} workflows`}
+            {delivered === 1
+              ? t("logs.oneWorkflow", "1 workflow")
+              : t("logs.workflows", "{{count}} workflows", { count: delivered })}
           </Badge>
         ) : (
-          <Badge variant="destructive">no workflow listening</Badge>
+          <Badge variant="destructive">{t("logs.noWorkflow", "no workflow listening")}</Badge>
         )}
         {event && <Badge variant="outline">{event}</Badge>}
         <ActivityMeta>{formatDistanceToNow(new Date(created_at), { addSuffix: true })}</ActivityMeta>
       </div>
       {inbound_text && (
         <p className="text-sm">
-          <span className="font-medium text-muted-foreground">Customer: </span>
+          <span className="font-medium text-muted-foreground">{t("logs.customer", "Customer: ")}</span>
           <span className="line-clamp-2">{inbound_text}</span>
         </p>
       )}
       <p className="text-xs text-muted-foreground">
         {delivered > 0
-          ? "Handed to your n8n workflow. Postora does not see what it replied — check the run in n8n."
-          : "No n8n workflow was subscribed to this event, so nothing was sent."}
+          ? t("logs.handedOff", "Handed to your n8n workflow. Postora does not see what it replied — check the run in n8n.")
+          : t("logs.noWorkflowHint", "No n8n workflow was subscribed to this event, so nothing was sent.")}
       </p>
     </>
   );
 }
 
-const SOURCE_LABELS: Record<ActivitySourceFilter, string> = {
-  all: "All handlers",
-  postora: "Postora agent",
-  n8n: "n8n",
-};
-
 export function AiAgentLogsView({ platform }: { platform: AiAgentPlatform }) {
+  const { t } = useTranslation("agent");
   const [source, setSource] = useState<ActivitySourceFilter>("all");
   const { entries, isLoading, dispatchError } = useAgentActivity(platform);
   const visible = filterActivity(entries, source);
+
+  const sourceLabel = (key: ActivitySourceFilter) => {
+    switch (key) {
+      case "all":
+        return t("logs.filterAll", "All handlers");
+      case "postora":
+        return t("logs.filterPostora", "Postora agent");
+      case "n8n":
+        return t("logs.filterN8n", "n8n");
+    }
+  };
 
   if (isLoading) {
     return (
@@ -140,24 +152,25 @@ export function AiAgentLogsView({ platform }: { platform: AiAgentPlatform }) {
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            {(Object.keys(SOURCE_LABELS) as ActivitySourceFilter[]).map((key) => (
+            {(["all", "postora", "n8n"] as const).map((key) => (
               <SelectItem key={key} value={key}>
-                {SOURCE_LABELS[key]}
+                {sourceLabel(key)}
               </SelectItem>
             ))}
           </SelectContent>
         </Select>
         {entries.length > 0 && (
           <span className="text-xs text-muted-foreground">
-            {visible.length} of {entries.length}
+            {t("logs.visibleOf", "{{visible}} of {{total}}", { visible: visible.length, total: entries.length })}
           </span>
         )}
       </div>
 
       {dispatchError && source !== "postora" && (
         <p className="rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-700 dark:text-amber-300">
-          n8n hand-offs could not be loaded, so only the Postora agent&apos;s own activity is
-          shown. {dispatchError instanceof Error ? dispatchError.message : "Unknown error"}
+          {t("logs.dispatchError", "n8n hand-offs could not be loaded, so only the Postora agent's own activity is shown. {{message}}", {
+            message: dispatchError instanceof Error ? dispatchError.message : t("logs.unknownError", "Unknown error"),
+          })}
         </p>
       )}
 
@@ -166,10 +179,12 @@ export function AiAgentLogsView({ platform }: { platform: AiAgentPlatform }) {
           <CardContent className="flex min-h-48 flex-col items-center justify-center text-center">
             <Bot className="mb-3 h-9 w-9 text-muted-foreground/50" />
             <p className="font-medium">
-              {source === "all" ? "No agent activity yet" : `No activity from ${SOURCE_LABELS[source]}`}
+              {source === "all"
+                ? t("logs.emptyAll", "No agent activity yet")
+                : t("logs.emptyFrom", "No activity from {{source}}", { source: sourceLabel(source) })}
             </p>
             <p className="mt-1 text-sm text-muted-foreground">
-              Replies, skips, escalations, and hand-offs to n8n will appear here.
+              {t("logs.emptyHint", "Replies, skips, escalations, and hand-offs to n8n will appear here.")}
             </p>
           </CardContent>
         </Card>

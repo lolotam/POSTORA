@@ -1,5 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
+import "@/i18n";
 import { Globe, PencilLine, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -33,7 +35,7 @@ import { ManualProfilePanel } from "@/components/messaging/knowledge/ManualProfi
 import { UploadPanel } from "@/components/messaging/knowledge/UploadPanel";
 import { WebsitePanel } from "@/components/messaging/knowledge/WebsitePanel";
 import { WebsiteSetupDrafts } from "@/components/messaging/knowledge/WebsiteSetupDrafts";
-import { mergeProfileRefresh, websiteIndexingMessage } from "@/lib/websiteSetup";
+import { mergeProfileRefresh } from "@/lib/websiteSetup";
 
 /** How knowledge gets in. Alternatives, so they are tabs. */
 type KnowledgeMethod = "manual" | "upload" | "website";
@@ -47,6 +49,7 @@ export function AiKnowledgeManager({
   // the manager passes its selection down and reads/writes through it.
   accountId?: string | null;
 }) {
+  const { t } = useTranslation("agent");
   const { config, error, upsertConfig } = useAiAgentConfig(platform, accountId);
   const { user, sources, links, linksReady, linksError, isLoading, graphExport, invoke, resolveExportUrls } = useAiKnowledge();
   // `error` and `isSuccess`, not just `data`. A failed read leaves data
@@ -161,11 +164,11 @@ export function AiKnowledgeManager({
       const response = await invoke.mutateAsync({ action, ...body });
       toast.success(typeof success === "function" ? success(response) : success);
       if (action === "ingest_website" && response.setup_error) {
-        toast.warning("Website knowledge was accepted, but setup generation could not start. Use Generate setup from indexed website to retry after indexing finishes.");
+        toast.warning(t("toast.setupWarning", "Website knowledge was accepted, but setup generation could not start. Use Generate setup from indexed website to retry after indexing finishes."));
       }
     } catch (error) {
       toast.error(
-        error instanceof Error ? error.message : "Knowledge action failed",
+        error instanceof Error ? error.message : t("toast.knowledgeFailed", "Knowledge action failed"),
       );
     }
   };
@@ -217,7 +220,7 @@ export function AiKnowledgeManager({
     // that strands a file in it.
     if (next.social_account_ids.length === 0) {
       toast.error(
-        "At least one account has to keep this source. Delete it instead if no agent should read it.",
+        t("toast.atLeastOneAccount", "At least one account has to keep this source. Delete it instead if no agent should read it."),
       );
       return;
     }
@@ -235,8 +238,8 @@ export function AiKnowledgeManager({
         social_account_ids: next.social_account_ids,
       },
       checked
-        ? `Shared with ${accountLabel(target)}`
-        : `Removed from ${accountLabel(target)}`,
+        ? t("toast.sharedWith", "Shared with {{account}}", { account: accountLabel(target) })
+        : t("toast.removedFrom", "Removed from {{account}}", { account: accountLabel(target) }),
     );
     // Fresh links are already in cache by here: mutateAsync resolves only after
     // the mutation's onSuccess refresh has invalidated and refetched them. That
@@ -259,13 +262,13 @@ export function AiKnowledgeManager({
         // Naming the account keeps the re-index reading the same config the
         // save just wrote, instead of an ambiguous (user, platform) lookup.
         { platform, social_account_id: accountId ?? undefined },
-        "Business profile indexed",
+        t("toast.profileIndexed", "Business profile indexed"),
       );
     } catch (error) {
       toast.error(
         error instanceof Error
           ? error.message
-          : "Could not save business profile",
+          : t("toast.profileSaveFailed", "Could not save business profile"),
       );
     }
   };
@@ -284,7 +287,7 @@ export function AiKnowledgeManager({
     // protection while keeping the reference this needs.
     const tab = window.open("", "_blank");
     if (!tab) {
-      toast.error("Allow pop-ups for this site to open the export.");
+      toast.error(t("toast.allowPopups", "Allow pop-ups for this site to open the export."));
       return;
     }
     tab.opener = null;
@@ -294,7 +297,7 @@ export function AiKnowledgeManager({
       if (!url) {
         tab.close();
         setUnresolvable((prev) => ({ ...prev, [kind]: true }));
-        toast.error("Export link is unavailable — regenerate the exports.");
+        toast.error(t("toast.exportUnavailable", "Export link is unavailable — regenerate the exports."));
         return;
       }
       // replace, not assign: the blank entry never becomes a history step, so
@@ -303,7 +306,7 @@ export function AiKnowledgeManager({
     } catch (error) {
       tab.close();
       toast.error(
-        error instanceof Error ? error.message : "Could not open export",
+        error instanceof Error ? error.message : t("toast.couldNotOpenExport", "Could not open export"),
       );
     }
   };
@@ -311,7 +314,7 @@ export function AiKnowledgeManager({
     if (!file || !user) return;
     const type = getKnowledgeSourceType(file.name);
     if (!type) {
-      toast.error("Supported files: CSV, XLSX, XLS, PDF, TXT, MD, PNG, JPG, WEBP.");
+      toast.error(t("toast.supportedFiles", "Supported files: CSV, XLSX, XLS, PDF, TXT, MD, PNG, JPG, WEBP."));
       return;
     }
     const scopeToAccount = uploadScope === "account" && !!accountId;
@@ -359,7 +362,7 @@ export function AiKnowledgeManager({
       await run(
         "ingest_source",
         { source_id: sourceId },
-        "Knowledge file indexed",
+        t("toast.fileIndexed", "Knowledge file indexed"),
       );
     } catch (error) {
       if (orphanedObjectPath) {
@@ -376,7 +379,7 @@ export function AiKnowledgeManager({
           console.error("Failed to remove orphaned knowledge upload:", cleanupError);
         }
       }
-      toast.error(error instanceof Error ? error.message : "Upload failed");
+      toast.error(error instanceof Error ? error.message : t("toast.uploadFailed", "Upload failed"));
     } finally {
       setUploading(false);
     }
@@ -391,13 +394,13 @@ export function AiKnowledgeManager({
       <Tabs value={method} onValueChange={(value) => setMethod(value as KnowledgeMethod)}>
         <TabsList className="h-auto flex-wrap justify-start">
           <TabsTrigger value="manual">
-            <PencilLine className="mr-1.5 h-4 w-4" /> Manual profile
+            <PencilLine className="mr-1.5 h-4 w-4" /> {t("knowledge.tabManual", "Manual profile")}
           </TabsTrigger>
           <TabsTrigger value="upload">
-            <Upload className="mr-1.5 h-4 w-4" /> Upload files
+            <Upload className="mr-1.5 h-4 w-4" /> {t("knowledge.tabUpload", "Upload files")}
           </TabsTrigger>
           <TabsTrigger value="website">
-            <Globe className="mr-1.5 h-4 w-4" /> Website scraping
+            <Globe className="mr-1.5 h-4 w-4" /> {t("knowledge.tabWebsite", "Website scraping")}
           </TabsTrigger>
         </TabsList>
         <TabsContent value="manual" className="mt-4">
@@ -415,7 +418,7 @@ export function AiKnowledgeManager({
               run(
                 "sync_catalog",
                 { social_account_id: waAccount!.id, catalog_id: catalog!.catalog_id },
-                "Catalog synced",
+                t("toast.catalogSynced", "Catalog synced"),
               )
             }
           />
@@ -439,7 +442,15 @@ export function AiKnowledgeManager({
               run(
                 "ingest_website",
                 { ...input, platform, social_account_id: accountId ?? undefined },
-                websiteIndexingMessage,
+                (response) => {
+                  if (response.queued) {
+                    return t("toast.websiteQueued", "Website queued — watch indexing and setup progress below");
+                  }
+                  if (typeof response.chunk_count === "number") {
+                    return t("toast.pageIndexed", "Page indexed");
+                  }
+                  return t("toast.websiteAccepted", "Website accepted — watch the sources list below");
+                },
               )
             }
           />
@@ -469,12 +480,12 @@ export function AiKnowledgeManager({
             source.source_type === "profile_text"
               ? { platform, social_account_id: accountId ?? undefined }
               : { source_id: source.id },
-            "Source indexing started",
+            t("toast.sourceIndexing", "Source indexing started"),
           )
         }
-        onDelete={(source) => run("delete_source", { source_id: source.id }, "Source deleted")}
+        onDelete={(source) => run("delete_source", { source_id: source.id }, t("toast.sourceDeleted", "Source deleted"))}
         onRename={(source, fileName) =>
-          run("rename_source", { source_id: source.id, file_name: fileName }, "Source renamed")}
+          run("rename_source", { source_id: source.id, file_name: fileName }, t("toast.sourceRenamed", "Source renamed"))}
         onToggleShare={toggleShare}
       />
       <KnowledgeGraphCard
@@ -483,7 +494,7 @@ export function AiKnowledgeManager({
         resolving={resolveExportUrls.isPending}
         unresolvable={unresolvable}
         onGenerate={async () => {
-          await run("export_graph", {}, "Knowledge graph exports generated");
+          await run("export_graph", {}, t("toast.graphGenerated", "Knowledge graph exports generated"));
           setUnresolvable({ html: false, vault: false });
         }}
         onOpen={openExport}
