@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Card, CardContent } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { MessageSquare, MessagesSquare, User, Clock, Gauge } from "lucide-react";
@@ -33,6 +34,7 @@ interface Props {
 
 export function ThreadsRepliesTab({ accountId }: Props) {
   useClearRepliesOnSignout();
+  const { t } = useTranslation("threads");
   const [selectedThread, setSelectedThread] = useState<ThreadSummary | null>(null);
   const [composerOpen, setComposerOpen] = useState(false);
   const [replyTarget, setReplyTarget] = useState<ThreadsReply | null>(null);
@@ -89,7 +91,7 @@ export function ThreadsRepliesTab({ accountId }: Props) {
               onClick={handleReplyToThread}
               className="text-sm text-primary hover:underline"
             >
-              Reply to this thread
+              {t("actions.replyToThread", "Reply to this thread")}
             </button>
           )}
         </CardContent>
@@ -99,23 +101,23 @@ export function ThreadsRepliesTab({ accountId }: Props) {
         <TabsList className="grid grid-cols-2 sm:grid-cols-5 w-full">
           <TabsTrigger value="top-level">
             <MessageSquare className="h-3.5 w-3.5 mr-1.5" />
-            Top-level
+            {t("filters.topLevel", "Top-level")}
           </TabsTrigger>
           <TabsTrigger value="conversation">
             <MessagesSquare className="h-3.5 w-3.5 mr-1.5" />
-            Conversation
+            {t("tabs.conversation", "Conversation")}
           </TabsTrigger>
           <TabsTrigger value="mine">
             <User className="h-3.5 w-3.5 mr-1.5" />
-            My Replies
+            {t("tabs.mine", "My Replies")}
           </TabsTrigger>
           <TabsTrigger value="pending">
             <Clock className="h-3.5 w-3.5 mr-1.5" />
-            Pending
+            {t("common:status.pending", "Pending")}
           </TabsTrigger>
           <TabsTrigger value="quota">
             <Gauge className="h-3.5 w-3.5 mr-1.5" />
-            Quota
+            {t("tabs.quota", "Quota")}
           </TabsTrigger>
         </TabsList>
 
@@ -123,7 +125,7 @@ export function ThreadsRepliesTab({ accountId }: Props) {
           {!selectedThread ? (
             <Card>
               <CardContent className="p-8 text-center text-sm text-muted-foreground">
-                Pick a thread above to see its replies.
+                {t("empty.pickThread", "Pick a thread above to see its replies.")}
               </CardContent>
             </Card>
           ) : (
@@ -134,8 +136,8 @@ export function ThreadsRepliesTab({ accountId }: Props) {
               error={topLevel.error}
               onRetry={() => topLevel.refetch()}
               onReplyClick={handleReplyClick}
-              emptyTitle="No replies yet"
-              emptyDescription="Be the first to reply on this thread."
+              emptyTitle={t("empty.noReplies", "No replies yet")}
+              emptyDescription={t("empty.beFirst", "Be the first to reply on this thread.")}
             />
           )}
         </TabsContent>
@@ -144,7 +146,7 @@ export function ThreadsRepliesTab({ accountId }: Props) {
           {!selectedThread ? (
             <Card>
               <CardContent className="p-8 text-center text-sm text-muted-foreground">
-                Pick a thread above to see the full conversation.
+                {t("empty.pickThreadConversation", "Pick a thread above to see the full conversation.")}
               </CardContent>
             </Card>
           ) : conversation.isLoading ? (
@@ -188,13 +190,13 @@ export function ThreadsRepliesTab({ accountId }: Props) {
                 onReplyClick={handleReplyClick}
                 emptyTitle={
                   (myReplies.data?.length ?? 0) === 0
-                    ? "You haven't replied to any threads yet"
-                    : "No replies match your filters"
+                    ? t("empty.youHaventReplied", "You haven't replied to any threads yet")
+                    : t("empty.noMatch", "No replies match your filters")
                 }
                 emptyDescription={
                   (myReplies.data?.length ?? 0) === 0
-                    ? "Once you reply on a thread, it will appear here grouped by the original post."
-                    : "Try adjusting or resetting the filters above."
+                    ? t("empty.youHaventRepliedHint", "Once you reply on a thread, it will appear here grouped by the original post.")
+                    : t("empty.noMatchHint", "Try adjusting or resetting the filters above.")
                 }
               />
             ) : (
@@ -215,8 +217,8 @@ export function ThreadsRepliesTab({ accountId }: Props) {
             error={pending.error}
             onRetry={() => pending.refetch()}
             showApproval
-            emptyTitle="No pending replies"
-            emptyDescription="Replies awaiting your approval will appear here."
+            emptyTitle={t("empty.noPending", "No pending replies")}
+            emptyDescription={t("empty.noPendingHint", "Replies awaiting your approval will appear here.")}
           />
         </TabsContent>
 

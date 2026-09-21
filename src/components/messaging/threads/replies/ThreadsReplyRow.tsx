@@ -1,4 +1,5 @@
 import { formatDistanceToNow, isValid } from "date-fns";
+import { useTranslation } from "react-i18next";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -42,6 +43,7 @@ interface Props {
  * and the frame around the whole thread says where the conversation starts and ends.
  */
 export function ThreadsReplyRow({ accountId, node, showApproval, onReplyClick }: Props) {
+  const { t } = useTranslation("threads");
   const { entry: reply, depth } = node;
   const style = depthStyle(depth);
   const { hide, unhide, approve, reject } = useThreadsReplyMutations(accountId);
@@ -49,9 +51,9 @@ export function ThreadsReplyRow({ accountId, node, showApproval, onReplyClick }:
   const isPending = reply.hide_status === "PENDING";
   const isOwned = !!reply.is_reply_owned_by_me;
   const { getAvatar, selfAvatar, selfUsername } = useThreadsAuthorAvatarContext();
-  const username =
-    reply.username ?? (isOwned ? selfUsername ?? "Unknown User" : "Unknown User");
-  const avatarUrl = isOwned ? selfAvatar ?? getAvatar(username) : getAvatar(username);
+  const rawUsername = reply.username ?? (isOwned ? selfUsername : null);
+  const username = rawUsername ?? t("mention.unknownUser", "Unknown User");
+  const avatarUrl = isOwned ? selfAvatar ?? getAvatar(rawUsername) : getAvatar(rawUsername);
   // date-fns 3 throws RangeError on an invalid date, and this renders inside a list -- one
   // bad timestamp from Meta would blank the whole page rather than one row. The threading
   // sort already tolerates these; rendering has to as well.
@@ -96,9 +98,9 @@ export function ThreadsReplyRow({ accountId, node, showApproval, onReplyClick }:
                   {postedAgo && (
                     <span className="text-xs text-muted-foreground">{postedAgo}</span>
                   )}
-                  {isOwned && <Badge variant="secondary" className="text-[10px]">You</Badge>}
-                  {isHidden && <Badge variant="outline" className="text-[10px]">Hidden</Badge>}
-                  {isPending && <Badge variant="default" className="text-[10px]">Pending</Badge>}
+                  {isOwned && <Badge variant="secondary" className="text-[10px]">{t("badge.you", "You")}</Badge>}
+                  {isHidden && <Badge variant="outline" className="text-[10px]">{t("badge.hidden", "Hidden")}</Badge>}
+                  {isPending && <Badge variant="default" className="text-[10px]">{t("common:status.pending", "Pending")}</Badge>}
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
                   {showApproval && isPending ? (
@@ -111,7 +113,7 @@ export function ThreadsReplyRow({ accountId, node, showApproval, onReplyClick }:
                         disabled={approve.isPending}
                       >
                         <Check className="h-3.5 w-3.5 mr-1" />
-                        Approve
+                        {t("actions.approve", "Approve")}
                       </Button>
                       <Button
                         size="sm"
@@ -121,7 +123,7 @@ export function ThreadsReplyRow({ accountId, node, showApproval, onReplyClick }:
                         disabled={reject.isPending}
                       >
                         <XIcon className="h-3.5 w-3.5 mr-1" />
-                        Reject
+                        {t("actions.reject", "Reject")}
                       </Button>
                     </>
                   ) : onReplyClick ? (
@@ -132,7 +134,7 @@ export function ThreadsReplyRow({ accountId, node, showApproval, onReplyClick }:
                       onClick={() => onReplyClick(reply)}
                     >
                       <ReplyIcon className="h-3.5 w-3.5 mr-1" />
-                      Reply
+                      {t("actions.reply", "Reply")}
                     </Button>
                   ) : null}
 
@@ -140,7 +142,7 @@ export function ThreadsReplyRow({ accountId, node, showApproval, onReplyClick }:
                     <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" asChild>
                       <a href={reply.permalink} target="_blank" rel="noopener noreferrer">
                         <ExternalLink className="h-3.5 w-3.5 mr-1" />
-                        View
+                        {t("common:view", "View")}
                       </a>
                     </Button>
                   )}
@@ -157,14 +159,14 @@ export function ThreadsReplyRow({ accountId, node, showApproval, onReplyClick }:
                           onClick={() => unhide.mutate(reply.id)}
                           disabled={unhide.isPending}
                         >
-                          <Eye className="h-4 w-4 mr-2" /> Unhide reply
+                          <Eye className="h-4 w-4 mr-2" /> {t("actions.unhideReply", "Unhide reply")}
                         </DropdownMenuItem>
                       ) : (
                         <DropdownMenuItem
                           onClick={() => hide.mutate(reply.id)}
                           disabled={hide.isPending}
                         >
-                          <EyeOff className="h-4 w-4 mr-2" /> Hide reply
+                          <EyeOff className="h-4 w-4 mr-2" /> {t("actions.hideReply", "Hide reply")}
                         </DropdownMenuItem>
                       )}
                     </DropdownMenuContent>

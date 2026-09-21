@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { ChevronDown, ChevronRight, MessagesSquare } from "lucide-react";
 import { useThreadConversation, useThreadPost } from "@/hooks/useThreadsReplies";
@@ -26,6 +27,7 @@ interface Props {
  * its root post first, and only then is the conversation requested.
  */
 export function ThreadsMentionConversation({ socialAccountId, threadsMediaId }: Props) {
+  const { t } = useTranslation("threads");
   const [open, setOpen] = useState(false);
 
   const {
@@ -67,7 +69,7 @@ export function ThreadsMentionConversation({ socialAccountId, threadsMediaId }: 
       >
         {open ? <ChevronDown className="h-3.5 w-3.5 mr-1.5" /> : <ChevronRight className="h-3.5 w-3.5 mr-1.5" />}
         <MessagesSquare className="h-3.5 w-3.5 mr-1.5" />
-        {open ? "Hide conversation" : "Show conversation"}
+        {open ? t("actions.hideConversation", "Hide conversation") : t("actions.showConversation", "Show conversation")}
       </Button>
 
       {open && (
@@ -78,8 +80,8 @@ export function ThreadsMentionConversation({ socialAccountId, threadsMediaId }: 
             isLoading={resolvingPost || loadingConversation}
             error={failure ?? undefined}
             onRetry={() => retry()}
-            emptyTitle="No replies on this thread"
-            emptyDescription="Nobody has replied to the post this mention sits in."
+            emptyTitle={t("empty.noRepliesOnThread", "No replies on this thread")}
+            emptyDescription={t("empty.noRepliesOnThreadHint", "Nobody has replied to the post this mention sits in.")}
           />
         </div>
       )}

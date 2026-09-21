@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Loader2, Send, X } from "lucide-react";
@@ -13,6 +14,7 @@ interface Props {
 const LIMIT = 500;
 
 export function ThreadsReplyComposer({ isPending, onCancel, onSubmit }: Props) {
+  const { t } = useTranslation("threads");
   const [text, setText] = useState("");
   const trimmed = text.trim();
   const tooLong = text.length > LIMIT;
@@ -23,7 +25,7 @@ export function ThreadsReplyComposer({ isPending, onCancel, onSubmit }: Props) {
       <Textarea
         value={text}
         onChange={(e) => setText(e.target.value)}
-        placeholder="Reply on Threads…"
+        placeholder={t("form.replyOnThreads", "Reply on Threads…")}
         rows={3}
         autoFocus
         className="resize-none text-sm bg-background"
@@ -46,7 +48,7 @@ export function ThreadsReplyComposer({ isPending, onCancel, onSubmit }: Props) {
             disabled={isPending}
           >
             <X className="h-3.5 w-3.5 mr-1.5" />
-            Cancel
+            {t("common:cancel", "Cancel")}
           </Button>
           <Button
             type="button"
@@ -59,7 +61,7 @@ export function ThreadsReplyComposer({ isPending, onCancel, onSubmit }: Props) {
             ) : (
               <Send className="h-3.5 w-3.5 mr-1.5" />
             )}
-            Send Reply
+            {t("actions.sendReply", "Send Reply")}
           </Button>
         </div>
       </div>

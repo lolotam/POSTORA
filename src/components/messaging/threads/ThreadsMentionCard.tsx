@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -38,15 +39,17 @@ export function ThreadsMentionCard({
   onMetaChange,
   onStatusChange,
 }: ThreadsMentionCardProps) {
+  const { t } = useTranslation("threads");
   const { flags } = useFeatureFlags();
   const [composerOpen, setComposerOpen] = useState(false);
-  const author = mention.mention_author_username || "unknown";
+  const authorKey = mention.mention_author_username || "unknown";
+  const author = mention.mention_author_username || t("mention.unknownAuthor", "unknown");
   const initials = author.slice(0, 2).toUpperCase();
   const { getAvatar } = useThreadsAuthorAvatarContext();
-  const avatarUrl = mention.mention_author_avatar_url || getAvatar(author);
+  const avatarUrl = mention.mention_author_avatar_url || getAvatar(authorKey);
   const timeLabel = mention.mentioned_at
     ? formatDistanceToNow(new Date(mention.mentioned_at), { addSuffix: true })
-    : "Unknown time";
+    : t("mention.unknownTime", "Unknown time");
   const repliedLabel = mention.replied_at
     ? formatDistanceToNow(new Date(mention.replied_at), { addSuffix: true })
     : null;
@@ -153,7 +156,7 @@ export function ThreadsMentionCard({
           <div className="rounded-md border border-emerald-500/20 bg-emerald-500/5 p-2.5 text-xs space-y-1">
             <div className="flex items-center gap-1.5 text-emerald-700 dark:text-emerald-300 font-medium">
               <CheckCircle2 className="h-3.5 w-3.5" />
-              Replied {repliedLabel}
+              {t("mention.repliedAgo", "Replied {{time}}", { time: repliedLabel })}
             </div>
             <p className="text-foreground/80 whitespace-pre-wrap break-words">
               {mention.reply_text}
@@ -166,7 +169,7 @@ export function ThreadsMentionCard({
                 className="inline-flex items-center gap-1 text-primary hover:underline"
               >
                 <ExternalLink className="h-3 w-3" />
-                Open reply on Threads
+                {t("actions.openReplyOnThreads", "Open reply on Threads")}
               </a>
             )}
           </div>
@@ -174,7 +177,7 @@ export function ThreadsMentionCard({
 
         {/* Reply error */}
         {mention.reply_error && !mention.has_reply && (
-          <p className="text-xs text-destructive">Last reply failed: {mention.reply_error}</p>
+          <p className="text-xs text-destructive">{t("errors.lastReplyFailed", "Last reply failed: {{message}}", { message: mention.reply_error })}</p>
         )}
 
         {/* Reply composer */}
@@ -200,7 +203,7 @@ export function ThreadsMentionCard({
               ) : (
                 <Check className="h-3.5 w-3.5 mr-1.5" />
               )}
-              Mark as Read
+              {t("actions.markAsRead", "Mark as Read")}
             </Button>
           )}
           {mention.status !== "archived" && (
@@ -211,7 +214,7 @@ export function ThreadsMentionCard({
               onClick={() => onArchive(mention.id)}
             >
               <Archive className="h-3.5 w-3.5 mr-1.5" />
-              Archive
+              {t("actions.archive", "Archive")}
             </Button>
           )}
           {flags.msgThreadsReply && onReply && !composerOpen && (
@@ -222,7 +225,7 @@ export function ThreadsMentionCard({
               onClick={() => setComposerOpen(true)}
             >
               <Reply className="h-3.5 w-3.5 mr-1.5" />
-              {mention.has_reply ? "Reply again" : "Reply"}
+              {mention.has_reply ? t("actions.replyAgain", "Reply again") : t("actions.reply", "Reply")}
             </Button>
           )}
           {mention.mention_permalink && (
@@ -233,7 +236,7 @@ export function ThreadsMentionCard({
                 rel="noopener noreferrer"
               >
                 <ExternalLink className="h-3.5 w-3.5 mr-1.5" />
-                Open in Threads
+                {t("actions.openInThreads", "Open in Threads")}
               </a>
             </Button>
           )}

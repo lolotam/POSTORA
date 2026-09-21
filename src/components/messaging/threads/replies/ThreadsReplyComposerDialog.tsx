@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Trans, useTranslation } from "react-i18next";
 import { AlertCircle, Hash, ImagePlus, Loader2, Send, X } from "lucide-react";
 import {
   Dialog,
@@ -38,6 +39,7 @@ export function ThreadsReplyComposerDialog({
   replyToUsername,
   mediaId,
 }: Props) {
+  const { t } = useTranslation("threads");
   const [text, setText] = useState("");
   const [topicTag, setTopicTag] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -69,11 +71,11 @@ export function ThreadsReplyComposerDialog({
   const submit = () => {
     setError(null);
     if (!replyToId) {
-      setError("Missing reply target");
+      setError(t("errors.missingTarget", "Missing reply target"));
       return;
     }
     if (!trimmed && !attached) {
-      setError("Add some text or attach media to reply");
+      setError(t("errors.needTextOrMedia", "Add some text or attach media to reply"));
       return;
     }
     if (createReply.isPending) return;
@@ -92,7 +94,7 @@ export function ThreadsReplyComposerDialog({
       },
       {
         onSuccess: () => onOpenChange(false),
-        onError: (e: any) => setError(e?.message || "Could not send reply"),
+        onError: (e: Error) => setError(e?.message || t("errors.couldNotSend", "Could not send reply")),
       },
     );
   };
@@ -101,7 +103,7 @@ export function ThreadsReplyComposerDialog({
     const file = files[0];
     if (!file) return;
     if (file.fileType === "gif") {
-      setError("Threads does not support GIF replies. Pick an image or video.");
+      setError(t("errors.gifNotSupported", "Threads does not support GIF replies. Pick an image or video."));
       return;
     }
     let url = file.cloudinaryUrl || "";
@@ -110,11 +112,11 @@ export function ThreadsReplyComposerDialog({
       url = data?.publicUrl || "";
     }
     if (!url) {
-      setError("Could not resolve a public URL for that file.");
+      setError(t("errors.publicUrl", "Could not resolve a public URL for that file."));
       return;
     }
     if (!/^https:\/\//i.test(url)) {
-      setError("Selected media must be served over HTTPS.");
+      setError(t("errors.httpsRequired", "Selected media must be served over HTTPS."));
       return;
     }
     setError(null);
@@ -122,7 +124,7 @@ export function ThreadsReplyComposerDialog({
       url,
       type: file.fileType === "video" ? "VIDEO" : "IMAGE",
       previewUrl: file.previewUrl || url,
-      name: file.file?.name || "attachment",
+      name: file.file?.name || t("form.attachmentName", "attachment"),
     });
   };
 
@@ -137,9 +139,11 @@ export function ThreadsReplyComposerDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[520px]">
         <DialogHeader>
-          <DialogTitle>Reply on Threads</DialogTitle>
+          <DialogTitle>{t("dialog.replyOnThreads", "Reply on Threads")}</DialogTitle>
           <DialogDescription>
-            {replyToUsername ? `Replying to @${replyToUsername}` : "Compose your reply"}
+            {replyToUsername
+              ? t("dialog.replyingTo", "Replying to @{{username}}", { username: replyToUsername })
+              : t("dialog.composeReply", "Compose your reply")}
           </DialogDescription>
         </DialogHeader>
 
@@ -153,7 +157,7 @@ export function ThreadsReplyComposerDialog({
         <div className="space-y-2">
           <Label className="text-sm font-medium flex items-center gap-2">
             <ImagePlus className="w-4 h-4" />
-            Media (optional)
+            {t("form.mediaOptional", "Media (optional)")}
           </Label>
           {attached ? (
             <div className="flex items-center gap-3 rounded-md border p-2">
@@ -187,11 +191,11 @@ export function ThreadsReplyComposerDialog({
               disabled={createReply.isPending}
             >
               <ImagePlus className="mr-2 h-4 w-4" />
-              Choose from Library
+              {t("actions.chooseFromLibrary", "Choose from Library")}
             </Button>
           )}
           <p className="text-xs text-muted-foreground">
-            Threads supports one image or one video per reply.
+            {t("form.mediaOnePerReply", "Threads supports one image or one video per reply.")}
           </p>
         </div>
 
@@ -199,10 +203,10 @@ export function ThreadsReplyComposerDialog({
         <div className="space-y-2">
           <Label className="text-sm font-medium flex items-center gap-2">
             <Hash className="w-4 h-4" />
-            Topic Tag (optional)
+            {t("form.topicTag", "Topic Tag (optional)")}
           </Label>
           <Input
-            placeholder="e.g. lovable-build"
+            placeholder={t("form.topicPlaceholder", "e.g. lovable-build")}
             value={topicTag}
             onChange={(e) => setTopicTag(e.target.value)}
             maxLength={50}
@@ -210,7 +214,7 @@ export function ThreadsReplyComposerDialog({
           />
           <div className="flex items-center justify-between gap-2">
             <p className="text-xs text-muted-foreground">
-              Adds a clickable topic above your reply. 1–50 characters. No periods (.) or ampersands (&amp;).
+              {t("form.topicHint", "Adds a clickable topic above your reply. 1–50 characters. No periods (.) or ampersands (&).")}
             </p>
             <p className="text-xs text-muted-foreground shrink-0">{cleanedTopicTag.length}/50</p>
           </div>
@@ -218,8 +222,11 @@ export function ThreadsReplyComposerDialog({
             <div className="flex items-start gap-2 text-xs text-amber-700 dark:text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-md p-2">
               <AlertCircle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
               <span>
-                Periods (.) and ampersands (&amp;) are not allowed and will be removed before publishing
-                {cleanedTopicTag.length > 0 ? ` → "${cleanedTopicTag}"` : ""}.
+                {t(
+                  "form.topicInvalid",
+                  "Periods (.) and ampersands (&) are not allowed and will be removed before publishing{{cleaned}}.",
+                  { cleaned: cleanedTopicTag.length > 0 ? ` → "${cleanedTopicTag}"` : "" },
+                )}
               </span>
             </div>
           )}
@@ -230,15 +237,19 @@ export function ThreadsReplyComposerDialog({
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="Write your reply…"
+          placeholder={t("form.writeReply", "Write your reply…")}
           rows={5}
           disabled={createReply.isPending}
         />
 
         <div className="flex items-center justify-between text-xs">
           <span className="text-muted-foreground">
-            Press <kbd className="px-1 rounded bg-muted">Enter</kbd> to send ·{" "}
-            <kbd className="px-1 rounded bg-muted">Shift+Enter</kbd> for new line
+            <Trans
+              ns="threads"
+              i18nKey="form.pressEnter"
+              defaults="Press <kbd>Enter</kbd> to send · <kbd>Shift+Enter</kbd> for new line"
+              components={{ kbd: <kbd className="px-1 rounded bg-muted" /> }}
+            />
           </span>
           <span className={overLimit ? "text-destructive" : "text-muted-foreground"}>
             {remaining}
@@ -249,7 +260,7 @@ export function ThreadsReplyComposerDialog({
 
         <DialogFooter>
           <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={createReply.isPending}>
-            Cancel
+            {t("common:cancel", "Cancel")}
           </Button>
           <Button
             onClick={submit}
@@ -260,7 +271,7 @@ export function ThreadsReplyComposerDialog({
             ) : (
               <Send className="h-4 w-4 mr-2" />
             )}
-            Send Reply
+            {t("actions.sendReply", "Send Reply")}
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { FileText, Loader2, ExternalLink, AlertCircle } from "lucide-react";
 import { format } from "date-fns";
 import { Button } from "@/components/ui/button";
@@ -51,6 +52,7 @@ function discoverPostIds(replies: ThreadsReply[]) {
 }
 
 export function ThreadsRepliesGroupedByPost({ accountId, replies, onReplyClick }: Props) {
+  const { t } = useTranslation("threads");
   const { postIds, myByPost } = useMemo(() => discoverPostIds(replies), [replies]);
   const { byMediaId, errorsByMediaId, loadingByMediaId, refetch } =
     useConversationsForMedia(accountId, postIds);
@@ -80,20 +82,20 @@ export function ThreadsRepliesGroupedByPost({ accountId, replies, onReplyClick }
             {isLoading ? (
               <div className="flex items-center gap-2 text-xs text-muted-foreground py-4">
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                Loading conversation…
+                {t("empty.loadingConversation", "Loading conversation…")}
               </div>
             ) : error ? (
               <div className="space-y-2">
                 <div className="flex items-center gap-2 text-xs text-destructive">
                   <AlertCircle className="h-3.5 w-3.5" />
-                  Conversation unavailable. Showing your replies only.
+                  {t("errors.conversationUnavailable", "Conversation unavailable. Showing your replies only.")}
                   <Button
                     variant="ghost"
                     size="sm"
                     className="h-6 px-2 text-xs ml-auto"
                     onClick={() => refetch(postId)}
                   >
-                    Retry
+                    {t("common:retry", "Retry")}
                   </Button>
                 </div>
                 <ThreadsConversationTimeline
@@ -132,6 +134,7 @@ interface PostHeaderProps {
 }
 
 function PostHeader({ accountId, postId, totalCount, myCount, onDetails }: PostHeaderProps) {
+  const { t } = useTranslation("threads");
   const { data: post } = useThreadPost(accountId, postId);
   const snippet = post?.text?.trim();
   const ts = post?.timestamp ? new Date(post.timestamp) : null;
@@ -141,15 +144,17 @@ function PostHeader({ accountId, postId, totalCount, myCount, onDetails }: PostH
       <div className="flex flex-wrap items-start gap-2">
         <div className="min-w-0 flex-1">
           <p className="text-sm font-medium line-clamp-2">
-            {snippet || <span className="text-muted-foreground italic">Untitled post</span>}
+            {snippet || <span className="text-muted-foreground italic">{t("header.untitledPost", "Untitled post")}</span>}
           </p>
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1 text-xs text-muted-foreground">
             {post?.username && <span>@{post.username}</span>}
             {ts && <span>{format(ts, "PPp")}</span>}
             <span>
-              {totalCount} {totalCount === 1 ? "reply" : "replies"}
+              {totalCount === 1
+                ? t("count.reply", "{{count}} reply", { count: totalCount })
+                : t("count.replies", "{{count}} replies", { count: totalCount })}
               {myCount > 0 && (
-                <> · {myCount} from you</>
+                <> · {t("header.fromYou", "{{count}} from you", { count: myCount })}</>
               )}
             </span>
           </div>
@@ -159,7 +164,7 @@ function PostHeader({ accountId, postId, totalCount, myCount, onDetails }: PostH
             <Button asChild variant="ghost" size="sm" className="h-7 px-2 text-xs">
               <a href={post.permalink} target="_blank" rel="noopener noreferrer">
                 <ExternalLink className="h-3.5 w-3.5 mr-1.5" />
-                Open
+                {t("common:open", "Open")}
               </a>
             </Button>
           )}
@@ -170,7 +175,7 @@ function PostHeader({ accountId, postId, totalCount, myCount, onDetails }: PostH
             onClick={onDetails}
           >
             <FileText className="h-3.5 w-3.5 mr-1.5" />
-            Details
+            {t("actions.details", "Details")}
           </Button>
         </div>
       </div>

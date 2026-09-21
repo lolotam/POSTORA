@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Check, ChevronsUpDown, ExternalLink, Loader2 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { Button } from "@/components/ui/button";
@@ -18,6 +19,7 @@ interface Props {
 }
 
 export function ThreadsThreadPicker({ accountId, value, onChange }: Props) {
+  const { t } = useTranslation("threads");
   const [open, setOpen] = useState(false);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
 
@@ -31,7 +33,7 @@ export function ThreadsThreadPicker({ accountId, value, onChange }: Props) {
   } = useUserThreadsInfinite(accountId);
 
   const threads: ThreadSummary[] =
-    data?.pages.flatMap((p: any) => (p.data as ThreadSummary[]) || []) || [];
+    data?.pages.flatMap((p) => p.data || []) || [];
 
   // Infinite scroll sentinel
   useEffect(() => {
@@ -66,8 +68,8 @@ export function ThreadsThreadPicker({ accountId, value, onChange }: Props) {
         >
           <span className="truncate text-left">
             {value
-              ? value.text?.slice(0, 60) || `Thread ${value.id.slice(0, 8)}…`
-              : "Select a thread to manage replies"}
+              ? value.text?.slice(0, 60) || t("picker.threadFallback", "Thread {{id}}…", { id: value.id.slice(0, 8) })
+              : t("picker.selectThread", "Select a thread to manage replies")}
           </span>
           <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
         </Button>
@@ -77,27 +79,27 @@ export function ThreadsThreadPicker({ accountId, value, onChange }: Props) {
           <div className="p-1 pr-2">
             {isLoading && (
               <div className="flex items-center justify-center py-6 text-sm text-muted-foreground">
-                <Loader2 className="h-4 w-4 mr-2 animate-spin" /> Loading threads…
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" /> {t("picker.loading", "Loading threads…")}
               </div>
             )}
 
             {error && (
               <div className="p-3 text-sm text-destructive">
-                {(error as Error).message || "Failed to load threads."}
+                {(error as Error).message || t("errors.failedLoadThreads", "Failed to load threads.")}
               </div>
             )}
 
             {!isLoading && !error && threads.length === 0 && (
               <div className="p-6 text-center text-sm text-muted-foreground">
-                No threads found for this account.
+                {t("empty.noThreads", "No threads found for this account.")}
               </div>
             )}
 
-            {threads.map((t, idx) => {
-              const selected = value?.id === t.id;
+            {threads.map((thread, idx) => {
+              const selected = value?.id === thread.id;
               return (
                 <div
-                  key={t.id}
+                  key={thread.id}
                   className={cn(
                     "w-full px-3 py-2 rounded-sm hover:bg-accent flex items-start gap-2",
                     selected && "bg-accent",
@@ -106,7 +108,7 @@ export function ThreadsThreadPicker({ accountId, value, onChange }: Props) {
                   <button
                     type="button"
                     onClick={() => {
-                      onChange(t);
+                      onChange(thread);
                       setOpen(false);
                     }}
                     className="flex-1 min-w-0 flex items-start gap-2 text-left"
@@ -122,27 +124,27 @@ export function ThreadsThreadPicker({ accountId, value, onChange }: Props) {
                     />
                     <div className="min-w-0 flex-1">
                       <p className="text-sm line-clamp-2">
-                        {t.text || <span className="italic text-muted-foreground">Media post</span>}
+                        {thread.text || <span className="italic text-muted-foreground">{t("picker.mediaPost", "Media post")}</span>}
                       </p>
-                      {t.timestamp && (
+                      {thread.timestamp && (
                         <p className="text-xs text-muted-foreground mt-0.5">
-                          {formatDistanceToNow(new Date(t.timestamp), { addSuffix: true })}
+                          {formatDistanceToNow(new Date(thread.timestamp), { addSuffix: true })}
                         </p>
                       )}
                     </div>
                   </button>
-                  {t.permalink && (
+                  {thread.permalink && (
                     <a
-                      href={t.permalink}
+                      href={thread.permalink}
                       target="_blank"
                       rel="noopener noreferrer"
                       onClick={(e) => e.stopPropagation()}
                       className="ml-1 inline-flex items-center gap-1 text-xs text-primary hover:underline shrink-0 pt-0.5"
-                      aria-label="View thread on Threads"
-                      title="Open on Threads"
+                      aria-label={t("actions.viewThreadAria", "View thread on Threads")}
+                      title={t("actions.openOnThreads", "Open on Threads")}
                     >
                       <ExternalLink className="h-3.5 w-3.5" />
-                      View
+                      {t("common:view", "View")}
                     </a>
                   )}
                 </div>
@@ -153,7 +155,7 @@ export function ThreadsThreadPicker({ accountId, value, onChange }: Props) {
 
             {isFetchingNextPage && (
               <div className="flex items-center justify-center py-3 text-xs text-muted-foreground">
-                <Loader2 className="h-3 w-3 mr-2 animate-spin" /> Loading more…
+                <Loader2 className="h-3 w-3 mr-2 animate-spin" /> {t("picker.loadingMore", "Loading more…")}
               </div>
             )}
           </div>

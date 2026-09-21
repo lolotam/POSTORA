@@ -1,5 +1,6 @@
 import { format, endOfDay, startOfDay } from "date-fns";
 import { Calendar as CalendarIcon, X } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Calendar } from "@/components/ui/calendar";
@@ -139,6 +140,7 @@ function DateField({
 }
 
 export function ThreadsRepliesFilterBar({ filters, onChange, total, shown }: Props) {
+  const { t } = useTranslation("threads");
   const update = (patch: Partial<ReplyFilters>) =>
     onChange({ ...filters, ...patch });
 
@@ -157,19 +159,19 @@ export function ThreadsRepliesFilterBar({ filters, onChange, total, shown }: Pro
         <Input
           value={filters.search}
           onChange={(e) => update({ search: e.target.value })}
-          placeholder="Search reply text…"
+          placeholder={t("filters.searchReply", "Search reply text…")}
           className="h-8 w-full sm:w-48 text-xs"
         />
 
         <DateField
           value={filters.from}
           onChange={(d) => update({ from: d })}
-          placeholder="From date"
+          placeholder={t("filters.fromDate", "From date")}
         />
         <DateField
           value={filters.to}
           onChange={(d) => update({ to: d })}
-          placeholder="To date"
+          placeholder={t("filters.toDate", "To date")}
         />
 
         <Select
@@ -177,13 +179,13 @@ export function ThreadsRepliesFilterBar({ filters, onChange, total, shown }: Pro
           onValueChange={(v) => update({ status: v as StatusFilter })}
         >
           <SelectTrigger className="h-8 w-[130px] text-xs">
-            <SelectValue placeholder="Status" />
+            <SelectValue placeholder={t("filters.status", "Status")} />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">All statuses</SelectItem>
-            <SelectItem value="visible">Visible</SelectItem>
-            <SelectItem value="hidden">Hidden</SelectItem>
-            <SelectItem value="pending">Pending</SelectItem>
+            <SelectItem value="all">{t("filters.allStatuses", "All statuses")}</SelectItem>
+            <SelectItem value="visible">{t("filters.visible", "Visible")}</SelectItem>
+            <SelectItem value="hidden">{t("badge.hidden", "Hidden")}</SelectItem>
+            <SelectItem value="pending">{t("common:status.pending", "Pending")}</SelectItem>
           </SelectContent>
         </Select>
 
@@ -192,12 +194,12 @@ export function ThreadsRepliesFilterBar({ filters, onChange, total, shown }: Pro
           onValueChange={(v) => update({ type: v as TypeFilter })}
         >
           <SelectTrigger className="h-8 w-[130px] text-xs">
-            <SelectValue placeholder="Type" />
+            <SelectValue placeholder={t("filters.type", "Type")} />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">All types</SelectItem>
-            <SelectItem value="top">Top-level</SelectItem>
-            <SelectItem value="nested">Nested</SelectItem>
+            <SelectItem value="all">{t("filters.allTypes", "All types")}</SelectItem>
+            <SelectItem value="top">{t("filters.topLevel", "Top-level")}</SelectItem>
+            <SelectItem value="nested">{t("filters.nested", "Nested")}</SelectItem>
           </SelectContent>
         </Select>
 
@@ -206,12 +208,12 @@ export function ThreadsRepliesFilterBar({ filters, onChange, total, shown }: Pro
           onValueChange={(v) => update({ hasReplies: v as HasRepliesFilter })}
         >
           <SelectTrigger className="h-8 w-[140px] text-xs">
-            <SelectValue placeholder="Has replies" />
+            <SelectValue placeholder={t("filters.hasReplies", "Has replies")} />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">Any replies</SelectItem>
-            <SelectItem value="with">With replies</SelectItem>
-            <SelectItem value="without">Without replies</SelectItem>
+            <SelectItem value="all">{t("filters.anyReplies", "Any replies")}</SelectItem>
+            <SelectItem value="with">{t("filters.withReplies", "With replies")}</SelectItem>
+            <SelectItem value="without">{t("filters.withoutReplies", "Without replies")}</SelectItem>
           </SelectContent>
         </Select>
 
@@ -220,13 +222,13 @@ export function ThreadsRepliesFilterBar({ filters, onChange, total, shown }: Pro
           onValueChange={(v) => update({ sortBy: v as SortBy })}
         >
           <SelectTrigger className="h-8 w-[150px] text-xs">
-            <SelectValue placeholder="Sort by" />
+            <SelectValue placeholder={t("filters.sortBy", "Sort by")} />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="newest">Newest first</SelectItem>
-            <SelectItem value="oldest">Oldest first</SelectItem>
-            <SelectItem value="longest">Longest text</SelectItem>
-            <SelectItem value="shortest">Shortest text</SelectItem>
+            <SelectItem value="newest">{t("filters.newest", "Newest first")}</SelectItem>
+            <SelectItem value="oldest">{t("filters.oldest", "Oldest first")}</SelectItem>
+            <SelectItem value="longest">{t("filters.longest", "Longest text")}</SelectItem>
+            <SelectItem value="shortest">{t("filters.shortest", "Shortest text")}</SelectItem>
           </SelectContent>
         </Select>
 
@@ -238,12 +240,12 @@ export function ThreadsRepliesFilterBar({ filters, onChange, total, shown }: Pro
             onClick={() => onChange(defaultReplyFilters)}
           >
             <X className="h-3.5 w-3.5 mr-1" />
-            Reset
+            {t("common:reset", "Reset")}
           </Button>
         )}
 
         <div className="ml-auto text-xs text-muted-foreground">
-          Showing {shown} of {total}
+          {t("filters.showing", "Showing {{shown}} of {{total}}", { shown, total })}
         </div>
       </div>
     </div>

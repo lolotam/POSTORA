@@ -1,4 +1,5 @@
 import { useState, type KeyboardEvent } from "react";
+import { useTranslation } from "react-i18next";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -15,6 +16,7 @@ interface Props {
 }
 
 export function ThreadsLabelsEditor({ labels, disabled, onChange }: Props) {
+  const { t } = useTranslation("threads");
   const [draft, setDraft] = useState("");
 
   const normalize = (raw: string) => raw.trim().toLowerCase().replace(/\s+/g, "-").slice(0, 32);
@@ -51,7 +53,7 @@ export function ThreadsLabelsEditor({ labels, disabled, onChange }: Props) {
               type="button"
               onClick={() => removeLabel(l)}
               className="rounded-full p-0.5 opacity-60 hover:opacity-100 hover:bg-background/50 transition-opacity"
-              aria-label={`Remove ${l} label`}
+              aria-label={t("labels.removeAria", "Remove {{label}} label", { label: l })}
             >
               <X className="h-3 w-3" />
             </button>
@@ -68,7 +70,7 @@ export function ThreadsLabelsEditor({ labels, disabled, onChange }: Props) {
             disabled={disabled}
           >
             <Plus className="h-3 w-3" />
-            Label
+            {t("labels.add", "Label")}
           </Button>
         </PopoverTrigger>
         <PopoverContent align="start" className="w-60 p-3 space-y-3">
@@ -77,16 +79,16 @@ export function ThreadsLabelsEditor({ labels, disabled, onChange }: Props) {
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               onKeyDown={handleKey}
-              placeholder="New label, then Enter"
+              placeholder={t("labels.placeholder", "New label, then Enter")}
               className="h-8 text-xs"
             />
             <p className="text-[10px] text-muted-foreground">
-              Lowercase, max 32 chars. Up to 10 labels per mention.
+              {t("labels.hint", "Lowercase, max 32 chars. Up to 10 labels per mention.")}
             </p>
           </div>
           <div className="space-y-1">
             <p className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">
-              Suggested
+              {t("labels.suggested", "Suggested")}
             </p>
             <div className="flex flex-wrap gap-1">
               {SUGGESTED.map((s) => {

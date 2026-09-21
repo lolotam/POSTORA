@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { useTranslation } from "react-i18next";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Inbox, AlertTriangle, Clock } from "lucide-react";
@@ -27,11 +28,14 @@ export function ThreadsReplyList({
   error,
   onRetry,
   showApproval,
-  emptyTitle = "No replies yet",
-  emptyDescription = "Replies on this thread will appear here.",
+  emptyTitle,
+  emptyDescription,
   onReplyClick,
 }: Props) {
+  const { t } = useTranslation("threads");
   const threads = useMemo(() => buildThreadsReplyThreads(replies), [replies]);
+  const title = emptyTitle ?? t("empty.noReplies", "No replies yet");
+  const description = emptyDescription ?? t("empty.repliesWillAppear", "Replies on this thread will appear here.");
 
   if (isLoading) {
     return (
@@ -66,10 +70,10 @@ export function ThreadsReplyList({
           <CardContent className="p-6 text-center space-y-3">
             <Clock className="h-6 w-6 text-muted-foreground mx-auto" />
             <p className="text-sm text-muted-foreground">
-              You're loading replies too quickly. Please wait a moment.
+              {t("errors.rateLimited", "You're loading replies too quickly. Please wait a moment.")}
             </p>
             {onRetry && (
-              <Button variant="outline" size="sm" onClick={onRetry}>Retry</Button>
+              <Button variant="outline" size="sm" onClick={onRetry}>{t("common:retry", "Retry")}</Button>
             )}
           </CardContent>
         </Card>
@@ -80,10 +84,10 @@ export function ThreadsReplyList({
         <CardContent className="p-6 text-center space-y-3">
           <AlertTriangle className="h-6 w-6 text-destructive mx-auto" />
           <p className="text-sm text-muted-foreground">
-            {(error as Error)?.message || "Failed to load replies."}
+            {(error as Error)?.message || t("errors.failedLoadReplies", "Failed to load replies.")}
           </p>
           {onRetry && (
-            <Button variant="outline" size="sm" onClick={onRetry}>Retry</Button>
+            <Button variant="outline" size="sm" onClick={onRetry}>{t("common:retry", "Retry")}</Button>
           )}
         </CardContent>
       </Card>
@@ -95,8 +99,8 @@ export function ThreadsReplyList({
       <Card>
         <CardContent className="p-8 text-center space-y-2">
           <Inbox className="h-6 w-6 text-muted-foreground mx-auto" />
-          <p className="text-sm font-medium">{emptyTitle}</p>
-          <p className="text-xs text-muted-foreground">{emptyDescription}</p>
+          <p className="text-sm font-medium">{title}</p>
+          <p className="text-xs text-muted-foreground">{description}</p>
         </CardContent>
       </Card>
     );

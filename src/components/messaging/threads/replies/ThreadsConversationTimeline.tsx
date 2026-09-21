@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { useTranslation } from "react-i18next";
 import type { ThreadsReply } from "@/hooks/useThreadsReplies";
 import { Card, CardContent } from "@/components/ui/card";
 import { Inbox } from "lucide-react";
@@ -20,6 +21,7 @@ interface Props {
  * reachable from a root, so both silently disappeared. The walk is now shared.
  */
 export function ThreadsConversationTimeline({ accountId, replies, onReplyClick }: Props) {
+  const { t } = useTranslation("threads");
   const threads = useMemo(() => buildThreadsReplyThreads(replies), [replies]);
 
   if (threads.length === 0) {
@@ -27,9 +29,9 @@ export function ThreadsConversationTimeline({ accountId, replies, onReplyClick }
       <Card>
         <CardContent className="p-8 text-center space-y-2">
           <Inbox className="h-6 w-6 text-muted-foreground mx-auto" />
-          <p className="text-sm font-medium">No conversation yet</p>
+          <p className="text-sm font-medium">{t("empty.noConversation", "No conversation yet")}</p>
           <p className="text-xs text-muted-foreground">
-            Once people reply on this thread, the conversation will appear here.
+            {t("empty.conversationHint", "Once people reply on this thread, the conversation will appear here.")}
           </p>
         </CardContent>
       </Card>

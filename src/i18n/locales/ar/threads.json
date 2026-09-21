@@ -1,0 +1,180 @@
+{
+  "actions": {
+    "approve": "وافق",
+    "archive": "أرشفة",
+    "chooseFromLibrary": "اختار من المكتبة",
+    "details": "التفاصيل",
+    "hideConversation": "اخفي المحادثة",
+    "hideReply": "اخفي الرد",
+    "markAsRead": "علّم كمقروء",
+    "more": "المزيد",
+    "openInThreads": "افتح في Threads",
+    "openOnThreads": "افتح على Threads",
+    "openReplyOnThreads": "افتح الرد على Threads",
+    "reject": "رفض",
+    "reply": "رد",
+    "replyAgain": "رد تاني",
+    "replyToThread": "رد على الثريد ده",
+    "sendReply": "ابعت الرد",
+    "showConversation": "ورّي المحادثة",
+    "unhideReply": "أظهر الرد",
+    "viewThreadAria": "شوف الثريد على Threads"
+  },
+  "assignee": {
+    "assigned": "المسند:",
+    "me": "أنا",
+    "other": "حد تاني",
+    "unassigned": "مش مسند"
+  },
+  "badge": {
+    "hidden": "مخفي",
+    "you": "أنت"
+  },
+  "count": {
+    "oneReply": "رد واحد",
+    "reply": "{{count}} رد",
+    "replies": "{{count}} رد"
+  },
+  "dialog": {
+    "composeReply": "اكتب ردك",
+    "loadingPost": "جاري تحميل المنشور…",
+    "noText": "مفيش نص.",
+    "postDetails": "تفاصيل المنشور",
+    "postId": "ID: {{id}}",
+    "postMediaAlt": "وسائط المنشور",
+    "replyOnThreads": "رد على Threads",
+    "replyingTo": "رد على @{{username}}"
+  },
+  "empty": {
+    "beFirst": "كن أول واحد يرد على الثريد ده.",
+    "conversationHint": "أول ما الناس ترد على الثريد ده، المحادثة هتظهر هنا.",
+    "loadingConversation": "جاري تحميل المحادثة…",
+    "noConversation": "مفيش محادثة لسه",
+    "noMatch": "مفيش ردود تطابق الفلاتر",
+    "noMatchHint": "جرّب تعدّل الفلاتر أو تصفّرها من فوق.",
+    "noPending": "مفيش ردود منتظرة",
+    "noPendingHint": "الردود اللي مستنية موافقتك هتظهر هنا.",
+    "noReplies": "مفيش ردود لسه",
+    "noRepliesOnThread": "مفيش ردود على الثريد ده",
+    "noRepliesOnThreadHint": "محدش رد على المنشور اللي المنشن فيه.",
+    "noThreads": "مفيش ثريدات للحساب ده.",
+    "pickThread": "اختار ثريد من فوق عشان تشوف ردوده.",
+    "pickThreadConversation": "اختار ثريد من فوق عشان تشوف المحادثة كاملة.",
+    "repliesWillAppear": "الردود على الثريد ده هتظهر هنا.",
+    "youHaventReplied": "لسه ما ردّتش على أي ثريد",
+    "youHaventRepliedHint": "أول ما ترد على ثريد، هتظهر هنا متجمّعة حسب المنشور الأصلي."
+  },
+  "errors": {
+    "couldNotSend": "مش قادرين نبعت الرد",
+    "conversationUnavailable": "المحادثة مش متاحة. ظاهر ردودك بس.",
+    "failedLoadPost": "فشل تحميل المنشور",
+    "failedLoadReplies": "فشل تحميل الردود.",
+    "failedLoadThreads": "فشل تحميل الثريدات.",
+    "gifNotSupported": "Threads مش بيدعم الرد بـ GIF. اختار صورة أو فيديو.",
+    "httpsRequired": "الوسائط المختارة لازم تبقى على HTTPS.",
+    "lastReplyFailed": "آخر رد فشل: {{message}}",
+    "missingTarget": "هدف الرد مش موجود",
+    "needTextOrMedia": "اكتب نص أو ارفق وسائط عشان ترد",
+    "publicUrl": "مش قادرين نلاقي رابط عام للملف ده.",
+    "quotaUnavailable": "الحصة مش متاحة للحساب ده.",
+    "rateLimited": "بتحمّل الردود بسرعة زيادة. استنى لحظة.",
+    "unknown": "خطأ غير معروف"
+  },
+  "filters": {
+    "allReplies": "كل الردود",
+    "allSentiment": "كل المشاعر",
+    "allStatus": "كل الحالات",
+    "allStatuses": "كل الحالات",
+    "allTypes": "كل الأنواع",
+    "anyReplies": "أي ردود",
+    "fromDate": "من تاريخ",
+    "hasReplies": "فيه ردود",
+    "labels": "الوسوم:",
+    "longest": "الأطول",
+    "nested": "متداخل",
+    "newest": "الأحدث أولاً",
+    "notReplied": "متمش الرد عليه",
+    "oldest": "الأقدم أولاً",
+    "searchAuthor": "دوّر في الكاتب أو النص…",
+    "searchReply": "دوّر في نص الرد…",
+    "shortest": "الأقصر",
+    "showing": "ظاهر {{shown}} من {{total}}",
+    "sortBy": "الترتيب",
+    "status": "الحالة",
+    "toDate": "لتاريخ",
+    "topLevel": "المستوى الأعلى",
+    "type": "النوع",
+    "visible": "ظاهر",
+    "withReplies": "فيه ردود",
+    "withoutReplies": "من غير ردود"
+  },
+  "form": {
+    "attachmentName": "مرفق",
+    "mediaOnePerReply": "Threads بيدعم صورة واحدة أو فيديو واحد لكل رد.",
+    "mediaOptional": "وسائط (اختياري)",
+    "pressEnter": "اضغط <kbd>Enter</kbd> عشان تبعت · <kbd>Shift+Enter</kbd> لسطر جديد",
+    "replyOnThreads": "رد على Threads…",
+    "topicHint": "بيضيف موضوع قابل للضغط فوق ردك. من 1 لـ 50 حرف. من غير نقطة (.) ولا علامة &.",
+    "topicInvalid": "النقط (.) وعلامة (&) مش مسموحين وهيتشالوا قبل النشر{{cleaned}}.",
+    "topicPlaceholder": "مثلاً lovable-build",
+    "topicTag": "وسم الموضوع (اختياري)",
+    "writeReply": "اكتب ردك…"
+  },
+  "header": {
+    "fromYou": "{{count}} منك",
+    "untitledPost": "منشور من غير عنوان"
+  },
+  "labels": {
+    "add": "وسم",
+    "hint": "حروف صغيرة، حد أقصى 32. لحد 10 وسوم لكل منشن.",
+    "placeholder": "وسم جديد، وبعدين Enter",
+    "removeAria": "امسح وسم {{label}}",
+    "suggested": "مقترحة"
+  },
+  "mention": {
+    "repliedAgo": "اتبعت الرد {{time}}",
+    "unknownAuthor": "مش معروف",
+    "unknownTime": "وقت غير معروف",
+    "unknownUser": "مستخدم مش معروف"
+  },
+  "permission": {
+    "expiredBody": "توكن الوصول لـ Threads انتهى. أعد الربط عشان تكمّل إدارة الردود.",
+    "expiredTitle": "اتصال Threads انتهى",
+    "reconnectBody": "حساب Threads ناقصه الصلاحيات المطلوبة لقراءة أو إدارة الردود. أعد الربط عشان تمنح الوصول.",
+    "reconnectCta": "أعد ربط Threads",
+    "reconnectTitle": "محتاج إعادة ربط"
+  },
+  "picker": {
+    "loading": "جاري تحميل الثريدات…",
+    "loadingMore": "جاري تحميل المزيد…",
+    "mediaPost": "منشور وسائط",
+    "selectThread": "اختار ثريد لإدارة الردود",
+    "threadFallback": "ثريد {{id}}…"
+  },
+  "quota": {
+    "dayWindow": "نافذة {{count}} يوم",
+    "hourWindow": "نافذة {{count}} ساعة",
+    "pctUsed": "{{pct}}% مستخدم",
+    "rollingWindow": "نافذة متجددة",
+    "title": "حصة الردود",
+    "usedOfTotal": "{{used}} / {{total}} رد"
+  },
+  "sentiment": {
+    "aria": "المشاعر: {{label}}. اضغط للتغيير.",
+    "negative": "سلبي",
+    "neutral": "محايد",
+    "positive": "إيجابي"
+  },
+  "status": {
+    "archived": "مؤرشف",
+    "aria": "الحالة: {{label}}. اضغط للتغيير.",
+    "new": "جديد",
+    "read": "مقروء",
+    "replied": "تم الرد"
+  },
+  "tabs": {
+    "conversation": "المحادثة",
+    "mine": "ردودي",
+    "quota": "الحصة"
+  }
+}

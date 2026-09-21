@@ -1,5 +1,6 @@
 import { Card, CardContent } from "@/components/ui/card";
 import { MessageSquare } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import type { ThreadsReply } from "@/hooks/useThreadsReplies";
 import { ThreadsReplyRow } from "./ThreadsReplyRow";
 import type { ThreadsReplyThread } from "./threadsReplyTree";
@@ -19,6 +20,7 @@ interface Props {
  * says "this is one exchange"; the depth colour inside says who is answering whom.
  */
 export function ThreadsThreadCard({ thread, accountId, showApproval, onReplyClick }: Props) {
+  const { t } = useTranslation("threads");
   const { nodes, replyCount } = thread;
 
   return (
@@ -28,7 +30,9 @@ export function ThreadsThreadCard({ thread, accountId, showApproval, onReplyClic
           <div className="flex items-center gap-2 pb-1">
             <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
               <MessageSquare className="h-3 w-3" />
-              {replyCount === 1 ? "1 reply" : `${replyCount} replies`}
+              {replyCount === 1
+                ? t("count.oneReply", "1 reply")
+                : t("count.replies", "{{count}} replies", { count: replyCount })}
             </span>
           </div>
         )}
