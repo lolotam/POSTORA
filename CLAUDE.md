@@ -54,6 +54,7 @@ Follow these steps for every task, in order:
 ### Deployment
 7. If any edge function under `supabase/functions/*` changed, **redeploy it via `ssh-contabo-mcp`**: copy the changed files into the functions volume `/etc/dokploy/compose/postorasupabase-supabase-j8axyh/files/volumes/functions/`, verify SHA256 hashes, then `docker compose up -d --no-deps functions` from the stack dir (see `docs/runbooks/deploy-edge-function.md`). Frontend deploys automatically when `main` is pushed (Dokploy).
    - ⚠️ **Do NOT use `npx supabase functions deploy`** — that targets Supabase Cloud and fails against this self-hosted stack.
+   - ⚠️ Deploy by reading `git show <ref>:<path>` from a fetched ref, never from `/root/postora-runtime`'s working tree. That checkout is usually dirty and behind `main`; **do not `git reset --hard` to tidy it** — the runbook explains how to prove nothing there is server-only first.
 
 ### Wrap-up (always)
 8. **Save to memory**: store a task summary in the `mem0` MCP (`add_memory`): the issue, root cause, how it was solved, and files changed — so future sessions can retrieve the fix history.

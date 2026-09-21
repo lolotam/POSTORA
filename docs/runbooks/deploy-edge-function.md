@@ -72,6 +72,21 @@ be applied ahead of the merge, pause the schedule (below) until it has been.
 never touches it, so it will fall behind `main`. That is harmless: every path here reads
 `git archive`/`git show` from a fetched `origin/main`, never from a working tree.
 
+It is also routinely **dirty** — past deploys have left files staged but uncommitted. Do not
+`git reset --hard` to "clean" it. You never need to, because `git show <ref>:<path>` ignores the
+working tree entirely, and this box has previously carried a `refresh-tokens` auth path that
+existed nowhere in the repo. If you must reset it, prove first that nothing is server-only:
+
+```bash
+git fetch origin main -q
+git status --porcelain                  # what is staged or modified
+git fsck --lost-found | grep dangling   # unreachable objects = genuinely unique content
+git log --oneline --all --find-object=<blob>   # which commit a suspicious blob came from
+```
+
+Zero dangling blobs means every byte there is reachable from committed history, i.e. someone
+ran `git add` during an old deploy and the "local changes" are just older committed states.
+
 ---
 
 ## Paths (constant)
