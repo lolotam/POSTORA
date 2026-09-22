@@ -8435,6 +8435,31 @@ CREATE TABLE public.user_quotas (
 );
 
 
+--
+-- Name: user_quotas_backup_20260823; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.user_quotas_backup_20260823 (
+    id uuid,
+    user_id uuid,
+    max_profiles integer,
+    max_posts_per_month integer,
+    posts_this_month integer,
+    quota_reset_date timestamp with time zone,
+    created_at timestamp with time zone,
+    updated_at timestamp with time zone,
+    max_social_accounts integer,
+    max_posts_per_day integer,
+    posts_today integer,
+    daily_reset_date timestamp with time zone,
+    media_uploads_today integer,
+    max_media_uploads_per_day integer,
+    media_daily_reset_date timestamp with time zone,
+    max_ai_generations_per_day integer,
+    ai_generations_today integer,
+    ai_generations_reset_date date
+);
+
 
 --
 -- Name: user_rate_limits; Type: TABLE; Schema: public; Owner: -
@@ -23259,6 +23284,15 @@ GRANT ALL ON TABLE public.user_quotas TO anon;
 GRANT ALL ON TABLE public.user_quotas TO authenticated;
 GRANT ALL ON TABLE public.user_quotas TO service_role;
 
+
+--
+-- Name: TABLE user_quotas_backup_20260823; Type: ACL; Schema: public; Owner: -
+--
+
+GRANT ALL ON TABLE public.user_quotas_backup_20260823 TO postgres;
+GRANT ALL ON TABLE public.user_quotas_backup_20260823 TO anon;
+GRANT ALL ON TABLE public.user_quotas_backup_20260823 TO authenticated;
+GRANT ALL ON TABLE public.user_quotas_backup_20260823 TO service_role;
 
 
 --
