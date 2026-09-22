@@ -149,4 +149,4 @@ END $l6$;
 SELECT pg_temp.lse_act_as(NULL);
 SELECT pg_temp.lse_cleanup();
 
-\echo '=== log_system_event: OK ==='
+\echo '=== log_system_event: ALL CHECKS PASSED ==='

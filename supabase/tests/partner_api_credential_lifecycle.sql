@@ -63,7 +63,18 @@ LANGUAGE plpgsql AS $$
 DECLARE
   v_ws uuid[] := ARRAY(SELECT id FROM lifecycle_ids WHERE k IN ('ws_a','ws_b'));
   v_us uuid[] := ARRAY(SELECT id FROM lifecycle_ids WHERE k IN ('owner_a','viewer_a','outsider','owner_b'));
+  -- Read BEFORE the workspace delete below cascades the binding away. The
+  -- principal itself is ON DELETE RESTRICT, so it survives that cascade and
+  -- would accumulate one orphan identity per run.
+  v_pr uuid[] := ARRAY(SELECT principal_id FROM public.partner_provisioned_workspaces
+                        WHERE workspace_id = ANY(v_ws));
 BEGIN
+  -- P1's atomicity check attaches this to a permanent table. Its function is
+  -- session-local and disappears on its own; the trigger does not, so a run
+  -- that died mid-check would otherwise wedge every later run.
+  DROP TRIGGER IF EXISTS lifecycle_inject_binding_failure
+    ON public.partner_api_key_accounts;
+
   DELETE FROM public.partner_audit_logs WHERE workspace_id = ANY(v_ws);
   DELETE FROM public.partner_api_key_accounts WHERE workspace_id = ANY(v_ws);
   -- The successor pointer is a self-FK; null it before deleting so the order
@@ -79,6 +90,9 @@ BEGIN
   -- stop a workspace being orphaned, not to stop it being removed.
   DELETE FROM public.workspaces WHERE id = ANY(v_ws);
   DELETE FROM public.workspace_members WHERE workspace_id = ANY(v_ws);
+  -- create_partner_key provisions the workspace on the first mint
+  -- (20260920120000), minting a partner_principals row with a generated id.
+  DELETE FROM public.partner_principals WHERE id = ANY(v_pr);
   DELETE FROM auth.users WHERE id = ANY(v_us);
 END $$;
 
@@ -94,6 +108,16 @@ CREATE OR REPLACE FUNCTION pg_temp.must(p_cond BOOLEAN, p_label TEXT) RETURNS vo
 LANGUAGE plpgsql AS $$
 BEGIN
   IF NOT p_cond THEN RAISE EXCEPTION 'ASSERTION FAILED: %', p_label; END IF;
+END $$;
+
+-- Fails the binding insert inside create_partner_key, so P1 can prove the key
+-- row is rolled back with it. The SQLSTATE is deliberately one no constraint
+-- produces: the handler that expects it then catches this injection and
+-- nothing else -- least of all P1's own "was ACCEPTED" RAISE.
+CREATE OR REPLACE FUNCTION pg_temp.lifecycle_fail_binding() RETURNS trigger
+LANGUAGE plpgsql AS $$
+BEGIN
+  RAISE EXCEPTION 'injected binding failure' USING ERRCODE = 'LT001';
 END $$;
 
 -- ---------------------------------------------------------------------------
@@ -184,23 +208,72 @@ BEGIN
       WHERE key_id = v_key AND action='create') = v_owner,
     'P3 audit actor is the calling user');
 
-  -- P1 atomicity: force the SECOND insert to fail (the binding's composite FK
-  -- refuses an account from another workspace) and prove NO key row survives.
-  -- This is the F3 failure -- an orphaned key with no binding -- made
-  -- impossible rather than merely unlikely.
+  -- P1 refusal: an account belonging to another workspace is refused, and the
+  -- attempt leaves no key row.
+  --
+  -- This was a foreign_key_violation from the binding's composite FK until
+  -- 20260920120000 put partner_ensure_provisioned_workspace() ahead of the key
+  -- insert in create_partner_key. That helper enforces the same
+  -- account-in-workspace predicate, so it now refuses first, with
+  -- check_violation, before anything is written. The property is unchanged and
+  -- its enforcement moved earlier, so the expected SQLSTATE moves with it.
+  -- Both are accepted: either one means refused, and naming only the newer one
+  -- would make this pass for the wrong reason if the order ever changed back.
+  --
+  -- Never WHEN OTHERS. That would also catch the RAISE below, and an accepted
+  -- write -- the one thing this exists to catch -- would report as a pass.
   SELECT count(*) INTO v_before FROM public.partner_api_keys WHERE workspace_id = v_ws_a;
   BEGIN
     PERFORM public.create_partner_key(
       v_ws_a, v_acct_b, 'should not survive', 'pk_live_bbbb',
       'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa9',
       ARRAY['messages:send']);
-    RAISE EXCEPTION 'P1 ATOMICITY: creating a key bound to another workspace''s account was ACCEPTED';
-  EXCEPTION WHEN foreign_key_violation THEN
-    NULL; -- expected
+    RAISE EXCEPTION 'P1 REFUSAL: creating a key bound to another workspace''s account was ACCEPTED';
+  EXCEPTION WHEN check_violation OR foreign_key_violation THEN
+    NULL; -- refused: by provisioning today, by the binding FK before it
   END;
   SELECT count(*) INTO v_after FROM public.partner_api_keys WHERE workspace_id = v_ws_a;
   PERFORM pg_temp.must(v_before = v_after,
-    'P1 a failed creation leaves NO key row behind');
+    'P1 a refused creation leaves NO key row behind');
+
+  -- P1 atomicity: a failure AFTER the key row is inserted must take the key
+  -- with it. That is the F3 failure -- an orphaned key with no binding -- and
+  -- it is a claim about create_partner_key, not about Postgres: the danger is
+  -- a future edit that catches the binding error and returns the key id anyway.
+  --
+  -- The refusal above used to double as this proof, because the composite FK
+  -- fired on the second of the three inserts. It cannot any more: provisioning
+  -- rejects that input before the first insert, so the count above would now
+  -- be equal no matter how create_partner_key behaved. The failure is therefore
+  -- injected at the binding insert, which also makes this independent of which
+  -- constraint happens to exist there.
+  SELECT count(*) INTO v_before FROM public.partner_api_keys WHERE workspace_id = v_ws_a;
+  EXECUTE 'CREATE TRIGGER lifecycle_inject_binding_failure'
+       || ' BEFORE INSERT ON public.partner_api_key_accounts'
+       || ' FOR EACH ROW EXECUTE FUNCTION pg_temp.lifecycle_fail_binding()';
+  BEGIN
+    BEGIN
+      PERFORM public.create_partner_key(
+        v_ws_a, v_acct_a, 'should not survive its binding', 'pk_live_cccc',
+        'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa7',
+        ARRAY['messages:send']);
+      RAISE EXCEPTION 'P1 ATOMICITY: create_partner_key returned a key id after its binding insert failed';
+    EXCEPTION WHEN sqlstate 'LT001' THEN
+      NULL; -- the injected failure reached the caller, which is the point
+    END;
+  EXCEPTION WHEN OTHERS THEN
+    -- Drop before re-raising: ON_ERROR_STOP ends the run here, and a trigger
+    -- left on a permanent table would outlive this session.
+    EXECUTE 'DROP TRIGGER IF EXISTS lifecycle_inject_binding_failure'
+         || ' ON public.partner_api_key_accounts';
+    RAISE;
+  END;
+  EXECUTE 'DROP TRIGGER IF EXISTS lifecycle_inject_binding_failure'
+       || ' ON public.partner_api_key_accounts';
+
+  SELECT count(*) INTO v_after FROM public.partner_api_keys WHERE workspace_id = v_ws_a;
+  PERFORM pg_temp.must(v_before = v_after,
+    'P1 a key whose binding failed leaves NO key row behind');
 
   RAISE NOTICE 'PASS P1/P3: creation is atomic, bound, audited, and stamps the real actor';
 END $p1$;
