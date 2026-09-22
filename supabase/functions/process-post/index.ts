@@ -496,21 +496,25 @@ function createErrorResponse(message: string, status = 500): Response {
 async function logLocationEvent(args: {
   userId?: string | null;
   errorCode: string;
-  level?: "info" | "warning" | "error";
+  level?: "info" | "warn" | "error";
   message: string;
   details?: Record<string, unknown>;
 }): Promise<void> {
   try {
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-    await supabase.rpc("log_system_event", {
-      p_level: args.level || "warning",
-      p_service: "process-post",
-      p_message: args.message,
-      p_details: args.details ?? {},
-      p_error_code: args.errorCode,
-      p_error_message: null,
-      p_user_id: args.userId ?? null,
+    // Direct insert, matching the other two system_logs writes in this file.
+    // This called the log_system_event RPC, which named four columns
+    // system_logs has never had; every call raised, and the catch below hid it
+    // for months. That is why the insert error is now surfaced.
+    const { error } = await supabase.from("system_logs").insert({
+      level: args.level || "warn",
+      category: "post",
+      source: "process-post",
+      message: args.message,
+      user_id: args.userId ?? null,
+      metadata: { error_code: args.errorCode, ...(args.details ?? {}) },
     });
+    if (error) console.error("logLocationEvent insert failed:", error.message);
   } catch (_e) {
     // swallow — logging must never break publishing
   }
@@ -2917,7 +2921,7 @@ async function postToFacebook(
       logLocationEvent({
         userId: post.user_id,
         errorCode: "fb_location_skipped_pre_publish",
-        level: "warning",
+        level: "warn",
         message: `Facebook location skipped pre-publish (${check.reason || "ineligible"})`,
         details: {
           platform: "facebook",
@@ -2978,7 +2982,7 @@ async function postToFacebook(
         logLocationEvent({
           userId: post.user_id,
           errorCode: "fb_location_retry_without",
-          level: "warning",
+          level: "warn",
           message: "Facebook publish retried without location",
           details: {
             platform: "facebook",
@@ -3012,7 +3016,7 @@ async function postToFacebook(
       logLocationEvent({
         userId: post.user_id,
         errorCode: "fb_location_silently_dropped",
-        level: "warning",
+        level: "warn",
         message: "Facebook published but place was silently dropped by Meta",
         details: {
           platform: "facebook",
@@ -3602,7 +3606,7 @@ async function postToInstagram(
         logLocationEvent({
           userId: post.user_id,
           errorCode: "ig_location_retry_without",
-          level: "warning",
+          level: "warn",
           message: "Instagram /media retried without location",
           details: {
             platform: "instagram",
@@ -4416,7 +4420,7 @@ async function postToInstagramBusinessLogin(
         logLocationEvent({
           userId: post.user_id,
           errorCode: "ig_location_retry_without",
-          level: "warning",
+          level: "warn",
           message: "Instagram (Business Login) /media retried without location",
           details: {
             platform: "instagram",

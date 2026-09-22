@@ -23,6 +23,7 @@ below). So the harness does not replay history. It:
 | `partner_api_credential_lifecycle.sql` | key lifecycle RPCs (create/rotate/revoke) and their audit trail; self-cleaning |
 | `partner_api_dispatch_intents.sql` | D13 dispatch-intent state machine: tenancy, CHECKs, natural key, transition guard, key-survival, grant surface; must run as superuser (SET ROLE grant checks); self-cleaning |
 | `partner_hub_admin.sql` | Admin Partner Hub readers, admin key lifecycle in foreign workspaces, ledger columns; self-cleaning |
+| `log_system_event.sql` | consent-log RPC: actor binding, service allow-list, grant surface; self-cleaning |
 | `whatsapp_workspace_crm.sql` | pgTAP; rolls itself back |
 | `import_whatsapp_contacts_to_workspace.sql` | pgTAP; rolls itself back |
 

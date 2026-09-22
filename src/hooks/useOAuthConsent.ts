@@ -2,11 +2,14 @@ import { useState, useEffect } from "react";
 import { useSearchParams } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 
+// No user id is passed: log_system_event takes the actor from the caller's JWT
+// and refuses any other service, so a caller cannot attribute an event to
+// someone else. It also means this only records while signed in — which is the
+// only state the consent screen is reachable in.
 async function logOAuthEvent(
-  level: string,
+  level: "info" | "error",
   message: string,
-  details: Record<string, any>,
-  userId?: string
+  details: Record<string, any>
 ) {
   try {
     await supabase.rpc("log_system_event", {
@@ -14,7 +17,6 @@ async function logOAuthEvent(
       p_service: "oauth-consent",
       p_message: message,
       p_details: details,
-      p_user_id: userId || null,
     });
   } catch (e) {
     console.error("Failed to log OAuth event:", e);
@@ -122,11 +124,10 @@ export function useOAuthConsent() {
         });
         setScopes(scopeList);
       } catch (err: any) {
-        const userId = (await supabase.auth.getSession()).data?.session?.user?.id;
         await logOAuthEvent("error", "OAuth authorization details fetch failed", {
           authorization_id: authorizationId,
           error: err.message,
-        }, userId);
+        });
         setError(err.message || "Failed to load authorization details");
       } finally {
         setIsLoading(false);
@@ -146,12 +147,11 @@ export function useOAuthConsent() {
       }
 
       // Log successful approval
-      const userId = (await supabase.auth.getSession()).data?.session?.user?.id;
       await logOAuthEvent("info", "OAuth authorization approved", {
         authorization_id: authorizationId,
         client_name: clientInfo?.name,
         scopes: scopes.map(s => s.key),
-      }, userId);
+      });
 
       // Redirect to the URL provided by Supabase (contains auth code for the third-party app)
       if (result.data?.redirect_to) {
@@ -160,12 +160,11 @@ export function useOAuthConsent() {
         throw new Error("No redirect URL returned from authorization server");
       }
     } catch (err: any) {
-      const userId = (await supabase.auth.getSession()).data?.session?.user?.id;
       await logOAuthEvent("error", "OAuth authorization approval failed", {
         authorization_id: authorizationId,
         client_name: clientInfo?.name,
         error: err.message,
-      }, userId);
+      });
       setError(err.message || "Authorization failed");
       setIsApproving(false);
     }
@@ -174,11 +173,10 @@ export function useOAuthConsent() {
   const handleDeny = async () => {
     try {
       // Log denial
-      const userId = (await supabase.auth.getSession()).data?.session?.user?.id;
       await logOAuthEvent("info", "OAuth authorization denied", {
         authorization_id: authorizationId,
         client_name: clientInfo?.name,
-      }, userId);
+      });
 
       const result = await (supabase.auth as any).oauth.denyAuthorization(authorizationId);
 
