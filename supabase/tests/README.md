@@ -1,8 +1,14 @@
 # supabase/tests — Postgres integration harness
 
-`scripts/db-harness.sh` gates every push and PR (the `db-harness` job in
-`.github/workflows/test.yml`) by proving database changes against a
-production-shaped database.
+`scripts/db-harness.sh` proves database changes against a production-shaped
+database.
+
+> **It does not gate anything automatically.** This said it ran as the
+> `db-harness` job in `.github/workflows/test.yml`; that directory is empty and
+> the job does not exist, so **run it yourself before merging a migration or a
+> suite**. Nobody did between roughly 2026-09-20 and 2026-09-22, and it sat red
+> the whole time — see "Running locally" below, and the note there about running
+> it on Contabo, which is usually faster than a local pull.
 
 ## What it does
 
@@ -48,6 +54,22 @@ docker run -d --name pg-harness -p 5432:5432 \
 DB_URL='postgres://supabase_admin:postgres@localhost:5432/postgres' \
   HARNESS_DB_NAME=partner_api_harness \
   bash scripts/db-harness.sh
+```
+
+The Contabo host (`ssh-contabo-mcp`) already has that exact image pulled and
+runs Linux, which avoids both the multi-gigabyte pull and the CRLF handling a
+Windows checkout needs:
+
+```bash
+git -C /root/postora-runtime fetch origin <ref>
+rm -rf /root/hg && mkdir /root/hg
+git -C /root/postora-runtime archive FETCH_HEAD | tar -x -C /root/hg
+docker run -d --name hg17 -e POSTGRES_PASSWORD=harness -v /root/hg:/repo \
+  supabase/postgres:17.6.1.158 \
+  -c cron.database_name=partner_api_harness -c shared_preload_libraries=pg_cron,pg_net
+# wait for HEALTHCHECK to report healthy, then:
+docker exec -e HARNESS_DB_NAME=partner_api_harness hg17 bash -c \
+  "cd /repo && bash scripts/db-harness.sh 'postgres://supabase_admin@localhost:5432/postgres'"
 ```
 
 The `cron.*` flags exist so a migration that schedules jobs can be tested;
