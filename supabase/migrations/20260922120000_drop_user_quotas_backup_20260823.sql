@@ -17,7 +17,7 @@
 -- disabled. Confirmed against production with nothing but the public anon key:
 --
 --     GET /rest/v1/user_quotas_backup_20260823?select=*  ->  200
---     [{"id":"986297d9…","user_id":"f496c521…","max_profiles":1, …}]
+--     [{"id":"<uuid>","user_id":"<uuid>","max_profiles":1, …}]
 --
 -- 66 rows of per-user quota data, including user ids, served to anyone who
 -- loads the site.
