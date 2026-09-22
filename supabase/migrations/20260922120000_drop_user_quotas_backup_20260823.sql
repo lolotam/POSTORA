@@ -1,0 +1,39 @@
+-- Drops the quota backfill's safety-net table, which was publicly readable.
+--
+-- 20260823140400_backfill_user_quota_overrides.sql created it with
+--
+--     CREATE TABLE IF NOT EXISTS public.user_quotas_backup_20260823 AS
+--     SELECT * FROM public.user_quotas;
+--
+-- and said in its own comment: "May be dropped once this migration has been
+-- verified in production." That was four weeks ago and user_quotas has been
+-- authoritative since.
+--
+-- WHY IT MATTERED, NOT JUST WHY IT IS TIDY
+--
+-- CREATE TABLE ... AS inherits no row-level security and takes the schema's
+-- default grants, so the copy was readable by `anon` while the table it was
+-- copied from is not. It was the only table of 181 in `public` with RLS
+-- disabled. Confirmed against production with nothing but the public anon key:
+--
+--     GET /rest/v1/user_quotas_backup_20260823?select=*  ->  200
+--     [{"id":"<uuid>","user_id":"<uuid>","max_profiles":1, …}]
+--
+-- 66 rows of per-user quota data, including user ids, served to anyone who
+-- loads the site.
+--
+-- ARCHIVED FIRST
+--
+-- A restorable pg_dump and a JSON copy were taken before this ran and are held
+-- at /root/backups/user_quotas_backup_20260823.{sql,json} on the Contabo host,
+-- mode 600 inside a 700 directory. They are deliberately NOT committed: the
+-- rows are user data, and putting them in git would move the exposure from a
+-- public API into permanent repository history rather than remove it.
+--
+-- Restore, if a quota dispute ever needs the pre-backfill values:
+--     docker exec -i <db-container> psql -U postgres -d postgres \
+--       < /root/backups/user_quotas_backup_20260823.sql
+-- Note that a restore recreates the same unrestricted table, so drop it again
+-- afterwards, or enable RLS on it first.
+
+DROP TABLE IF EXISTS public.user_quotas_backup_20260823;
