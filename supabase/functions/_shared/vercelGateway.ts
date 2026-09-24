@@ -1,12 +1,27 @@
 // deno-lint-ignore-file no-import-prefix no-explicit-any
 // The only module that imports the AI SDK. Image, video, speech and transcription
 // on the gateway are not plain OpenAI endpoints; the SDK owns their wire format.
-import { createGateway } from "npm:@ai-sdk/gateway@4.0.92";
-import {
-  experimental_getVideoStatus, experimental_startVideo, generateImage, generateSpeech, transcribe,
-} from "npm:ai@7.0.114";
+//
+// The SDK is loaded lazily (see `loadSdk` below), not via a top-level import.
+// `npm:@ai-sdk/gateway@4.0.92` pulls in `@vercel/oidc`, whose CJS module calls
+// `os.hostname()` at load time, which requires `--allow-sys`. A top-level
+// import would force every consumer of this module — and every edge function
+// that imports it, whether or not it ever calls Vercel — to carry that
+// permission and risk a boot failure. Deferring the import until a wrapper
+// actually runs keeps `--allow-sys` out of the repo's edge test gate.
 import { encodeBase64 } from "https://deno.land/std@0.208.0/encoding/base64.ts";
 import type { JobSnapshot } from "./higgsfield-job-payload.ts";
+
+let sdk:
+  | Promise<{ ai: typeof import("npm:ai@7.0.114"); gw: typeof import("npm:@ai-sdk/gateway@4.0.92") }>
+  | null = null;
+
+function loadSdk() {
+  return sdk ??= Promise.all([
+    import("npm:ai@7.0.114"),
+    import("npm:@ai-sdk/gateway@4.0.92"),
+  ]).then(([ai, gw]) => ({ ai, gw }));
+}
 
 export interface VercelVideoSnapshot extends JobSnapshot {
   outputBase64: string | null;
@@ -20,8 +35,6 @@ export type VideoStatusLike =
       | { type: "base64"; data: string; mediaType: string }
       | { type: "binary"; data: Uint8Array; mediaType?: string }> }
   | { status: "error"; error: string };
-
-const gatewayFor = (apiKey: string) => createGateway({ apiKey });
 
 export async function resolveVercelKey(db: any): Promise<string | null> {
   const fromEnv = Deno.env.get("AI_GATEWAY_API_KEY");
@@ -42,9 +55,10 @@ export function toVideoSnapshot(status: VideoStatusLike): VercelVideoSnapshot {
 }
 
 export async function vercelGenerateImage(apiKey: string, modelId: string, prompt: string, aspectRatio: string) {
+  const { ai, gw } = await loadSdk();
   const ratio = /^\d+:\d+$/.test(aspectRatio) ? aspectRatio as `${number}:${number}` : undefined;
-  const { image } = await generateImage({
-    model: gatewayFor(apiKey).imageModel(modelId), prompt, aspectRatio: ratio,
+  const { image } = await ai.generateImage({
+    model: gw.createGateway({ apiKey }).imageModel(modelId), prompt, aspectRatio: ratio,
     abortSignal: AbortSignal.timeout(50_000),
   });
   return { imageUrl: `data:${image.mediaType};base64,${image.base64}`, description: "Image generated successfully" };
@@ -54,8 +68,9 @@ export async function vercelStartVideo(
   apiKey: string, modelId: string,
   input: { prompt: string; duration?: number; aspectRatio?: string; imageUrl?: string },
 ) {
-  const result = await experimental_startVideo({
-    model: gatewayFor(apiKey).videoModel(modelId),
+  const { ai, gw } = await loadSdk();
+  const result = await ai.experimental_startVideo({
+    model: gw.createGateway({ apiKey }).videoModel(modelId),
     // Image-to-video takes a hosted URL: the gateway caps a persisted start request at 300 KiB.
     prompt: input.imageUrl ? { image: input.imageUrl, text: input.prompt } : input.prompt,
     duration: input.duration,
@@ -67,23 +82,26 @@ export async function vercelStartVideo(
 }
 
 export async function vercelVideoStatus(apiKey: string, modelId: string, operation: unknown) {
-  const status = await experimental_getVideoStatus(gatewayFor(apiKey).videoModel(modelId), {
+  const { ai, gw } = await loadSdk();
+  const status = await ai.experimental_getVideoStatus(gw.createGateway({ apiKey }).videoModel(modelId), {
     operation: operation as any, abortSignal: AbortSignal.timeout(20_000),
   });
   return toVideoSnapshot(status as VideoStatusLike);
 }
 
 export async function vercelGenerateSpeech(apiKey: string, modelId: string, text: string, voice?: string, outputFormat = "mp3") {
-  const result = await generateSpeech({
-    model: gatewayFor(apiKey).speechModel(modelId), text, voice, outputFormat,
+  const { ai, gw } = await loadSdk();
+  const result = await ai.generateSpeech({
+    model: gw.createGateway({ apiKey }).speechModel(modelId), text, voice, outputFormat,
     abortSignal: AbortSignal.timeout(45_000),
   });
   return { base64: result.audio.base64, mediaType: result.audio.mediaType };
 }
 
 export async function vercelTranscribe(apiKey: string, modelId: string, audio: Uint8Array) {
-  const result = await transcribe({
-    model: gatewayFor(apiKey).transcriptionModel(modelId), audio,
+  const { ai, gw } = await loadSdk();
+  const result = await ai.transcribe({
+    model: gw.createGateway({ apiKey }).transcriptionModel(modelId), audio,
     abortSignal: AbortSignal.timeout(50_000),
   });
   return { transcript: result.text, language: result.language ?? "unknown", duration: result.durationInSeconds ?? 0 };
