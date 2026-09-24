@@ -12,16 +12,36 @@
 import { encodeBase64 } from "https://deno.land/std@0.208.0/encoding/base64.ts";
 import type { JobSnapshot } from "./higgsfield-job-payload.ts";
 
-let sdk:
-  | Promise<{ ai: typeof import("npm:ai@7.0.114"); gw: typeof import("npm:@ai-sdk/gateway@4.0.92") }>
-  | null = null;
+/**
+ * Memoize an async loader, but only while it keeps succeeding.
+ *
+ * A plain `cached ??= fn()` would pin a transient failure (registry hiccup,
+ * cold-start network blip) into the module scope forever — every later call
+ * on that warm isolate would re-throw the same stale rejection with no way
+ * to recover short of a redeploy. Clearing the memo in the `catch` means the
+ * next call retries `fn()` from scratch instead.
+ */
+export function memoizeRetryable<T>(fn: () => Promise<T>): () => Promise<T> {
+  let cached: Promise<T> | null = null;
+  return () => {
+    if (!cached) {
+      cached = fn().catch((error) => {
+        cached = null;
+        throw error;
+      });
+    }
+    return cached;
+  };
+}
 
-function loadSdk() {
-  return sdk ??= Promise.all([
+type Sdk = { ai: typeof import("npm:ai@7.0.114"); gw: typeof import("npm:@ai-sdk/gateway@4.0.92") };
+
+const loadSdk: () => Promise<Sdk> = memoizeRetryable(() =>
+  Promise.all([
     import("npm:ai@7.0.114"),
     import("npm:@ai-sdk/gateway@4.0.92"),
-  ]).then(([ai, gw]) => ({ ai, gw }));
-}
+  ]).then(([ai, gw]) => ({ ai, gw }))
+);
 
 export interface VercelVideoSnapshot extends JobSnapshot {
   outputBase64: string | null;

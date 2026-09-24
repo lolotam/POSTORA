@@ -1,6 +1,6 @@
 // deno-lint-ignore-file no-import-prefix no-explicit-any
-import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { resolveVercelKey, toVideoSnapshot } from "./vercelGateway.ts";
+import { assertEquals, assertRejects } from "https://deno.land/std@0.208.0/assert/mod.ts";
+import { memoizeRetryable, resolveVercelKey, toVideoSnapshot } from "./vercelGateway.ts";
 
 Deno.test("pending maps to running with a poll delay", () => {
   const s = toVideoSnapshot({ status: "pending" });
@@ -31,4 +31,23 @@ Deno.test("resolveVercelKey prefers env, then provider_api_keys", async () => {
   Deno.env.set("AI_GATEWAY_API_KEY", "env-key");
   assertEquals(await resolveVercelKey(db), "env-key");
   Deno.env.delete("AI_GATEWAY_API_KEY");
+});
+
+Deno.test("memoizeRetryable retries after a rejected load, then memoizes success", async () => {
+  let calls = 0;
+  const load = memoizeRetryable(() => {
+    calls++;
+    return calls === 1 ? Promise.reject(new Error("boom")) : Promise.resolve(`ok-${calls}`);
+  });
+
+  await assertRejects(() => load(), Error, "boom");
+  assertEquals(calls, 1);
+
+  // A retry after the failure calls fn() again instead of re-throwing the stale rejection.
+  assertEquals(await load(), "ok-2");
+  assertEquals(calls, 2);
+
+  // Once it has succeeded, the result is memoized: fn() is not called a third time.
+  assertEquals(await load(), "ok-2");
+  assertEquals(calls, 2);
 });
