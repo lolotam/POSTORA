@@ -2,6 +2,7 @@ import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { restrictedCorsHeaders } from '../_shared/cors.ts';
 import { HiggsfieldAuthError, getValidAccessToken } from '../_shared/higgsfield-oauth.ts';
 import { HiggsfieldMcpClient } from '../_shared/higgsfield-mcp.ts';
+import { runCatalogSync, SYNCABLE_PROVIDERS } from '../_shared/modelCatalogSyncRun.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -296,6 +297,22 @@ serve(async (req) => {
           hasDb = !!data;
         }
         return new Response(JSON.stringify({ has_key: hasEnv || hasDb }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      }
+
+      if (resolvedAction === 'sync-models') {
+        if (!isAdmin) return new Response(JSON.stringify({ error: 'Admin required' }), { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+        const { provider_code } = body;
+        if (!(SYNCABLE_PROVIDERS as readonly string[]).includes(provider_code)) {
+          return new Response(JSON.stringify({ error: 'Provider does not support model sync' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+        }
+        try {
+          const report = await runCatalogSync(supabase, provider_code);
+          return new Response(JSON.stringify(report), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+        } catch (e: any) {
+          // Upstream catalogue failure, not an app error: 502 would be masked by Cloudflare,
+          // so answer 200 with an error body the UI shows as a toast.
+          return new Response(JSON.stringify({ error: e.message }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+        }
       }
 
       return new Response(JSON.stringify({ error: 'Unknown action' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
