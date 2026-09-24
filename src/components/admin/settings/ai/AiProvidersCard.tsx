@@ -90,7 +90,8 @@ export function AiProvidersCard() {
     try {
       const r = await setServiceKey.mutateAsync({ provider_code: providerCode, api_key: providerApiKey.trim() });
       if (r.success) {
-        toast.success(`API key saved & validated (${r.latency}ms)`);
+        if (r.warning) toast.warning(`API key saved. ${r.warning}`);
+        else toast.success(`API key saved & validated (${r.latency}ms)`);
         setProviderApiKey('');
         setShowProviderKey(false);
         // Optimistically update badge to "Configured" immediately

@@ -3,6 +3,7 @@ import { restrictedCorsHeaders } from '../_shared/cors.ts';
 import { HiggsfieldAuthError, getValidAccessToken } from '../_shared/higgsfield-oauth.ts';
 import { HiggsfieldMcpClient } from '../_shared/higgsfield-mcp.ts';
 import { runCatalogSync, SYNCABLE_PROVIDERS } from '../_shared/modelCatalogSyncRun.ts';
+import { describeProviderFailure, isBillingBlocked, ProviderTestError } from '../_shared/providerErrors.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -138,7 +139,7 @@ serve(async (req) => {
           } else if (provider.api_type === 'anthropic') {
             await testAnthropic(apiKey, provider.api_endpoint);
           } else {
-            await testOpenAI(apiKey, provider.api_endpoint);
+            await testOpenAI(apiKey, provider.api_endpoint, await defaultTestModel(supabase, provider));
           }
           latency = Date.now() - startTime;
           success = true;
@@ -172,6 +173,13 @@ serve(async (req) => {
         if (!provider_code || !api_key) return new Response(JSON.stringify({ error: 'provider_code and api_key required' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 
         const startTime = Date.now();
+        const saveKey = async () => {
+          const { error: upsertErr } = await supabase.from('provider_api_keys').upsert(
+            { provider_code, api_key, created_by: user.id, updated_at: new Date().toISOString() },
+            { onConflict: 'provider_code' },
+          );
+          if (upsertErr) throw new Error(upsertErr.message);
+        };
         try {
           // Test key based on provider_code
           if (provider_code === 'firecrawl') {
@@ -204,19 +212,17 @@ serve(async (req) => {
             } else if (provider.api_type === 'anthropic') {
               await testAnthropic(api_key, provider.api_endpoint);
             } else {
-              await testOpenAI(api_key, provider.api_endpoint);
+              await testOpenAI(api_key, provider.api_endpoint, await defaultTestModel(supabase, provider));
             }
           }
           const latency = Date.now() - startTime;
-
-          const { error: upsertErr } = await supabase.from('provider_api_keys').upsert(
-            { provider_code, api_key, created_by: user.id, updated_at: new Date().toISOString() },
-            { onConflict: 'provider_code' }
-          );
-          if (upsertErr) throw new Error(upsertErr.message);
-
+          await saveKey();
           return new Response(JSON.stringify({ success: true, latency }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
         } catch (e: any) {
+          if (e instanceof ProviderTestError && isBillingBlocked(e.status, e.body)) {
+            await saveKey();
+            return new Response(JSON.stringify({ success: true, latency: Date.now() - startTime, warning: e.message }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+          }
           return new Response(JSON.stringify({ success: false, error: e.message, latency: Date.now() - startTime }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
         }
       }
@@ -265,7 +271,7 @@ serve(async (req) => {
             else if (provider.api_type === 'elevenlabs' || provider.provider_code === 'elevenlabs') await testElevenLabs(apiKey, provider.api_endpoint);
             else if (provider.api_type === 'google') await testGemini(apiKey, provider.api_endpoint);
             else if (provider.api_type === 'anthropic') await testAnthropic(apiKey, provider.api_endpoint);
-            else await testOpenAI(apiKey, provider.api_endpoint);
+            else await testOpenAI(apiKey, provider.api_endpoint, await defaultTestModel(supabase, provider));
           }
           return new Response(JSON.stringify({ success: true, latency: Date.now() - startTime }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
         } catch (e: any) {
@@ -368,26 +374,10 @@ serve(async (req) => {
 
 // ── Test helpers ──
 async function handleRes(res: Response, name: string) {
-  if (!res.ok) {
-    const t = await res.text();
-    console.error(`${name} test failed: ${res.status} - ${t.slice(0, 300)}`);
-    if (res.status === 401) throw new Error('Invalid API key');
-    if (res.status === 403) throw new Error('API key lacks required permissions');
-    if (res.status === 429) {
-      // Check for provider-specific balance errors
-      if (t.includes('insufficient_balance') || t.includes('1008')) {
-        throw new Error('API key is valid, but the account has insufficient balance. Please top up your account.');
-      }
-      throw new Error('Rate limit exceeded');
-    }
-    // Parse JSON error details if possible
-    try {
-      const errJson = JSON.parse(t);
-      const msg = errJson?.error?.message || errJson?.message || errJson?.error;
-      if (msg) throw new Error(`${name}: ${msg}`);
-    } catch (_) { /* not JSON */ }
-    throw new Error(`${name} API error: ${res.status}`);
-  }
+  if (res.ok) return;
+  const t = await res.text();
+  console.error(`${name} test failed: ${res.status} - ${t.slice(0, 300)}`);
+  throw new ProviderTestError(describeProviderFailure(name, res.status, t), res.status, t);
 }
 
 function modelsUrl(ep: string, path = '/v1/models'): string {
@@ -399,14 +389,24 @@ async function testGemini(key: string, ep: string) {
   await handleRes(res, 'Gemini');
 }
 
-async function testOpenAI(key: string, ep: string) {
+async function testOpenAI(key: string, ep: string, model: string) {
   const url = ep.replace(/\/$/, '') + '/chat/completions';
   const res = await fetch(url, {
     method: 'POST',
     headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: 'gpt-4o-mini', messages: [{ role: 'user', content: 'hi' }], max_tokens: 1 }),
+    body: JSON.stringify({ model, messages: [{ role: 'user', content: 'hi' }], max_tokens: 1 }),
   });
   await handleRes(res, 'OpenAI');
+}
+
+// The gateway and OpenRouter namespace ids by vendor; a bare "gpt-4o-mini" is
+// rejected there, so test with a chat model the provider actually lists.
+const TEST_MODEL_OVERRIDE: Record<string, string> = { vercel: 'openai/gpt-4o-mini', openrouter: 'openai/gpt-4o-mini', deepseek: 'deepseek-flash' };
+async function defaultTestModel(db: any, provider: { id: string; provider_code: string }): Promise<string> {
+  if (TEST_MODEL_OVERRIDE[provider.provider_code]) return TEST_MODEL_OVERRIDE[provider.provider_code];
+  const { data } = await db.from('ai_models').select('model_id').eq('provider_id', provider.id)
+    .eq('is_active', true).contains('capabilities', ['chat']).order('name').limit(1).maybeSingle();
+  return data?.model_id ?? 'gpt-4o-mini';
 }
 
 async function testAnthropic(key: string, ep: string) {

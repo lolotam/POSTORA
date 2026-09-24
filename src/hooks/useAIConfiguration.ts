@@ -207,15 +207,23 @@ export function useTestConnection() {
   });
 }
 
+export interface SetServiceKeyResult {
+  success: boolean;
+  latency?: number;
+  error?: string;
+  /** Set when the key was saved but the account is billing-blocked (e.g. Vercel AI Gateway without a card on file). */
+  warning?: string;
+}
+
 export function useSetServiceKey() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async ({ provider_code, api_key }: { provider_code: string; api_key: string }) => {
+    mutationFn: async ({ provider_code, api_key }: { provider_code: string; api_key: string }): Promise<SetServiceKeyResult> => {
       const { data, error } = await supabase.functions.invoke('ai-config', {
         body: { action: 'set-service-key', provider_code, api_key },
       });
       if (error) throw new Error(error.message || 'Failed to save key');
-      return data;
+      return data as SetServiceKeyResult;
     },
     onSuccess: () => {
       queryClient.refetchQueries({ queryKey: ['service-keys'] });
