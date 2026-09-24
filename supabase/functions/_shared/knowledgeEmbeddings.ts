@@ -18,6 +18,10 @@ const OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1/embeddings";
 // jina-embeddings-v5-omni-small is 1024 wide and refuses a larger `dimensions`
 // (measured 2026-09-05), so it lives in the 1024 column.
 const JINA_ENDPOINT = "https://api.jina.ai/v1/embeddings";
+// Vercel AI Gateway speaks the OpenAI embeddings dialect; model ids carry the
+// vendor ("openai/text-embedding-3-small"). Its key is read from the env like
+// every other embedding provider: set AI_GATEWAY_API_KEY in the stack .env.
+const VERCEL_ENDPOINT = "https://ai-gateway.vercel.sh/v1/embeddings";
 
 // ai_knowledge_chunks has exactly two vector columns; a width outside this set
 // has no column to live in and must never be written.
@@ -34,7 +38,7 @@ const EMBEDDING_SETTING_KEYS = [
 const columnOwnerKey = (column: EmbeddingConfig["column"]) =>
   `embedding_column_owner_${column}`;
 
-export type EmbeddingProvider = "gemini" | "ollama" | "openai" | "openrouter" | "jina";
+export type EmbeddingProvider = "gemini" | "ollama" | "openai" | "openrouter" | "jina" | "vercel";
 /**
  * What the text is for. Providers with asymmetric retrieval models (Jina)
  * embed a stored passage and a search query differently; the others ignore it.
@@ -275,7 +279,7 @@ function selectionConfig(
       ollamaBaseUrl: configuredValue(readEnvironment, "OLLAMA_BASE_URL", "http://ollama:11434"),
     };
   }
-  if (selection.provider_code === "openrouter" || selection.provider_code === "jina") {
+  if (selection.provider_code === "openrouter" || selection.provider_code === "jina" || selection.provider_code === "vercel") {
     return {
       provider: selection.provider_code,
       column,
@@ -628,6 +632,14 @@ function embedWithOpenRouter(texts: string[], config: EmbeddingConfig): Promise<
   });
 }
 
+function embedWithVercel(texts: string[], config: EmbeddingConfig): Promise<number[][]> {
+  return embedWithOpenAiCompatible(texts, config, {
+    endpoint: VERCEL_ENDPOINT,
+    keyEnvVar: "AI_GATEWAY_API_KEY",
+    label: "Vercel AI Gateway",
+  });
+}
+
 // GEMINI_ENDPOINT is Google's OpenAI-compatible route, so Bearer auth is
 // correct here. The native generativelanguage route rejects Bearer and wants an
 // x-goog-api-key header instead — do not "fix" one into the other.
@@ -666,6 +678,7 @@ export async function embedKnowledge(
   if (config.provider === "openai") return embedWithOpenAI(texts, config);
   if (config.provider === "openrouter") return embedWithOpenRouter(texts, config);
   if (config.provider === "jina") return embedWithJina(texts, config, purpose);
+  if (config.provider === "vercel") return embedWithVercel(texts, config);
   if (config.provider === "ollama") {
     return embedWithOllama(texts, { baseUrl: config.ollamaBaseUrl, model: config.model });
   }
