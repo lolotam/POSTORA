@@ -10,6 +10,7 @@ import {
   resolvePlatformApiKey,
 } from "./ai-fallback.ts";
 import type { AiRoutingAdmin } from "./ai-user-routing.ts";
+import { clearProviderEndpointCache } from "./providerEndpoint.ts";
 
 function platformAdmin(
   key: string | null = "platform-secret",
@@ -398,5 +399,65 @@ Deno.test("a user-only chain rejected with 401 keeps AI_USER_KEY_INVALID instead
     assertEquals(mixed.errorCode, undefined);
   } finally {
     globalThis.fetch = originalFetch;
+  }
+});
+
+Deno.test("a data-driven vercel tier reaches its ai_providers endpoint with the platform key", async () => {
+  const original = globalThis.fetch;
+  clearProviderEndpointCache();
+  const fakeAdmin = {
+    from: (table: string) => {
+      if (table === "ai_providers") {
+        return {
+          select: () => ({
+            eq: () => ({
+              maybeSingle: () =>
+                Promise.resolve({
+                  data: {
+                    api_endpoint: "https://ai-gateway.vercel.sh/v1",
+                    api_type: "openai",
+                    is_active: true,
+                  },
+                  error: null,
+                }),
+            }),
+          }),
+        };
+      }
+      if (table === "provider_api_keys") {
+        return {
+          select: () => ({
+            eq: () => ({
+              maybeSingle: () =>
+                Promise.resolve({ data: { api_key: "k" }, error: null }),
+            }),
+          }),
+        };
+      }
+      throw new Error(`unexpected table ${table}`);
+    },
+  } as unknown as AiRoutingAdmin;
+  let requestedUrl: string | Request | undefined;
+  try {
+    globalThis.fetch = async (url, init) => {
+      requestedUrl = url;
+      assertEquals(
+        new Headers(init?.headers).get("authorization"),
+        "Bearer k",
+      );
+      return new Response(
+        JSON.stringify({ choices: [{ message: { content: "ok" } }] }),
+      );
+    };
+    const result = await callAiChain(fakeAdmin, {}, [
+      { provider: "vercel", model: "openai/gpt-5", credentialSource: "platform" },
+    ]);
+    assertEquals(
+      requestedUrl,
+      "https://ai-gateway.vercel.sh/v1/chat/completions",
+    );
+    assertEquals(result.providerUsed, "vercel");
+  } finally {
+    globalThis.fetch = original;
   }
 });

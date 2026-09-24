@@ -1,6 +1,7 @@
 import { callAnthropic } from "./anthropic-adapter.ts";
 import { AI_USER_KEY_INVALID, redactProviderError } from "./ai-routing-errors.ts";
 import type { AiRoutingAdmin } from "./ai-user-routing.ts";
+import { BUILTIN_CHAT_PROVIDERS, loadOpenAiCompatibleBase, PROVIDER_KEY_ENV } from "./providerEndpoint.ts";
 
 export type AiTier =
   | { provider: string; model: string; credentialSource: 'user'; apiKey: string }
@@ -45,7 +46,7 @@ const CATEGORY_LAST_RESORT: Record<string, { provider: string; model: string } |
   stt: { provider: 'openai', model: 'whisper-1' },
 };
 
-export function getAiEndpoint(provider: string, suppliedKey?: string): AiEndpoint {
+export function getAiEndpoint(provider: string, suppliedKey?: string, baseUrl?: string): AiEndpoint {
   if (provider === 'claude') {
     const apiKey = suppliedKey ?? Deno.env.get('ANTHROPIC_API_KEY') ?? '';
     return { kind: 'anthropic', apiUrl: '', apiKey, headers: {} };
@@ -75,6 +76,12 @@ export function getAiEndpoint(provider: string, suppliedKey?: string): AiEndpoin
       headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' } };
   }
 
+  if (baseUrl && !BUILTIN_CHAT_PROVIDERS.has(provider)) {
+    const apiKey = suppliedKey ?? Deno.env.get(PROVIDER_KEY_ENV[provider] ?? '') ?? '';
+    return { apiUrl: `${baseUrl}/chat/completions`, apiKey,
+      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' } };
+  }
+
   // Default: Google AI Studio direct
   const apiKey = suppliedKey ?? Deno.env.get('GOOGLE_AI_STUDIO_KEY') ?? '';
   return {
@@ -97,6 +104,7 @@ export async function resolvePlatformApiKey(admin: AiRoutingAdmin | undefined, p
       if (data.api_key.trim()) return data.api_key;
     }
   }
+  if (PROVIDER_KEY_ENV[provider]) return Deno.env.get(PROVIDER_KEY_ENV[provider]) ?? '';
   return getAiEndpoint(provider).apiKey;
 }
 
@@ -363,7 +371,13 @@ export async function callAiChain(admin: AiRoutingAdmin | undefined, requestBody
     tiers.push(attempt);
     if (!apiKey) { attempt.error = 'API key not configured'; continue; }
     try {
-      const endpoint = getAiEndpoint(tier.provider, apiKey);
+      let baseUrl: string | undefined;
+      if (!BUILTIN_CHAT_PROVIDERS.has(tier.provider)) {
+        const base = await loadOpenAiCompatibleBase(admin, tier.provider);
+        if (!base) { attempt.error = 'Provider endpoint not configured'; continue; }
+        baseUrl = base;
+      }
+      const endpoint = getAiEndpoint(tier.provider, apiKey, baseUrl);
       const body = chatRequestForTier(requestBody, tier);
       const response = endpoint.kind === 'anthropic'
         ? await callAnthropic(body, apiKey, AI_TIER_TIMEOUT_MS)
