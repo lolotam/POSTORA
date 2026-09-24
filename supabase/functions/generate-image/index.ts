@@ -10,6 +10,8 @@ import { checkByoGenerationLimits } from "../_shared/higgsfield-rate-limit.ts";
 import { mergeModelSpec, sanitizeParams, missingRequiredParams, resolveAspectRatio, defaultParamsFor } from "../_shared/higgsfield-model-spec.ts";
 import { collectReferences, isPublicHttpsUrl, parseDataUrl } from "../_shared/image-references.ts";
 import type { ReferenceInput } from "../_shared/image-references.ts";
+import { vercelGenerateImage } from "../_shared/vercelGateway.ts";
+import { pickRequestedModelRow } from "./modelChoice.ts";
 
 // A reference image reaches us either as a `data:` URL — the dialog reads
 // uploads with FileReader.readAsDataURL — or as an https URL from the media
@@ -117,23 +119,28 @@ async function resolveModelChain(supabaseAdmin: any, requestedModelId?: string):
     chain.push(m);
   };
 
-  // 1. Requested model (frontend dropdown picked something explicit)
+  // 1. Requested model (frontend dropdown picked something explicit).
+  // Vercel and OpenRouter can hold the same vendor-prefixed model_id (e.g.
+  // 'openai/gpt-image-2'), so this looks up every matching row and picks one
+  // deterministically instead of a `.maybeSingle()` that errors on >1 row.
   if (requestedModelId) {
-    const { data } = await supabaseAdmin
+    const { data: rows } = await supabaseAdmin
       .from('ai_models')
       .select('model_id, admin_params, ai_providers!inner(provider_code, api_endpoint, api_key_env_var, api_type, is_active)')
       .eq('model_id', requestedModelId)
       .eq('is_active', true)
-      .maybeSingle();
-    if (data?.ai_providers?.is_active) {
+      .contains('capabilities', ['image']);
+    const { data: def } = await supabaseAdmin.from('system_settings').select('value').eq('key', 'default_ai_model_image').maybeSingle();
+    const preferred: any = pickRequestedModelRow(rows ?? [], def?.value?.provider_code);
+    if (preferred) {
       push({
-        provider_code: data.ai_providers.provider_code,
-        model_id: data.model_id,
-        api_endpoint: data.ai_providers.api_endpoint,
-        api_key_env_var: data.ai_providers.api_key_env_var,
-        api_type: data.ai_providers.api_type,
+        provider_code: preferred.ai_providers.provider_code,
+        model_id: preferred.model_id,
+        api_endpoint: preferred.ai_providers.api_endpoint,
+        api_key_env_var: preferred.ai_providers.api_key_env_var,
+        api_type: preferred.ai_providers.api_type,
         source: 'requested',
-        admin_params: (data.admin_params ?? {}) as Record<string, string | number | boolean>,
+        admin_params: (preferred.admin_params ?? {}) as Record<string, string | number | boolean>,
       });
     }
   }
@@ -453,6 +460,10 @@ async function generateWithModel(
   aspectRatio: string,
   references: ReferenceInput[],
 ): Promise<{ imageUrl: string; description: string }> {
+  if (m.provider_code === 'vercel') {
+    if (references.length > 0) throw new Error('cannot take a reference image');
+    return vercelGenerateImage(apiKey, m.model_id, prompt, aspectRatio);
+  }
   if (m.api_type === 'openai' || m.provider_code === 'openai') {
     // /images/generations has no reference input at all — /images/edits is a
     // separate endpoint with a different contract. Refusing lets the chain fall
