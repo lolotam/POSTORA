@@ -3,6 +3,8 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.7.1";
 import { corsHeaders } from "../_shared/cors.ts";
 import { HiggsfieldAuthError, resolveHiggsfieldCredential } from "../_shared/higgsfield-oauth.ts";
 import { HiggsfieldMcpClient, readJobSnapshot } from "../_shared/higgsfield-mcp.ts";
+import { resolveVercelKey, vercelVideoStatus } from "../_shared/vercelGateway.ts";
+import { archiveBody as buildArchiveBody } from "./archiveBody.ts";
 const json = (b: unknown, s = 200) =>
   new Response(JSON.stringify(b), {
     status: s,
@@ -47,18 +49,25 @@ serve(async (req) => {
         await supabase.rpc("release_ai_generation_quota", { p_user_id: user.id });
       return json({ success: true, status: "timeout" });
     }
-    const cred = await resolveHiggsfieldCredential(supabase, user.id);
-    if (cred.source !== job.credential_source)
-      return json({
-        success: true,
-        status: "failed",
-        error: "The original Higgsfield connection is no longer available",
-      });
-    const payload = await HiggsfieldMcpClient.fromCredential(cred, supabase).callTool(
-      "job_status",
-      { jobId: job.provider_job_id },
-    );
-    const snap = readJobSnapshot(payload);
+    let snap: { state: string; status: string; outputUrl: string | null; error: string | null; pollAfterSeconds: number; outputBase64?: string | null; outputMediaType?: string | null };
+    if (job.provider === "vercel") {
+      const apiKey = await resolveVercelKey(supabase);
+      if (!apiKey) return json({ success: true, status: "running", pollAfterSeconds: 30 });
+      snap = await vercelVideoStatus(apiKey, job.model_id, job.params?.operation);
+    } else {
+      const cred = await resolveHiggsfieldCredential(supabase, user.id);
+      if (cred.source !== job.credential_source)
+        return json({
+          success: true,
+          status: "failed",
+          error: "The original Higgsfield connection is no longer available",
+        });
+      const payload = await HiggsfieldMcpClient.fromCredential(cred, supabase).callTool(
+        "job_status",
+        { jobId: job.provider_job_id },
+      );
+      snap = readJobSnapshot(payload);
+    }
     if (snap.state === "running")
       return json({
         success: true,
@@ -131,11 +140,7 @@ serve(async (req) => {
       const archived = await fetch(uploadUrl, {
         method: "POST",
         headers: { Authorization: h, "Content-Type": "application/json" },
-        body: JSON.stringify({
-          externalUrl: snap.outputUrl,
-          fileName: `higgsfield-${job.id}.${job.modality === "video" ? "mp4" : "png"}`,
-          fileType: job.modality,
-        }),
+        body: JSON.stringify(buildArchiveBody(job, snap)),
       });
       archiveBody = await archived.json().catch(() => ({}));
       if (!archived.ok || !archiveBody.success) throw new Error("Could not archive generated media");

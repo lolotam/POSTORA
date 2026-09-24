@@ -43,6 +43,7 @@ type VideoModel = {
   name?: string;
   metadata?: unknown;
   capabilities?: string[];
+  ai_providers: { provider_code: string } | null;
 };
 export function VideoGenerator({
   onVideoGenerated,
@@ -67,9 +68,10 @@ export function VideoGenerator({
     if (!open) return;
     void supabase
       .from("ai_models")
-      .select("model_id,name,metadata,capabilities,is_active")
+      .select("model_id,name,metadata,capabilities,is_active,ai_providers!inner(provider_code)")
       .eq("is_active", true)
       .contains("capabilities", ["video"])
+      .in("ai_providers.provider_code", ["higgsfield", "vercel"])
       .then(({ data }) => {
         const rows = data ?? [];
         setModels(rows);
@@ -108,6 +110,7 @@ export function VideoGenerator({
             ? Math.min(spec.durationRange?.max ?? duration, Math.max(spec.durationRange?.min ?? duration, duration))
             : undefined,
           params,
+          provider_code: selected?.ai_providers?.provider_code ?? "higgsfield",
         },
       });
       if (error || data?.error) throw error ?? new Error(data.error);
