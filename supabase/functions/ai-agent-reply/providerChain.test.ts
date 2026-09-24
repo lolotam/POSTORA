@@ -204,3 +204,8 @@ Deno.test("agent platform tier uses the DB key and rejects malformed successful 
     globalThis.fetch = original;
   }
 });
+
+Deno.test("parseModelRef keeps vendor-prefixed gateway ids intact", () => {
+  assertEquals(parseModelRef("vercel/openai/gpt-5.5"), { provider: "vercel", model: "openai/gpt-5.5" });
+  assertEquals(parseModelRef("deepseek/deepseek-flash"), { provider: "deepseek", model: "deepseek-flash" });
+});

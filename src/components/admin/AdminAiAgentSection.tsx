@@ -10,12 +10,12 @@ import {
 } from "@/hooks/useAIConfiguration";
 
 // The reply engine can only call providers it holds an endpoint and API key for.
-// Must stay in sync with PROVIDER_ENDPOINTS in
-// supabase/functions/ai-agent-reply/index.ts. Offering anything else is not a
+// Must stay in sync with PROVIDER_ENDPOINTS and KNOWN_MODEL_PROVIDERS in
+// supabase/functions/ai-agent-reply/index.ts and logic.ts. Offering anything else is not a
 // cosmetic slip: parseModelRef rewrites an unknown provider prefix to "openai",
 // so a Claude or Z AI model would be posted to OpenAI's endpoint under a name it
 // does not have.
-const AGENT_PROVIDER_CODES = ["openai", "openrouter", "gemini", "claude"];
+const AGENT_PROVIDER_CODES = ["openai", "openrouter", "gemini", "claude", "vercel", "deepseek"];
 
 export function AdminAiAgentSection() {
   const { data: aiConfig } = useAIConfiguration();

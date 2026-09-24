@@ -52,7 +52,8 @@ export function resolveEngagementMode(override: string | null | undefined, defau
 // Providers the reply engine has chat-completion endpoints for (see
 // PROVIDER_ENDPOINTS in index.ts). "gemini" is the ai_providers catalog
 // code for Google; "google" is kept for values stored before that mapping.
-export const KNOWN_MODEL_PROVIDERS = ["openai", "openrouter", "google", "gemini", "claude"] as const;
+// Providers not listed in PROVIDER_ENDPOINTS resolve through ai_providers (providerEndpoint.ts).
+export const KNOWN_MODEL_PROVIDERS = ["openai", "openrouter", "google", "gemini", "claude", "vercel", "deepseek"] as const;
 
 export interface ModelRef {
   provider: string;
