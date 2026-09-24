@@ -1,7 +1,7 @@
 # Vercel AI Gateway Provider + Model Catalogue Sync — Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
-> **Required reading before any edit:** `ARCHITECTURE.md` (layering, Edge Function shape, security rules). A delegation brief for any task must name it.
+> **Required reading before any edit:** `ARCHITECTURE.md`, specifically §12 (Edge Function shape), §13 (never-do list), §14 (auth via `_shared/auth-helper.ts`), §15 (Zod validation), §16 (sanitized errors via `_shared/errorSanitizer.ts`), §24–26 (service role, CORS, external HTTP timeouts), §39 (admin authorization in the function) and §40 (shared-code rule: feature-local unless two features use it). A delegation brief for any task must name these sections.
 
 **Goal:** Add Vercel AI Gateway and DeepSeek as providers on `/admin/settings?tab=ai`, show each Vercel model only in the section it belongs to, and make every section able to call Vercel (chat, agent, embedding, image, video, TTS, STT). Keep the model lists of Vercel, OpenRouter and DeepSeek current with a sync button, and refresh the other providers once.
 
@@ -60,6 +60,9 @@
 | `src/hooks/ai-config/useSyncModels.ts` | create | Mutation for `sync-models` |
 | `src/components/admin/settings/ai/AiProvidersCard.tsx` | modify | Sync button and last-synced time in the provider dialog |
 | `src/components/admin/SearchableModelPicker.tsx` | create | Searchable, vendor-grouped picker for large providers |
+| `src/components/admin/settings/ai/SyncModelsButton.tsx` | create | Sync button and last-synced time, shown in the provider dialog |
+| `supabase/functions/generate-image/modelChoice.ts` (+ test) | create | Pure: picks the requested model's row when several providers share an id |
+| `supabase/functions/ai-generation-status/archiveBody.ts` (+ test) | create | Pure: upload body for a finished job, hosted URL or inline bytes |
 | `src/components/admin/DefaultModelSelector.tsx` | modify | Uses the picker when a provider has more than 25 models in the section |
 | `src/components/admin/AdminAiAgentSection.tsx` | modify | Adds `vercel` and `deepseek` to `AGENT_PROVIDER_CODES` |
 | `src/components/admin/settings/ai/AiCategoryCards.tsx` | modify | "Try voice" on the TTS card |
@@ -655,8 +658,13 @@ git commit -m "feat(ai): sync-models action for Vercel, OpenRouter and DeepSeek 
 - Create: `supabase/functions/_shared/providerErrors.ts`, `supabase/functions/_shared/providerErrors.test.ts`
 - Modify: `supabase/functions/ai-config/index.ts`: `handleRes`, `testOpenAI`, plus the three call sites in `test-connection`, `set-service-key` and `test-service`
 
+**Why `set-service-key` changes too:** it saves the key only after the test passes. The gateway answers 403 `customer_verification_required` until a card is on file, so without this change the Vercel key could never be saved, and *Test* would have no key to use. A billing-blocked answer proves the key authenticates, so the key is saved and the response carries a warning.
+
 **Interfaces:**
 - Produces: `export function describeProviderFailure(name: string, status: number, bodyText: string): string`
+- Produces: `export function isBillingBlocked(status: number, bodyText: string): boolean`
+- Produces: `export class ProviderTestError extends Error { status: number; body: string }`, thrown by `handleRes`
+- `set-service-key` response: `{ success: true, latency, warning?: string }`. `warning` is set when the key was saved but the account is billing-blocked.
 - Produces: `testOpenAI(key: string, ep: string, model: string)`, where the model now comes from `defaultTestModel(db, provider)`
 
 - [ ] **Step 1: Failing test**
@@ -664,12 +672,18 @@ git commit -m "feat(ai): sync-models action for Vercel, OpenRouter and DeepSeek 
 ```ts
 // deno-lint-ignore-file no-import-prefix
 import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { describeProviderFailure } from "./providerErrors.ts";
+import { describeProviderFailure, isBillingBlocked } from "./providerErrors.ts";
 
 Deno.test("gateway billing block reads as a valid key that needs a card", () => {
   const body = JSON.stringify({ error: { type: "customer_verification_required", message: "AI Gateway requires a valid credit card" } });
   assertEquals(describeProviderFailure("Vercel AI Gateway", 403, body),
     "Key is valid — add a credit card to your Vercel team (AI Gateway) to enable requests");
+});
+
+Deno.test("isBillingBlocked recognises only the gateway verification 403", () => {
+  assertEquals(isBillingBlocked(403, '{"error":{"type":"customer_verification_required"}}'), true);
+  assertEquals(isBillingBlocked(403, '{"error":{"type":"forbidden"}}'), false);
+  assertEquals(isBillingBlocked(401, "customer_verification_required"), false);
 });
 
 Deno.test("401 and generic 403 keep their existing messages", () => {
@@ -694,9 +708,20 @@ Expected: FAIL, module not found.
 - [ ] **Step 3: Implement.** This moves the logic out of `handleRes` unchanged and adds the gateway case:
 
 ```ts
+// The gateway authenticated the key but refuses inference until billing is set up.
+export function isBillingBlocked(status: number, bodyText: string): boolean {
+  return status === 403 && bodyText.includes("customer_verification_required");
+}
+
+export class ProviderTestError extends Error {
+  constructor(message: string, readonly status: number, readonly body: string) {
+    super(message);
+  }
+}
+
 // Maps a provider's failed HTTP response to the message the admin Test card shows.
 export function describeProviderFailure(name: string, status: number, bodyText: string): string {
-  if (status === 403 && bodyText.includes("customer_verification_required")) {
+  if (isBillingBlocked(status, bodyText)) {
     return "Key is valid — add a credit card to your Vercel team (AI Gateway) to enable requests";
   }
   if (status === 401) return "Invalid API key";
@@ -719,15 +744,48 @@ export function describeProviderFailure(name: string, status: number, bodyText: 
 In `ai-config/index.ts`, replace the body of `handleRes`:
 
 ```ts
-import { describeProviderFailure } from '../_shared/providerErrors.ts';
+import { describeProviderFailure, isBillingBlocked, ProviderTestError } from '../_shared/providerErrors.ts';
 
 async function handleRes(res: Response, name: string) {
   if (res.ok) return;
   const t = await res.text();
   console.error(`${name} test failed: ${res.status} - ${t.slice(0, 300)}`);
-  throw new Error(describeProviderFailure(name, res.status, t));
+  throw new ProviderTestError(describeProviderFailure(name, res.status, t), res.status, t);
 }
 ```
+
+In `set-service-key`, wrap the provider test so a billing-blocked key is still saved. Replace `const latency = Date.now() - startTime;` and the upsert/return that follow with:
+
+```ts
+          const latency = Date.now() - startTime;
+          await saveKey();
+          return new Response(JSON.stringify({ success: true, latency }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+        } catch (e: any) {
+          if (e instanceof ProviderTestError && isBillingBlocked(e.status, e.body)) {
+            await saveKey();
+            return new Response(JSON.stringify({ success: true, latency: Date.now() - startTime, warning: e.message }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+          }
+          return new Response(JSON.stringify({ success: false, error: e.message, latency: Date.now() - startTime }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+        }
+```
+with `saveKey` declared before the `try`:
+```ts
+        const saveKey = async () => {
+          const { error: upsertErr } = await supabase.from('provider_api_keys').upsert(
+            { provider_code, api_key, created_by: user.id, updated_at: new Date().toISOString() },
+            { onConflict: 'provider_code' },
+          );
+          if (upsertErr) throw new Error(upsertErr.message);
+        };
+```
+
+In `AiProvidersCard.tsx` `handleSaveProviderKey`, show the warning:
+```ts
+      if (r.success) {
+        if (r.warning) toast.warning(`API key saved. ${r.warning}`);
+        else toast.success(`API key saved & validated (${r.latency}ms)`);
+```
+and add `warning?: string` to the `setServiceKey` result type in `useAIConfiguration.ts`.
 
 Make `testOpenAI` take the model to test with, and add a lookup that picks it:
 
@@ -761,12 +819,12 @@ await testOpenAI(apiKey, provider.api_endpoint, await defaultTestModel(supabase,
 - [ ] **Step 4: Run the tests and `deno check`**
 
 Run: `deno test --allow-env --allow-read --no-check supabase/functions/_shared/providerErrors.test.ts && deno check supabase/functions/ai-config/index.ts`
-Expected: 3 passed, check clean.
+Expected: 4 passed, check clean. Then run `npx tsc -b --noEmit`.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git commit -m "feat(ai): provider test uses a listed model and explains gateway billing errors" -- supabase/functions/_shared/providerErrors.ts supabase/functions/_shared/providerErrors.test.ts supabase/functions/ai-config/index.ts
+git commit -m "feat(ai): provider test uses a listed model; save billing-blocked gateway keys with a warning" -- supabase/functions/_shared/providerErrors.ts supabase/functions/_shared/providerErrors.test.ts supabase/functions/ai-config/index.ts src/components/admin/settings/ai/AiProvidersCard.tsx src/hooks/useAIConfiguration.ts
 ```
 
 ---
@@ -850,9 +908,19 @@ export function clearProviderEndpointCache(): void {
   cache.clear();
 }
 
-export async function loadOpenAiCompatibleBase(admin: any, providerCode: string): Promise<string | null> {
+// callAiWithFallback (ai-email-assistant, analyze-log, suggest-best-times) calls
+// callAiChain without a client. Rather than skipping data-driven providers there,
+// read the provider row with a service-role client of our own. ai_providers holds
+// no secrets.
+async function serviceClient(): Promise<any> {
+  const { createClient } = await import("https://esm.sh/@supabase/supabase-js@2");
+  return createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+}
+
+export async function loadOpenAiCompatibleBase(admin: any | undefined, providerCode: string): Promise<string | null> {
   if (cache.has(providerCode)) return cache.get(providerCode)!;
-  const { data, error } = await admin.from("ai_providers")
+  const db = admin ?? await serviceClient();
+  const { data, error } = await db.from("ai_providers")
     .select("api_endpoint, api_type, is_active").eq("provider_code", providerCode).maybeSingle();
   if (error) throw new Error("AI provider read failed");
   const base = data && data.is_active && data.api_type === "openai" && typeof data.api_endpoint === "string"
@@ -882,13 +950,17 @@ In `ai-fallback.ts`:
 ```ts
       let baseUrl: string | undefined;
       if (!BUILTIN_CHAT_PROVIDERS.has(tier.provider)) {
-        const base = admin ? await loadOpenAiCompatibleBase(admin, tier.provider) : null;
+        const base = await loadOpenAiCompatibleBase(admin, tier.provider);
         if (!base) { attempt.error = 'Provider endpoint not configured'; continue; }
         baseUrl = base;
       }
       const endpoint = getAiEndpoint(tier.provider, apiKey, baseUrl);
 ```
 This goes inside the existing `try`, so a DB error is caught per tier.
+
+**Behaviour change to put in the PR body:** `perplexity`, `zai` and `minimax` chat tiers currently fall through to the Google URL. After this task they reach their own `api_endpoint`, which fixes them.
+
+**Keys for callers without a client:** `resolvePlatformApiKey(undefined, 'vercel')` finds only the env var (`AI_GATEWAY_API_KEY`). That is why Task 15 sets the env var as well as the DB key.
 
 - [ ] **Step 4: Run the tests (the whole `_shared` folder, to catch regressions) and `deno check`**
 
@@ -934,8 +1006,11 @@ export const KNOWN_MODEL_PROVIDERS = ["openai", "openrouter", "google", "gemini"
 ```ts
   let endpoint = PROVIDER_ENDPOINTS[provider];
   if (!endpoint) {
-    const base = admin ? await loadOpenAiCompatibleBase(admin, provider) : null;
-    endpoint = base ? { url: `${base}/chat/completions`, keyEnv: "" } : PROVIDER_ENDPOINTS.openai;
+    const base = await loadOpenAiCompatibleBase(admin, provider);
+    // Only the legacy bare-id case ("gpt-4o" parsed as openai) may fall back to OpenAI;
+    // a named provider without a usable row must fail, not send its key to OpenAI.
+    if (!base) throw new Error(`${provider}: provider endpoint not configured`);
+    endpoint = { url: `${base}/chat/completions`, keyEnv: "" };
   }
 ```
 Update the comment above `PROVIDER_ENDPOINTS`: providers not listed there resolve through `ai_providers` (`providerEndpoint.ts`).
@@ -1165,7 +1240,7 @@ export async function vercelTranscribe(apiKey: string, modelId: string, audio: U
 Run: `deno test --allow-env --allow-net --allow-read --allow-write --no-check --node-modules-dir=auto supabase/functions/_shared/vercelGateway.test.ts && deno check --node-modules-dir=auto supabase/functions/_shared/vercelGateway.ts`
 Expected: 5 passed; check clean. If `deno check` reports a changed option name (`aspectRatio`, `outputFormat`, `durationInSeconds`), fix it to match the pinned `.d.ts`. Never unpin the packages.
 
-- [ ] **Step 5: Boot probe on the real runtime.** Memory: a worker boot error can hide behind `--no-check`. Run `deno run --allow-env --allow-net --node-modules-dir=auto -e "import('./supabase/functions/_shared/vercelGateway.ts').then(()=>console.log('ok'))"`. Expected: `ok`.
+- [ ] **Step 5: Boot probe on the real runtime.** Memory: a worker boot error can hide behind `--no-check`. Run `deno eval --node-modules-dir=auto "await import('./supabase/functions/_shared/vercelGateway.ts'); console.log('ok')"`. Expected: `ok`. After deploy (Task 15), also probe the deployed `generate-speech` unauthenticated and expect 401, not 500; that proves the edge runtime itself resolves the `npm:` imports.
 
 - [ ] **Step 6: Commit**
 
@@ -1183,7 +1258,35 @@ git commit -m "feat(ai): Vercel AI Gateway wrapper for image, video, speech and 
 **Interfaces:**
 - Consumes: `vercelGenerateImage` (Task 8).
 
-- [ ] **Step 1: Fix the ambiguous requested-model lookup.** Vercel and OpenRouter both use ids like `openai/gpt-image-2`, so `.eq('model_id', id).maybeSingle()` errors when two rows match and silently drops the requested model. Replace the step-1 query with a list query that prefers the admin's default image provider:
+- [ ] **Step 1: Failing test for a pure chooser** at `supabase/functions/generate-image/modelChoice.test.ts`. Vercel and OpenRouter both use ids like `openai/gpt-image-2`, so the current `.eq('model_id', id).maybeSingle()` errors when two rows match, and the requested model is silently dropped.
+
+```ts
+// deno-lint-ignore-file no-import-prefix
+import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
+import { pickRequestedModelRow } from "./modelChoice.ts";
+
+const row = (provider_code: string, is_active = true) => ({ model_id: "openai/gpt-image-2", ai_providers: { provider_code, is_active } });
+
+Deno.test("prefers the admin's default image provider when several share an id", () => {
+  assertEquals(pickRequestedModelRow([row("openrouter"), row("vercel")], "vercel")?.ai_providers.provider_code, "vercel");
+});
+Deno.test("skips inactive providers and returns null when nothing is usable", () => {
+  assertEquals(pickRequestedModelRow([row("vercel", false), row("openrouter")], "vercel")?.ai_providers.provider_code, "openrouter");
+  assertEquals(pickRequestedModelRow([row("vercel", false)], "vercel"), null);
+});
+```
+Run: `deno test --allow-env --allow-read --no-check supabase/functions/generate-image/modelChoice.test.ts`. Expected: FAIL.
+
+`supabase/functions/generate-image/modelChoice.ts`:
+```ts
+export interface RequestedModelRow { model_id: string; ai_providers: { provider_code: string; is_active: boolean } | null }
+
+export function pickRequestedModelRow<T extends RequestedModelRow>(rows: T[], defaultProviderCode: string | undefined): T | null {
+  const usable = rows.filter((r) => r.ai_providers?.is_active);
+  return usable.find((r) => r.ai_providers!.provider_code === defaultProviderCode) ?? usable[0] ?? null;
+}
+```
+Replace the step-1 query in `resolveModelChain` with a list query plus the chooser:
 
 ```ts
   if (requestedModelId) {
@@ -1194,8 +1297,7 @@ git commit -m "feat(ai): Vercel AI Gateway wrapper for image, video, speech and 
       .eq('is_active', true)
       .contains('capabilities', ['image']);
     const { data: def } = await supabaseAdmin.from('system_settings').select('value').eq('key', 'default_ai_model_image').maybeSingle();
-    const preferred = (rows ?? []).filter((r: any) => r.ai_providers?.is_active)
-      .sort((a: any, b: any) => Number(b.ai_providers.provider_code === def?.value?.provider_code) - Number(a.ai_providers.provider_code === def?.value?.provider_code))[0];
+    const preferred: any = pickRequestedModelRow(rows ?? [], def?.value?.provider_code);
     if (preferred) {
       push({
         provider_code: preferred.ai_providers.provider_code,
@@ -1220,12 +1322,12 @@ git commit -m "feat(ai): Vercel AI Gateway wrapper for image, video, speech and 
 ```
 Import `vercelGenerateImage` from `../_shared/vercelGateway.ts`. The key resolution at ~154 already reads env `api_key_env_var` (`AI_GATEWAY_API_KEY`) and then `provider_api_keys`, so no change is needed there.
 
-- [ ] **Step 3: Check.** `deno check --node-modules-dir=auto supabase/functions/generate-image/index.ts` passes clean, and `deno test ... supabase/functions/generate-image/` passes if that folder has tests.
+- [ ] **Step 3: Check.** Run `deno test --allow-env --allow-read --no-check supabase/functions/generate-image/ && deno check --node-modules-dir=auto supabase/functions/generate-image/index.ts`. Expected: pass.
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git commit -m "feat(image): generate images through Vercel AI Gateway; disambiguate requested model ids" -- supabase/functions/generate-image/index.ts
+git commit -m "feat(image): generate images through Vercel AI Gateway; disambiguate requested model ids" -- supabase/functions/generate-image/index.ts supabase/functions/generate-image/modelChoice.ts supabase/functions/generate-image/modelChoice.test.ts
 ```
 
 ---
@@ -1288,14 +1390,36 @@ Move `const modelId = ...` above this block. The existing `catch` already releas
       // existing Higgsfield credential check + job_status call, assigning to snap
     }
 ```
-In the archive request body, send bytes when the gateway returned them inline:
+The archive body becomes a pure, tested function. Create `supabase/functions/ai-generation-status/archiveBody.test.ts` first:
 ```ts
-        body: JSON.stringify({
-          ...(snap.outputBase64 ? { fileData: snap.outputBase64 } : { externalUrl: snap.outputUrl }),
-          fileName: `${job.provider}-${job.id}.${job.modality === "video" ? "mp4" : "png"}`,
-          fileType: job.modality,
-        }),
+// deno-lint-ignore-file no-import-prefix
+import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
+import { archiveBody } from "./archiveBody.ts";
+
+const job = { id: "j1", provider: "vercel", modality: "video" };
+Deno.test("hosted result uploads by URL", () => {
+  assertEquals(archiveBody(job, { outputUrl: "https://cdn/x.mp4", outputBase64: null }),
+    { externalUrl: "https://cdn/x.mp4", fileName: "vercel-j1.mp4", fileType: "video" });
+});
+Deno.test("inline result uploads the bytes", () => {
+  assertEquals(archiveBody(job, { outputUrl: null, outputBase64: "AAAA" }),
+    { fileData: "AAAA", fileName: "vercel-j1.mp4", fileType: "video" });
+});
+Deno.test("higgsfield images keep their png name", () => {
+  assertEquals(archiveBody({ id: "j2", provider: "higgsfield", modality: "image" }, { outputUrl: "u" }).fileName, "higgsfield-j2.png");
+});
 ```
+Then `supabase/functions/ai-generation-status/archiveBody.ts`:
+```ts
+export function archiveBody(
+  job: { id: string; provider: string; modality: string },
+  snap: { outputUrl: string | null; outputBase64?: string | null },
+): Record<string, string> {
+  const source: Record<string, string> = snap.outputBase64 ? { fileData: snap.outputBase64 } : { externalUrl: snap.outputUrl ?? "" };
+  return { ...source, fileName: `${job.provider}-${job.id}.${job.modality === "video" ? "mp4" : "png"}`, fileType: job.modality };
+}
+```
+In `index.ts`, the upload call uses `body: JSON.stringify(archiveBody(job, snap))`. For Higgsfield the file name is the same as before (`higgsfield-<id>`).
 and `const resultUrl = archiveBody.url || snap.outputUrl;` is unchanged. Hosted gateway URLs expire (`expiresAt`), so archiving on the first succeeded poll is required, and this flow already does it.
 
 **Size check:** memory note *Edge isolate OOM blanks a media batch* says anything over about 10 MB can kill an isolate. Before relying on inline base64 for long videos, confirm that `cloudinary-upload`'s `fileData` path handles an 8-second clip. If it doesn't, restrict Vercel video to models that return hosted URLs. Record the result in the PR.
@@ -1307,12 +1431,12 @@ and `const resultUrl = archiveBody.url || snap.outputUrl;` is unchanged. Hosted 
 ```
 and in the invoke body add `provider_code: selected?.ai_providers?.provider_code ?? "higgsfield",`. Extend the local row type with `ai_providers: { provider_code: string } | null`. The `.in` filter also stops xAI and MiniMax video rows showing up; `generate-video` has always rejected them.
 
-- [ ] **Step 4: Checks.** Run `deno check --node-modules-dir=auto supabase/functions/generate-video/index.ts supabase/functions/ai-generation-status/index.ts`, then `npx tsc -b --noEmit`, then `bun run test -- src/components/post` if tests exist there. All pass.
+- [ ] **Step 4: Checks.** Run `deno test --allow-env --allow-read --no-check supabase/functions/ai-generation-status/`, then `deno check --node-modules-dir=auto supabase/functions/generate-video/index.ts supabase/functions/ai-generation-status/index.ts`, then `npx tsc -b --noEmit`, then `bun run test -- src/components/post` if tests exist there. All pass.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git commit -m "feat(video): start and poll Vercel AI Gateway video jobs" -- supabase/functions/generate-video/index.ts supabase/functions/ai-generation-status/index.ts src/components/post/VideoGenerator.tsx
+git commit -m "feat(video): start and poll Vercel AI Gateway video jobs" -- supabase/functions/generate-video/index.ts supabase/functions/ai-generation-status/index.ts supabase/functions/ai-generation-status/archiveBody.ts supabase/functions/ai-generation-status/archiveBody.test.ts src/components/post/VideoGenerator.tsx
 ```
 
 ---
@@ -1331,29 +1455,43 @@ git commit -m "feat(video): start and poll Vercel AI Gateway video jobs" -- supa
 
 - [ ] **Step 1: Write the function**
 
+This follows ARCHITECTURE §12–16: shared CORS, `authenticateCaller`, a Zod schema, the admin check inside the function, and sanitized unexpected errors.
+
 ```ts
-// deno-lint-ignore-file no-explicit-any
+// deno-lint-ignore-file no-explicit-any no-import-prefix
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { z } from "npm:zod@3.23.8";
 import { restrictedCorsHeaders } from "../_shared/cors.ts";
+import { authenticateCaller } from "../_shared/auth-helper.ts";
+import { sanitizeErrorMessage } from "../_shared/errorSanitizer.ts";
 import { fetchCategoryAiSettings } from "../_shared/ai-fallback.ts";
 import { resolveVercelKey, vercelGenerateSpeech } from "../_shared/vercelGateway.ts";
+
+const RequestSchema = z.object({
+  text: z.string().trim().min(1).max(1000),
+  voice: z.string().max(64).optional(),
+});
 
 serve(async (req) => {
   const cors = restrictedCorsHeaders(req);
   const json = (b: unknown, s = 200) => new Response(JSON.stringify(b), { status: s, headers: { ...cors, "Content-Type": "application/json" } });
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
+  let userId: string;
+  try {
+    userId = (await authenticateCaller(req)).userId;
+  } catch {
+    return json({ error: "Unauthorized" }, 401);
+  }
   const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
-  const token = (req.headers.get("Authorization") || "").replace("Bearer ", "");
-  const { data: { user } } = await admin.auth.getUser(token);
-  if (!user) return json({ error: "Unauthorized" }, 401);
-  const { data: role } = await admin.from("user_roles").select("role").eq("user_id", user.id).eq("role", "admin").maybeSingle();
+  const { data: role } = await admin.from("user_roles").select("role").eq("user_id", userId).eq("role", "admin").maybeSingle();
   if (!role) return json({ error: "Admin required" }, 403);
 
-  const body = await req.json().catch(() => ({}));
-  const text = typeof body.text === "string" ? body.text.trim() : "";
-  if (!text || text.length > 1000) return json({ error: "text must be 1-1000 characters" }, 400);
+  const parsed = RequestSchema.safeParse(await req.json().catch(() => ({})));
+  if (!parsed.success) return json({ error: "text must be 1-1000 characters" }, 400);
+  const { text, voice } = parsed.data;
 
+  try {
   const s = await fetchCategoryAiSettings(admin, "tts");
   const tiers = [[s.primaryProvider, s.primaryModel], [s.fallbackProvider, s.fallbackModel], [s.lastResortProvider, s.lastResortModel]]
     .filter(([p, m]) => p === "vercel" && m);
@@ -1363,15 +1501,21 @@ serve(async (req) => {
   const errors: string[] = [];
   for (const [, model] of tiers) {
     try {
-      const out = await vercelGenerateSpeech(apiKey, model, text, typeof body.voice === "string" ? body.voice : undefined);
+      const out = await vercelGenerateSpeech(apiKey, model, text, voice);
       return json({ audio: out.base64, mediaType: out.mediaType, provider: "vercel", model });
     } catch (e) {
-      errors.push(`${model}: ${e instanceof Error ? e.message : "failed"}`);
+      console.error("[generate-speech] tier failed", model, e);
+      errors.push(`${model}: ${sanitizeErrorMessage(e)}`);
     }
   }
   return json({ error: errors.join("; ") });
+  } catch (e) {
+    console.error("[generate-speech]", e);
+    return json({ error: sanitizeErrorMessage(e) }, 500);
+  }
 });
 ```
+`sanitizeErrorMessage(error): string` (`_shared/errorSanitizer.ts:151`) is used instead of `logAndSanitize`. `logAndSanitize` returns a whole Response with wildcard CORS headers, which ARCHITECTURE §25 rules out for an authenticated endpoint.
 The function only runs Vercel tiers. Gemini and ElevenLabs TTS still have no runtime, and that stays out of scope (spec). The error message says so when no Vercel tier is selected.
 
 - [ ] **Step 2: Failing UI test.** This follows `postora-frontend-test-conventions`: use `fireEvent`, not `userEvent`, and mock `supabase.functions.invoke`.
@@ -1674,17 +1818,26 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { useSyncModels } from '@/hooks/ai-config/useSyncModels';
 
-export function SyncModelsButton({ providerCode }: { providerCode: string }) {
+// lastSyncedAt comes from the `model_catalog_synced_at_<code>` row that the
+// ai-config `list` action already returns in `settings` (it selects system_settings
+// LIKE 'default_ai_model%'). Widen that filter so this row is included too:
+// `.or('key.like.default_ai_model%,key.like.model_catalog_synced_at_%')`.
+export function SyncModelsButton({ providerCode, lastSyncedAt }: { providerCode: string; lastSyncedAt?: string | null }) {
   const sync = useSyncModels();
   const run = () => sync.mutate({ provider_code: providerCode }, {
     onSuccess: (r) => toast.success(`Synced: ${r.added} added, ${r.updated} updated, ${r.deactivated} deactivated, ${r.kept_in_use.length} kept (in use)`),
     onError: (e) => toast.error(e.message),
   });
   return (
-    <Button size="sm" variant="outline" onClick={run} disabled={sync.isPending} className="gap-1">
-      {sync.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
-      Sync models
-    </Button>
+    <div className="flex items-center gap-2">
+      <span className="text-[10px] text-muted-foreground">
+        {lastSyncedAt ? `Last synced ${new Date(lastSyncedAt).toLocaleString()}` : 'Never synced'}
+      </span>
+      <Button size="sm" variant="outline" onClick={run} disabled={sync.isPending} className="gap-1">
+        {sync.isPending ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+        Sync models
+      </Button>
+    </div>
   );
 }
 ```
@@ -1695,7 +1848,8 @@ In the `AiProvidersCard.tsx` dialog, under the API-key block for non-OAuth provi
 {selectedProvider && (SYNCABLE_PROVIDER_CODES as readonly string[]).includes(selectedProvider.provider_code) && (
   <div className="flex items-center justify-between pt-2">
     <span className="text-xs text-muted-foreground">Pull the provider's current model list</span>
-    <SyncModelsButton providerCode={selectedProvider.provider_code} />
+    <SyncModelsButton providerCode={selectedProvider.provider_code}
+      lastSyncedAt={(aiConfig?.settings ?? []).find((s) => s.key === `model_catalog_synced_at_${selectedProvider.provider_code}`)?.value?.at ?? null} />
   </div>
 )}
 ```
@@ -1705,7 +1859,7 @@ In the `AiProvidersCard.tsx` dialog, under the API-key block for non-OAuth provi
 - [ ] **Step 6: Commit**
 
 ```bash
-git commit -m "feat(admin): Sync models button and searchable vendor-grouped model picker" -- src/hooks/ai-config/useSyncModels.ts src/components/admin/SearchableModelPicker.tsx src/components/admin/settings/ai/SyncModelsButton.tsx src/components/admin/settings/ai/AiProvidersCard.tsx src/components/admin/DefaultModelSelector.tsx src/components/admin/__tests__/SearchableModelPicker.test.tsx src/components/admin/settings/ai/__tests__/SyncModelsButton.test.tsx
+git commit -m "feat(admin): Sync models button and searchable vendor-grouped model picker" -- supabase/functions/ai-config/index.ts src/hooks/ai-config/useSyncModels.ts src/components/admin/SearchableModelPicker.tsx src/components/admin/settings/ai/SyncModelsButton.tsx src/components/admin/settings/ai/AiProvidersCard.tsx src/components/admin/DefaultModelSelector.tsx src/components/admin/__tests__/SearchableModelPicker.test.tsx src/components/admin/settings/ai/__tests__/SyncModelsButton.test.tsx
 ```
 
 ---
@@ -1761,7 +1915,7 @@ ON CONFLICT (provider_id, model_id) DO NOTHING;`);
 }
 ```
 
-- [ ] **Step 2: Run it on Contabo.** Build `keys.json` inside the DB container with `jsonb_object_agg` over `provider_api_keys` and `ai_models`, pipe it to the script, and write only the SQL draft to `/tmp/hgate/draft.sql`. Copy the draft back with `git`-free means (sftp or `cat`), **never the keys file**. Delete `keys.json` straight away.
+- [ ] **Step 2: The user runs it locally.** It was not possible to confirm the Contabo host has `deno` (the SSH MCP timed out during planning), and the keys must not enter the agent transcript. So the **user** runs this in their own terminal with the `!` prefix. First they export `keys.json` from the DB: a `jsonb_object_agg` over `provider_api_keys` plus the existing `ai_models` ids per provider, through their own psql or Studio session. Then they run `deno run --allow-net scripts/provider-model-refresh.ts < keys.json > draft.sql` and delete `keys.json`. Only `draft.sql`, which holds model ids and no keys, is shared with the agent.
 
 - [ ] **Step 3: Human review.** Walk the draft with the user. Fix every capability `guessCapability` got wrong. Keep only current flagship and still-useful ids; drop dated snapshots, fine-tunes and deprecated preview ids. For each "no longer listed" line, add `UPDATE … SET is_active=false` only after checking `system_settings` shows no `default_ai_model_*` referencing it. Save the result as `supabase/migrations/20260925130000_refresh_provider_models.sql`.
 

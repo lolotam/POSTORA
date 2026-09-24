@@ -136,11 +136,10 @@ stays behind one module, `_shared/vercelGateway.ts`, that nothing else imports d
   calls `experimental_getVideoStatus` and downloads the hosted URL into storage before the
   gateway's `expiresAt`. Image inputs go in as hosted URLs; inline base64 has a 300 KiB cap.
   Quota reserve and release follow the Higgsfield flow that already exists.
-- **TTS:** a new `generate-speech` edge function (admin and authenticated user), driven by the
-  `default_ai_model_tts` chain. It posts to `/v4/ai/speech-model` (base64 audio in JSON)
-  and stores the result as an mp3/wav media file. The only UI in scope is a "Try voice"
-  preview on the *Text to Speech* card. Wiring TTS into the post composer is a separate
-  follow-up.
+- **TTS:** a new admin-only `generate-speech` edge function, driven by the Vercel tiers of
+  the `default_ai_model_tts` chain, through the AI SDK's `generateSpeech`. It returns base64
+  audio and stores nothing. The only UI is a "Try voice" preview on the *Text to Speech*
+  card. Wiring TTS into the post composer is a separate follow-up.
 - **STT:** `transcribe-media` gains a `vercel` branch for `transcription` models.
 
 ### 5. Admin UI
@@ -153,8 +152,10 @@ stays behind one module, `_shared/vercelGateway.ts`, that nothing else imports d
   - 403 `customer_verification_required` → "Key valid — add a credit card in Vercel to
     enable requests"
   - 401 → "Invalid key"
-- **Sync models button** on the Vercel, OpenRouter and DeepSeek cards, with a last-synced
-  timestamp stored in `ai_providers` metadata or `system_settings`.
+- **Sync models button** in the provider dialog for Vercel, OpenRouter and DeepSeek, with a
+  last-synced time stored in `system_settings` (`model_catalog_synced_at_<code>`).
+- **Save & Test** saves a billing-blocked gateway key and shows a warning, since a 403
+  `customer_verification_required` proves the key authenticates.
 - **Model selector:** `DefaultModelSelector` already shows a searchable list for OpenRouter.
   That becomes a searchable list for any provider with more than 25 models in the section,
   fed from `ai_models` for Vercel. It groups models by vendor prefix (`openai/`,
