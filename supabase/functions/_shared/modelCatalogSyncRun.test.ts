@@ -5,7 +5,7 @@ import { type CatalogDb, runCatalogSync } from "./modelCatalogSyncRun.ts";
 type Write = { table: string; op: string; payload: unknown; options?: unknown };
 type Result = { data: unknown; error: { message: string } | null };
 
-function fakeDb(state: { models: unknown[]; settings: unknown[]; settingsUpsertError?: string }) {
+function fakeDb(state: { models: unknown[]; settings: unknown[]; settingsUpsertError?: string; providerReadError?: string }) {
   const writes: Write[] = [];
   const db: CatalogDb = {
     from: (table: string) => {
@@ -13,6 +13,7 @@ function fakeDb(state: { models: unknown[]; settings: unknown[]; settingsUpsertE
       const list = (): Result => ({ data: table === "ai_models" ? state.models : state.settings, error: null });
       const single = (): Result => {
         if (table === "ai_providers") {
+          if (state.providerReadError) return { data: null, error: { message: state.providerReadError } };
           return { data: { id: "prov", provider_code: filters.provider_code, api_key_env_var: "NONE" }, error: null };
         }
         return { data: null, error: null };
@@ -134,4 +135,11 @@ Deno.test("malformed default-model settings are skipped and a failed timestamp w
   assertEquals((await runCatalogSync(ok.db, "vercel", vercelFetch)).kept_in_use, ["openai/old"]);
   const failing = fakeDb({ models: [], settings: [], settingsUpsertError: "denied" });
   await assertRejects(() => runCatalogSync(failing.db, "vercel", vercelFetch), Error, "system_settings write failed");
+});
+
+Deno.test("a failed ai_providers read is reported as a read failure, not a missing provider", async () => {
+  const { db, writes } = fakeDb({ models: [], settings: [], providerReadError: "statement timeout" });
+  const err = await assertRejects(() => runCatalogSync(db, "vercel", vercelFetch), Error);
+  assertEquals(err.message, "ai_providers read failed");
+  assertEquals(writes.length, 0);
 });

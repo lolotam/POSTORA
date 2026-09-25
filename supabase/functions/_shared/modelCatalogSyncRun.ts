@@ -60,8 +60,10 @@ function defaultModelsInUse(settings: Array<{ value: unknown }>, providerCode: s
 export async function runCatalogSync(db: CatalogDb, providerCode: string, fetchImpl: typeof fetch = fetch): Promise<SyncReport> {
   const source = CATALOGUE[providerCode];
   if (!source) throw new Error(`Provider ${providerCode} is not syncable`);
-  const { data: providerRow } = await db.from("ai_providers")
+  const { data: providerRow, error: providerError } = await db.from("ai_providers")
     .select("id, provider_code, api_key_env_var").eq("provider_code", providerCode).maybeSingle();
+  // A failed read must not read as "provider missing".
+  if (providerError) throw new Error("ai_providers read failed");
   const provider = providerRow as { id: string; api_key_env_var: string } | null;
   if (!provider) throw new Error(`Provider ${providerCode} is missing`);
 
