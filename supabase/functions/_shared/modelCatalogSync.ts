@@ -87,9 +87,11 @@ type Row = Record<string, unknown>;
 
 const str = (v: unknown): string | null => (typeof v === "string" && v.trim() ? v : null);
 const positiveInt = (v: unknown): number | null => (typeof v === "number" && v > 0 ? v : null);
+// OpenRouter prices its router models (openrouter/auto, …) as "-1", meaning variable.
+// A negative price has no per-million value, and ×1e6 would overflow numeric(10,4).
 const perMillion = (v: unknown): number | null => {
   const n = typeof v === "string" ? Number(v) : typeof v === "number" ? v : NaN;
-  return Number.isFinite(n) ? Math.round(n * 1e6 * 1e6) / 1e6 : null;
+  return Number.isFinite(n) && n >= 0 ? Math.round(n * 1e6 * 1e6) / 1e6 : null;
 };
 
 function baseModel(row: Row, capabilities: Capability[]): CatalogModel {

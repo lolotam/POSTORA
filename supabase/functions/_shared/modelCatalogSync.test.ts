@@ -63,6 +63,14 @@ Deno.test("mapOpenRouterCatalog maps output modalities and manages only chat and
   assertEquals(mapped.managedCapabilities.sort(), ["chat", "image"]);
 });
 
+Deno.test("mapOpenRouterCatalog leaves variable (-1) pricing unset instead of overflowing the column", () => {
+  const [router] = mapOpenRouterCatalog([
+    { id: "openrouter/auto", name: "Auto", pricing: { prompt: "-1", completion: "-1" },
+      architecture: { output_modalities: ["text"] } },
+  ]).models;
+  assertEquals([router.cost_per_1m_input_tokens, router.cost_per_1m_output_tokens], [null, null]);
+});
+
 Deno.test("mapDeepSeekCatalog marks every id as chat", () => {
   const mapped = mapDeepSeekCatalog([{ id: "deepseek-flash" }, { id: "deepseek-v4-pro" }]);
   assertEquals(mapped.models.map((m) => [m.model_id, m.capabilities]), [

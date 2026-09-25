@@ -405,7 +405,8 @@ async function testOpenAI(key: string, ep: string, model: string) {
   const res = await fetch(url, {
     method: 'POST',
     headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model, messages: [{ role: 'user', content: 'hi' }], max_tokens: 1 }),
+    // 16, not 1: Vercel routes openai/* through the Responses API, which rejects max_output_tokens < 16.
+    body: JSON.stringify({ model, messages: [{ role: 'user', content: 'hi' }], max_tokens: 16 }),
   });
   await handleRes(res, 'OpenAI');
 }
