@@ -21,10 +21,13 @@ function parseDefault(val: unknown): DefaultModel | null {
   return null;
 }
 
-const emptyCategoryDefaults: CategoryDefaults = { chat: null, image: null, tts: null, video: null, search: null, stt: null, agent: null, embedding: null };
-const emptyCategoryFallbacks: CategoryFallbacks = { chat: null, image: null, tts: null, video: null, search: null, stt: null, agent: null, embedding: null };
+const emptyCategoryDefaults: CategoryDefaults = { chat: null, image: null, tts: null, video: null, search: null, stt: null, agent: null, agent_triage: null, embedding: null };
+const emptyCategoryFallbacks: CategoryFallbacks = { chat: null, image: null, tts: null, video: null, search: null, stt: null, agent: null, agent_triage: null, embedding: null };
 
-const MODEL_CATEGORIES: ModelCategory[] = ['chat', 'image', 'tts', 'video', 'search', 'stt', 'agent', 'embedding'];
+// "agent_triage" must precede "agent": the loop below breaks on the first exact
+// match, and exact matching makes the order safe either way, but keeping the
+// longer key first mirrors this file's suffix-order rule (see parseSettingsRows).
+const MODEL_CATEGORIES: ModelCategory[] = ['chat', 'image', 'tts', 'video', 'search', 'stt', 'agent_triage', 'agent', 'embedding'];
 
 export interface ParsedModelSettings {
   defaultModel: DefaultModel | null;
@@ -77,8 +80,13 @@ export function useAIConfiguration() {
         supabase.from('ai_providers' as any).select('*').order('name'),
         supabase.from('ai_models' as any).select('*, ai_providers(provider_code, name)').order('name'),
         // Widened beyond the default_ai_model* tier rows so the admin UI can also
-        // read the model_catalog_synced_at_<code> rows the sync-models action writes.
-        supabase.from('system_settings' as any).select('*').or('key.like.default_ai_model%,key.like.model_catalog_synced_at_%'),
+        // read the model_catalog_synced_at_<code> rows the sync-models action writes,
+        // and the agent_triage_enabled on/off switch. Deviation from the task-5 brief:
+        // the brief's useAgentTriageEnabled comment assumes this hook reads through the
+        // ai-config edge function's `list` action, but it queries system_settings
+        // directly -- the edge function's filter change alone would not surface this
+        // row here, leaving the switch permanently off after a successful write.
+        supabase.from('system_settings' as any).select('*').or('key.like.default_ai_model%,key.like.model_catalog_synced_at_%,key.eq.agent_triage_enabled'),
       ]);
 
       const providers = (providersResult.data || []) as unknown as AIProvider[];

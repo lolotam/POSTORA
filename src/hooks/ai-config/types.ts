@@ -36,7 +36,7 @@ export interface DefaultModel {
   model_id: string;
 }
 
-export type ModelCategory = 'chat' | 'image' | 'tts' | 'video' | 'search' | 'stt' | 'agent' | 'embedding';
+export type ModelCategory = 'chat' | 'image' | 'tts' | 'video' | 'search' | 'stt' | 'agent' | 'agent_triage' | 'embedding';
 
 export interface CategoryDefaults {
   chat: DefaultModel | null;
@@ -46,6 +46,7 @@ export interface CategoryDefaults {
   search: DefaultModel | null;
   stt: DefaultModel | null;
   agent: DefaultModel | null;
+  agent_triage: DefaultModel | null;
   embedding: DefaultModel | null;
 }
 
@@ -57,6 +58,7 @@ export interface CategoryFallbacks {
   search: DefaultModel | null;
   stt: DefaultModel | null;
   agent: DefaultModel | null;
+  agent_triage: DefaultModel | null;
   embedding: DefaultModel | null;
 }
 
@@ -75,6 +77,7 @@ export interface CategoryFallbacks2 {
   search: DefaultModel | null;
   stt: DefaultModel | null;
   agent: DefaultModel | null;
+  agent_triage: DefaultModel | null;
   embedding: DefaultModel | null;
 }
 
