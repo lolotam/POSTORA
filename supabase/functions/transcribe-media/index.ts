@@ -3,7 +3,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { fetchCategoryAiSettings, logAiCall } from "../_shared/ai-fallback.ts";
 import { createLogger } from "../_shared/logging.ts";
 import { resolveVercelKey, vercelTranscribe } from "../_shared/vercelGateway.ts";
-import { sttProviderFor } from "./sttProvider.ts";
+import { sttLastResort, sttProviderFor } from "./sttProvider.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -301,7 +301,10 @@ serve(async (req) => {
 
     let primaryModel = sttSettings.primaryModel;
     let fallbackModel = sttSettings.fallbackModel;
-    const lastResortModel = "whisper-1";
+    const { model: lastResortModel, provider: lastResortProvider } = sttLastResort(
+      sttSettings.lastResortProvider,
+      sttSettings.lastResortModel,
+    );
 
     for (const row of appSettingsRows || []) {
       try {
@@ -389,11 +392,11 @@ serve(async (req) => {
       }
     }
 
-    // ── Tier 3: Last Resort (Google Gemini) ──
+    // ── Tier 3: Last Resort (whisper-1, or the admin's Vercel model) ──
     if (!result && lastResortModel !== primaryModel && lastResortModel !== fallbackModel) {
       try {
         console.log(`Tier 3 (last_resort): ${lastResortModel}`);
-        result = await runTranscription(audioBlob, lastResortModel, supabaseAdmin);
+        result = await runTranscription(audioBlob, lastResortModel, supabaseAdmin, lastResortProvider);
         tiers.push({ tier: "last_resort", model: lastResortModel, success: true });
       } catch (err) {
         const details = extractErrorDetails(err);
