@@ -194,6 +194,8 @@ Deno.test("Gemini models map by generation method, with the models/ prefix strip
     { name: "models/imagen-4.0-generate-001", displayName: "Imagen", supportedGenerationMethods: ["predict"] },
     { name: "models/veo-3.0-generate-001", displayName: "Veo", supportedGenerationMethods: ["predictLongRunning"] },
     { name: "models/aqa", displayName: "AQA", supportedGenerationMethods: ["generateAnswer"] },
+    // Gemma is served through the Gemini API but rejects system instructions and tool calls,
+    // so it cannot work as a chat or agent model here; it must be skipped, not classified chat.
     { name: "models/gemma-4-31b-it", displayName: "Gemma", supportedGenerationMethods: ["generateContent"] },
     { name: "models/lyria-3-clip-preview", displayName: "Lyria Clip", supportedGenerationMethods: ["generateContent"] },
     { name: "models/lyria-3-pro-preview", displayName: "Lyria Pro", supportedGenerationMethods: ["generateContent"] },
@@ -209,18 +211,20 @@ Deno.test("Gemini models map by generation method, with the models/ prefix strip
   assertEquals(byId(mapped), {
     "gemini-2.5-flash": ["chat"], "gemini-2.5-flash-preview-tts": ["tts"], "gemini-2.5-flash-image": ["image"],
     "gemini-embedding-001": ["embedding"], "imagen-4.0-generate-001": ["image"], "veo-3.0-generate-001": ["video"],
-    "gemma-4-31b-it": ["chat"], "gemini-3.5-transcribe": ["stt"], "nano-banana-pro-preview": ["image"],
+    "gemini-3.5-transcribe": ["stt"], "nano-banana-pro-preview": ["image"],
   });
   // Music and agent models list generateContent like any chat model, so id patterns must
   // win before the generateContent → chat fallback runs, not merely skip an unknown method.
-  assertEquals(mapped.skippedByType, { generateAnswer: 1, music: 3, agent: 5 });
+  // Gemma is open-weights: it lists generateContent too, but the Gemini API rejects system
+  // instructions and tool calls for it, so it cannot serve as chat or agent here either.
+  assertEquals(mapped.skippedByType, { generateAnswer: 1, music: 3, agent: 5, "open-weights": 1 });
   assertEquals(mapped.managedCapabilities.sort(), ["chat", "embedding", "image", "stt", "tts", "video"]);
 });
 
 Deno.test("OpenAI ids are classified by name; dated snapshots and non-reply models are skipped", () => {
   const mapped = mapOpenAICatalog([
     "gpt-5.5", "gpt-5-nano-2025-08-07", "o4-mini", "chatgpt-4o-latest", "gpt-image-2", "dall-e-3", "gpt-4o-mini-tts",
-    "tts-1-hd", "whisper-1", "gpt-4o-transcribe", "text-embedding-3-small", "sora-2", "omni-moderation-latest",
+    "tts-1-hd", "whisper-1", "gpt-4o-transcribe", "text-embedding-3-small", "sora-2", "sora-2-pro", "omni-moderation-latest",
     "gpt-4o-realtime-preview", "gpt-4o-audio-preview", "gpt-4o-search-preview", "computer-use-preview", "babbage-002",
     "gpt-audio", "o3-deep-research",
     // Old-style 4-digit snapshots (no full date), matched by /-\d{4}$/ without catching gpt-4o or o4-mini.
@@ -237,10 +241,21 @@ Deno.test("OpenAI ids are classified by name; dated snapshots and non-reply mode
     "gpt-5.5": ["chat"], "o4-mini": ["chat"], "chatgpt-4o-latest": ["chat"], "gpt-image-2": ["image"], "dall-e-3": ["image"],
     "gpt-4o-mini-tts": ["tts"], "tts-1-hd": ["tts"], "whisper-1": ["stt"], "gpt-4o-transcribe": ["stt"],
     "text-embedding-3-small": ["embedding"], "sora-2": ["video"],
+    // sora-2-pro is a video model whose id also ends in "-pro"; the -pro$ "other" exclusion
+    // (meant for o1-pro/gpt-5-pro chat snapshots) must never run before the media checks below.
+    "sora-2-pro": ["video"],
     "gpt-5.1": ["chat"], "gpt-6-luna": ["chat"], "gpt-5.3-chat-latest": ["chat"], "gpt-4-turbo": ["chat"],
     "gpt-3.5-turbo": ["chat"], "o1": ["chat"], "gpt-4": ["chat"], "gpt-live-transcribe": ["stt"],
   });
   assertEquals(mapped.skippedByType, { snapshot: 7, other: 20 });
+});
+
+Deno.test("planCatalogSync does not deactivate an active sora-2-pro video row when OpenAI still lists it", () => {
+  const mapped = mapOpenAICatalog([{ id: "sora-2-pro" }]);
+  const plan = planCatalogSync([
+    existingRow({ id: "1", model_id: "sora-2-pro", is_active: true, capabilities: ["video"], metadata: null }),
+  ], mapped, new Set());
+  assertEquals(plan.deactivateIds, []);
 });
 
 Deno.test("Z.ai and MiniMax list chat ids only, and the catalogue is partial so nothing is managed", () => {

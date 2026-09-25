@@ -323,6 +323,9 @@ function geminiCapability(id: string, methods: string[]): Capability | string {
   // generateContent → chat fallback below, not left to fall through to "chat".
   if (/^lyria/i.test(id)) return "music";
   if (/deep-research|computer-use|robotics|antigravity/i.test(id)) return "agent";
+  // Gemma is open-weights and served through the Gemini API, but the API rejects system
+  // instructions and tool calls for it, so it cannot work here as a chat or agent model either.
+  if (/^gemma/i.test(id)) return "open-weights";
   if (/transcribe/i.test(id)) return "stt";
   if (methods.includes("predictLongRunning")) return "video";
   if (methods.includes("predict")) return "image";
@@ -361,14 +364,18 @@ const DATED_SNAPSHOT = /-\d{4}-\d{2}-\d{2}$/;
 const OLD_SNAPSHOT = /-\d{4}$/;
 function openAICapability(id: string): Capability | string {
   if (DATED_SNAPSHOT.test(id) || OLD_SNAPSHOT.test(id)) return "snapshot";
-  // instruct/codex/*-pro ids and gpt-live-<n> don't work through /chat/completions.
-  // gpt-live-\d (not \w) so gpt-live-transcribe falls through to the stt check below.
-  if (/moderation|realtime|audio|search|computer-use|deep-research|instruct|codex|-pro$|^gpt-live-\d|^babbage|^davinci|^ft:/.test(id)) return "other";
+  // Media checks run before the "other" exclusions below: sora-2-pro is a video model whose id
+  // also ends in "-pro", and it must not be caught by the -pro$ exclusion meant for o1-pro /
+  // gpt-5-pro chat snapshots. Checking transcribe here also means gpt-live-transcribe resolves
+  // to stt before it ever reaches the gpt-live-* "other" exclusion, so that exclusion no longer
+  // needs to special-case a trailing digit to let the transcribe variant through.
   if (/^(gpt-image|dall-e|chatgpt-image)/.test(id)) return "image";
   if (/tts/.test(id)) return "tts";
   if (/whisper|transcribe/.test(id)) return "stt";
   if (/embedding/.test(id)) return "embedding";
   if (/^sora/.test(id)) return "video";
+  // instruct/codex/*-pro ids and gpt-live-* don't work through /chat/completions.
+  if (/moderation|realtime|audio|search|computer-use|deep-research|instruct|codex|-pro$|^gpt-live|^babbage|^davinci|^ft:/.test(id)) return "other";
   if (/^(gpt-|o\d|chatgpt-)/.test(id)) return "chat";
   return "other";
 }
