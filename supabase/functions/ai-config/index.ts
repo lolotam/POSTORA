@@ -2,7 +2,7 @@ import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { restrictedCorsHeaders } from '../_shared/cors.ts';
 import { HiggsfieldAuthError, getValidAccessToken } from '../_shared/higgsfield-oauth.ts';
 import { HiggsfieldMcpClient } from '../_shared/higgsfield-mcp.ts';
-import { runCatalogSync, SYNCABLE_PROVIDERS } from '../_shared/modelCatalogSyncRun.ts';
+import { type CatalogDb, runCatalogSync, SYNCABLE_PROVIDERS } from '../_shared/modelCatalogSyncRun.ts';
 import { describeProviderFailure, isBillingBlocked, ProviderTestError } from '../_shared/providerErrors.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
@@ -314,7 +314,8 @@ serve(async (req) => {
           return new Response(JSON.stringify({ error: 'Provider does not support model sync' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
         }
         try {
-          const report = await runCatalogSync(supabase, provider_code);
+          // The generated client type is too deep for a structural check; it satisfies CatalogDb at runtime.
+          const report = await runCatalogSync(supabase as unknown as CatalogDb, provider_code);
           return new Response(JSON.stringify(report), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
         } catch (e: any) {
           // Upstream catalogue failure, not an app error: 502 would be masked by Cloudflare,

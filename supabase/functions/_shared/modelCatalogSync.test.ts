@@ -1,7 +1,7 @@
 // deno-lint-ignore-file no-import-prefix
 import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import {
-  mapDeepSeekCatalog, mapOpenRouterCatalog, mapVercelCatalog, planCatalogSync,
+  type ExistingModelRow, mapDeepSeekCatalog, mapOpenRouterCatalog, mapVercelCatalog, planCatalogSync,
 } from "./modelCatalogSync.ts";
 
 const vercel = [
@@ -70,13 +70,18 @@ Deno.test("mapDeepSeekCatalog marks every id as chat", () => {
   ]);
 });
 
+/** An ai_models row with a stale name, so the planner always sees it as changed. */
+const existingRow = (row: Pick<ExistingModelRow, "id" | "model_id" | "is_active" | "capabilities" | "metadata">): ExistingModelRow => ({
+  name: "stale", description: null, context_limit: null, cost_per_1m_input_tokens: null, cost_per_1m_output_tokens: null, ...row,
+});
+
 Deno.test("planCatalogSync inserts new, updates existing, and guards in-use and unmanaged rows", () => {
   const mapped = mapVercelCatalog(vercel.slice(0, 2));
   const plan = planCatalogSync([
-    { id: "1", model_id: "openai/gpt-5.5", is_active: true, capabilities: ["chat"], metadata: null },
-    { id: "2", model_id: "openai/gone", is_active: true, capabilities: ["chat"], metadata: null },
-    { id: "3", model_id: "openai/gone-but-default", is_active: true, capabilities: ["chat"], metadata: null },
-    { id: "4", model_id: "hand/seeded-embed", is_active: true, capabilities: ["search"], metadata: null },
+    existingRow({ id: "1", model_id: "openai/gpt-5.5", is_active: true, capabilities: ["chat"], metadata: null }),
+    existingRow({ id: "2", model_id: "openai/gone", is_active: true, capabilities: ["chat"], metadata: null }),
+    existingRow({ id: "3", model_id: "openai/gone-but-default", is_active: true, capabilities: ["chat"], metadata: null }),
+    existingRow({ id: "4", model_id: "hand/seeded-embed", is_active: true, capabilities: ["search"], metadata: null }),
   ], mapped, new Set(["openai/gone-but-default"]));
   assertEquals(plan.inserts.map((m) => m.model_id), ["openai/text-embedding-3-small"]);
   assertEquals(plan.updates.map((u) => [u.id, u.reactivate]), [["1", false]]);
@@ -86,10 +91,10 @@ Deno.test("planCatalogSync inserts new, updates existing, and guards in-use and 
 
 Deno.test("planCatalogSync reactivates only rows a previous sync switched off", () => {
   const mapped = mapVercelCatalog(vercel.slice(0, 1));
-  const bySync = planCatalogSync([{ id: "1", model_id: "openai/gpt-5.5", is_active: false,
-    capabilities: ["chat"], metadata: { sync_deactivated: true } }], mapped, new Set());
-  const byAdmin = planCatalogSync([{ id: "1", model_id: "openai/gpt-5.5", is_active: false,
-    capabilities: ["chat"], metadata: {} }], mapped, new Set());
+  const bySync = planCatalogSync([existingRow({ id: "1", model_id: "openai/gpt-5.5", is_active: false,
+    capabilities: ["chat"], metadata: { sync_deactivated: true } })], mapped, new Set());
+  const byAdmin = planCatalogSync([existingRow({ id: "1", model_id: "openai/gpt-5.5", is_active: false,
+    capabilities: ["chat"], metadata: {} })], mapped, new Set());
   assertEquals(bySync.updates[0].reactivate, true);
   assertEquals(byAdmin.updates[0].reactivate, false);
 });

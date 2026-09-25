@@ -24,14 +24,29 @@ export interface MappedCatalog {
 export interface ExistingModelRow {
   id: string;
   model_id: string;
+  name: string;
+  description: string | null;
   is_active: boolean;
   capabilities: string[];
+  context_limit: number | null;
+  /** NUMERIC(10,4); PostgREST may hand it back as a string. */
+  cost_per_1m_input_tokens: number | string | null;
+  cost_per_1m_output_tokens: number | string | null;
   metadata: Record<string, unknown> | null;
 }
 
+/** A catalogue model merged onto its row. Capabilities widen to string: admin-added ones are kept. */
+export type ModelUpdate = Omit<CatalogModel, "capabilities"> & {
+  id: string;
+  capabilities: string[];
+  is_active: boolean;
+  reactivate: boolean;
+};
+
 export interface SyncPlan {
   inserts: CatalogModel[];
-  updates: Array<CatalogModel & { id: string; reactivate: boolean }>;
+  /** Existing rows whose stored values differ from the merged catalogue values; unchanged rows are absent. */
+  updates: ModelUpdate[];
   deactivateIds: string[];
   keptInUse: string[];
 }
@@ -144,6 +159,34 @@ export function mapDeepSeekCatalog(data: unknown[]): MappedCatalog {
   return { models, skippedByType: {}, managedCapabilities: ["chat"] };
 }
 
+// Stable across key order: jsonb hands keys back in its own order.
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    const entries = Object.entries(value as Row).sort(([a], [b]) => a.localeCompare(b));
+    return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${stableJson(v)}`).join(",")}}`;
+  }
+  return JSON.stringify(value ?? null);
+}
+
+// The cost columns are NUMERIC(10,4); compare at the precision they store.
+const fourDp = (v: number | string | null): number | null => {
+  if (v === null) return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.round(n * 1e4) / 1e4 : null;
+};
+
+function isUnchanged(row: ExistingModelRow, next: ModelUpdate): boolean {
+  return row.name === next.name &&
+    (row.description ?? null) === next.description &&
+    (row.context_limit ?? null) === next.context_limit &&
+    fourDp(row.cost_per_1m_input_tokens) === fourDp(next.cost_per_1m_input_tokens) &&
+    fourDp(row.cost_per_1m_output_tokens) === fourDp(next.cost_per_1m_output_tokens) &&
+    row.is_active === next.is_active &&
+    stableJson([...row.capabilities].sort()) === stableJson(next.capabilities) &&
+    stableJson(row.metadata ?? {}) === stableJson(next.metadata);
+}
+
 export function planCatalogSync(
   existing: ExistingModelRow[],
   mapped: MappedCatalog,
@@ -161,7 +204,13 @@ export function planCatalogSync(
       continue;
     }
     const reactivate = !row.is_active && row.metadata?.sync_deactivated === true;
-    plan.updates.push({ ...model, metadata: { ...(row.metadata ?? {}), ...model.metadata }, id: row.id, reactivate });
+    const metadata = { ...(row.metadata ?? {}), ...model.metadata };
+    if (reactivate) metadata.sync_deactivated = false;
+    // Capabilities outside what this catalogue manages (search, agent, ...) were set by an admin.
+    const adminCapabilities = row.capabilities.filter((c) => !managed.has(c));
+    const capabilities = [...new Set([...adminCapabilities, ...model.capabilities])].sort();
+    const update: ModelUpdate = { ...model, capabilities, metadata, id: row.id, is_active: reactivate || row.is_active, reactivate };
+    if (!isUnchanged(row, update)) plan.updates.push(update);
   }
   for (const row of existing) {
     if (!row.is_active || found.has(row.model_id)) continue;
