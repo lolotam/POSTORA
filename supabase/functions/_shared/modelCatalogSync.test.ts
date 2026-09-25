@@ -138,3 +138,25 @@ Deno.test("Jev decision models map to the triage capability on both catalogues",
   assertEquals(vercelJev.capabilities, ["triage"]);
   assertEquals(routerJev.capabilities, ["triage"]);
 });
+
+Deno.test("an id-only catalogue never erases a curated name, price, context or description", () => {
+  const mapped = { models: [{ model_id: "gpt-5", name: "gpt-5", description: null, capabilities: ["chat" as const],
+    context_limit: null, cost_per_1m_input_tokens: null, cost_per_1m_output_tokens: null, metadata: {} }],
+    skippedByType: {}, managedCapabilities: ["chat" as const] };
+  const row = { ...existingRow({ id: "1", model_id: "gpt-5", is_active: true, capabilities: ["chat"], metadata: null }),
+    name: "GPT-5", description: "Flagship", context_limit: 400000, cost_per_1m_input_tokens: "5.0000", cost_per_1m_output_tokens: 15 };
+  const plan = planCatalogSync([row], mapped, new Set());
+  assertEquals(plan.updates, []);
+});
+
+Deno.test("an additive catalogue keeps capabilities an admin gave a row", () => {
+  const mapped = { models: [{ model_id: "gemini-2.5-flash", name: "Gemini 2.5 Flash", description: null,
+    capabilities: ["chat" as const], context_limit: null, cost_per_1m_input_tokens: null, cost_per_1m_output_tokens: null,
+    metadata: {} }], skippedByType: {}, managedCapabilities: ["chat" as const, "image" as const], additiveCapabilities: true as const };
+  const row = { ...existingRow({ id: "1", model_id: "gemini-2.5-flash", is_active: true, capabilities: ["stt", "image", "chat"], metadata: null }),
+    name: "Gemini 2.5 Flash" };
+  const plan = planCatalogSync([row], mapped, new Set());
+  assertEquals(plan.updates, []);
+  const replacing = planCatalogSync([row], { ...mapped, additiveCapabilities: undefined }, new Set());
+  assertEquals(replacing.updates[0].capabilities, ["chat", "stt"]);
+});

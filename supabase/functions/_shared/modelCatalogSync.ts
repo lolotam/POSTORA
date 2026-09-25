@@ -19,6 +19,8 @@ export interface MappedCatalog {
   skippedByType: Record<string, number>;
   /** Capabilities this catalogue is authoritative for; rows outside them are never touched. */
   managedCapabilities: Capability[];
+  /** Direct providers: never remove a capability an admin gave a row. */
+  additiveCapabilities?: true;
 }
 
 export interface ExistingModelRow {
@@ -36,11 +38,13 @@ export interface ExistingModelRow {
 }
 
 /** A catalogue model merged onto its row. Capabilities widen to string: admin-added ones are kept. */
-export type ModelUpdate = Omit<CatalogModel, "capabilities"> & {
+export type ModelUpdate = Omit<CatalogModel, "capabilities" | "cost_per_1m_input_tokens" | "cost_per_1m_output_tokens"> & {
   id: string;
   capabilities: string[];
   is_active: boolean;
   reactivate: boolean;
+  cost_per_1m_input_tokens: number | string | null;
+  cost_per_1m_output_tokens: number | string | null;
 };
 
 export interface SyncPlan {
@@ -251,8 +255,20 @@ export function planCatalogSync(
     if (reactivate) metadata.sync_deactivated = false;
     // Capabilities outside what this catalogue manages (search, agent, ...) were set by an admin.
     const adminCapabilities = row.capabilities.filter((c) => !managed.has(c));
-    const capabilities = [...new Set([...adminCapabilities, ...model.capabilities])].sort();
-    const update: ModelUpdate = { ...model, capabilities, metadata, id: row.id, is_active: reactivate || row.is_active, reactivate };
+    const kept = (next: number | string | null, stored: number | string | null) => next ?? stored;
+    const capabilities = mapped.additiveCapabilities
+      ? [...new Set([...row.capabilities, ...model.capabilities])].sort()
+      : [...new Set([...adminCapabilities, ...model.capabilities])].sort();
+    const update: ModelUpdate = {
+      ...model,
+      // A catalogue that lists bare ids has no display name, price or context: keep the curated ones.
+      name: model.name === model.model_id && row.name ? row.name : model.name,
+      description: model.description ?? row.description ?? null,
+      context_limit: model.context_limit ?? row.context_limit ?? null,
+      cost_per_1m_input_tokens: kept(model.cost_per_1m_input_tokens, row.cost_per_1m_input_tokens) as number | null,
+      cost_per_1m_output_tokens: kept(model.cost_per_1m_output_tokens, row.cost_per_1m_output_tokens) as number | null,
+      capabilities, metadata, id: row.id, is_active: reactivate || row.is_active, reactivate,
+    };
     if (!isUnchanged(row, update)) plan.updates.push(update);
   }
   for (const row of existing) {
