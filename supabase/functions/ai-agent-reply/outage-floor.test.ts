@@ -249,3 +249,55 @@ Deno.test("a manual ai_first override blocks the outage mute and no apology is s
   assertEquals(result.escalated, false);
   assertEquals(c.sent.length, 0);
 });
+
+Deno.test("the outage floor stores its reason as the handoff summary", async () => {
+  // The floor has no model to write a summary with, so the boundary's fallback
+  // to `reason` is what the human sees in the queue.
+  const c = collector();
+  const captured: { storedRow: Record<string, unknown> | null } = { storedRow: null };
+  const admin = {
+    from(table: string) {
+      if (table === "ai_conversation_modes") {
+        const none: Record<string, unknown> = {};
+        none.eq = () => none;
+        none.maybeSingle = () => Promise.resolve({ data: null, error: null });
+        return {
+          select: () => none,
+          insert: (payload: Record<string, unknown>) => {
+            captured.storedRow = payload;
+            return Promise.resolve({ error: null });
+          },
+          upsert: (payload: Record<string, unknown>) => {
+            captured.storedRow = payload;
+            return Promise.resolve({ error: null });
+          },
+        };
+      }
+      return {
+        select: () => ({
+          eq: () => ({
+            is: () => ({ maybeSingle: () => Promise.resolve({ data: null }) }),
+            maybeSingle: () => Promise.resolve({ data: null }),
+            abortSignal: () => ({ maybeSingle: () => Promise.resolve({ data: null }) }),
+          }),
+          abortSignal: () => ({
+            then: (resolve: (v: unknown) => void) => resolve({ data: [] }),
+          }),
+          then: (resolve: (v: unknown) => void) => resolve({ data: [] }),
+        }),
+        insert: () => Promise.resolve({ error: null }),
+        update: () => ({ eq: () => Promise.resolve({ error: null }) }),
+      };
+    },
+  };
+
+  const result = await deliverModelOutageFloor(
+    DM, c.sender, "en", target({ admin, defaultMode: "human_then_ai", escalationTimeoutMinutes: 60 }), NONE,
+  );
+
+  assertEquals(result.escalated, true);
+  assert(captured.storedRow !== null);
+  assertEquals(captured.storedRow.handoff_summary, "All configured AI models failed");
+  assertEquals(typeof captured.storedRow.handoff_summary_at, "string");
+});
+

@@ -3,6 +3,7 @@ import {
   type ConnectorCapability,
   type ConnectorType,
 } from "../_shared/connectorRegistry.ts";
+import type { ConnectorCache } from "./cache.ts";
 
 export const CAPABILITIES = CONNECTOR_CAPABILITY_NAMES;
 
@@ -53,6 +54,13 @@ export interface AdapterDependencies {
    * vendor's own ceiling applies when absent.
    */
   callBudgetMs?: number;
+  /**
+   * Short-lived cache for read-only connector answers (WooCommerce category
+   * ids and product searches). Optional so existing callers and tests keep
+   * working; absent means every call goes live. A cache failure must never
+   * fail the call.
+   */
+  cache?: ConnectorCache;
 }
 
 export interface ConnectorFailure {

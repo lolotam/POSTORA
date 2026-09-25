@@ -1,3 +1,4 @@
+import { cacheKey, type ConnectorCache } from "./cache.ts";
 import { readJson, safeVendorFetch } from "./http.ts";
 import type {
   AdapterDependencies,
@@ -38,6 +39,37 @@ const SORT_KEYS: Record<string, string> = {
 
 const DEFAULT_SEARCH_LIMIT = 5;
 const MAX_SEARCH_LIMIT = 20;
+
+// A category id is stable for the store's lifetime in
+// practice, so it is cached for a day; a product search only for 120 s, the
+// staleness the tool description admits to the model. check_stock and
+// lookup_orders are never cached.
+const CATEGORY_CACHE_TTL_SECONDS = 86_400;
+const SEARCH_CACHE_TTL_SECONDS = 120;
+
+/** A cache read failure is a miss, never a failed connector call. */
+async function cacheRead(cache: ConnectorCache, key: string): Promise<unknown | null> {
+  try {
+    return await cache.get(key);
+  } catch {
+    return null;
+  }
+}
+
+/** A cache write failure is dropped; the live result is still returned. */
+async function cacheWrite(
+  cache: ConnectorCache,
+  key: string,
+  toolId: string,
+  value: unknown,
+  ttlSeconds: number,
+): Promise<void> {
+  try {
+    await cache.set(key, toolId, value, ttlSeconds);
+  } catch {
+    // Fall through: caching is an optimisation, not part of the answer.
+  }
+}
 
 /**
  * How many products to return. Defaults low on purpose: the result is
@@ -205,11 +237,39 @@ async function resolveCategoryId(
   return chosen && chosen.id !== undefined ? String(chosen.id) : null;
 }
 
+/**
+ * resolveCategoryId costs one extra request per category name. The id is
+ * stable, so the answer is cached for a day keyed by tool, store and name. A
+ * not-found null is never cached: it is a failure, and the store may add the
+ * category any minute.
+ */
+async function resolveCachedCategoryId(
+  toolId: string,
+  storeUrl: string,
+  authorization: string,
+  name: string,
+  dependencies: AdapterDependencies,
+): Promise<{ id: string | null; cached: boolean }> {
+  const cache = dependencies.cache;
+  if (!cache) {
+    return { id: await resolveCategoryId(storeUrl.replace(/\/+$/, ""), authorization, name, dependencies), cached: false };
+  }
+  const key = await cacheKey(["cat", toolId, storeUrl, name]);
+  const cached = await cacheRead(cache, key);
+  if (typeof cached === "string") return { id: cached, cached: true };
+  const resolved = await resolveCategoryId(storeUrl.replace(/\/+$/, ""), authorization, name, dependencies);
+  if (resolved !== null) {
+    await cacheWrite(cache, key, toolId, resolved, CATEGORY_CACHE_TTL_SECONDS);
+  }
+  return { id: resolved, cached: false };
+}
+
 async function callWooCommerce(
   invocation: ConnectorInvocation,
   dependencies: AdapterDependencies,
   capability?: Capability,
 ): Promise<ConnectorResult> {
+  if (invocation.request.action !== "execute") capability = undefined;
   const consumerKey = requiredString(invocation.credentials, "consumer_key");
   const consumerSecret = requiredString(invocation.credentials, "consumer_secret");
   const storeUrl = requiredString(invocation.tool.settings, "store_url");
@@ -218,17 +278,39 @@ async function callWooCommerce(
   }
   const authorization = `Basic ${btoa(`${consumerKey}:${consumerSecret}`)}`;
 
+  // A cached search answer skips the category resolution too — a hit means the
+  // whole call is answered without touching the store. Failures are never
+  // cached, so the hit is always a projected success payload.
+  let searchCacheKey: string | null = null;
+  if (invocation.request.action === "execute" && capability === "search_products" && dependencies.cache) {
+    searchCacheKey = await cacheKey(["search", invocation.tool.id, storeUrl, invocation.request.parameters]);
+    const cachedSearch = await cacheRead(dependencies.cache, searchCacheKey);
+    if (cachedSearch !== null) {
+      return {
+        ok: true,
+        vendor: "woocommerce",
+        action: "execute",
+        capability,
+        data: cachedSearch,
+      };
+    }
+  }
+
   let categoryId: string | null = null;
+  let categoryWasCached = false;
   const categoryName = capability === "search_products"
     ? requiredString(invocation.request.parameters, "category")
     : null;
   if (categoryName) {
-    categoryId = await resolveCategoryId(
-      storeUrl.replace(/\/+$/, ""),
+    const category = await resolveCachedCategoryId(
+      invocation.tool.id,
+      storeUrl,
       authorization,
       categoryName,
       dependencies,
     );
+    categoryId = category.id;
+    categoryWasCached = category.cached;
     if (!categoryId) {
       // Said out loud rather than silently searching every category: an answer
       // drawn from the whole store would be wrong for the question asked.
@@ -244,7 +326,7 @@ async function callWooCommerce(
     return wooFailure("woocommerce_configuration_invalid", "WooCommerce is not fully configured.");
   }
 
-  const response = await safeVendorFetch(url, {
+  let response = await safeVendorFetch(url, {
     method: "GET",
     headers: {
       Accept: "application/json",
@@ -254,7 +336,25 @@ async function callWooCommerce(
   if (!response.ok) {
     return wooFailure("woocommerce_http_error", "WooCommerce rejected the request.", response.status);
   }
-  const payload = await readJson(response);
+  let payload = await readJson(response);
+  if (categoryWasCached && categoryName && Array.isArray(payload) && payload.length === 0) {
+    const liveId = await resolveCategoryId(storeUrl.replace(/\/+$/, ""), authorization, categoryName, dependencies);
+    if (liveId !== null && liveId !== categoryId) {
+      if (dependencies.cache) {
+        const key = await cacheKey(["cat", invocation.tool.id, storeUrl, categoryName]);
+        await cacheWrite(dependencies.cache, key, invocation.tool.id, liveId, CATEGORY_CACHE_TTL_SECONDS);
+      }
+      // One retry only, even if the refreshed category also contains no matches.
+      response = await safeVendorFetch(buildUrl(invocation, capability, liveId)!, {
+        method: "GET",
+        headers: { Accept: "application/json", Authorization: authorization },
+      }, dependencies);
+      if (!response.ok) {
+        return wooFailure("woocommerce_http_error", "WooCommerce rejected the request.", response.status);
+      }
+      payload = await readJson(response);
+    }
+  }
   if (
     payload !== null && typeof payload === "object" && !Array.isArray(payload) &&
     typeof (payload as Record<string, unknown>).code === "string" &&
@@ -276,12 +376,22 @@ async function callWooCommerce(
       read_only: true,
     };
   }
+  const projected = projectPayload(capability, payload);
+  if (searchCacheKey !== null && dependencies.cache) {
+    await cacheWrite(
+      dependencies.cache,
+      searchCacheKey,
+      invocation.tool.id,
+      projected,
+      SEARCH_CACHE_TTL_SECONDS,
+    );
+  }
   return {
     ok: true,
     vendor: "woocommerce",
     action: "execute",
     capability,
-    data: projectPayload(capability, payload),
+    data: projected,
   };
 }
 

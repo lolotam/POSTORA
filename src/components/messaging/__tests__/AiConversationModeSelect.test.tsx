@@ -75,6 +75,64 @@ describe("AiConversationModeSelect", () => {
     expect(screen.queryByRole("button", { name: "Release override" })).not.toBeInTheDocument();
   });
 
+  it("shows the AI handoff summary under the select when the mode row has one", async () => {
+    callMessagingApi.mockResolvedValueOnce({
+      mode: {
+        id: "mode-1",
+        user_id: "user-1",
+        platform: "whatsapp",
+        conversation_id: "c1",
+        mode: "human_first",
+        expires_at: "2099-01-01T10:00:00Z",
+        handoff_summary: "Wants a refund for order 42. I confirmed the order exists.",
+        handoff_summary_at: "2026-09-25T09:00:00Z",
+        created_at: "2026-09-13T00:00:00Z",
+        updated_at: "2026-09-13T00:00:00Z",
+      },
+    });
+
+    renderComponent();
+
+    expect(await screen.findByText("AI summary")).toBeInTheDocument();
+    expect(screen.getByText("Wants a refund for order 42. I confirmed the order exists.")).toBeInTheDocument();
+  });
+
+  it("shows no AI summary block when handoff_summary is null", async () => {
+    callMessagingApi.mockResolvedValueOnce({
+      mode: {
+        id: "mode-1",
+        user_id: "user-1",
+        platform: "whatsapp",
+        conversation_id: "c1",
+        mode: "human_first",
+        expires_at: "2099-01-01T10:00:00Z",
+        handoff_summary: null,
+        handoff_summary_at: null,
+        created_at: "2026-09-13T00:00:00Z",
+        updated_at: "2026-09-13T00:00:00Z",
+      },
+    });
+
+    renderComponent();
+
+    expect(await screen.findByText(/Escalated to human/i)).toBeInTheDocument();
+    expect(screen.queryByText("AI summary")).not.toBeInTheDocument();
+  });
+
+  it.each(["2000-01-01T00:00:00Z", null])("hides a summary without an active window (%s)", async (expires_at) => {
+    callMessagingApi.mockResolvedValueOnce({
+      mode: {
+        id: "mode-1", user_id: "user-1", platform: "whatsapp", conversation_id: "c1",
+        mode: "human_first", expires_at, handoff_summary: "Old handoff context",
+        created_at: "2026-09-13T00:00:00Z", updated_at: "2026-09-13T00:00:00Z",
+      },
+    });
+    renderComponent();
+    expect(await screen.findByText("AI: Human first")).toBeInTheDocument();
+    expect(screen.queryByText("AI summary")).not.toBeInTheDocument();
+    expect(screen.queryByText("Old handoff context")).not.toBeInTheDocument();
+  });
+
   it("Release override sends the default mode", async () => {
     callMessagingApi.mockImplementation((action: string) => {
       if (action === "ai_get_conversation_mode") {

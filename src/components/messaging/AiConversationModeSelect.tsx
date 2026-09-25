@@ -54,45 +54,54 @@ export function AiConversationModeSelect({
     : "";
 
   return (
-    <div className="flex items-center gap-2">
-      <Select value={currentValue} onValueChange={handleChange} disabled={setConversationMode.isPending}>
-        <SelectTrigger className="h-8 w-40 text-xs" aria-label={t("mode.aria", "AI engagement mode for this conversation")}>
-          <div className="flex items-center gap-1.5">
-            <Bot className="h-3.5 w-3.5 shrink-0" />
-            <SelectValue />
-          </div>
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value="default">{modeLabel("default")}</SelectItem>
-          <SelectItem value="ai_first">{modeLabel("ai_first")}</SelectItem>
-          <SelectItem value="human_first">{modeLabel("human_first")}</SelectItem>
-          <SelectItem value="human_then_ai">{modeLabel("human_then_ai")}</SelectItem>
-        </SelectContent>
-      </Select>
-      {mode?.expires_at && (
-        <>
-          <Badge
-            variant="secondary"
-            className="gap-1 text-xs"
-            title={t("mode.humanWindow", "Human window until {{time}}", { time: new Date(mode.expires_at).toLocaleString() })}
-          >
-            <UserRound className="h-3 w-3" />
-            {mode.mode === "human_first"
-              ? t("mode.escalatedUntil", "Escalated to human · until {{time}}", { time: untilTime })
-              : t("mode.notedUntil", "Escalation noted · AI answering · until {{time}}", { time: untilTime })}
-          </Badge>
-          <Button
-            type="button" size="sm" variant="outline" className="h-8 text-xs"
-            disabled={setConversationMode.isPending}
-            onClick={() => setConversationMode.mutate("default", {
-              onSuccess: () => toast.success(t("mode.cleared", "Override cleared. The account default applies again.")),
-              onError: (error) => toast.error(error.message || t("mode.clearFailed", "Could not clear the override")),
-            })}
-          >
-            {t("mode.release", "Release override")}
-          </Button>
-        </>
-      )}
+    <div className="flex flex-col gap-1">
+      <div className="flex items-center gap-2">
+        <Select value={currentValue} onValueChange={handleChange} disabled={setConversationMode.isPending}>
+          <SelectTrigger className="h-8 w-40 text-xs" aria-label={t("mode.aria", "AI engagement mode for this conversation")}>
+            <div className="flex items-center gap-1.5">
+              <Bot className="h-3.5 w-3.5 shrink-0" />
+              <SelectValue />
+            </div>
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="default">{modeLabel("default")}</SelectItem>
+            <SelectItem value="ai_first">{modeLabel("ai_first")}</SelectItem>
+            <SelectItem value="human_first">{modeLabel("human_first")}</SelectItem>
+            <SelectItem value="human_then_ai">{modeLabel("human_then_ai")}</SelectItem>
+          </SelectContent>
+        </Select>
+        {mode?.expires_at && (
+          <>
+            <Badge
+              variant="secondary"
+              className="gap-1 text-xs"
+              title={t("mode.humanWindow", "Human window until {{time}}", { time: new Date(mode.expires_at).toLocaleString() })}
+            >
+              <UserRound className="h-3 w-3" />
+              {mode.mode === "human_first"
+                ? t("mode.escalatedUntil", "Escalated to human · until {{time}}", { time: untilTime })
+                : t("mode.notedUntil", "Escalation noted · AI answering · until {{time}}", { time: untilTime })}
+            </Badge>
+            <Button
+              type="button" size="sm" variant="outline" className="h-8 text-xs"
+              disabled={setConversationMode.isPending}
+              onClick={() => setConversationMode.mutate("default", {
+                onSuccess: () => toast.success(t("mode.cleared", "Override cleared. The account default applies again.")),
+                onError: (error) => toast.error(error.message || t("mode.clearFailed", "Could not clear the override")),
+              })}
+            >
+              {t("mode.release", "Release override")}
+            </Button>
+          </>
+        )}
+      </div>
+      {/* Plain text only: the summary is model output and must never render as HTML. */}
+      {mode?.handoff_summary && mode.expires_at && Date.parse(mode.expires_at) > Date.now() ? (
+        <div className="max-w-[280px] text-xs text-muted-foreground">
+          <span className="font-medium">{t("mode.aiSummary", "AI summary")}</span>
+          <p className="truncate" title={mode.handoff_summary}>{mode.handoff_summary}</p>
+        </div>
+      ) : null}
     </div>
   );
 }

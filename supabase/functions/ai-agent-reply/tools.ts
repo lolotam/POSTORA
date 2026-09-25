@@ -84,6 +84,11 @@ export const toolDefinitions = [
         type: "object",
         properties: {
           reason: { type: "string", description: "Why the conversation needs a human" },
+          summary: {
+            type: "string",
+            description:
+              "Two short lines for the human agent: what the customer wants, and what you already checked or told them. Plain text.",
+          },
         },
         required: ["reason"],
       },
@@ -228,6 +233,19 @@ export interface EscalationOutcome {
 }
 
 /**
+ * The AI's two-line note for the human, normalised at the one boundary every
+ * escalation passes through (the tool, the outage floor, recovery). Markdown is
+ * stripped because the human reads it in a chat UI that renders none; an empty
+ * result falls back to the reason, sanitised the same way; 300 is the column's
+ * CHECK limit.
+ */
+export function handoffSummary(summary: unknown, reason: string): string {
+  const sanitise = (value: unknown): string =>
+    typeof value === "string" ? value.replace(/\*\*|__|`|^#+/gm, "").trim() : "";
+  return (sanitise(summary) || sanitise(reason)).slice(0, 300);
+}
+
+/**
  * Hands a conversation to a human. Callable from the escalate_to_human tool and
  * from index.ts's model-outage floor, which has no working model to call a tool
  * with.
@@ -246,7 +264,10 @@ export async function escalateConversation(
   target: EscalationTarget,
   reason: string,
   deadlineAt?: number,
+  options: { summary?: string } = {},
 ): Promise<EscalationOutcome> {
+  const summary = handoffSummary(options.summary, reason);
+  const summaryAt = new Date().toISOString();
   const outOfTime = () => deadlineAt !== undefined && Date.now() >= deadlineAt;
   const msLeft = () => (deadlineAt === undefined ? undefined : Math.max(0, deadlineAt - Date.now()));
 
@@ -312,13 +333,20 @@ export async function escalateConversation(
           conversation_id: target.conversationId,
           mode: proposed.mode,
           expires_at: proposed.expires_at,
+          handoff_summary: summary,
+          handoff_summary_at: summaryAt,
         });
       if (insertError && insertError.code !== "23505") throw insertError;
       written = !insertError;
     } else {
       const { data: replaced, error: updateError } = await target.admin
         .from("ai_conversation_modes")
-        .update({ mode: proposed.mode, expires_at: proposed.expires_at })
+        .update({
+          mode: proposed.mode,
+          expires_at: proposed.expires_at,
+          handoff_summary: summary,
+          handoff_summary_at: summaryAt,
+        })
         .eq("id", existing.id)
         .eq("user_id", target.userId)
         .eq("expires_at", existing.expires_at)
@@ -326,6 +354,27 @@ export async function escalateConversation(
         .maybeSingle();
       if (updateError) throw updateError;
       written = replaced !== null && replaced !== undefined;
+    }
+  }
+  // A row the compare-and-set deliberately left alone (a manual override, or a
+  // still-running escalation window) may receive fresh tool context, but an
+  // outage/recovery reason must not replace it, nor may an older writer win.
+  // Summary failures are advisory; the window itself remains untouched.
+  if (!written && options.summary?.trim()) {
+    try {
+      const { error: summaryError } = await target.admin
+        .from("ai_conversation_modes")
+        .update({ handoff_summary: summary, handoff_summary_at: summaryAt })
+        .eq("user_id", target.userId)
+        .eq("platform", target.platform)
+        .eq("conversation_id", target.conversationId)
+        .or(`handoff_summary.is.null,handoff_summary_at.lt."${summaryAt}"`);
+      if (summaryError) throw summaryError;
+    } catch (summaryFailure) {
+      console.error(
+        "[ai-agent-reply] handoff summary store failed:",
+        summaryFailure instanceof Error ? summaryFailure.name : "error",
+      );
     }
   }
   const first: { mode: string; expires_at: string | null } = written
@@ -405,7 +454,7 @@ export async function escalateConversation(
             conversation_id: target.conversationId,
             agent_id: agent.id,
             assigned_by: target.userId,
-            notes: `AI escalation: ${reason}`.slice(0, 500),
+            notes: `AI handoff: ${summary}`.slice(0, 500),
           });
         if (assignError) throw assignError;
 
@@ -490,7 +539,7 @@ export async function escalateConversation(
     try {
       await target.sendWhatsAppText(
         waRecipient(phone),
-        `🤖 AI agent escalation\nCustomer: ${target.customerName}\nReason: ${reason}\n${assignmentNote}`,
+        `🤖 AI agent escalation\nCustomer: ${target.customerName}\nSummary: ${summary}\n${assignmentNote}`,
       );
       adminsNotified++;
     } catch (error) {
@@ -516,7 +565,7 @@ export async function escalateConversation(
   };
 }
 
-async function escalateToHuman(context: ToolContext, reason: string): Promise<ToolResult> {
+async function escalateToHuman(context: ToolContext, reason: string, summary?: string): Promise<ToolResult> {
   if (context.dryRun) {
     return {
       output:
@@ -525,7 +574,7 @@ async function escalateToHuman(context: ToolContext, reason: string): Promise<To
     };
   }
 
-  const outcome = await escalateConversation(context, reason);
+  const outcome = await escalateConversation(context, reason, undefined, { summary });
 
   // Plain language only: a raw timestamp or an internal mode name handed to
   // the model tends to be parroted back to the customer.
@@ -568,7 +617,13 @@ export async function executeTool(
   args: Record<string, unknown>,
 ): Promise<ToolResult> {
   if (name === "search_knowledge") return searchKnowledge(context, String(args.query || ""));
-  if (name === "escalate_to_human") return escalateToHuman(context, String(args.reason || ""));
+  if (name === "escalate_to_human") {
+    return escalateToHuman(
+      context,
+      String(args.reason || ""),
+      typeof args.summary === "string" ? args.summary : undefined,
+    );
+  }
   if (name === "notify_admin") return notifyAdmin(context, String(args.message || ""));
   return { output: `Unknown tool: ${name}` };
 }
@@ -586,6 +641,15 @@ export interface CustomTool {
   // Optional so a row written before the registry existed still type-checks.
   // Absent behaves exactly like custom_rest: no guide, description unchanged.
   connector_type?: string | null;
+  /**
+   * Whether the connector rejects writes at its own boundary (20260825120000).
+   * Optional so a row written before the column existed still type-checks.
+   * Composio-attached tools DO carry this flag (attachComposioTools spreads
+   * ...tool), but it came from the column default, not from their adapter —
+   * parallelizable() excludes them by auth_strategy instead. Absent keeps a
+   * tool out of the parallel round (logic.ts parallelizable).
+   */
+  read_only_mode?: boolean | null;
   /**
    * The connector's own configuration. Read only to tell the model what this
    * instance may reach: the registry describes a TYPE, and "Allowed PostgREST

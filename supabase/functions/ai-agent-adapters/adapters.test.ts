@@ -17,6 +17,8 @@ import {
 } from "./supabase.ts";
 import { handleAdapterRequest, meterTestConnectionProbe, RequestSchema, type AdminClientFactory } from "./handler.ts";
 import { createAdapterDependencies } from "./dependencies.ts";
+import type { ConnectorCache } from "./cache.ts";
+import { wooCommerceAdapter } from "./woocommerce.ts";
 import { SUPABASE_ADAPTER_OUTPUT_LIMIT } from "../_shared/connectorBudgets.ts";
 import {
   type AdapterDependencies,
@@ -1800,4 +1802,193 @@ Deno.test("a first page that outlives the deadline is a named timeout, not a gen
   );
   assertEquals(result.ok, false);
   assertEquals((result as { error: { code: string } }).error.code, "supabase_timeout");
+});
+
+// ---------------------------------------------------------------------------
+// Task 9 (plan 2026-09-25): the WooCommerce adapter behind a ConnectorCache.
+// Category ids are cached for a day, product searches for 120 s; stock and
+// order lookups and test_connection never touch the cache, and a broken cache
+// is indistinguishable from no cache except in speed.
+// ---------------------------------------------------------------------------
+
+function memoryCache(clock: { now: number }): {
+  cache: ConnectorCache;
+  reads: () => number;
+  writes: () => number;
+} {
+  const rows = new Map<string, { value: unknown; expiresAt: number }>();
+  let reads = 0;
+  let writes = 0;
+  return {
+    cache: {
+      async get(key) {
+        reads += 1;
+        const row = rows.get(key);
+        return row && row.expiresAt > clock.now ? row.value : null;
+      },
+      async set(key, _toolId, value, ttlSeconds) {
+        writes += 1;
+        rows.set(key, { value, expiresAt: clock.now + ttlSeconds * 1000 });
+      },
+    },
+    reads: () => reads,
+    writes: () => writes,
+  };
+}
+
+/** Serves one category list and an endless product list, recording every URL. */
+function wooStoreFetch(urls: string[]): typeof fetch {
+  return ((_url: string | URL, _init?: RequestInit) => {
+    const url = String(_url);
+    urls.push(url);
+    if (url.includes("/products/categories")) {
+      return Promise.resolve(jsonResponse([{ id: 77, name: "Men's perfumes" }]));
+    }
+    return Promise.resolve(jsonResponse([{ id: 1, name: "Hat", price: "5.00", sku: "HAT-1" }]));
+  }) as typeof fetch;
+}
+
+Deno.test("two identical category searches make one category request and one search request in total", async () => {
+  const clock = { now: 1_700_000_000_000 };
+  const mem = memoryCache(clock);
+  const urls: string[] = [];
+  const deps = { ...dependencies(wooStoreFetch(urls)), cache: mem.cache };
+  const invocation = {
+    tool: wooTool(),
+    credentials: { consumer_key: WOO_KEY, consumer_secret: WOO_SECRET },
+    request: request({ parameters: { query: "hat", category: "Men's Perfumes " } }),
+  };
+
+  const first = await executeConnector(invocation, deps);
+  const second = await executeConnector(invocation, deps);
+
+  assertEquals(first.ok, true);
+  assertEquals(second, first);
+  // One category lookup + one product search: the second call was fully cached.
+  assertEquals(urls.length, 2);
+});
+
+Deno.test("the same search after the 120 s TTL refetches the search but not the category", async () => {
+  const clock = { now: 1_700_000_000_000 };
+  const mem = memoryCache(clock);
+  const urls: string[] = [];
+  const deps = { ...dependencies(wooStoreFetch(urls)), cache: mem.cache };
+  const invocation = {
+    tool: wooTool(),
+    credentials: { consumer_key: WOO_KEY, consumer_secret: WOO_SECRET },
+    request: request({ parameters: { query: "hat", category: "Men's Perfumes" } }),
+  };
+  await executeConnector(invocation, deps);
+
+  clock.now += 121_000;
+  const result = await executeConnector(invocation, deps);
+
+  assertEquals(result.ok, true);
+  assertEquals(urls.length, 3);
+  assertStringIncludes(urls[2], "/wp-json/wc/v3/products?");
+  assertEquals(urls[2].includes("/products/categories"), false);
+});
+
+Deno.test("check_stock and lookup_orders never touch the cache", async () => {
+  const mem = memoryCache({ now: 1_700_000_000_000 });
+  const urls: string[] = [];
+  const deps = { ...dependencies(wooStoreFetch(urls)), cache: mem.cache };
+  const credentials = { consumer_key: WOO_KEY, consumer_secret: WOO_SECRET };
+
+  await executeConnector({
+    tool: wooTool(),
+    credentials,
+    request: request({ capability: "check_stock", parameters: { sku: "HAT-1" } }),
+  }, deps);
+  await executeConnector({
+    tool: wooTool(),
+    credentials,
+    request: request({ capability: "lookup_orders", parameters: { order_id: "10432" } }),
+  }, deps);
+
+  assertEquals(mem.reads(), 0);
+  assertEquals(mem.writes(), 0);
+});
+
+Deno.test("a throwing cache still returns the live result", async () => {
+  const urls: string[] = [];
+  const exploding: ConnectorCache = {
+    get() {
+      return Promise.reject(new Error("cache down"));
+    },
+    set() {
+      return Promise.reject(new Error("cache down"));
+    },
+  };
+  const first = await executeConnector({
+    tool: wooTool(),
+    credentials: { consumer_key: WOO_KEY, consumer_secret: WOO_SECRET },
+    request: request({ parameters: { query: "hat", category: "Men's Perfumes" } }),
+  }, { ...dependencies(wooStoreFetch(urls)), cache: exploding });
+
+  assertEquals(first.ok, true);
+  // The category lookup and the search both had to go live despite the cache.
+  assertEquals(urls.length, 2);
+});
+
+Deno.test("testConnection never touches the cache", async () => {
+  const mem = memoryCache({ now: 1_700_000_000_000 });
+  const urls: string[] = [];
+  const deps = { ...dependencies(wooStoreFetch(urls)), cache: mem.cache };
+
+  const result = await executeConnector({
+    tool: wooTool(),
+    credentials: { consumer_key: WOO_KEY, consumer_secret: WOO_SECRET },
+    request: request({ action: "test_connection", capability: undefined, parameters: {} }),
+  }, deps);
+
+  assertEquals(result.ok, true);
+  assertEquals(mem.reads() + mem.writes(), 0);
+});
+
+for (const liveId of [88, 77, 99]) {
+  Deno.test(`an empty cached-category search resolves live once (live id ${liveId})`, async () => {
+    const clock = { now: 1_700_000_000_000 };
+    const mem = memoryCache(clock);
+    const urls: string[] = [];
+    const invocation = {
+      tool: wooTool(),
+      credentials: { consumer_key: WOO_KEY, consumer_secret: WOO_SECRET },
+      request: request({ parameters: { category: "Men's perfumes" } }),
+    };
+    await executeConnector(invocation, { ...dependencies(wooStoreFetch([])), cache: mem.cache });
+    clock.now += 121_000;
+    const fetchImpl = ((input: string | URL) => {
+      const url = String(input);
+      urls.push(url);
+      return Promise.resolve(jsonResponse(url.includes("/categories")
+        ? [{ id: liveId, name: "Men's perfumes" }]
+        : new URL(url).searchParams.get("category") === "88" ? [{ id: 2, name: "Recovered product" }] : []));
+    }) as typeof fetch;
+    const deps = { ...dependencies(fetchImpl), cache: mem.cache };
+    const result = await executeConnector(invocation, deps);
+    assertEquals(result.ok && result.data, liveId === 88 ? [{ id: 2, name: "Recovered product" }] : []);
+    assertEquals(urls.length, liveId === 77 ? 2 : 3);
+    assertStringIncludes(urls[0], "category=77");
+    assertStringIncludes(urls[1], "/products/categories?");
+    if (liveId !== 77) assertStringIncludes(urls[2], `category=${liveId}`);
+
+    clock.now += 121_000;
+    await executeConnector(invocation, { ...dependencies(wooStoreFetch(urls)), cache: mem.cache });
+    assertStringIncludes(urls[urls.length - 1], `category=${liveId}`);
+  });
+}
+
+Deno.test("execute with test_connection action and a search capability bypasses every cache", async () => {
+  const mem = memoryCache({ now: 1_700_000_000_000 });
+  const urls: string[] = [];
+  const result = await wooCommerceAdapter.execute({
+    tool: wooTool(),
+    credentials: { consumer_key: WOO_KEY, consumer_secret: WOO_SECRET },
+    request: request({ action: "test_connection", parameters: { category: "Men's perfumes" } }),
+  }, { ...dependencies(wooStoreFetch(urls)), cache: mem.cache });
+  assertEquals(mem.reads(), 0);
+  assertEquals(mem.writes(), 0);
+  assertEquals(result.ok && result.action, "test_connection");
+  assertEquals(urls.length, 1);
 });
