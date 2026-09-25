@@ -60,9 +60,9 @@ Deno.test("runCatalogSync reports added, skipped and in-use models", async () =>
     settings: [{ key: "default_ai_model_chat", value: { provider_code: "vercel", model_id: "openai/old-default" } }],
   });
   const report = await runCatalogSync(db, "vercel", vercelFetch);
-  assertEquals([report.added, report.updated, report.deactivated], [1, 0, 0]);
+  assertEquals([report.added, report.updated, report.deactivated], [2, 0, 0]);
   assertEquals(report.kept_in_use, ["openai/old-default"]);
-  assertEquals(report.skipped_by_type, { evaluation: 1 });
+  assertEquals(report.skipped_by_type, {});
   assertEquals(writes.some((w) => w.table === "system_settings" && w.op === "upsert"), true);
 });
 
@@ -74,7 +74,8 @@ Deno.test("runCatalogSync refuses unknown providers and empty catalogues", async
 
 Deno.test("an unchanged row is not written and is not counted as updated", async () => {
   const { db, writes } = fakeDb({ models: [syncedRow()], settings: [] });
-  const report = await runCatalogSync(db, "vercel", vercelFetch);
+  const fetch = catalogue([{ id: "openai/gpt-5.5", name: "GPT-5.5", type: "language" }]);
+  const report = await runCatalogSync(db, "vercel", fetch);
   assertEquals(report.updated, 0);
   assertEquals(modelUpserts(writes).length, 0);
 });
@@ -113,7 +114,8 @@ Deno.test("inserts, changed rows and deactivations go out in one upsert on provi
 
 Deno.test("a row a previous sync switched off is reactivated when the catalogue lists it again", async () => {
   const { db, writes } = fakeDb({ models: [syncedRow({ is_active: false, metadata: { sync_deactivated: true } })], settings: [] });
-  const report = await runCatalogSync(db, "vercel", vercelFetch);
+  const fetch = catalogue([{ id: "openai/gpt-5.5", name: "GPT-5.5", type: "language" }]);
+  const report = await runCatalogSync(db, "vercel", fetch);
   assertEquals(report.updated, 1);
   const [row] = upsertedRows(writes);
   assertEquals([row.is_active, row.metadata], [true, { sync_deactivated: false }]);
@@ -121,7 +123,8 @@ Deno.test("a row a previous sync switched off is reactivated when the catalogue 
 
 Deno.test("capabilities an admin added outside the managed set survive a sync", async () => {
   const { db, writes } = fakeDb({ models: [syncedRow({ capabilities: ["chat", "search", "agent"], name: "Old" })], settings: [] });
-  await runCatalogSync(db, "vercel", vercelFetch);
+  const fetch = catalogue([{ id: "openai/gpt-5.5", name: "GPT-5.5", type: "language" }]);
+  await runCatalogSync(db, "vercel", fetch);
   const [row] = upsertedRows(writes);
   assertEquals(row.capabilities, ["agent", "chat", "search"]);
 });
