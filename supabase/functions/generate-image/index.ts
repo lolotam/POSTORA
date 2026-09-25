@@ -131,16 +131,22 @@ async function resolveModelChain(supabaseAdmin: any, requestedModelId?: string):
       .eq('is_active', true)
       .contains('capabilities', ['image']);
     const { data: def } = await supabaseAdmin.from('system_settings').select('value').eq('key', 'default_ai_model_image').maybeSingle();
-    const preferred: any = pickRequestedModelRow(rows ?? [], def?.value?.provider_code);
-    if (preferred) {
+    type ImageModelRow = {
+      model_id: string;
+      admin_params: Record<string, string | number | boolean> | null;
+      ai_providers: { provider_code: string; api_endpoint: string; api_key_env_var: string; api_type: string; is_active: boolean } | null;
+    };
+    const preferred = pickRequestedModelRow((rows ?? []) as ImageModelRow[], def?.value?.provider_code);
+    const provider = preferred?.ai_providers;
+    if (preferred && provider) {
       push({
-        provider_code: preferred.ai_providers.provider_code,
+        provider_code: provider.provider_code,
         model_id: preferred.model_id,
-        api_endpoint: preferred.ai_providers.api_endpoint,
-        api_key_env_var: preferred.ai_providers.api_key_env_var,
-        api_type: preferred.ai_providers.api_type,
+        api_endpoint: provider.api_endpoint,
+        api_key_env_var: provider.api_key_env_var,
+        api_type: provider.api_type,
         source: 'requested',
-        admin_params: (preferred.admin_params ?? {}) as Record<string, string | number | boolean>,
+        admin_params: preferred.admin_params ?? {},
       });
     }
   }
