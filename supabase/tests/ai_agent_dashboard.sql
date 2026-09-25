@@ -6,8 +6,9 @@
 --      work item's outcome (an error followed by a sent retry counts as one
 --      answered reply, not one error plus one reply);
 --   D2 sandbox rows (status = 'test') are excluded everywhere, tokens included;
---   D3 a sent reply whose tool_calls include escalate_to_human counts as
---      escalated, not answered; escalated_after_model_exhaustion does too;
+--   D3 any row whose tool_calls include escalate_to_human counts as escalated
+--      (a sent reply, or a no_reply_generated skip), and so does
+--      escalated_after_model_exhaustion;
 --   D4 skip reasons are grouped by the error column;
 --   D5 median and p90 latency are over sent replies only (percentile_cont);
 --   D6 tokens are summed per attempt, not per work item;
@@ -76,6 +77,8 @@ SELECT o.id, v.platform, a.id, v.conv, v.status, v.error, v.latency_ms,
     -- D3: escalated through the tool, and through the model-outage floor
     ('acct_b', 'facebook', 'c4', 'sent', NULL, 4000, 400, 50, '[{"name":"escalate_to_human","arguments":{}}]', NULL, 'complaint', FALSE, 'openai/gpt-4o', interval '1 day'),
     ('acct_b', 'facebook', 'c5', 'escalated_after_model_exhaustion', 'all models failed', 9000, NULL, NULL, NULL, NULL, NULL, NULL, NULL, interval '1 day'),
+    -- D3: escalated, then no closing text: logged as a skip, still a handoff
+    ('acct_b', 'facebook', 'c11', 'skipped', 'no_reply_generated', 800, 50, 5, '[{"name":"escalate_to_human","arguments":{}}]', NULL, NULL, NULL, NULL, interval '1 day'),
     -- D4: skips
     ('acct_b', 'facebook', 'c6', 'skipped', 'human_assigned', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, interval '1 day'),
     ('acct_b', 'facebook', 'c7', 'skipped', 'human_assigned', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, interval '1 day'),
@@ -103,12 +106,12 @@ BEGIN
   v := public.ai_agent_dashboard(7);
   t := v -> 'totals';
 
-  -- D1 + D2 + D9: 11 owner rows - 1 duplicate - 1 test - 1 out of window = 8 items.
-  PERFORM pg_temp.aad_must((t ->> 'items')::int = 8, 'D1 items de-duplicated to 8, got ' || (t ->> 'items'));
+  -- D1 + D2 + D9: 12 owner rows - 1 duplicate - 1 test - 1 out of window = 9 items.
+  PERFORM pg_temp.aad_must((t ->> 'items')::int = 9, 'D1 items de-duplicated to 9, got ' || (t ->> 'items'));
   PERFORM pg_temp.aad_must((t ->> 'answered')::int = 3, 'D1 answered = 3 (retry counts once), got ' || (t ->> 'answered'));
   PERFORM pg_temp.aad_must((t ->> 'errors')::int = 0, 'D1 superseded error is not counted, got ' || (t ->> 'errors'));
   -- D3
-  PERFORM pg_temp.aad_must((t ->> 'escalated')::int = 2, 'D3 escalated = 2, got ' || (t ->> 'escalated'));
+  PERFORM pg_temp.aad_must((t ->> 'escalated')::int = 3, 'D3 escalated = 3 (tool on a sent reply and on a skip, plus the outage floor), got ' || (t ->> 'escalated'));
   -- D4
   PERFORM pg_temp.aad_must((t ->> 'skipped')::int = 3, 'D4 skipped = 3');
   PERFORM pg_temp.aad_must(v -> 'skip_reasons' -> 0 = '{"reason":"human_assigned","count":2}'::jsonb,
@@ -116,9 +119,9 @@ BEGIN
   -- D5: sent latencies 1000, 2000, 3000, 4000 -> p50 2500, p90 3700.
   PERFORM pg_temp.aad_must((t ->> 'latency_p50_ms')::numeric = 2500, 'D5 p50 = 2500, got ' || (t ->> 'latency_p50_ms'));
   PERFORM pg_temp.aad_must((t ->> 'latency_p90_ms')::numeric = 3700, 'D5 p90 = 3700, got ' || (t ->> 'latency_p90_ms'));
-  -- D6: 100+200+300+400 prompt, 20+30+40+50 completion; the test row's 99999 excluded.
-  PERFORM pg_temp.aad_must((t ->> 'prompt_tokens')::int = 1000, 'D6 prompt tokens = 1000, got ' || (t ->> 'prompt_tokens'));
-  PERFORM pg_temp.aad_must((t ->> 'completion_tokens')::int = 140, 'D6 completion tokens = 140');
+  -- D6: 100+200+300+400+50 prompt, 20+30+40+50+5 completion; the test row's 99999 excluded.
+  PERFORM pg_temp.aad_must((t ->> 'prompt_tokens')::int = 1050, 'D6 prompt tokens = 1050, got ' || (t ->> 'prompt_tokens'));
+  PERFORM pg_temp.aad_must((t ->> 'completion_tokens')::int = 145, 'D6 completion tokens = 145');
   -- D7
   PERFORM pg_temp.aad_must(v -> 'intents' -> 0 = '{"intent":"pricing","count":2}'::jsonb,
     'D7 top intent pricing x2, got ' || (v -> 'intents')::text);
@@ -133,9 +136,9 @@ BEGIN
 
   -- D9: window and platform filters.
   v := public.ai_agent_dashboard(30);
-  PERFORM pg_temp.aad_must((v -> 'totals' ->> 'items')::int = 9, 'D9 30-day window includes the 10-day-old row');
+  PERFORM pg_temp.aad_must((v -> 'totals' ->> 'items')::int = 10, 'D9 30-day window includes the 10-day-old row');
   v := public.ai_agent_dashboard(7, 'facebook');
-  PERFORM pg_temp.aad_must((v -> 'totals' ->> 'items')::int = 5, 'D9 facebook filter = 5 items, got ' || (v -> 'totals' ->> 'items'));
+  PERFORM pg_temp.aad_must((v -> 'totals' ->> 'items')::int = 6, 'D9 facebook filter = 6 items, got ' || (v -> 'totals' ->> 'items'));
 
   -- D9: the stranger sees only their own single row.
   PERFORM pg_temp.aad_act_as((SELECT id FROM aad_ids WHERE k = 'stranger'));
@@ -180,8 +183,8 @@ SET ROLE authenticated;
 -- temp schema.
 DO $r$
 BEGIN
-  IF (public.ai_agent_dashboard(7) -> 'totals' ->> 'items')::int IS DISTINCT FROM 8 THEN
-    RAISE EXCEPTION 'ASSERTION FAILED: D9 owner as authenticated sees 8 items';
+  IF (public.ai_agent_dashboard(7) -> 'totals' ->> 'items')::int IS DISTINCT FROM 9 THEN
+    RAISE EXCEPTION 'ASSERTION FAILED: D9 owner as authenticated sees 9 items';
   END IF;
 END $r$;
 RESET ROLE;

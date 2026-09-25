@@ -44,12 +44,6 @@ COMMENT ON COLUMN public.ai_agent_logs.triage_fast_path IS
 COMMENT ON COLUMN public.ai_agent_logs.used_model IS
   'provider/model of the last model that answered, as logged in system_logs.metadata.used_model.';
 
--- The dashboard filters by user and time first; this covers the per-account
--- grouping without widening the existing (user_id, created_at DESC) index.
-CREATE INDEX IF NOT EXISTS idx_ai_agent_logs_user_account_created
-  ON public.ai_agent_logs (user_id, social_account_id, created_at DESC)
-  WHERE social_account_id IS NOT NULL;
-
 CREATE OR REPLACE FUNCTION public.ai_agent_dashboard(p_days integer, p_platform text DEFAULT NULL)
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -90,11 +84,15 @@ BEGIN
   ),
   classified AS (
     SELECT i.*,
+           -- The escalate_to_human check comes first and is not limited to 'sent':
+           -- a model that escalates and then writes no closing text is logged as
+           -- skipped/no_reply_generated with the tool call on the row, and that is
+           -- still a handoff.
            CASE
-             WHEN i.status = 'escalated_after_model_exhaustion' THEN 'escalated'
-             WHEN i.status = 'sent' AND jsonb_typeof(i.tool_calls) = 'array'
+             WHEN jsonb_typeof(i.tool_calls) = 'array'
                   AND jsonb_path_exists(i.tool_calls, '$[*] ? (@.name == "escalate_to_human")')
                THEN 'escalated'
+             WHEN i.status = 'escalated_after_model_exhaustion' THEN 'escalated'
              WHEN i.status = 'sent' THEN 'answered'
              WHEN i.status = 'skipped' THEN 'skipped'
              WHEN i.status IN ('error', 'model_exhaustion_unhandled', 'recovery_failed', 'delivery_unknown')
