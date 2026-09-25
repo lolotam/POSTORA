@@ -66,7 +66,7 @@ export function triageRequestBody(tier: TriageTier, input: TriageInput): Record<
   };
   if (input.askHandoff) {
     questions.handoff = yesNo(
-      "The customer asks for a human, is angry, or the request needs a human to handle it.",
+      "The customer explicitly asks to talk to a human person instead of the assistant.",
     );
   }
   if (input.connectors.length) {

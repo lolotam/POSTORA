@@ -830,6 +830,19 @@ Deno.serve(async (req) => {
       }
       return { relevantChunks, retrievedChunkIds, relatedFacts, ragError, graphError };
     };
+    // Started here, right where the inline retrieval used to run -- before tool
+    // resolution, Composio lookups, and everything else below -- so both overlap with
+    // that work instead of adding their own serial round trip. Neither is awaited until
+    // the triage point further down; retrieveKnowledgeContext catches its own errors, so
+    // starting it unawaited is safe, and the triage settings read is forced to start
+    // immediately by chaining .then() rather than left as an un-awaited query builder,
+    // which would not send its request until awaited.
+    const knowledgePromise = retrieveKnowledgeContext();
+    const triageRowsPromise = admin
+      .from("system_settings")
+      .select("key, value")
+      .in("key", TRIAGE_SETTING_KEYS)
+      .then((res) => res);
 
     // Operational tools unlock only for verified admin senders (or the
     // sandbox's explicit act-as-admin switch). Numbers are compared as bare
@@ -1011,17 +1024,18 @@ Deno.serve(async (req) => {
       onLowConfidence: config.handoff_on_low_confidence ?? true,
     };
 
-    const { data: triageRows } = await admin.from("system_settings").select("key, value").in("key", TRIAGE_SETTING_KEYS);
+    const { data: triageRows } = await triageRowsPromise;
     const triageChain = triageChainFromSettings(triageRows ?? []);
-    // Started together: triage (about 0.4s) and retrieval overlap, and retrieval is dropped
-    // unawaited when triage is confident it is not needed.
-    const knowledgePromise = retrieveKnowledgeContext();
     if (triageChain.length) {
       triage = await runTriage(triageChain, {
         message: request.inbound_text.slice(0, MAX_INBOUND_CHARS),
         history,
         connectors: customTools.map((tool) => ({ name: tool.name, description: tool.description ?? "" })),
-        askHandoff: handoff.onRequest || handoff.onLowConfidence,
+        // Only onRequest, not onLowConfidence: triage can judge whether the customer
+        // explicitly asked for a human, but "the model has low confidence in its own
+        // answer" is not something a fast, separate decision call can see -- only the
+        // chat model can know that once it has tried to answer.
+        askHandoff: handoff.onRequest,
       }, (code) => resolveProviderKey(admin as unknown as RowReader, code));
     }
     const triagePlan = triage?.outcome?.plan ?? null;
@@ -1151,7 +1165,6 @@ Deno.serve(async (req) => {
             temperature: config.temperature ?? 0.4,
             messages,
             ...(toolDefinitions.length ? { tools: toolDefinitions, tool_choice: "auto" } : {}),
-            ...(triagePlan?.smalltalk ? { max_tokens: 200 } : {}),
           }, Math.min(CHAT_TIMEOUT_MS, budgetMs), routingAdmin);
           usedModel = formatModelRef(modelChain[mi]);
           usedFallbackLevel = mi;
