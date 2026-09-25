@@ -19,6 +19,15 @@ describe('SyncModelsButton', () => {
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Synced: 12 added, 3 updated, 1 deactivated, 1 kept (in use)'));
     expect(invoke).toHaveBeenCalledWith('ai-config', { body: { action: 'sync-models', provider_code: 'vercel' } });
   });
+  it('compact card button syncs without opening the card behind it', async () => {
+    invoke.mockResolvedValue({ data: { added: 1, updated: 0, deactivated: 0, kept_in_use: [], skipped_by_type: {}, synced_at: '2026-09-25T00:00:00Z' }, error: null });
+    const onCardClick = vi.fn();
+    render(wrap(<div onClick={onCardClick}><SyncModelsButton providerCode="vercel" compact /></div>));
+    expect(screen.queryByText('Never synced')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /Sync/ }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith('ai-config', { body: { action: 'sync-models', provider_code: 'vercel' } }));
+    expect(onCardClick).not.toHaveBeenCalled();
+  });
   it('shows the server error', async () => {
     invoke.mockResolvedValue({ data: { error: 'vercel /models returned HTTP 503' }, error: null });
     render(wrap(<SyncModelsButton providerCode="vercel" />));

@@ -194,6 +194,9 @@ export function AiProvidersCard() {
                         )}
                         Test
                       </Button>
+                      {(SYNCABLE_PROVIDER_CODES as readonly string[]).includes(provider.provider_code) && (
+                        <SyncModelsButton providerCode={provider.provider_code} compact />
+                      )}
                       <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
                         <Switch id={`p-${provider.id}`} checked={provider.is_active}
                           onCheckedChange={() => handleToggleProvider(provider.id, provider.is_active)} className="scale-75" />
