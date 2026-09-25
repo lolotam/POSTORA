@@ -15,7 +15,11 @@
 --   D7 intents and the triage fast-path counts come from the new columns;
 --   D8 the per-account breakdown carries platform + social_account_id;
 --   D9 another user's rows are invisible, and the window/platform filters hold;
---   D10 p_days outside 1..90 is refused; only `authenticated` holds EXECUTE.
+--   D10 p_days outside 1..90 is refused; only `authenticated` holds EXECUTE;
+--   D11 dry-run rows (dry_run = TRUE) are excluded whatever their status;
+--   D12 a work item whose latest row is a recovery note without an account,
+--       intent or fast-path value still counts under the account, intent and
+--       fast-path value of its earlier rows, with the latest row's outcome.
 --
 -- Run with psql AS A SUPERUSER against the throwaway database created by
 -- scripts/db-harness.sh, with every migration applied. NEVER against
@@ -90,6 +94,24 @@ SELECT o.id, v.platform, a.id, v.conv, v.status, v.error, v.latency_ms,
   ) AS v(acct, platform, conv, status, error, latency_ms, pt, ct, tools, idem, intent, fast, model, age)
   JOIN aad_ids a ON a.k = v.acct;
 
+-- D11: a sandbox run that was skipped. Only a successful dry run is logged as
+-- 'test'; every other dry-run outcome is only marked by dry_run.
+INSERT INTO public.ai_agent_logs
+  (user_id, platform, social_account_id, conversation_id, status, error, prompt_tokens, completion_tokens, dry_run, created_at)
+SELECT o.id, 'whatsapp', a.id, 'c12', 'skipped', 'agent_disabled', 333, 33, TRUE, now() - interval '1 day'
+  FROM aad_ids o, aad_ids a WHERE o.k = 'owner' AND a.k = 'acct_a';
+
+-- D12: an attempt that errored, then process-pending-replies' recovery note for
+-- the same outbox row -- which carries no account, intent or fast-path value.
+INSERT INTO public.ai_agent_logs
+  (user_id, platform, social_account_id, conversation_id, status, error, idempotency_key, intent, triage_fast_path, created_at)
+SELECT o.id, 'facebook', a.id, 'c13', 'error', 'send failed', 'outbox-2', 'lead', FALSE, now() - interval '1 day 1 minute'
+  FROM aad_ids o, aad_ids a WHERE o.k = 'owner' AND a.k = 'acct_b';
+INSERT INTO public.ai_agent_logs
+  (user_id, platform, conversation_id, status, error, idempotency_key, created_at)
+SELECT o.id, 'facebook', 'c13', 'recovery_failed', 'attempts exhausted', 'outbox-2', now() - interval '1 day'
+  FROM aad_ids o WHERE o.k = 'owner';
+
 -- D9: the stranger's rows must never appear in the owner's dashboard.
 INSERT INTO public.ai_agent_logs (user_id, platform, conversation_id, status, latency_ms, prompt_tokens, completion_tokens)
 SELECT id, 'whatsapp', 'x1', 'sent', 1, 77777, 77777 FROM aad_ids WHERE k = 'stranger';
@@ -101,19 +123,21 @@ DECLARE
   v jsonb;
   t jsonb;
   acct jsonb;
+  v_acct_b text := (SELECT id::text FROM aad_ids WHERE k = 'acct_b');
 BEGIN
   PERFORM pg_temp.aad_act_as(v_owner);
   v := public.ai_agent_dashboard(7);
   t := v -> 'totals';
 
-  -- D1 + D2 + D9: 12 owner rows - 1 duplicate - 1 test - 1 out of window = 9 items.
-  PERFORM pg_temp.aad_must((t ->> 'items')::int = 9, 'D1 items de-duplicated to 9, got ' || (t ->> 'items'));
+  -- D1 + D2 + D9 + D11 + D12: 15 owner rows - 2 duplicates - 1 test - 1 dry-run skip
+  -- - 1 out of window = 10 items.
+  PERFORM pg_temp.aad_must((t ->> 'items')::int = 10, 'D1 items de-duplicated to 10, got ' || (t ->> 'items'));
   PERFORM pg_temp.aad_must((t ->> 'answered')::int = 3, 'D1 answered = 3 (retry counts once), got ' || (t ->> 'answered'));
-  PERFORM pg_temp.aad_must((t ->> 'errors')::int = 0, 'D1 superseded error is not counted, got ' || (t ->> 'errors'));
+  PERFORM pg_temp.aad_must((t ->> 'errors')::int = 1, 'D1 superseded error is not counted; D12 recovery item is one error, got ' || (t ->> 'errors'));
   -- D3
   PERFORM pg_temp.aad_must((t ->> 'escalated')::int = 3, 'D3 escalated = 3 (tool on a sent reply and on a skip, plus the outage floor), got ' || (t ->> 'escalated'));
   -- D4
-  PERFORM pg_temp.aad_must((t ->> 'skipped')::int = 3, 'D4 skipped = 3');
+  PERFORM pg_temp.aad_must((t ->> 'skipped')::int = 3, 'D4/D11 skipped = 3 (dry-run skip excluded), got ' || (t ->> 'skipped'));
   PERFORM pg_temp.aad_must(v -> 'skip_reasons' -> 0 = '{"reason":"human_assigned","count":2}'::jsonb,
     'D4 top skip reason is human_assigned x2, got ' || (v -> 'skip_reasons')::text);
   -- D5: sent latencies 1000, 2000, 3000, 4000 -> p50 2500, p90 3700.
@@ -125,8 +149,8 @@ BEGIN
   -- D7
   PERFORM pg_temp.aad_must(v -> 'intents' -> 0 = '{"intent":"pricing","count":2}'::jsonb,
     'D7 top intent pricing x2, got ' || (v -> 'intents')::text);
-  PERFORM pg_temp.aad_must((t ->> 'fast_path')::int = 2 AND (t ->> 'triaged')::int = 4,
-    'D7 fast path 2 of 4 triaged, got ' || (t ->> 'fast_path') || '/' || (t ->> 'triaged'));
+  PERFORM pg_temp.aad_must((t ->> 'fast_path')::int = 2 AND (t ->> 'triaged')::int = 5,
+    'D7/D12 fast path 2 of 5 triaged, got ' || (t ->> 'fast_path') || '/' || (t ->> 'triaged'));
   PERFORM pg_temp.aad_must(jsonb_array_length(v -> 'models') = 2, 'D7 two models (test model excluded)');
   -- D8
   PERFORM pg_temp.aad_must(jsonb_array_length(v -> 'accounts') = 2, 'D8 two account rows');
@@ -134,11 +158,22 @@ BEGIN
   PERFORM pg_temp.aad_must(acct ->> 'platform' = 'whatsapp' AND (acct ->> 'answered')::int = 3,
     'D8 account A: whatsapp, 3 answered, got ' || COALESCE(acct::text, 'null'));
 
+  -- D12: the recovery item stays under account B with intent lead; no
+  -- "before account tracking" bucket appears for it.
+  PERFORM pg_temp.aad_must(NOT EXISTS (
+      SELECT 1 FROM jsonb_array_elements(v -> 'accounts') e WHERE e ->> 'social_account_id' IS NULL),
+    'D12 no null-account row, got ' || (v -> 'accounts')::text);
+  SELECT e INTO acct FROM jsonb_array_elements(v -> 'accounts') e WHERE e ->> 'social_account_id' = v_acct_b;
+  PERFORM pg_temp.aad_must((acct ->> 'errors')::int = 1 AND (acct ->> 'items')::int = 7,
+    'D12 account B: 7 items incl. 1 error, got ' || COALESCE(acct::text, 'null'));
+  PERFORM pg_temp.aad_must(v -> 'intents' @> '[{"intent":"lead","count":1}]'::jsonb,
+    'D12 the recovery item keeps intent lead, got ' || (v -> 'intents')::text);
+
   -- D9: window and platform filters.
   v := public.ai_agent_dashboard(30);
-  PERFORM pg_temp.aad_must((v -> 'totals' ->> 'items')::int = 10, 'D9 30-day window includes the 10-day-old row');
+  PERFORM pg_temp.aad_must((v -> 'totals' ->> 'items')::int = 11, 'D9 30-day window includes the 10-day-old row');
   v := public.ai_agent_dashboard(7, 'facebook');
-  PERFORM pg_temp.aad_must((v -> 'totals' ->> 'items')::int = 6, 'D9 facebook filter = 6 items, got ' || (v -> 'totals' ->> 'items'));
+  PERFORM pg_temp.aad_must((v -> 'totals' ->> 'items')::int = 7, 'D9 facebook filter = 7 items, got ' || (v -> 'totals' ->> 'items'));
 
   -- D9: the stranger sees only their own single row.
   PERFORM pg_temp.aad_act_as((SELECT id FROM aad_ids WHERE k = 'stranger'));
@@ -183,8 +218,8 @@ SET ROLE authenticated;
 -- temp schema.
 DO $r$
 BEGIN
-  IF (public.ai_agent_dashboard(7) -> 'totals' ->> 'items')::int IS DISTINCT FROM 9 THEN
-    RAISE EXCEPTION 'ASSERTION FAILED: D9 owner as authenticated sees 9 items';
+  IF (public.ai_agent_dashboard(7) -> 'totals' ->> 'items')::int IS DISTINCT FROM 10 THEN
+    RAISE EXCEPTION 'ASSERTION FAILED: D9 owner as authenticated sees 10 items';
   END IF;
 END $r$;
 RESET ROLE;

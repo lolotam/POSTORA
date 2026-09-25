@@ -370,6 +370,7 @@ export type Database = {
           completion_tokens: number | null
           conversation_id: string | null
           created_at: string | null
+          dry_run: boolean | null
           error: string | null
           id: string
           idempotency_key: string | null
@@ -391,6 +392,7 @@ export type Database = {
           completion_tokens?: number | null
           conversation_id?: string | null
           created_at?: string | null
+          dry_run?: boolean | null
           error?: string | null
           id?: string
           idempotency_key?: string | null
@@ -412,6 +414,7 @@ export type Database = {
           completion_tokens?: number | null
           conversation_id?: string | null
           created_at?: string | null
+          dry_run?: boolean | null
           error?: string | null
           id?: string
           idempotency_key?: string | null
