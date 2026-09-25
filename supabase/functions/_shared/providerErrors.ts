@@ -15,6 +15,10 @@ export function describeProviderFailure(name: string, status: number, bodyText: 
     return "Key is valid — add a credit card to your Vercel team (AI Gateway) to enable requests";
   }
   if (status === 401) return "Invalid API key";
+  // xAI answers an out-of-credit team with 403 permission-denied.
+  if (status === 403 && /used all available credits|spending limit/i.test(bodyText)) {
+    return "API key is valid, but the account has used its credits or reached its spending limit. Please top up your account.";
+  }
   if (status === 403) return "API key lacks required permissions";
   if (status === 429) {
     if (bodyText.includes("insufficient_balance") || bodyText.includes("1008")) {

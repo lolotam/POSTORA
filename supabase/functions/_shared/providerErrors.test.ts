@@ -26,3 +26,9 @@ Deno.test("429 balance errors and JSON messages are surfaced", () => {
   assertEquals(describeProviderFailure("X", 400, JSON.stringify({ error: { message: "bad model" } })), "X: bad model");
   assertEquals(describeProviderFailure("X", 500, "<html>"), "X API error: 500");
 });
+
+Deno.test("a 403 for exhausted credits says the key is valid, not that it lacks permissions", () => {
+  const body = JSON.stringify({ code: "permission-denied", error: "Your team t1 has either used all available credits or reached its monthly spending limit." });
+  assertEquals(describeProviderFailure("xAI", 403, body),
+    "API key is valid, but the account has used its credits or reached its spending limit. Please top up your account.");
+});
