@@ -7,11 +7,19 @@ import { authenticateCaller } from "../_shared/auth-helper.ts";
 import { sanitizeErrorMessage } from "../_shared/errorSanitizer.ts";
 import { fetchCategoryAiSettings } from "../_shared/ai-fallback.ts";
 import { resolveVercelKey, vercelGenerateSpeech } from "../_shared/vercelGateway.ts";
+import { redactProviderError } from "../_shared/ai-routing-errors.ts";
+import { tierTimeout } from "./budget.ts";
 
 const RequestSchema = z.object({
   text: z.string().trim().min(1).max(1000),
   voice: z.string().max(64).optional(),
 });
+
+// Total wall-clock budget shared across every Vercel tier attempt, kept below the
+// platform's ~60s edge-worker ceiling. Without this, three failing tiers at 45s each
+// (PER_TIER_MAX_MS) could sum to 135s and get killed with no response and no log row.
+const SPEECH_BUDGET_MS = 50_000;
+const PER_TIER_MAX_MS = 45_000;
 
 serve(async (req) => {
   const cors = restrictedCorsHeaders(req);
@@ -39,13 +47,20 @@ serve(async (req) => {
   const apiKey = await resolveVercelKey(admin);
   if (!apiKey) return json({ error: "Vercel AI Gateway key not configured" });
   const errors: string[] = [];
+  const startedAt = Date.now();
   for (const [, model] of tiers) {
+    const timeoutMs = tierTimeout(startedAt, Date.now(), SPEECH_BUDGET_MS, PER_TIER_MAX_MS);
+    if (timeoutMs === null) {
+      errors.push("time budget exhausted before trying remaining tiers");
+      break;
+    }
     try {
-      const out = await vercelGenerateSpeech(apiKey, model, text, voice);
+      const out = await vercelGenerateSpeech(apiKey, model, text, voice, "mp3", timeoutMs);
       return json({ audio: out.base64, mediaType: out.mediaType, provider: "vercel", model });
     } catch (e) {
-      console.error("[generate-speech] tier failed", model, e);
-      errors.push(`${model}: ${sanitizeErrorMessage(e)}`);
+      const redacted = redactProviderError(e instanceof Error ? e.message : String(e), apiKey);
+      console.error("[generate-speech] tier failed", model, redacted);
+      errors.push(`${model}: ${redacted}`);
     }
   }
   return json({ error: errors.join("; ") });

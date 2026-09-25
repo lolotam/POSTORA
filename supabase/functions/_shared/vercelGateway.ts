@@ -109,11 +109,13 @@ export async function vercelVideoStatus(apiKey: string, modelId: string, operati
   return toVideoSnapshot(status as VideoStatusLike);
 }
 
-export async function vercelGenerateSpeech(apiKey: string, modelId: string, text: string, voice?: string, outputFormat = "mp3") {
+export async function vercelGenerateSpeech(
+  apiKey: string, modelId: string, text: string, voice?: string, outputFormat = "mp3", timeoutMs = 45_000,
+) {
   const { ai, gw } = await loadSdk();
   const result = await ai.generateSpeech({
     model: gw.createGateway({ apiKey }).speechModel(modelId), text, voice, outputFormat,
-    abortSignal: AbortSignal.timeout(45_000),
+    abortSignal: AbortSignal.timeout(timeoutMs),
   });
   return { base64: result.audio.base64, mediaType: result.audio.mediaType };
 }
