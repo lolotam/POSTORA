@@ -138,7 +138,15 @@ export async function runCatalogSync(
     if (!key) throw new CatalogSyncError(`API key ${provider.api_key_env_var} not configured`);
   }
   const { url, headers } = source.request(key);
-  const res = await fetchImpl(url, { headers, signal: AbortSignal.timeout(20_000) });
+  let res: Response;
+  try {
+    res = await fetchImpl(url, { headers, signal: AbortSignal.timeout(20_000) });
+  } catch {
+    // A rejected fetch (DNS, connection refused, TLS, abort) throws a TypeError whose message embeds the
+    // request URL — for Gemini that URL carries the key. Never surface that message or chain it as `cause`;
+    // a logger can serialise a cause just as readily as a top-level message.
+    throw new CatalogSyncError(`${providerCode} /models request failed`);
+  }
   // Never interpolate `url` into this message: the Gemini request carries the key in its query string.
   if (!res.ok) throw new CatalogSyncError(`${providerCode} /models returned HTTP ${res.status}`);
   const body = await res.json();

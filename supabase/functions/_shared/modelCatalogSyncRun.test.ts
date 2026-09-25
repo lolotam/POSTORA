@@ -264,3 +264,14 @@ Deno.test("a Gemini HTTP failure never puts the key in the error message", () =>
     assertEquals(err.message, "gemini /models returned HTTP 400");
     assertEquals(err.message.includes("super-secret-gemini-key"), false);
   }));
+
+Deno.test("a rejected fetch (DNS/connection/TLS) never puts the key in the error message", () =>
+  withEnv(KEY_ENV, "SECRET-KEY-123", async () => {
+    const { db } = fakeDb({ models: [], settings: [] });
+    const rejecting = (() =>
+      Promise.reject(new TypeError("error sending request for url (https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000&key=SECRET-KEY-123)"))) as unknown as typeof fetch;
+    const err = await assertRejects(() => runCatalogSync(db, "gemini", rejecting), CatalogSyncError);
+    assertEquals(err.message, "gemini /models request failed");
+    assertEquals(err.message.includes("SECRET-KEY-123"), false);
+    assertEquals(("cause" in err) ? err.cause : undefined, undefined);
+  }));
