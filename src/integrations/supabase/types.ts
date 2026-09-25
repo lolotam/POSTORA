@@ -374,13 +374,17 @@ export type Database = {
           id: string
           idempotency_key: string | null
           inbound_text: string | null
+          intent: string | null
           latency_ms: number | null
           platform: string | null
           prompt_tokens: number | null
           reply_text: string | null
           retrieved_chunk_ids: string[] | null
+          social_account_id: string | null
           status: string | null
           tool_calls: Json | null
+          triage_fast_path: boolean | null
+          used_model: string | null
           user_id: string
         }
         Insert: {
@@ -391,13 +395,17 @@ export type Database = {
           id?: string
           idempotency_key?: string | null
           inbound_text?: string | null
+          intent?: string | null
           latency_ms?: number | null
           platform?: string | null
           prompt_tokens?: number | null
           reply_text?: string | null
           retrieved_chunk_ids?: string[] | null
+          social_account_id?: string | null
           status?: string | null
           tool_calls?: Json | null
+          triage_fast_path?: boolean | null
+          used_model?: string | null
           user_id: string
         }
         Update: {
@@ -408,13 +416,17 @@ export type Database = {
           id?: string
           idempotency_key?: string | null
           inbound_text?: string | null
+          intent?: string | null
           latency_ms?: number | null
           platform?: string | null
           prompt_tokens?: number | null
           reply_text?: string | null
           retrieved_chunk_ids?: string[] | null
+          social_account_id?: string | null
           status?: string | null
           tool_calls?: Json | null
+          triage_fast_path?: boolean | null
+          used_model?: string | null
           user_id?: string
         }
         Relationships: []
@@ -7601,6 +7613,10 @@ export type Database = {
       }
     }
     Functions: {
+      ai_agent_dashboard: {
+        Args: { p_days: number; p_platform?: string | null }
+        Returns: Json
+      }
       create_ai_website_setup_job: {
         Args: { p_source_id: string; p_social_account_id: string; p_platform: string }
         Returns: string

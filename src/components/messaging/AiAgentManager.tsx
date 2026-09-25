@@ -13,6 +13,7 @@ import { AutomationHandlerCard } from "@/components/messaging/AutomationHandlerC
 import { AutoReplyManager } from "@/components/messaging/AutoReplyManager";
 import { AiKnowledgeManager } from "@/components/messaging/AiKnowledgeManager";
 import { AiAgentLogsView } from "@/components/messaging/AiAgentLogsView";
+import { AgentDashboardView } from "@/features/agent-dashboard";
 import { AiAgentTestChat } from "@/components/messaging/AiAgentTestChat";
 import { DatabaseConnectorsManager } from "@/components/automation/DatabaseConnectorsManager";
 import { UnsavedChangesDialog } from "@/components/ui/UnsavedChangesDialog";
@@ -292,6 +293,7 @@ export function AiAgentManager({ platform = "whatsapp", initialAccountId = null,
         <TabsTrigger value="knowledge">{t("tabs.knowledge", "Knowledge")}</TabsTrigger>
         <TabsTrigger value="tools">{t("tabs.tools", "Tools")}</TabsTrigger>
         <TabsTrigger value="test">{t("tabs.test", "Test")}</TabsTrigger>
+        <TabsTrigger value="dashboard">{t("tabs.dashboard", "Dashboard")}</TabsTrigger>
         <TabsTrigger value="logs">{t("tabs.logs", "Logs")}</TabsTrigger>
       </TabsList>
 
@@ -372,6 +374,7 @@ export function AiAgentManager({ platform = "whatsapp", initialAccountId = null,
         />
       </TabsContent>
       <TabsContent value="test" className="mt-0"><AiAgentTestChat platform={platform} accountId={accountId} /></TabsContent>
+      <TabsContent value="dashboard" className="mt-0"><AgentDashboardView platform={platform} /></TabsContent>
       <TabsContent value="logs" className="mt-0"><AiAgentLogsView platform={platform} /></TabsContent>
       <UnsavedChangesDialog
         open={pending}
