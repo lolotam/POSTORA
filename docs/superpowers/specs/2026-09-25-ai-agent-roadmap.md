@@ -79,3 +79,28 @@ Ordered by value for effort. Each phase ships on its own and is independently us
 - The handoff summary depends on the model filling `summary`. The fallback is today's `reason`.
 - The cache risks stale prices or stock, which a short TTL and never caching orders mitigate.
 - Procedures overlap with the agent's free-form tool use, so they need a clear rule for who is in control of a turn.
+
+## Revisions after debate round 1 (Codex astra 6 medium, 2026-09-25)
+
+The full verdict table is in the Phase 1 plan. Changes to this roadmap:
+
+- **Phase 1 order:** handoff summaries first (Tasks 1–3), then intent tags (Tasks 4–6).
+- **Where handoff summaries are stored:** `ai_conversation_modes.handoff_summary`, a new column, instead of only the assignment notes.
+  - That row exists on every escalation, on every platform, even with no agent online.
+  - It is shown through `AiConversationModeSelect` (WhatsApp and FB/IG) and in both Human Agent queues.
+- **Label handling:**
+  - labels refresh in an open inbox (30 s refetch plus refetch on focus);
+  - the oldest same-name label wins;
+  - redelivered replies are not labelled;
+  - a manually removed label may be re-added by a later confident message.
+- **Phase 2:** re-scoped in `docs/superpowers/plans/2026-09-25-agent-phase2-woocommerce-speed.md`:
+  - measurement first;
+  - a category-id cache (24 h) and a `search_products` cache (120 s), with stock staleness stated to the model;
+  - no cache for stock or orders;
+  - bounded parallelism for read-only connector calls.
+
+  Dropped: keyword prefetch, and the "Jev routes the search query" idea (Jev returns choices, not text). The latency target is set from the measured baseline.
+- **#7 media:** verified live as an immediate acceptance check, not a Phase 3 item.
+- **Phase 3 notes:**
+  - the dashboard must define "resolved" separately from "sent without escalation", with retry de-duplication and an explicit baseline for token savings;
+  - saved test sets need isolated sandbox threads per run, and connector fixtures, because dry-run connectors return placeholders.
