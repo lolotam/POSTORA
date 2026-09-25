@@ -17,6 +17,7 @@ import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import { ModelParamControls } from '@/components/admin/shared/ModelParamControls';
 import { defaultParamsFor, mergeModelSpec } from '@/lib/higgsfieldModelSpecs';
+import { SearchableModelPicker, LARGE_PROVIDER_THRESHOLD } from '@/components/admin/SearchableModelPicker';
 
 function primarySpecFor(row: AIModel | null, capability: string) {
   return mergeModelSpec(row?.model_id ?? '', row?.metadata ?? null, capability === 'video' ? 'video' : 'image');
@@ -341,6 +342,11 @@ function TierSelector({ label, icon, providers, allProviders, filteredModels, cu
               </Command>
             </PopoverContent>
           </Popover>
+        ) : selectedProviderId && providerModels.length > LARGE_PROVIDER_THRESHOLD ? (
+          <SearchableModelPicker
+            models={providerModels}
+            value={currentModel?.provider_code === selectedProvider?.provider_code ? currentModel?.model_id || '' : ''}
+            onSelect={handleModelChange} disabled={isSaving} modelNote={modelNote} />
         ) : selectedProviderId ? (
           <Select
             value={currentModel?.provider_code === selectedProvider?.provider_code ? currentModel?.model_id || '' : ''}

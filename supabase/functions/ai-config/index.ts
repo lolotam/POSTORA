@@ -2,6 +2,11 @@ import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { restrictedCorsHeaders } from '../_shared/cors.ts';
 import { HiggsfieldAuthError, getValidAccessToken } from '../_shared/higgsfield-oauth.ts';
 import { HiggsfieldMcpClient } from '../_shared/higgsfield-mcp.ts';
+import { createLogger } from '../_shared/logging.ts';
+import {
+  CatalogSyncError, type CatalogDb, runCatalogSync, SYNCABLE_PROVIDERS, syncFailureMessage,
+} from '../_shared/modelCatalogSyncRun.ts';
+import { describeProviderFailure, isBillingBlocked, ProviderTestError } from '../_shared/providerErrors.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -57,7 +62,9 @@ serve(async (req) => {
         const [pRes, mRes, sRes] = await Promise.all([
           supabase.from('ai_providers').select('*').order('name'),
           supabase.from('ai_models').select('*, ai_providers(provider_code, name)').order('name'),
-          supabase.from('system_settings').select('*').like('key', 'default_ai_model%'),
+          // Widened beyond the default_ai_model* tier rows so the admin UI can also
+          // read the model_catalog_synced_at_<code> rows sync-models writes.
+          supabase.from('system_settings').select('*').or('key.like.default_ai_model%,key.like.model_catalog_synced_at_%'),
         ]);
         return new Response(JSON.stringify({
           providers: pRes.data || [],
@@ -137,7 +144,7 @@ serve(async (req) => {
           } else if (provider.api_type === 'anthropic') {
             await testAnthropic(apiKey, provider.api_endpoint);
           } else {
-            await testOpenAI(apiKey, provider.api_endpoint);
+            await testOpenAI(apiKey, provider.api_endpoint, await defaultTestModel(supabase, provider));
           }
           latency = Date.now() - startTime;
           success = true;
@@ -171,6 +178,13 @@ serve(async (req) => {
         if (!provider_code || !api_key) return new Response(JSON.stringify({ error: 'provider_code and api_key required' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 
         const startTime = Date.now();
+        const saveKey = async () => {
+          const { error: upsertErr } = await supabase.from('provider_api_keys').upsert(
+            { provider_code, api_key, created_by: user.id, updated_at: new Date().toISOString() },
+            { onConflict: 'provider_code' },
+          );
+          if (upsertErr) throw new Error(upsertErr.message);
+        };
         try {
           // Test key based on provider_code
           if (provider_code === 'firecrawl') {
@@ -203,19 +217,17 @@ serve(async (req) => {
             } else if (provider.api_type === 'anthropic') {
               await testAnthropic(api_key, provider.api_endpoint);
             } else {
-              await testOpenAI(api_key, provider.api_endpoint);
+              await testOpenAI(api_key, provider.api_endpoint, await defaultTestModel(supabase, provider));
             }
           }
           const latency = Date.now() - startTime;
-
-          const { error: upsertErr } = await supabase.from('provider_api_keys').upsert(
-            { provider_code, api_key, created_by: user.id, updated_at: new Date().toISOString() },
-            { onConflict: 'provider_code' }
-          );
-          if (upsertErr) throw new Error(upsertErr.message);
-
+          await saveKey();
           return new Response(JSON.stringify({ success: true, latency }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
         } catch (e: any) {
+          if (e instanceof ProviderTestError && isBillingBlocked(e.status, e.body)) {
+            await saveKey();
+            return new Response(JSON.stringify({ success: true, latency: Date.now() - startTime, warning: e.message }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+          }
           return new Response(JSON.stringify({ success: false, error: e.message, latency: Date.now() - startTime }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
         }
       }
@@ -264,7 +276,7 @@ serve(async (req) => {
             else if (provider.api_type === 'elevenlabs' || provider.provider_code === 'elevenlabs') await testElevenLabs(apiKey, provider.api_endpoint);
             else if (provider.api_type === 'google') await testGemini(apiKey, provider.api_endpoint);
             else if (provider.api_type === 'anthropic') await testAnthropic(apiKey, provider.api_endpoint);
-            else await testOpenAI(apiKey, provider.api_endpoint);
+            else await testOpenAI(apiKey, provider.api_endpoint, await defaultTestModel(supabase, provider));
           }
           return new Response(JSON.stringify({ success: true, latency: Date.now() - startTime }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
         } catch (e: any) {
@@ -296,6 +308,28 @@ serve(async (req) => {
           hasDb = !!data;
         }
         return new Response(JSON.stringify({ has_key: hasEnv || hasDb }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+      }
+
+      if (resolvedAction === 'sync-models') {
+        if (!isAdmin) return new Response(JSON.stringify({ error: 'Admin required' }), { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+        const { provider_code } = body;
+        if (!(SYNCABLE_PROVIDERS as readonly string[]).includes(provider_code)) {
+          return new Response(JSON.stringify({ error: 'Provider does not support model sync' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+        }
+        try {
+          // The generated client type is too deep for a structural check; it satisfies CatalogDb at runtime.
+          const report = await runCatalogSync(supabase as unknown as CatalogDb, provider_code);
+          return new Response(JSON.stringify(report), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+        } catch (e) {
+          // 502 would be masked by Cloudflare, so answer 200 with an error body the UI shows as a
+          // toast. Only CatalogSyncError text reaches it; database errors stay in the log.
+          if (!(e instanceof CatalogSyncError)) {
+            await createLogger(supabase, 'ai-config').error('Model catalogue sync failed', {
+              event: 'model_sync_failed', provider_code, error: e instanceof Error ? e.message : String(e),
+            }, user.id);
+          }
+          return new Response(JSON.stringify({ error: syncFailureMessage(e) }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+        }
       }
 
       return new Response(JSON.stringify({ error: 'Unknown action' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
@@ -351,26 +385,10 @@ serve(async (req) => {
 
 // ── Test helpers ──
 async function handleRes(res: Response, name: string) {
-  if (!res.ok) {
-    const t = await res.text();
-    console.error(`${name} test failed: ${res.status} - ${t.slice(0, 300)}`);
-    if (res.status === 401) throw new Error('Invalid API key');
-    if (res.status === 403) throw new Error('API key lacks required permissions');
-    if (res.status === 429) {
-      // Check for provider-specific balance errors
-      if (t.includes('insufficient_balance') || t.includes('1008')) {
-        throw new Error('API key is valid, but the account has insufficient balance. Please top up your account.');
-      }
-      throw new Error('Rate limit exceeded');
-    }
-    // Parse JSON error details if possible
-    try {
-      const errJson = JSON.parse(t);
-      const msg = errJson?.error?.message || errJson?.message || errJson?.error;
-      if (msg) throw new Error(`${name}: ${msg}`);
-    } catch (_) { /* not JSON */ }
-    throw new Error(`${name} API error: ${res.status}`);
-  }
+  if (res.ok) return;
+  const t = await res.text();
+  console.error(`${name} test failed: ${res.status} - ${t.slice(0, 300)}`);
+  throw new ProviderTestError(describeProviderFailure(name, res.status, t), res.status, t);
 }
 
 function modelsUrl(ep: string, path = '/v1/models'): string {
@@ -382,14 +400,35 @@ async function testGemini(key: string, ep: string) {
   await handleRes(res, 'Gemini');
 }
 
-async function testOpenAI(key: string, ep: string) {
+async function testOpenAI(key: string, ep: string, model: string) {
   const url = ep.replace(/\/$/, '') + '/chat/completions';
   const res = await fetch(url, {
     method: 'POST',
     headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: 'gpt-4o-mini', messages: [{ role: 'user', content: 'hi' }], max_tokens: 1 }),
+    body: JSON.stringify({ model, messages: [{ role: 'user', content: 'hi' }], max_tokens: 1 }),
   });
   await handleRes(res, 'OpenAI');
+}
+
+// The gateway and OpenRouter namespace ids by vendor; a bare "gpt-4o-mini" is
+// rejected there, so test with a chat model the provider actually lists.
+const TEST_MODEL_OVERRIDE: Record<string, string> = { vercel: 'openai/gpt-4o-mini', openrouter: 'openai/gpt-4o-mini' };
+// Used only when a provider has no active chat model yet (e.g. DeepSeek before its first sync).
+const TEST_MODEL_FALLBACK: Record<string, string> = { deepseek: 'deepseek-chat' };
+interface ChatModelQuery {
+  eq(column: string, value: unknown): ChatModelQuery;
+  contains(column: string, value: string[]): ChatModelQuery;
+  order(column: string): ChatModelQuery;
+  limit(count: number): ChatModelQuery;
+  maybeSingle(): PromiseLike<{ data: { model_id?: string } | null }>;
+}
+interface ChatModelDb { from(table: string): { select(columns: string): ChatModelQuery } }
+// Takes the client as unknown: checking the generated client type against ChatModelDb hits TS2589.
+async function defaultTestModel(client: unknown, provider: { id: string; provider_code: string }): Promise<string> {
+  if (TEST_MODEL_OVERRIDE[provider.provider_code]) return TEST_MODEL_OVERRIDE[provider.provider_code];
+  const { data } = await (client as ChatModelDb).from('ai_models').select('model_id').eq('provider_id', provider.id)
+    .eq('is_active', true).contains('capabilities', ['chat']).order('name').limit(1).maybeSingle();
+  return data?.model_id ?? TEST_MODEL_FALLBACK[provider.provider_code] ?? 'gpt-4o-mini';
 }
 
 async function testAnthropic(key: string, ep: string) {

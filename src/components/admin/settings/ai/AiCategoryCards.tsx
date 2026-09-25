@@ -1,7 +1,11 @@
+import { useState } from 'react';
 import { AudioLines, ImageIcon, Layers, Loader2, MessageSquare, Mic, Search, Video } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { toast } from 'sonner';
 import { Card, CardContent } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { DefaultModelSelector } from '@/components/admin/DefaultModelSelector';
 import {
   useAIConfiguration,
@@ -13,6 +17,7 @@ import {
 import type { AIModel, ModelCategory } from '@/hooks/useAIConfiguration';
 import { embeddingModelNote } from '@/hooks/ai-config/embeddingDimensions';
 import { reEmbedWarningFor, useEmbeddingColumnOwners } from '@/hooks/useEmbeddingColumnOwners';
+import { supabase } from '@/integrations/supabase/client';
 
 /**
  * One model category, rendered on its own so the settings page can put each behind a
@@ -167,15 +172,47 @@ export function SpeechToTextCard() {
   );
 }
 
+/**
+ * Admin-only preview for the configured TTS chain. Calls `generate-speech` directly
+ * (no media-library write) and plays back the returned base64 audio in place.
+ */
+export function TryVoice() {
+  const [text, setText] = useState('Hello from Postora.');
+  const [src, setSrc] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const run = async () => {
+    setBusy(true); setError(null); setSrc(null);
+    const { data, error: invokeError } = await supabase.functions.invoke('generate-speech', { body: { text } });
+    setBusy(false);
+    if (invokeError || data?.error) { setError(data?.error ?? 'Speech generation failed'); return; }
+    setSrc(`data:${data.mediaType};base64,${data.audio}`);
+  };
+  return (
+    <div className="space-y-2 pt-3">
+      <Label htmlFor="tts-preview-text" className="text-xs">Preview text</Label>
+      <div className="flex gap-2">
+        <Input id="tts-preview-text" value={text} maxLength={1000} onChange={(e) => setText(e.target.value)} className="h-8 text-xs" />
+        <Button size="sm" onClick={run} disabled={busy || !text.trim()}>{busy ? <Loader2 className="w-3 h-3 animate-spin" /> : null}Try voice</Button>
+      </div>
+      {error && <p className="text-xs text-destructive">{error}</p>}
+      {src && <audio data-testid="tts-preview" controls src={src} className="w-full" />}
+    </div>
+  );
+}
+
 export function TextToSpeechCard() {
   return (
-    <AiCategoryCard
-      category="tts"
-      capability="tts"
-      title="Text to Speech"
-      description="Default model for text-to-speech conversion"
-      icon={AudioLines}
-    />
+    <div className="space-y-3">
+      <AiCategoryCard
+        category="tts"
+        capability="tts"
+        title="Text to Speech"
+        description="Default model for text-to-speech conversion"
+        icon={AudioLines}
+      />
+      <TryVoice />
+    </div>
   );
 }
 

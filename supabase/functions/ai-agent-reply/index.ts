@@ -64,6 +64,7 @@ import { type AiTier, fetchWithTimeout, resolvePlatformApiKey } from "../_shared
 import { callAnthropicJson } from "../_shared/anthropic-adapter.ts";
 import { composeAiTiers, invalidateRejectedUserTier, resolveUserAiRoute, type AiRoutingAdmin } from "../_shared/ai-user-routing.ts";
 import { AI_CONNECTION_REQUIRED, AI_USER_KEY_INVALID, ProviderHttpError, redactProviderError } from "../_shared/ai-routing-errors.ts";
+import { loadOpenAiCompatibleBase } from "../_shared/providerEndpoint.ts";
 
 const OPENAI_API = "https://api.openai.com/v1";
 const SERVICE_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -119,6 +120,7 @@ const CHAT_TIMEOUT_MS = 25_000;
 
 // OpenAI-compatible chat-completion endpoints per provider. Providers here
 // must stay in sync with the choices offered in AdminAiAgentSection.tsx.
+// Providers not listed here resolve through ai_providers (providerEndpoint.ts).
 const GOOGLE_ENDPOINT = { url: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", keyEnv: "GOOGLE_AI_STUDIO_KEY" };
 const PROVIDER_ENDPOINTS: Record<string, { url: string; keyEnv: string; kind?: "anthropic" }> = {
   claude: { url: "https://api.anthropic.com/v1/messages", keyEnv: "ANTHROPIC_API_KEY", kind: "anthropic" },
@@ -136,7 +138,14 @@ export async function chatCompletion(
   admin?: AiRoutingAdmin,
 ): Promise<any> {
   const provider = tier.provider;
-  const endpoint = PROVIDER_ENDPOINTS[provider] ?? PROVIDER_ENDPOINTS.openai;
+  let endpoint = PROVIDER_ENDPOINTS[provider];
+  if (!endpoint) {
+    const base = await loadOpenAiCompatibleBase(admin, provider);
+    // Only the legacy bare-id case ("gpt-4o" parsed as openai) may fall back to OpenAI;
+    // a named provider without a usable row must fail, not send its key to OpenAI.
+    if (!base) throw new Error(`${provider}: provider endpoint not configured`);
+    endpoint = { url: `${base}/chat/completions`, keyEnv: "" };
+  }
   const key = tier.credentialSource === "user" ? tier.apiKey : await resolvePlatformApiKey(admin, provider);
   if (!key?.trim()) throw new Error("AI tier requires an API key");
   let data;

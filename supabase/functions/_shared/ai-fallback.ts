@@ -1,6 +1,8 @@
 import { callAnthropic } from "./anthropic-adapter.ts";
 import { AI_USER_KEY_INVALID, redactProviderError } from "./ai-routing-errors.ts";
 import type { AiRoutingAdmin } from "./ai-user-routing.ts";
+import { BUILTIN_CHAT_PROVIDERS, loadOpenAiCompatibleBase } from "./providerEndpoint.ts";
+import { resolveProviderKey } from "./providerKeys.ts";
 
 export type AiTier =
   | { provider: string; model: string; credentialSource: 'user'; apiKey: string }
@@ -45,7 +47,7 @@ const CATEGORY_LAST_RESORT: Record<string, { provider: string; model: string } |
   stt: { provider: 'openai', model: 'whisper-1' },
 };
 
-export function getAiEndpoint(provider: string, suppliedKey?: string): AiEndpoint {
+export function getAiEndpoint(provider: string, suppliedKey?: string, baseUrl?: string): AiEndpoint {
   if (provider === 'claude') {
     const apiKey = suppliedKey ?? Deno.env.get('ANTHROPIC_API_KEY') ?? '';
     return { kind: 'anthropic', apiUrl: '', apiKey, headers: {} };
@@ -75,6 +77,13 @@ export function getAiEndpoint(provider: string, suppliedKey?: string): AiEndpoin
       headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' } };
   }
 
+  if (baseUrl && !BUILTIN_CHAT_PROVIDERS.has(provider)) {
+    // Data-driven providers get their key from resolveProviderKey; there is no env var to read here.
+    const apiKey = suppliedKey ?? '';
+    return { apiUrl: `${baseUrl}/chat/completions`, apiKey,
+      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' } };
+  }
+
   // Default: Google AI Studio direct
   const apiKey = suppliedKey ?? Deno.env.get('GOOGLE_AI_STUDIO_KEY') ?? '';
   return {
@@ -88,6 +97,8 @@ export function getAiEndpoint(provider: string, suppliedKey?: string): AiEndpoin
 }
 
 export async function resolvePlatformApiKey(admin: AiRoutingAdmin | undefined, provider: string): Promise<string> {
+  // A data-driven provider must never fall through to the Google default key below.
+  if (!BUILTIN_CHAT_PROVIDERS.has(provider)) return (await resolveProviderKey(admin, provider)) ?? '';
   if (admin) {
     const { data, error } = await admin.from('provider_api_keys').select('api_key')
       .eq('provider_code', provider === 'google' ? 'gemini' : provider).maybeSingle();
@@ -363,7 +374,13 @@ export async function callAiChain(admin: AiRoutingAdmin | undefined, requestBody
     tiers.push(attempt);
     if (!apiKey) { attempt.error = 'API key not configured'; continue; }
     try {
-      const endpoint = getAiEndpoint(tier.provider, apiKey);
+      let baseUrl: string | undefined;
+      if (!BUILTIN_CHAT_PROVIDERS.has(tier.provider)) {
+        const base = await loadOpenAiCompatibleBase(admin, tier.provider);
+        if (!base) { attempt.error = 'Provider endpoint not configured'; continue; }
+        baseUrl = base;
+      }
+      const endpoint = getAiEndpoint(tier.provider, apiKey, baseUrl);
       const body = chatRequestForTier(requestBody, tier);
       const response = endpoint.kind === 'anthropic'
         ? await callAnthropic(body, apiKey, AI_TIER_TIMEOUT_MS)

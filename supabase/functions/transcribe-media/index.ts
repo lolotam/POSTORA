@@ -2,6 +2,8 @@ import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { fetchCategoryAiSettings, logAiCall } from "../_shared/ai-fallback.ts";
 import { createLogger } from "../_shared/logging.ts";
+import { resolveVercelKey, vercelTranscribe } from "../_shared/vercelGateway.ts";
+import { sttLastResort, sttProviderFor } from "./sttProvider.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -211,8 +213,20 @@ async function transcribeWithGoogle(audioBlob: Blob, model = "gemini-2.5-flash")
   return { transcript, language: "auto", duration: 0 };
 }
 
-/** Run transcription for a specific model name */
-async function runTranscription(audioBlob: Blob, model: string, supabaseAdmin?: any): Promise<TranscriptionResult> {
+/** Run transcription for a specific model name, optionally routed through a named provider */
+async function runTranscription(audioBlob: Blob, model: string, supabaseAdmin?: any, provider?: string): Promise<TranscriptionResult> {
+  if (provider === "vercel") {
+    const apiKey = supabaseAdmin ? await resolveVercelKey(supabaseAdmin) : Deno.env.get("AI_GATEWAY_API_KEY");
+    if (!apiKey) {
+      throw new TranscriptionApiError(
+        "Vercel AI Gateway key not configured",
+        "https://ai-gateway.vercel.sh",
+        0,
+        "No AI_GATEWAY_API_KEY found in environment variables or provider_api_keys table"
+      );
+    }
+    return vercelTranscribe(apiKey, model, new Uint8Array(await audioBlob.arrayBuffer()));
+  }
   if (model === "nova-3" || model === "deepgram/nova-3") {
     return transcribeWithDeepgram(audioBlob);
   }
@@ -287,7 +301,10 @@ serve(async (req) => {
 
     let primaryModel = sttSettings.primaryModel;
     let fallbackModel = sttSettings.fallbackModel;
-    const lastResortModel = "whisper-1";
+    const { model: lastResortModel, provider: lastResortProvider } = sttLastResort(
+      sttSettings.lastResortProvider,
+      sttSettings.lastResortModel,
+    );
 
     for (const row of appSettingsRows || []) {
       try {
@@ -298,6 +315,12 @@ serve(async (req) => {
     }
 
     if (requestedModel) primaryModel = requestedModel;
+
+    // Only forward a provider when the resolved model is still the one sttSettings configured —
+    // an app_settings or requestedModel override changes `model` away from `settingsModel`, and
+    // sttProviderFor treats that as "no provider" so today's model-name-only routing is unchanged.
+    const primaryProvider = sttProviderFor(primaryModel, sttSettings.primaryModel, sttSettings.primaryProvider);
+    const fallbackProvider = sttProviderFor(fallbackModel, sttSettings.fallbackModel, sttSettings.fallbackProvider);
 
     console.log(`Transcription 3-tier: Primary=${primaryModel}, Fallback=${fallbackModel}, LastResort=${lastResortModel}`);
 
@@ -332,7 +355,7 @@ serve(async (req) => {
     // ── Tier 1: Primary ──
     try {
       console.log(`Tier 1 (primary): ${primaryModel}`);
-      result = await runTranscription(audioBlob, primaryModel, supabaseAdmin);
+      result = await runTranscription(audioBlob, primaryModel, supabaseAdmin, primaryProvider);
       tiers.push({ tier: "primary", model: primaryModel, success: true });
     } catch (err) {
       const details = extractErrorDetails(err);
@@ -352,7 +375,7 @@ serve(async (req) => {
     if (!result && fallbackModel && fallbackModel !== primaryModel) {
       try {
         console.log(`Tier 2 (fallback): ${fallbackModel}`);
-        result = await runTranscription(audioBlob, fallbackModel, supabaseAdmin);
+        result = await runTranscription(audioBlob, fallbackModel, supabaseAdmin, fallbackProvider);
         tiers.push({ tier: "fallback", model: fallbackModel, success: true });
       } catch (err) {
         const details = extractErrorDetails(err);
@@ -369,11 +392,11 @@ serve(async (req) => {
       }
     }
 
-    // ── Tier 3: Last Resort (Google Gemini) ──
+    // ── Tier 3: Last Resort (whisper-1, or the admin's Vercel model) ──
     if (!result && lastResortModel !== primaryModel && lastResortModel !== fallbackModel) {
       try {
         console.log(`Tier 3 (last_resort): ${lastResortModel}`);
-        result = await runTranscription(audioBlob, lastResortModel, supabaseAdmin);
+        result = await runTranscription(audioBlob, lastResortModel, supabaseAdmin, lastResortProvider);
         tiers.push({ tier: "last_resort", model: lastResortModel, success: true });
       } catch (err) {
         const details = extractErrorDetails(err);

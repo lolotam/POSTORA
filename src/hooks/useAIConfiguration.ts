@@ -9,9 +9,10 @@ import type {
   CategoryFallbacks2,
   AIConfigData,
   ModelCategory,
+  SystemSettingRow,
 } from './ai-config/types';
 
-export type { AIProvider, AIModel, DefaultModel, CategoryDefaults, CategoryFallbacks, CategoryFallbacks2, AIConfigData, ModelCategory };
+export type { AIProvider, AIModel, DefaultModel, CategoryDefaults, CategoryFallbacks, CategoryFallbacks2, AIConfigData, ModelCategory, SystemSettingRow };
 
 function parseDefault(val: unknown): DefaultModel | null {
   if (!val || typeof val !== 'object') return null;
@@ -69,21 +70,23 @@ export function useAIConfiguration() {
     queryFn: async (): Promise<AIConfigData> => {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) {
-        return { providers: [], models: [], defaultModel: null, categoryDefaults: { ...emptyCategoryDefaults }, categoryFallbacks: { ...emptyCategoryFallbacks }, categoryFallbacks2: { ...emptyCategoryFallbacks } };
+        return { providers: [], models: [], settings: [], defaultModel: null, categoryDefaults: { ...emptyCategoryDefaults }, categoryFallbacks: { ...emptyCategoryFallbacks }, categoryFallbacks2: { ...emptyCategoryFallbacks } };
       }
 
       const [providersResult, modelsResult, settingsResult] = await Promise.all([
         supabase.from('ai_providers' as any).select('*').order('name'),
         supabase.from('ai_models' as any).select('*, ai_providers(provider_code, name)').order('name'),
-        supabase.from('system_settings' as any).select('*').like('key', 'default_ai_model%'),
+        // Widened beyond the default_ai_model* tier rows so the admin UI can also
+        // read the model_catalog_synced_at_<code> rows the sync-models action writes.
+        supabase.from('system_settings' as any).select('*').or('key.like.default_ai_model%,key.like.model_catalog_synced_at_%'),
       ]);
 
       const providers = (providersResult.data || []) as unknown as AIProvider[];
       const models = (modelsResult.data || []) as unknown as AIModel[];
-      const settings = (settingsResult.data || []) as any[];
+      const settings = (settingsResult.data || []) as unknown as SystemSettingRow[];
 
       const parsed = parseSettingsRows(settings as { key: string; value: unknown }[]);
-      return { providers, models, ...parsed };
+      return { providers, models, settings, ...parsed };
     },
     retry: false,
   });
@@ -194,28 +197,43 @@ export function useToggleModel() {
   });
 }
 
+export interface TestConnectionResult {
+  success: boolean;
+  latency?: number;
+  error?: string | null;
+}
+
 export function useTestConnection() {
   return useMutation({
-    mutationFn: async ({ provider_id }: { provider_id: string }) => {
+    // A failed test comes back as { success: false, error } so the card can show the
+    // provider's mapped message; only a failed call to the function throws.
+    mutationFn: async ({ provider_id }: { provider_id: string }): Promise<TestConnectionResult> => {
       const { data, error } = await supabase.functions.invoke('ai-config', {
         body: { action: 'test-connection', provider_id },
       });
       if (error) throw new Error(error.message || 'Connection test failed');
-      if (data?.error) throw new Error(data.error);
-      return data;
+      return data as TestConnectionResult;
     },
   });
+}
+
+export interface SetServiceKeyResult {
+  success: boolean;
+  latency?: number;
+  error?: string;
+  /** Set when the key was saved but the account is billing-blocked (e.g. Vercel AI Gateway without a card on file). */
+  warning?: string;
 }
 
 export function useSetServiceKey() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async ({ provider_code, api_key }: { provider_code: string; api_key: string }) => {
+    mutationFn: async ({ provider_code, api_key }: { provider_code: string; api_key: string }): Promise<SetServiceKeyResult> => {
       const { data, error } = await supabase.functions.invoke('ai-config', {
         body: { action: 'set-service-key', provider_code, api_key },
       });
       if (error) throw new Error(error.message || 'Failed to save key');
-      return data;
+      return data as SetServiceKeyResult;
     },
     onSuccess: () => {
       queryClient.refetchQueries({ queryKey: ['service-keys'] });

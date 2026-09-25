@@ -11,6 +11,7 @@ import {
   embeddingRecord,
   embedKnowledgeDual,
   embedWithOpenAiCompatible,
+  embedWithVercel,
   EmbeddingColumnOwnershipError,
   resolveAdminEmbeddingLadder,
   resolveDualEmbeddingConfig,
@@ -351,6 +352,8 @@ const SEEDED_CATALOG = [
   // returned when each model was probed, not what its model card advertises.
   catalogRow("openrouter", "perplexity/pplx-embed-v1-4b", 2560, 1536),
   catalogRow("openrouter", "liquid/lfm-2.5-embedding-350m:free", 1024),
+  // Vercel AI Gateway speaks the OpenAI embeddings dialect.
+  catalogRow("vercel", "openai/text-embedding-3-small", 1536),
 ];
 
 Deno.test("an OpenRouter selection resolves to the column its returned width fits", () => {
@@ -368,6 +371,23 @@ Deno.test("an OpenRouter selection resolves to the column its returned width fit
   assertEquals(dual.primary.column, "embedding");
   assertEquals(dual.primary.dimensions, 1536);
   assertEquals(dual.primary.model, "perplexity/pplx-embed-v1-4b");
+  assertEquals(dual.fallback?.column, "embedding_bge_m3");
+  assertEquals(dual.fallback?.dimensions, 1024);
+});
+
+Deno.test("a Vercel selection resolves through the OpenAI-compatible dialect", () => {
+  const dual = resolveAdminEmbeddingLadder(
+    { provider_code: "vercel", model_id: "openai/text-embedding-3-small" },
+    { provider_code: "ollama", model_id: "bge-m3:latest" },
+    null,
+    SEEDED_CATALOG,
+    {},
+  );
+
+  assertEquals(dual.primary.provider, "vercel");
+  assertEquals(dual.primary.column, "embedding");
+  assertEquals(dual.primary.dimensions, 1536);
+  assertEquals(dual.primary.model, "openai/text-embedding-3-small");
   assertEquals(dual.fallback?.column, "embedding_bge_m3");
   assertEquals(dual.fallback?.dimensions, 1024);
 });
@@ -684,4 +704,24 @@ Deno.test("accountRetrievalRpcName pairs with each vector column", () => {
     accountRetrievalRpcName(resolveDualEmbeddingConfig(env({ EMBEDDING_PROVIDER: "gemini" })).primary),
     "match_ai_knowledge_chunks_for_account",
   );
+});
+
+Deno.test("a Vercel embedding uses the admin-saved key when AI_GATEWAY_API_KEY is unset", async () => {
+  const realFetch = globalThis.fetch;
+  const prior = Deno.env.get("AI_GATEWAY_API_KEY");
+  Deno.env.delete("AI_GATEWAY_API_KEY");
+  let authorization: string | null = null;
+  globalThis.fetch = ((_url: string | URL | Request, init?: RequestInit) => {
+    authorization = new Headers(init?.headers).get("authorization");
+    return Promise.resolve(new Response(JSON.stringify({ data: [{ embedding: [0.1, 0.2] }] }), { status: 200 }));
+  }) as typeof fetch;
+  try {
+    const vectors = await embedWithVercel(["hello"], { ...stubbedConfig, provider: "vercel" }, (code) =>
+      Promise.resolve(code === "vercel" ? "db-key" : null));
+    assertEquals(vectors, [[0.1, 0.2]]);
+    assertEquals(authorization, "Bearer db-key");
+  } finally {
+    globalThis.fetch = realFetch;
+    if (prior !== undefined) Deno.env.set("AI_GATEWAY_API_KEY", prior);
+  }
 });
