@@ -1,0 +1,56 @@
+// deno-lint-ignore-file no-explicit-any no-import-prefix
+import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { z } from "npm:zod@3.23.8";
+import { restrictedCorsHeaders } from "../_shared/cors.ts";
+import { authenticateCaller } from "../_shared/auth-helper.ts";
+import { sanitizeErrorMessage } from "../_shared/errorSanitizer.ts";
+import { fetchCategoryAiSettings } from "../_shared/ai-fallback.ts";
+import { resolveVercelKey, vercelGenerateSpeech } from "../_shared/vercelGateway.ts";
+
+const RequestSchema = z.object({
+  text: z.string().trim().min(1).max(1000),
+  voice: z.string().max(64).optional(),
+});
+
+serve(async (req) => {
+  const cors = restrictedCorsHeaders(req);
+  const json = (b: unknown, s = 200) => new Response(JSON.stringify(b), { status: s, headers: { ...cors, "Content-Type": "application/json" } });
+  if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
+  let userId: string;
+  try {
+    userId = (await authenticateCaller(req)).userId;
+  } catch {
+    return json({ error: "Unauthorized" }, 401);
+  }
+  const admin = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+  const { data: role } = await admin.from("user_roles").select("role").eq("user_id", userId).eq("role", "admin").maybeSingle();
+  if (!role) return json({ error: "Admin required" }, 403);
+
+  const parsed = RequestSchema.safeParse(await req.json().catch(() => ({})));
+  if (!parsed.success) return json({ error: "text must be 1-1000 characters" }, 400);
+  const { text, voice } = parsed.data;
+
+  try {
+  const s = await fetchCategoryAiSettings(admin, "tts");
+  const tiers = [[s.primaryProvider, s.primaryModel], [s.fallbackProvider, s.fallbackModel], [s.lastResortProvider, s.lastResortModel]]
+    .filter(([p, m]) => p === "vercel" && m);
+  if (!tiers.length) return json({ error: "No Vercel TTS model selected in Text to Speech settings" });
+  const apiKey = await resolveVercelKey(admin);
+  if (!apiKey) return json({ error: "Vercel AI Gateway key not configured" });
+  const errors: string[] = [];
+  for (const [, model] of tiers) {
+    try {
+      const out = await vercelGenerateSpeech(apiKey, model, text, voice);
+      return json({ audio: out.base64, mediaType: out.mediaType, provider: "vercel", model });
+    } catch (e) {
+      console.error("[generate-speech] tier failed", model, e);
+      errors.push(`${model}: ${sanitizeErrorMessage(e)}`);
+    }
+  }
+  return json({ error: errors.join("; ") });
+  } catch (e) {
+    console.error("[generate-speech]", e);
+    return json({ error: sanitizeErrorMessage(e) }, 500);
+  }
+});
