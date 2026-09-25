@@ -18,7 +18,7 @@ import {
   useAIConfiguration, useToggleProvider, useToggleModel, useTestConnection,
   useSetServiceKey, useTestService, useCheckServiceKey,
 } from '@/hooks/useAIConfiguration';
-import type { AIProvider } from '@/hooks/useAIConfiguration';
+import type { AIProvider, TestConnectionResult } from '@/hooks/useAIConfiguration';
 import { SyncModelsButton } from './SyncModelsButton';
 import { SYNCABLE_PROVIDER_CODES } from '@/hooks/ai-config/useSyncModels';
 
@@ -49,7 +49,7 @@ export function AiProvidersCard() {
   const { data: serviceKeyStatus } = useCheckServiceKey(allProviderCodes);
 
   const [selectedProvider, setSelectedProvider] = useState<AIProvider | null>(null);
-  const [testResults, setTestResults] = useState<Record<string, { success: boolean; latency?: number; error?: string }>>({});
+  const [testResults, setTestResults] = useState<Record<string, TestConnectionResult>>({});
   const [serviceTestResults, setServiceTestResults] = useState<Record<string, { success: boolean; latency?: number; error?: string } | null>>({});
 
   const [providerApiKey, setProviderApiKey] = useState('');

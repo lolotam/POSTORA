@@ -197,15 +197,22 @@ export function useToggleModel() {
   });
 }
 
+export interface TestConnectionResult {
+  success: boolean;
+  latency?: number;
+  error?: string | null;
+}
+
 export function useTestConnection() {
   return useMutation({
-    mutationFn: async ({ provider_id }: { provider_id: string }) => {
+    // A failed test comes back as { success: false, error } so the card can show the
+    // provider's mapped message; only a failed call to the function throws.
+    mutationFn: async ({ provider_id }: { provider_id: string }): Promise<TestConnectionResult> => {
       const { data, error } = await supabase.functions.invoke('ai-config', {
         body: { action: 'test-connection', provider_id },
       });
       if (error) throw new Error(error.message || 'Connection test failed');
-      if (data?.error) throw new Error(data.error);
-      return data;
+      return data as TestConnectionResult;
     },
   });
 }
