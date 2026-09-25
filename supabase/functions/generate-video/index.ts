@@ -12,6 +12,7 @@ import {
 } from "../_shared/higgsfield-model-spec.ts";
 import { checkByoGenerationLimits } from "../_shared/higgsfield-rate-limit.ts";
 import { resolveVercelKey, vercelStartVideo } from "../_shared/vercelGateway.ts";
+import { pickVideoProvider, VercelVideoInput, type VideoModelRow } from "./videoProvider.ts";
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), {
@@ -40,13 +41,24 @@ serve(async (req) => {
     const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
     if (!prompt) return json({ error: "Prompt is required" }, 400);
     const modelId = String(body.model_id || "cinematic_studio_3_0");
-    const providerCode = String(body.provider_code || "higgsfield");
-    if (providerCode === "vercel") {
-      const { data: vModel } = await supabase.from("ai_models")
-        .select("model_id, is_active, capabilities, ai_providers!inner(provider_code, is_active)")
-        .eq("model_id", modelId).eq("ai_providers.provider_code", "vercel").maybeSingle();
-      if (!vModel?.is_active || !vModel.ai_providers?.is_active || !(vModel.capabilities || []).includes("video"))
-        return json({ error: "Invalid Vercel video model" }, 400);
+    // The provider comes from the model row, never the client: non-admins cannot read
+    // ai_providers, and an old client's provider_code is ignored.
+    const { data: modelRows, error: modelError } = await supabase
+      .from("ai_models")
+      .select("model_id, metadata, is_active, capabilities, ai_providers!inner(provider_code, is_active)")
+      .eq("model_id", modelId)
+      .in("ai_providers.provider_code", ["higgsfield", "vercel"]);
+    if (modelError) throw new Error("Video model lookup failed");
+    const picked = pickVideoProvider((modelRows ?? []) as VideoModelRow[]);
+    if (!picked) return json({ error: "Unsupported video provider" }, 400);
+    if (picked.provider === "vercel") {
+      // Validate before reserving quota: a 400 return does not reach the catch that releases it.
+      const input = VercelVideoInput.safeParse({
+        duration: body.duration ?? undefined,
+        aspect_ratio: body.aspect_ratio ?? body.aspectRatio ?? undefined,
+        image_url: body.image_url ?? undefined,
+      });
+      if (!input.success) return json({ error: "Invalid video parameters" }, 400);
       const apiKey = await resolveVercelKey(supabase);
       if (!apiKey) return json({ error: "Vercel AI Gateway key not configured" }, 409);
       const { data: q } = await supabase.rpc("reserve_ai_generation_quota", { p_user_id: user.id });
@@ -55,9 +67,9 @@ serve(async (req) => {
       reserved = true;
       const started = await vercelStartVideo(apiKey, modelId, {
         prompt,
-        duration: typeof body.duration === "number" ? body.duration : undefined,
-        aspectRatio: body.aspect_ratio ?? body.aspectRatio,
-        imageUrl: typeof body.image_url === "string" ? body.image_url : undefined,
+        duration: input.data.duration,
+        aspectRatio: input.data.aspect_ratio,
+        imageUrl: input.data.image_url,
       });
       const { data: job, error: insertError } = await supabase.from("ai_generation_jobs").insert({
         user_id: user.id, provider: "vercel", model_id: modelId, modality: "video",
@@ -68,14 +80,7 @@ serve(async (req) => {
       if (insertError) throw insertError;
       return json({ success: true, jobId: job.id, status: "running", pollAfterSeconds: 10 });
     }
-    const { data: model } = await supabase
-      .from("ai_models")
-      .select("model_id, metadata, is_active, capabilities, ai_providers!inner(provider_code)")
-      .eq("model_id", modelId)
-      .eq("ai_providers.provider_code", "higgsfield")
-      .maybeSingle();
-    if (!model || !model.is_active || !(model.capabilities || []).includes("video"))
-      return json({ error: "Invalid Higgsfield video model" }, 400);
+    const model = picked.row;
     const cred = await resolveHiggsfieldCredential(supabase, user.id);
     if (cred.source === "byo") {
       const byoLimit = await checkByoGenerationLimits(supabase, user.id);
