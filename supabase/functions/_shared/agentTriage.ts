@@ -177,12 +177,23 @@ export async function runTriage(
 ): Promise<TriageRun> {
   const startedAt = now();
   const errors: TriageRun["errors"] = [];
+  // Memoized per provider: two tiers on the same provider (primary + fallback)
+  // must resolve its key once, not once per tier.
+  const keyCache = new Map<TriageProvider, Promise<string | null>>();
+  const resolveCachedKey = (provider: TriageProvider): Promise<string | null> => {
+    let cached = keyCache.get(provider);
+    if (!cached) {
+      cached = resolveKey(provider);
+      keyCache.set(provider, cached);
+    }
+    return cached;
+  };
   for (const tier of tiers) {
     const remaining = budgetMs - (now() - startedAt);
     if (remaining <= 0) break;
     const label = `${tier.provider}/${tier.model}`;
     try {
-      const key = await resolveKey(tier.provider);
+      const key = await resolveCachedKey(tier.provider);
       if (!key) {
         errors.push({ model: label, error: "no API key" });
         continue;

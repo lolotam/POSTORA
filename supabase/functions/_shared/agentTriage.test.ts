@@ -130,6 +130,19 @@ Deno.test("a failing first tier falls through to the next and the plan comes fro
   assertEquals(run.errors.map((e) => e.model), ["openrouter/a"]);
 });
 
+Deno.test("two tiers on the same provider resolve its key once", async () => {
+  const sameProviderTiers = [
+    { provider: "openrouter" as const, model: "a" },
+    { provider: "openrouter" as const, model: "b" },
+  ];
+  let keyCalls = 0;
+  const countingKey = () => { keyCalls += 1; return Promise.resolve("k"); };
+  const fetchImpl = (() => Promise.resolve(new Response("{}", { status: 500 }))) as typeof fetch;
+  const run = await runTriage(sameProviderTiers, input, countingKey, 1500, fetchImpl);
+  assertEquals(keyCalls, 1);
+  assertEquals(run.errors.length, 2);
+});
+
 Deno.test("no key, a throw, or an exhausted budget returns no outcome instead of failing the reply", async () => {
   const noKey = await runTriage(tiers, input, () => Promise.resolve(null), 1500,
     (() => { throw new Error("must not be called"); }) as unknown as typeof fetch);
