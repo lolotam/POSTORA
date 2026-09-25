@@ -298,7 +298,7 @@ const CONNECTOR_DEFINITIONS: Record<ConnectorType, ConnectorDefinition> = {
       {
         name: "search_products",
         description:
-          "Search or browse WooCommerce products. Sort by price to answer superlatives such as the most expensive or cheapest item.",
+          "Search or browse WooCommerce products. Sort by price to answer superlatives such as the most expensive or cheapest item. Stock and prices may be up to 2 minutes old.",
         parameters: {
           type: "object",
           properties: {
