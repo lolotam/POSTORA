@@ -3,6 +3,10 @@ import { useQueryClient } from '@tanstack/react-query';
 import { RefreshCw, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
+  AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
+} from '@/components/ui/alert-dialog';
 import { supabase } from '@/integrations/supabase/client';
 import { syncAllProviders, type SyncReport } from '@/hooks/ai-config/useSyncModels';
 
@@ -57,10 +61,29 @@ export function SyncAllButton({ providerCodes }: { providerCodes: readonly strin
       {running && progressLabel && (
         <span className="text-[10px] text-muted-foreground">{progressLabel}</span>
       )}
-      <Button size="sm" variant="outline" onClick={run} disabled={running || providerCodes.length === 0} className="gap-1">
-        {running ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
-        Sync all
-      </Button>
+      {/* A sync writes to production and can switch models off, so it is confirmed first. */}
+      <AlertDialog>
+        <AlertDialogTrigger asChild>
+          <Button size="sm" variant="outline" disabled={running || providerCodes.length === 0} className="gap-1">
+            {running ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+            Sync all
+          </Button>
+        </AlertDialogTrigger>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Sync models for {providerCodes.length} providers?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Each provider's model list is fetched in turn ({providerCodes.join(', ')}). New models are added,
+              and models a provider no longer lists are switched off. Models set as a default or fallback are
+              never switched off, and a switched-off model can be turned back on.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={run}>Sync now</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
