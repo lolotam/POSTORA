@@ -1,5 +1,6 @@
-// deno-lint-ignore-file no-import-prefix no-explicit-any
+// deno-lint-ignore-file no-import-prefix
 import { assertEquals, assertRejects } from "https://deno.land/std@0.208.0/assert/mod.ts";
+import type { RowReader } from "./providerEndpoint.ts";
 import { memoizeRetryable, resolveVercelKey, toVideoSnapshot } from "./vercelGateway.ts";
 
 Deno.test("pending maps to running with a poll delay", () => {
@@ -24,13 +25,30 @@ Deno.test("error and empty completions map to failed", () => {
   assertEquals(toVideoSnapshot({ status: "completed", videos: [] }).state, "failed");
 });
 
-Deno.test("resolveVercelKey prefers env, then provider_api_keys", async () => {
-  const db = { from: () => { const q: any = { select: () => q, eq: () => q, maybeSingle: async () => ({ data: { api_key: "db-key" } }) }; return q; } };
-  Deno.env.delete("AI_GATEWAY_API_KEY");
-  assertEquals(await resolveVercelKey(db), "db-key");
-  Deno.env.set("AI_GATEWAY_API_KEY", "env-key");
-  assertEquals(await resolveVercelKey(db), "env-key");
-  Deno.env.delete("AI_GATEWAY_API_KEY");
+Deno.test("resolveVercelKey prefers the saved key, then the env var the provider row names", async () => {
+  const dbWith = (savedKey: string | null): RowReader => ({
+    from: (table: string) => ({
+      select: () => ({
+        eq: () => ({
+          maybeSingle: async () => ({
+            data: table === "provider_api_keys"
+              ? (savedKey === null ? null : { api_key: savedKey })
+              : { api_key_env_var: "AI_GATEWAY_API_KEY" },
+            error: null,
+          }),
+        }),
+      }),
+    }),
+  });
+  const prior = Deno.env.get("AI_GATEWAY_API_KEY");
+  try {
+    Deno.env.set("AI_GATEWAY_API_KEY", "env-key");
+    assertEquals(await resolveVercelKey(dbWith("db-key")), "db-key");
+    assertEquals(await resolveVercelKey(dbWith(null)), "env-key");
+  } finally {
+    if (prior === undefined) Deno.env.delete("AI_GATEWAY_API_KEY");
+    else Deno.env.set("AI_GATEWAY_API_KEY", prior);
+  }
 });
 
 Deno.test("memoizeRetryable retries after a rejected load, then memoizes success", async () => {

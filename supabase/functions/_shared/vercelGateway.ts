@@ -1,4 +1,4 @@
-// deno-lint-ignore-file no-import-prefix no-explicit-any
+// deno-lint-ignore-file no-import-prefix
 // The only module that imports the AI SDK. Image, video, speech and transcription
 // on the gateway are not plain OpenAI endpoints; the SDK owns their wire format.
 //
@@ -11,6 +11,8 @@
 // actually runs keeps `--allow-sys` out of the repo's edge test gate.
 import { encodeBase64 } from "https://deno.land/std@0.208.0/encoding/base64.ts";
 import type { JobSnapshot } from "./higgsfield-job-payload.ts";
+import type { RowReader } from "./providerEndpoint.ts";
+import { resolveProviderKey } from "./providerKeys.ts";
 
 /**
  * Memoize an async loader, but only while it keeps succeeding.
@@ -56,11 +58,8 @@ export type VideoStatusLike =
       | { type: "binary"; data: Uint8Array; mediaType?: string }> }
   | { status: "error"; error: string };
 
-export async function resolveVercelKey(db: any): Promise<string | null> {
-  const fromEnv = Deno.env.get("AI_GATEWAY_API_KEY");
-  if (fromEnv) return fromEnv;
-  const { data } = await db.from("provider_api_keys").select("api_key").eq("provider_code", "vercel").maybeSingle();
-  return data?.api_key ?? null;
+export function resolveVercelKey(db: RowReader | undefined): Promise<string | null> {
+  return resolveProviderKey(db, "vercel");
 }
 
 export function toVideoSnapshot(status: VideoStatusLike): VercelVideoSnapshot {
@@ -97,14 +96,14 @@ export async function vercelStartVideo(
     aspectRatio: input.aspectRatio as `${number}:${number}` | undefined,
     abortSignal: AbortSignal.timeout(30_000),
   });
-  const job = (result.providerMetadata as any)?.gateway?.asyncJob;
+  const job = (result.providerMetadata as { gateway?: { asyncJob?: { jobId?: unknown } } } | undefined)?.gateway?.asyncJob;
   return { operation: result.operation, gatewayJobId: typeof job?.jobId === "string" ? job.jobId : null };
 }
 
 export async function vercelVideoStatus(apiKey: string, modelId: string, operation: unknown) {
   const { ai, gw } = await loadSdk();
   const status = await ai.experimental_getVideoStatus(gw.createGateway({ apiKey }).videoModel(modelId), {
-    operation: operation as any, abortSignal: AbortSignal.timeout(20_000),
+    operation: operation as Parameters<Sdk["ai"]["experimental_getVideoStatus"]>[1]["operation"], abortSignal: AbortSignal.timeout(20_000),
   });
   return toVideoSnapshot(status as VideoStatusLike);
 }

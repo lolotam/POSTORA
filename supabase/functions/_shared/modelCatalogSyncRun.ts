@@ -2,6 +2,7 @@
 import {
   type MappedCatalog, mapDeepSeekCatalog, mapOpenRouterCatalog, mapVercelCatalog, planCatalogSync,
 } from "./modelCatalogSync.ts";
+import { resolveProviderKey } from "./providerKeys.ts";
 
 export const SYNCABLE_PROVIDERS = ["vercel", "openrouter", "deepseek"] as const;
 
@@ -20,14 +21,6 @@ const CATALOGUE: Record<string, { url: string; needsKey: boolean; map: (d: unkno
   deepseek: { url: "https://api.deepseek.com/models", needsKey: true, map: mapDeepSeekCatalog },
 };
 
-async function providerKey(db: any, provider: { provider_code: string; api_key_env_var: string }) {
-  const fromEnv = Deno.env.get(provider.api_key_env_var);
-  if (fromEnv) return fromEnv;
-  const { data } = await db.from("provider_api_keys").select("api_key")
-    .eq("provider_code", provider.provider_code).maybeSingle();
-  return data?.api_key ?? null;
-}
-
 export async function runCatalogSync(db: any, providerCode: string, fetchImpl: typeof fetch = fetch): Promise<SyncReport> {
   const source = CATALOGUE[providerCode];
   if (!source) throw new Error(`Provider ${providerCode} is not syncable`);
@@ -37,7 +30,7 @@ export async function runCatalogSync(db: any, providerCode: string, fetchImpl: t
 
   const headers: Record<string, string> = {};
   if (source.needsKey) {
-    const key = await providerKey(db, provider);
+    const key = await resolveProviderKey(db, providerCode);
     if (!key) throw new Error(`API key ${provider.api_key_env_var} not configured`);
     headers.Authorization = `Bearer ${key}`;
   }

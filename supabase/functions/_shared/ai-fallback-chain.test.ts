@@ -402,6 +402,43 @@ Deno.test("a user-only chain rejected with 401 keeps AI_USER_KEY_INVALID instead
   }
 });
 
+Deno.test("a data-driven zai tier with no saved key and no env var is skipped, never sent the Google key", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalGet = Deno.env.get;
+  clearProviderEndpointCache();
+  const fakeAdmin = {
+    from: (table: string) => ({
+      select: () => ({
+        eq: () => ({
+          maybeSingle: () =>
+            Promise.resolve({
+              data: table === "ai_providers"
+                ? { api_endpoint: "https://api.z.ai/api/paas/v4", api_type: "openai", is_active: true, api_key_env_var: "ZAI_API_KEY" }
+                : null,
+              error: null,
+            }),
+        }),
+      }),
+    }),
+  } as unknown as AiRoutingAdmin;
+  let fetched = 0;
+  try {
+    Deno.env.get = (name: string) => name === "GOOGLE_AI_STUDIO_KEY" ? "google-secret" : undefined;
+    globalThis.fetch = () => {
+      fetched++;
+      return Promise.reject(new Error("fetch must not run"));
+    };
+    const result = await callAiChain(fakeAdmin, {}, [
+      { provider: "zai", model: "glm-5", credentialSource: "platform" },
+    ]);
+    assertEquals(result.tiers[0].error, "API key not configured");
+    assertEquals(fetched, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+    Deno.env.get = originalGet;
+  }
+});
+
 Deno.test("a data-driven vercel tier reaches its ai_providers endpoint with the platform key", async () => {
   const original = globalThis.fetch;
   clearProviderEndpointCache();
