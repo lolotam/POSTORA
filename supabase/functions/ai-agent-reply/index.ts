@@ -571,6 +571,9 @@ Deno.serve(async (req) => {
     // has to tell "never ran" from "ran and failed" for the same work item.
     idempotency_key: request.outbox_id ?? null,
     social_account_id: UUID_PATTERN.test(request.social_account_id) ? request.social_account_id : null,
+    // Here, not from logOutcome's meta: two outcome paths (agent_not_configured, the generic
+    // error) pass no dry_run in meta, and the dashboard must exclude every sandbox outcome.
+    dry_run: dryRun,
   };
   const outboxId = dryRun ? null : request.outbox_id ?? null;
 
