@@ -33,6 +33,10 @@ export function useWhatsAppLabels() {
       return (data || []) as ConversationLabel[];
     },
     enabled: !!userId,
+    // The AI agent applies labels server-side; an open inbox picks them up
+    // without a reload.
+    refetchInterval: 30_000,
+    refetchOnWindowFocus: true,
   });
 
   const assignmentsQuery = useQuery({
@@ -47,6 +51,8 @@ export function useWhatsAppLabels() {
       return (data || []) as LabelAssignment[];
     },
     enabled: !!userId,
+    refetchInterval: 30_000,
+    refetchOnWindowFocus: true,
   });
 
   const createLabel = useMutation({

@@ -479,6 +479,8 @@ export type Database = {
           conversation_id: string
           created_at: string | null
           expires_at: string | null
+          handoff_summary: string | null
+          handoff_summary_at: string | null
           id: string
           mode: string
           platform: string
@@ -489,6 +491,8 @@ export type Database = {
           conversation_id: string
           created_at?: string | null
           expires_at?: string | null
+          handoff_summary?: string | null
+          handoff_summary_at?: string | null
           id?: string
           mode: string
           platform: string
@@ -499,6 +503,8 @@ export type Database = {
           conversation_id?: string
           created_at?: string | null
           expires_at?: string | null
+          handoff_summary?: string | null
+          handoff_summary_at?: string | null
           id?: string
           mode?: string
           platform?: string

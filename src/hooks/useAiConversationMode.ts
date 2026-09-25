@@ -11,6 +11,9 @@ export interface AiConversationMode {
   mode: AiAgentMode;
   /** Set only by escalation; a manual override never carries it. */
   expires_at?: string | null;
+  /** The AI's two-line handoff note for the human, written when it escalates. */
+  handoff_summary?: string | null;
+  handoff_summary_at?: string | null;
   created_at: string;
   updated_at: string;
 }

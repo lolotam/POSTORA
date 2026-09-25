@@ -13,6 +13,7 @@ import { toast } from "@/hooks/use-toast";
 import { Icon3D, GradientHeading, GradientRingCard, GradientDivider, Reveal } from "@/components/fx";
 import type { GradientKey } from "@/components/fx";
 import { useWhatsAppAgents, useConversationAssignments, useAssignmentHistory } from "@/hooks/useWhatsAppAgents";
+import { useHandoffSummaries } from "@/hooks/useHandoffSummaries";
 import { useMessagingAccounts, useConversations, type Conversation, type MessagingAccount } from "@/hooks/useMessaging";
 import { AccountSelector } from "@/components/messaging/AccountSelector";
 import { WaitingQueueFilter } from "@/components/messaging/human-agent/WaitingQueueFilter";
@@ -66,6 +67,14 @@ export default function HumanAgentMode() {
   const allConversations = (Object.keys(conversationsByPlatform) as Platform[]).flatMap((platform) =>
     conversationsByPlatform[platform].map((conv) => ({ platform, conv, key: keyFor(conv) }))
   );
+
+  // One query covers both queues below: every listed conversation key plus
+  // every assignment's key, so a claimed conversation that no longer appears
+  // in the account lists still shows its AI handoff summary.
+  const { summaries } = useHandoffSummaries([
+    ...allConversations.map((c) => c.key),
+    ...assignments.map((a) => a.conversation_id),
+  ]);
 
   if (!flagsLoading && !flags.humanAgent) {
     return <Navigate to="/dashboard" replace />;
@@ -233,6 +242,12 @@ export default function HumanAgentMode() {
                         {match && <Badge variant="outline" className="text-xs shrink-0">{match.platform}</Badge>}
                       </div>
                       <p className="text-xs text-muted-foreground truncate">{match?.conv.last_message || ""}</p>
+                      {/* Plain text only: the summary is model output and must never render as HTML. */}
+                      {summaries[assignment.conversation_id] && (
+                        <p className="text-xs text-muted-foreground truncate">
+                          {t("agent:mode.aiSummary", "AI summary")}: {summaries[assignment.conversation_id]}
+                        </p>
+                      )}
                       <p className="text-xs text-muted-foreground">
                         {t("human.claimedAgo", "Claimed {{time}}", { time: formatDistanceToNow(new Date(assignment.assigned_at), { addSuffix: true }) })}
                       </p>
@@ -279,6 +294,12 @@ export default function HumanAgentMode() {
                         <Badge variant="outline" className="text-xs shrink-0">{platform}</Badge>
                       </div>
                       <p className="text-xs text-muted-foreground truncate">{conv.last_message}</p>
+                      {/* Plain text only: the summary is model output and must never render as HTML. */}
+                      {summaries[key] && (
+                        <p className="text-xs text-muted-foreground truncate">
+                          {t("agent:mode.aiSummary", "AI summary")}: {summaries[key]}
+                        </p>
+                      )}
                     </div>
                     <Button size="sm" disabled={!isOnline || !myAgent} onClick={() => handleClaim(key)}>
                       {t("actions.claim", "Claim")}
