@@ -85,9 +85,10 @@ export function AdminAiAgentSection() {
               Reply triage (Jev)
             </Label>
             <p className="text-xs text-muted-foreground max-w-md">
-              A fast decision model reads each message first and skips work it does not need: the
-              knowledge search, unused connectors, or tools for small talk. It never writes replies.
-              If it is unsure or unavailable, replies run as before.
+              A fast decision model reads each message first so the agent does less: it stops
+              waiting for the knowledge search when it isn't needed, offers only the connector the
+              message needs, and skips tools for small talk. It never writes replies. If it is
+              unsure or unavailable, replies run as before.
             </p>
           </div>
           <Switch
