@@ -157,3 +157,14 @@ Deno.test("no key, a throw, or an exhausted budget returns no outcome instead of
     () => clock);
   assertEquals(spent.errors.length, 1);
 });
+
+// Regression 2026-09-25: with "I want a human" in the recent turns, a later "hi" was
+// judged a handoff (0.97), because the question did not say which message it was about.
+Deno.test("every yes/no question is about the new message, not the earlier turns", () => {
+  const body = triageRequestBody({ provider: "openrouter", model: "m" }, input);
+  const questions = body.questions as Record<string, { type: string; instructions: string }>;
+  for (const [name, question] of Object.entries(questions)) {
+    if (question.type === "choice") continue;
+    assertEquals(question.instructions.includes("new message"), true, name);
+  }
+});
