@@ -5,7 +5,7 @@ import { useAuth } from "./useAuth";
 interface HandoffSummaryRow {
   conversation_id: string;
   handoff_summary: string | null;
-  handoff_summary_at: string | null;
+  expires_at: string | null;
 }
 
 /**
@@ -25,17 +25,22 @@ export function useHandoffSummaries(conversationIds: string[]) {
       if (!userId || ids.length === 0) return {};
       const { data, error } = await supabase
         .from("ai_conversation_modes")
-        .select("conversation_id, handoff_summary, handoff_summary_at")
+        .select("conversation_id, handoff_summary, expires_at")
         .eq("user_id", userId)
-        .in("conversation_id", ids);
+        .not("handoff_summary", "is", null)
+        .gt("expires_at", new Date().toISOString());
       if (error) throw error;
+      const listedIds = new Set(ids);
       const summaries: Record<string, string> = {};
       for (const row of (data || []) as HandoffSummaryRow[]) {
-        if (row.handoff_summary) summaries[row.conversation_id] = row.handoff_summary;
+        if (listedIds.has(row.conversation_id) && row.handoff_summary) {
+          summaries[row.conversation_id] = row.handoff_summary;
+        }
       }
       return summaries;
     },
     enabled: !!userId && ids.length > 0,
+    refetchInterval: 30_000,
   });
 
   return { summaries: query.data || {}, isLoading: query.isLoading };

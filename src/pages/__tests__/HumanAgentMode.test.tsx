@@ -19,7 +19,7 @@ const page = vi.hoisted(() => ({
   summaryRows: [] as Array<{
     conversation_id: string;
     handoff_summary: string | null;
-    handoff_summary_at: string | null;
+    expires_at: string | null;
   }>,
 }));
 
@@ -99,7 +99,12 @@ vi.mock("@/integrations/supabase/client", () => ({
     from: vi.fn(() => ({
       select: vi.fn(() => ({
         eq: vi.fn(() => ({
-          in: vi.fn(() => Promise.resolve({ data: page.summaryRows, error: null })),
+          not: vi.fn(() => ({
+            gt: vi.fn((_column: string, cutoff: string) => Promise.resolve({
+              data: page.summaryRows.filter((row) => row.handoff_summary !== null && row.expires_at !== null && row.expires_at > cutoff),
+              error: null,
+            })),
+          })),
         })),
       })),
     })),
@@ -124,7 +129,7 @@ describe("HumanAgentMode handoff summaries", () => {
       {
         conversation_id: "wa_1_customer-1",
         handoff_summary: "Asking where order 42 is; I told her it shipped yesterday.",
-        handoff_summary_at: "2026-09-25T08:30:00Z",
+        expires_at: "2099-01-01T00:00:00.000Z",
       },
     ];
   });

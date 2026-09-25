@@ -1,12 +1,10 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { renderHook, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { act, renderHook, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// The queue reads every conversation's handoff summary in ONE
-// ai_conversation_modes query filtered by the current user and the listed
-// conversation ids — never one query per row.
-
-const db = vi.hoisted(() => ({ from: vi.fn(), eq: vi.fn(), in: vi.fn() }));
+const db = vi.hoisted(() => ({
+  from: vi.fn(), select: vi.fn(), eq: vi.fn(), in: vi.fn(), not: vi.fn(), gt: vi.fn(),
+}));
 
 vi.mock("@/integrations/supabase/client", () => ({
   supabase: { from: (...args: unknown[]) => db.from(...args) },
@@ -17,6 +15,15 @@ vi.mock("@/hooks/useAuth", () => ({
 }));
 
 import { useHandoffSummaries } from "@/hooks/useHandoffSummaries";
+
+interface SummaryRow {
+  user_id: string;
+  conversation_id: string;
+  handoff_summary: string | null;
+  expires_at: string | null;
+}
+
+let rows: SummaryRow[];
 
 function renderHookWithClient(conversationIds: string[]) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -30,35 +37,78 @@ function renderHookWithClient(conversationIds: string[]) {
 describe("useHandoffSummaries", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    db.from.mockReturnValue({
-      select: vi.fn(() => ({ eq: db.eq })),
+    rows = [];
+    db.from.mockImplementation(() => {
+      const filters: Array<(row: SummaryRow) => boolean> = [];
+      const query = {
+        select: db.select, eq: db.eq, in: db.in, not: db.not, gt: db.gt,
+        then: (resolve: (result: { data: SummaryRow[]; error: null }) => unknown) =>
+          Promise.resolve({ data: rows.filter((row) => filters.every((filter) => filter(row))), error: null }).then(resolve),
+      };
+      db.select.mockReturnValue(query);
+      db.eq.mockImplementation((column: keyof SummaryRow, value: string) => {
+        filters.push((row) => row[column] === value);
+        return query;
+      });
+      db.in.mockImplementation((column: keyof SummaryRow, ids: string[]) => {
+        filters.push((row) => ids.includes(row[column] ?? ""));
+        return query;
+      });
+      db.not.mockImplementation((column: keyof SummaryRow) => {
+        filters.push((row) => row[column] !== null);
+        return query;
+      });
+      db.gt.mockImplementation((column: keyof SummaryRow, value: string) => {
+        filters.push((row) => row[column] !== null && row[column]! > value);
+        return query;
+      });
+      return query;
     });
-    db.eq.mockReturnValue({ in: db.in });
-    db.in.mockResolvedValue({ data: [], error: null });
   });
 
-  it("fetches all summaries in one user-scoped query keyed by conversation id", async () => {
-    db.in.mockResolvedValue({
-      data: [
-        { conversation_id: "c2", handoff_summary: "Second", handoff_summary_at: null },
-        { conversation_id: "c1", handoff_summary: "First", handoff_summary_at: "2026-09-25T09:00:00Z" },
-        { conversation_id: "c3", handoff_summary: null, handoff_summary_at: null },
-      ],
-      error: null,
-    });
+  afterEach(() => vi.useRealTimers());
 
-    const { result } = renderHookWithClient(["c2", "c1"]);
+  it("fetches active user summaries once and matches a large queue locally", async () => {
+    rows = [
+      { user_id: "user-1", conversation_id: "c2", handoff_summary: "Second", expires_at: "2099-01-01T00:00:00.000Z" },
+      { user_id: "user-1", conversation_id: "c1", handoff_summary: "First", expires_at: "2099-01-01T00:00:00.000Z" },
+      { user_id: "user-1", conversation_id: "c3", handoff_summary: "Expired", expires_at: "2000-01-01T00:00:00.000Z" },
+      { user_id: "user-1", conversation_id: "c4", handoff_summary: "Manual", expires_at: null },
+      { user_id: "user-1", conversation_id: "c5", handoff_summary: null, expires_at: "2099-01-01T00:00:00.000Z" },
+      { user_id: "user-1", conversation_id: "outside", handoff_summary: "Outside queue", expires_at: "2099-01-01T00:00:00.000Z" },
+      { user_id: "user-2", conversation_id: "c1", handoff_summary: "Foreign", expires_at: "2099-01-01T00:00:00.000Z" },
+    ];
+    const before = new Date().toISOString();
+    const { result } = renderHookWithClient(Array.from({ length: 3_000 }, (_, i) => `c${i}`));
 
     await waitFor(() => expect(result.current.summaries).toEqual({ c1: "First", c2: "Second" }));
     expect(db.from).toHaveBeenCalledTimes(1);
     expect(db.from).toHaveBeenCalledWith("ai_conversation_modes");
+    expect(db.select).toHaveBeenCalledWith("conversation_id, handoff_summary, expires_at");
     expect(db.eq).toHaveBeenCalledWith("user_id", "user-1");
-    expect(db.in).toHaveBeenCalledWith("conversation_id", ["c1", "c2"]);
+    expect(db.not).toHaveBeenCalledWith("handoff_summary", "is", null);
+    expect(db.gt).toHaveBeenCalledWith("expires_at", expect.any(String));
+    const cutoff = db.gt.mock.calls[0][1] as string;
+    expect(cutoff >= before && cutoff <= new Date().toISOString()).toBe(true);
+    expect(new Date(cutoff).toISOString()).toBe(cutoff);
+    expect(db.in).not.toHaveBeenCalled();
   });
 
-  it("queries nothing while there are no conversations to list", async () => {
-    const { result } = renderHookWithClient([]);
+  it("refreshes after 30 seconds and removes a summary that has expired", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-26T00:00:00.000Z"));
+    rows = [{ user_id: "user-1", conversation_id: "c1", handoff_summary: "Fresh", expires_at: "2026-09-26T00:00:30.000Z" }];
+    const { result, unmount } = renderHookWithClient(["c1"]);
+    await act(() => vi.advanceTimersByTimeAsync(1));
+    expect(result.current.summaries).toEqual({ c1: "Fresh" });
+    await act(() => vi.advanceTimersByTimeAsync(30_001));
+    expect(db.from).toHaveBeenCalledTimes(2);
+    expect(result.current.summaries).toEqual({});
+    unmount();
+  });
 
+  it("queries nothing while there are no conversations to list", () => {
+    const { result } = renderHookWithClient([]);
     expect(result.current.summaries).toEqual({});
     expect(db.from).not.toHaveBeenCalled();
   });

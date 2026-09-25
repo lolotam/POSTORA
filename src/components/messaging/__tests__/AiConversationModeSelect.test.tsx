@@ -119,6 +119,20 @@ describe("AiConversationModeSelect", () => {
     expect(screen.queryByText("AI summary")).not.toBeInTheDocument();
   });
 
+  it.each(["2000-01-01T00:00:00Z", null])("hides a summary without an active window (%s)", async (expires_at) => {
+    callMessagingApi.mockResolvedValueOnce({
+      mode: {
+        id: "mode-1", user_id: "user-1", platform: "whatsapp", conversation_id: "c1",
+        mode: "human_first", expires_at, handoff_summary: "Old handoff context",
+        created_at: "2026-09-13T00:00:00Z", updated_at: "2026-09-13T00:00:00Z",
+      },
+    });
+    renderComponent();
+    expect(await screen.findByText("AI: Human first")).toBeInTheDocument();
+    expect(screen.queryByText("AI summary")).not.toBeInTheDocument();
+    expect(screen.queryByText("Old handoff context")).not.toBeInTheDocument();
+  });
+
   it("Release override sends the default mode", async () => {
     callMessagingApi.mockImplementation((action: string) => {
       if (action === "ai_get_conversation_mode") {

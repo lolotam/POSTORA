@@ -18,6 +18,7 @@ import {
 import { handleAdapterRequest, meterTestConnectionProbe, RequestSchema, type AdminClientFactory } from "./handler.ts";
 import { createAdapterDependencies } from "./dependencies.ts";
 import type { ConnectorCache } from "./cache.ts";
+import { wooCommerceAdapter } from "./woocommerce.ts";
 import { SUPABASE_ADAPTER_OUTPUT_LIMIT } from "../_shared/connectorBudgets.ts";
 import {
   type AdapterDependencies,
@@ -1943,4 +1944,51 @@ Deno.test("testConnection never touches the cache", async () => {
 
   assertEquals(result.ok, true);
   assertEquals(mem.reads() + mem.writes(), 0);
+});
+
+for (const liveId of [88, 77, 99]) {
+  Deno.test(`an empty cached-category search resolves live once (live id ${liveId})`, async () => {
+    const clock = { now: 1_700_000_000_000 };
+    const mem = memoryCache(clock);
+    const urls: string[] = [];
+    const invocation = {
+      tool: wooTool(),
+      credentials: { consumer_key: WOO_KEY, consumer_secret: WOO_SECRET },
+      request: request({ parameters: { category: "Men's perfumes" } }),
+    };
+    await executeConnector(invocation, { ...dependencies(wooStoreFetch([])), cache: mem.cache });
+    clock.now += 121_000;
+    const fetchImpl = ((input: string | URL) => {
+      const url = String(input);
+      urls.push(url);
+      return Promise.resolve(jsonResponse(url.includes("/categories")
+        ? [{ id: liveId, name: "Men's perfumes" }]
+        : new URL(url).searchParams.get("category") === "88" ? [{ id: 2, name: "Recovered product" }] : []));
+    }) as typeof fetch;
+    const deps = { ...dependencies(fetchImpl), cache: mem.cache };
+    const result = await executeConnector(invocation, deps);
+    assertEquals(result.ok && result.data, liveId === 88 ? [{ id: 2, name: "Recovered product" }] : []);
+    assertEquals(urls.length, liveId === 77 ? 2 : 3);
+    assertStringIncludes(urls[0], "category=77");
+    assertStringIncludes(urls[1], "/products/categories?");
+    if (liveId !== 77) assertStringIncludes(urls[2], `category=${liveId}`);
+
+    clock.now += 121_000;
+    await executeConnector(invocation, { ...dependencies(wooStoreFetch(urls)), cache: mem.cache });
+    assertStringIncludes(urls[urls.length - 1], `category=${liveId}`);
+  });
+}
+
+Deno.test("execute with test_connection action and a search capability bypasses every cache", async () => {
+  const mem = memoryCache({ now: 1_700_000_000_000 });
+  const urls: string[] = [];
+  const result = await wooCommerceAdapter.execute({
+    tool: wooTool(),
+    credentials: { consumer_key: WOO_KEY, consumer_secret: WOO_SECRET },
+    request: request({ action: "test_connection", parameters: { category: "Men's perfumes" } }),
+  }, { ...dependencies(wooStoreFetch(urls)), cache: mem.cache });
+  assertEquals(mem.reads(), 0);
+  assertEquals(mem.writes(), 0);
+  assertEquals(result.ok && result.action, "test_connection");
+  assertEquals(urls.length, 1);
 });

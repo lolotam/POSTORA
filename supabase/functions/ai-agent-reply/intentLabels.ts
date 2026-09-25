@@ -63,6 +63,29 @@ export async function applyIntentLabel(
   conversationId: string,
   label: { name: string; color: string },
 ): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      writeIntentLabel(db, userId, conversationId, label),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          const error = new Error("Intent label write timed out");
+          error.name = "TimeoutError";
+          reject(error);
+        }, 2_000);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function writeIntentLabel(
+  db: LabelDb,
+  userId: string,
+  conversationId: string,
+  label: { name: string; color: string },
+): Promise<void> {
   const { data: existing, error: selectError } = await db
     .from("whatsapp_conversation_labels")
     .select("id")

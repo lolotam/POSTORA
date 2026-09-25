@@ -241,7 +241,7 @@ export interface EscalationOutcome {
  */
 export function handoffSummary(summary: unknown, reason: string): string {
   const sanitise = (value: unknown): string =>
-    typeof value === "string" ? value.replace(/[*_`#]/g, "").trim() : "";
+    typeof value === "string" ? value.replace(/\*\*|__|`|^#+/gm, "").trim() : "";
   return (sanitise(summary) || sanitise(reason)).slice(0, 300);
 }
 
@@ -357,18 +357,18 @@ export async function escalateConversation(
     }
   }
   // A row the compare-and-set deliberately left alone (a manual override, or a
-  // still-running escalation window) still deserves the summary: it is what the
-  // human reads in the queue. Scoped to this conversation, summary columns
-  // only, and its failure is logged and ignored -- the window itself is
-  // untouched either way.
-  if (!written) {
+  // still-running escalation window) may receive fresh tool context, but an
+  // outage/recovery reason must not replace it, nor may an older writer win.
+  // Summary failures are advisory; the window itself remains untouched.
+  if (!written && options.summary?.trim()) {
     try {
       const { error: summaryError } = await target.admin
         .from("ai_conversation_modes")
         .update({ handoff_summary: summary, handoff_summary_at: summaryAt })
         .eq("user_id", target.userId)
         .eq("platform", target.platform)
-        .eq("conversation_id", target.conversationId);
+        .eq("conversation_id", target.conversationId)
+        .or(`handoff_summary.is.null,handoff_summary_at.lt."${summaryAt}"`);
       if (summaryError) throw summaryError;
     } catch (summaryFailure) {
       console.error(

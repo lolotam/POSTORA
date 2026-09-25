@@ -105,6 +105,28 @@ function labelDatabase(labels: LabelRow[] = []) {
 
 const PRICING = { name: "Pricing", color: "#3b82f6" };
 
+Deno.test("a stalled label write rejects with TimeoutError within two seconds", async () => {
+  const { db } = labelDatabase();
+  const from = db.from;
+  db.from = (table: string) => {
+    const query = from(table);
+    query.maybeSingle = () => new Promise(() => {});
+    return query;
+  };
+  let guard: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const error = await assertRejects(() => Promise.race([
+      applyIntentLabel(db, "user-1", "wa_timeout", PRICING),
+      new Promise<never>((_resolve, reject) => {
+        guard = setTimeout(() => reject(new Error("Test deadline exceeded")), 2_500);
+      }),
+    ]));
+    assertEquals(error.name, "TimeoutError");
+  } finally {
+    clearTimeout(guard);
+  }
+});
+
 Deno.test("applyIntentLabel creates the label on first use and assigns it", async () => {
   const { db, calls, labels } = labelDatabase();
   await applyIntentLabel(db, "user-1", "wa_1_customer", PRICING);

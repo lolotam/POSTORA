@@ -1388,6 +1388,7 @@ Deno.serve(async (req) => {
       const label = intentLabelFor(triage?.outcome?.answers ?? null);
       if (label) {
         try {
+          // The writer bounds this advisory operation to 2 s; its timer is always cleared.
           // The generated client type is too deep for a structural check; it satisfies LabelDb at runtime.
           await applyIntentLabel(admin as unknown as LabelDb, request.user_id, request.conversation_id, label);
         } catch (labelError) {

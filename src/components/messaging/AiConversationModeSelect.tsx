@@ -96,7 +96,7 @@ export function AiConversationModeSelect({
         )}
       </div>
       {/* Plain text only: the summary is model output and must never render as HTML. */}
-      {mode?.handoff_summary ? (
+      {mode?.handoff_summary && mode.expires_at && Date.parse(mode.expires_at) > Date.now() ? (
         <div className="max-w-[280px] text-xs text-muted-foreground">
           <span className="font-medium">{t("mode.aiSummary", "AI summary")}</span>
           <p className="truncate" title={mode.handoff_summary}>{mode.handoff_summary}</p>

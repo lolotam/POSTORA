@@ -249,19 +249,19 @@ async function resolveCachedCategoryId(
   authorization: string,
   name: string,
   dependencies: AdapterDependencies,
-): Promise<string | null> {
+): Promise<{ id: string | null; cached: boolean }> {
   const cache = dependencies.cache;
   if (!cache) {
-    return resolveCategoryId(storeUrl.replace(/\/+$/, ""), authorization, name, dependencies);
+    return { id: await resolveCategoryId(storeUrl.replace(/\/+$/, ""), authorization, name, dependencies), cached: false };
   }
   const key = await cacheKey(["cat", toolId, storeUrl, name]);
   const cached = await cacheRead(cache, key);
-  if (typeof cached === "string") return cached;
+  if (typeof cached === "string") return { id: cached, cached: true };
   const resolved = await resolveCategoryId(storeUrl.replace(/\/+$/, ""), authorization, name, dependencies);
   if (resolved !== null) {
     await cacheWrite(cache, key, toolId, resolved, CATEGORY_CACHE_TTL_SECONDS);
   }
-  return resolved;
+  return { id: resolved, cached: false };
 }
 
 async function callWooCommerce(
@@ -269,6 +269,7 @@ async function callWooCommerce(
   dependencies: AdapterDependencies,
   capability?: Capability,
 ): Promise<ConnectorResult> {
+  if (invocation.request.action !== "execute") capability = undefined;
   const consumerKey = requiredString(invocation.credentials, "consumer_key");
   const consumerSecret = requiredString(invocation.credentials, "consumer_secret");
   const storeUrl = requiredString(invocation.tool.settings, "store_url");
@@ -281,7 +282,7 @@ async function callWooCommerce(
   // whole call is answered without touching the store. Failures are never
   // cached, so the hit is always a projected success payload.
   let searchCacheKey: string | null = null;
-  if (capability === "search_products" && dependencies.cache) {
+  if (invocation.request.action === "execute" && capability === "search_products" && dependencies.cache) {
     searchCacheKey = await cacheKey(["search", invocation.tool.id, storeUrl, invocation.request.parameters]);
     const cachedSearch = await cacheRead(dependencies.cache, searchCacheKey);
     if (cachedSearch !== null) {
@@ -296,17 +297,20 @@ async function callWooCommerce(
   }
 
   let categoryId: string | null = null;
+  let categoryWasCached = false;
   const categoryName = capability === "search_products"
     ? requiredString(invocation.request.parameters, "category")
     : null;
   if (categoryName) {
-    categoryId = await resolveCachedCategoryId(
+    const category = await resolveCachedCategoryId(
       invocation.tool.id,
       storeUrl,
       authorization,
       categoryName,
       dependencies,
     );
+    categoryId = category.id;
+    categoryWasCached = category.cached;
     if (!categoryId) {
       // Said out loud rather than silently searching every category: an answer
       // drawn from the whole store would be wrong for the question asked.
@@ -322,7 +326,7 @@ async function callWooCommerce(
     return wooFailure("woocommerce_configuration_invalid", "WooCommerce is not fully configured.");
   }
 
-  const response = await safeVendorFetch(url, {
+  let response = await safeVendorFetch(url, {
     method: "GET",
     headers: {
       Accept: "application/json",
@@ -332,7 +336,25 @@ async function callWooCommerce(
   if (!response.ok) {
     return wooFailure("woocommerce_http_error", "WooCommerce rejected the request.", response.status);
   }
-  const payload = await readJson(response);
+  let payload = await readJson(response);
+  if (categoryWasCached && categoryName && Array.isArray(payload) && payload.length === 0) {
+    const liveId = await resolveCategoryId(storeUrl.replace(/\/+$/, ""), authorization, categoryName, dependencies);
+    if (liveId !== null && liveId !== categoryId) {
+      if (dependencies.cache) {
+        const key = await cacheKey(["cat", invocation.tool.id, storeUrl, categoryName]);
+        await cacheWrite(dependencies.cache, key, invocation.tool.id, liveId, CATEGORY_CACHE_TTL_SECONDS);
+      }
+      // One retry only, even if the refreshed category also contains no matches.
+      response = await safeVendorFetch(buildUrl(invocation, capability, liveId)!, {
+        method: "GET",
+        headers: { Accept: "application/json", Authorization: authorization },
+      }, dependencies);
+      if (!response.ok) {
+        return wooFailure("woocommerce_http_error", "WooCommerce rejected the request.", response.status);
+      }
+      payload = await readJson(response);
+    }
+  }
   if (
     payload !== null && typeof payload === "object" && !Array.isArray(payload) &&
     typeof (payload as Record<string, unknown>).code === "string" &&
