@@ -58,8 +58,10 @@ export type VideoStatusLike =
       | { type: "binary"; data: Uint8Array; mediaType?: string }> }
   | { status: "error"; error: string };
 
-export function resolveVercelKey(db: RowReader | undefined): Promise<string | null> {
-  return resolveProviderKey(db, "vercel");
+// Takes any Supabase client as unknown: checking the generated client types against
+// RowReader hits TS2589 ("excessively deep") in some callers.
+export function resolveVercelKey(db: unknown): Promise<string | null> {
+  return resolveProviderKey(db as RowReader | undefined, "vercel");
 }
 
 export function toVideoSnapshot(status: VideoStatusLike): VercelVideoSnapshot {

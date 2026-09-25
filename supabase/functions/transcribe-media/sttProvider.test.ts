@@ -2,18 +2,16 @@
 import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import { sttProviderFor } from "./sttProvider.ts";
 
-Deno.test("returns the settings provider when the model matches the settings model", () => {
-  assertEquals(sttProviderFor("vercel/whisper-1", "vercel/whisper-1", "vercel"), "vercel");
-});
+// Each row is [case, resolved model, settings model, settings provider, expected provider].
+const CASES: Array<[string, string, string, string, string | undefined]> = [
+  ["the settings provider when the model matches the settings model", "vercel/whisper-1", "vercel/whisper-1", "vercel", "vercel"],
+  ["undefined when app_settings overrode the model", "nova-3", "vercel/whisper-1", "vercel", undefined],
+  ["undefined when the caller's requestedModel overrode the model", "gemini-2.5-flash", "vercel/whisper-1", "vercel", undefined],
+  ["undefined when the settings provider is empty even on a match", "whisper-1", "whisper-1", "", undefined],
+];
 
-Deno.test("returns undefined when app_settings overrode the model", () => {
-  assertEquals(sttProviderFor("nova-3", "vercel/whisper-1", "vercel"), undefined);
-});
-
-Deno.test("returns undefined when the caller's requestedModel overrode the model", () => {
-  assertEquals(sttProviderFor("gemini-2.5-flash", "vercel/whisper-1", "vercel"), undefined);
-});
-
-Deno.test("returns undefined when the settings provider is empty even on a match", () => {
-  assertEquals(sttProviderFor("whisper-1", "whisper-1", ""), undefined);
+Deno.test("sttProviderFor", async (t) => {
+  for (const [name, model, settingsModel, settingsProvider, expected] of CASES) {
+    await t.step(name, () => assertEquals(sttProviderFor(model, settingsModel, settingsProvider), expected));
+  }
 });

@@ -3,6 +3,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.7.1";
 import { corsHeaders } from "../_shared/cors.ts";
 import { HiggsfieldAuthError, resolveHiggsfieldCredential } from "../_shared/higgsfield-oauth.ts";
 import { HiggsfieldMcpClient, readJobSnapshot } from "../_shared/higgsfield-mcp.ts";
+import { redactProviderError } from "../_shared/ai-routing-errors.ts";
 import { resolveVercelKey, vercelVideoStatus } from "../_shared/vercelGateway.ts";
 import { archiveBody as buildArchiveBody } from "./archiveBody.ts";
 const json = (b: unknown, s = 200) =>
@@ -51,9 +52,16 @@ serve(async (req) => {
     }
     let snap: { state: string; status: string; outputUrl: string | null; error: string | null; pollAfterSeconds: number; outputBase64?: string | null; outputMediaType?: string | null };
     if (job.provider === "vercel") {
-      const apiKey = await resolveVercelKey(supabase);
-      if (!apiKey) return json({ success: true, status: "running", pollAfterSeconds: 30 });
-      snap = await vercelVideoStatus(apiKey, job.model_id, job.params?.operation);
+      let apiKey = "";
+      try {
+        apiKey = (await resolveVercelKey(supabase)) ?? "";
+        if (!apiKey) return json({ success: true, status: "running", pollAfterSeconds: 30 });
+        snap = await vercelVideoStatus(apiKey, job.model_id, job.params?.operation);
+      } catch (e) {
+        // A gateway or key-read failure says nothing about the job; keep polling, as for a missing key.
+        console.error("[ai-generation-status] vercel status failed:", redactProviderError(e instanceof Error ? e.message : String(e), apiKey));
+        return json({ success: true, status: "running", pollAfterSeconds: 30 });
+      }
     } else {
       const cred = await resolveHiggsfieldCredential(supabase, user.id);
       if (cred.source !== job.credential_source)

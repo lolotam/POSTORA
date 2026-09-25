@@ -40,29 +40,29 @@ serve(async (req) => {
   const { text, voice } = parsed.data;
 
   try {
-  const s = await fetchCategoryAiSettings(admin, "tts");
-  const tiers = [[s.primaryProvider, s.primaryModel], [s.fallbackProvider, s.fallbackModel], [s.lastResortProvider, s.lastResortModel]]
-    .filter(([p, m]) => p === "vercel" && m);
-  if (!tiers.length) return json({ error: "No Vercel TTS model selected in Text to Speech settings" });
-  const apiKey = await resolveVercelKey(admin);
-  if (!apiKey) return json({ error: "Vercel AI Gateway key not configured" });
-  const errors: string[] = [];
-  const startedAt = Date.now();
-  for (const [, model] of tiers) {
-    const timeoutMs = tierTimeout(startedAt, Date.now(), SPEECH_BUDGET_MS, PER_TIER_MAX_MS);
-    if (timeoutMs === null) {
-      errors.push("time budget exhausted before trying remaining tiers");
-      break;
+    const s = await fetchCategoryAiSettings(admin, "tts");
+    const tiers = [[s.primaryProvider, s.primaryModel], [s.fallbackProvider, s.fallbackModel], [s.lastResortProvider, s.lastResortModel]]
+      .filter(([p, m]) => p === "vercel" && m);
+    if (!tiers.length) return json({ error: "No Vercel TTS model selected in Text to Speech settings" });
+    const apiKey = await resolveVercelKey(admin);
+    if (!apiKey) return json({ error: "Vercel AI Gateway key not configured" });
+    const errors: string[] = [];
+    const startedAt = Date.now();
+    for (const [, model] of tiers) {
+      const timeoutMs = tierTimeout(startedAt, Date.now(), SPEECH_BUDGET_MS, PER_TIER_MAX_MS);
+      if (timeoutMs === null) {
+        errors.push("time budget exhausted before trying remaining tiers");
+        break;
+      }
+      try {
+        const out = await vercelGenerateSpeech(apiKey, model, text, voice, "mp3", timeoutMs);
+        return json({ audio: out.base64, mediaType: out.mediaType, provider: "vercel", model });
+      } catch (e) {
+        console.error("[generate-speech] tier failed", model, redactProviderError(e instanceof Error ? e.message : String(e), apiKey));
+        errors.push(`${model}: ${sanitizeErrorMessage(e)}`);
+      }
     }
-    try {
-      const out = await vercelGenerateSpeech(apiKey, model, text, voice, "mp3", timeoutMs);
-      return json({ audio: out.base64, mediaType: out.mediaType, provider: "vercel", model });
-    } catch (e) {
-      console.error("[generate-speech] tier failed", model, redactProviderError(e instanceof Error ? e.message : String(e), apiKey));
-      errors.push(`${model}: ${sanitizeErrorMessage(e)}`);
-    }
-  }
-  return json({ error: errors.join("; ") });
+    return json({ error: errors.join("; ") });
   } catch (e) {
     console.error("[generate-speech]", e);
     return json({ error: sanitizeErrorMessage(e) }, 500);

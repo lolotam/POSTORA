@@ -317,10 +317,10 @@ serve(async (req) => {
           // The generated client type is too deep for a structural check; it satisfies CatalogDb at runtime.
           const report = await runCatalogSync(supabase as unknown as CatalogDb, provider_code);
           return new Response(JSON.stringify(report), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
-        } catch (e: any) {
+        } catch (e) {
           // Upstream catalogue failure, not an app error: 502 would be masked by Cloudflare,
           // so answer 200 with an error body the UI shows as a toast.
-          return new Response(JSON.stringify({ error: e.message }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+          return new Response(JSON.stringify({ error: e instanceof Error ? e.message : 'Model sync failed' }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
         }
       }
 
@@ -404,12 +404,23 @@ async function testOpenAI(key: string, ep: string, model: string) {
 
 // The gateway and OpenRouter namespace ids by vendor; a bare "gpt-4o-mini" is
 // rejected there, so test with a chat model the provider actually lists.
-const TEST_MODEL_OVERRIDE: Record<string, string> = { vercel: 'openai/gpt-4o-mini', openrouter: 'openai/gpt-4o-mini', deepseek: 'deepseek-flash' };
-async function defaultTestModel(db: any, provider: { id: string; provider_code: string }): Promise<string> {
+const TEST_MODEL_OVERRIDE: Record<string, string> = { vercel: 'openai/gpt-4o-mini', openrouter: 'openai/gpt-4o-mini' };
+// Used only when a provider has no active chat model yet (e.g. DeepSeek before its first sync).
+const TEST_MODEL_FALLBACK: Record<string, string> = { deepseek: 'deepseek-chat' };
+interface ChatModelQuery {
+  eq(column: string, value: unknown): ChatModelQuery;
+  contains(column: string, value: string[]): ChatModelQuery;
+  order(column: string): ChatModelQuery;
+  limit(count: number): ChatModelQuery;
+  maybeSingle(): PromiseLike<{ data: { model_id?: string } | null }>;
+}
+interface ChatModelDb { from(table: string): { select(columns: string): ChatModelQuery } }
+// Takes the client as unknown: checking the generated client type against ChatModelDb hits TS2589.
+async function defaultTestModel(client: unknown, provider: { id: string; provider_code: string }): Promise<string> {
   if (TEST_MODEL_OVERRIDE[provider.provider_code]) return TEST_MODEL_OVERRIDE[provider.provider_code];
-  const { data } = await db.from('ai_models').select('model_id').eq('provider_id', provider.id)
+  const { data } = await (client as ChatModelDb).from('ai_models').select('model_id').eq('provider_id', provider.id)
     .eq('is_active', true).contains('capabilities', ['chat']).order('name').limit(1).maybeSingle();
-  return data?.model_id ?? 'gpt-4o-mini';
+  return data?.model_id ?? TEST_MODEL_FALLBACK[provider.provider_code] ?? 'gpt-4o-mini';
 }
 
 async function testAnthropic(key: string, ep: string) {
