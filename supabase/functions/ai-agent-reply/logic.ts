@@ -471,6 +471,66 @@ export function modelBudgetRemaining(startedAt: number, now: number): number {
   return WORKER_BUDGET_MS - FLOOR_RESERVE_MS - SAFETY_MARGIN_MS - (now - startedAt);
 }
 
+export interface PhaseTimingsRecorder {
+  /** Ends the phase that began at the previous mark (or at creation) and records its duration. */
+  mark(name: string): void;
+  /** Times an awaited phase; repeated names accumulate into an array. */
+  span<T>(name: string, fn: () => Promise<T>): Promise<T>;
+  toJSON(): Record<string, number | number[]>;
+}
+
+/**
+ * Per-phase timings for the log metadata: where a store-question reply's
+ * seconds actually go (Phase 2). Marks are milestones measured since the last
+ * mark; spans measure their own body and survive the body throwing, because a
+ * failed round costs the customer the same latency as a successful one.
+ */
+export function phaseTimings(now: () => number = Date.now): PhaseTimingsRecorder {
+  const marks = new Map<string, number>();
+  const spans = new Map<string, number[]>();
+  let lastMarkAt = now();
+  return {
+    mark(name: string) {
+      const at = now();
+      marks.set(name, at - lastMarkAt);
+      lastMarkAt = at;
+    },
+    async span<T>(name: string, fn: () => Promise<T>): Promise<T> {
+      const startedAt = now();
+      try {
+        return await fn();
+      } finally {
+        const elapsed = now() - startedAt;
+        spans.set(name, [...(spans.get(name) ?? []), elapsed]);
+      }
+    },
+    toJSON(): Record<string, number | number[]> {
+      return { ...Object.fromEntries(marks), ...Object.fromEntries(spans) };
+    },
+  };
+}
+
+/**
+ * Whether every call in one model round is a read-only custom connector call,
+ * so the round may run concurrently. Agent tools (escalate, notify, search)
+ * and any write-capable connector keep the round serial: racing a write, or a
+ * tool whose result feeds later bookkeeping, risks side effects arriving in an
+ * order nobody chose. `connector_type === "woocommerce"` is read-only by
+ * construction (its adapter reports read_only: true), so it qualifies even
+ * when the row predates read_only_mode.
+ */
+export function parallelizable(
+  calls: Array<{ function: { name: string } }>,
+  toolByName: Map<string, { connector_type?: string | null; read_only_mode?: boolean | null }>,
+): boolean {
+  if (calls.length < 2) return false;
+  return calls.every((call) => {
+    const tool = toolByName.get(call.function.name);
+    if (!tool) return false;
+    return tool.read_only_mode === true || tool.connector_type === "woocommerce";
+  });
+}
+
 /**
  * The failure a chat-completion body is carrying, or null when it holds a usable
  * assistant message.

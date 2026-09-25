@@ -1,6 +1,6 @@
 import { assertEquals, assertStringIncludes } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import type { KnowledgeChunkMatch } from "../_shared/knowledgeEmbeddings.ts";
-import { customToolDefinitions, escalateConversation, executeTool, type CustomTool, type EscalationTarget, type ToolContext } from "./tools.ts";
+import { customToolDefinitions, escalateConversation, executeTool, handoffSummary, type CustomTool, type EscalationTarget, type ToolContext } from "./tools.ts";
 import { composioBinding } from "../_shared/connectorRegistry.ts";
 
 type EscalationRow = Record<string, unknown>;
@@ -76,7 +76,7 @@ Deno.test("AI assignment and history carry tenancy and cache IDs without touchin
   assertEquals(foreign.unassigned_at, null);
   assertEquals(db.writes.find((write) => write.table === "whatsapp_conversation_assignments")?.payload, {
     workspace_id: "workspace-a", conversation_cache_id: "cache-a", conversation_id: "shared-key",
-    agent_id: "agent-a", assigned_by: "owner-a", notes: "AI escalation: Customer requested help",
+    agent_id: "agent-a", assigned_by: "owner-a", notes: "AI handoff: Customer requested help",
   });
   assertEquals(db.writes.find((write) => write.table === "whatsapp_assignment_history")?.payload, {
     workspace_id: "workspace-a", conversation_id: "shared-key", action: "assigned",
@@ -914,6 +914,98 @@ Deno.test("a repeated escalation still tightens the window once a human comes on
   assertEquals(outcome.mode, "human_first");
   assertEquals(db.tables.ai_conversation_modes[0].mode, "human_first");
   assertEquals(db.tables.ai_conversation_modes[0].expires_at, until);
+});
+
+// --- handoff summary: sanitised once, at the single escalation boundary -------
+
+Deno.test("handoffSummary strips markdown, trims, and keeps the model's own wording", () => {
+  assertEquals(
+    handoffSummary(" *Wants* the 100ml price; I checked stock.\n", "ignored"),
+    "Wants the 100ml price; I checked stock.",
+  );
+});
+
+Deno.test("handoffSummary caps at 300 characters", () => {
+  assertEquals(handoffSummary("x".repeat(500), "ignored").length, 300);
+});
+
+Deno.test("handoffSummary falls back to the reason when the summary is empty after stripping", () => {
+  assertEquals(handoffSummary(undefined, "customer asked"), "customer asked");
+  assertEquals(handoffSummary("  ", "customer asked"), "customer asked");
+  assertEquals(handoffSummary("***", "customer asked"), "customer asked");
+});
+
+Deno.test("handoffSummary sanitises and caps the fallback reason too", () => {
+  const fallback = handoffSummary("   ", "*".repeat(50) + "x".repeat(400));
+  assertEquals(fallback.length, 300);
+  assertEquals(fallback.includes("*"), false);
+});
+
+const TOOL_SUMMARY = "Wants a refund for order 42. I confirmed the order exists.";
+
+function summaryContext(db: ReturnType<typeof escalationDatabase>, overrides: Partial<ToolContext> = {}): ToolContext {
+  return context({
+    admin: db.admin,
+    dryRun: false,
+    userId: "owner-a",
+    platform: "whatsapp",
+    conversationId: "shared-key",
+    cachedConversation: { id: "cache-a", workspace_id: "workspace-a" },
+    ...overrides,
+  });
+}
+
+Deno.test("escalate_to_human stores the summary on the mode row, the assignment notes, and the admin alert", async () => {
+  const db = escalationDatabase();
+  const alerts: string[] = [];
+  const result = await executeTool(
+    summaryContext(db, {
+      adminPhoneNumbers: ["+96500000001"],
+      sendWhatsAppText: (_phone, text) => { alerts.push(text); return Promise.resolve(); },
+    }),
+    "escalate_to_human",
+    { reason: "r", summary: TOOL_SUMMARY },
+  );
+  assertEquals(result.escalated, true);
+  const modeRow = db.tables.ai_conversation_modes[0];
+  assertEquals(modeRow.handoff_summary, TOOL_SUMMARY);
+  assertEquals(typeof modeRow.handoff_summary_at, "string");
+  const assignment = db.writes.find((write) => write.table === "whatsapp_conversation_assignments")!.payload;
+  assertEquals(assignment.notes, `AI handoff: ${TOOL_SUMMARY}`);
+  assertStringIncludes(alerts[0], `Summary: ${TOOL_SUMMARY}`);
+  assertEquals(alerts[0].includes("Reason:"), false);
+});
+
+Deno.test("an escalation with no agent online still stores the summary on the mode row", async () => {
+  const db = escalationDatabase();
+  db.tables.whatsapp_agents.forEach((agent) => { agent.status = "offline"; });
+  const result = await executeTool(
+    summaryContext(db),
+    "escalate_to_human",
+    { reason: "r", summary: TOOL_SUMMARY },
+  );
+  assertEquals(result.escalated, true);
+  assertEquals(db.tables.ai_conversation_modes[0].handoff_summary, TOOL_SUMMARY);
+  assertEquals(typeof db.tables.ai_conversation_modes[0].handoff_summary_at, "string");
+});
+
+Deno.test("a repeated escalation updates only the summary columns of the untouched row", async () => {
+  const db = escalationDatabase();
+  db.tables.whatsapp_agents.forEach((agent) => { agent.status = "offline"; });
+  const until = new Date(Date.now() + 10 * 60_000).toISOString();
+  db.tables.ai_conversation_modes.push({
+    id: "m1", user_id: "owner-a", platform: "whatsapp", conversation_id: "shared-key",
+    mode: "human_then_ai", expires_at: until,
+  });
+  await escalateConversation(
+    escalationTarget(db.admin, { defaultMode: "human_then_ai" }),
+    "help again",
+    undefined,
+    { summary: TOOL_SUMMARY },
+  );
+  assertEquals(db.tables.ai_conversation_modes[0].mode, "human_then_ai");
+  assertEquals(db.tables.ai_conversation_modes[0].expires_at, until);
+  assertEquals(db.tables.ai_conversation_modes[0].handoff_summary, TOOL_SUMMARY);
 });
 
 Deno.test("a manual override written between the read and the first write wins", async () => {

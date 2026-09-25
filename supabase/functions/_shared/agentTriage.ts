@@ -12,11 +12,15 @@ export interface TriageInput {
   connectors: TriageConnector[];
   askHandoff: boolean;
 }
+/** What the customer wants, from the new message. Drives the WhatsApp intent labels. */
+export const INTENTS = ["pricing", "order_status", "complaint", "lead", "greeting", "other"] as const;
+export type Intent = typeof INTENTS[number];
 export interface TriageAnswers {
   needsKnowledge: number | null;
   smalltalk: number | null;
   handoff: number | null;
   connector: { choice: string; confidence: number } | null;
+  intent: { choice: Intent; confidence: number } | null;
 }
 export interface TriagePlan {
   skipKnowledge: boolean;
@@ -69,6 +73,18 @@ export function triageRequestBody(tier: TriageTier, input: TriageInput): Record<
       "In the new message, the customer explicitly asks to talk to a human person instead of the assistant.",
     );
   }
+  questions.intent = {
+    type: "choice",
+    instructions: "What does the customer want in the new message?",
+    criteria: {
+      pricing: "Asks about a price, cost, offer or discount",
+      order_status: "Asks where an order is, about delivery status or tracking",
+      complaint: "Unhappy, reports a problem, or wants a refund or return",
+      lead: "Shows buying interest: wants to order, book, subscribe or be contacted",
+      greeting: "Only greets, thanks or acknowledges",
+      other: "Anything else",
+    },
+  };
   if (input.connectors.length) {
     const criteria: Record<string, string> = { [NO_TOOL]: "No connected tool is needed to answer." };
     for (const connector of input.connectors) {
@@ -92,6 +108,14 @@ export function parseTriageAnswers(provider: TriageProvider, json: unknown): Tri
   const answers = ((json as { answers?: Record<string, unknown> } | null)?.answers ?? {});
   const field = YES_NO[provider].field;
   const connector = answers.connector as { choice?: unknown; confidence?: unknown } | undefined;
+  const intent = answers.intent as { choice?: unknown; confidence?: unknown } | undefined;
+  // An intent outside the six choices, or a confidence that is not a finite
+  // probability in [0, 1], is no intent at all: the caller labels nothing.
+  const usableIntent = typeof intent?.choice === "string" && INTENTS.includes(intent.choice as Intent) &&
+      typeof intent.confidence === "number" && Number.isFinite(intent.confidence) &&
+      intent.confidence >= 0 && intent.confidence <= 1
+    ? { choice: intent.choice as Intent, confidence: intent.confidence }
+    : null;
   return {
     needsKnowledge: probability(answers.needs_knowledge, field),
     smalltalk: probability(answers.smalltalk, field),
@@ -99,6 +123,7 @@ export function parseTriageAnswers(provider: TriageProvider, json: unknown): Tri
     connector: typeof connector?.choice === "string" && typeof connector.confidence === "number"
       ? { choice: connector.choice, confidence: connector.confidence }
       : null,
+    intent: usableIntent,
   };
 }
 

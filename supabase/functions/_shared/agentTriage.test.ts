@@ -1,7 +1,7 @@
 // deno-lint-ignore-file no-import-prefix
 import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import {
-  NO_TOOL, parseTriageAnswers, planFromAnswers, selectConnectorTools, triageEndpoint, triageRequestBody,
+  INTENTS, NO_TOOL, parseTriageAnswers, planFromAnswers, selectConnectorTools, triageEndpoint, triageRequestBody,
   type TriageAnswers, type TriageInput,
 } from "./agentTriage.ts";
 
@@ -29,7 +29,14 @@ Deno.test("the connector question lists each connector plus a no-tool option, an
   const criteria = (withTools.questions as any).connector.criteria;
   assertEquals(Object.keys(criteria).sort(), [NO_TOOL, "store_catalog"]);
   const bare = triageRequestBody({ provider: "vercel", model: "m" }, { ...input, connectors: [], askHandoff: false });
-  assertEquals(Object.keys(bare.questions as object).sort(), ["needs_knowledge", "smalltalk"]);
+  assertEquals(Object.keys(bare.questions as object).sort(), ["intent", "needs_knowledge", "smalltalk"]);
+});
+
+Deno.test("the request carries an intent choice question with exactly the six intents", () => {
+  const body = triageRequestBody({ provider: "vercel", model: "m" }, input);
+  const intent = (body.questions as Record<string, { type: string; criteria: Record<string, string> }>).intent;
+  assertEquals(intent.type, "choice");
+  assertEquals(Object.keys(intent.criteria), [...INTENTS]);
 });
 
 Deno.test("the state carries the recent turns and the message, bounded in size", () => {
@@ -48,37 +55,58 @@ Deno.test("answers parse from either dialect into one shape", () => {
     needs_knowledge: { type: "boolean", probability: 0.9 }, smalltalk: { type: "boolean", probability: 0.05 },
     connector: { type: "choice", choice: "store_catalog", confidence: 0.93 },
   } });
-  const expected: TriageAnswers = { needsKnowledge: 0.9, smalltalk: 0.05, handoff: null,
+  const expected: TriageAnswers = { needsKnowledge: 0.9, smalltalk: 0.05, handoff: null, intent: null,
     connector: { choice: "store_catalog", confidence: 0.93 } };
   assertEquals(router, expected);
   assertEquals(gateway, expected);
 });
 
+Deno.test("a confident known intent parses; the confidence stays attached", () => {
+  const parsed = parseTriageAnswers("vercel", { answers: {
+    intent: { type: "choice", choice: "pricing", confidence: 0.91 },
+  } });
+  assertEquals(parsed.intent, { choice: "pricing", confidence: 0.91 });
+});
+
+Deno.test("an intent outside the contract parses to null", () => {
+  for (const intent of [
+    { choice: "spam", confidence: 0.99 }, // unknown choice
+    { choice: "pricing", confidence: NaN }, // NaN confidence
+    { choice: "pricing", confidence: 1.5 }, // above 1
+    { choice: "pricing", confidence: -0.1 }, // below 0
+  ]) {
+    const parsed = parseTriageAnswers("vercel", { answers: { intent } });
+    assertEquals(parsed.intent, null, JSON.stringify(intent));
+  }
+  // A missing answer is the same as an unusable one.
+  assertEquals(parseTriageAnswers("vercel", { answers: {} }).intent, null);
+});
+
 Deno.test("only confident answers change the plan", () => {
   const names = ["store_catalog", "crm"];
-  const unsure = planFromAnswers({ needsKnowledge: 0.5, smalltalk: 0.6, handoff: 0.7,
+  const unsure = planFromAnswers({ needsKnowledge: 0.5, smalltalk: 0.6, handoff: 0.7, intent: null,
     connector: { choice: "crm", confidence: 0.6 } }, names);
   assertEquals(unsure, { skipKnowledge: false, smalltalk: false, handoff: false, connectors: "all" });
-  const sure = planFromAnswers({ needsKnowledge: 0.1, smalltalk: 0.02, handoff: 0.01,
+  const sure = planFromAnswers({ needsKnowledge: 0.1, smalltalk: 0.02, handoff: 0.01, intent: null,
     connector: { choice: "crm", confidence: 0.95 } }, names);
   assertEquals(sure, { skipKnowledge: true, smalltalk: false, handoff: false, connectors: ["crm"] });
 });
 
 Deno.test("small talk and handoff take precedence over connector routing", () => {
   const names = ["crm"];
-  const hi = planFromAnswers({ needsKnowledge: 0.4, smalltalk: 0.97, handoff: 0.01,
+  const hi = planFromAnswers({ needsKnowledge: 0.4, smalltalk: 0.97, handoff: 0.01, intent: null,
     connector: { choice: "crm", confidence: 0.9 } }, names);
   assertEquals(hi, { skipKnowledge: true, smalltalk: true, handoff: false, connectors: [] });
-  const human = planFromAnswers({ needsKnowledge: 0.9, smalltalk: 0.01, handoff: 0.92,
+  const human = planFromAnswers({ needsKnowledge: 0.9, smalltalk: 0.01, handoff: 0.92, intent: null,
     connector: { choice: "crm", confidence: 0.9 } }, names);
   assertEquals(human, { skipKnowledge: true, smalltalk: false, handoff: true, connectors: [] });
 });
 
 Deno.test("a confident no-tool choice offers no connectors; an unknown name offers all", () => {
-  const none = planFromAnswers({ needsKnowledge: null, smalltalk: null, handoff: null,
+  const none = planFromAnswers({ needsKnowledge: null, smalltalk: null, handoff: null, intent: null,
     connector: { choice: NO_TOOL, confidence: 0.9 } }, ["crm"]);
   assertEquals(none.connectors, []);
-  const unknown = planFromAnswers({ needsKnowledge: null, smalltalk: null, handoff: null,
+  const unknown = planFromAnswers({ needsKnowledge: null, smalltalk: null, handoff: null, intent: null,
     connector: { choice: "ghost", confidence: 0.99 } }, ["crm"]);
   assertEquals(unknown.connectors, "all");
 });

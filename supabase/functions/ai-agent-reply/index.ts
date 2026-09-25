@@ -20,6 +20,8 @@ import {
   ModelChainExhaustedError,
   modelBudgetRemaining,
   parseModelRef,
+  parallelizable,
+  phaseTimings,
   resolveEngagementMode,
   type ReplyLanguage,
   SIMILARITY_FLOOR,
@@ -39,6 +41,7 @@ import {
 } from "./tools.ts";
 import { executeRoutedCustomTool } from "./connectorExecution.ts";
 import { deliverModelOutageFloor } from "./outage-floor.ts";
+import { applyIntentLabel, intentLabelFor, shouldLabel, type LabelDb } from "./intentLabels.ts";
 import {
   type AdminClient as AccountScopeAdminClient,
   resolveAgentAccountId,
@@ -120,6 +123,11 @@ function errorMessage(error: unknown): string {
 // clock (which kills the request with an opaque 500 and no log row) and let
 // the fallback chain actually get its turn.
 const CHAT_TIMEOUT_MS = 25_000;
+
+// Read-only connector calls in one round run concurrently, at most this many at
+// a time (Phase 2): three keeps the reply's connector latency bounded by its
+// slowest call without opening an unbounded fan-out at the adapter.
+const PARALLEL_TOOLS_PER_CHUNK = 3;
 
 // OpenAI-compatible chat-completion endpoints per provider. Providers here
 // must stay in sync with the choices offered in AdminAiAgentSection.tsx.
@@ -476,6 +484,7 @@ Deno.serve(async (req) => {
 
   const admin = createClient(supabaseUrl, serviceKey);
   const startedAt = Date.now();
+  const timings = phaseTimings();
   let body: Record<string, unknown>;
   try {
     body = await req.json();
@@ -929,7 +938,7 @@ Deno.serve(async (req) => {
       // may reach; it holds no secret (credentials live in Vault).
       // `auth_strategy`/`connection_id` decide whether the tool is Composio-
       // backed, whose connection attachComposioTools resolves below.
-      .select("id, name, description, url, secret, admin_only, scope, social_account_id, connector_type, settings, auth_strategy, connection_id")
+      .select("id, name, description, url, secret, admin_only, scope, social_account_id, connector_type, read_only_mode, settings, auth_strategy, connection_id")
       .eq("user_id", request.user_id)
       .eq("is_enabled", true);
 
@@ -1038,12 +1047,14 @@ Deno.serve(async (req) => {
         askHandoff: handoff.onRequest,
       }, (code) => resolveProviderKey(admin as unknown as RowReader, code));
     }
+    timings.mark("triage");
     const triagePlan = triage?.outcome?.plan ?? null;
     if (triagePlan?.skipKnowledge) {
       knowledgePromise.catch(() => {}); // not awaited; keep a late rejection from being unhandled
     } else {
       ({ relevantChunks, retrievedChunkIds, relatedFacts, ragError, graphError } = await knowledgePromise);
     }
+    timings.mark("knowledge");
     const offeredTools = triagePlan?.smalltalk || triagePlan?.handoff ? [] : selectConnectorTools(customTools, triagePlan);
 
     // Built HERE, not where the knowledge was gathered, because the prompt now
@@ -1160,12 +1171,12 @@ Deno.serve(async (req) => {
           break;
         }
         try {
-          completion = await chatCompletion(modelChain[mi], {
+          completion = await timings.span("model_round", () => chatCompletion(modelChain[mi], {
             model: modelChain[mi].model,
             temperature: config.temperature ?? 0.4,
             messages,
             ...(toolDefinitions.length ? { tools: toolDefinitions, tool_choice: "auto" } : {}),
-          }, Math.min(CHAT_TIMEOUT_MS, budgetMs), routingAdmin);
+          }, Math.min(CHAT_TIMEOUT_MS, budgetMs), routingAdmin));
           usedModel = formatModelRef(modelChain[mi]);
           usedFallbackLevel = mi;
           usedCredentialSource = modelChain[mi].credentialSource;
@@ -1216,7 +1227,12 @@ Deno.serve(async (req) => {
       }
 
       messages.push(choice);
-      for (const toolCall of choice.tool_calls) {
+      // One per-call body shared by the serial and the parallel path, so their
+      // bookkeeping (executed calls, side-effect flags, escalation, chunks) can
+      // never drift apart.
+      const runToolCall = async (
+        toolCall: { id: string; function: { name: string; arguments?: string } },
+      ): Promise<{ role: "tool"; tool_call_id: string; content: string }> => {
         let args: Record<string, unknown> = {};
         try {
           args = JSON.parse(toolCall.function.arguments || "{}");
@@ -1226,28 +1242,40 @@ Deno.serve(async (req) => {
         executedToolCalls.push({ name: toolCall.function.name, arguments: args });
         sideEffectsHappened = true;
         const customTool = customToolByName.get(toolCall.function.name);
-        const result: ToolResult = customTool
-          ? await executeRoutedCustomTool(
-            toolContext,
-            customTool,
-            args,
-            {},
-            // The model budget is elapsed, not a per-call allowance, so a tool
-            // call late in the conversation must shrink to what is left.
-            modelBudgetRemaining(startedAt, Date.now()),
-          )
-          : (isAdmin ? await executeAdminTool(toolContext, toolCall.function.name, args) : null) ??
-            (await executeTool(toolContext, toolCall.function.name, args));
+        const result: ToolResult = await timings.span(`tool:${toolCall.function.name}`, async () =>
+          customTool
+            ? await executeRoutedCustomTool(
+              toolContext,
+              customTool,
+              args,
+              {},
+              // The model budget is elapsed, not a per-call allowance, so a tool
+              // call late in the conversation must shrink to what is left.
+              modelBudgetRemaining(startedAt, Date.now()),
+            )
+            : (isAdmin ? await executeAdminTool(toolContext, toolCall.function.name, args) : null) ??
+              (await executeTool(toolContext, toolCall.function.name, args)));
         if (result.escalated) {
           escalated = true;
           if (result.humanNotified) escalationNotifiedHuman = true;
         }
         if (result.retrievedChunkIds) retrievedChunkIds.push(...result.retrievedChunkIds);
-        messages.push({
-          role: "tool",
-          tool_call_id: toolCall.id,
-          content: result.output,
-        });
+        return { role: "tool", tool_call_id: toolCall.id, content: result.output };
+      };
+      if (parallelizable(choice.tool_calls, customToolByName)) {
+        // Every call in the round is a read-only connector call, so they cannot
+        // race a write; results are pushed in the model's original tool_calls
+        // order whatever order they finish in.
+        const toolMessages: Array<{ role: "tool"; tool_call_id: string; content: string }> = [];
+        for (let start = 0; start < choice.tool_calls.length; start += PARALLEL_TOOLS_PER_CHUNK) {
+          const chunk = choice.tool_calls.slice(start, start + PARALLEL_TOOLS_PER_CHUNK);
+          toolMessages.push(...(await Promise.all(chunk.map(runToolCall))));
+        }
+        messages.push(...toolMessages);
+      } else {
+        for (const toolCall of choice.tool_calls) {
+          messages.push(await runToolCall(toolCall));
+        }
       }
     }
 
@@ -1294,6 +1322,7 @@ Deno.serve(async (req) => {
         rag_error: ragError,
         graph_error: graphError,
         dry_run: dryRun,
+        timings: timings.toJSON(),
         triage: triage ? { outcome: triage.outcome, errors: triage.errors.length ? triage.errors : null } : null,
       });
       if (outboxId) await cancelOutboxRow(admin, outboxId, "no_reply_generated");
@@ -1347,8 +1376,28 @@ Deno.serve(async (req) => {
       connectors_offered: offeredTools.length ? offeredTools.map((tool) => tool.name) : null,
       escalated,
       dry_run: dryRun,
+      intent: triage?.outcome?.answers.intent ?? null,
       triage: triage ? { outcome: triage.outcome, errors: triage.errors.length ? triage.errors : null } : null,
+      timings: timings.toJSON(),
     });
+
+    // Intent labels are advisory: applied only after a fresh delivery on
+    // WhatsApp, and a failure here never changes or delays what the customer
+    // already received. The redelivery branch above returned before this point.
+    if (shouldLabel({ platform: request.platform, dryRun, freshDelivery: true })) {
+      const label = intentLabelFor(triage?.outcome?.answers ?? null);
+      if (label) {
+        try {
+          // The generated client type is too deep for a structural check; it satisfies LabelDb at runtime.
+          await applyIntentLabel(admin as unknown as LabelDb, request.user_id, request.conversation_id, label);
+        } catch (labelError) {
+          console.warn(
+            "[ai-agent-reply] intent label failed:",
+            labelError instanceof Error ? labelError.name : "error",
+          );
+        }
+      }
+    }
 
     return jsonResponse({ ok: true, reply: replyText, escalated, tool_calls: executedToolCalls, is_admin: isAdmin });
   } catch (error) {
