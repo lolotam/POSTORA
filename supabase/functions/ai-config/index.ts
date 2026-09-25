@@ -7,6 +7,9 @@ import {
   CatalogSyncError, type CatalogDb, runCatalogSync, SYNCABLE_PROVIDERS, syncFailureMessage,
 } from '../_shared/modelCatalogSyncRun.ts';
 import { describeProviderFailure, isBillingBlocked, ProviderTestError } from '../_shared/providerErrors.ts';
+import { resolveProviderKey } from '../_shared/providerKeys.ts';
+import type { RowReader } from '../_shared/providerEndpoint.ts';
+import { providerTestKind } from './providerTestKind.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -119,33 +122,10 @@ serve(async (req) => {
               headers: { ...corsHeaders, 'Content-Type': 'application/json' },
             });
           }
-          // Try env var first, then DB fallback
-          let apiKey = Deno.env.get(provider.api_key_env_var);
-          if (!apiKey) {
-            const { data: keyRow } = await supabase.from('provider_api_keys').select('api_key').eq('provider_code', provider.provider_code).maybeSingle();
-            apiKey = keyRow?.api_key;
-          }
+          // Same precedence as the runtime (saved key, then env), so the card tests the key requests use.
+          const apiKey = await resolveProviderKey(supabase as unknown as RowReader, provider.provider_code);
           if (!apiKey) throw new Error(`API key ${provider.api_key_env_var} not configured`);
-
-      if (provider.provider_code === 'perplexity') {
-            await testPerplexity(apiKey, provider.api_endpoint);
-          } else if (provider.provider_code === 'zai') {
-            await testZAI(apiKey, provider.api_endpoint);
-          } else if (provider.provider_code === 'xai') {
-            await testXAI(apiKey, provider.api_endpoint);
-          } else if (provider.provider_code === 'minimax') {
-            await testMinimax(apiKey, provider.api_endpoint);
-          } else if (provider.provider_code === 'brave_search') {
-            await testBrave(apiKey);
-          } else if (provider.provider_code === 'exa') {
-            await testExa(apiKey);
-          } else if (provider.api_type === 'google') {
-            await testGemini(apiKey, provider.api_endpoint);
-          } else if (provider.api_type === 'anthropic') {
-            await testAnthropic(apiKey, provider.api_endpoint);
-          } else {
-            await testOpenAI(apiKey, provider.api_endpoint, await defaultTestModel(supabase, provider));
-          }
+          await runProviderTest(supabase, provider, apiKey);
           latency = Date.now() - startTime;
           success = true;
         } catch (e: any) {
@@ -186,40 +166,11 @@ serve(async (req) => {
           if (upsertErr) throw new Error(upsertErr.message);
         };
         try {
-          // Test key based on provider_code
-          if (provider_code === 'firecrawl') {
-            await testFirecrawl(api_key);
-          } else if (provider_code === 'apify') {
-            await testApify(api_key);
-          } else {
-            // Look up provider from ai_providers table
-            const { data: provider } = await supabase.from('ai_providers').select('*').eq('provider_code', provider_code).single();
-            if (!provider) {
-              return new Response(JSON.stringify({ error: 'Unknown provider' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
-            }
-            // Use the appropriate test function
-            if (provider.provider_code === 'perplexity') {
-              await testPerplexity(api_key, provider.api_endpoint);
-            } else if (provider.provider_code === 'zai') {
-              await testZAI(api_key, provider.api_endpoint);
-            } else if (provider.provider_code === 'brave_search') {
-              await testBrave(api_key);
-            } else if (provider.provider_code === 'exa') {
-              await testExa(api_key);
-            } else if (provider.provider_code === 'minimax') {
-              await testMinimax(api_key, provider.api_endpoint);
-            } else if (provider.provider_code === 'xai') {
-              await testXAI(api_key, provider.api_endpoint);
-            } else if (provider.api_type === 'elevenlabs' || provider.provider_code === 'elevenlabs') {
-              await testElevenLabs(api_key, provider.api_endpoint);
-            } else if (provider.api_type === 'google') {
-              await testGemini(api_key, provider.api_endpoint);
-            } else if (provider.api_type === 'anthropic') {
-              await testAnthropic(api_key, provider.api_endpoint);
-            } else {
-              await testOpenAI(api_key, provider.api_endpoint, await defaultTestModel(supabase, provider));
-            }
+          const provider = await testTarget(supabase, provider_code);
+          if (!provider) {
+            return new Response(JSON.stringify({ error: 'Unknown provider' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
           }
+          await runProviderTest(supabase, provider, api_key);
           const latency = Date.now() - startTime;
           await saveKey();
           return new Response(JSON.stringify({ success: true, latency }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
@@ -261,23 +212,9 @@ serve(async (req) => {
 
         const startTime = Date.now();
         try {
-          if (provider_code === 'firecrawl') await testFirecrawl(apiKey);
-          else if (provider_code === 'apify') await testApify(apiKey);
-          else {
-            // AI provider test
-            const { data: provider } = await supabase.from('ai_providers').select('*').eq('provider_code', provider_code).single();
-            if (!provider) return new Response(JSON.stringify({ error: 'Unknown provider' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
-            if (provider.provider_code === 'perplexity') await testPerplexity(apiKey, provider.api_endpoint);
-            else if (provider.provider_code === 'zai') await testZAI(apiKey, provider.api_endpoint);
-            else if (provider.provider_code === 'brave_search') await testBrave(apiKey);
-            else if (provider.provider_code === 'exa') await testExa(apiKey);
-            else if (provider.provider_code === 'minimax') await testMinimax(apiKey, provider.api_endpoint);
-            else if (provider.provider_code === 'xai') await testXAI(apiKey, provider.api_endpoint);
-            else if (provider.api_type === 'elevenlabs' || provider.provider_code === 'elevenlabs') await testElevenLabs(apiKey, provider.api_endpoint);
-            else if (provider.api_type === 'google') await testGemini(apiKey, provider.api_endpoint);
-            else if (provider.api_type === 'anthropic') await testAnthropic(apiKey, provider.api_endpoint);
-            else await testOpenAI(apiKey, provider.api_endpoint, await defaultTestModel(supabase, provider));
-          }
+          const provider = await testTarget(supabase, provider_code);
+          if (!provider) return new Response(JSON.stringify({ error: 'Unknown provider' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+          await runProviderTest(supabase, provider, apiKey);
           return new Response(JSON.stringify({ success: true, latency: Date.now() - startTime }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
         } catch (e: any) {
           return new Response(JSON.stringify({ success: false, error: e.message, latency: Date.now() - startTime }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
@@ -384,6 +321,47 @@ serve(async (req) => {
 });
 
 // ── Test helpers ──
+interface TestTarget { id: string; provider_code: string; api_type: string | null; api_endpoint: string }
+
+// Firecrawl and Apify keys can be saved without an ai_providers row; they need no endpoint.
+async function testTarget(db: any, providerCode: string): Promise<TestTarget | null> {
+  const { data } = await db.from('ai_providers').select('*').eq('provider_code', providerCode).maybeSingle();
+  if (data) return data;
+  if (providerCode === 'firecrawl' || providerCode === 'apify') {
+    return { id: '', provider_code: providerCode, api_type: 'rest', api_endpoint: '' };
+  }
+  return null;
+}
+
+async function runProviderTest(db: unknown, provider: TestTarget, key: string) {
+  const ep = provider.api_endpoint;
+  switch (providerTestKind(provider)) {
+    case 'firecrawl': return testFirecrawl(key);
+    case 'apify': return testApify(key);
+    case 'elevenlabs': return testElevenLabs(key, ep);
+    case 'brave': return testBrave(key);
+    case 'exa': return testExa(key);
+    case 'jina': return testJina(key);
+    case 'zai': return testZAI(key, ep);
+    case 'xai': return testXAI(key, ep);
+    case 'minimax': return testMinimax(key, ep);
+    case 'perplexity': return testPerplexity(key, ep);
+    case 'google': return testGemini(key, ep);
+    case 'anthropic': return testAnthropic(key, ep);
+    case 'openai': return testOpenAI(key, ep, await defaultTestModel(db, provider));
+  }
+}
+
+// Jina has no chat endpoint; one tiny embedding proves the key.
+async function testJina(key: string) {
+  const res = await fetch('https://api.jina.ai/v1/embeddings', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: 'jina-embeddings-v5-omni-small', input: ['hi'] }),
+  });
+  await handleRes(res, 'Jina');
+}
+
 async function handleRes(res: Response, name: string) {
   if (res.ok) return;
   const t = await res.text();
