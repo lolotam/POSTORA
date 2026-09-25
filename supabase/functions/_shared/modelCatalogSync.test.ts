@@ -27,9 +27,10 @@ Deno.test("mapVercelCatalog assigns one capability per gateway type and skips un
     "alibaba/wan-v2.6-i2v": ["video"],
     "openai/tts-1": ["tts"],
     "openai/whisper-1": ["stt"],
+    "typesafe-ai/jev": ["triage"],
   });
-  assertEquals(mapped.skippedByType, { realtime: 1, reranking: 1, evaluation: 1 });
-  assertEquals(mapped.managedCapabilities.sort(), ["chat", "embedding", "image", "stt", "tts", "video"]);
+  assertEquals(mapped.skippedByType, { realtime: 1, reranking: 1 });
+  assertEquals(mapped.managedCapabilities.sort(), ["chat", "embedding", "image", "stt", "triage", "tts", "video"]);
 });
 
 Deno.test("mapVercelCatalog converts per-token pricing and keeps video tags", () => {
@@ -60,7 +61,7 @@ Deno.test("mapOpenRouterCatalog maps text and image output modalities to chat an
   ]);
   const caps = Object.fromEntries(mapped.models.map((m) => [m.model_id, m.capabilities]));
   assertEquals(caps, { "a/text": ["chat"], "g/flash-image": ["image", "chat"], "a/voice": ["chat"] });
-  assertEquals(mapped.managedCapabilities.sort(), ["chat", "embedding", "image"]);
+  assertEquals(mapped.managedCapabilities.sort(), ["chat", "embedding", "image", "triage"]);
 });
 
 Deno.test("mapOpenRouterCatalog adds embedding models with their measured width and skips what nothing can call", () => {
@@ -73,15 +74,16 @@ Deno.test("mapOpenRouterCatalog adds embedding models with their measured width 
     { id: "typesafe/jev-1.13", name: "J", architecture: { output_modalities: ["decisions"] } },
   ]);
   const byId = Object.fromEntries(mapped.models.map((m) => [m.model_id, m]));
-  assertEquals(Object.keys(byId).sort(), ["some/new-embedder", "thenlper/gte-large", "voyageai/voyage-4"]);
+  assertEquals(Object.keys(byId).sort(), ["some/new-embedder", "thenlper/gte-large", "typesafe/jev-1.13", "voyageai/voyage-4"]);
   assertEquals(byId["voyageai/voyage-4"].capabilities, ["embedding"]);
   assertEquals(byId["voyageai/voyage-4"].metadata.embedding_dimensions, { native: 1024, requested: 1024 });
   // gte-large rejects any `dimensions`, so no requested width is recorded.
   assertEquals(byId["thenlper/gte-large"].metadata.embedding_dimensions, { native: 1024 });
   // Unmeasured: listed, but left without a width so the Embedding card keeps it unselectable.
   assertEquals(byId["some/new-embedder"].metadata, {});
-  assertEquals(mapped.skippedByType, { batch: 1, image: 1, decisions: 1 });
-  assertEquals(mapped.managedCapabilities.sort(), ["chat", "embedding", "image"]);
+  assertEquals(byId["typesafe/jev-1.13"].capabilities, ["triage"]);
+  assertEquals(mapped.skippedByType, { batch: 1, image: 1 });
+  assertEquals(mapped.managedCapabilities.sort(), ["chat", "embedding", "image", "triage"]);
 });
 
 Deno.test("mapOpenRouterCatalog leaves variable (-1) pricing unset instead of overflowing the column", () => {
@@ -126,4 +128,13 @@ Deno.test("planCatalogSync reactivates only rows a previous sync switched off", 
     capabilities: ["chat"], metadata: {} })], mapped, new Set());
   assertEquals(bySync.updates[0].reactivate, true);
   assertEquals(byAdmin.updates[0].reactivate, false);
+});
+
+Deno.test("Jev decision models map to the triage capability on both catalogues", () => {
+  const vercelJev = mapVercelCatalog([{ id: "typesafe-ai/jev", name: "Jev", type: "evaluation" }]).models[0];
+  const routerJev = mapOpenRouterCatalog([
+    { id: "typesafe/jev-1.13", name: "Jev", architecture: { output_modalities: ["decisions"] } },
+  ]).models[0];
+  assertEquals(vercelJev.capabilities, ["triage"]);
+  assertEquals(routerJev.capabilities, ["triage"]);
 });

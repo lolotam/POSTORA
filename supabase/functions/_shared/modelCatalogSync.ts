@@ -1,7 +1,7 @@
 // Pure: turns a provider's /models catalogue into ai_models rows and plans the
 // DB diff. No I/O here — modelCatalogSyncRun.ts owns fetching and writing.
 
-export type Capability = "chat" | "image" | "video" | "embedding" | "tts" | "stt";
+export type Capability = "chat" | "image" | "video" | "embedding" | "tts" | "stt" | "triage";
 
 export interface CatalogModel {
   model_id: string;
@@ -58,6 +58,7 @@ const VERCEL_TYPE_CAPABILITY: Record<string, Capability> = {
   embedding: "embedding",
   speech: "tts",
   transcription: "stt",
+  evaluation: "triage",
 };
 
 // The gateway catalogue carries no vector width. Widths below are the vendors'
@@ -154,8 +155,9 @@ export const OPENROUTER_EMBEDDING_WIDTHS: Record<string, { native: number; reque
 };
 
 // Fetched with ?output_modalities=all. Image-only, video, speech, transcription,
-// rerank and decision models have no OpenRouter runtime in Postora yet, and the
-// `:batch` embedding ids are asynchronous duplicates, so those are counted, not listed.
+// and rerank models have no OpenRouter runtime in Postora yet; the `:batch`
+// embedding ids are asynchronous duplicates. Decision models map to `triage`,
+// used by the AI agent's triage step.
 export function mapOpenRouterCatalog(data: unknown[]): MappedCatalog {
   const models: CatalogModel[] = [];
   const skippedByType: Record<string, number> = {};
@@ -174,6 +176,8 @@ export function mapOpenRouterCatalog(data: unknown[]): MappedCatalog {
         continue;
       }
       capabilities.push("embedding");
+    } else if (outputs.includes("decisions")) {
+      capabilities.push("triage");
     }
     if (!capabilities.length) {
       skip(outputs.join("+") || "unknown");
@@ -187,7 +191,7 @@ export function mapOpenRouterCatalog(data: unknown[]): MappedCatalog {
     if (capabilities.includes("embedding") && width) model.metadata.embedding_dimensions = width;
     models.push(model);
   }
-  return { models, skippedByType, managedCapabilities: ["chat", "image", "embedding"] };
+  return { models, skippedByType, managedCapabilities: ["chat", "image", "embedding", "triage"] };
 }
 
 export function mapDeepSeekCatalog(data: unknown[]): MappedCatalog {

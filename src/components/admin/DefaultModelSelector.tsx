@@ -308,7 +308,10 @@ function TierSelector({ label, icon, providers, allProviders, filteredModels, cu
           </SelectContent>
         </Select>
 
-        {selectedProviderId && isOpenRouter ? (
+        {/* Triage models list from the synced ai_models rows, not the live OpenRouter catalogue below:
+            openrouter-models never requests output_modalities=all, so Jev's "decisions" modality
+            never reaches that picker and a chat model would show up in its place. */}
+        {selectedProviderId && isOpenRouter && category !== 'agent_triage' ? (
           <Popover open={orOpen} onOpenChange={setOrOpen}>
             <PopoverTrigger asChild>
               <Button variant="outline" role="combobox" aria-expanded={orOpen}

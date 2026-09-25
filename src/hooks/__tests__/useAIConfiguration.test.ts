@@ -28,4 +28,15 @@ describe("parseSettingsRows", () => {
     expect(parsed.categoryFallbacks.agent).toBeNull();
     expect(parsed.categoryFallbacks2.agent).toBeNull();
   });
+
+  it('routes the agent triage slots to their own category, not to agent', () => {
+    const parsed = parseSettingsRows([
+      { key: 'default_ai_model_agent', value: { provider_code: 'vercel', model_id: 'openai/gpt-5-mini' } },
+      { key: 'default_ai_model_agent_triage', value: { provider_code: 'openrouter', model_id: 'typesafe/jev-1.13' } },
+      { key: 'default_ai_model_agent_triage_fallback', value: { provider_code: 'vercel', model_id: 'typesafe-ai/jev' } },
+    ]);
+    expect(parsed.categoryDefaults.agent?.model_id).toBe('openai/gpt-5-mini');
+    expect(parsed.categoryDefaults.agent_triage?.model_id).toBe('typesafe/jev-1.13');
+    expect(parsed.categoryFallbacks.agent_triage?.model_id).toBe('typesafe-ai/jev');
+  });
 });
