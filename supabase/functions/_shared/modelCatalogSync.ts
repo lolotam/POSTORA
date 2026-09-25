@@ -279,3 +279,100 @@ export function planCatalogSync(
   }
   return plan;
 }
+
+// Direct providers (below) list only what they serve today, often as bare ids. Their rows were
+// curated by hand first, so these catalogues add, refresh and retire models but never strip a
+// capability an admin gave a row (see planCatalogSync).
+
+const CAPABILITY_SET = new Set<string>(["chat", "image", "video", "embedding", "tts", "stt"]);
+
+function idOnly(data: unknown[], classify: (id: string) => Capability | string): MappedCatalog & { models: CatalogModel[] } {
+  const models: CatalogModel[] = [];
+  const skippedByType: Record<string, number> = {};
+  for (const raw of data) {
+    const id = str((raw as Row).id);
+    if (!id) continue;
+    const kind = classify(id);
+    if (!CAPABILITY_SET.has(kind)) {
+      skippedByType[kind] = (skippedByType[kind] ?? 0) + 1;
+      continue;
+    }
+    models.push(baseModel(raw as Row, [kind as Capability]));
+  }
+  return { models, skippedByType, managedCapabilities: [], additiveCapabilities: true };
+}
+
+export function mapAnthropicCatalog(data: unknown[]): MappedCatalog {
+  const models = data.map((raw) => raw as Row).filter((row) => str(row.id)).map((row) => {
+    const model = baseModel(row, ["chat"]);
+    model.name = str(row.display_name) ?? model.name;
+    model.context_limit = positiveInt(row.max_input_tokens);
+    return model;
+  });
+  return { models, skippedByType: {}, managedCapabilities: ["chat"], additiveCapabilities: true };
+}
+
+function geminiCapability(id: string, methods: string[]): Capability | string {
+  if (methods.includes("predictLongRunning")) return "video";
+  if (methods.includes("predict")) return "image";
+  if (methods.includes("embedContent")) return "embedding";
+  if (methods.includes("generateContent")) {
+    if (/tts/i.test(id)) return "tts";
+    if (/image/i.test(id)) return "image";
+    return "chat";
+  }
+  return methods[0] ?? "unknown";
+}
+
+export function mapGeminiCatalog(data: unknown[]): MappedCatalog {
+  const models: CatalogModel[] = [];
+  const skippedByType: Record<string, number> = {};
+  for (const raw of data) {
+    const row = raw as Row;
+    const id = str(row.name)?.replace(/^models\//, "");
+    if (!id) continue;
+    const kind = geminiCapability(id, (row.supportedGenerationMethods ?? []) as string[]);
+    if (!CAPABILITY_SET.has(kind)) {
+      skippedByType[kind] = (skippedByType[kind] ?? 0) + 1;
+      continue;
+    }
+    const model = baseModel({ ...row, id }, [kind as Capability]);
+    model.name = str(row.displayName) ?? id;
+    model.context_limit = positiveInt(row.inputTokenLimit);
+    models.push(model);
+  }
+  return { models, skippedByType, managedCapabilities: ["chat", "image", "video", "embedding", "tts"], additiveCapabilities: true };
+}
+
+const DATED_SNAPSHOT = /-\d{4}-\d{2}-\d{2}$/;
+function openAICapability(id: string): Capability | string {
+  if (DATED_SNAPSHOT.test(id)) return "snapshot";
+  if (/moderation|realtime|audio-preview|search|computer-use|^babbage|^davinci|^ft:/.test(id)) return "other";
+  if (/^(gpt-image|dall-e|chatgpt-image)/.test(id)) return "image";
+  if (/tts/.test(id)) return "tts";
+  if (/whisper|transcribe/.test(id)) return "stt";
+  if (/embedding/.test(id)) return "embedding";
+  if (/^sora/.test(id)) return "video";
+  if (/^(gpt-|o\d|chatgpt-)/.test(id)) return "chat";
+  return "other";
+}
+
+export function mapOpenAICatalog(data: unknown[]): MappedCatalog {
+  const mapped = idOnly(data, openAICapability);
+  return { ...mapped, managedCapabilities: ["chat", "image", "tts", "stt", "embedding", "video"] };
+}
+
+// Z.ai and MiniMax: /models lists their chat models only; image, video and speech rows stay hand-managed.
+export function mapIdOnlyChatCatalog(data: unknown[]): MappedCatalog {
+  return { ...idOnly(data, () => "chat"), managedCapabilities: ["chat"] };
+}
+
+function xaiCapability(id: string): Capability {
+  if (/video/.test(id)) return "video";
+  if (/image/.test(id)) return "image";
+  return "chat";
+}
+
+export function mapXaiCatalog(data: unknown[]): MappedCatalog {
+  return { ...idOnly(data, xaiCapability), managedCapabilities: ["chat", "image", "video"] };
+}

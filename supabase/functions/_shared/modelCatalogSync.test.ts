@@ -1,7 +1,8 @@
 // deno-lint-ignore-file no-import-prefix
 import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import {
-  type ExistingModelRow, mapDeepSeekCatalog, mapOpenRouterCatalog, mapVercelCatalog, planCatalogSync,
+  type ExistingModelRow, mapAnthropicCatalog, mapDeepSeekCatalog, mapGeminiCatalog, mapIdOnlyChatCatalog,
+  mapOpenAICatalog, mapOpenRouterCatalog, mapVercelCatalog, mapXaiCatalog, planCatalogSync,
 } from "./modelCatalogSync.ts";
 
 const vercel = [
@@ -159,4 +160,60 @@ Deno.test("an additive catalogue keeps capabilities an admin gave a row", () => 
   assertEquals(plan.updates, []);
   const replacing = planCatalogSync([row], { ...mapped, additiveCapabilities: undefined }, new Set());
   assertEquals(replacing.updates[0].capabilities, ["chat", "stt"]);
+});
+
+const byId = (m: { models: Array<{ model_id: string; capabilities: string[] }> }) =>
+  Object.fromEntries(m.models.map((x) => [x.model_id, x.capabilities]));
+
+Deno.test("Anthropic models are chat, with their display name and context window", () => {
+  const mapped = mapAnthropicCatalog([{ id: "claude-opus-5-5", display_name: "Claude Opus 5.5", type: "model", max_input_tokens: 1000000 }]);
+  assertEquals(mapped.models[0].name, "Claude Opus 5.5");
+  assertEquals(mapped.models[0].capabilities, ["chat"]);
+  assertEquals(mapped.models[0].context_limit, 1000000);
+  assertEquals(mapped.managedCapabilities, ["chat"]);
+  assertEquals(mapped.additiveCapabilities, true);
+});
+
+Deno.test("Gemini models map by generation method, with the models/ prefix stripped", () => {
+  const mapped = mapGeminiCatalog([
+    { name: "models/gemini-2.5-flash", displayName: "Gemini 2.5 Flash", inputTokenLimit: 1048576, supportedGenerationMethods: ["generateContent", "countTokens"] },
+    { name: "models/gemini-2.5-flash-preview-tts", displayName: "TTS", supportedGenerationMethods: ["generateContent"] },
+    { name: "models/gemini-2.5-flash-image", displayName: "Image", supportedGenerationMethods: ["generateContent"] },
+    { name: "models/gemini-embedding-001", displayName: "Emb", supportedGenerationMethods: ["embedContent"] },
+    { name: "models/imagen-4.0-generate-001", displayName: "Imagen", supportedGenerationMethods: ["predict"] },
+    { name: "models/veo-3.0-generate-001", displayName: "Veo", supportedGenerationMethods: ["predictLongRunning"] },
+    { name: "models/aqa", displayName: "AQA", supportedGenerationMethods: ["generateAnswer"] },
+  ]);
+  assertEquals(byId(mapped), {
+    "gemini-2.5-flash": ["chat"], "gemini-2.5-flash-preview-tts": ["tts"], "gemini-2.5-flash-image": ["image"],
+    "gemini-embedding-001": ["embedding"], "imagen-4.0-generate-001": ["image"], "veo-3.0-generate-001": ["video"],
+  });
+  assertEquals(mapped.skippedByType, { generateAnswer: 1 });
+  assertEquals(mapped.managedCapabilities.sort(), ["chat", "embedding", "image", "tts", "video"]);
+});
+
+Deno.test("OpenAI ids are classified by name; dated snapshots and non-reply models are skipped", () => {
+  const mapped = mapOpenAICatalog([
+    "gpt-5.5", "gpt-5-nano-2025-08-07", "o4-mini", "chatgpt-4o-latest", "gpt-image-2", "dall-e-3", "gpt-4o-mini-tts",
+    "tts-1-hd", "whisper-1", "gpt-4o-transcribe", "text-embedding-3-small", "sora-2", "omni-moderation-latest",
+    "gpt-4o-realtime-preview", "gpt-4o-audio-preview", "gpt-4o-search-preview", "computer-use-preview", "babbage-002",
+  ].map((id) => ({ id })));
+  assertEquals(byId(mapped), {
+    "gpt-5.5": ["chat"], "o4-mini": ["chat"], "chatgpt-4o-latest": ["chat"], "gpt-image-2": ["image"], "dall-e-3": ["image"],
+    "gpt-4o-mini-tts": ["tts"], "tts-1-hd": ["tts"], "whisper-1": ["stt"], "gpt-4o-transcribe": ["stt"],
+    "text-embedding-3-small": ["embedding"], "sora-2": ["video"],
+  });
+  assertEquals(mapped.skippedByType, { snapshot: 1, other: 6 });
+});
+
+Deno.test("Z.ai and MiniMax list chat ids only, so only chat rows are managed", () => {
+  const mapped = mapIdOnlyChatCatalog([{ id: "glm-5" }, { id: "MiniMax-M3" }]);
+  assertEquals(byId(mapped), { "glm-5": ["chat"], "MiniMax-M3": ["chat"] });
+  assertEquals(mapped.managedCapabilities, ["chat"]);
+});
+
+Deno.test("xAI ids split into chat, image and video by name", () => {
+  const mapped = mapXaiCatalog([{ id: "grok-4.3" }, { id: "grok-imagine-image-pro" }, { id: "grok-imagine-video-1.5" }, { id: "grok-2-image-1212" }]);
+  assertEquals(byId(mapped), { "grok-4.3": ["chat"], "grok-imagine-image-pro": ["image"], "grok-imagine-video-1.5": ["video"], "grok-2-image-1212": ["image"] });
+  assertEquals(mapped.managedCapabilities.sort(), ["chat", "image", "video"]);
 });
