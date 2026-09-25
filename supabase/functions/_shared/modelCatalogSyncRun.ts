@@ -63,9 +63,11 @@ const CATALOGUE: Record<string, CatalogueSource> = {
     map: mapAnthropicCatalog,
   },
   gemini: {
+    // The REST API accepts the key as the x-goog-api-key header, which keeps it out of the URL —
+    // out of proxy/access logs, browser history, and any place that logs a fetch failure's message.
     request: (key) => ({
-      url: `https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000&key=${encodeURIComponent(key ?? "")}`,
-      headers: {},
+      url: "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000",
+      headers: key ? { "x-goog-api-key": key } : ({} as Record<string, string>),
     }),
     needsKey: true,
     list: (body) => {
@@ -141,13 +143,16 @@ export async function runCatalogSync(
   let res: Response;
   try {
     res = await fetchImpl(url, { headers, signal: AbortSignal.timeout(20_000) });
-  } catch {
+  } catch (e) {
     // A rejected fetch (DNS, connection refused, TLS, abort) throws a TypeError whose message embeds the
-    // request URL — for Gemini that URL carries the key. Never surface that message or chain it as `cause`;
-    // a logger can serialise a cause just as readily as a top-level message.
+    // request URL, and some provider request could carry a secret in that URL. Never surface that message
+    // or chain it as `cause` — a logger can serialise a cause just as readily as a top-level message —
+    // but the error NAME alone is safe and worth keeping server-side, since ai-config/index.ts skips its
+    // own logging for CatalogSyncErrors (their message is meant to be admin-facing already).
+    console.warn(`[model-sync] ${providerCode} /models request failed: ${e instanceof Error ? e.name : "error"}`);
     throw new CatalogSyncError(`${providerCode} /models request failed`);
   }
-  // Never interpolate `url` into this message: the Gemini request carries the key in its query string.
+  // Never interpolate `url` into this message: a provider request could carry a secret in its query string.
   if (!res.ok) throw new CatalogSyncError(`${providerCode} /models returned HTTP ${res.status}`);
   const body = await res.json();
   const mapped = source.map(source.list(body));

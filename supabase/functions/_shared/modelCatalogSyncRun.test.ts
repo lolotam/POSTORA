@@ -214,14 +214,15 @@ Deno.test("claude requests /v1/models with x-api-key and anthropic-version, no A
     assertEquals(report.dry_run, false);
   }));
 
-Deno.test("gemini puts the key in the URL query string, sends no auth header, and reads body.models", () =>
+Deno.test("gemini sends the key as an x-goog-api-key header, never in the URL, and reads body.models", () =>
   withEnv(KEY_ENV, "test-gemini-key", async () => {
     const { db } = fakeDb({ models: [], settings: [] });
     const { fetchImpl, calls } = recordingFetch(geminiBody);
     const report = await runCatalogSync(db, "gemini", fetchImpl);
     assertEquals(calls.length, 1);
-    assertEquals(calls[0].url, "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000&key=test-gemini-key");
-    assertEquals(calls[0].headers, {});
+    assertEquals(calls[0].url, "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000");
+    assertEquals(calls[0].url.includes("key="), false);
+    assertEquals(calls[0].headers["x-goog-api-key"], "test-gemini-key");
     assertEquals(report.added, 1);
   }));
 
@@ -274,4 +275,22 @@ Deno.test("a rejected fetch (DNS/connection/TLS) never puts the key in the error
     assertEquals(err.message, "gemini /models request failed");
     assertEquals(err.message.includes("SECRET-KEY-123"), false);
     assertEquals(("cause" in err) ? err.cause : undefined, undefined);
+  }));
+
+Deno.test("a rejected fetch logs the error name to the server, never the message", () =>
+  withEnv(KEY_ENV, "SECRET-KEY-123", async () => {
+    const { db } = fakeDb({ models: [], settings: [] });
+    const rejecting = (() =>
+      Promise.reject(new TypeError("error sending request for url (https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000&key=SECRET-KEY-123)"))) as unknown as typeof fetch;
+    const warnings: unknown[][] = [];
+    const originalWarn = console.warn;
+    console.warn = (...args: unknown[]) => { warnings.push(args); };
+    try {
+      await assertRejects(() => runCatalogSync(db, "gemini", rejecting), CatalogSyncError);
+    } finally {
+      console.warn = originalWarn;
+    }
+    assertEquals(warnings.length, 1);
+    assertEquals(warnings[0], ["[model-sync] gemini /models request failed: TypeError"]);
+    assertEquals(String(warnings[0]).includes("SECRET-KEY-123"), false);
   }));
