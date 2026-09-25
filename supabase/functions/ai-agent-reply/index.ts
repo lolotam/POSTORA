@@ -1376,6 +1376,8 @@ Deno.serve(async (req) => {
         : await sender(request.recipient_phone, replyText);
     }
     timings.mark("sent");
+    // Customer-perceived: request start to the send completing (marks are per-phase deltas).
+    timings.note("sent_total", Date.now() - startedAt);
 
     // Outside the send block, exactly as before: a sandbox run writes its thread turns
     // without sending anything.
