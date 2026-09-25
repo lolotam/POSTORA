@@ -31,7 +31,7 @@ export function syncFailureMessage(err: unknown): string {
 
 const CATALOGUE: Record<string, { url: string; needsKey: boolean; map: (d: unknown[]) => MappedCatalog }> = {
   vercel: { url: "https://ai-gateway.vercel.sh/v1/models", needsKey: false, map: mapVercelCatalog },
-  openrouter: { url: "https://openrouter.ai/api/v1/models", needsKey: false, map: mapOpenRouterCatalog },
+  openrouter: { url: "https://openrouter.ai/api/v1/models?output_modalities=all", needsKey: false, map: mapOpenRouterCatalog },
   deepseek: { url: "https://api.deepseek.com/models", needsKey: true, map: mapDeepSeekCatalog },
 };
 

@@ -50,7 +50,7 @@ Deno.test("mapVercelCatalog records known embedding widths and leaves unknown on
   assertEquals(byId["perplexity/pplx-embed-v1-4b"].metadata.embedding_dimensions, undefined);
 });
 
-Deno.test("mapOpenRouterCatalog maps output modalities and manages only chat and image", () => {
+Deno.test("mapOpenRouterCatalog maps text and image output modalities to chat and image", () => {
   const mapped = mapOpenRouterCatalog([
     { id: "a/text", name: "T", context_length: 1000, pricing: { prompt: "0.000001", completion: "0.000002" },
       architecture: { output_modalities: ["text"] } },
@@ -60,7 +60,28 @@ Deno.test("mapOpenRouterCatalog maps output modalities and manages only chat and
   ]);
   const caps = Object.fromEntries(mapped.models.map((m) => [m.model_id, m.capabilities]));
   assertEquals(caps, { "a/text": ["chat"], "g/flash-image": ["image", "chat"], "a/voice": ["chat"] });
-  assertEquals(mapped.managedCapabilities.sort(), ["chat", "image"]);
+  assertEquals(mapped.managedCapabilities.sort(), ["chat", "embedding", "image"]);
+});
+
+Deno.test("mapOpenRouterCatalog adds embedding models with their measured width and skips what nothing can call", () => {
+  const mapped = mapOpenRouterCatalog([
+    { id: "voyageai/voyage-4", name: "V", architecture: { output_modalities: ["embeddings"] } },
+    { id: "thenlper/gte-large", name: "G", architecture: { output_modalities: ["embeddings"] } },
+    { id: "some/new-embedder", name: "N", architecture: { output_modalities: ["embeddings"] } },
+    { id: "openai/text-embedding-3-small:batch", name: "B", architecture: { output_modalities: ["embeddings"] } },
+    { id: "openai/gpt-image-2.5", name: "I", architecture: { output_modalities: ["image"] } },
+    { id: "typesafe/jev-1.13", name: "J", architecture: { output_modalities: ["decisions"] } },
+  ]);
+  const byId = Object.fromEntries(mapped.models.map((m) => [m.model_id, m]));
+  assertEquals(Object.keys(byId).sort(), ["some/new-embedder", "thenlper/gte-large", "voyageai/voyage-4"]);
+  assertEquals(byId["voyageai/voyage-4"].capabilities, ["embedding"]);
+  assertEquals(byId["voyageai/voyage-4"].metadata.embedding_dimensions, { native: 1024, requested: 1024 });
+  // gte-large rejects any `dimensions`, so no requested width is recorded.
+  assertEquals(byId["thenlper/gte-large"].metadata.embedding_dimensions, { native: 1024 });
+  // Unmeasured: listed, but left without a width so the Embedding card keeps it unselectable.
+  assertEquals(byId["some/new-embedder"].metadata, {});
+  assertEquals(mapped.skippedByType, { batch: 1, image: 1, decisions: 1 });
+  assertEquals(mapped.managedCapabilities.sort(), ["chat", "embedding", "image"]);
 });
 
 Deno.test("mapOpenRouterCatalog leaves variable (-1) pricing unset instead of overflowing the column", () => {

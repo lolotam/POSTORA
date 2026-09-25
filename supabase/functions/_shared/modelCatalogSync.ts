@@ -132,25 +132,62 @@ export function mapVercelCatalog(data: unknown[]): MappedCatalog {
   return { models, skippedByType, managedCapabilities: Object.values(VERCEL_TYPE_CAPABILITY) };
 }
 
+// Widths the live OpenRouter /embeddings endpoint returned (probed 2026-09-25).
+// `requested` only where the model accepts `dimensions`; gte-large, e5-large-v2 and
+// bge-large reject it even at their native 1024. Rows seeded before this table keep
+// the widths already recorded on them.
+export const OPENROUTER_EMBEDDING_WIDTHS: Record<string, { native: number; requested?: number }> = {
+  "voyageai/voyage-4": { native: 1024, requested: 1024 },
+  "voyageai/voyage-4-large": { native: 1024, requested: 1024 },
+  "voyageai/voyage-4-lite": { native: 1024, requested: 1024 },
+  "voyageai/voyage-code-4": { native: 1024, requested: 1024 },
+  "voyageai/voyage-multimodal-3.5": { native: 1024, requested: 1024 },
+  "intfloat/multilingual-e5-large": { native: 1024, requested: 1024 },
+  "baai/bge-m3": { native: 1024, requested: 1024 },
+  "thenlper/gte-large": { native: 1024 },
+  "intfloat/e5-large-v2": { native: 1024 },
+  "baai/bge-large-en-v1.5": { native: 1024 },
+  "nvidia/nemotron-3-embed-1b:free": { native: 2048 },
+  "thenlper/gte-base": { native: 768 },
+  "intfloat/e5-base-v2": { native: 768 },
+  "sentence-transformers/all-mpnet-base-v2": { native: 768 },
+};
+
+// Fetched with ?output_modalities=all. Image-only, video, speech, transcription,
+// rerank and decision models have no OpenRouter runtime in Postora yet, and the
+// `:batch` embedding ids are asynchronous duplicates, so those are counted, not listed.
 export function mapOpenRouterCatalog(data: unknown[]): MappedCatalog {
   const models: CatalogModel[] = [];
+  const skippedByType: Record<string, number> = {};
+  const skip = (type: string) => { skippedByType[type] = (skippedByType[type] ?? 0) + 1; };
   for (const raw of data) {
     const row = raw as Row;
     if (!str(row.id)) continue;
     const outputs = ((row.architecture as Row | undefined)?.output_modalities ?? []) as string[];
     const capabilities: Capability[] = [];
-    if (outputs.includes("image")) capabilities.push("image");
-    if (outputs.includes("text")) capabilities.push("chat");
-    if (!capabilities.length) continue;
+    if (outputs.includes("text")) {
+      if (outputs.includes("image")) capabilities.push("image");
+      capabilities.push("chat");
+    } else if (outputs.includes("embeddings")) {
+      if (String(row.id).endsWith(":batch")) {
+        skip("batch");
+        continue;
+      }
+      capabilities.push("embedding");
+    }
+    if (!capabilities.length) {
+      skip(outputs.join("+") || "unknown");
+      continue;
+    }
     const model = baseModel(row, capabilities);
     const pricing = (row.pricing ?? {}) as Row;
     model.cost_per_1m_input_tokens = perMillion(pricing.prompt);
     model.cost_per_1m_output_tokens = perMillion(pricing.completion);
+    const width = OPENROUTER_EMBEDDING_WIDTHS[model.model_id];
+    if (capabilities.includes("embedding") && width) model.metadata.embedding_dimensions = width;
     models.push(model);
   }
-  // OpenRouter's /models lists no embedding models, so the embedding rows seeded
-  // by hand (each verified live) are outside what this sync may deactivate.
-  return { models, skippedByType: {}, managedCapabilities: ["chat", "image"] };
+  return { models, skippedByType, managedCapabilities: ["chat", "image", "embedding"] };
 }
 
 export function mapDeepSeekCatalog(data: unknown[]): MappedCatalog {

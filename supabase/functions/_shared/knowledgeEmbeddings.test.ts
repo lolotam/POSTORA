@@ -309,6 +309,34 @@ Deno.test("a provider that stays rate-limited fails after the last attempt with 
   assertEquals(calls, 3);
 });
 
+/** The JSON body of the single request `embed` sends. */
+async function sentBody(embed: () => Promise<unknown>): Promise<Record<string, unknown>> {
+  const realFetch = globalThis.fetch;
+  let sent: Record<string, unknown> = {};
+  globalThis.fetch = ((_url: string, init: RequestInit) => {
+    sent = JSON.parse(String(init.body));
+    return Promise.resolve(new Response(JSON.stringify(okBody), { status: 200 }));
+  }) as typeof fetch;
+  Deno.env.set("TEST_EMBED_KEY", "k");
+  try {
+    await embed();
+  } finally {
+    globalThis.fetch = realFetch;
+    Deno.env.delete("TEST_EMBED_KEY");
+  }
+  return sent;
+}
+
+Deno.test("a fixed-width model is called without `dimensions`, which it would reject", async () => {
+  // OpenRouter's thenlper/gte-large, intfloat/e5-large-v2 and baai/bge-large-en-v1.5
+  // fail on any `dimensions`, even their native 1024 (measured 2026-09-25).
+  const fixed = await sentBody(() =>
+    embedWithOpenAiCompatible(["a"], { ...stubbedConfig, fixedWidth: true }, stubbedApi));
+  const sized = await sentBody(() => embedWithOpenAiCompatible(["a"], stubbedConfig, stubbedApi));
+  assertEquals("dimensions" in fixed, false);
+  assertEquals(sized.dimensions, 2);
+});
+
 Deno.test("dual ingest keeps the primary vectors when the concurrent fallback embed fails", async () => {
   const dual = resolveDualEmbeddingConfig(
     env({ EMBEDDING_PROVIDER: "gemini", EMBEDDING_FALLBACK_PROVIDER: "ollama" }),
@@ -372,6 +400,23 @@ Deno.test("an OpenRouter selection resolves to the column its returned width fit
   assertEquals(dual.primary.dimensions, 1536);
   assertEquals(dual.primary.model, "perplexity/pplx-embed-v1-4b");
   assertEquals(dual.fallback?.column, "embedding_bge_m3");
+  assertEquals(dual.fallback?.dimensions, 1024);
+});
+
+Deno.test("a catalogue row with no requested width resolves to a fixed-width config", () => {
+  const nativeOnly: EmbeddingModelCatalogRow = {
+    ...catalogRow("openrouter", "thenlper/gte-large", 1024),
+    metadata: { embedding_dimensions: { native: 1024 } },
+  };
+  const dual = resolveAdminEmbeddingLadder(
+    { provider_code: "openrouter", model_id: "perplexity/pplx-embed-v1-4b" },
+    { provider_code: "openrouter", model_id: "thenlper/gte-large" },
+    null,
+    [...SEEDED_CATALOG, nativeOnly],
+    {},
+  );
+  assertEquals(dual.primary.fixedWidth, undefined);
+  assertEquals(dual.fallback?.fixedWidth, true);
   assertEquals(dual.fallback?.dimensions, 1024);
 });
 
