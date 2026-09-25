@@ -128,3 +128,81 @@ export function selectConnectorTools<T extends { name: string }>(tools: T[], pla
   const keep = new Set(plan.connectors);
   return tools.filter((tool) => keep.has(tool.name));
 }
+
+// ========== Task 3: Triage runtime ==========
+
+export const TRIAGE_BUDGET_MS = 1500;
+const ENABLED_KEY = "agent_triage_enabled";
+const SLOT_KEYS = [
+  "default_ai_model_agent_triage",
+  "default_ai_model_agent_triage_fallback",
+  "default_ai_model_agent_triage_fallback_2",
+] as const;
+export const TRIAGE_SETTING_KEYS: readonly string[] = [ENABLED_KEY, ...SLOT_KEYS];
+
+export interface TriageOutcome {
+  provider: TriageProvider;
+  model: string;
+  latencyMs: number;
+  answers: TriageAnswers;
+  plan: TriagePlan;
+}
+export interface TriageRun { outcome: TriageOutcome | null; errors: Array<{ model: string; error: string }> }
+
+const isTriageProvider = (code: unknown): code is TriageProvider => code === "openrouter" || code === "vercel";
+
+// Off unless an admin switched it on. Slots holding any other provider are ignored:
+// only these two speak the decision API.
+export function triageChainFromSettings(rows: Array<{ key: string; value: unknown }>): TriageTier[] {
+  const byKey = new Map(rows.map((row) => [row.key, row.value]));
+  if ((byKey.get(ENABLED_KEY) as { enabled?: unknown } | undefined)?.enabled !== true) return [];
+  const chain: TriageTier[] = [];
+  for (const key of SLOT_KEYS) {
+    const slotValue = byKey.get(key) as { provider_code?: unknown; model_id?: unknown } | undefined;
+    if (isTriageProvider(slotValue?.provider_code) && typeof slotValue.model_id === "string" && slotValue.model_id) {
+      chain.push({ provider: slotValue.provider_code, model: slotValue.model_id });
+    }
+  }
+  return chain;
+}
+
+// Never throws: every failure is recorded and the caller runs today's pipeline.
+export async function runTriage(
+  tiers: TriageTier[],
+  input: TriageInput,
+  resolveKey: (providerCode: TriageProvider) => Promise<string | null>,
+  budgetMs = TRIAGE_BUDGET_MS,
+  fetchImpl: typeof fetch = fetch,
+  now: () => number = Date.now,
+): Promise<TriageRun> {
+  const startedAt = now();
+  const errors: TriageRun["errors"] = [];
+  for (const tier of tiers) {
+    const remaining = budgetMs - (now() - startedAt);
+    if (remaining <= 0) break;
+    const label = `${tier.provider}/${tier.model}`;
+    try {
+      const key = await resolveKey(tier.provider);
+      if (!key) {
+        errors.push({ model: label, error: "no API key" });
+        continue;
+      }
+      const response = await fetchImpl(triageEndpoint(tier.provider), {
+        method: "POST",
+        headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+        body: JSON.stringify(triageRequestBody(tier, input)),
+        signal: AbortSignal.timeout(remaining),
+      });
+      if (!response.ok) {
+        errors.push({ model: label, error: `HTTP ${response.status}` });
+        continue;
+      }
+      const answers = parseTriageAnswers(tier.provider, await response.json());
+      const plan = planFromAnswers(answers, input.connectors.map((c) => c.name));
+      return { outcome: { provider: tier.provider, model: tier.model, latencyMs: now() - startedAt, answers, plan }, errors };
+    } catch (error) {
+      errors.push({ model: label, error: error instanceof Error ? error.name : "error" });
+    }
+  }
+  return { outcome: null, errors };
+}
