@@ -474,7 +474,7 @@ Deno.test("a data-driven vercel tier reaches its ai_providers endpoint with the 
       throw new Error(`unexpected table ${table}`);
     },
   } as unknown as AiRoutingAdmin;
-  let requestedUrl: string | Request | undefined;
+  let requestedUrl: RequestInfo | URL | undefined;
   try {
     globalThis.fetch = async (url, init) => {
       requestedUrl = url;
