@@ -13,6 +13,8 @@ import {
 import { checkByoGenerationLimits } from "../_shared/higgsfield-rate-limit.ts";
 import { resolveVercelKey, vercelStartVideo } from "../_shared/vercelGateway.ts";
 import { pickVideoProvider, VercelVideoInput, type VideoModelRow } from "./videoProvider.ts";
+import { insertWithOneRetry, shouldReleaseReservation } from "./jobRecording.ts";
+import { createLogger } from "../_shared/logging.ts";
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), {
@@ -27,6 +29,8 @@ serve(async (req) => {
   // Hoisted so the catch can release a reservation made inside the try.
   const supabase = admin();
   let reserved = false;
+  // Set once a paid provider job has started; from then on the reservation is never released.
+  let dispatched = false;
   let userId: string | null = null;
   try {
     const authHeader = req.headers.get("Authorization") || "";
@@ -71,14 +75,28 @@ serve(async (req) => {
         aspectRatio: input.data.aspect_ratio,
         imageUrl: input.data.image_url,
       });
-      const { data: job, error: insertError } = await supabase.from("ai_generation_jobs").insert({
-        user_id: user.id, provider: "vercel", model_id: modelId, modality: "video",
-        credential_source: "platform", status: "running",
-        provider_job_id: started.gatewayJobId ?? "vercel-op",
-        params: { prompt, operation: started.operation, reservation: true },
-      }).select("id").single();
-      if (insertError) throw insertError;
-      return json({ success: true, jobId: job.id, status: "running", pollAfterSeconds: 10 });
+      dispatched = true;
+      const recorded = await insertWithOneRetry<{ id: string }>(() =>
+        supabase.from("ai_generation_jobs").insert({
+          user_id: user.id, provider: "vercel", model_id: modelId, modality: "video",
+          credential_source: "platform", status: "running",
+          provider_job_id: started.gatewayJobId ?? "vercel-op",
+          params: { prompt, operation: started.operation, reservation: true },
+        }).select("id").single()
+      );
+      if (recorded.error || !recorded.data) {
+        // The gateway job is running and billable, so the reservation stays; support needs
+        // the operation to find the output, since no job row exists to poll it.
+        await createLogger(supabase, "generate-video").error("Vercel video started but its job row could not be recorded", {
+          event: "vercel_video_unrecorded",
+          model_id: modelId,
+          gateway_job_id: started.gatewayJobId,
+          operation: JSON.stringify(started.operation ?? null),
+          error: recorded.error?.message ?? "insert returned no row",
+        }, user.id);
+        return json({ error: "Video started but could not be recorded; contact support" }, 500);
+      }
+      return json({ success: true, jobId: recorded.data.id, status: "running", pollAfterSeconds: 10 });
     }
     const model = picked.row;
     const cred = await resolveHiggsfieldCredential(supabase, user.id);
@@ -136,7 +154,7 @@ serve(async (req) => {
     // charged for a generation that never ran. Releasing is safe precisely
     // because we only get here on a definitive failure; an indeterminate outcome
     // returns a running job instead and stays charged.
-    if (reserved && userId) {
+    if (shouldReleaseReservation({ reserved, dispatched }) && userId) {
       const { error: releaseError } = await supabase.rpc("release_ai_generation_quota", {
         p_user_id: userId,
       });
