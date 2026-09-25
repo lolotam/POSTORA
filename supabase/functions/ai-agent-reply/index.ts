@@ -24,6 +24,7 @@ import {
   type ReplyLanguage,
   SIMILARITY_FLOOR,
   shouldAiReply,
+  triageSystemHint,
   waRecipient,
 } from "./logic.ts";
 import { repairChatReply } from "./chatLinks.ts";
@@ -64,7 +65,9 @@ import { type AiTier, fetchWithTimeout, resolvePlatformApiKey } from "../_shared
 import { callAnthropicJson } from "../_shared/anthropic-adapter.ts";
 import { composeAiTiers, invalidateRejectedUserTier, resolveUserAiRoute, type AiRoutingAdmin } from "../_shared/ai-user-routing.ts";
 import { AI_CONNECTION_REQUIRED, AI_USER_KEY_INVALID, ProviderHttpError, redactProviderError } from "../_shared/ai-routing-errors.ts";
-import { loadOpenAiCompatibleBase } from "../_shared/providerEndpoint.ts";
+import { loadOpenAiCompatibleBase, type RowReader } from "../_shared/providerEndpoint.ts";
+import { runTriage, selectConnectorTools, TRIAGE_SETTING_KEYS, triageChainFromSettings, type TriageRun } from "../_shared/agentTriage.ts";
+import { resolveProviderKey } from "../_shared/providerKeys.ts";
 
 const OPENAI_API = "https://api.openai.com/v1";
 const SERVICE_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -565,6 +568,8 @@ Deno.serve(async (req) => {
   let usedCredentialSource: "user" | "platform" | null = null;
   let fallbackReason: string | undefined;
   const modelErrors: Array<{ model: string; error: string }> = [];
+  // Hoisted so the catch block can log which triage outcome (if any) preceded the failure.
+  let triage: TriageRun | null = null;
 
   // Hoisted out of the try below so the model-outage floor in the catch can reach
   // them. A value declared inside the try is invisible to its own catch.
@@ -768,55 +773,63 @@ Deno.serve(async (req) => {
     // both are unavailable, degrade to replying without knowledge and record the
     // RAG failure in the logs rather than silencing the agent.
     let relevantChunks: Array<{ id: string; content: string; similarity: number }> = [];
-    let ragError: string | null = null;
-    const embeddingConfig = await resolveDualEmbeddingConfigFromDb(admin);
-    try {
-      const matchedChunks = await retrieveKnowledgeChunks(
-        async (name, params) => await admin.rpc(name, params),
-        {
-          userId: request.user_id,
-          socialAccountId: knowledgeAccountId,
-          query: request.inbound_text,
-          matchCount: 6,
-        },
-        embeddingConfig,
-      );
-      relevantChunks = matchedChunks.filter(
-        (chunk) => chunk.similarity > SIMILARITY_FLOOR,
-      );
-    } catch (error) {
-      ragError = errorMessage(error).slice(0, 300);
-      console.error("[ai-agent-reply] Knowledge lookup failed, replying without RAG:", ragError);
-    }
-    const retrievedChunkIds: string[] = relevantChunks.map((chunk: { id: string }) => chunk.id);
-    let graphError: string | null = null;
+    let retrievedChunkIds: string[] = [];
     let relatedFacts = "";
-    if (retrievedChunkIds.length) {
+    let ragError: string | null = null;
+    let graphError: string | null = null;
+    const embeddingConfig = await resolveDualEmbeddingConfigFromDb(admin);
+    const retrieveKnowledgeContext = async () => {
+      let relevantChunks: Array<{ id: string; content: string; similarity: number }> = [];
+      let ragError: string | null = null;
       try {
-        // Graph expansion is the third retrieval path and the easiest to miss.
-        // Entities are shared across a user's sources by design, so filtering by
-        // entity would let a linked source's entity pull in relations extracted
-        // from an unlinked one. The account-scoped function filters by relation
-        // provenance instead.
-        const { data, error } = knowledgeAccountId
-          ? await admin.rpc("match_ai_knowledge_graph_relations_for_account", {
-            p_user_id: request.user_id,
-            p_social_account_id: knowledgeAccountId,
-            p_source_chunk_ids: retrievedChunkIds,
-            match_count: 12,
-          })
-          : await admin.rpc("match_ai_knowledge_graph_relations", {
-            p_user_id: request.user_id,
-            p_source_chunk_ids: retrievedChunkIds,
-            match_count: 12,
-          });
-        if (error) throw error;
-        relatedFacts = formatRelatedFacts((data || []) as GraphRelationFact[]);
+        const matchedChunks = await retrieveKnowledgeChunks(
+          async (name, params) => await admin.rpc(name, params),
+          {
+            userId: request.user_id,
+            socialAccountId: knowledgeAccountId,
+            query: request.inbound_text,
+            matchCount: 6,
+          },
+          embeddingConfig,
+        );
+        relevantChunks = matchedChunks.filter(
+          (chunk) => chunk.similarity > SIMILARITY_FLOOR,
+        );
       } catch (error) {
-        graphError = errorMessage(error).slice(0, 300);
-        console.error("[ai-agent-reply] Knowledge graph lookup failed:", graphError);
+        ragError = errorMessage(error).slice(0, 300);
+        console.error("[ai-agent-reply] Knowledge lookup failed, replying without RAG:", ragError);
       }
-    }
+      const retrievedChunkIds: string[] = relevantChunks.map((chunk: { id: string }) => chunk.id);
+      let graphError: string | null = null;
+      let relatedFacts = "";
+      if (retrievedChunkIds.length) {
+        try {
+          // Graph expansion is the third retrieval path and the easiest to miss.
+          // Entities are shared across a user's sources by design, so filtering by
+          // entity would let a linked source's entity pull in relations extracted
+          // from an unlinked one. The account-scoped function filters by relation
+          // provenance instead.
+          const { data, error } = knowledgeAccountId
+            ? await admin.rpc("match_ai_knowledge_graph_relations_for_account", {
+              p_user_id: request.user_id,
+              p_social_account_id: knowledgeAccountId,
+              p_source_chunk_ids: retrievedChunkIds,
+              match_count: 12,
+            })
+            : await admin.rpc("match_ai_knowledge_graph_relations", {
+              p_user_id: request.user_id,
+              p_source_chunk_ids: retrievedChunkIds,
+              match_count: 12,
+            });
+          if (error) throw error;
+          relatedFacts = formatRelatedFacts((data || []) as GraphRelationFact[]);
+        } catch (error) {
+          graphError = errorMessage(error).slice(0, 300);
+          console.error("[ai-agent-reply] Knowledge graph lookup failed:", graphError);
+        }
+      }
+      return { relevantChunks, retrievedChunkIds, relatedFacts, ragError, graphError };
+    };
 
     // Operational tools unlock only for verified admin senders (or the
     // sandbox's explicit act-as-admin switch). Numbers are compared as bare
@@ -989,11 +1002,6 @@ Deno.serve(async (req) => {
       : toolResolution.tools;
     const customToolByName = new Map(customTools.map((tool) => [tool.name, tool]));
 
-    // Built HERE, not where the knowledge was gathered, because the prompt now
-    // has to name the connectors this account actually resolved. A rule that
-    // merely alludes to "a connector" loses to a persona holding a ready
-    // answer -- a configured Supabase price table went unqueried that way
-    // (2026-09-01). systemPrompt is read once, at the messages array below.
     // Both off removes escalate_to_human entirely; one off narrows its
     // description to the trigger that is still allowed. Passing a single boolean
     // here was not enough -- the stock description names BOTH reasons, so
@@ -1002,6 +1010,33 @@ Deno.serve(async (req) => {
       onRequest: config.handoff_on_request ?? true,
       onLowConfidence: config.handoff_on_low_confidence ?? true,
     };
+
+    const { data: triageRows } = await admin.from("system_settings").select("key, value").in("key", TRIAGE_SETTING_KEYS);
+    const triageChain = triageChainFromSettings(triageRows ?? []);
+    // Started together: triage (about 0.4s) and retrieval overlap, and retrieval is dropped
+    // unawaited when triage is confident it is not needed.
+    const knowledgePromise = retrieveKnowledgeContext();
+    if (triageChain.length) {
+      triage = await runTriage(triageChain, {
+        message: request.inbound_text.slice(0, MAX_INBOUND_CHARS),
+        history,
+        connectors: customTools.map((tool) => ({ name: tool.name, description: tool.description ?? "" })),
+        askHandoff: handoff.onRequest || handoff.onLowConfidence,
+      }, (code) => resolveProviderKey(admin as unknown as RowReader, code));
+    }
+    const triagePlan = triage?.outcome?.plan ?? null;
+    if (triagePlan?.skipKnowledge) {
+      knowledgePromise.catch(() => {}); // not awaited; keep a late rejection from being unhandled
+    } else {
+      ({ relevantChunks, retrievedChunkIds, relatedFacts, ragError, graphError } = await knowledgePromise);
+    }
+    const offeredTools = triagePlan?.smalltalk || triagePlan?.handoff ? [] : selectConnectorTools(customTools, triagePlan);
+
+    // Built HERE, not where the knowledge was gathered, because the prompt now
+    // has to name the connectors this account actually resolved. A rule that
+    // merely alludes to "a connector" loses to a persona holding a ready
+    // answer -- a configured Supabase price table went unqueried that way
+    // (2026-09-01). systemPrompt is read once, at the messages array below.
     const systemPrompt = buildSystemPrompt({
       persona: config.persona_instructions,
       behavior: config.agent_behavior,
@@ -1017,7 +1052,7 @@ Deno.serve(async (req) => {
       nowIso: new Date().toISOString(),
       isAdmin,
       surface: request.comment_id ? "comment" : "dm",
-      connectorNames: customTools.map((tool) => tool.name),
+      connectorNames: offeredTools.map((tool) => tool.name),
     });
 
     if (toolResolution.droppedDuplicates.length > 0) {
@@ -1062,6 +1097,8 @@ Deno.serve(async (req) => {
       ...history,
       { role: "user", content: request.inbound_text.slice(0, MAX_INBOUND_CHARS) },
     ];
+    const hint = triageSystemHint(triagePlan);
+    if (hint) messages.splice(1, 0, { role: "system", content: hint });
     let promptTokens = 0;
     let completionTokens = 0;
     let replyText = "";
@@ -1088,6 +1125,11 @@ Deno.serve(async (req) => {
       // unlisted gpt-4o-mini kept answering; a human is the better fallback.
       throw new ModelChainExhaustedError("No global AI agent model is configured");
     }
+    const toolDefinitions = triagePlan?.smalltalk ? [] : [
+      ...agentToolDefinitions(handoff),
+      ...(isAdmin ? adminToolDefinitions : []),
+      ...customToolDefinitions(offeredTools),
+    ];
     for (let iteration = 0; iteration < maxIterations; iteration++) {
       let completion: any = null;
       let lastError: unknown = null;
@@ -1108,12 +1150,8 @@ Deno.serve(async (req) => {
             model: modelChain[mi].model,
             temperature: config.temperature ?? 0.4,
             messages,
-            tools: [
-              ...agentToolDefinitions(handoff),
-              ...(isAdmin ? adminToolDefinitions : []),
-              ...customToolDefinitions(customTools),
-            ],
-            tool_choice: "auto",
+            ...(toolDefinitions.length ? { tools: toolDefinitions, tool_choice: "auto" } : {}),
+            ...(triagePlan?.smalltalk ? { max_tokens: 200 } : {}),
           }, Math.min(CHAT_TIMEOUT_MS, budgetMs), routingAdmin);
           usedModel = formatModelRef(modelChain[mi]);
           usedFallbackLevel = mi;
@@ -1243,6 +1281,7 @@ Deno.serve(async (req) => {
         rag_error: ragError,
         graph_error: graphError,
         dry_run: dryRun,
+        triage: triage ? { outcome: triage.outcome, errors: triage.errors.length ? triage.errors : null } : null,
       });
       if (outboxId) await cancelOutboxRow(admin, outboxId, "no_reply_generated");
       return jsonResponse({ ok: true, skipped: "no_reply_generated" });
@@ -1292,9 +1331,10 @@ Deno.serve(async (req) => {
       // resolveToolsForAccount against live rows to tell "not offered" from
       // "offered and declined" -- two very different bugs that look identical
       // in this log. Names only; nothing here is a secret.
-      connectors_offered: customTools.length ? customTools.map((tool) => tool.name) : null,
+      connectors_offered: offeredTools.length ? offeredTools.map((tool) => tool.name) : null,
       escalated,
       dry_run: dryRun,
+      triage: triage ? { outcome: triage.outcome, errors: triage.errors.length ? triage.errors : null } : null,
     });
 
     return jsonResponse({ ok: true, reply: replyText, escalated, tool_calls: executedToolCalls, is_admin: isAdmin });
@@ -1320,6 +1360,7 @@ Deno.serve(async (req) => {
         fallback_level: usedFallbackLevel,
         model_errors: modelErrors.length ? modelErrors : null,
         model_chain: modelChain.map(formatModelRef),
+        triage: triage ? { outcome: triage.outcome, errors: triage.errors.length ? triage.errors : null } : null,
         ...floor,
       });
       if (outboxId) {
@@ -1350,6 +1391,7 @@ Deno.serve(async (req) => {
       fallback_reason: fallbackReason,
       fallback_level: usedFallbackLevel,
       model_errors: modelErrors.length ? modelErrors : null,
+      triage: triage ? { outcome: triage.outcome, errors: triage.errors.length ? triage.errors : null } : null,
     });
     if (outboxId) await releaseAfterError(admin, outboxId, { sideEffectsHappened, error: errorMessage(error) });
     return jsonResponse({ ok: false, error: errorMessage(error) });

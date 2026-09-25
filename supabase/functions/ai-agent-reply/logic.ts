@@ -5,6 +5,7 @@ import type {
   AgentResponseLength,
   AgentTone,
 } from "../_shared/agentBehavior.ts";
+import type { TriagePlan } from "../_shared/agentTriage.ts";
 // imports here — this module is unit-tested from the frontend vitest suite.
 
 export type EngagementMode = "ai_first" | "human_first" | "human_then_ai";
@@ -332,6 +333,17 @@ export function behaviorRules(behavior?: AgentBehavior | null): string[] {
     if (title && body) lines.push(`${title}:\n${body}`);
   }
   return lines;
+}
+
+// The chat model still writes the reply; triage only tells it what kind of turn this is.
+export function triageSystemHint(plan: TriagePlan | null): string | null {
+  if (plan?.handoff) {
+    return "This customer needs a human. Call escalate_to_human now, then tell them briefly that a person will reply.";
+  }
+  if (plan?.smalltalk) {
+    return "This message is small talk. Reply with one short, friendly sentence in the customer's language.";
+  }
+  return null;
 }
 
 export function buildSystemPrompt(params: SystemPromptParams): string {
