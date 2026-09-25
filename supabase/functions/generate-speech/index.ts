@@ -8,6 +8,7 @@ import { sanitizeErrorMessage } from "../_shared/errorSanitizer.ts";
 import { fetchCategoryAiSettings } from "../_shared/ai-fallback.ts";
 import { resolveVercelKey, vercelGenerateSpeech } from "../_shared/vercelGateway.ts";
 import { redactProviderError } from "../_shared/ai-routing-errors.ts";
+import { createLogger } from "../_shared/logging.ts";
 import { tierTimeout } from "./budget.ts";
 
 const RequestSchema = z.object({
@@ -39,13 +40,19 @@ serve(async (req) => {
   if (!parsed.success) return json({ error: "text must be 1-1000 characters" }, 400);
   const { text, voice } = parsed.data;
 
+  const logger = createLogger(admin, "generate-speech");
+  // Every refusal leaves a durable row, not just a toast the admin may never report.
+  const refuse = async (reason: string, message: string, detail?: Record<string, unknown>) => {
+    await logger.warn(`Speech refused: ${message}`, { event: "speech_refused", reason, ...detail }, userId);
+    return json({ error: message });
+  };
   try {
     const s = await fetchCategoryAiSettings(admin, "tts");
     const tiers = [[s.primaryProvider, s.primaryModel], [s.fallbackProvider, s.fallbackModel], [s.lastResortProvider, s.lastResortModel]]
       .filter(([p, m]) => p === "vercel" && m);
-    if (!tiers.length) return json({ error: "No Vercel TTS model selected in Text to Speech settings" });
+    if (!tiers.length) return await refuse("no_vercel_tts_tier", "No Vercel TTS model selected in Text to Speech settings");
     const apiKey = await resolveVercelKey(admin);
-    if (!apiKey) return json({ error: "Vercel AI Gateway key not configured" });
+    if (!apiKey) return await refuse("gateway_key_missing", "Vercel AI Gateway key not configured");
     const errors: string[] = [];
     const startedAt = Date.now();
     for (const [, model] of tiers) {
@@ -62,9 +69,9 @@ serve(async (req) => {
         errors.push(`${model}: ${sanitizeErrorMessage(e)}`);
       }
     }
-    return json({ error: errors.join("; ") });
+    return await refuse("all_tiers_failed", errors.join("; "), { models: tiers.map(([, m]) => m) });
   } catch (e) {
-    console.error("[generate-speech]", e);
+    await logger.error("Speech generation failed", { event: "speech_failed", error: sanitizeErrorMessage(e) }, userId);
     return json({ error: sanitizeErrorMessage(e) }, 500);
   }
 });
