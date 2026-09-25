@@ -140,14 +140,25 @@ Deno.test("Jev decision models map to the triage capability on both catalogues",
   assertEquals(routerJev.capabilities, ["triage"]);
 });
 
-Deno.test("an id-only catalogue never erases a curated name, price, context or description", () => {
+Deno.test("an additive catalogue never erases a curated name, price, context or description", () => {
   const mapped = { models: [{ model_id: "gpt-5", name: "gpt-5", description: null, capabilities: ["chat" as const],
     context_limit: null, cost_per_1m_input_tokens: null, cost_per_1m_output_tokens: null, metadata: {} }],
-    skippedByType: {}, managedCapabilities: ["chat" as const] };
+    skippedByType: {}, managedCapabilities: ["chat" as const], additiveCapabilities: true as const };
   const row = { ...existingRow({ id: "1", model_id: "gpt-5", is_active: true, capabilities: ["chat"], metadata: null }),
     name: "GPT-5", description: "Flagship", context_limit: 400000, cost_per_1m_input_tokens: "5.0000", cost_per_1m_output_tokens: 15 };
   const plan = planCatalogSync([row], mapped, new Set());
   assertEquals(plan.updates, []);
+});
+
+Deno.test("a non-additive catalogue overwrites with null cost, replacing stored values", () => {
+  const mapped = { models: [{ model_id: "gpt-5", name: "gpt-5", description: null, capabilities: ["chat" as const],
+    context_limit: null, cost_per_1m_input_tokens: null, cost_per_1m_output_tokens: null, metadata: {} }],
+    skippedByType: {}, managedCapabilities: ["chat" as const] };
+  const row = { ...existingRow({ id: "1", model_id: "gpt-5", is_active: true, capabilities: ["chat"], metadata: null }),
+    name: "gpt-5", description: "Old", context_limit: 400000, cost_per_1m_input_tokens: 5, cost_per_1m_output_tokens: null };
+  const plan = planCatalogSync([row], mapped, new Set());
+  assertEquals(plan.updates.length, 1);
+  assertEquals(plan.updates[0].cost_per_1m_input_tokens, null);
 });
 
 Deno.test("an additive catalogue keeps capabilities an admin gave a row", () => {
@@ -197,13 +208,14 @@ Deno.test("OpenAI ids are classified by name; dated snapshots and non-reply mode
     "gpt-5.5", "gpt-5-nano-2025-08-07", "o4-mini", "chatgpt-4o-latest", "gpt-image-2", "dall-e-3", "gpt-4o-mini-tts",
     "tts-1-hd", "whisper-1", "gpt-4o-transcribe", "text-embedding-3-small", "sora-2", "omni-moderation-latest",
     "gpt-4o-realtime-preview", "gpt-4o-audio-preview", "gpt-4o-search-preview", "computer-use-preview", "babbage-002",
+    "gpt-audio", "o3-deep-research",
   ].map((id) => ({ id })));
   assertEquals(byId(mapped), {
     "gpt-5.5": ["chat"], "o4-mini": ["chat"], "chatgpt-4o-latest": ["chat"], "gpt-image-2": ["image"], "dall-e-3": ["image"],
     "gpt-4o-mini-tts": ["tts"], "tts-1-hd": ["tts"], "whisper-1": ["stt"], "gpt-4o-transcribe": ["stt"],
     "text-embedding-3-small": ["embedding"], "sora-2": ["video"],
   });
-  assertEquals(mapped.skippedByType, { snapshot: 1, other: 6 });
+  assertEquals(mapped.skippedByType, { snapshot: 1, other: 8 });
 });
 
 Deno.test("Z.ai and MiniMax list chat ids only, so only chat rows are managed", () => {

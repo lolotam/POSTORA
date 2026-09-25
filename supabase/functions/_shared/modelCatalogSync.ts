@@ -255,20 +255,25 @@ export function planCatalogSync(
     if (reactivate) metadata.sync_deactivated = false;
     // Capabilities outside what this catalogue manages (search, agent, ...) were set by an admin.
     const adminCapabilities = row.capabilities.filter((c) => !managed.has(c));
-    const kept = (next: number | string | null, stored: number | string | null) => next ?? stored;
     const capabilities = mapped.additiveCapabilities
       ? [...new Set([...row.capabilities, ...model.capabilities])].sort()
       : [...new Set([...adminCapabilities, ...model.capabilities])].sort();
-    const update: ModelUpdate = {
-      ...model,
-      // A catalogue that lists bare ids has no display name, price or context: keep the curated ones.
-      name: model.name === model.model_id && row.name ? row.name : model.name,
-      description: model.description ?? row.description ?? null,
-      context_limit: model.context_limit ?? row.context_limit ?? null,
-      cost_per_1m_input_tokens: kept(model.cost_per_1m_input_tokens, row.cost_per_1m_input_tokens) as number | null,
-      cost_per_1m_output_tokens: kept(model.cost_per_1m_output_tokens, row.cost_per_1m_output_tokens) as number | null,
-      capabilities, metadata, id: row.id, is_active: reactivate || row.is_active, reactivate,
-    };
+    // Direct (additive) providers preserve curated names, prices and context when the catalogue lacks them.
+    // Indirect (aggregate) providers overwrite with catalogue values, including nulls.
+    const update: ModelUpdate = mapped.additiveCapabilities
+      ? {
+        ...model,
+        name: model.name === model.model_id && row.name ? row.name : model.name,
+        description: model.description ?? row.description ?? null,
+        context_limit: model.context_limit ?? row.context_limit ?? null,
+        cost_per_1m_input_tokens: model.cost_per_1m_input_tokens ?? row.cost_per_1m_input_tokens,
+        cost_per_1m_output_tokens: model.cost_per_1m_output_tokens ?? row.cost_per_1m_output_tokens,
+        capabilities, metadata, id: row.id, is_active: reactivate || row.is_active, reactivate,
+      }
+      : {
+        ...model,
+        capabilities, metadata, id: row.id, is_active: reactivate || row.is_active, reactivate,
+      };
     if (!isUnchanged(row, update)) plan.updates.push(update);
   }
   for (const row of existing) {
@@ -347,7 +352,7 @@ export function mapGeminiCatalog(data: unknown[]): MappedCatalog {
 const DATED_SNAPSHOT = /-\d{4}-\d{2}-\d{2}$/;
 function openAICapability(id: string): Capability | string {
   if (DATED_SNAPSHOT.test(id)) return "snapshot";
-  if (/moderation|realtime|audio-preview|search|computer-use|^babbage|^davinci|^ft:/.test(id)) return "other";
+  if (/moderation|realtime|audio|search|computer-use|deep-research|^babbage|^davinci|^ft:/.test(id)) return "other";
   if (/^(gpt-image|dall-e|chatgpt-image)/.test(id)) return "image";
   if (/tts/.test(id)) return "tts";
   if (/whisper|transcribe/.test(id)) return "stt";
