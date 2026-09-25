@@ -47,3 +47,25 @@ Deno.test("phaseTimings attributes each mark to the phase since the previous one
   timings.mark("knowledge");
   assertEquals(timings.toJSON(), { triage: 300, knowledge: 1200 });
 });
+
+Deno.test("phaseTimings accumulates notes, and a setup mark precedes triage", () => {
+  let clock = 0;
+  const timings = phaseTimings(() => clock);
+  clock += 1000;
+  timings.mark("setup");
+  clock += 400;
+  timings.mark("triage");
+  timings.note("prompt_tokens_per_round", 120);
+  timings.note("prompt_tokens_per_round", 40);
+  timings.note("completion_tokens_per_round", 15);
+
+  const json = timings.toJSON();
+  assertEquals(json, {
+    setup: 1000,
+    triage: 400,
+    prompt_tokens_per_round: [120, 40],
+    completion_tokens_per_round: [15],
+  });
+  const keys = Object.keys(json);
+  assertEquals(keys.indexOf("setup") < keys.indexOf("triage"), true);
+});
