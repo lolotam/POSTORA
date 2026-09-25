@@ -100,11 +100,6 @@ function productSearchQuery(parameters: Record<string, unknown>, categoryId: str
   return search.toString();
 }
 
-// What WooCommerce is asked to build: the projected fields plus the nested ones the
-// projection reads (category names, order line items). Anything else is never used.
-const PRODUCT_REQUEST_FIELDS = [...PRODUCT_FIELDS, "categories"];
-const ORDER_REQUEST_FIELDS = [...ORDER_FIELDS, "line_items"];
-
 function withFields(url: string, fields: readonly string[]): string {
   const joiner = url.includes("?") ? "&" : "?";
   return `${url}${joiner}_fields=${fields.join(",")}`;
@@ -176,6 +171,11 @@ const ORDER_FIELDS = [
   "currency",
   "date_created",
 ] as const;
+
+// What WooCommerce is asked to build: the projected fields plus the nested ones the
+// projection reads (category names, order line items). Anything else is never used.
+const PRODUCT_REQUEST_FIELDS = [...PRODUCT_FIELDS, "categories"];
+const ORDER_REQUEST_FIELDS = [...ORDER_FIELDS, "line_items"];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
