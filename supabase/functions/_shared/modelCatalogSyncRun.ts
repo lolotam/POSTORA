@@ -14,6 +14,21 @@ export interface SyncReport {
   synced_at: string;
 }
 
+/**
+ * A sync refusal whose message is safe to show an admin: an upstream catalogue answer or a
+ * configuration gap. Any other failure (database reads and writes) is logged, not shown.
+ */
+export class CatalogSyncError extends Error {
+  override name = "CatalogSyncError";
+}
+
+const GENERIC_SYNC_FAILURE = "Model sync failed; see server logs";
+
+/** The message the sync-models action returns for a failed sync. */
+export function syncFailureMessage(err: unknown): string {
+  return err instanceof CatalogSyncError ? err.message : GENERIC_SYNC_FAILURE;
+}
+
 const CATALOGUE: Record<string, { url: string; needsKey: boolean; map: (d: unknown[]) => MappedCatalog }> = {
   vercel: { url: "https://ai-gateway.vercel.sh/v1/models", needsKey: false, map: mapVercelCatalog },
   openrouter: { url: "https://openrouter.ai/api/v1/models", needsKey: false, map: mapOpenRouterCatalog },
@@ -59,25 +74,25 @@ function defaultModelsInUse(settings: Array<{ value: unknown }>, providerCode: s
 
 export async function runCatalogSync(db: CatalogDb, providerCode: string, fetchImpl: typeof fetch = fetch): Promise<SyncReport> {
   const source = CATALOGUE[providerCode];
-  if (!source) throw new Error(`Provider ${providerCode} is not syncable`);
+  if (!source) throw new CatalogSyncError(`Provider ${providerCode} is not syncable`);
   const { data: providerRow, error: providerError } = await db.from("ai_providers")
     .select("id, provider_code, api_key_env_var").eq("provider_code", providerCode).maybeSingle();
   // A failed read must not read as "provider missing".
   if (providerError) throw new Error("ai_providers read failed");
   const provider = providerRow as { id: string; api_key_env_var: string } | null;
-  if (!provider) throw new Error(`Provider ${providerCode} is missing`);
+  if (!provider) throw new CatalogSyncError(`Provider ${providerCode} is missing`);
 
   const headers: Record<string, string> = {};
   if (source.needsKey) {
     const key = await resolveProviderKey(db, providerCode);
-    if (!key) throw new Error(`API key ${provider.api_key_env_var} not configured`);
+    if (!key) throw new CatalogSyncError(`API key ${provider.api_key_env_var} not configured`);
     headers.Authorization = `Bearer ${key}`;
   }
   const res = await fetchImpl(source.url, { headers, signal: AbortSignal.timeout(20_000) });
-  if (!res.ok) throw new Error(`${providerCode} /models returned HTTP ${res.status}`);
+  if (!res.ok) throw new CatalogSyncError(`${providerCode} /models returned HTTP ${res.status}`);
   const body = await res.json();
   const mapped = source.map(Array.isArray(body?.data) ? body.data : []);
-  if (!mapped.models.length) throw new Error(`${providerCode} returned an empty model catalogue`);
+  if (!mapped.models.length) throw new CatalogSyncError(`${providerCode} returned an empty model catalogue`);
 
   const { data: existingData, error: existingError } = await db.from("ai_models")
     .select(MODEL_COLUMNS).eq("provider_id", provider.id);

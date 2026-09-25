@@ -2,7 +2,10 @@ import { serve } from 'https://deno.land/std@0.168.0/http/server.ts';
 import { restrictedCorsHeaders } from '../_shared/cors.ts';
 import { HiggsfieldAuthError, getValidAccessToken } from '../_shared/higgsfield-oauth.ts';
 import { HiggsfieldMcpClient } from '../_shared/higgsfield-mcp.ts';
-import { type CatalogDb, runCatalogSync, SYNCABLE_PROVIDERS } from '../_shared/modelCatalogSyncRun.ts';
+import { createLogger } from '../_shared/logging.ts';
+import {
+  CatalogSyncError, type CatalogDb, runCatalogSync, SYNCABLE_PROVIDERS, syncFailureMessage,
+} from '../_shared/modelCatalogSyncRun.ts';
 import { describeProviderFailure, isBillingBlocked, ProviderTestError } from '../_shared/providerErrors.ts';
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
@@ -318,9 +321,14 @@ serve(async (req) => {
           const report = await runCatalogSync(supabase as unknown as CatalogDb, provider_code);
           return new Response(JSON.stringify(report), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
         } catch (e) {
-          // Upstream catalogue failure, not an app error: 502 would be masked by Cloudflare,
-          // so answer 200 with an error body the UI shows as a toast.
-          return new Response(JSON.stringify({ error: e instanceof Error ? e.message : 'Model sync failed' }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
+          // 502 would be masked by Cloudflare, so answer 200 with an error body the UI shows as a
+          // toast. Only CatalogSyncError text reaches it; database errors stay in the log.
+          if (!(e instanceof CatalogSyncError)) {
+            await createLogger(supabase, 'ai-config').error('Model catalogue sync failed', {
+              event: 'model_sync_failed', provider_code, error: e instanceof Error ? e.message : String(e),
+            }, user.id);
+          }
+          return new Response(JSON.stringify({ error: syncFailureMessage(e) }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
         }
       }
 

@@ -1,6 +1,6 @@
 // deno-lint-ignore-file no-import-prefix
 import { assertEquals, assertRejects } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { type CatalogDb, runCatalogSync } from "./modelCatalogSyncRun.ts";
+import { CatalogSyncError, type CatalogDb, runCatalogSync, syncFailureMessage } from "./modelCatalogSyncRun.ts";
 
 type Write = { table: string; op: string; payload: unknown; options?: unknown };
 type Result = { data: unknown; error: { message: string } | null };
@@ -142,4 +142,30 @@ Deno.test("a failed ai_providers read is reported as a read failure, not a missi
   const err = await assertRejects(() => runCatalogSync(db, "vercel", vercelFetch), Error);
   assertEquals(err.message, "ai_providers read failed");
   assertEquals(writes.length, 0);
+});
+
+Deno.test("the intentional upstream refusals are CatalogSyncErrors", async () => {
+  const { db } = fakeDb({ models: [], settings: [] });
+  const failing = (async () => new Response("", { status: 503 })) as typeof fetch;
+  await assertRejects(() => runCatalogSync(db, "claude", vercelFetch), CatalogSyncError, "not syncable");
+  await assertRejects(() => runCatalogSync(db, "vercel", catalogue([])), CatalogSyncError, "empty model catalogue");
+  await assertRejects(() => runCatalogSync(db, "vercel", failing), CatalogSyncError, "vercel /models returned HTTP 503");
+});
+
+Deno.test("syncFailureMessage shows CatalogSyncErrors and hides every other failure", async (t) => {
+  const cases: Array<[string, unknown, string]> = [
+    ["an upstream HTTP failure", new CatalogSyncError("vercel /models returned HTTP 503"), "vercel /models returned HTTP 503"],
+    ["a missing key", new CatalogSyncError("API key DEEPSEEK_API_KEY not configured"), "API key DEEPSEEK_API_KEY not configured"],
+    ["a database write error", new Error("ai_models upsert failed: duplicate key value violates unique constraint"), "Model sync failed; see server logs"],
+    ["a non-Error throw", "boom", "Model sync failed; see server logs"],
+  ];
+  for (const [name, err, expected] of cases) {
+    await t.step(name, () => assertEquals(syncFailureMessage(err), expected));
+  }
+});
+
+Deno.test("a failed settings write is not a user-facing CatalogSyncError", async () => {
+  const { db } = fakeDb({ models: [], settings: [], settingsUpsertError: "permission denied for table system_settings" });
+  const err = await assertRejects(() => runCatalogSync(db, "vercel", vercelFetch), Error);
+  assertEquals(err instanceof CatalogSyncError, false);
 });
