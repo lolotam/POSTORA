@@ -53,6 +53,8 @@ export type EmbeddingConfig = {
   dimensions: number;
   model: string;
   ollamaBaseUrl?: string;
+  /** The model has one width and rejects a `dimensions` parameter, so none is sent. */
+  fixedWidth?: true;
 };
 
 export type EmbeddingSelection = {
@@ -253,6 +255,13 @@ export function recordedEmbeddingWidth(
   return typeof width === "number" ? width : null;
 }
 
+// A `requested` width is recorded only for models that accept a `dimensions`
+// parameter (see EMBEDDING_WIDTHS in modelCatalogSync.ts); the rest get none.
+function hasRequestedWidth(metadata: Record<string, unknown> | null | undefined): boolean {
+  const dims = metadata?.embedding_dimensions as { requested?: unknown } | undefined;
+  return typeof dims?.requested === "number";
+}
+
 function isStorableWidth(width: number): boolean {
   return (STORABLE_EMBEDDING_DIMENSIONS as readonly number[]).includes(width);
 }
@@ -368,7 +377,10 @@ export function resolveAdminEmbeddingLadder(
     if (!isStorableWidth(width)) {
       throw new UnstorableEmbeddingWidthError(tier, width);
     }
-    const config = selectionConfig(tier, width, readEnvironment);
+    const config: EmbeddingConfig = {
+      ...selectionConfig(tier, width, readEnvironment),
+      ...(hasRequestedWidth(row.metadata) ? {} : { fixedWidth: true as const }),
+    };
     if (configs.some((existing) => existing.column === config.column)) {
       console.warn(
         `[knowledge-embeddings] dropping embedding tier ${tier.provider_code}/${tier.model_id}: column ${config.column} already assigned this run`,
@@ -570,7 +582,7 @@ export async function embedWithOpenAiCompatible(
     const body = JSON.stringify({
       model: config.model,
       input: texts.slice(start, start + 64),
-      dimensions: config.dimensions,
+      ...(config.fixedWidth ? {} : { dimensions: config.dimensions }),
       ...api.extraBody,
     });
     let payload: { data?: Array<{ embedding?: unknown }> } = {};
