@@ -78,9 +78,26 @@ export interface CategoryFallbacks2 {
   embedding: DefaultModel | null;
 }
 
+/**
+ * A raw `system_settings` row as returned by the `ai-config` list query.
+ *
+ * `value` covers both shapes seen under this LIKE filter: `{ provider_code,
+ * model_id }` for the `default_ai_model*` tier rows, and `{ at: ISO }` for the
+ * `model_catalog_synced_at_<code>` sync-timestamp rows. `at` is typed
+ * explicitly (rather than left to the index signature, which would resolve to
+ * `unknown`) so callers can read `.value?.at` as `string | undefined` without
+ * a cast.
+ */
+export interface SystemSettingRow {
+  key: string;
+  value: { at?: string } & Record<string, unknown>;
+}
+
 export interface AIConfigData {
   providers: AIProvider[];
   models: AIModel[];
+  /** Raw system_settings rows matched by the list query, before tier-parsing. */
+  settings: SystemSettingRow[];
   defaultModel: DefaultModel | null;
   categoryDefaults: CategoryDefaults;
   categoryFallbacks: CategoryFallbacks;

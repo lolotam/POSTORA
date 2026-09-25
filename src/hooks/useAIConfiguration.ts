@@ -9,9 +9,10 @@ import type {
   CategoryFallbacks2,
   AIConfigData,
   ModelCategory,
+  SystemSettingRow,
 } from './ai-config/types';
 
-export type { AIProvider, AIModel, DefaultModel, CategoryDefaults, CategoryFallbacks, CategoryFallbacks2, AIConfigData, ModelCategory };
+export type { AIProvider, AIModel, DefaultModel, CategoryDefaults, CategoryFallbacks, CategoryFallbacks2, AIConfigData, ModelCategory, SystemSettingRow };
 
 function parseDefault(val: unknown): DefaultModel | null {
   if (!val || typeof val !== 'object') return null;
@@ -69,21 +70,23 @@ export function useAIConfiguration() {
     queryFn: async (): Promise<AIConfigData> => {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) {
-        return { providers: [], models: [], defaultModel: null, categoryDefaults: { ...emptyCategoryDefaults }, categoryFallbacks: { ...emptyCategoryFallbacks }, categoryFallbacks2: { ...emptyCategoryFallbacks } };
+        return { providers: [], models: [], settings: [], defaultModel: null, categoryDefaults: { ...emptyCategoryDefaults }, categoryFallbacks: { ...emptyCategoryFallbacks }, categoryFallbacks2: { ...emptyCategoryFallbacks } };
       }
 
       const [providersResult, modelsResult, settingsResult] = await Promise.all([
         supabase.from('ai_providers' as any).select('*').order('name'),
         supabase.from('ai_models' as any).select('*, ai_providers(provider_code, name)').order('name'),
-        supabase.from('system_settings' as any).select('*').like('key', 'default_ai_model%'),
+        // Widened beyond the default_ai_model* tier rows so the admin UI can also
+        // read the model_catalog_synced_at_<code> rows the sync-models action writes.
+        supabase.from('system_settings' as any).select('*').or('key.like.default_ai_model%,key.like.model_catalog_synced_at_%'),
       ]);
 
       const providers = (providersResult.data || []) as unknown as AIProvider[];
       const models = (modelsResult.data || []) as unknown as AIModel[];
-      const settings = (settingsResult.data || []) as any[];
+      const settings = (settingsResult.data || []) as unknown as SystemSettingRow[];
 
       const parsed = parseSettingsRows(settings as { key: string; value: unknown }[]);
-      return { providers, models, ...parsed };
+      return { providers, models, settings, ...parsed };
     },
     retry: false,
   });

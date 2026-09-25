@@ -19,6 +19,8 @@ import {
   useSetServiceKey, useTestService, useCheckServiceKey,
 } from '@/hooks/useAIConfiguration';
 import type { AIProvider } from '@/hooks/useAIConfiguration';
+import { SyncModelsButton } from './SyncModelsButton';
+import { SYNCABLE_PROVIDER_CODES } from '@/hooks/ai-config/useSyncModels';
 
 function isOAuthProvider(provider: AIProvider | null) {
   return !!provider && (provider.auth_type === 'oauth' || provider.provider_code === 'higgsfield' || provider.api_type === 'higgsfield');
@@ -256,6 +258,14 @@ export function AiProvidersCard() {
                 {savingProviderKey ? <Loader2 className="w-3 h-3 animate-spin me-1" /> : null}
                 Save & Test
               </Button>
+            </div>
+          )}
+
+          {selectedProvider && (SYNCABLE_PROVIDER_CODES as readonly string[]).includes(selectedProvider.provider_code) && (
+            <div className="flex items-center justify-between pt-2">
+              <span className="text-xs text-muted-foreground">Pull the provider's current model list</span>
+              <SyncModelsButton providerCode={selectedProvider.provider_code}
+                lastSyncedAt={(aiConfig?.settings ?? []).find((s) => s.key === `model_catalog_synced_at_${selectedProvider.provider_code}`)?.value?.at ?? null} />
             </div>
           )}
 

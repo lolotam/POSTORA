@@ -59,7 +59,9 @@ serve(async (req) => {
         const [pRes, mRes, sRes] = await Promise.all([
           supabase.from('ai_providers').select('*').order('name'),
           supabase.from('ai_models').select('*, ai_providers(provider_code, name)').order('name'),
-          supabase.from('system_settings').select('*').like('key', 'default_ai_model%'),
+          // Widened beyond the default_ai_model* tier rows so the admin UI can also
+          // read the model_catalog_synced_at_<code> rows sync-models writes.
+          supabase.from('system_settings').select('*').or('key.like.default_ai_model%,key.like.model_catalog_synced_at_%'),
         ]);
         return new Response(JSON.stringify({
           providers: pRes.data || [],
