@@ -100,6 +100,16 @@ function productSearchQuery(parameters: Record<string, unknown>, categoryId: str
   return search.toString();
 }
 
+// What WooCommerce is asked to build: the projected fields plus the nested ones the
+// projection reads (category names, order line items). Anything else is never used.
+const PRODUCT_REQUEST_FIELDS = [...PRODUCT_FIELDS, "categories"];
+const ORDER_REQUEST_FIELDS = [...ORDER_FIELDS, "line_items"];
+
+function withFields(url: string, fields: readonly string[]): string {
+  const joiner = url.includes("?") ? "&" : "?";
+  return `${url}${joiner}_fields=${fields.join(",")}`;
+}
+
 function buildUrl(
   invocation: ConnectorInvocation,
   capability?: Capability,
@@ -112,19 +122,31 @@ function buildUrl(
 
   if (!capability) return `${base}/wp-json/wc/v3/products?per_page=1`;
   if (capability === "search_products") {
-    return `${base}/wp-json/wc/v3/products?${productSearchQuery(parameters, categoryId)}`;
+    return withFields(
+      `${base}/wp-json/wc/v3/products?${productSearchQuery(parameters, categoryId)}`,
+      PRODUCT_REQUEST_FIELDS,
+    );
   }
   if (capability === "check_stock") {
     const sku = requiredString(parameters, "sku") ?? requiredString(parameters, "query") ?? "";
-    return `${base}/wp-json/wc/v3/products?sku=${encodeURIComponent(sku)}&per_page=20`;
+    return withFields(
+      `${base}/wp-json/wc/v3/products?sku=${encodeURIComponent(sku)}&per_page=20`,
+      PRODUCT_REQUEST_FIELDS,
+    );
   }
 
   const orderId = requiredString(parameters, "order_id");
   if (orderId) {
-    return `${base}/wp-json/wc/v3/orders/${encodeURIComponent(orderId)}`;
+    return withFields(
+      `${base}/wp-json/wc/v3/orders/${encodeURIComponent(orderId)}`,
+      ORDER_REQUEST_FIELDS,
+    );
   }
   const query = requiredString(parameters, "query") ?? "";
-  return `${base}/wp-json/wc/v3/orders?search=${encodeURIComponent(query)}&per_page=20`;
+  return withFields(
+    `${base}/wp-json/wc/v3/orders?search=${encodeURIComponent(query)}&per_page=20`,
+    ORDER_REQUEST_FIELDS,
+  );
 }
 
 // A WooCommerce product carries its full HTML descriptions, image list,
@@ -215,9 +237,10 @@ async function resolveCategoryId(
   name: string,
   dependencies: AdapterDependencies,
 ): Promise<string | null> {
-  const url = `${base}/wp-json/wc/v3/products/categories?search=${
-    encodeURIComponent(name)
-  }&per_page=10`;
+  const url = withFields(
+    `${base}/wp-json/wc/v3/products/categories?search=${encodeURIComponent(name)}&per_page=10`,
+    ["id", "name"],
+  );
   const response = await safeVendorFetch(url, {
     method: "GET",
     headers: { Accept: "application/json", Authorization: authorization },

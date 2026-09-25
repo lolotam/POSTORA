@@ -507,6 +507,66 @@ Deno.test("a named category is resolved to its id before the product search", as
   assertStringIncludes(urls[1], "category=77");
 });
 
+const PRODUCT_FIELD_LIST = [
+  "id",
+  "name",
+  "sku",
+  "price",
+  "regular_price",
+  "sale_price",
+  "on_sale",
+  "stock_status",
+  "stock_quantity",
+  "permalink",
+  // Nested fields the projection reads; without them product answers lose their categories.
+  "categories",
+].join(",");
+const ORDER_FIELD_LIST = ["id", "number", "status", "total", "currency", "date_created", "line_items"].join(",");
+
+async function wooUrls(
+  capability: "search_products" | "check_stock" | "lookup_orders",
+  parameters: Record<string, unknown>,
+): Promise<string[]> {
+  const seen: string[] = [];
+  await executeConnector(
+    {
+      tool: wooTool(),
+      credentials: { consumer_key: WOO_KEY, consumer_secret: WOO_SECRET },
+      request: request({ capability, parameters }),
+    },
+    dependencies((url) => {
+      seen.push(String(url));
+      return Promise.resolve(jsonResponse(capability === "lookup_orders" ? { id: 1 } : []));
+    }),
+  );
+  return seen;
+}
+
+Deno.test("WooCommerce product, stock, order and category URLs ask only for the fields we keep", async () => {
+  const [search] = await wooUrls("search_products", { query: "hat" });
+  assertStringIncludes(search, `_fields=${PRODUCT_FIELD_LIST}`);
+  assertEquals(new URL(search).searchParams.get("_fields"), PRODUCT_FIELD_LIST);
+
+  const [stock] = await wooUrls("check_stock", { sku: "HAT-1" });
+  assertStringIncludes(stock, `_fields=${PRODUCT_FIELD_LIST}`);
+  assertEquals(new URL(stock).searchParams.get("_fields"), PRODUCT_FIELD_LIST);
+
+  const [byId] = await wooUrls("lookup_orders", { order_id: "10432" });
+  assertStringIncludes(byId, `_fields=${ORDER_FIELD_LIST}`);
+  assertEquals(new URL(byId).searchParams.get("_fields"), ORDER_FIELD_LIST);
+
+  const [bySearch] = await wooUrls("lookup_orders", { query: "10432" });
+  assertStringIncludes(bySearch, `_fields=${ORDER_FIELD_LIST}`);
+  assertEquals(new URL(bySearch).searchParams.get("_fields"), ORDER_FIELD_LIST);
+
+  const categoryUrls = await wooUrlFor(
+    { query: "hat", category: "Men" },
+    [[{ id: 3, name: "Men" }], []],
+  );
+  assertStringIncludes(categoryUrls[0], "_fields=id,name");
+  assertEquals(new URL(categoryUrls[0]).searchParams.get("_fields"), "id,name");
+});
+
 Deno.test("an exact category name beats WooCommerce's first substring hit", async () => {
   const urls = await wooUrlFor(
     { query: "عطر", category: "Perfume" },

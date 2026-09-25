@@ -20,6 +20,7 @@ import {
   ModelChainExhaustedError,
   modelBudgetRemaining,
   parseModelRef,
+  evaluateGates,
   parallelizable,
   phaseTimings,
   resolveEngagementMode,
@@ -627,44 +628,50 @@ Deno.serve(async (req) => {
       return jsonResponse({ ok: true, skipped: "agent_disabled" });
     }
 
-    // Reads the override, ignores and cleans up an expired one, and throws on a
-    // failed read rather than treating it as "no override".
-    const overrideMode = await resolveConversationOverride(admin, {
-      userId: request.user_id,
-      platform: request.platform,
-      conversationId: request.conversation_id,
-    }, Date.now());
+    // The override read and the thread upsert do not use each other's results.
+    // A failed override read still throws (resolveConversationOverride), and a
+    // failed upsert still throws below — Promise.all, so either abort aborts.
+    const [overrideMode, threadResult] = await Promise.all([
+      resolveConversationOverride(admin, {
+        userId: request.user_id,
+        platform: request.platform,
+        conversationId: request.conversation_id,
+      }, Date.now()),
+      admin
+        .from("ai_threads")
+        .upsert(
+          {
+            user_id: request.user_id,
+            platform: request.platform,
+            conversation_id: request.conversation_id,
+          },
+          { onConflict: "user_id,platform,conversation_id" },
+        )
+        .select()
+        .single(),
+    ]);
     const mode = resolveEngagementMode(overrideMode, config.default_mode);
-
-    const { data: thread, error: threadError } = await admin
-      .from("ai_threads")
-      .upsert(
-        {
-          user_id: request.user_id,
-          platform: request.platform,
-          conversation_id: request.conversation_id,
-        },
-        { onConflict: "user_id,platform,conversation_id" },
-      )
-      .select()
-      .single();
+    const { data: thread, error: threadError } = threadResult;
     if (threadError) throw threadError;
 
     // Sandbox runs bypass the delivery gates — they test the agent's brain,
-    // not the conversation's delivery state.
+    // not the conversation's delivery state. The sender is built only after
+    // the gates, so a closed gate still returns without one.
     if (!dryRun) {
       // FB/IG replies happen inside the live webhook turnaround, so the
       // messaging window is open by definition; only WhatsApp needs the
-      // stored-history check.
-      const withinServiceWindow = request.platform === "whatsapp"
-        ? await isWithinServiceWindow(admin, request.user_id, request.conversation_id)
-        : true;
+      // stored-history check. Cooldown needs the thread id from the upsert.
+      const gateChecks = await evaluateGates({
+        withinServiceWindow: () => request.platform === "whatsapp"
+          ? isWithinServiceWindow(admin, request.user_id, request.conversation_id)
+          : Promise.resolve(true),
+        humanAssignedAndOnline: () => isHumanAssignedAndOnline(admin, request.conversation_id),
+        cooldownActive: () => isCooldownActive(admin, thread.id, config.reply_cooldown_seconds),
+        dailyCapReached: () => isDailyCapReached(admin, request, config.daily_message_cap),
+      });
       const gate = shouldAiReply({
         mode,
-        humanAssignedAndOnline: await isHumanAssignedAndOnline(admin, request.conversation_id),
-        withinServiceWindow,
-        cooldownActive: await isCooldownActive(admin, thread.id, config.reply_cooldown_seconds),
-        dailyCapReached: await isDailyCapReached(admin, request, config.daily_message_cap),
+        ...gateChecks,
       });
       if (!gate.reply) {
         await logOutcome(admin, { ...baseLog, status: "skipped", error: gate.reason });
@@ -765,17 +772,95 @@ Deno.serve(async (req) => {
       }
     }
 
-    const { data: historyRows } = await admin
-      .from("ai_thread_messages")
-      .select("role, content")
-      .eq("thread_id", thread.id)
-      .in("role", ["user", "assistant"])
-      .order("created_at", { ascending: false })
-      .limit(HISTORY_LIMIT);
+    // The sandbox passes the literal "test" when a caller names no account, and
+    // .eq() against a uuid column with a non-uuid raises 22P02 -- which would
+    // kill a reply over a tool list. Anything unusable degrades to the
+    // all_accounts corpus instead.
+    const scopedAccountId = UUID_PATTERN.test(request.social_account_id)
+      ? request.social_account_id
+      : null;
+
+    let cachedConversationQuery = admin
+      .from("messaging_cache")
+      .select("id, workspace_id, participant_name")
+      .eq("user_id", request.user_id)
+      .eq("platform", request.platform)
+      .eq("conversation_id", request.conversation_id);
+    if (scopedAccountId) {
+      cachedConversationQuery = cachedConversationQuery.eq("social_account_id", request.social_account_id);
+    }
+
+    // These five reads do not use each other's results. Promise.all, not
+    // allSettled: a read that threw before still throws and the reply fails
+    // the same way. The link read is the exception that already returned an
+    // error instead of throwing; that handling stays after the group.
+    const [
+      historyResult,
+      embeddingConfig,
+      cachedConversationResult,
+      customToolResult,
+      linkResult,
+    ] = await Promise.all([
+      admin
+        .from("ai_thread_messages")
+        .select("role, content")
+        .eq("thread_id", thread.id)
+        .in("role", ["user", "assistant"])
+        .order("created_at", { ascending: false })
+        .limit(HISTORY_LIMIT),
+      resolveDualEmbeddingConfigFromDb(admin),
+      cachedConversationQuery.maybeSingle(),
+      admin
+        .from("ai_agent_tools")
+        // `settings` is read only to tell the model which tables this connector
+        // may reach; it holds no secret (credentials live in Vault).
+        // `auth_strategy`/`connection_id` decide whether the tool is Composio-
+        // backed, whose connection attachComposioTools resolves below.
+        .select("id, name, description, url, secret, admin_only, scope, social_account_id, connector_type, read_only_mode, settings, auth_strategy, connection_id")
+        .eq("user_id", request.user_id)
+        .eq("is_enabled", true),
+      scopedAccountId
+        ? admin
+          .from("ai_agent_tool_accounts")
+          .select("tool_id, social_account_id")
+          .eq("user_id", request.user_id)
+          .eq("social_account_id", scopedAccountId)
+        : Promise.resolve({ data: null, error: null }),
+    ]);
+
+    const { data: historyRows } = historyResult;
     const history = (historyRows || []).reverse().map((row: { role: string; content: string | null }) => ({
       role: row.role,
       content: row.content || "",
     }));
+
+    let toolLinks: ToolAccountLink[] = [];
+    let toolLinksDegraded = false;
+    if (scopedAccountId) {
+      // Scoped by user_id as well as account: this runs under the service role,
+      // so RLS is not evaluated and tenancy has to be structural (ARCHITECTURE
+      // §24). Without it another tenant's link row would grant access here.
+      const { data: linkRows, error: linkError } = linkResult;
+      if (linkError) {
+        // Codex P1. PostgREST returns { data: null, error } on a timeout, and
+        // `linkRows || []` turned that into "this account was shared nothing" --
+        // so every explicitly shared connector silently vanished from the prompt
+        // and the customer got an answer as if it had never been configured.
+        // The reply still proceeds on owned + all_accounts, because failing a
+        // customer over a degraded read is worse; but it is now SAID, not
+        // silently assumed.
+        toolLinksDegraded = true;
+        console.error(
+          "[ai-agent-reply] connector link read failed; shared connectors omitted:",
+          linkError.message,
+        );
+      }
+      toolLinks = (linkRows || []) as ToolAccountLink[];
+    }
+
+    const { data: cachedConversation, error: cachedConversationError } = cachedConversationResult;
+    if (cachedConversationError) throw cachedConversationError;
+    const { data: customToolRows } = customToolResult;
 
     // Retrieval uses the primary embedding provider and fails over to the
     // configured fallback provider's vector column when the primary is down. If
@@ -786,7 +871,6 @@ Deno.serve(async (req) => {
     let relatedFacts = "";
     let ragError: string | null = null;
     let graphError: string | null = null;
-    const embeddingConfig = await resolveDualEmbeddingConfigFromDb(admin);
     const retrieveKnowledgeContext = async () => {
       let relevantChunks: Array<{ id: string; content: string; similarity: number }> = [];
       let ragError: string | null = null;
@@ -873,17 +957,6 @@ Deno.serve(async (req) => {
       adminNotifier ??= buildAdminNotifier(admin, request);
       return await (await adminNotifier)(recipientPhone, text);
     };
-    let cachedConversationQuery = admin
-      .from("messaging_cache")
-      .select("id, workspace_id, participant_name")
-      .eq("user_id", request.user_id)
-      .eq("platform", request.platform)
-      .eq("conversation_id", request.conversation_id);
-    if (UUID_PATTERN.test(request.social_account_id)) {
-      cachedConversationQuery = cachedConversationQuery.eq("social_account_id", request.social_account_id);
-    }
-    const { data: cachedConversation, error: cachedConversationError } = await cachedConversationQuery.maybeSingle();
-    if (cachedConversationError) throw cachedConversationError;
 
     const toolContext: ToolContext = {
       admin,
@@ -932,52 +1005,6 @@ Deno.serve(async (req) => {
     // page answered customers out of another page's store. Migration A scoped
     // the table; this query and resolveToolsForAccount are what make that
     // scoping real.
-    const { data: customToolRows } = await admin
-      .from("ai_agent_tools")
-      // `settings` is read only to tell the model which tables this connector
-      // may reach; it holds no secret (credentials live in Vault).
-      // `auth_strategy`/`connection_id` decide whether the tool is Composio-
-      // backed, whose connection attachComposioTools resolves below.
-      .select("id, name, description, url, secret, admin_only, scope, social_account_id, connector_type, read_only_mode, settings, auth_strategy, connection_id")
-      .eq("user_id", request.user_id)
-      .eq("is_enabled", true);
-
-    // The sandbox passes the literal "test" when a caller names no account, and
-    // .eq() against a uuid column with a non-uuid raises 22P02 -- which would
-    // kill a reply over a tool list. Anything unusable degrades to the
-    // all_accounts corpus instead.
-    const scopedAccountId = UUID_PATTERN.test(request.social_account_id)
-      ? request.social_account_id
-      : null;
-
-    let toolLinks: ToolAccountLink[] = [];
-    let toolLinksDegraded = false;
-    if (scopedAccountId) {
-      // Scoped by user_id as well as account: this runs under the service role,
-      // so RLS is not evaluated and tenancy has to be structural (ARCHITECTURE
-      // §24). Without it another tenant's link row would grant access here.
-      const { data: linkRows, error: linkError } = await admin
-        .from("ai_agent_tool_accounts")
-        .select("tool_id, social_account_id")
-        .eq("user_id", request.user_id)
-        .eq("social_account_id", scopedAccountId);
-      if (linkError) {
-        // Codex P1. PostgREST returns { data: null, error } on a timeout, and
-        // `linkRows || []` turned that into "this account was shared nothing" --
-        // so every explicitly shared connector silently vanished from the prompt
-        // and the customer got an answer as if it had never been configured.
-        // The reply still proceeds on owned + all_accounts, because failing a
-        // customer over a degraded read is worse; but it is now SAID, not
-        // silently assumed.
-        toolLinksDegraded = true;
-        console.error(
-          "[ai-agent-reply] connector link read failed; shared connectors omitted:",
-          linkError.message,
-        );
-      }
-      toolLinks = (linkRows || []) as ToolAccountLink[];
-    }
-
     // admin_only is passed IN rather than filtered out afterwards: narrowing
     // after collision resolution let an admin-only tool win a name and then be
     // removed, leaving a customer with neither connector (Codex P2).
@@ -1033,6 +1060,7 @@ Deno.serve(async (req) => {
       onLowConfidence: config.handoff_on_low_confidence ?? true,
     };
 
+    timings.mark("setup");
     const { data: triageRows } = await triageRowsPromise;
     const triageChain = triageChainFromSettings(triageRows ?? []);
     if (triageChain.length) {
@@ -1213,6 +1241,8 @@ Deno.serve(async (req) => {
       }
       promptTokens += completion.usage?.prompt_tokens || 0;
       completionTokens += completion.usage?.completion_tokens || 0;
+      timings.note("prompt_tokens_per_round", completion.usage?.prompt_tokens ?? 0);
+      timings.note("completion_tokens_per_round", completion.usage?.completion_tokens ?? 0);
       // chatCompletion rejects any body that lacks one, so this cannot be undefined.
       const choice = completion.choices[0].message;
 
@@ -1345,6 +1375,7 @@ Deno.serve(async (req) => {
         )
         : await sender(request.recipient_phone, replyText);
     }
+    timings.mark("sent");
 
     // Outside the send block, exactly as before: a sandbox run writes its thread turns
     // without sending anything.

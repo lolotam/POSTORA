@@ -119,6 +119,41 @@ export function shouldAiReply(params: ReplyGateParams): { reply: boolean; reason
   return { reply: true, reason: "ok" };
 }
 
+export interface ReplyGateChecks {
+  withinServiceWindow: () => Promise<boolean>;
+  humanAssignedAndOnline: () => Promise<boolean>;
+  cooldownActive: () => Promise<boolean>;
+  dailyCapReached: () => Promise<boolean>;
+}
+
+/**
+ * Runs the four delivery checks together. A rejection still rejects: these
+ * reads used to abort the reply when they threw, and Promise.all keeps that.
+ */
+export async function evaluateGates(checks: ReplyGateChecks): Promise<{
+  withinServiceWindow: boolean;
+  humanAssignedAndOnline: boolean;
+  cooldownActive: boolean;
+  dailyCapReached: boolean;
+}> {
+  const withinServiceWindow = checks.withinServiceWindow();
+  const humanAssignedAndOnline = checks.humanAssignedAndOnline();
+  const cooldownActive = checks.cooldownActive();
+  const dailyCapReached = checks.dailyCapReached();
+  const [windowOpen, humanOnline, coolingDown, capReached] = await Promise.all([
+    withinServiceWindow,
+    humanAssignedAndOnline,
+    cooldownActive,
+    dailyCapReached,
+  ]);
+  return {
+    withinServiceWindow: windowOpen,
+    humanAssignedAndOnline: humanOnline,
+    cooldownActive: coolingDown,
+    dailyCapReached: capReached,
+  };
+}
+
 export interface EscalationAgentCandidate {
   id: string;
   user_id: string;
@@ -480,6 +515,8 @@ export interface PhaseTimingsRecorder {
   mark(name: string): void;
   /** Times an awaited phase; repeated names accumulate into an array. */
   span<T>(name: string, fn: () => Promise<T>): Promise<T>;
+  /** Appends a numeric sample; repeated names accumulate into an array, as spans do. */
+  note(name: string, value: number): void;
   toJSON(): Record<string, number | number[]>;
 }
 
@@ -492,6 +529,7 @@ export interface PhaseTimingsRecorder {
 export function phaseTimings(now: () => number = Date.now): PhaseTimingsRecorder {
   const marks = new Map<string, number>();
   const spans = new Map<string, number[]>();
+  const notes = new Map<string, number[]>();
   let lastMarkAt = now();
   return {
     mark(name: string) {
@@ -508,8 +546,15 @@ export function phaseTimings(now: () => number = Date.now): PhaseTimingsRecorder
         spans.set(name, [...(spans.get(name) ?? []), elapsed]);
       }
     },
+    note(name: string, value: number) {
+      notes.set(name, [...(notes.get(name) ?? []), value]);
+    },
     toJSON(): Record<string, number | number[]> {
-      return { ...Object.fromEntries(marks), ...Object.fromEntries(spans) };
+      return {
+        ...Object.fromEntries(marks),
+        ...Object.fromEntries(spans),
+        ...Object.fromEntries(notes),
+      };
     },
   };
 }
