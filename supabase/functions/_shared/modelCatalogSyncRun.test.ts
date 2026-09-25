@@ -68,7 +68,7 @@ Deno.test("runCatalogSync reports added, skipped and in-use models", async () =>
 
 Deno.test("runCatalogSync refuses unknown providers and empty catalogues", async () => {
   const { db } = fakeDb({ models: [], settings: [] });
-  await assertRejects(() => runCatalogSync(db, "claude", vercelFetch), Error, "not syncable");
+  await assertRejects(() => runCatalogSync(db, "not-a-real-provider", vercelFetch), Error, "not syncable");
   await assertRejects(() => runCatalogSync(db, "vercel", catalogue([])), Error, "empty model catalogue");
 });
 
@@ -150,7 +150,7 @@ Deno.test("a failed ai_providers read is reported as a read failure, not a missi
 Deno.test("the intentional upstream refusals are CatalogSyncErrors", async () => {
   const { db } = fakeDb({ models: [], settings: [] });
   const failing = (async () => new Response("", { status: 503 })) as typeof fetch;
-  await assertRejects(() => runCatalogSync(db, "claude", vercelFetch), CatalogSyncError, "not syncable");
+  await assertRejects(() => runCatalogSync(db, "not-a-real-provider", vercelFetch), CatalogSyncError, "not syncable");
   await assertRejects(() => runCatalogSync(db, "vercel", catalogue([])), CatalogSyncError, "empty model catalogue");
   await assertRejects(() => runCatalogSync(db, "vercel", failing), CatalogSyncError, "vercel /models returned HTTP 503");
 });
@@ -172,3 +172,125 @@ Deno.test("a failed settings write is not a user-facing CatalogSyncError", async
   const err = await assertRejects(() => runCatalogSync(db, "vercel", vercelFetch), Error);
   assertEquals(err instanceof CatalogSyncError, false);
 });
+
+// --- Task 3: per-provider request specs, new syncable providers, dry run ---
+
+/** fakeDb's ai_providers row always names this env var; resolveProviderKey reads it via Deno.env. */
+const KEY_ENV = "NONE";
+
+function withEnv<T>(name: string, value: string | undefined, run: () => Promise<T>): Promise<T> {
+  const prior = Deno.env.get(name);
+  if (value === undefined) Deno.env.delete(name);
+  else Deno.env.set(name, value);
+  return run().finally(() => {
+    if (prior === undefined) Deno.env.delete(name);
+    else Deno.env.set(name, prior);
+  });
+}
+
+function recordingFetch(body: unknown, status = 200) {
+  const calls: Array<{ url: string; headers: Record<string, string> }> = [];
+  const fetchImpl = ((url: string | URL, init?: RequestInit) => {
+    calls.push({ url: String(url), headers: { ...(init?.headers as Record<string, string> ?? {}) } });
+    return Promise.resolve(new Response(JSON.stringify(body), { status }));
+  }) as typeof fetch;
+  return { fetchImpl, calls };
+}
+
+const claudeBody = { data: [{ id: "claude-sonnet-5", display_name: "Claude Sonnet 5", max_input_tokens: 200000 }] };
+const geminiBody = { models: [{ name: "models/gemini-3-pro", displayName: "Gemini 3 Pro", supportedGenerationMethods: ["generateContent"] }] };
+
+Deno.test("claude requests /v1/models with x-api-key and anthropic-version, no Authorization", () =>
+  withEnv(KEY_ENV, "test-anthropic-key", async () => {
+    const { db } = fakeDb({ models: [], settings: [] });
+    const { fetchImpl, calls } = recordingFetch(claudeBody);
+    const report = await runCatalogSync(db, "claude", fetchImpl);
+    assertEquals(calls.length, 1);
+    assertEquals(calls[0].url, "https://api.anthropic.com/v1/models?limit=1000");
+    assertEquals(calls[0].headers["x-api-key"], "test-anthropic-key");
+    assertEquals(calls[0].headers["anthropic-version"], "2023-06-01");
+    assertEquals("Authorization" in calls[0].headers, false);
+    assertEquals(report.added, 1);
+    assertEquals(report.dry_run, false);
+  }));
+
+Deno.test("gemini sends the key as an x-goog-api-key header, never in the URL, and reads body.models", () =>
+  withEnv(KEY_ENV, "test-gemini-key", async () => {
+    const { db } = fakeDb({ models: [], settings: [] });
+    const { fetchImpl, calls } = recordingFetch(geminiBody);
+    const report = await runCatalogSync(db, "gemini", fetchImpl);
+    assertEquals(calls.length, 1);
+    assertEquals(calls[0].url, "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000");
+    assertEquals(calls[0].url.includes("key="), false);
+    assertEquals(calls[0].headers["x-goog-api-key"], "test-gemini-key");
+    assertEquals(report.added, 1);
+  }));
+
+const bearerProviders: Array<[string, string, unknown]> = [
+  ["openai", "https://api.openai.com/v1/models", { data: [{ id: "gpt-5.5" }] }],
+  ["zai", "https://api.z.ai/api/paas/v4/models", { data: [{ id: "glm-5.3" }] }],
+  ["minimax", "https://api.minimax.io/v1/models", { data: [{ id: "minimax-m3" }] }],
+  ["xai", "https://api.x.ai/v1/models", { data: [{ id: "grok-5" }] }],
+];
+
+for (const [providerCode, url, body] of bearerProviders) {
+  Deno.test(`${providerCode} requests ${url} with a Bearer key`, () =>
+    withEnv(KEY_ENV, "test-bearer-key", async () => {
+      const { db } = fakeDb({ models: [], settings: [] });
+      const { fetchImpl, calls } = recordingFetch(body);
+      const report = await runCatalogSync(db, providerCode, fetchImpl);
+      assertEquals(calls.length, 1);
+      assertEquals(calls[0].url, url);
+      assertEquals(calls[0].headers.Authorization, "Bearer test-bearer-key");
+      assertEquals(report.added, 1);
+    }));
+}
+
+Deno.test("a dry run reports the plan but writes nothing", () =>
+  withEnv(KEY_ENV, "test-anthropic-key", async () => {
+    const { db, writes } = fakeDb({ models: [], settings: [] });
+    const { fetchImpl } = recordingFetch(claudeBody);
+    const report = await runCatalogSync(db, "claude", fetchImpl, { dryRun: true });
+    assertEquals(report.added, 1);
+    assertEquals(report.dry_run, true);
+    assertEquals(writes.some((w) => w.table === "ai_models"), false);
+    assertEquals(writes.some((w) => w.table === "system_settings" && (w.payload as { key?: string }).key?.startsWith("model_catalog_synced_at_")), false);
+  }));
+
+Deno.test("a Gemini HTTP failure never puts the key in the error message", () =>
+  withEnv(KEY_ENV, "super-secret-gemini-key", async () => {
+    const { db } = fakeDb({ models: [], settings: [] });
+    const { fetchImpl } = recordingFetch({}, 400);
+    const err = await assertRejects(() => runCatalogSync(db, "gemini", fetchImpl), CatalogSyncError);
+    assertEquals(err.message, "gemini /models returned HTTP 400");
+    assertEquals(err.message.includes("super-secret-gemini-key"), false);
+  }));
+
+Deno.test("a rejected fetch (DNS/connection/TLS) never puts the key in the error message", () =>
+  withEnv(KEY_ENV, "SECRET-KEY-123", async () => {
+    const { db } = fakeDb({ models: [], settings: [] });
+    const rejecting = (() =>
+      Promise.reject(new TypeError("error sending request for url (https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000&key=SECRET-KEY-123)"))) as unknown as typeof fetch;
+    const err = await assertRejects(() => runCatalogSync(db, "gemini", rejecting), CatalogSyncError);
+    assertEquals(err.message, "gemini /models request failed");
+    assertEquals(err.message.includes("SECRET-KEY-123"), false);
+    assertEquals(("cause" in err) ? err.cause : undefined, undefined);
+  }));
+
+Deno.test("a rejected fetch logs the error name to the server, never the message", () =>
+  withEnv(KEY_ENV, "SECRET-KEY-123", async () => {
+    const { db } = fakeDb({ models: [], settings: [] });
+    const rejecting = (() =>
+      Promise.reject(new TypeError("error sending request for url (https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000&key=SECRET-KEY-123)"))) as unknown as typeof fetch;
+    const warnings: unknown[][] = [];
+    const originalWarn = console.warn;
+    console.warn = (...args: unknown[]) => { warnings.push(args); };
+    try {
+      await assertRejects(() => runCatalogSync(db, "gemini", rejecting), CatalogSyncError);
+    } finally {
+      console.warn = originalWarn;
+    }
+    assertEquals(warnings.length, 1);
+    assertEquals(warnings[0], ["[model-sync] gemini /models request failed: TypeError"]);
+    assertEquals(String(warnings[0]).includes("SECRET-KEY-123"), false);
+  }));

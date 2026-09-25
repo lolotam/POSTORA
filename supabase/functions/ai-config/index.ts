@@ -239,9 +239,10 @@ serve(async (req) => {
         if (!(SYNCABLE_PROVIDERS as readonly string[]).includes(provider_code)) {
           return new Response(JSON.stringify({ error: 'Provider does not support model sync' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
         }
+        const dryRun = body.dry_run === true;
         try {
           // The generated client type is too deep for a structural check; it satisfies CatalogDb at runtime.
-          const report = await runCatalogSync(supabase as unknown as CatalogDb, provider_code);
+          const report = await runCatalogSync(supabase as unknown as CatalogDb, provider_code, fetch, { dryRun });
           return new Response(JSON.stringify(report), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
         } catch (e) {
           // 502 would be masked by Cloudflare, so answer 200 with an error body the UI shows as a

@@ -19,6 +19,8 @@ export interface MappedCatalog {
   skippedByType: Record<string, number>;
   /** Capabilities this catalogue is authoritative for; rows outside them are never touched. */
   managedCapabilities: Capability[];
+  /** Direct providers: never remove a capability an admin gave a row. */
+  additiveCapabilities?: true;
 }
 
 export interface ExistingModelRow {
@@ -36,11 +38,13 @@ export interface ExistingModelRow {
 }
 
 /** A catalogue model merged onto its row. Capabilities widen to string: admin-added ones are kept. */
-export type ModelUpdate = Omit<CatalogModel, "capabilities"> & {
+export type ModelUpdate = Omit<CatalogModel, "capabilities" | "cost_per_1m_input_tokens" | "cost_per_1m_output_tokens"> & {
   id: string;
   capabilities: string[];
   is_active: boolean;
   reactivate: boolean;
+  cost_per_1m_input_tokens: number | string | null;
+  cost_per_1m_output_tokens: number | string | null;
 };
 
 export interface SyncPlan {
@@ -251,8 +255,25 @@ export function planCatalogSync(
     if (reactivate) metadata.sync_deactivated = false;
     // Capabilities outside what this catalogue manages (search, agent, ...) were set by an admin.
     const adminCapabilities = row.capabilities.filter((c) => !managed.has(c));
-    const capabilities = [...new Set([...adminCapabilities, ...model.capabilities])].sort();
-    const update: ModelUpdate = { ...model, capabilities, metadata, id: row.id, is_active: reactivate || row.is_active, reactivate };
+    const capabilities = mapped.additiveCapabilities
+      ? [...new Set([...row.capabilities, ...model.capabilities])].sort()
+      : [...new Set([...adminCapabilities, ...model.capabilities])].sort();
+    // Direct (additive) providers preserve curated names, prices and context when the catalogue lacks them.
+    // Indirect (aggregate) providers overwrite with catalogue values, including nulls.
+    const update: ModelUpdate = mapped.additiveCapabilities
+      ? {
+        ...model,
+        name: model.name === model.model_id && row.name ? row.name : model.name,
+        description: model.description ?? row.description ?? null,
+        context_limit: model.context_limit ?? row.context_limit ?? null,
+        cost_per_1m_input_tokens: model.cost_per_1m_input_tokens ?? row.cost_per_1m_input_tokens,
+        cost_per_1m_output_tokens: model.cost_per_1m_output_tokens ?? row.cost_per_1m_output_tokens,
+        capabilities, metadata, id: row.id, is_active: reactivate || row.is_active, reactivate,
+      }
+      : {
+        ...model,
+        capabilities, metadata, id: row.id, is_active: reactivate || row.is_active, reactivate,
+      };
     if (!isUnchanged(row, update)) plan.updates.push(update);
   }
   for (const row of existing) {
@@ -262,4 +283,122 @@ export function planCatalogSync(
     else plan.deactivateIds.push(row.id);
   }
   return plan;
+}
+
+// Direct providers (below) list only what they serve today, often as bare ids. Their rows were
+// curated by hand first, so these catalogues add, refresh and retire models but never strip a
+// capability an admin gave a row (see planCatalogSync).
+
+const CAPABILITY_SET = new Set<string>(["chat", "image", "video", "embedding", "tts", "stt"]);
+
+function idOnly(data: unknown[], classify: (id: string) => Capability | string): MappedCatalog & { models: CatalogModel[] } {
+  const models: CatalogModel[] = [];
+  const skippedByType: Record<string, number> = {};
+  for (const raw of data) {
+    const id = str((raw as Row).id);
+    if (!id) continue;
+    const kind = classify(id);
+    if (!CAPABILITY_SET.has(kind)) {
+      skippedByType[kind] = (skippedByType[kind] ?? 0) + 1;
+      continue;
+    }
+    models.push(baseModel(raw as Row, [kind as Capability]));
+  }
+  return { models, skippedByType, managedCapabilities: [], additiveCapabilities: true };
+}
+
+export function mapAnthropicCatalog(data: unknown[]): MappedCatalog {
+  const models = data.map((raw) => raw as Row).filter((row) => str(row.id)).map((row) => {
+    const model = baseModel(row, ["chat"]);
+    model.name = str(row.display_name) ?? model.name;
+    model.context_limit = positiveInt(row.max_input_tokens);
+    return model;
+  });
+  return { models, skippedByType: {}, managedCapabilities: ["chat"], additiveCapabilities: true };
+}
+
+function geminiCapability(id: string, methods: string[]): Capability | string {
+  // Music and agent/tool models (Lyria, Deep Research, computer-use, robotics, Antigravity) list
+  // generateContent like any chat model, so id patterns must be checked before the
+  // generateContent → chat fallback below, not left to fall through to "chat".
+  if (/^lyria/i.test(id)) return "music";
+  if (/deep-research|computer-use|robotics|antigravity/i.test(id)) return "agent";
+  // Gemma is open-weights and served through the Gemini API, but the API rejects system
+  // instructions and tool calls for it, so it cannot work here as a chat or agent model either.
+  if (/^gemma/i.test(id)) return "open-weights";
+  if (/transcribe/i.test(id)) return "stt";
+  if (methods.includes("predictLongRunning")) return "video";
+  if (methods.includes("predict")) return "image";
+  if (methods.includes("embedContent")) return "embedding";
+  if (methods.includes("generateContent")) {
+    if (/tts/i.test(id)) return "tts";
+    if (/image/i.test(id) || /nano-banana/i.test(id)) return "image";
+    return "chat";
+  }
+  return methods[0] ?? "unknown";
+}
+
+export function mapGeminiCatalog(data: unknown[]): MappedCatalog {
+  const models: CatalogModel[] = [];
+  const skippedByType: Record<string, number> = {};
+  for (const raw of data) {
+    const row = raw as Row;
+    const id = str(row.name)?.replace(/^models\//, "");
+    if (!id) continue;
+    const kind = geminiCapability(id, (row.supportedGenerationMethods ?? []) as string[]);
+    if (!CAPABILITY_SET.has(kind)) {
+      skippedByType[kind] = (skippedByType[kind] ?? 0) + 1;
+      continue;
+    }
+    const model = baseModel({ ...row, id }, [kind as Capability]);
+    model.name = str(row.displayName) ?? id;
+    model.context_limit = positiveInt(row.inputTokenLimit);
+    models.push(model);
+  }
+  return { models, skippedByType, managedCapabilities: ["chat", "image", "video", "embedding", "tts", "stt"], additiveCapabilities: true };
+}
+
+const DATED_SNAPSHOT = /-\d{4}-\d{2}-\d{2}$/;
+// Old-style snapshots that predate the full-date convention, e.g. gpt-4-0613, tts-1-1106.
+// Four digits after a trailing dash; doesn't catch gpt-4o or o4-mini (no trailing dash+digits).
+const OLD_SNAPSHOT = /-\d{4}$/;
+function openAICapability(id: string): Capability | string {
+  if (DATED_SNAPSHOT.test(id) || OLD_SNAPSHOT.test(id)) return "snapshot";
+  // Media checks run before the "other" exclusions below: sora-2-pro is a video model whose id
+  // also ends in "-pro", and it must not be caught by the -pro$ exclusion meant for o1-pro /
+  // gpt-5-pro chat snapshots. Checking transcribe here also means gpt-live-transcribe resolves
+  // to stt before it ever reaches the gpt-live-* "other" exclusion, so that exclusion no longer
+  // needs to special-case a trailing digit to let the transcribe variant through.
+  if (/^(gpt-image|dall-e|chatgpt-image)/.test(id)) return "image";
+  if (/tts/.test(id)) return "tts";
+  if (/whisper|transcribe/.test(id)) return "stt";
+  if (/embedding/.test(id)) return "embedding";
+  if (/^sora/.test(id)) return "video";
+  // instruct/codex/*-pro ids and gpt-live-* don't work through /chat/completions.
+  if (/moderation|realtime|audio|search|computer-use|deep-research|instruct|codex|-pro$|^gpt-live|^babbage|^davinci|^ft:/.test(id)) return "other";
+  if (/^(gpt-|o\d|chatgpt-)/.test(id)) return "chat";
+  return "other";
+}
+
+export function mapOpenAICatalog(data: unknown[]): MappedCatalog {
+  const mapped = idOnly(data, openAICapability);
+  return { ...mapped, managedCapabilities: ["chat", "image", "tts", "stt", "embedding", "video"] };
+}
+
+// Z.ai and MiniMax: /models lists their chat models only, and that list is itself PARTIAL —
+// it omits live chat models (e.g. glm-4.6v, glm-4.5-flash, MiniMax-M1). managedCapabilities
+// stays empty so a sync can add new ids and refresh known ones but can never deactivate a
+// chat row for being merely absent from this incomplete catalogue.
+export function mapIdOnlyChatCatalog(data: unknown[]): MappedCatalog {
+  return { ...idOnly(data, () => "chat"), managedCapabilities: [] };
+}
+
+function xaiCapability(id: string): Capability {
+  if (/video/.test(id)) return "video";
+  if (/image/.test(id)) return "image";
+  return "chat";
+}
+
+export function mapXaiCatalog(data: unknown[]): MappedCatalog {
+  return { ...idOnly(data, xaiCapability), managedCapabilities: ["chat", "image", "video"] };
 }

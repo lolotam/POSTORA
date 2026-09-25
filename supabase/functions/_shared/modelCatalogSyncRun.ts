@@ -1,9 +1,12 @@
 import {
-  type ExistingModelRow, type MappedCatalog, mapDeepSeekCatalog, mapOpenRouterCatalog, mapVercelCatalog, planCatalogSync,
+  type ExistingModelRow, type MappedCatalog, mapAnthropicCatalog, mapDeepSeekCatalog, mapGeminiCatalog,
+  mapIdOnlyChatCatalog, mapOpenAICatalog, mapOpenRouterCatalog, mapVercelCatalog, mapXaiCatalog, planCatalogSync,
 } from "./modelCatalogSync.ts";
 import { resolveProviderKey } from "./providerKeys.ts";
 
-export const SYNCABLE_PROVIDERS = ["vercel", "openrouter", "deepseek"] as const;
+export const SYNCABLE_PROVIDERS = [
+  "vercel", "openrouter", "deepseek", "claude", "gemini", "openai", "zai", "minimax", "xai",
+] as const;
 
 export interface SyncReport {
   added: number;
@@ -12,6 +15,7 @@ export interface SyncReport {
   kept_in_use: string[];
   skipped_by_type: Record<string, number>;
   synced_at: string;
+  dry_run: boolean;
 }
 
 /**
@@ -29,10 +33,53 @@ export function syncFailureMessage(err: unknown): string {
   return err instanceof CatalogSyncError ? err.message : GENERIC_SYNC_FAILURE;
 }
 
-const CATALOGUE: Record<string, { url: string; needsKey: boolean; map: (d: unknown[]) => MappedCatalog }> = {
-  vercel: { url: "https://ai-gateway.vercel.sh/v1/models", needsKey: false, map: mapVercelCatalog },
-  openrouter: { url: "https://openrouter.ai/api/v1/models?output_modalities=all", needsKey: false, map: mapOpenRouterCatalog },
-  deepseek: { url: "https://api.deepseek.com/models", needsKey: true, map: mapDeepSeekCatalog },
+interface CatalogueSource {
+  /** Builds the request; `key` is null for public catalogues. */
+  request(key: string | null): { url: string; headers: Record<string, string> };
+  needsKey: boolean;
+  list(body: unknown): unknown[];
+  map(data: unknown[]): MappedCatalog;
+}
+const dataList = (body: unknown) => {
+  const data = (body as { data?: unknown } | null)?.data;
+  return Array.isArray(data) ? data : [];
+};
+const bearer = (url: string): CatalogueSource["request"] => (key) => ({
+  url,
+  headers: key ? { Authorization: `Bearer ${key}` } : ({} as Record<string, string>),
+});
+
+const CATALOGUE: Record<string, CatalogueSource> = {
+  vercel: { request: bearer("https://ai-gateway.vercel.sh/v1/models"), needsKey: false, list: dataList, map: mapVercelCatalog },
+  openrouter: {
+    request: bearer("https://openrouter.ai/api/v1/models?output_modalities=all"), needsKey: false, list: dataList,
+    map: mapOpenRouterCatalog,
+  },
+  deepseek: { request: bearer("https://api.deepseek.com/models"), needsKey: true, list: dataList, map: mapDeepSeekCatalog },
+  claude: {
+    request: (key) => ({ url: "https://api.anthropic.com/v1/models?limit=1000", headers: { "x-api-key": key ?? "", "anthropic-version": "2023-06-01" } }),
+    needsKey: true,
+    list: dataList,
+    map: mapAnthropicCatalog,
+  },
+  gemini: {
+    // The REST API accepts the key as the x-goog-api-key header, which keeps it out of the URL —
+    // out of proxy/access logs, browser history, and any place that logs a fetch failure's message.
+    request: (key) => ({
+      url: "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000",
+      headers: key ? { "x-goog-api-key": key } : ({} as Record<string, string>),
+    }),
+    needsKey: true,
+    list: (body) => {
+      const models = (body as { models?: unknown } | null)?.models;
+      return Array.isArray(models) ? models : [];
+    },
+    map: mapGeminiCatalog,
+  },
+  openai: { request: bearer("https://api.openai.com/v1/models"), needsKey: true, list: dataList, map: mapOpenAICatalog },
+  zai: { request: bearer("https://api.z.ai/api/paas/v4/models"), needsKey: true, list: dataList, map: mapIdOnlyChatCatalog },
+  minimax: { request: bearer("https://api.minimax.io/v1/models"), needsKey: true, list: dataList, map: mapIdOnlyChatCatalog },
+  xai: { request: bearer("https://api.x.ai/v1/models"), needsKey: true, list: dataList, map: mapXaiCatalog },
 };
 
 type DbError = { message: string } | null;
@@ -72,7 +119,12 @@ function defaultModelsInUse(settings: Array<{ value: unknown }>, providerCode: s
   return inUse;
 }
 
-export async function runCatalogSync(db: CatalogDb, providerCode: string, fetchImpl: typeof fetch = fetch): Promise<SyncReport> {
+export async function runCatalogSync(
+  db: CatalogDb,
+  providerCode: string,
+  fetchImpl: typeof fetch = fetch,
+  options: { dryRun?: boolean } = {},
+): Promise<SyncReport> {
   const source = CATALOGUE[providerCode];
   if (!source) throw new CatalogSyncError(`Provider ${providerCode} is not syncable`);
   const { data: providerRow, error: providerError } = await db.from("ai_providers")
@@ -82,16 +134,28 @@ export async function runCatalogSync(db: CatalogDb, providerCode: string, fetchI
   const provider = providerRow as { id: string; api_key_env_var: string } | null;
   if (!provider) throw new CatalogSyncError(`Provider ${providerCode} is missing`);
 
-  const headers: Record<string, string> = {};
+  let key: string | null = null;
   if (source.needsKey) {
-    const key = await resolveProviderKey(db, providerCode);
+    key = await resolveProviderKey(db, providerCode);
     if (!key) throw new CatalogSyncError(`API key ${provider.api_key_env_var} not configured`);
-    headers.Authorization = `Bearer ${key}`;
   }
-  const res = await fetchImpl(source.url, { headers, signal: AbortSignal.timeout(20_000) });
+  const { url, headers } = source.request(key);
+  let res: Response;
+  try {
+    res = await fetchImpl(url, { headers, signal: AbortSignal.timeout(20_000) });
+  } catch (e) {
+    // A rejected fetch (DNS, connection refused, TLS, abort) throws a TypeError whose message embeds the
+    // request URL, and some provider request could carry a secret in that URL. Never surface that message
+    // or chain it as `cause` — a logger can serialise a cause just as readily as a top-level message —
+    // but the error NAME alone is safe and worth keeping server-side, since ai-config/index.ts skips its
+    // own logging for CatalogSyncErrors (their message is meant to be admin-facing already).
+    console.warn(`[model-sync] ${providerCode} /models request failed: ${e instanceof Error ? e.name : "error"}`);
+    throw new CatalogSyncError(`${providerCode} /models request failed`);
+  }
+  // Never interpolate `url` into this message: a provider request could carry a secret in its query string.
   if (!res.ok) throw new CatalogSyncError(`${providerCode} /models returned HTTP ${res.status}`);
   const body = await res.json();
-  const mapped = source.map(Array.isArray(body?.data) ? body.data : []);
+  const mapped = source.map(source.list(body));
   if (!mapped.models.length) throw new CatalogSyncError(`${providerCode} returned an empty model catalogue`);
 
   const { data: existingData, error: existingError } = await db.from("ai_models")
@@ -119,16 +183,19 @@ export async function runCatalogSync(db: CatalogDb, providerCode: string, fetchI
     ...plan.updates.map((u) => row(u)),
     ...deactivated.map((r) => row({ ...r, is_active: false, metadata: { ...(r.metadata ?? {}), sync_deactivated: true } })),
   ];
-  if (rows.length) {
-    const { error } = await db.from("ai_models").upsert(rows, { onConflict: "provider_id,model_id" });
-    if (error) throw new Error(`ai_models upsert failed: ${error.message}`);
+  const dryRun = options.dryRun === true;
+  if (!dryRun) {
+    if (rows.length) {
+      const { error } = await db.from("ai_models").upsert(rows, { onConflict: "provider_id,model_id" });
+      if (error) throw new Error(`ai_models upsert failed: ${error.message}`);
+    }
+    const { error: stampError } = await db.from("system_settings").upsert(
+      { key: `model_catalog_synced_at_${providerCode}`, value: { at: now } }, { onConflict: "key" },
+    );
+    if (stampError) throw new Error(`system_settings write failed: ${stampError.message}`);
   }
-  const { error: stampError } = await db.from("system_settings").upsert(
-    { key: `model_catalog_synced_at_${providerCode}`, value: { at: now } }, { onConflict: "key" },
-  );
-  if (stampError) throw new Error(`system_settings write failed: ${stampError.message}`);
   return {
     added: plan.inserts.length, updated: plan.updates.length, deactivated: plan.deactivateIds.length,
-    kept_in_use: plan.keptInUse, skipped_by_type: mapped.skippedByType, synced_at: now,
+    kept_in_use: plan.keptInUse, skipped_by_type: mapped.skippedByType, synced_at: now, dry_run: dryRun,
   };
 }
