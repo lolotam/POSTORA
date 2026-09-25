@@ -71,6 +71,7 @@ serve(async (req) => {
     }
     return await refuse("all_tiers_failed", errors.join("; "), { models: tiers.map(([, m]) => m) });
   } catch (e) {
+    console.error("[generate-speech]", e);
     await logger.error("Speech generation failed", { event: "speech_failed", error: sanitizeErrorMessage(e) }, userId);
     return json({ error: sanitizeErrorMessage(e) }, 500);
   }
