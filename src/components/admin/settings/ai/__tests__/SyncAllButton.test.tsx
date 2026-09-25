@@ -25,6 +25,7 @@ describe('SyncAllButton', () => {
         : { data: { added: 1, updated: 0, deactivated: 0, kept_in_use: [], skipped_by_type: {}, synced_at: 't', dry_run: false }, error: null }));
     render(wrap(<SyncAllButton providerCodes={['openai', 'xai', 'zai']} />));
     fireEvent.click(screen.getByRole('button', { name: /Sync all/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /^Sync now$/ }));
     await waitFor(() => expect(invoke).toHaveBeenCalledTimes(3));
     expect(invoke.mock.calls.map((c) => c[1].body.provider_code)).toEqual(['openai', 'xai', 'zai']);
     await waitFor(() => expect(toast.warning).toHaveBeenCalled());
@@ -35,8 +36,24 @@ describe('SyncAllButton', () => {
     invoke.mockResolvedValue({ data: { added: 2, updated: 1, deactivated: 0, kept_in_use: [], skipped_by_type: {}, synced_at: 't', dry_run: false }, error: null });
     render(wrap(<SyncAllButton providerCodes={['openai', 'zai']} />));
     fireEvent.click(screen.getByRole('button', { name: /Sync all/ }));
+    fireEvent.click(await screen.findByRole('button', { name: /^Sync now$/ }));
     await waitFor(() => expect(invoke).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(toast.success).toHaveBeenCalled());
     expect(String(toast.success.mock.calls[0][0])).toMatch(/4 added/);
+  });
+});
+
+describe('SyncAllButton confirmation', () => {
+  beforeEach(() => invoke.mockReset());
+
+  it('asks first, names the provider count and the switch-offs, and cancel syncs nothing', async () => {
+    render(wrap(<SyncAllButton providerCodes={['openai', 'zai', 'claude']} />));
+    fireEvent.click(screen.getByRole('button', { name: /Sync all/ }));
+    const dialog = await screen.findByRole('alertdialog');
+    expect(dialog.textContent).toMatch(/3 providers/);
+    expect(dialog.textContent).toMatch(/switch(ed)? off/i);
+    fireEvent.click(screen.getByRole('button', { name: /Cancel/ }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect(invoke).not.toHaveBeenCalled();
   });
 });
