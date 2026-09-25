@@ -58,9 +58,8 @@ serve(async (req) => {
       const out = await vercelGenerateSpeech(apiKey, model, text, voice, "mp3", timeoutMs);
       return json({ audio: out.base64, mediaType: out.mediaType, provider: "vercel", model });
     } catch (e) {
-      const redacted = redactProviderError(e instanceof Error ? e.message : String(e), apiKey);
-      console.error("[generate-speech] tier failed", model, redacted);
-      errors.push(`${model}: ${redacted}`);
+      console.error("[generate-speech] tier failed", model, redactProviderError(e instanceof Error ? e.message : String(e), apiKey));
+      errors.push(`${model}: ${sanitizeErrorMessage(e)}`);
     }
   }
   return json({ error: errors.join("; ") });
