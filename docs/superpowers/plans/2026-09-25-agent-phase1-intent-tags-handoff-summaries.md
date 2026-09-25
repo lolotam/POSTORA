@@ -3,23 +3,34 @@
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:**
-- Jev's per-message triage also classifies intent, and the agent tags WhatsApp conversations with it (Pricing, Order status, Complaint, Lead, Greeting).
-- When the agent escalates to a human, it leaves a two-line summary that the human sees.
+- When the agent escalates to a human, it leaves a two-line summary. The human sees it in the conversation header on every platform and in the Human Agent queue, whether or not an agent was online.
+- Jev's triage also classifies intent, and the agent tags WhatsApp conversations with it.
 
 **Architecture:**
-- **Intent:** one extra `intent` choice question in the existing Jev request (`_shared/agentTriage.ts`); there is no second call.
-- **Labels:** a new `_shared/agentIntentLabels.ts` maps an intent to a label and applies it to the existing `whatsapp_conversation_labels` and `whatsapp_conversation_label_assignments` tables, after the reply is delivered.
-- **Handoff:** `escalate_to_human` gains an optional `summary` argument. `escalateConversation` stores it in the assignment `notes` and in the admin alert. The Human Agent UI shows the notes.
+- **Handoff summary:**
+  - `escalate_to_human` gains an optional `summary` argument;
+  - `escalateConversation` normalises it at its single boundary, with a fallback to `reason`, and stores it in a new `ai_conversation_modes.handoff_summary` column;
+  - the same row the escalation already writes is keyed by user, platform and conversation, so it exists even when no agent is online;
+  - it also goes into the assignment `notes` and the admin alert;
+  - the UI reads it through `useAiConversationMode`.
+- **Intent:**
+  - one extra `intent` choice question in the existing Jev request;
+  - the agent-specific label policy lives beside ai-agent-reply (ARCHITECTURE §§5/40);
+  - labels are applied after a fresh delivery on WhatsApp.
 
-**Tech Stack:** Deno edge functions (`deno test`), React + TanStack Query (Vitest).
+**Tech Stack:** Deno edge functions, Postgres migration, React + TanStack Query (Vitest).
 
 **Spec:** `docs/superpowers/specs/2026-09-25-ai-agent-roadmap.md`, Phase 1.
 
 ## Global Constraints
 
 - Required reading before editing `supabase/functions/**` or `src/**`: `ARCHITECTURE.md`.
-- The intent choice keys are exactly `pricing`, `order_status`, `complaint`, `lead`, `greeting` and `other`.
-- The label names and colours are exactly:
+- **Migrations go to the Migrations lane** (Task 1). Apply them to production **before** merging any code that reads the new columns.
+- **Intent:**
+  - the choice keys are exactly `pricing`, `order_status`, `complaint`, `lead`, `greeting`, `other`;
+  - the confidence must be a finite number in `[0, 1]`, otherwise the intent is `null`;
+  - the threshold is `TRIAGE_CONFIDENCE` (0.8) from `_shared/agentTriage.ts`, with no second constant.
+- **Labels** (name, colour):
   - Pricing `#3b82f6`
   - Order status `#8b5cf6`
   - Complaint `#ef4444`
@@ -27,60 +38,127 @@
   - Greeting `#94a3b8`
 
   `other` is never labelled.
-- Confidence threshold: `TRIAGE_CONFIDENCE` (0.8) from `_shared/agentTriage.ts`. Do not add a second constant.
-- A label is applied only when all of these hold:
+- **When a label is applied:** only when all of these hold:
   - `request.platform === "whatsapp"`;
-  - it is not a dry run;
+  - not a dry run;
   - triage produced an outcome;
-  - the reply was delivered.
+  - the reply was **freshly** delivered on this invocation.
 
-  It is written with the service-role client, scoped by `user_id` (ARCHITECTURE §24, structural tenancy).
-- The label key is `request.conversation_id`, the same `wa_<account>_<customer>` string the inbox uses (verified 2026-09-25 against `ai_agent_logs`, `whatsapp_conversation_label_assignments` and `messaging_cache`).
-- Label names are not unique per user, so look the label up by `(user_id, name)` and create it only if absent. Assignment inserts ignore the duplicate from `UNIQUE(conversation_id, label_id)`.
-- A labelling or summary failure never changes or delays what the customer receives; log it and continue.
-- The summary is plain text, at most 300 characters after trimming, with markdown (`*`, `_`, `` ` ``, `#`) stripped. It falls back to `reason` when missing or empty.
-- Deno: `cd supabase/functions && deno test -A --no-check --node-modules-dir=none <paths>`, plus `deno check <file>`. Frontend: `node_modules/.bin/vitest run <paths>`, and `node_modules/.bin/tsc --noEmit -p tsconfig.app.json` with 0 errors. Run Deno before vitest. If vitest fails with `ERR_PACKAGE_PATH_NOT_EXPORTED`, run `bun install --frozen-lockfile`.
-- Add no new `any`; match the neighbouring style; tests use `fireEvent`.
+  Redelivered replies are not labelled. Labels are advisory, and losing one on a crash-and-redeliver is accepted.
+- **Label lookup:** by `(user_id, name)`, ordered by `created_at` then `id` ascending (the oldest label wins, so duplicate names converge). Create the label only if absent. Assignment inserts ignore the duplicate from `UNIQUE(conversation_id, label_id)`.
+- **Label key:** `request.conversation_id`, the same `wa_<account>_<customer>` string the inbox uses (verified 2026-09-25).
+- **Summary sanitising:**
+  1. strip markdown (`*`, `_`, `` ` ``, `#`) and trim first;
+  2. if it is then empty, fall back to `reason`, sanitised the same way;
+  3. cap at 300 characters.
+- **Failure handling:** a labelling or summary-storage failure never changes or delays what the customer receives. Log only the error class.
+- **Tests:** Deno `cd supabase/functions && deno test -A --no-check --node-modules-dir=none <paths>` plus `deno check`. Frontend `node_modules/.bin/vitest run <paths>`, and `tsc --noEmit -p tsconfig.app.json` with 0 errors. Run Deno before vitest. If vitest fails with `ERR_PACKAGE_PATH_NOT_EXPORTED`, run `bun install --frozen-lockfile`.
+- **Style:** add no new `any`, match the neighbouring style, use `fireEvent` in tests, and put UI strings through `t()` with an English default, like the neighbouring messaging components.
 
 ---
 
-### Task 1: Jev also answers `intent`
+### Task 1 (Migrations lane): the handoff summary column
+
+**Files:** Create `supabase/migrations/20260926090000_ai_conversation_modes_handoff_summary.sql`.
+
+```sql
+-- The AI's two-line handoff note for the human, kept on the per-conversation mode row that
+-- every escalation already writes, so it exists even when no agent was online to assign.
+ALTER TABLE public.ai_conversation_modes
+  ADD COLUMN IF NOT EXISTS handoff_summary text,
+  ADD COLUMN IF NOT EXISTS handoff_summary_at timestamptz;
+
+ALTER TABLE public.ai_conversation_modes
+  DROP CONSTRAINT IF EXISTS ai_conversation_modes_handoff_summary_len;
+ALTER TABLE public.ai_conversation_modes
+  ADD CONSTRAINT ai_conversation_modes_handoff_summary_len CHECK (char_length(handoff_summary) <= 300);
+```
+
+- The change is additive and idempotent. Existing RLS policies already cover the table, so no new grants are needed.
+- Verify it on the Contabo rehearsal DB first, per `docs/runbooks`. Then the controller applies it to production as `supabase_admin` and runs `NOTIFY pgrst, 'reload schema'` **before** the merge.
+- Commit: `feat(db): ai_conversation_modes.handoff_summary`.
+
+---
+
+### Task 2: One escalation boundary normalises and stores the summary
 
 **Files:**
-- Modify: `supabase/functions/_shared/agentTriage.ts` (`TriageAnswers`, `triageRequestBody`, `parseTriageAnswers`)
-- Test: `supabase/functions/_shared/agentTriage.test.ts`
+- Modify: `supabase/functions/ai-agent-reply/tools.ts`:
+  - the `escalate_to_human` schema (~line 80);
+  - `escalateConversation` (~245–517);
+  - the tool dispatch (~571);
+  - `outage-floor.ts` (~60), only if its call must change.
+- Test: `supabase/functions/ai-agent-reply/tools.test.ts` and `outage-floor.test.ts`.
+
+**Interfaces:**
+- Produces:
+  - `export function handoffSummary(summary: unknown, reason: string): string`, implementing the sanitising rules above.
+  - `escalateConversation` takes the summary through an **options object** added as a new trailing parameter, `options: { summary?: string } = {}`, so the existing positional `deadline` argument keeps its meaning. Inside, it computes `const summary = handoffSummary(options.summary, reason)` exactly once.
+
+- [ ] **Step 1: Failing tests**
+   - `handoffSummary`:
+     - `" *Wants* the 100ml price; I checked stock.\n"` → `"Wants the 100ml price; I checked stock."`;
+     - a 500-character input → 300 characters;
+     - `undefined` / `"  "` / `"***"` with reason `"customer asked"` → `"customer asked"`;
+     - a 400-character reason as the fallback → 300 characters.
+   - **Tool path** (extend the existing `escalate` test and its fake db). Calling `escalate_to_human` with `{ reason: "r", summary: "Wants a refund for order 42. I confirmed the order exists." }`:
+     - writes that text to `ai_conversation_modes.handoff_summary`, with `handoff_summary_at` set;
+     - writes the assignment `notes` as `"AI handoff: Wants a refund…"` when an agent is online;
+     - puts `"Summary: Wants a refund…"` in the admin text.
+   - **No agent online:** the same call with no online agents still writes `handoff_summary` to the mode row.
+   - **Outage floor:** `outage-floor.ts`'s escalation (no summary) stores the floor's reason as the summary. Its deadline behaviour and the existing repeat-notification suppression are unchanged. Assert the suppression test in the existing suite still passes, and add one that asserts the stored summary.
+- [ ] **Step 2: Run and see it FAIL.**
+- [ ] **Step 3: Implement.**
+   - **Schema:** add `summary: { type: "string", description: "Two short lines for the human agent: what the customer wants, and what you already checked or told them. Plain text." }` to the tool schema. Keep `required: ["reason"]`.
+   - **Tool dispatch:** passes `{ summary: args.summary }`.
+   - **Mode row:** in `escalateConversation`, write `handoff_summary` and `handoff_summary_at: new Date().toISOString()` into the same `ai_conversation_modes` write the function already performs (the compare-and-set at ~262–335).
+     - If that write is a conditional update, include the columns in it.
+     - Do not add a separate write that could race with it.
+     - If an existing mode row is left unchanged by design (for example, already escalated), update only `handoff_summary` and `handoff_summary_at` with a follow-up update scoped by `user_id`, `platform` and `conversation_id`. Its failure is logged and ignored.
+   - **Notes:** assignment notes become `` `AI handoff: ${summary}` ``.
+   - **Admin alert:** replace the `Reason:` line with `Summary: ${summary}`.
+- [ ] **Step 4: Run and see it PASS.** Run the whole `ai-agent-reply/` suite, plus `deno check ai-agent-reply/index.ts`.
+- [ ] **Step 5: Commit** `feat(agent): escalations store a two-line handoff summary`.
+
+---
+
+### Task 3: The human sees the summary
+
+**Files:**
+- Modify:
+  - the hook behind `useAiConversationMode` (find it with `grep -rn "export function useAiConversationMode" src`). Make sure its select includes `handoff_summary` and `handoff_summary_at`; if the select is hand-picked, add them. Also add both fields to its row type and to `src/integrations/supabase/types.ts` for `ai_conversation_modes`;
+  - `src/components/messaging/AiConversationModeSelect.tsx`: when `mode.handoff_summary` is set, render a small muted block under the select, labelled `t("mode.aiSummary", "AI summary")`, showing the text as plain text (never HTML). This one component is used by `WhatsAppConversationPane` (WhatsApp) and `ConversationDetail` (FB/IG), so both get it;
+  - `src/pages/HumanAgentMode.tsx`: for every conversation in **both** the waiting queue and the assigned queue, show the same summary. Read it with one query on `ai_conversation_modes`, filtered by the current user and the listed conversation ids, **not** one query per row. Put that query in a small hook, `useHandoffSummaries(conversationIds)`, beside the existing hooks.
+- Test:
+  - `src/components/messaging/__tests__/AiConversationModeSelect.test.tsx` (extend): the summary renders when present and is absent when null;
+  - `src/pages/__tests__/HumanAgentMode.test.tsx` (create or extend): a waiting (unassigned) conversation whose mode row has a summary shows it.
+- [ ] **Steps:** failing tests, then implement, then pass. `tsc` stays at 0 errors.
+- [ ] **Commit:** `feat(inbox): show the AI handoff summary on every platform and in the agent queue`.
+
+---
+
+### Task 4: Jev also answers `intent`
+
+**Files:** `supabase/functions/_shared/agentTriage.ts` and its test.
 
 **Interfaces:**
 - Produces:
   - `export const INTENTS = ["pricing", "order_status", "complaint", "lead", "greeting", "other"] as const;`
   - `export type Intent = typeof INTENTS[number];`
-  - `TriageAnswers.intent: { choice: Intent; confidence: number } | null`, which is `null` when the answer is missing or not one of `INTENTS`.
+  - `TriageAnswers.intent: { choice: Intent; confidence: number } | null`.
 
-`planFromAnswers` does not change.
+`planFromAnswers` is unchanged.
 
-- [ ] **Step 1: Failing tests** (append):
-
-```ts
-Deno.test("triage asks one intent question with the six fixed choices", () => {
-  const body = triageRequestBody({ provider: "vercel", model: "m" }, input);
-  const intent = (body.questions as Record<string, { type: string; criteria: Record<string, string> }>).intent;
-  assertEquals(intent.type, "choice");
-  assertEquals(Object.keys(intent.criteria).sort(), ["complaint", "greeting", "lead", "order_status", "other", "pricing"]);
-});
-
-Deno.test("the intent answer is parsed, and an unknown choice is dropped", () => {
-  const ok = parseTriageAnswers("openrouter", { answers: { intent: { type: "choice", choice: "pricing", confidence: 0.91 } } });
-  assertEquals(ok.intent, { choice: "pricing", confidence: 0.91 });
-  const bad = parseTriageAnswers("openrouter", { answers: { intent: { type: "choice", choice: "refund", confidence: 0.99 } } });
-  assertEquals(bad.intent, null);
-});
-```
-
-Also update the existing test that asserts the full question-key list (`["needs_knowledge", "smalltalk"]` for the bare input) to include `"intent"`, and the `parseTriageAnswers` expected objects to carry `intent: null`.
-
+- [ ] **Step 1: Failing tests.**
+   - The request carries `intent`: `type` is `choice`, and its criteria keys are exactly the six intents.
+   - Parsing accepts `{ choice: "pricing", confidence: 0.91 }`.
+   - Parsing returns `null` for:
+     - an unknown choice;
+     - a confidence of `NaN`, `1.5` or `-0.1`;
+     - a missing answer.
+   - Update the existing tests that assert the full question-key list or the parsed shape, so they include `intent`.
 - [ ] **Step 2: Run and see it FAIL.**
-
-- [ ] **Step 3: Implement.** In `triageRequestBody`, always add:
+- [ ] **Step 3: Implement.** Add the question:
 
 ```ts
     intent: {
@@ -97,194 +175,91 @@ Also update the existing test that asserts the full question-key list (`["needs_
     },
 ```
 
-In `parseTriageAnswers`, read `answers.intent` like `connector`, and accept it only when `choice` is in `INTENTS` and `confidence` is a number.
-
-- [ ] **Step 4: Run and see it PASS** (`_shared/agentTriage.test.ts`, then `deno check _shared/agentTriage.ts`).
-
+Parse it with `Number.isFinite(c) && c >= 0 && c <= 1`, and with the choice in `INTENTS`.
+- [ ] **Step 4: Run and see it PASS**, plus `deno check`.
 - [ ] **Step 5: Commit** `feat(agent): Jev triage also classifies intent`.
 
 ---
 
-### Task 2: The intent-label module
+### Task 5: The intent-label policy and writer
 
-**Files:**
-- Create: `supabase/functions/_shared/agentIntentLabels.ts`
-- Test: `supabase/functions/_shared/agentIntentLabels.test.ts`
+**Files:** Create `supabase/functions/ai-agent-reply/intentLabels.ts`, with tests in `intentLabels.test.ts`.
 
 **Interfaces:**
-- Consumes: `TRIAGE_CONFIDENCE`, `Intent`, `TriageAnswers` from `./agentTriage.ts`.
+- Consumes: `TRIAGE_CONFIDENCE`, `Intent`, `TriageAnswers`.
 - Produces:
-  - `export const INTENT_LABELS: Record<Exclude<Intent, "other">, { name: string; color: string }>`
-  - `export function intentLabelFor(answers: TriageAnswers | null): { name: string; color: string } | null`
-  - `export interface LabelDb { from(table: string): any }`. Use the narrow structural type the tests' fake implements. Mirror `CatalogDb` in `_shared/modelCatalogSyncRun.ts`, with no `any`.
-  - `export async function applyIntentLabel(db: LabelDb, userId: string, conversationId: string, label: { name: string; color: string }): Promise<void>`. It throws on a DB error; the caller catches.
-
-- [ ] **Step 1: Failing tests**
-
-```ts
-// deno-lint-ignore-file no-import-prefix
-import { assertEquals, assertRejects } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { applyIntentLabel, INTENT_LABELS, intentLabelFor } from "./agentIntentLabels.ts";
-
-const answers = (choice: string, confidence: number) =>
-  ({ needsKnowledge: null, smalltalk: null, handoff: null, connector: null, intent: { choice, confidence } }) as never;
-
-Deno.test("only a confident, labelled intent maps to a label", () => {
-  assertEquals(intentLabelFor(answers("pricing", 0.9)), { name: "Pricing", color: "#3b82f6" });
-  assertEquals(intentLabelFor(answers("pricing", 0.5)), null);
-  assertEquals(intentLabelFor(answers("other", 0.99)), null);
-  assertEquals(intentLabelFor(null), null);
-  assertEquals(Object.keys(INTENT_LABELS).sort(), ["complaint", "greeting", "lead", "order_status", "pricing"]);
-});
-```
-
-Build the fake db. It keeps `labels` and `assignments` arrays and supports exactly these chains:
-- `from("whatsapp_conversation_labels").select("id").eq("user_id", u).eq("name", n).limit(1)` → `{ data, error }`
-- `.insert({...}).select("id").single()`
-- `from("whatsapp_conversation_label_assignments").upsert(row, { onConflict: "conversation_id,label_id", ignoreDuplicates: true })` → `{ error }`
-
-Test cases:
-- a first call creates the label and one assignment;
-- a second call for the same conversation creates nothing new;
-- a second conversation reuses the same label id;
-- a label with that name owned by ANOTHER user is not reused;
-- an `error` on the label select makes `applyIntentLabel` reject (`assertRejects`).
-
+  - `INTENT_LABELS`;
+  - `intentLabelFor(answers: TriageAnswers | null): { name: string; color: string } | null`;
+  - `shouldLabel(input: { platform: string; dryRun: boolean; freshDelivery: boolean }): boolean`;
+  - a narrow structural `LabelDb` type with no `any` (mirror `CatalogDb` in `_shared/modelCatalogSyncRun.ts`);
+  - `applyIntentLabel(db: LabelDb, userId: string, conversationId: string, label): Promise<void>`, which throws on a DB error with no row data in the message.
+- [ ] **Step 1: Failing tests.**
+   - `intentLabelFor`: confident pricing → Pricing; 0.5 → null; `other` → null; null → null.
+   - `shouldLabel`: true only for WhatsApp, not dry run, fresh delivery. Cover all three false cases.
+   - `applyIntentLabel`, with a fake db that records calls:
+     - creates the label on first use;
+     - reuses it on a second conversation;
+     - picks the **oldest** of two same-name labels: the query orders by `created_at` then `id`, and the test asserts the order call;
+     - never reuses another user's label;
+     - rejects on a select error.
 - [ ] **Step 2: Run and see it FAIL.**
-
 - [ ] **Step 3: Implement.**
-
-```ts
-// Labels Jev's intent onto a WhatsApp conversation, reusing the inbox's own label tables so
-// the tags appear in its existing filter. Service-role writes: every query is scoped by user_id.
-import { type Intent, TRIAGE_CONFIDENCE, type TriageAnswers } from "./agentTriage.ts";
-
-export const INTENT_LABELS: Record<Exclude<Intent, "other">, { name: string; color: string }> = {
-  pricing: { name: "Pricing", color: "#3b82f6" },
-  order_status: { name: "Order status", color: "#8b5cf6" },
-  complaint: { name: "Complaint", color: "#ef4444" },
-  lead: { name: "Lead", color: "#22c55e" },
-  greeting: { name: "Greeting", color: "#94a3b8" },
-};
-
-export function intentLabelFor(answers: TriageAnswers | null): { name: string; color: string } | null {
-  const intent = answers?.intent;
-  if (!intent || intent.confidence < TRIAGE_CONFIDENCE || intent.choice === "other") return null;
-  return INTENT_LABELS[intent.choice];
-}
-```
-
-`applyIntentLabel`:
-1. Select `id` from `whatsapp_conversation_labels` where `user_id = userId` and `name = label.name`, limit 1. If `error`, throw `new Error("intent label read failed")`.
-2. If there is no row, insert `{ user_id, name, color }`, select `id`, `.single()`. On error, throw.
-3. Upsert the assignment `{ user_id, conversation_id, label_id }` with `onConflict: "conversation_id,label_id", ignoreDuplicates: true`. On error, throw.
-
-The error messages must not include row data.
-
-- [ ] **Step 4: Run and see it PASS**, and `deno check _shared/agentIntentLabels.ts`.
-
-- [ ] **Step 5: Commit** `feat(agent): label WhatsApp conversations with Jev's intent`.
+   - Select `id` from `whatsapp_conversation_labels`, filtered by `user_id` and `name`, ordered by `created_at` then `id` ascending, `limit(1)`.
+   - If there is no row, insert `{ user_id, name, color }`, select `id`, `.single()`.
+   - Upsert the assignment `{ user_id, conversation_id, label_id }` with `onConflict: "conversation_id,label_id", ignoreDuplicates: true`.
+- [ ] **Step 4: Run and see it PASS**, plus `deno check`.
+- [ ] **Step 5: Commit** `feat(agent): intent label policy and writer`.
 
 ---
 
-### Task 3: Wire intent labels into `ai-agent-reply`
+### Task 6: Wire labels into the reply path, and refresh the inbox
 
 **Files:**
-- Modify: `supabase/functions/ai-agent-reply/index.ts`
-- Test: extend the nearest existing ai-agent-reply test only if a pure helper is added. The labelling decision is already covered by Task 2, so this task needs no new logic test.
+- Modify: `supabase/functions/ai-agent-reply/index.ts` and `src/hooks/useWhatsAppLabels.ts`.
 
-**Interfaces:**
-- Consumes: `intentLabelFor`, `applyIntentLabel`, `LabelDb` (Task 2); the hoisted `triage: TriageRun | null`, which already exists in index.ts.
-
-- [ ] **Step 1: Implement.**
-   - **Where:** immediately after the successful-delivery `logOutcome(...)` call (the one with `status: dryRun ? "test" : "sent"`), before `return jsonResponse(...)`, add a block.
-   - **Condition:** it runs only when `!dryRun && request.platform === "whatsapp"`.
-   - **What it does:**
-     - compute `const intentLabel = intentLabelFor(triage?.outcome?.answers ?? null);`
-     - when it is non-null, `await applyIntentLabel(admin as unknown as LabelDb, request.user_id, request.conversation_id, intentLabel)`;
-     - wrap the await in try/catch. On catch, `console.warn("[ai-agent-reply] intent label failed:", error instanceof Error ? error.name : "error")`.
-   - **Log:** add `intent: triage?.outcome?.answers.intent ?? null` to that success `logOutcome` meta, so `/admin/logs` shows it even when no label applies.
-
-- [ ] **Step 2: Verify.** Run `deno test -A --no-check --node-modules-dir=none _shared/ ai-agent-reply/` and `deno check ai-agent-reply/index.ts`. Expected: all pass, clean.
-
-- [ ] **Step 3: Commit** `feat(agent): apply intent labels after a WhatsApp reply is delivered`.
+- [ ] **Step 1: Implement the backend wiring.**
+   - Immediately after the fresh-delivery success `logOutcome(...)` (the `status: dryRun ? "test" : "sent"` one), and only when `shouldLabel({ platform: request.platform, dryRun, freshDelivery: true })` holds:
+     - compute `intentLabelFor(triage?.outcome?.answers ?? null)`;
+     - when that is non-null, await `applyIntentLabel(...)` inside try/catch, and on catch log `console.warn("[ai-agent-reply] intent label failed:", e instanceof Error ? e.name : "error")`.
+   - The redelivery branch does not label (per Global Constraints).
+   - Add `intent: triage?.outcome?.answers.intent ?? null` to the success `logOutcome` meta.
+- [ ] **Step 2: Implement the frontend refresh.** In `useWhatsAppLabels.ts`, give the labels and assignments queries `refetchInterval: 30_000` and `refetchOnWindowFocus: true`, so server-created labels appear in an open inbox.
+   - Extend its test if one exists; otherwise assert the options in a small test.
+- [ ] **Step 3: Verify.**
+   - Deno: `_shared/` + `ai-agent-reply/` suites, plus `deno check ai-agent-reply/index.ts`.
+   - Then vitest on `src/hooks`, plus `tsc`.
+- [ ] **Step 4: Commit** `feat(agent): label WhatsApp conversations after delivery; inbox refreshes labels`.
 
 ---
 
-### Task 4: `escalate_to_human` carries a handoff summary
+## Release and acceptance (controller)
 
-**Files:**
-- Modify: `supabase/functions/ai-agent-reply/tools.ts`:
-  - the `escalate_to_human` definition (~line 80);
-  - `escalateConversation` (~245–517);
-  - the tool dispatch (~571).
-- Test: `supabase/functions/ai-agent-reply/tools.test.ts`
+1. Apply the Task 1 migration to production, then reload the PostgREST schema cache. Confirm the columns exist.
+2. Merge the PR. `main` auto-deploys the frontend (Dokploy) **and** the edge functions: a Dokploy schedule syncs `origin/main` into the functions volume every 2 minutes and restarts the functions. That was verified on every merge on 2026-09-25. Confirm by file content and the container restart time.
+3. Live acceptance on xsellpoint's WhatsApp, with triage on. Send:
+   - "كم سعر …" → a Pricing label appears within 30 s in an open inbox;
+   - "وين طلبي" → Order status;
+   - "ابغى اكلم موظف" → the summary appears in the conversation header and the Human Agent queue, `handoff_summary` is set on the mode row, and the admin alert shows `Summary:`.
 
-**Interfaces:**
-- Produces:
-  - `export function handoffSummary(summary: unknown, reason: string): string`, which trims, strips markdown `* _ \` #`, caps at 300 characters, and falls back to `reason`;
-  - the tool schema property `summary`.
-
-- [ ] **Step 1: Failing tests** (in `tools.test.ts`):
-   - `handoffSummary(" *Wants* the 100ml price; I checked stock.\n", "r")` returns `"Wants the 100ml price; I checked stock."`.
-   - A 500-character summary returns 300 characters.
-   - `handoffSummary(undefined, "customer asked")` and `handoffSummary("  ", "customer asked")` both return `"customer asked"`.
-   - Find the existing test that exercises `escalateConversation` with a fake db and target (search `tools.test.ts` for `escalate`). Extend it, or add a sibling, so that calling the `escalate_to_human` tool with `{ reason: "r", summary: "Wants a refund for order 42. I confirmed the order exists." }` results in:
-     - the inserted `whatsapp_conversation_assignments.notes` equal to `"AI handoff: Wants a refund for order 42. I confirmed the order exists."`;
-     - the admin WhatsApp text containing `"Summary: Wants a refund for order 42. I confirmed the order exists."`.
-
-- [ ] **Step 2: Run and see it FAIL.**
-
-- [ ] **Step 3: Implement.**
-   - **Schema:** in the `escalate_to_human` schema, add
-
-     ```ts
-     summary: { type: "string", description: "Two short lines for the human agent: what the customer wants, and what you already checked or told them. Plain text." }
-     ```
-
-     Keep `required: ["reason"]`.
-   - **Thread the summary through:** pass `handoffSummary(args.summary, reason)` into `escalateConversation`. Add a parameter, or extend its existing input object; follow the current signature style.
-   - **Where it is used:**
-     - the assignment `notes` becomes `` `AI handoff: ${summary}` `` (was `` `AI escalation: ${reason}` ``);
-     - in the admin alert, replace the `Reason: …` line with `Summary: <summary>`;
-     - keep every other line of the alert unchanged.
-   - **Other callers:** the model-outage floor path must still work. It passes no summary, so `handoffSummary` falls back to its reason.
-
-- [ ] **Step 4: Run and see it PASS** (`ai-agent-reply/tools.test.ts`, then the whole `ai-agent-reply/`), plus `deno check ai-agent-reply/index.ts`.
-
-- [ ] **Step 5: Commit** `feat(agent): escalations carry a two-line handoff summary`.
+   Repeat the handoff with no agent online.
+4. mem0 plus the final report.
 
 ---
 
-### Task 5: Show the handoff summary to the human agent
+## Debate round 1: Codex astra 6 medium (`gpt-6-astra`, reasoning medium, `--sandbox read-only`), verdict REWORK
 
-**Files:**
-- Modify: `src/pages/HumanAgentMode.tsx` (queue items), and the component that shows a conversation's current assignment in the WhatsApp inbox. Find it with `grep -rn "useConversationAssignments\|assigned to" src/components src/features`.
-- Test: `src/pages/__tests__/HumanAgentMode.test.tsx`, or the existing test file for the component you change. Create one if none exists.
-
-**Interfaces:**
-- Consumes: the assignment rows from `useConversationAssignments`, which already `select` the columns. Confirm that `notes` is selected; if the select is hand-picked, add `notes` (see the memory note on hand-picked selects hiding new columns).
-
-- [ ] **Step 1: Failing test.** Render the queue with one assignment whose `notes` is `"AI handoff: Wants a refund for order 42."`, and assert the text `Wants a refund for order 42.` is visible, labelled "AI summary". Also assert that an assignment with `notes: null` renders no "AI summary" element.
-
-- [ ] **Step 2: Run and see it FAIL.**
-
-- [ ] **Step 3: Implement.** When `notes` starts with `AI handoff: ` or `AI escalation: `:
-   - show the text after the prefix;
-   - use a small muted block with the label "AI summary", under the conversation name in the queue item and in the inbox assignment badge's tooltip or area;
-   - render it as plain text, never as HTML.
-
-- [ ] **Step 4: Run and see it PASS**, and `tsc` is at 0 errors.
-
-- [ ] **Step 5: Commit** `feat(inbox): show the AI handoff summary to the human agent`.
-
----
-
-## After all tasks (controller)
-
-1. Final whole-branch review, then the guards; merge; Dokploy deploys.
-2. Live check on the xsellpoint WhatsApp agent. Triage is already on. Send "كم سعر…", then "وين طلبي", then "ابغى اكلم موظف". Confirm:
-   - the Pricing and Order status labels appear in the inbox filter;
-   - the handoff notes read `AI handoff: …` and show in the Human Agent queue;
-   - the admin alert shows `Summary:`.
-3. mem0 plus the final report.
+| # | Finding | Ruling | Reason |
+|---|---|---|---|
+| A | Put instrumentation first, summaries before tags, and verify media now | **partial** | Summaries are now Tasks 1–3 and tags Tasks 4–6. Instrumentation opens Phase 2 (its first task) because it measures Phase 2's work. Media verification is added to the roadmap as an immediate acceptance check. |
+| B1 | Label creation isn't idempotent (no name uniqueness; race; arbitrary `limit(1)`) | **partial** | Adopted a deterministic oldest-first lookup, so duplicates converge. The first-use race needs two messages for the same user in the same instant with no label yet, which is rare and harmless: one extra label, and later writes converge. A unique index would require resolving existing duplicate user labels in production, which is out of scope. |
+| B2 | Tenant scoping is overstated; composite FK | **reject** | `user_id` and `conversation_id` come from the service-role webhook request, and the label is read and written filtered by that same `user_id`. Codex itself calls this an existing schema weakness, not a new exploit. Hardening the label schema is out of this feature's scope. |
+| B3 | Redelivery loses the intent | **partial** | Accepted as documented behaviour: labels are advisory. Redelivery occurs only after a crash between generation and send. Persisting intent in the outbox adds schema and code for a cosmetic loss. |
+| B4 | The integration-test exemption is unjustified | **partial** | Added the pure `shouldLabel` gate with dry-run, platform and redelivery cases, plus the oldest-first ordering assertion. Real PostgREST conflict behaviour is covered by the live acceptance step rather than a fake. |
+| B5 | Notes can't cover the waiting queue | **accept** | Summaries now live on `ai_conversation_modes` (Task 1 migration), which is written on every escalation regardless of agent availability. |
+| B6 | UI target unspecified | **accept** | Named the components: `AiConversationModeSelect` (shared by the WhatsApp pane and FB/IG `ConversationDetail`) and `HumanAgentMode` for both queues, via `useHandoffSummaries`. |
+| B7 | Escalation coverage contract | **accept** | Normalised once inside `escalateConversation` through a trailing options object that preserves `deadline`. Tool, no-agent and outage-floor tests added, with repeat-notification suppression asserted. |
+| B8 | Labels don't refresh in an open inbox | **accept** | Added a 30 s refetch plus refetch on focus in Task 6. Owner-scoped visibility is today's label semantics, unchanged. |
+| B9 | Boundary contracts (NaN, empty after stripping, long fallback, manual removal) | **partial** | Adopted: finite confidence in [0,1], sanitise before the emptiness check, sanitise and cap the fallback, and the policy module lives beside ai-agent-reply. Manual removal: a later message with the same confident intent may re-add the label. That is documented; tracking removals is out of scope. |
+| B10 | "Merge; Dokploy deploys" is wrong for edge functions | **reject** | Outdated. A Dokploy schedule syncs `origin/main` into the functions volume and restarts the functions every 2 minutes. Verified on PRs #195–#203 on 2026-09-25 by file content and container restart time. The migration-first step was added. |
+| C | Phase 2: 6 s is a hypothesis; cache categories first; product-search cache TTL and stock; bounded read-only parallelism; drop prefetch; "one round" is mislabelled | **accept** | Phase 2 plan written to match: measurement first, the category-id cache, a short search cache with stock staleness defined, parallel only for read-only WooCommerce capabilities, prefetch dropped, extra-round cap deferred to the measurement. |
+| C | Dashboard: "sent" ≠ "resolved"; saved tests need isolated threads and fixtures | **accept** | Recorded in the roadmap for Phase 3 scoping. |
