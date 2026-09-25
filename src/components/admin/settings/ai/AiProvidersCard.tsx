@@ -20,6 +20,7 @@ import {
 } from '@/hooks/useAIConfiguration';
 import type { AIProvider, TestConnectionResult } from '@/hooks/useAIConfiguration';
 import { SyncModelsButton } from './SyncModelsButton';
+import { SyncAllButton } from './SyncAllButton';
 import { SYNCABLE_PROVIDER_CODES } from '@/hooks/ai-config/useSyncModels';
 
 function isOAuthProvider(provider: AIProvider | null) {
@@ -146,9 +147,16 @@ export function AiProvidersCard() {
   return (
     <div className="space-y-6">
       <Card>
-        <CardHeader>
-          <CardTitle>AI Providers</CardTitle>
-          <CardDescription>Manage AI providers and their connection status</CardDescription>
+        <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0">
+          <div>
+            <CardTitle>AI Providers</CardTitle>
+            <CardDescription>Manage AI providers and their connection status</CardDescription>
+          </div>
+          <SyncAllButton
+            providerCodes={providers
+              .filter((p) => p.is_active && (SYNCABLE_PROVIDER_CODES as readonly string[]).includes(p.provider_code))
+              .map((p) => p.provider_code)}
+          />
         </CardHeader>
         <CardContent>
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-2">
