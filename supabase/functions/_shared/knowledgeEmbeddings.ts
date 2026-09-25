@@ -3,6 +3,7 @@ import {
   EMBEDDING_MODEL as DEFAULT_OLLAMA_MODEL,
   embedWithOllama,
 } from "./ollamaEmbeddings.ts";
+import { resolveProviderKey } from "./providerKeys.ts";
 
 const GEMINI_ENDPOINT =
   "https://generativelanguage.googleapis.com/v1beta/openai/embeddings";
@@ -546,6 +547,8 @@ const EMBED_ATTEMPTS = 3;
 type OpenAiCompatibleApi = {
   endpoint: string;
   keyEnvVar: string;
+  /** An already-resolved key; when set, keyEnvVar is only used to name a missing key. */
+  apiKey?: string | null;
   label: string;
   /** Provider-specific fields sent alongside the standard body. */
   extraBody?: Record<string, unknown>;
@@ -559,7 +562,7 @@ export async function embedWithOpenAiCompatible(
   sleep: (milliseconds: number) => Promise<void> = (milliseconds) =>
     new Promise((resolve) => setTimeout(resolve, milliseconds)),
 ): Promise<number[][]> {
-  const key = Deno.env.get(api.keyEnvVar);
+  const key = api.apiKey ?? Deno.env.get(api.keyEnvVar);
   if (!key) throw new Error(`${api.keyEnvVar} is not configured`);
 
   const embeddings: number[][] = [];
@@ -632,10 +635,16 @@ function embedWithOpenRouter(texts: string[], config: EmbeddingConfig): Promise<
   });
 }
 
-function embedWithVercel(texts: string[], config: EmbeddingConfig): Promise<number[][]> {
+/** Exported for tests only. The key is the admin-saved one first, then AI_GATEWAY_API_KEY via the provider row. */
+export async function embedWithVercel(
+  texts: string[],
+  config: EmbeddingConfig,
+  resolveKey: (providerCode: string) => Promise<string | null> = (code) => resolveProviderKey(undefined, code),
+): Promise<number[][]> {
   return embedWithOpenAiCompatible(texts, config, {
     endpoint: VERCEL_ENDPOINT,
     keyEnvVar: "AI_GATEWAY_API_KEY",
+    apiKey: await resolveKey("vercel") ?? "",
     label: "Vercel AI Gateway",
   });
 }

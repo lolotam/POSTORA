@@ -11,6 +11,7 @@ import {
   embeddingRecord,
   embedKnowledgeDual,
   embedWithOpenAiCompatible,
+  embedWithVercel,
   EmbeddingColumnOwnershipError,
   resolveAdminEmbeddingLadder,
   resolveDualEmbeddingConfig,
@@ -703,4 +704,24 @@ Deno.test("accountRetrievalRpcName pairs with each vector column", () => {
     accountRetrievalRpcName(resolveDualEmbeddingConfig(env({ EMBEDDING_PROVIDER: "gemini" })).primary),
     "match_ai_knowledge_chunks_for_account",
   );
+});
+
+Deno.test("a Vercel embedding uses the admin-saved key when AI_GATEWAY_API_KEY is unset", async () => {
+  const realFetch = globalThis.fetch;
+  const prior = Deno.env.get("AI_GATEWAY_API_KEY");
+  Deno.env.delete("AI_GATEWAY_API_KEY");
+  let authorization: string | null = null;
+  globalThis.fetch = ((_url: string | URL | Request, init?: RequestInit) => {
+    authorization = new Headers(init?.headers).get("authorization");
+    return Promise.resolve(new Response(JSON.stringify({ data: [{ embedding: [0.1, 0.2] }] }), { status: 200 }));
+  }) as typeof fetch;
+  try {
+    const vectors = await embedWithVercel(["hello"], { ...stubbedConfig, provider: "vercel" }, (code) =>
+      Promise.resolve(code === "vercel" ? "db-key" : null));
+    assertEquals(vectors, [[0.1, 0.2]]);
+    assertEquals(authorization, "Bearer db-key");
+  } finally {
+    globalThis.fetch = realFetch;
+    if (prior !== undefined) Deno.env.set("AI_GATEWAY_API_KEY", prior);
+  }
 });
