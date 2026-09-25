@@ -91,7 +91,7 @@ serve(async (req) => {
           event: "vercel_video_unrecorded",
           model_id: modelId,
           gateway_job_id: started.gatewayJobId,
-          operation: JSON.stringify(started.operation ?? null),
+          operation: started.operation ?? null,
           error: recorded.error?.message ?? "insert returned no row",
         }, user.id);
         return json({ error: "Video started but could not be recorded; contact support" }, 500);
@@ -149,9 +149,10 @@ serve(async (req) => {
     return json({ success: true, jobId: job.id, status: "running", pollAfterSeconds: 10 });
   } catch (err) {
     // Quota was reserved before dispatch. Reaching here means the job never
-    // started — the MCP call threw, Higgsfield returned no job id, or the job row
+    // started — the MCP call threw, Higgsfield returned no job id, or its job row
     // failed to insert — so the reservation must be released or the user is
-    // charged for a generation that never ran. Releasing is safe precisely
+    // charged for a generation that never ran. A Vercel job that did start keeps
+    // its reservation (see `dispatched`). Releasing is safe precisely
     // because we only get here on a definitive failure; an indeterminate outcome
     // returns a running job instead and stays charged.
     if (shouldReleaseReservation({ reserved, dispatched }) && userId) {
