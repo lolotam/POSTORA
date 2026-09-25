@@ -643,8 +643,11 @@ export interface CustomTool {
   connector_type?: string | null;
   /**
    * Whether the connector rejects writes at its own boundary (20260825120000).
-   * Optional because Composio-attached tools are built without it; absent
-   * keeps a tool out of the parallel round (logic.ts parallelizable).
+   * Optional so a row written before the column existed still type-checks.
+   * Composio-attached tools DO carry this flag (attachComposioTools spreads
+   * ...tool), but it came from the column default, not from their adapter —
+   * parallelizable() excludes them by auth_strategy instead. Absent keeps a
+   * tool out of the parallel round (logic.ts parallelizable).
    */
   read_only_mode?: boolean | null;
   /**

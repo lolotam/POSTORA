@@ -1,4 +1,9 @@
 // Pure decision logic for the AI agent reply pipeline. No Deno or network
+// imports here — this module is unit-tested from the frontend vitest suite.
+// connectorRegistry.ts is the one allowed runtime import: it is a pure data
+// module (no Deno APIs), and parallelizable must consult the same registry
+// the reply dispatch routes adapters by, or the two decisions can drift.
+import { shouldUseAdapter } from "../_shared/connectorRegistry.ts";
 import type {
   AgentBehavior,
   AgentGoal,
@@ -6,7 +11,6 @@ import type {
   AgentTone,
 } from "../_shared/agentBehavior.ts";
 import type { TriagePlan } from "../_shared/agentTriage.ts";
-// imports here — this module is unit-tested from the frontend vitest suite.
 
 export type EngagementMode = "ai_first" | "human_first" | "human_then_ai";
 export type ReplyLanguage = "ar" | "en";
@@ -515,18 +519,31 @@ export function phaseTimings(now: () => number = Date.now): PhaseTimingsRecorder
  * so the round may run concurrently. Agent tools (escalate, notify, search)
  * and any write-capable connector keep the round serial: racing a write, or a
  * tool whose result feeds later bookkeeping, risks side effects arriving in an
- * order nobody chose. `connector_type === "woocommerce"` is read-only by
- * construction (its adapter reports read_only: true), so it qualifies even
- * when the row predates read_only_mode.
+ * order nobody chose.
+ *
+ * `read_only_mode` defaults to true on EVERY ai_agent_tools row, so the flag
+ * alone qualifies nothing. A call qualifies only when its tool is NOT
+ * Composio-routed (auth_strategy "composio_oauth" goes through Composio, which
+ * may mutate), goes through the adapter path (shouldUseAdapter — the same
+ * registry decision the reply dispatch routes by; a legacy custom_rest webhook
+ * can do anything), and is read-only by flag or by construction:
+ * `connector_type === "woocommerce"` reports read_only: true at its adapter,
+ * so it qualifies even when the row predates read_only_mode.
  */
 export function parallelizable(
   calls: Array<{ function: { name: string } }>,
-  toolByName: Map<string, { connector_type?: string | null; read_only_mode?: boolean | null }>,
+  toolByName: Map<string, {
+    connector_type?: string | null;
+    read_only_mode?: boolean | null;
+    auth_strategy?: string | null;
+  }>,
 ): boolean {
   if (calls.length < 2) return false;
   return calls.every((call) => {
     const tool = toolByName.get(call.function.name);
     if (!tool) return false;
+    if (tool.auth_strategy === "composio_oauth") return false;
+    if (!shouldUseAdapter(tool)) return false;
     return tool.read_only_mode === true || tool.connector_type === "woocommerce";
   });
 }
