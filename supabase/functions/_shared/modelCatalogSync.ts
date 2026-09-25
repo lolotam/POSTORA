@@ -318,12 +318,18 @@ export function mapAnthropicCatalog(data: unknown[]): MappedCatalog {
 }
 
 function geminiCapability(id: string, methods: string[]): Capability | string {
+  // Music and agent/tool models (Lyria, Deep Research, computer-use, robotics, Antigravity) list
+  // generateContent like any chat model, so id patterns must be checked before the
+  // generateContent → chat fallback below, not left to fall through to "chat".
+  if (/^lyria/i.test(id)) return "music";
+  if (/deep-research|computer-use|robotics|antigravity/i.test(id)) return "agent";
+  if (/transcribe/i.test(id)) return "stt";
   if (methods.includes("predictLongRunning")) return "video";
   if (methods.includes("predict")) return "image";
   if (methods.includes("embedContent")) return "embedding";
   if (methods.includes("generateContent")) {
     if (/tts/i.test(id)) return "tts";
-    if (/image/i.test(id)) return "image";
+    if (/image/i.test(id) || /nano-banana/i.test(id)) return "image";
     return "chat";
   }
   return methods[0] ?? "unknown";
@@ -346,13 +352,18 @@ export function mapGeminiCatalog(data: unknown[]): MappedCatalog {
     model.context_limit = positiveInt(row.inputTokenLimit);
     models.push(model);
   }
-  return { models, skippedByType, managedCapabilities: ["chat", "image", "video", "embedding", "tts"], additiveCapabilities: true };
+  return { models, skippedByType, managedCapabilities: ["chat", "image", "video", "embedding", "tts", "stt"], additiveCapabilities: true };
 }
 
 const DATED_SNAPSHOT = /-\d{4}-\d{2}-\d{2}$/;
+// Old-style snapshots that predate the full-date convention, e.g. gpt-4-0613, tts-1-1106.
+// Four digits after a trailing dash; doesn't catch gpt-4o or o4-mini (no trailing dash+digits).
+const OLD_SNAPSHOT = /-\d{4}$/;
 function openAICapability(id: string): Capability | string {
-  if (DATED_SNAPSHOT.test(id)) return "snapshot";
-  if (/moderation|realtime|audio|search|computer-use|deep-research|^babbage|^davinci|^ft:/.test(id)) return "other";
+  if (DATED_SNAPSHOT.test(id) || OLD_SNAPSHOT.test(id)) return "snapshot";
+  // instruct/codex/*-pro ids and gpt-live-<n> don't work through /chat/completions.
+  // gpt-live-\d (not \w) so gpt-live-transcribe falls through to the stt check below.
+  if (/moderation|realtime|audio|search|computer-use|deep-research|instruct|codex|-pro$|^gpt-live-\d|^babbage|^davinci|^ft:/.test(id)) return "other";
   if (/^(gpt-image|dall-e|chatgpt-image)/.test(id)) return "image";
   if (/tts/.test(id)) return "tts";
   if (/whisper|transcribe/.test(id)) return "stt";
@@ -367,9 +378,12 @@ export function mapOpenAICatalog(data: unknown[]): MappedCatalog {
   return { ...mapped, managedCapabilities: ["chat", "image", "tts", "stt", "embedding", "video"] };
 }
 
-// Z.ai and MiniMax: /models lists their chat models only; image, video and speech rows stay hand-managed.
+// Z.ai and MiniMax: /models lists their chat models only, and that list is itself PARTIAL —
+// it omits live chat models (e.g. glm-4.6v, glm-4.5-flash, MiniMax-M1). managedCapabilities
+// stays empty so a sync can add new ids and refresh known ones but can never deactivate a
+// chat row for being merely absent from this incomplete catalogue.
 export function mapIdOnlyChatCatalog(data: unknown[]): MappedCatalog {
-  return { ...idOnly(data, () => "chat"), managedCapabilities: ["chat"] };
+  return { ...idOnly(data, () => "chat"), managedCapabilities: [] };
 }
 
 function xaiCapability(id: string): Capability {

@@ -194,13 +194,27 @@ Deno.test("Gemini models map by generation method, with the models/ prefix strip
     { name: "models/imagen-4.0-generate-001", displayName: "Imagen", supportedGenerationMethods: ["predict"] },
     { name: "models/veo-3.0-generate-001", displayName: "Veo", supportedGenerationMethods: ["predictLongRunning"] },
     { name: "models/aqa", displayName: "AQA", supportedGenerationMethods: ["generateAnswer"] },
+    { name: "models/gemma-4-31b-it", displayName: "Gemma", supportedGenerationMethods: ["generateContent"] },
+    { name: "models/lyria-3-clip-preview", displayName: "Lyria Clip", supportedGenerationMethods: ["generateContent"] },
+    { name: "models/lyria-3-pro-preview", displayName: "Lyria Pro", supportedGenerationMethods: ["generateContent"] },
+    { name: "models/lyria-3.5", displayName: "Lyria 3.5", supportedGenerationMethods: ["generateContent"] },
+    { name: "models/deep-research-preview-04-2026", displayName: "Deep Research", supportedGenerationMethods: ["generateContent"] },
+    { name: "models/deep-research-max-preview-04-2026", displayName: "Deep Research Max", supportedGenerationMethods: ["generateContent"] },
+    { name: "models/gemini-2.5-computer-use-preview-10-2025", displayName: "Computer Use", supportedGenerationMethods: ["generateContent"] },
+    { name: "models/gemini-robotics-er-2-preview", displayName: "Robotics", supportedGenerationMethods: ["generateContent"] },
+    { name: "models/antigravity-preview-latest", displayName: "Antigravity", supportedGenerationMethods: ["generateContent"] },
+    { name: "models/gemini-3.5-transcribe", displayName: "Transcribe", supportedGenerationMethods: ["generateContent"] },
+    { name: "models/nano-banana-pro-preview", displayName: "Nano Banana", supportedGenerationMethods: ["generateContent"] },
   ]);
   assertEquals(byId(mapped), {
     "gemini-2.5-flash": ["chat"], "gemini-2.5-flash-preview-tts": ["tts"], "gemini-2.5-flash-image": ["image"],
     "gemini-embedding-001": ["embedding"], "imagen-4.0-generate-001": ["image"], "veo-3.0-generate-001": ["video"],
+    "gemma-4-31b-it": ["chat"], "gemini-3.5-transcribe": ["stt"], "nano-banana-pro-preview": ["image"],
   });
-  assertEquals(mapped.skippedByType, { generateAnswer: 1 });
-  assertEquals(mapped.managedCapabilities.sort(), ["chat", "embedding", "image", "tts", "video"]);
+  // Music and agent models list generateContent like any chat model, so id patterns must
+  // win before the generateContent → chat fallback runs, not merely skip an unknown method.
+  assertEquals(mapped.skippedByType, { generateAnswer: 1, music: 3, agent: 5 });
+  assertEquals(mapped.managedCapabilities.sort(), ["chat", "embedding", "image", "stt", "tts", "video"]);
 });
 
 Deno.test("OpenAI ids are classified by name; dated snapshots and non-reply models are skipped", () => {
@@ -209,19 +223,38 @@ Deno.test("OpenAI ids are classified by name; dated snapshots and non-reply mode
     "tts-1-hd", "whisper-1", "gpt-4o-transcribe", "text-embedding-3-small", "sora-2", "omni-moderation-latest",
     "gpt-4o-realtime-preview", "gpt-4o-audio-preview", "gpt-4o-search-preview", "computer-use-preview", "babbage-002",
     "gpt-audio", "o3-deep-research",
+    // Old-style 4-digit snapshots (no full date), matched by /-\d{4}$/ without catching gpt-4o or o4-mini.
+    "gpt-4-0613", "tts-1-1106", "tts-1-hd-1106", "gpt-3.5-turbo-0125", "gpt-3.5-turbo-1106", "gpt-3.5-turbo-instruct-0914",
+    // Real ids that don't work through /chat/completions: instruct, codex, *-pro, and live (but not live transcribe).
+    "gpt-3.5-turbo-instruct", "gpt-5-codex", "gpt-5.1-codex", "gpt-5.1-codex-mini", "gpt-5.1-codex-max", "gpt-5.2-codex",
+    "gpt-5.3-codex", "o1-pro", "o3-pro", "gpt-5-pro", "gpt-5.2-pro", "gpt-live-1",
+    // Real chat ids that must not be caught by the new other/snapshot patterns.
+    "gpt-5.1", "gpt-6-luna", "gpt-5.3-chat-latest", "gpt-4-turbo", "gpt-3.5-turbo", "o1", "gpt-4",
+    // gpt-live-transcribe must stay stt, not fall into the gpt-live-* "other" exclusion.
+    "gpt-live-transcribe",
   ].map((id) => ({ id })));
   assertEquals(byId(mapped), {
     "gpt-5.5": ["chat"], "o4-mini": ["chat"], "chatgpt-4o-latest": ["chat"], "gpt-image-2": ["image"], "dall-e-3": ["image"],
     "gpt-4o-mini-tts": ["tts"], "tts-1-hd": ["tts"], "whisper-1": ["stt"], "gpt-4o-transcribe": ["stt"],
     "text-embedding-3-small": ["embedding"], "sora-2": ["video"],
+    "gpt-5.1": ["chat"], "gpt-6-luna": ["chat"], "gpt-5.3-chat-latest": ["chat"], "gpt-4-turbo": ["chat"],
+    "gpt-3.5-turbo": ["chat"], "o1": ["chat"], "gpt-4": ["chat"], "gpt-live-transcribe": ["stt"],
   });
-  assertEquals(mapped.skippedByType, { snapshot: 1, other: 8 });
+  assertEquals(mapped.skippedByType, { snapshot: 7, other: 20 });
 });
 
-Deno.test("Z.ai and MiniMax list chat ids only, so only chat rows are managed", () => {
+Deno.test("Z.ai and MiniMax list chat ids only, and the catalogue is partial so nothing is managed", () => {
   const mapped = mapIdOnlyChatCatalog([{ id: "glm-5" }, { id: "MiniMax-M3" }]);
   assertEquals(byId(mapped), { "glm-5": ["chat"], "MiniMax-M3": ["chat"] });
-  assertEquals(mapped.managedCapabilities, ["chat"]);
+  assertEquals(mapped.managedCapabilities, []);
+});
+
+Deno.test("mapIdOnlyChatCatalog never deactivates an active chat row merely absent from its partial list", () => {
+  const mapped = mapIdOnlyChatCatalog([{ id: "glm-5" }]);
+  const plan = planCatalogSync([
+    existingRow({ id: "1", model_id: "glm-4.6v", is_active: true, capabilities: ["chat"], metadata: null }),
+  ], mapped, new Set());
+  assertEquals(plan.deactivateIds, []);
 });
 
 Deno.test("xAI ids split into chat, image and video by name", () => {
