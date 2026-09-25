@@ -166,7 +166,7 @@ serve(async (req) => {
           if (upsertErr) throw new Error(upsertErr.message);
         };
         try {
-          const provider = await testTarget(supabase, provider_code);
+          const provider = await testTarget(supabase as unknown as RowReader, provider_code);
           if (!provider) {
             return new Response(JSON.stringify({ error: 'Unknown provider' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
           }
@@ -188,31 +188,16 @@ serve(async (req) => {
         const { provider_code } = body;
         if (!provider_code) return new Response(JSON.stringify({ error: 'provider_code required' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 
-        // Try to find key from env or DB
-        let apiKey: string | undefined;
-        
-        // For external services, check known env vars
-        const envMap: Record<string, string> = { firecrawl: 'FIRECRAWL_API_KEY', apify: 'APIFY_API_KEY' };
-        if (envMap[provider_code]) {
-          apiKey = Deno.env.get(envMap[provider_code]);
-        } else {
-          // For AI providers, check their env var
-          const { data: provider } = await supabase.from('ai_providers').select('api_key_env_var').eq('provider_code', provider_code).maybeSingle();
-          if (provider?.api_key_env_var) {
-            apiKey = Deno.env.get(provider.api_key_env_var);
-          }
-        }
-        
-        // Fallback to DB
-        if (!apiKey) {
-          const { data: keyRow } = await supabase.from('provider_api_keys').select('api_key').eq('provider_code', provider_code).single();
-          apiKey = keyRow?.api_key;
-        }
+        // Saved key, then the provider row's env var — the runtime's order. Services
+        // without an ai_providers row fall back to their well-known env var.
+        const serviceEnv: Record<string, string> = { firecrawl: 'FIRECRAWL_API_KEY', apify: 'APIFY_API_KEY' };
+        const apiKey = await resolveProviderKey(supabase as unknown as RowReader, provider_code)
+          ?? (serviceEnv[provider_code] ? Deno.env.get(serviceEnv[provider_code]) : undefined);
         if (!apiKey) return new Response(JSON.stringify({ success: false, error: 'No API key configured' }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
 
         const startTime = Date.now();
         try {
-          const provider = await testTarget(supabase, provider_code);
+          const provider = await testTarget(supabase as unknown as RowReader, provider_code);
           if (!provider) return new Response(JSON.stringify({ error: 'Unknown provider' }), { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
           await runProviderTest(supabase, provider, apiKey);
           return new Response(JSON.stringify({ success: true, latency: Date.now() - startTime }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
@@ -324,9 +309,9 @@ serve(async (req) => {
 interface TestTarget { id: string; provider_code: string; api_type: string | null; api_endpoint: string }
 
 // Firecrawl and Apify keys can be saved without an ai_providers row; they need no endpoint.
-async function testTarget(db: any, providerCode: string): Promise<TestTarget | null> {
+async function testTarget(db: RowReader, providerCode: string): Promise<TestTarget | null> {
   const { data } = await db.from('ai_providers').select('*').eq('provider_code', providerCode).maybeSingle();
-  if (data) return data;
+  if (data) return data as TestTarget;
   if (providerCode === 'firecrawl' || providerCode === 'apify') {
     return { id: '', provider_code: providerCode, api_type: 'rest', api_endpoint: '' };
   }

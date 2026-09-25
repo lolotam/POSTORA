@@ -4,6 +4,7 @@ import { providerTestKind } from "./providerTestKind.ts";
 
 const kind = (provider_code: string, api_type = "openai") => providerTestKind({ provider_code, api_type });
 
+// Regression 2026-09-25: the card Test sent Firecrawl and ElevenLabs keys to /chat/completions.
 Deno.test("non-chat services get their own probe instead of a chat completion", () => {
   assertEquals(kind("firecrawl", "rest"), "firecrawl");
   assertEquals(kind("apify", "rest"), "apify");
