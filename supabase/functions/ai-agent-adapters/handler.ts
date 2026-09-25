@@ -7,6 +7,7 @@ import {
   restrictedJsonResponse,
 } from "../_shared/cors.ts";
 import { persistConnectionTestOutcome } from "./connectionTestOutcome.ts";
+import { tableCache } from "./cache.ts";
 import { createAdapterDependencies } from "./dependencies.ts";
 import { executeConnector } from "./dispatcher.ts";
 import { CAPABILITIES, type ConnectorResult, type ConnectorTool } from "./types.ts";
@@ -214,7 +215,7 @@ async function executeAdapterRequest(
           parameters: parsedRequest.data.parameters,
         },
       },
-      createAdapterDependencies(parsedRequest.data.call_budget_ms),
+      createAdapterDependencies(parsedRequest.data.call_budget_ms, tableCache(admin)),
     );
   const connectorOutcome = parsedRequest.data.action === "test_connection"
     ? await meterTestConnectionProbe(admin, {

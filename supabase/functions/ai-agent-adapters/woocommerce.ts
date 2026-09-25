@@ -1,3 +1,4 @@
+import { cacheKey, type ConnectorCache } from "./cache.ts";
 import { readJson, safeVendorFetch } from "./http.ts";
 import type {
   AdapterDependencies,
@@ -38,6 +39,37 @@ const SORT_KEYS: Record<string, string> = {
 
 const DEFAULT_SEARCH_LIMIT = 5;
 const MAX_SEARCH_LIMIT = 20;
+
+// A category id is stable for the store's lifetime in
+// practice, so it is cached for a day; a product search only for 120 s, the
+// staleness the tool description admits to the model. check_stock and
+// lookup_orders are never cached.
+const CATEGORY_CACHE_TTL_SECONDS = 86_400;
+const SEARCH_CACHE_TTL_SECONDS = 120;
+
+/** A cache read failure is a miss, never a failed connector call. */
+async function cacheRead(cache: ConnectorCache, key: string): Promise<unknown | null> {
+  try {
+    return await cache.get(key);
+  } catch {
+    return null;
+  }
+}
+
+/** A cache write failure is dropped; the live result is still returned. */
+async function cacheWrite(
+  cache: ConnectorCache,
+  key: string,
+  toolId: string,
+  value: unknown,
+  ttlSeconds: number,
+): Promise<void> {
+  try {
+    await cache.set(key, toolId, value, ttlSeconds);
+  } catch {
+    // Fall through: caching is an optimisation, not part of the answer.
+  }
+}
 
 /**
  * How many products to return. Defaults low on purpose: the result is
@@ -205,6 +237,33 @@ async function resolveCategoryId(
   return chosen && chosen.id !== undefined ? String(chosen.id) : null;
 }
 
+/**
+ * resolveCategoryId costs one extra request per category name. The id is
+ * stable, so the answer is cached for a day keyed by tool, store and name. A
+ * not-found null is never cached: it is a failure, and the store may add the
+ * category any minute.
+ */
+async function resolveCachedCategoryId(
+  toolId: string,
+  storeUrl: string,
+  authorization: string,
+  name: string,
+  dependencies: AdapterDependencies,
+): Promise<string | null> {
+  const cache = dependencies.cache;
+  if (!cache) {
+    return resolveCategoryId(storeUrl.replace(/\/+$/, ""), authorization, name, dependencies);
+  }
+  const key = await cacheKey(["cat", toolId, storeUrl, name]);
+  const cached = await cacheRead(cache, key);
+  if (typeof cached === "string") return cached;
+  const resolved = await resolveCategoryId(storeUrl.replace(/\/+$/, ""), authorization, name, dependencies);
+  if (resolved !== null) {
+    await cacheWrite(cache, key, toolId, resolved, CATEGORY_CACHE_TTL_SECONDS);
+  }
+  return resolved;
+}
+
 async function callWooCommerce(
   invocation: ConnectorInvocation,
   dependencies: AdapterDependencies,
@@ -218,13 +277,32 @@ async function callWooCommerce(
   }
   const authorization = `Basic ${btoa(`${consumerKey}:${consumerSecret}`)}`;
 
+  // A cached search answer skips the category resolution too — a hit means the
+  // whole call is answered without touching the store. Failures are never
+  // cached, so the hit is always a projected success payload.
+  let searchCacheKey: string | null = null;
+  if (capability === "search_products" && dependencies.cache) {
+    searchCacheKey = await cacheKey(["search", invocation.tool.id, storeUrl, invocation.request.parameters]);
+    const cachedSearch = await cacheRead(dependencies.cache, searchCacheKey);
+    if (cachedSearch !== null) {
+      return {
+        ok: true,
+        vendor: "woocommerce",
+        action: "execute",
+        capability,
+        data: cachedSearch,
+      };
+    }
+  }
+
   let categoryId: string | null = null;
   const categoryName = capability === "search_products"
     ? requiredString(invocation.request.parameters, "category")
     : null;
   if (categoryName) {
-    categoryId = await resolveCategoryId(
-      storeUrl.replace(/\/+$/, ""),
+    categoryId = await resolveCachedCategoryId(
+      invocation.tool.id,
+      storeUrl,
       authorization,
       categoryName,
       dependencies,
@@ -276,12 +354,22 @@ async function callWooCommerce(
       read_only: true,
     };
   }
+  const projected = projectPayload(capability, payload);
+  if (searchCacheKey !== null && dependencies.cache) {
+    await cacheWrite(
+      dependencies.cache,
+      searchCacheKey,
+      invocation.tool.id,
+      projected,
+      SEARCH_CACHE_TTL_SECONDS,
+    );
+  }
   return {
     ok: true,
     vendor: "woocommerce",
     action: "execute",
     capability,
-    data: projectPayload(capability, payload),
+    data: projected,
   };
 }
 
