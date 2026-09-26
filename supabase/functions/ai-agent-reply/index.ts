@@ -25,6 +25,7 @@ import {
   phaseTimings,
   replyIntentFields,
   resolveEngagementMode,
+  invalidTestCaseKeyRefusalLog,
   sandboxConversationId,
   type ReplyLanguage,
   SIMILARITY_FLOOR,
@@ -557,7 +558,21 @@ Deno.serve(async (req) => {
       sandboxAccountId ?? user.id,
       body.test_case_key,
     );
-    if (!thread.ok) return badRequestResponse(thread.error);
+    if (!thread.ok) {
+      // baseLog does not exist yet. One sanitized system_logs row, then the same 400.
+      // A failed insert must not change that response, and the raw key must not be logged.
+      const { error: refusalLogError } = await admin.from("system_logs").insert(
+        invalidTestCaseKeyRefusalLog({
+          userId: user.id,
+          platform,
+          testCaseKey: body.test_case_key,
+        }),
+      );
+      if (refusalLogError) {
+        console.error("[ai-agent-reply] Sandbox refusal log rejected:", refusalLogError.message);
+      }
+      return badRequestResponse(thread.error);
+    }
     // Built field by field rather than from the body: comment_id is the one field that makes
     // this function post publicly, and it must never be reachable from a user JWT.
     request = {

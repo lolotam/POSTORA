@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import i18next from "i18next";
 import { renderMinimal } from "@/test/test-utils";
 import { AiAgentTestChat } from "../AiAgentTestChat";
@@ -54,5 +54,29 @@ describe("AiAgentTestChat saved tests", () => {
 
     view.rerender(<AiAgentTestChat platform="whatsapp" accountId="acct-2" />);
     await waitFor(() => expect(screen.queryByText("the price is 5")).not.toBeInTheDocument());
+  });
+
+  it("drops a reply that resolves after the account changes", async () => {
+    let resolveSend: (value: { reply: string; tool_calls: []; escalated: boolean }) => void = () => {};
+    edge.callEdgeApi.mockImplementation(
+      () => new Promise((resolve) => {
+        resolveSend = resolve;
+      }),
+    );
+
+    const view = renderMinimal(<AiAgentTestChat platform="whatsapp" accountId="acct-1" />);
+    const input = screen.getByPlaceholderText(/كم سعر التوصيل/);
+    fireEvent.change(input, { target: { value: "hello from A" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(edge.callEdgeApi).toHaveBeenCalledTimes(1));
+
+    view.rerender(<AiAgentTestChat platform="whatsapp" accountId="acct-2" />);
+    await act(async () => {
+      resolveSend({ reply: "late reply for A", tool_calls: [], escalated: false });
+    });
+
+    expect(screen.queryByText("hello from A")).not.toBeInTheDocument();
+    expect(screen.queryByText("late reply for A")).not.toBeInTheDocument();
+    expect(screen.getByText("Send a message the way a customer would — in Arabic or English.")).toBeInTheDocument();
   });
 });

@@ -12,7 +12,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { compareRuns, displayRunStatus } from "../domain/evaluateTestCase";
 import { MAX_CASES_PER_RUN, TEST_INTENTS, testCaseInputSchema, STALE_RUN_MS, type CaseResult, type TestCase, type TestExpectation } from "../domain/types";
-import { useAgentTestCases, useAgentTestRuns, useDeleteTestCase, useRunAllTests, useSaveTestCase } from "../application/useAgentTestSets";
+import { useAgentTestCases, useAgentTestRuns, useDeleteTestCase, useRunAllTests, useSaveTestCase } from "./useAgentTestSets";
 
 interface CaseForm {
   message: string;

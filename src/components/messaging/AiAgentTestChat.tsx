@@ -39,18 +39,29 @@ export function AiAgentTestChat({
   const [sending, setSending] = useState(false);
   const [prefillMessage, setPrefillMessage] = useState<string | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
+  // Bumped on every account or platform change so a send started for the
+  // previous chat cannot append its reply after the switch.
+  const invocationRef = useRef(0);
+  const abortRef = useRef<AbortController | null>(null);
 
   // A saved case is one customer message. Switching account must not keep the
   // previous account's turns, or "Save as test" would file the wrong message.
   useEffect(() => {
+    invocationRef.current += 1;
+    abortRef.current?.abort();
+    abortRef.current = null;
     setTurns([]);
     setInput("");
     setPrefillMessage(null);
+    setSending(false);
   }, [accountId, platform]);
 
   const send = async () => {
     const text = input.trim();
     if (!text || sending) return;
+    const invocation = invocationRef.current;
+    const controller = new AbortController();
+    abortRef.current = controller;
     setInput("");
     setTurns((current) => [...current, { role: "user", content: text }]);
     setSending(true);
@@ -60,7 +71,8 @@ export function AiAgentTestChat({
         social_account_id: accountId ?? undefined,
         inbound_text: text,
         act_as_admin: actAsAdmin,
-      });
+      }, { signal: controller.signal });
+      if (invocationRef.current !== invocation) return;
       const turn: TestTurn = data.reply
         ? {
             role: "assistant",
@@ -71,13 +83,17 @@ export function AiAgentTestChat({
         : { role: "assistant", content: "", skipped: data.skipped || data.error || t("test.fallbackNoReply", "no reply") };
       setTurns((current) => [...current, turn]);
     } catch (error) {
+      if (invocationRef.current !== invocation) return;
+      if (error instanceof Error && error.name === "AbortError") return;
       setTurns((current) => [
         ...current,
         { role: "assistant", content: "", skipped: error instanceof Error ? error.message : t("test.requestFailed", "Request failed") },
       ]);
     } finally {
-      setSending(false);
-      setTimeout(() => endRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
+      if (invocationRef.current === invocation) {
+        setSending(false);
+        setTimeout(() => endRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
+      }
     }
   };
 

@@ -3,6 +3,7 @@ import {
   parallelizable,
   readOnlyConnector,
   replyIntentFields,
+  invalidTestCaseKeyRefusalLog,
   sandboxConversationId,
 } from "./logic.ts";
 
@@ -112,6 +113,37 @@ Deno.test("sandboxConversationId keeps today's thread unless the key is valid", 
     ok: false,
     error: "Invalid test_case_key",
   });
+});
+
+Deno.test("invalidTestCaseKeyRefusalLog records the refusal without the raw key", () => {
+  const leaked = "not a valid key LEAKED-VALUE";
+  const row = invalidTestCaseKeyRefusalLog({
+    userId: "user-1",
+    platform: "whatsapp",
+    testCaseKey: leaked,
+  });
+  assertEquals(row, {
+    source: "ai-agent-reply",
+    category: "ai",
+    level: "info",
+    message: "AI agent sandbox refused: invalid test_case_key",
+    user_id: "user-1",
+    metadata: {
+      platform: "whatsapp",
+      error: "invalid_test_case_key",
+      key_length: leaked.length,
+    },
+  });
+  assertEquals(JSON.stringify(row).includes(leaked), false);
+
+  const objectKey = { raw: "LEAKED-OBJECT" };
+  const hidden = invalidTestCaseKeyRefusalLog({
+    userId: "user-1",
+    platform: "instagram",
+    testCaseKey: objectKey,
+  });
+  assertEquals(hidden.metadata, { platform: "instagram", error: "invalid_test_case_key" });
+  assertEquals(JSON.stringify(hidden).includes("LEAKED-OBJECT"), false);
 });
 
 Deno.test("replyIntentFields publishes an intent only at triage confidence", () => {

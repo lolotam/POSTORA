@@ -631,6 +631,29 @@ export function sandboxConversationId(
   return { ok: true, conversationId: `${base}_${testCaseKey}` };
 }
 
+/**
+ * Audit row for a sandbox request whose test_case_key failed the pattern.
+ * The raw key is never copied onto the row; a string key contributes only its length.
+ */
+export function invalidTestCaseKeyRefusalLog(input: {
+  userId: string;
+  platform: string;
+  testCaseKey: unknown;
+}) {
+  return {
+    source: "ai-agent-reply",
+    category: "ai",
+    level: "info",
+    message: "AI agent sandbox refused: invalid test_case_key",
+    user_id: input.userId,
+    metadata: {
+      platform: input.platform,
+      error: "invalid_test_case_key",
+      ...(typeof input.testCaseKey === "string" ? { key_length: input.testCaseKey.length } : {}),
+    },
+  };
+}
+
 export type IntentStatus = "off" | "uncertain" | "classified";
 
 /**

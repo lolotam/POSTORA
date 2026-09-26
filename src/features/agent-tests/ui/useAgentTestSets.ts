@@ -12,7 +12,7 @@ import {
   updateRun,
   updateTestCase,
 } from "../infrastructure/testCasesApi";
-import { runSavedTests } from "./runSavedTests";
+import { runSavedTests } from "../application/runSavedTests";
 import { MAX_CASES_PER_RUN, type CaseResult, type RunStatus, type TestCase, type TestExpectation } from "../domain/types";
 
 function casesKey(userId: string | undefined, accountId: string | null, platform: string) {
