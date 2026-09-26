@@ -146,6 +146,34 @@
     "titleAria": "عنوان البلوك {{n}}",
     "titlePlaceholder": "الأسعار"
   },
+  "procedures": {
+    "addQuestion": "أضف سؤال",
+    "closing": "جملة الختام",
+    "closingPlaceholder": "خلاص كده، هكمّل معاك من هنا.",
+    "description": "محادثات ثابتة الوكيل يمشيها مع العميل لحد ما تخلّص. كل واحدة مقفولة لحد ما تشغّلها.",
+    "fields": {
+      "contact": "إزاي تطلب contact",
+      "name": "إزاي تطلب name",
+      "order_number": "إزاي تطلب order_number",
+      "problem": "إزاي تطلب problem",
+      "product": "إزاي تطلب product",
+      "service": "إزاي تطلب service",
+      "when": "إزاي تطلب when"
+    },
+    "flows": {
+      "booking": "حجز",
+      "complaint_return": "شكوى أو إرجاع",
+      "lead_capture": "تسجيل عميل محتمل",
+      "order_status": "حالة الطلب",
+      "product_finder": "البحث عن منتج"
+    },
+    "questionLabel": "السؤال {{n}}",
+    "questionsHint": "اكتب من سؤالين لتلاتة",
+    "removeQuestion": "امسح السؤال {{n}}",
+    "services": "الخدمات، مفصولة بفاصلة",
+    "servicesHint": "حد أقصى {{count}} خدمة، وكل واحدة {{length}} حرف.",
+    "title": "مسارات جاهزة"
+  },
   "knowledge": {
     "accountsCouldNotLoad": "مش قادرين نحمّل حساباتك المربوطة، فمشاركة المصدر مش هتتغيّر من هنا. حدّث الصفحة وجرّب تاني.",
     "addQuestion": "أضف سؤال",

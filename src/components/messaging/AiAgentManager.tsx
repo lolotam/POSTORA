@@ -25,6 +25,7 @@ import { AdvancedCard } from "@/components/messaging/agent-settings/AdvancedCard
 import { BusinessGoalsCard } from "@/components/messaging/agent-settings/BusinessGoalsCard";
 import { GuardrailsCard } from "@/components/messaging/agent-settings/GuardrailsCard";
 import { InstructionBlocksCard } from "@/components/messaging/agent-settings/InstructionBlocksCard";
+import { ProceduresCard } from "@/components/messaging/agent-settings/ProceduresCard";
 import { HumanHandoffCard } from "@/components/messaging/agent-settings/HumanHandoffCard";
 
 const defaultConfig: Required<Pick<AiAgentConfigInput,
@@ -344,6 +345,7 @@ export function AiAgentManager({ platform = "whatsapp", initialAccountId = null,
             }
           />
           <InstructionBlocksCard form={form} update={update} behavior={behavior} updateBehavior={updateBehavior} />
+          <ProceduresCard form={form} update={update} behavior={behavior} updateBehavior={updateBehavior} />
           <AdvancedCard form={form} update={update} />
           </fieldset>
 
