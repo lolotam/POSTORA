@@ -25,87 +25,82 @@
 
 ### Task 1: Migration `20260927120000_store_events.sql` (Muse Spark)
 
-**Files:** create `supabase/migrations/20260927120000_store_events.sql`, `supabase/tests/agent_procedures_b.sql`; modify `scripts/db-harness.sh` (SUITES).
+**Files:** create `supabase/migrations/20260927120000_store_events.sql`, `supabase/tests/agent_procedures_b.sql`; modify `scripts/db-harness.sh` (SUITES). Read first: `20260831140000_connector_secret_reclaim.sql`, `20260831150000_connector_credential_read.sql` (vault helpers), `20260926091000_connector_response_cache.sql` (grants and cron style).
 
 **Produces:**
-- `public.store_events` — columns exactly as spec §3.2 (`id uuid pk default gen_random_uuid()`, `user_id uuid not null references auth.users on delete cascade`, `social_account_id uuid not null references social_accounts on delete cascade`, `connector_id uuid not null references ai_agent_tools on delete cascade`, `flow text not null check (flow in ('cod_confirm','review_request','back_in_stock'))`, `external_id text not null`, `delivery_id text`, `payload jsonb not null default '{}'`, `status text not null default 'pending' check (status in ('pending','claimed','sent','skipped','failed'))`, `outbound_message_id text`, `skip_reason text`, `due_at timestamptz not null default now()`, `claimed_at timestamptz`, `attempts int not null default 0`, `created_at timestamptz not null default now()`, `processed_at timestamptz`), `unique (connector_id, flow, external_id)`, index `(status, due_at)`. Service-role only.
-- `public.stock_waitlist` — `id`, `user_id`, `social_account_id`, `conversation_id text not null`, `phone text not null`, `product_id bigint not null`, `parent_id bigint`, `product_name text not null`, `created_at`, `expires_at timestamptz not null default now() + interval '60 days'`; **plain** `unique (social_account_id, phone, product_id)` (a notified row is deleted, so no partial index is needed and PostgREST `onConflict` works). Owner SELECT/DELETE policies by `user_id`; writes service-role.
-- `public.messaging_opt_outs` — `user_id`, `phone`, `source text not null default 'keyword'`, `created_at`; `unique (user_id, phone)`. Owner SELECT/DELETE; writes service-role.
-- Idempotent (IF NOT EXISTS / DROP ... IF EXISTS), ends with `NOTIFY pgrst, 'reload schema';`.
+- `store_webhook_bindings (id uuid pk, user_id uuid not null → auth.users on delete cascade, social_account_id uuid not null, connector_id uuid not null, secret_id uuid not null, previous_secret_id uuid, rotated_at timestamptz, created_at timestamptz default now())`; unique `(connector_id)`; composite FKs so the account and the connector both belong to `user_id` (`social_accounts (id, user_id)` and `ai_agent_tools (id, user_id)`; add the needed unique keys on those tables with IF NOT EXISTS). Owner SELECT only; writes service-role.
+- `store_events` as spec §3.2 plus `binding_id uuid not null → store_webhook_bindings on delete cascade`, `claim_token uuid`, `send_attempt_id uuid`; the status check adds `'sending'`; unique `(binding_id, flow, external_id)` (replaces the connector-based unique). Service-role only.
+- `stock_waitlist (id, user_id, social_account_id, connector_id, conversation_id, phone, product_id bigint, parent_id bigint, product_name, consent_source text not null default 'chat_optin', consented_at timestamptz not null default now(), created_at, expires_at default now() + 60 days)`; unique `(connector_id, phone, product_id)`. Owner SELECT/DELETE.
+- `messaging_opt_outs (user_id, phone, source, created_at)`, unique `(user_id, phone)`. Owner SELECT/DELETE.
+- `create_store_webhook_secret(p_secret text) returns uuid` (creates a vault secret, returns its id) and `get_store_webhook_secret(p_binding_id uuid) returns jsonb` (`{"current": text, "previous": text|null, "rotated_at": timestamptz|null}`), both SECURITY DEFINER with `search_path = public, pg_temp`, following the vault pattern of `get_connector_credential`; `REVOKE EXECUTE ... FROM PUBLIC, anon, authenticated; GRANT EXECUTE ... TO service_role`.
+- Every new table: RLS on; `REVOKE ALL FROM PUBLIC, anon, authenticated`; explicit grants. Idempotent; ends with `NOTIFY pgrst, 'reload schema';`.
 
-- [ ] Write the suite first (labelled asserts B1..Bn): tables and uniques exist; duplicate `(connector_id, flow, external_id)` raises `unique_violation`; bad `flow`/`status` raise `check_violation`; `has_table_privilege('anon','public.store_events','SELECT')` and `('authenticated', ...)` are false; `authenticated` has SELECT on `stock_waitlist` and `messaging_opt_outs` but not INSERT; RLS enabled on all three. End with the sentinel.
-- [ ] Register `agent_procedures_b.sql` in `SUITES`.
-- [ ] Orchestrator rehearses on Contabo (scratch DB from `pg_dump --schema-only`, apply twice, run suite, mutation-check one assert), then applies to production before PR 1 merges.
+- [ ] Suite first, labelled B1..Bn: objects exist; uniques raise `unique_violation`; checks raise `check_violation`; a binding whose account belongs to another user fails the FK; `SET ROLE authenticated` with `request.jwt.claims` for user A reads 0 of user B's waitlist/opt-out/binding rows and gets `insufficient_privilege` on `store_events`; `authenticated` and `anon` cannot EXECUTE the two functions; a secret created by `create_store_webhook_secret` round-trips through `get_store_webhook_secret`. Sentinel last. Register in `SUITES`.
+- [ ] Orchestrator: rehearse (scratch DB, apply twice, suite, mutation check), apply to production before merge.
 
-### Task 2: Shared phone and conversation-id helpers
+### Task 2: Strict phone parser and conversation id
 
-**Files:** create `supabase/functions/_shared/phone.ts`, `_shared/phone.test.ts`; modify `ecommerce-whatsapp-api/index.ts` (replace its private `normalizePhone` with the shared one, behaviour-preserving for its callers).
+**Files:** create `_shared/phone.ts`, `_shared/phone.test.ts`. `ecommerce-whatsapp-api` is **not** changed.
 
 **Produces:**
 ```ts
-/** Digits only, country code included. `defaultCountry` is an ISO-3166 alpha-2 used when the raw number has no + or 00 prefix. Returns null when fewer than 8 digits remain. */
-export function normalizePhone(raw: string, defaultCountry?: string | null): string | null;
+export function parseCustomerPhone(raw: string, country: string | null): string | null; // digits with country code, or null
 export type WhatsAppAddressing = { mode: "cloud_api" | "coexistence" | "evolution_qr"; phoneNumberId: string | null; platformUserId: string };
-/** Cloud API and coexistence: wa_<phoneNumberId>_<phone>; QR: wa_<platformUserId>_<phone>. Matches messaging-api:121 and evolutionMessage.ts conversationIdFor. */
-export function whatsappConversationId(addressing: WhatsAppAddressing, phone: string): string;
+export function whatsappConversationId(addressing: WhatsAppAddressing, phone: string): string; // cloud/coexistence wa_<phoneNumberId>_<phone>; QR wa_<platformUserId>_<phone>
 ```
-- [ ] Table test: `+965 5551 2345`→`96555512345`; `0096555512345`→`96555512345`; `55512345` with `KW`→`96555512345`; `055512345` with `SA`→`96655512345` (leading trunk 0 dropped); `12`→null; with no country and no prefix → the digits unchanged. Country dialing codes: a small map of GCC + EG, JO, LB, IQ, US, GB (extendable); unknown country → digits unchanged.
-- [ ] Test `whatsappConversationId` for both modes against the literal formats above.
-- [ ] Run the existing `ecommerce-whatsapp-api` tests (if any) unchanged.
+Rules: strip spaces, dashes, dots and parentheses. A `+` or `00` prefix means international digits. Otherwise, with a known country (KW 965/8, SA 966/9, AE 971/9, QA 974/8, BH 973/8, OM 968/8, EG 20/10, JO 962/9, IQ 964/10, LB 961/8, US 1/10, GB 44/10 — dialing code / national length after dropping one leading trunk 0): digits that already start with the dialing code at length code+national are kept; length equal to the national length is prefixed; anything else is null. Unknown country and no prefix → null. Final length must be 8–15, else null.
+- [ ] Table test with at least 15 rows, including: `+965 5551 2345` → `96555512345`; `96555512345` with KW → `96555512345` (no double prefix); `55512345` with KW → `96555512345`; `0555123456` with SA → `966555123456`; `5551234` with KW → null; `55512345` with no country → null; 16 digits → null. `whatsappConversationId` for both modes.
 
 ### Task 3: `store-webhook` receiver
 
-**Files:** create `_shared/wooWebhook.ts`, `_shared/wooWebhook.test.ts`, `store-webhook/index.ts`, `store-webhook/index.test.ts`.
+**Files:** create `_shared/wooWebhook.ts` (+ test), `store-webhook/index.ts` (+ test).
 
-**Consumes:** `normalizePhone` (Task 2), tables (Task 1), `check_rate_limit` via `_shared/rate-limiter.ts`, `get_connector_credential(p_user_id, p_tool_id)` returning the connector blob (the webhook secret lives in it as `webhook_secret`, Task 4).
+**Consumes:** Task 1 tables and `get_store_webhook_secret`; Task 2 `parseCustomerPhone`; `_shared/rate-limiter.ts`.
 
-**Produces (pure, in `_shared/wooWebhook.ts`):**
+**Produces (pure):**
 ```ts
 export function isWooPing(contentType: string | null, rawBody: string): boolean; // form body exactly webhook_id=<digits>
-export async function verifyWooSignature(rawBody: string, signature: string | null, secret: string): Promise<boolean>; // base64 HMAC-SHA256, constant-time
-export function sourceMatchesStore(source: string | null, storeUrl: string): boolean; // host equality, ignore scheme/trailing slash/www
+export async function verifyWooSignature(rawBody: string, signature: string | null, secrets: { current: string; previous: string | null; rotatedAt: Date | null }, now: Date): Promise<boolean>; // base64 HMAC-SHA256; previous accepted for 24 h after rotatedAt; constant-time
 export type EventDraft = { flow: "cod_confirm" | "review_request" | "back_in_stock"; external_id: string; due_at: Date; payload: Record<string, string> };
-export function classifyWooDelivery(input: {
-  topic: string | null; body: unknown; now: Date; enabled: ReadonlySet<string>; reviewDelayDays: number;
-  defaultCountry: string | null; waitlist?: Array<{ id: string; product_id: number; parent_id: number | null }>;
-}): EventDraft[];
+export function classifyWooDelivery(input: { topic: string | null; body: unknown; now: Date; enabled: ReadonlySet<string>; reviewDelayDays: number; country: string | null; waitlist?: Array<{ id: string; product_id: number; parent_id: number | null }> }): EventDraft[];
 ```
-- Payload whitelist: `order_id, order_number, phone, first_name, total, currency, status, payment_method, product_id, product_name`. No address, email, line items.
-- COD: topic `order.created`, `payment_method === "cod"`, status ∉ {cancelled, refunded, failed, completed}, phone normalizes → one draft, `external_id = String(order.id)`, due now. Review: topic `order.updated`, status `completed` → due `now + reviewDelayDays`. Back-in-stock: topic `product.updated`, `stock_status === "instock"` → one draft per waitlist row whose `product_id` or `parent_id` equals the product id, `external_id = "<product id>:<waitlist id>"`. Flow not in `enabled` → no draft. In PR 1 `enabled` is always empty (toggles hidden), so the receiver stores nothing yet; the classifier is fully tested.
+Payload whitelist: `order_id, order_number, phone, first_name, total, currency, status, payment_method, date_completed, product_id, parent_id, product_name, consent_basis`. COD eligible statuses: pending, on-hold, processing. Review `due_at = date_completed + delay`, dropped when that is more than 48 h in the past. Back-in-stock drafts are only candidates; the worker re-reads stock.
 
-**Handler (`store-webhook/index.ts`):** POST only; path `/store-webhook/<social_account_id>/<connector_id>` (both uuids); body read as text with a 256 KB cap (413); ping → 200 `{ok:true}`; rate limit `store-webhook:ip:<ip>` 120/min and `store-webhook:connector:<id>` 600/min → 429; load the account (platform `whatsapp`) and the tool (`connector_type = 'woocommerce'`, same `user_id`) else 404 with no detail; secret missing or signature bad or source mismatch → 401; parse JSON (bad → 400); classify; insert drafts with `upsert(..., { onConflict: "connector_id,flow,external_id", ignoreDuplicates: true })`, `delivery_id` from `X-WC-Webhook-Delivery-ID`; answer 200 `{ok:true, stored:n}`. Errors never echo input.
+**Handler order:** POST only → IP rate limit (`store-webhook:ip:<CF-Connecting-IP>`, 120/min) **before reading the body** → `Content-Length` > 262144 → 413, then read with a streaming cap → ping → 200 → path `/store-webhook/<binding uuid>` → load the binding (404, no detail) → secrets → signature (401) → connector rate limit (600/min, only after the signature) → parse JSON (400) → classify (flows enabled from the account's procedure config; in PR 1 event flows are never enabled, so nothing is stored) → insert with `ignoreDuplicates` → an insert error returns **500**, otherwise 200 `{ok:true, stored:n}`. Never store or log the raw body; never echo input.
+- [ ] Tests: ping; good, wrong and missing signature; previous secret inside and outside 24 h; **mutation check** of the compare; oversized by header and by stream; rate limit happens before the body read (a fake limiter asserts it); each classifier branch incl. `on-hold` COD, non-COD, stale completion, whitelist keys only; insert failure → 500; duplicate delivery stores once.
 
-- [ ] Tests (Deno, no network; fake db ports): ping accepted without a secret; valid signature accepted; wrong secret, missing header, tampered body rejected; **mutation check**: replace the compare with `true` and confirm a test fails; source host mismatch rejected; 256 KB+1 rejected; each classifier branch incl. COD in `processing`, non-COD ignored, `order.updated` not completed ignored, `product.updated` outofstock ignored, disabled flow ignored, waitlist parent match; payload has only whitelisted keys; duplicate delivery stores once.
+### Task 4: Bindings, rotation route, card section (flow toggles hidden)
 
-### Task 4: Webhook secret + card section (toggles hidden)
+**Files:** the authenticated agent-config function that owns connector saves (`_shared/agentConfigOps.ts` plus its route) gains `create_store_webhook_binding {social_account_id, connector_id}` and `rotate_store_webhook_secret {binding_id}`. Both require the caller to own the account and the connector with the same checks as existing connector operations (workspace scope included), the account on `whatsapp`, and the connector `woocommerce`. Creation also creates the first secret. Rotation: 32 random bytes → base64url → `create_store_webhook_secret` → update the binding (`previous_secret_id = secret_id`, `secret_id = new`, `rotated_at = now()`) → return the secret once. Frontend: `src/components/messaging/agent-settings/ProceduresCard.tsx` gets a store-events section (WhatsApp account with a WooCommerce connector): the URL, the three topics (Order created, Order updated, Product updated), a Generate/Rotate button that shows the secret once with a copy button, and the text "If WooCommerce shows the webhook as disabled, re-enable it." i18n in en and ar.
+- [ ] Tests: ownership and workspace refusals; non-woocommerce refused; the secret is 43 characters; the previous id moves; vitest for the section and the one-time secret display.
 
-**Files:** modify the connector save path in `_shared/agentConfigOps.ts` (new operation `rotate_store_webhook_secret` for a `woocommerce` tool the caller owns: 32 random bytes → base64url, merged into the credential blob via `upsert_connector_credential_secret`, returned once); tests in the existing agentConfigOps test file; frontend: `src/components/ai-agent/ProceduresCard.tsx` gains a "Store events (WooCommerce)" section for WhatsApp accounts showing the webhook URL `https://api.postora.cloud/functions/v1/store-webhook/<account>/<connector>`, the three topics to add (Order created, Order updated, Product updated), and a Generate/Rotate button that shows the secret once with a copy button. i18n keys in `src/i18n/locales/{en,ar}/agent.json`.
+### Task 5: Opt-out and template-button ingest
 
-- [ ] Tests: rotate refuses a tool of another user and a non-woocommerce tool; returned secret is 43 chars base64url; the blob merge keeps existing keys (fake vault asserts the RPC receives only `webhook_secret`); vitest: section shows only for WhatsApp + a Woo connector; the secret disappears after close.
-
-### Task 5: Opt-out at ingest
-
-**Files:** create `_shared/optOut.ts`, `_shared/optOut.test.ts`; modify `whatsapp-webhook/index.ts` (before `processAutoReplies`, ~line 585) and `whatsapp-evolution-webhook/index.ts` (same point before auto-reply/agent dispatch).
+**Files:** create `_shared/optOut.ts` (+ test); modify `whatsapp-webhook/index.ts` (after the inbound row is stored and **before** the n8n dispatch near line 551 and before auto-replies; add the `type: "button"` branch near line 296 with text = `button.text`, keeping `button.payload` in metadata) and `whatsapp-evolution-webhook/index.ts` (after the row is stored, before dispatch).
 
 **Produces:**
 ```ts
-export function isOptOutMessage(text: string): boolean; // whole trimmed message, case-insensitive: stop, unsubscribe, توقف, إلغاء الاشتراك, الغاء الاشتراك
-export async function recordOptOut(db, input: { userId: string; phone: string; threadConversationId: string }): Promise<void>; // upsert messaging_opt_outs; clear an active event-origin procedure_state on that thread with a CAS; never throws (logs a sanitized warning)
+export function isOptOutMessage(text: string): boolean;
+export async function recordOptOut(db: OptOutDb, input: { userId: string; socialAccountId: string; phone: string; conversationId: string }): Promise<boolean>; // upsert the opt-out; set that account+phone's pending/claimed store_events to skipped('opted_out'); clear an event-origin procedure_state with a CAS; on error write a system_logs warning and return false
 ```
-- [ ] Tests: table of matching/non-matching texts ("stop" yes, "please stop sending" no, "STOP " yes, Arabic forms yes); recordOptOut clears only `origin === "event"` states; a DB error does not throw. The message still flows to rules/agent as before (behaviour unchanged except the record).
+Phrases (whole trimmed message, case-insensitive, Arabic alef/hamza normalised): stop, unsubscribe, stop messaging, don't message me, dont message me, توقف, إلغاء الاشتراك, الغاء الاشتراك, لا ترسل.
+- [ ] Tests: phrase table (`please stop sending` → false); side effects through a fake db; the error path logs and returns false; webhook tests: a `button` message yields text "Confirm"; the opt-out is recorded before dispatch (ordering asserted with a fake).
 
 ### Task 6: Engine additions (no sending)
 
-**Files:** modify `_shared/procedures/templates.ts`, `engine.ts`, their tests; `ai-agent-reply/logic.ts` (`jevStartKey`), `procedureRuntime.ts` (`start_procedure` enum excludes event flows); `src/lib/procedureTemplates.ts` mirror.
+**Files:** `_shared/procedures/templates.ts`, `engine.ts`, `config.ts` and tests; `ai-agent-reply/logic.ts` (`jevStartKey`), `procedureRuntime.ts`; `src/lib/procedureTemplates.ts`; `src/components/messaging/agent-settings/ProceduresCard.tsx`.
 
 **Produces:**
-- `PROCEDURE_KEYS` gains `cod_confirm`, `review_request`, `back_in_stock`; `EVENT_PROCEDURE_KEYS` = those three. `ProcedureField` gains `when?: (fields: Record<string,string>) => boolean` (field is required only when `when` is absent or true). Fields: `cod_confirm.decision` (validate → `confirm`|`cancel` from confirm/yes/نعم/تأكيد/cancel/no/لا/إلغاء, hint "confirm or cancel"); `review_request.rating` (1–5, Arabic-Indic digits accepted), `review_request.problem` (`when: f => Number(f.rating) <= 3`, text 500); `back_in_stock.interest` (yes/no, Arabic). End actions `cod_update`, `review_route`, `stock_offer` (implemented in PR 2; in PR 1 `finish` throws `not_available` for them and they can never start).
-- `nextField` and `submitFields` honour `when`.
-- `staleAfterMs(origin)`: `event` → 72h, else 24h; `expireIfStale` uses it.
-- `jevStartKey` and the model's `start_procedure` never return/accept an event key.
-- [ ] Tests: conditional field (rating 4 completes without problem; rating 2 requires problem); validators table incl. Arabic; expiry 71h event state kept, 73h dropped, 25h model state dropped; `start_procedure` with `cod_confirm` refused; mirror parity test in vitest for keys.
+- `PROCEDURE_KEYS` gains `cod_confirm`, `review_request`, `back_in_stock`; `EVENT_PROCEDURE_KEYS` lists them. `ProcedureField.when?: (fields: Record<string, string>) => boolean`. Fields: `cod_confirm.decision` (confirm|cancel from confirm/yes/نعم/تأكيد and cancel/no/لا/إلغاء); `review_request.rating` (1–5, Arabic-Indic digits accepted) and `review_request.problem` (`when: f => Number(f.rating) <= 3`, text up to 500); `back_in_stock.interest` (yes|no incl. Arabic). End actions `cod_update`, `review_route`, `stock_offer` throw `not_available` in PR 1.
+- `ProcedureState.phase?: "pending_opener" | "active"`; `isStoredState` accepts it; `createProcedureTurn` treats a `pending_opener` state as no state (no tools, no submit, never overwritten).
+- `staleAfterMs(origin)`: event 72 h, others 24 h; `expireIfStale` uses it.
+- `jevStartKey` never returns, and `start_procedure` never accepts, an event key.
+- Strict `parseProcedureConfig` rejects event keys in PR 1; the lenient read drops them. The card filters `EVENT_PROCEDURE_KEYS`; `FLOW_NAMES` stays exhaustive.
+- [ ] Tests: rating 4 completes without `problem`, rating 2 requires it; validator table incl. Arabic; 71 h event state kept, 73 h dropped, 25 h model state dropped; `start_procedure` with `cod_confirm` refused; a `pending_opener` state is inert; the strict parser rejects event keys; vitest mirror parity and the card shows no event toggles.
 
-**PR 1 exit:** guards (clean-code, test, security pass on `store-webhook`), gates, PR, CI + Codex bot rounds, migration live, merge, deploy verified (probe `store-webhook` ping → 200, unsigned JSON → 401).
+**PR 1 Deno gate paths:** `_shared/ ai-agent-reply/ ai-agent-adapters/ store-webhook/ whatsapp-webhook/ whatsapp-evolution-webhook/`.
+
+**PR 1 exit:** guards (clean-code, test, and a security pass on `store-webhook`), gates, PR, CI and Codex bot, migration live, merge, deploy verified (ping → 200, unsigned JSON → 401, unknown binding → 404).
 
 ---
 
@@ -143,3 +138,36 @@ export async function recordOptOut(db, input: { userId: string; phone: string; t
 - Replay a captured Woo `order.created` COD payload with a valid HMAC against production for the admin connector, with a test-only `dry_run` marker in `store_events.payload` that the worker honours by logging instead of sending; then one real send to the admin's own test number only. Restore any setting changed; delete test rows.
 
 **PR 2 exit:** same as PR 1, plus the cron job verified in `cron.job` and one worker run observed in logs.
+
+
+## Codex debate verdicts (astra 6 medium, 23 findings, REWORK)
+
+PR 2 tasks are amended by spec §8 items 2–5, 9–10 and 12–16 (fenced claim, `sending` intent, `pending_opener` → `active`, re-read before opener, `get_product`, `reserve_qr_opener`, `eventFor(runId)` port, QR and consent acknowledgements in the card, COD note-first order, Graph name-filtered templates, signed live test). Wiring to enumerate in PR 2: `config.ts` fields (delay, link, attestation, QR acknowledgement), `connectorRegistry.ts` capabilities (`update_order` write, `get_product` read), `dispatcher.ts` allowing non-GET only for `update_order` when not read-only.
+
+| # | Finding | Ruling |
+|---|---|---|
+| 1 | Event toggles leak through the real card path | Accepted — card filter and strict parser rejects in PR 1 |
+| 2 | Same owner is insufficient | Accepted — `store_webhook_bindings` with composite FKs |
+| 3 | No trusted order binding | Accepted — `eventFor(runId)` port; nothing taken from state or model |
+| 4 | Replay after purge; headers unsigned | Accepted — tombstones; re-read before opener |
+| 5 | DoS bypasses | Reduced — IP limit before body, length and stream cap, connector quota after signature; limiter fail-open kept (repo convention) |
+| 6 | WooCommerce does not retry | Accepted — 200 only after insert; monitoring deferred |
+| 7 | Phone normalization | Accepted — strict new parser; legacy API untouched |
+| 8 | Secret rotation race | Accepted — separate vault row per binding, previous secret for 24 h |
+| 9 | Consent | Reduced — owner attestation and waitlist chat opt-in record |
+| 10 | Opt-out gaps | Reduced — before n8n dispatch, fixed phrases, logged failures, pending events skipped |
+| 11 | QR proactive messaging | **Kept (user decision C)** with owner risk acknowledgement and an atomic cap |
+| 12 | Duplicate send after a crash | Accepted — `sending` intent; indeterminate outcomes never resent |
+| 13 | Lease and cap concurrency | Accepted — claim token, 40 s budget, `reserve_qr_opener`; competing-worker integration test deferred |
+| 14 | State before opener | Accepted — `phase: pending_opener` |
+| 15 | COD cancel race | **Kept (user decision A)** — note first, re-read, stated window |
+| 16 | Timing and eligibility | Accepted — re-read, `date_completed` anchor, statuses incl. on-hold |
+| 17 | Variation stock | Accepted — exact `get_product` re-read |
+| 18 | Waitlist identity | Accepted — `connector_id`, delete on notify |
+| 19 | Button replies | Ingest accepted (PR 1); stale-button correlation deferred |
+| 20 | Template reuse | Reduced — Graph name filter; match name, language and category |
+| 21 | Missing wiring | Accepted — enumerated above for PR 2 |
+| 22 | Dry run could send | Accepted — signed test body to the admin's own phone |
+| 23 | Validation gaps | Reduced — real RLS SQL tests; corrected gate paths |
+
+Deferred to an issue: competing-worker integration test (#13), stale-button correlation (#19), disabled-webhook monitoring (#6).
