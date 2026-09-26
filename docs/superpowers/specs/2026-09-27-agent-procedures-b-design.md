@@ -58,7 +58,7 @@ customer reply ──▶ ai-agent-reply (existing) ──▶ procedure continues
 - Always answers 200 quickly once the signature is valid (even for dropped events), so WooCommerce does not retry.
 
 ### 3.2 Data (migration, Muse Spark lane)
-- `store_events`: `id`, `user_id`, `social_account_id`, `connector_id`, `flow`, `external_id` (order id or `<product id>:<waitlist id>`), `delivery_id`, `payload` (**minimal** jsonb: order id/number, normalized phone, first name, total + currency, status, payment method, product id/name, language hint), `status` (`pending|claimed|sent|skipped|failed`), `skip_reason`, `due_at`, `claimed_at`, `attempts`, `created_at`, `processed_at`. Unique `(connector_id, flow, external_id)` so retries and re-completions never send twice. Service-role only: RLS on, no policies for `anon`/`authenticated`, `REVOKE ALL` from `PUBLIC, anon, authenticated`. Rows purged 30 days after processing.
+- `store_events`: `id`, `user_id`, `social_account_id`, `connector_id`, `flow`, `external_id` (order id or `<product id>:<waitlist id>`), `delivery_id`, `payload` (**minimal** jsonb: order id/number, normalized phone, first name, total + currency, status, payment method, product id/name), `status` (`pending|claimed|sent|skipped|failed`), `outbound_message_id`, `skip_reason`, `due_at`, `claimed_at`, `attempts`, `created_at`, `processed_at`. Unique `(connector_id, flow, external_id)` so retries and re-completions never send twice. Service-role only: RLS on, no policies for `anon`/`authenticated`, `REVOKE ALL` from `PUBLIC, anon, authenticated`. Rows purged 30 days after processing.
 - `stock_waitlist`: `id`, `user_id`, `social_account_id`, `conversation_id`, `phone`, `product_id`, `parent_id`, `product_name`, `created_at`, `notified_at`, `expires_at` (created + 60 days). Unique `(social_account_id, phone, product_id)` where `notified_at is null`. Owner can read and delete their rows (RLS by `user_id`); writes are service-role.
 - `messaging_opt_outs`: `user_id`, `phone`, `created_at`, `source`. Unique `(user_id, phone)`. Owner read/delete; writes service-role.
 - Extend `ai_agent_test_expected_valid` only if a new intent is added (none is planned).
@@ -67,10 +67,10 @@ customer reply ──▶ ai-agent-reply (existing) ──▶ procedure continues
 ### 3.3 `process-store-events` (worker, cron-authed)
 - Claims up to 20 due rows with `FOR UPDATE SKIP LOCKED` **and** a `claimed_at` lease of 2 minutes (a row claimed longer ago is reclaimable); `attempts` capped at 3, then `failed`.
 - For each event:
-  1. Skip if the flow is now disabled, the phone is opted out, the event is older than `due_at + 48h`, or (QR) the account already sent 50 openers today.
+  1. Skip if the flow is now disabled, the account's agent is disabled or its engagement mode would not let the AI reply (`human_first` blocks unconditionally), the phone is opted out, the event is older than `due_at + 48h`, or (QR) the account already sent 50 openers today. `review_request` re-reads the order and skips unless it is still `completed` (it may have been refunded during the delay).
   2. Build the conversation id for the account's mode; find or create the `ai_threads` row.
-  3. Start the procedure with `persistProcedureState(expected = null)`, `run_id = store_events.id`, `origin = "event"`. A non-null state → `skipped: flow_active`.
-  4. Send the opener. Cloud API: the approved template in the account's language (default Arabic); not approved → `skipped: template_not_approved` and the state is cleared with a CAS. QR: the default opener text.
+  3. Start the procedure with `persistProcedureState(expected = null)`, `run_id = store_events.id`, `origin = "event"`. A non-null state → `skipped: flow_active`, **except** a state with `origin = "event"` and `run_id = store_events.id`: that is this event's own unfinished attempt (a worker died between start and send), so it resumes at step 4.
+  4. Send the opener, idempotently: if the event row already records an `outbound_message_id`, do not send again. Cloud API: the approved template in the account's language (default Arabic; WooCommerce carries no customer language); not approved → `skipped: template_not_approved` and the state is cleared with a CAS. QR: the same wording as the template body, in the account language, as free text. The provider message id is written to the event row immediately after the send.
   5. Record the opener in `whatsapp_messages` (inbox) and in the thread's message history so the model sees it when the customer replies.
   6. Mark `sent` (or `failed` with a sanitized reason; on send failure the state is cleared with a CAS).
 - Purges processed `store_events` older than 30 days and expired waitlist rows.
@@ -85,7 +85,7 @@ customer reply ──▶ ai-agent-reply (existing) ──▶ procedure continues
   - `stock_offer`: yes → store lookup for the product (link + price); no → end.
   - All go through the PR #211 claim first.
 - Waitlist join: a new agent tool `stock_waitlist_join(product_id)` offered only when `back_in_stock` is enabled and a stock check in this turn returned out of stock for that product; the runtime takes product id/name/parent from that stock result, never from free model text.
-- Opt-out: inbound text matching stop/unsubscribe/إلغاء الاشتراك/توقف (whole message, trimmed, case-insensitive) writes `messaging_opt_outs` and clears any active event flow.
+- Opt-out is detected at **inbound ingest**, before auto-reply rules and agent dispatch, in both `whatsapp-webhook` and `whatsapp-evolution-webhook`, through one shared helper (`_shared/optOut.ts`). A whole message (trimmed, case-insensitive) of stop/unsubscribe/إلغاء الاشتراك/توقف writes `messaging_opt_outs` and clears any active event-origin flow with a CAS. It therefore works when the agent is off or human-first.
 
 ### 3.5 Store writes
 - New WooCommerce adapter capability `update_order` (status + note) — the only write. The adapter refuses it while the tool's `read_only_mode` is true (preserves PR #204). The existing "writes are refused" test stays for every other capability.
@@ -96,7 +96,7 @@ customer reply ──▶ ai-agent-reply (existing) ──▶ procedure continues
 - Status is read with `whatsapp_list_templates` when the card loads and when the worker meets a non-approved template. No new Meta webhook subscription. The card shows pending/approved/rejected and the category Meta assigned.
 
 ### 3.7 Settings (Procedures card)
-- Per flow: enable toggle; `review_request` adds delay days (0–14, default 3) and review link (https only); the card shows the webhook URL and a "Generate / rotate secret" button for the account's WooCommerce connector, and the WooCommerce topics to add.
+- Per flow: enable toggle (refused unless the account's agent is enabled and can reply; `cod_confirm` also refused while the connector is read-only); `review_request` adds delay days (0–14, default 3) and review link (https only); the card shows the webhook URL and a "Generate / rotate secret" button for the account's WooCommerce connector, and the WooCommerce topics to add.
 - Stored in `agent_behavior.procedures` like Spec A, parsed strictly on save and leniently on read.
 
 ## 4. Security
@@ -114,8 +114,8 @@ customer reply ──▶ ai-agent-reply (existing) ──▶ procedure continues
 
 ## 6. Delivery
 Two PRs split at `store_events`:
-- **PR 1** — migration, `store-webhook`, shared phone function, engine/template additions (no sending), waitlist join tool, card settings + webhook URL/secret. Safe to go live: nothing is sent.
-- **PR 2** — `process-store-events` + cron, openers, template submission/status, `update_order`, end actions, opt-out, live test.
+- **PR 1** — migration, `store-webhook`, shared phone function, opt-out ingest, engine/template additions (no sending), card webhook URL/secret. The three flow toggles stay hidden. Safe to go live: nothing is sent and no customer is promised a message.
+- **PR 2** — `process-store-events` + cron, openers, template submission/status, `update_order`, end actions, waitlist join tool, the flow toggles, live test.
 Migrations rehearsed on a scratch database and applied before each merge.
 
 ## 7. Out of scope
