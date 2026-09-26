@@ -263,7 +263,7 @@ BEGIN
     (id, user_id, social_account_id, connector_id, secret_id)
   VALUES (v_binding, '11111111-1111-4111-8111-111111111111',
           '33333333-3333-4333-8333-333333333333',
-          '55555555-5555-4555-8555-555555555555', v_first);
+          '12121212-1212-4121-8121-121212121212', v_first);
 
   v_got := public.get_store_webhook_secret(v_binding);
   ASSERT (v_got->>'current') = 'whsec-test-current-001',
