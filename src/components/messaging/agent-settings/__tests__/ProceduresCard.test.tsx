@@ -18,7 +18,7 @@ describe("ProceduresCard", () => {
     });
   });
 
-  it("enabling the product finder seeds two empty questions so the saved config is valid", () => {
+  it("enabling the product finder seeds the two question slots the business must fill", () => {
     const updateBehavior = setup();
     fireEvent.click(screen.getByRole("switch", { name: /product finder/i }));
     expect(updateBehavior).toHaveBeenCalledWith("procedures", {

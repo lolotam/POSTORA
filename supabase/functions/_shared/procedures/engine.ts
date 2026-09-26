@@ -86,8 +86,19 @@ export function recordOffScript(state: ProcedureState, now: Date): ProcedureStat
 
 /** Lazy expiry: evaluated at the start of a turn, never by a cron job. */
 export function expireIfStale(state: ProcedureState | null, now: Date): ProcedureState | null {
-  if (!state) return null;
+  // The column is owner-writable through ai_threads RLS, so a stored value is untrusted shape.
+  if (!isStoredState(state)) return null;
   const template = TEMPLATES[state.key];
   if (!template || state.version !== template.version) return null;
   return now.getTime() - Date.parse(state.updated_at) > STALE_AFTER_MS ? null : state;
+}
+
+function isStoredState(value: unknown): value is ProcedureState {
+  if (typeof value !== "object" || value === null) return false;
+  const state = value as Record<string, unknown>;
+  return typeof state.run_id === "string" && typeof state.key === "string" &&
+    typeof state.step === "number" && typeof state.off_script === "number" &&
+    typeof state.fields === "object" && state.fields !== null && !Array.isArray(state.fields) &&
+    Object.values(state.fields).every((field) => typeof field === "string") &&
+    typeof state.updated_at === "string" && Number.isFinite(Date.parse(state.updated_at));
 }

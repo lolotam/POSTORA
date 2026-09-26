@@ -27,6 +27,7 @@ import {
   phaseTimings,
   procedurePromptBlock,
   procedureStateAfterTurn,
+  procedureStoreTool,
   procedureTurnGate,
   replyIntentFields,
   resolveEngagementMode,
@@ -82,7 +83,6 @@ import { AI_CONNECTION_REQUIRED, AI_USER_KEY_INVALID, ProviderHttpError, redactP
 import { loadOpenAiCompatibleBase, type RowReader } from "../_shared/providerEndpoint.ts";
 import { runTriage, selectConnectorTools, TRIAGE_SETTING_KEYS, triageChainFromSettings, type TriageRun } from "../_shared/agentTriage.ts";
 import { resolveProviderKey } from "../_shared/providerKeys.ts";
-import { connectorCapabilities } from "../_shared/connectorRegistry.ts";
 import { enabledProcedures, readProcedureConfig } from "../_shared/procedures/config.ts";
 import { expireIfStale } from "../_shared/procedures/engine.ts";
 import {
@@ -1102,8 +1102,7 @@ Deno.serve(async (req) => {
       : toolResolution.tools;
     const customToolByName = new Map(customTools.map((tool) => [tool.name, tool]));
 
-    const storeTool = (capability: string) =>
-      customTools.find((tool) => connectorCapabilities(tool.connector_type)?.some((c) => c.name === capability)) ?? null;
+    const storeTool = (capability: "lookup_orders" | "search_products") => procedureStoreTool(customTools, capability);
     const procedureTurn = proceduresOn ? createProcedureTurn({
       state: initialProcedureState, config: procedureConfig, dryRun, now: () => new Date(),
       runId: outboxId ?? crypto.randomUUID(),

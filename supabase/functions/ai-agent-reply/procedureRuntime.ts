@@ -115,7 +115,8 @@ export function createProcedureTurn(input: ProcedureTurnInput): ProcedureTurn {
   };
 
   const start = (key: ProcedureKey, origin: ProcedureOrigin): boolean => {
-    if (state || handedOff || !canStart(key)) return false;
+    // One flow per turn: a second run would share this turn's run id and its save would be dropped.
+    if (state || handedOff || completed || !canStart(key)) return false;
     state = startProcedure(null, key, origin, input.now(), input.runId).state;
     progressed = true;
     return true;

@@ -21,6 +21,8 @@ for (const [label, input] of [
   ["product finder with four questions", { product_finder: { enabled: true, prompts: {}, closing: "", questions: ["a", "b", "c", "d"] } }],
   ["21 booking services", { booking: { enabled: true, prompts: {}, closing: "", services: Array(21).fill("s") } }],
   ["prompt for a field the template lacks", { booking: { enabled: true, prompts: { colour: "x" }, closing: "" } }],
+  ["a blank product finder question", { product_finder: { enabled: true, prompts: {}, closing: "", questions: ["Budget?", "  "] } }],
+  ["a blank booking service", { booking: { enabled: true, prompts: {}, closing: "", services: ["Haircut", ""] } }],
 ] as const) {
   Deno.test(`parseProcedureConfig rejects ${label}`, () => {
     assertThrows(() => parseProcedureConfig(input), AgentBehaviorError);

@@ -24,6 +24,13 @@ function boundedText(value: unknown, field: string, max: number): string {
   return value;
 }
 
+/** A question or service the agent will say aloud: blank text would reach the customer as nothing. */
+function nonBlankText(value: unknown, field: string, max: number): string {
+  const text = boundedText(value, field, max);
+  if (!text.trim()) fail(`${field} must not be blank`);
+  return text;
+}
+
 function parseSettings(key: ProcedureKey, value: unknown): ProcedureSettings {
   if (typeof value !== "object" || value === null || Array.isArray(value)) fail(`procedures.${key} must be an object`);
   const source = value as Record<string, unknown>;
@@ -46,13 +53,13 @@ function parseSettings(key: ProcedureKey, value: unknown): ProcedureSettings {
     if (!Array.isArray(questions) || questions.length < 2 || questions.length > 3) {
       fail("procedures.product_finder.questions must hold 2 or 3 questions");
     }
-    settings.questions = questions.map((q, i) => boundedText(q, `procedures.product_finder.questions[${i}]`, MAX_TEXT));
+    settings.questions = questions.map((q, i) => nonBlankText(q, `procedures.product_finder.questions[${i}]`, MAX_TEXT));
   }
   if (key === "booking" && source.services !== undefined) {
     if (!Array.isArray(source.services) || source.services.length > MAX_SERVICES) {
       fail(`procedures.booking.services must hold at most ${MAX_SERVICES} items`);
     }
-    settings.services = source.services.map((s, i) => boundedText(s, `procedures.booking.services[${i}]`, MAX_SERVICE));
+    settings.services = source.services.map((s, i) => nonBlankText(s, `procedures.booking.services[${i}]`, MAX_SERVICE));
   }
   return settings;
 }

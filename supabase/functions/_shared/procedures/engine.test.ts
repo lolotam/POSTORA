@@ -86,3 +86,15 @@ for (const [label, ageMs, version, expected] of [
     assertEquals(result === null ? "expired" : "kept", expected);
   });
 }
+
+// ai_threads.procedure_state is owner-writable through RLS, so the stored value is untrusted.
+for (const [label, stored] of [
+  ["fields that are not an object", { fields: null }],
+  ["a non-string field value", { fields: { service: 7 } }],
+  ["an unparseable updated_at", { updated_at: "soon" }],
+] as const) {
+  Deno.test(`expireIfStale drops a stored state with ${label}`, () => {
+    const state = { ...startProcedure(null, "booking", "jev", T0, "run-1").state, ...stored };
+    assertEquals(expireIfStale(state as never, later(1)), null);
+  });
+}

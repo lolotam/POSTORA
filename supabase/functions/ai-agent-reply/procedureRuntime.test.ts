@@ -1,6 +1,6 @@
 // supabase/functions/ai-agent-reply/procedureRuntime.test.ts
 import { assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
-import { createProcedureTurn, procedureToolDefinitions, type ProcedurePorts, type ProcedureTurnInput } from "./procedureRuntime.ts";
+import { createProcedureTurn, type ProcedurePorts, type ProcedureTurnInput } from "./procedureRuntime.ts";
 
 function fakePorts(overrides: Partial<ProcedurePorts> = {}) {
   const calls = {
@@ -34,10 +34,6 @@ const input = (ports: ProcedurePorts, extra: Partial<ProcedureTurnInput> = {}): 
   ...extra,
 });
 const leadFields = { name: "Sara", contact: "Salmiya", product: "oud" };
-
-Deno.test("no tools are offered when no flow is enabled", () => {
-  assertEquals(procedureToolDefinitions([]), []);
-});
 
 Deno.test("start and submit in one turn saves the lead once, keyed by run id, and alerts the admin", async () => {
   const { ports, calls } = fakePorts();
@@ -175,4 +171,23 @@ Deno.test("cancel ends the flow and counts as progress", async () => {
   await turn.handle("start_procedure", { key: "lead_capture" });
   await turn.handle("procedure_cancel", { reason: "customer stopped" });
   assertEquals([turn.state, turn.progressed], [null, true]);
+});
+
+Deno.test("the product finder asks the business's own question for the current step", async () => {
+  const { ports } = fakePorts();
+  const turn = createProcedureTurn(input(ports, {
+    config: { product_finder: { enabled: true, prompts: {}, closing: "", questions: ["What is your budget?", "Who is it for?"] } },
+  }));
+  await turn.handle("start_procedure", { key: "product_finder" });
+  const next = await turn.handle("procedure_submit", { fields: { answer_1: "50 KWD" } });
+  assertStringIncludes(next.output, "Who is it for?");
+});
+
+Deno.test("a second flow cannot start in the turn that completed one", async () => {
+  const { ports } = fakePorts();
+  const turn = createProcedureTurn(input(ports));
+  await turn.handle("start_procedure", { key: "lead_capture" });
+  await turn.handle("procedure_submit", { fields: leadFields });
+  assertEquals(turn.start("booking", "model"), false);
+  assertEquals(turn.state, null);
 });

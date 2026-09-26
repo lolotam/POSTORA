@@ -4,7 +4,7 @@
 // uses the same adapter decision as reply dispatch, TRIAGE_CONFIDENCE so the
 // reply's intent field cannot drift from triage, and the procedure engine so
 // the turn gate and the state write stay free of I/O.
-import { shouldUseAdapter } from "../_shared/connectorRegistry.ts";
+import { connectorCapabilities, shouldUseAdapter } from "../_shared/connectorRegistry.ts";
 import type {
   AgentBehavior,
   AgentGoal,
@@ -795,6 +795,7 @@ export function procedureStateAfterTurn(input: {
   turnState: ProcedureState | null; progressed: boolean; escalated: boolean; now: Date;
 }): ProcedureState | null | undefined {
   if (!input.hadTurn) return input.storedState ? null : undefined;
+  if (!input.storedState && !input.turnState) return undefined;
   if (input.escalated) return null;
   if (input.initialState && input.turnState && !input.progressed) return recordOffScript(input.turnState, input.now);
   return input.turnState;
@@ -811,4 +812,25 @@ export function iterationBudget(
   // Verdict 4: a procedure tool on the last permitted round earns one text-only round,
   // so an end action is never followed by silence.
   return iteration === limit && procedureToolRanOnLastRound ? "text_only" : "stop";
+}
+
+/** The single typed parameter a procedure passes to each store capability. */
+const PROCEDURE_STORE_PARAMETER = { lookup_orders: "order_id", search_products: "query" } as const;
+
+/**
+ * The account's connector that can serve a procedure's store lookup. A connector qualifies
+ * only when its capability schema declares the exact parameter the runtime sends: a generic
+ * connector (Supabase lists every capability over a table/filters schema) would ignore
+ * order_id and return unfiltered rows, i.e. other customers' orders.
+ */
+export function procedureStoreTool<T extends { connector_type?: string | null }>(
+  tools: T[],
+  capability: keyof typeof PROCEDURE_STORE_PARAMETER,
+): T | null {
+  const parameter = PROCEDURE_STORE_PARAMETER[capability];
+  return tools.find((tool) =>
+    connectorCapabilities(tool.connector_type)?.some((definition) =>
+      definition.name === capability && parameter in (definition.parameters.properties ?? {})
+    )
+  ) ?? null;
 }
