@@ -92,6 +92,7 @@ import {
   procedureToolDefinitions,
   stepGuidance,
 } from "./procedureRuntime.ts";
+import { PROCEDURE_STATE_CONFLICT, persistProcedureState } from "./procedureState.ts";
 
 const OPENAI_API = "https://api.openai.com/v1";
 const SERVICE_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -1472,9 +1473,16 @@ Deno.serve(async (req) => {
       initialState: initialProcedureState, turnState: procedureTurn?.state ?? null,
       progressed: procedureTurn?.progressed ?? false, escalated, now: new Date(),
     });
-    if (procedureStateToWrite !== undefined) {
-      const { error } = await admin.from("ai_threads").update({ procedure_state: procedureStateToWrite }).eq("id", thread.id);
-      if (error) console.error("[ai-agent-reply] Procedure state write failed:", error.message);
+    if (
+      procedureStateToWrite !== undefined &&
+      !(await persistProcedureState(admin, thread.id, thread.procedure_state ?? null, procedureStateToWrite))
+    ) {
+      // The reply claims a transition durable state does not hold (a concurrent turn won,
+      // or the write failed). Sending it would re-ask answered questions next turn.
+      await logOutcome(admin, { ...baseLog, status: "skipped", error: PROCEDURE_STATE_CONFLICT,
+        latency_ms: Date.now() - startedAt }, { error_code: PROCEDURE_STATE_CONFLICT, dry_run: dryRun });
+      if (outboxId) await cancelOutboxRow(admin, outboxId, PROCEDURE_STATE_CONFLICT);
+      return jsonResponse({ ok: true, skipped: "no_reply_generated", error: PROCEDURE_STATE_CONFLICT });
     }
 
     let outboundMessageId: string | null = null;

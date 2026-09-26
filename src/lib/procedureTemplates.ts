@@ -17,3 +17,10 @@ export interface ProcedureSettings {
   questions?: string[];
   services?: string[];
 }
+
+/** Mirrors procedureTurnGate in ai-agent-reply/logic.ts: DMs on these platforms only. */
+const PROCEDURE_PLATFORMS = ["whatsapp", "facebook", "instagram"];
+
+export function supportsProcedures(platform: string, surface: "dms" | "comments" | "both"): boolean {
+  return PROCEDURE_PLATFORMS.includes(platform) && surface !== "comments";
+}
