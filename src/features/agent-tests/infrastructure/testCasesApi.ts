@@ -127,16 +127,26 @@ export async function insertTestCase(input: {
   if (error) throw error;
 }
 
-export async function updateTestCase(id: string, input: { message: string; expected: TestExpectation }): Promise<void> {
+export async function updateTestCase(id: string, input: {
+  message: string;
+  expected: TestExpectation;
+  socialAccountId: string;
+  platform: string;
+}): Promise<void> {
   const { error } = await supabase.from("ai_agent_test_cases").update({
     message: input.message,
     expected: asJson(input.expected),
-  }).eq("id", id);
+  }).eq("id", id).eq("social_account_id", input.socialAccountId).eq("platform", input.platform);
   if (error) throw error;
 }
 
-export async function deleteTestCase(id: string): Promise<void> {
-  const { error } = await supabase.from("ai_agent_test_cases").delete().eq("id", id);
+export async function deleteTestCase(id: string, scope: { socialAccountId: string; platform: string }): Promise<void> {
+  const { error } = await supabase
+    .from("ai_agent_test_cases")
+    .delete()
+    .eq("id", id)
+    .eq("social_account_id", scope.socialAccountId)
+    .eq("platform", scope.platform);
   if (error) throw error;
 }
 

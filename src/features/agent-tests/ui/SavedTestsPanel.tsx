@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import "@/i18n";
 import { Loader2, Play } from "lucide-react";
@@ -88,6 +88,17 @@ export function SavedTestsPanel({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<CaseForm>(emptyForm());
   const [formError, setFormError] = useState(false);
+  const scopeKey = `${account ?? ""}:${platform}`;
+  const seenScope = useRef(scopeKey);
+
+  useEffect(() => {
+    if (seenScope.current === scopeKey) return;
+    seenScope.current = scopeKey;
+    setOpen(false);
+    setEditingId(null);
+    setForm(emptyForm());
+    setFormError(false);
+  }, [scopeKey]);
 
   useEffect(() => {
     if (!prefillMessage) return;
@@ -226,6 +237,11 @@ export function SavedTestsPanel({
         {shownResults && (
           <div className="space-y-2">
             <h3 className="text-sm font-medium">{t("test.saved.results", "Results")}</h3>
+            {runner.live?.savedOk === false && (
+              <p className="text-sm text-destructive">
+                {t("test.saved.saveFailed", "Results could not be saved; this run will show as interrupted after reload")}
+              </p>
+            )}
             {shownStatus === "interrupted" && (
               <p className="text-sm text-muted-foreground">{t("test.saved.interrupted", "Interrupted")}</p>
             )}

@@ -95,9 +95,13 @@ function snapshot(results: CaseResult[]): CaseResult[] {
   return results.map((result) => ({ ...result, reasons: [...result.reasons], tool_calls: [...result.tool_calls] }));
 }
 
+async function writeCheckpoint(deps: RunSavedTestsDeps, id: string, patch: RunPatch): Promise<void> {
+  await deps.updateRun(id, { ...patch, results: snapshot(patch.results) });
+}
+
 async function checkpoint(deps: RunSavedTestsDeps, id: string, patch: RunPatch): Promise<void> {
   try {
-    await deps.updateRun(id, { ...patch, results: snapshot(patch.results) });
+    await writeCheckpoint(deps, id, patch);
   } catch (error) {
     console.error(`[agent-tests] run checkpoint failed: ${error instanceof Error ? error.name : "Error"}`);
   }
@@ -113,6 +117,7 @@ export async function runSavedTests(deps: RunSavedTestsDeps): Promise<{
   id: string;
   status: RunStatus;
   results: CaseResult[];
+  savedOk: boolean;
 }> {
   const ordered = [...deps.cases].sort((left, right) => left.position - right.position || left.id.localeCompare(right.id));
   const selected = ordered.slice(0, MAX_CASES_PER_RUN);
@@ -185,11 +190,18 @@ export async function runSavedTests(deps: RunSavedTestsDeps): Promise<{
     summary: summariseResults(results),
     results,
   };
-  await checkpoint(deps, created.id, finished);
+  let savedOk = true;
+  try {
+    await writeCheckpoint(deps, created.id, finished);
+  } catch (error) {
+    savedOk = false;
+    status = "interrupted";
+    console.error(`[agent-tests] run checkpoint failed: ${error instanceof Error ? error.name : "Error"}`);
+  }
   try {
     await deps.deleteThreads(threadIds);
   } catch (error) {
     console.error(`[agent-tests] thread cleanup failed: ${error instanceof Error ? error.name : "Error"}`);
   }
-  return { id: created.id, status, results };
+  return { id: created.id, status, results, savedOk };
 }

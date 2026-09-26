@@ -73,4 +73,28 @@ describe("runSavedTests", () => {
     ]]);
     expect(deleted[0].every((id) => !id.endsWith("%"))).toBe(true);
   });
+
+  it("does not report the run completed when the final checkpoint fails", async () => {
+    const finished = await runSavedTests({
+      cases: [testCase("one", 0, { contains: ["price"] })],
+      platform: "whatsapp",
+      accountId: "acct",
+      createRun: async () => ({ id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" }),
+      updateRun: async (_id, patch) => {
+        if (patch.status !== "running") throw new Error("final write failed");
+      },
+      deleteThreads: async () => {},
+      runCase: async () => ({
+        ok: true,
+        reply: "the price is 5",
+        intent_status: "off",
+        tool_calls: [],
+        escalated: false,
+      }),
+    });
+
+    expect(finished.status).not.toBe("completed");
+    expect(finished.savedOk).toBe(false);
+    expect(finished.results).toHaveLength(1);
+  });
 });

@@ -86,4 +86,18 @@ describe("SavedTestsPanel", () => {
     expect(screen.getByText("Passed")).toBeInTheDocument();
     expect(screen.getByText('reply does not contain "د.ك"')).toBeInTheDocument();
   });
+
+  it("closes and clears the editor when the account changes", async () => {
+    const view = renderMinimal(<SavedTestsPanel platform="whatsapp" accountId="acct-a" />);
+    expect(await screen.findByText("first question")).toBeInTheDocument();
+    fireEvent.click(screen.getAllByRole("button", { name: "Edit" })[0]);
+    expect(screen.getByLabelText("Customer message")).toHaveValue("first question");
+
+    view.rerender(<SavedTestsPanel platform="whatsapp" accountId="acct-b" />);
+
+    await waitFor(() => {
+      expect(screen.queryByLabelText("Customer message")).not.toBeInTheDocument();
+    });
+    expect(screen.queryByDisplayValue("first question")).not.toBeInTheDocument();
+  });
 });
