@@ -54,6 +54,8 @@ function useIntentLabel() {
         return t("dashboard.intent.complaint", "Complaint");
       case "lead":
         return t("dashboard.intent.lead", "Lead");
+      case "booking":
+        return t("dashboard.intent.booking", "Booking");
       case "greeting":
         return t("dashboard.intent.greeting", "Greeting");
       case "other":

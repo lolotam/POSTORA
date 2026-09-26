@@ -10,6 +10,7 @@ export const INTENT_LABELS: Record<Exclude<Intent, "other">, { name: string; col
   order_status: { name: "Order status", color: "#8b5cf6" },
   complaint: { name: "Complaint", color: "#ef4444" },
   lead: { name: "Lead", color: "#22c55e" },
+  booking: { name: "Booking", color: "#f59e0b" },
   greeting: { name: "Greeting", color: "#94a3b8" },
 };
 

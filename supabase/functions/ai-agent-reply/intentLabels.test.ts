@@ -23,6 +23,10 @@ Deno.test("a confident intent earns its label; everything else earns none", () =
     name: "Pricing",
     color: "#3b82f6",
   });
+  assertEquals(intentLabelFor(answers({ choice: "booking", confidence: 0.9 })), {
+    name: "Booking",
+    color: "#f59e0b",
+  });
   // Below the triage threshold the intent is a guess, not a signal.
   assertEquals(intentLabelFor(answers({ choice: "pricing", confidence: 0.5 })), null);
   // "other" is deliberately never labelled.

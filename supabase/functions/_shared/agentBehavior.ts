@@ -13,6 +13,11 @@
  * loaded gun in a settings form.
  */
 
+import { AgentBehaviorError } from "./agentBehaviorError.ts";
+import { parseProcedureConfig, type ProcedureConfig } from "./procedures/config.ts";
+
+export { AgentBehaviorError };
+
 export type AgentTone = "friendly_professional" | "formal" | "enthusiastic" | "concise";
 export type AgentResponseLength = "short" | "medium" | "detailed";
 export type AgentGoal =
@@ -50,13 +55,7 @@ export interface AgentBehavior {
   goals?: AgentGoal[];
   greeting?: string;
   instruction_blocks?: AgentInstructionBlock[];
-}
-
-export class AgentBehaviorError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "AgentBehaviorError";
-  }
+  procedures?: ProcedureConfig;
 }
 
 const BEHAVIOR_KEYS = [
@@ -65,6 +64,7 @@ const BEHAVIOR_KEYS = [
   "goals",
   "greeting",
   "instruction_blocks",
+  "procedures",
 ] as const;
 
 const MAX_GREETING = 500;
@@ -172,5 +172,6 @@ export function parseAgentBehavior(input: unknown): AgentBehavior {
   if (source.instruction_blocks !== undefined) {
     behavior.instruction_blocks = parseInstructionBlocks(source.instruction_blocks);
   }
+  if (source.procedures !== undefined) behavior.procedures = parseProcedureConfig(source.procedures);
   return behavior;
 }

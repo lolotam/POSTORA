@@ -76,3 +76,16 @@ Deno.test("a non-object is rejected", () => {
   assertThrows(() => parseAgentBehavior("formal"), AgentBehaviorError);
   assertThrows(() => parseAgentBehavior([{ tone: "formal" }]), AgentBehaviorError);
 });
+
+const validProcedures = {
+  order_status: { enabled: true, prompts: { order_number: "Ask for the order number" }, closing: "" },
+  product_finder: { enabled: true, prompts: {}, closing: "", questions: ["Budget?", "For whom?"] },
+};
+
+Deno.test("a valid procedures config is kept", () => {
+  assertEquals(parseAgentBehavior({ procedures: validProcedures }).procedures, validProcedures);
+});
+
+Deno.test("an unknown procedure is rejected", () => {
+  assertThrows(() => parseAgentBehavior({ procedures: { weather: {} } }), AgentBehaviorError);
+});

@@ -13,7 +13,7 @@ export interface TriageInput {
   askHandoff: boolean;
 }
 /** What the customer wants, from the new message. Drives the WhatsApp intent labels. */
-export const INTENTS = ["pricing", "order_status", "complaint", "lead", "greeting", "other"] as const;
+export const INTENTS = ["pricing", "order_status", "complaint", "lead", "booking", "greeting", "other"] as const;
 export type Intent = typeof INTENTS[number];
 export interface TriageAnswers {
   needsKnowledge: number | null;
@@ -80,7 +80,8 @@ export function triageRequestBody(tier: TriageTier, input: TriageInput): Record<
       pricing: "Asks about a price, cost, offer or discount",
       order_status: "Asks where an order is, about delivery status or tracking",
       complaint: "Unhappy, reports a problem, or wants a refund or return",
-      lead: "Shows buying interest: wants to order, book, subscribe or be contacted",
+      lead: "Shows buying interest: wants to order, subscribe or be contacted",
+      booking: "Wants to book, reserve or schedule an appointment or service",
       greeting: "Only greets, thanks or acknowledges",
       other: "Anything else",
     },
@@ -109,7 +110,7 @@ export function parseTriageAnswers(provider: TriageProvider, json: unknown): Tri
   const field = YES_NO[provider].field;
   const connector = answers.connector as { choice?: unknown; confidence?: unknown } | undefined;
   const intent = answers.intent as { choice?: unknown; confidence?: unknown } | undefined;
-  // An intent outside the six choices, or a confidence that is not a finite
+  // An intent outside the seven choices, or a confidence that is not a finite
   // probability in [0, 1], is no intent at all: the caller labels nothing.
   const usableIntent = typeof intent?.choice === "string" && INTENTS.includes(intent.choice as Intent) &&
       typeof intent.confidence === "number" && Number.isFinite(intent.confidence) &&
