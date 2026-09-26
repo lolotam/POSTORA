@@ -98,6 +98,31 @@ describe("runSavedTests", () => {
     ]]);
   });
 
+  it("stops the run when the sandbox returns 429", async () => {
+    const runCase = vi.fn()
+      .mockRejectedValueOnce(new EdgeApiError("Too many requests", 429))
+      .mockResolvedValueOnce({
+        ok: true,
+        reply: "should not run",
+        escalated: false,
+        intent_status: "off",
+        tool_calls: [],
+      });
+    const finished = await runSavedTests({
+      cases: [testCase("one", 0, {}), testCase("two", 1, {})],
+      platform: "whatsapp",
+      accountId: "acct",
+      createRun: async () => ({ id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" }),
+      updateRun: async () => {},
+      deleteThreads: async () => {},
+      runCase,
+    });
+    expect(runCase).toHaveBeenCalledTimes(1);
+    expect(finished.status).toBe("interrupted");
+    expect(finished.results.map((result) => result.verdict)).toEqual(["errored"]);
+    expect(finished.results[0].reasons).toEqual(["rate limited, try again in a few minutes"]);
+  });
+
   it("records an authentication failure as errored with its reason", async () => {
     const finished = await runSavedTests({
       cases: [testCase("one", 0, {})],

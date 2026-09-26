@@ -2,7 +2,8 @@
 // webhooks (whatsapp-webhook) after auto-reply rules found no match.
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { handleCorsOptions, jsonResponse, unauthorizedResponse, badRequestResponse } from "../_shared/cors.ts";
+import { handleCorsOptions, jsonResponse, unauthorizedResponse, badRequestResponse, corsHeaders } from "../_shared/cors.ts";
+import { checkUserRateLimit, rateLimitExceededResponse } from "../_shared/rate-limiter.ts";
 import {
   resolveToolsForAccount,
   type ResolvableTool,
@@ -538,6 +539,8 @@ Deno.serve(async (req) => {
     });
     const { data: { user } } = await anon.auth.getUser(bearer);
     if (!user) return unauthorizedResponse();
+    const sandboxLimit = await checkUserRateLimit(admin, "ai-agent-reply-sandbox", user.id, 60, 900);
+    if (!sandboxLimit.allowed) return rateLimitExceededResponse(sandboxLimit, corsHeaders);
     if (!body.inbound_text || typeof body.inbound_text !== "string") {
       return badRequestResponse("Missing field: inbound_text");
     }
@@ -705,6 +708,9 @@ Deno.serve(async (req) => {
     const procedureConfig = readProcedureConfig(config.agent_behavior?.procedures);
     const proceduresOn = procedureTurnGate(request) && enabledProcedures(procedureConfig).length > 0;
     const initialProcedureState = proceduresOn ? expireIfStale(thread.procedure_state ?? null, new Date()) : null;
+    // The claim port advances this. The final write must expect it, not the value read above:
+    // the winner then moves claimed -> null, and the loser's compare-and-set still expects what it read.
+    let durableProcedureState: unknown = thread.procedure_state ?? null;
 
     // Sandbox runs bypass the delivery gates — they test the agent's brain,
     // not the conversation's delivery state. The sender is built only after
@@ -1109,6 +1115,11 @@ Deno.serve(async (req) => {
       runId: outboxId ?? crypto.randomUUID(),
       leadContext: { platform: request.platform, socialAccountId: toolContext.socialAccountId, conversationId: request.conversation_id },
       ports: {
+        claim: async (claimed) => {
+          const won = await persistProcedureState(admin, thread.id, durableProcedureState, claimed);
+          if (won) durableProcedureState = claimed;
+          return won;
+        },
         saveLead: async (row) => {
           const { data, error } = await admin.from("leads").upsert(
             { user_id: request.user_id, form_id: null, status: "new", ...row },
@@ -1469,13 +1480,13 @@ Deno.serve(async (req) => {
     }
 
     const procedureStateToWrite = procedureStateAfterTurn({
-      hadTurn: procedureTurn !== null, storedState: thread.procedure_state ?? null,
+      hadTurn: procedureTurn !== null, storedState: durableProcedureState,
       initialState: initialProcedureState, turnState: procedureTurn?.state ?? null,
       progressed: procedureTurn?.progressed ?? false, escalated, now: new Date(),
     });
     if (
       procedureStateToWrite !== undefined &&
-      !(await persistProcedureState(admin, thread.id, thread.procedure_state ?? null, procedureStateToWrite))
+      !(await persistProcedureState(admin, thread.id, durableProcedureState, procedureStateToWrite))
     ) {
       // The reply claims a transition durable state does not hold (a concurrent turn won,
       // or the write failed). Sending it would re-ask answered questions next turn.

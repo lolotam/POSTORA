@@ -113,9 +113,11 @@ async function checkpoint(deps: RunSavedTestsDeps, id: string, patch: RunPatch):
 
 /**
  * One case at a time, in position order, at most 25. A failed or errored case
- * is recorded and the run continues. Each finished case is written to the run
- * row before the next starts. Gateway and network failures are indeterminate
- * and are not retried. When the run ends, its exact sandbox threads are deleted.
+ * is recorded and the run continues. A 429 is the exception: that case is
+ * recorded and the run stops, so the rest are not sent into the same limit.
+ * Each finished case is written to the run row before the next starts. Gateway
+ * and network failures are indeterminate and are not retried. When the run
+ * ends, its exact sandbox threads are deleted.
  */
 export async function runSavedTests(deps: RunSavedTestsDeps): Promise<{
   id: string;
@@ -164,6 +166,11 @@ export async function runSavedTests(deps: RunSavedTestsDeps): Promise<{
         const reply = await deps.runCase({ message: testCase.message, testCaseKey: key, signal: caseAbort.signal });
         results.push(fromReply(testCase, reply));
       } catch (error) {
+        if (error instanceof EdgeApiError && error.status === 429) {
+          results.push(baseResult(testCase, "errored", ["rate limited, try again in a few minutes"]));
+          status = "interrupted";
+          break;
+        }
         if (isAbort(error) && !timedOut) {
           status = "interrupted";
           break;

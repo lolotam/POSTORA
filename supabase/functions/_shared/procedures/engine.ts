@@ -11,6 +11,8 @@ export interface ProcedureState {
   origin: ProcedureOrigin;
   started_at: string;
   updated_at: string;
+  /** Set only by the compare-and-set that won the end action, so the claimed value differs from the stored one. */
+  claimed_by?: string;
 }
 
 export interface SubmitResult {
@@ -100,5 +102,6 @@ function isStoredState(value: unknown): value is ProcedureState {
     typeof state.step === "number" && typeof state.off_script === "number" &&
     typeof state.fields === "object" && state.fields !== null && !Array.isArray(state.fields) &&
     Object.values(state.fields).every((field) => typeof field === "string") &&
-    typeof state.updated_at === "string" && Number.isFinite(Date.parse(state.updated_at));
+    typeof state.updated_at === "string" && Number.isFinite(Date.parse(state.updated_at)) &&
+    (state.claimed_by === undefined || typeof state.claimed_by === "string");
 }

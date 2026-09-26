@@ -11,6 +11,8 @@ export const OFF_SCRIPT_LIMIT = 3;
 
 export interface ProcedureField {
   name: string;
+  /** What counts as an answer. Wording says how to ask; the hint says what to accept. */
+  hint?: string;
   /** Normalized value, or null when the input does not satisfy the field. */
   validate: (raw: string) => string | null;
 }
@@ -37,6 +39,16 @@ const contact = (raw: string) => {
   return value.length >= 3 && value.length <= 120 ? value : null;
 };
 
+const hint = {
+  order_number: "the order number; digits, a leading # is fine",
+  name: "the customer's name",
+  contact: "a phone number or an area/city (for example Salmiya); accept either, do not insist on a phone number",
+  product: "the product or service they are interested in",
+  problem: "a short description of the problem",
+  service: "the service they want",
+  when: "the day and time they prefer, in their own words",
+} as const;
+
 export function productFinderFields(count: number): ProcedureField[] {
   return Array.from({ length: count }, (_, index) => ({ name: `answer_${index + 1}`, validate: text(300) }));
 }
@@ -44,14 +56,14 @@ export function productFinderFields(count: number): ProcedureField[] {
 export const TEMPLATES: Record<ProcedureKey, ProcedureTemplate> = {
   order_status: {
     key: "order_status", version: 1, endAction: "order_lookup", needsCapability: "lookup_orders",
-    fields: [{ name: "order_number", validate: orderNumber }],
+    fields: [{ name: "order_number", hint: hint.order_number, validate: orderNumber }],
   },
   lead_capture: {
     key: "lead_capture", version: 1, endAction: "save_lead",
     fields: [
-      { name: "name", validate: text(120) },
-      { name: "contact", validate: contact },
-      { name: "product", validate: text(500) },
+      { name: "name", hint: hint.name, validate: text(120) },
+      { name: "contact", hint: hint.contact, validate: contact },
+      { name: "product", hint: hint.product, validate: text(500) },
     ],
   },
   complaint_return: {
@@ -59,15 +71,15 @@ export const TEMPLATES: Record<ProcedureKey, ProcedureTemplate> = {
     // human who takes the handoff sees any photo in the chat itself.
     key: "complaint_return", version: 1, endAction: "handoff",
     fields: [
-      { name: "order_number", validate: orderNumber },
-      { name: "problem", validate: text(500) },
+      { name: "order_number", hint: hint.order_number, validate: orderNumber },
+      { name: "problem", hint: hint.problem, validate: text(500) },
     ],
   },
   booking: {
     key: "booking", version: 1, endAction: "save_booking",
     fields: [
-      { name: "service", validate: text(120) },
-      { name: "when", validate: text(120) },
+      { name: "service", hint: hint.service, validate: text(120) },
+      { name: "when", hint: hint.when, validate: text(120) },
     ],
   },
   product_finder: {

@@ -98,3 +98,8 @@ for (const [label, stored] of [
     assertEquals(expireIfStale(state as never, later(1)), null);
   });
 }
+
+Deno.test("expireIfStale keeps a stored state that carries claimed_by", () => {
+  const state = { ...startProcedure(null, "booking", "jev", T0, "run-1").state, claimed_by: "run-9" };
+  assertEquals(expireIfStale(state, later(1)), state);
+});
