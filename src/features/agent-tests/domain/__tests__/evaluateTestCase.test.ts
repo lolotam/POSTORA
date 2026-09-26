@@ -3,6 +3,7 @@ import {
   compareRuns,
   displayRunStatus,
   evaluateTestCase,
+  nextCasePosition,
   normaliseForMatch,
   testCaseKey,
   testThreadId,
@@ -107,5 +108,17 @@ describe("run snapshots", () => {
     expect(key.length).toBeLessThanOrEqual(64);
     expect(key).toMatch(/^[A-Za-z0-9_-]{1,64}$/);
     expect(testThreadId("whatsapp", "acct-1", key)).toBe(`test_whatsapp_acct-1_${key}`);
+  });
+});
+
+describe("nextCasePosition", () => {
+  // Codex P2 on PR #207: after deleting position 0 of [0,1,2], cases.length (2)
+  // collided with an existing case and the list and runner orders diverged.
+  it.each([
+    { positions: [], expected: 0 },
+    { positions: [1, 2], expected: 3 },
+    { positions: [0, 5, 2], expected: 6 },
+  ])("a new case after positions $positions goes to $expected", ({ positions, expected }) => {
+    expect(nextCasePosition(positions.map((position) => ({ position })))).toBe(expected);
   });
 });

@@ -179,3 +179,8 @@ export function testCaseKey(runId: string, caseIndex: number): string {
 export function testThreadId(platform: string, accountId: string, key: string): string {
   return `test_${platform}_${accountId}_${key}`;
 }
+
+/** Positions survive deletes, so a new case goes after the highest one, not at cases.length. */
+export function nextCasePosition(cases: ReadonlyArray<{ position: number }>): number {
+  return cases.reduce((highest, testCase) => Math.max(highest, testCase.position + 1), 0);
+}

@@ -10,7 +10,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { compareRuns, displayRunStatus } from "../domain/evaluateTestCase";
+import { compareRuns, displayRunStatus, nextCasePosition } from "../domain/evaluateTestCase";
 import { MAX_CASES_PER_RUN, TEST_INTENTS, testCaseInputSchema, STALE_RUN_MS, type CaseResult, type TestCase, type TestExpectation } from "../domain/types";
 import { useAgentTestCases, useAgentTestRuns, useDeleteTestCase, useRunAllTests, useSaveTestCase } from "./useAgentTestSets";
 
@@ -148,9 +148,7 @@ export function SavedTestsPanel({
       setFormError(true);
       return;
     }
-    const position = editingId
-      ? cases.find((testCase) => testCase.id === editingId)?.position ?? cases.length
-      : cases.length;
+    const position = cases.find((testCase) => testCase.id === editingId)?.position ?? nextCasePosition(cases);
     saveCase.mutate(
       { id: editingId ?? undefined, message: parsed.data.message, expected: parsed.data.expected, position },
       {
