@@ -213,9 +213,7 @@ export async function deleteRunThreads(input: {
     .eq("user_id", input.userId)
     .eq("platform", input.platform)
     .in("conversation_id", input.conversationIds);
-  if (error) {
-    console.error(`[agent-tests] thread cleanup failed: ${error.code}`);
-  }
+  if (error) throw error;
 }
 
 export async function runTestCase(input: {

@@ -49,7 +49,11 @@ function transportOutcome(error: unknown): { verdict: "errored" | "indeterminate
     if (error.status === null) return { verdict: "indeterminate", reason: "network error" };
     return { verdict: "errored", reason: `request failed (HTTP ${error.status})` };
   }
-  return { verdict: "indeterminate", reason: "network error" };
+  // fetch() rejects with TypeError. callEdgeApi wraps that as EdgeApiError
+  // status null; a raw TypeError is the same failure if it surfaces here.
+  if (error instanceof TypeError) return { verdict: "indeterminate", reason: "network error" };
+  if (error instanceof Error && error.message) return { verdict: "errored", reason: error.message };
+  return { verdict: "errored", reason: "request failed" };
 }
 
 function toolNames(reply: SandboxReply): string[] {

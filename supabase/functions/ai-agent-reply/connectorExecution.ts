@@ -297,6 +297,15 @@ function outcomeFromOutput(output: string): { status: "success" | "failed" | "ti
   return { status: "failed", errorCode: bracketed?.[1] ?? "connector_failure" };
 }
 
+// Same shape index.ts accepts before it will compare a column of type uuid.
+// The sandbox with no account passes the sentinel "test" (or null). Querying
+// or inserting that value fails the statement; skip the ledger instead.
+const ACCOUNT_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function isAccountUuid(value: string | null): value is string {
+  return value !== null && ACCOUNT_UUID.test(value);
+}
+
 /**
  * Spec §7.2: native agent executions are metered HERE, where the conversation's
  * account is known, never inside ai-agent-adapters (which meters only the
@@ -309,14 +318,16 @@ async function meterNativeExecution(
   tool: CustomTool,
   actionName: string,
   run: () => Promise<ToolResult>,
-  source: ConnectorCallSource,
+  options: { source: ConnectorCallSource },
 ): Promise<ToolResult> {
   const startedAt = performance.now();
   const result = await run();
+  if (!isAccountUuid(context.socialAccountId)) return result;
+  const socialAccountId = context.socialAccountId;
   let workspaceId: string;
   try {
     workspaceId = await resolveWorkspaceForCall(context.admin, {
-      socialAccountId: context.socialAccountId,
+      socialAccountId,
       userId: context.userId,
     });
   } catch (error) {
@@ -332,12 +343,12 @@ async function meterNativeExecution(
     workspaceId,
     toolId: tool.id,
     connectionId: null,
-    socialAccountId: context.socialAccountId,
+    socialAccountId,
     partnerKeyId: null,
     connectorType: tool.connector_type ?? "custom_rest",
     authStrategy: "manual_credentials",
     actionName,
-    source,
+    source: options.source,
     requestId: context.requestId,
   }, { ...outcome, latencyMs: performance.now() - startedAt });
   return result;
@@ -371,5 +382,7 @@ export async function executeRoutedCustomTool(
   // "test" so a sandbox probe is not counted as a customer reply.
   if (context.dryRun && !readOnlyConnector(tool)) return await run();
   const actionName = typeof args.capability === "string" ? args.capability : "input";
-  return await meterNativeExecution(context, tool, actionName, run, context.dryRun ? "test" : "agent");
+  return await meterNativeExecution(context, tool, actionName, run, {
+    source: context.dryRun ? "test" : "agent",
+  });
 }

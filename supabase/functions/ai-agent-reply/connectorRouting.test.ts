@@ -38,6 +38,14 @@ const legacyTool: CustomTool = {
   connector_type: "custom_rest",
 };
 
+const writableAdapter: CustomTool = {
+  ...legacyTool,
+  id: "77777777-7777-4777-8777-777777777777",
+  name: "supabase_db",
+  connector_type: "supabase",
+  read_only_mode: false,
+};
+
 const wooTool: CustomTool = {
   ...legacyTool,
   id: "22222222-2222-4222-8222-222222222222",
@@ -202,14 +210,7 @@ Deno.test("custom_rest routes only to the legacy executor", async () => {
 
 Deno.test("adapter dryRun performs no network call unless the tool is read-only", async () => {
   let fetchCalls = 0;
-  const writable = {
-    ...legacyTool,
-    id: "77777777-7777-4777-8777-777777777777",
-    name: "supabase_db",
-    connector_type: "supabase",
-    read_only_mode: false,
-  };
-  const result = await executeAdapterTool(context(true), writable, typedArgs, {
+  const result = await executeAdapterTool(context(true), writableAdapter, typedArgs, {
     fetch: () => {
       fetchCalls += 1;
       return Promise.reject(new Error("fetch must not run"));
@@ -606,14 +607,18 @@ Deno.test("a simulated dryRun writes no ledger row", async () => {
   const dry = context(true);
 
   // A non-read-only adapter stays on the placeholder path (no env, no fetch).
-  const writable = {
-    ...legacyTool,
-    id: "77777777-7777-4777-8777-777777777777",
-    name: "supabase_db",
-    connector_type: "supabase",
-    read_only_mode: false,
-  };
-  const adapterResult = await executeRoutedCustomTool({ ...dry, admin }, writable, typedArgs);
+  let fetchCalls = 0;
+  const adapterResult = await executeRoutedCustomTool({ ...dry, admin }, writableAdapter, typedArgs, {
+    executeAdapter: (adapterContext, tool, args) =>
+      executeAdapterTool(adapterContext, tool, args, {
+        fetch: () => {
+          fetchCalls += 1;
+          return Promise.reject(new Error("fetch must not run"));
+        },
+        getEnv: () => "must-not-be-read",
+      }),
+  });
+  assertEquals(fetchCalls, 0);
   assertStringIncludes(adapterResult.output, "test mode");
 
   // Legacy branch.
@@ -675,14 +680,6 @@ Deno.test("the call budget never exceeds the request's remaining time", () => {
   assertEquals(adapterCallBudget("supabase", -5_000), 0);
 });
 
-const writableAdapter: CustomTool = {
-  ...legacyTool,
-  id: "77777777-7777-4777-8777-777777777777",
-  name: "supabase_db",
-  connector_type: "supabase",
-  read_only_mode: false,
-};
-
 Deno.test("a dry-run read-only adapter call reaches the stubbed fetch and is metered as test", async () => {
   const state: LedgerState = { rows: [] };
   let fetchCalls = 0;
@@ -716,28 +713,32 @@ Deno.test("a dry-run read-only adapter call reaches the stubbed fetch and is met
   assertEquals(row.action_name, "search_products");
 });
 
-Deno.test("a dry-run custom_rest call and a non-read-only adapter stay simulated and unmetered", async () => {
-  const state: LedgerState = { rows: [] };
-  const admin = ledgerAdmin(state);
+Deno.test("a dry-run read-only call skips the ledger when the account is not a uuid", async () => {
+  let lookups = 0;
   let fetchCalls = 0;
-
-  const legacyResult = await executeRoutedCustomTool(
-    { ...context(true), admin },
-    legacyTool,
-    { input: "hello" },
-  );
-  assertStringIncludes(legacyResult.output, "test mode");
-
-  const writableResult = await executeAdapterTool(context(true), writableAdapter, typedArgs, {
-    fetch: () => {
-      fetchCalls += 1;
-      return Promise.reject(new Error("fetch must not run"));
+  const result = await executeRoutedCustomTool(
+    { ...context(true), socialAccountId: "test", admin: { from() { lookups += 1; throw new Error("ledger must not be touched"); } } },
+    wooTool,
+    typedArgs,
+    {
+      executeAdapter: (adapterContext, tool, args) =>
+        executeAdapterTool(adapterContext, tool, args, {
+          fetch: () => {
+            fetchCalls += 1;
+            return Promise.resolve(Response.json({
+              ok: true,
+              vendor: "woocommerce",
+              data: [{ id: 1 }],
+            }));
+          },
+          getEnv: (name) => name === "SUPABASE_URL" ? "http://kong:8000" : "service-key",
+        }),
     },
-    getEnv: () => "must-not-be-read",
-  });
-  assertEquals(fetchCalls, 0);
-  assertStringIncludes(writableResult.output, "test mode");
-  assertEquals(state.rows.length, 0);
+  );
+
+  assertEquals(fetchCalls, 1);
+  assertStringIncludes(result.output, "returned");
+  assertEquals(lookups, 0);
 });
 
 Deno.test("WooCommerce keeps its 6s budget and 8000-character output cap", () => {

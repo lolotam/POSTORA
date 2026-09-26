@@ -13,7 +13,7 @@ import {
   updateTestCase,
 } from "../infrastructure/testCasesApi";
 import { runSavedTests } from "./runSavedTests";
-import type { CaseResult, RunStatus, TestCase, TestExpectation } from "../domain/types";
+import { MAX_CASES_PER_RUN, type CaseResult, type RunStatus, type TestCase, type TestExpectation } from "../domain/types";
 
 function casesKey(userId: string | undefined, accountId: string | null, platform: string) {
   return ["ai-agent-test-cases", userId, accountId, platform] as const;
@@ -96,6 +96,7 @@ export function useRunAllTests(accountId: string | null, platform: string) {
   const queryClient = useQueryClient();
   const [progress, setProgress] = useState<{ current: number; total: number } | null>(null);
   const [live, setLive] = useState<LiveRun | null>(null);
+  const [error, setError] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   // Account changes and later runs bump this so an older run cannot write their state.
   const invocationRef = useRef(0);
@@ -107,6 +108,7 @@ export function useRunAllTests(accountId: string | null, platform: string) {
     invocationRef.current += 1;
     setLive(null);
     setProgress(null);
+    setError(false);
     return () => abortRef.current?.abort();
   }, [accountId, platform]);
 
@@ -117,7 +119,8 @@ export function useRunAllTests(accountId: string | null, platform: string) {
     const controller = new AbortController();
     abortRef.current = controller;
     const current = () => invocationRef.current === invocation && accountKeyRef.current === startedKey;
-    setProgress({ current: 1, total: Math.min(cases.length, 25) });
+    setError(false);
+    setProgress({ current: 1, total: Math.min(cases.length, MAX_CASES_PER_RUN) });
     try {
       const finished = await runSavedTests({
         cases,
@@ -140,13 +143,14 @@ export function useRunAllTests(accountId: string | null, platform: string) {
         savedOk: finished.savedOk,
       });
       await queryClient.invalidateQueries({ queryKey: runsKey(user.id, accountId, platform) });
-    } catch (error) {
-      console.error(`[agent-tests] run failed: ${error instanceof Error ? error.name : "Error"}`);
+    } catch (caught) {
+      console.error(`[agent-tests] run failed: ${caught instanceof Error ? caught.name : "Error"}`);
+      if (current()) setError(true);
     } finally {
       if (current()) setProgress(null);
       if (abortRef.current === controller) abortRef.current = null;
     }
   };
 
-  return { run, progress, live, running: progress !== null };
+  return { run, progress, live, running: progress !== null, error };
 }

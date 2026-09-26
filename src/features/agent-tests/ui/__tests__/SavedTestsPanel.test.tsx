@@ -87,6 +87,16 @@ describe("SavedTestsPanel", () => {
     expect(screen.getByText('reply does not contain "د.ك"')).toBeInTheDocument();
   });
 
+  it("shows a message when the run cannot start", async () => {
+    api.insertRun.mockRejectedValue(new Error("relation does not exist"));
+    renderMinimal(<SavedTestsPanel platform="whatsapp" accountId="acct" />);
+    expect(await screen.findByText("first question")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Run all" }));
+    expect(await screen.findByText(
+      "The run could not start. Check that saved tests are set up, then try again.",
+    )).toBeInTheDocument();
+  });
+
   it("closes and clears the editor when the account changes", async () => {
     const view = renderMinimal(<SavedTestsPanel platform="whatsapp" accountId="acct-a" />);
     expect(await screen.findByText("first question")).toBeInTheDocument();

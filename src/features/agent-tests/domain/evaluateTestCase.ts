@@ -1,5 +1,8 @@
 import type { IntentStatus, SandboxReply, TestExpectation, TestVerdict } from "./types";
 
+// Built-in names are not connectors. Source of truth: `toolDefinitions` in
+// supabase/functions/ai-agent-reply/tools.ts, plus `adminToolDefinitions` in
+// supabase/functions/ai-agent-reply/admin-tools.ts. Both must change together.
 const BUILTIN_TOOLS = new Set([
   "search_knowledge",
   "escalate_to_human",

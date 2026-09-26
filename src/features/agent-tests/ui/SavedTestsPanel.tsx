@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import "@/i18n";
+import { toast } from "sonner";
 import { Loader2, Play } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -10,7 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { compareRuns, displayRunStatus } from "../domain/evaluateTestCase";
-import { TEST_INTENTS, testCaseInputSchema, STALE_RUN_MS, type CaseResult, type TestCase, type TestExpectation } from "../domain/types";
+import { MAX_CASES_PER_RUN, TEST_INTENTS, testCaseInputSchema, STALE_RUN_MS, type CaseResult, type TestCase, type TestExpectation } from "../domain/types";
 import { useAgentTestCases, useAgentTestRuns, useDeleteTestCase, useRunAllTests, useSaveTestCase } from "../application/useAgentTestSets";
 
 interface CaseForm {
@@ -152,7 +153,10 @@ export function SavedTestsPanel({
       : cases.length;
     saveCase.mutate(
       { id: editingId ?? undefined, message: parsed.data.message, expected: parsed.data.expected, position },
-      { onSuccess: () => setOpen(false) },
+      {
+        onSuccess: () => setOpen(false),
+        onError: () => toast.error(t("test.saved.saveCaseFailed", "Could not save this test.")),
+      },
     );
   };
 
@@ -189,8 +193,13 @@ export function SavedTestsPanel({
             {t("test.saved.running", "Running {{current}}/{{total}}…", { current: runner.progress.current, total: runner.progress.total })}
           </p>
         )}
-        {cases.length > 25 && (
-          <p className="text-sm text-muted-foreground">{t("test.saved.cap", "Only the first {{max}} cases run.", { max: 25 })}</p>
+        {runner.error && (
+          <p className="text-sm text-destructive" role="alert">
+            {t("tests.runFailedToStart", "The run could not start. Check that saved tests are set up, then try again.")}
+          </p>
+        )}
+        {cases.length > MAX_CASES_PER_RUN && (
+          <p className="text-sm text-muted-foreground">{t("test.saved.cap", "Only the first {{max}} cases run.", { max: MAX_CASES_PER_RUN })}</p>
         )}
         {account && cases.length === 0 && !casesQuery.isLoading && (
           <p className="text-sm text-muted-foreground">{t("test.saved.empty", "No saved tests yet.")}</p>
@@ -204,7 +213,14 @@ export function SavedTestsPanel({
                   <Button type="button" variant="outline" size="sm" onClick={() => openEdit(testCase)}>
                     {t("test.saved.edit", "Edit")}
                   </Button>
-                  <Button type="button" variant="outline" size="sm" onClick={() => removeCase.mutate(testCase.id)}>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => removeCase.mutate(testCase.id, {
+                      onError: () => toast.error(t("test.saved.deleteFailed", "Could not delete this test.")),
+                    })}
+                  >
                     {t("test.saved.delete", "Delete")}
                   </Button>
                 </div>

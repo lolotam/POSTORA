@@ -7,7 +7,7 @@ import {
   testCaseKey,
   testThreadId,
 } from "../evaluateTestCase";
-import { STALE_RUN_MS, testCaseInputSchema, testExpectationSchema } from "../types";
+import { STALE_RUN_MS, testCaseInputSchema, testExpectationSchema, type TestExpectation, type TestVerdict } from "../types";
 
 const reply = (overrides: Record<string, unknown> = {}) => ({
   ok: true,
@@ -20,17 +20,21 @@ const reply = (overrides: Record<string, unknown> = {}) => ({
 });
 
 describe("evaluateTestCase", () => {
-  it("passes and fails each check", () => {
-    expect(evaluateTestCase({ intent: "pricing" }, reply()).verdict).toBe("passed");
-    expect(evaluateTestCase({ intent: "greeting" }, reply()).reasons).toEqual(["expected intent greeting, got pricing"]);
-    expect(evaluateTestCase({ connector: "woo_store" }, reply({ tool_calls: [{ name: "woo_store" }] })).verdict).toBe("passed");
-    expect(evaluateTestCase({ connector: "woo_store" }, reply()).reasons).toEqual(["expected connector woo_store to be called"]);
-    expect(evaluateTestCase({ contains: ["د.ك"] }, reply()).verdict).toBe("passed");
-    expect(evaluateTestCase({ contains: ["missing"] }, reply()).reasons).toEqual(['reply does not contain "missing"']);
-    expect(evaluateTestCase({ avoids: ["refund"] }, reply()).verdict).toBe("passed");
-    expect(evaluateTestCase({ avoids: ["price"] }, reply()).reasons).toEqual(['reply contains "price"']);
-    expect(evaluateTestCase({ escalates: true }, reply({ escalated: true })).verdict).toBe("passed");
-    expect(evaluateTestCase({ escalates: true }, reply()).reasons).toEqual(["expected a handoff"]);
+  it.each<{ name: string; expected: TestExpectation; overrides: Record<string, unknown>; verdict: TestVerdict; reasons: string[] }>([
+    { name: "matching intent passes", expected: { intent: "pricing" }, overrides: {}, verdict: "passed", reasons: [] },
+    { name: "wrong intent fails with the reason", expected: { intent: "greeting" }, overrides: {}, verdict: "failed", reasons: ["expected intent greeting, got pricing"] },
+    { name: "called connector passes", expected: { connector: "woo_store" }, overrides: { tool_calls: [{ name: "woo_store" }] }, verdict: "passed", reasons: [] },
+    { name: "missing connector fails with the reason", expected: { connector: "woo_store" }, overrides: {}, verdict: "failed", reasons: ["expected connector woo_store to be called"] },
+    { name: "contained phrase passes", expected: { contains: ["د.ك"] }, overrides: {}, verdict: "passed", reasons: [] },
+    { name: "missing phrase fails with the reason", expected: { contains: ["missing"] }, overrides: {}, verdict: "failed", reasons: ['reply does not contain "missing"'] },
+    { name: "avoided phrase passes", expected: { avoids: ["refund"] }, overrides: {}, verdict: "passed", reasons: [] },
+    { name: "forbidden phrase fails with the reason", expected: { avoids: ["price"] }, overrides: {}, verdict: "failed", reasons: ['reply contains "price"'] },
+    { name: "expected handoff passes", expected: { escalates: true }, overrides: { escalated: true }, verdict: "passed", reasons: [] },
+    { name: "missing handoff fails with the reason", expected: { escalates: true }, overrides: {}, verdict: "failed", reasons: ["expected a handoff"] },
+  ])("$name", ({ expected, overrides, verdict, reasons }) => {
+    const evaluation = evaluateTestCase(expected, reply(overrides));
+    expect(evaluation.verdict).toBe(verdict);
+    expect(evaluation.reasons).toEqual(reasons);
   });
 
   it("folds Arabic alef variants and taa marbuta", () => {
@@ -85,11 +89,14 @@ describe("test expectation schema", () => {
 });
 
 describe("run snapshots", () => {
-  it("compares completed runs by case id and ages a stale running run", () => {
+  it("compares completed runs by case id", () => {
     expect(compareRuns(
       [{ case_id: "a", verdict: "passed" }, { case_id: "b", verdict: "failed" }],
       [{ case_id: "a", verdict: "failed" }, { case_id: "b", verdict: "passed" }, { case_id: "c", verdict: "failed" }],
     )).toEqual({ newlyFailing: ["a"], newlyPassing: ["b"] });
+  });
+
+  it("ages a stale running run and leaves a completed run completed", () => {
     const started = "2026-09-26T00:00:00.000Z";
     expect(displayRunStatus("running", started, Date.parse(started) + STALE_RUN_MS + 1, STALE_RUN_MS)).toBe("interrupted");
     expect(displayRunStatus("completed", started, Date.parse(started) + STALE_RUN_MS + 1, STALE_RUN_MS)).toBe("completed");

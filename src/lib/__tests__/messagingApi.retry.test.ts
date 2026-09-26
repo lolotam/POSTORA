@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/integrations/supabase/client", () => ({
   supabase: {
@@ -14,6 +14,10 @@ import { callEdgeApi, EdgeApiError } from "@/lib/messagingApi";
 describe("callEdgeApi retry option", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it("does not retry a gateway status when retry is false", async () => {
