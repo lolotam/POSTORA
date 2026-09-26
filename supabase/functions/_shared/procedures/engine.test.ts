@@ -1,7 +1,7 @@
 // supabase/functions/_shared/procedures/engine.test.ts
 import { assertEquals } from "jsr:@std/assert@1";
-import { expireIfStale, nextField, recordOffScript, startProcedure, submitFields } from "./engine.ts";
-import { TEMPLATES } from "./templates.ts";
+import { claimHeldByOther, expireIfStale, nextField, recordOffScript, startProcedure, submitFields } from "./engine.ts";
+import { CLAIM_LEASE_MS, TEMPLATES } from "./templates.ts";
 
 const T0 = new Date("2026-09-26T10:00:00Z");
 const later = (ms: number) => new Date(T0.getTime() + ms);
@@ -103,3 +103,17 @@ Deno.test("expireIfStale keeps a stored state that carries claimed_by", () => {
   const state = { ...startProcedure(null, "booking", "jev", T0, "run-1").state, claimed_by: "run-9" };
   assertEquals(expireIfStale(state, later(1)), state);
 });
+
+// PR #211 Codex P1: a turn that loads a flow another run has just claimed must not take it over.
+for (const [label, claim, now, held] of [
+  ["no claim", {}, T0, false],
+  ["this run's own claim", { claimed_by: "run-1", claimed_at: T0.toISOString() }, T0, false],
+  ["another run's fresh claim", { claimed_by: "run-2", claimed_at: T0.toISOString() }, later(CLAIM_LEASE_MS - 1), true],
+  ["another run's expired claim", { claimed_by: "run-2", claimed_at: T0.toISOString() }, later(CLAIM_LEASE_MS), false],
+  ["another run's claim with no time", { claimed_by: "run-2" }, T0, false],
+] as const) {
+  Deno.test(`claimHeldByOther: ${label} -> ${held}`, () => {
+    const state = { ...startProcedure(null, "lead_capture", "jev", T0, "run-0").state, ...claim };
+    assertEquals(claimHeldByOther(state, "run-1", now), held);
+  });
+}

@@ -1,6 +1,6 @@
 // Procedure tools for one reply turn (Spec A, D1–D7, D12, and the debate verdicts in the plan).
 // End actions go through ports so the sandbox can simulate writes and tests need no database.
-import { type ProcedureState, nextField, startProcedure, submitFields } from "../_shared/procedures/engine.ts";
+import { type ProcedureState, claimHeldByOther, nextField, startProcedure, submitFields } from "../_shared/procedures/engine.ts";
 import { type ProcedureConfig, enabledProcedures } from "../_shared/procedures/config.ts";
 import {
   type ProcedureField, type ProcedureKey, type ProcedureOrigin, PROCEDURE_KEYS, productFinderFields, TEMPLATES,
@@ -41,6 +41,8 @@ export interface ProcedureTurn {
   readonly state: ProcedureState | null;
   readonly progressed: boolean;
   readonly completed: ProcedureKey | null;
+  /** Another turn owns this flow's end action; this turn's reply must not be delivered. */
+  readonly claimConflict: boolean;
 }
 
 export const PROCEDURE_TOOL_NAMES: ReadonlySet<string> = new Set(["start_procedure", "procedure_submit", "procedure_cancel"]);
@@ -111,6 +113,7 @@ export function createProcedureTurn(input: ProcedureTurnInput): ProcedureTurn {
   let progressed = false;
   let handedOff = false;
   let completed: ProcedureKey | null = null;
+  let claimConflict = false;
 
   const canStart = (key: ProcedureKey): boolean => {
     const capability = TEMPLATES[key].needsCapability;
@@ -187,9 +190,12 @@ export function createProcedureTurn(input: ProcedureTurnInput): ProcedureTurn {
     try {
       // Claim first. A compare-and-set of the stored value onto itself would let two
       // concurrent retries both pass, so claimed_by makes the next value different.
+      // A live claim by another run is not overwritten: that run may be mid end action.
       if (!input.dryRun) {
-        const claimed = { ...done, claimed_by: input.runId };
-        if (!(await input.ports.claim(claimed))) {
+        const now = input.now();
+        const claimed = { ...done, claimed_by: input.runId, claimed_at: now.toISOString() };
+        if (claimHeldByOther(done, input.runId, now) || !(await input.ports.claim(claimed))) {
+          claimConflict = true;
           await input.ports.logFailure("Procedure claim lost", { procedure: done.key, run_id: done.run_id });
           return { output: retryOutput };
         }
@@ -260,5 +266,6 @@ export function createProcedureTurn(input: ProcedureTurnInput): ProcedureTurn {
     get state() { return state; },
     get progressed() { return progressed; },
     get completed() { return completed; },
+    get claimConflict() { return claimConflict; },
   };
 }

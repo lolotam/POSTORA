@@ -8,6 +8,8 @@ export type EndAction = "order_lookup" | "save_lead" | "handoff" | "save_booking
 
 export const STALE_AFTER_MS = 24 * 60 * 60 * 1000;
 export const OFF_SCRIPT_LIMIT = 3;
+/** Longer than an edge worker lives (60 s), so a live claim is never taken over mid end action. */
+export const CLAIM_LEASE_MS = 2 * 60 * 1000;
 
 export interface ProcedureField {
   name: string;

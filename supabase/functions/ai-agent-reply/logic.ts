@@ -638,6 +638,18 @@ export function sandboxConversationId(
  * Audit row for a sandbox request whose test_case_key failed the pattern.
  * The raw key is never copied onto the row; a string key contributes only its length.
  */
+/** The system_logs row for a sandbox request refused by the per-user rate limit. */
+export function sandboxRateLimitedLog(userId: string) {
+  return {
+    source: "ai-agent-reply",
+    category: "ai",
+    level: "info",
+    message: "AI agent sandbox refused: rate limited",
+    user_id: userId,
+    metadata: { error: "rate_limited", endpoint: "ai-agent-reply-sandbox" },
+  };
+}
+
 export function invalidTestCaseKeyRefusalLog(input: {
   userId: string;
   platform: string;

@@ -103,3 +103,4 @@ BEGIN
   END;
 END $$;
 ROLLBACK;
+\echo '=== agent_test_limits: ALL CHECKS PASSED ==='

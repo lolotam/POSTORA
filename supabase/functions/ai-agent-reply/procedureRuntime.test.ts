@@ -251,6 +251,7 @@ Deno.test("a lost claim saves nothing, alerts nobody, and keeps the finished flo
   assertEquals([calls.leads.length, calls.notified.length, calls.escalated.length, calls.lookups.length], [0, 0, 0, 0]);
   assertEquals(calls.failures, ["Procedure claim lost", "Procedure claim lost", "Procedure claim lost"]);
   assertEquals(turn.completed, null);
+  assertEquals(turn.claimConflict, true);
   assertEquals(turn.state?.fields, leadFields);
   assertEquals(order.state?.key, "order_status");
   assertEquals(complaint.state?.key, "complaint_return");
@@ -306,4 +307,33 @@ Deno.test("a retry of an already complete flow claims before saving", async () =
   assertEquals(calls.claims.map((claimed) => claimed.claimed_by), ["run-1", "run-2"]);
   assertEquals(retry.completed, "lead_capture");
   assertEquals(calls.order.filter((step) => step === "claim" || step === "saveLead"), ["claim", "saveLead", "claim", "saveLead"]);
+});
+
+// PR #211 Codex P1: the second turn loaded the state after the first turn's claim landed.
+Deno.test("a flow freshly claimed by another run is not taken over, and the turn is marked conflicted", async () => {
+  const { ports, calls } = fakePorts();
+  const claimedElsewhere = {
+    run_id: "run-1", key: "lead_capture" as const, version: 1, step: 3, fields: leadFields, off_script: 0,
+    origin: "jev" as const, started_at: T.toISOString(), updated_at: T.toISOString(),
+    claimed_by: "run-other", claimed_at: T.toISOString(),
+  };
+  const turn = createProcedureTurn(input(ports, { state: claimedElsewhere, runId: "run-2" }));
+  await turn.handle("procedure_submit", { fields: {} });
+  assertEquals([calls.claims.length, calls.leads.length, calls.notified.length], [0, 0, 0]);
+  assertEquals(turn.claimConflict, true);
+  assertEquals(turn.completed, null);
+});
+
+Deno.test("a flow whose claim outlived the lease is reclaimed and finished", async () => {
+  const { ports, calls } = fakePorts();
+  const abandoned = {
+    run_id: "run-1", key: "lead_capture" as const, version: 1, step: 3, fields: leadFields, off_script: 0,
+    origin: "jev" as const, started_at: T.toISOString(), updated_at: T.toISOString(),
+    claimed_by: "run-crashed", claimed_at: new Date(T.getTime() - 3 * 60 * 1000).toISOString(),
+  };
+  const turn = createProcedureTurn(input(ports, { state: abandoned, runId: "run-2" }));
+  await turn.handle("procedure_submit", { fields: {} });
+  assertEquals(calls.claims.map((claimed) => claimed.claimed_by), ["run-2"]);
+  assertEquals(calls.leads.length, 1);
+  assertEquals([turn.completed, turn.claimConflict], ["lead_capture", false]);
 });

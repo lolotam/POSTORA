@@ -33,6 +33,7 @@ import {
   replyIntentFields,
   resolveEngagementMode,
   invalidTestCaseKeyRefusalLog,
+  sandboxRateLimitedLog,
   sandboxConversationId,
   type ReplyLanguage,
   SIMILARITY_FLOOR,
@@ -540,7 +541,12 @@ Deno.serve(async (req) => {
     const { data: { user } } = await anon.auth.getUser(bearer);
     if (!user) return unauthorizedResponse();
     const sandboxLimit = await checkUserRateLimit(admin, "ai-agent-reply-sandbox", user.id, 60, 900);
-    if (!sandboxLimit.allowed) return rateLimitExceededResponse(sandboxLimit, corsHeaders);
+    if (!sandboxLimit.allowed) {
+      // Before baseLog exists, like the invalid-key refusal: one row so support can see it.
+      const { error: limitLogError } = await admin.from("system_logs").insert(sandboxRateLimitedLog(user.id));
+      if (limitLogError) console.error("[ai-agent-reply] Sandbox rate-limit log rejected:", limitLogError.message);
+      return rateLimitExceededResponse(sandboxLimit, corsHeaders);
+    }
     if (!body.inbound_text || typeof body.inbound_text !== "string") {
       return badRequestResponse("Missing field: inbound_text");
     }
@@ -1485,8 +1491,9 @@ Deno.serve(async (req) => {
       progressed: procedureTurn?.progressed ?? false, escalated, now: new Date(),
     });
     if (
-      procedureStateToWrite !== undefined &&
-      !(await persistProcedureState(admin, thread.id, durableProcedureState, procedureStateToWrite))
+      procedureTurn?.claimConflict ||
+      (procedureStateToWrite !== undefined &&
+        !(await persistProcedureState(admin, thread.id, durableProcedureState, procedureStateToWrite)))
     ) {
       // The reply claims a transition durable state does not hold (a concurrent turn won,
       // or the write failed). Sending it would re-ask answered questions next turn.
