@@ -146,6 +146,54 @@ Deno.test("WooCommerce 401 is a named failure, never empty data or vendor text",
   assertEquals(serialized(result).includes(WOO_SECRET), false);
 });
 
+Deno.test("execute refuses a write even when read_only_mode is off, and the refusal carries no secret", async () => {
+  let fetchCalls = 0;
+  const leaked = "ck_write_attempt_must_not_leak";
+  const result = await executeConnector(
+    {
+      tool: wooTool({ read_only_mode: false }),
+      credentials: { consumer_key: leaked, consumer_secret: WOO_SECRET },
+      request: { ...request({ capability: "lookup_orders" }), method: "POST" },
+    },
+    dependencies(() => {
+      fetchCalls += 1;
+      return Promise.resolve(jsonResponse({}));
+    }),
+  );
+
+  assertEquals(fetchCalls, 0);
+  assertEquals(result.ok, false);
+  if (!result.ok) {
+    assertEquals(result.error.code, "connector_write_unsupported");
+    assertStringIncludes(result.error.message, "POST");
+  }
+  assertEquals(serialized(result).includes(leaked), false);
+  assertEquals(serialized(result).includes(WOO_SECRET), false);
+});
+
+Deno.test("missing WooCommerce credentials fail before fetch and carry no partial secret", async () => {
+  let fetchCalls = 0;
+  const leaked = "ck_partial_secret_must_not_leak";
+  const result = await executeConnector(
+    {
+      tool: wooTool(),
+      credentials: { consumer_key: leaked },
+      request: request(),
+    },
+    dependencies(() => {
+      fetchCalls += 1;
+      return Promise.resolve(jsonResponse([]));
+    }),
+  );
+
+  assertEquals(fetchCalls, 0);
+  assertEquals(result.ok, false);
+  if (!result.ok) {
+    assertEquals(result.error.code, "woocommerce_configuration_invalid");
+  }
+  assertEquals(serialized(result).includes(leaked), false);
+});
+
 Deno.test("read_only_mode refuses a write before fetch is attempted", async () => {
   let fetchCalls = 0;
   const writeAttempt = {

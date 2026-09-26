@@ -1,8 +1,8 @@
 // Pure decision logic for the AI agent reply pipeline. No Deno or network
 // imports here — this module is unit-tested from the frontend vitest suite.
-// connectorRegistry.ts is the one allowed runtime import: it is a pure data
-// module (no Deno APIs), and parallelizable must consult the same registry
-// the reply dispatch routes adapters by, or the two decisions can drift.
+// Two runtime imports are allowed, both pure (no Deno APIs): connectorRegistry
+// so parallelizable uses the same adapter decision as reply dispatch, and
+// TRIAGE_CONFIDENCE so the reply's intent field cannot drift from triage.
 import { shouldUseAdapter } from "../_shared/connectorRegistry.ts";
 import type {
   AgentBehavior,
@@ -10,7 +10,7 @@ import type {
   AgentResponseLength,
   AgentTone,
 } from "../_shared/agentBehavior.ts";
-import type { TriagePlan } from "../_shared/agentTriage.ts";
+import { TRIAGE_CONFIDENCE, type TriagePlan } from "../_shared/agentTriage.ts";
 
 export type EngagementMode = "ai_first" | "human_first" | "human_then_ai";
 export type ReplyLanguage = "ar" | "en";
@@ -575,6 +575,25 @@ export function phaseTimings(now: () => number = Date.now): PhaseTimingsRecorder
  * `connector_type === "woocommerce"` reports read_only: true at its adapter,
  * so it qualifies even when the row predates read_only_mode.
  */
+/**
+ * The per-tool half of `parallelizable`. Not Composio, on the adapter path,
+ * and read-only by flag or by construction (`woocommerce` reports read_only
+ * at its adapter even when the row predates `read_only_mode`).
+ *
+ * The sandbox reuses this exact predicate for the one dry-run exception:
+ * a read-only adapter call runs for real. Anything this returns false for
+ * stays simulated. Do not broaden it.
+ */
+export function readOnlyConnector(tool: {
+  connector_type?: string | null;
+  read_only_mode?: boolean | null;
+  auth_strategy?: string | null;
+}): boolean {
+  if (tool.auth_strategy === "composio_oauth") return false;
+  if (!shouldUseAdapter(tool)) return false;
+  return tool.read_only_mode === true || tool.connector_type === "woocommerce";
+}
+
 export function parallelizable(
   calls: Array<{ function: { name: string } }>,
   toolByName: Map<string, {
@@ -586,11 +605,56 @@ export function parallelizable(
   if (calls.length < 2) return false;
   return calls.every((call) => {
     const tool = toolByName.get(call.function.name);
-    if (!tool) return false;
-    if (tool.auth_strategy === "composio_oauth") return false;
-    if (!shouldUseAdapter(tool)) return false;
-    return tool.read_only_mode === true || tool.connector_type === "woocommerce";
+    return tool ? readOnlyConnector(tool) : false;
   });
+}
+
+const TEST_CASE_KEY_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+
+/**
+ * The sandbox thread. With no key, the id is the account thread used today.
+ * A present key must match the pattern or the caller refuses the request;
+ * an absent key (undefined or null) leaves the id unchanged.
+ */
+export function sandboxConversationId(
+  platform: string,
+  accountKey: string,
+  testCaseKey: unknown,
+): { ok: true; conversationId: string } | { ok: false; error: "Invalid test_case_key" } {
+  const base = `test_${platform}_${accountKey}`;
+  if (testCaseKey === undefined || testCaseKey === null) {
+    return { ok: true, conversationId: base };
+  }
+  if (typeof testCaseKey !== "string" || !TEST_CASE_KEY_PATTERN.test(testCaseKey)) {
+    return { ok: false, error: "Invalid test_case_key" };
+  }
+  return { ok: true, conversationId: `${base}_${testCaseKey}` };
+}
+
+export type IntentStatus = "off" | "uncertain" | "classified";
+
+/**
+ * What the reply JSON may claim about triage. `intent` is present only when
+ * the choice cleared TRIAGE_CONFIDENCE. A missing triage run is off; a run
+ * that did not clear the bar is uncertain. Tests do not turn triage on.
+ */
+export function replyIntentFields(triage: {
+  outcome: {
+    answers: { intent: { choice: string; confidence: number } | null };
+  } | null;
+} | null): {
+  intent: { choice: string; confidence: number } | null;
+  intent_status: IntentStatus;
+} {
+  if (!triage) return { intent: null, intent_status: "off" };
+  const intent = triage.outcome?.answers.intent ?? null;
+  if (!intent || intent.confidence < TRIAGE_CONFIDENCE) {
+    return { intent: null, intent_status: "uncertain" };
+  }
+  return {
+    intent: { choice: intent.choice, confidence: intent.confidence },
+    intent_status: "classified",
+  };
 }
 
 /**

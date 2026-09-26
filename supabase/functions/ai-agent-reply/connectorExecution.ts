@@ -1,4 +1,6 @@
 import { shouldUseAdapter } from "../_shared/connectorRegistry.ts";
+import { readOnlyConnector } from "./logic.ts";
+import type { ConnectorCallSource } from "../_shared/connectorTelemetry.ts";
 import {
   ADAPTER_CALL_TIMEOUT_MS,
   ADAPTER_OUTPUT_LIMIT,
@@ -234,9 +236,10 @@ export async function executeAdapterTool(
   args: Record<string, unknown>,
   dependencies: AdapterCallDependencies = {},
 ): Promise<ToolResult> {
-  // This precedes env access and request construction because the sandbox must
-  // never touch a real connector or Vault-backed execution path.
-  if (context.dryRun) {
+  // Simulated unless this tool is the same read-only adapter parallelizable
+  // already trusts. Those calls run for real in the sandbox; everything else
+  // must not touch env, Vault, or the network.
+  if (context.dryRun && !readOnlyConnector(tool)) {
     return { output: `(test mode — connector adapter not called) Would call "${tool.name}".` };
   }
 
@@ -306,6 +309,7 @@ async function meterNativeExecution(
   tool: CustomTool,
   actionName: string,
   run: () => Promise<ToolResult>,
+  source: ConnectorCallSource,
 ): Promise<ToolResult> {
   const startedAt = performance.now();
   const result = await run();
@@ -333,7 +337,7 @@ async function meterNativeExecution(
     connectorType: tool.connector_type ?? "custom_rest",
     authStrategy: "manual_credentials",
     actionName,
-    source: "agent",
+    source,
     requestId: context.requestId,
   }, { ...outcome, latencyMs: performance.now() - startedAt });
   return result;
@@ -362,8 +366,10 @@ export async function executeRoutedCustomTool(
       ? dependencies.executeAdapter(context, tool, args)
       : executeAdapterTool(context, tool, args, { remainingBudgetMs }))
     : () => (dependencies.executeLegacy ?? executeCustomTool)(context, tool, args);
-  // The sandbox never touches the ledger, exactly as it never touches a vendor.
-  if (context.dryRun) return await run();
+  // A simulated sandbox call still skips the ledger. A real read-only adapter
+  // call in dry run is metered like any other native execution, with source
+  // "test" so a sandbox probe is not counted as a customer reply.
+  if (context.dryRun && !readOnlyConnector(tool)) return await run();
   const actionName = typeof args.capability === "string" ? args.capability : "input";
-  return await meterNativeExecution(context, tool, actionName, run);
+  return await meterNativeExecution(context, tool, actionName, run, context.dryRun ? "test" : "agent");
 }

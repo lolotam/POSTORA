@@ -200,9 +200,16 @@ Deno.test("custom_rest routes only to the legacy executor", async () => {
   assertEquals(legacyCalls, 1);
 });
 
-Deno.test("adapter dryRun performs no network call", async () => {
+Deno.test("adapter dryRun performs no network call unless the tool is read-only", async () => {
   let fetchCalls = 0;
-  const result = await executeAdapterTool(context(true), wooTool, typedArgs, {
+  const writable = {
+    ...legacyTool,
+    id: "77777777-7777-4777-8777-777777777777",
+    name: "supabase_db",
+    connector_type: "supabase",
+    read_only_mode: false,
+  };
+  const result = await executeAdapterTool(context(true), writable, typedArgs, {
     fetch: () => {
       fetchCalls += 1;
       return Promise.reject(new Error("fetch must not run"));
@@ -475,10 +482,12 @@ Deno.test("a connector with no allow-list keeps the registry wording", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Spec §7.2 / D5: every execution attempt from the agent door writes exactly
-// one connector_call_logs row; the sandbox (dryRun) writes none. The Composio
-// branch meters itself inside executeComposioTool — including its refusals —
-// so wrapping it again here would double-count every call.
+// Spec §7.2 / D5: every live execution attempt from the agent door writes
+// exactly one connector_call_logs row. A simulated sandbox call writes none.
+// A read-only adapter call in dry run is the exception: it runs and is metered
+// with source "test". The Composio branch meters itself inside
+// executeComposioTool — including its refusals — so wrapping it again here
+// would double-count every call.
 // ---------------------------------------------------------------------------
 
 Deno.test("the adapter branch meters through the context admin", async () => {
@@ -590,14 +599,21 @@ Deno.test("the composio branch writes exactly one agent ledger row", async () =>
   assertEquals(row.action_name, "GOOGLESHEETS_BATCH_GET");
 });
 
-Deno.test("a dryRun context writes no ledger row on any branch", async () => {
+Deno.test("a simulated dryRun writes no ledger row", async () => {
   const state: LedgerState = { rows: [] };
   const composioLedger: LedgerState = { rows: [] };
   const admin = ledgerAdmin(state);
   const dry = context(true);
 
-  // Adapter branch: the real executor's dryRun path (no env access, no fetch).
-  const adapterResult = await executeRoutedCustomTool({ ...dry, admin }, wooTool, typedArgs);
+  // A non-read-only adapter stays on the placeholder path (no env, no fetch).
+  const writable = {
+    ...legacyTool,
+    id: "77777777-7777-4777-8777-777777777777",
+    name: "supabase_db",
+    connector_type: "supabase",
+    read_only_mode: false,
+  };
+  const adapterResult = await executeRoutedCustomTool({ ...dry, admin }, writable, typedArgs);
   assertStringIncludes(adapterResult.output, "test mode");
 
   // Legacy branch.
@@ -657,6 +673,71 @@ Deno.test("the call budget never exceeds the request's remaining time", () => {
   assertEquals(adapterCallBudget("supabase", 18_000), 18_000 - POST_TOOL_RESERVE_MS);
   assertEquals(adapterCallBudget("supabase", 0), 0);
   assertEquals(adapterCallBudget("supabase", -5_000), 0);
+});
+
+const writableAdapter: CustomTool = {
+  ...legacyTool,
+  id: "77777777-7777-4777-8777-777777777777",
+  name: "supabase_db",
+  connector_type: "supabase",
+  read_only_mode: false,
+};
+
+Deno.test("a dry-run read-only adapter call reaches the stubbed fetch and is metered as test", async () => {
+  const state: LedgerState = { rows: [] };
+  let fetchCalls = 0;
+  const result = await executeRoutedCustomTool(
+    { ...context(true), admin: ledgerAdmin(state) },
+    wooTool,
+    typedArgs,
+    {
+      executeAdapter: (adapterContext, tool, args) =>
+        executeAdapterTool(adapterContext, tool, args, {
+          fetch: () => {
+            fetchCalls += 1;
+            return Promise.resolve(Response.json({
+              ok: true,
+              vendor: "woocommerce",
+              data: [{ id: 1 }],
+            }));
+          },
+          getEnv: (name) => name === "SUPABASE_URL" ? "http://kong:8000" : "service-key",
+        }),
+    },
+  );
+
+  assertEquals(fetchCalls, 1);
+  assertStringIncludes(result.output, "returned");
+  assertEquals(state.rows.length, 1);
+  const row = state.rows[0] as ConnectorCallRow;
+  assertEquals(row.source, "test");
+  assertEquals(row.status, "success");
+  assertEquals(row.connector_type, "woocommerce");
+  assertEquals(row.action_name, "search_products");
+});
+
+Deno.test("a dry-run custom_rest call and a non-read-only adapter stay simulated and unmetered", async () => {
+  const state: LedgerState = { rows: [] };
+  const admin = ledgerAdmin(state);
+  let fetchCalls = 0;
+
+  const legacyResult = await executeRoutedCustomTool(
+    { ...context(true), admin },
+    legacyTool,
+    { input: "hello" },
+  );
+  assertStringIncludes(legacyResult.output, "test mode");
+
+  const writableResult = await executeAdapterTool(context(true), writableAdapter, typedArgs, {
+    fetch: () => {
+      fetchCalls += 1;
+      return Promise.reject(new Error("fetch must not run"));
+    },
+    getEnv: () => "must-not-be-read",
+  });
+  assertEquals(fetchCalls, 0);
+  assertStringIncludes(writableResult.output, "test mode");
+  assertEquals(state.rows.length, 0);
 });
 
 Deno.test("WooCommerce keeps its 6s budget and 8000-character output cap", () => {

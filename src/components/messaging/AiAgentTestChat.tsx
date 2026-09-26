@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import "@/i18n";
 import { Bot, Loader2, Send, ShieldCheck } from "lucide-react";
@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { callEdgeApi } from "@/lib/messagingApi";
+import { SavedTestsPanel } from "@/features/agent-tests";
 import { type AiAgentPlatform } from "@/hooks/useAiAgentConfig";
 
 interface TestTurn {
@@ -36,7 +37,16 @@ export function AiAgentTestChat({
   const [input, setInput] = useState("");
   const [actAsAdmin, setActAsAdmin] = useState(false);
   const [sending, setSending] = useState(false);
+  const [prefillMessage, setPrefillMessage] = useState<string | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
+
+  // A saved case is one customer message. Switching account must not keep the
+  // previous account's turns, or "Save as test" would file the wrong message.
+  useEffect(() => {
+    setTurns([]);
+    setInput("");
+    setPrefillMessage(null);
+  }, [accountId, platform]);
 
   const send = async () => {
     const text = input.trim();
@@ -72,6 +82,7 @@ export function AiAgentTestChat({
   };
 
   return (
+    <div className="space-y-4">
     <Card>
       <CardHeader>
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -118,6 +129,21 @@ export function AiAgentTestChat({
                 ) : (
                   <span className="whitespace-pre-wrap">{turn.content}</span>
                 )}
+                {turn.role === "assistant" && (
+                  <div className="mt-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        const customer = turns.slice(0, index).reverse().find((item) => item.role === "user");
+                        if (customer) setPrefillMessage(customer.content);
+                      }}
+                    >
+                      {t("test.saved.saveAsTest", "Save as test")}
+                    </Button>
+                  </div>
+                )}
               </div>
             </div>
           ))}
@@ -149,5 +175,12 @@ export function AiAgentTestChat({
         </div>
       </CardContent>
     </Card>
+    <SavedTestsPanel
+      platform={platform}
+      accountId={accountId}
+      prefillMessage={prefillMessage}
+      onPrefillHandled={() => setPrefillMessage(null)}
+    />
+    </div>
   );
 }

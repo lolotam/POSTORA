@@ -434,6 +434,92 @@ export type Database = {
         }
         Relationships: []
       }
+      ai_agent_test_cases: {
+        Row: {
+          created_at: string
+          expected: Json
+          id: string
+          message: string
+          platform: string
+          position: number
+          social_account_id: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          expected?: Json
+          id?: string
+          message: string
+          platform: string
+          position?: number
+          social_account_id: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          expected?: Json
+          id?: string
+          message?: string
+          platform?: string
+          position?: number
+          social_account_id?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ai_agent_test_cases_account_same_owner_platform"
+            columns: ["social_account_id", "user_id", "platform"]
+            referencedRelation: "social_accounts"
+            referencedColumns: ["id", "user_id", "platform"]
+          },
+        ]
+      }
+      ai_agent_test_runs: {
+        Row: {
+          finished_at: string | null
+          id: string
+          platform: string
+          results: Json
+          social_account_id: string
+          started_at: string
+          status: string
+          summary: Json
+          user_id: string
+        }
+        Insert: {
+          finished_at?: string | null
+          id?: string
+          platform: string
+          results?: Json
+          social_account_id: string
+          started_at?: string
+          status?: string
+          summary?: Json
+          user_id: string
+        }
+        Update: {
+          finished_at?: string | null
+          id?: string
+          platform?: string
+          results?: Json
+          social_account_id?: string
+          started_at?: string
+          status?: string
+          summary?: Json
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ai_agent_test_runs_account_same_owner_platform"
+            columns: ["social_account_id", "user_id", "platform"]
+            referencedRelation: "social_accounts"
+            referencedColumns: ["id", "user_id", "platform"]
+          },
+        ]
+      }
       ai_agent_tools: {
         Row: {
           admin_only: boolean | null
