@@ -23,7 +23,10 @@ import {
   evaluateGates,
   parallelizable,
   phaseTimings,
+  replyIntentFields,
   resolveEngagementMode,
+  invalidTestCaseKeyRefusalLog,
+  sandboxConversationId,
   type ReplyLanguage,
   SIMILARITY_FLOOR,
   shouldAiReply,
@@ -547,6 +550,29 @@ Deno.serve(async (req) => {
       if (!owned) return badRequestResponse("Account not found");
       sandboxAccountId = owned.id;
     }
+    // An optional test_case_key isolates one saved case from the account's
+    // shared sandbox thread. Absent, the id is unchanged. Present and invalid
+    // is a 400 — a prefix or a free-form string must not select another thread.
+    const thread = sandboxConversationId(
+      platform,
+      sandboxAccountId ?? user.id,
+      body.test_case_key,
+    );
+    if (!thread.ok) {
+      // baseLog does not exist yet. One sanitized system_logs row, then the same 400.
+      // A failed insert must not change that response, and the raw key must not be logged.
+      const { error: refusalLogError } = await admin.from("system_logs").insert(
+        invalidTestCaseKeyRefusalLog({
+          userId: user.id,
+          platform,
+          testCaseKey: body.test_case_key,
+        }),
+      );
+      if (refusalLogError) {
+        console.error("[ai-agent-reply] Sandbox refusal log rejected:", refusalLogError.message);
+      }
+      return badRequestResponse(thread.error);
+    }
     // Built field by field rather than from the body: comment_id is the one field that makes
     // this function post publicly, and it must never be reachable from a user JWT.
     request = {
@@ -555,7 +581,7 @@ Deno.serve(async (req) => {
       social_account_id: sandboxAccountId ?? "test",
       // Keyed by account so one account's test turns cannot replay as
       // another's; the owner-only key is kept for a caller naming no account.
-      conversation_id: `test_${platform}_${sandboxAccountId ?? user.id}`,
+      conversation_id: thread.conversationId,
       phone_number_id: "test",
       recipient_phone: "test",
       inbound_text: body.inbound_text,
@@ -1438,7 +1464,20 @@ Deno.serve(async (req) => {
       }
     }
 
-    return jsonResponse({ ok: true, reply: replyText, escalated, tool_calls: executedToolCalls, is_admin: isAdmin });
+    // Added fields only. Webhook and service-role callers ignore what they
+    // do not read. intent is omitted unless triage cleared TRIAGE_CONFIDENCE;
+    // intent_status says off, uncertain, or classified. Triage is not switched
+    // on for a sandbox run. used_model is the chain slot that wrote the reply,
+    // so a saved test run can snapshot it.
+    return jsonResponse({
+      ok: true,
+      reply: replyText,
+      escalated,
+      tool_calls: executedToolCalls,
+      is_admin: isAdmin,
+      used_model: usedModel,
+      ...replyIntentFields(triage),
+    });
   } catch (error) {
     console.error("[ai-agent-reply] Failed:", errorMessage(error));
     if (error instanceof ModelChainExhaustedError && !dryRun) {

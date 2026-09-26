@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import "@/i18n";
 import { Bot, Loader2, Send, ShieldCheck } from "lucide-react";
@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { callEdgeApi } from "@/lib/messagingApi";
+import { SavedTestsPanel } from "@/features/agent-tests";
 import { type AiAgentPlatform } from "@/hooks/useAiAgentConfig";
 
 interface TestTurn {
@@ -36,11 +37,31 @@ export function AiAgentTestChat({
   const [input, setInput] = useState("");
   const [actAsAdmin, setActAsAdmin] = useState(false);
   const [sending, setSending] = useState(false);
+  const [prefillMessage, setPrefillMessage] = useState<string | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
+  // Bumped on every account or platform change so a send started for the
+  // previous chat cannot append its reply after the switch.
+  const invocationRef = useRef(0);
+  const abortRef = useRef<AbortController | null>(null);
+
+  // A saved case is one customer message. Switching account must not keep the
+  // previous account's turns, or "Save as test" would file the wrong message.
+  useEffect(() => {
+    invocationRef.current += 1;
+    abortRef.current?.abort();
+    abortRef.current = null;
+    setTurns([]);
+    setInput("");
+    setPrefillMessage(null);
+    setSending(false);
+  }, [accountId, platform]);
 
   const send = async () => {
     const text = input.trim();
     if (!text || sending) return;
+    const invocation = invocationRef.current;
+    const controller = new AbortController();
+    abortRef.current = controller;
     setInput("");
     setTurns((current) => [...current, { role: "user", content: text }]);
     setSending(true);
@@ -50,7 +71,8 @@ export function AiAgentTestChat({
         social_account_id: accountId ?? undefined,
         inbound_text: text,
         act_as_admin: actAsAdmin,
-      });
+      }, { signal: controller.signal });
+      if (invocationRef.current !== invocation) return;
       const turn: TestTurn = data.reply
         ? {
             role: "assistant",
@@ -61,17 +83,22 @@ export function AiAgentTestChat({
         : { role: "assistant", content: "", skipped: data.skipped || data.error || t("test.fallbackNoReply", "no reply") };
       setTurns((current) => [...current, turn]);
     } catch (error) {
+      if (invocationRef.current !== invocation) return;
+      if (error instanceof Error && error.name === "AbortError") return;
       setTurns((current) => [
         ...current,
         { role: "assistant", content: "", skipped: error instanceof Error ? error.message : t("test.requestFailed", "Request failed") },
       ]);
     } finally {
-      setSending(false);
-      setTimeout(() => endRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
+      if (invocationRef.current === invocation) {
+        setSending(false);
+        setTimeout(() => endRef.current?.scrollIntoView({ behavior: "smooth" }), 50);
+      }
     }
   };
 
   return (
+    <div className="space-y-4">
     <Card>
       <CardHeader>
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -118,6 +145,21 @@ export function AiAgentTestChat({
                 ) : (
                   <span className="whitespace-pre-wrap">{turn.content}</span>
                 )}
+                {turn.role === "assistant" && (
+                  <div className="mt-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        const customer = turns.slice(0, index).reverse().find((item) => item.role === "user");
+                        if (customer) setPrefillMessage(customer.content);
+                      }}
+                    >
+                      {t("test.saved.saveAsTest", "Save as test")}
+                    </Button>
+                  </div>
+                )}
               </div>
             </div>
           ))}
@@ -149,5 +191,12 @@ export function AiAgentTestChat({
         </div>
       </CardContent>
     </Card>
+    <SavedTestsPanel
+      platform={platform}
+      accountId={accountId}
+      prefillMessage={prefillMessage}
+      onPrefillHandled={() => setPrefillMessage(null)}
+    />
+    </div>
   );
 }
