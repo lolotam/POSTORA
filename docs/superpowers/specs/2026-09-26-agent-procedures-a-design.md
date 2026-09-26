@@ -219,3 +219,22 @@ Once `order_status` has looked up the order, the block also carries the fixed st
 - The three business-started flows.
 - Custom procedures built from scratch (a visual builder). Only the templates are editable.
 - Calendar availability for bookings. A booking is a request the admin confirms.
+
+## Revisions after debate round 1 (Codex astra 6 medium, 2026-09-26)
+
+These supersede the matching text above. The full verdict table is in `docs/superpowers/plans/2026-09-26-agent-procedures-a.md`.
+
+- **D2: `complaint_return` has no photo field.** Its fields are `order_number` and `problem`. The reply request carries no attachment reference, and the human who takes the handoff sees any photo in the chat.
+- **D2: store flows run their own lookup.** `order_status` and `product_finder` run their store capability inside the procedure runtime, with typed parameters. They complete only when the lookup returns a result, a legitimate "not found" included. A connector error keeps the flow on its final step.
+- **D4: the state is written when the reply is final, before it is sent** — not after delivery. Redelivery then sends text that matches the stored state and replays no tools.
+  - **Cost:** a failed send leaves the state one step ahead of what the customer saw.
+  - **Recovery:** the next turn's block names the field still needed, and the model asks for it.
+- **D4: `run_id` is the outbox row id when one exists.** Only the call that creates the lead row alerts the admin, so a retried turn never alerts twice.
+- **D5: a handoff ends the flow deterministically.** This covers both Jev's handoff decision and any tool that escalates. Procedure tools are refused for the rest of that turn.
+- **D5: a stored flow whose own toggle is off is dropped,** even while other flows stay enabled.
+- **D10: the system block names the collected fields but never their values.** Customer text is data. It appears only in tool results, and in admin alerts and handoff summaries as one quoted line of at most 500 characters.
+- **D10: every transition returns the next step's full guidance** (business wording, product finder question, booking services).
+- **Tool loop:** a procedure tool on the last permitted round earns one text-only round, so an end action is never followed by silence.
+- **Error handling:**
+  - An admin alert that reaches nobody is logged to `system_logs`. It does not block completion, because the saved lead is the outcome, and it is not retried, because a retry would risk duplicate alerts.
+  - Other end-action failures are logged to `system_logs` too, not only to the console.
