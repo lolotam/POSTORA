@@ -121,6 +121,7 @@ SUITES=(
   social_contacts.sql
   byok_provider_keys.sql
   log_system_event.sql
+  ai_agent_dashboard.sql
 )
 # These fixtures build their own focused schema and apply the migration under
 # test. They must never run against the restored production-shaped database.
