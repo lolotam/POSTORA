@@ -38,3 +38,10 @@ Deno.test("readProcedureConfig drops only the invalid flow and never throws", ()
   assertEquals(readProcedureConfig("garbage"), {});
   assertEquals(readProcedureConfig(undefined), {});
 });
+
+Deno.test("a switched-off product finder with unfinished questions saves without them", () => {
+  const parsed = parseProcedureConfig({
+    product_finder: { enabled: false, prompts: {}, closing: "", questions: ["", ""] },
+  });
+  assertEquals(parsed.product_finder, { enabled: false, prompts: {}, closing: "" });
+});

@@ -191,3 +191,37 @@ Deno.test("a second flow cannot start in the turn that completed one", async () 
   assertEquals(turn.start("booking", "model"), false);
   assertEquals(turn.state, null);
 });
+
+Deno.test("a failed end action retries on the next submit without asking for fields again", async () => {
+  let failing = true;
+  const { ports, calls } = fakePorts({
+    saveLead: async (row) => {
+      if (failing) throw new Error("db down");
+      calls.leads.push(row);
+      return true;
+    },
+  });
+  const first = createProcedureTurn(input(ports));
+  await first.handle("start_procedure", { key: "lead_capture" });
+  await first.handle("procedure_submit", { fields: leadFields });
+  failing = false;
+  const retry = createProcedureTurn(input(ports, { state: first.state, runId: "run-2" }));
+  await retry.handle("procedure_submit", { fields: {} });
+  assertEquals(retry.completed, "lead_capture");
+  assertEquals(calls.leads.map((row) => row.meta_lead_id), ["ai:run-1"]);
+});
+
+// Two concurrent turns finishing one stored flow share its run id, so the lead is saved
+// once and the admin is alerted once, whichever turn wins (PR #209 review, P1).
+Deno.test("two turns finishing the same stored flow save one lead and send one alert", async () => {
+  const { ports, calls } = fakePorts();
+  const opener = createProcedureTurn(input(ports));
+  await opener.handle("start_procedure", { key: "lead_capture" });
+  await opener.handle("procedure_submit", { fields: { name: "Sara", contact: "Salmiya" } });
+  for (const runId of ["outbox-a", "outbox-b"]) {
+    const turn = createProcedureTurn(input(ports, { state: opener.state, runId }));
+    await turn.handle("procedure_submit", { fields: { product: "oud" } });
+  }
+  assertEquals(new Set(calls.leads.map((row) => row.meta_lead_id)), new Set(["ai:run-1"]));
+  assertEquals(calls.notified.length, 1);
+});

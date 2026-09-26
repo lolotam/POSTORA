@@ -31,6 +31,13 @@ function nonBlankText(value: unknown, field: string, max: number): string {
   return text;
 }
 
+function parseQuestions(questions: unknown): string[] {
+  if (!Array.isArray(questions) || questions.length < 2 || questions.length > 3) {
+    fail("procedures.product_finder.questions must hold 2 or 3 questions");
+  }
+  return questions.map((q, i) => nonBlankText(q, `procedures.product_finder.questions[${i}]`, MAX_TEXT));
+}
+
 function parseSettings(key: ProcedureKey, value: unknown): ProcedureSettings {
   if (typeof value !== "object" || value === null || Array.isArray(value)) fail(`procedures.${key} must be an object`);
   const source = value as Record<string, unknown>;
@@ -49,11 +56,13 @@ function parseSettings(key: ProcedureKey, value: unknown): ProcedureSettings {
     closing: boundedText(source.closing ?? "", `procedures.${key}.closing`, MAX_TEXT),
   };
   if (key === "product_finder") {
-    const questions = source.questions;
-    if (!Array.isArray(questions) || questions.length < 2 || questions.length > 3) {
-      fail("procedures.product_finder.questions must hold 2 or 3 questions");
+    // Questions are required only while the flow is on; a switched-off flow keeps a valid
+    // draft and drops an unfinished one, so it can never block saving (PR #209 review).
+    try {
+      settings.questions = parseQuestions(source.questions);
+    } catch (error) {
+      if (settings.enabled || !(error instanceof AgentBehaviorError)) throw error;
     }
-    settings.questions = questions.map((q, i) => nonBlankText(q, `procedures.product_finder.questions[${i}]`, MAX_TEXT));
   }
   if (key === "booking" && source.services !== undefined) {
     if (!Array.isArray(source.services) || source.services.length > MAX_SERVICES) {

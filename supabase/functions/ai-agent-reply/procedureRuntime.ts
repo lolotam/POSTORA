@@ -172,9 +172,31 @@ export function createProcedureTurn(input: ProcedureTurnInput): ProcedureTurn {
     }
   };
 
+  const complete = async (done: ProcedureState): Promise<ToolResult> => {
+    try {
+      const output = await finish(done);
+      completed = done.key;
+      state = null;
+      return output;
+    } catch (error) {
+      await input.ports.logFailure("Procedure end action failed", {
+        procedure: done.key, run_id: done.run_id, error: error instanceof Error ? error.name : "Error",
+      });
+      return {
+        output: "The last step could not be completed. Apologise and offer a human; if the customer wants to try again, call procedure_submit with no fields to retry.",
+      };
+    }
+  };
+
   const submit = async (args: Record<string, unknown>): Promise<ToolResult> => {
     if (!state) return { output: "No procedure is active; start one first." };
     const fields = fieldsFor(state.key, input.config);
+    // A state kept after a failed end action already holds every field: retry the action
+    // rather than waiting for a field the customer has already given (PR #209 review).
+    if (!nextField(state, fields)) {
+      progressed = true;
+      return await complete(state);
+    }
     const raw = (typeof args.fields === "object" && args.fields !== null ? args.fields : {}) as Record<string, unknown>;
     const result = submitFields(state, fields, raw, input.now());
     const rejected = result.rejected.map((r) => `${r.field} (${r.reason})`).join(", ");
@@ -186,18 +208,7 @@ export function createProcedureTurn(input: ProcedureTurnInput): ProcedureTurn {
     if (!result.complete) {
       return { output: `Recorded ${result.accepted.join(", ")}.${rejected ? ` Rejected: ${rejected}.` : ""} ${stepGuidance(state, input.config)}` };
     }
-    const done = state;
-    try {
-      const output = await finish(done);
-      completed = done.key;
-      state = null;
-      return output;
-    } catch (error) {
-      await input.ports.logFailure("Procedure end action failed", {
-        procedure: done.key, run_id: done.run_id, error: error instanceof Error ? error.name : "Error",
-      });
-      return { output: "The last step could not be completed. Apologise and offer a human; the details are kept for a retry." };
-    }
+    return await complete(state);
   };
 
   const handle = async (name: string, args: Record<string, unknown>): Promise<ToolResult> => {
