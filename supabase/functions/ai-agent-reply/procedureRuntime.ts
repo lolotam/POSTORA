@@ -1,6 +1,6 @@
 // Procedure tools for one reply turn (Spec A, D1–D7, D12, and the debate verdicts in the plan).
 // End actions go through ports so the sandbox can simulate writes and tests need no database.
-import { type ProcedureState, nextField, startProcedure, submitFields } from "../_shared/procedures/engine.ts";
+import { type ProcedureState, claimHeldByOther, nextField, startProcedure, submitFields } from "../_shared/procedures/engine.ts";
 import { type ProcedureConfig, enabledProcedures } from "../_shared/procedures/config.ts";
 import {
   type ProcedureField, type ProcedureKey, type ProcedureOrigin, PROCEDURE_KEYS, productFinderFields, TEMPLATES,
@@ -9,6 +9,8 @@ import { sanitizeFieldValue } from "./logic.ts";
 import type { ToolResult } from "./tools.ts";
 
 export interface ProcedurePorts {
+  /** True only when this turn's compare-and-set replaced the stored state with `claimed`. */
+  claim(claimed: ProcedureState): Promise<boolean>;
   /** Upserts on meta_lead_id; true only when this call created the row. */
   saveLead(row: { meta_lead_id: string; lead_data: Record<string, string> }): Promise<boolean>;
   /** Number of admins the alert reached (0 = none configured or all sends failed). */
@@ -39,6 +41,8 @@ export interface ProcedureTurn {
   readonly state: ProcedureState | null;
   readonly progressed: boolean;
   readonly completed: ProcedureKey | null;
+  /** Another turn owns this flow's end action; this turn's reply must not be delivered. */
+  readonly claimConflict: boolean;
 }
 
 export const PROCEDURE_TOOL_NAMES: ReadonlySet<string> = new Set(["start_procedure", "procedure_submit", "procedure_cancel"]);
@@ -61,7 +65,8 @@ export function stepGuidance(state: ProcedureState, config: ProcedureConfig): st
   const services = state.key === "booking" && next.name === "service" && settings?.services?.length
     ? ` Offer only these services: ${settings.services.join(", ")}.`
     : "";
-  return `Needed now: ${next.name}.${wording ? ` Ask it this way, in the customer's language: ${wording}` : ""}${services}`;
+  const accept = next.hint ? ` (accept: ${next.hint})` : "";
+  return `Needed now: ${next.name}${accept}.${wording ? ` Ask it this way, in the customer's language: ${wording}` : ""}${services}`;
 }
 
 export function procedureToolDefinitions(enabled: ProcedureKey[]) {
@@ -108,6 +113,7 @@ export function createProcedureTurn(input: ProcedureTurnInput): ProcedureTurn {
   let progressed = false;
   let handedOff = false;
   let completed: ProcedureKey | null = null;
+  let claimConflict = false;
 
   const canStart = (key: ProcedureKey): boolean => {
     const capability = TEMPLATES[key].needsCapability;
@@ -125,8 +131,13 @@ export function createProcedureTurn(input: ProcedureTurnInput): ProcedureTurn {
   const alertLines = (fields: Record<string, string>) =>
     Object.entries(fields).map(([name, value]) => `${name}: ${sanitizeFieldValue(value)}`);
 
+  const customerFollowUp =
+    "Tell the customer the team will contact them soon. Do not say an order was placed or that a booking is confirmed.";
+
   const saveAndAlert = async (done: ProcedureState, kind: "lead" | "booking"): Promise<ToolResult> => {
-    if (input.dryRun) return { output: `Procedure complete: the ${kind} would be saved (test mode, nothing written). Confirm to the customer.` };
+    if (input.dryRun) {
+      return { output: `Procedure complete: the ${kind} would be saved (test mode, nothing written). ${customerFollowUp}` };
+    }
     const created = await input.ports.saveLead({
       meta_lead_id: `ai:${done.run_id}`,
       lead_data: {
@@ -142,7 +153,7 @@ export function createProcedureTurn(input: ProcedureTurnInput): ProcedureTurn {
         await input.ports.logFailure(`Procedure ${kind} saved but no admin alert was delivered`, { run_id: done.run_id });
       }
     }
-    return { output: `Procedure complete: the ${kind} is saved. Confirm to the customer.` };
+    return { output: `Procedure complete: the ${kind} is saved. ${customerFollowUp}` };
   };
 
   const finish = async (done: ProcedureState): Promise<ToolResult> => {
@@ -172,8 +183,23 @@ export function createProcedureTurn(input: ProcedureTurnInput): ProcedureTurn {
     }
   };
 
+  const retryOutput =
+    "The last step could not be completed. Apologise and offer a human; if the customer wants to try again, call procedure_submit with no fields to retry.";
+
   const complete = async (done: ProcedureState): Promise<ToolResult> => {
     try {
+      // Claim first. A compare-and-set of the stored value onto itself would let two
+      // concurrent retries both pass, so claimed_by makes the next value different.
+      // A live claim by another run is not overwritten: that run may be mid end action.
+      if (!input.dryRun) {
+        const now = input.now();
+        const claimed = { ...done, claimed_by: input.runId, claimed_at: now.toISOString() };
+        if (claimHeldByOther(done, input.runId, now) || !(await input.ports.claim(claimed))) {
+          claimConflict = true;
+          await input.ports.logFailure("Procedure claim lost", { procedure: done.key, run_id: done.run_id });
+          return { output: retryOutput };
+        }
+      }
       const output = await finish(done);
       completed = done.key;
       state = null;
@@ -182,9 +208,7 @@ export function createProcedureTurn(input: ProcedureTurnInput): ProcedureTurn {
       await input.ports.logFailure("Procedure end action failed", {
         procedure: done.key, run_id: done.run_id, error: error instanceof Error ? error.name : "Error",
       });
-      return {
-        output: "The last step could not be completed. Apologise and offer a human; if the customer wants to try again, call procedure_submit with no fields to retry.",
-      };
+      return { output: retryOutput };
     }
   };
 
@@ -242,5 +266,6 @@ export function createProcedureTurn(input: ProcedureTurnInput): ProcedureTurn {
     get state() { return state; },
     get progressed() { return progressed; },
     get completed() { return completed; },
+    get claimConflict() { return claimConflict; },
   };
 }

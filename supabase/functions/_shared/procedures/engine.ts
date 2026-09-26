@@ -1,5 +1,5 @@
 // Pure procedure state transitions (Spec A, D3–D5). Callers pass time and ids in.
-import { OFF_SCRIPT_LIMIT, type ProcedureField, type ProcedureKey, type ProcedureOrigin, STALE_AFTER_MS, TEMPLATES } from "./templates.ts";
+import { CLAIM_LEASE_MS, OFF_SCRIPT_LIMIT, type ProcedureField, type ProcedureKey, type ProcedureOrigin, STALE_AFTER_MS, TEMPLATES } from "./templates.ts";
 
 export interface ProcedureState {
   run_id: string;
@@ -11,6 +11,10 @@ export interface ProcedureState {
   origin: ProcedureOrigin;
   started_at: string;
   updated_at: string;
+  /** Set only by the compare-and-set that won the end action, so the claimed value differs from the stored one. */
+  claimed_by?: string;
+  /** When the claim was taken; another run's claim younger than CLAIM_LEASE_MS is still in flight. */
+  claimed_at?: string;
 }
 
 export interface SubmitResult {
@@ -36,6 +40,13 @@ export function startProcedure(
       origin, started_at: at, updated_at: at,
     },
   };
+}
+
+/** True while another run's claim on this flow may still be running its end action. */
+export function claimHeldByOther(state: ProcedureState, runId: string, now: Date): boolean {
+  if (!state.claimed_by || state.claimed_by === runId) return false;
+  const age = now.getTime() - Date.parse(state.claimed_at ?? "");
+  return age >= 0 && age < CLAIM_LEASE_MS;
 }
 
 export function nextField(state: ProcedureState, fields: ProcedureField[]): ProcedureField | null {
@@ -100,5 +111,7 @@ function isStoredState(value: unknown): value is ProcedureState {
     typeof state.step === "number" && typeof state.off_script === "number" &&
     typeof state.fields === "object" && state.fields !== null && !Array.isArray(state.fields) &&
     Object.values(state.fields).every((field) => typeof field === "string") &&
-    typeof state.updated_at === "string" && Number.isFinite(Date.parse(state.updated_at));
+    typeof state.updated_at === "string" && Number.isFinite(Date.parse(state.updated_at)) &&
+    (state.claimed_by === undefined || typeof state.claimed_by === "string") &&
+    (state.claimed_at === undefined || typeof state.claimed_at === "string");
 }

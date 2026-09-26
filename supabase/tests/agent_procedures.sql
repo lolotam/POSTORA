@@ -14,3 +14,4 @@ BEGIN
   ASSERT (SELECT count(*) FROM pg_proc WHERE proname='ai_agent_test_expected_valid') = 1, 'P6 no overload added';
 END $$;
 ROLLBACK;
+\echo '=== agent_procedures: ALL CHECKS PASSED ==='
