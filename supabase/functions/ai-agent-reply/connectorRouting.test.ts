@@ -10,6 +10,7 @@ import {
   type ToolContext,
 } from "./tools.ts";
 import {
+  connectorCallFailed,
   executeAdapterTool,
   executeRoutedCustomTool,
   type ConnectorCallRow,
@@ -748,3 +749,13 @@ Deno.test("WooCommerce keeps its 6s budget and 8000-character output cap", () =>
   assertEquals(ADAPTER_OUTPUT_LIMIT, 8_000);
   assertEquals(adapterCallBudget("woocommerce", 40_000), 6_000);
 });
+
+for (const [label, output, failed] of [
+  ["adapter failure text", 'Connector "woo" failed via woocommerce adapter [vendor_error] (HTTP 500): boom', true],
+  ["timeout text", 'Connector "woo" failed via connector adapter: timed out', true],
+  ["a normal result", '{"orders":[]}', false],
+] as const) {
+  Deno.test(`connectorCallFailed: ${label}`, () => {
+    assertEquals(connectorCallFailed({ output }), failed);
+  });
+}

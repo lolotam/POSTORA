@@ -18,11 +18,16 @@ import {
   formatModelRef,
   type GraphRelationFact,
   ModelChainExhaustedError,
+  iterationBudget,
+  jevStartKey,
   modelBudgetRemaining,
   parseModelRef,
   evaluateGates,
   parallelizable,
   phaseTimings,
+  procedurePromptBlock,
+  procedureStateAfterTurn,
+  procedureTurnGate,
   replyIntentFields,
   resolveEngagementMode,
   invalidTestCaseKeyRefusalLog,
@@ -39,11 +44,12 @@ import {
   type EscalationTarget,
   executeTool,
   agentToolDefinitions,
+  notifyAdmins,
   type CustomTool,
   type ToolContext,
   type ToolResult,
 } from "./tools.ts";
-import { executeRoutedCustomTool } from "./connectorExecution.ts";
+import { connectorCallFailed, executeRoutedCustomTool } from "./connectorExecution.ts";
 import { deliverModelOutageFloor } from "./outage-floor.ts";
 import { applyIntentLabel, intentLabelFor, shouldLabel, type LabelDb } from "./intentLabels.ts";
 import { dashboardColumns } from "./dashboardColumns.ts";
@@ -76,6 +82,16 @@ import { AI_CONNECTION_REQUIRED, AI_USER_KEY_INVALID, ProviderHttpError, redactP
 import { loadOpenAiCompatibleBase, type RowReader } from "../_shared/providerEndpoint.ts";
 import { runTriage, selectConnectorTools, TRIAGE_SETTING_KEYS, triageChainFromSettings, type TriageRun } from "../_shared/agentTriage.ts";
 import { resolveProviderKey } from "../_shared/providerKeys.ts";
+import { connectorCapabilities } from "../_shared/connectorRegistry.ts";
+import { enabledProcedures, readProcedureConfig } from "../_shared/procedures/config.ts";
+import { expireIfStale } from "../_shared/procedures/engine.ts";
+import {
+  createProcedureTurn,
+  fieldsFor,
+  PROCEDURE_TOOL_NAMES,
+  procedureToolDefinitions,
+  stepGuidance,
+} from "./procedureRuntime.ts";
 
 const OPENAI_API = "https://api.openai.com/v1";
 const SERVICE_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -685,6 +701,10 @@ Deno.serve(async (req) => {
     const { data: thread, error: threadError } = threadResult;
     if (threadError) throw threadError;
 
+    const procedureConfig = readProcedureConfig(config.agent_behavior?.procedures);
+    const proceduresOn = procedureTurnGate(request) && enabledProcedures(procedureConfig).length > 0;
+    const initialProcedureState = proceduresOn ? expireIfStale(thread.procedure_state ?? null, new Date()) : null;
+
     // Sandbox runs bypass the delivery gates — they test the agent's brain,
     // not the conversation's delivery state. The sender is built only after
     // the gates, so a closed gate still returns without one.
@@ -1082,6 +1102,43 @@ Deno.serve(async (req) => {
       : toolResolution.tools;
     const customToolByName = new Map(customTools.map((tool) => [tool.name, tool]));
 
+    const storeTool = (capability: string) =>
+      customTools.find((tool) => connectorCapabilities(tool.connector_type)?.some((c) => c.name === capability)) ?? null;
+    const procedureTurn = proceduresOn ? createProcedureTurn({
+      state: initialProcedureState, config: procedureConfig, dryRun, now: () => new Date(),
+      runId: outboxId ?? crypto.randomUUID(),
+      leadContext: { platform: request.platform, socialAccountId: toolContext.socialAccountId, conversationId: request.conversation_id },
+      ports: {
+        saveLead: async (row) => {
+          const { data, error } = await admin.from("leads").upsert(
+            { user_id: request.user_id, form_id: null, status: "new", ...row },
+            { onConflict: "meta_lead_id", ignoreDuplicates: true },
+          ).select("id");
+          if (error) throw new Error(error.message);
+          return (data ?? []).length > 0;
+        },
+        notifyAdmin: (message) => notifyAdmins(toolContext, message),
+        escalate: (reason, summary) => executeTool(toolContext, "escalate_to_human", { reason, summary }),
+        hasStoreCapability: (capability) => storeTool(capability) !== null,
+        storeLookup: async (capability, parameters) => {
+          const tool = storeTool(capability);
+          if (!tool) return null;
+          const found = await executeRoutedCustomTool(toolContext, tool, { capability, parameters }, {}, modelBudgetRemaining(startedAt, Date.now()));
+          // Connector failures come back as text, not exceptions; the flow must keep its
+          // final step for a retry instead of completing on an error (debate verdict 3).
+          if (connectorCallFailed(found)) throw new Error("store_lookup_failed");
+          return found;
+        },
+        logFailure: async (message, metadata) => {
+          const { error } = await admin.from("system_logs").insert({
+            source: "ai-agent-reply", category: "ai", level: "warn", message, user_id: request.user_id,
+            metadata: { platform: request.platform, ...metadata },
+          });
+          if (error) console.error("[ai-agent-reply] Procedure failure log rejected:", error.message);
+        },
+      },
+    }) : null;
+
     // Both off removes escalate_to_human entirely; one off narrows its
     // description to the trigger that is still allowed. Passing a single boolean
     // here was not enough -- the stock description names BOTH reasons, so
@@ -1108,13 +1165,17 @@ Deno.serve(async (req) => {
     }
     timings.mark("triage");
     const triagePlan = triage?.outcome?.plan ?? null;
+    if (procedureTurn && triagePlan?.handoff) procedureTurn.endForHandoff();
+    const jevKey = procedureTurn ? jevStartKey(triage?.outcome?.answers.intent ?? null, procedureTurn.state !== null) : null;
+    if (jevKey) procedureTurn!.start(jevKey, "jev");
+    const procedureActive = procedureTurn?.state != null;
     if (triagePlan?.skipKnowledge) {
       knowledgePromise.catch(() => {}); // not awaited; keep a late rejection from being unhandled
     } else {
       ({ relevantChunks, retrievedChunkIds, relatedFacts, ragError, graphError } = await knowledgePromise);
     }
     timings.mark("knowledge");
-    const offeredTools = triagePlan?.smalltalk || triagePlan?.handoff ? [] : selectConnectorTools(customTools, triagePlan);
+    const offeredTools = (triagePlan?.smalltalk && !procedureActive) || triagePlan?.handoff ? [] : selectConnectorTools(customTools, triagePlan);
 
     // Built HERE, not where the knowledge was gathered, because the prompt now
     // has to name the connectors this account actually resolved. A rule that
@@ -1183,6 +1244,11 @@ Deno.serve(async (req) => {
     ];
     const hint = triageSystemHint(triagePlan);
     if (hint) messages.splice(1, 0, { role: "system", content: hint });
+    if (procedureTurn?.state) {
+      const fields = fieldsFor(procedureTurn.state.key, procedureConfig);
+      messages.splice(1, 0, { role: "system", content:
+        procedurePromptBlock(procedureTurn.state, stepGuidance(procedureTurn.state, procedureConfig), fields.length) });
+    }
     let promptTokens = 0;
     let completionTokens = 0;
     let replyText = "";
@@ -1209,12 +1275,19 @@ Deno.serve(async (req) => {
       // unlisted gpt-4o-mini kept answering; a human is the better fallback.
       throw new ModelChainExhaustedError("No global AI agent model is configured");
     }
-    const toolDefinitions = triagePlan?.smalltalk ? [] : [
+    const toolDefinitions = triagePlan?.smalltalk && !procedureActive ? [] : [
       ...agentToolDefinitions(handoff),
       ...(isAdmin ? adminToolDefinitions : []),
       ...customToolDefinitions(offeredTools),
+      ...procedureToolDefinitions(procedureTurn && !triagePlan?.handoff ? enabledProcedures(procedureConfig) : []),
     ];
-    for (let iteration = 0; iteration < maxIterations; iteration++) {
+    let procedureToolRanThisRound = false;
+    for (let iteration = 0; ; iteration++) {
+      const procedureToolRanOnLastRound = procedureToolRanThisRound;
+      procedureToolRanThisRound = false;
+      const budget = iterationBudget(maxIterations, procedureToolRanOnLastRound, iteration);
+      if (budget === "stop") break;
+      const roundToolDefinitions = budget === "text_only" ? [] : toolDefinitions;
       let completion: any = null;
       let lastError: unknown = null;
       for (let mi = 0; mi < modelChain.length; mi++) {
@@ -1234,7 +1307,7 @@ Deno.serve(async (req) => {
             model: modelChain[mi].model,
             temperature: config.temperature ?? 0.4,
             messages,
-            ...(toolDefinitions.length ? { tools: toolDefinitions, tool_choice: "auto" } : {}),
+            ...(roundToolDefinitions.length ? { tools: roundToolDefinitions, tool_choice: "auto" } : {}),
           }, Math.min(CHAT_TIMEOUT_MS, budgetMs), routingAdmin));
           usedModel = formatModelRef(modelChain[mi]);
           usedFallbackLevel = mi;
@@ -1303,8 +1376,12 @@ Deno.serve(async (req) => {
         executedToolCalls.push({ name: toolCall.function.name, arguments: args });
         sideEffectsHappened = true;
         const customTool = customToolByName.get(toolCall.function.name);
+        const isProcedureTool = procedureTurn !== null && PROCEDURE_TOOL_NAMES.has(toolCall.function.name);
+        if (isProcedureTool) procedureToolRanThisRound = true;
         const result: ToolResult = await timings.span(`tool:${toolCall.function.name}`, async () =>
-          customTool
+          isProcedureTool
+            ? await procedureTurn!.handle(toolCall.function.name, args)
+            : customTool
             ? await executeRoutedCustomTool(
               toolContext,
               customTool,
@@ -1319,6 +1396,7 @@ Deno.serve(async (req) => {
         if (result.escalated) {
           escalated = true;
           if (result.humanNotified) escalationNotifiedHuman = true;
+          procedureTurn?.endForHandoff();
         }
         if (result.retrievedChunkIds) retrievedChunkIds.push(...result.retrievedChunkIds);
         return { role: "tool", tool_call_id: toolCall.id, content: result.output };
@@ -1388,6 +1466,16 @@ Deno.serve(async (req) => {
       });
       if (outboxId) await cancelOutboxRow(admin, outboxId, "no_reply_generated");
       return jsonResponse({ ok: true, skipped: "no_reply_generated" });
+    }
+
+    const procedureStateToWrite = procedureStateAfterTurn({
+      hadTurn: procedureTurn !== null, storedState: thread.procedure_state ?? null,
+      initialState: initialProcedureState, turnState: procedureTurn?.state ?? null,
+      progressed: procedureTurn?.progressed ?? false, escalated, now: new Date(),
+    });
+    if (procedureStateToWrite !== undefined) {
+      const { error } = await admin.from("ai_threads").update({ procedure_state: procedureStateToWrite }).eq("id", thread.id);
+      if (error) console.error("[ai-agent-reply] Procedure state write failed:", error.message);
     }
 
     let outboundMessageId: string | null = null;
@@ -1477,6 +1565,9 @@ Deno.serve(async (req) => {
       is_admin: isAdmin,
       used_model: usedModel,
       ...replyIntentFields(triage),
+      procedure: procedureTurn?.completed
+        ? { key: procedureTurn.completed, step: -1, completed: true }
+        : procedureTurn?.state ? { key: procedureTurn.state.key, step: procedureTurn.state.step, completed: false } : null,
     });
   } catch (error) {
     console.error("[ai-agent-reply] Failed:", errorMessage(error));

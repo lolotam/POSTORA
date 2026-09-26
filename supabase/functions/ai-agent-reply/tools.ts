@@ -177,7 +177,7 @@ async function searchKnowledge(context: ToolContext, query: string): Promise<Too
   };
 }
 
-async function notifyAdmins(context: ToolContext, text: string): Promise<number> {
+export async function notifyAdmins(context: ToolContext, text: string): Promise<number> {
   let delivered = 0;
   for (const phone of context.adminPhoneNumbers) {
     try {
