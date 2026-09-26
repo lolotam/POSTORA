@@ -8,6 +8,7 @@
  * 400 naming the key rather than a silent drop. That is the intended failure
  * mode, but a confusing one to debug: change both files together.
  */
+import type { ProcedureKey, ProcedureSettings } from "./procedureTemplates";
 
 export type BusinessIndustry =
   | "ecommerce"
@@ -170,6 +171,7 @@ export interface AgentBehavior {
   goals?: AgentGoal[];
   greeting?: string;
   instruction_blocks?: AgentInstructionBlock[];
+  procedures?: Partial<Record<ProcedureKey, ProcedureSettings>>;
 }
 
 export const TONE_OPTIONS: { value: AgentTone; label: string; hint: string }[] = [

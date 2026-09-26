@@ -290,6 +290,11 @@ export async function executeAdapterTool(
 // rather than by throwing (a thrown error would end the reply), so the ledger
 // status is read back from that text. The two prefixes are the ones
 // adapterFailure/structuredAdapterResult and executeCustomTool produce.
+/** Whether a routed connector call failed, read the same way the ledger reads it. */
+export function connectorCallFailed(result: ToolResult): boolean {
+  return outcomeFromOutput(result.output).status !== "success";
+}
+
 function outcomeFromOutput(output: string): { status: "success" | "failed" | "timeout"; errorCode: string | null } {
   if (!/^Connector ".*" failed/.test(output)) return { status: "success", errorCode: null };
   if (/timed out/.test(output)) return { status: "timeout", errorCode: "connector_timeout" };

@@ -32,7 +32,7 @@ Deno.test("the connector question lists each connector plus a no-tool option, an
   assertEquals(Object.keys(bare.questions as object).sort(), ["intent", "needs_knowledge", "smalltalk"]);
 });
 
-Deno.test("the request carries an intent choice question with exactly the six intents", () => {
+Deno.test("the request carries an intent choice question with exactly the seven intents", () => {
   const body = triageRequestBody({ provider: "vercel", model: "m" }, input);
   const intent = (body.questions as Record<string, { type: string; criteria: Record<string, string> }>).intent;
   assertEquals(intent.type, "choice");
@@ -66,6 +66,13 @@ Deno.test("a confident known intent parses; the confidence stays attached", () =
     intent: { type: "choice", choice: "pricing", confidence: 0.91 },
   } });
   assertEquals(parsed.intent, { choice: "pricing", confidence: 0.91 });
+});
+
+Deno.test("triage accepts a confident booking intent", () => {
+  const parsed = parseTriageAnswers("vercel", { answers: {
+    intent: { type: "choice", choice: "booking", confidence: 0.9 },
+  } });
+  assertEquals(parsed.intent, { choice: "booking", confidence: 0.9 });
 });
 
 Deno.test("an intent outside the contract parses to null", () => {

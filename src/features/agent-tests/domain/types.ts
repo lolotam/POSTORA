@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const TEST_INTENTS = ["pricing", "order_status", "complaint", "lead", "greeting", "other"] as const;
+export const TEST_INTENTS = ["pricing", "order_status", "complaint", "lead", "booking", "greeting", "other"] as const;
 
 export const testExpectationSchema = z.object({
   intent: z.enum(TEST_INTENTS).optional(),

@@ -1,16 +1,19 @@
 // Pure decision logic for the AI agent reply pipeline. No Deno or network
 // imports here — this module is unit-tested from the frontend vitest suite.
-// Two runtime imports are allowed, both pure (no Deno APIs): connectorRegistry
-// so parallelizable uses the same adapter decision as reply dispatch, and
-// TRIAGE_CONFIDENCE so the reply's intent field cannot drift from triage.
-import { shouldUseAdapter } from "../_shared/connectorRegistry.ts";
+// Runtime imports are pure (no Deno APIs): connectorRegistry so parallelizable
+// uses the same adapter decision as reply dispatch, TRIAGE_CONFIDENCE so the
+// reply's intent field cannot drift from triage, and the procedure engine so
+// the turn gate and the state write stay free of I/O.
+import { connectorCapabilities, shouldUseAdapter } from "../_shared/connectorRegistry.ts";
 import type {
   AgentBehavior,
   AgentGoal,
   AgentResponseLength,
   AgentTone,
 } from "../_shared/agentBehavior.ts";
-import { TRIAGE_CONFIDENCE, type TriagePlan } from "../_shared/agentTriage.ts";
+import { TRIAGE_CONFIDENCE, type Intent, type TriagePlan } from "../_shared/agentTriage.ts";
+import { recordOffScript, type ProcedureState } from "../_shared/procedures/engine.ts";
+import { JEV_START, type ProcedureKey } from "../_shared/procedures/templates.ts";
 
 export type EngagementMode = "ai_first" | "human_first" | "human_then_ai";
 export type ReplyLanguage = "ar" | "en";
@@ -751,4 +754,83 @@ function isExecutableToolCall(entry: unknown): boolean {
   const { function: fn } = entry as { function?: unknown };
   if (!fn || typeof fn !== "object") return false;
   return typeof (fn as { name?: unknown }).name === "string";
+}
+
+/** One line, bounded: customer text reaches alerts and summaries only as a quoted value. */
+export function sanitizeFieldValue(value: string): string {
+  return JSON.stringify(value.replace(/[\r\n\t]+/g, " ").replace(/\s{2,}/g, " ").trim().slice(0, 500));
+}
+
+/** Whether a turn may take part in procedures at all (Spec A, D11). */
+export function procedureTurnGate(request: { platform: string; comment_id?: string }): boolean {
+  return !request.comment_id && ["whatsapp", "facebook", "instagram"].includes(request.platform);
+}
+
+/** Jev intent → the flow to start, or null (Spec A, D3). */
+export function jevStartKey(
+  intent: { choice: Intent; confidence: number } | null,
+  active: boolean,
+): ProcedureKey | null {
+  if (active || !intent || intent.confidence < TRIAGE_CONFIDENCE) return null;
+  return JEV_START[intent.choice] ?? null;
+}
+
+/**
+ * The per-turn system block (Spec A, D10). It names fields, never their values: a value is
+ * customer text and must not be promoted into a system message (debate verdict 7).
+ */
+export function procedurePromptBlock(state: ProcedureState, guidance: string, total: number): string {
+  const collected = Object.keys(state.fields).join(", ") || "none";
+  return [
+    `Active procedure: ${state.key}, step ${Math.min(state.step + 1, total)} of ${total}.`,
+    guidance,
+    `Fields already recorded: ${collected}.`,
+    "If the customer asks something else, answer briefly, then ask for the needed field again. Record values with procedure_submit.",
+  ].filter(Boolean).join("\n");
+}
+
+/** What the turn leaves in ai_threads.procedure_state; undefined = do not write. */
+export function procedureStateAfterTurn(input: {
+  hadTurn: boolean; storedState: unknown; initialState: ProcedureState | null;
+  turnState: ProcedureState | null; progressed: boolean; escalated: boolean; now: Date;
+}): ProcedureState | null | undefined {
+  if (!input.hadTurn) return input.storedState ? null : undefined;
+  if (!input.storedState && !input.turnState) return undefined;
+  if (input.escalated) return null;
+  if (input.initialState && input.turnState && !input.progressed) return recordOffScript(input.turnState, input.now);
+  return input.turnState;
+}
+
+/** Rounds available to the tool loop: one extra text-only round when a procedure tool ran on the last one. */
+export function iterationBudget(
+  configured: number,
+  procedureToolRanOnLastRound: boolean,
+  iteration: number,
+): "tools" | "text_only" | "stop" {
+  const limit = Math.max(1, configured);
+  if (iteration < limit) return "tools";
+  // Verdict 4: a procedure tool on the last permitted round earns one text-only round,
+  // so an end action is never followed by silence.
+  return iteration === limit && procedureToolRanOnLastRound ? "text_only" : "stop";
+}
+
+/** The single typed parameter a procedure passes to each store capability. */
+const PROCEDURE_STORE_PARAMETER = { lookup_orders: "order_id", search_products: "query" } as const;
+
+/**
+ * The account's connector that can serve a procedure's store lookup. A connector qualifies
+ * only when its capability schema declares the exact parameter the runtime sends: a generic
+ * connector (Supabase lists every capability over a table/filters schema) would ignore
+ * order_id and return unfiltered rows, i.e. other customers' orders.
+ */
+export function procedureStoreTool<T extends { connector_type?: string | null }>(
+  tools: T[],
+  capability: keyof typeof PROCEDURE_STORE_PARAMETER,
+): T | null {
+  const parameter = PROCEDURE_STORE_PARAMETER[capability];
+  return tools.find((tool) =>
+    connectorCapabilities(tool.connector_type)?.some((definition) =>
+      definition.name === capability && parameter in (definition.parameters.properties ?? {})
+    )
+  ) ?? null;
 }
