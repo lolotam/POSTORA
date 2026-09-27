@@ -181,16 +181,51 @@ describe("ProceduresCard", () => {
   it("refuses COD while the WooCommerce connector is read-only", () => {
     mocks.tools = [{
       id: "woo-1",
+      name: "Main shop",
       connector_type: "woocommerce",
       scope: "account",
       social_account_id: "acc-1",
       read_only_mode: true,
     }];
+    mocks.bindings = [{ social_account_id: "acc-1", connector_id: "woo-1" }];
     const card = liveCard({ storeAccountId: "acc-1", connectionMode: "cloud_api" });
     fireEvent.click(screen.getAllByRole("checkbox", { name: /checkout collects customer consent/i })[0]);
     card.rerender();
     fireEvent.click(screen.getByRole("switch", { name: /cod order confirmation/i }));
+    expect(screen.getByRole("alert")).toHaveTextContent(/Main shop/);
     expect(screen.getByRole("alert")).toHaveTextContent(/read-only/i);
+    expect(card.seen.some((value) => (value as { cod_confirm?: { enabled?: boolean } }).cod_confirm?.enabled)).toBe(false);
+  });
+
+  it("refuses COD when any bound WooCommerce connector is read-only", () => {
+    mocks.tools = [
+      {
+        id: "woo-write",
+        name: "Writable shop",
+        connector_type: "woocommerce",
+        scope: "account",
+        social_account_id: "acc-1",
+        read_only_mode: false,
+      },
+      {
+        id: "woo-read",
+        name: "Catalog shop",
+        connector_type: "woocommerce",
+        scope: "account",
+        social_account_id: "acc-1",
+        read_only_mode: true,
+      },
+    ];
+    mocks.bindings = [
+      { social_account_id: "acc-1", connector_id: "woo-write" },
+      { social_account_id: "acc-1", connector_id: "woo-read" },
+    ];
+    const card = liveCard({ storeAccountId: "acc-1", connectionMode: "cloud_api" });
+    fireEvent.click(screen.getAllByRole("checkbox", { name: /checkout collects customer consent/i })[0]);
+    card.rerender();
+    fireEvent.click(screen.getByRole("switch", { name: /cod order confirmation/i }));
+    expect(screen.getByRole("alert")).toHaveTextContent("Catalog shop");
+    expect(screen.getByRole("alert").textContent ?? "").not.toContain("Writable shop");
     expect(card.seen.some((value) => (value as { cod_confirm?: { enabled?: boolean } }).cod_confirm?.enabled)).toBe(false);
   });
 

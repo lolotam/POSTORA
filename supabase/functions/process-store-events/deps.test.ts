@@ -122,6 +122,7 @@ function openerInput(): RecordOpenerInput {
       defaultMode: "ai_first",
       settings: null,
       connectorVisible: true,
+      connectorReadOnly: false,
       optedOut: false,
     },
     threadId: "thread-1",

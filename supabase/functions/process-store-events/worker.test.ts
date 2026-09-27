@@ -47,6 +47,7 @@ function account(overrides: Partial<AccountContext> = {}): AccountContext {
     defaultMode: "ai_first",
     settings: { enabled: true, prompts: {}, closing: "", consent_attested_at: "2026-09-01T00:00:00.000Z" },
     connectorVisible: true,
+    connectorReadOnly: false,
     optedOut: false,
     ...overrides,
   };
@@ -130,7 +131,12 @@ function harness(options: {
     claim: () => Promise.resolve(rows),
     updateEvent: apply,
     releaseClaim: async (id, token) => {
-      const target = rows.find((item) => item.id === id && item.claim_token === token && item.status === "claimed");
+      const target = rows.find((item) =>
+        item.id === id
+        && item.claim_token === token
+        && (item.status === "claimed" || item.status === "sending")
+        && !item.outbound_message_id
+      );
       if (!target) return false;
       Object.assign(target, { status: "pending", claim_token: "released" });
       return true;
@@ -620,6 +626,86 @@ Deno.test("a skip writes one outcome log and a thrown log insert does not change
   assertEquals(reasonOf(thrown.row), "opted_out");
   assertEquals(errors.length > 0, true);
   assertEquals(errors.some((line) => line.includes(PHONE)), false);
+});
+
+Deno.test("a read-only connector skips cod confirmation before any send", async () => {
+  const box = harness({ account: account({ connectorReadOnly: true }) });
+  await runStoreEventWorker(box.ports);
+  assertEquals(box.row.status, "skipped");
+  assertEquals(reasonOf(box.row), "connector_read_only");
+  assertEquals(box.sends.length, 0);
+  assertEquals(box.logs.length, 1);
+  assertEquals(box.logs[0].message, "Store event skipped");
+  assertEquals(box.logs[0].metadata.reason, "connector_read_only");
+  assertEquals(JSON.stringify(box.logs[0]).includes(PHONE), false);
+});
+
+async function withClearFailure(box: Harness, mode: "false" | "throw", run: (errors: string[]) => Promise<void>): Promise<void> {
+  const errors: string[] = [];
+  const originalError = console.error;
+  const originalPersist = box.ports.persistState;
+  console.error = (...args: unknown[]) => {
+    errors.push(args.map((part) => String(part)).join(" "));
+  };
+  box.ports.persistState = (threadId, expected, next) => {
+    if (next === null) {
+      if (mode === "throw") return Promise.reject(new Error(`clear failed for ${PHONE}`));
+      return Promise.resolve(false);
+    }
+    return originalPersist(threadId, expected, next);
+  };
+  try {
+    await run(errors);
+  } finally {
+    console.error = originalError;
+  }
+}
+
+Deno.test("a template refusal whose state clear fails releases the claim", async () => {
+  const box = harness({ template: "pending" });
+  const released: string[] = [];
+  const original = box.ports.releaseClaim;
+  box.ports.releaseClaim = async (id, token) => {
+    released.push(token);
+    return original(id, token);
+  };
+  await withClearFailure(box, "false", async (errors) => {
+    const summary = await runStoreEventWorker(box.ports);
+    assertEquals(summary.released, 1);
+    assertEquals(summary.skipped, 0);
+    assertEquals(box.row.status, "pending");
+    assertEquals(reasonOf(box.row), undefined);
+    assertEquals(box.sends.length, 0);
+    assertEquals(box.logs.length, 0);
+    assertEquals(released, ["token-1"]);
+    assertEquals(errors.some((line) => line.includes("releasing the claim")), true);
+    assertEquals(errors.some((line) => line.includes(PHONE)), false);
+  });
+});
+
+Deno.test("a definite send failure whose state clear throws releases the claim", async () => {
+  const box = harness({
+    send: { accepted: false, definite: true, reason: `recipient ${PHONE} unreachable` },
+  });
+  const released: string[] = [];
+  const original = box.ports.releaseClaim;
+  box.ports.releaseClaim = async (id, token) => {
+    released.push(`${id}:${token}`);
+    return original(id, token);
+  };
+  await withClearFailure(box, "throw", async (errors) => {
+    const summary = await runStoreEventWorker(box.ports);
+    assertEquals(summary.failed, 0);
+    assertEquals(summary.released, 1);
+    assertEquals(box.row.status, "pending");
+    assertEquals(reasonOf(box.row), undefined);
+    assertEquals(box.sends.length, 1);
+    assertEquals(box.alerts.length, 0);
+    assertEquals(box.logs.length, 0);
+    assertEquals(released, [`${box.row.id}:token-1`]);
+    assertEquals(errors.some((line) => line.includes(PHONE)), false);
+    assertEquals(errors.some((line) => line.includes("[redacted]") || line.includes("state clear failed")), true);
+  });
 });
 
 Deno.test("a definite send failure writes one outcome log without the phone", async () => {

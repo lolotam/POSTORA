@@ -430,6 +430,153 @@ export function stockWaitlistToolDefinition(sightings: StockSighting[]) {
   };
 }
 
+/** True when this connector has a store_webhook_bindings row for the chat's social account. */
+export interface StoreBindingPort {
+  hasStoreBinding(connectorId: string): Promise<boolean>;
+}
+
+export const WAITLIST_BINDING_REFUSAL =
+  "Refused: stock notifications are not set up for this store. Do not tell the customer they will be notified.";
+
+export const WAITLIST_NOTIFICATIONS_NOT_SET_UP =
+  "Stock notifications are not set up for this store. Do not tell the customer they will be messaged when the product is back.";
+
+/** Tool for this round, plus the line the model hears when nothing can be offered. */
+export function waitlistRound(sightings: StockSighting[], offered: StockSighting[]): {
+  tool: ReturnType<typeof stockWaitlistToolDefinition>;
+  gap: string | null;
+} {
+  const tool = stockWaitlistToolDefinition(offered);
+  const gap = !tool && sightings.some((sighting) => sighting.stockStatus !== "instock")
+    ? WAITLIST_NOTIFICATIONS_NOT_SET_UP
+    : null;
+  return { tool, gap };
+}
+
+const WAITLIST_FOLLOW_UP = "The waitlist could not be saved. Tell the customer the team will follow up.";
+
+/** Out-of-stock sightings whose connector can actually deliver a later WhatsApp. */
+export async function boundWaitlistSightings(
+  sightings: StockSighting[],
+  port: StoreBindingPort,
+): Promise<StockSighting[]> {
+  const cached = new Map<string, boolean>();
+  const bound = async (connectorId: string) => {
+    const known = cached.get(connectorId);
+    if (known !== undefined) return known;
+    const answer = await port.hasStoreBinding(connectorId);
+    cached.set(connectorId, answer);
+    return answer;
+  };
+  const offered: StockSighting[] = [];
+  for (const sighting of sightings) {
+    if (sighting.stockStatus === "instock") continue;
+    if (await bound(sighting.connectorId)) offered.push(sighting);
+  }
+  return offered;
+}
+
+export async function planBoundWaitlistJoin(
+  input: Parameters<typeof planWaitlistJoin>[0],
+  port: StoreBindingPort,
+): Promise<WaitlistPlan> {
+  const plan = planWaitlistJoin(input);
+  if (plan.action === "refuse") return plan;
+  const connectorId = plan.action === "upsert"
+    ? plan.row.connector_id
+    : input.sightings.find((sighting) => sighting.productId === input.productId && sighting.stockStatus !== "instock")?.connectorId;
+  if (!connectorId || !(await port.hasStoreBinding(connectorId))) {
+    return { action: "refuse", output: WAITLIST_BINDING_REFUSAL };
+  }
+  return plan;
+}
+
+export interface WaitlistEnrollmentLog {
+  source: "ai-agent-reply";
+  category: "ai";
+  level: "warn";
+  message: "Waitlist enrollment failed";
+  user_id: string;
+  metadata: {
+    social_account_id: string;
+    connector_id: string;
+    product_id: string;
+    error_code: string;
+  };
+}
+
+export interface WaitlistLogPort {
+  insert(entry: WaitlistEnrollmentLog): Promise<{ error: { message?: string } | null }>;
+}
+
+export function waitlistErrorCode(error: { code?: unknown }): string {
+  const code = typeof error.code === "string" ? error.code.trim() : "";
+  return /^[A-Za-z0-9]{1,10}$/.test(code) ? code : "upsert_failed";
+}
+
+function consoleSafe(value: unknown): string {
+  const text = value instanceof Error ? value.message : String(value ?? "log_failed");
+  return text.replace(/\+?\d[\d\s-]{5,}\d/g, "[redacted]").slice(0, 200);
+}
+
+export async function recordWaitlistEnrollmentFailure(
+  port: WaitlistLogPort,
+  input: {
+    userId: string;
+    socialAccountId: string;
+    connectorId: string;
+    productId: string;
+    errorCode: string;
+  },
+): Promise<void> {
+  const entry: WaitlistEnrollmentLog = {
+    source: "ai-agent-reply",
+    category: "ai",
+    level: "warn",
+    message: "Waitlist enrollment failed",
+    user_id: input.userId,
+    metadata: {
+      social_account_id: input.socialAccountId,
+      connector_id: input.connectorId,
+      product_id: input.productId,
+      error_code: input.errorCode,
+    },
+  };
+  try {
+    const { error } = await port.insert(entry);
+    if (error) console.error("[ai-agent-reply] waitlist failure log rejected:", consoleSafe(error.message));
+  } catch (error) {
+    console.error("[ai-agent-reply] waitlist failure log rejected:", consoleSafe(error));
+  }
+}
+
+/** Upserts only an already-accepted plan. A failed write is logged, then the follow-up text is returned. */
+export async function enrollWaitlist(
+  plan: WaitlistPlan,
+  ports: {
+    upsert(row: WaitlistJoinRow, onConflict: string): Promise<{ error: { code?: unknown; message?: string } | null }>;
+    log: WaitlistLogPort;
+  },
+): Promise<string> {
+  if (plan.action !== "upsert") return plan.output;
+  let failure: { code?: unknown; message?: string } | null = null;
+  try {
+    const result = await ports.upsert(plan.row, plan.onConflict);
+    failure = result.error;
+  } catch {
+    failure = { code: "upsert_failed" };
+  }
+  if (!failure) return plan.output;
+  await recordWaitlistEnrollmentFailure(ports.log, {
+    userId: plan.row.user_id,
+    socialAccountId: plan.row.social_account_id,
+    connectorId: plan.row.connector_id,
+    productId: String(plan.row.product_id),
+    errorCode: waitlistErrorCode(failure),
+  });
+  return WAITLIST_FOLLOW_UP;
+}
+
 export function createProcedureTurn(input: ProcedureTurnInput): ProcedureTurn {
   const enabled = new Set(enabledProcedures(input.config));
   const inert = isPendingOpener(input.state);

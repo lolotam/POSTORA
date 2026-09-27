@@ -43,6 +43,8 @@ export interface AccountContext {
   defaultMode: string;
   settings: ProcedureSettings | null;
   connectorVisible: boolean;
+  /** True unless this event's ai_agent_tools row has read_only_mode === false. */
+  connectorReadOnly: boolean;
   optedOut: boolean;
 }
 
@@ -145,6 +147,7 @@ export function accountSkipReason(event: StoreEventRow, account: AccountContext 
   if (!account.agentEnabled) return "agent_disabled";
   if (resolveEngagementMode(null, account.defaultMode) === "human_first") return "engagement_mode";
   if (!account.connectorVisible) return "connector_not_visible";
+  if (event.flow === "cod_confirm" && account.connectorReadOnly) return "connector_read_only";
   if (account.optedOut) return "opted_out";
   const due = Date.parse(event.due_at);
   if (!Number.isFinite(due) || due + STALE_AFTER_MS < nowMs) return "expired";
@@ -207,10 +210,46 @@ function pendingState(event: StoreEventRow, nowMs: number): ProcedureState {
   };
 }
 
-async function clearPending(ports: WorkerPorts, thread: ThreadRow, eventId: string, expected: ProcedureState | null): Promise<void> {
+async function clearPending(ports: WorkerPorts, thread: ThreadRow, eventId: string, expected: ProcedureState | null): Promise<boolean> {
   const state = expected ?? (isPendingOpener(thread.procedure_state) ? thread.procedure_state as ProcedureState : null);
-  if (!state || state.run_id !== eventId || state.phase !== "pending_opener") return;
-  await ports.persistState(thread.id, state, null);
+  if (!state || state.run_id !== eventId || state.phase !== "pending_opener") return true;
+  return await ports.persistState(thread.id, state, null);
+}
+
+/** A compare-and-set miss and a thrown clear are the same failure: the opener is still stored. */
+async function clearPendingOrLog(ports: WorkerPorts, thread: ThreadRow, event: StoreEventRow, expected: ProcedureState | null): Promise<boolean> {
+  try {
+    return await clearPending(ports, thread, event.id, expected);
+  } catch (error) {
+    console.error(
+      `[process-store-events] ${event.id} state clear failed:`,
+      sanitizeFailureReason(error instanceof Error ? error.message : "state_clear_failed"),
+    );
+    return false;
+  }
+}
+
+async function releaseReservedQr(ports: WorkerPorts, event: StoreEventRow, reserved: boolean): Promise<void> {
+  if (!reserved) return;
+  try {
+    await ports.releaseQr(event.social_account_id);
+  } catch {
+    // The lease still returns the row; the cap slot is the smaller loss.
+  }
+}
+
+/** releaseClaim matches claim_token. A released row stays subject to attempt exhaustion. */
+async function releaseAfterClearFailure(ports: WorkerPorts, event: StoreEventRow): Promise<"released" | "left"> {
+  console.error(`[process-store-events] ${event.id} opener clear failed; releasing the claim for retry`);
+  try {
+    return await ports.releaseClaim(event.id, event.claim_token) ? "released" : "left";
+  } catch (error) {
+    console.error(
+      `[process-store-events] ${event.id} claim release failed:`,
+      sanitizeFailureReason(error instanceof Error ? error.message : "release_failed"),
+    );
+    return "left";
+  }
 }
 
 export async function runStoreEventWorker(
@@ -499,7 +538,11 @@ async function processClaimed(
     if (loaded.connectionMode !== "evolution_qr") {
       const template = await ports.templateStatus(event, language);
       if (template.status !== "approved") {
-        await clearPending(ports, thread, event.id, openerState);
+        const cleared = await clearPendingOrLog(ports, thread, event, openerState);
+        if (!cleared) {
+          await releaseReservedQr(ports, event, reserved);
+          return await releaseAfterClearFailure(ports, event);
+        }
         if (reserved) await ports.releaseQr(event.social_account_id);
         await skip(ports, event, "template_not_approved");
         return "skipped";
@@ -530,7 +573,11 @@ async function processClaimed(
         await settleIndeterminate(ports, { ...event, status: "sending" });
         return "failed";
       }
-      await clearPending(ports, thread, event.id, openerState);
+      const cleared = await clearPendingOrLog(ports, thread, event, openerState);
+      if (!cleared) {
+        await releaseReservedQr(ports, event, reserved);
+        return await releaseAfterClearFailure(ports, event);
+      }
       if (reserved) await ports.releaseQr(event.social_account_id);
       const failed = await markFailed(ports, event, sent.reason, false);
       return failed ? "failed" : "left";

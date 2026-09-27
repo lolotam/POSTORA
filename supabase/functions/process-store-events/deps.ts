@@ -185,10 +185,11 @@ export function createStoreEventPorts(admin: any): WorkerPorts {
     },
     async releaseClaim(id, claimToken) {
       const { data, error } = await admin.from("store_events")
-        .update({ status: "pending", claimed_at: null, claim_token: null })
+        .update({ status: "pending", claimed_at: null, claim_token: null, send_attempt_id: null })
         .eq("id", id)
         .eq("claim_token", claimToken)
-        .eq("status", "claimed")
+        .in("status", ["claimed", "sending"])
+        .is("outbound_message_id", null)
         .select("id");
       if (error) throw error;
       return ((data ?? []) as unknown[]).length === 1;
@@ -211,9 +212,10 @@ export function createStoreEventPorts(admin: any): WorkerPorts {
       if (linkResult.error) throw linkResult.error;
       if (optOutResult.error) throw optOutResult.error;
       const binding = bindingResult.data as StoreBindingIdentity | null;
-      const tools = (toolResult.data ?? []) as ResolvableTool[];
+      const tools = (toolResult.data ?? []) as Array<ResolvableTool & { read_only_mode?: boolean | null }>;
       const links = (linkResult.data ?? []) as ToolAccountLink[];
       const visible = resolveToolsForAccount(tools, links, row.id).tools.some((tool) => tool.id === event.connector_id);
+      const connector = tools.find((tool) => tool.id === event.connector_id);
       const bindingOk = storeBindingMatches(binding, event);
       const procedures = readProcedureConfig((config?.agent_behavior as { procedures?: unknown } | undefined)?.procedures);
       const mode = row.connection_mode ?? null;
@@ -227,6 +229,7 @@ export function createStoreEventPorts(admin: any): WorkerPorts {
         defaultMode: typeof config?.default_mode === "string" ? config.default_mode : "",
         settings: procedures[event.flow] ?? null,
         connectorVisible: visible && bindingOk,
+        connectorReadOnly: connector?.read_only_mode !== false,
         optedOut: optedOutFromLookup(lookupPhone, optOutResult.data),
       };
     },

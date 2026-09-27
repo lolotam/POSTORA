@@ -43,7 +43,7 @@ const FLOW_NAMES: Record<ProcedureKey, string> = {
 const REFUSAL_TEXT: Record<EventEnableRefusal, string> = {
   agent_disabled: "Turn the agent on before enabling this flow.",
   human_first: "This flow stays off while replies are set to human first.",
-  read_only: "COD confirmation needs a WooCommerce connection that can update orders. This one is read-only.",
+  read_only: "COD confirmation needs a WooCommerce connection that can update orders. {{name}} is read-only.",
   consent_required: "Confirm that checkout collects consent for WhatsApp order updates.",
   qr_risk_required: "Confirm that you understand WhatsApp may restrict numbers that send unsolicited messages.",
   review_delay: "Delay must be a whole number of days from 0 to 14.",
@@ -85,28 +85,29 @@ function servicesFromInput(raw: string): string[] {
   return items;
 }
 
-function wooReadOnly(
+/** Name of a bound WooCommerce connector that cannot update orders, if any. */
+function readOnlyBoundConnector(
   accountId: string,
   tools: AiAgentTool[],
   links: ToolAccountLink[],
   linksReady: boolean,
   bindings: Array<{ social_account_id: string; connector_id: string }> | undefined,
-): boolean {
-  if (!linksReady || !bindings) return false;
+): string | null {
+  if (!linksReady || !bindings) return null;
   const account: SharingAccount = { id: accountId, platform: "whatsapp", platform_username: null, platform_user_id: null };
-  const eligible = tools.filter((tool) => {
-    if (tool.connector_type !== "woocommerce") return false;
-    return effectiveToolAccountIds(
+  const bound = new Set(bindings.filter((row) => row.social_account_id === accountId).map((row) => row.connector_id));
+  const names = tools.flatMap((tool) => {
+    if (tool.connector_type !== "woocommerce" || !bound.has(tool.id) || tool.read_only_mode === false) return [];
+    const visible = effectiveToolAccountIds(
       { id: tool.id, scope: tool.scope, social_account_id: tool.social_account_id },
       [account],
       links,
     ).includes(accountId);
+    if (!visible) return [];
+    const label = tool.name.trim();
+    return [label || tool.id];
   });
-  if (eligible.length === 0) return false;
-  const bound = new Set(bindings.filter((row) => row.social_account_id === accountId).map((row) => row.connector_id));
-  const relevant = bound.size > 0 ? eligible.filter((tool) => bound.has(tool.id)) : eligible;
-  const set = relevant.length > 0 ? relevant : eligible;
-  return set.every((tool) => tool.read_only_mode !== false);
+  return names.length > 0 ? names.join(", ") : null;
 }
 
 function EventTemplateBadge({ accountId, flow }: { accountId: string; flow: EventProcedureKey }) {
@@ -176,7 +177,7 @@ export function ProceduresCard({
 }: ProceduresCardProps) {
   const { t } = useTranslation("agent");
   const procedures = behavior.procedures ?? {};
-  const [readOnly, setReadOnly] = useState(false);
+  const [readOnlyConnector, setReadOnlyConnector] = useState<string | null>(null);
   const [refusal, setRefusal] = useState<Partial<Record<EventProcedureKey, EventEnableRefusal>>>({});
   const keys = storeAccountId ? PROCEDURE_KEYS : PROCEDURE_KEYS.filter((key) => !isEventProcedureKey(key));
 
@@ -190,7 +191,7 @@ export function ProceduresCard({
       agentEnabled: form.is_enabled === true,
       defaultMode: form.default_mode || "human_then_ai",
       connectionMode,
-      wooReadOnly: readOnly,
+      wooReadOnly: readOnlyConnector !== null,
       consentAttested: Boolean(draft.consent_attested_at),
       qrRiskAcknowledged: Boolean(draft.qr_risk_acknowledged_at),
       delayDays: draft.delay_days ?? 3,
@@ -226,7 +227,7 @@ export function ProceduresCard({
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
-        {storeAccountId && <StoreEventData accountId={storeAccountId} onReadOnly={setReadOnly} />}
+        {storeAccountId && <StoreEventData accountId={storeAccountId} onReadOnly={setReadOnlyConnector} />}
         {keys.map((key) => {
           const current = procedures[key];
           const enabled = current?.enabled ?? false;
@@ -260,7 +261,12 @@ export function ProceduresCard({
               </div>
               {eventRefusal && (
                 <p className="text-xs text-destructive" role="alert">
-                  {t(`procedures.refusal.${eventRefusal}`, REFUSAL_TEXT[eventRefusal])}
+                  {eventRefusal === "read_only"
+                    ? t("procedures.refusal.read_only", {
+                      defaultValue: REFUSAL_TEXT.read_only,
+                      name: readOnlyConnector ?? "",
+                    })
+                    : t(`procedures.refusal.${eventRefusal}`, REFUSAL_TEXT[eventRefusal])}
                 </p>
               )}
               {eventKey && storeAccountId && (
@@ -401,13 +407,13 @@ function StoreEventData({
   onReadOnly,
 }: {
   accountId: string;
-  onReadOnly: (readOnly: boolean) => void;
+  onReadOnly: (connectorName: string | null) => void;
 }) {
   const { tools } = useAiAgentTools();
   const { links, linksReady } = useAiToolAccountLinks();
   const { bindings } = useStoreWebhookBindings();
   useEffect(() => {
-    onReadOnly(wooReadOnly(accountId, tools, links, linksReady, bindings));
+    onReadOnly(readOnlyBoundConnector(accountId, tools, links, linksReady, bindings));
   }, [accountId, tools, links, linksReady, bindings, onReadOnly]);
   return null;
 }

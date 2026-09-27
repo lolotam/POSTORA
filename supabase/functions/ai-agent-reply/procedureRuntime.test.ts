@@ -1,9 +1,10 @@
 // supabase/functions/ai-agent-reply/procedureRuntime.test.ts
 import { assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 import {
-  createProcedureTurn, planWaitlistJoin, procedureToolDefinitions, scopeStoreEventRead, STOCK_WAITLIST_ON_CONFLICT,
-  storeEventReadScope,
-  type ProcedurePorts, type ProcedureTurnInput, type StockSighting, type StoreEventRow,
+  boundWaitlistSightings, createProcedureTurn, enrollWaitlist, planBoundWaitlistJoin, planWaitlistJoin,
+  procedureToolDefinitions, scopeStoreEventRead, STOCK_WAITLIST_ON_CONFLICT, stockWaitlistToolDefinition,
+  storeEventReadScope, WAITLIST_BINDING_REFUSAL, waitlistRound,
+  type ProcedurePorts, type ProcedureTurnInput, type StockSighting, type StoreEventRow, type WaitlistEnrollmentLog,
 } from "./procedureRuntime.ts";
 
 function fakePorts(overrides: Partial<ProcedurePorts> = {}) {
@@ -624,4 +625,96 @@ Deno.test("waitlist join copies id, parent and name from the stock result", () =
   assertEquals(plan.onConflict, "social_account_id,connector_id,phone,product_id");
   assertEquals(STOCK_WAITLIST_ON_CONFLICT, plan.onConflict);
   assertEquals(joinInput([sighting("outofstock")], { dryRun: true }).action, "dry_run");
+});
+
+Deno.test("waitlist join is offered and saved only when the connector has a store binding", async () => {
+  const bound = sighting("outofstock", "Bound hat");
+  const unbound = { ...sighting("outofstock", "Other hat"), connectorId: "conn-other", productId: "77" };
+  const calls: string[] = [];
+  const port = {
+    hasStoreBinding: (connectorId: string) => {
+      calls.push(connectorId);
+      return Promise.resolve(connectorId === "conn-9");
+    },
+  };
+  const offered = await boundWaitlistSightings([bound, unbound, bound], port);
+  const round = waitlistRound([bound, unbound], offered);
+  const parameters = round.tool?.function.parameters as { properties: { product_id: { enum: string[] } } };
+  assertEquals(parameters.properties.product_id.enum, ["55"]);
+  assertEquals(round.gap, null);
+  assertEquals(calls, ["conn-9", "conn-other"]);
+
+  const saved = await planBoundWaitlistJoin({
+    productId: "55", sightings: [bound], platform: "whatsapp", phone: "+965 5551 2345", dryRun: false,
+    userId: "user-1", socialAccountId: "acc-1", conversationId: "conv-1", now: T.toISOString(),
+  }, port);
+  assertEquals(saved.action, "upsert");
+
+  const refused = await planBoundWaitlistJoin({
+    productId: "77", sightings: [unbound], platform: "whatsapp", phone: "+965 5551 2345", dryRun: false,
+    userId: "user-1", socialAccountId: "acc-1", conversationId: "conv-1", now: T.toISOString(),
+  }, { hasStoreBinding: () => Promise.resolve(false) });
+  assertEquals(refused.action, "refuse");
+  if (refused.action === "refuse") assertEquals(refused.output, WAITLIST_BINDING_REFUSAL);
+  assertStringIncludes(WAITLIST_BINDING_REFUSAL, "notifications are not set up");
+
+  const dry = await planBoundWaitlistJoin({
+    productId: "77", sightings: [unbound], platform: "whatsapp", phone: "+965 5551 2345", dryRun: true,
+    userId: "user-1", socialAccountId: "acc-1", conversationId: "conv-1", now: T.toISOString(),
+  }, { hasStoreBinding: () => Promise.resolve(false) });
+  assertEquals(dry.action, "refuse");
+
+  const none = waitlistRound([unbound], []);
+  assertEquals(none.tool, null);
+  assertStringIncludes(none.gap ?? "", "notifications are not set up");
+  assertEquals(stockWaitlistToolDefinition([]), null);
+});
+
+Deno.test("a failed waitlist upsert writes one sanitized log through the port, then the follow-up", async () => {
+  const plan = joinInput([sighting("outofstock", "Real Hat")]);
+  if (plan.action !== "upsert") throw new Error("expected upsert");
+  const rows: WaitlistEnrollmentLog[] = [];
+  const phone = "96500011122";
+  const output = await enrollWaitlist(plan, {
+    upsert: async () => ({ error: { code: "23505", message: `duplicate key ${phone}` } }),
+    log: {
+      insert: async (entry) => {
+        rows.push(entry);
+        return { error: null };
+      },
+    },
+  });
+  assertEquals(output, "The waitlist could not be saved. Tell the customer the team will follow up.");
+  assertEquals(rows, [{
+    source: "ai-agent-reply",
+    category: "ai",
+    level: "warn",
+    message: "Waitlist enrollment failed",
+    user_id: "user-1",
+    metadata: {
+      social_account_id: "acc-1",
+      connector_id: "conn-9",
+      product_id: "55",
+      error_code: "23505",
+    },
+  }]);
+  assertEquals(JSON.stringify(rows).includes(phone), false);
+
+  const errors: string[] = [];
+  const original = console.error;
+  console.error = (...args: unknown[]) => {
+    errors.push(args.map((part) => String(part)).join(" "));
+  };
+  try {
+    const again = await enrollWaitlist(plan, {
+      upsert: async () => { throw new Error(`upsert exploded ${phone}`); },
+      log: { insert: async () => { throw new Error(`log insert failed ${phone}`); } },
+    });
+    assertEquals(again, output);
+  } finally {
+    console.error = original;
+  }
+  assertEquals(errors.length, 1);
+  assertEquals(errors[0].includes(phone), false);
+  assertStringIncludes(errors[0], "[redacted]");
 });

@@ -88,17 +88,20 @@ import { resolveProviderKey } from "../_shared/providerKeys.ts";
 import { enabledProcedures, readProcedureConfig } from "../_shared/procedures/config.ts";
 import { expireIfStale, isPendingOpener } from "../_shared/procedures/engine.ts";
 import {
+  boundWaitlistSightings,
   createProcedureTurn,
+  enrollWaitlist,
   fieldsFor,
-  planWaitlistJoin,
+  planBoundWaitlistJoin,
   PROCEDURE_TOOL_NAMES,
   procedureToolDefinitions,
   stepGuidance,
   scopeStoreEventRead,
   stockSightingsFromToolOutput,
-  stockWaitlistToolDefinition,
   storeEventReadScope,
+  waitlistRound,
   type StockSighting,
+  type StoreBindingPort,
   type StoreEventEq,
 } from "./procedureRuntime.ts";
 import { PROCEDURE_STATE_CONFLICT, persistProcedureState } from "./procedureState.ts";
@@ -1402,11 +1405,33 @@ Deno.serve(async (req) => {
       ...customToolDefinitions(offeredTools),
       ...procedureToolDefinitions(procedureTurn && !triagePlan?.handoff ? enabledProcedures(procedureConfig) : []),
     ];
-    // Rebuilt each round: the tool appears only after this turn's check_stock saw the product out of stock.
+    // Rebuilt each round: the tool appears only after this turn's check_stock saw the product out of stock,
+    // and only for a connector that has a store webhook binding on this social account.
     const waitlistOn = procedureConfig.back_in_stock?.enabled === true && request.platform === "whatsapp";
     const stockSightings: StockSighting[] = [];
+    const bindingCache = new Map<string, Promise<boolean>>();
+    const bindingPort: StoreBindingPort = {
+      hasStoreBinding(connectorId) {
+        const cached = bindingCache.get(connectorId);
+        if (cached) return cached;
+        const pending = (async () => {
+          const accountId = toolContext.socialAccountId;
+          if (!accountId) return false;
+          const { data, error } = await admin.from("store_webhook_bindings")
+            .select("id")
+            .eq("user_id", request.user_id)
+            .eq("social_account_id", accountId)
+            .eq("connector_id", connectorId)
+            .maybeSingle();
+          if (error) throw new Error("store_binding_lookup_failed");
+          return data !== null;
+        })();
+        bindingCache.set(connectorId, pending);
+        return pending;
+      },
+    };
     const joinStockWaitlist = async (productId: string): Promise<ToolResult> => {
-      const plan = planWaitlistJoin({
+      const plan = await planBoundWaitlistJoin({
         productId,
         sightings: stockSightings,
         platform: request.platform,
@@ -1416,26 +1441,35 @@ Deno.serve(async (req) => {
         socialAccountId: toolContext.socialAccountId,
         conversationId: request.conversation_id,
         now: new Date().toISOString(),
+      }, bindingPort);
+      const output = await enrollWaitlist(plan, {
+        upsert: async (row, onConflict) => {
+          const { error } = await admin.from("stock_waitlist").upsert(row, { onConflict });
+          return { error };
+        },
+        log: {
+          insert: async (entry) => {
+            const { error } = await admin.from("system_logs").insert(entry);
+            return { error };
+          },
+        },
       });
-      if (plan.action === "upsert") {
-        const { error } = await admin.from("stock_waitlist").upsert(
-          plan.row,
-          { onConflict: plan.onConflict },
-        );
-        if (error) {
-          console.error("[ai-agent-reply] waitlist join failed:", error.message);
-          return { output: "The waitlist could not be saved. Tell the customer the team will follow up." };
-        }
-      }
-      return { output: plan.output };
+      return { output };
     };
+    let toldWaitlistGap = false;
     let procedureToolRanThisRound = false;
     for (let iteration = 0; ; iteration++) {
       const procedureToolRanOnLastRound = procedureToolRanThisRound;
       procedureToolRanThisRound = false;
       const budget = iterationBudget(maxIterations, procedureToolRanOnLastRound, iteration);
       if (budget === "stop") break;
-      const waitlistTool = waitlistOn ? stockWaitlistToolDefinition(stockSightings) : null;
+      const offeredSightings = waitlistOn ? await boundWaitlistSightings(stockSightings, bindingPort) : [];
+      const waitlist = waitlistOn ? waitlistRound(stockSightings, offeredSightings) : { tool: null, gap: null };
+      const waitlistTool = waitlist.tool;
+      if (waitlist.gap && !toldWaitlistGap) {
+        messages.push({ role: "system", content: waitlist.gap });
+        toldWaitlistGap = true;
+      }
       const roundToolDefinitions = budget === "text_only" ? [] : [
         ...toolDefinitions,
         ...(waitlistTool ? [waitlistTool] : []),
