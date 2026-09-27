@@ -406,5 +406,199 @@ BEGIN
     'B20 previous secret reclaimed on binding delete';
 END $procb_reclaim$;
 
+-- B21..B29: the fenced claim, the QR cap, and their grants. Fixtures reuse
+-- bind_a's identity (u_a, acct_a, tool_a) so the tenant FK holds. due_at
+-- values are staggered so ORDER BY due_at picks the B21 rows first: older
+-- rows from B4/B19 all sit at the transaction's now().
+DO $$
+DECLARE
+  u_a uuid := '11111111-1111-4111-8111-111111111111';
+  acct_a uuid := '33333333-3333-4333-8333-333333333333';
+  tool_a uuid := '55555555-5555-4555-8555-555555555555';
+  bind_a uuid := '77777777-7777-4777-8777-777777777777';
+  v_claimed text[];
+  v_old_token uuid := 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  v_got uuid;
+  v_ok boolean;
+  v_i int;
+BEGIN
+  INSERT INTO public.store_events
+    (user_id, social_account_id, connector_id, binding_id, flow,
+     external_id, payload, status, due_at)
+  VALUES
+    (u_a, acct_a, tool_a, bind_a, 'cod_confirm', 'order-b21-oldest',
+     '{"order_id":"b21-a"}', 'pending', now() - interval '1 hour'),
+    (u_a, acct_a, tool_a, bind_a, 'cod_confirm', 'order-b21-middle',
+     '{"order_id":"b21-b"}', 'pending', now() - interval '50 minutes'),
+    (u_a, acct_a, tool_a, bind_a, 'cod_confirm', 'order-b21-newest',
+     '{"order_id":"b21-c"}', 'pending', now() - interval '40 minutes'),
+    (u_a, acct_a, tool_a, bind_a, 'cod_confirm', 'order-b21-future',
+     '{"order_id":"b21-f"}', 'pending', now() + interval '1 hour');
+
+  -- B21: at most p_limit rows come back, oldest due first.
+  SELECT array_agg(external_id)
+    INTO v_claimed
+    FROM public.claim_store_events(2, interval '2 minutes');
+  ASSERT array_length(v_claimed, 1) <= 2,
+    'B21 claim returns at most p_limit rows';
+  ASSERT v_claimed @> ARRAY['order-b21-oldest', 'order-b21-middle'],
+    'B21 claim takes the oldest due rows first';
+
+  -- B22: a row due in the future is skipped (still pending, no token).
+  ASSERT (SELECT status FROM public.store_events
+          WHERE binding_id = bind_a AND external_id = 'order-b21-future') = 'pending',
+    'B22 future due_at row stays pending';
+  ASSERT (SELECT claim_token FROM public.store_events
+          WHERE binding_id = bind_a AND external_id = 'order-b21-future') IS NULL,
+    'B22 future due_at row gets no claim token';
+
+  -- B23: every claimed row carries a fresh token.
+  ASSERT (SELECT count(*) FROM public.store_events
+          WHERE external_id = ANY (v_claimed)
+            AND claim_token IS NULL) = 0,
+    'B23 claimed rows all carry a claim token';
+  ASSERT (SELECT count(*) FROM public.store_events
+          WHERE external_id = ANY (v_claimed)
+            AND status = 'claimed') = array_length(v_claimed, 1),
+    'B23 claimed rows are in claimed status';
+
+  -- Reclaim fixtures: an expired lease, an exhausted row, an expired send.
+  INSERT INTO public.store_events
+    (user_id, social_account_id, connector_id, binding_id, flow,
+     external_id, payload, status, due_at, claimed_at, claim_token, attempts)
+  VALUES
+    (u_a, acct_a, tool_a, bind_a, 'cod_confirm', 'order-b24-reclaim',
+     '{"order_id":"b24"}', 'claimed', now() - interval '1 hour',
+     now() - interval '10 minutes', v_old_token, 1),
+    (u_a, acct_a, tool_a, bind_a, 'cod_confirm', 'order-b25-exhausted',
+     '{"order_id":"b25"}', 'claimed', now() - interval '1 hour',
+     now() - interval '10 minutes', gen_random_uuid(), 3),
+    (u_a, acct_a, tool_a, bind_a, 'cod_confirm', 'order-b26-sending',
+     '{"order_id":"b26"}', 'sending', now() - interval '1 hour',
+     now() - interval '10 minutes', v_old_token, 1);
+  UPDATE public.store_events
+  SET outbound_message_id = 'b26-mid'
+  WHERE binding_id = bind_a AND external_id = 'order-b26-sending';
+
+  PERFORM public.claim_store_events(10, interval '2 minutes');
+
+  -- B24: the expired lease is reclaimed under a new token, attempts + 1.
+  ASSERT (SELECT status FROM public.store_events
+          WHERE binding_id = bind_a AND external_id = 'order-b24-reclaim') = 'claimed',
+    'B24 expired lease stays claimed';
+  SELECT claim_token INTO v_got FROM public.store_events
+  WHERE binding_id = bind_a AND external_id = 'order-b24-reclaim';
+  ASSERT v_got IS NOT NULL AND v_got <> v_old_token,
+    'B24 expired lease carries a new claim token';
+  ASSERT (SELECT attempts FROM public.store_events
+          WHERE binding_id = bind_a AND external_id = 'order-b24-reclaim') = 2,
+    'B24 reclaim bumps attempts';
+
+  -- B25: three attempts on an expired lease means failed, never reclaimed.
+  ASSERT (SELECT status FROM public.store_events
+          WHERE binding_id = bind_a AND external_id = 'order-b25-exhausted') = 'failed',
+    'B25 exhausted row is marked failed';
+  ASSERT (SELECT skip_reason FROM public.store_events
+          WHERE binding_id = bind_a AND external_id = 'order-b25-exhausted') = 'attempts_exhausted',
+    'B25 exhausted row carries attempts_exhausted';
+  ASSERT (SELECT processed_at FROM public.store_events
+          WHERE binding_id = bind_a AND external_id = 'order-b25-exhausted') IS NOT NULL,
+    'B25 exhausted row carries processed_at';
+
+  -- B26: an expired send is indeterminate: still sending, new token, no resend.
+  ASSERT (SELECT status FROM public.store_events
+          WHERE binding_id = bind_a AND external_id = 'order-b26-sending') = 'sending',
+    'B26 expired sending row stays sending';
+  SELECT claim_token INTO v_got FROM public.store_events
+  WHERE binding_id = bind_a AND external_id = 'order-b26-sending';
+  ASSERT v_got IS NOT NULL AND v_got <> v_old_token,
+    'B26 expired sending row carries a new claim token';
+  ASSERT (SELECT outbound_message_id FROM public.store_events
+          WHERE binding_id = bind_a AND external_id = 'order-b26-sending') = 'b26-mid',
+    'B26 expired sending row keeps its outbound id (worker must not resend)';
+
+  -- B27: the QR cap grants exactly p_limit reservations, then refuses.
+  FOR v_i IN 1..3 LOOP
+    v_ok := public.reserve_qr_opener(acct_a, 3);
+    ASSERT v_ok, 'B27 reservation ' || v_i || ' of 3 granted';
+  END LOOP;
+  ASSERT NOT public.reserve_qr_opener(acct_a, 3),
+    'B27 fourth reservation refused at the cap';
+  ASSERT (SELECT sent FROM public.store_qr_opener_counts
+          WHERE social_account_id = acct_a
+            AND day = (now() AT TIME ZONE 'utc')::date) = 3,
+    'B27 counter holds exactly the cap';
+
+  -- B28: release walks the counter down and never below zero.
+  PERFORM public.release_qr_opener(acct_a);
+  ASSERT (SELECT sent FROM public.store_qr_opener_counts
+          WHERE social_account_id = acct_a
+            AND day = (now() AT TIME ZONE 'utc')::date) = 2,
+    'B28 release decrements the counter';
+  PERFORM public.release_qr_opener(acct_a);
+  PERFORM public.release_qr_opener(acct_a);
+  PERFORM public.release_qr_opener(acct_a);
+  ASSERT (SELECT sent FROM public.store_qr_opener_counts
+          WHERE social_account_id = acct_a
+            AND day = (now() AT TIME ZONE 'utc')::date) = 0,
+    'B28 counter never drops below zero';
+
+  -- B29: the three worker functions are service-role only, and the counter
+  -- table is invisible to client roles.
+  ASSERT NOT has_function_privilege('anon',
+             'public.claim_store_events(int, interval)', 'EXECUTE'),
+    'B29 anon cannot EXECUTE claim_store_events';
+  ASSERT NOT has_function_privilege('authenticated',
+             'public.claim_store_events(int, interval)', 'EXECUTE'),
+    'B29 authenticated cannot EXECUTE claim_store_events';
+  ASSERT has_function_privilege('service_role',
+             'public.claim_store_events(int, interval)', 'EXECUTE'),
+    'B29 service_role can EXECUTE claim_store_events';
+  ASSERT NOT has_function_privilege('anon',
+             'public.reserve_qr_opener(uuid, int)', 'EXECUTE'),
+    'B29 anon cannot EXECUTE reserve_qr_opener';
+  ASSERT NOT has_function_privilege('authenticated',
+             'public.reserve_qr_opener(uuid, int)', 'EXECUTE'),
+    'B29 authenticated cannot EXECUTE reserve_qr_opener';
+  ASSERT has_function_privilege('service_role',
+             'public.reserve_qr_opener(uuid, int)', 'EXECUTE'),
+    'B29 service_role can EXECUTE reserve_qr_opener';
+  ASSERT NOT has_function_privilege('anon',
+             'public.release_qr_opener(uuid)', 'EXECUTE'),
+    'B29 anon cannot EXECUTE release_qr_opener';
+  ASSERT NOT has_function_privilege('authenticated',
+             'public.release_qr_opener(uuid)', 'EXECUTE'),
+    'B29 authenticated cannot EXECUTE release_qr_opener';
+  ASSERT has_function_privilege('service_role',
+             'public.release_qr_opener(uuid)', 'EXECUTE'),
+    'B29 service_role can EXECUTE release_qr_opener';
+  ASSERT NOT has_table_privilege('authenticated',
+             'public.store_qr_opener_counts', 'SELECT'),
+    'B29 authenticated holds no SELECT on store_qr_opener_counts';
+END $$;
+
+-- B30: both cron jobs exist. Skipped with a NOTICE where pg_cron is absent:
+-- the harness baseline has no pg_cron, production does.
+DO $procb_cron$
+DECLARE
+  v_cron_present boolean;
+BEGIN
+  SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname = 'pg_cron')
+    INTO v_cron_present;
+  IF NOT v_cron_present THEN
+    RAISE NOTICE 'pg_cron absent: skipping B30 cron assertions';
+    RETURN;
+  END IF;
+
+  ASSERT EXISTS (SELECT 1 FROM cron.job
+                 WHERE jobname = 'process-store-events'
+                   AND schedule = '* * * * *'),
+    'B30 process-store-events runs every minute';
+  ASSERT EXISTS (SELECT 1 FROM cron.job
+                 WHERE jobname = 'purge-store-events'
+                   AND schedule = '27 3 * * *'),
+    'B30 purge-store-events runs daily';
+END $procb_cron$;
+
 ROLLBACK;
 \echo '=== agent_procedures_b: ALL CHECKS PASSED ==='
