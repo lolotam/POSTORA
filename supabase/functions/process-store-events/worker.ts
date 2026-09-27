@@ -2,7 +2,12 @@
 import { whatsappConversationId, type WhatsAppAddressing } from "../_shared/phone.ts";
 import { resolveEngagementMode } from "../ai-agent-reply/logic.ts";
 import { expireIfStale, isPendingOpener, type ProcedureState } from "../_shared/procedures/engine.ts";
-import { templateSendComponents, type TemplateResolution } from "../_shared/procedures/eventTemplates.ts";
+import {
+  ensureEventTemplate,
+  templateSendComponents,
+  type TemplateGraph,
+  type TemplateResolution,
+} from "../_shared/procedures/eventTemplates.ts";
 import { openerLanguage, openerText, type OpenerLanguage } from "../_shared/procedures/openers.ts";
 import { TEMPLATES, type EventProcedureKey } from "../_shared/procedures/templates.ts";
 import type { ProcedureSettings } from "../_shared/procedures/config.ts";
@@ -122,8 +127,16 @@ export interface WorkerPorts {
   reserveQr(accountId: string, limit: number): Promise<boolean>;
   releaseQr(accountId: string): Promise<void>;
   ensureThread(input: { userId: string; conversationId: string }): Promise<ThreadRow>;
+  /**
+   * Read the thread if one exists. Unlike ensureThread this does not insert,
+   * so a skip can look for an opener it stored on an earlier attempt without
+   * creating a conversation.
+   */
+  findThread(input: { userId: string; conversationId: string }): Promise<ThreadRow | null>;
   persistState(threadId: string, expected: unknown, next: unknown): Promise<boolean>;
   templateStatus(event: StoreEventRow, language: OpenerLanguage): Promise<TemplateResolution>;
+  /** Null when this account has no WABA id or token to submit a template with. */
+  templateGraph(event: StoreEventRow): Promise<TemplateGraph | null>;
   sendOpener(input: SendOpenerInput): Promise<SendOutcome>;
   recordOpener(input: RecordOpenerInput): Promise<void>;
   deleteWaitlist(event: StoreEventRow): Promise<void>;
@@ -254,6 +267,63 @@ async function releaseReservedQr(ports: WorkerPorts, event: StoreEventRow, reser
   }
 }
 
+interface OpenerClearance {
+  account: AccountContext | null;
+  /** The thread this attempt already loaded. Null asks for a read, not an insert. */
+  thread: ThreadRow | null;
+  expected: ProcedureState | null;
+  reserved: boolean;
+}
+
+async function openerThread(
+  ports: WorkerPorts,
+  event: StoreEventRow,
+  clearance: OpenerClearance,
+): Promise<ThreadRow | null> {
+  if (clearance.thread) return clearance.thread;
+  const account = clearance.account;
+  const phone = event.payload.phone;
+  if (!account || account.platform !== "whatsapp" || !account.connectionMode || !account.platformUserId || !phone) {
+    return null;
+  }
+  return await ports.findThread({
+    userId: event.user_id,
+    conversationId: whatsappConversationId(addressing(account), phone),
+  });
+}
+
+/**
+ * Terminal rows must drop an opener this event owns before the status write.
+ * A failed clear leaves the row retryable: `sending` stays `sending` (the next
+ * claim refreshes the lease and does not resend); every other status releases
+ * the claim.
+ */
+async function refuseTerminal(
+  ports: WorkerPorts,
+  event: StoreEventRow,
+  clearance: OpenerClearance,
+  whenClearFails: "keep-sending" | "release",
+): Promise<"go" | "released" | "left"> {
+  let thread: ThreadRow | null;
+  try {
+    thread = await openerThread(ports, event, clearance);
+  } catch (error) {
+    console.error(
+      `[process-store-events] ${event.id} state clear failed:`,
+      sanitizeFailureReason(error instanceof Error ? error.message : "state_clear_failed"),
+    );
+    if (whenClearFails === "keep-sending") return "left";
+    await releaseReservedQr(ports, event, clearance.reserved);
+    return await releaseAfterClearFailure(ports, event);
+  }
+  if (!thread) return "go";
+  const cleared = await clearPendingOrLog(ports, thread, event, clearance.expected);
+  if (cleared) return "go";
+  if (whenClearFails === "keep-sending") return "left";
+  await releaseReservedQr(ports, event, clearance.reserved);
+  return await releaseAfterClearFailure(ports, event);
+}
+
 /** releaseClaim matches claim_token. A released row stays subject to attempt exhaustion. */
 async function releaseAfterClearFailure(ports: WorkerPorts, event: StoreEventRow): Promise<"released" | "left"> {
   console.error(`[process-store-events] ${event.id} opener clear failed; releasing the claim for retry`);
@@ -282,6 +352,7 @@ export async function runStoreEventWorker(
         const finished = await completeRecordedSend(ports, event);
         if (finished === "sent") summary.sent += 1;
         else if (finished === "failed") summary.failed += 1;
+        else if (finished === "released") summary.released += 1;
       } else if (await settleIndeterminate(ports, event)) {
         summary.failed += 1;
       }
@@ -309,7 +380,7 @@ function eventOwns(state: ProcedureState | null, event: StoreEventRow): boolean 
 }
 
 /** The provider already accepted. Finish activation and bookkeeping; do not send again. */
-async function completeRecordedSend(ports: WorkerPorts, event: StoreEventRow): Promise<"sent" | "failed" | "left"> {
+async function completeRecordedSend(ports: WorkerPorts, event: StoreEventRow): Promise<"sent" | "failed" | "released" | "left"> {
   const messageId = event.outbound_message_id;
   if (!messageId) return "left";
   try {
@@ -353,16 +424,27 @@ async function finishAccepted(
   opener: RecordOpenerInput,
   thread: ThreadRow,
   pending: ProcedureState | null,
-): Promise<"sent" | "failed" | "left"> {
+): Promise<"sent" | "failed" | "released" | "left"> {
   const stored = asProcedure(thread.procedure_state);
   const ownedPending = pending?.phase === "pending_opener" && eventOwns(pending, opener.event)
     ? pending
     : stored?.phase === "pending_opener" && eventOwns(stored, opener.event)
       ? stored
       : null;
-  if (stored?.phase === "active" && eventOwns(stored, opener.event)) {
-    // The previous tick stored active and stopped before marking the event sent.
-  } else if (ownedPending) {
+  // markSent clears a pending_opener still sitting on the thread object. Pass
+  // the activated state so that clear is a no-op. The compare-and-set retires
+  // the opener; a lost one leaves the row sending.
+  const alreadyActive = stored?.phase === "active" && eventOwns(stored, opener.event);
+  let activeThread = thread;
+  if (!alreadyActive) {
+    if (!ownedPending) {
+      return await markFailed(ports, opener.event, { reason: "activation_conflict", alert: true }, {
+        account: opener.account,
+        thread,
+        expected: null,
+        reserved: false,
+      });
+    }
     const active: ProcedureState = { ...ownedPending, phase: "active", updated_at: iso(ports.now()) };
     const activated = await ports.persistState(thread.id, ownedPending, active);
     if (!activated) {
@@ -371,17 +453,16 @@ async function finishAccepted(
       );
       return "left";
     }
-  } else {
-    const failed = await markFailed(ports, opener.event, "activation_conflict", true);
-    return failed ? "failed" : "left";
+    activeThread = { ...thread, procedure_state: active };
   }
   await ports.recordOpener(opener);
   if (opener.event.flow === "back_in_stock") await ports.deleteWaitlist(opener.event);
-  const done = await ports.updateEvent(opener.event.id, opener.event.claim_token, {
-    status: "sent",
-    processed_at: iso(ports.now()),
+  return await markSent(ports, opener.event, {
+    account: opener.account,
+    thread: activeThread,
+    expected: null,
+    reserved: false,
   });
-  return done ? "sent" : "left";
 }
 
 async function writeOutcomeLog(
@@ -414,7 +495,7 @@ async function writeOutcomeLog(
   }
 }
 
-async function markFailed(ports: WorkerPorts, event: StoreEventRow, reason: string, alert: boolean): Promise<boolean> {
+async function writeFailure(ports: WorkerPorts, event: StoreEventRow, reason: string, alert: boolean): Promise<boolean> {
   const safeReason = sanitizeFailureReason(reason);
   const marked = await ports.updateEvent(event.id, event.claim_token, {
     status: "failed",
@@ -436,37 +517,52 @@ async function markFailed(ports: WorkerPorts, event: StoreEventRow, reason: stri
   return true;
 }
 
-async function settleIndeterminate(ports: WorkerPorts, event: StoreEventRow): Promise<boolean> {
+async function markFailed(
+  ports: WorkerPorts,
+  event: StoreEventRow,
+  failure: { reason: string; alert: boolean },
+  clearance: OpenerClearance,
+): Promise<"failed" | "released" | "left"> {
+  const gate = await refuseTerminal(ports, event, clearance, "release");
+  if (gate !== "go") return gate;
+  if (clearance.reserved) await ports.releaseQr(event.social_account_id);
+  return await writeFailure(ports, event, failure.reason, failure.alert) ? "failed" : "left";
+}
+
+async function markSent(
+  ports: WorkerPorts,
+  event: StoreEventRow,
+  clearance: OpenerClearance,
+): Promise<"sent" | "released" | "left"> {
+  const gate = await refuseTerminal(ports, event, clearance, "release");
+  if (gate !== "go") return gate;
+  if (clearance.reserved) await ports.releaseQr(event.social_account_id);
   const marked = await ports.updateEvent(event.id, event.claim_token, {
-    status: "failed",
-    skip_reason: "indeterminate",
+    status: "sent",
     processed_at: iso(ports.now()),
   });
-  if (!marked) return false;
+  return marked ? "sent" : "left";
+}
+
+async function settleIndeterminate(ports: WorkerPorts, event: StoreEventRow): Promise<boolean> {
+  let account: AccountContext | null = null;
   try {
-    const account = await ports.loadAccount(event);
-    const phone = event.payload.phone;
-    if (account?.platform === "whatsapp" && account.connectionMode && account.platformUserId && phone) {
-      const conversationId = whatsappConversationId(addressing(account), phone);
-      const thread = await ports.ensureThread({ userId: event.user_id, conversationId });
-      await clearPending(ports, thread, event.id, null);
-    }
+    account = await ports.loadAccount(event);
   } catch (error) {
     console.error(
       `[process-store-events] ${event.id} state clear failed:`,
       sanitizeFailureReason(error instanceof Error ? error.message : "state_clear_failed"),
     );
+    return false;
   }
-  try {
-    await ports.alertAdmin(event, "indeterminate");
-  } catch (error) {
-    console.error(
-      `[process-store-events] ${event.id} admin alert failed:`,
-      sanitizeFailureReason(error instanceof Error ? error.message : "alert_failed"),
-    );
-  }
-  await writeOutcomeLog(ports, event, "warn", "Store event failed", "indeterminate");
-  return true;
+  const gate = await refuseTerminal(ports, event, {
+    account,
+    thread: null,
+    expected: null,
+    reserved: false,
+  }, "keep-sending");
+  if (gate !== "go") return false;
+  return await writeFailure(ports, event, "indeterminate", true);
 }
 
 /** Give the claim back for 15 minutes. The attempt the claim just counted is returned. */
@@ -487,14 +583,33 @@ async function deferPendingTemplate(ports: WorkerPorts, event: StoreEventRow): P
   return marked;
 }
 
-async function skip(ports: WorkerPorts, event: StoreEventRow, reason: string): Promise<boolean> {
+async function deferUnapprovedTemplate(
+  ports: WorkerPorts,
+  event: StoreEventRow,
+  clearance: OpenerClearance,
+): Promise<"released" | "left"> {
+  const gate = await refuseTerminal(ports, event, clearance, "release");
+  if (gate !== "go") return gate;
+  if (clearance.reserved) await ports.releaseQr(event.social_account_id);
+  return await deferPendingTemplate(ports, event) ? "released" : "left";
+}
+
+async function skip(
+  ports: WorkerPorts,
+  event: StoreEventRow,
+  reason: string,
+  clearance: OpenerClearance,
+): Promise<"skipped" | "released" | "left"> {
+  const gate = await refuseTerminal(ports, event, clearance, "release");
+  if (gate !== "go") return gate;
+  if (clearance.reserved) await ports.releaseQr(event.social_account_id);
   const marked = await ports.updateEvent(event.id, event.claim_token, {
     status: "skipped",
     skip_reason: reason,
     processed_at: iso(ports.now()),
   });
   if (marked) await writeOutcomeLog(ports, event, "info", "Store event skipped", reason);
-  return marked;
+  return marked ? "skipped" : "left";
 }
 
 async function processClaimed(
@@ -512,8 +627,7 @@ async function processClaimed(
     account = await ports.loadAccount(event);
     const early = accountSkipReason(event, account, ports.now());
     if (early) {
-      await skip(ports, event, early);
-      return "skipped";
+      return await skip(ports, event, early, { account, thread: null, expected: null, reserved: false });
     }
     const loaded = account!;
     const read = await ports.readStore(event);
@@ -528,14 +642,22 @@ async function processClaimed(
       ports.now(),
     );
     if (storeReason) {
-      await skip(ports, event, storeReason);
-      return "skipped";
+      return await skip(ports, event, storeReason, {
+        account: loaded,
+        thread: null,
+        expected: null,
+        reserved: false,
+      });
     }
     if (loaded.connectionMode === "evolution_qr") {
       reserved = await ports.reserveQr(event.social_account_id, qrCap);
       if (!reserved) {
-        await skip(ports, event, "qr_daily_cap");
-        return "skipped";
+        return await skip(ports, event, "qr_daily_cap", {
+          account: loaded,
+          thread: null,
+          expected: null,
+          reserved: false,
+        });
       }
     }
     const phone = event.payload.phone;
@@ -547,14 +669,10 @@ async function processClaimed(
     );
     let openerState: ProcedureState;
     if (live && !(live.origin === "event" && live.run_id === event.id)) {
-      if (reserved) await ports.releaseQr(event.social_account_id);
-      await skip(ports, event, "flow_active");
-      return "skipped";
+      return await skip(ports, event, "flow_active", { account: loaded, thread, expected: null, reserved });
     }
     if (live?.phase === "active") {
-      if (reserved) await ports.releaseQr(event.social_account_id);
-      const finished = await ports.updateEvent(event.id, event.claim_token, { status: "sent", processed_at: iso(ports.now()) });
-      return finished ? "sent" : "left";
+      return await markSent(ports, event, { account: loaded, thread, expected: null, reserved });
     }
     if (live?.phase === "pending_opener") {
       openerState = live;
@@ -571,25 +689,21 @@ async function processClaimed(
     let templateName: string | null = null;
     if (loaded.connectionMode !== "evolution_qr") {
       const template = await ports.templateStatus(event, language);
+      const clearance: OpenerClearance = { account: loaded, thread, expected: openerState, reserved };
       if (template.status === "pending") {
-        const cleared = await clearPendingOrLog(ports, thread, event, openerState);
-        if (!cleared) {
-          await releaseReservedQr(ports, event, reserved);
-          return await releaseAfterClearFailure(ports, event);
+        return await deferUnapprovedTemplate(ports, event, clearance);
+      }
+      if (template.status === "missing") {
+        const graph = await ports.templateGraph(event);
+        if (graph) {
+          const submitted = await ensureEventTemplate(graph, event.flow, language, { create: true });
+          if (submitted.status !== "rejected") {
+            return await deferUnapprovedTemplate(ports, event, clearance);
+          }
         }
-        if (reserved) await ports.releaseQr(event.social_account_id);
-        const deferred = await deferPendingTemplate(ports, event);
-        return deferred ? "released" : "left";
       }
       if (template.status !== "approved") {
-        const cleared = await clearPendingOrLog(ports, thread, event, openerState);
-        if (!cleared) {
-          await releaseReservedQr(ports, event, reserved);
-          return await releaseAfterClearFailure(ports, event);
-        }
-        if (reserved) await ports.releaseQr(event.social_account_id);
-        await skip(ports, event, "template_not_approved");
-        return "skipped";
+        return await skip(ports, event, "template_not_approved", clearance);
       }
       templateName = template.name;
     }
@@ -614,17 +728,15 @@ async function processClaimed(
     });
     if (!sent.accepted) {
       if (!sent.definite) {
-        await settleIndeterminate(ports, { ...event, status: "sending" });
-        return "failed";
+        const settled = await settleIndeterminate(ports, { ...event, status: "sending" });
+        return settled ? "failed" : "left";
       }
-      const cleared = await clearPendingOrLog(ports, thread, event, openerState);
-      if (!cleared) {
-        await releaseReservedQr(ports, event, reserved);
-        return await releaseAfterClearFailure(ports, event);
-      }
-      if (reserved) await ports.releaseQr(event.social_account_id);
-      const failed = await markFailed(ports, event, sent.reason, false);
-      return failed ? "failed" : "left";
+      return await markFailed(ports, event, { reason: sent.reason, alert: false }, {
+        account: loaded,
+        thread,
+        expected: openerState,
+        reserved,
+      });
     }
     const recordedId = await ports.updateEvent(event.id, event.claim_token, { outbound_message_id: sent.messageId });
     if (!recordedId) return "left";

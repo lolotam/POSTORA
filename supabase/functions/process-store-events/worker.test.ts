@@ -1,4 +1,5 @@
 import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
+import type { TemplateGraph } from "../_shared/procedures/eventTemplates.ts";
 import { openerText } from "../_shared/procedures/openers.ts";
 import {
   accountSkipReason,
@@ -106,6 +107,7 @@ function harness(options: {
   thread?: ThreadRow;
   send?: SendOutcome;
   template?: "approved" | "pending" | "rejected" | "missing";
+  graph?: TemplateGraph | null;
   reserve?: boolean;
   now?: () => number;
   update?: WorkerPorts["updateEvent"];
@@ -159,6 +161,7 @@ function harness(options: {
       return Promise.resolve();
     },
     ensureThread: () => Promise.resolve(state.thread),
+    findThread: () => Promise.resolve(state.thread),
     persistState: (_threadId, expected, next) => {
       state.persists.push({ expected, next });
       state.thread = { ...state.thread, procedure_state: next };
@@ -170,6 +173,7 @@ function harness(options: {
       language: "en",
       category: "UTILITY",
     }),
+    templateGraph: () => Promise.resolve(options.graph === undefined ? null : options.graph),
     sendOpener: () => {
       const outcome = options.send ?? { accepted: true as const, messageId: "wamid.1" };
       state.sends.push(outcome);
@@ -405,16 +409,99 @@ Deno.test("the QR daily cap skips without a send", async () => {
   assertEquals(box.qrReleases, 0);
 });
 
-Deno.test("a rejected or missing template skips and clears the opener state", async () => {
-  for (const template of ["rejected", "missing"] as const) {
-    const box = harness({ template });
-    await runStoreEventWorker(box.ports);
-    assertEquals(reasonOf(box.row), "template_not_approved", template);
-    assertEquals(box.sends.length, 0);
-    assertEquals(box.persists.some((call) => call.next === null), true);
-    assertEquals(activated(box), false);
-    assertEquals(box.row.attempts, 1);
-  }
+Deno.test("a rejected template skips and clears the opener state", async () => {
+  let graphs = 0;
+  const box = harness({ template: "rejected" });
+  box.ports.templateGraph = () => {
+    graphs += 1;
+    return Promise.resolve(null);
+  };
+  await runStoreEventWorker(box.ports);
+  assertEquals(graphs, 0);
+  assertEquals(reasonOf(box.row), "template_not_approved");
+  assertEquals(box.sends.length, 0);
+  assertEquals(box.persists.some((call) => call.next === null), true);
+  assertEquals(activated(box), false);
+  assertEquals(box.row.attempts, 1);
+});
+
+Deno.test("a missing template with no WhatsApp graph skips as template_not_approved", async () => {
+  const box = harness({ template: "missing", graph: null });
+  await runStoreEventWorker(box.ports);
+  assertEquals(reasonOf(box.row), "template_not_approved");
+  assertEquals(box.sends.length, 0);
+  assertEquals(box.persists.some((call) => call.next === null), true);
+  assertEquals(box.row.attempts, 1);
+});
+
+Deno.test("a missing template is submitted in the account language and deferred", async () => {
+  const creates: Array<Record<string, unknown>> = [];
+  const box = harness({
+    template: "missing",
+    row: event({ attempts: 1 }),
+    graph: {
+      list: () => Promise.resolve([]),
+      create: (body) => {
+        creates.push(body);
+        return Promise.resolve({ id: "tpl-1" });
+      },
+    },
+  });
+  const summary = await runStoreEventWorker(box.ports);
+  assertEquals(summary.released, 1);
+  assertEquals(summary.skipped, 0);
+  assertEquals(creates.length, 1);
+  assertEquals(creates[0].language, "en");
+  assertEquals(creates[0].name, "postora_cod_confirm_v1");
+  assertEquals(box.row.status, "pending");
+  assertEquals(box.row.attempts, 0);
+  assertEquals(box.row.due_at, new Date(NOW + 15 * 60 * 1000).toISOString());
+  assertEquals(box.row.payload.original_due_at, new Date(NOW).toISOString());
+  assertEquals(box.row.claim_token, null);
+  assertEquals(box.sends.length, 0);
+  assertEquals(box.persists.some((call) => call.next === null), true);
+  assertEquals(activated(box), false);
+  assertEquals(box.logs[0]?.metadata.reason, "template_pending");
+});
+
+function failOpenerClear(box: Harness): void {
+  const original = box.ports.persistState;
+  box.ports.persistState = (threadId, expected, next) => {
+    if (next === null) return Promise.resolve(false);
+    return original(threadId, expected, next);
+  };
+}
+
+Deno.test("a failed opener clear on an indeterminate row leaves it sending and does not resend", async () => {
+  const row = event({ status: "sending" });
+  const box = harness({
+    row,
+    thread: { id: "thread-1", procedure_state: pending(row.id) },
+  });
+  failOpenerClear(box);
+  const summary = await runStoreEventWorker(box.ports);
+  assertEquals(summary.failed, 0);
+  assertEquals(summary.released, 0);
+  assertEquals(summary.sent, 0);
+  assertEquals(box.sends.length, 0);
+  assertEquals(box.row.status, "sending");
+  assertEquals(box.row.claim_token, "token-1");
+  assertEquals(box.row.outbound_message_id, null);
+  assertEquals(box.alerts.length, 0);
+  assertEquals((box.thread.procedure_state as { phase?: string }).phase, "pending_opener");
+});
+
+Deno.test("a failed opener clear on a rejected template releases the claim instead of skipping", async () => {
+  const box = harness({ template: "rejected" });
+  failOpenerClear(box);
+  const summary = await runStoreEventWorker(box.ports);
+  assertEquals(summary.skipped, 0);
+  assertEquals(summary.released, 1);
+  assertEquals(box.row.status, "pending");
+  assertEquals(reasonOf(box.row), undefined);
+  assertEquals(box.sends.length, 0);
+  assertEquals((box.thread.procedure_state as { phase?: string }).phase, "pending_opener");
+  assertEquals(box.logs.some((entry) => entry.metadata.reason === "template_not_approved"), false);
 });
 
 Deno.test("a pending template is deferred and the claim attempt is given back", async () => {

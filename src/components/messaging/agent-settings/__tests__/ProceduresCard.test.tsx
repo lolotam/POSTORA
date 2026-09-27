@@ -1,10 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { ProceduresCard } from "../ProceduresCard";
 import { eventEnableRefusal } from "@/lib/procedureTemplates";
 
 const mocks = vi.hoisted(() => ({
   tools: [] as Array<Record<string, unknown>>,
+  toolsLoading: false,
+  toolsError: null as unknown,
+  refetchTools: vi.fn(),
   links: [] as Array<{ tool_id: string; social_account_id: string }>,
   linksReady: true,
   linksError: null as unknown,
@@ -22,7 +25,12 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@/hooks/useAiAgentTools", () => ({
-  useAiAgentTools: () => ({ tools: mocks.tools }),
+  useAiAgentTools: () => ({
+    tools: mocks.tools,
+    isLoading: mocks.toolsLoading,
+    isError: mocks.toolsError,
+    refetch: mocks.refetchTools,
+  }),
   useAiToolAccountLinks: () => ({
     links: mocks.links,
     linksReady: mocks.linksReady,
@@ -128,6 +136,9 @@ describe("event enable refusals", () => {
 describe("ProceduresCard", () => {
   beforeEach(() => {
     mocks.tools = [];
+    mocks.toolsLoading = false;
+    mocks.toolsError = null;
+    mocks.refetchTools.mockClear();
     mocks.links = [];
     mocks.linksReady = true;
     mocks.linksError = null;
@@ -200,6 +211,17 @@ describe("ProceduresCard", () => {
   });
 
   it.each([
+    ["connector tools are loading", () => {
+      mocks.toolsLoading = true;
+      mocks.tools = [{
+        id: "woo-1",
+        name: "Main shop",
+        connector_type: "woocommerce",
+        scope: "account",
+        social_account_id: "acc-1",
+        read_only_mode: false,
+      }];
+    }],
     ["account links are loading", () => {
       mocks.linksReady = false;
     }],
@@ -218,6 +240,10 @@ describe("ProceduresCard", () => {
   });
 
   it.each([
+    ["the connector-tool query fails", () => {
+      mocks.toolsError = new Error("tools failed");
+      mocks.tools = [];
+    }],
     ["the account-link query fails", () => {
       mocks.linksError = new Error("links failed");
     }],
@@ -234,6 +260,7 @@ describe("ProceduresCard", () => {
     fireEvent.click(toggle);
     expect(card.seen).toEqual([]);
     fireEvent.click(screen.getByRole("button", { name: /^retry$/i }));
+    expect(mocks.refetchTools).toHaveBeenCalled();
     expect(mocks.refetchLinks).toHaveBeenCalled();
     expect(mocks.refetchBindings).toHaveBeenCalled();
   });
@@ -353,6 +380,108 @@ describe("ProceduresCard", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(/could not be submitted/i);
     expect(card.seen.some((value) => (value as { cod_confirm?: { enabled?: boolean } }).cod_confirm?.enabled)).toBe(false);
     expect(screen.getByRole("switch", { name: /cod order confirmation/i })).not.toBeChecked();
+  });
+
+  it("discards a template enable that finishes after the WhatsApp account changes", async () => {
+    let resolveCreate: (value: unknown) => void = () => {};
+    mocks.messaging.mockImplementation(async (_action: string, body: Record<string, unknown>) => {
+      if (body.create === true) return new Promise((resolve) => {
+        resolveCreate = resolve;
+      });
+      return { status: "missing", name: "", language: "ar", category: "" };
+    });
+    let accountId = "acc-1";
+    let procedures: Record<string, unknown> = {};
+    const seen: unknown[] = [];
+    const view = render(
+      <ProceduresCard
+        form={readyForm as never}
+        update={vi.fn()}
+        behavior={{ procedures }}
+        updateBehavior={(_key, value) => {
+          procedures = value as Record<string, unknown>;
+          seen.push(value);
+        }}
+        storeAccountId={accountId}
+        connectionMode="cloud_api"
+      />,
+    );
+    const rerender = () => {
+      view.rerender(
+        <ProceduresCard
+          form={readyForm as never}
+          update={vi.fn()}
+          behavior={{ procedures }}
+          updateBehavior={(_key, value) => {
+            procedures = value as Record<string, unknown>;
+            seen.push(value);
+          }}
+          storeAccountId={accountId}
+          connectionMode="cloud_api"
+        />,
+      );
+    };
+    fireEvent.click(screen.getAllByRole("checkbox", { name: /checkout collects customer consent/i })[0]);
+    rerender();
+    fireEvent.click(screen.getByRole("switch", { name: /cod order confirmation/i }));
+    await waitFor(() => expect(mocks.messaging).toHaveBeenCalledWith("event_template_status", expect.objectContaining({
+      social_account_id: "acc-1",
+      flow: "cod_confirm",
+      create: true,
+    })));
+    accountId = "acc-2";
+    rerender();
+    await act(async () => {
+      resolveCreate({ status: "approved", name: "postora_cod_confirm_v1", language: "ar", category: "UTILITY" });
+    });
+    expect(screen.getByRole("switch", { name: /cod order confirmation/i })).toBeEnabled();
+    expect(seen.some((value) => (value as { cod_confirm?: { enabled?: boolean } }).cod_confirm?.enabled)).toBe(false);
+  });
+
+  it("discards a template submission that finishes after the WhatsApp account changes", async () => {
+    let resolveCreate: (value: unknown) => void = () => {};
+    mocks.messaging.mockImplementation(async (_action: string, body: Record<string, unknown>) => {
+      if (body.create === true) return new Promise((resolve) => {
+        resolveCreate = resolve;
+      });
+      return { status: "missing", name: "", language: "ar", category: "" };
+    });
+    let accountId = "acc-1";
+    const view = render(
+      <ProceduresCard
+        form={readyForm as never}
+        update={vi.fn()}
+        behavior={{ procedures: {} }}
+        updateBehavior={vi.fn()}
+        storeAccountId={accountId}
+        connectionMode="cloud_api"
+      />,
+    );
+    const codStatus = () => screen.getByTestId("template-status-cod_confirm");
+    await waitFor(() => expect(codStatus()).toHaveTextContent("missing"));
+    fireEvent.click(within(codStatus()).getByRole("button", { name: /submit template/i }));
+    await waitFor(() => expect(mocks.messaging).toHaveBeenCalledWith("event_template_status", expect.objectContaining({
+      social_account_id: "acc-1",
+      create: true,
+    })));
+    accountId = "acc-2";
+    view.rerender(
+      <ProceduresCard
+        form={readyForm as never}
+        update={vi.fn()}
+        behavior={{ procedures: {} }}
+        updateBehavior={vi.fn()}
+        storeAccountId={accountId}
+        connectionMode="cloud_api"
+      />,
+    );
+    await waitFor(() => expect(codStatus()).toHaveTextContent("missing"));
+    await act(async () => {
+      resolveCreate({ status: "approved", name: "postora_cod_confirm_v1", language: "ar", category: "UTILITY" });
+    });
+    expect(within(codStatus()).getByRole("button", { name: /submit template/i })).toBeEnabled();
+    expect(codStatus()).toHaveTextContent("missing");
+    expect(codStatus()).not.toHaveTextContent("approved");
   });
 
   it("shows the template status and submits it", async () => {

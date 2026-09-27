@@ -7,6 +7,7 @@ import {
   ensureEventTemplate,
   eventTemplateGraph,
   eventTemplateName,
+  type TemplateGraph,
   type TemplateResolution,
 } from "../_shared/procedures/eventTemplates.ts";
 import type { OpenerLanguage } from "../_shared/procedures/openers.ts";
@@ -145,6 +146,15 @@ export function createStoreEventPorts(admin: any): WorkerPorts { // eslint-disab
       .maybeSingle();
     if (error) throw error;
     return (data as AccountRow | null) ?? null;
+  }
+
+  async function graphForAccount(event: StoreEventRow): Promise<TemplateGraph | null> {
+    const row = await accountRow(event);
+    const metadata = row?.account_metadata ?? {};
+    const wabaId = typeof metadata.waba_id === "string" ? metadata.waba_id : Deno.env.get("WHATSAPP_BUSINESS_ACCOUNT_ID");
+    const token = row?.access_token || Deno.env.get("WHATSAPP_ACCESS_TOKEN") || "";
+    if (!wabaId || !token) return null;
+    return eventTemplateGraph(wabaId, token);
   }
 
   async function wooTool(event: StoreEventRow): Promise<CustomTool | null> {
@@ -289,15 +299,24 @@ export function createStoreEventPorts(admin: any): WorkerPorts { // eslint-disab
       if (error) throw error;
       return { id: String(data.id), procedure_state: data.procedure_state ?? null };
     },
+    async findThread(input) {
+      const { data, error } = await admin.from("ai_threads")
+        .select("id, procedure_state")
+        .eq("user_id", input.userId)
+        .eq("platform", "whatsapp")
+        .eq("conversation_id", input.conversationId)
+        .maybeSingle();
+      if (error) throw error;
+      if (!data) return null;
+      return { id: String(data.id), procedure_state: data.procedure_state ?? null };
+    },
     persistState: (threadId, expected, next) => persistProcedureState(admin, threadId, expected, next),
+    templateGraph: (event) => graphForAccount(event),
     async templateStatus(event, language: OpenerLanguage): Promise<TemplateResolution> {
-      const row = await accountRow(event);
-      const metadata = row?.account_metadata ?? {};
-      const wabaId = typeof metadata.waba_id === "string" ? metadata.waba_id : Deno.env.get("WHATSAPP_BUSINESS_ACCOUNT_ID");
-      const token = row?.access_token || Deno.env.get("WHATSAPP_ACCESS_TOKEN") || "";
+      const graph = await graphForAccount(event);
       const fallback = eventTemplateName(event.flow, 1);
-      if (!wabaId || !token) return { status: "missing", name: fallback, language, category: "UTILITY" };
-      return await ensureEventTemplate(eventTemplateGraph(wabaId, token), event.flow, language, { create: false });
+      if (!graph) return { status: "missing", name: fallback, language, category: "UTILITY" };
+      return await ensureEventTemplate(graph, event.flow, language, { create: false });
     },
     async sendOpener(input: SendOpenerInput): Promise<SendOutcome> {
       const row = await accountRow(input.event);

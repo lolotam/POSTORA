@@ -86,20 +86,27 @@ function servicesFromInput(raw: string): string[] {
 }
 
 type CodAccess =
-  | { state: "loading" }
-  | { state: "error" }
+  | { state: "unresolved"; reason: "loading" | "error" }
   | { state: "read_only"; name: string }
   | { state: "writable" };
 
 function codAccessEqual(prev: CodAccess, next: CodAccess): boolean {
   if (prev.state !== next.state) return false;
+  if (prev.state === "unresolved" && next.state === "unresolved") return prev.reason === next.reason;
   return prev.state !== "read_only" || next.state !== "read_only" || prev.name === next.name;
 }
 
-/** Loading or a failed read is unresolved. An empty successful read is writable. */
+/**
+ * The read-only decision reads three queries: connector tools, the account
+ * links those tools are shared through, and the store-webhook bindings.
+ * Any one of them still loading or failed is unresolved. An empty successful
+ * read is a real answer; it is the only shape that may enable the toggle.
+ */
 function resolveCodAccess(input: {
   accountId: string;
   tools: AiAgentTool[];
+  toolsLoading: boolean;
+  toolsError: unknown;
   links: ToolAccountLink[];
   linksReady: boolean;
   linksError: unknown;
@@ -107,8 +114,10 @@ function resolveCodAccess(input: {
   bindingsLoading: boolean;
   bindingsError: boolean;
 }): CodAccess {
-  if (input.linksError || input.bindingsError) return { state: "error" };
-  if (!input.linksReady || input.bindingsLoading || !input.bindings) return { state: "loading" };
+  if (input.toolsError || input.linksError || input.bindingsError) return { state: "unresolved", reason: "error" };
+  if (input.toolsLoading || !input.linksReady || input.bindingsLoading || !input.bindings) {
+    return { state: "unresolved", reason: "loading" };
+  }
   const name = readOnlyBoundConnector(input.accountId, input.tools, input.links, true, input.bindings);
   return name ? { state: "read_only", name } : { state: "writable" };
 }
@@ -161,6 +170,8 @@ function EventTemplateBadge({
   const { t } = useTranslation("agent");
   const [status, setStatus] = useState(pinnedStatus ?? "missing");
   const [busy, setBusy] = useState(false);
+  const accountIdRef = useRef(accountId);
+  accountIdRef.current = accountId;
 
   useEffect(() => {
     if (pinnedStatus) {
@@ -186,13 +197,20 @@ function EventTemplateBadge({
   }, [accountId, flow, pinnedStatus]);
 
   const submit = () => {
+    const forAccount = accountId;
     setBusy(true);
-    void callMessagingApi("event_template_status", { social_account_id: accountId, flow, create: true })
+    void callMessagingApi("event_template_status", { social_account_id: forAccount, flow, create: true })
       .then((data) => {
+        if (accountIdRef.current !== forAccount) return;
         setStatus(readTemplateStatus(data) ?? "pending");
       })
-      .catch(() => setStatus("missing"))
-      .finally(() => setBusy(false));
+      .catch(() => {
+        if (accountIdRef.current !== forAccount) return;
+        setStatus("missing");
+      })
+      .finally(() => {
+        if (accountIdRef.current === forAccount) setBusy(false);
+      });
   };
 
   return (
@@ -225,7 +243,9 @@ export function ProceduresCard({
   const procedures = behavior.procedures ?? {};
   const proceduresRef = useRef(procedures);
   proceduresRef.current = procedures;
-  const [codAccess, setCodAccess] = useState<CodAccess>({ state: "loading" });
+  const storeAccountRef = useRef(storeAccountId);
+  storeAccountRef.current = storeAccountId;
+  const [codAccess, setCodAccess] = useState<CodAccess>({ state: "unresolved", reason: "loading" });
   const reportCodAccess = useCallback((next: CodAccess) => {
     setCodAccess((prev) => codAccessEqual(prev, next) ? prev : next);
   }, []);
@@ -238,6 +258,13 @@ export function ProceduresCard({
   const [templateBusy, setTemplateBusy] = useState<Partial<Record<EventProcedureKey, boolean>>>({});
   const [submittedStatus, setSubmittedStatus] = useState<Partial<Record<EventProcedureKey, string>>>({});
   const enableGeneration = useRef<Partial<Record<EventProcedureKey, number>>>({});
+  useEffect(() => {
+    enableGeneration.current = {};
+    setTemplateBusy({});
+    setTemplateFailed({});
+    setSubmittedStatus({});
+    setRefusal({});
+  }, [storeAccountId]);
   const keys = storeAccountId ? PROCEDURE_KEYS : PROCEDURE_KEYS.filter((key) => !isEventProcedureKey(key));
 
   const write = (key: ProcedureKey, settings: ProcedureSettings) =>
@@ -256,7 +283,7 @@ export function ProceduresCard({
       delayDays: draft.delay_days ?? 3,
       reviewUrl: draft.review_url ?? "",
     });
-    if (key === "cod_confirm" && codAccess.state !== "writable" && codAccess.state !== "read_only") return;
+    if (key === "cod_confirm" && codAccess.state === "unresolved") return;
     if (blocked) {
       setTemplateFailed((prev) => ({ ...prev, [key]: false }));
       setRefusal((prev) => ({ ...prev, [key]: blocked }));
@@ -290,16 +317,18 @@ export function ProceduresCard({
       return;
     }
 
+    const requestedAccount = storeAccountId;
+    const sameAccount = () => stillCurrent() && storeAccountRef.current === requestedAccount;
     setRefusal((prev) => ({ ...prev, [key]: undefined }));
     setTemplateFailed((prev) => ({ ...prev, [key]: false }));
     setTemplateBusy((prev) => ({ ...prev, [key]: true }));
     void callMessagingApi("event_template_status", {
-      social_account_id: storeAccountId,
+      social_account_id: requestedAccount,
       flow: key,
       create: true,
     })
       .then((data) => {
-        if (!stillCurrent()) return;
+        if (!sameAccount()) return;
         const status = readTemplateStatus(data);
         if (!status || !templateAllowsEnable(status)) {
           setTemplateFailed((prev) => ({ ...prev, [key]: true }));
@@ -310,11 +339,11 @@ export function ProceduresCard({
         write(key, enabledSettings);
       })
       .catch(() => {
-        if (!stillCurrent()) return;
+        if (!sameAccount()) return;
         setTemplateFailed((prev) => ({ ...prev, [key]: true }));
       })
       .finally(() => {
-        if (stillCurrent()) setTemplateBusy((prev) => ({ ...prev, [key]: false }));
+        if (sameAccount()) setTemplateBusy((prev) => ({ ...prev, [key]: false }));
       });
   };
 
@@ -351,11 +380,11 @@ export function ProceduresCard({
                   aria-label={name}
                   checked={enabled}
                   disabled={
-                    (key === "cod_confirm" && (codAccess.state === "loading" || codAccess.state === "error"))
+                    (key === "cod_confirm" && codAccess.state === "unresolved")
                     || (eventKey ? templateBusy[eventKey] === true : false)
                   }
                   onCheckedChange={(checked) => {
-                    if (key === "cod_confirm" && checked && (codAccess.state === "loading" || codAccess.state === "error")) return;
+                    if (key === "cod_confirm" && checked && codAccess.state === "unresolved") return;
                     if (!checked) {
                       write(key, { ...(current ?? { prompts: {}, closing: "" }), enabled: false });
                       if (eventKey) {
@@ -392,12 +421,12 @@ export function ProceduresCard({
                   )}
                 </p>
               )}
-              {key === "cod_confirm" && codAccess.state === "loading" && (
+              {key === "cod_confirm" && codAccess.state === "unresolved" && codAccess.reason === "loading" && (
                 <p className="text-xs text-muted-foreground">
                   {t("procedures.codChecking", "Checking whether this store can update orders.")}
                 </p>
               )}
-              {key === "cod_confirm" && codAccess.state === "error" && (
+              {key === "cod_confirm" && codAccess.state === "unresolved" && codAccess.reason === "error" && (
                 <div className="flex flex-wrap items-center gap-2 text-xs text-destructive" role="alert">
                   <span>
                     {t(
@@ -553,13 +582,15 @@ function StoreEventData({
   onAccess: (access: CodAccess) => void;
   onRetry: (retry: () => void) => void;
 }) {
-  const { tools } = useAiAgentTools();
+  const { tools, isLoading: toolsLoading, isError: toolsError, refetch: refetchTools } = useAiAgentTools();
   const { links, linksReady, linksError, refetchLinks } = useAiToolAccountLinks();
   const { bindings, isLoading, isError, refetch } = useStoreWebhookBindings();
   useEffect(() => {
     onAccess(resolveCodAccess({
       accountId,
       tools,
+      toolsLoading,
+      toolsError,
       links,
       linksReady,
       linksError,
@@ -567,13 +598,14 @@ function StoreEventData({
       bindingsLoading: isLoading,
       bindingsError: isError,
     }));
-  }, [accountId, tools, links, linksReady, linksError, bindings, isLoading, isError, onAccess]);
+  }, [accountId, tools, toolsLoading, toolsError, links, linksReady, linksError, bindings, isLoading, isError, onAccess]);
   useEffect(() => {
     onRetry(() => {
+      void refetchTools();
       void refetchLinks();
       void refetch();
     });
-  }, [onRetry, refetch, refetchLinks]);
+  }, [onRetry, refetch, refetchLinks, refetchTools]);
   return null;
 }
 
