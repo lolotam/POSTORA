@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { toast } from "sonner";
 import { StoreWebhookSection } from "../StoreWebhookSection";
 import { storeWebhookUrl } from "@/hooks/useStoreWebhookBindings";
@@ -45,7 +45,13 @@ vi.mock("@/hooks/useStoreWebhookBindings", async (importOriginal) => {
   };
 });
 
-const woo = { id: CONNECTOR, connector_type: "woocommerce", social_account_id: ACCOUNT, scope: "account" };
+const woo = {
+  id: CONNECTOR,
+  name: "Alpha",
+  connector_type: "woocommerce",
+  social_account_id: ACCOUNT,
+  scope: "account" as const,
+};
 const issued = (secret: string) => ({ binding: { id: BINDING, connector_id: CONNECTOR }, secret });
 
 describe("StoreWebhookSection", () => {
@@ -166,6 +172,41 @@ describe("StoreWebhookSection", () => {
   it("offers generate only after a successful empty result", () => {
     render(<StoreWebhookSection accountId={ACCOUNT} />);
     expect(screen.getByRole("button", { name: /generate webhook url and secret/i })).toBeInTheDocument();
+  });
+
+  it("renders one row per eligible WooCommerce connector, each with its own URL", () => {
+    const second = "con-2";
+    const binding2 = "22222222-2222-4222-8222-222222222222";
+    mocks.tools = [
+      woo,
+      { ...woo, id: second, name: "Beta" },
+    ];
+    mocks.bindings = [
+      { id: BINDING, connector_id: CONNECTOR, social_account_id: ACCOUNT },
+      { id: binding2, connector_id: second, social_account_id: ACCOUNT },
+    ];
+    render(<StoreWebhookSection accountId={ACCOUNT} />);
+    const rows = screen.getAllByTestId("store-webhook-connector");
+    expect(rows).toHaveLength(2);
+    expect(within(rows[0]).getByLabelText(/delivery url/i)).toHaveValue(storeWebhookUrl(BINDING));
+    expect(within(rows[1]).getByLabelText(/delivery url/i)).toHaveValue(storeWebhookUrl(binding2));
+  });
+
+  it("switching account while a rotate is pending does not show that secret under the new account", async () => {
+    let finish: (value: ReturnType<typeof issued>) => void = () => {};
+    mocks.bindings = [{ id: BINDING, connector_id: CONNECTOR, social_account_id: ACCOUNT }];
+    mocks.rotate.mockReturnValue(new Promise((resolve) => {
+      finish = resolve;
+    }));
+    const { rerender } = render(<StoreWebhookSection accountId={ACCOUNT} />);
+    fireEvent.click(screen.getByRole("button", { name: /rotate secret/i }));
+    mocks.tools = [{ ...woo, social_account_id: "acc-2" }];
+    mocks.bindings = [];
+    rerender(<StoreWebhookSection accountId="acc-2" />);
+    await act(async () => {
+      finish(issued("r".repeat(43)));
+    });
+    expect(screen.queryByLabelText(/webhook secret/i)).not.toBeInTheDocument();
   });
 
   it("the secret is dropped when the account changes", async () => {

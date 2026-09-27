@@ -339,3 +339,19 @@ Deno.test("only POST is accepted", async () => {
   const response = await handleStoreWebhook(new Request(URL, { method: "GET" }), deps());
   assertEquals(response.status, 405);
 });
+
+Deno.test("the waitlist is read for the delivered product id only, and a non-integer id reads nothing", async () => {
+  const asked: number[] = [];
+  const gate = accepting({
+    flowsFrom: () => new Set(["back_in_stock"]),
+    loadWaitlist: async (_binding, productId) => {
+      asked.push(productId);
+      return [];
+    },
+  });
+  for (const body of [{ id: 42, stock_status: "instock" }, { id: "1,parent_id.gt.0", stock_status: "instock" }]) {
+    const raw = JSON.stringify(body);
+    assertEquals((await handleStoreWebhook(jsonPost(raw, await mac(SECRET, raw), "product.updated"), gate)).status, 200);
+  }
+  assertEquals(asked, [42]);
+});
