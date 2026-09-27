@@ -739,7 +739,7 @@ async function callSupabase(
         ok: true,
         vendor: "supabase",
         action: "test_connection",
-        capabilities: [...CAPABILITIES],
+        capabilities: SUPABASE_CAPABILITIES,
         read_only: true,
       };
     }
@@ -825,9 +825,13 @@ async function callSupabase(
   }
 }
 
+const SUPABASE_CAPABILITIES = CAPABILITIES.filter(
+  (name) => name === "search_products" || name === "check_stock" || name === "lookup_orders",
+);
+
 export const supabaseAdapter: ConnectorAdapter = {
   id: "supabase",
-  capabilities: [...CAPABILITIES],
+  capabilities: SUPABASE_CAPABILITIES,
   execute: (invocation, dependencies) =>
     callSupabase(invocation, dependencies, invocation.request.capability),
   testConnection: (invocation, dependencies) =>

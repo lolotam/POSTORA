@@ -221,6 +221,145 @@ Deno.test("read_only_mode refuses a write before fetch is attempted", async () =
   }
 });
 
+const ORDER_NOTE = "Customer asked to cancel on WhatsApp (Postora)";
+
+function updateOrderRequest(overrides: Partial<ConnectorTool> = {}): {
+  tool: ConnectorTool;
+  credentials: { consumer_key: string; consumer_secret: string };
+  request: ExecuteConnectorRequest;
+} {
+  return {
+    tool: wooTool({ read_only_mode: false, ...overrides }),
+    credentials: { consumer_key: WOO_KEY, consumer_secret: WOO_SECRET },
+    request: {
+      action: "execute",
+      capability: "update_order",
+      method: "POST",
+      internalProcedure: true,
+      parameters: {
+        order_id: "10432",
+        note: ORDER_NOTE,
+        status: "cancelled",
+        expected_statuses: ["pending", "on-hold", "processing"],
+      },
+    },
+  };
+}
+
+Deno.test("update_order in read-only mode performs zero fetches", async () => {
+  let fetchCalls = 0;
+  const result = await executeConnector(
+    updateOrderRequest({ read_only_mode: true }),
+    dependencies(() => {
+      fetchCalls += 1;
+      return Promise.resolve(jsonResponse({}));
+    }),
+  );
+  assertEquals(fetchCalls, 0);
+  assertEquals(result.ok, false);
+  if (!result.ok) assertEquals(result.error.code, "read_only_violation");
+});
+
+Deno.test("update_order posts the note before it changes status", async () => {
+  const calls: Array<{ method: string; url: string; body: string | null }> = [];
+  const result = await executeConnector(updateOrderRequest(), dependencies((url, init) => {
+    calls.push({ method: init?.method ?? "GET", url: String(url), body: typeof init?.body === "string" ? init.body : null });
+    if (calls.length === 1) return Promise.resolve(jsonResponse({ id: 10432, status: "processing" }));
+    if (calls.length === 2) return Promise.resolve(jsonResponse({ id: 9, note: ORDER_NOTE }));
+    if (calls.length === 3) return Promise.resolve(jsonResponse({ id: 10432, status: "on-hold" }));
+    return Promise.resolve(jsonResponse({ id: 10432, status: "cancelled" }));
+  }));
+  assertEquals(calls.map((call) => call.method), ["GET", "POST", "GET", "PUT"]);
+  assertStringIncludes(calls[1].url, "/orders/10432/notes");
+  assertEquals(JSON.parse(calls[1].body ?? "{}"), { note: ORDER_NOTE, customer_note: false });
+  assertStringIncludes(calls[3].url, "/orders/10432");
+  assertEquals(calls[3].url.includes("/notes"), false);
+  assertEquals(JSON.parse(calls[3].body ?? "{}"), { status: "cancelled" });
+  assertEquals(result, {
+    ok: true, vendor: "woocommerce", action: "execute", capability: "update_order",
+    data: { changed: true, status: "cancelled" },
+  });
+});
+
+Deno.test("update_order does not PUT when the re-read left the expected statuses", async () => {
+  const methods: string[] = [];
+  const result = await executeConnector(updateOrderRequest(), dependencies((_url, init) => {
+    methods.push(init?.method ?? "GET");
+    if (methods.length === 1) return Promise.resolve(jsonResponse({ id: 10432, status: "pending" }));
+    if (methods.length === 2) return Promise.resolve(jsonResponse({ id: 9, note: ORDER_NOTE }));
+    return Promise.resolve(jsonResponse({ id: 10432, status: "completed" }));
+  }));
+  assertEquals(methods, ["GET", "POST", "GET"]);
+  assertEquals(result, {
+    ok: true, vendor: "woocommerce", action: "execute", capability: "update_order",
+    data: { changed: false, status: "completed" },
+  });
+});
+
+Deno.test("update_order maps a 401 to store_write_denied and stops", async () => {
+  let fetchCalls = 0;
+  const result = await executeConnector(updateOrderRequest(), dependencies(() => {
+    fetchCalls += 1;
+    return Promise.resolve(jsonResponse({ message: `bad ${WOO_KEY}` }, 401));
+  }));
+  assertEquals(fetchCalls, 1);
+  assertEquals(result.ok, false);
+  if (!result.ok) {
+    assertEquals(result.error.code, "store_write_denied");
+    assertEquals(result.error.vendor_status, 401);
+  }
+  assertEquals(serialized(result).includes(WOO_KEY), false);
+});
+
+Deno.test("a cancelled order whose latest note is ours is already done", async () => {
+  const methods: string[] = [];
+  const result = await executeConnector(updateOrderRequest(), dependencies((url, init) => {
+    methods.push(init?.method ?? "GET");
+    if (!String(url).includes("/notes")) return Promise.resolve(jsonResponse({ id: 10432, status: "cancelled" }));
+    return Promise.resolve(jsonResponse([
+      { id: 1, note: "older" },
+      { id: 4, note: ORDER_NOTE },
+    ]));
+  }));
+  assertEquals(methods, ["GET", "GET"]);
+  assertEquals(result, {
+    ok: true, vendor: "woocommerce", action: "execute", capability: "update_order",
+    data: { changed: true, status: "cancelled" },
+  });
+});
+
+Deno.test("get_product reads a variation and projects the stock fields", async () => {
+  const seen: string[] = [];
+  const result = await executeConnector(
+    {
+      tool: wooTool(),
+      credentials: { consumer_key: WOO_KEY, consumer_secret: WOO_SECRET },
+      request: {
+        action: "execute",
+        capability: "get_product",
+        internalProcedure: true,
+        parameters: { product_id: "55", parent_id: "10" },
+      },
+    },
+    dependencies((url) => {
+      seen.push(String(url));
+      return Promise.resolve(jsonResponse({
+        id: 55, parent_id: 10, name: "Hat / Blue", price: "3.500", stock_status: "instock",
+        permalink: "https://store.example.com/hat", description: "<p>secret</p>", sku: "HAT",
+      }));
+    }),
+  );
+  assertEquals(seen.length, 1);
+  assertStringIncludes(seen[0], "/products/10/variations/55");
+  assertEquals(result, {
+    ok: true, vendor: "woocommerce", action: "execute", capability: "get_product",
+    data: {
+      id: 55, parent_id: 10, name: "Hat / Blue", price: "3.500", stock_status: "instock",
+      permalink: "https://store.example.com/hat",
+    },
+  });
+});
+
 Deno.test("every redirect hop is passed through the shared SSRF validator", async () => {
   const checkedUrls: string[] = [];
   let fetchCalls = 0;
@@ -557,6 +696,7 @@ Deno.test("a named category is resolved to its id before the product search", as
 
 const PRODUCT_FIELD_LIST = [
   "id",
+  "parent_id",
   "name",
   "sku",
   "price",

@@ -23,8 +23,13 @@ export interface ExecuteConnectorRequest {
   action: ConnectorAction;
   capability?: Capability;
   parameters: Record<string, unknown>;
-  /** Defensive internal seam. The public schema does not accept this field. */
+  /** Defensive internal seam. The public schema does not accept this field from a browser. */
   method?: ConnectorMethod;
+  /**
+   * Set only by the procedure runtime's own adapter call, never copied from model
+   * tool arguments. get_product and update_order refuse without it.
+   */
+  internalProcedure?: boolean;
 }
 
 export interface ConnectorInvocation {

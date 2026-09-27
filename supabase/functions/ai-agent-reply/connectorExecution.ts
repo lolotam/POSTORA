@@ -105,6 +105,16 @@ interface AdapterRequestInput {
   signal: AbortSignal;
   /** The budget granted to this call, forwarded so the callee can size its own work. */
   callBudgetMs?: number;
+  /**
+   * Procedure runtime only. Never read from model tool arguments: a model that
+   * sent internalProcedure would otherwise be able to cancel an order.
+   */
+  trusted?: TrustedAdapterCall;
+}
+
+interface TrustedAdapterCall {
+  internalProcedure?: boolean;
+  method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 }
 
 function adapterFailure(toolName: string, detail: string): ToolResult {
@@ -131,7 +141,7 @@ function adapterCallConfig(
 }
 
 function adapterRequest(input: AdapterRequestInput): Request | null {
-  const { context, tool, args, config, signal, callBudgetMs } = input;
+  const { context, tool, args, config, signal, callBudgetMs, trusted } = input;
   if (typeof args.capability !== "string") return null;
   const parameters = isRecord(args.parameters) ? args.parameters : {};
   return new Request(
@@ -149,6 +159,8 @@ function adapterRequest(input: AdapterRequestInput): Request | null {
         action: "execute",
         capability: args.capability,
         parameters,
+        ...(trusted?.internalProcedure ? { internal_procedure: true } : {}),
+        ...(trusted?.method ? { method: trusted.method } : {}),
         // Tell the callee how long it really has. Without this the adapter
         // assumes its full ceiling and plans a loop the caller will abort,
         // discarding every page already fetched.
@@ -235,6 +247,7 @@ export async function executeAdapterTool(
   tool: CustomTool,
   args: Record<string, unknown>,
   dependencies: AdapterCallDependencies = {},
+  trusted?: TrustedAdapterCall,
 ): Promise<ToolResult> {
   // Simulated unless this tool is the same read-only adapter parallelizable
   // already trusts. Those calls run for real in the sandbox; everything else
@@ -264,6 +277,7 @@ export async function executeAdapterTool(
     config,
     signal: controller.signal,
     callBudgetMs: grantedBudgetMs,
+    trusted,
   });
   if (!request) return adapterFailure(tool.name, "the requested capability is missing.");
 
@@ -359,6 +373,32 @@ async function meterNativeExecution(
   return result;
 }
 
+export async function executeProcedureStoreCall(
+  context: ToolContext,
+  tool: CustomTool,
+  spec: {
+    capability: "update_order" | "get_product";
+    parameters: Record<string, unknown>;
+    method?: TrustedAdapterCall["method"];
+  },
+  remainingBudgetMs?: number,
+): Promise<ToolResult> {
+  if (context.dryRun && spec.capability === "update_order") {
+    return { output: "(test mode — nothing written)" };
+  }
+  return await executeRoutedCustomTool(
+    context,
+    tool,
+    { capability: spec.capability, parameters: spec.parameters },
+    {},
+    remainingBudgetMs,
+    {
+      internalProcedure: true,
+      method: spec.method ?? (spec.capability === "update_order" ? "POST" : "GET"),
+    },
+  );
+}
+
 export async function executeRoutedCustomTool(
   context: ToolContext,
   tool: CustomTool,
@@ -366,6 +406,7 @@ export async function executeRoutedCustomTool(
   dependencies: RoutedCustomToolDependencies = {},
   /** The request's remaining model budget, threaded into the adapter call. */
   remainingBudgetMs?: number,
+  trusted?: TrustedAdapterCall,
 ): Promise<ToolResult> {
   // Composio first: executeComposioTool meters itself (refusals included), so
   // wrapping it here would write every call twice.
@@ -380,7 +421,7 @@ export async function executeRoutedCustomTool(
   const run = shouldUseAdapter(tool)
     ? () => (dependencies.executeAdapter
       ? dependencies.executeAdapter(context, tool, args)
-      : executeAdapterTool(context, tool, args, { remainingBudgetMs }))
+      : executeAdapterTool(context, tool, args, { remainingBudgetMs }, trusted))
     : () => (dependencies.executeLegacy ?? executeCustomTool)(context, tool, args);
   // A simulated sandbox call still skips the ledger. A real read-only adapter
   // call in dry run is metered like any other native execution, with source

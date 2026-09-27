@@ -152,6 +152,7 @@ function buildUrl(
 // an answer is built from survive.
 const PRODUCT_FIELDS = [
   "id",
+  "parent_id",
   "name",
   "sku",
   "price",
@@ -218,6 +219,14 @@ function projectOrder(order: Record<string, unknown>): Record<string, unknown> {
  * returned untouched rather than emptied -- a projection that silently drops
  * everything would read to the model as "the store has no such product".
  */
+const GET_PRODUCT_FIELDS = ["id", "parent_id", "name", "price", "stock_status", "permalink"] as const;
+
+function projectGetProduct(product: Record<string, unknown>, parentId: string | null): Record<string, unknown> {
+  const projected = pick(product, GET_PRODUCT_FIELDS);
+  if (parentId && projected.parent_id == null) projected.parent_id = Number(parentId);
+  return projected;
+}
+
 function projectPayload(capability: Capability, payload: unknown): unknown {
   const project = capability === "lookup_orders" ? projectOrder : projectProduct;
   if (Array.isArray(payload)) {
@@ -287,6 +296,164 @@ async function resolveCachedCategoryId(
   return { id: resolved, cached: false };
 }
 
+function positiveId(parameters: Record<string, unknown>, key: string): string | null {
+  const value = requiredString(parameters, key);
+  if (!value || value === "0" || !/^\d+$/.test(value)) return null;
+  return value;
+}
+
+function orderStatus(payload: unknown): string | null {
+  if (!isRecord(payload) || typeof payload.status !== "string" || !payload.status) return null;
+  return payload.status;
+}
+
+async function wooSend(
+  url: string,
+  method: "GET" | "POST" | "PUT",
+  authorization: string,
+  dependencies: AdapterDependencies,
+  body?: unknown,
+): Promise<{ ok: true; payload: unknown } | { ok: false; failure: ConnectorFailure }> {
+  let response: Response;
+  try {
+    response = await safeVendorFetch(url, {
+      method,
+      headers: {
+        Accept: "application/json",
+        Authorization: authorization,
+        ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    }, dependencies);
+  } catch {
+    return { ok: false, failure: wooFailure("woocommerce_http_error", "WooCommerce rejected the request.") };
+  }
+  if (response.status === 401 || response.status === 403) {
+    return { ok: false, failure: wooFailure("store_write_denied", "WooCommerce refused the write.", response.status) };
+  }
+  if (!response.ok) {
+    return { ok: false, failure: wooFailure("woocommerce_http_error", "WooCommerce rejected the request.", response.status) };
+  }
+  try {
+    return { ok: true, payload: await readJson(response) };
+  } catch {
+    return { ok: false, failure: wooFailure("woocommerce_response_invalid", "WooCommerce returned an invalid response.", response.status) };
+  }
+}
+
+function latestNoteText(payload: unknown): string | null {
+  if (!Array.isArray(payload)) return null;
+  let bestId = -1;
+  let best: string | null = null;
+  for (const entry of payload) {
+    if (!isRecord(entry) || typeof entry.note !== "string") continue;
+    const id = typeof entry.id === "number" ? entry.id : -1;
+    if (id >= bestId) {
+      bestId = id;
+      best = entry.note;
+    }
+  }
+  return best;
+}
+
+/**
+ * The only WooCommerce write. Note first, then a second read, then status.
+ * WooCommerce has no conditional update, so a status that left the expected
+ * set between the two reads is left untouched.
+ */
+async function updateOrder(
+  invocation: ConnectorInvocation,
+  dependencies: AdapterDependencies,
+  authorization: string,
+  base: string,
+): Promise<ConnectorResult> {
+  if (invocation.tool.read_only_mode !== false) {
+    return wooFailure("read_only_violation", "Read-only mode refused the order update.");
+  }
+  const parameters = invocation.request.parameters;
+  const orderId = positiveId(parameters, "order_id");
+  const note = requiredString(parameters, "note");
+  const requestedStatus = requiredString(parameters, "status");
+  const expected = parameters.expected_statuses;
+  const expectedOk = Array.isArray(expected)
+    && expected.length > 0
+    && expected.length <= 8
+    && expected.every((status) => typeof status === "string" && /^[a-z0-9_-]{1,32}$/.test(status));
+  if (!orderId || !note || note.length > 500 || (requestedStatus !== null && requestedStatus !== "cancelled") || !expectedOk) {
+    return wooFailure("woocommerce_configuration_invalid", "WooCommerce is not fully configured.");
+  }
+  const orderUrl = `${base}/wp-json/wc/v3/orders/${encodeURIComponent(orderId)}`;
+  const current = await wooSend(withFields(orderUrl, ["id", "status"]), "GET", authorization, dependencies);
+  if (!current.ok) return current.failure;
+  const status = orderStatus(current.payload);
+  if (!status) return wooFailure("woocommerce_response_invalid", "WooCommerce returned an invalid response.");
+  const allowed = new Set(expected as string[]);
+  if (!allowed.has(status)) {
+    if (status === "cancelled" && requestedStatus === "cancelled") {
+      const notes = await wooSend(`${orderUrl}/notes`, "GET", authorization, dependencies);
+      if (!notes.ok) return notes.failure;
+      if (latestNoteText(notes.payload)?.trim() === note.trim()) {
+        return { ok: true, vendor: "woocommerce", action: "execute", capability: "update_order", data: { changed: true, status } };
+      }
+    }
+    return { ok: true, vendor: "woocommerce", action: "execute", capability: "update_order", data: { changed: false, status } };
+  }
+  const noted = await wooSend(`${orderUrl}/notes`, "POST", authorization, dependencies, { note, customer_note: false });
+  if (!noted.ok) return noted.failure;
+  const again = await wooSend(withFields(orderUrl, ["id", "status"]), "GET", authorization, dependencies);
+  if (!again.ok) return again.failure;
+  const afterNote = orderStatus(again.payload);
+  if (!afterNote) return wooFailure("woocommerce_response_invalid", "WooCommerce returned an invalid response.");
+  if (!allowed.has(afterNote)) {
+    return { ok: true, vendor: "woocommerce", action: "execute", capability: "update_order", data: { changed: false, status: afterNote } };
+  }
+  if (requestedStatus) {
+    const written = await wooSend(orderUrl, "PUT", authorization, dependencies, { status: requestedStatus });
+    if (!written.ok) return written.failure;
+    return {
+      ok: true, vendor: "woocommerce", action: "execute", capability: "update_order",
+      data: { changed: true, status: requestedStatus },
+    };
+  }
+  return { ok: true, vendor: "woocommerce", action: "execute", capability: "update_order", data: { changed: true, status: afterNote } };
+}
+
+async function getProduct(
+  invocation: ConnectorInvocation,
+  dependencies: AdapterDependencies,
+  authorization: string,
+  base: string,
+): Promise<ConnectorResult> {
+  const productId = positiveId(invocation.request.parameters, "product_id");
+  if (!productId) return wooFailure("woocommerce_configuration_invalid", "WooCommerce is not fully configured.");
+  const parentId = positiveId(invocation.request.parameters, "parent_id");
+  const path = parentId
+    ? `/products/${encodeURIComponent(parentId)}/variations/${encodeURIComponent(productId)}`
+    : `/products/${encodeURIComponent(productId)}`;
+  const sent = await wooSend(
+    withFields(`${base}/wp-json/wc/v3${path}`, GET_PRODUCT_FIELDS),
+    "GET",
+    authorization,
+    dependencies,
+  );
+  if (!sent.ok) {
+    // A read is not a refused write. Keep the existing HTTP error code.
+    return sent.failure.error.code === "store_write_denied"
+      ? wooFailure("woocommerce_http_error", "WooCommerce rejected the request.", sent.failure.error.vendor_status)
+      : sent.failure;
+  }
+  if (!isRecord(sent.payload)) {
+    return wooFailure("woocommerce_response_invalid", "WooCommerce returned an invalid response.");
+  }
+  return {
+    ok: true,
+    vendor: "woocommerce",
+    action: "execute",
+    capability: "get_product",
+    data: projectGetProduct(sent.payload, parentId),
+  };
+}
+
 async function callWooCommerce(
   invocation: ConnectorInvocation,
   dependencies: AdapterDependencies,
@@ -300,6 +467,13 @@ async function callWooCommerce(
     return wooFailure("woocommerce_configuration_invalid", "WooCommerce is not fully configured.");
   }
   const authorization = `Basic ${btoa(`${consumerKey}:${consumerSecret}`)}`;
+  const base = storeUrl.replace(/\/+$/, "");
+  if (invocation.request.action === "execute" && capability === "update_order") {
+    return updateOrder(invocation, dependencies, authorization, base);
+  }
+  if (invocation.request.action === "execute" && capability === "get_product") {
+    return getProduct(invocation, dependencies, authorization, base);
+  }
 
   // A cached search answer skips the category resolution too — a hit means the
   // whole call is answered without touching the store. Failures are never
@@ -395,7 +569,7 @@ async function callWooCommerce(
       ok: true,
       vendor: "woocommerce",
       action: "test_connection",
-      capabilities: [...CAPABILITIES],
+      capabilities: CAPABILITIES.filter((name) => name !== "get_product" && name !== "update_order"),
       read_only: true,
     };
   }

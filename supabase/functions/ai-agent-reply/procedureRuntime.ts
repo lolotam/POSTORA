@@ -10,6 +10,21 @@ import {
 import { sanitizeFieldValue } from "./logic.ts";
 import type { ToolResult } from "./tools.ts";
 
+/** The store_events row a business-started flow is bound to. Ids come from this row only. */
+export interface StoreEventRow {
+  id: string;
+  user_id: string;
+  social_account_id: string;
+  connector_id: string;
+  flow: string;
+  payload: Record<string, string>;
+}
+
+export type UpdateOrderResult =
+  | { changed: true; status: string }
+  | { changed: false; status: string }
+  | { error: "store_write_denied" | "missing" };
+
 export interface ProcedurePorts {
   /** True only when this turn's compare-and-set replaced the stored state with `claimed`. */
   claim(claimed: ProcedureState): Promise<boolean>;
@@ -22,6 +37,20 @@ export interface ProcedurePorts {
   storeLookup(capability: "lookup_orders" | "search_products", parameters: Record<string, string>): Promise<ToolResult | null>;
   hasStoreCapability(capability: "lookup_orders" | "search_products"): boolean;
   logFailure(message: string, metadata: Record<string, string>): Promise<void>;
+  /** store_events row whose id is the procedure run id, or null when there is none. A read error throws. */
+  eventFor(runId: string): Promise<StoreEventRow | null>;
+  /** update_order on the event's connector. The runtime has already checked read-only is the adapter's job. */
+  updateOrder(input: {
+    connectorId: string;
+    orderId: string;
+    note: string;
+    status?: "cancelled";
+    expectedStatuses: string[];
+  }): Promise<UpdateOrderResult>;
+  /** get_product on the event's connector. */
+  getProduct(input: { connectorId: string; productId: string; parentId?: string }): Promise<
+    { ok: true; name: string; price: string; permalink: string } | { ok: false }
+  >;
 }
 
 export interface ProcedureTurnInput {
@@ -32,6 +61,8 @@ export interface ProcedureTurnInput {
   now: () => Date;
   /** Deterministic per inbound message when an outbox row exists (debate verdict 2). */
   runId: string;
+  /** The account owner. Event end actions require the store_events row to name this user. */
+  userId: string;
   leadContext: { platform: string; socialAccountId: string | null; conversationId: string };
 }
 
@@ -75,16 +106,18 @@ export function stepGuidance(state: ProcedureState, config: ProcedureConfig): st
 
 export function procedureToolDefinitions(enabled: ProcedureKey[]) {
   if (!enabled.length) return [];
+  // Event flows are started by the worker. Offering them here would let the model open one.
+  const startable = enabled.filter((key) => !isEventProcedureKey(key));
   return [
-    {
+    ...(startable.length ? [{
       type: "function",
       function: {
         name: "start_procedure",
         description:
           "Start a guided procedure when the customer's request matches one. Only one runs at a time. You may call procedure_submit in the same response if the message already contains a field.",
-        parameters: { type: "object", properties: { key: { type: "string", enum: enabled } }, required: ["key"] },
+        parameters: { type: "object", properties: { key: { type: "string", enum: startable } }, required: ["key"] },
       },
-    },
+    }] : []),
     {
       type: "function",
       function: {
@@ -106,6 +139,228 @@ export function procedureToolDefinitions(enabled: ProcedureKey[]) {
       },
     },
   ];
+}
+
+const TEAM_FOLLOW_UP = "Tell the customer the team will follow up. Do not say the order was changed.";
+const COD_EXPECTED = ["pending", "on-hold", "processing"];
+const CONFIRM_NOTE = "Confirmed by the customer on WhatsApp (Postora)";
+const CANCEL_NOTE = "Customer asked to cancel on WhatsApp (Postora)";
+
+function eventMatches(event: StoreEventRow | null, input: ProcedureTurnInput, flow: string): event is StoreEventRow {
+  return !!event
+    && event.user_id === input.userId
+    && event.social_account_id === input.leadContext.socialAccountId
+    && event.flow === flow
+    && event.connector_id.length > 0;
+}
+
+/** Mismatch is terminal for this turn: the customer hears the follow-up, and nothing is written to the store. */
+async function refuseEvent(input: ProcedureTurnInput, done: ProcedureState): Promise<ToolResult> {
+  await input.ports.logFailure("Store event does not match this turn", { procedure: done.key, run_id: done.run_id });
+  await input.ports.notifyAdmin(`A ${done.key} reply was refused because the stored event does not match this conversation.`);
+  return { output: TEAM_FOLLOW_UP };
+}
+
+async function loadEvent(
+  input: ProcedureTurnInput,
+  done: ProcedureState,
+): Promise<{ ok: true; event: StoreEventRow } | { ok: false; result: ToolResult }> {
+  if (input.dryRun) {
+    return { ok: false, result: { output: `Procedure complete: ${done.key} would finish now (test mode, nothing written).` } };
+  }
+  const event = await input.ports.eventFor(done.run_id);
+  if (!eventMatches(event, input, done.key)) return { ok: false, result: await refuseEvent(input, done) };
+  return { ok: true, event };
+}
+
+async function finishCod(input: ProcedureTurnInput, done: ProcedureState): Promise<ToolResult> {
+  const loaded = await loadEvent(input, done);
+  if (!loaded.ok) return loaded.result;
+  const orderId = loaded.event.payload.order_id ?? "";
+  if (!/^\d+$/.test(orderId)) return refuseEvent(input, done);
+  const cancel = done.fields.decision === "cancel";
+  const result = await input.ports.updateOrder({
+    connectorId: loaded.event.connector_id,
+    orderId,
+    note: cancel ? CANCEL_NOTE : CONFIRM_NOTE,
+    ...(cancel ? { status: "cancelled" as const } : {}),
+    expectedStatuses: COD_EXPECTED,
+  });
+  if ("error" in result) {
+    await input.ports.logFailure("Store write was denied", { procedure: done.key, run_id: done.run_id, order_id: orderId });
+    await input.ports.notifyAdmin(`COD order ${orderId} could not be updated because the store refused the write.`);
+    return { output: TEAM_FOLLOW_UP };
+  }
+  if (!result.changed) {
+    await input.ports.logFailure("Order status changed before the write", { procedure: done.key, run_id: done.run_id, order_id: orderId, status: result.status });
+    await input.ports.notifyAdmin(`COD order ${orderId} was not changed because its status is now ${result.status}.`);
+    return { output: TEAM_FOLLOW_UP };
+  }
+  if (cancel) {
+    await input.ports.notifyAdmin(`COD order ${orderId} was cancelled at the customer's request on WhatsApp.`);
+    return { output: `The order ${orderId} is cancelled. Tell the customer their order was cancelled.` };
+  }
+  return { output: `The order ${orderId} is confirmed. Tell the customer their cash-on-delivery order is confirmed. Do not say it was cancelled.` };
+}
+
+async function finishReview(input: ProcedureTurnInput, done: ProcedureState): Promise<ToolResult> {
+  const loaded = await loadEvent(input, done);
+  if (!loaded.ok) return loaded.result;
+  const rating = Number(done.fields.rating);
+  if (rating >= 4) {
+    const url = input.config.review_request?.review_url;
+    if (!url) return refuseEvent(input, done);
+    return { output: `Send the customer this review link: ${url}` };
+  }
+  const summary = `Rating ${done.fields.rating}. Problem: ${sanitizeFieldValue(done.fields.problem ?? "")}.`;
+  return await input.ports.escalate("Low review rating", summary);
+}
+
+async function finishStock(input: ProcedureTurnInput, done: ProcedureState): Promise<ToolResult> {
+  const loaded = await loadEvent(input, done);
+  if (!loaded.ok) return loaded.result;
+  if (done.fields.interest !== "yes") {
+    return { output: "Procedure complete. The customer does not want the product link." };
+  }
+  const productId = loaded.event.payload.product_id ?? "";
+  if (!/^\d+$/.test(productId)) return refuseEvent(input, done);
+  const parentId = loaded.event.payload.parent_id;
+  const product = await input.ports.getProduct({
+    connectorId: loaded.event.connector_id,
+    productId,
+    ...(parentId && /^\d+$/.test(parentId) && parentId !== "0" ? { parentId } : {}),
+  });
+  if (!product.ok) throw new Error("product_unavailable");
+  return { output: `Send the customer this product link and price. Name: ${product.name}. Price: ${product.price}. Link: ${product.permalink}.` };
+}
+
+export interface StockSighting {
+  connectorId: string;
+  productId: string;
+  parentId: string | null;
+  name: string;
+  stockStatus: string;
+}
+
+export function stockSightingsFromData(connectorId: string, data: unknown): StockSighting[] {
+  if (!Array.isArray(data)) return [];
+  const sightings: StockSighting[] = [];
+  for (const row of data) {
+    if (typeof row !== "object" || row === null) continue;
+    const record = row as Record<string, unknown>;
+    const productId = typeof record.id === "number" || typeof record.id === "string" ? String(record.id) : "";
+    if (!/^\d+$/.test(productId)) continue;
+    const parentText = typeof record.parent_id === "number" || typeof record.parent_id === "string" ? String(record.parent_id) : "";
+    sightings.push({
+      connectorId,
+      productId,
+      parentId: /^\d+$/.test(parentText) && parentText !== "0" ? parentText : null,
+      name: typeof record.name === "string" ? record.name.slice(0, 200) : "",
+      stockStatus: typeof record.stock_status === "string" ? record.stock_status : "",
+    });
+  }
+  return sightings;
+}
+
+/** Pulls projected products out of the model-facing connector text. A truncated payload is ignored. */
+export function stockSightingsFromToolOutput(connectorId: string, output: string): StockSighting[] {
+  const marker = "returned: ";
+  const at = output.indexOf(marker);
+  if (at < 0) return [];
+  try {
+    return stockSightingsFromData(connectorId, JSON.parse(output.slice(at + marker.length).replace(/ …\[output truncated:.*$/, "")));
+  } catch {
+    return [];
+  }
+}
+
+/** Digits already resolved for this customer. An @lid id is not a phone. */
+export function customerPhoneForWaitlist(raw: string): string | null {
+  if (raw.toLowerCase().includes("@")) return null;
+  const digits = raw.replace(/\D/g, "");
+  return digits.length >= 8 && digits.length <= 15 ? digits : null;
+}
+
+export interface WaitlistJoinRow {
+  user_id: string;
+  social_account_id: string;
+  connector_id: string;
+  conversation_id: string;
+  phone: string;
+  product_id: number;
+  parent_id: number | null;
+  product_name: string;
+  consent_source: "chat_optin";
+  consented_at: string;
+}
+
+export type WaitlistPlan =
+  | { action: "refuse"; output: string }
+  | { action: "dry_run"; output: string }
+  | { action: "upsert"; row: WaitlistJoinRow; output: string };
+
+/**
+ * The product id selects which earlier check_stock row to copy. Name, parent
+ * and connector come from that row, never from the model's other text.
+ */
+export function planWaitlistJoin(input: {
+  productId: string;
+  sightings: StockSighting[];
+  platform: string;
+  phone: string | null;
+  dryRun: boolean;
+  userId: string;
+  socialAccountId: string | null;
+  conversationId: string;
+  now: string;
+}): WaitlistPlan {
+  if (input.platform !== "whatsapp") return { action: "refuse", output: "Waitlist join is only available on WhatsApp." };
+  const matches = input.sightings.filter((sighting) => sighting.productId === input.productId);
+  if (!matches.length) return { action: "refuse", output: "Refused: no stock check in this turn found that product." };
+  const source = matches.find((sighting) => sighting.stockStatus !== "instock");
+  if (!source) return { action: "refuse", output: "Refused: that product is in stock." };
+  const phone = input.phone ? customerPhoneForWaitlist(input.phone) : null;
+  if (!phone || !input.socialAccountId) return { action: "refuse", output: "Refused: this chat has no customer phone." };
+  const productId = Number(source.productId);
+  if (!Number.isSafeInteger(productId)) return { action: "refuse", output: "Refused: no stock check in this turn found that product." };
+  if (input.dryRun) return { action: "dry_run", output: "(test mode, nothing written) The customer would be added to the waitlist." };
+  return {
+    action: "upsert",
+    output: `Saved. Tell the customer we will WhatsApp them when ${source.name || "the product"} is back in stock.`,
+    row: {
+      user_id: input.userId,
+      social_account_id: input.socialAccountId,
+      connector_id: source.connectorId,
+      conversation_id: input.conversationId,
+      phone,
+      product_id: productId,
+      parent_id: source.parentId ? Number(source.parentId) : null,
+      product_name: source.name,
+      consent_source: "chat_optin",
+      consented_at: input.now,
+    },
+  };
+}
+
+/** Offered only once this turn has seen the product out of stock. */
+export function stockWaitlistToolDefinition(sightings: StockSighting[]) {
+  const ids = [...new Set(sightings.filter((sighting) => sighting.stockStatus !== "instock").map((sighting) => sighting.productId))];
+  if (!ids.length) return null;
+  return {
+    type: "function" as const,
+    function: {
+      name: "stock_waitlist_join",
+      description:
+        "Save this WhatsApp customer for a message when an out-of-stock product returns. Use only a product id that check_stock just showed as not in stock.",
+      parameters: {
+        type: "object",
+        properties: {
+          product_id: { type: "string", enum: ids, description: "Product id copied from this turn's check_stock result." },
+        },
+        required: ["product_id"],
+      },
+    },
+  };
 }
 
 export function createProcedureTurn(input: ProcedureTurnInput): ProcedureTurn {
@@ -186,9 +441,11 @@ export function createProcedureTurn(input: ProcedureTurnInput): ProcedureTurn {
         return await input.ports.escalate("Complaint or return", summary); // verdict 6: flags kept
       }
       case "cod_update":
+        return withClosing(await finishCod(input, done));
       case "review_route":
+        return withClosing(await finishReview(input, done));
       case "stock_offer":
-        throw new Error("not_available"); // Spec B PR 2
+        return withClosing(await finishStock(input, done));
     }
   };
 

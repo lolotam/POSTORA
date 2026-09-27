@@ -7,6 +7,7 @@ import { composeToolDescription } from "../_shared/composeToolDescription.ts";
 import {
   composioBinding,
   connectorCapabilities,
+  MODEL_CONNECTOR_CAPABILITIES,
   type ConnectorCapabilityDefinition,
   type ConnectorParameterSchema,
   connectorUsageGuide,
@@ -762,7 +763,12 @@ export function customToolDefinitions(tools: CustomTool[]) {
       },
       required: ["input"],
     };
-    const typedParameters = capabilities?.length
+    // get_product and update_order stay on the adapter for procedures. Putting
+    // them in this enum would let the model cancel an order by naming the capability.
+    const modelCapabilities = (capabilities ?? []).filter((capability) =>
+      (MODEL_CONNECTOR_CAPABILITIES as readonly string[]).includes(capability.name)
+    );
+    const typedParameters = modelCapabilities.length
       ? {
         // One flat object, deliberately: a `capability` enum plus the merged
         // arguments, and NO schema-level polymorphism at the root.
@@ -788,11 +794,11 @@ export function customToolDefinitions(tools: CustomTool[]) {
         properties: {
           capability: {
             type: "string",
-            enum: capabilities.map((capability) => capability.name),
+            enum: modelCapabilities.map((capability) => capability.name),
             // Which argument each capability takes is said here because the
             // schema no longer binds them: this description is the only place
             // the model can learn that check_stock wants a sku.
-            description: capabilities
+            description: modelCapabilities
               .map((capability) =>
                 `${capability.name}: ${capability.description} Takes ${
                   describeParameterKeys(capability.parameters)
@@ -803,7 +809,7 @@ export function customToolDefinitions(tools: CustomTool[]) {
           parameters: {
             type: "object",
             description: "Arguments for the chosen capability.",
-            properties: nameAllowedTables(mergeCapabilityParameters(capabilities), tool.settings),
+            properties: nameAllowedTables(mergeCapabilityParameters(modelCapabilities), tool.settings),
           },
         },
         required: ["capability", "parameters"],

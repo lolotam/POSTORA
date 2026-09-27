@@ -231,7 +231,7 @@ Deno.test("missing webhook secrets are 401", async () => {
   assertEquals(gate.inserted, []);
 });
 
-Deno.test("event flows in stored config are not stored in PR 1", async () => {
+Deno.test("an event flow without its required consent is not stored", async () => {
   const gate = deps({
     loadProcedures: async () => ({ cod_confirm: { enabled: true, prompts: {}, closing: "" } }),
   });
@@ -247,6 +247,34 @@ Deno.test("event flows in stored config are not stored in PR 1", async () => {
   assertEquals(await response.json(), { ok: true, stored: 0 });
   assertEquals(gate.inserted, []);
   assertEquals(enabledStoreFlows({ cod_confirm: { enabled: true, prompts: {}, closing: "" } }).size, 0);
+});
+
+Deno.test("review_request delay_days comes from the account config", async () => {
+  const completed = JSON.stringify({
+    id: 100, number: "100", status: "completed", total: "4.500", currency: "KWD", payment_method: "cod",
+    date_completed: "2026-09-20T12:00:00Z",
+    billing: { phone: "+965 5551 2345", first_name: "Sara", country: "KW" },
+  });
+  const gate = deps({
+    loadProcedures: async () => ({
+      review_request: {
+        enabled: true, prompts: {}, closing: "", consent_attested_at: "2026-09-01T00:00:00Z",
+        delay_days: 7, review_url: "https://shop.example/reviews",
+      },
+    }),
+  });
+  const response = await handleStoreWebhook(new Request(URL, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-wc-webhook-signature": await mac(SECRET, completed),
+      "x-wc-webhook-topic": "order.updated",
+    },
+    body: completed,
+  }), gate);
+  assertEquals(await response.json(), { ok: true, stored: 1 });
+  assertEquals(gate.inserted[0].due_at, "2026-09-27T12:00:00.000Z");
+  assertEquals(gate.inserted[0].flow, "review_request");
 });
 
 Deno.test("an insert failure is 500 and the response does not echo the delivery", async () => {

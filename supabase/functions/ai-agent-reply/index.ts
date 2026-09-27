@@ -52,7 +52,7 @@ import {
   type ToolContext,
   type ToolResult,
 } from "./tools.ts";
-import { connectorCallFailed, executeRoutedCustomTool } from "./connectorExecution.ts";
+import { connectorCallFailed, executeProcedureStoreCall, executeRoutedCustomTool } from "./connectorExecution.ts";
 import { deliverModelOutageFloor } from "./outage-floor.ts";
 import { applyIntentLabel, intentLabelFor, shouldLabel, type LabelDb } from "./intentLabels.ts";
 import { dashboardColumns } from "./dashboardColumns.ts";
@@ -90,9 +90,13 @@ import { expireIfStale, isPendingOpener } from "../_shared/procedures/engine.ts"
 import {
   createProcedureTurn,
   fieldsFor,
+  planWaitlistJoin,
   PROCEDURE_TOOL_NAMES,
   procedureToolDefinitions,
   stepGuidance,
+  stockSightingsFromToolOutput,
+  stockWaitlistToolDefinition,
+  type StockSighting,
 } from "./procedureRuntime.ts";
 import { PROCEDURE_STATE_CONFLICT, persistProcedureState } from "./procedureState.ts";
 
@@ -1118,9 +1122,26 @@ Deno.serve(async (req) => {
     const customToolByName = new Map(customTools.map((tool) => [tool.name, tool]));
 
     const storeTool = (capability: "lookup_orders" | "search_products") => procedureStoreTool(customTools, capability);
+    const wooById = (connectorId: string) =>
+      customTools.find((tool) => tool.id === connectorId && tool.connector_type === "woocommerce") ?? null;
+    const readStorePayload = (found: ToolResult): Record<string, unknown> => {
+      if (connectorCallFailed(found)) {
+        if (found.output.includes("[store_write_denied]") || found.output.includes("[read_only_violation]")) {
+          return { error: "store_write_denied" };
+        }
+        throw new Error("store_lookup_failed");
+      }
+      const marker = "returned: ";
+      const at = found.output.indexOf(marker);
+      if (at < 0) throw new Error("store_lookup_failed");
+      const parsed = JSON.parse(found.output.slice(at + marker.length));
+      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw new Error("store_lookup_failed");
+      return parsed as Record<string, unknown>;
+    };
     const procedureTurn = proceduresOn ? createProcedureTurn({
       state: initialProcedureState, config: procedureConfig, dryRun, now: () => new Date(),
       runId: outboxId ?? crypto.randomUUID(),
+      userId: request.user_id,
       leadContext: { platform: request.platform, socialAccountId: toolContext.socialAccountId, conversationId: request.conversation_id },
       ports: {
         claim: async (claimed) => {
@@ -1154,6 +1175,67 @@ Deno.serve(async (req) => {
             metadata: { platform: request.platform, ...metadata },
           });
           if (error) console.error("[ai-agent-reply] Procedure failure log rejected:", error.message);
+        },
+        eventFor: async (runId) => {
+          if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(runId)) return null;
+          const { data, error } = await admin.from("store_events")
+            .select("id, user_id, social_account_id, connector_id, flow, payload")
+            .eq("id", runId)
+            .maybeSingle();
+          if (error) throw new Error("store_event_read_failed");
+          if (!data || typeof data.user_id !== "string" || typeof data.social_account_id !== "string" || typeof data.connector_id !== "string" || typeof data.flow !== "string") {
+            return null;
+          }
+          const payload: Record<string, string> = {};
+          if (data.payload && typeof data.payload === "object" && !Array.isArray(data.payload)) {
+            for (const [key, value] of Object.entries(data.payload as Record<string, unknown>)) {
+              if (typeof value === "string") payload[key] = value;
+              else if (typeof value === "number" && Number.isFinite(value)) payload[key] = String(value);
+            }
+          }
+          return {
+            id: String(data.id), user_id: data.user_id, social_account_id: data.social_account_id,
+            connector_id: data.connector_id, flow: data.flow, payload,
+          };
+        },
+        updateOrder: async (order) => {
+          const tool = wooById(order.connectorId);
+          if (!tool) return { error: "missing" as const };
+          const found = await executeProcedureStoreCall(toolContext, tool, {
+            capability: "update_order",
+            method: "POST",
+            parameters: {
+              order_id: order.orderId,
+              note: order.note,
+              expected_statuses: order.expectedStatuses,
+              ...(order.status ? { status: order.status } : {}),
+            },
+          }, modelBudgetRemaining(startedAt, Date.now()));
+          const data = readStorePayload(found);
+          if (data.error === "store_write_denied") return { error: "store_write_denied" as const };
+          if (data.changed === true && typeof data.status === "string") return { changed: true as const, status: data.status };
+          if (data.changed === false && typeof data.status === "string") return { changed: false as const, status: data.status };
+          throw new Error("store_lookup_failed");
+        },
+        getProduct: async (product) => {
+          const tool = wooById(product.connectorId);
+          if (!tool) return { ok: false as const };
+          const found = await executeProcedureStoreCall(toolContext, tool, {
+            capability: "get_product",
+            method: "GET",
+            parameters: {
+              product_id: product.productId,
+              ...(product.parentId ? { parent_id: product.parentId } : {}),
+            },
+          }, modelBudgetRemaining(startedAt, Date.now()));
+          const data = readStorePayload(found);
+          if (data.error === "store_write_denied") return { ok: false as const };
+          return {
+            ok: true as const,
+            name: typeof data.name === "string" ? data.name : "",
+            price: typeof data.price === "number" || typeof data.price === "string" ? String(data.price) : "",
+            permalink: typeof data.permalink === "string" ? data.permalink : "",
+          };
         },
       },
     }) : null;
@@ -1300,13 +1382,44 @@ Deno.serve(async (req) => {
       ...customToolDefinitions(offeredTools),
       ...procedureToolDefinitions(procedureTurn && !triagePlan?.handoff ? enabledProcedures(procedureConfig) : []),
     ];
+    // Rebuilt each round: the tool appears only after this turn's check_stock saw the product out of stock.
+    const waitlistOn = procedureConfig.back_in_stock?.enabled === true && request.platform === "whatsapp";
+    const stockSightings: StockSighting[] = [];
+    const joinStockWaitlist = async (productId: string): Promise<ToolResult> => {
+      const plan = planWaitlistJoin({
+        productId,
+        sightings: stockSightings,
+        platform: request.platform,
+        phone: request.recipient_phone,
+        dryRun,
+        userId: request.user_id,
+        socialAccountId: toolContext.socialAccountId,
+        conversationId: request.conversation_id,
+        now: new Date().toISOString(),
+      });
+      if (plan.action === "upsert") {
+        const { error } = await admin.from("stock_waitlist").upsert(
+          plan.row,
+          { onConflict: "connector_id,phone,product_id" },
+        );
+        if (error) {
+          console.error("[ai-agent-reply] waitlist join failed:", error.message);
+          return { output: "The waitlist could not be saved. Tell the customer the team will follow up." };
+        }
+      }
+      return { output: plan.output };
+    };
     let procedureToolRanThisRound = false;
     for (let iteration = 0; ; iteration++) {
       const procedureToolRanOnLastRound = procedureToolRanThisRound;
       procedureToolRanThisRound = false;
       const budget = iterationBudget(maxIterations, procedureToolRanOnLastRound, iteration);
       if (budget === "stop") break;
-      const roundToolDefinitions = budget === "text_only" ? [] : toolDefinitions;
+      const waitlistTool = waitlistOn ? stockWaitlistToolDefinition(stockSightings) : null;
+      const roundToolDefinitions = budget === "text_only" ? [] : [
+        ...toolDefinitions,
+        ...(waitlistTool ? [waitlistTool] : []),
+      ];
       let completion: any = null;
       let lastError: unknown = null;
       for (let mi = 0; mi < modelChain.length; mi++) {
@@ -1398,7 +1511,9 @@ Deno.serve(async (req) => {
         const isProcedureTool = procedureTurn !== null && PROCEDURE_TOOL_NAMES.has(toolCall.function.name);
         if (isProcedureTool) procedureToolRanThisRound = true;
         const result: ToolResult = await timings.span(`tool:${toolCall.function.name}`, async () =>
-          isProcedureTool
+          toolCall.function.name === "stock_waitlist_join"
+            ? await joinStockWaitlist(String(args.product_id ?? ""))
+            : isProcedureTool
             ? await procedureTurn!.handle(toolCall.function.name, args)
             : customTool
             ? await executeRoutedCustomTool(
@@ -1412,6 +1527,9 @@ Deno.serve(async (req) => {
             )
             : (isAdmin ? await executeAdminTool(toolContext, toolCall.function.name, args) : null) ??
               (await executeTool(toolContext, toolCall.function.name, args)));
+        if (customTool && args.capability === "check_stock") {
+          stockSightings.push(...stockSightingsFromToolOutput(customTool.id, result.output));
+        }
         if (result.escalated) {
           escalated = true;
           if (result.humanNotified) escalationNotifiedHuman = true;

@@ -68,6 +68,8 @@ export const RequestSchema = z.object({
   action: z.enum(["execute", "test_connection"]),
   capability: z.enum(CAPABILITIES).optional(),
   method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]).optional(),
+  /** Procedure runtime only. The model tool path never sets this. */
+  internal_procedure: z.boolean().optional(),
   parameters: z.record(z.unknown()).default({}),
   user_id: z.string().uuid().optional(),
   // The caller's REMAINING wall-clock budget for this whole adapter call. The
@@ -143,8 +145,9 @@ async function executeAdapterRequest(
   }
 
   let userId: string;
+  let isServiceRole = false;
   try {
-    ({ userId } = await authenticateCaller(req, untrustedBodyUserId(requestBody)));
+    ({ userId, isServiceRole } = await authenticateCaller(req, untrustedBodyUserId(requestBody)));
   } catch {
     boundaryLog("connector_refused", "unauthorized");
     return restrictedErrorResponse(req, "Unauthorized.", 401);
@@ -212,6 +215,7 @@ async function executeAdapterRequest(
           action: parsedRequest.data.action,
           capability: parsedRequest.data.capability,
           method: parsedRequest.data.method,
+          internalProcedure: isServiceRole && parsedRequest.data.internal_procedure === true,
           parameters: parsedRequest.data.parameters,
         },
       },
