@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import "@/i18n";
 import { Plus, X } from "lucide-react";
@@ -83,6 +83,34 @@ function servicesFromInput(raw: string): string[] {
     .slice(0, PROCEDURE_LIMITS.services);
   if (endsWithComma && items.length < PROCEDURE_LIMITS.services) items.push("");
   return items;
+}
+
+type CodAccess =
+  | { state: "loading" }
+  | { state: "error" }
+  | { state: "read_only"; name: string }
+  | { state: "writable" };
+
+function codAccessEqual(prev: CodAccess, next: CodAccess): boolean {
+  if (prev.state !== next.state) return false;
+  return prev.state !== "read_only" || next.state !== "read_only" || prev.name === next.name;
+}
+
+/** Loading or a failed read is unresolved. An empty successful read is writable. */
+function resolveCodAccess(input: {
+  accountId: string;
+  tools: AiAgentTool[];
+  links: ToolAccountLink[];
+  linksReady: boolean;
+  linksError: unknown;
+  bindings: Array<{ social_account_id: string; connector_id: string }> | undefined;
+  bindingsLoading: boolean;
+  bindingsError: boolean;
+}): CodAccess {
+  if (input.linksError || input.bindingsError) return { state: "error" };
+  if (!input.linksReady || input.bindingsLoading || !input.bindings) return { state: "loading" };
+  const name = readOnlyBoundConnector(input.accountId, input.tools, input.links, true, input.bindings);
+  return name ? { state: "read_only", name } : { state: "writable" };
 }
 
 /** Name of a bound WooCommerce connector that cannot update orders, if any. */
@@ -197,7 +225,14 @@ export function ProceduresCard({
   const procedures = behavior.procedures ?? {};
   const proceduresRef = useRef(procedures);
   proceduresRef.current = procedures;
-  const [readOnlyConnector, setReadOnlyConnector] = useState<string | null>(null);
+  const [codAccess, setCodAccess] = useState<CodAccess>({ state: "loading" });
+  const reportCodAccess = useCallback((next: CodAccess) => {
+    setCodAccess((prev) => codAccessEqual(prev, next) ? prev : next);
+  }, []);
+  const retryCodCheck = useRef<() => void>(() => {});
+  const rememberCodRetry = useCallback((retry: () => void) => {
+    retryCodCheck.current = retry;
+  }, []);
   const [refusal, setRefusal] = useState<Partial<Record<EventProcedureKey, EventEnableRefusal>>>({});
   const [templateFailed, setTemplateFailed] = useState<Partial<Record<EventProcedureKey, boolean>>>({});
   const [templateBusy, setTemplateBusy] = useState<Partial<Record<EventProcedureKey, boolean>>>({});
@@ -215,12 +250,13 @@ export function ProceduresCard({
       agentEnabled: form.is_enabled === true,
       defaultMode: form.default_mode || "human_then_ai",
       connectionMode,
-      wooReadOnly: readOnlyConnector !== null,
+      wooReadOnly: codAccess.state === "read_only",
       consentAttested: Boolean(draft.consent_attested_at),
       qrRiskAcknowledged: Boolean(draft.qr_risk_acknowledged_at),
       delayDays: draft.delay_days ?? 3,
       reviewUrl: draft.review_url ?? "",
     });
+    if (key === "cod_confirm" && codAccess.state !== "writable" && codAccess.state !== "read_only") return;
     if (blocked) {
       setTemplateFailed((prev) => ({ ...prev, [key]: false }));
       setRefusal((prev) => ({ ...prev, [key]: blocked }));
@@ -294,7 +330,9 @@ export function ProceduresCard({
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
-        {storeAccountId && <StoreEventData accountId={storeAccountId} onReadOnly={setReadOnlyConnector} />}
+        {storeAccountId && (
+          <StoreEventData accountId={storeAccountId} onAccess={reportCodAccess} onRetry={rememberCodRetry} />
+        )}
         {keys.map((key) => {
           const current = procedures[key];
           const enabled = current?.enabled ?? false;
@@ -312,8 +350,12 @@ export function ProceduresCard({
                   id={`procedure-${key}`}
                   aria-label={name}
                   checked={enabled}
-                  disabled={eventKey ? templateBusy[eventKey] === true : false}
+                  disabled={
+                    (key === "cod_confirm" && (codAccess.state === "loading" || codAccess.state === "error"))
+                    || (eventKey ? templateBusy[eventKey] === true : false)
+                  }
                   onCheckedChange={(checked) => {
+                    if (key === "cod_confirm" && checked && (codAccess.state === "loading" || codAccess.state === "error")) return;
                     if (!checked) {
                       write(key, { ...(current ?? { prompts: {}, closing: "" }), enabled: false });
                       if (eventKey) {
@@ -337,7 +379,7 @@ export function ProceduresCard({
                   {eventRefusal === "read_only"
                     ? t("procedures.refusal.read_only", {
                       defaultValue: REFUSAL_TEXT.read_only,
-                      name: readOnlyConnector ?? "",
+                      name: codAccess.state === "read_only" ? codAccess.name : "",
                     })
                     : t(`procedures.refusal.${eventRefusal}`, REFUSAL_TEXT[eventRefusal])}
                 </p>
@@ -349,6 +391,24 @@ export function ProceduresCard({
                     "The WhatsApp template could not be submitted, so this flow stays off.",
                   )}
                 </p>
+              )}
+              {key === "cod_confirm" && codAccess.state === "loading" && (
+                <p className="text-xs text-muted-foreground">
+                  {t("procedures.codChecking", "Checking whether this store can update orders.")}
+                </p>
+              )}
+              {key === "cod_confirm" && codAccess.state === "error" && (
+                <div className="flex flex-wrap items-center gap-2 text-xs text-destructive" role="alert">
+                  <span>
+                    {t(
+                      "procedures.codCheckFailed",
+                      "The store connection could not be checked. Retry, then turn COD confirmation on.",
+                    )}
+                  </span>
+                  <Button type="button" variant="outline" size="sm" onClick={() => retryCodCheck.current()}>
+                    {t("procedures.retry", "Retry")}
+                  </Button>
+                </div>
               )}
               {eventKey && storeAccountId && (
                 <EventFlowFields
@@ -486,17 +546,34 @@ export function ProceduresCard({
 
 function StoreEventData({
   accountId,
-  onReadOnly,
+  onAccess,
+  onRetry,
 }: {
   accountId: string;
-  onReadOnly: (connectorName: string | null) => void;
+  onAccess: (access: CodAccess) => void;
+  onRetry: (retry: () => void) => void;
 }) {
   const { tools } = useAiAgentTools();
-  const { links, linksReady } = useAiToolAccountLinks();
-  const { bindings } = useStoreWebhookBindings();
+  const { links, linksReady, linksError, refetchLinks } = useAiToolAccountLinks();
+  const { bindings, isLoading, isError, refetch } = useStoreWebhookBindings();
   useEffect(() => {
-    onReadOnly(readOnlyBoundConnector(accountId, tools, links, linksReady, bindings));
-  }, [accountId, tools, links, linksReady, bindings, onReadOnly]);
+    onAccess(resolveCodAccess({
+      accountId,
+      tools,
+      links,
+      linksReady,
+      linksError,
+      bindings,
+      bindingsLoading: isLoading,
+      bindingsError: isError,
+    }));
+  }, [accountId, tools, links, linksReady, linksError, bindings, isLoading, isError, onAccess]);
+  useEffect(() => {
+    onRetry(() => {
+      void refetchLinks();
+      void refetch();
+    });
+  }, [onRetry, refetch, refetchLinks]);
   return null;
 }
 

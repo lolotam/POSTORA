@@ -15,6 +15,7 @@ export const STORE_EVENT_LIMITS = {
 } as const;
 
 const STALE_AFTER_MS = 48 * 60 * 60 * 1000;
+const PENDING_TEMPLATE_DEFER_MS = 15 * 60 * 1000;
 const ORDER_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const COD_STATUSES = new Set(["pending", "on-hold", "processing"]);
 
@@ -30,6 +31,10 @@ export interface StoreEventRow {
   status: "claimed" | "sending";
   claim_token: string;
   due_at: string;
+  /** Set when the row is inserted. Deferral does not move it. */
+  created_at: string;
+  /** Claim already added one. A pending-template deferral gives that one back. */
+  attempts: number;
   outbound_message_id: string | null;
 }
 
@@ -96,7 +101,7 @@ export interface StoreEventLog {
   source: "process-store-events";
   category: "ai";
   level: "info" | "warn";
-  message: "Store event skipped" | "Store event failed";
+  message: "Store event skipped" | "Store event failed" | "Store event deferred";
   user_id: string;
   metadata: {
     event_id: string;
@@ -149,8 +154,8 @@ export function accountSkipReason(event: StoreEventRow, account: AccountContext 
   if (!account.connectorVisible) return "connector_not_visible";
   if (event.flow === "cod_confirm" && account.connectorReadOnly) return "connector_read_only";
   if (account.optedOut) return "opted_out";
-  const due = Date.parse(event.due_at);
-  if (!Number.isFinite(due) || due + STALE_AFTER_MS < nowMs) return "expired";
+  const origin = stalenessOriginMs(event);
+  if (!Number.isFinite(origin) || origin + STALE_AFTER_MS < nowMs) return "expired";
   if (account.connectionMode === "evolution_qr" && !account.settings.qr_risk_acknowledged_at) return "qr_risk_unacknowledged";
   if ((event.flow === "cod_confirm" || event.flow === "review_request") && !account.settings.consent_attested_at) {
     return "consent_missing";
@@ -182,6 +187,17 @@ export function storeSkipReason(
 
 function iso(nowMs: number): string {
   return new Date(nowMs).toISOString();
+}
+
+/**
+ * 48h is measured from the original due time. COD and back-in-stock are due at
+ * insert, so created_at is that time. A review's due_at moves when its template
+ * is still in Meta review; the first deferral stores the original under
+ * payload.original_due_at and later deferrals leave that key alone.
+ */
+function stalenessOriginMs(event: StoreEventRow): number {
+  if (event.flow === "cod_confirm" || event.flow === "back_in_stock") return Date.parse(event.created_at);
+  return Date.parse(event.payload.original_due_at || event.due_at);
 }
 
 function addressing(account: AccountContext): WhatsAppAddressing {
@@ -453,6 +469,24 @@ async function settleIndeterminate(ports: WorkerPorts, event: StoreEventRow): Pr
   return true;
 }
 
+/** Give the claim back for 15 minutes. The attempt the claim just counted is returned. */
+async function deferPendingTemplate(ports: WorkerPorts, event: StoreEventRow): Promise<boolean> {
+  const payload = event.payload.original_due_at
+    ? null
+    : { ...event.payload, original_due_at: event.due_at };
+  const marked = await ports.updateEvent(event.id, event.claim_token, {
+    status: "pending",
+    due_at: iso(ports.now() + PENDING_TEMPLATE_DEFER_MS),
+    attempts: event.attempts - 1,
+    claimed_at: null,
+    claim_token: null,
+    send_attempt_id: null,
+    ...(payload ? { payload } : {}),
+  });
+  if (marked) await writeOutcomeLog(ports, event, "info", "Store event deferred", "template_pending");
+  return marked;
+}
+
 async function skip(ports: WorkerPorts, event: StoreEventRow, reason: string): Promise<boolean> {
   const marked = await ports.updateEvent(event.id, event.claim_token, {
     status: "skipped",
@@ -537,6 +571,16 @@ async function processClaimed(
     let templateName: string | null = null;
     if (loaded.connectionMode !== "evolution_qr") {
       const template = await ports.templateStatus(event, language);
+      if (template.status === "pending") {
+        const cleared = await clearPendingOrLog(ports, thread, event, openerState);
+        if (!cleared) {
+          await releaseReservedQr(ports, event, reserved);
+          return await releaseAfterClearFailure(ports, event);
+        }
+        if (reserved) await ports.releaseQr(event.social_account_id);
+        const deferred = await deferPendingTemplate(ports, event);
+        return deferred ? "released" : "left";
+      }
       if (template.status !== "approved") {
         const cleared = await clearPendingOrLog(ports, thread, event, openerState);
         if (!cleared) {

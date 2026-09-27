@@ -136,7 +136,7 @@ function snapshotFromOutput(output: string): StoreSnapshot | null {
 }
 
 // deno-lint-ignore no-explicit-any
-export function createStoreEventPorts(admin: any): WorkerPorts {
+export function createStoreEventPorts(admin: any): WorkerPorts { // eslint-disable-line @typescript-eslint/no-explicit-any -- service-role client has no generated type here
   async function accountRow(event: StoreEventRow): Promise<AccountRow | null> {
     const { data, error } = await admin.from("social_accounts")
       .select("id, user_id, platform, connection_mode, platform_user_id, access_token, account_metadata, workspace_id")
@@ -175,6 +175,8 @@ export function createStoreEventPorts(admin: any): WorkerPorts {
         status: row.status === "sending" ? "sending" : "claimed",
         claim_token: String(row.claim_token ?? ""),
         due_at: String(row.due_at ?? ""),
+        created_at: String(row.created_at ?? ""),
+        attempts: Number.isFinite(Number(row.attempts)) ? Number(row.attempts) : 0,
         outbound_message_id: typeof row.outbound_message_id === "string" ? row.outbound_message_id : null,
       }));
     },
@@ -420,7 +422,7 @@ export function createStoreEventPorts(admin: any): WorkerPorts {
     async alertAdmin(event, reason) {
       const { error } = await admin.from("system_logs").insert({
         source: "process-store-events",
-        category: "api",
+        category: "ai",
         level: "warn",
         message: `Store event ${event.id} (${event.flow}) needs attention: ${reason}`,
         metadata: { event_id: event.id, flow: event.flow, reason },

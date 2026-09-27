@@ -1,9 +1,9 @@
 // supabase/functions/ai-agent-reply/procedureRuntime.test.ts
 import { assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 import {
-  boundWaitlistSightings, createProcedureTurn, enrollWaitlist, planBoundWaitlistJoin, planWaitlistJoin,
+  boundWaitlistSightings, createProcedureTurn, enrollWaitlist, executeOfferedWaitlistJoin, planBoundWaitlistJoin, planWaitlistJoin,
   procedureToolDefinitions, scopeStoreEventRead, STOCK_WAITLIST_ON_CONFLICT, stockWaitlistToolDefinition,
-  storeEventReadScope, WAITLIST_BINDING_REFUSAL, waitlistRound,
+  stockWaitlistJoinOffered, storeEventReadScope, WAITLIST_BINDING_REFUSAL, waitlistRound,
   type ProcedurePorts, type ProcedureTurnInput, type StockSighting, type StoreEventRow, type WaitlistEnrollmentLog,
 } from "./procedureRuntime.ts";
 
@@ -670,6 +670,23 @@ Deno.test("waitlist join is offered and saved only when the connector has a stor
   assertEquals(none.tool, null);
   assertStringIncludes(none.gap ?? "", "notifications are not set up");
   assertEquals(stockWaitlistToolDefinition([]), null);
+});
+
+Deno.test("stock_waitlist_join writes only when this turn offered the tool", async () => {
+  const offered = [{ function: { name: "stock_waitlist_join" } }];
+  let writes = 0;
+  const join = () => {
+    writes += 1;
+    return Promise.resolve({ output: "saved" });
+  };
+  const hidden = await executeOfferedWaitlistJoin(stockWaitlistJoinOffered(true, []), join);
+  assertEquals(hidden.output, "Unknown tool: stock_waitlist_join");
+  const switchedOff = await executeOfferedWaitlistJoin(stockWaitlistJoinOffered(false, offered), join);
+  assertEquals(switchedOff.output, "Unknown tool: stock_waitlist_join");
+  assertEquals(writes, 0);
+  const saved = await executeOfferedWaitlistJoin(stockWaitlistJoinOffered(true, offered), join);
+  assertEquals(saved.output, "saved");
+  assertEquals(writes, 1);
 });
 
 Deno.test("a waitlist re-join upsert renews expires_at and consented_at", async () => {

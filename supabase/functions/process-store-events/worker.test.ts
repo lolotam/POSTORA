@@ -19,7 +19,7 @@ const PHONE = "96555512345";
 const NOW = Date.parse("2026-09-27T12:00:00.000Z");
 
 function event(overrides: Partial<StoreEventRow> = {}): StoreEventRow {
-  return {
+  const row: StoreEventRow = {
     id: "11111111-1111-4111-8111-111111111111",
     user_id: "user-1",
     social_account_id: "account-1",
@@ -31,9 +31,13 @@ function event(overrides: Partial<StoreEventRow> = {}): StoreEventRow {
     status: "claimed",
     claim_token: "token-1",
     due_at: new Date(NOW).toISOString(),
+    created_at: new Date(NOW).toISOString(),
+    attempts: 1,
     outbound_message_id: null,
     ...overrides,
   };
+  if (overrides.created_at === undefined) row.created_at = row.due_at;
+  return row;
 }
 
 function account(overrides: Partial<AccountContext> = {}): AccountContext {
@@ -401,13 +405,105 @@ Deno.test("the QR daily cap skips without a send", async () => {
   assertEquals(box.qrReleases, 0);
 });
 
-Deno.test("a template that is not approved skips and clears the opener state", async () => {
-  const box = harness({ template: "pending" });
-  await runStoreEventWorker(box.ports);
-  assertEquals(reasonOf(box.row), "template_not_approved");
+Deno.test("a rejected or missing template skips and clears the opener state", async () => {
+  for (const template of ["rejected", "missing"] as const) {
+    const box = harness({ template });
+    await runStoreEventWorker(box.ports);
+    assertEquals(reasonOf(box.row), "template_not_approved", template);
+    assertEquals(box.sends.length, 0);
+    assertEquals(box.persists.some((call) => call.next === null), true);
+    assertEquals(activated(box), false);
+    assertEquals(box.row.attempts, 1);
+  }
+});
+
+Deno.test("a pending template is deferred and the claim attempt is given back", async () => {
+  const box = harness({ template: "pending", row: event({ attempts: 1 }) });
+  const summary = await runStoreEventWorker(box.ports);
+  assertEquals(summary.released, 1);
+  assertEquals(summary.skipped, 0);
+  assertEquals(box.row.status, "pending");
+  assertEquals(box.row.attempts, 0);
+  assertEquals(box.row.due_at, new Date(NOW + 15 * 60 * 1000).toISOString());
+  assertEquals(box.row.payload.original_due_at, new Date(NOW).toISOString());
+  assertEquals(box.row.claim_token, null);
   assertEquals(box.sends.length, 0);
   assertEquals(box.persists.some((call) => call.next === null), true);
   assertEquals(activated(box), false);
+  assertEquals(box.logs, [{
+    source: "process-store-events",
+    category: "ai",
+    level: "info",
+    message: "Store event deferred",
+    user_id: "user-1",
+    metadata: {
+      event_id: box.row.id,
+      flow: "cod_confirm",
+      social_account_id: "account-1",
+      reason: "template_pending",
+    },
+  }]);
+
+  box.row.status = "claimed";
+  box.row.claim_token = "token-1";
+  box.row.attempts = 1;
+  box.logs.length = 0;
+  await runStoreEventWorker(box.ports);
+  assertEquals(box.row.payload.original_due_at, new Date(NOW).toISOString());
+  assertEquals(box.row.attempts, 0);
+});
+
+Deno.test("a pending template past the original due time is skipped as stale", async () => {
+  const staleAt = new Date(NOW - 49 * 60 * 60 * 1000).toISOString();
+  const freshAt = new Date(NOW).toISOString();
+  const cases: Array<{ name: string; row: StoreEventRow }> = [
+    {
+      name: "cod created_at",
+      row: event({ attempts: 1, created_at: staleAt, due_at: freshAt }),
+    },
+    {
+      name: "back in stock created_at",
+      row: event({
+        flow: "back_in_stock",
+        attempts: 1,
+        created_at: staleAt,
+        due_at: freshAt,
+        payload: { phone: PHONE, product_id: "9", product_name: "Rose" },
+      }),
+    },
+    {
+      name: "review original_due_at",
+      row: event({
+        flow: "review_request",
+        attempts: 1,
+        created_at: freshAt,
+        due_at: freshAt,
+        payload: {
+          phone: PHONE,
+          first_name: "Sara",
+          order_number: "1042",
+          order_id: "1042",
+          original_due_at: staleAt,
+        },
+      }),
+    },
+  ];
+  for (const item of cases) {
+    const box = harness({
+      template: "pending",
+      row: item.row,
+      account: item.row.flow === "back_in_stock"
+        ? account({ settings: { enabled: true, prompts: {}, closing: "" } })
+        : undefined,
+    });
+    await runStoreEventWorker(box.ports);
+    assertEquals(box.row.status, "skipped", item.name);
+    assertEquals(reasonOf(box.row), "expired", item.name);
+    assertEquals(box.row.attempts, 1, item.name);
+    assertEquals(box.row.due_at, freshAt, item.name);
+    assertEquals(box.sends.length, 0, item.name);
+    assertEquals(box.logs[0]?.metadata.reason, "expired", item.name);
+  }
 });
 
 Deno.test("another live procedure skips as flow_active and releases the QR slot", async () => {

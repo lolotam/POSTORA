@@ -6,7 +6,13 @@ import { eventEnableRefusal } from "@/lib/procedureTemplates";
 const mocks = vi.hoisted(() => ({
   tools: [] as Array<Record<string, unknown>>,
   links: [] as Array<{ tool_id: string; social_account_id: string }>,
-  bindings: [] as Array<{ social_account_id: string; connector_id: string }>,
+  linksReady: true,
+  linksError: null as unknown,
+  refetchLinks: vi.fn(),
+  bindings: [] as Array<{ social_account_id: string; connector_id: string }> | undefined,
+  bindingsLoading: false,
+  bindingsError: false,
+  refetchBindings: vi.fn(),
   messaging: vi.fn(async (_action: string, _body: Record<string, unknown>) => ({
     status: "pending",
     name: "postora_cod_confirm_v1",
@@ -17,14 +23,19 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@/hooks/useAiAgentTools", () => ({
   useAiAgentTools: () => ({ tools: mocks.tools }),
-  useAiToolAccountLinks: () => ({ links: mocks.links, linksReady: true }),
+  useAiToolAccountLinks: () => ({
+    links: mocks.links,
+    linksReady: mocks.linksReady,
+    linksError: mocks.linksError,
+    refetchLinks: mocks.refetchLinks,
+  }),
 }));
 vi.mock("@/hooks/useStoreWebhookBindings", () => ({
   useStoreWebhookBindings: () => ({
     bindings: mocks.bindings,
-    isLoading: false,
-    isError: false,
-    refetch: vi.fn(),
+    isLoading: mocks.bindingsLoading,
+    isError: mocks.bindingsError,
+    refetch: mocks.refetchBindings,
     createBinding: { isPending: false, mutateAsync: vi.fn() },
     rotateSecret: { isPending: false, mutateAsync: vi.fn() },
   }),
@@ -118,7 +129,13 @@ describe("ProceduresCard", () => {
   beforeEach(() => {
     mocks.tools = [];
     mocks.links = [];
+    mocks.linksReady = true;
+    mocks.linksError = null;
+    mocks.refetchLinks.mockClear();
     mocks.bindings = [];
+    mocks.bindingsLoading = false;
+    mocks.bindingsError = false;
+    mocks.refetchBindings.mockClear();
     mocks.messaging.mockClear();
     mocks.messaging.mockResolvedValue({ status: "pending", name: "postora_cod_confirm_v1", language: "ar", category: "UTILITY" });
   });
@@ -180,6 +197,45 @@ describe("ProceduresCard", () => {
     expect(written.cod_confirm.enabled).toBe(true);
     expect(written.cod_confirm.qr_risk_acknowledged_at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
     expect(mocks.messaging.mock.calls.some((call) => call[1]?.create === true)).toBe(false);
+  });
+
+  it.each([
+    ["account links are loading", () => {
+      mocks.linksReady = false;
+    }],
+    ["webhook bindings are loading", () => {
+      mocks.bindingsLoading = true;
+      mocks.bindings = undefined;
+    }],
+  ])("disables COD while %s", (_name, arrange) => {
+    arrange();
+    const card = liveCard({ storeAccountId: "acc-1", connectionMode: "cloud_api" });
+    const toggle = screen.getByRole("switch", { name: /cod order confirmation/i });
+    expect(toggle).toBeDisabled();
+    expect(screen.getByText(/checking whether this store can update orders/i)).toBeInTheDocument();
+    fireEvent.click(toggle);
+    expect(card.seen).toEqual([]);
+  });
+
+  it.each([
+    ["the account-link query fails", () => {
+      mocks.linksError = new Error("links failed");
+    }],
+    ["the webhook-binding query fails", () => {
+      mocks.bindingsError = true;
+      mocks.bindings = undefined;
+    }],
+  ])("disables COD when %s", (_name, arrange) => {
+    arrange();
+    const card = liveCard({ storeAccountId: "acc-1", connectionMode: "cloud_api" });
+    const toggle = screen.getByRole("switch", { name: /cod order confirmation/i });
+    expect(toggle).toBeDisabled();
+    expect(screen.getByRole("alert")).toHaveTextContent(/could not be checked/i);
+    fireEvent.click(toggle);
+    expect(card.seen).toEqual([]);
+    fireEvent.click(screen.getByRole("button", { name: /^retry$/i }));
+    expect(mocks.refetchLinks).toHaveBeenCalled();
+    expect(mocks.refetchBindings).toHaveBeenCalled();
   });
 
   it("refuses COD while the WooCommerce connector is read-only", () => {

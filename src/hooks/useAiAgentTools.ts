@@ -190,6 +190,7 @@ export function useAiToolAccountLinks() {
     // wait for linksReady before drawing a strip whose ticks state facts.
     linksReady: links.isSuccess,
     linksError: links.error,
+    refetchLinks: () => links.refetch(),
     setToolAccounts,
   };
 }

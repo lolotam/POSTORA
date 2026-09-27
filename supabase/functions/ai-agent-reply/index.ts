@@ -91,6 +91,7 @@ import {
   boundWaitlistSightings,
   createProcedureTurn,
   enrollWaitlist,
+  executeOfferedWaitlistJoin,
   fieldsFor,
   planBoundWaitlistJoin,
   PROCEDURE_TOOL_NAMES,
@@ -98,6 +99,7 @@ import {
   stepGuidance,
   scopeStoreEventRead,
   stockSightingsFromToolOutput,
+  stockWaitlistJoinOffered,
   storeEventReadScope,
   waitlistRound,
   type StockSighting,
@@ -1566,7 +1568,10 @@ Deno.serve(async (req) => {
         if (isProcedureTool) procedureToolRanThisRound = true;
         const result: ToolResult = await timings.span(`tool:${toolCall.function.name}`, async () =>
           toolCall.function.name === "stock_waitlist_join"
-            ? await joinStockWaitlist(String(args.product_id ?? ""))
+            ? await executeOfferedWaitlistJoin(
+              stockWaitlistJoinOffered(waitlistOn, roundToolDefinitions),
+              () => joinStockWaitlist(String(args.product_id ?? "")),
+            )
             : isProcedureTool
             ? await procedureTurn!.handle(toolCall.function.name, args)
             : customTool

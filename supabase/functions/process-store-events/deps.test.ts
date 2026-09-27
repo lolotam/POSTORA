@@ -110,6 +110,8 @@ function openerInput(): RecordOpenerInput {
       status: "sending",
       claim_token: "token-1",
       due_at: "2026-09-27T12:00:00.000Z",
+      created_at: "2026-09-27T12:00:00.000Z",
+      attempts: 1,
       outbound_message_id: "wamid.kept",
     },
     account: {
@@ -176,6 +178,35 @@ Deno.test("recordOpener does not insert when the inbox read fails", async () => 
   const broken = recordingAdmin({ message: false, thread: false, messageError: true });
   await assertRejects(() => createStoreEventPorts(broken.admin).recordOpener(openerInput()));
   assertEquals(broken.inserts, []);
+});
+
+Deno.test("alertAdmin records the attention row under category ai", async () => {
+  const inserted: Array<Record<string, unknown>> = [];
+  const admin = {
+    from(table: string) {
+      const builder = {
+        insert(row: Record<string, unknown>) {
+          if (table === "system_logs") inserted.push(row);
+          return Promise.resolve({ error: null });
+        },
+        select() {
+          return builder;
+        },
+        eq() {
+          return builder;
+        },
+        maybeSingle() {
+          return Promise.resolve({ data: null, error: null });
+        },
+      };
+      return builder;
+    },
+  };
+  await createStoreEventPorts(admin).alertAdmin(openerInput().event, "indeterminate");
+  assertEquals(inserted.length, 1);
+  assertEquals(inserted[0].category, "ai");
+  assertEquals(inserted[0].source, "process-store-events");
+  assertEquals(inserted[0].level, "warn");
 });
 
 Deno.test("opt-out lookup runs only for a phone the event named", () => {

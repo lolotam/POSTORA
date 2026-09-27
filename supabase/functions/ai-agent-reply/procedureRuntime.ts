@@ -446,6 +446,23 @@ export const WAITLIST_BINDING_REFUSAL =
 export const WAITLIST_NOTIFICATIONS_NOT_SET_UP =
   "Stock notifications are not set up for this store. Do not tell the customer they will be messaged when the product is back.";
 
+/** True only when this turn's tool list actually contained stock_waitlist_join. */
+export function stockWaitlistJoinOffered(
+  waitlistOn: boolean,
+  offeredTools: ReadonlyArray<{ function?: { name?: string } }>,
+): boolean {
+  return waitlistOn && offeredTools.some((tool) => tool.function?.name === "stock_waitlist_join");
+}
+
+/** Join when it was offered. Otherwise the usual unknown-tool line, and `join` is not called. */
+export async function executeOfferedWaitlistJoin(
+  offered: boolean,
+  join: () => Promise<ToolResult>,
+): Promise<ToolResult> {
+  if (!offered) return { output: "Unknown tool: stock_waitlist_join" };
+  return await join();
+}
+
 /** Tool for this round, plus the line the model hears when nothing can be offered. */
 export function waitlistRound(sightings: StockSighting[], offered: StockSighting[]): {
   tool: ReturnType<typeof stockWaitlistToolDefinition>;
