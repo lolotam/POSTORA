@@ -351,6 +351,7 @@ Deno.test("a claim RPC error sends nothing", async () => {
   assertEquals(response.status, 500);
   assertEquals(await response.json(), { error: "scheduled_query_failed" });
   assertEquals(gate.sends, []);
+  assertEquals(gate.events.map((event) => event.metadata.reason), ["claim_failed"]);
 });
 
 Deno.test("an Evolution timeout, a network error or an Evolution 5xx leaves the row sending, never failed", async () => {

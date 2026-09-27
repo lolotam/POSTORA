@@ -72,6 +72,15 @@ BEGIN
     RETURN;
   END IF;
 
+  -- The column was unrestricted text and owners could write any value, so a
+  -- status outside the new list would abort ADD CONSTRAINT. Such rows were
+  -- never sendable; record them as failed.
+  UPDATE public.whatsapp_scheduled_messages
+  SET status = 'failed',
+      error_message = 'legacy_status'
+  WHERE status IS NULL
+     OR status NOT IN ('pending', 'claimed', 'sending', 'sent', 'failed', 'cancelled', 'skipped');
+
   FOR r IN
     SELECT c.conname
     FROM pg_constraint AS c

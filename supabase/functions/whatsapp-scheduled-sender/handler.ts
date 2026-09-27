@@ -46,7 +46,8 @@ export interface ScheduledTransition {
 }
 
 export interface ScheduledLog {
-  userId: string;
+  /** Null for tick-level events that belong to no single user. */
+  userId: string | null;
   level: "info" | "warn" | "error";
   message: string;
   metadata: Record<string, unknown>;
@@ -502,7 +503,14 @@ export async function handleScheduledSender(req: Request, deps: ScheduledSenderD
 
   try {
     const loaded = await deps.loadDue();
-    if ("error" in loaded) return json({ error: "scheduled_query_failed" }, 500);
+    if ("error" in loaded) {
+      try {
+        await deps.logEvent({ userId: null, level: "error", message: "Scheduled claim failed", metadata: { reason: "claim_failed" } });
+      } catch {
+        console.error("[scheduled-sender] claim-failure log failed");
+      }
+      return json({ error: "scheduled_query_failed" }, 500);
+    }
     return json(await deliverDue(loaded.messages, deps));
   } catch {
     console.error("[scheduled-sender] Fatal error");
