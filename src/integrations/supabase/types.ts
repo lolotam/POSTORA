@@ -7040,6 +7040,9 @@ export type Database = {
       }
       whatsapp_scheduled_messages: {
         Row: {
+          attempts: number
+          claim_token: string | null
+          claimed_at: string | null
           created_at: string | null
           error_message: string | null
           id: string
@@ -7056,6 +7059,9 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          attempts?: number
+          claim_token?: string | null
+          claimed_at?: string | null
           created_at?: string | null
           error_message?: string | null
           id?: string
@@ -7072,6 +7078,9 @@ export type Database = {
           user_id: string
         }
         Update: {
+          attempts?: number
+          claim_token?: string | null
+          claimed_at?: string | null
           created_at?: string | null
           error_message?: string | null
           id?: string
@@ -7087,7 +7096,15 @@ export type Database = {
           updated_at?: string | null
           user_id?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "whatsapp_scheduled_messages_social_account_id_fkey"
+            columns: ["social_account_id"]
+            isOneToOne: false
+            referencedRelation: "social_accounts"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       whatsapp_webhooks: {
         Row: {

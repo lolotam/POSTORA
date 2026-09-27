@@ -2,6 +2,14 @@ import { createEvolutionApi, type EvolutionApi, type EvolutionSendResult } from 
 
 const GRAPH_API = "https://graph.facebook.com/v22.0";
 
+/** A Graph API send that got a response. `status` tells a 5xx (outcome unknown) from a refusal. */
+export class WhatsAppCloudApiError extends Error {
+  constructor(message: string, public readonly status: number, public readonly code?: unknown) {
+    super(message);
+    this.name = "WhatsAppCloudApiError";
+  }
+}
+
 export interface WhatsAppTransportAccount {
   id: string;
   platform_user_id: string;
@@ -73,7 +81,9 @@ async function graphSend(account: WhatsAppTransportAccount, payload: Record<stri
     body: JSON.stringify(payload),
   });
   const raw = await response.json().catch(() => ({}));
-  if (!response.ok || raw?.error) throw new Error(raw?.error?.message || "WhatsApp send failed");
+  if (!response.ok || raw?.error) {
+    throw new WhatsAppCloudApiError(raw?.error?.message || "WhatsApp send failed", response.status, raw?.error?.code);
+  }
   return { messageId: raw?.messages?.[0]?.id || null, raw };
 }
 

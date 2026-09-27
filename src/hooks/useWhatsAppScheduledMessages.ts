@@ -2,6 +2,8 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "./useAuth";
 
+export const SCHEDULED_CANCEL_BLOCKED = "This message is already being sent and can no longer be cancelled.";
+
 export interface ScheduledMessage {
   id: string;
   social_account_id: string;
@@ -63,8 +65,16 @@ export function useWhatsAppScheduledMessages(socialAccountId?: string) {
 
   const cancel = useMutation({
     mutationFn: async (id: string) => {
-      const { error } = await supabase.from("whatsapp_scheduled_messages").update({ status: "cancelled" }).eq("id", id);
+      const { data, error } = await supabase
+        .from("whatsapp_scheduled_messages")
+        .update({ status: "cancelled" })
+        .eq("id", id)
+        .eq("status", "pending")
+        .select("id");
       if (error) throw error;
+      if (!data || data.length === 0) {
+        throw new Error(SCHEDULED_CANCEL_BLOCKED);
+      }
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["whatsapp-scheduled"] }),
   });
