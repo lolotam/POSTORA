@@ -267,7 +267,7 @@ Deno.test("engagement mode uses the reply gate and human_then_ai still sends", (
   assertEquals(accountSkipReason(row, account({ defaultMode: "human_then_ai" }), NOW), null);
   // resolveEngagementMode maps an unknown mode to human_then_ai, so it is not a skip.
   assertEquals(accountSkipReason(row, account({ defaultMode: "nope" }), NOW), null);
-  assertEquals(storeSkipReason("review_request", {}, snapshot({ status: "completed" }), NOW), null);
+  assertEquals(storeSkipReason("review_request", { phone: PHONE }, snapshot({ status: "completed" }), NOW), null);
 });
 
 Deno.test("a successful send activates the procedure and records the opener", async () => {
@@ -920,4 +920,11 @@ Deno.test("back in stock deletes the waitlist row after the opener is accepted",
   await runStoreEventWorker(box.ports);
   assertEquals(box.deleted, 1);
   assertEquals(box.row.status, "sent");
+});
+
+// PR #214 round 9: a delayed review must not go to a number the order no longer carries.
+Deno.test("a review request is skipped when the order's phone changed since the webhook", () => {
+  assertEquals(storeSkipReason("review_request", { phone: PHONE }, snapshot({ status: "completed", phone: "96599990000" }), NOW), "phone_changed");
+  assertEquals(storeSkipReason("review_request", { phone: PHONE }, snapshot({ status: "completed", phone: "" }), NOW), "phone_changed");
+  assertEquals(storeSkipReason("review_request", { phone: PHONE }, snapshot({ status: "completed" }), NOW), null);
 });

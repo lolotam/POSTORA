@@ -189,7 +189,11 @@ export function storeSkipReason(
 ): string | null {
   if (!snapshot) return "store_unread";
   if (flow === "back_in_stock") return snapshot.stockStatus === "instock" ? null : "not_instock";
-  if (flow === "review_request") return snapshot.status === "completed" ? null : "review_not_completed";
+  if (flow === "review_request") {
+    if (snapshot.status !== "completed") return "review_not_completed";
+    // The review runs days after the webhook: never message a number the order no longer carries.
+    return snapshot.phone && snapshot.phone === payload.phone ? null : "phone_changed";
+  }
   if (snapshot.paymentMethod.toLowerCase() !== "cod") return "payment_method_changed";
   if (!COD_STATUSES.has(snapshot.status)) return "status_changed";
   if (!snapshot.phone || snapshot.phone !== payload.phone) return "phone_changed";
