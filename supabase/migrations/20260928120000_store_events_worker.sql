@@ -35,15 +35,33 @@ SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $function$
 BEGIN
-  -- (a) An expired lease at 3+ attempts can never be retried: mark it failed
-  -- rather than leaving it 'claimed' forever.
-  UPDATE public.store_events
-  SET status = 'failed',
-      skip_reason = 'attempts_exhausted',
-      processed_at = now()
-  WHERE status = 'claimed'
-    AND claimed_at < now() - p_lease
-    AND attempts >= 3;
+  -- (a) Attempts are exhausted whether the row sits 'pending' after a
+  -- transient-read release or holds an expired 'claimed' lease: mark it
+  -- failed and log one sanitized row per exhausted event (event_id, flow,
+  -- social_account_id only -- never phone or payload).
+  WITH exhausted AS (
+    UPDATE public.store_events
+    SET status = 'failed',
+        skip_reason = 'attempts_exhausted',
+        processed_at = now()
+    WHERE ((status = 'pending' AND due_at <= now())
+        OR (status = 'claimed' AND claimed_at < now() - p_lease))
+      AND attempts >= 3
+    RETURNING id, user_id, flow, social_account_id
+  )
+  INSERT INTO public.system_logs
+    (source, category, level, message, user_id, metadata)
+  SELECT 'process-store-events',
+         'ai',
+         'warn',
+         'Store event failed after 3 attempts',
+         e.user_id,
+         jsonb_build_object(
+           'event_id', e.id,
+           'flow', e.flow,
+           'social_account_id', e.social_account_id
+         )
+  FROM exhausted AS e;
 
   -- (b) Claim due pending rows plus expired leases, oldest first, at most
   -- p_limit. SKIP LOCKED lets overlapping workers split the queue instead

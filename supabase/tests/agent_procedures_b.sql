@@ -623,5 +623,60 @@ BEGIN
     'B30 purge-store-events runs daily';
 END $procb_cron$;
 
+-- B31: a pending row at 3 attempts (released back after a transient read)
+-- exhausts on the next claim instead of being reclaimed, and logs one
+-- sanitized system_logs row. Payload carries a phone number so the log
+-- sanitization assert is meaningful.
+DO $$
+DECLARE
+  u_a uuid := '11111111-1111-4111-8111-111111111111';
+  acct_a uuid := '33333333-3333-4333-8333-333333333333';
+  tool_a uuid := '55555555-5555-4555-8555-555555555555';
+  bind_a uuid := '77777777-7777-4777-8777-777777777777';
+  v_event uuid;
+  v_claimed text[];
+  v_log jsonb;
+BEGIN
+  INSERT INTO public.store_events
+    (user_id, social_account_id, connector_id, binding_id, flow,
+     external_id, payload, status, due_at, attempts)
+  VALUES
+    (u_a, acct_a, tool_a, bind_a, 'cod_confirm', 'order-b31-pending-exhausted',
+     '{"order_id":"b31","phone":"96555519999"}', 'pending',
+     now() - interval '1 hour', 3)
+  RETURNING id INTO v_event;
+
+  SELECT array_agg(external_id)
+    INTO v_claimed
+    FROM public.claim_store_events(10, interval '2 minutes');
+
+  ASSERT (SELECT status FROM public.store_events WHERE id = v_event) = 'failed',
+    'B31 pending row at 3 attempts is marked failed';
+  ASSERT (SELECT skip_reason FROM public.store_events WHERE id = v_event) = 'attempts_exhausted',
+    'B31 pending exhausted row carries attempts_exhausted';
+  ASSERT (SELECT processed_at FROM public.store_events WHERE id = v_event) IS NOT NULL,
+    'B31 pending exhausted row carries processed_at';
+  ASSERT COALESCE(v_claimed @> ARRAY['order-b31-pending-exhausted'], false) = false,
+    'B31 pending exhausted row is not returned by the claim';
+
+  SELECT metadata INTO v_log FROM public.system_logs
+  WHERE metadata->>'event_id' = v_event::text
+  ORDER BY created_at DESC LIMIT 1;
+  ASSERT v_log IS NOT NULL,
+    'B31 exhausted event has a system_logs row';
+  ASSERT NOT (v_log ? 'phone'),
+    'B31 system_logs metadata contains no phone key';
+  ASSERT NOT (v_log ? 'payload'),
+    'B31 system_logs metadata contains no payload';
+  ASSERT (SELECT message FROM public.system_logs
+          WHERE metadata->>'event_id' = v_event::text
+          ORDER BY created_at DESC LIMIT 1) = 'Store event failed after 3 attempts',
+    'B31 system_logs row carries the exhaustion message';
+  ASSERT (SELECT source FROM public.system_logs
+          WHERE metadata->>'event_id' = v_event::text
+          ORDER BY created_at DESC LIMIT 1) = 'process-store-events',
+    'B31 system_logs row carries the process-store-events source';
+END $$;
+
 ROLLBACK;
 \echo '=== agent_procedures_b: ALL CHECKS PASSED ==='

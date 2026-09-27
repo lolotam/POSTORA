@@ -121,27 +121,32 @@ Deno.test("back-in-stock drafts are candidates for a matching waitlist row only"
   assertEquals("sku" in drafts[0].payload, false);
 });
 
-Deno.test("a parent delivery and a variation delivery for one waitlist row share one external id", () => {
-  const row = { id: "w1", product_id: 42, parent_id: 9, phone: "96555512345" };
+Deno.test("back-in-stock matches the reported product or its parent, never a child row of the reported product", () => {
   const base = {
-    now: NOW, enabled: new Set(["back_in_stock"]), reviewDelayDays: 3, country: null, waitlist: [row],
+    now: NOW, enabled: new Set(["back_in_stock"]), reviewDelayDays: 3, country: null,
   };
-  const parent = classifyWooDelivery({
+  const child = { id: "child", product_id: 42, parent_id: 9, phone: "96555510042" };
+  const parentRow = { id: "parent", product_id: 9, parent_id: null, phone: "96555510009" };
+
+  const parentUpdate = classifyWooDelivery({
     topic: "product.updated",
     body: { id: 9, name: "Oud", stock_status: "instock" },
     ...base,
+    waitlist: [child, parentRow],
   });
-  const variation = classifyWooDelivery({
+  assertEquals(parentUpdate.map((draft) => draft.external_id), ["waitlist:parent"]);
+  assertEquals(parentUpdate[0].payload.product_id, "9");
+
+  const variationUpdate = classifyWooDelivery({
     topic: "product.updated",
     body: { id: 42, parent_id: 9, name: "Oud 50ml", stock_status: "instock" },
     ...base,
+    waitlist: [child, parentRow],
   });
-  assertEquals(parent.map((draft) => draft.external_id), ["waitlist:w1"]);
-  assertEquals(variation.map((draft) => draft.external_id), ["waitlist:w1"]);
-  assertEquals(parent[0].payload.phone, "96555512345");
-  assertEquals(variation[0].payload.phone, "96555512345");
-  assertEquals(parent[0].payload.product_id, "42");
-  assertEquals(variation[0].payload.product_id, "42");
+  assertEquals(variationUpdate.map((draft) => draft.external_id), ["waitlist:child", "waitlist:parent"]);
+  assertEquals(variationUpdate[0].payload.product_id, "42");
+  assertEquals(variationUpdate[1].payload.product_id, "9");
+  assertEquals(variationUpdate[1].payload.product_name, "Oud 50ml");
 });
 
 
