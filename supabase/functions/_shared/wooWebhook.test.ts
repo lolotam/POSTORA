@@ -37,7 +37,9 @@ Deno.test("verifyWooSignature accepts the current secret and rejects a wrong or 
 Deno.test("a one-byte mutation of a valid signature is rejected", async () => {
   const body = "{\"id\":1}";
   const good = await mac(SECRET, body);
-  const mutated = `${good.slice(0, -1)}${good.endsWith("A") ? "B" : "A"}`;
+  const at = Math.floor(good.length / 2);
+  assertEquals(good[at] === "=", false);
+  const mutated = `${good.slice(0, at)}${good[at] === "A" ? "B" : "A"}${good.slice(at + 1)}`;
   assertEquals(await verifyWooSignature(body, mutated, { current: SECRET, previous: null, rotatedAt: null }, NOW), false);
 });
 
@@ -74,19 +76,17 @@ Deno.test("a COD order only becomes a draft when it is created, not on a later u
   }), []);
 });
 
-Deno.test("a COD order already cancelled produces no draft", () => {
-  assertEquals(classifyWooDelivery({
-    topic: "order.created", body: { ...order, status: "cancelled" }, now: NOW,
-    enabled: new Set(["cod_confirm"]), reviewDelayDays: 3, country: "KW",
-  }), []);
-});
-
-Deno.test("a non-COD order produces no draft", () => {
-  const drafts = classifyWooDelivery({
-    topic: "order.created", body: { ...order, payment_method: "knet" }, now: NOW,
-    enabled: new Set(["cod_confirm"]), reviewDelayDays: 3, country: "KW",
-  });
-  assertEquals(drafts, []);
+Deno.test("a created order that is not a live COD confirmation produces no draft", () => {
+  const cases = [
+    ["non-COD", { ...order, payment_method: "knet" }, new Set(["cod_confirm"])],
+    ["cancelled", { ...order, status: "cancelled" }, new Set(["cod_confirm"])],
+    ["disabled flow", order, new Set<string>()],
+  ] as const;
+  for (const [label, body, enabled] of cases) {
+    assertEquals(classifyWooDelivery({
+      topic: "order.created", body, now: NOW, enabled, reviewDelayDays: 3, country: "KW",
+    }), [], label);
+  }
 });
 
 Deno.test("a review is due at completion plus the delay, and a stale completion is dropped", () => {
@@ -118,8 +118,4 @@ Deno.test("back-in-stock drafts are candidates for a matching waitlist row only"
   assertEquals(drafts[0].payload, { product_id: "9", product_name: "Oud", consent_basis: "chat_optin" });
 });
 
-Deno.test("a disabled flow produces nothing", () => {
-  assertEquals(classifyWooDelivery({
-    topic: "order.created", body: order, now: NOW, enabled: new Set(), reviewDelayDays: 3, country: "KW",
-  }), []);
-});
+

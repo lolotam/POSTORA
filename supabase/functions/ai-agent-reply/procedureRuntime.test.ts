@@ -353,7 +353,12 @@ Deno.test("a pending_opener state is inert: no start, no submit, nothing progres
     run_id: "evt-1", key: "cod_confirm" as const, version: 1, step: 0, fields: {}, off_script: 0,
     origin: "event" as const, started_at: T.toISOString(), updated_at: T.toISOString(), phase: "pending_opener" as const,
   };
-  const turn = createProcedureTurn(input(ports, { state: pending }));
+  const base = input(ports);
+  const turn = createProcedureTurn({
+    ...base,
+    state: pending,
+    config: { ...base.config, cod_confirm: { enabled: true, prompts: {}, closing: "" } },
+  });
   assertEquals(turn.inert, true);
   assertEquals(turn.state, null);
   assertEquals(turn.start("lead_capture", "jev"), false);

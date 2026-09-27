@@ -19,7 +19,7 @@ import {
   runInboundMediaUnderstanding,
 } from "../_shared/inboundMediaPipeline.ts";
 import { EvolutionFetcher } from "../_shared/inboundMediaFetchers.ts";
-import { isOptOutMessage, optOutDb, recordOptOut } from "../_shared/optOut.ts";
+import { automationAllowedAfterInbound, isOptOutMessage, optOutDb, recordOptOut } from "../_shared/optOut.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -160,17 +160,8 @@ async function persistEvolutionMessage(
     | { row_id: string | null; was_inserted: boolean }
     | undefined;
   if (!persisted || !persisted.was_inserted) return false;
-  // Opt-out lands before n8n dispatch and auto-replies, so it holds with the agent off.
   const inboundText = (row.message_text as string) || "";
   const optedOut = !sentByOwner && isOptOutMessage(inboundText);
-  if (optedOut) {
-    await recordOptOut(optOutDb(admin), {
-      userId: account.user_id,
-      socialAccountId: account.id,
-      phone: remoteNumber,
-      conversationId,
-    });
-  }
   await touchConversation(admin, account, {
     conversationId,
     participantName: built.participantName,
@@ -196,6 +187,17 @@ async function persistEvolutionMessage(
       contactNumber: remoteNumber,
     },
   );
+  // Inbound row and inbox cache are stored. Opt-out returns before n8n and the agent.
+  if (!automationAllowedAfterInbound({ optedOut })) {
+    await recordOptOut(optOutDb(admin), {
+      userId: account.user_id,
+      socialAccountId: account.id,
+      phone: remoteNumber,
+      conversationId,
+    });
+    return true;
+  }
+
   // Only a message from the contact is an inbound event for automations; echoing the
   // operator's own reply back into n8n would retrigger their workflows on their own text.
   if (sentByOwner) return true;
@@ -231,7 +233,7 @@ async function persistEvolutionMessage(
     ));
   }
 
-  if (optedOut || automationHandler !== "internal" || !inboundText.trim()) return true;
+  if (automationHandler !== "internal" || !inboundText.trim()) return true;
 
   // Evolution builds "[Document] <filename>" from a sender-chosen name, exactly like the
   // Cloud path. Keep it out of the keyword matcher and out of the model: there it is an

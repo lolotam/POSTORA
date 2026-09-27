@@ -1,5 +1,5 @@
-// Inbound opt-out (Spec B §8.11). Both WhatsApp webhooks record it before n8n dispatch and
-// auto-replies; a failed write is logged, not swallowed.
+// Inbound opt-out (Spec B §8.11). Both WhatsApp webhooks record it and then stop every
+// automation path (n8n, auto-replies, the agent). A failed write is logged, not swallowed.
 import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { persistProcedureState } from "../ai-agent-reply/procedureState.ts";
 
@@ -21,6 +21,11 @@ function normalize(text: string): string {
 /** Whole trimmed message, case-insensitive, with Arabic alef and hamza folded. */
 export function isOptOutMessage(text: string): boolean {
   return PHRASES.has(normalize(text));
+}
+
+/** An opt-out inbound message must not reach n8n, auto-replies, or the agent. */
+export function automationAllowedAfterInbound(input: { optedOut: boolean }): boolean {
+  return !input.optedOut;
 }
 
 export interface OptOutDb {

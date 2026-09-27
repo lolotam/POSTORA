@@ -94,20 +94,23 @@ Deno.test("a stream that exceeds the cap is refused", async () => {
   assertEquals(response.status, 413);
 });
 
-Deno.test("a good signature is stored, a wrong or missing one is 401 and does not spend the connector limit", async () => {
-  const good = deps({
+function accepting(extra: Partial<StoreWebhookDeps> = {}) {
+  return deps({
     flowsFrom: () => new Set(["cod_confirm"]),
     loadProcedures: async () => ({ cod_confirm: { enabled: true } }),
+    ...extra,
   });
-  const ok = await handleStoreWebhook(new Request(URL, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "x-wc-webhook-signature": await mac(SECRET, ORDER),
-      "x-wc-webhook-topic": "order.created",
-    },
-    body: ORDER,
-  }), good);
+}
+
+function jsonPost(body: string, signature: string | null, topic = "order.created"): Request {
+  const headers: Record<string, string> = { "content-type": "application/json", "x-wc-webhook-topic": topic };
+  if (signature !== null) headers["x-wc-webhook-signature"] = signature;
+  return new Request(URL, { method: "POST", headers, body });
+}
+
+Deno.test("a good signature is stored", async () => {
+  const good = accepting();
+  const ok = await handleStoreWebhook(jsonPost(ORDER, await mac(SECRET, ORDER)), good);
   assertEquals(ok.status, 200);
   assertEquals(await ok.json(), { ok: true, stored: 1 });
   assertEquals(good.inserted.length, 1);
@@ -116,21 +119,116 @@ Deno.test("a good signature is stored, a wrong or missing one is 401 and does no
     total: "4.500", currency: "KWD", status: "processing", payment_method: "cod", consent_basis: "checkout",
   });
   assert(!JSON.stringify(good.inserted[0]).includes("current-secret"));
+});
 
+Deno.test("a wrong signature is 401 and does not spend the connector limit", async () => {
   const wrong = deps();
-  const denied = await handleStoreWebhook(new Request(URL, {
-    method: "POST",
-    headers: { "content-type": "application/json", "x-wc-webhook-signature": "aaaa" },
-    body: ORDER,
-  }), wrong);
+  const denied = await handleStoreWebhook(jsonPost(ORDER, "aaaa"), wrong);
   assertEquals(denied.status, 401);
   assertEquals(wrong.connectorChecks, 0);
+  assertEquals(wrong.inserted, []);
   assertEquals(await denied.json(), { error: "unauthorized" });
+});
 
-  const missing = await handleStoreWebhook(new Request(URL, {
-    method: "POST", headers: { "content-type": "application/json" }, body: ORDER,
-  }), deps());
+Deno.test("a missing signature is 401 and does not spend the connector limit", async () => {
+  const gate = deps();
+  const missing = await handleStoreWebhook(jsonPost(ORDER, null), gate);
   assertEquals(missing.status, 401);
+  assertEquals(gate.connectorChecks, 0);
+  assertEquals(gate.inserted, []);
+});
+
+const RAW_ORDER = [
+  "{",
+  '  "billing" : { "country" : "KW", "first_name" : "Sara", "phone" : "+965 5551 2345" },',
+  '  "currency" : "KWD",',
+  '  "id" : 100,',
+  '  "number" : "100",',
+  '  "payment_method" : "cod",',
+  '  "status" : "processing",',
+  '  "total" : "4.500"',
+  "}",
+].join("\n");
+
+Deno.test("a body with whitespace and reordered keys is stored when signed exactly as sent", async () => {
+  const gate = accepting();
+  const response = await handleStoreWebhook(jsonPost(RAW_ORDER, await mac(SECRET, RAW_ORDER)), gate);
+  assertEquals(response.status, 200);
+  assertEquals(await response.json(), { ok: true, stored: 1 });
+  assertEquals(gate.inserted.length, 1);
+  assertEquals((gate.inserted[0].payload as { phone: string }).phone, "96555512345");
+});
+
+Deno.test("a body signed and then changed by one byte is 401 and is not stored", async () => {
+  const signature = await mac(SECRET, RAW_ORDER);
+  const at = RAW_ORDER.indexOf("processing");
+  const mutated = `${RAW_ORDER.slice(0, at)}X${RAW_ORDER.slice(at + 1)}`;
+  const gate = accepting();
+  const response = await handleStoreWebhook(jsonPost(mutated, signature), gate);
+  assertEquals(response.status, 401);
+  assertEquals(gate.inserted, []);
+});
+
+const PREVIOUS = "previous-secret";
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function secretsAt(rotatedAt: string) {
+  return accepting({
+    loadSecrets: async () => ({ current: SECRET, previous: PREVIOUS, rotatedAt }),
+  });
+}
+
+Deno.test("a delivery signed with the previous secret inside 24 hours is stored", async () => {
+  const gate = secretsAt(new Date(NOW.getTime() - (DAY_MS - 1)).toISOString());
+  const response = await handleStoreWebhook(jsonPost(ORDER, await mac(PREVIOUS, ORDER)), gate);
+  assertEquals(response.status, 200);
+  assertEquals((await response.json()).stored, 1);
+  assertEquals(gate.inserted.length, 1);
+});
+
+Deno.test("a delivery signed with the previous secret at 24 hours plus 1ms is 401", async () => {
+  const gate = secretsAt(new Date(NOW.getTime() - (DAY_MS + 1)).toISOString());
+  const response = await handleStoreWebhook(jsonPost(ORDER, await mac(PREVIOUS, ORDER)), gate);
+  assertEquals(response.status, 401);
+  assertEquals(gate.inserted, []);
+});
+
+Deno.test("a previous secret whose rotation time is in the future is refused", async () => {
+  const gate = secretsAt(new Date(NOW.getTime() + 1).toISOString());
+  const response = await handleStoreWebhook(jsonPost(ORDER, await mac(PREVIOUS, ORDER)), gate);
+  assertEquals(response.status, 401);
+  assertEquals(gate.inserted, []);
+});
+
+Deno.test("a connector rate limit denial is 429 and stores nothing", async () => {
+  const gate = accepting({ limitConnector: async () => ({ allowed: false, retryAfter: 9 }) });
+  const response = await handleStoreWebhook(jsonPost(ORDER, await mac(SECRET, ORDER)), gate);
+  assertEquals(response.status, 429);
+  assertEquals(gate.inserted, []);
+});
+
+Deno.test("a loadBinding failure is 500", async () => {
+  const gate = deps({ loadBinding: async () => { throw new Error("db down"); } });
+  const response = await handleStoreWebhook(jsonPost("{}", await mac(SECRET, "{}")), gate);
+  assertEquals(response.status, 500);
+  assertEquals(await response.json(), { error: "store_failed" });
+  assertEquals(gate.inserted, []);
+});
+
+Deno.test("a loadSecrets failure is 500", async () => {
+  const gate = deps({ loadSecrets: async () => { throw new Error("vault down"); } });
+  const response = await handleStoreWebhook(jsonPost("{}", await mac(SECRET, "{}")), gate);
+  assertEquals(response.status, 500);
+  assertEquals(await response.json(), { error: "store_failed" });
+  assertEquals(gate.inserted, []);
+});
+
+Deno.test("missing webhook secrets are 401", async () => {
+  const gate = deps({ loadSecrets: async () => null });
+  const response = await handleStoreWebhook(jsonPost("{}", await mac(SECRET, "{}")), gate);
+  assertEquals(response.status, 401);
+  assertEquals(await response.json(), { error: "unauthorized" });
+  assertEquals(gate.inserted, []);
 });
 
 Deno.test("event flows in stored config are not stored in PR 1", async () => {
@@ -203,20 +301,14 @@ Deno.test("a duplicate delivery stores once", async () => {
   assertEquals(rows.length, 1);
 });
 
-Deno.test("an unknown binding is a detail-free 404 and broken JSON is 400", async () => {
-  const missing = await handleStoreWebhook(new Request(URL, {
-    method: "POST",
-    headers: { "content-type": "application/json", "x-wc-webhook-signature": await mac(SECRET, "{}") },
-    body: "{}",
-  }), deps({ loadBinding: async () => null }));
+Deno.test("an unknown binding is a detail-free 404", async () => {
+  const missing = await handleStoreWebhook(jsonPost("{}", await mac(SECRET, "{}")), deps({ loadBinding: async () => null }));
   assertEquals(missing.status, 404);
   assertEquals(await missing.json(), { error: "not_found" });
+});
 
-  const broken = await handleStoreWebhook(new Request(URL, {
-    method: "POST",
-    headers: { "content-type": "application/json", "x-wc-webhook-signature": await mac(SECRET, "{") },
-    body: "{",
-  }), deps());
+Deno.test("broken JSON is 400", async () => {
+  const broken = await handleStoreWebhook(jsonPost("{", await mac(SECRET, "{")), deps());
   assertEquals(broken.status, 400);
   assertEquals(await broken.json(), { error: "invalid_json" });
 });

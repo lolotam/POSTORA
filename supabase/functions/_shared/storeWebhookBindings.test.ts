@@ -100,6 +100,16 @@ Deno.test("rotation of an unknown binding is a 404, and a lost race is a 409", a
   assertEquals(await status(rotateStoreWebhookSecret(fake.ports, { binding_id: BINDING }, NOW)), 409);
 });
 
+Deno.test("rotation refused when the account owner differs creates no new secret", async () => {
+  const fake = fakePorts();
+  await createStoreWebhookBinding(fake.ports, { social_account_id: ACCOUNT, connector_id: CONNECTOR });
+  fake.ports.resolveAccount = async (id) => ({ id, user_id: "someone-else", platform: "whatsapp" });
+  assertEquals(await status(rotateStoreWebhookSecret(fake.ports, { binding_id: BINDING }, NOW)), 404);
+  assertEquals(fake.secrets.length, 1);
+  assertEquals(fake.rows.get(BINDING)?.secret_id, "secret-1");
+  assertEquals(fake.rows.get(BINDING)?.previous_secret_id, undefined);
+});
+
 Deno.test("rotation checks the caller owns the binding's account", async () => {
   const fake = fakePorts();
   await createStoreWebhookBinding(fake.ports, { social_account_id: ACCOUNT, connector_id: CONNECTOR });

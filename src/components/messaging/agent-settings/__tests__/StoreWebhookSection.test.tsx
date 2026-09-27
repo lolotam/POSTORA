@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
+import { toast } from "sonner";
 import { StoreWebhookSection } from "../StoreWebhookSection";
+import { storeWebhookUrl } from "@/hooks/useStoreWebhookBindings";
 
 const ACCOUNT = "acc-1";
 const CONNECTOR = "con-1";
@@ -13,15 +15,19 @@ const mocks = vi.hoisted(() => ({
   rotate: vi.fn(),
 }));
 
+vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 vi.mock("@/hooks/useAiAgentTools", () => ({ useAiAgentTools: () => ({ tools: mocks.tools }) }));
-vi.mock("@/hooks/useStoreWebhookBindings", () => ({
-  storeWebhookUrl: (id: string) => `https://api.postora.cloud/functions/v1/store-webhook/${id}`,
-  useStoreWebhookBindings: () => ({
-    bindings: mocks.bindings,
-    createBinding: { mutateAsync: mocks.create, isPending: false },
-    rotateSecret: { mutateAsync: mocks.rotate, isPending: false },
-  }),
-}));
+vi.mock("@/hooks/useStoreWebhookBindings", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/hooks/useStoreWebhookBindings")>();
+  return {
+    ...actual,
+    useStoreWebhookBindings: () => ({
+      bindings: mocks.bindings,
+      createBinding: { mutateAsync: mocks.create, isPending: false },
+      rotateSecret: { mutateAsync: mocks.rotate, isPending: false },
+    }),
+  };
+});
 
 const woo = { id: CONNECTOR, connector_type: "woocommerce", social_account_id: ACCOUNT, scope: "account" };
 const issued = (secret: string) => ({ binding: { id: BINDING, connector_id: CONNECTOR }, secret });
@@ -32,6 +38,7 @@ describe("StoreWebhookSection", () => {
     mocks.bindings = [];
     mocks.create.mockReset();
     mocks.rotate.mockReset();
+    vi.mocked(toast.error).mockClear();
   });
 
   it("renders nothing for an account without a WooCommerce connector", () => {
@@ -64,15 +71,34 @@ describe("StoreWebhookSection", () => {
     mocks.bindings = [{ id: BINDING, connector_id: CONNECTOR, social_account_id: ACCOUNT }];
     mocks.rotate.mockResolvedValue(issued("r".repeat(43)));
     render(<StoreWebhookSection accountId={ACCOUNT} />);
-    expect(screen.getByLabelText(/delivery url/i)).toHaveValue(
-      `https://api.postora.cloud/functions/v1/store-webhook/${BINDING}`,
-    );
+    expect(screen.getByLabelText(/delivery url/i)).toHaveValue(storeWebhookUrl(BINDING));
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: /rotate secret/i }));
     });
     expect(mocks.rotate).toHaveBeenCalledWith(BINDING);
     expect(mocks.create).not.toHaveBeenCalled();
     expect(screen.getByLabelText(/webhook secret/i)).toHaveValue("r".repeat(43));
+  });
+
+  it("a failed create shows the error and no secret", async () => {
+    mocks.create.mockRejectedValue(new Error("down"));
+    render(<StoreWebhookSection accountId={ACCOUNT} />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /generate webhook url and secret/i }));
+    });
+    expect(toast.error).toHaveBeenCalledWith("The webhook secret could not be created. Try again.");
+    expect(screen.queryByLabelText(/webhook secret/i)).not.toBeInTheDocument();
+  });
+
+  it("a failed rotate shows the error and no secret", async () => {
+    mocks.bindings = [{ id: BINDING, connector_id: CONNECTOR, social_account_id: ACCOUNT }];
+    mocks.rotate.mockRejectedValue(new Error("down"));
+    render(<StoreWebhookSection accountId={ACCOUNT} />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /rotate secret/i }));
+    });
+    expect(toast.error).toHaveBeenCalledWith("The webhook secret could not be created. Try again.");
+    expect(screen.queryByLabelText(/webhook secret/i)).not.toBeInTheDocument();
   });
 
   it("the secret is dropped when the account changes", async () => {

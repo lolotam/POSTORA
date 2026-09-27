@@ -10,7 +10,7 @@ import { cancelOutboxRow } from "../ai-agent-reply/outbox.ts";
 import { enqueueAgentReply } from "../_shared/pendingReplies.ts";
 import { dispatchAgentReply } from "../_shared/agentReplyDispatch.ts";
 import { cloudButtonContent, isPlaceholderOnly, promptSafeInput } from "./messageContent.ts";
-import { isOptOutMessage, optOutDb, recordOptOut } from "../_shared/optOut.ts";
+import { automationAllowedAfterInbound, isOptOutMessage, optOutDb, recordOptOut } from "../_shared/optOut.ts";
 import {
   isDispatchIntentId,
   reconcileDispatchIntentByEcho,
@@ -552,10 +552,10 @@ async function handleLiveMessages(
 
     console.log("[whatsapp-webhook] Stored inbound message");
 
-    // Opt-out lands before n8n dispatch and auto-replies, so it holds with the agent off.
-    // The outbox row enqueued above is cancelled: nothing answers an opt-out.
+    // The inbound row is already stored. An opt-out cancels the queued reply and
+    // leaves before n8n, auto-replies, and the agent.
     const optedOut = isOptOutMessage(messageText);
-    if (optedOut) {
+    if (!automationAllowedAfterInbound({ optedOut })) {
       await recordOptOut(optOutDb(adminClient), {
         userId: account.user_id,
         socialAccountId: account.id,
@@ -563,6 +563,7 @@ async function handleLiveMessages(
         conversationId,
       });
       if (outboxId) await cancelOutboxRow(adminClient, outboxId, "opted_out");
+      continue;
     }
 
     if (automationHandler === "n8n") {
@@ -591,8 +592,6 @@ async function handleLiveMessages(
         }),
       ));
     }
-
-    if (optedOut) continue;
 
     // promptSafeText is computed with the enqueue above, because the row records it.
     //

@@ -23,10 +23,15 @@ for (const [label, input] of [
   ["prompt for a field the template lacks", { booking: { enabled: true, prompts: { colour: "x" }, closing: "" } }],
   ["a blank product finder question", { product_finder: { enabled: true, prompts: {}, closing: "", questions: ["Budget?", "  "] } }],
   ["a blank booking service", { booking: { enabled: true, prompts: {}, closing: "", services: ["Haircut", ""] } }],
-  ["a store-event flow (Spec B PR 1)", { cod_confirm: { enabled: true, prompts: {}, closing: "" } }],
 ] as const) {
   Deno.test(`parseProcedureConfig rejects ${label}`, () => {
     assertThrows(() => parseProcedureConfig(input), AgentBehaviorError);
+  });
+}
+
+for (const key of ["cod_confirm", "review_request", "back_in_stock"] as const) {
+  Deno.test(`parseProcedureConfig rejects the event flow ${key}`, () => {
+    assertThrows(() => parseProcedureConfig({ [key]: { enabled: true, prompts: {}, closing: "" } }), AgentBehaviorError);
   });
 }
 
