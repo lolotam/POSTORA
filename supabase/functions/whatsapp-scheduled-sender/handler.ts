@@ -85,6 +85,12 @@ export async function handleScheduledSender(req: Request, deps: ScheduledSenderD
           await deps.updateMessage(msg.id, { status: "skipped", error_message: "opted_out" });
         } catch {
           console.error("[scheduled-sender] opt-out skip update failed", msg.id);
+          await deps.logSendRefused({
+            source: "whatsapp-scheduled-sender",
+            userId: msg.user_id,
+            reason: "opt_out_skip_failed",
+            metadata: { scheduled_message_id: msg.id },
+          });
           continue;
         }
         await deps.logSendRefused({

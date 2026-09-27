@@ -73,3 +73,12 @@ Deno.test("a scheduled opt-out lookup failure leaves that user's messages pendin
   assertEquals(gate.logs[0]?.reason, "opt_out_lookup_failed");
   assertEquals(JSON.stringify(gate.logs).includes(DIGITS), false);
 });
+
+Deno.test("a failed opted-out status write is logged and the message is not sent", async () => {
+  const gate = deps([message("msg-a", "user-a")], {
+    updateMessage: async () => { throw new Error("scheduled_message_update_failed"); },
+  });
+  await handleScheduledSender(request(), gate);
+  assertEquals(gate.graph, []);
+  assertEquals(gate.logs, [{ userId: "user-a", reason: "opt_out_skip_failed", metadata: { scheduled_message_id: "msg-a" } }]);
+});

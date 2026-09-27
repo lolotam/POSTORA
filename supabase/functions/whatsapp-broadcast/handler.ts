@@ -105,6 +105,12 @@ export async function handleWhatsAppBroadcast(req: Request, deps: BroadcastDeps)
         await deps.skipRecipients(broadcast.id, skipped.map((recipient) => recipient.id));
       } catch {
         console.error("[whatsapp-broadcast] opt-out skip update failed");
+        await deps.logSendRefused({
+          source: "whatsapp-broadcast",
+          userId: auth.userId,
+          reason: "opt_out_skip_failed",
+          metadata: { broadcast_id: broadcast.id, skipped_count: skipped.length },
+        });
         return json({ error: "opt_out_skip_failed" }, 500);
       }
       await deps.logSendRefused({

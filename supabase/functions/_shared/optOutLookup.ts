@@ -47,7 +47,13 @@ export async function optedOutPhones(
   return optedOut;
 }
 
-export type OptOutRefusalReason = "opted_out" | "opt_out_lookup_failed";
+export type OptOutRefusalReason = "opted_out" | "opt_out_lookup_failed" | "opt_out_skip_failed";
+
+const REFUSAL_MESSAGES: Record<OptOutRefusalReason, string> = {
+  opted_out: "WhatsApp send refused: customer opted out",
+  opt_out_lookup_failed: "WhatsApp send refused: opt-out lookup failed",
+  opt_out_skip_failed: "WhatsApp send refused: opted-out status could not be saved",
+};
 
 export interface SendRefusedInput {
   source: string;
@@ -73,9 +79,7 @@ export async function logSendRefused(admin: OptOutLookupAdmin, input: SendRefuse
       level: optedOut ? "info" : "error",
       category: "system",
       source: input.source,
-      message: optedOut
-        ? "WhatsApp send refused: customer opted out"
-        : "WhatsApp send refused: opt-out lookup failed",
+      message: REFUSAL_MESSAGES[input.reason],
       user_id: input.userId,
       metadata: { ...safeMetadata(input.metadata), reason: input.reason },
     });

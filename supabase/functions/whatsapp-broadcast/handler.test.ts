@@ -76,6 +76,7 @@ Deno.test("broadcast skip-write failure returns 500 before any send", async () =
   assertEquals(response.status, 500);
   assertEquals(gate.graph, 0);
   assertEquals(gate.sending, 0);
+  assertEquals(gate.logs.map((log) => log.reason), ["opt_out_skip_failed"]);
 });
 
 Deno.test("a mixed broadcast sends only the numbers that are not opted out", async () => {
