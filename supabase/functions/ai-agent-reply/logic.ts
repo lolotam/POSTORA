@@ -12,7 +12,7 @@ import type {
   AgentTone,
 } from "../_shared/agentBehavior.ts";
 import { TRIAGE_CONFIDENCE, type Intent, type TriagePlan } from "../_shared/agentTriage.ts";
-import { isPendingOpener, recordOffScript, type ProcedureState } from "../_shared/procedures/engine.ts";
+import { isLivePendingOpener, recordOffScript, type ProcedureState } from "../_shared/procedures/engine.ts";
 import { isEventProcedureKey, JEV_START, type ProcedureKey } from "../_shared/procedures/templates.ts";
 
 export type EngagementMode = "ai_first" | "human_first" | "human_then_ai";
@@ -808,8 +808,8 @@ export function procedureStateAfterTurn(input: {
   hadTurn: boolean; storedState: unknown; initialState: ProcedureState | null;
   turnState: ProcedureState | null; progressed: boolean; escalated: boolean; now: Date;
 }): ProcedureState | null | undefined {
-  // An opener the worker has not confirmed belongs to the worker: never rewritten here.
-  if (isPendingOpener(input.storedState)) return undefined;
+  // A live opener belongs to the worker. A stale one falls through and is cleared.
+  if (isLivePendingOpener(input.storedState, input.now)) return undefined;
   if (!input.hadTurn) return input.storedState ? null : undefined;
   if (!input.storedState && !input.turnState) return undefined;
   if (input.escalated) return null;

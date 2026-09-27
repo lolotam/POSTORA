@@ -32,6 +32,20 @@ export function isPendingOpener(value: unknown): boolean {
   return typeof value === "object" && value !== null && (value as { phase?: unknown }).phase === "pending_opener";
 }
 
+/**
+ * A pending opener the worker may still confirm. Missing or unparseable `updated_at` is not live,
+ * so a stranded opener can be cleared. `isPendingOpener` stays the raw phase check.
+ */
+export function isLivePendingOpener(value: unknown, now: Date): boolean {
+  if (!isPendingOpener(value)) return false;
+  const state = value as { updated_at?: unknown; origin?: unknown };
+  if (typeof state.updated_at !== "string" || !Number.isFinite(Date.parse(state.updated_at))) return false;
+  const origin = state.origin === "event" || state.origin === "jev" || state.origin === "model"
+    ? state.origin
+    : undefined;
+  return now.getTime() - Date.parse(state.updated_at) <= staleAfterMs(origin);
+}
+
 function fieldDue(field: ProcedureField, collected: Record<string, string>): boolean {
   return field.when ? field.when(collected) : true;
 }

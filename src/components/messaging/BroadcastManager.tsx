@@ -33,6 +33,8 @@ function broadcastStatusLabel(status: string, t: (key: string, fallback: string)
       return t("status.completed", "completed");
     case "failed":
       return t("status.failed", "failed");
+    case "skipped":
+      return t("status.skipped", "skipped (opted out)");
     default:
       return status;
   }

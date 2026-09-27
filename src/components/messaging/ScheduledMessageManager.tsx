@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Clock, XCircle, CheckCircle2, Loader2, AlertCircle } from "lucide-react";
+import { Clock, XCircle, CheckCircle2, Loader2, AlertCircle, MinusCircle } from "lucide-react";
 import { format } from "date-fns";
 import { useWhatsAppScheduledMessages } from "@/hooks/useWhatsAppScheduledMessages";
 import { toast } from "sonner";
@@ -19,6 +19,7 @@ export function ScheduledMessageManager() {
       case "sent": return <Badge variant="default" className="gap-1"><CheckCircle2 className="h-3 w-3" /> {t("common:status.sent", "Sent")}</Badge>;
       case "failed": return <Badge variant="destructive" className="gap-1"><AlertCircle className="h-3 w-3" /> {t("common:status.failed", "Failed")}</Badge>;
       case "cancelled": return <Badge variant="outline" className="gap-1"><XCircle className="h-3 w-3" /> {t("common:status.cancelled", "Cancelled")}</Badge>;
+      case "skipped": return <Badge variant="outline" className="gap-1"><MinusCircle className="h-3 w-3" /> {t("status.skipped", "skipped (opted out)")}</Badge>;
       default: return <Badge variant="outline">{status}</Badge>;
     }
   };

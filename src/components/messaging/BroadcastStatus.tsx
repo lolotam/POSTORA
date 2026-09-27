@@ -5,13 +5,14 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { useWhatsAppBroadcastRecipients, WhatsAppBroadcast } from "@/hooks/useWhatsAppBroadcasts";
-import { CheckCircle2, Clock, XCircle, Loader2, Send } from "lucide-react";
+import { CheckCircle2, Clock, XCircle, Loader2, MinusCircle, Send } from "lucide-react";
 
 const statusConfig: Record<string, { icon: React.ReactNode; variant: "default" | "secondary" | "destructive" | "outline" }> = {
   pending: { icon: <Clock className="h-3 w-3" />, variant: "secondary" },
   sent: { icon: <Send className="h-3 w-3" />, variant: "default" },
   delivered: { icon: <CheckCircle2 className="h-3 w-3" />, variant: "default" },
   failed: { icon: <XCircle className="h-3 w-3" />, variant: "destructive" },
+  skipped: { icon: <MinusCircle className="h-3 w-3" />, variant: "outline" },
 };
 
 function statusLabel(status: string, t: (key: string, fallback: string) => string) {
@@ -28,6 +29,8 @@ function statusLabel(status: string, t: (key: string, fallback: string) => strin
       return t("status.sent", "sent");
     case "delivered":
       return t("status.delivered", "delivered");
+    case "skipped":
+      return t("status.skipped", "skipped (opted out)");
     default:
       return status;
   }
