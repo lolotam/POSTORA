@@ -8,7 +8,7 @@ export default function Scheduled() {
       <WhatsAppPageHeader
         icon={Clock}
         title="Scheduled"
-        description="Review scheduled WhatsApp messages before they send."
+        description="Schedule a WhatsApp message and review it before it sends."
       />
       <ScheduledMessageManager />
     </div>

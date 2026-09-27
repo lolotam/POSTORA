@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -7,10 +8,12 @@ import { Clock, XCircle, CheckCircle2, Loader2, AlertCircle, MinusCircle } from 
 import { format } from "date-fns";
 import { SCHEDULED_CANCEL_BLOCKED, useWhatsAppScheduledMessages } from "@/hooks/useWhatsAppScheduledMessages";
 import { toast } from "sonner";
+import { ScheduleMessageDialog } from "@/components/messaging/ScheduleMessageDialog";
 
 export function ScheduledMessageManager() {
   const { t } = useTranslation("inbox");
   const { messages, isLoading, cancel } = useWhatsAppScheduledMessages();
+  const [scheduleOpen, setScheduleOpen] = useState(false);
 
   const statusBadge = (status: string) => {
     if (status === "claimed" || status === "sending") {
@@ -39,11 +42,14 @@ export function ScheduledMessageManager() {
 
   return (
     <Card>
-      <CardHeader>
+      <CardHeader className="flex flex-row items-center justify-between gap-3 space-y-0">
         <CardTitle className="flex items-center gap-2">
           <Clock className="h-5 w-5" />
           {t("scheduled.titleCount", "Scheduled Messages ({{count}})", { count: messages.length })}
         </CardTitle>
+        <Button type="button" size="sm" onClick={() => setScheduleOpen(true)}>
+          {t("scheduled.scheduleButton", "Schedule message")}
+        </Button>
       </CardHeader>
       <CardContent>
         {isLoading ? (
@@ -51,7 +57,7 @@ export function ScheduledMessageManager() {
         ) : messages.length === 0 ? (
           <div className="text-center py-8 text-muted-foreground">
             <Clock className="h-8 w-8 mx-auto mb-2 opacity-50" />
-            <p className="text-sm">{t("scheduled.empty", "Scheduled messages created through the API appear here.")}</p>
+            <p className="text-sm">{t("scheduled.empty", "No scheduled messages yet. Use \"Schedule message\" to add one.")}</p>
           </div>
         ) : (
           <Table>
@@ -89,6 +95,7 @@ export function ScheduledMessageManager() {
           </Table>
         )}
       </CardContent>
+      <ScheduleMessageDialog open={scheduleOpen} onOpenChange={setScheduleOpen} />
     </Card>
   );
 }
