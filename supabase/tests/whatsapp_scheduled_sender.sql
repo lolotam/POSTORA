@@ -178,6 +178,15 @@ BEGIN
       USING ERRCODE = 'assert_failure';
   EXCEPTION WHEN insufficient_privilege THEN NULL;
   END;
+
+  -- S4b: an in-flight row cannot be deleted (RLS filters it silently); a
+  -- pending row can.
+  DELETE FROM public.whatsapp_scheduled_messages WHERE id = msg_claimed;
+  ASSERT EXISTS (SELECT 1 FROM public.whatsapp_scheduled_messages WHERE id = msg_claimed),
+    'S4b claimed row survives an end-user delete';
+  DELETE FROM public.whatsapp_scheduled_messages WHERE id = msg_tok;
+  ASSERT NOT EXISTS (SELECT 1 FROM public.whatsapp_scheduled_messages WHERE id = msg_tok),
+    'S4b pending row can be deleted by its owner';
 END $$;
 
 RESET ROLE;

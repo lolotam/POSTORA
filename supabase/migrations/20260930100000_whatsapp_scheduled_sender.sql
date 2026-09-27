@@ -115,10 +115,13 @@ CREATE POLICY "whatsapp_scheduled_messages_select_own"
 
 DROP POLICY IF EXISTS "whatsapp_scheduled_messages_delete_own"
   ON public.whatsapp_scheduled_messages;
+-- An in-flight row (claimed or sending) cannot be deleted: the send may still
+-- complete, and deleting it would lose the only record of a delivered message.
+-- Terminal rows stay deletable. Account deletion still cascades by design.
 CREATE POLICY "whatsapp_scheduled_messages_delete_own"
   ON public.whatsapp_scheduled_messages
   FOR DELETE
-  USING (auth.uid() = user_id);
+  USING (auth.uid() = user_id AND status NOT IN ('claimed', 'sending'));
 
 DROP POLICY IF EXISTS "whatsapp_scheduled_messages_insert_owned_account"
   ON public.whatsapp_scheduled_messages;
