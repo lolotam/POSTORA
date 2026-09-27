@@ -172,6 +172,33 @@ function eventOrderIdOk(event: StoreEventRow): boolean {
   return true;
 }
 
+export interface StoreEventLookup {
+  id: string;
+  userId: string;
+  socialAccountId: string;
+}
+
+const RUN_ID_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Null when this turn has no uuid account to bind the service-role read to. */
+export function storeEventReadScope(
+  runId: string,
+  userId: string,
+  socialAccountId: string | null,
+): StoreEventLookup | null {
+  if (!RUN_ID_UUID.test(runId) || !socialAccountId) return null;
+  return { id: runId, userId, socialAccountId };
+}
+
+export interface StoreEventEq {
+  eq(column: "id" | "user_id" | "social_account_id", value: string): StoreEventEq;
+}
+
+/** id, user_id, and social_account_id. eventMatches is the second check, not the only one. */
+export function scopeStoreEventRead(query: StoreEventEq, lookup: StoreEventLookup): StoreEventEq {
+  return query.eq("id", lookup.id).eq("user_id", lookup.userId).eq("social_account_id", lookup.socialAccountId);
+}
+
 function eventMatches(event: StoreEventRow | null, input: ProcedureTurnInput, flow: string): event is StoreEventRow {
   return !!event
     && event.user_id === input.userId
@@ -345,8 +372,16 @@ export function planWaitlistJoin(input: {
   if (input.platform !== "whatsapp") return { action: "refuse", output: "Waitlist join is only available on WhatsApp." };
   const matches = input.sightings.filter((sighting) => sighting.productId === input.productId);
   if (!matches.length) return { action: "refuse", output: "Refused: no stock check in this turn found that product." };
-  const source = matches.find((sighting) => sighting.stockStatus !== "instock");
-  if (!source) return { action: "refuse", output: "Refused: that product is in stock." };
+  const outOfStock = matches.filter((sighting) => sighting.stockStatus !== "instock");
+  if (!outOfStock.length) return { action: "refuse", output: "Refused: that product is in stock." };
+  const connectors = new Set(outOfStock.map((sighting) => sighting.connectorId));
+  if (connectors.size > 1) {
+    return {
+      action: "refuse",
+      output: "Refused: that product id was returned by more than one store. Ask the customer which product they mean.",
+    };
+  }
+  const source = outOfStock[0];
   const phone = input.phone ? customerPhoneForWaitlist(input.phone) : null;
   if (!phone || !input.socialAccountId) return { action: "refuse", output: "Refused: this chat has no customer phone." };
   const productId = Number(source.productId);

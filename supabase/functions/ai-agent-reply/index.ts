@@ -94,9 +94,12 @@ import {
   PROCEDURE_TOOL_NAMES,
   procedureToolDefinitions,
   stepGuidance,
+  scopeStoreEventRead,
   stockSightingsFromToolOutput,
   stockWaitlistToolDefinition,
+  storeEventReadScope,
   type StockSighting,
+  type StoreEventEq,
 } from "./procedureRuntime.ts";
 import { PROCEDURE_STATE_CONFLICT, persistProcedureState } from "./procedureState.ts";
 
@@ -1178,11 +1181,27 @@ Deno.serve(async (req) => {
           if (error) console.error("[ai-agent-reply] Procedure failure log rejected:", error.message);
         },
         eventFor: async (runId) => {
-          if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(runId)) return null;
-          const { data, error } = await admin.from("store_events")
-            .select("id, user_id, social_account_id, connector_id, flow, payload")
-            .eq("id", runId)
-            .maybeSingle();
+          const scope = storeEventReadScope(runId, request.user_id, toolContext.socialAccountId);
+          if (!scope) return null;
+          // The generated filter builder is too deep to pass through a generic.
+          // The cast keeps the three equality filters on the real query.
+          const scoped = scopeStoreEventRead(
+            admin.from("store_events").select("id, user_id, social_account_id, connector_id, flow, payload") as unknown as StoreEventEq,
+            scope,
+          ) as unknown as {
+            maybeSingle(): Promise<{
+              data: {
+                id: unknown;
+                user_id: unknown;
+                social_account_id: unknown;
+                connector_id: unknown;
+                flow: unknown;
+                payload: unknown;
+              } | null;
+              error: { message: string } | null;
+            }>;
+          };
+          const { data, error } = await scoped.maybeSingle();
           if (error) throw new Error("store_event_read_failed");
           if (!data || typeof data.user_id !== "string" || typeof data.social_account_id !== "string" || typeof data.connector_id !== "string" || typeof data.flow !== "string") {
             return null;

@@ -54,6 +54,12 @@ export interface StoreSnapshot {
   stockStatus: string | null;
 }
 
+/** A Woo re-read. `transient` is released for the next tick; `absent` is a final skip. */
+export type StoreRead =
+  | { outcome: "snapshot"; snapshot: StoreSnapshot }
+  | { outcome: "absent" }
+  | { outcome: "transient" };
+
 export interface ThreadRow {
   id: string;
   procedure_state: unknown;
@@ -90,7 +96,7 @@ export interface WorkerPorts {
   updateEvent(id: string, claimToken: string, patch: Record<string, unknown>): Promise<boolean>;
   releaseClaim(id: string, claimToken: string): Promise<boolean>;
   loadAccount(event: StoreEventRow): Promise<AccountContext | null>;
-  readStore(event: StoreEventRow): Promise<StoreSnapshot | null>;
+  readStore(event: StoreEventRow): Promise<StoreRead>;
   reserveQr(accountId: string, limit: number): Promise<boolean>;
   releaseQr(accountId: string): Promise<void>;
   ensureThread(input: { userId: string; conversationId: string }): Promise<ThreadRow>;
@@ -100,7 +106,6 @@ export interface WorkerPorts {
   recordOpener(input: RecordOpenerInput): Promise<void>;
   deleteWaitlist(event: StoreEventRow): Promise<void>;
   alertAdmin(event: StoreEventRow, reason: string): Promise<void>;
-  purge(nowMs: number): Promise<void>;
 }
 
 export interface WorkerSummary {
@@ -201,7 +206,12 @@ export async function runStoreEventWorker(
   summary.claimed = rows.length;
   for (const event of rows) {
     if (event.status === "sending") {
-      if (await settleIndeterminate(ports, event)) summary.failed += 1;
+      if (event.outbound_message_id) {
+        const finished = await completeRecordedSend(ports, event);
+        if (finished === "sent") summary.sent += 1;
+      } else if (await settleIndeterminate(ports, event)) {
+        summary.failed += 1;
+      }
       continue;
     }
     if (ports.now() - started >= limits.tickBudgetMs) {
@@ -211,8 +221,67 @@ export async function runStoreEventWorker(
     const outcome = await processClaimed(ports, event, limits.qrDailyCap);
     if (outcome !== "left") summary[outcome] += 1;
   }
-  await ports.purge(ports.now());
   return summary;
+}
+
+/** The provider already accepted. Finish the opener bookkeeping and do not send again. */
+async function completeRecordedSend(ports: WorkerPorts, event: StoreEventRow): Promise<"sent" | "left"> {
+  const messageId = event.outbound_message_id;
+  if (!messageId) return "left";
+  try {
+    const account = await ports.loadAccount(event);
+    const phone = event.payload.phone;
+    if (account?.platform === "whatsapp" && account.connectionMode && account.platformUserId && phone) {
+      const conversationId = whatsappConversationId(addressing(account), phone);
+      const thread = await ports.ensureThread({ userId: event.user_id, conversationId });
+      const stored = thread.procedure_state;
+      const pending = isPendingOpener(stored) && (stored as ProcedureState).run_id === event.id
+        ? stored as ProcedureState
+        : null;
+      return await finishAccepted(ports, {
+        event,
+        account,
+        threadId: thread.id,
+        conversationId,
+        messageId,
+        text: openerText(event.flow, openerLanguage(account.languageMode), event.payload),
+      }, thread, pending);
+    }
+    console.error(
+      `[process-store-events] ${event.id} accepted send has no WhatsApp thread to record`,
+    );
+    if (event.flow === "back_in_stock") await ports.deleteWaitlist(event);
+    const done = await ports.updateEvent(event.id, event.claim_token, {
+      status: "sent",
+      processed_at: iso(ports.now()),
+    });
+    return done ? "sent" : "left";
+  } catch (error) {
+    console.error(
+      `[process-store-events] ${event.id} accepted send was not finished:`,
+      sanitizeFailureReason(error instanceof Error ? error.message : "finish_failed"),
+    );
+    return "left";
+  }
+}
+
+async function finishAccepted(
+  ports: WorkerPorts,
+  opener: RecordOpenerInput,
+  thread: ThreadRow,
+  pending: ProcedureState | null,
+): Promise<"sent" | "left"> {
+  if (pending?.phase === "pending_opener" && pending.run_id === opener.event.id) {
+    const active: ProcedureState = { ...pending, phase: "active", updated_at: iso(ports.now()) };
+    await ports.persistState(thread.id, pending, active);
+  }
+  await ports.recordOpener(opener);
+  if (opener.event.flow === "back_in_stock") await ports.deleteWaitlist(opener.event);
+  const done = await ports.updateEvent(opener.event.id, opener.event.claim_token, {
+    status: "sent",
+    processed_at: iso(ports.now()),
+  });
+  return done ? "sent" : "left";
 }
 
 async function settleIndeterminate(ports: WorkerPorts, event: StoreEventRow): Promise<boolean> {
@@ -267,7 +336,17 @@ async function processClaimed(
       return "skipped";
     }
     const loaded = account!;
-    const storeReason = storeSkipReason(event.flow, event.payload, await ports.readStore(event), ports.now());
+    const read = await ports.readStore(event);
+    if (read.outcome === "transient") {
+      if (await ports.releaseClaim(event.id, event.claim_token)) return "released";
+      return "left";
+    }
+    const storeReason = storeSkipReason(
+      event.flow,
+      event.payload,
+      read.outcome === "snapshot" ? read.snapshot : null,
+      ports.now(),
+    );
     if (storeReason) {
       await skip(ports, event, storeReason);
       return "skipped";
@@ -355,14 +434,14 @@ async function processClaimed(
     }
     const recordedId = await ports.updateEvent(event.id, event.claim_token, { outbound_message_id: sent.messageId });
     if (!recordedId) return "left";
-    const active: ProcedureState = { ...openerState, phase: "active", updated_at: iso(ports.now()) };
-    await ports.persistState(thread.id, openerState, active);
-    await ports.recordOpener({
-      event, account: loaded, threadId: thread.id, conversationId, messageId: sent.messageId, text,
-    });
-    if (event.flow === "back_in_stock") await ports.deleteWaitlist(event);
-    const done = await ports.updateEvent(event.id, event.claim_token, { status: "sent", processed_at: iso(ports.now()) });
-    return done ? "sent" : "left";
+    return await finishAccepted(ports, {
+      event,
+      account: loaded,
+      threadId: thread.id,
+      conversationId,
+      messageId: sent.messageId,
+      text,
+    }, thread, openerState);
   } catch (error) {
     if (reserved && !sending && account) {
       try {

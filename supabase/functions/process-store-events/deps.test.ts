@@ -1,12 +1,15 @@
-import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
+import { assertEquals, assertRejects } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import { WhatsAppOpError } from "../_shared/whatsappPartnerOps.ts";
 import {
   classifyQrTextResult,
   classifySendError,
+  classifyStoreReadOutput,
+  createStoreEventPorts,
   optedOutFromLookup,
   optOutLookupPhone,
   storeBindingMatches,
 } from "./deps.ts";
+import type { RecordOpenerInput } from "./worker.ts";
 
 const event = {
   connector_id: "connector-1",
@@ -58,6 +61,120 @@ Deno.test("store binding must match the event connector, account, and user", () 
   for (const item of cases) {
     assertEquals(storeBindingMatches(item.binding, event), item.matches, item.name);
   }
+});
+
+Deno.test("a timed-out store read is retried and a missing product is final", () => {
+  const cases: Array<{ name: string; output: string; kind: "transient" | "absent" | "ready" }> = [
+    {
+      name: "timeout",
+      output: 'Connector "woo" failed via connector adapter: request timed out.',
+      kind: "transient",
+    },
+    {
+      name: "http 503",
+      output: 'Connector "woo" failed via woocommerce adapter [woocommerce_http_error] (HTTP 503): WooCommerce rejected the request.',
+      kind: "transient",
+    },
+    {
+      name: "http 404",
+      output: 'Connector "woo" failed via woocommerce adapter [woocommerce_http_error] (HTTP 404): WooCommerce rejected the request.',
+      kind: "absent",
+    },
+    {
+      name: "write denied",
+      output: 'Connector "woo" failed via woocommerce adapter [store_write_denied] (HTTP 401): WooCommerce refused the write.',
+      kind: "absent",
+    },
+    {
+      name: "product body",
+      output: 'Connector "woo" returned: {"stock_status":"instock"}',
+      kind: "ready",
+    },
+  ];
+  for (const item of cases) {
+    assertEquals(classifyStoreReadOutput(item.output), item.kind, item.name);
+  }
+});
+
+function openerInput(): RecordOpenerInput {
+  return {
+    event: {
+      id: "11111111-1111-4111-8111-111111111111",
+      user_id: "user-1",
+      social_account_id: "account-1",
+      connector_id: "connector-1",
+      binding_id: "binding-1",
+      flow: "cod_confirm",
+      external_id: "1042",
+      payload: { phone: "96555512345" },
+      status: "sending",
+      claim_token: "token-1",
+      due_at: "2026-09-27T12:00:00.000Z",
+      outbound_message_id: "wamid.kept",
+    },
+    account: {
+      platform: "whatsapp",
+      connectionMode: "cloud_api",
+      phoneNumberId: "pnid",
+      platformUserId: "pnid",
+      languageMode: "en",
+      agentEnabled: true,
+      defaultMode: "ai_first",
+      settings: null,
+      connectorVisible: true,
+      optedOut: false,
+    },
+    threadId: "thread-1",
+    conversationId: "conv-1",
+    messageId: "wamid.kept",
+    text: "Hello",
+  };
+}
+
+function recordingAdmin(found: { message: boolean; thread: boolean; messageError?: boolean }) {
+  const inserts: string[] = [];
+  const admin = {
+    from(table: string) {
+      const builder = {
+        select() { return builder; },
+        eq() { return builder; },
+        limit() { return builder; },
+        maybeSingle() {
+          if (found.messageError) return Promise.resolve({ data: null, error: { message: "message read failed" } });
+          return Promise.resolve({ data: found.message ? { id: "row" } : null, error: null });
+        },
+        insert() {
+          inserts.push(table);
+          return Promise.resolve({ error: null });
+        },
+        then(resolve: (value: { data: unknown[]; error: null }) => void) {
+          resolve({ data: found.thread ? [{ id: "row" }] : [], error: null });
+        },
+      };
+      return builder;
+    },
+  };
+  return { admin, inserts };
+}
+
+Deno.test("recordOpener writes only the inbox and thread rows that are missing", async () => {
+  const both = recordingAdmin({ message: true, thread: true });
+  await createStoreEventPorts(both.admin).recordOpener(openerInput());
+  assertEquals(both.inserts, []);
+
+  const neither = recordingAdmin({ message: false, thread: false });
+  await createStoreEventPorts(neither.admin).recordOpener(openerInput());
+  assertEquals(neither.inserts, ["whatsapp_messages", "ai_thread_messages"]);
+
+  const threadOnly = recordingAdmin({ message: true, thread: false });
+  await createStoreEventPorts(threadOnly.admin).recordOpener(openerInput());
+  assertEquals(threadOnly.inserts, ["ai_thread_messages"]);
+});
+
+Deno.test("recordOpener does not insert when the inbox read fails", async () => {
+  const broken = recordingAdmin({ message: false, thread: false, messageError: true });
+  await assertRejects(() => createStoreEventPorts(broken.admin).recordOpener(openerInput()));
+  assertEquals(broken.inserts, []);
 });
 
 Deno.test("opt-out lookup runs only for a phone the event named", () => {

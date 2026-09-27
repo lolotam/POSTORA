@@ -1,7 +1,8 @@
 // supabase/functions/ai-agent-reply/procedureRuntime.test.ts
 import { assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 import {
-  createProcedureTurn, planWaitlistJoin, procedureToolDefinitions, type ProcedurePorts, type ProcedureTurnInput, type StockSighting, type StoreEventRow,
+  createProcedureTurn, planWaitlistJoin, procedureToolDefinitions, scopeStoreEventRead, storeEventReadScope,
+  type ProcedurePorts, type ProcedureTurnInput, type StockSighting, type StoreEventRow,
 } from "./procedureRuntime.ts";
 
 function fakePorts(overrides: Partial<ProcedurePorts> = {}) {
@@ -567,6 +568,46 @@ Deno.test("waitlist join is refused for an in-stock product", () => {
   const plan = joinInput([sighting("instock")]);
   assertEquals(plan.action, "refuse");
   if (plan.action === "refuse") assertStringIncludes(plan.output, "in stock");
+});
+
+Deno.test("waitlist join refuses the same out-of-stock id from two connectors", () => {
+  const plan = joinInput([
+    sighting("outofstock", "Hat A"),
+    { ...sighting("outofstock", "Hat B"), connectorId: "conn-other" },
+  ]);
+  assertEquals(plan.action, "refuse");
+  if (plan.action === "refuse") assertStringIncludes(plan.output, "which product");
+});
+
+Deno.test("waitlist join uses the connector of the single out-of-stock match", () => {
+  const plan = joinInput([
+    { ...sighting("instock", "In stock hat"), connectorId: "conn-in" },
+    sighting("outofstock", "Real Hat"),
+  ]);
+  assertEquals(plan.action, "upsert");
+  if (plan.action !== "upsert") return;
+  assertEquals(plan.row.connector_id, "conn-9");
+  assertEquals(plan.row.product_name, "Real Hat");
+});
+
+Deno.test("the store event read is scoped by id, user, and account", () => {
+  assertEquals(storeEventReadScope("not-a-uuid", "user-1", "acc-1"), null);
+  assertEquals(storeEventReadScope(EVENT_ID, "user-1", null), null);
+  const filters: Array<[string, string]> = [];
+  const query = {
+    eq(column: "id" | "user_id" | "social_account_id", value: string) {
+      filters.push([column, value]);
+      return query;
+    },
+  };
+  const scope = storeEventReadScope(EVENT_ID, "user-1", "acc-1");
+  assertEquals(scope, { id: EVENT_ID, userId: "user-1", socialAccountId: "acc-1" });
+  scopeStoreEventRead(query, scope!);
+  assertEquals(filters, [
+    ["id", EVENT_ID],
+    ["user_id", "user-1"],
+    ["social_account_id", "acc-1"],
+  ]);
 });
 
 Deno.test("waitlist join copies id, parent and name from the stock result", () => {

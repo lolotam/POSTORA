@@ -22,12 +22,12 @@ import {
   type SendOpenerInput,
   type SendOutcome,
   type StoreEventRow,
+  type StoreRead,
   type StoreSnapshot,
   type WorkerPorts,
 } from "./worker.ts";
 
 const TOOL_COLUMNS = "id, name, description, url, secret, admin_only, scope, social_account_id, connector_type, read_only_mode, settings, auth_strategy, connection_id";
-const DAY_MS = 24 * 60 * 60 * 1000;
 
 interface AccountRow {
   id: string;
@@ -105,6 +105,34 @@ export function optOutLookupPhone(phone: string | undefined): string | null {
 /** A lookup row counts only when this event actually named a phone. */
 export function optedOutFromLookup(phone: string | null, row: unknown): boolean {
   return phone !== null && row != null;
+}
+
+/**
+ * A timeout or other connector failure is retried. HTTP 404/410 and a refused
+ * or unconfigured read will not succeed on the next tick, so they are final.
+ */
+export function classifyStoreReadOutput(output: string): "transient" | "absent" | "ready" {
+  if (!connectorCallFailed({ output })) return "ready";
+  const status = Number(output.match(/\(HTTP (\d+)\)/)?.[1] ?? 0);
+  if (status === 404 || status === 410) return "absent";
+  if (
+    output.includes("[store_write_denied]")
+    || output.includes("[read_only_violation]")
+    || output.includes("[woocommerce_configuration_invalid]")
+  ) return "absent";
+  return "transient";
+}
+
+function snapshotFromOutput(output: string): StoreSnapshot | null {
+  const data = readReturned(output);
+  if (!data) return null;
+  return {
+    paymentMethod: typeof data.payment_method === "string" ? data.payment_method : "",
+    status: typeof data.status === "string" ? data.status : "",
+    phone: parseCustomerPhone(typeof data.phone === "string" ? data.phone : "", typeof data.country === "string" ? data.country : null),
+    createdAt: typeof data.date_created === "string" ? data.date_created : null,
+    stockStatus: typeof data.stock_status === "string" ? data.stock_status : null,
+  };
 }
 
 // deno-lint-ignore no-explicit-any
@@ -202,9 +230,9 @@ export function createStoreEventPorts(admin: any): WorkerPorts {
         optedOut: optedOutFromLookup(lookupPhone, optOutResult.data),
       };
     },
-    async readStore(event) {
+    async readStore(event): Promise<StoreRead> {
       const tool = await wooTool(event);
-      if (!tool) return null;
+      if (!tool) return { outcome: "absent" };
       const context = {
         admin,
         userId: event.user_id,
@@ -233,16 +261,11 @@ export function createStoreEventPorts(admin: any): WorkerPorts {
           method: "GET",
           parameters: { order_id: event.payload.order_id },
         });
-      if (connectorCallFailed(found)) return null;
-      const data = readReturned(found.output);
-      if (!data) return null;
-      return {
-        paymentMethod: typeof data.payment_method === "string" ? data.payment_method : "",
-        status: typeof data.status === "string" ? data.status : "",
-        phone: parseCustomerPhone(typeof data.phone === "string" ? data.phone : "", typeof data.country === "string" ? data.country : null),
-        createdAt: typeof data.date_created === "string" ? data.date_created : null,
-        stockStatus: typeof data.stock_status === "string" ? data.stock_status : null,
-      } satisfies StoreSnapshot;
+      const kind = classifyStoreReadOutput(found.output);
+      if (kind === "transient") return { outcome: "transient" };
+      if (kind === "absent") return { outcome: "absent" };
+      const snapshot = snapshotFromOutput(found.output);
+      return snapshot ? { outcome: "snapshot", snapshot } : { outcome: "absent" };
     },
     async reserveQr(accountId, limit) {
       const { data, error } = await admin.rpc("reserve_qr_opener", { p_account: accountId, p_limit: limit });
@@ -313,26 +336,44 @@ export function createStoreEventPorts(admin: any): WorkerPorts {
       const phoneNumberId = input.account.connectionMode === "evolution_qr"
         ? input.account.platformUserId
         : (input.account.phoneNumberId ?? input.account.platformUserId);
-      const { error: messageError } = await admin.from("whatsapp_messages").insert({
-        user_id: input.event.user_id,
-        social_account_id: input.event.social_account_id,
-        conversation_id: input.conversationId,
-        message_id: input.messageId,
-        from_phone: phoneNumberId,
-        from_name: "AI Agent",
-        to_phone: input.event.payload.phone,
-        message_text: input.text,
-        message_type: input.account.connectionMode === "evolution_qr" ? "text" : "template",
-        direction: "outbound",
-        status: "sent",
-        timestamp: new Date().toISOString(),
-      });
-      if (messageError) {
-        console.error(
-          `[process-store-events] ${input.event.id} inbox write failed:`,
-          sanitizeFailureReason(messageError.message),
-        );
+      const { data: existingMessage, error: messageReadError } = await admin.from("whatsapp_messages")
+        .select("id")
+        .eq("user_id", input.event.user_id)
+        .eq("social_account_id", input.event.social_account_id)
+        .eq("message_id", input.messageId)
+        .maybeSingle();
+      if (messageReadError) throw messageReadError;
+      if (!existingMessage) {
+        const { error: messageError } = await admin.from("whatsapp_messages").insert({
+          user_id: input.event.user_id,
+          social_account_id: input.event.social_account_id,
+          conversation_id: input.conversationId,
+          message_id: input.messageId,
+          from_phone: phoneNumberId,
+          from_name: "AI Agent",
+          to_phone: input.event.payload.phone,
+          message_text: input.text,
+          message_type: input.account.connectionMode === "evolution_qr" ? "text" : "template",
+          direction: "outbound",
+          status: "sent",
+          timestamp: new Date().toISOString(),
+        });
+        if (messageError) {
+          console.error(
+            `[process-store-events] ${input.event.id} inbox write failed:`,
+            sanitizeFailureReason(messageError.message),
+          );
+        }
       }
+      const { data: existingThread, error: threadReadError } = await admin.from("ai_thread_messages")
+        .select("id")
+        .eq("thread_id", input.threadId)
+        .eq("user_id", input.event.user_id)
+        .eq("role", "assistant")
+        .eq("content", input.text)
+        .limit(1);
+      if (threadReadError) throw threadReadError;
+      if ((existingThread ?? []).length > 0) return;
       const { error: threadError } = await admin.from("ai_thread_messages").insert({
         thread_id: input.threadId,
         user_id: input.event.user_id,
@@ -406,17 +447,6 @@ export function createStoreEventPorts(admin: any): WorkerPorts {
         } catch {
           console.error(`[process-store-events] ${event.id} admin alert failed`);
         }
-      }
-    },
-    async purge(nowMs) {
-      const cutoff = new Date(nowMs - 30 * DAY_MS).toISOString();
-      const cleared = await admin.from("store_events").update({ payload: {} }).lt("processed_at", cutoff).in("status", ["sent", "skipped", "failed"]);
-      if (cleared.error) {
-        console.error("[process-store-events] payload purge failed:", sanitizeFailureReason(cleared.error.message));
-      }
-      const dropped = await admin.from("stock_waitlist").delete().lt("expires_at", new Date(nowMs).toISOString());
-      if (dropped.error) {
-        console.error("[process-store-events] waitlist purge failed:", sanitizeFailureReason(dropped.error.message));
       }
     },
   };

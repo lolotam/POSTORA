@@ -8,6 +8,7 @@ import {
   type AccountContext,
   type SendOutcome,
   type StoreEventRow,
+  type StoreRead,
   type StoreSnapshot,
   type ThreadRow,
   type WorkerPorts,
@@ -86,7 +87,6 @@ interface Harness {
   alerts: string[];
   qrReleases: number;
   deleted: number;
-  purged: number;
   thread: ThreadRow;
 }
 
@@ -95,6 +95,7 @@ function harness(options: {
   rows?: StoreEventRow[];
   account?: AccountContext | null;
   store?: StoreSnapshot | null;
+  read?: StoreRead;
   thread?: ThreadRow;
   send?: SendOutcome;
   template?: "approved" | "pending" | "rejected" | "missing";
@@ -113,7 +114,6 @@ function harness(options: {
     alerts: [],
     qrReleases: 0,
     deleted: 0,
-    purged: 0,
     thread: options.thread ?? { id: "thread-1", procedure_state: null },
   };
   const apply = options.update ?? (async (id, token, patch) => {
@@ -133,7 +133,13 @@ function harness(options: {
       return true;
     },
     loadAccount: () => Promise.resolve(options.account === undefined ? account() : options.account),
-    readStore: () => Promise.resolve(options.store === undefined ? snapshot() : options.store),
+    readStore: () => Promise.resolve(options.read ?? (
+      options.store === undefined
+        ? { outcome: "snapshot" as const, snapshot: snapshot() }
+        : options.store === null
+          ? { outcome: "absent" as const }
+          : { outcome: "snapshot" as const, snapshot: options.store }
+    )),
     reserveQr: () => Promise.resolve(options.reserve !== false),
     releaseQr: () => {
       state.qrReleases += 1;
@@ -166,10 +172,6 @@ function harness(options: {
     },
     alertAdmin: (_event, reason) => {
       state.alerts.push(reason);
-      return Promise.resolve();
-    },
-    purge: () => {
-      state.purged += 1;
       return Promise.resolve();
     },
   };
@@ -257,7 +259,6 @@ Deno.test("a successful send activates the procedure and records the opener", as
   const activation = box.persists.at(-1);
   assertEquals((activation?.expected as { phase?: string })?.phase, "pending_opener");
   assertEquals((activation?.next as { phase?: string })?.phase, "active");
-  assertEquals(box.purged, 1);
 });
 
 Deno.test("own pending_opener resumes into a send", async () => {
@@ -269,7 +270,61 @@ Deno.test("own pending_opener resumes into a send", async () => {
   assertEquals((box.persists[0].next as { phase?: string }).phase, "active");
 });
 
-Deno.test("an expired sending row is never resent", async () => {
+Deno.test("a transient store read releases the claim instead of skipping", async () => {
+  const box = harness({ read: { outcome: "transient" } });
+  const summary = await runStoreEventWorker(box.ports);
+  assertEquals(summary.released, 1);
+  assertEquals(summary.skipped, 0);
+  assertEquals(box.row.status, "pending");
+  assertEquals(reasonOf(box.row), undefined);
+  assertEquals(box.sends.length, 0);
+});
+
+Deno.test("a definitive store miss is skipped as store_unread", async () => {
+  const box = harness({ read: { outcome: "absent" } });
+  await runStoreEventWorker(box.ports);
+  assertEquals(box.row.status, "skipped");
+  assertEquals(reasonOf(box.row), "store_unread");
+  assertEquals(box.sends.length, 0);
+});
+
+Deno.test("a reclaimed sending row with a provider message id finishes without resending", async () => {
+  const row = event({ status: "sending", outbound_message_id: "wamid.kept" });
+  const box = harness({
+    row,
+    thread: { id: "thread-1", procedure_state: pending(row.id) },
+  });
+  const summary = await runStoreEventWorker(box.ports);
+  assertEquals(summary.sent, 1);
+  assertEquals(box.sends.length, 0);
+  assertEquals(box.row.status, "sent");
+  assertEquals(box.records.length, 1);
+  assertEquals(box.alerts.length, 0);
+  assertEquals((box.persists.at(-1)?.expected as { phase?: string }).phase, "pending_opener");
+  assertEquals((box.persists.at(-1)?.next as { phase?: string }).phase, "active");
+});
+
+Deno.test("a reclaimed back-in-stock send deletes the waitlist without resending", async () => {
+  const row = event({
+    status: "sending",
+    outbound_message_id: "wamid.stock",
+    flow: "back_in_stock",
+    external_id: "waitlist:row-1",
+    payload: { phone: PHONE, product_id: "9", product_name: "Rose", first_name: "Sara" },
+  });
+  const box = harness({
+    row,
+    account: account({ settings: { enabled: true, prompts: {}, closing: "" } }),
+    thread: { id: "thread-1", procedure_state: { ...pending(row.id), key: "back_in_stock" } },
+  });
+  await runStoreEventWorker(box.ports);
+  assertEquals(box.sends.length, 0);
+  assertEquals(box.deleted, 1);
+  assertEquals(box.row.status, "sent");
+  assertEquals(box.records.length, 1);
+});
+
+Deno.test("an expired sending row without a message id is never resent", async () => {
   const row = event({ status: "sending" });
   const box = harness({
     row,
