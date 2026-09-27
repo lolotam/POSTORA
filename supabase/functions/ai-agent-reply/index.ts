@@ -1405,7 +1405,10 @@ Deno.serve(async (req) => {
       ...agentToolDefinitions(handoff),
       ...(isAdmin ? adminToolDefinitions : []),
       ...customToolDefinitions(offeredTools),
-      ...procedureToolDefinitions(procedureTurn && !triagePlan?.handoff ? enabledProcedures(procedureConfig) : []),
+      ...procedureToolDefinitions(
+        procedureTurn && !triagePlan?.handoff ? enabledProcedures(procedureConfig) : [],
+        procedureTurn?.state?.key ?? null,
+      ),
     ];
     // Rebuilt each round: the tool appears only after this turn's check_stock saw the product out of stock,
     // and only for a connector that has a store webhook binding on this social account.

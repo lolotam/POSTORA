@@ -110,7 +110,7 @@ export function stepGuidance(state: ProcedureState, config: ProcedureConfig): st
   return `Needed now: ${next.name}${accept}.${wording ? ` Ask it this way, in the customer's language: ${wording}` : ""}${services}`;
 }
 
-export function procedureToolDefinitions(enabled: ProcedureKey[]) {
+export function procedureToolDefinitions(enabled: ProcedureKey[], activeKey: ProcedureKey | null = null) {
   if (!enabled.length) return [];
   // Event flows are started by the worker. Offering them here would let the model open one.
   const startable = enabled.filter((key) => !isEventProcedureKey(key));
@@ -136,14 +136,16 @@ export function procedureToolDefinitions(enabled: ProcedureKey[]) {
         },
       },
     },
-    {
+    // On a COD confirmation "cancel" is the customer's decision, not a way out of the flow:
+    // it must reach the order through procedure_submit (PR #214 review).
+    ...(activeKey === "cod_confirm" ? [] : [{
       type: "function",
       function: {
         name: "procedure_cancel",
         description: "End the active procedure when the customer asks to stop or clearly changes topic.",
         parameters: { type: "object", properties: { reason: { type: "string" } }, required: ["reason"] },
       },
-    },
+    }]),
   ];
 }
 
@@ -751,6 +753,9 @@ export function createProcedureTurn(input: ProcedureTurnInput): ProcedureTurn {
     }
     if (name === "procedure_cancel") {
       if (!state) return { output: "No procedure is active." };
+      if (state.key === "cod_confirm") {
+        return { output: 'This order confirmation cannot be ended here. If the customer wants to cancel the order, call procedure_submit with {"decision": "cancel"}.' };
+      }
       state = null;
       progressed = true;
       return { output: "Procedure ended. Continue the conversation normally." };

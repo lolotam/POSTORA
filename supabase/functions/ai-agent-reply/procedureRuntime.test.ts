@@ -755,3 +755,21 @@ Deno.test("a failed waitlist upsert writes one sanitized log through the port, t
   assertEquals(errors[0].includes(phone), false);
   assertStringIncludes(errors[0], "[redacted]");
 });
+
+// PR #214 round 8: on a COD confirmation "cancel" is the customer's decision and must reach the order.
+Deno.test("an active COD confirmation offers no procedure_cancel; other flows still do", () => {
+  const names = (defs: Array<{ function: { name: string } }>) => defs.map((def) => def.function.name);
+  assertEquals(names(procedureToolDefinitions(["cod_confirm", "lead_capture"], "cod_confirm")).includes("procedure_cancel"), false);
+  assertEquals(names(procedureToolDefinitions(["review_request"], "review_request")).includes("procedure_cancel"), true);
+  assertEquals(names(procedureToolDefinitions(["lead_capture"], null)).includes("procedure_cancel"), true);
+});
+
+Deno.test("procedure_cancel on a COD confirmation keeps the flow and points at the cancel decision", async () => {
+  const { ports, updates } = eventPorts("cod_confirm");
+  const turn = eventTurn("cod_confirm", ports);
+  const result = await turn.handle("procedure_cancel", { reason: "customer pressed Cancel" });
+  assertEquals(turn.state?.key, "cod_confirm");
+  assertEquals(turn.completed, null);
+  assertEquals(updates.length, 0);
+  assertStringIncludes(result.output, '"decision": "cancel"');
+});
