@@ -740,6 +740,7 @@ DECLARE
   v_lonely uuid;
   v_bc uuid;
   v_ct uuid;
+  v_ws uuid;
   v_log jsonb;
 BEGIN
   -- Fixtures. platform 'facebook' avoids the whatsapp-needs-workspace check.
@@ -866,8 +867,11 @@ BEGIN
   INSERT INTO public.whatsapp_broadcasts (id, user_id, name, template_name)
   VALUES (gen_random_uuid(), u_a, 'exhaust broadcast', 'hello_world')
   RETURNING id INTO v_bc;
-  INSERT INTO public.whatsapp_contacts (id, user_id, phone_number, display_name)
-  VALUES (gen_random_uuid(), u_a, '96555510001', 'Exhaust Probe')
+  INSERT INTO public.workspaces (id, name, owner_id)
+  VALUES (gen_random_uuid(), 'exhaust workspace', u_a)
+  RETURNING id INTO v_ws;
+  INSERT INTO public.whatsapp_contacts (id, user_id, workspace_id, phone_number, display_name)
+  VALUES (gen_random_uuid(), u_a, v_ws, '96555510001', 'Exhaust Probe')
   RETURNING id INTO v_ct;
   INSERT INTO public.whatsapp_broadcast_recipients
     (broadcast_id, contact_id, phone_number, status)
