@@ -142,3 +142,26 @@ Codex astra 6 medium returned REWORK with 23 findings; rulings are in the plan's
 15. **Waitlist** gains `connector_id`; unique `(connector_id, phone, product_id)`; a row is deleted when its notification is sent (no `notified_at`).
 16. **Live test:** a WooCommerce body addressed to the admin's own test phone, signed with the real binding secret, sent through the real pipeline. No dry-run marker.
 17. **No `X-WC-Webhook-Source` check.** WooCommerce signs only the body, so the source header proves nothing an attacker could not forge; authentication is the per-binding HMAC secret and the binding id in the URL. §3.1's source-host check is dropped.
+
+## 9. As shipped (PR #212 and PR #214 review rounds)
+
+These points supersede earlier sections where they differ.
+
+- **Waitlist key:** `stock_waitlist` is unique on `(social_account_id, connector_id, phone, product_id)`. A re-join refreshes `expires_at`. The join tool is offered only when this turn's `check_stock` saw the product out of stock, only on WhatsApp, and only when the connector has a store webhook binding for the account. A product id seen out of stock on more than one connector in the same turn is refused as ambiguous.
+- **Matching a restock:** a `product.updated` delivery for product X with parent P drafts a waitlist row only when `product_id` is X or P. A parent update never consumes a variation's waitlist row.
+- **Templates:** a template that is still pending review defers the event by 15 minutes instead of skipping it, and the attempt is given back. A missing language variant is submitted, then the event is deferred the same way. A rejected template skips the event. Enabling a flow on a Cloud API account submits its template.
+- **COD:**
+  - `procedure_cancel` is neither offered nor honoured during a COD confirmation, so a customer's Cancel reaches the order through `procedure_submit`.
+  - The worker skips COD events from a read-only connector.
+  - The card refuses COD while any bound WooCommerce connector is read-only, or while any query it depends on is loading or has failed (it fails closed).
+- **Review requests:** the worker re-checks the order's phone before sending, as it already did for COD.
+- **`update_order` and `get_product`:** both are reachable only through the procedure runtime's internal flag. The adapter honours that flag only from service-role callers and refuses it whatever the connector's permissions JSON says.
+- **End actions:** each is bound to its `store_events` row by id, tenant, account, flow and customer phone. The lookup itself is scoped by tenant.
+- **Worker recovery:**
+  - A transient store re-read releases the claim so the event is retried.
+  - An accepted send with a recorded message id finishes activation without resending.
+  - Any worker path that owns a `pending_opener` state clears it before writing a terminal status. If the clear fails, the row is not terminalized.
+  - **Exception:** after three attempts `claim_store_events` fails the row directly in SQL and does not clear the thread's state. `ai-agent-reply` checks for `pending_opener` before expiry and never rewrites that phase, so a `pending_opener` left this way **persists** and keeps that conversation's procedures inactive until it is cleared. The fix is tracked in #213.
+  - Every worker skip and failure attempts a sanitized outcome row in `system_logs` (best effort: a failed log insert is console-logged and does not change the outcome) (`event_id`, `flow`, `social_account_id` and `reason`, never a phone number). Failures that alert the admin (`indeterminate`, `activation_conflict`) write a second row: the admin alert. The row written in SQL on attempt exhaustion carries `event_id`, `flow` and `social_account_id` only; its message states the reason.
+- **`system_logs.category`:** migration `20260928120000` normalises the CHECK constraint to production's 11 values (`auth`, `edge`, `database`, `token`, `post`, `system`, `ai`, `scheduler`, `webhook`, `payment`, `media`). The checked-in migrations had only 6.
+- **Opt-out:** covers business-initiated messages. It is recorded before the inbound message is persisted, and a failed write returns 500 so Meta retries. It cancels unclaimed queued replies and is keyed on the resolved phone. A customer's later message counts as re-engagement. `whatsapp-broadcast` and `ecommerce-whatsapp-api` do not read it yet (issue #213).
