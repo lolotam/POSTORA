@@ -331,6 +331,10 @@ BEGIN
   ASSERT (SELECT claim_token FROM public.whatsapp_scheduled_messages
           WHERE id = msg_s7) IS NULL,
     'S7 expired sending row carries a cleared token';
+  ASSERT EXISTS (SELECT 1 FROM public.system_logs
+                 WHERE metadata->>'scheduled_message_id' = msg_s7::text
+                   AND metadata->>'reason' = 'indeterminate'),
+    'S7 indeterminate expiry writes a log row';
 END $$;
 
 -- S8: an expired 'claimed' lease below 3 attempts goes back to pending
@@ -387,6 +391,10 @@ BEGIN
   ASSERT (SELECT claim_token FROM public.whatsapp_scheduled_messages
           WHERE id = msg_exh) IS NULL,
     'S8 exhausted lease carries a cleared token';
+  ASSERT EXISTS (SELECT 1 FROM public.system_logs
+                 WHERE metadata->>'scheduled_message_id' = msg_exh::text
+                   AND metadata->>'reason' = 'attempts_exhausted'),
+    'S8 exhausted lease writes a log row';
 END $$;
 
 -- S9: the claim function is executable by service_role only.

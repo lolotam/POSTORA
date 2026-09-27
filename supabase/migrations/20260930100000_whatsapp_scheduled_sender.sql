@@ -286,24 +286,44 @@ BEGIN
   -- have accepted the send, so fail them under a cleared token and never
   -- resend. (The target alias matters: the RETURNS TABLE out-params share
   -- these column names, and an unqualified reference would be ambiguous.)
-  UPDATE public.whatsapp_scheduled_messages AS m
-  SET status = 'failed',
-      error_message = 'indeterminate',
-      claim_token = NULL,
-      updated_at = now()
-  WHERE m.status = 'sending'
-    AND m.claimed_at < now() - p_lease;
+  WITH indeterminate AS (
+    UPDATE public.whatsapp_scheduled_messages AS m
+    SET status = 'failed',
+        error_message = 'indeterminate',
+        claim_token = NULL,
+        updated_at = now()
+    WHERE m.status = 'sending'
+      AND m.claimed_at < now() - p_lease
+    RETURNING m.id, m.user_id
+  )
+  INSERT INTO public.system_logs
+    (source, category, level, message, user_id, metadata)
+  SELECT 'whatsapp-scheduled-sender', 'system', 'warn',
+         'Scheduled send outcome unknown after lease expiry',
+         i.user_id,
+         jsonb_build_object('scheduled_message_id', i.id, 'reason', 'indeterminate')
+  FROM indeterminate AS i;
 
   -- (c) Expired pre-send leases: attempts >= 3 exhaust, the rest go back to
   -- pending under a cleared lease for the next claim.
-  UPDATE public.whatsapp_scheduled_messages AS m
-  SET status = 'failed',
-      error_message = 'attempts_exhausted',
-      claim_token = NULL,
-      updated_at = now()
-  WHERE m.status = 'claimed'
-    AND m.claimed_at < now() - p_lease
-    AND m.attempts >= 3;
+  WITH exhausted AS (
+    UPDATE public.whatsapp_scheduled_messages AS m
+    SET status = 'failed',
+        error_message = 'attempts_exhausted',
+        claim_token = NULL,
+        updated_at = now()
+    WHERE m.status = 'claimed'
+      AND m.claimed_at < now() - p_lease
+      AND m.attempts >= 3
+    RETURNING m.id, m.user_id
+  )
+  INSERT INTO public.system_logs
+    (source, category, level, message, user_id, metadata)
+  SELECT 'whatsapp-scheduled-sender', 'system', 'warn',
+         'Scheduled message failed after repeated expired claims',
+         x.user_id,
+         jsonb_build_object('scheduled_message_id', x.id, 'reason', 'attempts_exhausted')
+  FROM exhausted AS x;
 
   UPDATE public.whatsapp_scheduled_messages AS m
   SET status = 'pending',

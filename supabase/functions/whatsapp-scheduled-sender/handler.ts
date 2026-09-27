@@ -29,6 +29,8 @@ export interface ClaimedScheduledMessage {
   media_url: string | null;
   media_type: string | null;
   claim_token: string;
+  /** Claims so far, including this one. */
+  attempts: number;
   account_connection_mode: string | null;
   account_platform_user_id: string | null;
   account_access_token: string | null;
@@ -244,7 +246,26 @@ async function noteClaimLost(deps: ScheduledSenderDeps, row: ClaimedScheduledMes
   await note(deps, row, "warn", "Scheduled claim no longer valid", { expected_status: expectedStatus });
 }
 
-async function releaseClaim(deps: ScheduledSenderDeps, row: ClaimedScheduledMessage): Promise<boolean> {
+// A released row goes back to `pending` and is claimed again next tick. Without a cap, a row that
+// fails the same way every tick (e.g. a QR account with no instance) would be retried forever and,
+// being oldest, fill the claim limit ahead of newer messages.
+const MAX_CLAIM_ATTEMPTS = 5;
+
+/** Releases the claim for a retry, or fails the row once it has used its attempts. */
+async function releaseClaim(
+  deps: ScheduledSenderDeps,
+  row: ClaimedScheduledMessage,
+  summary: ScheduledTickSummary,
+  reason: string,
+): Promise<void> {
+  if (row.attempts >= MAX_CLAIM_ATTEMPTS) {
+    if (await refuseBeforeSend(deps, row, reason)) summary.failed += 1;
+    return;
+  }
+  if (await releaseForRetry(deps, row)) summary.released += 1;
+}
+
+async function releaseForRetry(deps: ScheduledSenderDeps, row: ClaimedScheduledMessage): Promise<boolean> {
   const outcome = await compareAndSet(deps, row, "claimed", {
     status: "pending",
     claim_token: null,
@@ -285,7 +306,7 @@ async function applyOptOut(
       });
       for (const row of messages) {
         finished.add(row.id);
-        if (await releaseClaim(deps, row)) summary.released += 1;
+        await releaseClaim(deps, row, summary, "opt_out_lookup_failed");
       }
       continue;
     }
@@ -421,7 +442,7 @@ async function sendClaimed(deps: ScheduledSenderDeps, row: ClaimedScheduledMessa
     transport = await withTimeout(deps.resolveTransport(transportAccount(row)), deps.sendTimeoutMs);
   } catch {
     await note(deps, row, "warn", "Scheduled transport could not be resolved", { reason: "transport_unavailable" });
-    if (await releaseClaim(deps, row)) summary.released += 1;
+    await releaseClaim(deps, row, summary, "transport_unavailable");
     return;
   }
   const markedSending = await compareAndSet(deps, row, "claimed", { status: "sending" });
@@ -461,7 +482,7 @@ async function deliverDue(rows: ClaimedScheduledMessage[], deps: ScheduledSender
   for (const row of rows) {
     if (finished.has(row.id)) continue;
     if (budgetSpent(deps, startedMs)) {
-      if (await releaseClaim(deps, row)) summary.released += 1;
+      await releaseClaim(deps, row, summary, "attempts_exhausted");
       continue;
     }
     const reason = rejectionReason(row);

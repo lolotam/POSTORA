@@ -33,6 +33,7 @@ function message(id: string, userId: string, over: Partial<ClaimedScheduledMessa
     media_url: null,
     media_type: null,
     claim_token: `token-${id}`,
+    attempts: 1,
     account_connection_mode: "cloud_api",
     account_platform_user_id: "pnid",
     account_access_token: "account-token",
@@ -421,4 +422,14 @@ Deno.test("a transport that cannot be resolved releases the claim before sending
   assertEquals(gate.sends, []);
   assertEquals(gate.transitions.map((update) => [update.expectedStatus, update.patch.status]), [["claimed", "pending"]]);
   assertEquals(gate.events.some((event) => event.metadata.reason === "transport_unavailable"), true);
+});
+
+Deno.test("a row that keeps failing to resolve its transport is failed at the attempt cap, not released forever", async () => {
+  const gate = deps([message("stuck", "user-b", { attempts: 5 })]);
+  gate.resolveTransport = () => Promise.reject(new Error("Direct QR instance is not configured"));
+  const response = await handleScheduledSender(request(), gate);
+  assertEquals(await response.json(), summary({ failed: 1, total: 1 }));
+  assertEquals(gate.transitions.map((update) => update.patch), [
+    { status: "failed", error_message: "transport_unavailable", claim_token: null },
+  ]);
 });
