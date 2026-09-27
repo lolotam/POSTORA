@@ -29,17 +29,21 @@ async function templateOptOutRefusal(
 ): Promise<TemplateRefusal | null> {
   const digits = recipientDigits(input.recipientPhone);
   if (!digits) {
+    await logSendRefused(admin, {
+      source: "messaging-api",
+      userId: input.ownerId,
+      reason: "invalid_recipient",
+      metadata: { action: input.action },
+    });
     return { message: INVALID_RECIPIENT_MESSAGE, errorType: "INVALID_RECIPIENT" };
   }
 
   let optedOut: Set<string>;
   try {
     optedOut = await optedOutPhones(admin, input.ownerId, [input.recipientPhone]);
-  } catch (err) {
-    // optedOutPhones throws this when the read fails. Anything else is a bug
-    // and must still not reach the provider, so the caller sees a throw
-    // before `send` — but only this known failure is a logged refusal.
-    if (!(err instanceof Error) || err.message !== "opt_out_lookup_failed") throw err;
+  } catch {
+    // A returned error and a rejected request (network, transport) are the
+    // same failure here: the opt-out set is unknown, so nothing is sent.
     await logSendRefused(admin, {
       source: "messaging-api",
       userId: input.ownerId,

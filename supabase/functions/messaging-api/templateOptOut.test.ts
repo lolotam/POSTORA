@@ -160,7 +160,8 @@ Deno.test("an @lid or a non-phone recipient is refused before the opt-out lookup
     );
     assertEquals(sent.calls, []);
     assertEquals(queriedUserIds, []);
-    assertEquals(logs, []);
+    assertEquals(logs.map((log) => log.metadata), [{ action: "whatsapp_send_template", reason: "invalid_recipient" }]);
+    assertEquals(JSON.stringify(logs).includes(recipientPhone), false);
     const body = await (outcome as Response).json();
     assertEquals(body.error_type, "INVALID_RECIPIENT");
     assertEquals(JSON.stringify(body).includes(recipientPhone), false);
@@ -183,4 +184,24 @@ Deno.test("an opt-out lookup failure sends nothing and logs the refusal without 
   assertEquals(logs[0]?.metadata, { action: "whatsapp_send_message", reason: "opt_out_lookup_failed" });
   assertEquals(JSON.stringify(logs).includes(STORED_PHONE), false);
   assertEquals(JSON.stringify(body).includes(STORED_PHONE), false);
+});
+
+Deno.test("a rejected opt-out request is a lookup failure, not a 500", async () => {
+  const { admin: base, logs } = optOutAdmin([]);
+  const admin: OptOutLookupAdmin = {
+    from(table: string) {
+      if (table === "messaging_opt_outs") throw new TypeError("network connection lost");
+      return base.from(table);
+    },
+  };
+  const sent = provider();
+  const outcome = await refuseOptedOutTemplate(
+    admin,
+    { ownerId: "owner-1", recipientPhone: FORMATTED_PHONE, action: "whatsapp_send_template" },
+    gracefulError,
+    sent.send("rejected"),
+  );
+  assertEquals(sent.calls, []);
+  assertEquals((await (outcome as Response).json()).error_type, "OPT_OUT_LOOKUP_FAILED");
+  assertEquals(logs.map((log) => log.metadata), [{ action: "whatsapp_send_template", reason: "opt_out_lookup_failed" }]);
 });

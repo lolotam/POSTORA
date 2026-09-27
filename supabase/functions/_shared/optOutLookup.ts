@@ -47,12 +47,13 @@ export async function optedOutPhones(
   return optedOut;
 }
 
-export type OptOutRefusalReason = "opted_out" | "opt_out_lookup_failed" | "opt_out_skip_failed";
+export type OptOutRefusalReason = "opted_out" | "opt_out_lookup_failed" | "opt_out_skip_failed" | "invalid_recipient";
 
 const REFUSAL_MESSAGES: Record<OptOutRefusalReason, string> = {
   opted_out: "WhatsApp send refused: customer opted out",
   opt_out_lookup_failed: "WhatsApp send refused: opt-out lookup failed",
   opt_out_skip_failed: "WhatsApp send refused: opted-out status could not be saved",
+  invalid_recipient: "WhatsApp send refused: recipient is not a phone number",
 };
 
 export interface SendRefusedInput {
