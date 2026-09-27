@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -6,7 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Clock, XCircle, CheckCircle2, Loader2, AlertCircle, MinusCircle } from "lucide-react";
 import { format } from "date-fns";
-import { useWhatsAppScheduledMessages } from "@/hooks/useWhatsAppScheduledMessages";
+import { SCHEDULED_CANCEL_BLOCKED, useWhatsAppScheduledMessages } from "@/hooks/useWhatsAppScheduledMessages";
 import { toast } from "sonner";
 
 export function ScheduledMessageManager() {
@@ -14,6 +13,9 @@ export function ScheduledMessageManager() {
   const { messages, isLoading, cancel } = useWhatsAppScheduledMessages();
 
   const statusBadge = (status: string) => {
+    if (status === "claimed" || status === "sending") {
+      return <Badge variant="secondary" className="gap-1"><Loader2 className="h-3 w-3" /> {t("status.sending", "sending")}</Badge>;
+    }
     switch (status) {
       case "pending": return <Badge variant="secondary" className="gap-1"><Clock className="h-3 w-3" /> {t("common:status.pending", "Pending")}</Badge>;
       case "sent": return <Badge variant="default" className="gap-1"><CheckCircle2 className="h-3 w-3" /> {t("common:status.sent", "Sent")}</Badge>;
@@ -27,7 +29,11 @@ export function ScheduledMessageManager() {
   const handleCancel = (id: string) => {
     cancel.mutate(id, {
       onSuccess: () => toast.success(t("scheduled.cancelledToast", "Scheduled message cancelled")),
-      onError: (err: any) => toast.error(err.message),
+      onError: (err: Error) => toast.error(
+        err.message === SCHEDULED_CANCEL_BLOCKED
+          ? t("scheduled.cancelTooLate", SCHEDULED_CANCEL_BLOCKED)
+          : err.message,
+      ),
     });
   };
 
@@ -45,7 +51,7 @@ export function ScheduledMessageManager() {
         ) : messages.length === 0 ? (
           <div className="text-center py-8 text-muted-foreground">
             <Clock className="h-8 w-8 mx-auto mb-2 opacity-50" />
-            <p className="text-sm">{t("scheduled.empty", "No scheduled messages. Use the clock icon in conversations to schedule.")}</p>
+            <p className="text-sm">{t("scheduled.empty", "Scheduled messages created through the API appear here.")}</p>
           </div>
         ) : (
           <Table>
@@ -74,7 +80,7 @@ export function ScheduledMessageManager() {
                       </Button>
                     )}
                     {msg.status === "failed" && msg.error_message && (
-                      <span className="text-xs text-destructive" title={msg.error_message}>{t("common:error", "Error")}</span>
+                      <span className="block max-w-[180px] truncate text-xs text-destructive" title={msg.error_message}>{msg.error_message}</span>
                     )}
                   </TableCell>
                 </TableRow>
