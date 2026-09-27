@@ -1,4 +1,5 @@
 import { EvolutionApiError } from "../_shared/evolutionApi.ts";
+import { WhatsAppCloudApiError } from "../_shared/whatsappTransport.ts";
 import { assertEquals } from "jsr:@std/assert@1";
 import type { EvolutionSendResult } from "../_shared/evolutionApi.ts";
 import type { WhatsAppTransport, WhatsAppTransportAccount } from "../_shared/whatsappTransport.ts";
@@ -171,7 +172,8 @@ Deno.test("a claim lost while moving to sending does not call the provider", asy
   const response = await handleScheduledSender(request(), gate);
   assertEquals(await response.json(), summary({ total: 1 }));
   assertEquals(gate.sends, []);
-  assertEquals(gate.accounts, []);
+  // The transport resolves before the sending claim; the provider is never called.
+  assertEquals(gate.accounts.length, 1);
   assertEquals(gate.events[0]?.metadata.expected_status, "claimed");
   assertEquals(JSON.stringify(gate.events).includes(DIGITS), false);
 });
@@ -386,4 +388,37 @@ Deno.test("an Evolution 4xx refusal is recorded as failed", async () => {
   const response = await handleScheduledSender(request(), gate);
   assertEquals(await response.json(), summary({ failed: 1, total: 1 }));
   assertEquals(gate.transitions.map((update) => update.patch.status), ["sending", "failed"]);
+});
+
+function failingTransport(gate: ReturnType<typeof deps>, failure: Error) {
+  gate.resolveTransport = async (account) => {
+    gate.accounts.push(account);
+    return {
+      sendText: () => Promise.reject(failure),
+      sendMedia: () => Promise.reject(failure),
+      markRead: () => Promise.resolve(),
+    };
+  };
+}
+
+Deno.test("a Meta 5xx leaves the row sending and a Meta 4xx is recorded as failed", async () => {
+  const unknown = deps([message("meta-5xx", "user-b")]);
+  failingTransport(unknown, new WhatsAppCloudApiError("Service temporarily unavailable", 503));
+  assertEquals(await (await handleScheduledSender(request(), unknown)).json(), summary({ total: 1 }));
+  assertEquals(unknown.transitions.map((update) => update.patch.status), ["sending"]);
+
+  const refused = deps([message("meta-4xx", "user-b")]);
+  failingTransport(refused, new WhatsAppCloudApiError("Invalid parameter", 400, 100));
+  assertEquals(await (await handleScheduledSender(request(), refused)).json(), summary({ failed: 1, total: 1 }));
+  assertEquals(refused.transitions.map((update) => update.patch.status), ["sending", "failed"]);
+});
+
+Deno.test("a transport that cannot be resolved releases the claim before sending", async () => {
+  const gate = deps([message("no-instance", "user-b")]);
+  gate.resolveTransport = () => Promise.reject(new Error("Direct QR instance is not configured"));
+  const response = await handleScheduledSender(request(), gate);
+  assertEquals(await response.json(), summary({ released: 1, total: 1 }));
+  assertEquals(gate.sends, []);
+  assertEquals(gate.transitions.map((update) => [update.expectedStatus, update.patch.status]), [["claimed", "pending"]]);
+  assertEquals(gate.events.some((event) => event.metadata.reason === "transport_unavailable"), true);
 });

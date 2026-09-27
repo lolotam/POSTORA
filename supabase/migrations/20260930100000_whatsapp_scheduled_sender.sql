@@ -39,6 +39,13 @@ ALTER TABLE public.whatsapp_scheduled_messages
 ALTER TABLE public.whatsapp_scheduled_messages
   DROP CONSTRAINT IF EXISTS whatsapp_scheduled_messages_social_account_id_fkey;
 
+-- Rows whose account was deleted before this FK existed would abort ADD
+-- CONSTRAINT. ON DELETE CASCADE is the rule from here on, so apply it to them.
+DELETE FROM public.whatsapp_scheduled_messages AS m
+WHERE NOT EXISTS (
+  SELECT 1 FROM public.social_accounts AS s WHERE s.id = m.social_account_id
+);
+
 ALTER TABLE public.whatsapp_scheduled_messages
   ADD CONSTRAINT whatsapp_scheduled_messages_social_account_id_fkey
   FOREIGN KEY (social_account_id)

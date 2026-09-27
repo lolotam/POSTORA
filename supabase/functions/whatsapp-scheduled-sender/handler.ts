@@ -4,6 +4,7 @@
 import { digitsOnly, type SendRefusedInput } from "../_shared/optOutLookup.ts";
 import { EvolutionApiError } from "../_shared/evolutionApi.ts";
 import { whatsappConversationId } from "../_shared/phone.ts";
+import { WhatsAppCloudApiError } from "../_shared/whatsappTransport.ts";
 import type {
   WhatsAppSendMediaInput,
   WhatsAppTransport,
@@ -119,7 +120,7 @@ function storedProviderError(error: unknown): string {
  */
 function sendOutcomeUnknown(error: unknown): boolean {
   if (!(error instanceof Error)) return true;
-  if (error instanceof EvolutionApiError) return error.status >= 500;
+  if (error instanceof EvolutionApiError || error instanceof WhatsAppCloudApiError) return error.status >= 500;
   if (error.name === "TypeError" || error.name === "AbortError") return true;
   return error.message === "provider_timeout" || /timed out|aborted/i.test(error.message);
 }
@@ -195,8 +196,7 @@ function mediaInput(row: ClaimedScheduledMessage, recipientPhone: string): Whats
   return input;
 }
 
-async function dispatchSend(deps: ScheduledSenderDeps, row: ClaimedScheduledMessage): Promise<{ messageId: string | null }> {
-  const transport = await deps.resolveTransport(transportAccount(row));
+async function dispatchSend(transport: WhatsAppTransport, row: ClaimedScheduledMessage): Promise<{ messageId: string | null }> {
   const recipientPhone = digitsOnly(row.recipient_phone);
   if (row.media_type) {
     const sent = await transport.sendMedia(mediaInput(row, recipientPhone));
@@ -414,6 +414,16 @@ async function recordProviderRefusal(deps: ScheduledSenderDeps, row: ClaimedSche
 }
 
 async function sendClaimed(deps: ScheduledSenderDeps, row: ClaimedScheduledMessage, summary: ScheduledTickSummary): Promise<void> {
+  // Resolved before `sending`: a resolver failure (e.g. the QR instance lookup) never reached the
+  // provider, so the claim is released for a retry instead of being discarded.
+  let transport: WhatsAppTransport;
+  try {
+    transport = await withTimeout(deps.resolveTransport(transportAccount(row)), deps.sendTimeoutMs);
+  } catch {
+    await note(deps, row, "warn", "Scheduled transport could not be resolved", { reason: "transport_unavailable" });
+    if (await releaseClaim(deps, row)) summary.released += 1;
+    return;
+  }
   const markedSending = await compareAndSet(deps, row, "claimed", { status: "sending" });
   if (markedSending === "lost") {
     await noteClaimLost(deps, row, "claimed");
@@ -425,7 +435,7 @@ async function sendClaimed(deps: ScheduledSenderDeps, row: ClaimedScheduledMessa
   }
   let messageId: string | null;
   try {
-    const sent = await withTimeout(dispatchSend(deps, row), deps.sendTimeoutMs);
+    const sent = await withTimeout(dispatchSend(transport, row), deps.sendTimeoutMs);
     messageId = sent.messageId;
   } catch (error) {
     // A timeout means the provider may already have accepted. Leave `sending` so the lease can mark it indeterminate.
