@@ -1,7 +1,10 @@
-// Inbound opt-out (Spec B §8.11). It stops business-initiated sends: pending store
-// events, an active event-origin procedure, and agent replies that have not been
-// claimed yet. A customer's own message, including one that arrives later, is
-// re-engagement and is still answered. A failed opt-out write is logged, not swallowed.
+// Inbound opt-out (Spec B §8.11). Opt-out blocks business-initiated automation
+// (store events, broadcasts, scheduled sends, store and partner APIs) and
+// operator template sends. Recording it also skips pending store events, clears
+// an active event-origin procedure, and cancels agent replies not yet claimed.
+// It does not block free-form replies, the agent's answer to a later customer
+// message, auto-replies, or n8n. A customer's own later message does not clear
+// the opt-out row. A failed opt-out write is logged, not swallowed.
 import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { persistProcedureState } from "../ai-agent-reply/procedureState.ts";
 
@@ -28,8 +31,11 @@ export function isOptOutMessage(text: string): boolean {
 /**
  * Decided before the inbound row is stored. An owner echo is never an opt-out.
  * Recording comes before persist so a provider retry can still write the row.
- * The customer's message is still enqueued: opt-out does not gate the agent,
- * auto-replies, or n8n. It only stops business-initiated work already queued.
+ * The customer's message is still enqueued. Opt-out blocks business-initiated
+ * automation (store events, broadcasts, scheduled sends, store and partner
+ * APIs) and operator template sends. It does not block free-form replies, the
+ * agent, auto-replies, or n8n. A customer's own later message does not clear
+ * the opt-out row.
  */
 export function inboundOptOutPlan(text: string, fromOwner = false): {
   recordBeforePersist: boolean;

@@ -85,6 +85,7 @@ import {
   resolveAutomationHandler,
   resolveCommentAutomationHandler,
 } from "../_shared/automationHandler.ts";
+import { refuseOptedOutTemplate, sendOperatorWhatsAppMessage } from "./templateOptOut.ts";
 
 // Meta's participant profile_pic URLs expire after a few days; re-fetch/re-cache
 // before that window closes rather than serving a dead link from messaging_cache.
@@ -1242,24 +1243,28 @@ function isAiAgentPlatform(value: unknown): value is string {
         socialAccountId: social_account_id,
       }, (access) => Promise.resolve(access));
       const phoneNumberId = account.platformUserId;
-      let data: any;
-      if (message_type === "template") {
-        rejectDirectQrCapability(account);
-        const token = getWhatsAppToken(account);
-        const payload = {
-          messaging_product: "whatsapp",
-          to: recipient_phone,
-          type: message_type,
-          template: typeof message === "string" ? JSON.parse(message) : message,
-        };
-        data = await sendWhatsAppWithRetry(
-          `${GRAPH_API}/${phoneNumberId}/messages`,
-          token,
-          payload,
-          phoneNumberId,
-          social_account_id,
-        );
-      } else {
+      if (message_type === "template") rejectDirectQrCapability(account);
+      const sent = await sendOperatorWhatsAppMessage(adminClient, {
+        ownerId: account.ownerId,
+        recipientPhone: recipient_phone,
+        messageType: message_type,
+      }, gracefulError, async () => {
+        if (message_type === "template") {
+          const token = getWhatsAppToken(account);
+          const payload = {
+            messaging_product: "whatsapp",
+            to: recipient_phone,
+            type: message_type,
+            template: typeof message === "string" ? JSON.parse(message) : message,
+          };
+          return await sendWhatsAppWithRetry(
+            `${GRAPH_API}/${phoneNumberId}/messages`,
+            token,
+            payload,
+            phoneNumberId,
+            social_account_id,
+          );
+        }
         const transport = await resolveWhatsAppTransport(adminClient, {
           id: account.accountId,
           platform_user_id: account.platformUserId,
@@ -1267,8 +1272,10 @@ function isAiAgentPlatform(value: unknown): value is string {
           connection_mode: account.connectionMode,
           account_metadata: account.accountMetadata as Record<string, unknown> | null,
         });
-        data = (await transport.sendText({ recipientPhone: recipient_phone, text: String(message) })).raw;
-      }
+        return (await transport.sendText({ recipientPhone: recipient_phone, text: String(message) })).raw;
+      });
+      if (sent instanceof Response) return sent;
+      const data: any = sent;
       const sentMessageId = data?.messages?.[0]?.id || data?.key?.id;
 
       // Store outbound message in whatsapp_messages table
@@ -1318,7 +1325,12 @@ function isAiAgentPlatform(value: unknown): value is string {
       // Delegated to the shared op so the JWT door and the partner-api key door
       // run one implementation and cannot drift. Authorization stays here: this
       // door resolves a human workspace role, the other resolves key scopes.
-      const result = await sendTemplate({
+      // Opt-out is this door's rule: the partner door gates itself.
+      const result = await refuseOptedOutTemplate(adminClient, {
+        ownerId: account.ownerId,
+        recipientPhone: recipient_phone,
+        action: "whatsapp_send_template",
+      }, gracefulError, () => sendTemplate({
         admin: adminClient,
         accountId: account.accountId,
         ownerId: account.ownerId,
@@ -1331,7 +1343,8 @@ function isAiAgentPlatform(value: unknown): value is string {
         templateName: template_name,
         templateLanguage: template_language || "en_US",
         components: template_components,
-      });
+      }));
+      if (result instanceof Response) return result;
 
       // `data` preserves the existing frontend contract — WhatsAppDiagnostics.tsx
       // and useMessaging.ts consume this response shape.
