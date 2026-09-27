@@ -10,6 +10,7 @@ import {
   type StoreEventRow,
   type StoreRead,
   type StoreSnapshot,
+  type StoreEventLog,
   type ThreadRow,
   type WorkerPorts,
 } from "./worker.ts";
@@ -85,6 +86,7 @@ interface Harness {
   records: string[];
   persists: Array<{ expected: unknown; next: unknown }>;
   alerts: string[];
+  logs: StoreEventLog[];
   qrReleases: number;
   deleted: number;
   thread: ThreadRow;
@@ -112,6 +114,7 @@ function harness(options: {
     records: [],
     persists: [],
     alerts: [],
+    logs: [],
     qrReleases: 0,
     deleted: 0,
     thread: options.thread ?? { id: "thread-1", procedure_state: null },
@@ -172,6 +175,10 @@ function harness(options: {
     },
     alertAdmin: (_event, reason) => {
       state.alerts.push(reason);
+      return Promise.resolve();
+    },
+    logEvent: (entry) => {
+      state.logs.push(entry);
       return Promise.resolve();
     },
   };
@@ -476,6 +483,160 @@ Deno.test("the tick releases claimed rows once the 40s budget is spent", async (
   assertEquals(summary.released, 1);
   assertEquals(second.status, "pending");
   assertEquals(box.sends.length, 1);
+});
+
+function loseActivation(box: Harness): void {
+  const original = box.ports.persistState;
+  box.ports.persistState = (threadId, expected, next) => {
+    if ((next as { phase?: string } | null)?.phase === "active") {
+      box.persists.push({ expected, next });
+      return Promise.resolve(false);
+    }
+    return original(threadId, expected, next);
+  };
+}
+
+Deno.test("a lost activation compare-and-set leaves the accepted send unfinished", async () => {
+  const box = harness({ account: qrAccount() });
+  loseActivation(box);
+  const summary = await runStoreEventWorker(box.ports);
+  assertEquals(summary.sent, 0);
+  assertEquals(summary.failed, 0);
+  assertEquals(box.row.status, "sending");
+  assertEquals(box.row.outbound_message_id, "wamid.1");
+  assertEquals(box.records.length, 0);
+  assertEquals(box.deleted, 0);
+  assertEquals(box.qrReleases, 0);
+  assertEquals(box.alerts.length, 0);
+  assertEquals(box.logs.length, 0);
+  assertEquals((box.persists.at(-1)?.next as { phase?: string }).phase, "active");
+});
+
+Deno.test("a reclaimed send retries activation when the compare-and-set loses", async () => {
+  const row = event({ status: "sending", outbound_message_id: "wamid.kept" });
+  const box = harness({
+    row,
+    thread: { id: "thread-1", procedure_state: pending(row.id) },
+  });
+  loseActivation(box);
+  const summary = await runStoreEventWorker(box.ports);
+  assertEquals(summary.sent, 0);
+  assertEquals(summary.failed, 0);
+  assertEquals(box.sends.length, 0);
+  assertEquals(box.row.status, "sending");
+  assertEquals(box.row.outbound_message_id, "wamid.kept");
+  assertEquals(box.records.length, 0);
+  assertEquals(box.deleted, 0);
+  assertEquals(box.alerts.length, 0);
+  assertEquals(box.logs.length, 0);
+});
+
+Deno.test("a reclaimed send treats this event's active state as already activated", async () => {
+  const row = event({ status: "sending", outbound_message_id: "wamid.kept" });
+  const box = harness({
+    row,
+    thread: { id: "thread-1", procedure_state: { ...pending(row.id), phase: "active" } },
+  });
+  const summary = await runStoreEventWorker(box.ports);
+  assertEquals(summary.sent, 1);
+  assertEquals(box.sends.length, 0);
+  assertEquals(box.persists.length, 0);
+  assertEquals(box.row.status, "sent");
+  assertEquals(box.records.length, 1);
+  assertEquals(box.alerts.length, 0);
+});
+
+Deno.test("a reclaimed send fails activation_conflict when another flow holds the thread", async () => {
+  const row = event({ status: "sending", outbound_message_id: "wamid.kept" });
+  const at = new Date(NOW).toISOString();
+  const box = harness({
+    row,
+    account: qrAccount(),
+    thread: {
+      id: "thread-1",
+      procedure_state: {
+        run_id: "other-run",
+        key: "order_status",
+        version: 1,
+        step: 0,
+        fields: {},
+        off_script: 0,
+        origin: "model",
+        phase: "active",
+        started_at: at,
+        updated_at: at,
+      },
+    },
+  });
+  const summary = await runStoreEventWorker(box.ports);
+  assertEquals(summary.failed, 1);
+  assertEquals(box.sends.length, 0);
+  assertEquals(box.records.length, 0);
+  assertEquals(box.qrReleases, 0);
+  assertEquals(box.row.status, "failed");
+  assertEquals(reasonOf(box.row), "activation_conflict");
+  assertEquals(box.alerts, ["activation_conflict"]);
+  assertEquals(box.logs.length, 1);
+  assertEquals(box.logs[0].level, "warn");
+  assertEquals(box.logs[0].message, "Store event failed");
+  assertEquals(box.logs[0].metadata.reason, "activation_conflict");
+  assertEquals("phone" in box.logs[0].metadata, false);
+});
+
+Deno.test("a skip writes one outcome log and a thrown log insert does not change the skip", async () => {
+  const box = harness({ account: account({ agentEnabled: false }) });
+  await runStoreEventWorker(box.ports);
+  assertEquals(box.row.status, "skipped");
+  assertEquals(box.logs, [{
+    source: "process-store-events",
+    category: "ai",
+    level: "info",
+    message: "Store event skipped",
+    user_id: "user-1",
+    metadata: {
+      event_id: box.row.id,
+      flow: "cod_confirm",
+      social_account_id: "account-1",
+      reason: "agent_disabled",
+    },
+  }]);
+  assertEquals("phone" in box.logs[0].metadata, false);
+
+  const thrown = harness({ account: account({ optedOut: true }) });
+  const errors: string[] = [];
+  const original = console.error;
+  console.error = (...args: unknown[]) => {
+    errors.push(args.map((part) => String(part)).join(" "));
+  };
+  thrown.ports.logEvent = () => {
+    throw new Error(`log insert failed for ${PHONE}`);
+  };
+  try {
+    await runStoreEventWorker(thrown.ports);
+  } finally {
+    console.error = original;
+  }
+  assertEquals(thrown.row.status, "skipped");
+  assertEquals(reasonOf(thrown.row), "opted_out");
+  assertEquals(errors.length > 0, true);
+  assertEquals(errors.some((line) => line.includes(PHONE)), false);
+});
+
+Deno.test("a definite send failure writes one outcome log without the phone", async () => {
+  const box = harness({
+    send: { accepted: false, definite: true, reason: `recipient ${PHONE} unreachable` },
+  });
+  await runStoreEventWorker(box.ports);
+  assertEquals(box.row.status, "failed");
+  assertEquals(box.logs.length, 1);
+  assertEquals(box.logs[0].level, "warn");
+  assertEquals(box.logs[0].message, "Store event failed");
+  assertEquals(box.logs[0].category, "ai");
+  assertEquals(box.logs[0].user_id, box.row.user_id);
+  assertEquals(Object.keys(box.logs[0].metadata).sort(), ["event_id", "flow", "reason", "social_account_id"]);
+  assertEquals("phone" in box.logs[0].metadata, false);
+  assertEquals(box.logs[0].metadata.reason.includes(PHONE), false);
+  assertEquals(JSON.stringify(box.logs[0]).includes(PHONE), false);
 });
 
 Deno.test("back in stock deletes the waitlist row after the opener is accepted", async () => {

@@ -1,7 +1,8 @@
 // supabase/functions/ai-agent-reply/procedureRuntime.test.ts
 import { assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 import {
-  createProcedureTurn, planWaitlistJoin, procedureToolDefinitions, scopeStoreEventRead, storeEventReadScope,
+  createProcedureTurn, planWaitlistJoin, procedureToolDefinitions, scopeStoreEventRead, STOCK_WAITLIST_ON_CONFLICT,
+  storeEventReadScope,
   type ProcedurePorts, type ProcedureTurnInput, type StockSighting, type StoreEventRow,
 } from "./procedureRuntime.ts";
 
@@ -620,5 +621,7 @@ Deno.test("waitlist join copies id, parent and name from the stock result", () =
   assertEquals(plan.row.connector_id, "conn-9");
   assertEquals(plan.row.phone, "96555512345");
   assertEquals(plan.row.consent_source, "chat_optin");
+  assertEquals(plan.onConflict, "social_account_id,connector_id,phone,product_id");
+  assertEquals(STOCK_WAITLIST_ON_CONFLICT, plan.onConflict);
   assertEquals(joinInput([sighting("outofstock")], { dryRun: true }).action, "dry_run");
 });

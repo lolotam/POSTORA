@@ -128,7 +128,7 @@ BEGIN
            WHERE binding_id = bind_b AND external_id = 'order-sending') = 'sending',
     'B5 sending status accepted';
 
-  -- B6: waitlist is unique per (connector, phone, product).
+  -- B6: waitlist is unique per (social_account_id, connector, phone, product).
   BEGIN
     INSERT INTO public.stock_waitlist (user_id, social_account_id, connector_id, conversation_id, phone, product_id)
     VALUES (u_b, acct_b, tool_b, 'wa_test_b', '96555519999', 202);
@@ -136,6 +136,21 @@ BEGIN
       USING ERRCODE = 'assert_failure';
   EXCEPTION WHEN unique_violation THEN NULL;
   END;
+
+  -- B6b: the same phone+product+connector under two different social
+  -- accounts inserts two rows (per-account uniqueness). The probe rows are
+  -- deleted afterwards so B9 still sees exactly one waitlist row for user A.
+  INSERT INTO public.social_accounts (id, user_id, platform, platform_user_id, access_token)
+  VALUES ('c9c9c9c9-c9c9-4c9c-8c9c-c9c9c9c9c9c9', u_a, 'facebook', 'procb-acct-a2', 'token-a2');
+  INSERT INTO public.stock_waitlist (user_id, social_account_id, connector_id, conversation_id, phone, product_id)
+  VALUES
+    (u_a, acct_a, tool_a, 'wa_b6_a', '96555510001', 301),
+    (u_a, 'c9c9c9c9-c9c9-4c9c-8c9c-c9c9c9c9c9c9', tool_a, 'wa_b6_b', '96555510001', 301);
+  ASSERT (SELECT count(*) FROM public.stock_waitlist
+           WHERE connector_id = tool_a AND phone = '96555510001' AND product_id = 301) = 2,
+    'B6 same phone+product+connector under two accounts inserts two rows';
+  DELETE FROM public.stock_waitlist
+  WHERE connector_id = tool_a AND phone = '96555510001' AND product_id = 301;
 
   -- B7: opt-outs are unique per (user, phone).
   BEGIN

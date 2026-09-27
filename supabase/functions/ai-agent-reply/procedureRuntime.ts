@@ -349,10 +349,13 @@ export interface WaitlistJoinRow {
   consented_at: string;
 }
 
+/** stock_waitlist_account_connector_phone_product_key. Two accounts may wait on one store product. */
+export const STOCK_WAITLIST_ON_CONFLICT = "social_account_id,connector_id,phone,product_id";
+
 export type WaitlistPlan =
   | { action: "refuse"; output: string }
   | { action: "dry_run"; output: string }
-  | { action: "upsert"; row: WaitlistJoinRow; output: string };
+  | { action: "upsert"; row: WaitlistJoinRow; onConflict: typeof STOCK_WAITLIST_ON_CONFLICT; output: string };
 
 /**
  * The product id selects which earlier check_stock row to copy. Name, parent
@@ -389,6 +392,7 @@ export function planWaitlistJoin(input: {
   if (input.dryRun) return { action: "dry_run", output: "(test mode, nothing written) The customer would be added to the waitlist." };
   return {
     action: "upsert",
+    onConflict: STOCK_WAITLIST_ON_CONFLICT,
     output: `Saved. Tell the customer we will WhatsApp them when ${source.name || "the product"} is back in stock.`,
     row: {
       user_id: input.userId,

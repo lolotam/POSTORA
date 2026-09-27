@@ -1420,7 +1420,7 @@ Deno.serve(async (req) => {
       if (plan.action === "upsert") {
         const { error } = await admin.from("stock_waitlist").upsert(
           plan.row,
-          { onConflict: "connector_id,phone,product_id" },
+          { onConflict: plan.onConflict },
         );
         if (error) {
           console.error("[ai-agent-reply] waitlist join failed:", error.message);

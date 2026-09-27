@@ -387,6 +387,22 @@ export function createStoreEventPorts(admin: any): WorkerPorts {
         );
       }
     },
+    async logEvent(entry) {
+      try {
+        const { error } = await admin.from("system_logs").insert(entry);
+        if (error) {
+          console.error(
+            `[process-store-events] ${entry.metadata.event_id} outcome log failed:`,
+            sanitizeFailureReason(error.message),
+          );
+        }
+      } catch (error) {
+        console.error(
+          `[process-store-events] ${entry.metadata.event_id} outcome log failed:`,
+          sanitizeFailureReason(error instanceof Error ? error.message : "log_failed"),
+        );
+      }
+    },
     async deleteWaitlist(event) {
       const waitlistId = event.external_id.startsWith("waitlist:") ? event.external_id.slice("waitlist:".length) : "";
       if (!waitlistId) return;

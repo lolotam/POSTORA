@@ -89,6 +89,21 @@ export interface RecordOpenerInput {
   text: string;
 }
 
+/** One terminal skip or failure. Metadata never carries the phone or the payload. */
+export interface StoreEventLog {
+  source: "process-store-events";
+  category: "ai";
+  level: "info" | "warn";
+  message: "Store event skipped" | "Store event failed";
+  user_id: string;
+  metadata: {
+    event_id: string;
+    flow: string;
+    social_account_id: string;
+    reason: string;
+  };
+}
+
 export interface WorkerPorts {
   now(): number;
   claim(limit: number, lease: string): Promise<StoreEventRow[]>;
@@ -106,6 +121,8 @@ export interface WorkerPorts {
   recordOpener(input: RecordOpenerInput): Promise<void>;
   deleteWaitlist(event: StoreEventRow): Promise<void>;
   alertAdmin(event: StoreEventRow, reason: string): Promise<void>;
+  /** A failed insert is logged by the adapter and must not change the worker outcome. */
+  logEvent(entry: StoreEventLog): Promise<void>;
 }
 
 export interface WorkerSummary {
@@ -209,6 +226,7 @@ export async function runStoreEventWorker(
       if (event.outbound_message_id) {
         const finished = await completeRecordedSend(ports, event);
         if (finished === "sent") summary.sent += 1;
+        else if (finished === "failed") summary.failed += 1;
       } else if (await settleIndeterminate(ports, event)) {
         summary.failed += 1;
       }
@@ -224,8 +242,19 @@ export async function runStoreEventWorker(
   return summary;
 }
 
-/** The provider already accepted. Finish the opener bookkeeping and do not send again. */
-async function completeRecordedSend(ports: WorkerPorts, event: StoreEventRow): Promise<"sent" | "left"> {
+function asProcedure(value: unknown): ProcedureState | null {
+  if (!value || typeof value !== "object") return null;
+  const state = value as ProcedureState;
+  if (typeof state.run_id !== "string" || typeof state.key !== "string") return null;
+  return state;
+}
+
+function eventOwns(state: ProcedureState | null, event: StoreEventRow): boolean {
+  return !!state && state.run_id === event.id && state.key === event.flow;
+}
+
+/** The provider already accepted. Finish activation and bookkeeping; do not send again. */
+async function completeRecordedSend(ports: WorkerPorts, event: StoreEventRow): Promise<"sent" | "failed" | "left"> {
   const messageId = event.outbound_message_id;
   if (!messageId) return "left";
   try {
@@ -234,10 +263,8 @@ async function completeRecordedSend(ports: WorkerPorts, event: StoreEventRow): P
     if (account?.platform === "whatsapp" && account.connectionMode && account.platformUserId && phone) {
       const conversationId = whatsappConversationId(addressing(account), phone);
       const thread = await ports.ensureThread({ userId: event.user_id, conversationId });
-      const stored = thread.procedure_state;
-      const pending = isPendingOpener(stored) && (stored as ProcedureState).run_id === event.id
-        ? stored as ProcedureState
-        : null;
+      const stored = asProcedure(thread.procedure_state);
+      const pending = stored?.phase === "pending_opener" && eventOwns(stored, event) ? stored : null;
       return await finishAccepted(ports, {
         event,
         account,
@@ -248,14 +275,9 @@ async function completeRecordedSend(ports: WorkerPorts, event: StoreEventRow): P
       }, thread, pending);
     }
     console.error(
-      `[process-store-events] ${event.id} accepted send has no WhatsApp thread to record`,
+      `[process-store-events] ${event.id} accepted send has no WhatsApp thread to activate`,
     );
-    if (event.flow === "back_in_stock") await ports.deleteWaitlist(event);
-    const done = await ports.updateEvent(event.id, event.claim_token, {
-      status: "sent",
-      processed_at: iso(ports.now()),
-    });
-    return done ? "sent" : "left";
+    return "left";
   } catch (error) {
     console.error(
       `[process-store-events] ${event.id} accepted send was not finished:`,
@@ -265,15 +287,38 @@ async function completeRecordedSend(ports: WorkerPorts, event: StoreEventRow): P
   }
 }
 
+/**
+ * Activate pending_opener → active, then record the send.
+ * A lost compare-and-set leaves the row in `sending` with outbound_message_id set.
+ * The next tick retries. An already-active state for this event is success.
+ * Any other stored flow is a terminal activation_conflict.
+ */
 async function finishAccepted(
   ports: WorkerPorts,
   opener: RecordOpenerInput,
   thread: ThreadRow,
   pending: ProcedureState | null,
-): Promise<"sent" | "left"> {
-  if (pending?.phase === "pending_opener" && pending.run_id === opener.event.id) {
-    const active: ProcedureState = { ...pending, phase: "active", updated_at: iso(ports.now()) };
-    await ports.persistState(thread.id, pending, active);
+): Promise<"sent" | "failed" | "left"> {
+  const stored = asProcedure(thread.procedure_state);
+  const ownedPending = pending?.phase === "pending_opener" && eventOwns(pending, opener.event)
+    ? pending
+    : stored?.phase === "pending_opener" && eventOwns(stored, opener.event)
+      ? stored
+      : null;
+  if (stored?.phase === "active" && eventOwns(stored, opener.event)) {
+    // The previous tick stored active and stopped before marking the event sent.
+  } else if (ownedPending) {
+    const active: ProcedureState = { ...ownedPending, phase: "active", updated_at: iso(ports.now()) };
+    const activated = await ports.persistState(thread.id, ownedPending, active);
+    if (!activated) {
+      console.error(
+        `[process-store-events] ${opener.event.id} opener activation lost the compare-and-set; leaving status sending`,
+      );
+      return "left";
+    }
+  } else {
+    const failed = await markFailed(ports, opener.event, "activation_conflict", true);
+    return failed ? "failed" : "left";
   }
   await ports.recordOpener(opener);
   if (opener.event.flow === "back_in_stock") await ports.deleteWaitlist(opener.event);
@@ -282,6 +327,58 @@ async function finishAccepted(
     processed_at: iso(ports.now()),
   });
   return done ? "sent" : "left";
+}
+
+async function writeOutcomeLog(
+  ports: WorkerPorts,
+  event: StoreEventRow,
+  level: StoreEventLog["level"],
+  message: StoreEventLog["message"],
+  reason: string,
+): Promise<void> {
+  const safeReason = sanitizeFailureReason(reason);
+  try {
+    await ports.logEvent({
+      source: "process-store-events",
+      category: "ai",
+      level,
+      message,
+      user_id: event.user_id,
+      metadata: {
+        event_id: event.id,
+        flow: event.flow,
+        social_account_id: event.social_account_id,
+        reason: safeReason,
+      },
+    });
+  } catch (error) {
+    console.error(
+      `[process-store-events] ${event.id} outcome log failed:`,
+      sanitizeFailureReason(error instanceof Error ? error.message : "log_failed"),
+    );
+  }
+}
+
+async function markFailed(ports: WorkerPorts, event: StoreEventRow, reason: string, alert: boolean): Promise<boolean> {
+  const safeReason = sanitizeFailureReason(reason);
+  const marked = await ports.updateEvent(event.id, event.claim_token, {
+    status: "failed",
+    skip_reason: safeReason,
+    processed_at: iso(ports.now()),
+  });
+  if (!marked) return false;
+  if (alert) {
+    try {
+      await ports.alertAdmin(event, safeReason);
+    } catch (error) {
+      console.error(
+        `[process-store-events] ${event.id} admin alert failed:`,
+        sanitizeFailureReason(error instanceof Error ? error.message : "alert_failed"),
+      );
+    }
+  }
+  await writeOutcomeLog(ports, event, "warn", "Store event failed", safeReason);
+  return true;
 }
 
 async function settleIndeterminate(ports: WorkerPorts, event: StoreEventRow): Promise<boolean> {
@@ -305,16 +402,26 @@ async function settleIndeterminate(ports: WorkerPorts, event: StoreEventRow): Pr
       sanitizeFailureReason(error instanceof Error ? error.message : "state_clear_failed"),
     );
   }
-  await ports.alertAdmin(event, "indeterminate");
+  try {
+    await ports.alertAdmin(event, "indeterminate");
+  } catch (error) {
+    console.error(
+      `[process-store-events] ${event.id} admin alert failed:`,
+      sanitizeFailureReason(error instanceof Error ? error.message : "alert_failed"),
+    );
+  }
+  await writeOutcomeLog(ports, event, "warn", "Store event failed", "indeterminate");
   return true;
 }
 
 async function skip(ports: WorkerPorts, event: StoreEventRow, reason: string): Promise<boolean> {
-  return await ports.updateEvent(event.id, event.claim_token, {
+  const marked = await ports.updateEvent(event.id, event.claim_token, {
     status: "skipped",
     skip_reason: reason,
     processed_at: iso(ports.now()),
   });
+  if (marked) await writeOutcomeLog(ports, event, "info", "Store event skipped", reason);
+  return marked;
 }
 
 async function processClaimed(
@@ -425,12 +532,8 @@ async function processClaimed(
       }
       await clearPending(ports, thread, event.id, openerState);
       if (reserved) await ports.releaseQr(event.social_account_id);
-      await ports.updateEvent(event.id, event.claim_token, {
-        status: "failed",
-        skip_reason: sanitizeFailureReason(sent.reason),
-        processed_at: iso(ports.now()),
-      });
-      return "failed";
+      const failed = await markFailed(ports, event, sent.reason, false);
+      return failed ? "failed" : "left";
     }
     const recordedId = await ports.updateEvent(event.id, event.claim_token, { outbound_message_id: sent.messageId });
     if (!recordedId) return "left";

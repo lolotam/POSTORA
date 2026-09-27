@@ -17,8 +17,10 @@
 --
 -- Idempotent: functions are dropped IF EXISTS before CREATE; the table and
 -- its grants use IF NOT EXISTS / REVOKE-then-GRANT; both cron jobs are
--- unscheduled-then-scheduled inside pg_cron guards. Does not touch the
--- 20260927120000 / 20260927130000 / 20260927140000 objects.
+-- unscheduled-then-scheduled inside pg_cron guards. The stock_waitlist
+-- uniqueness swap in section G is the one exception: it retires the
+-- 20260927120000 (connector, phone, product) key in favour of the
+-- per-account (social_account_id, connector, phone, product) key.
 
 BEGIN;
 
@@ -222,6 +224,32 @@ BEGIN
     );
   END IF;
 END $do_cron_purge$;
+
+-- ---------------------------------------------------------------------------
+-- G. stock_waitlist uniqueness becomes per-account: the same phone+product
+--    under one connector may wait on two different social accounts (two
+--    chat identities), while a re-opt-in on the same account stays one row.
+--    Retires stock_waitlist_connector_phone_product_key from 20260927120000
+--    in favour of stock_waitlist_account_connector_phone_product_key.
+--    Idempotent: the old key drops IF EXISTS; the new key is added only
+--    when missing (a DROP on re-run would fail once rows depend on it, and
+--    an unconditional ADD would fail on re-run).
+-- ---------------------------------------------------------------------------
+ALTER TABLE public.stock_waitlist
+  DROP CONSTRAINT IF EXISTS stock_waitlist_connector_phone_product_key;
+
+DO $do_stock_waitlist_account_key$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'stock_waitlist_account_connector_phone_product_key'
+      AND conrelid = 'public.stock_waitlist'::regclass
+  ) THEN
+    ALTER TABLE public.stock_waitlist
+      ADD CONSTRAINT stock_waitlist_account_connector_phone_product_key
+      UNIQUE (social_account_id, connector_id, phone, product_id);
+  END IF;
+END $do_stock_waitlist_account_key$;
 
 COMMIT;
 
