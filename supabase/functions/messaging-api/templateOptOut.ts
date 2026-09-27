@@ -15,9 +15,13 @@ interface TemplateRefusal {
   errorType: "INVALID_RECIPIENT" | "RECIPIENT_OPTED_OUT" | "OPT_OUT_LOOKUP_FAILED";
 }
 
-/** 8–15 digits. An @lid (or any address containing '@') is never a phone. */
+// Digits with optional leading +, spaces, dashes, dots and brackets only. Letters,
+// "ext" and '@' (a WhatsApp @lid) are refused: stripping them would check a different number.
+const PHONE_FORMAT = /^\+?[0-9][0-9\s\-().]*$/;
+
+/** 8–15 digits from a strictly phone-shaped value, else null. */
 function recipientDigits(recipientPhone: string): string | null {
-  if (recipientPhone.includes("@")) return null;
+  if (!PHONE_FORMAT.test(recipientPhone.trim())) return null;
   const digits = digitsOnly(recipientPhone);
   if (digits.length < 8 || digits.length > 15) return null;
   return digits;

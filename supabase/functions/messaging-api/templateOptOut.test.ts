@@ -148,7 +148,7 @@ Deno.test("another owner's identical phone is still allowed to receive a templat
 });
 
 Deno.test("an @lid or a non-phone recipient is refused before the opt-out lookup", async () => {
-  const cases = ["166095025660123@lid", "12345", "1234567890123456", "user@example.com"];
+  const cases = ["166095025660123@lid", "12345", "1234567890123456", "user@example.com", "+96555512345 ext 99"];
   for (const recipientPhone of cases) {
     const { admin, logs, queriedUserIds } = optOutAdmin([{ user_id: "owner-1", phone: STORED_PHONE }]);
     const sent = provider();
