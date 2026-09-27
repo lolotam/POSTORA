@@ -139,10 +139,12 @@ Derived from `V1_ERROR_POLICY`. The retry verdict is the `retryable` flag, never
 | `meta_error` | 502 | yes | The provider request could not be completed |
 | `method_not_allowed` | 405 | no | Method not allowed; see the Allow header |
 | `missing_idempotency_key` | 400 | no | Idempotency-Key header is required for this request |
+| `opt_out_lookup_failed` | 503 | yes | Opt-out status could not be confirmed; retry shortly |
 | `outside_session_window` | 422 | no | Recipient has not messaged in the last 24h — send an approved template. |
 | `payload_too_large` | 413 | no | The uploaded file is larger than the limit for its media type |
 | `quota_exceeded` | 429 | no | Monthly quota exhausted for this key |
 | `rate_limited` | 429 | yes | Rate limit exceeded |
+| `recipient_opted_out` | 422 | no | This customer has opted out of WhatsApp messages |
 | `resource_not_found` | 404 | no | Resource not found |
 | `sync_already_running` | 409 | yes | History sync is already running; poll history-sync for progress |
 | `template_not_approved` | 422 | no | Template rejected by Meta |

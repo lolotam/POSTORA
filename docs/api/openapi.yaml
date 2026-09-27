@@ -2970,6 +2970,12 @@ components:
           `invalid_recipient` (131026), `meta_error` (5xx / unparseable / missing message id),
           `account_needs_reauth` (190), `account_not_connected` (phone registration failure),
           `unsupported_direct_qr` (evolution_qr mode — `whatsappPartnerOps.ts:221`)
+        - `_shared/partnerDispatch.ts` (opt-out gate, before quota):
+          `recipient_opted_out` (422, not retryable) when the sending account's
+          owner has this recipient in `messaging_opt_outs`, and
+          `opt_out_lookup_failed` (503, retryable) when that read fails. The
+          lookup failure is not stored on the idempotency row, so the same key
+          re-attempts after the lease instead of replaying the 503.
         - `partner-api/v1/media.ts` (Phase 4): `payload_too_large` when a file
           exceeds its type's limit, `unsupported_capability` when the sniffed
           type is not on the allowlist, `resource_not_found` for a `media_id`
@@ -3041,10 +3047,12 @@ components:
         - meta_error
         - method_not_allowed
         - missing_idempotency_key
+        - opt_out_lookup_failed
         - outside_session_window
         - payload_too_large
         - quota_exceeded
         - rate_limited
+        - recipient_opted_out
         - resource_not_found
         - sync_already_running
         - template_not_approved

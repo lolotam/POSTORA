@@ -80,6 +80,12 @@ const UNREACHABLE_WHILE_SEND_IS_SUSPENDED: Record<string, string> = {
   tool_not_found: "emitted by POST /v1/tools/execute for a tool or account outside the key's binding",
   tool_execution_failed: "emitted by POST /v1/tools/execute when the downstream call reports failure",
   tool_execution_timeout: "emitted by POST /v1/tools/execute when the 20 s execution budget expires",
+  // Opt-out is decided inside dispatchPartnerTemplate, after the idempotency
+  // claim. The alias send is still behind the 0A suspension, so this drive
+  // never gets there. Both codes are reached through POST /v1/messages text
+  // in v1/messages.test.ts (T9, T10) and through partnerDispatch.test.ts.
+  recipient_opted_out: "emitted by dispatchPartnerTemplate before quota when the account owner has opted this recipient out; exercised in v1/messages.test.ts",
+  opt_out_lookup_failed: "emitted by dispatchPartnerTemplate when the opt-out read throws; the claim stays processing; exercised in v1/messages.test.ts",
 };
 
 const KEY_ROW = {
