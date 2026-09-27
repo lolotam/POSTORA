@@ -125,6 +125,7 @@ SUITES=(
   agent_procedures.sql
   agent_test_limits.sql
   agent_procedures_b.sql
+  whatsapp_scheduled_sender.sql
 )
 # These fixtures build their own focused schema and apply the migration under
 # test. They must never run against the restored production-shaped database.
