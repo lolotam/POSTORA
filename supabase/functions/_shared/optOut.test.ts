@@ -1,5 +1,5 @@
 import { assertEquals } from "jsr:@std/assert@1";
-import { automationAllowedAfterInbound, inboundOptOutPlan, isOptOutMessage, optOutDb, recordOptOut, type OptOutDb } from "./optOut.ts";
+import { automationAllowedAfterInbound, inboundOptOutPlan, isOptOutMessage, optOutDb, optOutPersistDecision, recordOptOut, type OptOutDb } from "./optOut.ts";
 
 for (const [text, expected] of [
   ["stop", true],
@@ -70,8 +70,8 @@ function recordingDb(failAt?: "upsert" | "skip" | "clear") {
       if (failAt === "clear") throw new Error("down");
       calls.push({ port: "clearEventProcedure", args: [userId, conversationId] });
     },
-    async warn(userId, socialAccountId) {
-      calls.push({ port: "warn", args: [userId, socialAccountId] });
+    async warn(userId, socialAccountId, phase) {
+      calls.push({ port: "warn", args: [userId, socialAccountId, phase] });
     },
   };
   return { db, calls };
@@ -87,10 +87,29 @@ Deno.test("recordOptOut upserts, then skips events, then clears the procedure, i
   ]);
 });
 
-Deno.test("a failed opt-out write is logged and returns false", async () => {
+Deno.test("a failed opt-out upsert is logged and returns false without the follow-ups", async () => {
   const fake = recordingDb("upsert");
   assertEquals(await recordOptOut(fake.db, INPUT), false);
-  assertEquals(fake.calls, [{ port: "warn", args: ["user", "acc"] }]);
+  assertEquals(fake.calls, [{ port: "warn", args: ["user", "acc", "upsert"] }]);
+});
+
+Deno.test("a failed event skip is logged and does not block the opt-out", async () => {
+  const fake = recordingDb("skip");
+  assertEquals(await recordOptOut(fake.db, INPUT), true);
+  assertEquals(fake.calls.map((call) => call.port), ["upsertOptOut", "warn", "clearEventProcedure"]);
+  assertEquals(fake.calls[1].args, ["user", "acc", "skip"]);
+});
+
+Deno.test("a failed procedure clear is logged and does not block the opt-out", async () => {
+  const fake = recordingDb("clear");
+  assertEquals(await recordOptOut(fake.db, INPUT), true);
+  assertEquals(fake.calls.map((call) => call.port), ["upsertOptOut", "skipEvents", "warn"]);
+  assertEquals(fake.calls[2].args, ["user", "acc", "clear"]);
+});
+
+Deno.test("optOutPersistDecision refuses to persist only when the opt-out row was not written", () => {
+  assertEquals(optOutPersistDecision(false), { persist: false, status: 500 });
+  assertEquals(optOutPersistDecision(true), { persist: true, status: 200 });
 });
 
 interface QueryCall { table: string; method: string; args: unknown[] }

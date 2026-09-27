@@ -10,6 +10,8 @@ const BINDING = "11111111-1111-4111-8111-111111111111";
 
 const mocks = vi.hoisted(() => ({
   tools: [] as Array<Record<string, unknown>>,
+  links: [] as Array<{ tool_id: string; social_account_id: string }>,
+  linksReady: true,
   bindings: [] as Array<Record<string, unknown>> | undefined,
   isLoading: false,
   isError: false,
@@ -19,7 +21,15 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
-vi.mock("@/hooks/useAiAgentTools", () => ({ useAiAgentTools: () => ({ tools: mocks.tools }) }));
+vi.mock("@/hooks/useAiAgentTools", () => ({
+  useAiAgentTools: () => ({ tools: mocks.tools }),
+  useAiToolAccountLinks: () => ({
+    links: mocks.links,
+    linksReady: mocks.linksReady,
+    linksError: null,
+    setToolAccounts: { mutateAsync: vi.fn() },
+  }),
+}));
 vi.mock("@/hooks/useStoreWebhookBindings", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/hooks/useStoreWebhookBindings")>();
   return {
@@ -41,6 +51,8 @@ const issued = (secret: string) => ({ binding: { id: BINDING, connector_id: CONN
 describe("StoreWebhookSection", () => {
   beforeEach(() => {
     mocks.tools = [woo];
+    mocks.links = [];
+    mocks.linksReady = true;
     mocks.bindings = [];
     mocks.isLoading = false;
     mocks.isError = false;
@@ -48,6 +60,20 @@ describe("StoreWebhookSection", () => {
     mocks.create.mockReset();
     mocks.rotate.mockReset();
     vi.mocked(toast.error).mockClear();
+  });
+
+  it("shows a WooCommerce connector explicitly shared to this account", () => {
+    mocks.tools = [{ ...woo, social_account_id: "acc-other" }];
+    mocks.links = [{ tool_id: CONNECTOR, social_account_id: ACCOUNT }];
+    render(<StoreWebhookSection accountId={ACCOUNT} />);
+    expect(screen.getByTestId("store-webhook-section")).toBeInTheDocument();
+  });
+
+  it("hides a WooCommerce connector shared only with another account", () => {
+    mocks.tools = [{ ...woo, social_account_id: "acc-other" }];
+    mocks.links = [{ tool_id: CONNECTOR, social_account_id: "acc-3" }];
+    const { container } = render(<StoreWebhookSection accountId={ACCOUNT} />);
+    expect(container).toBeEmptyDOMElement();
   });
 
   it("renders nothing for an account without a WooCommerce connector", () => {

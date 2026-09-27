@@ -16,6 +16,31 @@ export interface StoreBinding {
   connector_id: string;
 }
 
+/** A waitlist row plus the two columns that decide which binding may draft it. */
+export interface ScopedWaitlistRow extends WaitlistMatch {
+  connector_id: string;
+  social_account_id: string;
+}
+
+/**
+ * Waitlist rows that belong to this binding. The connector is shared across
+ * WhatsApp accounts, so a connector match alone would draft another account's
+ * customers into this account's events.
+ */
+export function waitlistForBinding(
+  rows: readonly ScopedWaitlistRow[],
+  binding: Pick<StoreBinding, "connector_id" | "social_account_id">,
+): WaitlistMatch[] {
+  return rows
+    .filter((row) => row.connector_id === binding.connector_id && row.social_account_id === binding.social_account_id)
+    .map((row) => ({
+      id: row.id,
+      product_id: row.product_id,
+      parent_id: row.parent_id,
+      phone: row.phone,
+    }));
+}
+
 export interface StoreWebhookDeps {
   limitIp(req: Request): Promise<{ allowed: boolean; retryAfter?: number }>;
   limitConnector(connectorId: string): Promise<{ allowed: boolean; retryAfter?: number }>;
@@ -24,7 +49,7 @@ export interface StoreWebhookDeps {
   loadProcedures(socialAccountId: string): Promise<unknown>;
   /** Defaults to enabledStoreFlows, which drops event keys in PR 1. */
   flowsFrom?(procedures: unknown): ReadonlySet<string>;
-  loadWaitlist(connectorId: string): Promise<WaitlistMatch[]>;
+  loadWaitlist(binding: StoreBinding): Promise<ScopedWaitlistRow[]>;
   insertEvents(rows: Array<Record<string, unknown>>): Promise<{ ok: true; stored: number } | { ok: false }>;
   now(): Date;
 }
@@ -85,7 +110,7 @@ export async function handleStoreWebhook(req: Request, deps: StoreWebhookDeps): 
   try {
     procedures = await deps.loadProcedures(binding.social_account_id);
     // Only a product update can match the waitlist; orders never need it.
-    if (topic === "product.updated") waitlist = await deps.loadWaitlist(binding.connector_id);
+    if (topic === "product.updated") waitlist = waitlistForBinding(await deps.loadWaitlist(binding), binding);
   } catch {
     return json({ error: "store_failed" }, 500);
   }

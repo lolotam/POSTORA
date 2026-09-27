@@ -49,30 +49,69 @@ export function inboundOptOutPlan(text: string, fromOwner = false): {
   };
 }
 
+/** Which step a warning describes. Never a phone number or a secret. */
+export type OptOutWarnPhase = "upsert" | "skip" | "clear";
+
 export interface OptOutDb {
   upsertOptOut(userId: string, phone: string): Promise<void>;
   skipEvents(socialAccountId: string, phone: string): Promise<void>;
   clearEventProcedure(userId: string, conversationId: string): Promise<void>;
-  warn(userId: string, socialAccountId: string): Promise<void>;
+  warn(userId: string, socialAccountId: string, phase: OptOutWarnPhase): Promise<void>;
 }
 
+/**
+ * Writes the opt-out, then best-effort follow-ups.
+ *
+ * Returns false only when the `messaging_opt_outs` upsert itself failed. That
+ * row is the durable fact: the caller must not persist the inbound message,
+ * and must answer the provider with a non-2xx so the delivery is retried.
+ * `skipEvents` and `clearEventProcedure` failures are logged and do not change
+ * the result — the opt-out row is already stored, and those steps can be
+ * recovered without asking the provider to send the message again.
+ */
 export async function recordOptOut(
   db: OptOutDb,
   input: { userId: string; socialAccountId: string; phone: string; conversationId: string },
 ): Promise<boolean> {
   try {
     await db.upsertOptOut(input.userId, input.phone);
-    await db.skipEvents(input.socialAccountId, input.phone);
-    await db.clearEventProcedure(input.userId, input.conversationId);
-    return true;
   } catch {
-    try {
-      await db.warn(input.userId, input.socialAccountId);
-    } catch {
-      // The warning is best-effort; the caller still sees the failure.
-    }
+    await warnOptOut(db, input, "upsert");
     return false;
   }
+  try {
+    await db.skipEvents(input.socialAccountId, input.phone);
+  } catch {
+    await warnOptOut(db, input, "skip");
+  }
+  try {
+    await db.clearEventProcedure(input.userId, input.conversationId);
+  } catch {
+    await warnOptOut(db, input, "clear");
+  }
+  return true;
+}
+
+async function warnOptOut(
+  db: OptOutDb,
+  input: { userId: string; socialAccountId: string },
+  phase: OptOutWarnPhase,
+): Promise<void> {
+  try {
+    await db.warn(input.userId, input.socialAccountId, phase);
+  } catch {
+    // The warning is best-effort. A failed upsert still returns false.
+  }
+}
+
+/**
+ * A false result from `recordOptOut` means the opt-out row was not written.
+ * Persisting would consume the provider redelivery, so the webhook answers
+ * 500 and leaves the message unstored. True persists; the HTTP status here
+ * is not a promise that the rest of the request succeeds.
+ */
+export function optOutPersistDecision(recorded: boolean): { persist: boolean; status: 200 | 500 } {
+  return recorded ? { persist: true, status: 200 } : { persist: false, status: 500 };
 }
 
 /** The service-role client of either WhatsApp webhook. */
@@ -101,14 +140,19 @@ export function optOutDb(admin: SupabaseClient): OptOutDb {
       const cleared = await persistProcedureState(admin, data.id, state, null);
       if (!cleared) throw new Error("opt_out_state_clear_failed");
     },
-    async warn(userId, socialAccountId) {
+    async warn(userId, socialAccountId, phase) {
+      const message = phase === "upsert"
+        ? "Opt-out could not be recorded"
+        : phase === "skip"
+          ? "Opt-out was recorded but store events could not be skipped"
+          : "Opt-out was recorded but the event procedure could not be cleared";
       const { error } = await admin.from("system_logs").insert({
         level: "warn",
         category: "messaging",
         source: "opt-out",
-        message: "Opt-out could not be recorded",
+        message,
         user_id: userId,
-        metadata: { social_account_id: socialAccountId },
+        metadata: { social_account_id: socialAccountId, phase },
       });
       if (error) throw new Error("opt_out_log_failed");
     },

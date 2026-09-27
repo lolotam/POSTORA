@@ -19,7 +19,7 @@ import {
   runInboundMediaUnderstanding,
 } from "../_shared/inboundMediaPipeline.ts";
 import { EvolutionFetcher } from "../_shared/inboundMediaFetchers.ts";
-import { automationAllowedAfterInbound, inboundOptOutPlan, optOutDb, recordOptOut } from "../_shared/optOut.ts";
+import { automationAllowedAfterInbound, inboundOptOutPlan, optOutDb, optOutPersistDecision, recordOptOut } from "../_shared/optOut.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -119,9 +119,9 @@ async function persistEvolutionMessage(
   account: EvolutionAccount,
   message: any,
   instanceName: string,
-): Promise<boolean> {
+): Promise<200 | 500> {
   const built = buildEvolutionMessageRow(account, message);
-  if (!built) return false;
+  if (!built) return 200;
   const { conversationId, sentByOwner, row } = built;
   const remoteNumber = remoteNumberFor(message.key.remoteJid);
   const inboundText = (row.message_text as string) || "";
@@ -130,12 +130,18 @@ async function persistEvolutionMessage(
   // would be skipped when the retry lands in the duplicate return.
   const optOutPlan = inboundOptOutPlan(inboundText, sentByOwner);
   if (optOutPlan.recordBeforePersist) {
-    await recordOptOut(optOutDb(admin), {
+    const decision = optOutPersistDecision(await recordOptOut(optOutDb(admin), {
       userId: account.user_id,
       socialAccountId: account.id,
       phone: remoteNumber,
       conversationId,
-    });
+    }));
+    // The persist RPC consumes the redelivery. Leave before it when the
+    // opt-out row was not written so Evolution retries this delivery.
+    if (!decision.persist) {
+      console.error("[whatsapp-evolution-webhook] Opt-out row was not stored");
+      return decision.status;
+    }
   }
 
   // The persist and the message.received fan-out are ONE statement (D5 R1).
@@ -167,12 +173,12 @@ async function persistEvolutionMessage(
   // below, which is how a silent persistence failure could look like normal operation.
   if (insertError) {
     console.error("[whatsapp-evolution-webhook] Message persist failed:", insertError.message);
-    return false;
+    return 200;
   }
   const persisted = (persistResult ?? [])[0] as
     | { row_id: string | null; was_inserted: boolean }
     | undefined;
-  if (!persisted || !persisted.was_inserted) return false;
+  if (!persisted || !persisted.was_inserted) return 200;
 
   await touchConversation(admin, account, {
     conversationId,
@@ -201,11 +207,11 @@ async function persistEvolutionMessage(
   );
   // Inbound row and inbox cache are stored. The opt-out was recorded before the
   // persist RPC, and no agent reply is enqueued. Leave before n8n and the agent.
-  if (!automationAllowedAfterInbound({ optedOut: optOutPlan.recordBeforePersist })) return true;
+  if (!automationAllowedAfterInbound({ optedOut: optOutPlan.recordBeforePersist })) return 200;
 
   // Only a message from the contact is an inbound event for automations; echoing the
   // operator's own reply back into n8n would retrigger their workflows on their own text.
-  if (sentByOwner) return true;
+  if (sentByOwner) return 200;
 
   const automationHandler = resolveAutomationHandler(account.account_metadata);
 
@@ -238,7 +244,7 @@ async function persistEvolutionMessage(
     ));
   }
 
-  if (automationHandler !== "internal" || !inboundText.trim()) return true;
+  if (automationHandler !== "internal" || !inboundText.trim()) return 200;
 
   // Evolution builds "[Document] <filename>" from a sender-chosen name, exactly like the
   // Cloud path. Keep it out of the keyword matcher and out of the model: there it is an
@@ -293,7 +299,7 @@ async function persistEvolutionMessage(
         outcome.understood ? outcome.languageCode : undefined,
       );
     });
-    return true;
+    return 200;
   }
 
   triggerAiAgentReply(
@@ -304,7 +310,7 @@ async function persistEvolutionMessage(
     promptSafeText,
   ).catch((e) => console.error("[whatsapp-evolution-webhook] AI agent dispatch failed:", e?.message || e));
 
-  return true;
+  return 200;
 }
 
 async function triggerAiAgentReply(
@@ -428,7 +434,8 @@ Deno.serve(async (req) => {
     const event = normalizeEvolutionEvent(body.event);
     if (event === "MESSAGES_UPSERT") {
       for (const message of messageItems(body)) {
-        await persistEvolutionMessage(admin, account, message, instance.instance_name);
+        const status = await persistEvolutionMessage(admin, account, message, instance.instance_name);
+        if (status !== 200) return jsonResponse({ error: "Webhook processing failed" }, status);
       }
     } else if (event === "MESSAGES_UPDATE") {
       await handleMessagesUpdate(admin, account, body);

@@ -10,7 +10,7 @@ import { cancelOutboxRow } from "../ai-agent-reply/outbox.ts";
 import { enqueueAgentReply } from "../_shared/pendingReplies.ts";
 import { dispatchAgentReply } from "../_shared/agentReplyDispatch.ts";
 import { cloudButtonContent, isPlaceholderOnly, promptSafeInput } from "./messageContent.ts";
-import { automationAllowedAfterInbound, inboundOptOutPlan, optOutDb, recordOptOut } from "../_shared/optOut.ts";
+import { automationAllowedAfterInbound, inboundOptOutPlan, optOutDb, optOutPersistDecision, recordOptOut } from "../_shared/optOut.ts";
 import {
   isDispatchIntentId,
   reconcileDispatchIntentByEcho,
@@ -146,7 +146,9 @@ Deno.serve(async (req) => {
       // Collected across the request and written once: runInBackground's degraded path
       // awaits up to 2s per call, so a per-event write would charge that to the ack.
       const unmatched: UnmatchedObservation[] = [];
+      let deliveryStatus: 200 | 500 = 200;
       for (const entry of entries) {
+        if (deliveryStatus !== 200) break;
         const changes = entry?.changes || [];
         for (const change of changes) {
           const value = change.value;
@@ -162,7 +164,11 @@ Deno.serve(async (req) => {
           if (change.field === "messages") {
             // Status updates resolve by wamid, not account, so they are
             // processed even when no active account matches.
-            await handleLiveMessages(adminClient, account, value, accessToken, unmatched, entry, change);
+            const outcome = await handleLiveMessages(adminClient, account, value, accessToken, unmatched, entry, change);
+            if (outcome.status !== 200) {
+              deliveryStatus = outcome.status;
+              break;
+            }
           } else if (!account) {
             console.warn(`[whatsapp-webhook] No matching account found for field: ${change.field}, phone_number_id: ${value?.metadata?.phone_number_id}`);
             // history / smb_message_echoes / smb_app_state_sync -- not inbound messages,
@@ -183,6 +189,16 @@ Deno.serve(async (req) => {
             await handleContactSync(adminClient, account, value);
           }
         }
+      }
+
+      if (deliveryStatus !== 200) {
+        // The opt-out row was not stored. 500 asks Meta to retry this delivery.
+        // Messages already persisted in the batch dedupe on that retry. Skip the
+        // observation flush: the same delivery will be processed again.
+        return new Response(JSON.stringify({ error: "Webhook processing failed" }), {
+          status: deliveryStatus,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
       }
 
       await runInBackground(
@@ -399,7 +415,7 @@ async function handleLiveMessages(
   unmatched?: UnmatchedObservation[],
   entry?: any,
   change?: any,
-) {
+): Promise<{ status: 200 | 500 }> {
   const phoneNumberId = value.metadata.phone_number_id;
   const displayPhone = value?.metadata?.display_phone_number;
 
@@ -446,12 +462,18 @@ async function handleLiveMessages(
     // enqueues a reply, so a worker cannot send one before a later cancel.
     const optOutPlan = inboundOptOutPlan(messageText);
     if (optOutPlan.recordBeforePersist) {
-      await recordOptOut(optOutDb(adminClient), {
+      const decision = optOutPersistDecision(await recordOptOut(optOutDb(adminClient), {
         userId: account.user_id,
         socialAccountId: account.id,
         phone: from,
         conversationId,
-      });
+      }));
+      // A failed upsert must not reach the persist RPC. That RPC consumes
+      // Meta's redelivery, so the message would never be offered again.
+      if (!decision.persist) {
+        console.error("[whatsapp-webhook] Opt-out row was not stored");
+        return decision;
+      }
     }
 
     const contacts = value?.contacts || [];
@@ -732,6 +754,7 @@ async function handleLiveMessages(
         .eq("conversation_id", row.conversation_id);
     }
   }
+  return { status: 200 };
 }
 
 // Coexistence one-time history push: Meta sends recent phone threads in chunks

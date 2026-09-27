@@ -1,5 +1,5 @@
 import { assert, assertEquals } from "jsr:@std/assert@1";
-import { enabledStoreFlows, handleStoreWebhook, type StoreWebhookDeps } from "./handler.ts";
+import { enabledStoreFlows, handleStoreWebhook, type ScopedWaitlistRow, type StoreBinding, type StoreWebhookDeps } from "./handler.ts";
 
 const BINDING_ID = "11111111-1111-4111-8111-111111111111";
 const URL = `https://api.example/functions/v1/store-webhook/${BINDING_ID}`;
@@ -311,6 +311,28 @@ Deno.test("broken JSON is 400", async () => {
   const broken = await handleStoreWebhook(jsonPost("{", await mac(SECRET, "{")), deps());
   assertEquals(broken.status, 400);
   assertEquals(await broken.json(), { error: "invalid_json" });
+});
+
+Deno.test("another account's waitlist rows on the same connector never produce drafts", async () => {
+  const product = JSON.stringify({ id: 9, name: "Oud", stock_status: "instock" });
+  const seen: StoreBinding[] = [];
+  const rows: ScopedWaitlistRow[] = [
+    { id: "mine", product_id: 9, parent_id: null, phone: "96550001111", connector_id: "con-1", social_account_id: "acc-1" },
+    { id: "theirs", product_id: 9, parent_id: null, phone: "96550002222", connector_id: "con-1", social_account_id: "acc-2" },
+  ];
+  const gate = accepting({
+    flowsFrom: () => new Set(["back_in_stock"]),
+    loadWaitlist: async (binding) => {
+      seen.push(binding);
+      return rows;
+    },
+  });
+  const response = await handleStoreWebhook(jsonPost(product, await mac(SECRET, product), "product.updated"), gate);
+  assertEquals(response.status, 200);
+  assertEquals(seen.map((binding) => binding.social_account_id), ["acc-1"]);
+  assertEquals(seen.map((binding) => binding.connector_id), ["con-1"]);
+  assertEquals(gate.inserted.map((row) => row.external_id), ["waitlist:mine"]);
+  assertEquals(JSON.stringify(gate.inserted).includes("96550002222"), false);
 });
 
 Deno.test("only POST is accepted", async () => {

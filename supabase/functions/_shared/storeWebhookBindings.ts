@@ -35,6 +35,11 @@ export interface StoreWebhookBindingPorts {
   insertBinding(row: Omit<BindingRow, "id" | "rotated_at" | "created_at">): Promise<BindingRow | null>;
   /** Compare-and-set on secret_id, so two concurrent rotations cannot both win. Null when lost. */
   rotateBinding(bindingId: string, expectedSecretId: string, newSecretId: string, at: string): Promise<BindingRow | null>;
+  /**
+   * Deletes one Vault secret by id via public.delete_connector_credential_secret.
+   * Used only for a secret this call just minted and then failed to attach.
+   */
+  deleteSecret(secretId: string): Promise<void>;
   listBindings(): Promise<BindingRow[]>;
 }
 
@@ -76,7 +81,10 @@ export async function createStoreWebhookBinding(
   const row = await ports.insertBinding({
     user_id: account.user_id, social_account_id: account.id, connector_id: connector.id, secret_id: secretId,
   });
-  if (!row) throw new ToolWriteError("This connector already has a webhook; rotate its secret instead", 409);
+  if (!row) {
+    await ports.deleteSecret(secretId);
+    throw new ToolWriteError("This connector already has a webhook; rotate its secret instead", 409);
+  }
   return { binding: view(row), secret };
 }
 
@@ -93,7 +101,10 @@ export async function rotateStoreWebhookSecret(
   const secret = newWebhookSecret();
   const secretId = await ports.createSecret(secret);
   const row = await ports.rotateBinding(binding.id, binding.secret_id, secretId, now.toISOString());
-  if (!row) throw new ToolWriteError("The secret was rotated by another request; reload and try again", 409);
+  if (!row) {
+    await ports.deleteSecret(secretId);
+    throw new ToolWriteError("The secret was rotated by another request; reload and try again", 409);
+  }
   return { binding: view(row), secret };
 }
 
@@ -137,6 +148,10 @@ export function storeWebhookBindingPorts(
         .select(BINDING_COLUMNS).maybeSingle();
       if (error) throw new Error("Binding rotation failed");
       return data;
+    },
+    async deleteSecret(secretId) {
+      const { error } = await admin.rpc("delete_connector_credential_secret", { p_secret_id: secretId });
+      if (error) throw new Error("Webhook secret could not be reclaimed");
     },
     async listBindings() {
       let query = bindings().select(BINDING_COLUMNS);

@@ -15,6 +15,7 @@ const NOW = new Date("2026-09-27T12:00:00Z");
 
 function fakePorts(overrides: Partial<StoreWebhookBindingPorts> = {}) {
   const secrets: string[] = [];
+  const deleted: string[] = [];
   const rows = new Map<string, BindingRow & { previous_secret_id?: string | null }>();
   const ports: StoreWebhookBindingPorts = {
     resolveAccount: async (id) => ({ id, user_id: "owner", platform: "whatsapp" }),
@@ -34,10 +35,11 @@ function fakePorts(overrides: Partial<StoreWebhookBindingPorts> = {}) {
       rows.set(id, updated);
       return updated;
     },
+    deleteSecret: async (id) => { deleted.push(id); },
     listBindings: async () => [...rows.values()],
     ...overrides,
   };
-  return { ports, secrets, rows };
+  return { ports, secrets, deleted, rows };
 }
 
 const status = async (promise: Promise<unknown>) => {
@@ -91,6 +93,49 @@ Deno.test("rotation moves the current secret to previous and stamps rotated_at",
   assertEquals(fake.rows.get(BINDING)?.previous_secret_id, "secret-1");
   assertEquals(fake.rows.get(BINDING)?.secret_id, "secret-2");
   assertEquals(rotated.binding.rotated_at, NOW.toISOString());
+});
+
+Deno.test("a lost create deletes only the secret minted for that attempt", async () => {
+  const fake = fakePorts();
+  await createStoreWebhookBinding(fake.ports, { social_account_id: ACCOUNT, connector_id: CONNECTOR });
+  assertEquals(await status(createStoreWebhookBinding(fake.ports, { social_account_id: ACCOUNT, connector_id: CONNECTOR })), 409);
+  assertEquals(fake.deleted, ["secret-2"]);
+  assertEquals(fake.rows.get(BINDING)?.secret_id, "secret-1");
+});
+
+Deno.test("a lost rotate deletes only the newly minted secret", async () => {
+  const fake = fakePorts({ rotateBinding: async () => null });
+  await createStoreWebhookBinding(fake.ports, { social_account_id: ACCOUNT, connector_id: CONNECTOR });
+  assertEquals(await status(rotateStoreWebhookSecret(fake.ports, { binding_id: BINDING }, NOW)), 409);
+  assertEquals(fake.deleted, ["secret-2"]);
+  assertEquals(fake.rows.get(BINDING)?.secret_id, "secret-1");
+});
+
+Deno.test("a same-owner WooCommerce connector is accepted for this WhatsApp account", async () => {
+  const fake = fakePorts({
+    loadConnector: async (id) => ({ id, user_id: "owner", connector_type: "woocommerce" }),
+  });
+  const result = await createStoreWebhookBinding(fake.ports, { social_account_id: ACCOUNT, connector_id: CONNECTOR });
+  assertEquals(result.binding.social_account_id, ACCOUNT);
+  assertEquals(result.binding.connector_id, CONNECTOR);
+  assertEquals(fake.deleted, []);
+});
+
+Deno.test("deleteSecret calls delete_connector_credential_secret with that id", async () => {
+  const rpcCalls: Array<{ name: string; args: unknown }> = [];
+  const admin = {
+    rpc(name: string, args: unknown) {
+      rpcCalls.push({ name, args });
+      return Promise.resolve({ data: null, error: null });
+    },
+    from() {
+      throw new Error("no table");
+    },
+  };
+  const ports = storeWebhookBindingPorts(admin as never, { userId: "owner" });
+  const secretId = "99999999-9999-4999-8999-999999999999";
+  await ports.deleteSecret(secretId);
+  assertEquals(rpcCalls, [{ name: "delete_connector_credential_secret", args: { p_secret_id: secretId } }]);
 });
 
 Deno.test("rotation of an unknown binding is a 404, and a lost race is a 409", async () => {

@@ -7,7 +7,8 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { useAiAgentTools } from "@/hooks/useAiAgentTools";
+import { useAiAgentTools, useAiToolAccountLinks } from "@/hooks/useAiAgentTools";
+import { effectiveToolAccountIds, type SharingAccount } from "@/lib/accountSharing";
 import { storeWebhookUrl, useStoreWebhookBindings } from "@/hooks/useStoreWebhookBindings";
 
 const TOPICS = [
@@ -20,14 +21,30 @@ const TOPICS = [
 export function StoreWebhookSection({ accountId }: { accountId: string }) {
   const { t } = useTranslation("agent");
   const { tools } = useAiAgentTools();
+  const { links, linksReady } = useAiToolAccountLinks();
   const { bindings, isLoading, isError, refetch, createBinding, rotateSecret } = useStoreWebhookBindings();
   // Shown once, straight from the create/rotate response; a later list read does not restore it.
   const [secret, setSecret] = useState<string | null>(null);
   useEffect(() => setSecret(null), [accountId]);
 
-  const connector = tools.find((tool) =>
-    tool.connector_type === "woocommerce" && (tool.social_account_id === accountId || tool.scope === "all_accounts")
-  );
+  const account: SharingAccount = {
+    id: accountId,
+    platform: "whatsapp",
+    platform_username: null,
+    platform_user_id: null,
+  };
+  // Same rule the agent uses: the owning account, an all-accounts connector, or
+  // an explicit ai_agent_tool_accounts share. An unread link list must not look
+  // like "not shared", so shares wait until that read succeeds. Ownership and
+  // all-accounts do not need the link rows.
+  const connector = tools.find((tool) => {
+    if (tool.connector_type !== "woocommerce") return false;
+    return effectiveToolAccountIds(
+      { id: tool.id, scope: tool.scope, social_account_id: tool.social_account_id },
+      [account],
+      linksReady ? links : [],
+    ).includes(accountId);
+  });
   if (!connector) return null;
   const listReady = bindings !== undefined && !isLoading && !isError;
   const binding = listReady ? bindings.find((row) => row.connector_id === connector.id) : undefined;
