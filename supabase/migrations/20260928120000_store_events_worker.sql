@@ -25,6 +25,42 @@
 BEGIN;
 
 -- ---------------------------------------------------------------------------
+-- 0. system_logs category CHECK backfill: production's live constraint is
+--    CHECK (category = ANY (ARRAY['auth','edge','database','token','post',
+--    'system','ai','scheduler','webhook','payment','media'])), but no
+--    checked-in migration contains that list -- 20260112101005 only allows
+--    ('auth','edge','database','token','post','system'), so a database built
+--    from migrations rejects category 'ai' and the claim_store_events log
+--    insert below would roll back. Normalize any existing category CHECK to
+--    exactly production's list (no-op where already applied). Idempotent: the
+--    lookup drops whatever category CHECK is present, then re-adds the
+--    canonical one, so a second run drops what the first run added and
+--    re-adds it identically.
+-- ---------------------------------------------------------------------------
+DO $do_system_logs_category_check$
+DECLARE
+  r record;
+BEGIN
+  IF to_regclass('public.system_logs') IS NULL THEN
+    RETURN;
+  END IF;
+
+  FOR r IN
+    SELECT c.conname
+    FROM pg_constraint AS c
+    WHERE c.conrelid = 'public.system_logs'::regclass
+      AND c.contype = 'c'
+      AND pg_get_constraintdef(c.oid) ILIKE '%category%'
+  LOOP
+    EXECUTE format('ALTER TABLE public.system_logs DROP CONSTRAINT IF EXISTS %I', r.conname);
+  END LOOP;
+
+  ALTER TABLE public.system_logs
+    ADD CONSTRAINT system_logs_category_check
+    CHECK (category IN ('auth','edge','database','token','post','system','ai','scheduler','webhook','payment','media'));
+END $do_system_logs_category_check$;
+
+-- ---------------------------------------------------------------------------
 -- A. claim_store_events: fence (a) exhaust, (b) claim due rows, (c) refresh
 --    indeterminate sends. p_lease is the claim lease (worker uses 2 minutes).
 -- ---------------------------------------------------------------------------
@@ -250,6 +286,7 @@ BEGIN
       UNIQUE (social_account_id, connector_id, phone, product_id);
   END IF;
 END $do_stock_waitlist_account_key$;
+
 
 COMMIT;
 

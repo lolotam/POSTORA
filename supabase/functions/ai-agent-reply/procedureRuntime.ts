@@ -347,7 +347,11 @@ export interface WaitlistJoinRow {
   product_name: string;
   consent_source: "chat_optin";
   consented_at: string;
+  /** Renewed on every join, including a conflict update. Matches the column default of 60 days. */
+  expires_at: string;
 }
+
+const WAITLIST_KEEP_MS = 60 * 24 * 60 * 60 * 1000;
 
 /** stock_waitlist_account_connector_phone_product_key. Two accounts may wait on one store product. */
 export const STOCK_WAITLIST_ON_CONFLICT = "social_account_id,connector_id,phone,product_id";
@@ -405,6 +409,7 @@ export function planWaitlistJoin(input: {
       product_name: source.name,
       consent_source: "chat_optin",
       consented_at: input.now,
+      expires_at: new Date(Date.parse(input.now) + WAITLIST_KEEP_MS).toISOString(),
     },
   };
 }

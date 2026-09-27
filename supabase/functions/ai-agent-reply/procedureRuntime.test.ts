@@ -622,6 +622,8 @@ Deno.test("waitlist join copies id, parent and name from the stock result", () =
   assertEquals(plan.row.connector_id, "conn-9");
   assertEquals(plan.row.phone, "96555512345");
   assertEquals(plan.row.consent_source, "chat_optin");
+  assertEquals(plan.row.consented_at, T.toISOString());
+  assertEquals(plan.row.expires_at, "2026-11-25T10:00:00.000Z");
   assertEquals(plan.onConflict, "social_account_id,connector_id,phone,product_id");
   assertEquals(STOCK_WAITLIST_ON_CONFLICT, plan.onConflict);
   assertEquals(joinInput([sighting("outofstock")], { dryRun: true }).action, "dry_run");
@@ -668,6 +670,24 @@ Deno.test("waitlist join is offered and saved only when the connector has a stor
   assertEquals(none.tool, null);
   assertStringIncludes(none.gap ?? "", "notifications are not set up");
   assertEquals(stockWaitlistToolDefinition([]), null);
+});
+
+Deno.test("a waitlist re-join upsert renews expires_at and consented_at", async () => {
+  const plan = joinInput([sighting("outofstock", "Real Hat")]);
+  if (plan.action !== "upsert") throw new Error("expected upsert");
+  let received: { expires_at: string; consented_at: string } | null = null;
+  const output = await enrollWaitlist(plan, {
+    upsert: async (row) => {
+      received = { expires_at: row.expires_at, consented_at: row.consented_at };
+      return { error: null };
+    },
+    log: { insert: async () => ({ error: null }) },
+  });
+  assertEquals(output.includes("back in stock"), true);
+  assertEquals(received, {
+    expires_at: "2026-11-25T10:00:00.000Z",
+    consented_at: T.toISOString(),
+  });
 });
 
 Deno.test("a failed waitlist upsert writes one sanitized log through the port, then the follow-up", async () => {

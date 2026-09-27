@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { ProceduresCard } from "../ProceduresCard";
 import { eventEnableRefusal } from "@/lib/procedureTemplates";
 
@@ -153,16 +153,18 @@ describe("ProceduresCard", () => {
     expect(screen.getByRole("switch", { name: /back in stock/i })).toBeInTheDocument();
   });
 
-  it("refuses COD until the consent box is ticked, then stores the attestation", () => {
+  it("refuses COD until the consent box is ticked, then stores the attestation", async () => {
     const card = liveCard({ storeAccountId: "acc-1", connectionMode: "cloud_api" });
     fireEvent.click(screen.getByRole("switch", { name: /cod order confirmation/i }));
     expect(screen.getByRole("alert")).toHaveTextContent(/consent/i);
     fireEvent.click(screen.getAllByRole("checkbox", { name: /checkout collects customer consent/i })[0]);
     card.rerender();
     fireEvent.click(screen.getByRole("switch", { name: /cod order confirmation/i }));
-    const written = card.seen.at(-1) as { cod_confirm: { enabled: boolean; consent_attested_at?: string } };
-    expect(written.cod_confirm.enabled).toBe(true);
-    expect(written.cod_confirm.consent_attested_at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    await waitFor(() => {
+      const written = card.seen.at(-1) as { cod_confirm: { enabled: boolean; consent_attested_at?: string } };
+      expect(written.cod_confirm.enabled).toBe(true);
+      expect(written.cod_confirm.consent_attested_at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    });
   });
 
   it("refuses a QR event flow until the ban risk is acknowledged", () => {
@@ -174,8 +176,10 @@ describe("ProceduresCard", () => {
     fireEvent.click(screen.getAllByRole("checkbox", { name: /restrict numbers/i })[0]);
     card.rerender();
     fireEvent.click(screen.getByRole("switch", { name: /cod order confirmation/i }));
-    const written = card.seen.at(-1) as { cod_confirm: { qr_risk_acknowledged_at?: string } };
+    const written = card.seen.at(-1) as { cod_confirm: { enabled?: boolean; qr_risk_acknowledged_at?: string } };
+    expect(written.cod_confirm.enabled).toBe(true);
     expect(written.cod_confirm.qr_risk_acknowledged_at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(mocks.messaging.mock.calls.some((call) => call[1]?.create === true)).toBe(false);
   });
 
   it("refuses COD while the WooCommerce connector is read-only", () => {
@@ -229,7 +233,7 @@ describe("ProceduresCard", () => {
     expect(card.seen.some((value) => (value as { cod_confirm?: { enabled?: boolean } }).cod_confirm?.enabled)).toBe(false);
   });
 
-  it("refuses a review request until the delay and https link are valid", () => {
+  it("refuses a review request until the delay and https link are valid", async () => {
     const card = liveCard({ storeAccountId: "acc-1", connectionMode: "cloud_api" });
     const reviewBox = () => screen.getAllByRole("checkbox", { name: /checkout collects customer consent/i })[1];
     fireEvent.click(reviewBox());
@@ -247,8 +251,52 @@ describe("ProceduresCard", () => {
     fireEvent.change(screen.getByLabelText(/days after delivery/i), { target: { value: "3" } });
     card.rerender();
     fireEvent.click(screen.getByRole("switch", { name: /review request/i }));
-    const written = card.seen.at(-1) as { review_request: { enabled: boolean; delay_days: number; review_url: string } };
-    expect(written.review_request).toMatchObject({ enabled: true, delay_days: 3, review_url: "https://shop.example/reviews" });
+    await waitFor(() => {
+      const written = card.seen.at(-1) as { review_request: { enabled: boolean; delay_days: number; review_url: string } };
+      expect(written.review_request).toMatchObject({ enabled: true, delay_days: 3, review_url: "https://shop.example/reviews" });
+    });
+  });
+
+  it.each(["cloud_api", "coexistence"] as const)(
+    "enabling on %s submits the template and keeps the returned status",
+    async (connectionMode) => {
+      mocks.messaging.mockImplementation(async (_action: string, body: Record<string, unknown>) => (
+        body.create === true
+          ? { status: "approved", name: "postora_cod_confirm_v1", language: "ar", category: "UTILITY" }
+          : { status: "missing", name: "", language: "ar", category: "" }
+      ));
+      const card = liveCard({ storeAccountId: "acc-1", connectionMode });
+      fireEvent.click(screen.getAllByRole("checkbox", { name: /checkout collects customer consent/i })[0]);
+      card.rerender();
+      fireEvent.click(screen.getByRole("switch", { name: /cod order confirmation/i }));
+      await waitFor(() => {
+        expect(mocks.messaging).toHaveBeenCalledWith("event_template_status", expect.objectContaining({
+          social_account_id: "acc-1",
+          flow: "cod_confirm",
+          create: true,
+        }));
+        const written = card.seen.at(-1) as { cod_confirm?: { enabled?: boolean } };
+        expect(written.cod_confirm?.enabled).toBe(true);
+      });
+      expect(screen.getByTestId("template-status-cod_confirm")).toHaveTextContent("approved");
+    },
+  );
+
+  it.each([
+    ["throws", async () => { throw new Error("template rejected"); }],
+    ["returns rejected", async () => ({ status: "rejected", name: "postora_cod_confirm_v1", language: "ar", category: "UTILITY" })],
+  ] as const)("a failed template submission (%s) leaves the flow disabled", async (_name, createResult) => {
+    mocks.messaging.mockImplementation(async (_action: string, body: Record<string, unknown>) => {
+      if (body.create === true) return createResult();
+      return { status: "missing", name: "", language: "ar", category: "" };
+    });
+    const card = liveCard({ storeAccountId: "acc-1", connectionMode: "cloud_api" });
+    fireEvent.click(screen.getAllByRole("checkbox", { name: /checkout collects customer consent/i })[0]);
+    card.rerender();
+    fireEvent.click(screen.getByRole("switch", { name: /cod order confirmation/i }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(/could not be submitted/i);
+    expect(card.seen.some((value) => (value as { cod_confirm?: { enabled?: boolean } }).cod_confirm?.enabled)).toBe(false);
+    expect(screen.getByRole("switch", { name: /cod order confirmation/i })).not.toBeChecked();
   });
 
   it("shows the template status and submits it", async () => {

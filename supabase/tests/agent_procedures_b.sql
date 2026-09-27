@@ -694,4 +694,29 @@ BEGIN
 END $$;
 
 ROLLBACK;
+BEGIN;
+-- ---------------------------------------------------------------------------
+-- B40: system_logs category CHECK (migration 20260928120000 section 0): system_logs category 'ai' inserts succeed, 'bogus' is refused.
+-- ---------------------------------------------------------------------------
+DO $do_system_logs_category_suite$
+DECLARE
+  v_id uuid;
+BEGIN
+  INSERT INTO public.system_logs (level, category, source, message, metadata)
+  VALUES ('info', 'ai', 'migration-suite', 'suite probe', '{}'::jsonb)
+  RETURNING id INTO v_id;
+
+  ASSERT v_id IS NOT NULL, 'system_logs category ''ai'' insert returned no id';
+
+  DELETE FROM public.system_logs WHERE id = v_id;
+
+  BEGIN
+    INSERT INTO public.system_logs (level, category, source, message, metadata)
+    VALUES ('info', 'bogus', 'migration-suite', 'suite probe', '{}'::jsonb);
+    RAISE EXCEPTION 'system_logs accepted category ''bogus''';
+  EXCEPTION WHEN check_violation THEN
+    NULL;
+  END;
+END $do_system_logs_category_suite$;
+ROLLBACK;
 \echo '=== agent_procedures_b: ALL CHECKS PASSED ==='

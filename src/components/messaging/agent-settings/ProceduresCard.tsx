@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import "@/i18n";
 import { Plus, X } from "lucide-react";
@@ -110,20 +110,41 @@ function readOnlyBoundConnector(
   return names.length > 0 ? names.join(", ") : null;
 }
 
-function EventTemplateBadge({ accountId, flow }: { accountId: string; flow: EventProcedureKey }) {
+function readTemplateStatus(data: unknown): string | null {
+  if (!data || typeof data !== "object" || !("status" in data)) return null;
+  const status = (data as { status?: unknown }).status;
+  return typeof status === "string" && status.length > 0 ? status : null;
+}
+
+/** A created template can be pending review or already approved. Anything else leaves the flow off. */
+function templateAllowsEnable(status: string): boolean {
+  return status === "pending" || status === "approved";
+}
+
+function EventTemplateBadge({
+  accountId,
+  flow,
+  pinnedStatus,
+}: {
+  accountId: string;
+  flow: EventProcedureKey;
+  pinnedStatus?: string;
+}) {
   const { t } = useTranslation("agent");
-  const [status, setStatus] = useState("missing");
+  const [status, setStatus] = useState(pinnedStatus ?? "missing");
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
+    if (pinnedStatus) {
+      setStatus(pinnedStatus);
+      setBusy(false);
+      return;
+    }
     let cancelled = false;
     setBusy(true);
     void callMessagingApi("event_template_status", { social_account_id: accountId, flow })
       .then((data) => {
-        const next = data && typeof data === "object" && typeof (data as { status?: unknown }).status === "string"
-          ? (data as { status: string }).status
-          : "missing";
-        if (!cancelled) setStatus(next);
+        if (!cancelled) setStatus(readTemplateStatus(data) ?? "missing");
       })
       .catch(() => {
         if (!cancelled) setStatus("missing");
@@ -134,16 +155,13 @@ function EventTemplateBadge({ accountId, flow }: { accountId: string; flow: Even
     return () => {
       cancelled = true;
     };
-  }, [accountId, flow]);
+  }, [accountId, flow, pinnedStatus]);
 
   const submit = () => {
     setBusy(true);
     void callMessagingApi("event_template_status", { social_account_id: accountId, flow, create: true })
       .then((data) => {
-        const next = data && typeof data === "object" && typeof (data as { status?: unknown }).status === "string"
-          ? (data as { status: string }).status
-          : "pending";
-        setStatus(next);
+        setStatus(readTemplateStatus(data) ?? "pending");
       })
       .catch(() => setStatus("missing"))
       .finally(() => setBusy(false));
@@ -177,12 +195,18 @@ export function ProceduresCard({
 }: ProceduresCardProps) {
   const { t } = useTranslation("agent");
   const procedures = behavior.procedures ?? {};
+  const proceduresRef = useRef(procedures);
+  proceduresRef.current = procedures;
   const [readOnlyConnector, setReadOnlyConnector] = useState<string | null>(null);
   const [refusal, setRefusal] = useState<Partial<Record<EventProcedureKey, EventEnableRefusal>>>({});
+  const [templateFailed, setTemplateFailed] = useState<Partial<Record<EventProcedureKey, boolean>>>({});
+  const [templateBusy, setTemplateBusy] = useState<Partial<Record<EventProcedureKey, boolean>>>({});
+  const [submittedStatus, setSubmittedStatus] = useState<Partial<Record<EventProcedureKey, string>>>({});
+  const enableGeneration = useRef<Partial<Record<EventProcedureKey, number>>>({});
   const keys = storeAccountId ? PROCEDURE_KEYS : PROCEDURE_KEYS.filter((key) => !isEventProcedureKey(key));
 
   const write = (key: ProcedureKey, settings: ProcedureSettings) =>
-    updateBehavior("procedures", { ...procedures, [key]: settings });
+    updateBehavior("procedures", { ...proceduresRef.current, [key]: settings });
 
   const enableEvent = (key: EventProcedureKey, current: ProcedureSettings | undefined) => {
     const draft = blank(key, current);
@@ -198,12 +222,12 @@ export function ProceduresCard({
       reviewUrl: draft.review_url ?? "",
     });
     if (blocked) {
+      setTemplateFailed((prev) => ({ ...prev, [key]: false }));
       setRefusal((prev) => ({ ...prev, [key]: blocked }));
       return;
     }
-    setRefusal((prev) => ({ ...prev, [key]: undefined }));
     const stamped = new Date().toISOString();
-    write(key, {
+    const enabledSettings: ProcedureSettings = {
       ...draft,
       enabled: true,
       ...((key === "cod_confirm" || key === "review_request") && !draft.consent_attested_at
@@ -212,7 +236,50 @@ export function ProceduresCard({
       ...(connectionMode === "evolution_qr" && !draft.qr_risk_acknowledged_at
         ? { qr_risk_acknowledged_at: stamped }
         : {}),
-    });
+    };
+    const attempt = (enableGeneration.current[key] ?? 0) + 1;
+    enableGeneration.current[key] = attempt;
+    const stillCurrent = () => enableGeneration.current[key] === attempt;
+
+    if (!showsEventTemplateStatus(connectionMode)) {
+      setTemplateFailed((prev) => ({ ...prev, [key]: false }));
+      setRefusal((prev) => ({ ...prev, [key]: undefined }));
+      write(key, enabledSettings);
+      return;
+    }
+
+    if (!storeAccountId) {
+      setRefusal((prev) => ({ ...prev, [key]: undefined }));
+      setTemplateFailed((prev) => ({ ...prev, [key]: true }));
+      return;
+    }
+
+    setRefusal((prev) => ({ ...prev, [key]: undefined }));
+    setTemplateFailed((prev) => ({ ...prev, [key]: false }));
+    setTemplateBusy((prev) => ({ ...prev, [key]: true }));
+    void callMessagingApi("event_template_status", {
+      social_account_id: storeAccountId,
+      flow: key,
+      create: true,
+    })
+      .then((data) => {
+        if (!stillCurrent()) return;
+        const status = readTemplateStatus(data);
+        if (!status || !templateAllowsEnable(status)) {
+          setTemplateFailed((prev) => ({ ...prev, [key]: true }));
+          return;
+        }
+        setSubmittedStatus((prev) => ({ ...prev, [key]: status }));
+        setTemplateFailed((prev) => ({ ...prev, [key]: false }));
+        write(key, enabledSettings);
+      })
+      .catch(() => {
+        if (!stillCurrent()) return;
+        setTemplateFailed((prev) => ({ ...prev, [key]: true }));
+      })
+      .finally(() => {
+        if (stillCurrent()) setTemplateBusy((prev) => ({ ...prev, [key]: false }));
+      });
   };
 
   return (
@@ -245,10 +312,16 @@ export function ProceduresCard({
                   id={`procedure-${key}`}
                   aria-label={name}
                   checked={enabled}
+                  disabled={eventKey ? templateBusy[eventKey] === true : false}
                   onCheckedChange={(checked) => {
                     if (!checked) {
                       write(key, { ...(current ?? { prompts: {}, closing: "" }), enabled: false });
-                      if (eventKey) setRefusal((prev) => ({ ...prev, [eventKey]: undefined }));
+                      if (eventKey) {
+                        enableGeneration.current[eventKey] = (enableGeneration.current[eventKey] ?? 0) + 1;
+                        setRefusal((prev) => ({ ...prev, [eventKey]: undefined }));
+                        setTemplateFailed((prev) => ({ ...prev, [eventKey]: false }));
+                        setTemplateBusy((prev) => ({ ...prev, [eventKey]: false }));
+                      }
                       return;
                     }
                     if (eventKey) {
@@ -269,6 +342,14 @@ export function ProceduresCard({
                     : t(`procedures.refusal.${eventRefusal}`, REFUSAL_TEXT[eventRefusal])}
                 </p>
               )}
+              {!eventRefusal && eventKey && templateFailed[eventKey] && (
+                <p className="text-xs text-destructive" role="alert">
+                  {t(
+                    "procedures.templateSubmitFailed",
+                    "The WhatsApp template could not be submitted, so this flow stays off.",
+                  )}
+                </p>
+              )}
               {eventKey && storeAccountId && (
                 <EventFlowFields
                   flow={eventKey}
@@ -276,6 +357,7 @@ export function ProceduresCard({
                   connectionMode={connectionMode}
                   current={current}
                   onChange={(settings) => write(eventKey, settings)}
+                  pinnedStatus={submittedStatus[eventKey]}
                 />
               )}
               {enabled && current && (
@@ -424,12 +506,14 @@ function EventFlowFields({
   connectionMode,
   current,
   onChange,
+  pinnedStatus,
 }: {
   flow: EventProcedureKey;
   accountId: string;
   connectionMode: "cloud_api" | "coexistence" | "evolution_qr" | null;
   current: ProcedureSettings | undefined;
   onChange: (settings: ProcedureSettings) => void;
+  pinnedStatus?: string;
 }) {
   const { t } = useTranslation("agent");
   const base: ProcedureSettings = current ?? { enabled: false, prompts: {}, closing: "" };
@@ -499,7 +583,9 @@ function EventFlowFields({
           </div>
         </div>
       )}
-      {showsEventTemplateStatus(connectionMode) && <EventTemplateBadge accountId={accountId} flow={flow} />}
+      {showsEventTemplateStatus(connectionMode) && (
+        <EventTemplateBadge accountId={accountId} flow={flow} pinnedStatus={pinnedStatus} />
+      )}
     </div>
   );
 }
