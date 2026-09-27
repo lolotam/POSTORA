@@ -32,12 +32,12 @@ function deps(): StoreWebhookDeps {
       return behavior?.procedures;
     },
     flowsFrom: enabledStoreFlows,
-    async loadWaitlist(binding, productId): Promise<ScopedWaitlistRow[]> {
+    async loadWaitlist(binding, productIds): Promise<ScopedWaitlistRow[]> {
       const { data, error } = await admin.from("stock_waitlist")
         .select("id, product_id, parent_id, phone, connector_id, social_account_id")
         .eq("connector_id", binding.connector_id)
         .eq("social_account_id", binding.social_account_id)
-        .or(`product_id.eq.${productId},parent_id.eq.${productId}`);
+        .or(`product_id.in.(${productIds.join(",")}),parent_id.in.(${productIds.join(",")})`);
       if (error) throw new Error("waitlist_read_failed");
       return (data ?? []).map((row: {
         id: string;

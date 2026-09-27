@@ -11,7 +11,28 @@ import { ToolWriteError } from "./toolWrites.ts";
 const ACCOUNT = "11111111-1111-4111-8111-111111111111";
 const CONNECTOR = "22222222-2222-4222-8222-222222222222";
 const BINDING = "33333333-3333-4333-8333-333333333333";
+const OTHER = "44444444-4444-4444-8444-444444444444";
 const NOW = new Date("2026-09-27T12:00:00Z");
+const input = { social_account_id: ACCOUNT, connector_id: CONNECTOR };
+
+function wooConnector(over: {
+  id?: string;
+  user_id?: string;
+  connector_type?: string | null;
+  scope?: "account" | "all_accounts";
+  social_account_id?: string | null;
+  admin_only?: boolean;
+} = {}) {
+  return {
+    id: CONNECTOR,
+    user_id: "owner",
+    connector_type: "woocommerce" as string | null,
+    scope: "all_accounts" as "account" | "all_accounts",
+    social_account_id: null as string | null,
+    admin_only: false,
+    ...over,
+  };
+}
 
 function fakePorts(overrides: Partial<StoreWebhookBindingPorts> = {}) {
   const secrets: string[] = [];
@@ -19,7 +40,8 @@ function fakePorts(overrides: Partial<StoreWebhookBindingPorts> = {}) {
   const rows = new Map<string, BindingRow>();
   const ports: StoreWebhookBindingPorts = {
     resolveAccount: async (id) => ({ id, user_id: "owner", platform: "whatsapp" }),
-    loadConnector: async (id) => ({ id, user_id: "owner", connector_type: "woocommerce" }),
+    loadConnector: async (id) => wooConnector({ id }),
+    loadConnectorLinks: async () => [],
     loadBinding: async (id) => rows.get(id) ?? null,
     createSecret: async (secret) => { secrets.push(secret); return `secret-${secrets.length}`; },
     insertBinding: async (row) => {
@@ -37,6 +59,7 @@ function fakePorts(overrides: Partial<StoreWebhookBindingPorts> = {}) {
       rows.set(id, updated);
       return updated;
     },
+    secretReferenced: async () => false,
     deleteSecret: async (id) => { deleted.push(id); },
     listBindings: async () => [...rows.values()],
     ...overrides,
@@ -66,15 +89,14 @@ Deno.test("a second binding for the same connector is a 409", async () => {
 });
 
 Deno.test("creation is refused for a non-WhatsApp account, a foreign connector, or a non-WooCommerce connector", async () => {
-  const input = { social_account_id: ACCOUNT, connector_id: CONNECTOR };
   assertEquals(await status(createStoreWebhookBinding(fakePorts({
     resolveAccount: async (id) => ({ id, user_id: "owner", platform: "instagram" }),
   }).ports, input)), 400);
   assertEquals(await status(createStoreWebhookBinding(fakePorts({
-    loadConnector: async (id) => ({ id, user_id: "someone-else", connector_type: "woocommerce" }),
+    loadConnector: async (id) => wooConnector({ id, user_id: "someone-else" }),
   }).ports, input)), 404);
   assertEquals(await status(createStoreWebhookBinding(fakePorts({
-    loadConnector: async (id) => ({ id, user_id: "owner", connector_type: "shopify" }),
+    loadConnector: async (id) => wooConnector({ id, connector_type: "shopify" }),
   }).ports, input)), 400);
   assertEquals(await status(createStoreWebhookBinding(fakePorts().ports, { ...input, connector_id: "not-a-uuid" })), 400);
 });
@@ -143,13 +165,100 @@ Deno.test("a lost rotate deletes only the newly minted secret", async () => {
   assertEquals(fake.rows.get(BINDING)?.secret_id, "secret-1");
 });
 
-Deno.test("a same-owner WooCommerce connector is accepted for this WhatsApp account", async () => {
+Deno.test("a same-owner WooCommerce connector is bindable when this account owns it, inherits it, or is linked to it", async () => {
+  const cases = [
+    { label: "owned", connector: wooConnector({ scope: "account", social_account_id: ACCOUNT }), links: [] as { tool_id: string; social_account_id: string }[] },
+    { label: "all_accounts", connector: wooConnector({ scope: "all_accounts", social_account_id: OTHER }), links: [] },
+    {
+      label: "linked",
+      connector: wooConnector({ scope: "account", social_account_id: OTHER }),
+      links: [{ tool_id: CONNECTOR, social_account_id: ACCOUNT }],
+    },
+  ];
+  for (const scenario of cases) {
+    const fake = fakePorts({
+      loadConnector: async (id) => ({ ...scenario.connector, id }),
+      loadConnectorLinks: async () => scenario.links,
+    });
+    const result = await createStoreWebhookBinding(fake.ports, input);
+    assertEquals(result.binding.social_account_id, ACCOUNT, scenario.label);
+    assertEquals(result.binding.connector_id, CONNECTOR, scenario.label);
+    assertEquals(fake.secrets.length, 1, scenario.label);
+    assertEquals(fake.deleted, [], scenario.label);
+  }
+});
+
+Deno.test("a same-owner WooCommerce connector this account cannot see is a 404 and mints nothing", async () => {
+  const checked: string[] = [];
   const fake = fakePorts({
-    loadConnector: async (id) => ({ id, user_id: "owner", connector_type: "woocommerce" }),
+    loadConnector: async (id) => wooConnector({ id, scope: "account", social_account_id: OTHER }),
+    loadConnectorLinks: async () => [{ tool_id: CONNECTOR, social_account_id: OTHER }],
+    createSecret: async () => { checked.push("secret"); return "secret-1"; },
   });
-  const result = await createStoreWebhookBinding(fake.ports, { social_account_id: ACCOUNT, connector_id: CONNECTOR });
-  assertEquals(result.binding.social_account_id, ACCOUNT);
-  assertEquals(result.binding.connector_id, CONNECTOR);
+  const error = await assertRejects(
+    () => createStoreWebhookBinding(fake.ports, input),
+    ToolWriteError,
+    "Connector not found",
+  );
+  assertEquals((error as ToolWriteError).status, 404);
+  assertEquals(checked, []);
+  assertEquals(fake.deleted, []);
+});
+
+Deno.test("a thrown insert or rotate deletes the new secret when no binding references it", async () => {
+  const created = fakePorts({
+    insertBinding: async () => { throw new Error("insert failed"); },
+  });
+  const createdReads: string[] = [];
+  created.ports.secretReferenced = async (id) => { createdReads.push(id); return false; };
+  await assertRejects(() => createStoreWebhookBinding(created.ports, input), Error, "insert failed");
+  assertEquals(createdReads, ["secret-1"]);
+  assertEquals(created.deleted, ["secret-1"]);
+
+  const rotated = fakePorts({
+    rotateBinding: async () => { throw new Error("rotate failed"); },
+  });
+  const rotatedReads: string[] = [];
+  rotated.ports.secretReferenced = async (id) => { rotatedReads.push(id); return false; };
+  await createStoreWebhookBinding(rotated.ports, input);
+  await assertRejects(
+    () => rotateStoreWebhookSecret(rotated.ports, { binding_id: BINDING }, NOW),
+    Error,
+    "rotate failed",
+  );
+  assertEquals(rotatedReads, ["secret-2"]);
+  assertEquals(rotated.deleted, ["secret-2"]);
+  assertEquals(rotated.rows.get(BINDING)?.secret_id, "secret-1");
+});
+
+Deno.test("a thrown insert or rotate keeps the new secret when a binding references it", async () => {
+  const created = fakePorts({
+    insertBinding: async () => { throw new Error("insert failed"); },
+    secretReferenced: async () => true,
+  });
+  await assertRejects(() => createStoreWebhookBinding(created.ports, input), Error, "insert failed");
+  assertEquals(created.deleted, []);
+
+  const rotated = fakePorts({
+    rotateBinding: async () => { throw new Error("rotate failed"); },
+    secretReferenced: async () => true,
+  });
+  await createStoreWebhookBinding(rotated.ports, input);
+  await assertRejects(
+    () => rotateStoreWebhookSecret(rotated.ports, { binding_id: BINDING }, NOW),
+    Error,
+    "rotate failed",
+  );
+  assertEquals(rotated.deleted, []);
+  assertEquals(rotated.rows.get(BINDING)?.secret_id, "secret-1");
+});
+
+Deno.test("a thrown write does not delete the new secret when the reference read fails", async () => {
+  const fake = fakePorts({
+    insertBinding: async () => { throw new Error("insert failed"); },
+    secretReferenced: async () => { throw new Error("binding read failed"); },
+  });
+  await assertRejects(() => createStoreWebhookBinding(fake.ports, input), Error, "insert failed");
   assertEquals(fake.deleted, []);
 });
 
@@ -192,6 +301,113 @@ Deno.test("rotation checks the caller owns the binding's account", async () => {
   await createStoreWebhookBinding(fake.ports, { social_account_id: ACCOUNT, connector_id: CONNECTOR });
   fake.ports.resolveAccount = async () => { throw new ToolWriteError("Account not found", 404); };
   assertEquals(await status(rotateStoreWebhookSecret(fake.ports, { binding_id: BINDING }, NOW)), 404);
+});
+
+Deno.test("the connector load reads visibility columns and the link load is scoped to owner, connector, and account", async () => {
+  let toolSelect = "";
+  const linkFilters: Array<[string, string]> = [];
+  const admin = {
+    from(table: string) {
+      if (table === "ai_agent_tools") {
+        return {
+          select(columns: string) {
+            toolSelect = columns;
+            return {
+              eq() {
+                return {
+                  maybeSingle: () => Promise.resolve({
+                    data: {
+                      id: CONNECTOR,
+                      user_id: "owner",
+                      connector_type: "woocommerce",
+                      scope: "all_accounts",
+                      social_account_id: null,
+                      admin_only: false,
+                    },
+                    error: null,
+                  }),
+                };
+              },
+            };
+          },
+        };
+      }
+      if (table === "ai_agent_tool_accounts") {
+        const filters: Array<[string, string]> = [];
+        const builder = {
+          select() { return builder; },
+          eq(column: string, value: string) { filters.push([column, value]); return builder; },
+          then(resolve: (value: unknown) => void) {
+            linkFilters.push(...filters);
+            resolve({ data: [], error: null });
+          },
+        };
+        return builder;
+      }
+      throw new Error(table);
+    },
+    rpc() { throw new Error("rpc"); },
+  };
+  const ports = storeWebhookBindingPorts(admin as never, { userId: "owner" });
+  const connector = await ports.loadConnector(CONNECTOR);
+  assertEquals(connector?.scope, "all_accounts");
+  assertEquals(toolSelect.includes("scope"), true);
+  assertEquals(toolSelect.includes("social_account_id"), true);
+  assertEquals(toolSelect.includes("admin_only"), true);
+  assertEquals(await ports.loadConnectorLinks("owner", CONNECTOR, ACCOUNT), []);
+  assertEquals(linkFilters, [
+    ["user_id", "owner"],
+    ["tool_id", CONNECTOR],
+    ["social_account_id", ACCOUNT],
+  ]);
+});
+
+Deno.test("secretReferenced is true when secret_id or previous_secret_id matches, and a read error is not unreferenced", async () => {
+  const secretId = "99999999-9999-4999-8999-999999999999";
+  const query = (answer: (column: string) => { data: { id: string } | null; error: { message: string } | null }) => {
+    const columns: string[] = [];
+    const admin = {
+      from() {
+        return {
+          select() {
+            return {
+              eq(column: string) {
+                columns.push(column);
+                return { limit: () => ({ maybeSingle: () => Promise.resolve(answer(column)) }) };
+              },
+            };
+          },
+        };
+      },
+      rpc() { throw new Error("rpc"); },
+    };
+    return { admin, columns };
+  };
+
+  const onCurrent = query((column) => (
+    column === "secret_id" ? { data: { id: BINDING }, error: null } : { data: null, error: null }
+  ));
+  assertEquals(await storeWebhookBindingPorts(onCurrent.admin as never, { userId: "owner" }).secretReferenced(secretId), true);
+  assertEquals(onCurrent.columns, ["secret_id"]);
+
+  const onPrevious = query((column) => (
+    column === "previous_secret_id" ? { data: { id: BINDING }, error: null } : { data: null, error: null }
+  ));
+  assertEquals(
+    await storeWebhookBindingPorts(onPrevious.admin as never, { userId: "owner" }).secretReferenced(secretId),
+    true,
+  );
+  assertEquals(onPrevious.columns, ["secret_id", "previous_secret_id"]);
+
+  const empty = query(() => ({ data: null, error: null }));
+  assertEquals(await storeWebhookBindingPorts(empty.admin as never, { userId: "owner" }).secretReferenced(secretId), false);
+
+  const failed = query(() => ({ data: null, error: { message: "timeout" } }));
+  await assertRejects(
+    () => storeWebhookBindingPorts(failed.admin as never, { userId: "owner" }).secretReferenced(secretId),
+    Error,
+    "Binding read failed",
+  );
 });
 
 Deno.test("the workspace scope refuses an account outside the key's bound set without a query", async () => {

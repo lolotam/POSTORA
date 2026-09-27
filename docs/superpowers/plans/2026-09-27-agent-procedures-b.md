@@ -171,3 +171,5 @@ PR 2 tasks are amended by spec §8 items 2–5, 9–10 and 12–16 (fenced claim
 | 23 | Validation gaps | Reduced — real RLS SQL tests; corrected gate paths |
 
 Deferred to an issue: competing-worker integration test (#13), stale-button correlation (#19), disabled-webhook monitoring (#6).
+
+**PR 2 carry-overs from PR #212 review:** the worker (Task 9) must re-validate at send time that the binding's connector is still visible to the account (owned, `all_accounts`, or linked in `ai_agent_tool_accounts`), since removing a share leaves an existing binding in place; opt-out checks and event skips key on the resolved phone (`from_phone`), never raw `@lid` digits.

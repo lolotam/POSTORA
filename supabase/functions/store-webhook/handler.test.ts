@@ -340,18 +340,35 @@ Deno.test("only POST is accepted", async () => {
   assertEquals(response.status, 405);
 });
 
-Deno.test("the waitlist is read for the delivered product id only, and a non-integer id reads nothing", async () => {
-  const asked: number[] = [];
+Deno.test("the waitlist is read for the product and parent ids only, and non-integer ids never reach the filter", async () => {
+  const asked: number[][] = [];
   const gate = accepting({
     flowsFrom: () => new Set(["back_in_stock"]),
-    loadWaitlist: async (_binding, productId) => {
-      asked.push(productId);
+    loadWaitlist: async (_binding, productIds) => {
+      asked.push(productIds);
       return [];
     },
   });
-  for (const body of [{ id: 42, stock_status: "instock" }, { id: "1,parent_id.gt.0", stock_status: "instock" }]) {
+  for (const body of [
+    { id: 42, stock_status: "instock" },
+    { id: 43, parent_id: 9, stock_status: "instock" },
+    { id: 44, parent_id: "9),id.gt.(0", stock_status: "instock" },
+    { id: "1,parent_id.gt.0", stock_status: "instock" },
+  ]) {
     const raw = JSON.stringify(body);
     assertEquals((await handleStoreWebhook(jsonPost(raw, await mac(SECRET, raw), "product.updated"), gate)).status, 200);
   }
-  assertEquals(asked, [42]);
+  assertEquals(asked, [[42], [43, 9], [44]]);
+});
+
+Deno.test("a variation update reaches a customer waiting on its parent product", async () => {
+  const gate = accepting({
+    flowsFrom: () => new Set(["back_in_stock"]),
+    loadWaitlist: async () => [
+      { id: "w1", product_id: 9, parent_id: null, phone: "96550001111", connector_id: "con-1", social_account_id: "acc-1" },
+    ],
+  });
+  const raw = JSON.stringify({ id: 42, parent_id: 9, name: "Oud 50ml", stock_status: "instock" });
+  assertEquals((await handleStoreWebhook(jsonPost(raw, await mac(SECRET, raw), "product.updated"), gate)).status, 200);
+  assertEquals(gate.inserted.map((row) => row.external_id), ["waitlist:w1"]);
 });

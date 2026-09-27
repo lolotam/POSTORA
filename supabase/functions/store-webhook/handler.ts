@@ -49,8 +49,8 @@ export interface StoreWebhookDeps {
   loadProcedures(socialAccountId: string): Promise<unknown>;
   /** Defaults to enabledStoreFlows, which drops event keys in PR 1. */
   flowsFrom?(procedures: unknown): ReadonlySet<string>;
-  /** Only rows for this product or its parent; productId is a validated integer. */
-  loadWaitlist(binding: StoreBinding, productId: number): Promise<ScopedWaitlistRow[]>;
+  /** Only rows whose product or parent is one of productIds (validated positive integers). */
+  loadWaitlist(binding: StoreBinding, productIds: number[]): Promise<ScopedWaitlistRow[]>;
   insertEvents(rows: Array<Record<string, unknown>>): Promise<{ ok: true; stored: number } | { ok: false }>;
   now(): Date;
 }
@@ -111,10 +111,13 @@ export async function handleStoreWebhook(req: Request, deps: StoreWebhookDeps): 
   try {
     procedures = await deps.loadProcedures(binding.social_account_id);
     // Only a product update can match the waitlist; orders never need it.
-    const productId = topic === "product.updated" ? Number((parsed as { id?: unknown }).id) : NaN;
-    // The id comes from the signed body; an integer check keeps it safe inside the PostgREST filter.
-    if (Number.isSafeInteger(productId) && productId > 0) {
-      waitlist = waitlistForBinding(await deps.loadWaitlist(binding, productId), binding);
+    const product = parsed as { id?: unknown; parent_id?: unknown };
+    // Ids come from the signed body; the integer check keeps them safe inside the PostgREST filter.
+    const productIds = topic === "product.updated"
+      ? [product.id, product.parent_id].map(Number).filter((id) => Number.isSafeInteger(id) && id > 0)
+      : [];
+    if (productIds.length && Number.isSafeInteger(Number(product.id))) {
+      waitlist = waitlistForBinding(await deps.loadWaitlist(binding, productIds), binding);
     }
   } catch {
     return json({ error: "store_failed" }, 500);
