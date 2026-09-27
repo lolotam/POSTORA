@@ -449,14 +449,13 @@ END $$;
 -- S12: a SECURITY DEFINER function called by an end user (like the account
 -- merge, which repoints social_account_id on rows in any status) passes the
 -- client guard, while the same end user updating the row directly does not.
-CREATE FUNCTION pg_temp.s12_repoint(p_id uuid) RETURNS void
+CREATE FUNCTION public.s12_repoint(p_id uuid) RETURNS void
 LANGUAGE sql SECURITY DEFINER AS $fn$
   UPDATE public.whatsapp_scheduled_messages
   SET social_account_id = social_account_id, updated_at = now()
   WHERE id = p_id;
 $fn$;
-GRANT EXECUTE ON FUNCTION pg_temp.s12_repoint(uuid) TO authenticated;
-GRANT USAGE ON SCHEMA pg_temp TO authenticated;
+GRANT EXECUTE ON FUNCTION public.s12_repoint(uuid) TO authenticated;
 
 INSERT INTO public.whatsapp_scheduled_messages
   (id, user_id, social_account_id, recipient_phone, scheduled_at, status, sent_at)
@@ -471,7 +470,7 @@ SELECT set_config('request.jwt.claims',
 
 DO $$
 BEGIN
-  PERFORM pg_temp.s12_repoint('12121212-1212-4212-8212-121212121212');
+  PERFORM public.s12_repoint('12121212-1212-4212-8212-121212121212');
   BEGIN
     UPDATE public.whatsapp_scheduled_messages
     SET social_account_id = social_account_id
