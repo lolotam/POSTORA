@@ -160,8 +160,8 @@ These points supersede earlier sections where they differ.
 - **Worker recovery:**
   - A transient store re-read releases the claim so the event is retried.
   - An accepted send with a recorded message id finishes activation without resending.
-  - Any path that owns a `pending_opener` state clears it before writing a terminal status. If the clear fails, the row is not terminalized.
-  - After three attempts the row fails and one `system_logs` row is written.
-  - Every skip and failure writes one sanitized `system_logs` row (`event_id`, `flow`, `social_account_id` and `reason`, never a phone number).
+  - Any worker path that owns a `pending_opener` state clears it before writing a terminal status. If the clear fails, the row is not terminalized.
+  - **Exception:** after three attempts `claim_store_events` fails the row directly in SQL and does not clear the thread's state. A `pending_opener` left that way keeps that conversation's procedures inactive until the event-state expiry (72 h). This is tracked in #213.
+  - Every worker skip and failure writes one sanitized `system_logs` row (`event_id`, `flow`, `social_account_id` and `reason`, never a phone number). The row written in SQL on attempt exhaustion carries `event_id`, `flow` and `social_account_id` only; its message states the reason.
 - **`system_logs.category`:** migration `20260928120000` normalises the CHECK constraint to production's 11 values (`auth`, `edge`, `database`, `token`, `post`, `system`, `ai`, `scheduler`, `webhook`, `payment`, `media`). The checked-in migrations had only 6.
 - **Opt-out:** covers business-initiated messages. It is recorded before the inbound message is persisted, and a failed write returns 500 so Meta retries. It cancels unclaimed queued replies and is keyed on the resolved phone. A customer's later message counts as re-engagement. `whatsapp-broadcast` and `ecommerce-whatsapp-api` do not read it yet (issue #213).
