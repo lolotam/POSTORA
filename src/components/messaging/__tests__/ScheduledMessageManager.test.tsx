@@ -5,6 +5,10 @@ import type { ScheduledMessage } from "@/hooks/useWhatsAppScheduledMessages";
 const state = vi.hoisted(() => ({
   messages: [] as ScheduledMessage[],
   isLoading: false,
+  accounts: [] as { id: string; platform_username: string | null; platform_user_id: string; connection_mode: string | null }[],
+  accountsLoading: false,
+  accountsError: false,
+  schedule: { mutate: vi.fn(), isPending: false },
   cancel: { mutate: vi.fn(), isPending: false },
 }));
 
@@ -16,6 +20,8 @@ vi.mock("react-i18next", () => ({
 
 vi.mock("@/hooks/useWhatsAppScheduledMessages", () => ({
   SCHEDULED_CANCEL_BLOCKED: "This message is already being sent and can no longer be cancelled.",
+  SCHEDULED_OWN_ACCOUNT_ONLY: "You can only schedule from your own WhatsApp accounts.",
+  WHATSAPP_MESSAGE_MAX: 4096,
   useWhatsAppScheduledMessages: () => state,
 }));
 
@@ -44,9 +50,10 @@ describe("ScheduledMessageManager", () => {
     state.isLoading = false;
   });
 
-  it("describes the API empty state", () => {
+  it("describes how to add the first scheduled message", () => {
     render(<ScheduledMessageManager />);
-    expect(screen.getByText("Scheduled messages created through the API appear here.")).toBeInTheDocument();
+    expect(screen.getByText("No scheduled messages yet. Use \"Schedule message\" to add one.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Schedule message" })).toBeInTheDocument();
   });
 
   it("labels claimed and sending rows as sending and cancels only pending rows", () => {
