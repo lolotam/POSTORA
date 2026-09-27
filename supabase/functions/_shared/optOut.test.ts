@@ -1,5 +1,5 @@
 import { assertEquals } from "jsr:@std/assert@1";
-import { automationAllowedAfterInbound, isOptOutMessage, optOutDb, recordOptOut, type OptOutDb } from "./optOut.ts";
+import { automationAllowedAfterInbound, inboundOptOutPlan, isOptOutMessage, optOutDb, recordOptOut, type OptOutDb } from "./optOut.ts";
 
 for (const [text, expected] of [
   ["stop", true],
@@ -27,6 +27,29 @@ for (const [optedOut, allowed] of [[true, false], [false, true]] as const) {
     assertEquals(automationAllowedAfterInbound({ optedOut }), allowed);
   });
 }
+
+Deno.test("an opt-out is decided before persist and does not enqueue a reply", () => {
+  const plan = inboundOptOutPlan("  STOP ");
+  assertEquals(plan.recordBeforePersist, true);
+  assertEquals(plan.enqueueAgentReply, false);
+  assertEquals(plan.steps, ["record_opt_out", "persist_inbound"]);
+  assertEquals(plan.steps.indexOf("record_opt_out") < plan.steps.indexOf("persist_inbound"), true);
+  assertEquals(plan.steps.includes("enqueue_agent_reply"), false);
+});
+
+Deno.test("a normal inbound message may enqueue, and only after persist", () => {
+  const plan = inboundOptOutPlan("where is my order");
+  assertEquals(plan.recordBeforePersist, false);
+  assertEquals(plan.enqueueAgentReply, true);
+  assertEquals(plan.steps, ["persist_inbound", "enqueue_agent_reply"]);
+});
+
+Deno.test("an owner echo of an opt-out phrase is not an opt-out", () => {
+  const plan = inboundOptOutPlan("stop", true);
+  assertEquals(plan.recordBeforePersist, false);
+  assertEquals(plan.enqueueAgentReply, true);
+  assertEquals(plan.steps.includes("record_opt_out"), false);
+});
 
 const INPUT = {
   userId: "user", socialAccountId: "acc", phone: "96555512345", conversationId: "wa_1_96555512345",

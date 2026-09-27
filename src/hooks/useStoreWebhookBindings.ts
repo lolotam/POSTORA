@@ -49,5 +49,12 @@ export function useStoreWebhookBindings() {
     onSuccess: invalidate,
   });
 
-  return { bindings: query.data || [], isLoading: query.isLoading, createBinding, rotateSecret };
+  return {
+    bindings: query.data,
+    isLoading: query.isPending,
+    isError: query.isError,
+    refetch: query.refetch,
+    createBinding,
+    rotateSecret,
+  };
 }

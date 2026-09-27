@@ -28,6 +28,27 @@ export function automationAllowedAfterInbound(input: { optedOut: boolean }): boo
   return !input.optedOut;
 }
 
+/**
+ * Decided before the inbound row is stored and before any agent reply is enqueued.
+ * An owner echo is never an opt-out. When `recordBeforePersist` is set, the steps
+ * are record then persist, and enqueue is absent.
+ */
+export function inboundOptOutPlan(text: string, fromOwner = false): {
+  recordBeforePersist: boolean;
+  enqueueAgentReply: boolean;
+  steps: readonly ("record_opt_out" | "persist_inbound" | "enqueue_agent_reply")[];
+} {
+  const recordBeforePersist = !fromOwner && isOptOutMessage(text);
+  const enqueueAgentReply = automationAllowedAfterInbound({ optedOut: recordBeforePersist });
+  return {
+    recordBeforePersist,
+    enqueueAgentReply,
+    steps: recordBeforePersist
+      ? ["record_opt_out", "persist_inbound"]
+      : ["persist_inbound", "enqueue_agent_reply"],
+  };
+}
+
 export interface OptOutDb {
   upsertOptOut(userId: string, phone: string): Promise<void>;
   skipEvents(socialAccountId: string, phone: string): Promise<void>;

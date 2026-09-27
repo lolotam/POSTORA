@@ -20,8 +20,8 @@ const TOPICS = [
 export function StoreWebhookSection({ accountId }: { accountId: string }) {
   const { t } = useTranslation("agent");
   const { tools } = useAiAgentTools();
-  const { bindings, createBinding, rotateSecret } = useStoreWebhookBindings();
-  // Shown once, straight from the create/rotate response; never refetched.
+  const { bindings, isLoading, isError, refetch, createBinding, rotateSecret } = useStoreWebhookBindings();
+  // Shown once, straight from the create/rotate response; a later list read does not restore it.
   const [secret, setSecret] = useState<string | null>(null);
   useEffect(() => setSecret(null), [accountId]);
 
@@ -29,7 +29,8 @@ export function StoreWebhookSection({ accountId }: { accountId: string }) {
     tool.connector_type === "woocommerce" && (tool.social_account_id === accountId || tool.scope === "all_accounts")
   );
   if (!connector) return null;
-  const binding = bindings.find((row) => row.connector_id === connector.id);
+  const listReady = bindings !== undefined && !isLoading && !isError;
+  const binding = listReady ? bindings.find((row) => row.connector_id === connector.id) : undefined;
   const pending = createBinding.isPending || rotateSecret.isPending;
 
   const issue = async () => {
@@ -64,6 +65,21 @@ export function StoreWebhookSection({ accountId }: { accountId: string }) {
           )}
         </p>
       </div>
+      {isLoading && (
+        <p role="status" className="text-xs text-muted-foreground">
+          {t("procedures.store.loading", "Loading the store webhook…")}
+        </p>
+      )}
+      {!isLoading && (isError || bindings === undefined) && (
+        <div className="space-y-2">
+          <p role="alert" className="text-xs text-destructive">
+            {t("procedures.store.loadFailed", "The store webhook could not be loaded.")}
+          </p>
+          <Button type="button" variant="outline" size="sm" onClick={() => void refetch()}>
+            {t("procedures.store.retry", "Retry")}
+          </Button>
+        </div>
+      )}
       {binding && (
         <div className="space-y-2">
           <Label htmlFor="store-webhook-url">{t("procedures.store.url", "Delivery URL")}</Label>
@@ -107,11 +123,13 @@ export function StoreWebhookSection({ accountId }: { accountId: string }) {
           </div>
         </div>
       )}
-      <Button type="button" variant="outline" size="sm" disabled={pending} onClick={issue}>
-        {binding
-          ? t("procedures.store.rotate", "Rotate secret")
-          : t("procedures.store.generate", "Generate webhook URL and secret")}
-      </Button>
+      {listReady && (
+        <Button type="button" variant="outline" size="sm" disabled={pending} onClick={issue}>
+          {binding
+            ? t("procedures.store.rotate", "Rotate secret")
+            : t("procedures.store.generate", "Generate webhook URL and secret")}
+        </Button>
+      )}
       {binding && (
         <p className="text-xs text-muted-foreground">
           {t("procedures.store.rotateHint", "After rotating, the old secret keeps working for 24 hours.")}

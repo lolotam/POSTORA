@@ -10,7 +10,7 @@ import { cancelOutboxRow } from "../ai-agent-reply/outbox.ts";
 import { enqueueAgentReply } from "../_shared/pendingReplies.ts";
 import { dispatchAgentReply } from "../_shared/agentReplyDispatch.ts";
 import { cloudButtonContent, isPlaceholderOnly, promptSafeInput } from "./messageContent.ts";
-import { automationAllowedAfterInbound, isOptOutMessage, optOutDb, recordOptOut } from "../_shared/optOut.ts";
+import { automationAllowedAfterInbound, inboundOptOutPlan, optOutDb, recordOptOut } from "../_shared/optOut.ts";
 import {
   isDispatchIntentId,
   reconcileDispatchIntentByEcho,
@@ -440,6 +440,20 @@ async function handleLiveMessages(
 
     const conversationId = `wa_${phoneNumberId}_${from.replace(/\D/g, "")}`;
 
+    // Record an opt-out before the inbound upsert. That upsert consumes Meta's
+    // redelivery, so a crash after it would skip this branch on the retry and
+    // lose the opt-out. Recording first is idempotent. An opt-out also never
+    // enqueues a reply, so a worker cannot send one before a later cancel.
+    const optOutPlan = inboundOptOutPlan(messageText);
+    if (optOutPlan.recordBeforePersist) {
+      await recordOptOut(optOutDb(adminClient), {
+        userId: account.user_id,
+        socialAccountId: account.id,
+        phone: from,
+        conversationId,
+      });
+    }
+
     const contacts = value?.contacts || [];
     const contactName = contacts.find((c: any) => c.wa_id === from)?.profile?.name || from;
     const msgTimestamp = toIsoTimestamp(msg.timestamp);
@@ -501,7 +515,7 @@ async function handleLiveMessages(
     // which can itself send. Now it includes nothing.
     const automationHandler = resolveAutomationHandler(account.account_metadata);
     const promptSafeText = promptSafeInput(mediaType, messageText, caption);
-    const enqueued = automationHandler === "internal"
+    const enqueued = optOutPlan.enqueueAgentReply && automationHandler === "internal"
       ? await enqueueAgentReply(adminClient, {
         socialAccountId: account.id,
         platform: "whatsapp",
@@ -552,19 +566,9 @@ async function handleLiveMessages(
 
     console.log("[whatsapp-webhook] Stored inbound message");
 
-    // The inbound row is already stored. An opt-out cancels the queued reply and
-    // leaves before n8n, auto-replies, and the agent.
-    const optedOut = isOptOutMessage(messageText);
-    if (!automationAllowedAfterInbound({ optedOut })) {
-      await recordOptOut(optOutDb(adminClient), {
-        userId: account.user_id,
-        socialAccountId: account.id,
-        phone: from,
-        conversationId,
-      });
-      if (outboxId) await cancelOutboxRow(adminClient, outboxId, "opted_out");
-      continue;
-    }
+    // The opt-out was recorded before this row existed, and no reply was enqueued.
+    // Leave before n8n, auto-replies, and the agent.
+    if (!automationAllowedAfterInbound({ optedOut: optOutPlan.recordBeforePersist })) continue;
 
     if (automationHandler === "n8n") {
       await runInBackground("whatsapp message dispatch", () => dispatchMessageEvent(

@@ -1,6 +1,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { checkIpRateLimit, checkUserRateLimit } from "../_shared/rate-limiter.ts";
 import { enabledStoreFlows, handleStoreWebhook, type StoreWebhookDeps } from "./handler.ts";
+import type { WaitlistMatch } from "../_shared/wooWebhook.ts";
 
 function deps(): StoreWebhookDeps {
   const admin = createClient(
@@ -32,12 +33,15 @@ function deps(): StoreWebhookDeps {
       return behavior?.procedures;
     },
     flowsFrom: enabledStoreFlows,
-    async loadWaitlist(connectorId) {
+    async loadWaitlist(connectorId): Promise<WaitlistMatch[]> {
       const { data, error } = await admin.from("stock_waitlist")
-        .select("id, product_id, parent_id").eq("connector_id", connectorId);
+        .select("id, product_id, parent_id, phone").eq("connector_id", connectorId);
       if (error) throw new Error("waitlist_read_failed");
-      return (data ?? []).map((row: { id: string; product_id: number; parent_id: number | null }) => ({
-        id: row.id, product_id: Number(row.product_id), parent_id: row.parent_id == null ? null : Number(row.parent_id),
+      return (data ?? []).map((row: { id: string; product_id: number; parent_id: number | null; phone: string | null }) => ({
+        id: row.id,
+        product_id: Number(row.product_id),
+        parent_id: row.parent_id == null ? null : Number(row.parent_id),
+        phone: typeof row.phone === "string" ? row.phone : "",
       }));
     },
     async insertEvents(rows) {

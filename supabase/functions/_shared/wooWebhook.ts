@@ -66,6 +66,14 @@ export type EventDraft = {
   payload: Record<string, string>;
 };
 
+/** One un-notified waitlist row the product update may match. `phone` is copied into the event payload. */
+export interface WaitlistMatch {
+  id: string;
+  product_id: number;
+  parent_id: number | null;
+  phone: string;
+}
+
 export function classifyWooDelivery(input: {
   topic: string | null;
   body: unknown;
@@ -73,7 +81,7 @@ export function classifyWooDelivery(input: {
   enabled: ReadonlySet<string>;
   reviewDelayDays: number;
   country: string | null;
-  waitlist?: Array<{ id: string; product_id: number; parent_id: number | null }>;
+  waitlist?: WaitlistMatch[];
 }): EventDraft[] {
   if (!input.topic || typeof input.body !== "object" || input.body === null || Array.isArray(input.body)) return [];
   const body = input.body as Record<string, unknown>;
@@ -133,7 +141,7 @@ function reviewDue(value: unknown, delayDays: number): Date | null {
 
 function stockDrafts(
   body: Record<string, unknown>,
-  waitlist: Array<{ id: string; product_id: number; parent_id: number | null }>,
+  waitlist: WaitlistMatch[],
   now: Date,
 ): EventDraft[] {
   const id = Number(body.id);
@@ -146,9 +154,12 @@ function stockDrafts(
     if (!hit) continue;
     drafts.push({
       flow: "back_in_stock",
-      external_id: `${id}:${row.id}`,
+      // The waitlist row is the customer. A parent update and a variation update
+      // for that same row must collapse to one event.
+      external_id: `waitlist:${row.id}`,
       due_at: now,
       payload: whitelist({
+        phone: row.phone,
         product_id: String(row.product_id),
         parent_id: row.parent_id == null ? "" : String(row.parent_id),
         product_name: name,

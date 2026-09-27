@@ -19,7 +19,7 @@ import {
   runInboundMediaUnderstanding,
 } from "../_shared/inboundMediaPipeline.ts";
 import { EvolutionFetcher } from "../_shared/inboundMediaFetchers.ts";
-import { automationAllowedAfterInbound, isOptOutMessage, optOutDb, recordOptOut } from "../_shared/optOut.ts";
+import { automationAllowedAfterInbound, inboundOptOutPlan, optOutDb, recordOptOut } from "../_shared/optOut.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -124,6 +124,19 @@ async function persistEvolutionMessage(
   if (!built) return false;
   const { conversationId, sentByOwner, row } = built;
   const remoteNumber = remoteNumberFor(message.key.remoteJid);
+  const inboundText = (row.message_text as string) || "";
+  // Owner echoes are never opt-outs. A contact opt-out is recorded before the
+  // persist RPC. That RPC consumes the redelivery, so recording afterwards
+  // would be skipped when the retry lands in the duplicate return.
+  const optOutPlan = inboundOptOutPlan(inboundText, sentByOwner);
+  if (optOutPlan.recordBeforePersist) {
+    await recordOptOut(optOutDb(admin), {
+      userId: account.user_id,
+      socialAccountId: account.id,
+      phone: remoteNumber,
+      conversationId,
+    });
+  }
 
   // The persist and the message.received fan-out are ONE statement (D5 R1).
   // The row here can be EITHER direction -- owner-sent echoes go through
@@ -160,8 +173,7 @@ async function persistEvolutionMessage(
     | { row_id: string | null; was_inserted: boolean }
     | undefined;
   if (!persisted || !persisted.was_inserted) return false;
-  const inboundText = (row.message_text as string) || "";
-  const optedOut = !sentByOwner && isOptOutMessage(inboundText);
+
   await touchConversation(admin, account, {
     conversationId,
     participantName: built.participantName,
@@ -187,16 +199,9 @@ async function persistEvolutionMessage(
       contactNumber: remoteNumber,
     },
   );
-  // Inbound row and inbox cache are stored. Opt-out returns before n8n and the agent.
-  if (!automationAllowedAfterInbound({ optedOut })) {
-    await recordOptOut(optOutDb(admin), {
-      userId: account.user_id,
-      socialAccountId: account.id,
-      phone: remoteNumber,
-      conversationId,
-    });
-    return true;
-  }
+  // Inbound row and inbox cache are stored. The opt-out was recorded before the
+  // persist RPC, and no agent reply is enqueued. Leave before n8n and the agent.
+  if (!automationAllowedAfterInbound({ optedOut: optOutPlan.recordBeforePersist })) return true;
 
   // Only a message from the contact is an inbound event for automations; echoing the
   // operator's own reply back into n8n would retrigger their workflows on their own text.

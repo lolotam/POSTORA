@@ -3,7 +3,7 @@
 // verified delivery is stored only when a later change turns a flow on.
 import { rateLimitExceededResponse } from "../_shared/rate-limiter.ts";
 import { corsHeaders, jsonResponse } from "../_shared/cors.ts";
-import { classifyWooDelivery, isWooPing, verifyWooSignature } from "../_shared/wooWebhook.ts";
+import { classifyWooDelivery, isWooPing, verifyWooSignature, type WaitlistMatch } from "../_shared/wooWebhook.ts";
 import { enabledProcedures, readProcedureConfig } from "../_shared/procedures/config.ts";
 
 const BODY_CAP = 262144;
@@ -24,7 +24,7 @@ export interface StoreWebhookDeps {
   loadProcedures(socialAccountId: string): Promise<unknown>;
   /** Defaults to enabledStoreFlows, which drops event keys in PR 1. */
   flowsFrom?(procedures: unknown): ReadonlySet<string>;
-  loadWaitlist(connectorId: string): Promise<Array<{ id: string; product_id: number; parent_id: number | null }>>;
+  loadWaitlist(connectorId: string): Promise<WaitlistMatch[]>;
   insertEvents(rows: Array<Record<string, unknown>>): Promise<{ ok: true; stored: number } | { ok: false }>;
   now(): Date;
 }
@@ -81,7 +81,7 @@ export async function handleStoreWebhook(req: Request, deps: StoreWebhookDeps): 
 
   const topic = req.headers.get("x-wc-webhook-topic");
   let procedures: unknown;
-  let waitlist: Array<{ id: string; product_id: number; parent_id: number | null }> = [];
+  let waitlist: WaitlistMatch[] = [];
   try {
     procedures = await deps.loadProcedures(binding.social_account_id);
     // Only a product update can match the waitlist; orders never need it.

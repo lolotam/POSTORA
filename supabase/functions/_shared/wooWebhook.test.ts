@@ -110,12 +110,38 @@ Deno.test("back-in-stock drafts are candidates for a matching waitlist row only"
     body: { id: 9, name: "Oud", stock_status: "instock", sku: "secret-sku" },
     now: NOW, enabled: new Set(["back_in_stock"]), reviewDelayDays: 3, country: null,
     waitlist: [
-      { id: "w1", product_id: 9, parent_id: null },
-      { id: "w2", product_id: 4, parent_id: 3 },
+      { id: "w1", product_id: 9, parent_id: null, phone: "96550001111" },
+      { id: "w2", product_id: 4, parent_id: 3, phone: "96550002222" },
     ],
   });
-  assertEquals(drafts.map((draft) => draft.external_id), ["9:w1"]);
-  assertEquals(drafts[0].payload, { product_id: "9", product_name: "Oud", consent_basis: "chat_optin" });
+  assertEquals(drafts.map((draft) => draft.external_id), ["waitlist:w1"]);
+  assertEquals(drafts[0].payload, {
+    phone: "96550001111", product_id: "9", product_name: "Oud", consent_basis: "chat_optin",
+  });
+  assertEquals("sku" in drafts[0].payload, false);
+});
+
+Deno.test("a parent delivery and a variation delivery for one waitlist row share one external id", () => {
+  const row = { id: "w1", product_id: 42, parent_id: 9, phone: "96555512345" };
+  const base = {
+    now: NOW, enabled: new Set(["back_in_stock"]), reviewDelayDays: 3, country: null, waitlist: [row],
+  };
+  const parent = classifyWooDelivery({
+    topic: "product.updated",
+    body: { id: 9, name: "Oud", stock_status: "instock" },
+    ...base,
+  });
+  const variation = classifyWooDelivery({
+    topic: "product.updated",
+    body: { id: 42, parent_id: 9, name: "Oud 50ml", stock_status: "instock" },
+    ...base,
+  });
+  assertEquals(parent.map((draft) => draft.external_id), ["waitlist:w1"]);
+  assertEquals(variation.map((draft) => draft.external_id), ["waitlist:w1"]);
+  assertEquals(parent[0].payload.phone, "96555512345");
+  assertEquals(variation[0].payload.phone, "96555512345");
+  assertEquals(parent[0].payload.product_id, "42");
+  assertEquals(variation[0].payload.product_id, "42");
 });
 
 

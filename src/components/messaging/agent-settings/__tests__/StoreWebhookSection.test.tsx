@@ -10,7 +10,10 @@ const BINDING = "11111111-1111-4111-8111-111111111111";
 
 const mocks = vi.hoisted(() => ({
   tools: [] as Array<Record<string, unknown>>,
-  bindings: [] as Array<Record<string, unknown>>,
+  bindings: [] as Array<Record<string, unknown>> | undefined,
+  isLoading: false,
+  isError: false,
+  refetch: vi.fn(),
   create: vi.fn(),
   rotate: vi.fn(),
 }));
@@ -23,6 +26,9 @@ vi.mock("@/hooks/useStoreWebhookBindings", async (importOriginal) => {
     ...actual,
     useStoreWebhookBindings: () => ({
       bindings: mocks.bindings,
+      isLoading: mocks.isLoading,
+      isError: mocks.isError,
+      refetch: mocks.refetch,
       createBinding: { mutateAsync: mocks.create, isPending: false },
       rotateSecret: { mutateAsync: mocks.rotate, isPending: false },
     }),
@@ -36,6 +42,9 @@ describe("StoreWebhookSection", () => {
   beforeEach(() => {
     mocks.tools = [woo];
     mocks.bindings = [];
+    mocks.isLoading = false;
+    mocks.isError = false;
+    mocks.refetch.mockReset();
     mocks.create.mockReset();
     mocks.rotate.mockReset();
     vi.mocked(toast.error).mockClear();
@@ -99,6 +108,29 @@ describe("StoreWebhookSection", () => {
     });
     expect(toast.error).toHaveBeenCalledWith("The webhook secret could not be created. Try again.");
     expect(screen.queryByLabelText(/webhook secret/i)).not.toBeInTheDocument();
+  });
+
+  it("shows a loading state and does not offer generate while the list is loading", () => {
+    mocks.isLoading = true;
+    mocks.bindings = undefined;
+    render(<StoreWebhookSection accountId={ACCOUNT} />);
+    expect(screen.getByRole("status")).toHaveTextContent(/loading the store webhook/i);
+    expect(screen.queryByRole("button", { name: /generate webhook url and secret/i })).not.toBeInTheDocument();
+  });
+
+  it("shows an error with retry and does not offer generate when the list fails", () => {
+    mocks.isError = true;
+    mocks.bindings = undefined;
+    render(<StoreWebhookSection accountId={ACCOUNT} />);
+    expect(screen.getByRole("alert")).toHaveTextContent(/could not be loaded/i);
+    expect(screen.queryByRole("button", { name: /generate webhook url and secret/i })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /^retry$/i }));
+    expect(mocks.refetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers generate only after a successful empty result", () => {
+    render(<StoreWebhookSection accountId={ACCOUNT} />);
+    expect(screen.getByRole("button", { name: /generate webhook url and secret/i })).toBeInTheDocument();
   });
 
   it("the secret is dropped when the account changes", async () => {

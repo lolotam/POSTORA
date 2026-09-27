@@ -99,15 +99,15 @@ BEGIN
   -- B4: events are unique per (binding, flow, external_id).
   BEGIN
     INSERT INTO public.store_events
-      (user_id, binding_id, flow, external_id, payload)
-    VALUES (u_b, bind_b, 'cod_confirm', 'order-1', '{}');
+      (user_id, social_account_id, connector_id, binding_id, flow, external_id, payload)
+    VALUES (u_b, acct_b, tool_b, bind_b, 'cod_confirm', 'order-1', '{}');
     RAISE EXCEPTION 'B4 failed: duplicate event accepted'
       USING ERRCODE = 'assert_failure';
   EXCEPTION WHEN unique_violation THEN NULL;
   END;
   INSERT INTO public.store_events
-    (user_id, binding_id, flow, external_id, payload)
-  VALUES (u_b, bind_b, 'review_request', 'order-1', '{}');
+    (user_id, social_account_id, connector_id, binding_id, flow, external_id, payload)
+  VALUES (u_b, acct_b, tool_b, bind_b, 'review_request', 'order-1', '{}');
   ASSERT (SELECT count(*) FROM public.store_events
            WHERE binding_id = bind_b AND external_id = 'order-1') = 2,
     'B4 same external_id under another flow accepted';
@@ -115,15 +115,15 @@ BEGIN
   -- B5: the status check holds, and 'sending' is a legal status.
   BEGIN
     INSERT INTO public.store_events
-      (user_id, binding_id, flow, external_id, payload, status)
-    VALUES (u_b, bind_b, 'cod_confirm', 'order-bogus', '{}', 'bogus');
+      (user_id, social_account_id, connector_id, binding_id, flow, external_id, payload, status)
+    VALUES (u_b, acct_b, tool_b, bind_b, 'cod_confirm', 'order-bogus', '{}', 'bogus');
     RAISE EXCEPTION 'B5 failed: bogus status accepted'
       USING ERRCODE = 'assert_failure';
   EXCEPTION WHEN check_violation THEN NULL;
   END;
   INSERT INTO public.store_events
-    (user_id, binding_id, flow, external_id, payload, status)
-  VALUES (u_b, bind_b, 'cod_confirm', 'order-sending', '{}', 'sending');
+    (user_id, social_account_id, connector_id, binding_id, flow, external_id, payload, status)
+  VALUES (u_b, acct_b, tool_b, bind_b, 'cod_confirm', 'order-sending', '{}', 'sending');
   ASSERT (SELECT status FROM public.store_events
            WHERE binding_id = bind_b AND external_id = 'order-sending') = 'sending',
     'B5 sending status accepted';
@@ -291,6 +291,78 @@ BEGIN
   ASSERT (public.get_store_webhook_secret(gen_random_uuid())) IS NULL,
     'B14 unknown binding reads as NULL, not an empty object';
 END $procb_vault$;
+
+-- B15..B19: store_events rows are bound to their binding structurally.
+-- bind_a is (u_a, acct_a, tool_a); tool_c is u_a's spare connector, so only
+-- the connector leg differs in B16.
+DO $$
+DECLARE
+  u_a uuid := '11111111-1111-4111-8111-111111111111';
+  u_b uuid := '22222222-2222-4222-8222-222222222222';
+  acct_a uuid := '33333333-3333-4333-8333-333333333333';
+  acct_b uuid := '44444444-4444-4334-8444-444444444444';
+  tool_a uuid := '55555555-5555-4555-8555-555555555555';
+  tool_c uuid := '12121212-1212-4121-8121-121212121212';
+  bind_a uuid := '77777777-7777-4777-8777-777777777777';
+BEGIN
+  -- B15: a social_account_id that differs from the binding fails the FK.
+  BEGIN
+    INSERT INTO public.store_events
+      (user_id, social_account_id, connector_id, binding_id, flow,
+       external_id, payload)
+    VALUES (u_a, acct_b, tool_a, bind_a, 'cod_confirm', 'order-b15-acct',
+            '{"order_id":"b15"}');
+    RAISE EXCEPTION 'B15 failed: cross-account event accepted'
+      USING ERRCODE = 'assert_failure';
+  EXCEPTION WHEN foreign_key_violation THEN NULL;
+  END;
+
+  -- B16: a connector_id that differs from the binding fails the FK.
+  BEGIN
+    INSERT INTO public.store_events
+      (user_id, social_account_id, connector_id, binding_id, flow,
+       external_id, payload)
+    VALUES (u_a, acct_a, tool_c, bind_a, 'cod_confirm', 'order-b16-tool',
+            '{"order_id":"b16"}');
+    RAISE EXCEPTION 'B16 failed: cross-connector event accepted'
+      USING ERRCODE = 'assert_failure';
+  EXCEPTION WHEN foreign_key_violation THEN NULL;
+  END;
+
+  -- B17: a user_id that differs from the binding fails the FK.
+  BEGIN
+    INSERT INTO public.store_events
+      (user_id, social_account_id, connector_id, binding_id, flow,
+       external_id, payload)
+    VALUES (u_b, acct_a, tool_a, bind_a, 'cod_confirm', 'order-b17-user',
+            '{"order_id":"b17"}');
+    RAISE EXCEPTION 'B17 failed: cross-user event accepted'
+      USING ERRCODE = 'assert_failure';
+  EXCEPTION WHEN foreign_key_violation THEN NULL;
+  END;
+
+  -- B18: a null social_account_id fails NOT NULL, not the FK.
+  BEGIN
+    INSERT INTO public.store_events
+      (user_id, social_account_id, connector_id, binding_id, flow,
+       external_id, payload)
+    VALUES (u_a, NULL, tool_a, bind_a, 'cod_confirm', 'order-b18-null',
+            '{"order_id":"b18"}');
+    RAISE EXCEPTION 'B18 failed: null social_account_id accepted'
+      USING ERRCODE = 'assert_failure';
+  EXCEPTION WHEN not_null_violation THEN NULL;
+  END;
+
+  -- B19: a row whose identity matches its binding inserts.
+  INSERT INTO public.store_events
+    (user_id, social_account_id, connector_id, binding_id, flow,
+     external_id, payload)
+  VALUES (u_a, acct_a, tool_a, bind_a, 'cod_confirm', 'order-b19-ok',
+          '{"order_id":"b19"}');
+  ASSERT (SELECT count(*) FROM public.store_events
+           WHERE binding_id = bind_a AND external_id = 'order-b19-ok') = 1,
+    'B19 matching identity row inserts';
+END $$;
 
 ROLLBACK;
 \echo '=== agent_procedures_b: ALL CHECKS PASSED ==='
