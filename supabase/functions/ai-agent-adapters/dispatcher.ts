@@ -22,9 +22,19 @@ function connectorFailure(vendor: string, code: string, message: string): Connec
 
 const PROCEDURE_CAPABILITIES = new Set<Capability>(["get_product", "update_order"]);
 
+/** A procedure re-read of one order. The model permission stays closed; only the internal flag opens it. */
+function internalOrderRead(invocation: ConnectorInvocation): boolean {
+  const orderId = invocation.request.parameters.order_id;
+  return invocation.request.capability === "lookup_orders"
+    && invocation.request.internalProcedure === true
+    && typeof orderId === "string"
+    && /^[0-9]{1,12}$/.test(orderId);
+}
+
 function enabledCapabilities(invocation: ConnectorInvocation): Capability[] {
   const permissions = invocation.tool.permissions;
   return CAPABILITIES.filter((capability) => {
+    if (capability === "lookup_orders" && internalOrderRead(invocation)) return true;
     if (permissions[capability] === true) return true;
     // No permissions column for these: the procedure call opts in, and an
     // explicit false still refuses. Model tool calls never set the flag.

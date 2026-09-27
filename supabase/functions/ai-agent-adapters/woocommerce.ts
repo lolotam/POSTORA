@@ -418,6 +418,51 @@ async function updateOrder(
   return { ok: true, vendor: "woocommerce", action: "execute", capability: "update_order", data: { changed: true, status: afterNote } };
 }
 
+const PROCEDURE_ORDER_FIELDS = ["id", "status", "payment_method", "date_created", "billing"] as const;
+
+/**
+ * Order re-read for a store-event opener. Returns the eligibility fields only:
+ * payment method, status, created time, and the billing phone. The rest of
+ * billing (email, address) is not copied out.
+ */
+async function readProcedureOrder(
+  invocation: ConnectorInvocation,
+  dependencies: AdapterDependencies,
+  authorization: string,
+  base: string,
+): Promise<ConnectorResult> {
+  const orderId = positiveId(invocation.request.parameters, "order_id");
+  if (!orderId) return wooFailure("woocommerce_configuration_invalid", "WooCommerce is not fully configured.");
+  const sent = await wooSend(
+    withFields(`${base}/wp-json/wc/v3/orders/${encodeURIComponent(orderId)}`, PROCEDURE_ORDER_FIELDS),
+    "GET",
+    authorization,
+    dependencies,
+  );
+  if (!sent.ok) {
+    return sent.failure.error.code === "store_write_denied"
+      ? wooFailure("woocommerce_http_error", "WooCommerce rejected the request.", sent.failure.error.vendor_status)
+      : sent.failure;
+  }
+  if (!isRecord(sent.payload)) {
+    return wooFailure("woocommerce_response_invalid", "WooCommerce returned an invalid response.");
+  }
+  const billing = isRecord(sent.payload.billing) ? sent.payload.billing : {};
+  return {
+    ok: true,
+    vendor: "woocommerce",
+    action: "execute",
+    capability: "lookup_orders",
+    data: {
+      status: typeof sent.payload.status === "string" ? sent.payload.status : "",
+      payment_method: typeof sent.payload.payment_method === "string" ? sent.payload.payment_method : "",
+      date_created: typeof sent.payload.date_created === "string" ? sent.payload.date_created : "",
+      phone: typeof billing.phone === "string" ? billing.phone : "",
+      country: typeof billing.country === "string" ? billing.country : "",
+    },
+  };
+}
+
 async function getProduct(
   invocation: ConnectorInvocation,
   dependencies: AdapterDependencies,
@@ -473,6 +518,14 @@ async function callWooCommerce(
   }
   if (invocation.request.action === "execute" && capability === "get_product") {
     return getProduct(invocation, dependencies, authorization, base);
+  }
+  if (
+    invocation.request.action === "execute"
+    && capability === "lookup_orders"
+    && invocation.request.internalProcedure === true
+    && positiveId(invocation.request.parameters, "order_id")
+  ) {
+    return readProcedureOrder(invocation, dependencies, authorization, base);
   }
 
   // A cached search answer skips the category resolution too — a hit means the

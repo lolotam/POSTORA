@@ -33,6 +33,21 @@ vi.mock("@/components/messaging/AiAgentLogsView", () => ({ AiAgentLogsView: () =
 vi.mock("@/components/messaging/AiAgentTestChat", () => ({ AiAgentTestChat: () => null }));
 vi.mock("@/components/automation/DatabaseConnectorsManager", () => ({ DatabaseConnectorsManager: () => null }));
 vi.mock("@/components/messaging/agent-settings/StoreWebhookSection", () => ({ StoreWebhookSection: () => null }));
+vi.mock("@/hooks/useAiAgentTools", () => ({
+  useAiAgentTools: () => ({ tools: [] }),
+  useAiToolAccountLinks: () => ({ links: [], linksReady: true }),
+}));
+vi.mock("@/hooks/useStoreWebhookBindings", () => ({
+  useStoreWebhookBindings: () => ({
+    bindings: [],
+    isLoading: false,
+    isError: false,
+    refetch: vi.fn(),
+    createBinding: { isPending: false, mutateAsync: vi.fn() },
+    rotateSecret: { isPending: false, mutateAsync: vi.fn() },
+  }),
+}));
+vi.mock("@/lib/messagingApi", () => ({ callMessagingApi: vi.fn(async () => ({ status: "missing" })) }));
 
 import { AiAgentManager } from "@/components/messaging/AiAgentManager";
 

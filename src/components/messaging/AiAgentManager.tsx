@@ -353,6 +353,7 @@ export function AiAgentManager({ platform = "whatsapp", initialAccountId = null,
               behavior={behavior}
               updateBehavior={updateBehavior}
               storeAccountId={platform === "whatsapp" ? accountId : null}
+              connectionMode={accounts.find((account) => account.id === accountId)?.connection_mode ?? null}
             />
           )}
           <AdvancedCard form={form} update={update} />

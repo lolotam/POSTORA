@@ -6,8 +6,9 @@ export const PROCEDURE_KEYS = [
   "cod_confirm", "review_request", "back_in_stock",
 ] as const;
 export type ProcedureKey = typeof PROCEDURE_KEYS[number];
-/** Store-event flows. The worker starts them; the model and the card cannot, in PR 1. */
+/** Store-event flows. The worker starts them; the model cannot. */
 export const EVENT_PROCEDURE_KEYS = ["cod_confirm", "review_request", "back_in_stock"] as const;
+export type EventProcedureKey = typeof EVENT_PROCEDURE_KEYS[number];
 export function isEventProcedureKey(key: string): boolean {
   return (EVENT_PROCEDURE_KEYS as readonly string[]).includes(key);
 }

@@ -377,7 +377,7 @@ export async function executeProcedureStoreCall(
   context: ToolContext,
   tool: CustomTool,
   spec: {
-    capability: "update_order" | "get_product";
+    capability: "update_order" | "get_product" | "lookup_orders";
     parameters: Record<string, unknown>;
     method?: TrustedAdapterCall["method"];
   },

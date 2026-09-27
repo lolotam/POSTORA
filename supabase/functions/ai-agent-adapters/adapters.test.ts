@@ -747,6 +747,43 @@ Deno.test("WooCommerce product, stock, order and category URLs ask only for the 
   assertStringIncludes(bySearch, `_fields=${ORDER_FIELD_LIST}`);
   assertEquals(new URL(bySearch).searchParams.get("_fields"), ORDER_FIELD_LIST);
 
+  const seen: string[] = [];
+  const procedureRead = await executeConnector(
+    {
+      tool: wooTool({ permissions: { search_products: false, check_stock: false, lookup_orders: false } }),
+      credentials: { consumer_key: WOO_KEY, consumer_secret: WOO_SECRET },
+      request: request({
+        capability: "lookup_orders",
+        method: "GET",
+        internalProcedure: true,
+        parameters: { order_id: "10432" },
+      }),
+    },
+    dependencies((url) => {
+      seen.push(String(url));
+      return Promise.resolve(jsonResponse({
+        id: 10432,
+        status: "processing",
+        payment_method: "cod",
+        date_created: "2026-09-20T00:00:00",
+        billing: { phone: "+96555512345", email: "secret@example.com", country: "KW" },
+      }));
+    }),
+  );
+  assertEquals(seen.length, 1);
+  assertStringIncludes(seen[0], "_fields=id,status,payment_method,date_created,billing");
+  assertEquals(procedureRead.ok, true);
+  if (procedureRead.ok) {
+    assertEquals(procedureRead.data, {
+      status: "processing",
+      payment_method: "cod",
+      date_created: "2026-09-20T00:00:00",
+      phone: "+96555512345",
+      country: "KW",
+    });
+    assertEquals(JSON.stringify(procedureRead.data).includes("secret@example.com"), false);
+  }
+
   const categoryUrls = await wooUrlFor(
     { query: "hat", category: "Men" },
     [[{ id: 3, name: "Men" }], []],
