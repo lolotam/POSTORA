@@ -1,5 +1,8 @@
 // Pure procedure state transitions (Spec A, D3–D5). Callers pass time and ids in.
-import { CLAIM_LEASE_MS, OFF_SCRIPT_LIMIT, type ProcedureField, type ProcedureKey, type ProcedureOrigin, STALE_AFTER_MS, TEMPLATES } from "./templates.ts";
+import {
+  CLAIM_LEASE_MS, EVENT_STALE_AFTER_MS, OFF_SCRIPT_LIMIT, type ProcedureField, type ProcedureKey, type ProcedureOrigin,
+  STALE_AFTER_MS, TEMPLATES,
+} from "./templates.ts";
 
 export interface ProcedureState {
   run_id: string;
@@ -15,6 +18,22 @@ export interface ProcedureState {
   claimed_by?: string;
   /** When the claim was taken; another run's claim younger than CLAIM_LEASE_MS is still in flight. */
   claimed_at?: string;
+  /** Set by the store-event worker. pending_opener is not a live procedure yet. */
+  phase?: "pending_opener" | "active";
+}
+
+/** Customers answer a business-started template late, so event flows live longer. */
+export function staleAfterMs(origin: ProcedureOrigin | undefined): number {
+  return origin === "event" ? EVENT_STALE_AFTER_MS : STALE_AFTER_MS;
+}
+
+/** The worker has written the state but the opener is not yet accepted: not a live flow. */
+export function isPendingOpener(value: unknown): boolean {
+  return typeof value === "object" && value !== null && (value as { phase?: unknown }).phase === "pending_opener";
+}
+
+function fieldDue(field: ProcedureField, collected: Record<string, string>): boolean {
+  return field.when ? field.when(collected) : true;
 }
 
 export interface SubmitResult {
@@ -50,7 +69,7 @@ export function claimHeldByOther(state: ProcedureState, runId: string, now: Date
 }
 
 export function nextField(state: ProcedureState, fields: ProcedureField[]): ProcedureField | null {
-  return fields.find((field) => !(field.name in state.fields)) ?? null;
+  return fields.find((field) => fieldDue(field, state.fields) && !(field.name in state.fields)) ?? null;
 }
 
 export function submitFields(
@@ -77,7 +96,7 @@ export function submitFields(
     collected[name] = value;
     accepted.push(name);
   }
-  const step = fields.findIndex((field) => !(field.name in collected));
+  const step = fields.findIndex((field) => fieldDue(field, collected) && !(field.name in collected));
   const next: ProcedureState = {
     ...state,
     fields: collected,
@@ -101,7 +120,7 @@ export function expireIfStale(state: ProcedureState | null, now: Date): Procedur
   if (!isStoredState(state)) return null;
   const template = TEMPLATES[state.key];
   if (!template || state.version !== template.version) return null;
-  return now.getTime() - Date.parse(state.updated_at) > STALE_AFTER_MS ? null : state;
+  return now.getTime() - Date.parse(state.updated_at) > staleAfterMs(state.origin) ? null : state;
 }
 
 function isStoredState(value: unknown): value is ProcedureState {
@@ -113,5 +132,7 @@ function isStoredState(value: unknown): value is ProcedureState {
     Object.values(state.fields).every((field) => typeof field === "string") &&
     typeof state.updated_at === "string" && Number.isFinite(Date.parse(state.updated_at)) &&
     (state.claimed_by === undefined || typeof state.claimed_by === "string") &&
-    (state.claimed_at === undefined || typeof state.claimed_at === "string");
+    (state.claimed_at === undefined || typeof state.claimed_at === "string") &&
+    (state.phase === undefined || state.phase === "pending_opener" || state.phase === "active") &&
+    (state.origin === undefined || state.origin === "jev" || state.origin === "model" || state.origin === "event");
 }

@@ -1,9 +1,11 @@
 // Procedure tools for one reply turn (Spec A, D1–D7, D12, and the debate verdicts in the plan).
 // End actions go through ports so the sandbox can simulate writes and tests need no database.
-import { type ProcedureState, claimHeldByOther, nextField, startProcedure, submitFields } from "../_shared/procedures/engine.ts";
+import {
+  type ProcedureState, claimHeldByOther, isPendingOpener, nextField, startProcedure, submitFields,
+} from "../_shared/procedures/engine.ts";
 import { type ProcedureConfig, enabledProcedures } from "../_shared/procedures/config.ts";
 import {
-  type ProcedureField, type ProcedureKey, type ProcedureOrigin, PROCEDURE_KEYS, productFinderFields, TEMPLATES,
+  type ProcedureField, type ProcedureKey, type ProcedureOrigin, PROCEDURE_KEYS, isEventProcedureKey, productFinderFields, TEMPLATES,
 } from "../_shared/procedures/templates.ts";
 import { sanitizeFieldValue } from "./logic.ts";
 import type { ToolResult } from "./tools.ts";
@@ -43,6 +45,8 @@ export interface ProcedureTurn {
   readonly completed: ProcedureKey | null;
   /** Another turn owns this flow's end action; this turn's reply must not be delivered. */
   readonly claimConflict: boolean;
+  /** A store-event opener awaits the worker: the turn offers no procedure tools and changes nothing. */
+  readonly inert: boolean;
 }
 
 export const PROCEDURE_TOOL_NAMES: ReadonlySet<string> = new Set(["start_procedure", "procedure_submit", "procedure_cancel"]);
@@ -106,8 +110,9 @@ export function procedureToolDefinitions(enabled: ProcedureKey[]) {
 
 export function createProcedureTurn(input: ProcedureTurnInput): ProcedureTurn {
   const enabled = new Set(enabledProcedures(input.config));
+  const inert = isPendingOpener(input.state);
   // Verdict 9: the stored flow is judged by its own toggle, not by "some flow is on".
-  let state = input.state && enabled.has(input.state.key) && fieldsFor(input.state.key, input.config).length
+  let state = !inert && input.state && enabled.has(input.state.key) && fieldsFor(input.state.key, input.config).length
     ? input.state
     : null;
   let progressed = false;
@@ -117,7 +122,7 @@ export function createProcedureTurn(input: ProcedureTurnInput): ProcedureTurn {
 
   const canStart = (key: ProcedureKey): boolean => {
     const capability = TEMPLATES[key].needsCapability;
-    return enabled.has(key) && (!capability || input.ports.hasStoreCapability(capability));
+    return !inert && !isEventProcedureKey(key) && enabled.has(key) && (!capability || input.ports.hasStoreCapability(capability));
   };
 
   const start = (key: ProcedureKey, origin: ProcedureOrigin): boolean => {
@@ -180,6 +185,10 @@ export function createProcedureTurn(input: ProcedureTurnInput): ProcedureTurn {
         handedOff = true;
         return await input.ports.escalate("Complaint or return", summary); // verdict 6: flags kept
       }
+      case "cod_update":
+      case "review_route":
+      case "stock_offer":
+        throw new Error("not_available"); // Spec B PR 2
     }
   };
 
@@ -237,9 +246,10 @@ export function createProcedureTurn(input: ProcedureTurnInput): ProcedureTurn {
 
   const handle = async (name: string, args: Record<string, unknown>): Promise<ToolResult> => {
     if (handedOff) return { output: "The conversation was handed to a human; the procedure has ended." };
+    if (inert) return { output: "No procedure is available right now." };
     if (name === "start_procedure") {
       const key = String(args.key ?? "") as ProcedureKey;
-      if (!(PROCEDURE_KEYS as readonly string[]).includes(key) || !enabled.has(key)) {
+      if (!(PROCEDURE_KEYS as readonly string[]).includes(key) || isEventProcedureKey(key) || !enabled.has(key)) {
         return { output: `Procedure ${key} is not enabled for this account.` };
       }
       if (state) return { output: `Procedure ${state.key} is already active. ${stepGuidance(state, input.config)}` };
@@ -267,5 +277,6 @@ export function createProcedureTurn(input: ProcedureTurnInput): ProcedureTurn {
     get progressed() { return progressed; },
     get completed() { return completed; },
     get claimConflict() { return claimConflict; },
+    get inert() { return inert; },
   };
 }

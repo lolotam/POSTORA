@@ -9,7 +9,8 @@ import {
 import { cancelOutboxRow } from "../ai-agent-reply/outbox.ts";
 import { enqueueAgentReply } from "../_shared/pendingReplies.ts";
 import { dispatchAgentReply } from "../_shared/agentReplyDispatch.ts";
-import { isPlaceholderOnly, promptSafeInput } from "./messageContent.ts";
+import { cloudButtonContent, isPlaceholderOnly, promptSafeInput } from "./messageContent.ts";
+import { inboundOptOutPlan, optOutDb, optOutPersistDecision, recordOptOut } from "../_shared/optOut.ts";
 import {
   isDispatchIntentId,
   reconcileDispatchIntentByEcho,
@@ -145,7 +146,9 @@ Deno.serve(async (req) => {
       // Collected across the request and written once: runInBackground's degraded path
       // awaits up to 2s per call, so a per-event write would charge that to the ack.
       const unmatched: UnmatchedObservation[] = [];
+      let deliveryStatus: 200 | 500 = 200;
       for (const entry of entries) {
+        if (deliveryStatus !== 200) break;
         const changes = entry?.changes || [];
         for (const change of changes) {
           const value = change.value;
@@ -161,7 +164,11 @@ Deno.serve(async (req) => {
           if (change.field === "messages") {
             // Status updates resolve by wamid, not account, so they are
             // processed even when no active account matches.
-            await handleLiveMessages(adminClient, account, value, accessToken, unmatched, entry, change);
+            const outcome = await handleLiveMessages(adminClient, account, value, accessToken, unmatched, entry, change);
+            if (outcome.status !== 200) {
+              deliveryStatus = outcome.status;
+              break;
+            }
           } else if (!account) {
             console.warn(`[whatsapp-webhook] No matching account found for field: ${change.field}, phone_number_id: ${value?.metadata?.phone_number_id}`);
             // history / smb_message_echoes / smb_app_state_sync -- not inbound messages,
@@ -182,6 +189,16 @@ Deno.serve(async (req) => {
             await handleContactSync(adminClient, account, value);
           }
         }
+      }
+
+      if (deliveryStatus !== 200) {
+        // The opt-out row was not stored. 500 asks Meta to retry this delivery.
+        // Messages already persisted in the batch dedupe on that retry. Skip the
+        // observation flush: the same delivery will be processed again.
+        return new Response(JSON.stringify({ error: "Webhook processing failed" }), {
+          status: deliveryStatus,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
       }
 
       await runInBackground(
@@ -295,6 +312,10 @@ async function extractMessageContent(
     messageText = `[Contact] ${msg.contacts?.[0]?.name?.formatted_name || ""}`;
   } else if (msgType === "interactive") {
     messageText = msg.interactive?.button_reply?.title || msg.interactive?.list_reply?.title || "[Interactive]";
+  } else if (msgType === "button") {
+    const button = cloudButtonContent(msg.button);
+    messageText = button.text;
+    mediaMetadata = button.metadata;
   } else if (msgType === "reaction") {
     messageText = `[Reaction] ${msg.reaction?.emoji || ""}`;
   } else {
@@ -394,7 +415,7 @@ async function handleLiveMessages(
   unmatched?: UnmatchedObservation[],
   entry?: any,
   change?: any,
-) {
+): Promise<{ status: 200 | 500 }> {
   const phoneNumberId = value.metadata.phone_number_id;
   const displayPhone = value?.metadata?.display_phone_number;
 
@@ -434,6 +455,26 @@ async function handleLiveMessages(
       await extractMessageContent(msg, accessToken, true);
 
     const conversationId = `wa_${phoneNumberId}_${from.replace(/\D/g, "")}`;
+
+    // Record an opt-out before the inbound upsert. That upsert consumes Meta's
+    // redelivery, so a crash after it would skip this branch on the retry and
+    // lose the opt-out. Recording first is idempotent. The opt-out cancels
+    // replies that are still unclaimed; this customer message is still answered.
+    const optOutPlan = inboundOptOutPlan(messageText);
+    if (optOutPlan.recordBeforePersist) {
+      const decision = optOutPersistDecision(await recordOptOut(optOutDb(adminClient), {
+        userId: account.user_id,
+        socialAccountId: account.id,
+        phone: from,
+        conversationId,
+      }));
+      // A failed upsert must not reach the persist RPC. That RPC consumes
+      // Meta's redelivery, so the message would never be offered again.
+      if (!decision.persist) {
+        console.error("[whatsapp-webhook] Opt-out row was not stored");
+        return decision;
+      }
+    }
 
     const contacts = value?.contacts || [];
     const contactName = contacts.find((c: any) => c.wa_id === from)?.profile?.name || from;
@@ -496,7 +537,7 @@ async function handleLiveMessages(
     // which can itself send. Now it includes nothing.
     const automationHandler = resolveAutomationHandler(account.account_metadata);
     const promptSafeText = promptSafeInput(mediaType, messageText, caption);
-    const enqueued = automationHandler === "internal"
+    const enqueued = optOutPlan.enqueueAgentReply && automationHandler === "internal"
       ? await enqueueAgentReply(adminClient, {
         socialAccountId: account.id,
         platform: "whatsapp",
@@ -547,6 +588,9 @@ async function handleLiveMessages(
 
     console.log("[whatsapp-webhook] Stored inbound message");
 
+    // Opt-out covers business-initiated sends only. This inbound message still
+    // reaches n8n, auto-replies, and the agent: a later customer message is
+    // re-engagement and must be answered.
     if (automationHandler === "n8n") {
       await runInBackground("whatsapp message dispatch", () => dispatchMessageEvent(
         adminClient,
@@ -709,6 +753,7 @@ async function handleLiveMessages(
         .eq("conversation_id", row.conversation_id);
     }
   }
+  return { status: 200 };
 }
 
 // Coexistence one-time history push: Meta sends recent phone threads in chunks

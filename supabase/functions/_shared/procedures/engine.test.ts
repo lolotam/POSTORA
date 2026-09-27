@@ -1,6 +1,8 @@
 // supabase/functions/_shared/procedures/engine.test.ts
 import { assertEquals } from "jsr:@std/assert@1";
-import { claimHeldByOther, expireIfStale, nextField, recordOffScript, startProcedure, submitFields } from "./engine.ts";
+import {
+  claimHeldByOther, expireIfStale, isPendingOpener, nextField, recordOffScript, startProcedure, submitFields,
+} from "./engine.ts";
 import { CLAIM_LEASE_MS, TEMPLATES } from "./templates.ts";
 
 const T0 = new Date("2026-09-26T10:00:00Z");
@@ -86,6 +88,38 @@ for (const [label, ageMs, version, expected] of [
     assertEquals(result === null ? "expired" : "kept", expected);
   });
 }
+
+const HOUR = 60 * 60 * 1000;
+for (const [label, key, origin, ageMs, expected] of [
+  ["an event flow at 71 h is kept", "cod_confirm", "event", 71 * HOUR, "kept"],
+  ["an event flow at 73 h expires", "cod_confirm", "event", 73 * HOUR, "expired"],
+  ["a model flow at 25 h expires", "booking", "model", 25 * HOUR, "expired"],
+] as const) {
+  Deno.test(`expireIfStale by origin: ${label}`, () => {
+    const state = startProcedure(null, key, origin, T0, "run-1").state;
+    assertEquals(expireIfStale(state, later(ageMs)) === null ? "expired" : "kept", expected);
+  });
+}
+
+Deno.test("isPendingOpener is true only for the pending_opener phase", () => {
+  const state = startProcedure(null, "cod_confirm", "event", T0, "run-1").state;
+  assertEquals(isPendingOpener({ ...state, phase: "pending_opener" }), true);
+  assertEquals(isPendingOpener({ ...state, phase: "active" }), false);
+  assertEquals(isPendingOpener(state), false);
+  assertEquals(isPendingOpener(null), false);
+});
+
+Deno.test("a review rated 4 completes without a problem; rated 2 it requires one", () => {
+  const fields = TEMPLATES.review_request.fields;
+  const started = startProcedure(null, "review_request", "event", T0, "run-1").state;
+  const happy = submitFields(started, fields, { rating: "٤" }, later(1));
+  assertEquals(happy.state.fields, { rating: "4" });
+  assertEquals(happy.complete, true);
+  const unhappy = submitFields(started, fields, { rating: "2" }, later(1));
+  assertEquals(unhappy.complete, false);
+  assertEquals(nextField(unhappy.state, fields)?.name, "problem");
+  assertEquals(submitFields(unhappy.state, fields, { problem: "arrived broken" }, later(2)).complete, true);
+});
 
 // ai_threads.procedure_state is owner-writable through RLS, so the stored value is untrusted.
 for (const [label, stored] of [

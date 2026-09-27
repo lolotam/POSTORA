@@ -29,6 +29,12 @@ for (const [label, input] of [
   });
 }
 
+for (const key of ["cod_confirm", "review_request", "back_in_stock"] as const) {
+  Deno.test(`parseProcedureConfig rejects the event flow ${key}`, () => {
+    assertThrows(() => parseProcedureConfig({ [key]: { enabled: true, prompts: {}, closing: "" } }), AgentBehaviorError);
+  });
+}
+
 Deno.test("readProcedureConfig drops only the invalid flow and never throws", () => {
   const read = readProcedureConfig({
     ...valid,
@@ -36,6 +42,7 @@ Deno.test("readProcedureConfig drops only the invalid flow and never throws", ()
   });
   assertEquals(enabledProcedures(read), ["order_status"]);
   assertEquals(readProcedureConfig("garbage"), {});
+  assertEquals(readProcedureConfig({ ...valid, review_request: { enabled: true, prompts: {}, closing: "" } }).review_request, undefined);
   assertEquals(readProcedureConfig(undefined), {});
 });
 

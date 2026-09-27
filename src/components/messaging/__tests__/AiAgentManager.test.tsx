@@ -32,6 +32,7 @@ vi.mock("@/components/messaging/AiKnowledgeManager", () => ({ AiKnowledgeManager
 vi.mock("@/components/messaging/AiAgentLogsView", () => ({ AiAgentLogsView: () => null }));
 vi.mock("@/components/messaging/AiAgentTestChat", () => ({ AiAgentTestChat: () => null }));
 vi.mock("@/components/automation/DatabaseConnectorsManager", () => ({ DatabaseConnectorsManager: () => null }));
+vi.mock("@/components/messaging/agent-settings/StoreWebhookSection", () => ({ StoreWebhookSection: () => null }));
 
 import { AiAgentManager } from "@/components/messaging/AiAgentManager";
 

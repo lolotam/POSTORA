@@ -86,7 +86,7 @@ import { loadOpenAiCompatibleBase, type RowReader } from "../_shared/providerEnd
 import { runTriage, selectConnectorTools, TRIAGE_SETTING_KEYS, triageChainFromSettings, type TriageRun } from "../_shared/agentTriage.ts";
 import { resolveProviderKey } from "../_shared/providerKeys.ts";
 import { enabledProcedures, readProcedureConfig } from "../_shared/procedures/config.ts";
-import { expireIfStale } from "../_shared/procedures/engine.ts";
+import { expireIfStale, isPendingOpener } from "../_shared/procedures/engine.ts";
 import {
   createProcedureTurn,
   fieldsFor,
@@ -712,7 +712,9 @@ Deno.serve(async (req) => {
     if (threadError) throw threadError;
 
     const procedureConfig = readProcedureConfig(config.agent_behavior?.procedures);
-    const proceduresOn = procedureTurnGate(request) && enabledProcedures(procedureConfig).length > 0;
+    // A store-event opener the worker has not confirmed is not a live flow; the turn leaves it alone.
+    const proceduresOn = procedureTurnGate(request) && !isPendingOpener(thread.procedure_state) &&
+      enabledProcedures(procedureConfig).length > 0;
     const initialProcedureState = proceduresOn ? expireIfStale(thread.procedure_state ?? null, new Date()) : null;
     // The claim port advances this. The final write must expect it, not the value read above:
     // the winner then moves claimed -> null, and the loser's compare-and-set still expects what it read.

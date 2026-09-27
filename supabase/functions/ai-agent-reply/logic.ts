@@ -12,8 +12,8 @@ import type {
   AgentTone,
 } from "../_shared/agentBehavior.ts";
 import { TRIAGE_CONFIDENCE, type Intent, type TriagePlan } from "../_shared/agentTriage.ts";
-import { recordOffScript, type ProcedureState } from "../_shared/procedures/engine.ts";
-import { JEV_START, type ProcedureKey } from "../_shared/procedures/templates.ts";
+import { isPendingOpener, recordOffScript, type ProcedureState } from "../_shared/procedures/engine.ts";
+import { isEventProcedureKey, JEV_START, type ProcedureKey } from "../_shared/procedures/templates.ts";
 
 export type EngagementMode = "ai_first" | "human_first" | "human_then_ai";
 export type ReplyLanguage = "ar" | "en";
@@ -784,7 +784,9 @@ export function jevStartKey(
   active: boolean,
 ): ProcedureKey | null {
   if (active || !intent || intent.confidence < TRIAGE_CONFIDENCE) return null;
-  return JEV_START[intent.choice] ?? null;
+  const key = JEV_START[intent.choice] ?? null;
+  // Only the store-event worker starts an event flow.
+  return key && isEventProcedureKey(key) ? null : key;
 }
 
 /**
@@ -806,6 +808,8 @@ export function procedureStateAfterTurn(input: {
   hadTurn: boolean; storedState: unknown; initialState: ProcedureState | null;
   turnState: ProcedureState | null; progressed: boolean; escalated: boolean; now: Date;
 }): ProcedureState | null | undefined {
+  // An opener the worker has not confirmed belongs to the worker: never rewritten here.
+  if (isPendingOpener(input.storedState)) return undefined;
   if (!input.hadTurn) return input.storedState ? null : undefined;
   if (!input.storedState && !input.turnState) return undefined;
   if (input.escalated) return null;

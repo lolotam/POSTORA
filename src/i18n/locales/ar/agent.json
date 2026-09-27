@@ -165,14 +165,40 @@
       "complaint_return": "شكوى أو إرجاع",
       "lead_capture": "تسجيل عميل محتمل",
       "order_status": "حالة الطلب",
-      "product_finder": "البحث عن منتج"
+      "product_finder": "البحث عن منتج",
+      "back_in_stock": "رجوع المنتج للمخزون",
+      "cod_confirm": "تأكيد طلب الدفع عند الاستلام",
+      "review_request": "طلب تقييم"
     },
     "questionLabel": "السؤال {{n}}",
     "questionsHint": "اكتب من سؤالين لتلاتة",
     "removeQuestion": "امسح السؤال {{n}}",
     "services": "الخدمات، مفصولة بفاصلة",
     "servicesHint": "حد أقصى {{count}} خدمة، وكل واحدة {{length}} حرف.",
-    "title": "مسارات جاهزة"
+    "title": "مسارات جاهزة",
+    "store": {
+      "copied": "اتنسخ السر",
+      "copy": "انسخ",
+      "copyFailed": "النسخ منفعش. حدّد السر وانسخه بإيدك.",
+      "description": "في WooCommerce ← Settings ← Advanced ← Webhooks، ضيف webhook لكل موضوع من اللي تحت بنفس رابط الاستلام والسر.",
+      "disabled": "لو WooCommerce بيقول إن الـ webhook متوقف، شغّله تاني.",
+      "generate": "اعمل رابط الـ webhook والسر",
+      "issueFailed": "معرفناش نعمل سر الـ webhook. جرّب تاني.",
+      "linkedElsewhere": "ربط المتجر ده متربط بحساب واتساب تاني",
+      "rotate": "غيّر السر",
+      "rotateHint": "بعد ما تغيّر السر، القديم هيفضل شغال 24 ساعة.",
+      "secret": "سر الـ webhook",
+      "secretOnce": "انسخ السر ده دلوقتي",
+      "secretOnceHint": "مش هيظهر تاني. لو ضاع، غيّره.",
+      "title": "أحداث المتجر (WooCommerce)",
+      "topic": {
+        "orderCreated": "Order created (طلب جديد)",
+        "orderUpdated": "Order updated (تحديث طلب)",
+        "productUpdated": "Product updated (تحديث منتج)"
+      },
+      "topics": "المواضيع",
+      "url": "رابط الاستلام (Delivery URL)"
+    }
   },
   "knowledge": {
     "accountsCouldNotLoad": "مش قادرين نحمّل حساباتك المربوطة، فمشاركة المصدر مش هتتغيّر من هنا. حدّث الصفحة وجرّب تاني.",
