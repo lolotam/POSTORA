@@ -221,7 +221,14 @@ export function ScheduleMessageDialog({ open, onOpenChange }: ScheduleMessageDia
               <Label htmlFor="schedule-media-type">{t("scheduled.mediaType", "Media type")}</Label>
               <Select
                 value={mediaType || NO_MEDIA}
-                onValueChange={(value) => setMediaType(value === NO_MEDIA ? "" : (value as MediaType))}
+                onValueChange={(value) => {
+                  if (value === NO_MEDIA) {
+                    setMediaType("");
+                    setMediaUrl("");
+                  } else {
+                    setMediaType(value as MediaType);
+                  }
+                }}
               >
                 <SelectTrigger id="schedule-media-type">
                   <SelectValue />

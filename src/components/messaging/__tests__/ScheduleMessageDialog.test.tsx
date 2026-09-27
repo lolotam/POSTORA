@@ -27,7 +27,13 @@ const OWN = [
   { id: "acc-2", platform_username: null, platform_user_id: "965222", connection_mode: "evolution_qr" },
 ];
 
-const FUTURE = "2026-12-01T15:30";
+/** A datetime-local value one day ahead of the real clock, so the suite never ages out. */
+function futureLocal(): string {
+  const when = new Date(Date.now() + 24 * 60 * 60 * 1000);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${when.getFullYear()}-${pad(when.getMonth() + 1)}-${pad(when.getDate())}T${pad(when.getHours())}:${pad(when.getMinutes())}`;
+}
+const FUTURE = futureLocal();
 const PHONE_ERROR = "Enter a phone number with 8–15 digits. Letters, @ and extensions are not allowed.";
 
 let accounts: Array<(typeof OWN)[number]> = [];
@@ -172,6 +178,18 @@ describe("ScheduleMessageDialog", () => {
     await openDialog();
     fireEvent.change(screen.getByLabelText("Message"), { target: { value: "Hello" } });
     expect(screen.getByText("5 / 4096")).toBeInTheDocument();
+  });
+
+  it("choosing None for media clears the URL and lets the message schedule", async () => {
+    renderManager();
+    await openDialog();
+    await fillReady();
+    await chooseOption("Media type", "Image");
+    fireEvent.change(screen.getByLabelText("Media URL"), { target: { value: "https://cdn.example/a.jpg" } });
+    await chooseOption("Media type", "None");
+    fireEvent.click(screen.getByRole("button", { name: "Schedule" }));
+    await waitFor(() => expect(inserted).not.toBeNull());
+    expect((inserted as Record<string, unknown>).media_url).toBeNull();
   });
 
   it("caps the text at the 1024-character caption limit when image media is attached", async () => {
