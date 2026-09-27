@@ -141,3 +141,4 @@ Codex astra 6 medium returned REWORK with 23 findings; rulings are in the plan's
 14. **Phone parser** is new and strict (max 15 digits; keep digits that already start with the country code at a plausible length; prefix the country code only when the length equals the national length; else null). `ecommerce-whatsapp-api` keeps its own parser unchanged.
 15. **Waitlist** gains `connector_id`; unique `(connector_id, phone, product_id)`; a row is deleted when its notification is sent (no `notified_at`).
 16. **Live test:** a WooCommerce body addressed to the admin's own test phone, signed with the real binding secret, sent through the real pipeline. No dry-run marker.
+17. **No `X-WC-Webhook-Source` check.** WooCommerce signs only the body, so the source header proves nothing an attacker could not forge; authentication is the per-binding HMAC secret and the binding id in the URL. §3.1's source-host check is dropped.
