@@ -10,7 +10,7 @@ import { cancelOutboxRow } from "../ai-agent-reply/outbox.ts";
 import { enqueueAgentReply } from "../_shared/pendingReplies.ts";
 import { dispatchAgentReply } from "../_shared/agentReplyDispatch.ts";
 import { cloudButtonContent, isPlaceholderOnly, promptSafeInput } from "./messageContent.ts";
-import { automationAllowedAfterInbound, inboundOptOutPlan, optOutDb, optOutPersistDecision, recordOptOut } from "../_shared/optOut.ts";
+import { inboundOptOutPlan, optOutDb, optOutPersistDecision, recordOptOut } from "../_shared/optOut.ts";
 import {
   isDispatchIntentId,
   reconcileDispatchIntentByEcho,
@@ -458,8 +458,8 @@ async function handleLiveMessages(
 
     // Record an opt-out before the inbound upsert. That upsert consumes Meta's
     // redelivery, so a crash after it would skip this branch on the retry and
-    // lose the opt-out. Recording first is idempotent. An opt-out also never
-    // enqueues a reply, so a worker cannot send one before a later cancel.
+    // lose the opt-out. Recording first is idempotent. The opt-out cancels
+    // replies that are still unclaimed; this customer message is still answered.
     const optOutPlan = inboundOptOutPlan(messageText);
     if (optOutPlan.recordBeforePersist) {
       const decision = optOutPersistDecision(await recordOptOut(optOutDb(adminClient), {
@@ -588,10 +588,9 @@ async function handleLiveMessages(
 
     console.log("[whatsapp-webhook] Stored inbound message");
 
-    // The opt-out was recorded before this row existed, and no reply was enqueued.
-    // Leave before n8n, auto-replies, and the agent.
-    if (!automationAllowedAfterInbound({ optedOut: optOutPlan.recordBeforePersist })) continue;
-
+    // Opt-out covers business-initiated sends only. This inbound message still
+    // reaches n8n, auto-replies, and the agent: a later customer message is
+    // re-engagement and must be answered.
     if (automationHandler === "n8n") {
       await runInBackground("whatsapp message dispatch", () => dispatchMessageEvent(
         adminClient,

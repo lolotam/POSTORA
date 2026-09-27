@@ -19,7 +19,8 @@ import {
   runInboundMediaUnderstanding,
 } from "../_shared/inboundMediaPipeline.ts";
 import { EvolutionFetcher } from "../_shared/inboundMediaFetchers.ts";
-import { automationAllowedAfterInbound, inboundOptOutPlan, optOutDb, optOutPersistDecision, recordOptOut } from "../_shared/optOut.ts";
+import { inboundOptOutPlan, optOutDb, optOutPersistDecision, recordOptOut } from "../_shared/optOut.ts";
+import { evolutionOptOutTarget } from "./optOutAddress.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -129,12 +130,13 @@ async function persistEvolutionMessage(
   // persist RPC. That RPC consumes the redelivery, so recording afterwards
   // would be skipped when the retry lands in the duplicate return.
   const optOutPlan = inboundOptOutPlan(inboundText, sentByOwner);
-  if (optOutPlan.recordBeforePersist) {
+  const optOutTarget = evolutionOptOutTarget(account, message);
+  if (optOutPlan.recordBeforePersist && optOutTarget) {
     const decision = optOutPersistDecision(await recordOptOut(optOutDb(admin), {
       userId: account.user_id,
       socialAccountId: account.id,
-      phone: remoteNumber,
-      conversationId,
+      phone: optOutTarget.phone,
+      conversationId: optOutTarget.conversationId,
     }));
     // The persist RPC consumes the redelivery. Leave before it when the
     // opt-out row was not written so Evolution retries this delivery.
@@ -205,10 +207,8 @@ async function persistEvolutionMessage(
       contactNumber: remoteNumber,
     },
   );
-  // Inbound row and inbox cache are stored. The opt-out was recorded before the
-  // persist RPC, and no agent reply is enqueued. Leave before n8n and the agent.
-  if (!automationAllowedAfterInbound({ optedOut: optOutPlan.recordBeforePersist })) return 200;
-
+  // Opt-out covers business-initiated sends only. This contact message still
+  // reaches n8n and the agent.
   // Only a message from the contact is an inbound event for automations; echoing the
   // operator's own reply back into n8n would retrigger their workflows on their own text.
   if (sentByOwner) return 200;

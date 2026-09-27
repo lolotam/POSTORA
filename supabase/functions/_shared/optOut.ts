@@ -1,5 +1,7 @@
-// Inbound opt-out (Spec B §8.11). Both WhatsApp webhooks record it and then stop every
-// automation path (n8n, auto-replies, the agent). A failed write is logged, not swallowed.
+// Inbound opt-out (Spec B §8.11). It stops business-initiated sends: pending store
+// events, an active event-origin procedure, and agent replies that have not been
+// claimed yet. A customer's own message, including one that arrives later, is
+// re-engagement and is still answered. A failed opt-out write is logged, not swallowed.
 import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { persistProcedureState } from "../ai-agent-reply/procedureState.ts";
 
@@ -23,15 +25,11 @@ export function isOptOutMessage(text: string): boolean {
   return PHRASES.has(normalize(text));
 }
 
-/** An opt-out inbound message must not reach n8n, auto-replies, or the agent. */
-export function automationAllowedAfterInbound(input: { optedOut: boolean }): boolean {
-  return !input.optedOut;
-}
-
 /**
- * Decided before the inbound row is stored and before any agent reply is enqueued.
- * An owner echo is never an opt-out. When `recordBeforePersist` is set, the steps
- * are record then persist, and enqueue is absent.
+ * Decided before the inbound row is stored. An owner echo is never an opt-out.
+ * Recording comes before persist so a provider retry can still write the row.
+ * The customer's message is still enqueued: opt-out does not gate the agent,
+ * auto-replies, or n8n. It only stops business-initiated work already queued.
  */
 export function inboundOptOutPlan(text: string, fromOwner = false): {
   recordBeforePersist: boolean;
@@ -39,23 +37,28 @@ export function inboundOptOutPlan(text: string, fromOwner = false): {
   steps: readonly ("record_opt_out" | "persist_inbound" | "enqueue_agent_reply")[];
 } {
   const recordBeforePersist = !fromOwner && isOptOutMessage(text);
-  const enqueueAgentReply = automationAllowedAfterInbound({ optedOut: recordBeforePersist });
   return {
     recordBeforePersist,
-    enqueueAgentReply,
+    enqueueAgentReply: true,
     steps: recordBeforePersist
-      ? ["record_opt_out", "persist_inbound"]
+      ? ["record_opt_out", "persist_inbound", "enqueue_agent_reply"]
       : ["persist_inbound", "enqueue_agent_reply"],
   };
 }
 
 /** Which step a warning describes. Never a phone number or a secret. */
-export type OptOutWarnPhase = "upsert" | "skip" | "clear";
+export type OptOutWarnPhase = "upsert" | "skip" | "clear" | "cancel";
 
 export interface OptOutDb {
   upsertOptOut(userId: string, phone: string): Promise<void>;
   skipEvents(socialAccountId: string, phone: string): Promise<void>;
   clearEventProcedure(userId: string, conversationId: string): Promise<void>;
+  /**
+   * Cancels this conversation's `pending_agent_replies` rows whose status is
+   * still `pending` (not yet claimed). `running`, `sending`, and every later
+   * status stay as they are.
+   */
+  cancelUnclaimedReplies(socialAccountId: string, conversationId: string): Promise<void>;
   warn(userId: string, socialAccountId: string, phase: OptOutWarnPhase): Promise<void>;
 }
 
@@ -65,9 +68,10 @@ export interface OptOutDb {
  * Returns false only when the `messaging_opt_outs` upsert itself failed. That
  * row is the durable fact: the caller must not persist the inbound message,
  * and must answer the provider with a non-2xx so the delivery is retried.
- * `skipEvents` and `clearEventProcedure` failures are logged and do not change
- * the result — the opt-out row is already stored, and those steps can be
- * recovered without asking the provider to send the message again.
+ * `skipEvents`, `clearEventProcedure`, and `cancelUnclaimedReplies` failures
+ * are logged and do not change the result — the opt-out row is already stored,
+ * and those steps can be recovered without asking the provider to send the
+ * message again.
  */
 export async function recordOptOut(
   db: OptOutDb,
@@ -88,6 +92,11 @@ export async function recordOptOut(
     await db.clearEventProcedure(input.userId, input.conversationId);
   } catch {
     await warnOptOut(db, input, "clear");
+  }
+  try {
+    await db.cancelUnclaimedReplies(input.socialAccountId, input.conversationId);
+  } catch {
+    await warnOptOut(db, input, "cancel");
   }
   return true;
 }
@@ -140,12 +149,24 @@ export function optOutDb(admin: SupabaseClient): OptOutDb {
       const cleared = await persistProcedureState(admin, data.id, state, null);
       if (!cleared) throw new Error("opt_out_state_clear_failed");
     },
+    async cancelUnclaimedReplies(socialAccountId, conversationId) {
+      // `pending` is the only status before takeOutboxRow claims the row
+      // (`pending` -> `running`). `sending` is a delivery already in flight.
+      const { error } = await admin.from("pending_agent_replies")
+        .update({ status: "cancelled", error: "opted_out", lease_expires_at: null })
+        .eq("social_account_id", socialAccountId)
+        .eq("conversation_id", conversationId)
+        .eq("status", "pending");
+      if (error) throw new Error("opt_out_cancel_failed");
+    },
     async warn(userId, socialAccountId, phase) {
       const message = phase === "upsert"
         ? "Opt-out could not be recorded"
         : phase === "skip"
           ? "Opt-out was recorded but store events could not be skipped"
-          : "Opt-out was recorded but the event procedure could not be cleared";
+          : phase === "clear"
+            ? "Opt-out was recorded but the event procedure could not be cleared"
+            : "Opt-out was recorded but unclaimed replies could not be cancelled";
       const { error } = await admin.from("system_logs").insert({
         level: "warn",
         category: "messaging",

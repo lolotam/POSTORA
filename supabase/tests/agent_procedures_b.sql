@@ -364,5 +364,47 @@ BEGIN
     'B19 matching identity row inserts';
 END $$;
 
+-- B20 (reclaim; task spec "B16" -- the B16 label is already taken above by
+-- the cross-connector FK check, so numbering continues after B19): deleting
+-- a binding reclaims both its vault secrets. tool_d is u_b's spare connector
+-- (tool_c is already bound by B14's rotation binding), so the connector
+-- unique stays out of the way. Skipped with a NOTICE where supabase_vault is
+-- absent, like B14.
+DO $procb_reclaim$
+DECLARE
+  v_vault_present boolean;
+  v_current uuid;
+  v_previous uuid;
+  v_binding uuid := 'b1b1b1b1-b1b1-41b1-81b1-b1b1b1b1b1b1';
+BEGIN
+  SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname = 'supabase_vault')
+    INTO v_vault_present;
+  IF NOT v_vault_present THEN
+    RAISE NOTICE 'vault absent: skipping B20 secret reclaim assertions';
+    RETURN;
+  END IF;
+
+  v_current := public.create_store_webhook_secret('whsec-reclaim-current-001');
+  v_previous := public.create_store_webhook_secret('whsec-reclaim-previous-001');
+  ASSERT v_current IS NOT NULL AND v_previous IS NOT NULL,
+    'B20 both secret ids returned';
+  ASSERT (SELECT count(*) FROM vault.secrets
+          WHERE id IN (v_current, v_previous)) = 2,
+    'B20 both secrets present before binding delete';
+
+  INSERT INTO public.store_webhook_bindings
+    (id, user_id, social_account_id, connector_id, secret_id, previous_secret_id)
+  VALUES (v_binding, '22222222-2222-4222-8222-222222222222',
+          '44444444-4444-4334-8444-444444444444',
+          '34343434-3434-4343-8343-343434343434', v_current, v_previous);
+
+  DELETE FROM public.store_webhook_bindings WHERE id = v_binding;
+
+  ASSERT NOT EXISTS (SELECT 1 FROM vault.secrets WHERE id = v_current),
+    'B20 current secret reclaimed on binding delete';
+  ASSERT NOT EXISTS (SELECT 1 FROM vault.secrets WHERE id = v_previous),
+    'B20 previous secret reclaimed on binding delete';
+END $procb_reclaim$;
+
 ROLLBACK;
 \echo '=== agent_procedures_b: ALL CHECKS PASSED ==='

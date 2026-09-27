@@ -16,7 +16,7 @@ const NOW = new Date("2026-09-27T12:00:00Z");
 function fakePorts(overrides: Partial<StoreWebhookBindingPorts> = {}) {
   const secrets: string[] = [];
   const deleted: string[] = [];
-  const rows = new Map<string, BindingRow & { previous_secret_id?: string | null }>();
+  const rows = new Map<string, BindingRow>();
   const ports: StoreWebhookBindingPorts = {
     resolveAccount: async (id) => ({ id, user_id: "owner", platform: "whatsapp" }),
     loadConnector: async (id) => ({ id, user_id: "owner", connector_type: "woocommerce" }),
@@ -24,7 +24,9 @@ function fakePorts(overrides: Partial<StoreWebhookBindingPorts> = {}) {
     createSecret: async (secret) => { secrets.push(secret); return `secret-${secrets.length}`; },
     insertBinding: async (row) => {
       if ([...rows.values()].some((existing) => existing.connector_id === row.connector_id)) return null;
-      const stored = { ...row, id: BINDING, rotated_at: null, created_at: NOW.toISOString() };
+      const stored = {
+        ...row, id: BINDING, previous_secret_id: null, rotated_at: null, created_at: NOW.toISOString(),
+      };
       rows.set(BINDING, stored);
       return stored;
     },
@@ -103,6 +105,36 @@ Deno.test("a lost create deletes only the secret minted for that attempt", async
   assertEquals(fake.rows.get(BINDING)?.secret_id, "secret-1");
 });
 
+Deno.test("a second rotation deletes the secret that left the two-slot window", async () => {
+  const fake = fakePorts();
+  await createStoreWebhookBinding(fake.ports, { social_account_id: ACCOUNT, connector_id: CONNECTOR });
+  await rotateStoreWebhookSecret(fake.ports, { binding_id: BINDING }, NOW);
+  assertEquals(fake.deleted, []);
+  assertEquals(fake.rows.get(BINDING)?.previous_secret_id, "secret-1");
+  const second = await rotateStoreWebhookSecret(fake.ports, { binding_id: BINDING }, NOW);
+  assertEquals(fake.deleted, ["secret-1"]);
+  assertEquals(fake.rows.get(BINDING)?.previous_secret_id, "secret-2");
+  assertEquals(fake.rows.get(BINDING)?.secret_id, "secret-3");
+  assertEquals(second.secret, fake.secrets[2]);
+  assertEquals(fake.deleted.includes("secret-2"), false);
+  assertEquals(fake.deleted.includes("secret-3"), false);
+});
+
+Deno.test("a failed delete of the rotated-out secret still returns the new secret", async () => {
+  const fake = fakePorts();
+  await createStoreWebhookBinding(fake.ports, { social_account_id: ACCOUNT, connector_id: CONNECTOR });
+  await rotateStoreWebhookSecret(fake.ports, { binding_id: BINDING }, NOW);
+  fake.ports.deleteSecret = async (id) => {
+    if (id === "secret-1") throw new Error("vault down");
+    fake.deleted.push(id);
+  };
+  const second = await rotateStoreWebhookSecret(fake.ports, { binding_id: BINDING }, NOW);
+  assertEquals(second.binding.connector_id, CONNECTOR);
+  assertEquals(fake.rows.get(BINDING)?.secret_id, "secret-3");
+  assertEquals(fake.rows.get(BINDING)?.previous_secret_id, "secret-2");
+  assertEquals(fake.deleted, []);
+});
+
 Deno.test("a lost rotate deletes only the newly minted secret", async () => {
   const fake = fakePorts({ rotateBinding: async () => null });
   await createStoreWebhookBinding(fake.ports, { social_account_id: ACCOUNT, connector_id: CONNECTOR });
@@ -152,7 +184,7 @@ Deno.test("rotation refused when the account owner differs creates no new secret
   assertEquals(await status(rotateStoreWebhookSecret(fake.ports, { binding_id: BINDING }, NOW)), 404);
   assertEquals(fake.secrets.length, 1);
   assertEquals(fake.rows.get(BINDING)?.secret_id, "secret-1");
-  assertEquals(fake.rows.get(BINDING)?.previous_secret_id, undefined);
+  assertEquals(fake.rows.get(BINDING)?.previous_secret_id, null);
 });
 
 Deno.test("rotation checks the caller owns the binding's account", async () => {

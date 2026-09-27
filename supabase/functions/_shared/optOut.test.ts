@@ -1,5 +1,5 @@
 import { assertEquals } from "jsr:@std/assert@1";
-import { automationAllowedAfterInbound, inboundOptOutPlan, isOptOutMessage, optOutDb, optOutPersistDecision, recordOptOut, type OptOutDb } from "./optOut.ts";
+import { inboundOptOutPlan, isOptOutMessage, optOutDb, optOutPersistDecision, recordOptOut, type OptOutDb } from "./optOut.ts";
 
 for (const [text, expected] of [
   ["stop", true],
@@ -22,19 +22,13 @@ for (const [text, expected] of [
   });
 }
 
-for (const [optedOut, allowed] of [[true, false], [false, true]] as const) {
-  Deno.test(`automationAllowedAfterInbound optedOut=${optedOut} → ${allowed}`, () => {
-    assertEquals(automationAllowedAfterInbound({ optedOut }), allowed);
-  });
-}
-
-Deno.test("an opt-out is decided before persist and does not enqueue a reply", () => {
+Deno.test("an opt-out is recorded before persist and the customer message is still enqueued", () => {
   const plan = inboundOptOutPlan("  STOP ");
   assertEquals(plan.recordBeforePersist, true);
-  assertEquals(plan.enqueueAgentReply, false);
-  assertEquals(plan.steps, ["record_opt_out", "persist_inbound"]);
+  assertEquals(plan.enqueueAgentReply, true);
+  assertEquals(plan.steps, ["record_opt_out", "persist_inbound", "enqueue_agent_reply"]);
   assertEquals(plan.steps.indexOf("record_opt_out") < plan.steps.indexOf("persist_inbound"), true);
-  assertEquals(plan.steps.includes("enqueue_agent_reply"), false);
+  assertEquals(plan.steps.indexOf("persist_inbound") < plan.steps.indexOf("enqueue_agent_reply"), true);
 });
 
 Deno.test("a normal inbound message may enqueue, and only after persist", () => {
@@ -55,7 +49,7 @@ const INPUT = {
   userId: "user", socialAccountId: "acc", phone: "96555512345", conversationId: "wa_1_96555512345",
 };
 
-function recordingDb(failAt?: "upsert" | "skip" | "clear") {
+function recordingDb(failAt?: "upsert" | "skip" | "clear" | "cancel") {
   const calls: Array<{ port: string; args: unknown[] }> = [];
   const db: OptOutDb = {
     async upsertOptOut(userId, phone) {
@@ -70,6 +64,10 @@ function recordingDb(failAt?: "upsert" | "skip" | "clear") {
       if (failAt === "clear") throw new Error("down");
       calls.push({ port: "clearEventProcedure", args: [userId, conversationId] });
     },
+    async cancelUnclaimedReplies(socialAccountId, conversationId) {
+      if (failAt === "cancel") throw new Error("down");
+      calls.push({ port: "cancelUnclaimedReplies", args: [socialAccountId, conversationId] });
+    },
     async warn(userId, socialAccountId, phase) {
       calls.push({ port: "warn", args: [userId, socialAccountId, phase] });
     },
@@ -77,13 +75,14 @@ function recordingDb(failAt?: "upsert" | "skip" | "clear") {
   return { db, calls };
 }
 
-Deno.test("recordOptOut upserts, then skips events, then clears the procedure, in that order", async () => {
+Deno.test("recordOptOut upserts, skips events, clears the procedure, then cancels unclaimed replies", async () => {
   const fake = recordingDb();
   assertEquals(await recordOptOut(fake.db, INPUT), true);
   assertEquals(fake.calls, [
     { port: "upsertOptOut", args: ["user", "96555512345"] },
     { port: "skipEvents", args: ["acc", "96555512345"] },
     { port: "clearEventProcedure", args: ["user", "wa_1_96555512345"] },
+    { port: "cancelUnclaimedReplies", args: ["acc", "wa_1_96555512345"] },
   ]);
 });
 
@@ -96,15 +95,22 @@ Deno.test("a failed opt-out upsert is logged and returns false without the follo
 Deno.test("a failed event skip is logged and does not block the opt-out", async () => {
   const fake = recordingDb("skip");
   assertEquals(await recordOptOut(fake.db, INPUT), true);
-  assertEquals(fake.calls.map((call) => call.port), ["upsertOptOut", "warn", "clearEventProcedure"]);
+  assertEquals(fake.calls.map((call) => call.port), ["upsertOptOut", "warn", "clearEventProcedure", "cancelUnclaimedReplies"]);
   assertEquals(fake.calls[1].args, ["user", "acc", "skip"]);
 });
 
 Deno.test("a failed procedure clear is logged and does not block the opt-out", async () => {
   const fake = recordingDb("clear");
   assertEquals(await recordOptOut(fake.db, INPUT), true);
-  assertEquals(fake.calls.map((call) => call.port), ["upsertOptOut", "skipEvents", "warn"]);
+  assertEquals(fake.calls.map((call) => call.port), ["upsertOptOut", "skipEvents", "warn", "cancelUnclaimedReplies"]);
   assertEquals(fake.calls[2].args, ["user", "acc", "clear"]);
+});
+
+Deno.test("a failed unclaimed-reply cancel is logged and does not block the opt-out", async () => {
+  const fake = recordingDb("cancel");
+  assertEquals(await recordOptOut(fake.db, INPUT), true);
+  assertEquals(fake.calls.map((call) => call.port), ["upsertOptOut", "skipEvents", "clearEventProcedure", "warn"]);
+  assertEquals(fake.calls[3].args, ["user", "acc", "cancel"]);
 });
 
 Deno.test("optOutPersistDecision refuses to persist only when the opt-out row was not written", () => {
@@ -114,7 +120,10 @@ Deno.test("optOutPersistDecision refuses to persist only when the opt-out row wa
 
 interface QueryCall { table: string; method: string; args: unknown[] }
 
-function recordingAdmin(thread: { id: string; procedure_state: { origin?: string } } | null) {
+function recordingAdmin(
+  thread: { id: string; procedure_state: { origin?: string } } | null,
+  failTable?: string,
+) {
   const calls: QueryCall[] = [];
   const from = (table: string) => {
     const api = {
@@ -134,7 +143,11 @@ function recordingAdmin(thread: { id: string; procedure_state: { origin?: string
         onFulfilled?: (value: { data: Array<{ id: string }> | null; error: null }) => unknown,
         onRejected?: (reason: unknown) => unknown,
       ) {
-        return Promise.resolve({ data: thread ? [{ id: thread.id }] : [], error: null }).then(onFulfilled, onRejected);
+        const failed = table === failTable;
+        return Promise.resolve({
+          data: failed ? null : thread ? [{ id: thread.id }] : [],
+          error: failed ? { message: "down" } : null,
+        }).then(onFulfilled, onRejected);
       },
     };
     return api;
@@ -165,6 +178,22 @@ Deno.test("optOutDb filters pending and claimed events for that account and phon
   assertEquals(callsOn(admin.calls, "ai_threads", "eq").some((call) =>
     call.args[0] === "procedure_state" && call.args[1] === JSON.stringify(state)
   ), true);
+  const replies = admin.calls.filter((call) => call.table === "pending_agent_replies");
+  assertEquals(replies.map((call) => call.method), ["update", "eq", "eq", "eq"]);
+  assertEquals(replies[0].args, [{ status: "cancelled", error: "opted_out", lease_expires_at: null }]);
+  assertEquals(replies[1].args, ["social_account_id", "acc"]);
+  assertEquals(replies[2].args, ["conversation_id", "wa_1_96555512345"]);
+  assertEquals(replies[3].args, ["status", "pending"]);
+});
+
+Deno.test("optOutDb logs a failed unclaimed-reply cancel and still returns the opt-out as recorded", async () => {
+  const admin = recordingAdmin({ id: "thread-1", procedure_state: { origin: "event" } }, "pending_agent_replies");
+  assertEquals(await recordOptOut(optOutDb(admin as never), INPUT), true);
+  const logged = callsOn(admin.calls, "system_logs", "insert");
+  assertEquals(logged.length, 1);
+  const row = logged[0].args[0] as { message: string; metadata: { phase: string } };
+  assertEquals(row.metadata.phase, "cancel");
+  assertEquals(row.message.includes("96555512345"), false);
 });
 
 Deno.test("optOutDb does not clear a Spec A procedure state", async () => {

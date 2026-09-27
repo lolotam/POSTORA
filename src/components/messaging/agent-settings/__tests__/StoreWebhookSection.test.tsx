@@ -102,6 +102,15 @@ describe("StoreWebhookSection", () => {
     expect(screen.getByText(/will not be shown again/i)).toBeInTheDocument();
   });
 
+  it("a connector bound to another WhatsApp account offers no generate or rotate", () => {
+    mocks.bindings = [{ id: BINDING, connector_id: CONNECTOR, social_account_id: "acc-other" }];
+    render(<StoreWebhookSection accountId={ACCOUNT} />);
+    expect(screen.getByText("This store connection is already linked to another WhatsApp account")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /generate webhook url and secret/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /rotate secret/i })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/delivery url/i)).not.toBeInTheDocument();
+  });
+
   it("an existing binding shows its URL and rotates instead of creating", async () => {
     mocks.bindings = [{ id: BINDING, connector_id: CONNECTOR, social_account_id: ACCOUNT }];
     mocks.rotate.mockResolvedValue(issued("r".repeat(43)));

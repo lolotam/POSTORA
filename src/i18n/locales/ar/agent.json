@@ -184,6 +184,7 @@
       "disabled": "لو WooCommerce بيقول إن الـ webhook متوقف، شغّله تاني.",
       "generate": "اعمل رابط الـ webhook والسر",
       "issueFailed": "معرفناش نعمل سر الـ webhook. جرّب تاني.",
+      "linkedElsewhere": "ربط المتجر ده متربط بحساب واتساب تاني",
       "rotate": "غيّر السر",
       "rotateHint": "بعد ما تغيّر السر، القديم هيفضل شغال 24 ساعة.",
       "secret": "سر الـ webhook",

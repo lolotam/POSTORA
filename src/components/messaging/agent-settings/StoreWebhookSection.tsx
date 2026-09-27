@@ -47,7 +47,12 @@ export function StoreWebhookSection({ accountId }: { accountId: string }) {
   });
   if (!connector) return null;
   const listReady = bindings !== undefined && !isLoading && !isError;
-  const binding = listReady ? bindings.find((row) => row.connector_id === connector.id) : undefined;
+  const binding = listReady
+    ? bindings.find((row) => row.connector_id === connector.id && row.social_account_id === accountId)
+    : undefined;
+  const linkedElsewhere = !isLoading && !isError && bindings !== undefined && bindings.some((row) =>
+    row.connector_id === connector.id && row.social_account_id !== accountId
+  );
   const pending = createBinding.isPending || rotateSecret.isPending;
 
   const issue = async () => {
@@ -140,7 +145,15 @@ export function StoreWebhookSection({ accountId }: { accountId: string }) {
           </div>
         </div>
       )}
-      {listReady && (
+      {linkedElsewhere && !binding && (
+        <p className="text-xs text-muted-foreground">
+          {t(
+            "procedures.store.linkedElsewhere",
+            "This store connection is already linked to another WhatsApp account",
+          )}
+        </p>
+      )}
+      {listReady && !linkedElsewhere && (
         <Button type="button" variant="outline" size="sm" disabled={pending} onClick={issue}>
           {binding
             ? t("procedures.store.rotate", "Rotate secret")

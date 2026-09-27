@@ -5,7 +5,7 @@ import { resolveToolAccount, type ToolAdminClient, ToolWriteError } from "./tool
 import type { WorkspaceToolScope } from "./toolSharing.ts";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const BINDING_COLUMNS = "id, user_id, social_account_id, connector_id, secret_id, rotated_at, created_at";
+const BINDING_COLUMNS = "id, user_id, social_account_id, connector_id, secret_id, previous_secret_id, rotated_at, created_at";
 
 export interface BindingRow {
   id: string;
@@ -13,6 +13,7 @@ export interface BindingRow {
   social_account_id: string;
   connector_id: string;
   secret_id: string;
+  previous_secret_id: string | null;
   rotated_at: string | null;
   created_at: string;
 }
@@ -37,7 +38,8 @@ export interface StoreWebhookBindingPorts {
   rotateBinding(bindingId: string, expectedSecretId: string, newSecretId: string, at: string): Promise<BindingRow | null>;
   /**
    * Deletes one Vault secret by id via public.delete_connector_credential_secret.
-   * Used only for a secret this call just minted and then failed to attach.
+   * Used for a secret this call just minted and then failed to attach, and for
+   * the previous secret that a successful rotation drops out of the two-slot window.
    */
   deleteSecret(secretId: string): Promise<void>;
   listBindings(): Promise<BindingRow[]>;
@@ -79,7 +81,11 @@ export async function createStoreWebhookBinding(
   const secret = newWebhookSecret();
   const secretId = await ports.createSecret(secret);
   const row = await ports.insertBinding({
-    user_id: account.user_id, social_account_id: account.id, connector_id: connector.id, secret_id: secretId,
+    user_id: account.user_id,
+    social_account_id: account.id,
+    connector_id: connector.id,
+    secret_id: secretId,
+    previous_secret_id: null,
   });
   if (!row) {
     await ports.deleteSecret(secretId);
@@ -100,10 +106,23 @@ export async function rotateStoreWebhookSecret(
   if (account.user_id !== binding.user_id) throw notFound();
   const secret = newWebhookSecret();
   const secretId = await ports.createSecret(secret);
+  const droppedSecretId = binding.previous_secret_id;
   const row = await ports.rotateBinding(binding.id, binding.secret_id, secretId, now.toISOString());
   if (!row) {
     await ports.deleteSecret(secretId);
     throw new ToolWriteError("The secret was rotated by another request; reload and try again", 409);
+  }
+  // The row now holds the new secret and the one just replaced. The secret that
+  // was already `previous_secret_id` has left the two-slot window.
+  if (droppedSecretId) {
+    try {
+      await ports.deleteSecret(droppedSecretId);
+    } catch (error) {
+      console.error(
+        "[store-webhook] rotated-out secret could not be deleted:",
+        (error as Error).message,
+      );
+    }
   }
   return { binding: view(row), secret };
 }
