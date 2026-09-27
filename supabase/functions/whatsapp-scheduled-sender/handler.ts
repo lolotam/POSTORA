@@ -2,6 +2,7 @@
 // `claimed`. Every later status change is a compare-and-set on that claim token,
 // and a miss means the row was cancelled, expired, or reclaimed — never send.
 import { digitsOnly, type SendRefusedInput } from "../_shared/optOutLookup.ts";
+import { EvolutionApiError } from "../_shared/evolutionApi.ts";
 import { whatsappConversationId } from "../_shared/phone.ts";
 import type {
   WhatsAppSendMediaInput,
@@ -108,8 +109,19 @@ function storedProviderError(error: unknown): string {
   return redactSensitive(details.message).slice(0, ERROR_LIMIT);
 }
 
-function isProviderTimeout(error: unknown): boolean {
-  return error instanceof Error && error.message === "provider_timeout";
+/**
+ * True when the provider may have accepted the message: our own timeout, the
+ * Evolution client's timeout, an abort, a network failure (fetch TypeError),
+ * an Evolution 5xx, or anything unrecognised. Such a row stays `sending` and
+ * the lease turns it indeterminate; it is never marked failed or resent.
+ * Only a definite refusal (a provider response, or a pre-send config error)
+ * is recorded as failed.
+ */
+function sendOutcomeUnknown(error: unknown): boolean {
+  if (!(error instanceof Error)) return true;
+  if (error instanceof EvolutionApiError) return error.status >= 500;
+  if (error.name === "TypeError" || error.name === "AbortError") return true;
+  return error.message === "provider_timeout" || /timed out|aborted/i.test(error.message);
 }
 
 function withTimeout<T>(work: Promise<T>, timeoutMs: number): Promise<T> {
@@ -134,8 +146,12 @@ function rejectionReason(row: ClaimedScheduledMessage): string | null {
   return null;
 }
 
+// Digits with optional leading +, spaces, dashes, dots and brackets only. Letters,
+// "ext", '@' and anything else are refused: stripping them would send to a different number.
+const PHONE_FORMAT = /^\+?[0-9][0-9\s\-().]*$/;
+
 function acceptableRecipient(raw: string | null): boolean {
-  if (!raw || raw.includes("@")) return false;
+  if (!raw || !PHONE_FORMAT.test(raw.trim())) return false;
   const digits = digitsOnly(raw);
   return digits.length >= 8 && digits.length <= 15;
 }
@@ -413,8 +429,8 @@ async function sendClaimed(deps: ScheduledSenderDeps, row: ClaimedScheduledMessa
     messageId = sent.messageId;
   } catch (error) {
     // A timeout means the provider may already have accepted. Leave `sending` so the lease can mark it indeterminate.
-    if (isProviderTimeout(error)) {
-      await note(deps, row, "warn", "Scheduled provider call timed out", { reason: "provider_timeout" });
+    if (sendOutcomeUnknown(error)) {
+      await note(deps, row, "warn", "Scheduled send outcome unknown", { reason: "send_outcome_unknown" });
       return;
     }
     if (await recordProviderRefusal(deps, row, error)) summary.failed += 1;

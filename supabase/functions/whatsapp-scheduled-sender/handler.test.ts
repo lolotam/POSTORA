@@ -1,3 +1,4 @@
+import { EvolutionApiError } from "../_shared/evolutionApi.ts";
 import { assertEquals } from "jsr:@std/assert@1";
 import type { EvolutionSendResult } from "../_shared/evolutionApi.ts";
 import type { WhatsAppTransport, WhatsAppTransportAccount } from "../_shared/whatsappTransport.ts";
@@ -270,6 +271,8 @@ Deno.test("invalid media, empty text, an @lid recipient, and an inactive account
     ["empty", { message_text: "  " }, "empty_message"],
     ["lid", { recipient_phone: "96550001111@lid" }, "invalid_recipient"],
     ["short", { recipient_phone: "12345" }, "invalid_recipient"],
+    ["extension", { recipient_phone: "+96555512345 ext 99" }, "invalid_recipient"],
+    ["letters", { recipient_phone: "9655551234x5" }, "invalid_recipient"],
     ["inactive", { account_is_active: false }, "account_inactive"],
     ["mode", { account_connection_mode: "sms" }, "unsupported_account"],
   ];
@@ -332,7 +335,7 @@ Deno.test("a provider timeout after the sending claim leaves the row sending", a
     const response = await handleScheduledSender(request(), gate);
     assertEquals(await response.json(), summary({ total: 1 }));
     assertEquals(gate.transitions.map((update) => update.patch.status), ["sending"]);
-    assertEquals(gate.events[0]?.metadata.reason, "provider_timeout");
+    assertEquals(gate.events[0]?.metadata.reason, "send_outcome_unknown");
     assertEquals(JSON.stringify(gate.events).includes(DIGITS), false);
   } finally {
     finish({ messageId: "late", raw: {} });
@@ -345,4 +348,42 @@ Deno.test("a claim RPC error sends nothing", async () => {
   assertEquals(response.status, 500);
   assertEquals(await response.json(), { error: "scheduled_query_failed" });
   assertEquals(gate.sends, []);
+});
+
+Deno.test("an Evolution timeout, a network error or an Evolution 5xx leaves the row sending, never failed", async () => {
+  const cases: Array<[string, Error]> = [
+    ["evolution-timeout", new Error("Evolution API request timed out")],
+    ["network", new TypeError("error sending request: connection reset")],
+    ["evolution-5xx", new EvolutionApiError("Evolution API request failed with status 502", 502, {})],
+  ];
+  for (const [id, failure] of cases) {
+    const gate = deps([message(id, "user-b")]);
+    gate.resolveTransport = async (account) => {
+      gate.accounts.push(account);
+      return {
+        sendText: () => Promise.reject(failure),
+        sendMedia: () => Promise.reject(failure),
+        markRead: () => Promise.resolve(),
+      };
+    };
+    const response = await handleScheduledSender(request(), gate);
+    assertEquals(await response.json(), summary({ total: 1 }), id);
+    assertEquals(gate.transitions.map((update) => update.patch.status), ["sending"], id);
+    assertEquals(gate.events.some((event) => event.metadata.reason === "send_outcome_unknown"), true, id);
+  }
+});
+
+Deno.test("an Evolution 4xx refusal is recorded as failed", async () => {
+  const gate = deps([message("evolution-4xx", "user-b")]);
+  gate.resolveTransport = async (account) => {
+    gate.accounts.push(account);
+    return {
+      sendText: () => Promise.reject(new EvolutionApiError("Evolution API request failed with status 400", 400, {})),
+      sendMedia: () => Promise.reject(new Error("unused")),
+      markRead: () => Promise.resolve(),
+    };
+  };
+  const response = await handleScheduledSender(request(), gate);
+  assertEquals(await response.json(), summary({ failed: 1, total: 1 }));
+  assertEquals(gate.transitions.map((update) => update.patch.status), ["sending", "failed"]);
 });
