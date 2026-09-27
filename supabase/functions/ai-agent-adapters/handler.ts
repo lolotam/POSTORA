@@ -63,11 +63,21 @@ export async function meterTestConnectionProbe(
   return outcome;
 }
 
+/** User JWTs never open procedure writes, even when the body asks for them. */
+export function internalProcedureAllowed(
+  isServiceRole: boolean,
+  body: { internal_procedure?: boolean },
+): boolean {
+  return isServiceRole === true && body.internal_procedure === true;
+}
+
 export const RequestSchema = z.object({
   tool_id: z.string().uuid(),
   action: z.enum(["execute", "test_connection"]),
   capability: z.enum(CAPABILITIES).optional(),
   method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]).optional(),
+  /** Procedure runtime only. The model tool path never sets this. */
+  internal_procedure: z.boolean().optional(),
   parameters: z.record(z.unknown()).default({}),
   user_id: z.string().uuid().optional(),
   // The caller's REMAINING wall-clock budget for this whole adapter call. The
@@ -143,8 +153,9 @@ async function executeAdapterRequest(
   }
 
   let userId: string;
+  let isServiceRole = false;
   try {
-    ({ userId } = await authenticateCaller(req, untrustedBodyUserId(requestBody)));
+    ({ userId, isServiceRole } = await authenticateCaller(req, untrustedBodyUserId(requestBody)));
   } catch {
     boundaryLog("connector_refused", "unauthorized");
     return restrictedErrorResponse(req, "Unauthorized.", 401);
@@ -212,6 +223,7 @@ async function executeAdapterRequest(
           action: parsedRequest.data.action,
           capability: parsedRequest.data.capability,
           method: parsedRequest.data.method,
+          internalProcedure: internalProcedureAllowed(isServiceRole, parsedRequest.data),
           parameters: parsedRequest.data.parameters,
         },
       },

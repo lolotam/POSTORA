@@ -126,7 +126,16 @@ export function useAiAgentTools() {
     onSuccess: invalidate,
   });
 
-  return { tools: query.data || [], isLoading: query.isLoading, upsertTool, deleteTool };
+  return {
+    tools: query.data || [],
+    // isPending, not isLoading: a disabled query is unsettled while isLoading
+    // is already false, and that would look like an empty connector list.
+    isLoading: query.isPending,
+    isError: query.isError,
+    refetch: () => query.refetch(),
+    upsertTool,
+    deleteTool,
+  };
 }
 
 /**
@@ -190,6 +199,7 @@ export function useAiToolAccountLinks() {
     // wait for linksReady before drawing a strip whose ticks state facts.
     linksReady: links.isSuccess,
     linksError: links.error,
+    refetchLinks: () => links.refetch(),
     setToolAccounts,
   };
 }

@@ -1,6 +1,6 @@
 // supabase/functions/_shared/procedures/config.test.ts
 import { assertEquals, assertThrows } from "jsr:@std/assert@1";
-import { enabledProcedures, parseProcedureConfig, readProcedureConfig } from "./config.ts";
+import { enabledProcedures, parseProcedureConfig, readProcedureConfig, reviewDelayDays } from "./config.ts";
 import { AgentBehaviorError } from "../agentBehaviorError.ts";
 
 const valid = {
@@ -29,9 +29,46 @@ for (const [label, input] of [
   });
 }
 
-for (const key of ["cod_confirm", "review_request", "back_in_stock"] as const) {
-  Deno.test(`parseProcedureConfig rejects the event flow ${key}`, () => {
-    assertThrows(() => parseProcedureConfig({ [key]: { enabled: true, prompts: {}, closing: "" } }), AgentBehaviorError);
+const CONSENT = "2026-09-01T00:00:00Z";
+const QR = "2026-09-02T00:00:00.000Z";
+
+Deno.test("event flows save only with their required settings", () => {
+  const parsed = parseProcedureConfig({
+    cod_confirm: { enabled: true, prompts: {}, closing: "", consent_attested_at: CONSENT, qr_risk_acknowledged_at: QR },
+    review_request: {
+      enabled: true, prompts: {}, closing: "", consent_attested_at: CONSENT,
+      review_url: "https://shop.example/reviews",
+    },
+    back_in_stock: { enabled: true, prompts: {}, closing: "", qr_risk_acknowledged_at: QR },
+  });
+  assertEquals(parsed.cod_confirm?.consent_attested_at, CONSENT);
+  assertEquals(parsed.cod_confirm?.qr_risk_acknowledged_at, QR);
+  assertEquals(parsed.review_request?.delay_days, 3);
+  assertEquals(parsed.review_request?.review_url, "https://shop.example/reviews");
+  assertEquals(parsed.back_in_stock?.qr_risk_acknowledged_at, QR);
+  assertEquals(enabledProcedures(parsed), ["cod_confirm", "review_request", "back_in_stock"]);
+});
+
+for (const [label, input] of [
+  ["cod_confirm without consent", { cod_confirm: { enabled: true, prompts: {}, closing: "" } }],
+  ["review_request without consent", {
+    review_request: { enabled: true, prompts: {}, closing: "", review_url: "https://shop.example/reviews" },
+  }],
+  ["review_request with an http link", {
+    review_request: { enabled: true, prompts: {}, closing: "", consent_attested_at: CONSENT, review_url: "http://shop.example/reviews" },
+  }],
+  ["review_request delay above 14 days", {
+    review_request: {
+      enabled: true, prompts: {}, closing: "", consent_attested_at: CONSENT,
+      review_url: "https://shop.example/reviews", delay_days: 15,
+    },
+  }],
+  ["back_in_stock with a non-timestamp acknowledgement", {
+    back_in_stock: { enabled: true, prompts: {}, closing: "", qr_risk_acknowledged_at: "yesterday" },
+  }],
+] as const) {
+  Deno.test(`parseProcedureConfig rejects ${label}`, () => {
+    assertThrows(() => parseProcedureConfig(input), AgentBehaviorError);
   });
 }
 
@@ -43,6 +80,19 @@ Deno.test("readProcedureConfig drops only the invalid flow and never throws", ()
   assertEquals(enabledProcedures(read), ["order_status"]);
   assertEquals(readProcedureConfig("garbage"), {});
   assertEquals(readProcedureConfig({ ...valid, review_request: { enabled: true, prompts: {}, closing: "" } }).review_request, undefined);
+  const kept = readProcedureConfig({
+    cod_confirm: { enabled: true, prompts: {}, closing: "", consent_attested_at: CONSENT },
+    review_request: {
+      enabled: true, prompts: {}, closing: "", consent_attested_at: CONSENT,
+      delay_days: 7, review_url: "https://shop.example/reviews",
+    },
+    back_in_stock: { enabled: false, prompts: {}, closing: "" },
+  });
+  assertEquals(kept.cod_confirm?.enabled, true);
+  assertEquals(kept.review_request?.delay_days, 7);
+  assertEquals(kept.back_in_stock?.enabled, false);
+  assertEquals(reviewDelayDays(kept), 7);
+  assertEquals(reviewDelayDays({ review_request: { enabled: true, prompts: {}, closing: "" } }), 3);
   assertEquals(readProcedureConfig(undefined), {});
 });
 

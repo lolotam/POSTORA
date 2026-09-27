@@ -15,7 +15,7 @@ import {
   resolvePageSize,
   SupabaseValidationError,
 } from "./supabase.ts";
-import { handleAdapterRequest, meterTestConnectionProbe, RequestSchema, type AdminClientFactory } from "./handler.ts";
+import { handleAdapterRequest, internalProcedureAllowed, meterTestConnectionProbe, RequestSchema, type AdminClientFactory } from "./handler.ts";
 import { createAdapterDependencies } from "./dependencies.ts";
 import type { ConnectorCache } from "./cache.ts";
 import { wooCommerceAdapter } from "./woocommerce.ts";
@@ -219,6 +219,186 @@ Deno.test("read_only_mode refuses a write before fetch is attempted", async () =
     assertEquals(result.error.code, "read_only_violation");
     assertStringIncludes(result.error.message, "POST");
   }
+});
+
+const ORDER_NOTE = "Customer asked to cancel on WhatsApp (Postora)";
+
+function updateOrderRequest(overrides: Partial<ConnectorTool> = {}): {
+  tool: ConnectorTool;
+  credentials: { consumer_key: string; consumer_secret: string };
+  request: ExecuteConnectorRequest;
+} {
+  return {
+    tool: wooTool({ read_only_mode: false, ...overrides }),
+    credentials: { consumer_key: WOO_KEY, consumer_secret: WOO_SECRET },
+    request: {
+      action: "execute",
+      capability: "update_order",
+      method: "POST",
+      internalProcedure: true,
+      parameters: {
+        order_id: "10432",
+        note: ORDER_NOTE,
+        status: "cancelled",
+        expected_statuses: ["pending", "on-hold", "processing"],
+      },
+    },
+  };
+}
+
+for (const method of ["POST", "GET", "unset"] as const) {
+  Deno.test(`update_order in read-only mode performs zero fetches (${method})`, async () => {
+    let fetchCalls = 0;
+    const invocation = updateOrderRequest({ read_only_mode: true });
+    if (method === "unset") delete invocation.request.method;
+    else invocation.request.method = method;
+    const result = await executeConnector(
+      invocation,
+      dependencies(() => {
+        fetchCalls += 1;
+        return Promise.resolve(jsonResponse({}));
+      }),
+    );
+    assertEquals(fetchCalls, 0);
+    assertEquals(result.ok, false);
+    if (!result.ok) assertEquals(result.error.code, "read_only_violation");
+  });
+}
+
+for (const capability of ["update_order", "get_product"] as const) {
+  Deno.test(`${capability} without the procedure flag is refused before any fetch`, async () => {
+    for (const permissions of [{}, { [capability]: true }] as const) {
+      let fetchCalls = 0;
+      const result = await executeConnector(
+        {
+          tool: wooTool({ read_only_mode: false, permissions: { ...permissions } }),
+          credentials: { consumer_key: WOO_KEY, consumer_secret: WOO_SECRET },
+          request: {
+            action: "execute",
+            capability,
+            method: capability === "update_order" ? "POST" : "GET",
+            parameters: capability === "update_order"
+              ? { order_id: "10432", note: ORDER_NOTE, status: "cancelled", expected_statuses: ["processing"] }
+              : { product_id: "55" },
+          },
+        },
+        dependencies(() => {
+          fetchCalls += 1;
+          return Promise.resolve(jsonResponse({}));
+        }),
+      );
+      assertEquals(fetchCalls, 0, JSON.stringify(permissions));
+      assertEquals(result.ok, false);
+      if (!result.ok) assertEquals(result.error.code, "capability_refused");
+    }
+  });
+}
+
+Deno.test("internalProcedureAllowed rejects a user JWT even when the body asks", () => {
+  assertEquals(internalProcedureAllowed(false, { internal_procedure: true }), false);
+  assertEquals(internalProcedureAllowed(true, { internal_procedure: false }), false);
+  assertEquals(internalProcedureAllowed(true, {}), false);
+  assertEquals(internalProcedureAllowed(true, { internal_procedure: true }), true);
+});
+
+Deno.test("update_order posts the note before it changes status", async () => {
+  const calls: Array<{ method: string; url: string; body: string | null }> = [];
+  const result = await executeConnector(updateOrderRequest(), dependencies((url, init) => {
+    calls.push({ method: init?.method ?? "GET", url: String(url), body: typeof init?.body === "string" ? init.body : null });
+    if (calls.length === 1) return Promise.resolve(jsonResponse({ id: 10432, status: "processing" }));
+    if (calls.length === 2) return Promise.resolve(jsonResponse({ id: 9, note: ORDER_NOTE }));
+    if (calls.length === 3) return Promise.resolve(jsonResponse({ id: 10432, status: "on-hold" }));
+    return Promise.resolve(jsonResponse({ id: 10432, status: "cancelled" }));
+  }));
+  assertEquals(calls.map((call) => call.method), ["GET", "POST", "GET", "PUT"]);
+  assertStringIncludes(calls[1].url, "/orders/10432/notes");
+  assertEquals(JSON.parse(calls[1].body ?? "{}"), { note: ORDER_NOTE, customer_note: false });
+  assertStringIncludes(calls[3].url, "/orders/10432");
+  assertEquals(calls[3].url.includes("/notes"), false);
+  assertEquals(JSON.parse(calls[3].body ?? "{}"), { status: "cancelled" });
+  assertEquals(result, {
+    ok: true, vendor: "woocommerce", action: "execute", capability: "update_order",
+    data: { changed: true, status: "cancelled" },
+  });
+});
+
+Deno.test("update_order does not PUT when the re-read left the expected statuses", async () => {
+  const methods: string[] = [];
+  const result = await executeConnector(updateOrderRequest(), dependencies((_url, init) => {
+    methods.push(init?.method ?? "GET");
+    if (methods.length === 1) return Promise.resolve(jsonResponse({ id: 10432, status: "pending" }));
+    if (methods.length === 2) return Promise.resolve(jsonResponse({ id: 9, note: ORDER_NOTE }));
+    return Promise.resolve(jsonResponse({ id: 10432, status: "completed" }));
+  }));
+  assertEquals(methods, ["GET", "POST", "GET"]);
+  assertEquals(result, {
+    ok: true, vendor: "woocommerce", action: "execute", capability: "update_order",
+    data: { changed: false, status: "completed" },
+  });
+});
+
+Deno.test("update_order maps a 401 to store_write_denied and stops", async () => {
+  let fetchCalls = 0;
+  const result = await executeConnector(updateOrderRequest(), dependencies(() => {
+    fetchCalls += 1;
+    return Promise.resolve(jsonResponse({ message: `bad ${WOO_KEY}` }, 401));
+  }));
+  assertEquals(fetchCalls, 1);
+  assertEquals(result.ok, false);
+  if (!result.ok) {
+    assertEquals(result.error.code, "store_write_denied");
+    assertEquals(result.error.vendor_status, 401);
+  }
+  assertEquals(serialized(result).includes(WOO_KEY), false);
+});
+
+Deno.test("a cancelled order whose latest note is ours is already done", async () => {
+  const methods: string[] = [];
+  const result = await executeConnector(updateOrderRequest(), dependencies((url, init) => {
+    methods.push(init?.method ?? "GET");
+    if (!String(url).includes("/notes")) return Promise.resolve(jsonResponse({ id: 10432, status: "cancelled" }));
+    return Promise.resolve(jsonResponse([
+      { id: 1, note: "older" },
+      { id: 4, note: ORDER_NOTE },
+    ]));
+  }));
+  assertEquals(methods, ["GET", "GET"]);
+  assertEquals(result, {
+    ok: true, vendor: "woocommerce", action: "execute", capability: "update_order",
+    data: { changed: true, status: "cancelled" },
+  });
+});
+
+Deno.test("get_product reads a variation and projects the stock fields", async () => {
+  const seen: string[] = [];
+  const result = await executeConnector(
+    {
+      tool: wooTool(),
+      credentials: { consumer_key: WOO_KEY, consumer_secret: WOO_SECRET },
+      request: {
+        action: "execute",
+        capability: "get_product",
+        internalProcedure: true,
+        parameters: { product_id: "55", parent_id: "10" },
+      },
+    },
+    dependencies((url) => {
+      seen.push(String(url));
+      return Promise.resolve(jsonResponse({
+        id: 55, parent_id: 10, name: "Hat / Blue", price: "3.500", stock_status: "instock",
+        permalink: "https://store.example.com/hat", description: "<p>secret</p>", sku: "HAT",
+      }));
+    }),
+  );
+  assertEquals(seen.length, 1);
+  assertStringIncludes(seen[0], "/products/10/variations/55");
+  assertEquals(result, {
+    ok: true, vendor: "woocommerce", action: "execute", capability: "get_product",
+    data: {
+      id: 55, parent_id: 10, name: "Hat / Blue", price: "3.500", stock_status: "instock",
+      permalink: "https://store.example.com/hat",
+    },
+  });
 });
 
 Deno.test("every redirect hop is passed through the shared SSRF validator", async () => {
@@ -557,6 +737,7 @@ Deno.test("a named category is resolved to its id before the product search", as
 
 const PRODUCT_FIELD_LIST = [
   "id",
+  "parent_id",
   "name",
   "sku",
   "price",
@@ -606,6 +787,43 @@ Deno.test("WooCommerce product, stock, order and category URLs ask only for the 
   const [bySearch] = await wooUrls("lookup_orders", { query: "10432" });
   assertStringIncludes(bySearch, `_fields=${ORDER_FIELD_LIST}`);
   assertEquals(new URL(bySearch).searchParams.get("_fields"), ORDER_FIELD_LIST);
+
+  const seen: string[] = [];
+  const procedureRead = await executeConnector(
+    {
+      tool: wooTool({ permissions: { search_products: false, check_stock: false, lookup_orders: false } }),
+      credentials: { consumer_key: WOO_KEY, consumer_secret: WOO_SECRET },
+      request: request({
+        capability: "lookup_orders",
+        method: "GET",
+        internalProcedure: true,
+        parameters: { order_id: "10432" },
+      }),
+    },
+    dependencies((url) => {
+      seen.push(String(url));
+      return Promise.resolve(jsonResponse({
+        id: 10432,
+        status: "processing",
+        payment_method: "cod",
+        date_created: "2026-09-20T00:00:00",
+        billing: { phone: "+96555512345", email: "secret@example.com", country: "KW" },
+      }));
+    }),
+  );
+  assertEquals(seen.length, 1);
+  assertStringIncludes(seen[0], "_fields=id,status,payment_method,date_created,billing");
+  assertEquals(procedureRead.ok, true);
+  if (procedureRead.ok) {
+    assertEquals(procedureRead.data, {
+      status: "processing",
+      payment_method: "cod",
+      date_created: "2026-09-20T00:00:00",
+      phone: "+96555512345",
+      country: "KW",
+    });
+    assertEquals(JSON.stringify(procedureRead.data).includes("secret@example.com"), false);
+  }
 
   const categoryUrls = await wooUrlFor(
     { query: "hat", category: "Men" },

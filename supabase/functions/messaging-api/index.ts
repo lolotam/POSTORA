@@ -58,6 +58,8 @@ import {
   signMediaPath,
 } from "../_shared/whatsappMediaResolver.ts";
 import { sendTemplate } from "../_shared/whatsappPartnerOps.ts";
+import { ensureEventTemplate, eventTemplateGraph, isEventFlow } from "../_shared/procedures/eventTemplates.ts";
+import { openerLanguage } from "../_shared/procedures/openers.ts";
 import { resolveWhatsAppTransport } from "../_shared/whatsappTransport.ts";
 import {
   CONVERSATION_LIST_LIMIT,
@@ -1334,6 +1336,37 @@ function isAiAgentPlatform(value: unknown): value is string {
       // `data` preserves the existing frontend contract — WhatsAppDiagnostics.tsx
       // and useMessaging.ts consume this response shape.
       return jsonResponse({ success: true, message_id: result.messageId, data: result.raw });
+    }
+
+    // ACTION: event_template_status — Cloud API template for one store-event flow.
+    if (action === "event_template_status") {
+      const { social_account_id, flow, create } = body;
+      if (!social_account_id || !isEventFlow(flow)) throw new Error("social_account_id and flow required");
+      const creating = create === true;
+      const account = await withWhatsAppActionAccess({
+        client: whatsappAccessClient,
+        userId: user.id,
+        action: creating ? "whatsapp_create_template" : "whatsapp_list_templates",
+        socialAccountId: social_account_id,
+      }, (access) => Promise.resolve(access));
+      if (account.connectionMode === "evolution_qr") {
+        return jsonResponse({ status: "unsupported", name: "", language: "ar", category: "" });
+      }
+      const wabaId = getWhatsAppMetadata(account).waba_id || Deno.env.get("WHATSAPP_BUSINESS_ACCOUNT_ID");
+      if (!wabaId || typeof wabaId !== "string") throw new Error("WhatsApp Business Account ID not found. Please reconnect your account.");
+      const config = await loadAgentConfigForAccount(adminClient, {
+        userId: account.ownerId,
+        platform: "whatsapp",
+        accountId: account.accountId,
+      });
+      const language = openerLanguage(config?.language_mode);
+      const result = await ensureEventTemplate(
+        eventTemplateGraph(wabaId, getWhatsAppToken(account)),
+        flow,
+        language,
+        { create: creating },
+      );
+      return jsonResponse(result);
     }
 
     // ACTION: whatsapp_list_templates

@@ -37,6 +37,15 @@ export const CONNECTOR_CAPABILITY_NAMES = [
   "search_products",
   "check_stock",
   "lookup_orders",
+  "get_product",
+  "update_order",
+] as const;
+
+/** Capabilities the model may choose. get_product and update_order are procedure-only. */
+export const MODEL_CONNECTOR_CAPABILITIES = [
+  "search_products",
+  "check_stock",
+  "lookup_orders",
 ] as const;
 
 export type ConnectorCapability = (typeof CONNECTOR_CAPABILITY_NAMES)[number];
@@ -362,6 +371,33 @@ const CONNECTOR_DEFINITIONS: Record<ConnectorType, ConnectorDefinition> = {
             order_id: { type: "string", description: "Exact WooCommerce order id, when known." },
             query: { type: "string", description: "Order search phrase when the exact id is unknown." },
           },
+          additionalProperties: false,
+        },
+      },
+      {
+        name: "get_product",
+        description: "Read one WooCommerce product or variation by id. Used by store procedures, not offered to the model.",
+        parameters: {
+          type: "object",
+          properties: {
+            product_id: { type: "string", description: "WooCommerce product or variation id." },
+            parent_id: { type: "string", description: "Parent product id when product_id is a variation." },
+          },
+          required: ["product_id"],
+          additionalProperties: false,
+        },
+      },
+      {
+        name: "update_order",
+        description: "Add an order note and, when asked, cancel the order. Used by store procedures, not offered to the model.",
+        parameters: {
+          type: "object",
+          properties: {
+            order_id: { type: "string", description: "WooCommerce order id." },
+            note: { type: "string", description: "Private order note." },
+            status: { type: "string", description: "Only cancelled, and only when the order is still in an expected status." },
+          },
+          required: ["order_id", "note"],
           additionalProperties: false,
         },
       },

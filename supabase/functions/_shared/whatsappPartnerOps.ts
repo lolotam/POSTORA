@@ -21,6 +21,11 @@ export interface SendTemplateInput {
   templateLanguage: string;
   components?: unknown[];
   /**
+   * When false, the caller records the inbox row itself. Default true keeps
+   * every existing door writing the message before it returns.
+   */
+  recordOutbound?: boolean;
+  /**
    * Client correlator stamped into the send as `biz_opaque_callback_data`,
    * which Meta echoes back inside status webhooks for this message (D13
    * reconciliation, deliverable 3.4). Carries the dispatch intent id on the
@@ -359,11 +364,13 @@ export async function sendTemplate(
     );
   }
 
-  const persisted = await persistOutbound(ctx, {
-    recipientPhone: input.recipientPhone,
-    preview: `[Template: ${input.templateName}]`,
-    messageType: "template",
-  }, messageId);
+  const persisted = input.recordOutbound === false
+    ? false
+    : await persistOutbound(ctx, {
+      recipientPhone: input.recipientPhone,
+      preview: `[Template: ${input.templateName}]`,
+      messageType: "template",
+    }, messageId);
   return { messageId, persisted, raw: body };
 }
 

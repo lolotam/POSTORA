@@ -20,11 +20,28 @@ function connectorFailure(vendor: string, code: string, message: string): Connec
   return { ok: false, vendor, error: { code, message } };
 }
 
+const PROCEDURE_CAPABILITIES = new Set<Capability>(["get_product", "update_order"]);
+
+/** A procedure re-read of one order. The model permission stays closed; only the internal flag opens it. */
+function internalOrderRead(invocation: ConnectorInvocation): boolean {
+  const orderId = invocation.request.parameters.order_id;
+  return invocation.request.capability === "lookup_orders"
+    && invocation.request.internalProcedure === true
+    && typeof orderId === "string"
+    && /^[0-9]{1,12}$/.test(orderId);
+}
+
 function enabledCapabilities(invocation: ConnectorInvocation): Capability[] {
   const permissions = invocation.tool.permissions;
-  return CAPABILITIES.filter(
-    (capability) => permissions[capability] === true,
-  );
+  return CAPABILITIES.filter((capability) => {
+    if (capability === "lookup_orders" && internalOrderRead(invocation)) return true;
+    // permissions JSON true must not open these. Only the runtime flag does,
+    // and an explicit false still refuses.
+    if (PROCEDURE_CAPABILITIES.has(capability)) {
+      return invocation.request.internalProcedure === true && permissions[capability] !== false;
+    }
+    return permissions[capability] === true;
+  });
 }
 
 function safeLog(
@@ -50,6 +67,21 @@ export async function executeConnector(
   // This is intentionally before adapter selection, URL construction,
   // auth-header construction, or fetch.
   const requestedMethod = invocation.request.method ?? "GET";
+  const writingOrder = invocation.request.capability === "update_order";
+  if (writingOrder && invocation.tool.read_only_mode !== false) {
+    const connectorOutcome = connectorFailure(
+      vendor,
+      "read_only_violation",
+      "Read-only mode refused the order update.",
+    );
+    safeLog(dependencies, {
+      event: "connector_refused",
+      vendor,
+      operation,
+      error_code: connectorOutcome.error.code,
+    });
+    return connectorOutcome;
+  }
   if (invocation.tool.read_only_mode !== false && requestedMethod !== "GET") {
     const connectorOutcome = connectorFailure(
       vendor,
@@ -64,7 +96,8 @@ export async function executeConnector(
     });
     return connectorOutcome;
   }
-  if (requestedMethod !== "GET") {
+  // update_order is the only write, and only while the tool is not read-only.
+  if (requestedMethod !== "GET" && !writingOrder) {
     const connectorOutcome = connectorFailure(
       vendor,
       "connector_write_unsupported",

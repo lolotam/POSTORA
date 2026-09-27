@@ -243,6 +243,30 @@ Deno.test("adapter structured failure is named and is not empty success", async 
   assertEquals(result.output.includes("no results"), false);
 });
 
+Deno.test("model args never set the internal procedure request flag", async () => {
+  let body: Record<string, unknown> = {};
+  await executeAdapterTool(context(), wooTool, {
+    capability: "search_products",
+    internal_procedure: true,
+    internalProcedure: true,
+    parameters: { query: "hat", internal_procedure: true, internalProcedure: true },
+  }, {
+    fetch: async (request) => {
+      body = await (request as Request).json();
+      return Response.json({
+        ok: true,
+        vendor: "woocommerce",
+        action: "execute",
+        capability: "search_products",
+        data: [],
+      });
+    },
+    getEnv: (name) => name === "SUPABASE_URL" ? "http://kong:8000" : "service-key",
+  });
+  assertEquals(Object.hasOwn(body, "internal_procedure"), false);
+  assertEquals(Object.hasOwn(body, "internalProcedure"), false);
+});
+
 Deno.test("adapter call uses the in-cluster URL and service-role internal contract", async () => {
   const serviceRoleKey = "internal-service-role-key";
   let capturedRequest: Request | undefined;

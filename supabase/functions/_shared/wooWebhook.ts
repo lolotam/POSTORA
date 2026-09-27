@@ -150,12 +150,15 @@ function stockDrafts(
   const name = typeof body.name === "string" ? body.name : "";
   const drafts: EventDraft[] = [];
   for (const row of waitlist) {
-    const hit = row.product_id === id || row.parent_id === id || (parent != null && row.product_id === parent);
+    // X matches the waited-on product. P matches a parent-level row when a variation of it
+    // came back. A child row whose parent_id is X stays untouched: drafting it would tombstone
+    // the variation the customer actually waited for.
+    const hit = row.product_id === id || (parent != null && row.product_id === parent);
     if (!hit) continue;
     drafts.push({
       flow: "back_in_stock",
-      // The waitlist row is the customer. A parent update and a variation update
-      // for that same row must collapse to one event.
+      // One waitlist row is one customer. An exact update and a variation update that both
+      // name that product share this id.
       external_id: `waitlist:${row.id}`,
       due_at: now,
       payload: whitelist({

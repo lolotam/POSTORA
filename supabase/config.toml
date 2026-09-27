@@ -38,6 +38,10 @@ verify_jwt = false
 [functions.store-webhook]
 verify_jwt = false
 
+# Cron calls with the shared secret, not a user JWT. Same gate as store-webhook.
+[functions.process-store-events]
+verify_jwt = false
+
 [functions.higgsfield-oauth]
 verify_jwt = true
 

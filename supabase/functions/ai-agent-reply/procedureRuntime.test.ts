@@ -1,6 +1,11 @@
 // supabase/functions/ai-agent-reply/procedureRuntime.test.ts
 import { assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
-import { createProcedureTurn, type ProcedurePorts, type ProcedureTurnInput } from "./procedureRuntime.ts";
+import {
+  boundWaitlistSightings, createProcedureTurn, enrollWaitlist, executeOfferedWaitlistJoin, planBoundWaitlistJoin, planWaitlistJoin,
+  procedureToolDefinitions, scopeStoreEventRead, STOCK_WAITLIST_ON_CONFLICT, stockWaitlistToolDefinition,
+  stockWaitlistJoinOffered, storeEventReadScope, WAITLIST_BINDING_REFUSAL, waitlistRound,
+  type ProcedurePorts, type ProcedureTurnInput, type StockSighting, type StoreEventRow, type WaitlistEnrollmentLog,
+} from "./procedureRuntime.ts";
 
 function fakePorts(overrides: Partial<ProcedurePorts> = {}) {
   const calls = {
@@ -18,6 +23,9 @@ function fakePorts(overrides: Partial<ProcedurePorts> = {}) {
     storeLookup: async (capability, parameters) => { calls.order.push("lookup"); calls.lookups.push(`${capability}:${JSON.stringify(parameters)}`); return { output: "Order 1234: shipped" }; },
     hasStoreCapability: () => true,
     logFailure: async (message) => { calls.failures.push(message); },
+    eventFor: async () => null,
+    updateOrder: async () => { throw new Error("updateOrder was not expected"); },
+    getProduct: async () => { throw new Error("getProduct was not expected"); },
     ...overrides,
   };
   return { ports, calls };
@@ -32,7 +40,8 @@ const input = (ports: ProcedurePorts, extra: Partial<ProcedureTurnInput> = {}): 
     complaint_return: { enabled: true, prompts: {}, closing: "" },
     booking: { enabled: true, prompts: {}, closing: "", services: ["Haircut", "Beard trim"] },
   },
-  ports, dryRun: false, now: () => T, runId: "run-1",
+  ports, dryRun: false, now: () => T, runId: "run-1", userId: "user-1",
+  customerPhone: "96555512345",
   leadContext: { platform: "whatsapp", socialAccountId: "acc-1", conversationId: "conv-1" },
   ...extra,
 });
@@ -367,4 +376,400 @@ Deno.test("a pending_opener state is inert: no start, no submit, nothing progres
   assertEquals(turn.state, null);
   assertEquals(turn.progressed, false);
   assertEquals(calls.order, []);
+});
+
+const EVENT_ID = "11111111-1111-4111-8111-111111111111";
+const EVENT_PHONE = "+965 5551 2345";
+const eventRow = (flow: StoreEventRow["flow"]): StoreEventRow => ({
+  id: EVENT_ID, user_id: "user-1", social_account_id: "acc-1", connector_id: "conn-1", flow,
+  payload: {
+    order_id: "10432", product_id: "55", parent_id: "10", product_name: "Blue hat", phone: EVENT_PHONE,
+  },
+});
+
+function eventPorts(flow: StoreEventRow["flow"]) {
+  const updates: Array<Record<string, unknown>> = [];
+  const products: Array<Record<string, unknown>> = [];
+  const { ports, calls } = fakePorts({
+    eventFor: async (runId) => (runId === EVENT_ID ? eventRow(flow) : null),
+    updateOrder: async (order) => { calls.order.push("update"); updates.push(order); return { changed: true, status: order.status ?? "processing" }; },
+    getProduct: async (product) => {
+      calls.order.push("product");
+      products.push(product);
+      return { ok: true, name: "Blue hat", price: "3.500", permalink: "https://store.example/hat" };
+    },
+  });
+  return { ports, calls, updates, products };
+}
+
+function eventTurn(flow: "cod_confirm" | "review_request" | "back_in_stock", ports: ProcedurePorts, extra: Partial<ProcedureTurnInput> = {}) {
+  const base = input(ports);
+  return createProcedureTurn(input(ports, {
+    state: {
+      run_id: EVENT_ID, key: flow, version: 1, step: 0,
+      fields: { order_id: "99999", product_id: "1" },
+      off_script: 0,
+      origin: "event", started_at: T.toISOString(), updated_at: T.toISOString(),
+    },
+    config: {
+      ...base.config,
+      cod_confirm: { enabled: true, prompts: {}, closing: "", consent_attested_at: "2026-09-01T00:00:00Z" },
+      review_request: {
+        enabled: true, prompts: {}, closing: "", consent_attested_at: "2026-09-01T00:00:00Z",
+        delay_days: 3, review_url: "https://shop.example/reviews",
+      },
+      back_in_stock: { enabled: true, prompts: {}, closing: "" },
+    },
+    ...extra,
+  }));
+}
+
+Deno.test("cod confirm notes the order from the event and does not change its status", async () => {
+  const { ports, calls, updates } = eventPorts("cod_confirm");
+  const turn = eventTurn("cod_confirm", ports);
+  const result = await turn.handle("procedure_submit", { fields: { decision: "confirm", order_id: "99999" } });
+  assertEquals(turn.completed, "cod_confirm");
+  assertEquals(calls.order[0], "claim");
+  assertEquals(updates[0], {
+    connectorId: "conn-1", orderId: "10432",
+    note: "Confirmed by the customer on WhatsApp (Postora)",
+    expectedStatuses: ["pending", "on-hold", "processing"],
+  });
+  assertEquals(calls.notified.length, 0);
+  assertStringIncludes(result.output, "confirmed");
+});
+
+Deno.test("cod cancel sets status cancelled and alerts the admin", async () => {
+  const { ports, calls, updates } = eventPorts("cod_confirm");
+  const turn = eventTurn("cod_confirm", ports);
+  const result = await turn.handle("procedure_submit", { fields: { decision: "cancel" } });
+  assertEquals(updates[0].status, "cancelled");
+  assertEquals(updates[0].note, "Customer asked to cancel on WhatsApp (Postora)");
+  assertEquals(calls.notified.length, 1);
+  assertStringIncludes(result.output, "cancelled");
+});
+
+Deno.test("a store write that changes nothing alerts and tells the customer the team will follow up", async () => {
+  const { ports, calls } = eventPorts("cod_confirm");
+  ports.updateOrder = async () => { calls.order.push("update"); return { changed: false, status: "completed" }; };
+  const result = await eventTurn("cod_confirm", ports).handle("procedure_submit", { fields: { decision: "confirm" } });
+  assertStringIncludes(result.output, "team will follow up");
+  assertEquals(calls.notified.length, 1);
+  assertEquals(calls.failures.length, 1);
+});
+
+Deno.test("store_write_denied alerts and does not claim the order changed", async () => {
+  const { ports, calls } = eventPorts("cod_confirm");
+  ports.updateOrder = async () => { calls.order.push("update"); return { error: "store_write_denied" }; };
+  const result = await eventTurn("cod_confirm", ports).handle("procedure_submit", { fields: { decision: "cancel" } });
+  assertStringIncludes(result.output, "team will follow up");
+  assertStringIncludes(calls.notified[0], "refused");
+  assertEquals(result.output.includes("cancelled"), false);
+});
+
+const EVENT_FLOWS = ["cod_confirm", "review_request", "back_in_stock"] as const;
+const EVENT_ANSWERS = {
+  cod_confirm: { decision: "confirm" },
+  review_request: { rating: "5" },
+  back_in_stock: { interest: "yes" },
+} as const;
+
+for (const flow of EVENT_FLOWS) {
+  const mismatches: Array<[string, (row: StoreEventRow) => StoreEventRow | null]> = [
+    ["wrong user_id", (row) => ({ ...row, user_id: "someone-else" })],
+    ["wrong social_account_id", (row) => ({ ...row, social_account_id: "other-account" })],
+    ["wrong flow", (row) => ({ ...row, flow: flow === "cod_confirm" ? "review_request" : "cod_confirm" })],
+    ["empty connector_id", (row) => ({ ...row, connector_id: "" })],
+    ["null event", () => null],
+    ["wrong phone", (row) => ({ ...row, payload: { ...row.payload, phone: "966500000000" } })],
+    ["payload order_id abc", (row) => ({ ...row, payload: { ...row.payload, order_id: "abc" } })],
+  ];
+  for (const [name, mutate] of mismatches) {
+    Deno.test(`${flow} refuses ${name} with no store call`, async () => {
+      const { ports, calls, updates, products } = eventPorts(flow);
+      ports.eventFor = async () => mutate(eventRow(flow));
+      const result = await eventTurn(flow, ports).handle("procedure_submit", { fields: EVENT_ANSWERS[flow] });
+      assertEquals(updates.length, 0);
+      assertEquals(products.length, 0);
+      assertEquals(calls.escalated.length, 0);
+      assertEquals(calls.notified.length, 1);
+      assertEquals(calls.failures.length, 1);
+      assertStringIncludes(result.output, "team will follow up");
+    });
+  }
+}
+
+Deno.test("a cod end action in dry run writes nothing and alerts nobody", async () => {
+  const { ports, calls, updates } = eventPorts("cod_confirm");
+  const result = await eventTurn("cod_confirm", ports, { dryRun: true }).handle("procedure_submit", { fields: { decision: "cancel" } });
+  assertEquals(updates.length, 0);
+  assertEquals(calls.notified.length, 0);
+  assertEquals(calls.claims.length, 0);
+  assertStringIncludes(result.output, "nothing written");
+});
+
+Deno.test("a high rating tells the model to send the configured review link", async () => {
+  const { ports, calls } = eventPorts("review_request");
+  const result = await eventTurn("review_request", ports).handle("procedure_submit", { fields: { rating: "5" } });
+  assertStringIncludes(result.output, "https://shop.example/reviews");
+  assertEquals(calls.escalated.length, 0);
+});
+
+Deno.test("a low rating escalates with the rating and a sanitized problem", async () => {
+  const { ports, calls } = eventPorts("review_request");
+  await eventTurn("review_request", ports).handle("procedure_submit", { fields: { rating: "2", problem: "Torn\nbox" } });
+  assertEquals(calls.escalated.length, 1);
+  assertStringIncludes(calls.escalated[0], "2");
+  assertStringIncludes(calls.escalated[0], "Torn box");
+  assertEquals(calls.escalated[0].includes("\n"), false);
+});
+
+Deno.test("stock interest yes reads the event product and returns its link and price", async () => {
+  const { ports, products } = eventPorts("back_in_stock");
+  const result = await eventTurn("back_in_stock", ports).handle("procedure_submit", { fields: { interest: "yes", product_id: "1" } });
+  assertEquals(products[0], { connectorId: "conn-1", productId: "55", parentId: "10" });
+  assertStringIncludes(result.output, "https://store.example/hat");
+  assertStringIncludes(result.output, "3.500");
+});
+
+Deno.test("stock interest no ends without reading the product", async () => {
+  const { ports, products } = eventPorts("back_in_stock");
+  const result = await eventTurn("back_in_stock", ports).handle("procedure_submit", { fields: { interest: "no" } });
+  assertEquals(products.length, 0);
+  assertStringIncludes(result.output, "does not want");
+});
+
+const sighting = (stockStatus: string, name = "Blue hat"): StockSighting => ({
+  connectorId: "conn-9", productId: "55", parentId: "10", name, stockStatus,
+});
+const joinInput = (sightings: StockSighting[], extra: Partial<Parameters<typeof planWaitlistJoin>[0]> = {}) => planWaitlistJoin({
+  productId: "55", sightings, platform: "whatsapp", phone: "+965 5551 2345", dryRun: false,
+  userId: "user-1", socialAccountId: "acc-1", conversationId: "conv-1", now: T.toISOString(),
+  ...extra,
+});
+
+Deno.test("event procedures offer no start_procedure", () => {
+  const names = procedureToolDefinitions(["cod_confirm", "review_request", "back_in_stock"])
+    .map((tool) => tool.function.name);
+  assertEquals(names.includes("start_procedure"), false);
+});
+
+Deno.test("a mixed procedure list excludes event keys from start_procedure", () => {
+  const start = procedureToolDefinitions(["order_status", "cod_confirm", "lead_capture", "back_in_stock"])
+    .find((tool) => tool.function.name === "start_procedure");
+  const parameters = start?.function.parameters as { properties: { key: { enum: string[] } } };
+  assertEquals(parameters.properties.key.enum, ["order_status", "lead_capture"]);
+});
+
+Deno.test("waitlist join is refused without a stock result", () => {
+  const plan = joinInput([]);
+  assertEquals(plan.action, "refuse");
+});
+
+Deno.test("waitlist join is refused for an in-stock product", () => {
+  const plan = joinInput([sighting("instock")]);
+  assertEquals(plan.action, "refuse");
+  if (plan.action === "refuse") assertStringIncludes(plan.output, "in stock");
+});
+
+Deno.test("waitlist join refuses the same out-of-stock id from two connectors", () => {
+  const plan = joinInput([
+    sighting("outofstock", "Hat A"),
+    { ...sighting("outofstock", "Hat B"), connectorId: "conn-other" },
+  ]);
+  assertEquals(plan.action, "refuse");
+  if (plan.action === "refuse") assertStringIncludes(plan.output, "which product");
+});
+
+Deno.test("waitlist join uses the connector of the single out-of-stock match", () => {
+  const plan = joinInput([
+    { ...sighting("instock", "In stock hat"), connectorId: "conn-in" },
+    sighting("outofstock", "Real Hat"),
+  ]);
+  assertEquals(plan.action, "upsert");
+  if (plan.action !== "upsert") return;
+  assertEquals(plan.row.connector_id, "conn-9");
+  assertEquals(plan.row.product_name, "Real Hat");
+});
+
+Deno.test("the store event read is scoped by id, user, and account", () => {
+  assertEquals(storeEventReadScope("not-a-uuid", "user-1", "acc-1"), null);
+  assertEquals(storeEventReadScope(EVENT_ID, "user-1", null), null);
+  const filters: Array<[string, string]> = [];
+  const query = {
+    eq(column: "id" | "user_id" | "social_account_id", value: string) {
+      filters.push([column, value]);
+      return query;
+    },
+  };
+  const scope = storeEventReadScope(EVENT_ID, "user-1", "acc-1");
+  assertEquals(scope, { id: EVENT_ID, userId: "user-1", socialAccountId: "acc-1" });
+  scopeStoreEventRead(query, scope!);
+  assertEquals(filters, [
+    ["id", EVENT_ID],
+    ["user_id", "user-1"],
+    ["social_account_id", "acc-1"],
+  ]);
+});
+
+Deno.test("waitlist join copies id, parent and name from the stock result", () => {
+  const plan = joinInput([sighting("outofstock", "Real Hat")]);
+  assertEquals(plan.action, "upsert");
+  if (plan.action !== "upsert") return;
+  assertEquals(plan.row.product_id, 55);
+  assertEquals(plan.row.parent_id, 10);
+  assertEquals(plan.row.product_name, "Real Hat");
+  assertEquals(plan.row.connector_id, "conn-9");
+  assertEquals(plan.row.phone, "96555512345");
+  assertEquals(plan.row.consent_source, "chat_optin");
+  assertEquals(plan.row.consented_at, T.toISOString());
+  assertEquals(plan.row.expires_at, "2026-11-25T10:00:00.000Z");
+  assertEquals(plan.onConflict, "social_account_id,connector_id,phone,product_id");
+  assertEquals(STOCK_WAITLIST_ON_CONFLICT, plan.onConflict);
+  assertEquals(joinInput([sighting("outofstock")], { dryRun: true }).action, "dry_run");
+});
+
+Deno.test("waitlist join is offered and saved only when the connector has a store binding", async () => {
+  const bound = sighting("outofstock", "Bound hat");
+  const unbound = { ...sighting("outofstock", "Other hat"), connectorId: "conn-other", productId: "77" };
+  const calls: string[] = [];
+  const port = {
+    hasStoreBinding: (connectorId: string) => {
+      calls.push(connectorId);
+      return Promise.resolve(connectorId === "conn-9");
+    },
+  };
+  const offered = await boundWaitlistSightings([bound, unbound, bound], port);
+  const round = waitlistRound([bound, unbound], offered);
+  const parameters = round.tool?.function.parameters as { properties: { product_id: { enum: string[] } } };
+  assertEquals(parameters.properties.product_id.enum, ["55"]);
+  assertEquals(round.gap, null);
+  assertEquals(calls, ["conn-9", "conn-other"]);
+
+  const saved = await planBoundWaitlistJoin({
+    productId: "55", sightings: [bound], platform: "whatsapp", phone: "+965 5551 2345", dryRun: false,
+    userId: "user-1", socialAccountId: "acc-1", conversationId: "conv-1", now: T.toISOString(),
+  }, port);
+  assertEquals(saved.action, "upsert");
+
+  const refused = await planBoundWaitlistJoin({
+    productId: "77", sightings: [unbound], platform: "whatsapp", phone: "+965 5551 2345", dryRun: false,
+    userId: "user-1", socialAccountId: "acc-1", conversationId: "conv-1", now: T.toISOString(),
+  }, { hasStoreBinding: () => Promise.resolve(false) });
+  assertEquals(refused.action, "refuse");
+  if (refused.action === "refuse") assertEquals(refused.output, WAITLIST_BINDING_REFUSAL);
+  assertStringIncludes(WAITLIST_BINDING_REFUSAL, "notifications are not set up");
+
+  const dry = await planBoundWaitlistJoin({
+    productId: "77", sightings: [unbound], platform: "whatsapp", phone: "+965 5551 2345", dryRun: true,
+    userId: "user-1", socialAccountId: "acc-1", conversationId: "conv-1", now: T.toISOString(),
+  }, { hasStoreBinding: () => Promise.resolve(false) });
+  assertEquals(dry.action, "refuse");
+
+  const none = waitlistRound([unbound], []);
+  assertEquals(none.tool, null);
+  assertStringIncludes(none.gap ?? "", "notifications are not set up");
+  assertEquals(stockWaitlistToolDefinition([]), null);
+});
+
+Deno.test("stock_waitlist_join writes only when this turn offered the tool", async () => {
+  const offered = [{ function: { name: "stock_waitlist_join" } }];
+  let writes = 0;
+  const join = () => {
+    writes += 1;
+    return Promise.resolve({ output: "saved" });
+  };
+  const hidden = await executeOfferedWaitlistJoin(stockWaitlistJoinOffered(true, []), join);
+  assertEquals(hidden.output, "Unknown tool: stock_waitlist_join");
+  const switchedOff = await executeOfferedWaitlistJoin(stockWaitlistJoinOffered(false, offered), join);
+  assertEquals(switchedOff.output, "Unknown tool: stock_waitlist_join");
+  assertEquals(writes, 0);
+  const saved = await executeOfferedWaitlistJoin(stockWaitlistJoinOffered(true, offered), join);
+  assertEquals(saved.output, "saved");
+  assertEquals(writes, 1);
+});
+
+Deno.test("a waitlist re-join upsert renews expires_at and consented_at", async () => {
+  const plan = joinInput([sighting("outofstock", "Real Hat")]);
+  if (plan.action !== "upsert") throw new Error("expected upsert");
+  let received: { expires_at: string; consented_at: string } | null = null;
+  const output = await enrollWaitlist(plan, {
+    upsert: async (row) => {
+      received = { expires_at: row.expires_at, consented_at: row.consented_at };
+      return { error: null };
+    },
+    log: { insert: async () => ({ error: null }) },
+  });
+  assertEquals(output.includes("back in stock"), true);
+  assertEquals(received, {
+    expires_at: "2026-11-25T10:00:00.000Z",
+    consented_at: T.toISOString(),
+  });
+});
+
+Deno.test("a failed waitlist upsert writes one sanitized log through the port, then the follow-up", async () => {
+  const plan = joinInput([sighting("outofstock", "Real Hat")]);
+  if (plan.action !== "upsert") throw new Error("expected upsert");
+  const rows: WaitlistEnrollmentLog[] = [];
+  const phone = "96500011122";
+  const output = await enrollWaitlist(plan, {
+    upsert: async () => ({ error: { code: "23505", message: `duplicate key ${phone}` } }),
+    log: {
+      insert: async (entry) => {
+        rows.push(entry);
+        return { error: null };
+      },
+    },
+  });
+  assertEquals(output, "The waitlist could not be saved. Tell the customer the team will follow up.");
+  assertEquals(rows, [{
+    source: "ai-agent-reply",
+    category: "ai",
+    level: "warn",
+    message: "Waitlist enrollment failed",
+    user_id: "user-1",
+    metadata: {
+      social_account_id: "acc-1",
+      connector_id: "conn-9",
+      product_id: "55",
+      error_code: "23505",
+    },
+  }]);
+  assertEquals(JSON.stringify(rows).includes(phone), false);
+
+  const errors: string[] = [];
+  const original = console.error;
+  console.error = (...args: unknown[]) => {
+    errors.push(args.map((part) => String(part)).join(" "));
+  };
+  try {
+    const again = await enrollWaitlist(plan, {
+      upsert: async () => { throw new Error(`upsert exploded ${phone}`); },
+      log: { insert: async () => { throw new Error(`log insert failed ${phone}`); } },
+    });
+    assertEquals(again, output);
+  } finally {
+    console.error = original;
+  }
+  assertEquals(errors.length, 1);
+  assertEquals(errors[0].includes(phone), false);
+  assertStringIncludes(errors[0], "[redacted]");
+});
+
+// PR #214 round 8: on a COD confirmation "cancel" is the customer's decision and must reach the order.
+Deno.test("an active COD confirmation offers no procedure_cancel; other flows still do", () => {
+  const names = (defs: Array<{ function: { name: string } }>) => defs.map((def) => def.function.name);
+  assertEquals(names(procedureToolDefinitions(["cod_confirm", "lead_capture"], "cod_confirm")).includes("procedure_cancel"), false);
+  assertEquals(names(procedureToolDefinitions(["review_request"], "review_request")).includes("procedure_cancel"), true);
+  assertEquals(names(procedureToolDefinitions(["lead_capture"], null)).includes("procedure_cancel"), true);
+});
+
+Deno.test("procedure_cancel on a COD confirmation keeps the flow and points at the cancel decision", async () => {
+  const { ports, updates } = eventPorts("cod_confirm");
+  const turn = eventTurn("cod_confirm", ports);
+  const result = await turn.handle("procedure_cancel", { reason: "customer pressed Cancel" });
+  assertEquals(turn.state?.key, "cod_confirm");
+  assertEquals(turn.completed, null);
+  assertEquals(updates.length, 0);
+  assertStringIncludes(result.output, '"decision": "cancel"');
 });

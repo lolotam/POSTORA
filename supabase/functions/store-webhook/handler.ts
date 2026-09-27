@@ -1,10 +1,10 @@
 // Public WooCommerce receiver. Nothing in this module sends a message.
-// Event flows are not enabled in PR 1 (readProcedureConfig drops them), so a
-// verified delivery is stored only when a later change turns a flow on.
+// A verified delivery is stored only when that account's procedure config
+// enables the flow, including the consent timestamp cod and review require.
 import { rateLimitExceededResponse } from "../_shared/rate-limiter.ts";
 import { corsHeaders, jsonResponse } from "../_shared/cors.ts";
 import { classifyWooDelivery, isWooPing, verifyWooSignature, type WaitlistMatch } from "../_shared/wooWebhook.ts";
-import { enabledProcedures, readProcedureConfig } from "../_shared/procedures/config.ts";
+import { enabledProcedures, readProcedureConfig, reviewDelayDays } from "../_shared/procedures/config.ts";
 
 const BODY_CAP = 262144;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -47,7 +47,7 @@ export interface StoreWebhookDeps {
   loadBinding(id: string): Promise<StoreBinding | null>;
   loadSecrets(bindingId: string): Promise<{ current: string; previous: string | null; rotatedAt: string | null } | null>;
   loadProcedures(socialAccountId: string): Promise<unknown>;
-  /** Defaults to enabledStoreFlows, which drops event keys in PR 1. */
+  /** Defaults to enabledStoreFlows. */
   flowsFrom?(procedures: unknown): ReadonlySet<string>;
   /** Only rows whose product or parent is one of productIds (validated positive integers). */
   loadWaitlist(binding: StoreBinding, productIds: number[]): Promise<ScopedWaitlistRow[]>;
@@ -55,7 +55,7 @@ export interface StoreWebhookDeps {
   now(): Date;
 }
 
-/** Flows a stored config may start. readProcedureConfig drops event keys until PR 2. */
+/** Flows a stored config may start. Invalid event settings are dropped by the lenient read. */
 export function enabledStoreFlows(procedures: unknown): Set<string> {
   return new Set(enabledProcedures(readProcedureConfig(procedures)));
 }
@@ -127,7 +127,7 @@ export async function handleStoreWebhook(req: Request, deps: StoreWebhookDeps): 
     body: parsed,
     now: deps.now(),
     enabled: (deps.flowsFrom ?? enabledStoreFlows)(procedures),
-    reviewDelayDays: 3,
+    reviewDelayDays: reviewDelayDays(procedures),
     country: null,
     waitlist,
   });
