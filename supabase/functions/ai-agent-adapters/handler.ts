@@ -63,6 +63,14 @@ export async function meterTestConnectionProbe(
   return outcome;
 }
 
+/** User JWTs never open procedure writes, even when the body asks for them. */
+export function internalProcedureAllowed(
+  isServiceRole: boolean,
+  body: { internal_procedure?: boolean },
+): boolean {
+  return isServiceRole === true && body.internal_procedure === true;
+}
+
 export const RequestSchema = z.object({
   tool_id: z.string().uuid(),
   action: z.enum(["execute", "test_connection"]),
@@ -215,7 +223,7 @@ async function executeAdapterRequest(
           action: parsedRequest.data.action,
           capability: parsedRequest.data.capability,
           method: parsedRequest.data.method,
-          internalProcedure: isServiceRole && parsedRequest.data.internal_procedure === true,
+          internalProcedure: internalProcedureAllowed(isServiceRole, parsedRequest.data),
           parameters: parsedRequest.data.parameters,
         },
       },

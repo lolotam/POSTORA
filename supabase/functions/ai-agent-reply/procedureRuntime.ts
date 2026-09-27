@@ -7,6 +7,7 @@ import { type ProcedureConfig, enabledProcedures } from "../_shared/procedures/c
 import {
   type ProcedureField, type ProcedureKey, type ProcedureOrigin, PROCEDURE_KEYS, isEventProcedureKey, productFinderFields, TEMPLATES,
 } from "../_shared/procedures/templates.ts";
+import { parseCustomerPhone } from "../_shared/phone.ts";
 import { sanitizeFieldValue } from "./logic.ts";
 import type { ToolResult } from "./tools.ts";
 
@@ -63,6 +64,11 @@ export interface ProcedureTurnInput {
   runId: string;
   /** The account owner. Event end actions require the store_events row to name this user. */
   userId: string;
+  /**
+   * Phone of the customer on this turn. For WhatsApp this is recipient_phone.
+   * Event end actions refuse when it does not match the event payload phone.
+   */
+  customerPhone: string;
   leadContext: { platform: string; socialAccountId: string | null; conversationId: string };
 }
 
@@ -146,12 +152,34 @@ const COD_EXPECTED = ["pending", "on-hold", "processing"];
 const CONFIRM_NOTE = "Confirmed by the customer on WhatsApp (Postora)";
 const CANCEL_NOTE = "Customer asked to cancel on WhatsApp (Postora)";
 
+/** International digits, or the digit run when the number is already bare. */
+function canonicalCustomerPhone(raw: string | undefined): string | null {
+  if (!raw || raw.toLowerCase().includes("@")) return null;
+  return parseCustomerPhone(raw, null) ?? customerPhoneForWaitlist(raw);
+}
+
+function sameCustomer(eventPhone: string | undefined, turnPhone: string): boolean {
+  const eventDigits = canonicalCustomerPhone(eventPhone);
+  const turnDigits = canonicalCustomerPhone(turnPhone);
+  return eventDigits !== null && eventDigits === turnDigits;
+}
+
+/** A non-digit order id is not an order. COD requires one; other flows refuse a bad one when it is present. */
+function eventOrderIdOk(event: StoreEventRow): boolean {
+  const orderId = event.payload.order_id;
+  if (orderId !== undefined && !/^\d+$/.test(orderId)) return false;
+  if (event.flow === "cod_confirm") return /^\d+$/.test(orderId ?? "");
+  return true;
+}
+
 function eventMatches(event: StoreEventRow | null, input: ProcedureTurnInput, flow: string): event is StoreEventRow {
   return !!event
     && event.user_id === input.userId
     && event.social_account_id === input.leadContext.socialAccountId
     && event.flow === flow
-    && event.connector_id.length > 0;
+    && event.connector_id.length > 0
+    && sameCustomer(event.payload.phone, input.customerPhone)
+    && eventOrderIdOk(event);
 }
 
 /** Mismatch is terminal for this turn: the customer hears the follow-up, and nothing is written to the store. */

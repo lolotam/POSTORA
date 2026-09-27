@@ -1142,6 +1142,7 @@ Deno.serve(async (req) => {
       state: initialProcedureState, config: procedureConfig, dryRun, now: () => new Date(),
       runId: outboxId ?? crypto.randomUUID(),
       userId: request.user_id,
+      customerPhone: request.recipient_phone,
       leadContext: { platform: request.platform, socialAccountId: toolContext.socialAccountId, conversationId: request.conversation_id },
       ports: {
         claim: async (claimed) => {

@@ -49,34 +49,28 @@ Deno.test("event flows save only with their required settings", () => {
   assertEquals(enabledProcedures(parsed), ["cod_confirm", "review_request", "back_in_stock"]);
 });
 
-Deno.test("enabling cod_confirm or review_request without consent is rejected", () => {
-  assertThrows(
-    () => parseProcedureConfig({ cod_confirm: { enabled: true, prompts: {}, closing: "" } }),
-    AgentBehaviorError,
-  );
-  assertThrows(
-    () => parseProcedureConfig({
-      review_request: { enabled: true, prompts: {}, closing: "", review_url: "https://shop.example/reviews" },
-    }),
-    AgentBehaviorError,
-  );
-  assertThrows(
-    () => parseProcedureConfig({
-      review_request: { enabled: true, prompts: {}, closing: "", consent_attested_at: CONSENT, review_url: "http://shop.example/reviews" },
-    }),
-    AgentBehaviorError,
-  );
-  assertThrows(
-    () => parseProcedureConfig({
-      review_request: { enabled: true, prompts: {}, closing: "", consent_attested_at: CONSENT, review_url: "https://shop.example/reviews", delay_days: 15 },
-    }),
-    AgentBehaviorError,
-  );
-  assertThrows(
-    () => parseProcedureConfig({ back_in_stock: { enabled: true, prompts: {}, closing: "", qr_risk_acknowledged_at: "yesterday" } }),
-    AgentBehaviorError,
-  );
-});
+for (const [label, input] of [
+  ["cod_confirm without consent", { cod_confirm: { enabled: true, prompts: {}, closing: "" } }],
+  ["review_request without consent", {
+    review_request: { enabled: true, prompts: {}, closing: "", review_url: "https://shop.example/reviews" },
+  }],
+  ["review_request with an http link", {
+    review_request: { enabled: true, prompts: {}, closing: "", consent_attested_at: CONSENT, review_url: "http://shop.example/reviews" },
+  }],
+  ["review_request delay above 14 days", {
+    review_request: {
+      enabled: true, prompts: {}, closing: "", consent_attested_at: CONSENT,
+      review_url: "https://shop.example/reviews", delay_days: 15,
+    },
+  }],
+  ["back_in_stock with a non-timestamp acknowledgement", {
+    back_in_stock: { enabled: true, prompts: {}, closing: "", qr_risk_acknowledged_at: "yesterday" },
+  }],
+] as const) {
+  Deno.test(`parseProcedureConfig rejects ${label}`, () => {
+    assertThrows(() => parseProcedureConfig(input), AgentBehaviorError);
+  });
+}
 
 Deno.test("readProcedureConfig drops only the invalid flow and never throws", () => {
   const read = readProcedureConfig({

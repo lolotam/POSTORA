@@ -367,6 +367,9 @@ async function updateOrder(
   authorization: string,
   base: string,
 ): Promise<ConnectorResult> {
+  if (invocation.request.internalProcedure !== true) {
+    return wooFailure("capability_refused", "The requested connector capability is not enabled.");
+  }
   if (invocation.tool.read_only_mode !== false) {
     return wooFailure("read_only_violation", "Read-only mode refused the order update.");
   }

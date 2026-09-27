@@ -35,12 +35,12 @@ function enabledCapabilities(invocation: ConnectorInvocation): Capability[] {
   const permissions = invocation.tool.permissions;
   return CAPABILITIES.filter((capability) => {
     if (capability === "lookup_orders" && internalOrderRead(invocation)) return true;
-    if (permissions[capability] === true) return true;
-    // No permissions column for these: the procedure call opts in, and an
-    // explicit false still refuses. Model tool calls never set the flag.
-    return PROCEDURE_CAPABILITIES.has(capability)
-      && invocation.request.internalProcedure === true
-      && permissions[capability] !== false;
+    // permissions JSON true must not open these. Only the runtime flag does,
+    // and an explicit false still refuses.
+    if (PROCEDURE_CAPABILITIES.has(capability)) {
+      return invocation.request.internalProcedure === true && permissions[capability] !== false;
+    }
+    return permissions[capability] === true;
   });
 }
 

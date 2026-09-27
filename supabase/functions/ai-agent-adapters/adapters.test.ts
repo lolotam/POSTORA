@@ -15,7 +15,7 @@ import {
   resolvePageSize,
   SupabaseValidationError,
 } from "./supabase.ts";
-import { handleAdapterRequest, meterTestConnectionProbe, RequestSchema, type AdminClientFactory } from "./handler.ts";
+import { handleAdapterRequest, internalProcedureAllowed, meterTestConnectionProbe, RequestSchema, type AdminClientFactory } from "./handler.ts";
 import { createAdapterDependencies } from "./dependencies.ts";
 import type { ConnectorCache } from "./cache.ts";
 import { wooCommerceAdapter } from "./woocommerce.ts";
@@ -246,18 +246,59 @@ function updateOrderRequest(overrides: Partial<ConnectorTool> = {}): {
   };
 }
 
-Deno.test("update_order in read-only mode performs zero fetches", async () => {
-  let fetchCalls = 0;
-  const result = await executeConnector(
-    updateOrderRequest({ read_only_mode: true }),
-    dependencies(() => {
-      fetchCalls += 1;
-      return Promise.resolve(jsonResponse({}));
-    }),
-  );
-  assertEquals(fetchCalls, 0);
-  assertEquals(result.ok, false);
-  if (!result.ok) assertEquals(result.error.code, "read_only_violation");
+for (const method of ["POST", "GET", "unset"] as const) {
+  Deno.test(`update_order in read-only mode performs zero fetches (${method})`, async () => {
+    let fetchCalls = 0;
+    const invocation = updateOrderRequest({ read_only_mode: true });
+    if (method === "unset") delete invocation.request.method;
+    else invocation.request.method = method;
+    const result = await executeConnector(
+      invocation,
+      dependencies(() => {
+        fetchCalls += 1;
+        return Promise.resolve(jsonResponse({}));
+      }),
+    );
+    assertEquals(fetchCalls, 0);
+    assertEquals(result.ok, false);
+    if (!result.ok) assertEquals(result.error.code, "read_only_violation");
+  });
+}
+
+for (const capability of ["update_order", "get_product"] as const) {
+  Deno.test(`${capability} without the procedure flag is refused before any fetch`, async () => {
+    for (const permissions of [{}, { [capability]: true }] as const) {
+      let fetchCalls = 0;
+      const result = await executeConnector(
+        {
+          tool: wooTool({ read_only_mode: false, permissions: { ...permissions } }),
+          credentials: { consumer_key: WOO_KEY, consumer_secret: WOO_SECRET },
+          request: {
+            action: "execute",
+            capability,
+            method: capability === "update_order" ? "POST" : "GET",
+            parameters: capability === "update_order"
+              ? { order_id: "10432", note: ORDER_NOTE, status: "cancelled", expected_statuses: ["processing"] }
+              : { product_id: "55" },
+          },
+        },
+        dependencies(() => {
+          fetchCalls += 1;
+          return Promise.resolve(jsonResponse({}));
+        }),
+      );
+      assertEquals(fetchCalls, 0, JSON.stringify(permissions));
+      assertEquals(result.ok, false);
+      if (!result.ok) assertEquals(result.error.code, "capability_refused");
+    }
+  });
+}
+
+Deno.test("internalProcedureAllowed rejects a user JWT even when the body asks", () => {
+  assertEquals(internalProcedureAllowed(false, { internal_procedure: true }), false);
+  assertEquals(internalProcedureAllowed(true, { internal_procedure: false }), false);
+  assertEquals(internalProcedureAllowed(true, {}), false);
+  assertEquals(internalProcedureAllowed(true, { internal_procedure: true }), true);
 });
 
 Deno.test("update_order posts the note before it changes status", async () => {

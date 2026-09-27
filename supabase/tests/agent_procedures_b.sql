@@ -418,8 +418,11 @@ DECLARE
   bind_a uuid := '77777777-7777-4777-8777-777777777777';
   v_claimed text[];
   v_old_token uuid := 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  v_b21_oldest_token uuid;
+  v_b21_middle_token uuid;
   v_got uuid;
   v_ok boolean;
+  v_stale_rows int := -1;
   v_i int;
 BEGIN
   INSERT INTO public.store_events
@@ -439,8 +442,8 @@ BEGIN
   SELECT array_agg(external_id)
     INTO v_claimed
     FROM public.claim_store_events(2, interval '2 minutes');
-  ASSERT array_length(v_claimed, 1) <= 2,
-    'B21 claim returns at most p_limit rows';
+  ASSERT array_length(v_claimed, 1) = 2,
+    'B21 claim returns exactly p_limit rows';
   ASSERT v_claimed @> ARRAY['order-b21-oldest', 'order-b21-middle'],
     'B21 claim takes the oldest due rows first';
 
@@ -462,6 +465,11 @@ BEGIN
             AND status = 'claimed') = array_length(v_claimed, 1),
     'B23 claimed rows are in claimed status';
 
+  SELECT claim_token INTO v_b21_oldest_token FROM public.store_events
+  WHERE binding_id = bind_a AND external_id = 'order-b21-oldest';
+  SELECT claim_token INTO v_b21_middle_token FROM public.store_events
+  WHERE binding_id = bind_a AND external_id = 'order-b21-middle';
+
   -- Reclaim fixtures: an expired lease, an exhausted row, an expired send.
   INSERT INTO public.store_events
     (user_id, social_account_id, connector_id, binding_id, flow,
@@ -482,6 +490,13 @@ BEGIN
 
   PERFORM public.claim_store_events(10, interval '2 minutes');
 
+  ASSERT (SELECT claim_token FROM public.store_events
+          WHERE binding_id = bind_a AND external_id = 'order-b21-oldest') = v_b21_oldest_token,
+    'B21 unexpired oldest row keeps its original claim token';
+  ASSERT (SELECT claim_token FROM public.store_events
+          WHERE binding_id = bind_a AND external_id = 'order-b21-middle') = v_b21_middle_token,
+    'B21 unexpired middle row keeps its original claim token';
+
   -- B24: the expired lease is reclaimed under a new token, attempts + 1.
   ASSERT (SELECT status FROM public.store_events
           WHERE binding_id = bind_a AND external_id = 'order-b24-reclaim') = 'claimed',
@@ -493,6 +508,14 @@ BEGIN
   ASSERT (SELECT attempts FROM public.store_events
           WHERE binding_id = bind_a AND external_id = 'order-b24-reclaim') = 2,
     'B24 reclaim bumps attempts';
+  UPDATE public.store_events
+  SET skip_reason = 'stale-token-write'
+  WHERE binding_id = bind_a
+    AND external_id = 'order-b24-reclaim'
+    AND claim_token = v_old_token;
+  GET DIAGNOSTICS v_stale_rows = ROW_COUNT;
+  ASSERT v_stale_rows = 0,
+    'B24 update with the old claim token touches 0 rows';
 
   -- B25: three attempts on an expired lease means failed, never reclaimed.
   ASSERT (SELECT status FROM public.store_events

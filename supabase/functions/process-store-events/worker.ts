@@ -231,7 +231,10 @@ async function settleIndeterminate(ports: WorkerPorts, event: StoreEventRow): Pr
       await clearPending(ports, thread, event.id, null);
     }
   } catch (error) {
-    console.error(`[process-store-events] ${event.id} state clear failed:`, error instanceof Error ? error.message : "state_clear_failed");
+    console.error(
+      `[process-store-events] ${event.id} state clear failed:`,
+      sanitizeFailureReason(error instanceof Error ? error.message : "state_clear_failed"),
+    );
   }
   await ports.alertAdmin(event, "indeterminate");
   return true;
@@ -370,7 +373,7 @@ async function processClaimed(
     }
     console.error(
       `[process-store-events] ${event.id} stopped:`,
-      error instanceof Error ? error.message : "worker_error",
+      sanitizeFailureReason(error instanceof Error ? error.message : "worker_error"),
     );
     return "left";
   }

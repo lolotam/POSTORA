@@ -1,7 +1,7 @@
 // supabase/functions/ai-agent-reply/procedureRuntime.test.ts
 import { assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 import {
-  createProcedureTurn, planWaitlistJoin, type ProcedurePorts, type ProcedureTurnInput, type StockSighting, type StoreEventRow,
+  createProcedureTurn, planWaitlistJoin, procedureToolDefinitions, type ProcedurePorts, type ProcedureTurnInput, type StockSighting, type StoreEventRow,
 } from "./procedureRuntime.ts";
 
 function fakePorts(overrides: Partial<ProcedurePorts> = {}) {
@@ -38,6 +38,7 @@ const input = (ports: ProcedurePorts, extra: Partial<ProcedureTurnInput> = {}): 
     booking: { enabled: true, prompts: {}, closing: "", services: ["Haircut", "Beard trim"] },
   },
   ports, dryRun: false, now: () => T, runId: "run-1", userId: "user-1",
+  customerPhone: "96555512345",
   leadContext: { platform: "whatsapp", socialAccountId: "acc-1", conversationId: "conv-1" },
   ...extra,
 });
@@ -375,9 +376,12 @@ Deno.test("a pending_opener state is inert: no start, no submit, nothing progres
 });
 
 const EVENT_ID = "11111111-1111-4111-8111-111111111111";
+const EVENT_PHONE = "+965 5551 2345";
 const eventRow = (flow: StoreEventRow["flow"]): StoreEventRow => ({
   id: EVENT_ID, user_id: "user-1", social_account_id: "acc-1", connector_id: "conn-1", flow,
-  payload: { order_id: "10432", product_id: "55", parent_id: "10", product_name: "Blue hat" },
+  payload: {
+    order_id: "10432", product_id: "55", parent_id: "10", product_name: "Blue hat", phone: EVENT_PHONE,
+  },
 });
 
 function eventPorts(flow: StoreEventRow["flow"]) {
@@ -399,7 +403,9 @@ function eventTurn(flow: "cod_confirm" | "review_request" | "back_in_stock", por
   const base = input(ports);
   return createProcedureTurn(input(ports, {
     state: {
-      run_id: EVENT_ID, key: flow, version: 1, step: 0, fields: {}, off_script: 0,
+      run_id: EVENT_ID, key: flow, version: 1, step: 0,
+      fields: { order_id: "99999", product_id: "1" },
+      off_script: 0,
       origin: "event", started_at: T.toISOString(), updated_at: T.toISOString(),
     },
     config: {
@@ -458,14 +464,37 @@ Deno.test("store_write_denied alerts and does not claim the order changed", asyn
   assertEquals(result.output.includes("cancelled"), false);
 });
 
-Deno.test("an event for another account is refused before any store write", async () => {
-  const { ports, calls, updates } = eventPorts("cod_confirm");
-  ports.eventFor = async () => ({ ...eventRow("cod_confirm"), user_id: "someone-else" });
-  const result = await eventTurn("cod_confirm", ports).handle("procedure_submit", { fields: { decision: "confirm" } });
-  assertEquals(updates.length, 0);
-  assertEquals(calls.notified.length, 1);
-  assertStringIncludes(result.output, "team will follow up");
-});
+const EVENT_FLOWS = ["cod_confirm", "review_request", "back_in_stock"] as const;
+const EVENT_ANSWERS = {
+  cod_confirm: { decision: "confirm" },
+  review_request: { rating: "5" },
+  back_in_stock: { interest: "yes" },
+} as const;
+
+for (const flow of EVENT_FLOWS) {
+  const mismatches: Array<[string, (row: StoreEventRow) => StoreEventRow | null]> = [
+    ["wrong user_id", (row) => ({ ...row, user_id: "someone-else" })],
+    ["wrong social_account_id", (row) => ({ ...row, social_account_id: "other-account" })],
+    ["wrong flow", (row) => ({ ...row, flow: flow === "cod_confirm" ? "review_request" : "cod_confirm" })],
+    ["empty connector_id", (row) => ({ ...row, connector_id: "" })],
+    ["null event", () => null],
+    ["wrong phone", (row) => ({ ...row, payload: { ...row.payload, phone: "966500000000" } })],
+    ["payload order_id abc", (row) => ({ ...row, payload: { ...row.payload, order_id: "abc" } })],
+  ];
+  for (const [name, mutate] of mismatches) {
+    Deno.test(`${flow} refuses ${name} with no store call`, async () => {
+      const { ports, calls, updates, products } = eventPorts(flow);
+      ports.eventFor = async () => mutate(eventRow(flow));
+      const result = await eventTurn(flow, ports).handle("procedure_submit", { fields: EVENT_ANSWERS[flow] });
+      assertEquals(updates.length, 0);
+      assertEquals(products.length, 0);
+      assertEquals(calls.escalated.length, 0);
+      assertEquals(calls.notified.length, 1);
+      assertEquals(calls.failures.length, 1);
+      assertStringIncludes(result.output, "team will follow up");
+    });
+  }
+}
 
 Deno.test("a cod end action in dry run writes nothing and alerts nobody", async () => {
   const { ports, calls, updates } = eventPorts("cod_confirm");
@@ -514,6 +543,19 @@ const joinInput = (sightings: StockSighting[], extra: Partial<Parameters<typeof 
   productId: "55", sightings, platform: "whatsapp", phone: "+965 5551 2345", dryRun: false,
   userId: "user-1", socialAccountId: "acc-1", conversationId: "conv-1", now: T.toISOString(),
   ...extra,
+});
+
+Deno.test("event procedures offer no start_procedure", () => {
+  const names = procedureToolDefinitions(["cod_confirm", "review_request", "back_in_stock"])
+    .map((tool) => tool.function.name);
+  assertEquals(names.includes("start_procedure"), false);
+});
+
+Deno.test("a mixed procedure list excludes event keys from start_procedure", () => {
+  const start = procedureToolDefinitions(["order_status", "cod_confirm", "lead_capture", "back_in_stock"])
+    .find((tool) => tool.function.name === "start_procedure");
+  const parameters = start?.function.parameters as { properties: { key: { enum: string[] } } };
+  assertEquals(parameters.properties.key.enum, ["order_status", "lead_capture"]);
 });
 
 Deno.test("waitlist join is refused without a stock result", () => {

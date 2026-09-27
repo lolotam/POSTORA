@@ -129,7 +129,6 @@ function harness(options: {
     releaseClaim: async (id, token) => {
       const target = rows.find((item) => item.id === id && item.claim_token === token && item.status === "claimed");
       if (!target) return false;
-      target.status = "claimed";
       Object.assign(target, { status: "pending", claim_token: "released" });
       return true;
     },
@@ -175,6 +174,25 @@ function harness(options: {
     },
   };
   return state;
+}
+
+function activated(box: Harness): boolean {
+  return box.persists.some((call) => (call.next as { phase?: string } | null)?.phase === "active");
+}
+
+function qrAccount(): AccountContext {
+  return account({
+    connectionMode: "evolution_qr",
+    platformUserId: "qr-user",
+    phoneNumberId: null,
+    settings: {
+      enabled: true,
+      prompts: {},
+      closing: "",
+      consent_attested_at: "2026-09-01T00:00:00.000Z",
+      qr_risk_acknowledged_at: "2026-09-01T00:00:00.000Z",
+    },
+  });
 }
 
 function reasonOf(row: StoreEventRow): string | undefined {
@@ -224,6 +242,7 @@ Deno.test("each account and store skip reason is recorded and nothing is sent", 
 Deno.test("engagement mode uses the reply gate and human_then_ai still sends", () => {
   const row = event();
   assertEquals(accountSkipReason(row, account({ defaultMode: "human_then_ai" }), NOW), null);
+  // resolveEngagementMode maps an unknown mode to human_then_ai, so it is not a skip.
   assertEquals(accountSkipReason(row, account({ defaultMode: "nope" }), NOW), null);
   assertEquals(storeSkipReason("review_request", {}, snapshot({ status: "completed" }), NOW), null);
 });
@@ -266,18 +285,7 @@ Deno.test("an expired sending row is never resent", async () => {
 
 Deno.test("a definite send failure clears the opener state and releases the QR slot", async () => {
   const box = harness({
-    account: account({
-      connectionMode: "evolution_qr",
-      platformUserId: "qr-user",
-      phoneNumberId: null,
-      settings: {
-        enabled: true,
-        prompts: {},
-        closing: "",
-        consent_attested_at: "2026-09-01T00:00:00.000Z",
-        qr_risk_acknowledged_at: "2026-09-01T00:00:00.000Z",
-      },
-    }),
+    account: qrAccount(),
     send: { accepted: false, definite: true, reason: "recipient 96555512345 unreachable" },
   });
   await runStoreEventWorker(box.ports);
@@ -285,6 +293,22 @@ Deno.test("a definite send failure clears the opener state and releases the QR s
   assertEquals(reasonOf(box.row)?.includes(PHONE), false);
   assertEquals(box.qrReleases, 1);
   assertEquals(box.persists.some((call) => call.next === null), true);
+  assertEquals(activated(box), false);
+});
+
+Deno.test("an indeterminate send fails the row, alerts, and keeps the QR slot", async () => {
+  const box = harness({
+    account: qrAccount(),
+    send: { accepted: false, definite: false },
+  });
+  const summary = await runStoreEventWorker(box.ports);
+  assertEquals(summary.failed, 1);
+  assertEquals(box.row.status, "failed");
+  assertEquals(reasonOf(box.row), "indeterminate");
+  assertEquals(box.alerts, ["indeterminate"]);
+  assertEquals(box.qrReleases, 0);
+  assertEquals(activated(box), false);
+  assertEquals(box.sends.length, 1);
 });
 
 Deno.test("the QR daily cap skips without a send", async () => {
@@ -315,23 +339,13 @@ Deno.test("a template that is not approved skips and clears the opener state", a
   assertEquals(reasonOf(box.row), "template_not_approved");
   assertEquals(box.sends.length, 0);
   assertEquals(box.persists.some((call) => call.next === null), true);
+  assertEquals(activated(box), false);
 });
 
 Deno.test("another live procedure skips as flow_active and releases the QR slot", async () => {
   const at = new Date(NOW).toISOString();
   const box = harness({
-    account: account({
-      connectionMode: "evolution_qr",
-      platformUserId: "qr-user",
-      phoneNumberId: null,
-      settings: {
-        enabled: true,
-        prompts: {},
-        closing: "",
-        consent_attested_at: "2026-09-01T00:00:00.000Z",
-        qr_risk_acknowledged_at: "2026-09-01T00:00:00.000Z",
-      },
-    }),
+    account: qrAccount(),
     thread: {
       id: "thread-1",
       procedure_state: {
@@ -351,6 +365,7 @@ Deno.test("another live procedure skips as flow_active and releases the QR slot"
   assertEquals(reasonOf(box.row), "flow_active");
   assertEquals(box.qrReleases, 1);
   assertEquals(box.sends.length, 0);
+  assertEquals(activated(box), false);
 });
 
 Deno.test("a stale claim token updates nothing and does not send", async () => {
@@ -369,10 +384,26 @@ Deno.test("a stale claim token updates nothing and does not send", async () => {
   assertEquals(row.claim_token, "token-1");
   assertEquals(mutated, false);
   assertEquals(box.sends.length, 0);
-  const shadow = { status: "claimed", claim_token: "token-1" };
-  const applied = shadow.claim_token === "other";
-  if (applied) shadow.status = "sent";
-  assertEquals(shadow, { status: "claimed", claim_token: "token-1" });
+  assertEquals(box.persists.length, 0);
+});
+
+Deno.test("a claim token lost before sending releases the QR slot and does not send", async () => {
+  const row = event();
+  const box = harness({
+    row,
+    account: qrAccount(),
+    update: async (id, token, patch) => {
+      if (patch.status === "sending") return false;
+      if (row.id !== id || row.claim_token !== token) return false;
+      Object.assign(row, patch);
+      return true;
+    },
+  });
+  await runStoreEventWorker(box.ports);
+  assertEquals(box.sends.length, 0);
+  assertEquals(box.qrReleases, 1);
+  assertEquals(activated(box), false);
+  assertEquals(row.status, "claimed");
 });
 
 Deno.test("the tick releases claimed rows once the 40s budget is spent", async () => {

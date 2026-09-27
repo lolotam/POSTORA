@@ -8,18 +8,24 @@ import {
 } from "./eventTemplates.ts";
 import { EVENT_PROCEDURE_KEYS } from "./templates.ts";
 
-Deno.test("every template variable has an example", () => {
-  for (const flow of EVENT_PROCEDURE_KEYS) {
-    for (const language of ["ar", "en"] as const) {
+for (const flow of EVENT_PROCEDURE_KEYS) {
+  for (const language of ["ar", "en"] as const) {
+    Deno.test(`${flow} ${language} template variable has an example`, () => {
       const definition = eventTemplateDefinition(flow, language);
       const variables = definition.body.match(/\{\{\d+\}\}/g) ?? [];
       assertEquals(definition.examples.length, variables.length);
       assertEquals(definition.name, `postora_${flow}_v1`);
-    }
+    });
   }
+}
+
+Deno.test("cod arabic template is a utility with confirm and cancel buttons", () => {
   const cod = eventTemplateDefinition("cod_confirm", "ar");
   assertEquals(cod.category, "UTILITY");
   assertEquals(cod.buttons, ["تأكيد", "إلغاء"]);
+});
+
+Deno.test("back in stock english template is marketing", () => {
   assertEquals(eventTemplateDefinition("back_in_stock", "en").category, "MARKETING");
 });
 

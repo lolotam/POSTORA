@@ -15,14 +15,15 @@ import { connectorCallFailed, executeProcedureStoreCall } from "../ai-agent-repl
 import type { CustomTool, ToolContext } from "../ai-agent-reply/tools.ts";
 import { sendTemplate, sendText, WhatsAppOpError } from "../_shared/whatsappPartnerOps.ts";
 import { resolveWhatsAppTransport } from "../_shared/whatsappTransport.ts";
-import type {
-  AccountContext,
-  RecordOpenerInput,
-  SendOpenerInput,
-  SendOutcome,
-  StoreEventRow,
-  StoreSnapshot,
-  WorkerPorts,
+import {
+  sanitizeFailureReason,
+  type AccountContext,
+  type RecordOpenerInput,
+  type SendOpenerInput,
+  type SendOutcome,
+  type StoreEventRow,
+  type StoreSnapshot,
+  type WorkerPorts,
 } from "./worker.ts";
 
 const TOOL_COLUMNS = "id, name, description, url, secret, admin_only, scope, social_account_id, connector_type, read_only_mode, settings, auth_strategy, connection_id";
@@ -61,7 +62,7 @@ function readReturned(output: string): Record<string, unknown> | null {
   }
 }
 
-function classifySendError(error: unknown): SendOutcome {
+export function classifySendError(error: unknown): SendOutcome {
   if (error instanceof WhatsAppOpError) {
     return error.indeterminate
       ? { accepted: false, definite: false }
@@ -71,6 +72,39 @@ function classifySendError(error: unknown): SendOutcome {
   const status = typeof (error as { status?: unknown }).status === "number" ? (error as { status: number }).status : 0;
   if (status >= 500 || /timed out|aborted/i.test(message)) return { accepted: false, definite: false };
   return { accepted: false, definite: true, reason: message };
+}
+
+/** A QR text send with no provider message id may already be on its way. */
+export function classifyQrTextResult(messageId: string | null | undefined): SendOutcome {
+  if (!messageId) return { accepted: false, definite: false };
+  return { accepted: true, messageId };
+}
+
+export interface StoreBindingIdentity {
+  connector_id?: string;
+  social_account_id?: string;
+  user_id?: string;
+}
+
+/** The webhook binding must name this event's connector, account, and owner. */
+export function storeBindingMatches(
+  binding: StoreBindingIdentity | null,
+  event: { connector_id: string; social_account_id: string; user_id: string },
+): boolean {
+  return Boolean(binding)
+    && binding?.connector_id === event.connector_id
+    && binding?.social_account_id === event.social_account_id
+    && binding?.user_id === event.user_id;
+}
+
+/** Phone to look up in messaging_opt_outs. No phone means the lookup is skipped. */
+export function optOutLookupPhone(phone: string | undefined): string | null {
+  return phone ? phone : null;
+}
+
+/** A lookup row counts only when this event actually named a phone. */
+export function optedOutFromLookup(phone: string | null, row: unknown): boolean {
+  return phone !== null && row != null;
 }
 
 // deno-lint-ignore no-explicit-any
@@ -134,27 +168,25 @@ export function createStoreEventPorts(admin: any): WorkerPorts {
     async loadAccount(event) {
       const row = await accountRow(event);
       if (!row) return null;
+      const lookupPhone = optOutLookupPhone(event.payload.phone);
       const [config, bindingResult, toolResult, linkResult, optOutResult] = await Promise.all([
         loadAgentConfigForAccount(admin, { userId: event.user_id, platform: "whatsapp", accountId: row.id }),
         admin.from("store_webhook_bindings").select("id, connector_id, social_account_id, user_id").eq("id", event.binding_id).maybeSingle(),
         admin.from("ai_agent_tools").select(TOOL_COLUMNS).eq("user_id", event.user_id).eq("is_enabled", true),
         admin.from("ai_agent_tool_accounts").select("tool_id, social_account_id").eq("user_id", event.user_id).eq("social_account_id", row.id),
-        event.payload.phone
-          ? admin.from("messaging_opt_outs").select("user_id").eq("user_id", event.user_id).eq("phone", event.payload.phone).maybeSingle()
+        lookupPhone
+          ? admin.from("messaging_opt_outs").select("user_id").eq("user_id", event.user_id).eq("phone", lookupPhone).maybeSingle()
           : Promise.resolve({ data: null, error: null }),
       ]);
       if (bindingResult.error) throw bindingResult.error;
       if (toolResult.error) throw toolResult.error;
       if (linkResult.error) throw linkResult.error;
       if (optOutResult.error) throw optOutResult.error;
-      const binding = bindingResult.data as { connector_id?: string; social_account_id?: string; user_id?: string } | null;
+      const binding = bindingResult.data as StoreBindingIdentity | null;
       const tools = (toolResult.data ?? []) as ResolvableTool[];
       const links = (linkResult.data ?? []) as ToolAccountLink[];
       const visible = resolveToolsForAccount(tools, links, row.id).tools.some((tool) => tool.id === event.connector_id);
-      const bindingOk = Boolean(binding)
-        && binding?.connector_id === event.connector_id
-        && binding?.social_account_id === event.social_account_id
-        && binding?.user_id === event.user_id;
+      const bindingOk = storeBindingMatches(binding, event);
       const procedures = readProcedureConfig((config?.agent_behavior as { procedures?: unknown } | undefined)?.procedures);
       const mode = row.connection_mode ?? null;
       return {
@@ -167,7 +199,7 @@ export function createStoreEventPorts(admin: any): WorkerPorts {
         defaultMode: typeof config?.default_mode === "string" ? config.default_mode : "",
         settings: procedures[event.flow] ?? null,
         connectorVisible: visible && bindingOk,
-        optedOut: Boolean(optOutResult.data),
+        optedOut: optedOutFromLookup(lookupPhone, optOutResult.data),
       };
     },
     async readStore(event) {
@@ -252,8 +284,7 @@ export function createStoreEventPorts(admin: any): WorkerPorts {
             connection_mode: "evolution_qr",
           });
           const result = await transport.sendText({ recipientPhone: input.event.payload.phone, text: input.text });
-          if (!result.messageId) return { accepted: false, definite: false };
-          return { accepted: true, messageId: result.messageId };
+          return classifyQrTextResult(result.messageId);
         }
         if (!input.templateName || !row.access_token && !Deno.env.get("WHATSAPP_ACCESS_TOKEN")) {
           return { accepted: false, definite: true, reason: "account_unavailable" };
@@ -296,20 +327,35 @@ export function createStoreEventPorts(admin: any): WorkerPorts {
         status: "sent",
         timestamp: new Date().toISOString(),
       });
-      if (messageError) console.error(`[process-store-events] ${input.event.id} inbox write failed:`, messageError.message);
+      if (messageError) {
+        console.error(
+          `[process-store-events] ${input.event.id} inbox write failed:`,
+          sanitizeFailureReason(messageError.message),
+        );
+      }
       const { error: threadError } = await admin.from("ai_thread_messages").insert({
         thread_id: input.threadId,
         user_id: input.event.user_id,
         role: "assistant",
         content: input.text,
       });
-      if (threadError) console.error(`[process-store-events] ${input.event.id} thread write failed:`, threadError.message);
+      if (threadError) {
+        console.error(
+          `[process-store-events] ${input.event.id} thread write failed:`,
+          sanitizeFailureReason(threadError.message),
+        );
+      }
     },
     async deleteWaitlist(event) {
       const waitlistId = event.external_id.startsWith("waitlist:") ? event.external_id.slice("waitlist:".length) : "";
       if (!waitlistId) return;
       const { error } = await admin.from("stock_waitlist").delete().eq("id", waitlistId).eq("user_id", event.user_id);
-      if (error) console.error(`[process-store-events] ${event.id} waitlist delete failed:`, error.message);
+      if (error) {
+        console.error(
+          `[process-store-events] ${event.id} waitlist delete failed:`,
+          sanitizeFailureReason(error.message),
+        );
+      }
     },
     async alertAdmin(event, reason) {
       const { error } = await admin.from("system_logs").insert({
@@ -319,7 +365,12 @@ export function createStoreEventPorts(admin: any): WorkerPorts {
         message: `Store event ${event.id} (${event.flow}) needs attention: ${reason}`,
         metadata: { event_id: event.id, flow: event.flow, reason },
       });
-      if (error) console.error(`[process-store-events] ${event.id} alert log failed:`, error.message);
+      if (error) {
+        console.error(
+          `[process-store-events] ${event.id} alert log failed:`,
+          sanitizeFailureReason(error.message),
+        );
+      }
       const config = await loadAgentConfigForAccount(admin, {
         userId: event.user_id,
         platform: "whatsapp",
@@ -360,9 +411,13 @@ export function createStoreEventPorts(admin: any): WorkerPorts {
     async purge(nowMs) {
       const cutoff = new Date(nowMs - 30 * DAY_MS).toISOString();
       const cleared = await admin.from("store_events").update({ payload: {} }).lt("processed_at", cutoff).in("status", ["sent", "skipped", "failed"]);
-      if (cleared.error) console.error("[process-store-events] payload purge failed:", cleared.error.message);
+      if (cleared.error) {
+        console.error("[process-store-events] payload purge failed:", sanitizeFailureReason(cleared.error.message));
+      }
       const dropped = await admin.from("stock_waitlist").delete().lt("expires_at", new Date(nowMs).toISOString());
-      if (dropped.error) console.error("[process-store-events] waitlist purge failed:", dropped.error.message);
+      if (dropped.error) {
+        console.error("[process-store-events] waitlist purge failed:", sanitizeFailureReason(dropped.error.message));
+      }
     },
   };
 }
