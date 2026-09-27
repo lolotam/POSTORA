@@ -166,6 +166,14 @@ export const V1_ERROR_POLICY = {
     status: 400, retryable: false,
     message: "Idempotency-Key header is required for this request",
   },
+  // The opt-out read failed. 503 and retryable, like limiter_unavailable:
+  // the claim is left `processing` so the same Idempotency-Key re-attempts
+  // after the lease, rather than replaying a stored failure. Never 422 —
+  // that would tell the partner the recipient's state is known.
+  opt_out_lookup_failed: {
+    status: 503, retryable: true,
+    message: "Opt-out status could not be confirmed; retry shortly",
+  },
   outside_session_window: {
     status: 422, retryable: false,
     message: "Recipient has not messaged in the last 24h — send an approved template.",
@@ -185,6 +193,13 @@ export const V1_ERROR_POLICY = {
   rate_limited: {
     status: 429, retryable: true,
     message: "Rate limit exceeded",
+  },
+  // A known opt-out. 422, same family as invalid_recipient and
+  // outside_session_window: a fact about this recipient that retrying will
+  // not change. The claim is completed, so the same key replays this refusal.
+  recipient_opted_out: {
+    status: 422, retryable: false,
+    message: "This customer has opted out of WhatsApp messages",
   },
   // Reachable since the /v1 router landed: the router's unmatched-path 404 and,
   // from deliverable 2.5 on, D11's answer for a resource outside the key's

@@ -1,9 +1,9 @@
 // supabase/functions/_shared/procedures/engine.test.ts
 import { assertEquals } from "jsr:@std/assert@1";
 import {
-  claimHeldByOther, expireIfStale, isPendingOpener, nextField, recordOffScript, startProcedure, submitFields,
+  claimHeldByOther, expireIfStale, isLivePendingOpener, isPendingOpener, nextField, recordOffScript, startProcedure, submitFields,
 } from "./engine.ts";
-import { CLAIM_LEASE_MS, TEMPLATES } from "./templates.ts";
+import { CLAIM_LEASE_MS, EVENT_STALE_AFTER_MS, STALE_AFTER_MS, TEMPLATES } from "./templates.ts";
 
 const T0 = new Date("2026-09-26T10:00:00Z");
 const later = (ms: number) => new Date(T0.getTime() + ms);
@@ -100,6 +100,32 @@ for (const [label, key, origin, ageMs, expected] of [
     assertEquals(expireIfStale(state, later(ageMs)) === null ? "expired" : "kept", expected);
   });
 }
+
+function pending(origin: "event" | "jev" | "model", ageMs: number, updatedAt: string | null = "set") {
+  return {
+    phase: "pending_opener" as const,
+    origin,
+    ...(updatedAt === "set" ? { updated_at: new Date(T0.getTime() - ageMs).toISOString() } : {}),
+    ...(updatedAt !== "set" && updatedAt !== null ? { updated_at: updatedAt } : {}),
+  };
+}
+
+Deno.test("isLivePendingOpener is live at exactly 72h and not 1ms later", () => {
+  assertEquals(isLivePendingOpener(pending("event", EVENT_STALE_AFTER_MS), T0), true);
+  assertEquals(isLivePendingOpener(pending("event", EVENT_STALE_AFTER_MS + 1), T0), false);
+});
+
+Deno.test("isLivePendingOpener treats a missing or invalid updated_at as not live", () => {
+  assertEquals(isLivePendingOpener(pending("event", 0, null), T0), false);
+  assertEquals(isLivePendingOpener(pending("event", 0, "soon"), T0), false);
+});
+
+Deno.test("isLivePendingOpener uses the shorter threshold for jev and model openers", () => {
+  assertEquals(isLivePendingOpener(pending("jev", STALE_AFTER_MS), T0), true);
+  assertEquals(isLivePendingOpener(pending("jev", STALE_AFTER_MS + 1), T0), false);
+  assertEquals(isLivePendingOpener(pending("model", STALE_AFTER_MS), T0), true);
+  assertEquals(isLivePendingOpener(pending("model", EVENT_STALE_AFTER_MS), T0), false);
+});
 
 Deno.test("isPendingOpener is true only for the pending_opener phase", () => {
   const state = startProcedure(null, "cod_confirm", "event", T0, "run-1").state;

@@ -9,6 +9,17 @@
 //
 // ORDER OF OPERATIONS (each step's position is load-bearing):
 //
+//   0. opt-out lookup         -- BEFORE quota. Keyed by the sending
+//                                account's owner (ctx.ownerId), matched on
+//                                digitsOnly(recipientPhone). A refusal or a
+//                                failed read reserves no quota and writes no
+//                                intent. Opted-out settles the claim (step 5's
+//                                complete) the way a quota refusal does. A
+//                                failed read does NOT complete the claim: the
+//                                row stays `processing`, and claim_partner_idempotency
+//                                re-claims it once the lease expires. Completing
+//                                a 503 would replay that stale failure until
+//                                the row expires;
 //   1. reserve quota          -- a refused request must leave NO intent row,
 //                                or an orphan `intended` would poison the
 //                                key for a retry that never dispatched;
@@ -45,6 +56,7 @@ import {
   completeIdempotency,
   markIndeterminate,
 } from "./partnerApiIdempotency.ts";
+import { digitsOnly, logSendRefused, optedOutPhones } from "./optOutLookup.ts";
 import { confirmQuota, indeterminateQuota, releaseQuota, reserveQuota } from "./partnerApiMetering.ts";
 import {
   markIntentFailed,
@@ -175,6 +187,48 @@ export async function dispatchPartnerTemplate(
   deps: PartnerDispatchDeps,
 ): Promise<PartnerDispatchResult> {
   const { admin, record, ctx, idempotencyKey, attemptToken, input } = deps;
+
+  // ---- 0. opt-out, before quota: a refused request must not reserve one ---
+  // recipientPhone is the partner's raw string (`+`, spaces, dashes included).
+  // messaging_opt_outs.phone is digits-only, scoped to the account owner.
+  const ownerId = ctx.ownerId;
+  let optedOut: Set<string>;
+  try {
+    optedOut = await optedOutPhones(admin, ownerId, [input.recipientPhone]);
+  } catch (err) {
+    console.error("[partner-dispatch] opt-out lookup failed:", err);
+    await logSendRefused(admin, {
+      source: "partner-api",
+      userId: ownerId,
+      reason: "opt_out_lookup_failed",
+      metadata: { kind: input.kind },
+    });
+    // Same settle as the intent-insert failure below: leave the claim
+    // `processing`. A completed 503 is a replay, and the lookup would never
+    // run again for this key. Lease expiry is what lets the retry re-attempt.
+    const body = errorBody(
+      "opt_out_lookup_failed",
+      "Opt-out status could not be confirmed; retry shortly",
+      true,
+    );
+    return { outcome: "failed", httpStatus: 503, errorCode: "opt_out_lookup_failed", body };
+  }
+  if (optedOut.has(digitsOnly(input.recipientPhone))) {
+    const body = errorBody(
+      "recipient_opted_out",
+      "This customer has opted out of WhatsApp messages",
+      false,
+    );
+    await completeIdempotency(admin, record.id, idempotencyKey, attemptToken, 422, body)
+      .catch((e) => console.error("[partner-dispatch] settle after opt-out refusal failed:", e));
+    await logSendRefused(admin, {
+      source: "partner-api",
+      userId: ownerId,
+      reason: "opted_out",
+      metadata: { kind: input.kind },
+    });
+    return { outcome: "failed", httpStatus: 422, errorCode: "recipient_opted_out", body };
+  }
 
   // ---- 1. quota, before the intent: a refused request must not leave one --
   const reserved = await reserveQuota(admin, record);

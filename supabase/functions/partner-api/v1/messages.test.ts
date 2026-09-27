@@ -50,6 +50,10 @@ interface StubOpts {
   account?: Record<string, unknown>;
   /** `null` data models a limiter outage (class B/C must fail closed). */
   limiter?: { data: unknown; error: unknown };
+  /** Digits-only phones opted out for the sending account's owner. */
+  optedOutPhones?: string[];
+  /** The opt-out read itself fails. */
+  optOutLookupError?: boolean;
 }
 
 function stub(opts: StubOpts = {}) {
@@ -75,6 +79,40 @@ function stub(opts: StubOpts = {}) {
       return Promise.resolve({ data: null, error: null });
     },
     from(table: string) {
+      if (table === "messaging_opt_outs") {
+        let userId = "";
+        const chain = {
+          select() { return chain; },
+          in() { return chain; },
+          eq(col: string, val: string) {
+            if (col === "user_id") userId = val;
+            return chain;
+          },
+          then(onFulfilled: (v: { data: unknown; error: unknown }) => unknown) {
+            if (opts.optOutLookupError) {
+              return Promise.resolve({ data: null, error: { message: "statement timeout" } }).then(onFulfilled);
+            }
+            const phones = userId === account.user_id ? (opts.optedOutPhones ?? []) : [];
+            return Promise.resolve({
+              data: phones.map((phone) => ({ phone })),
+              error: null,
+            }).then(onFulfilled);
+          },
+        };
+        return chain;
+      }
+      if (table === "system_logs") {
+        return { insert: () => Promise.resolve({ error: null }) };
+      }
+      if (table === "partner_api_idempotency") {
+        const chain = {
+          eq() { return chain; },
+          then(onFulfilled: (v: { error: null }) => unknown) {
+            return Promise.resolve({ error: null }).then(onFulfilled);
+          },
+        };
+        return { update: () => chain };
+      }
       if (table === "partner_dispatch_intents") {
         return {
           insert(row: Record<string, unknown>) {
@@ -250,6 +288,60 @@ Deno.test("T6: the TEXT send path writes a dispatch intent (D13's boundary is no
 });
 
 // --- T8 --------------------------------------------------------------------
+
+Deno.test("T9: an opted-out recipient reaches the client as recipient_opted_out and creates no intent", async () => {
+  const client = stub({ optedOutPhones: ["96550000001"] });
+  const res = await handleRequest(
+    v1("/v1/messages", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-postora-key": "pk_live_test",
+        "idempotency-key": "idem-opt-out",
+      },
+      body: JSON.stringify({
+        type: "text",
+        recipient_phone: "+965 5000-0001",
+        text: { body: "hello" },
+      }),
+    }),
+    () => client,
+  );
+  assertEquals(res.status, 422);
+  const body = await res.json();
+  assertEquals(body.error.code, "recipient_opted_out");
+  assertEquals(body.error.message, "This customer has opted out of WhatsApp messages");
+  assertEquals(body.error.retryable, false);
+  assertEquals(typeof body.error.request_id, "string");
+  assertEquals(client.intents.length, 0);
+  assertEquals(client.rpcCalls.includes("reserve_partner_quota"), false);
+});
+
+Deno.test("T10: an opt-out lookup failure reaches the client as a retryable 503", async () => {
+  const client = stub({ optOutLookupError: true });
+  const res = await handleRequest(
+    v1("/v1/messages", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-postora-key": "pk_live_test",
+        "idempotency-key": "idem-opt-out-down",
+      },
+      body: JSON.stringify({
+        type: "text",
+        recipient_phone: "+965 5000-0001",
+        text: { body: "hello" },
+      }),
+    }),
+    () => client,
+  );
+  assertEquals(res.status, 503);
+  const body = await res.json();
+  assertEquals(body.error.code, "opt_out_lookup_failed");
+  assertEquals(body.error.retryable, true);
+  assertEquals(client.intents.length, 0);
+  assertEquals(client.rpcCalls.includes("reserve_partner_quota"), false);
+});
 
 Deno.test("T8: GET /v1/templates fails CLOSED on a limiter outage (D7 class B)", async () => {
   const res = await handleRequest(

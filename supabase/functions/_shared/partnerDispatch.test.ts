@@ -6,7 +6,7 @@
 // (the durable version of the ordering proof is the crash-before gate).
 import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 
-import { dispatchPartnerTemplate } from "./partnerDispatch.ts";
+import { dispatchPartnerTemplate, type PartnerSendInput } from "./partnerDispatch.ts";
 import { createDispatchHarness, type DispatchHarness } from "./partnerDispatchDurableStub.ts";
 import { WhatsAppOpError, type Fetcher } from "./whatsappPartnerOps.ts";
 
@@ -362,4 +362,182 @@ Deno.test("dispatch: takeover of an existing intended row calls reserve then rel
   assertEquals(result.outcome, "indeterminate");
   assertEquals(fetchCalls, 0);
   assertEquals(h.read().rpcCalls, ["reserve_partner_quota", "release_partner_quota"]);
+});
+
+// ---------------------------------------------------------------------------
+// Opt-out gate. Runs before quota, so a refusal must not reserve, must not
+// insert an intent, and must not call the provider. The harness's default
+// `from()` answers messaging_opt_outs with an empty read; these tests replace
+// that table (and system_logs) only.
+// ---------------------------------------------------------------------------
+
+const RAW_PHONE = "+965 5000-0001";
+const DIGITS = "96550000001";
+
+function sendInput(kind: PartnerSendInput["kind"]): PartnerSendInput {
+  if (kind === "text") return { kind, recipientPhone: RAW_PHONE, body: "hi" };
+  if (kind === "media") {
+    return {
+      kind,
+      recipientPhone: RAW_PHONE,
+      mediaUrl: "https://example.invalid/file",
+      mediaKind: "image",
+      mediaFileId: "media-1",
+    };
+  }
+  return { kind, recipientPhone: RAW_PHONE, templateName: "t_v1", templateLanguage: "ar" };
+}
+
+function scriptOptOut(
+  h: DispatchHarness,
+  script: { byOwner?: Record<string, string[]>; fail?: boolean },
+) {
+  const orig = h.admin.from.bind(h.admin);
+  const lookups: Array<{ userId: string; phones: string[] }> = [];
+  const logs: Array<Record<string, unknown>> = [];
+  h.admin.from = (table: string) => {
+    if (table === "messaging_opt_outs") {
+      let phones: string[] = [];
+      let userId = "";
+      const chain = {
+        select() { return chain; },
+        in(_col: string, vals: string[]) {
+          phones = vals;
+          return chain;
+        },
+        eq(col: string, val: string) {
+          if (col === "user_id") userId = val;
+          return chain;
+        },
+        then(
+          onFulfilled: (v: { data: unknown; error: unknown }) => unknown,
+          onRejected?: (reason: unknown) => unknown,
+        ) {
+          lookups.push({ userId, phones: [...phones] });
+          const result = script.fail
+            ? { data: null, error: { message: "statement timeout" } }
+            : {
+              data: (script.byOwner?.[userId] ?? [])
+                .filter((phone) => phones.includes(phone))
+                .map((phone) => ({ phone })),
+              error: null,
+            };
+          return Promise.resolve(result).then(onFulfilled, onRejected);
+        },
+      };
+      return chain;
+    }
+    if (table === "system_logs") {
+      return {
+        insert(row: Record<string, unknown>) {
+          logs.push(row);
+          return Promise.resolve({ error: null });
+        },
+      };
+    }
+    return orig(table);
+  };
+  return { lookups, logs };
+}
+
+function countingFetcher(): { fetcher: Fetcher; calls: () => number } {
+  let n = 0;
+  return {
+    calls: () => n,
+    fetcher: () => {
+      n += 1;
+      return okFetcher();
+    },
+  };
+}
+
+for (const kind of ["text", "media", "template"] as const) {
+  Deno.test(`dispatch: opted-out ${kind} refuses before quota, intent, and provider`, async () => {
+    const h = freshHarness();
+    const observed = scriptOptOut(h, { byOwner: { [h.ctx.ownerId]: [DIGITS] } });
+    const provider = countingFetcher();
+
+    const result = await dispatchPartnerTemplate({
+      ...deps(h, provider.fetcher),
+      input: sendInput(kind),
+    });
+
+    assertEquals(result.outcome, "failed");
+    if (result.outcome !== "failed") throw new Error("unreachable");
+    assertEquals(result.httpStatus, 422);
+    assertEquals(result.errorCode, "recipient_opted_out");
+    assertEquals(result.body, {
+      success: false,
+      error: {
+        code: "recipient_opted_out",
+        message: "This customer has opted out of WhatsApp messages",
+        retryable: false,
+      },
+    });
+    assertEquals(provider.calls(), 0);
+    const final = h.read();
+    assertEquals(final.intents.length, 0);
+    assertEquals(final.quotaReserved, 0);
+    assertEquals(final.rpcCalls.includes("reserve_partner_quota"), false);
+    assertEquals(final.idempotency[0].state, "completed");
+    assertEquals(final.idempotency[0].http_status, 422);
+    assertEquals(final.idempotency[0].response_body, result.body);
+    assertEquals(observed.lookups[0].userId, h.ctx.ownerId);
+    assertEquals(observed.lookups[0].phones, [DIGITS]);
+    assertEquals(observed.logs.length, 1);
+    assertEquals(observed.logs[0].source, "partner-api");
+    assertEquals(observed.logs[0].user_id, h.ctx.ownerId);
+    const metadata = observed.logs[0].metadata as Record<string, unknown>;
+    assertEquals(metadata.reason, "opted_out");
+    assertEquals(metadata.kind, kind);
+    assertEquals(JSON.stringify(observed.logs[0]).includes(DIGITS), false);
+  });
+}
+
+Deno.test("dispatch: an opt-out lookup failure is a retryable 503 and leaves the claim processing", async () => {
+  const h = freshHarness();
+  const observed = scriptOptOut(h, { fail: true });
+  const provider = countingFetcher();
+
+  const result = await dispatchPartnerTemplate({
+    ...deps(h, provider.fetcher),
+    input: sendInput("template"),
+  });
+
+  assertEquals(result.outcome, "failed");
+  if (result.outcome !== "failed") throw new Error("unreachable");
+  assertEquals(result.httpStatus, 503);
+  assertEquals(result.errorCode, "opt_out_lookup_failed");
+  const body = result.body as { error: { retryable: boolean } };
+  assertEquals(body.error.retryable, true);
+  assertEquals(provider.calls(), 0);
+  const final = h.read();
+  assertEquals(final.intents.length, 0);
+  assertEquals(final.quotaReserved, 0);
+  assertEquals(final.rpcCalls.includes("reserve_partner_quota"), false);
+  // Not completed: a completed 503 would replay forever. processing + lease
+  // expiry is how claim_partner_idempotency re-attempts.
+  assertEquals(final.idempotency[0].state, "processing");
+  assertEquals(final.idempotency[0].http_status, undefined);
+  assertEquals(observed.logs.length, 1);
+  const metadata = observed.logs[0].metadata as Record<string, unknown>;
+  assertEquals(metadata.reason, "opt_out_lookup_failed");
+  assertEquals(metadata.kind, "template");
+  assertEquals(JSON.stringify(observed.logs[0]).includes(DIGITS), false);
+});
+
+Deno.test("dispatch: another owner's opt-out of the same phone does not block the send", async () => {
+  const h = freshHarness();
+  const observed = scriptOptOut(h, { byOwner: { "someone-else": [DIGITS] } });
+  const provider = countingFetcher();
+
+  const result = await dispatchPartnerTemplate({
+    ...deps(h, provider.fetcher),
+    input: sendInput("text"),
+  });
+
+  assertEquals(observed.lookups[0].userId, h.ctx.ownerId);
+  assertEquals(result.outcome, "sent");
+  assertEquals(provider.calls(), 1);
+  assertEquals(observed.logs.length, 0);
 });

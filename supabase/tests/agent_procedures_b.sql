@@ -719,4 +719,175 @@ BEGIN
   END;
 END $do_system_logs_category_suite$;
 ROLLBACK;
+BEGIN;
+-- ---------------------------------------------------------------------------
+-- E1..E5: optout exhaustion clears the stranded pending_opener (migration
+-- 20260929100000_optout_exhaustion). claim_store_events marks attempts>=3
+-- events failed, logs reason attempts_exhausted, and NULLs the matching
+-- pending_opener thread; whatsapp_broadcast_recipients gains 'skipped'.
+-- Fixture values are synthetic ('...@example.invalid', '9655551xxxx' test
+-- range); no secrets or real data.
+-- ---------------------------------------------------------------------------
+DO $$
+DECLARE
+  u_a uuid := 'a1a1a1a1-a1a1-41a1-81a1-a1a1a1a1a1a1';
+  u_b uuid := 'b2b2b2b2-b2b2-42b2-82b2-b2b2b2b2b2b2';
+  acct_a uuid := 'c3c3c3c3-c3c3-43c3-83c3-c3c3c3c3c3c3';
+  tool_a uuid := 'd4d4d4d4-d4d4-44d4-84d4-d4d4d4d4d4d4';
+  bind_a uuid := 'e5e5e5e5-e5e5-45e5-85e5-e5e5e5e5e5e5';
+  v_e1 uuid;
+  v_e2 uuid;
+  v_lonely uuid;
+  v_bc uuid;
+  v_ct uuid;
+  v_ws uuid;
+  v_log jsonb;
+BEGIN
+  -- Fixtures. platform 'facebook' avoids the whatsapp-needs-workspace check.
+  INSERT INTO auth.users (id, email)
+  VALUES
+    (u_a, 'exhaust-a-' || u_a::text || '@example.invalid'),
+    (u_b, 'exhaust-b-' || u_b::text || '@example.invalid');
+  INSERT INTO public.social_accounts (id, user_id, platform, platform_user_id, access_token)
+  VALUES
+    (acct_a, u_a, 'facebook', 'exhaust-acct-a', 'token-exhaust-a');
+  INSERT INTO public.ai_agent_tools (id, user_id, name, description, connector_type)
+  VALUES
+    (tool_a, u_a, 'woo-exhaust', 'exhaustion fixture', 'woocommerce');
+  INSERT INTO public.store_webhook_bindings
+    (id, user_id, social_account_id, connector_id, secret_id)
+  VALUES
+    (bind_a, u_a, acct_a, tool_a, gen_random_uuid());
+
+  -- E1: due 'pending' event at 3 attempts with a stranded opener thread.
+  INSERT INTO public.store_events
+    (user_id, social_account_id, connector_id, binding_id, flow,
+     external_id, payload, status, due_at, attempts)
+  VALUES
+    (u_a, acct_a, tool_a, bind_a, 'cod_confirm', 'order-e1-pending',
+     '{"order_id":"e1"}', 'pending', now() - interval '1 hour', 3)
+  RETURNING id INTO v_e1;
+  INSERT INTO public.ai_threads (user_id, platform, conversation_id, procedure_state)
+  VALUES
+    (u_a, 'whatsapp', 'conv-e1-stranded',
+     jsonb_build_object('phase', 'pending_opener', 'run_id', v_e1::text, 'step', 'greeting'));
+
+  -- E2: expired 'claimed' lease at 3 attempts with a stranded opener thread.
+  INSERT INTO public.store_events
+    (user_id, social_account_id, connector_id, binding_id, flow,
+     external_id, payload, status, due_at, claimed_at, claim_token, attempts)
+  VALUES
+    (u_a, acct_a, tool_a, bind_a, 'cod_confirm', 'order-e2-claimed',
+     '{"order_id":"e2"}', 'claimed', now() - interval '1 hour',
+     now() - interval '10 minutes', gen_random_uuid(), 3)
+  RETURNING id INTO v_e2;
+  INSERT INTO public.ai_threads (user_id, platform, conversation_id, procedure_state)
+  VALUES
+    (u_a, 'whatsapp', 'conv-e2-stranded',
+     jsonb_build_object('phase', 'pending_opener', 'run_id', v_e2::text, 'step', 'greeting'));
+
+  -- E3: threads that must survive the claim: same user + same run_id but an
+  -- active phase; same user + pending_opener phase but another run_id;
+  -- another user + pending_opener phase + the same run_id.
+  INSERT INTO public.ai_threads (user_id, platform, conversation_id, procedure_state)
+  VALUES
+    (u_a, 'whatsapp', 'conv-e3-active',
+     jsonb_build_object('phase', 'active', 'run_id', v_e1::text, 'step', 'confirm')),
+    (u_a, 'whatsapp', 'conv-e3-other-run',
+     jsonb_build_object('phase', 'pending_opener', 'run_id', gen_random_uuid()::text)),
+    (u_b, 'whatsapp', 'conv-e3-other-user',
+     jsonb_build_object('phase', 'pending_opener', 'run_id', v_e1::text));
+
+  -- E4: an exhausted event with NO matching thread still exhausts + logs.
+  INSERT INTO public.store_events
+    (user_id, social_account_id, connector_id, binding_id, flow,
+     external_id, payload, status, due_at, attempts)
+  VALUES
+    (u_a, acct_a, tool_a, bind_a, 'cod_confirm', 'order-e4-lonely',
+     '{"order_id":"e4"}', 'pending', now() - interval '1 hour', 3)
+  RETURNING id INTO v_lonely;
+
+  PERFORM public.claim_store_events(10, interval '2 minutes');
+
+  -- E1: the due pending event exhausts and its stranded opener is cleared.
+  ASSERT (SELECT status FROM public.store_events WHERE id = v_e1) = 'failed',
+    'E1 due pending event at 3 attempts is marked failed';
+  ASSERT (SELECT skip_reason FROM public.store_events WHERE id = v_e1) = 'attempts_exhausted',
+    'E1 exhausted event carries attempts_exhausted';
+  ASSERT (SELECT procedure_state FROM public.ai_threads
+          WHERE user_id = u_a AND conversation_id = 'conv-e1-stranded') IS NULL,
+    'E1 stranded pending_opener thread is cleared';
+
+  -- E2: the expired claimed lease exhausts the same way.
+  ASSERT (SELECT status FROM public.store_events WHERE id = v_e2) = 'failed',
+    'E2 expired claimed event at 3 attempts is marked failed';
+  ASSERT (SELECT skip_reason FROM public.store_events WHERE id = v_e2) = 'attempts_exhausted',
+    'E2 exhausted event carries attempts_exhausted';
+  ASSERT (SELECT procedure_state FROM public.ai_threads
+          WHERE user_id = u_a AND conversation_id = 'conv-e2-stranded') IS NULL,
+    'E2 stranded pending_opener thread is cleared';
+
+  -- E3: unrelated threads keep their procedure_state.
+  ASSERT (SELECT procedure_state->>'phase' FROM public.ai_threads
+          WHERE user_id = u_a AND conversation_id = 'conv-e3-active') = 'active',
+    'E3 active-phase thread keeps its phase';
+  ASSERT (SELECT procedure_state->>'run_id' FROM public.ai_threads
+          WHERE user_id = u_a AND conversation_id = 'conv-e3-active') = v_e1::text,
+    'E3 active-phase thread keeps its run_id';
+  ASSERT (SELECT procedure_state->>'phase' FROM public.ai_threads
+          WHERE user_id = u_a AND conversation_id = 'conv-e3-other-run') = 'pending_opener',
+    'E3 pending_opener thread with another run_id keeps its state';
+  ASSERT (SELECT procedure_state->>'phase' FROM public.ai_threads
+          WHERE user_id = u_b AND conversation_id = 'conv-e3-other-user') = 'pending_opener',
+    'E3 other-user pending_opener thread keeps its state';
+  ASSERT (SELECT procedure_state->>'run_id' FROM public.ai_threads
+          WHERE user_id = u_b AND conversation_id = 'conv-e3-other-user') = v_e1::text,
+    'E3 other-user pending_opener thread keeps its run_id';
+
+  -- E4: the log row carries reason attempts_exhausted, and the lonely event
+  -- still gets its log row.
+  SELECT metadata INTO v_log FROM public.system_logs
+  WHERE metadata->>'event_id' = v_e1::text
+  ORDER BY created_at DESC LIMIT 1;
+  ASSERT v_log IS NOT NULL,
+    'E4 exhausted event has a system_logs row';
+  ASSERT v_log->>'reason' = 'attempts_exhausted',
+    'E4 system_logs row carries reason attempts_exhausted';
+  ASSERT NOT (v_log ? 'phone'),
+    'E4 system_logs metadata contains no phone key';
+  ASSERT NOT (v_log ? 'payload'),
+    'E4 system_logs metadata contains no payload';
+  ASSERT (SELECT status FROM public.store_events WHERE id = v_lonely) = 'failed',
+    'E4 lonely exhausted event is marked failed';
+  ASSERT EXISTS (SELECT 1 FROM public.system_logs
+                 WHERE metadata->>'event_id' = v_lonely::text),
+    'E4 lonely exhausted event still gets its system_logs row';
+
+  -- E5: recipients accept 'skipped' and reject 'bogus'.
+  INSERT INTO public.whatsapp_broadcasts (id, user_id, name, template_name)
+  VALUES (gen_random_uuid(), u_a, 'exhaust broadcast', 'hello_world')
+  RETURNING id INTO v_bc;
+  INSERT INTO public.workspaces (id, name, owner_id)
+  VALUES (gen_random_uuid(), 'exhaust workspace', u_a)
+  RETURNING id INTO v_ws;
+  INSERT INTO public.whatsapp_contacts (id, user_id, workspace_id, phone_number, display_name)
+  VALUES (gen_random_uuid(), u_a, v_ws, '96555510001', 'Exhaust Probe')
+  RETURNING id INTO v_ct;
+  INSERT INTO public.whatsapp_broadcast_recipients
+    (broadcast_id, contact_id, phone_number, status)
+  VALUES (v_bc, v_ct, '96555510001', 'skipped');
+  ASSERT (SELECT status FROM public.whatsapp_broadcast_recipients
+          WHERE broadcast_id = v_bc) = 'skipped',
+    'E5 skipped status accepted';
+  BEGIN
+    INSERT INTO public.whatsapp_broadcast_recipients
+      (broadcast_id, contact_id, phone_number, status)
+    VALUES (v_bc, v_ct, '96555510001', 'bogus');
+    RAISE EXCEPTION 'E5 failed: bogus status accepted'
+      USING ERRCODE = 'assert_failure';
+  EXCEPTION WHEN check_violation THEN NULL;
+  END;
+END $$;
+
+ROLLBACK;
 \echo '=== agent_procedures_b: ALL CHECKS PASSED ==='
