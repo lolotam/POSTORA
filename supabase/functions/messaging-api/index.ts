@@ -27,6 +27,12 @@ import {
   upsertAccountScopedTool,
 } from "../_shared/toolWrites.ts";
 import {
+  createStoreWebhookBinding,
+  listStoreWebhookBindings,
+  rotateStoreWebhookSecret,
+  storeWebhookBindingPorts,
+} from "../_shared/storeWebhookBindings.ts";
+import {
   parseSetToolAccountsInput,
   type SharingAdminClient,
   setToolAccounts,
@@ -822,6 +828,20 @@ function isAiAgentPlatform(value: unknown): value is string {
       const input = parseSetToolAccountsInput(body);
       await setToolAccounts(sharingAdmin, { userId: user.id, input });
       return jsonResponse({ ok: true });
+    }
+
+    // ACTIONS: store-event webhook bindings (Spec B §8.1). The secret is in this response
+    // only; nothing here logs it, and no later read returns it.
+    if (action === "list_store_webhook_bindings") {
+      return jsonResponse({ bindings: await listStoreWebhookBindings(storeWebhookBindingPorts(adminClient, { userId: user.id })) });
+    }
+    if (action === "create_store_webhook_binding") {
+      return jsonResponse(await createStoreWebhookBinding(storeWebhookBindingPorts(adminClient, { userId: user.id }), body));
+    }
+    if (action === "rotate_store_webhook_secret") {
+      return jsonResponse(
+        await rotateStoreWebhookSecret(storeWebhookBindingPorts(adminClient, { userId: user.id }), body, new Date()),
+      );
     }
 
     // ACTION: list_accounts

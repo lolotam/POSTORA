@@ -1,0 +1,125 @@
+import { assertEquals } from "jsr:@std/assert@1";
+import { classifyWooDelivery, isWooPing, verifyWooSignature } from "./wooWebhook.ts";
+
+const NOW = new Date("2026-09-27T12:00:00Z");
+const SECRET = "current-secret";
+const PREVIOUS = "previous-secret";
+
+async function mac(secret: string, body: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const bytes = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(body)));
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
+Deno.test("a WooCommerce ping is the form body webhook_id and nothing else", () => {
+  assertEquals(isWooPing("application/x-www-form-urlencoded", "webhook_id=42"), true);
+  assertEquals(isWooPing("application/x-www-form-urlencoded", "webhook_id=42&extra=1"), false);
+  assertEquals(isWooPing("application/json", "webhook_id=42"), false);
+});
+
+Deno.test("verifyWooSignature accepts the current secret and rejects a wrong or missing one", async () => {
+  const body = "{\"id\":1}";
+  const good = await mac(SECRET, body);
+  const secrets = { current: SECRET, previous: null, rotatedAt: null };
+  assertEquals(await verifyWooSignature(body, good, secrets, NOW), true);
+  assertEquals(await verifyWooSignature(body, await mac("other", body), secrets, NOW), false);
+  assertEquals(await verifyWooSignature(body, null, secrets, NOW), false);
+});
+
+Deno.test("a one-byte mutation of a valid signature is rejected", async () => {
+  const body = "{\"id\":1}";
+  const good = await mac(SECRET, body);
+  const mutated = `${good.slice(0, -1)}${good.endsWith("A") ? "B" : "A"}`;
+  assertEquals(await verifyWooSignature(body, mutated, { current: SECRET, previous: null, rotatedAt: null }, NOW), false);
+});
+
+Deno.test("the previous secret is accepted only for 24 hours after rotation", async () => {
+  const body = "{\"id\":1}";
+  const signature = await mac(PREVIOUS, body);
+  const rotatedAt = new Date(NOW.getTime() - 24 * 60 * 60 * 1000);
+  const secrets = { current: SECRET, previous: PREVIOUS, rotatedAt };
+  assertEquals(await verifyWooSignature(body, signature, secrets, NOW), true);
+  const expired = { ...secrets, rotatedAt: new Date(rotatedAt.getTime() - 1) };
+  assertEquals(await verifyWooSignature(body, signature, expired, NOW), false);
+});
+
+const order = {
+  id: 100, number: "100", status: "on-hold", total: "4.500", currency: "KWD", payment_method: "cod",
+  billing: { phone: "+965 5551 2345", first_name: "Sara", email: "sara@example.com", country: "KW" },
+};
+
+Deno.test("on-hold COD becomes a cod_confirm draft with whitelist keys only", () => {
+  const [draft] = classifyWooDelivery({
+    topic: "order.created", body: order, now: NOW, enabled: new Set(["cod_confirm"]), reviewDelayDays: 3, country: "KW",
+  });
+  assertEquals(draft.flow, "cod_confirm");
+  assertEquals(draft.external_id, "100");
+  assertEquals(draft.payload.phone, "96555512345");
+  assertEquals(draft.payload.status, "on-hold");
+  assertEquals(Object.hasOwn(draft.payload, "email"), false);
+  assertEquals(Object.keys(draft.payload).sort(), ["consent_basis", "currency", "first_name", "order_id", "order_number", "payment_method", "phone", "status", "total"]);
+});
+
+Deno.test("a COD order only becomes a draft when it is created, not on a later update", () => {
+  assertEquals(classifyWooDelivery({
+    topic: "order.updated", body: order, now: NOW, enabled: new Set(["cod_confirm"]), reviewDelayDays: 3, country: "KW",
+  }), []);
+});
+
+Deno.test("a COD order already cancelled produces no draft", () => {
+  assertEquals(classifyWooDelivery({
+    topic: "order.created", body: { ...order, status: "cancelled" }, now: NOW,
+    enabled: new Set(["cod_confirm"]), reviewDelayDays: 3, country: "KW",
+  }), []);
+});
+
+Deno.test("a non-COD order produces no draft", () => {
+  const drafts = classifyWooDelivery({
+    topic: "order.created", body: { ...order, payment_method: "knet" }, now: NOW,
+    enabled: new Set(["cod_confirm"]), reviewDelayDays: 3, country: "KW",
+  });
+  assertEquals(drafts, []);
+});
+
+Deno.test("a review is due at completion plus the delay, and a stale completion is dropped", () => {
+  const fresh = classifyWooDelivery({
+    topic: "order.updated",
+    body: { ...order, status: "completed", date_completed: "2026-09-26T12:00:00Z" },
+    now: NOW, enabled: new Set(["review_request"]), reviewDelayDays: 3, country: "KW",
+  });
+  assertEquals(fresh[0]?.due_at.toISOString(), "2026-09-29T12:00:00.000Z");
+  const stale = classifyWooDelivery({
+    topic: "order.updated",
+    body: { ...order, status: "completed", date_completed: "2026-09-20T12:00:00Z" },
+    now: NOW, enabled: new Set(["review_request"]), reviewDelayDays: 3, country: "KW",
+  });
+  assertEquals(stale, []);
+});
+
+Deno.test("back-in-stock drafts are candidates for a matching waitlist row only", () => {
+  const drafts = classifyWooDelivery({
+    topic: "product.updated",
+    body: { id: 9, name: "Oud", stock_status: "instock", sku: "secret-sku" },
+    now: NOW, enabled: new Set(["back_in_stock"]), reviewDelayDays: 3, country: null,
+    waitlist: [
+      { id: "w1", product_id: 9, parent_id: null },
+      { id: "w2", product_id: 4, parent_id: 3 },
+    ],
+  });
+  assertEquals(drafts.map((draft) => draft.external_id), ["9:w1"]);
+  assertEquals(drafts[0].payload, { product_id: "9", product_name: "Oud", consent_basis: "chat_optin" });
+});
+
+Deno.test("a disabled flow produces nothing", () => {
+  assertEquals(classifyWooDelivery({
+    topic: "order.created", body: order, now: NOW, enabled: new Set(), reviewDelayDays: 3, country: "KW",
+  }), []);
+});

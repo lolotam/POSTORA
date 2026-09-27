@@ -347,7 +347,13 @@ export function AiAgentManager({ platform = "whatsapp", initialAccountId = null,
           />
           <InstructionBlocksCard form={form} update={update} behavior={behavior} updateBehavior={updateBehavior} />
           {supportsProcedures(platform, surface) && (
-            <ProceduresCard form={form} update={update} behavior={behavior} updateBehavior={updateBehavior} />
+            <ProceduresCard
+              form={form}
+              update={update}
+              behavior={behavior}
+              updateBehavior={updateBehavior}
+              storeAccountId={platform === "whatsapp" ? accountId : null}
+            />
           )}
           <AdvancedCard form={form} update={update} />
           </fieldset>

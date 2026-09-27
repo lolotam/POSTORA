@@ -337,3 +337,29 @@ Deno.test("a flow whose claim outlived the lease is reclaimed and finished", asy
   assertEquals(calls.leads.length, 1);
   assertEquals([turn.completed, turn.claimConflict], ["lead_capture", false]);
 });
+
+Deno.test("start_procedure never starts a store-event flow", async () => {
+  const { ports } = fakePorts();
+  const turn = createProcedureTurn(input(ports));
+  const result = await turn.handle("start_procedure", { key: "cod_confirm" });
+  assertStringIncludes(result.output, "not enabled");
+  assertEquals(turn.start("cod_confirm", "jev"), false);
+  assertEquals(turn.state, null);
+});
+
+Deno.test("a pending_opener state is inert: no start, no submit, nothing progressed", async () => {
+  const { ports, calls } = fakePorts();
+  const pending = {
+    run_id: "evt-1", key: "cod_confirm" as const, version: 1, step: 0, fields: {}, off_script: 0,
+    origin: "event" as const, started_at: T.toISOString(), updated_at: T.toISOString(), phase: "pending_opener" as const,
+  };
+  const turn = createProcedureTurn(input(ports, { state: pending }));
+  assertEquals(turn.inert, true);
+  assertEquals(turn.state, null);
+  assertEquals(turn.start("lead_capture", "jev"), false);
+  await turn.handle("start_procedure", { key: "lead_capture" });
+  await turn.handle("procedure_submit", { fields: { decision: "confirm" } });
+  assertEquals(turn.state, null);
+  assertEquals(turn.progressed, false);
+  assertEquals(calls.order, []);
+});

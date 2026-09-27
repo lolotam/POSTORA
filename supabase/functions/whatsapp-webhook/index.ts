@@ -9,7 +9,8 @@ import {
 import { cancelOutboxRow } from "../ai-agent-reply/outbox.ts";
 import { enqueueAgentReply } from "../_shared/pendingReplies.ts";
 import { dispatchAgentReply } from "../_shared/agentReplyDispatch.ts";
-import { isPlaceholderOnly, promptSafeInput } from "./messageContent.ts";
+import { cloudButtonContent, isPlaceholderOnly, promptSafeInput } from "./messageContent.ts";
+import { isOptOutMessage, optOutDb, recordOptOut } from "../_shared/optOut.ts";
 import {
   isDispatchIntentId,
   reconcileDispatchIntentByEcho,
@@ -295,6 +296,10 @@ async function extractMessageContent(
     messageText = `[Contact] ${msg.contacts?.[0]?.name?.formatted_name || ""}`;
   } else if (msgType === "interactive") {
     messageText = msg.interactive?.button_reply?.title || msg.interactive?.list_reply?.title || "[Interactive]";
+  } else if (msgType === "button") {
+    const button = cloudButtonContent(msg.button);
+    messageText = button.text;
+    mediaMetadata = button.metadata;
   } else if (msgType === "reaction") {
     messageText = `[Reaction] ${msg.reaction?.emoji || ""}`;
   } else {
@@ -547,6 +552,19 @@ async function handleLiveMessages(
 
     console.log("[whatsapp-webhook] Stored inbound message");
 
+    // Opt-out lands before n8n dispatch and auto-replies, so it holds with the agent off.
+    // The outbox row enqueued above is cancelled: nothing answers an opt-out.
+    const optedOut = isOptOutMessage(messageText);
+    if (optedOut) {
+      await recordOptOut(optOutDb(adminClient), {
+        userId: account.user_id,
+        socialAccountId: account.id,
+        phone: from,
+        conversationId,
+      });
+      if (outboxId) await cancelOutboxRow(adminClient, outboxId, "opted_out");
+    }
+
     if (automationHandler === "n8n") {
       await runInBackground("whatsapp message dispatch", () => dispatchMessageEvent(
         adminClient,
@@ -573,6 +591,8 @@ async function handleLiveMessages(
         }),
       ));
     }
+
+    if (optedOut) continue;
 
     // promptSafeText is computed with the enqueue above, because the row records it.
     //

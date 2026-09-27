@@ -1,6 +1,6 @@
 // agent_behavior.procedures (Spec A, D8). Strict on save, lenient on read.
 import { AgentBehaviorError } from "../agentBehaviorError.ts";
-import { PROCEDURE_KEYS, type ProcedureKey, TEMPLATES } from "./templates.ts";
+import { isEventProcedureKey, PROCEDURE_KEYS, type ProcedureKey, TEMPLATES } from "./templates.ts";
 
 export interface ProcedureSettings {
   enabled: boolean;
@@ -77,7 +77,7 @@ export function parseProcedureConfig(input: unknown): ProcedureConfig {
   if (typeof input !== "object" || input === null || Array.isArray(input)) fail("procedures must be an object");
   const config: ProcedureConfig = {};
   for (const [key, value] of Object.entries(input as Record<string, unknown>)) {
-    if (!(PROCEDURE_KEYS as readonly string[]).includes(key)) fail(`Unknown procedure: ${key}`);
+    if (isEventProcedureKey(key) || !(PROCEDURE_KEYS as readonly string[]).includes(key)) fail(`Unknown procedure: ${key}`);
     config[key as ProcedureKey] = parseSettings(key as ProcedureKey, value);
   }
   return config;
@@ -88,6 +88,7 @@ export function readProcedureConfig(input: unknown): ProcedureConfig {
   if (typeof input !== "object" || input === null || Array.isArray(input)) return {};
   const config: ProcedureConfig = {};
   for (const key of PROCEDURE_KEYS) {
+    if (isEventProcedureKey(key)) continue; // Spec B PR 1: no event flow can be switched on yet
     const value = (input as Record<string, unknown>)[key];
     if (value === undefined) continue;
     try {

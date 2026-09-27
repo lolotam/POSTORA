@@ -1,6 +1,6 @@
 // deno-lint-ignore-file no-import-prefix
 import { assert, assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { isPlaceholderOnly, promptSafeInput } from "./messageContent.ts";
+import { cloudButtonContent, isPlaceholderOnly, promptSafeInput } from "./messageContent.ts";
 
 Deno.test("a document's filename is recognised as placeholder, not as typed text", () => {
   assert(isPlaceholderOnly("document", "[Document] invoice-1448O.pdf"));
@@ -32,6 +32,12 @@ Deno.test("a document caption survives, because a human wrote it", () => {
     promptSafeInput("document", "[Document] contract-final-v3.pdf", "here is the signed contract"),
     "[Document] here is the signed contract",
   );
+});
+
+Deno.test("a button message yields text Confirm and keeps the payload in metadata", () => {
+  const button = cloudButtonContent({ text: "Confirm", payload: "cod:evt:confirm" });
+  assertEquals(button.text, "Confirm");
+  assertEquals(button.metadata.button_payload, "cod:evt:confirm");
 });
 
 Deno.test("text and captioned media pass through untouched", () => {

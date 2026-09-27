@@ -26,6 +26,14 @@ describe("ProceduresCard", () => {
     });
   });
 
+  it("shows no toggle for a store-event flow, even when stored config names one", () => {
+    setup({ cod_confirm: { enabled: true, prompts: {}, closing: "" } });
+    expect(screen.getAllByRole("switch")).toHaveLength(5);
+    for (const name of [/cod order confirmation/i, /review request/i, /back in stock/i]) {
+      expect(screen.queryByRole("switch", { name })).not.toBeInTheDocument();
+    }
+  });
+
   it("editing a field prompt writes it under that field's name", () => {
     const updateBehavior = setup({ order_status: { enabled: true, prompts: {}, closing: "" } });
     fireEvent.change(screen.getByLabelText(/order_number/i), { target: { value: "Your order number please" } });

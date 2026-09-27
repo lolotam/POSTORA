@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import {
+  isEventProcedureKey,
   PROCEDURE_FIELDS,
   PROCEDURE_KEYS,
   PROCEDURE_LIMITS,
@@ -15,6 +16,7 @@ import {
   type ProcedureSettings,
 } from "@/lib/procedureTemplates";
 import type { BehaviorCardProps } from "./types";
+import { StoreWebhookSection } from "./StoreWebhookSection";
 
 const FLOW_NAMES: Record<ProcedureKey, string> = {
   order_status: "Order status",
@@ -22,7 +24,13 @@ const FLOW_NAMES: Record<ProcedureKey, string> = {
   complaint_return: "Complaint or return",
   booking: "Booking",
   product_finder: "Product finder",
+  cod_confirm: "COD order confirmation",
+  review_request: "Review request",
+  back_in_stock: "Back in stock",
 };
+
+/** Store-event flows have no toggle yet: the server refuses them on save (Spec B PR 1). */
+const CARD_KEYS = PROCEDURE_KEYS.filter((key) => !isEventProcedureKey(key));
 
 /** Longest legal comma-separated list: 20 services of 60 characters, joined by ", ". */
 const SERVICES_INPUT_MAX =
@@ -54,7 +62,12 @@ function servicesFromInput(raw: string): string[] {
   return items;
 }
 
-export function ProceduresCard({ behavior, updateBehavior }: BehaviorCardProps) {
+interface ProceduresCardProps extends BehaviorCardProps {
+  /** The WhatsApp account being edited; the store-events section needs it. */
+  storeAccountId?: string | null;
+}
+
+export function ProceduresCard({ behavior, updateBehavior, storeAccountId = null }: ProceduresCardProps) {
   const { t } = useTranslation("agent");
   const procedures = behavior.procedures ?? {};
 
@@ -73,7 +86,7 @@ export function ProceduresCard({ behavior, updateBehavior }: BehaviorCardProps) 
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
-        {PROCEDURE_KEYS.map((key) => {
+        {CARD_KEYS.map((key) => {
           const current = procedures[key];
           const enabled = current?.enabled ?? false;
           const name = t(`procedures.flows.${key}`, FLOW_NAMES[key]);
@@ -215,6 +228,7 @@ export function ProceduresCard({ behavior, updateBehavior }: BehaviorCardProps) 
             </div>
           );
         })}
+        {storeAccountId && <StoreWebhookSection accountId={storeAccountId} />}
       </CardContent>
     </Card>
   );

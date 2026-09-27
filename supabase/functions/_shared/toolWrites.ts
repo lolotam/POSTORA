@@ -263,7 +263,7 @@ interface AccountRow {
   workspace_id: string | null;
 }
 
-async function resolveToolAccount(
+export async function resolveToolAccount(
   admin: ToolAdminClient,
   scope: { userId: string } | WorkspaceToolScope,
   socialAccountId: string,

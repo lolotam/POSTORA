@@ -16,6 +16,12 @@ for (const [label, overrides, expected] of [
   ["an escalation clears the flow", { escalated: true }, null],
   ["progress keeps the new state", { progressed: true }, active],
   ["a completed flow clears", { progressed: true, turnState: null }, null],
+  ["a pending store-event opener is never rewritten, even without a turn", {
+    hadTurn: false, storedState: { ...active, origin: "event", phase: "pending_opener" }, turnState: null,
+  }, undefined],
+  ["a pending opener survives a turn that would clear it", {
+    escalated: true, storedState: { ...active, origin: "event", phase: "pending_opener" },
+  }, undefined],
 ] as const) {
   Deno.test(`procedureStateAfterTurn: ${label}`, () => {
     assertEquals(procedureStateAfterTurn({ ...base, ...overrides } as never), expected);

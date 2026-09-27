@@ -49,3 +49,11 @@ export function promptSafeInput(
   if (!mediaType || !isPlaceholderOnly(mediaType, messageText)) return messageText;
   return [MEDIA_PLACEHOLDERS[mediaType], caption].filter(Boolean).join(" ");
 }
+
+/** Template quick-reply. `text` is what the customer saw; `payload` stays beside it, not in the prompt. */
+export function cloudButtonContent(button: { text?: string; payload?: string } | undefined): {
+  text: string;
+  metadata: Record<string, unknown>;
+} {
+  return { text: button?.text || "", metadata: { button_payload: button?.payload ?? null } };
+}

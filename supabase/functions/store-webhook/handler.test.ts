@@ -1,0 +1,227 @@
+import { assert, assertEquals } from "jsr:@std/assert@1";
+import { enabledStoreFlows, handleStoreWebhook, type StoreWebhookDeps } from "./handler.ts";
+
+const BINDING_ID = "11111111-1111-4111-8111-111111111111";
+const URL = `https://api.example/functions/v1/store-webhook/${BINDING_ID}`;
+const NOW = new Date("2026-09-27T12:00:00Z");
+const SECRET = "current-secret";
+
+async function mac(secret: string, body: string): Promise<string> {
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const bytes = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(body)));
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary);
+}
+
+const ORDER = JSON.stringify({
+  id: 100, number: "100", status: "processing", total: "4.500", currency: "KWD", payment_method: "cod",
+  billing: { phone: "+965 5551 2345", first_name: "Sara", country: "KW" },
+});
+
+function deps(extra: Partial<StoreWebhookDeps> = {}): StoreWebhookDeps & { connectorChecks: number; inserted: Array<Record<string, unknown>> } {
+  const inserted: Array<Record<string, unknown>> = [];
+  const base: StoreWebhookDeps & { connectorChecks: number; inserted: Array<Record<string, unknown>> } = {
+    connectorChecks: 0,
+    inserted,
+    limitIp: async () => ({ allowed: true }),
+    limitConnector: async () => { base.connectorChecks += 1; return { allowed: true }; },
+    loadBinding: async () => ({ id: BINDING_ID, user_id: "user-1", social_account_id: "acc-1", connector_id: "con-1" }),
+    loadSecrets: async () => ({ current: SECRET, previous: null, rotatedAt: null }),
+    loadProcedures: async () => ({}),
+    loadWaitlist: async () => [],
+    insertEvents: async (rows) => { inserted.push(...rows); return { ok: true, stored: rows.length }; },
+    now: () => NOW,
+  };
+  return Object.assign(base, extra);
+}
+
+Deno.test("a ping is acknowledged before the binding is loaded", async () => {
+  const gate = deps({ loadBinding: async () => { throw new Error("should not load"); } });
+  const response = await handleStoreWebhook(new Request(URL, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: "webhook_id=7",
+  }), gate);
+  assertEquals(response.status, 200);
+  assertEquals(await response.json(), { ok: true });
+});
+
+Deno.test("the IP limit runs before the body is read", async () => {
+  const order: string[] = [];
+  const stream = new ReadableStream({
+    pull(controller) {
+      order.push("body");
+      controller.enqueue(new TextEncoder().encode("webhook_id=1"));
+      controller.close();
+    },
+  }, { highWaterMark: 0 }); // pull only when the handler reads
+  const response = await handleStoreWebhook(new Request(URL, { method: "POST", body: stream }), deps({
+    limitIp: async () => { order.push("limit"); return { allowed: false, retryAfter: 9 }; },
+  }));
+  assertEquals(response.status, 429);
+  assertEquals(order, ["limit"]);
+});
+
+Deno.test("a declared body over 256 KiB is refused before it is read", async () => {
+  let read = false;
+  const stream = new ReadableStream({
+    pull(controller) {
+      read = true;
+      controller.close();
+    },
+  }, { highWaterMark: 0 });
+  const response = await handleStoreWebhook(new Request(URL, {
+    method: "POST",
+    headers: { "content-length": String(262145) },
+    body: stream,
+  }), deps());
+  assertEquals(response.status, 413);
+  assertEquals(read, false);
+});
+
+Deno.test("a stream that exceeds the cap is refused", async () => {
+  const stream = new ReadableStream({
+    start(controller) {
+      controller.enqueue(new Uint8Array(262145));
+      controller.close();
+    },
+  });
+  const response = await handleStoreWebhook(new Request("https://api.example/functions/v1/store-webhook/" + BINDING_ID, {
+    method: "POST",
+    body: stream,
+  }), deps());
+  assertEquals(response.status, 413);
+});
+
+Deno.test("a good signature is stored, a wrong or missing one is 401 and does not spend the connector limit", async () => {
+  const good = deps({
+    flowsFrom: () => new Set(["cod_confirm"]),
+    loadProcedures: async () => ({ cod_confirm: { enabled: true } }),
+  });
+  const ok = await handleStoreWebhook(new Request(URL, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-wc-webhook-signature": await mac(SECRET, ORDER),
+      "x-wc-webhook-topic": "order.created",
+    },
+    body: ORDER,
+  }), good);
+  assertEquals(ok.status, 200);
+  assertEquals(await ok.json(), { ok: true, stored: 1 });
+  assertEquals(good.inserted.length, 1);
+  assertEquals(good.inserted[0].payload, {
+    order_id: "100", order_number: "100", phone: "96555512345", first_name: "Sara",
+    total: "4.500", currency: "KWD", status: "processing", payment_method: "cod", consent_basis: "checkout",
+  });
+  assert(!JSON.stringify(good.inserted[0]).includes("current-secret"));
+
+  const wrong = deps();
+  const denied = await handleStoreWebhook(new Request(URL, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-wc-webhook-signature": "aaaa" },
+    body: ORDER,
+  }), wrong);
+  assertEquals(denied.status, 401);
+  assertEquals(wrong.connectorChecks, 0);
+  assertEquals(await denied.json(), { error: "unauthorized" });
+
+  const missing = await handleStoreWebhook(new Request(URL, {
+    method: "POST", headers: { "content-type": "application/json" }, body: ORDER,
+  }), deps());
+  assertEquals(missing.status, 401);
+});
+
+Deno.test("event flows in stored config are not stored in PR 1", async () => {
+  const gate = deps({
+    loadProcedures: async () => ({ cod_confirm: { enabled: true, prompts: {}, closing: "" } }),
+  });
+  const response = await handleStoreWebhook(new Request(URL, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-wc-webhook-signature": await mac(SECRET, ORDER),
+      "x-wc-webhook-topic": "order.created",
+    },
+    body: ORDER,
+  }), gate);
+  assertEquals(await response.json(), { ok: true, stored: 0 });
+  assertEquals(gate.inserted, []);
+  assertEquals(enabledStoreFlows({ cod_confirm: { enabled: true, prompts: {}, closing: "" } }).size, 0);
+});
+
+Deno.test("an insert failure is 500 and the response does not echo the delivery", async () => {
+  const response = await handleStoreWebhook(new Request(URL, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-wc-webhook-signature": await mac(SECRET, ORDER),
+      "x-wc-webhook-topic": "order.created",
+    },
+    body: ORDER,
+  }), deps({
+    flowsFrom: () => new Set(["cod_confirm"]),
+    insertEvents: async () => ({ ok: false }),
+  }));
+  assertEquals(response.status, 500);
+  const text = await response.text();
+  assertEquals(text, JSON.stringify({ error: "store_failed" }));
+  assert(!text.includes("5551"));
+  assert(!text.includes(ORDER));
+});
+
+Deno.test("a duplicate delivery stores once", async () => {
+  const seen = new Set<string>();
+  const rows: Array<Record<string, unknown>> = [];
+  const gate = deps({
+    flowsFrom: () => new Set(["cod_confirm"]),
+    insertEvents: async (batch) => {
+      let stored = 0;
+      for (const row of batch) {
+        const key = `${row.binding_id}:${row.flow}:${row.external_id}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        rows.push(row);
+        stored += 1;
+      }
+      return { ok: true, stored };
+    },
+  });
+  const signature = await mac(SECRET, ORDER);
+  const call = () => handleStoreWebhook(new Request(URL, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-wc-webhook-signature": signature,
+      "x-wc-webhook-topic": "order.created",
+    },
+    body: ORDER,
+  }), gate);
+  assertEquals((await (await call()).json()).stored, 1);
+  assertEquals((await (await call()).json()).stored, 0);
+  assertEquals(rows.length, 1);
+});
+
+Deno.test("an unknown binding is a detail-free 404 and broken JSON is 400", async () => {
+  const missing = await handleStoreWebhook(new Request(URL, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-wc-webhook-signature": await mac(SECRET, "{}") },
+    body: "{}",
+  }), deps({ loadBinding: async () => null }));
+  assertEquals(missing.status, 404);
+  assertEquals(await missing.json(), { error: "not_found" });
+
+  const broken = await handleStoreWebhook(new Request(URL, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-wc-webhook-signature": await mac(SECRET, "{") },
+    body: "{",
+  }), deps());
+  assertEquals(broken.status, 400);
+  assertEquals(await broken.json(), { error: "invalid_json" });
+});
+
+Deno.test("only POST is accepted", async () => {
+  const response = await handleStoreWebhook(new Request(URL, { method: "GET" }), deps());
+  assertEquals(response.status, 405);
+});

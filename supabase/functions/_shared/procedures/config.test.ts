@@ -23,6 +23,7 @@ for (const [label, input] of [
   ["prompt for a field the template lacks", { booking: { enabled: true, prompts: { colour: "x" }, closing: "" } }],
   ["a blank product finder question", { product_finder: { enabled: true, prompts: {}, closing: "", questions: ["Budget?", "  "] } }],
   ["a blank booking service", { booking: { enabled: true, prompts: {}, closing: "", services: ["Haircut", ""] } }],
+  ["a store-event flow (Spec B PR 1)", { cod_confirm: { enabled: true, prompts: {}, closing: "" } }],
 ] as const) {
   Deno.test(`parseProcedureConfig rejects ${label}`, () => {
     assertThrows(() => parseProcedureConfig(input), AgentBehaviorError);
@@ -36,6 +37,7 @@ Deno.test("readProcedureConfig drops only the invalid flow and never throws", ()
   });
   assertEquals(enabledProcedures(read), ["order_status"]);
   assertEquals(readProcedureConfig("garbage"), {});
+  assertEquals(readProcedureConfig({ ...valid, review_request: { enabled: true, prompts: {}, closing: "" } }).review_request, undefined);
   assertEquals(readProcedureConfig(undefined), {});
 });
 

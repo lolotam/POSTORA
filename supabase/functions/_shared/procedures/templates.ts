@@ -1,12 +1,23 @@
 // Procedure templates (Spec A, D2). Pure data plus validators; no I/O.
 import type { Intent } from "../agentTriage.ts";
 
-export const PROCEDURE_KEYS = ["order_status", "lead_capture", "complaint_return", "booking", "product_finder"] as const;
+export const PROCEDURE_KEYS = [
+  "order_status", "lead_capture", "complaint_return", "booking", "product_finder",
+  "cod_confirm", "review_request", "back_in_stock",
+] as const;
 export type ProcedureKey = typeof PROCEDURE_KEYS[number];
+/** Store-event flows. The worker starts them; the model and the card cannot, in PR 1. */
+export const EVENT_PROCEDURE_KEYS = ["cod_confirm", "review_request", "back_in_stock"] as const;
+export function isEventProcedureKey(key: string): boolean {
+  return (EVENT_PROCEDURE_KEYS as readonly string[]).includes(key);
+}
 export type ProcedureOrigin = "jev" | "model" | "event";
-export type EndAction = "order_lookup" | "save_lead" | "handoff" | "save_booking" | "product_search";
+export type EndAction =
+  | "order_lookup" | "save_lead" | "handoff" | "save_booking" | "product_search"
+  | "cod_update" | "review_route" | "stock_offer";
 
 export const STALE_AFTER_MS = 24 * 60 * 60 * 1000;
+export const EVENT_STALE_AFTER_MS = 72 * 60 * 60 * 1000;
 export const OFF_SCRIPT_LIMIT = 3;
 /** Longer than an edge worker lives (60 s), so a live claim is never taken over mid end action. */
 export const CLAIM_LEASE_MS = 2 * 60 * 1000;
@@ -15,6 +26,8 @@ export interface ProcedureField {
   name: string;
   /** What counts as an answer. Wording says how to ask; the hint says what to accept. */
   hint?: string;
+  /** When omitted, the field is always required. Otherwise it is required only while this is true. */
+  when?: (fields: Record<string, string>) => boolean;
   /** Normalized value, or null when the input does not satisfy the field. */
   validate: (raw: string) => string | null;
 }
@@ -39,6 +52,27 @@ const orderNumber = (raw: string) => {
 const contact = (raw: string) => {
   const value = raw.trim();
   return value.length >= 3 && value.length <= 120 ? value : null;
+};
+/** Case and Arabic alef/hamza folded, so the lists below hold the folded spelling. */
+const fold = (raw: string) => raw.trim().toLowerCase().replace(/[أإآٱ]/g, "ا");
+const decision = (raw: string) => {
+  const value = fold(raw);
+  if (["confirm", "yes", "نعم", "تاكيد"].includes(value)) return "confirm";
+  if (["cancel", "no", "لا", "الغاء"].includes(value)) return "cancel";
+  return null;
+};
+const arabicDigits = (raw: string) => raw.trim()
+  .replace(/[٠-٩]/g, (digit) => String(digit.charCodeAt(0) - 0x0660))
+  .replace(/[۰-۹]/g, (digit) => String(digit.charCodeAt(0) - 0x06f0));
+const rating = (raw: string) => {
+  const value = arabicDigits(raw);
+  return /^[1-5]$/.test(value) ? value : null;
+};
+const interest = (raw: string) => {
+  const value = fold(raw);
+  if (value === "yes" || value === "نعم") return "yes";
+  if (value === "no" || value === "لا") return "no";
+  return null;
 };
 
 const hint = {
@@ -88,6 +122,21 @@ export const TEMPLATES: Record<ProcedureKey, ProcedureTemplate> = {
     // Fields come from the business's 2–3 questions: productFinderFields(questions.length).
     key: "product_finder", version: 1, endAction: "product_search", needsCapability: "search_products",
     fields: [],
+  },
+  cod_confirm: {
+    key: "cod_confirm", version: 1, endAction: "cod_update",
+    fields: [{ name: "decision", validate: decision }],
+  },
+  review_request: {
+    key: "review_request", version: 1, endAction: "review_route",
+    fields: [
+      { name: "rating", validate: rating },
+      { name: "problem", when: (fields) => Number(fields.rating) <= 3, validate: text(500) },
+    ],
+  },
+  back_in_stock: {
+    key: "back_in_stock", version: 1, endAction: "stock_offer",
+    fields: [{ name: "interest", validate: interest }],
   },
 };
 
