@@ -174,6 +174,19 @@ describe("ScheduleMessageDialog", () => {
     expect(screen.getByText("5 / 4096")).toBeInTheDocument();
   });
 
+  it("caps the text at the 1024-character caption limit when image media is attached", async () => {
+    renderManager();
+    await openDialog();
+    await fillReady();
+    await chooseOption("Media type", "Image");
+    fireEvent.change(screen.getByLabelText("Media URL"), { target: { value: "https://cdn.example/a.jpg" } });
+    fireEvent.change(screen.getByLabelText("Message"), { target: { value: "x".repeat(1025) } });
+    expect(screen.getByText("1025 / 1024")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Schedule" }));
+    expect(await screen.findByText("Message must be 1024 characters or fewer.")).toBeInTheDocument();
+    expect(inserted).toBeNull();
+  });
+
   it("inserts a pending row and confirms the scheduled time", async () => {
     renderManager();
     await openDialog();

@@ -11,6 +11,9 @@ const RECIPIENT_PHONE_FORMAT = /^\+?[0-9][0-9\s\-().]*$/;
 
 export const WHATSAPP_MESSAGE_MAX = 4096;
 
+/** Image, video and document captions are capped lower than text messages. */
+export const WHATSAPP_CAPTION_MAX = 1024;
+
 export interface OwnWhatsAppAccount {
   id: string;
   platform_username: string | null;

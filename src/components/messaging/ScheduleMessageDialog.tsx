@@ -13,6 +13,7 @@ import {
   recipientDigits,
   SCHEDULED_OWN_ACCOUNT_ONLY,
   scheduledAtFromLocal,
+  WHATSAPP_CAPTION_MAX,
   WHATSAPP_MESSAGE_MAX,
   useWhatsAppScheduledMessages,
   type OwnWhatsAppAccount,
@@ -67,6 +68,8 @@ export function ScheduleMessageDialog({ open, onOpenChange }: ScheduleMessageDia
   const selected = accounts.find((account) => account.id === accountId) ?? null;
   const sessionWindow = selected?.connection_mode === "cloud_api" || selected?.connection_mode === "coexistence";
   const audio = mediaType === "audio";
+  // With image, video or document media the text is sent as a caption.
+  const textMax = mediaType !== "" && !audio ? WHATSAPP_CAPTION_MAX : WHATSAPP_MESSAGE_MAX;
   const noAccounts = !accountsLoading && !accountsError && accounts.length === 0;
 
   const handleSubmit = () => {
@@ -87,8 +90,8 @@ export function ScheduleMessageDialog({ open, onOpenChange }: ScheduleMessageDia
     if (!audio && !text && !typeSet) {
       next.message = t("scheduled.messageRequired", "Write a message or attach media.");
     }
-    if (text.length > WHATSAPP_MESSAGE_MAX) {
-      next.message = t("scheduled.messageTooLong", "Message must be {{max}} characters or fewer.", { max: WHATSAPP_MESSAGE_MAX });
+    if (text.length > textMax) {
+      next.message = t("scheduled.messageTooLong", "Message must be {{max}} characters or fewer.", { max: textMax });
     }
 
     const scheduledAt = scheduledAtFromLocal(whenLocal);
@@ -196,7 +199,7 @@ export function ScheduleMessageDialog({ open, onOpenChange }: ScheduleMessageDia
               <Label htmlFor="schedule-message">{t("scheduled.message", "Message")}</Label>
               {!audio && (
                 <span className="text-xs text-muted-foreground">
-                  {t("scheduled.characterCount", "{{count}} / {{max}}", { count: message.length, max: WHATSAPP_MESSAGE_MAX })}
+                  {t("scheduled.characterCount", "{{count}} / {{max}}", { count: message.length, max: textMax })}
                 </span>
               )}
             </div>
