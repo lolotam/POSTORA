@@ -14,6 +14,13 @@ export interface MediaFile {
   publicUrl: string;
   metadata?: Record<string, unknown> | null;
   linked_account_ids?: string[];
+  keep_forever?: boolean;
+  last_used_at?: string | null;
+  expires_at?: string | null;
+  retention_state?: string | null;
+  retention_claimed_at?: string | null;
+  retention_attempts?: number;
+  retention_next_attempt_at?: string | null;
 }
 
 export interface MediaFolder {

@@ -12,8 +12,8 @@ export interface ProviderDeleteResponse {
 
 export function partitionStoredMedia(files: StoredMediaRef[]): { storage: StoredMediaRef[]; provider: StoredMediaRef[] } {
   return {
-    storage: files.filter((file) => file.storage_bucket === "media"),
-    provider: files.filter((file) => file.storage_bucket !== "media"),
+    storage: files.filter((file) => file.storage_bucket === "media" || file.storage_bucket === "supabase"),
+    provider: files.filter((file) => file.storage_bucket !== "media" && file.storage_bucket !== "supabase"),
   };
 }
 

@@ -42,6 +42,7 @@ import {
   RectangleHorizontal,
   RectangleVertical,
   Square,
+  Pin,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { getMediaThumbnailUrl } from "@/lib/mediaUrl";
@@ -96,6 +97,7 @@ import {
 } from "@/components/media";
 import { FileTypeTile } from "@/components/media/FileTypeTile";
 import { deleteLibraryFiles } from "@/lib/mediaDelete";
+import { setMediaKeep } from "@/lib/mediaRetention";
 import { downloadNameFor, isPostableLibraryFile, libraryFilePresentation, librarySearchText, matchesLibraryFilter } from "@/lib/mediaTypes";
 import {
   DndContext,
@@ -131,6 +133,7 @@ import {
   BulkDeleteDialog,
   DeleteFolderDialog,
 } from "./media-library";
+import { RetentionBadge, RetentionKeepItem } from "./media-library/components/RetentionBadge";
 
 /**
  * Thumbnail for one media row in the grid, the list, and the drag overlay.
@@ -202,6 +205,7 @@ export default function MediaLibrary() {
   const [search, setSearch] = useState("");
   const [viewMode, setViewMode] = useState<ViewMode>("grid");
   const [filterType, setFilterType] = useState<FilterType>("all");
+  const [expiringSoon, setExpiringSoon] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [fileToDelete, setFileToDelete] = useState<string | null>(null);
@@ -391,15 +395,30 @@ export default function MediaLibrary() {
     enabled: !!effectiveUserId,
   });
 
+  // Readable only when authenticated is granted the singleton. A permission error
+  // leaves the badge as a plain countdown; this page does not create that access.
+  const { data: retentionSettings } = useQuery({
+    queryKey: ["media-retention-settings"],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("media_retention_settings")
+        .select("delete_enabled")
+        .limit(1)
+        .maybeSingle();
+      if (error || !data) return { readable: false as const };
+      return { readable: true as const, deleteEnabled: data.delete_enabled === true };
+    },
+  });
+  const deletionPaused = retentionSettings?.readable === true && retentionSettings.deleteEnabled === false;
+
   // Fetch media files
   const { data: mediaFiles = [], isLoading, refetch } = useQuery({
     queryKey: ["media-files", effectiveUserId, mediaToAccountsMap],
     queryFn: async () => {
       if (!effectiveUserId) return [];
-      // Explicit allowlist rather than `*`. Today it happens to name every column
-      // — this page really does consume all fifteen — so it is not a payload win.
-      // It is a guard: a column added later (an embedding, a large JSON blob)
-      // joins this query only when someone adds it here deliberately.
+      // Explicit allowlist rather than `*`. A column added later joins this
+      // query only when someone adds it here deliberately. Retention columns
+      // are included so the library can show the warning and the keep toggle.
       //
       // Deliberately NOT paginated at the database level: folder navigation,
       // search, type/date/platform/account/aspect-ratio filters, and select-all
@@ -409,7 +428,7 @@ export default function MediaLibrary() {
       const { data, error } = await supabase
         .from("media_files")
         .select(
-          "id, user_id, file_path, file_type, mime_type, file_size, storage_bucket, cloudinary_public_id, folder_path, platforms, social_account_ids, upload_date, created_at, metadata, current_object_version",
+          "id, user_id, file_path, file_type, mime_type, file_size, storage_bucket, cloudinary_public_id, folder_path, platforms, social_account_ids, upload_date, created_at, metadata, current_object_version, keep_forever, last_used_at, expires_at, retention_state, retention_claimed_at, retention_attempts, retention_next_attempt_at",
         )
         .eq("user_id", effectiveUserId)
         .order("created_at", { ascending: false });
@@ -545,13 +564,15 @@ export default function MediaLibrary() {
         }
       }
 
-      return matchesFolder && matchesSearch && matchesType && matchesDate && matchesPlatform && matchesAccount && matchesAspectRatio;
+      const matchesExpiring = !expiringSoon || file.expires_at != null;
+
+      return matchesFolder && matchesSearch && matchesType && matchesDate && matchesPlatform && matchesAccount && matchesAspectRatio && matchesExpiring;
     });
-  }, [mediaFiles, currentFolder, search, filterType, selectedDate, selectedPlatform, selectedAccountId, aspectRatioFilter, socialAccounts]);
+  }, [mediaFiles, currentFolder, search, filterType, selectedDate, selectedPlatform, selectedAccountId, aspectRatioFilter, socialAccounts, expiringSoon]);
 
   const displayedFiles = useMemo(() => filteredFiles.slice(0, itemsPerPage), [filteredFiles, itemsPerPage]);
 
-  const hasActiveFilters = selectedDate || selectedPlatform || selectedAccountId || filterType !== "all" || aspectRatioFilter !== "all" || search || itemsPerPage !== 50;
+  const hasActiveFilters = selectedDate || selectedPlatform || selectedAccountId || filterType !== "all" || aspectRatioFilter !== "all" || search || itemsPerPage !== 50 || expiringSoon;
 
   const getAccountInfo = (accountId: string) => socialAccounts.find((a) => a.id === accountId);
 
@@ -585,12 +606,31 @@ export default function MediaLibrary() {
     navigate("/post?from=media-library");
   };
 
+  const handleSetKeep = async (ids: string[], keep: boolean) => {
+    const { error } = await setMediaKeep(ids, keep);
+    if (error) {
+      toast({
+        title: t("retention.keepFailed", "Could not update keep"),
+        description: t("errors.unknownError", "An error occurred"),
+        variant: "destructive",
+      });
+      return;
+    }
+    await refetch();
+    toast({
+      title: keep
+        ? t("retention.kept", "Kept forever")
+        : t("retention.unkept", "These files can expire again"),
+    });
+  };
+
   const clearFilters = () => {
     setSelectedDate(undefined);
     setSelectedPlatform(null);
     setSelectedAccountId(null);
     setAspectRatioFilter("all");
     setFilterType("all");
+    setExpiringSoon(false);
     setSearch("");
     setItemsPerPage(50);
     localStorage.setItem("mediaLibraryItemsPerPage", "50");
@@ -965,6 +1005,8 @@ export default function MediaLibrary() {
             onMove={() => setMoveDialogOpen(true)}
             onDownload={handleBulkDownload}
             onDelete={() => setDeleteDialogOpen(true)}
+            onKeepForever={() => handleSetKeep(Array.from(selectedFiles), true)}
+            onAllowExpiry={() => handleSetKeep(Array.from(selectedFiles), false)}
           />
 
           {downloadProgress && <DownloadProgressBar progress={downloadProgress} onCancel={() => setDownloadProgress(null)} />}
@@ -1063,6 +1105,14 @@ export default function MediaLibrary() {
                 )}
 
                 {/* Type Filter */}
+                <Button
+                  variant="outline"
+                  className={cn("gap-2", expiringSoon && "border-primary")}
+                  onClick={() => setExpiringSoon((current) => !current)}
+                >
+                  <Pin className="w-4 h-4" />
+                  {t("filters.expiringSoon", "Expiring soon")}
+                </Button>
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <Button variant="outline" className={cn("gap-2", filterType !== "all" && "border-primary")}>
@@ -1159,6 +1209,12 @@ export default function MediaLibrary() {
                     <button onClick={() => setSelectedAccountId(null)} className="ms-1 hover:text-destructive"><X className="w-3 h-3" /></button>
                   </Badge>
                 )}
+                {expiringSoon && (
+                  <Badge variant="secondary" className="gap-1">
+                    {t("filters.expiringSoon", "Expiring soon")}
+                    <button onClick={() => setExpiringSoon(false)} className="ms-1 hover:text-destructive"><X className="w-3 h-3" /></button>
+                  </Badge>
+                )}
                 {filterType !== "all" && (
                   <Badge variant="secondary" className="gap-1">
                     {filterType === "image" ? <Image className="w-3 h-3" /> : filterType === "video" ? <Video className="w-3 h-3" /> : null}{filterType === "image" ? t("filters.imagesLower", "images") : filterType === "video" ? t("filters.videosLower", "videos") : filterType === "audio" ? t("filters.audioLower", "audio") : filterType === "archive" ? t("filters.archivesLower", "archives") : t("filters.documentsLower", "documents")}
@@ -1216,6 +1272,11 @@ export default function MediaLibrary() {
                         <div className="absolute bottom-1 start-1 flex gap-0.5">
                           <Badge variant="secondary" className="text-[10px] px-1 py-0 opacity-80">{libraryFilePresentation(file).kind === "video" ? t("library.video", "Video") : libraryFilePresentation(file).kind === "audio" ? t("library.audio", "Audio") : libraryFilePresentation(file).kind === "archive" ? t("library.archive", "Archive") : libraryFilePresentation(file).kind === "document" ? t("library.document", "Document") : t("library.image", "Image")}</Badge>
                           {(() => { const label = getAspectRatioLabel(file.metadata?.width as number, file.metadata?.height as number); return label ? <Badge variant="secondary" className="text-[10px] px-1 py-0 opacity-80">{label}</Badge> : null; })()}
+                          <RetentionBadge
+                            expiresAt={file.expires_at}
+                            deletionPaused={deletionPaused}
+                            onKeep={file.keep_forever ? undefined : () => handleSetKeep([file.id], true)}
+                          />
                         </div>
                         <Button size="icon" variant="secondary" className={cn("absolute top-1/2 start-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full opacity-0 group-hover:opacity-100 transition-opacity shadow-lg", columnsPerRow >= 10 ? "h-5 w-5" : columnsPerRow >= 8 ? "h-7 w-7" : "h-10 w-10")} onClick={(e) => { e.stopPropagation(); setPreviewFile(file); }}><Eye className={columnsPerRow >= 10 ? "w-2.5 h-2.5" : columnsPerRow >= 8 ? "w-3.5 h-3.5" : "w-5 h-5"} /></Button>
                         <div className={cn("absolute rounded-full flex items-center justify-center transition-all", columnsPerRow >= 10 ? "top-0.5 start-0.5 w-3 h-3" : columnsPerRow >= 8 ? "top-1 start-1 w-4 h-4" : "top-1 start-1 w-6 h-6", selectedFiles.has(file.id) ? "bg-primary text-primary-foreground" : "bg-background/80 backdrop-blur opacity-0 group-hover:opacity-100")}>{selectedFiles.has(file.id) ? <CheckCircle2 className={columnsPerRow >= 10 ? "w-2 h-2" : columnsPerRow >= 8 ? "w-3 h-3" : "w-4 h-4"} /> : <div className={cn("rounded-full border-2 border-muted-foreground", columnsPerRow >= 10 ? "w-1.5 h-1.5" : columnsPerRow >= 8 ? "w-2 h-2" : "w-3 h-3")} />}</div>
@@ -1232,6 +1293,8 @@ export default function MediaLibrary() {
                               {(file.file_type === "image" || file.file_type === "gif") && <DropdownMenuItem onClick={(e) => { e.stopPropagation(); setImageToolsFile(file); }}><Wand2 className="w-4 h-4 me-2" />{t("actions.imageTools", "Image Tools")}</DropdownMenuItem>}
                               <DropdownMenuSeparator />
                               <DropdownMenuItem onClick={(e) => { e.stopPropagation(); handleDownload(file); }}><Download className="w-4 h-4 me-2" />{t("common:download", "Download")}</DropdownMenuItem>
+                              <DropdownMenuSeparator />
+                              <RetentionKeepItem keepForever={!!file.keep_forever} onToggle={() => handleSetKeep([file.id], !file.keep_forever)} />
                               <DropdownMenuSeparator />
                               <DropdownMenuItem className="text-destructive" onClick={(e) => { e.stopPropagation(); setFileToDelete(file.id); }}><Trash2 className="w-4 h-4 me-2" />{t("common:delete", "Delete")}</DropdownMenuItem>
                             </DropdownMenuContent>
@@ -1252,6 +1315,11 @@ export default function MediaLibrary() {
                           <span className="flex items-center gap-1">{libraryFilePresentation(file).kind === "image" ? <Image className="w-3 h-3" /> : libraryFilePresentation(file).kind === "video" ? <Video className="w-3 h-3" /> : null}{libraryFilePresentation(file).kind === "image" ? t("type.imageLower", "image") : libraryFilePresentation(file).kind === "video" ? t("type.videoLower", "video") : libraryFilePresentation(file).kind === "audio" ? t("type.audio", "audio") : libraryFilePresentation(file).kind === "archive" ? t("type.archive", "archive") : t("type.document", "document")}</span>
                           <span>{formatFileSize(file.file_size)}</span>
                           {(() => { const label = getAspectRatioLabel(file.metadata?.width as number, file.metadata?.height as number); return label ? <Badge variant="secondary" className="text-[10px] px-1 py-0">{label}</Badge> : null; })()}
+                          <RetentionBadge
+                            expiresAt={file.expires_at}
+                            deletionPaused={deletionPaused}
+                            onKeep={file.keep_forever ? undefined : () => handleSetKeep([file.id], true)}
+                          />
                           <span>{format(new Date(file.created_at), "MMM d, yyyy")}</span>
                         </div>
                       </div>
@@ -1262,6 +1330,8 @@ export default function MediaLibrary() {
                           <DropdownMenuSeparator />
                           <DropdownMenuItem onClick={(e) => { e.stopPropagation(); setRenameFile(file); }}><Pencil className="w-4 h-4 me-2" />{t("common:rename", "Rename")}</DropdownMenuItem>
                           <DropdownMenuItem onClick={(e) => { e.stopPropagation(); handleDownload(file); }}><Download className="w-4 h-4 me-2" />{t("common:download", "Download")}</DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          <RetentionKeepItem keepForever={!!file.keep_forever} onToggle={() => handleSetKeep([file.id], !file.keep_forever)} />
                           <DropdownMenuSeparator />
                           <DropdownMenuItem className="text-destructive" onClick={(e) => { e.stopPropagation(); setFileToDelete(file.id); }}><Trash2 className="w-4 h-4 me-2" />{t("common:delete", "Delete")}</DropdownMenuItem>
                         </DropdownMenuContent>

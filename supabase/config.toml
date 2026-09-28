@@ -20,6 +20,12 @@ port = 55434
 [analytics]
 port = 55437
 
+[functions.media-retention]
+verify_jwt = false
+
+[functions.cleanup-media]
+verify_jwt = false
+
 [functions.threads-webhook]
 verify_jwt = false
 
