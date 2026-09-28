@@ -94,6 +94,9 @@ import {
   BatchRenameDialog,
   getFileDisplayName,
 } from "@/components/media";
+import { FileTypeTile } from "@/components/media/FileTypeTile";
+import { deleteLibraryFiles } from "@/lib/mediaDelete";
+import { downloadNameFor, isPostableLibraryFile, libraryFilePresentation, librarySearchText, matchesLibraryFilter } from "@/lib/mediaTypes";
 import {
   DndContext,
   DragEndEvent,
@@ -114,6 +117,7 @@ import {
   DownloadProgress,
   Breadcrumb,
   formatFileSize,
+  libraryFilePublicUrl,
   isProcessedFile,
   extractCloudName,
   DraggableMediaCard,
@@ -152,7 +156,10 @@ function MediaThumbnail({
   openinaryOrigin?: string;
   onHeal: (fileId: string, width: number, height: number, existingMetadata: MediaFile["metadata"]) => void;
 }) {
-  const src = file.file_type === "image" ? getMediaThumbnailUrl(file.publicUrl, size, openinaryOrigin) : file.publicUrl;
+  const presentation = libraryFilePresentation(file);
+  const src = file.file_type === "image" || file.file_type === "gif"
+    ? getMediaThumbnailUrl(file.publicUrl, size, openinaryOrigin)
+    : file.publicUrl;
   const shouldHeal = !file.metadata?.width && src === file.publicUrl;
   const className = "w-full h-full object-cover";
 
@@ -168,6 +175,10 @@ function MediaThumbnail({
         }}
       />
     );
+  }
+
+  if (file.file_type !== "image" && file.file_type !== "gif") {
+    return <FileTypeTile kind={presentation.kind} icon={presentation.icon} extension={presentation.extension} />;
   }
 
   return (
@@ -405,20 +416,7 @@ export default function MediaLibrary() {
       if (error) throw error;
 
       const filesWithUrls = data.map((file) => {
-        let publicUrl: string;
-        if (file.storage_bucket === "cloudinary") {
-          if (file.file_path.startsWith("http")) {
-            publicUrl = file.file_path;
-          } else if (file.metadata && typeof file.metadata === "object" && "cloudinary_url" in file.metadata) {
-            publicUrl = (file.metadata as { cloudinary_url?: string }).cloudinary_url || "";
-          } else {
-            // Fallback to file_path if it's the only option, even if it doesn't look like a URL
-            publicUrl = file.file_path;
-          }
-        } else {
-          const { data: urlData } = supabase.storage.from("media").getPublicUrl(file.file_path);
-          publicUrl = urlData.publicUrl;
-        }
+        const publicUrl = libraryFilePublicUrl(file, (bucket, path) => supabase.storage.from(bucket).getPublicUrl(path).data.publicUrl);
 
         // Debug log for troubleshooting broken images
         if (import.meta.env.DEV) {
@@ -501,8 +499,8 @@ export default function MediaLibrary() {
   const filteredFiles = useMemo(() => {
     return mediaFiles.filter((file) => {
       const matchesFolder = file.folder_path === currentFolder;
-      const matchesSearch = file.file_path.toLowerCase().includes(search.toLowerCase());
-      const matchesType = filterType === "all" || file.file_type === filterType;
+      const matchesSearch = librarySearchText(file).includes(search.toLowerCase());
+      const matchesType = matchesLibraryFilter(file, filterType);
 
       let matchesDate = true;
       if (selectedDate) {
@@ -564,6 +562,15 @@ export default function MediaLibrary() {
       return;
     }
     const filesToSend = mediaFiles.filter((f) => selectedFiles.has(f.id));
+    const blocked = filesToSend.filter((file) => !isPostableLibraryFile(file));
+    if (blocked.length > 0) {
+      toast({
+        title: t("toast.notPostable", "These files can't be posted"),
+        description: t("toast.notPostableDesc", "Posts only accept images and video. Remove documents, audio, and archives from the selection."),
+        variant: "destructive",
+      });
+      return;
+    }
     const mediaData = filesToSend.map((f) => ({
       id: f.id,
       url: f.publicUrl,
@@ -609,14 +616,25 @@ export default function MediaLibrary() {
         },
       });
 
-      if (file.storage_bucket === "cloudinary" && file.cloudinary_public_id) {
-        await supabase.functions.invoke("cloudinary-delete", {
-          body: { publicIds: [file.cloudinary_public_id], resourceType: file.file_type },
-        });
-      } else {
-        await supabase.storage.from("media").remove([file.file_path]);
+      const outcome = await deleteLibraryFiles([file], {
+        removeStorage: async (paths) => {
+          const { error } = await supabase.storage.from("media").remove(paths);
+          return error;
+        },
+        invokeDelete: async (ids) => {
+          const { data, error } = await supabase.functions.invoke("cloudinary-delete", { body: { mediaFileIds: ids } });
+          return { data, error };
+        },
+        deleteRows: async (ids) => {
+          const { error } = await supabase.from("media_files").delete().in("id", ids);
+          if (error) throw error;
+        },
+      });
+      if (outcome.failedIds.length > 0) {
+        toast({ title: t("toast.deleteFailed", "Delete failed"), description: t("errors.deleteFileFailed", "Failed to delete file. Please try again."), variant: "destructive" });
+        if (operationId) await failOperation(operationId, "Delete was not confirmed", Date.now() - startTime);
+        return;
       }
-      await supabase.from("media_files").delete().eq("id", fileId);
       toast({ title: t("toast.fileDeleted", "File deleted"), description: t("toast.fileDeletedDesc", "The file has been removed from your library.") });
 
       if (operationId) {
@@ -640,14 +658,11 @@ export default function MediaLibrary() {
 
   const handleBulkDelete = async () => {
     const filesToDelete = mediaFiles.filter((f) => selectedFiles.has(f.id));
-    const cloudinaryFiles = filesToDelete.filter((f) => f.storage_bucket === "cloudinary" && f.cloudinary_public_id);
-    const supabaseFiles = filesToDelete.filter((f) => f.storage_bucket !== "cloudinary");
 
     const startTime = Date.now();
     let operationId: string | null = null;
 
     try {
-      // Log the operation
       operationId = await logOperation({
         operationType: "delete_bulk",
         operationDetails: {
@@ -659,20 +674,31 @@ export default function MediaLibrary() {
         },
       });
 
-      if (cloudinaryFiles.length > 0) {
-        const imageIds = cloudinaryFiles.filter((f) => f.file_type === "image").map((f) => f.cloudinary_public_id!);
-        const videoIds = cloudinaryFiles.filter((f) => f.file_type === "video").map((f) => f.cloudinary_public_id!);
-        if (imageIds.length > 0) {
-          await supabase.functions.invoke("cloudinary-delete", { body: { publicIds: imageIds, resourceType: "image" } });
-        }
-        if (videoIds.length > 0) {
-          await supabase.functions.invoke("cloudinary-delete", { body: { publicIds: videoIds, resourceType: "video" } });
-        }
+      const outcome = await deleteLibraryFiles(filesToDelete, {
+        removeStorage: async (paths) => {
+          const { error } = await supabase.storage.from("media").remove(paths);
+          return error;
+        },
+        invokeDelete: async (ids) => {
+          const { data, error } = await supabase.functions.invoke("cloudinary-delete", { body: { mediaFileIds: ids } });
+          return { data, error };
+        },
+        deleteRows: async (ids) => {
+          const { error } = await supabase.from("media_files").delete().in("id", ids);
+          if (error) throw error;
+        },
+      });
+      if (outcome.failedIds.length > 0) {
+        toast({
+          title: t("toast.deletePartial", "Some files were not deleted"),
+          description: t("toast.deletePartialDesc", "{{deleted}} deleted, {{failed}} could not be removed.", { deleted: outcome.removeIds.length, failed: outcome.failedIds.length }),
+          variant: "destructive",
+        });
+        if (operationId) await failOperation(operationId, "Partial delete", Date.now() - startTime);
+        setSelectedFiles(new Set(outcome.failedIds));
+        refetch();
+        return;
       }
-      if (supabaseFiles.length > 0) {
-        await supabase.storage.from("media").remove(supabaseFiles.map((f) => f.file_path));
-      }
-      await supabase.from("media_files").delete().in("id", Array.from(selectedFiles));
       toast({ title: t("toast.filesDeleted", "Files deleted"), description: t("toast.filesDeletedDesc", "{{count}} files have been removed.", { count: selectedFiles.size }) });
 
       if (operationId) {
@@ -751,7 +777,7 @@ export default function MediaLibrary() {
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = file.file_path.split("/").pop() || "download";
+      a.download = downloadNameFor(file);
       document.body.appendChild(a);
       a.click();
       window.URL.revokeObjectURL(url);
@@ -1041,13 +1067,16 @@ export default function MediaLibrary() {
                   <DropdownMenuTrigger asChild>
                     <Button variant="outline" className={cn("gap-2", filterType !== "all" && "border-primary")}>
                       <Filter className="w-4 h-4" />
-                      {filterType === "all" ? t("common:all", "All") : filterType === "image" ? t("filters.images", "Images") : t("filters.videos", "Videos")}
+                      {filterType === "all" ? t("common:all", "All") : filterType === "image" ? t("filters.images", "Images") : filterType === "video" ? t("filters.videos", "Videos") : filterType === "audio" ? t("filters.audio", "Audio") : filterType === "archive" ? t("filters.archives", "Archives") : t("filters.documents", "Documents")}
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end">
                     <DropdownMenuItem onClick={() => setFilterType("all")}>{t("filters.allFiles", "All Files")}</DropdownMenuItem>
                     <DropdownMenuItem onClick={() => setFilterType("image")}><Image className="w-4 h-4 me-2" />{t("filters.imagesOnly", "Images Only")}</DropdownMenuItem>
                     <DropdownMenuItem onClick={() => setFilterType("video")}><Video className="w-4 h-4 me-2" />{t("filters.videosOnly", "Videos Only")}</DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => setFilterType("document")}>{t("filters.documentsOnly", "Documents Only")}</DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => setFilterType("audio")}>{t("filters.audioOnly", "Audio Only")}</DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => setFilterType("archive")}>{t("filters.archivesOnly", "Archives Only")}</DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
 
@@ -1132,7 +1161,7 @@ export default function MediaLibrary() {
                 )}
                 {filterType !== "all" && (
                   <Badge variant="secondary" className="gap-1">
-                    {filterType === "image" ? <Image className="w-3 h-3" /> : <Video className="w-3 h-3" />}{filterType === "image" ? t("filters.imagesLower", "images") : t("filters.videosLower", "videos")}
+                    {filterType === "image" ? <Image className="w-3 h-3" /> : filterType === "video" ? <Video className="w-3 h-3" /> : null}{filterType === "image" ? t("filters.imagesLower", "images") : filterType === "video" ? t("filters.videosLower", "videos") : filterType === "audio" ? t("filters.audioLower", "audio") : filterType === "archive" ? t("filters.archivesLower", "archives") : t("filters.documentsLower", "documents")}
                     <button onClick={() => setFilterType("all")} className="ms-1 hover:text-destructive"><X className="w-3 h-3" /></button>
                   </Badge>
                 )}
@@ -1185,7 +1214,7 @@ export default function MediaLibrary() {
                       <div className={cn("relative rounded-xl overflow-hidden border-2 transition-all cursor-pointer aspect-square", selectedFiles.has(file.id) ? "border-primary bg-primary/5" : "border-border hover:border-primary/50")} onClick={() => toggleFileSelection(file.id)}>
                         <MediaThumbnail file={file} size={300} openinaryOrigin={openinaryOrigin} onHeal={healMetadata} />
                         <div className="absolute bottom-1 start-1 flex gap-0.5">
-                          <Badge variant="secondary" className="text-[10px] px-1 py-0 opacity-80">{file.file_type === "video" ? t("library.video", "Video") : t("library.image", "Image")}</Badge>
+                          <Badge variant="secondary" className="text-[10px] px-1 py-0 opacity-80">{libraryFilePresentation(file).kind === "video" ? t("library.video", "Video") : libraryFilePresentation(file).kind === "audio" ? t("library.audio", "Audio") : libraryFilePresentation(file).kind === "archive" ? t("library.archive", "Archive") : libraryFilePresentation(file).kind === "document" ? t("library.document", "Document") : t("library.image", "Image")}</Badge>
                           {(() => { const label = getAspectRatioLabel(file.metadata?.width as number, file.metadata?.height as number); return label ? <Badge variant="secondary" className="text-[10px] px-1 py-0 opacity-80">{label}</Badge> : null; })()}
                         </div>
                         <Button size="icon" variant="secondary" className={cn("absolute top-1/2 start-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full opacity-0 group-hover:opacity-100 transition-opacity shadow-lg", columnsPerRow >= 10 ? "h-5 w-5" : columnsPerRow >= 8 ? "h-7 w-7" : "h-10 w-10")} onClick={(e) => { e.stopPropagation(); setPreviewFile(file); }}><Eye className={columnsPerRow >= 10 ? "w-2.5 h-2.5" : columnsPerRow >= 8 ? "w-3.5 h-3.5" : "w-5 h-5"} /></Button>
@@ -1199,8 +1228,8 @@ export default function MediaLibrary() {
                               <DropdownMenuItem onClick={(e) => { e.stopPropagation(); setRenameFile(file); }}><Pencil className="w-4 h-4 me-2" />{t("common:rename", "Rename")}</DropdownMenuItem>
                               <DropdownMenuItem onClick={(e) => { e.stopPropagation(); setShareFile(file); }}><Share2 className="w-4 h-4 me-2" />{t("actions.shareEmbed", "Share / Embed")}</DropdownMenuItem>
                               <DropdownMenuItem onClick={(e) => { e.stopPropagation(); setSingleFileMoveId(file.id); }}><Move className="w-4 h-4 me-2" />{t("common:move", "Move")}</DropdownMenuItem>
-                              <DropdownMenuItem onClick={(e) => { e.stopPropagation(); setReplaceFile(file); }}><RefreshCw className="w-4 h-4 me-2" />{t("actions.replace", "Replace")}</DropdownMenuItem>
-                              {file.file_type === "image" && <DropdownMenuItem onClick={(e) => { e.stopPropagation(); setImageToolsFile(file); }}><Wand2 className="w-4 h-4 me-2" />{t("actions.imageTools", "Image Tools")}</DropdownMenuItem>}
+                              {(file.file_type === "image" || file.file_type === "gif") && <DropdownMenuItem onClick={(e) => { e.stopPropagation(); setReplaceFile(file); }}><RefreshCw className="w-4 h-4 me-2" />{t("actions.replace", "Replace")}</DropdownMenuItem>}
+                              {(file.file_type === "image" || file.file_type === "gif") && <DropdownMenuItem onClick={(e) => { e.stopPropagation(); setImageToolsFile(file); }}><Wand2 className="w-4 h-4 me-2" />{t("actions.imageTools", "Image Tools")}</DropdownMenuItem>}
                               <DropdownMenuSeparator />
                               <DropdownMenuItem onClick={(e) => { e.stopPropagation(); handleDownload(file); }}><Download className="w-4 h-4 me-2" />{t("common:download", "Download")}</DropdownMenuItem>
                               <DropdownMenuSeparator />
@@ -1220,7 +1249,7 @@ export default function MediaLibrary() {
                       <div className="flex-1 min-w-0">
                         <p className="font-medium truncate">{getFileDisplayName(file)}</p>
                         <div className="flex items-center gap-4 text-sm text-muted-foreground mt-1">
-                          <span className="flex items-center gap-1">{file.file_type === "image" ? <Image className="w-3 h-3" /> : <Video className="w-3 h-3" />}{file.file_type === "image" ? t("type.imageLower", "image") : t("type.videoLower", "video")}</span>
+                          <span className="flex items-center gap-1">{libraryFilePresentation(file).kind === "image" ? <Image className="w-3 h-3" /> : libraryFilePresentation(file).kind === "video" ? <Video className="w-3 h-3" /> : null}{libraryFilePresentation(file).kind === "image" ? t("type.imageLower", "image") : libraryFilePresentation(file).kind === "video" ? t("type.videoLower", "video") : libraryFilePresentation(file).kind === "audio" ? t("type.audio", "audio") : libraryFilePresentation(file).kind === "archive" ? t("type.archive", "archive") : t("type.document", "document")}</span>
                           <span>{formatFileSize(file.file_size)}</span>
                           {(() => { const label = getAspectRatioLabel(file.metadata?.width as number, file.metadata?.height as number); return label ? <Badge variant="secondary" className="text-[10px] px-1 py-0">{label}</Badge> : null; })()}
                           <span>{format(new Date(file.created_at), "MMM d, yyyy")}</span>
@@ -1262,10 +1291,10 @@ export default function MediaLibrary() {
         {bgRemovalFile && <BackgroundRemovalDialog open={!!bgRemovalFile} onClose={() => setBgRemovalFile(null)} file={bgRemovalFile} cloudName={extractCloudName(bgRemovalFile.publicUrl)} onProcessComplete={() => refetch()} />}
         {imageToolsFile && <ImageToolsDialog open={!!imageToolsFile} onClose={() => setImageToolsFile(null)} file={imageToolsFile} cloudName={extractCloudName(imageToolsFile.publicUrl)} onProcessComplete={() => refetch()} />}
         <BatchImageToolsDialog files={mediaFiles.filter((f) => selectedFiles.has(f.id))} open={batchImageToolsOpen} onClose={() => setBatchImageToolsOpen(false)} cloudName="" onProcessComplete={() => { refetch(); setSelectedFiles(new Set()); }} />
-        {renameFile && <RenameFileDialog open={!!renameFile} onClose={() => setRenameFile(null)} fileId={renameFile.id} currentName={renameFile.file_path} storageBucket={renameFile.storage_bucket} cloudinaryPublicId={renameFile.cloudinary_public_id} onRenamed={() => refetch()} />}
+        {renameFile && <RenameFileDialog open={!!renameFile} onClose={() => setRenameFile(null)} fileId={renameFile.id} currentName={renameFile.storage_bucket === "media" ? renameFile.file_path : getFileDisplayName(renameFile)} storageBucket={renameFile.storage_bucket} onRenamed={() => refetch()} />}
         {renameFolder && <RenameFolderDialog open={!!renameFolder} onClose={() => setRenameFolder(null)} folderId={renameFolder.id} currentName={renameFolder.name} currentPath={renameFolder.full_path} parentPath={renameFolder.parent_path} onRenamed={() => refetchFolders()} />}
         {shareFile && <ShareEmbedDialog open={!!shareFile} file={shareFile} onClose={() => setShareFile(null)} />}
-        {replaceFile && user && <ReplaceFileDialog open={!!replaceFile} onClose={() => setReplaceFile(null)} file={replaceFile} userId={user.id} onReplaced={() => refetch()} />}
+        {replaceFile && user && (replaceFile.file_type === "image" || replaceFile.file_type === "video") && <ReplaceFileDialog open={!!replaceFile} onClose={() => setReplaceFile(null)} file={replaceFile} userId={user.id} onReplaced={() => refetch()} />}
         <BatchRenameDialog files={mediaFiles.filter((f) => selectedFiles.has(f.id))} open={batchRenameDialogOpen} onClose={() => setBatchRenameDialogOpen(false)} onRenameComplete={() => { refetch(); setSelectedFiles(new Set()); }} />
         <MediaPreviewDialog file={previewFile} socialAccounts={socialAccounts} onClose={() => setPreviewFile(null)} onDownload={handleDownload} onCopyLink={copyFileLink} onDelete={setFileToDelete} onMove={setSingleFileMoveId} onRename={setRenameFile} onShare={setShareFile} onReplace={setReplaceFile} onImageTools={setImageToolsFile} onBgRemoval={setBgRemovalFile} />
         <DeleteFileDialog open={!!fileToDelete} onClose={() => setFileToDelete(null)} onConfirm={() => { if (fileToDelete) { handleDelete(fileToDelete); setFileToDelete(null); } }} />

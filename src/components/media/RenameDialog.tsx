@@ -14,8 +14,7 @@ import { Label } from "@/components/ui/label";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { useLogMediaOperation } from "@/hooks/useMediaOperationsHistory";
-import { Loader2, Pencil, AlertCircle } from "lucide-react";
-import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Loader2, Pencil } from "lucide-react";
 
 interface RenameFileDialogProps {
   open: boolean;
@@ -23,7 +22,6 @@ interface RenameFileDialogProps {
   fileId: string;
   currentName: string;
   storageBucket: string;
-  cloudinaryPublicId?: string;
   onRenamed: () => void;
 }
 
@@ -60,7 +58,6 @@ export function RenameFileDialog({
   fileId,
   currentName,
   storageBucket,
-  cloudinaryPublicId,
   onRenamed,
 }: RenameFileDialogProps) {
   const [newName, setNewName] = useState("");
@@ -72,7 +69,10 @@ export function RenameFileDialog({
   // Calculate display name and extension when dialog opens
   const displayName = getDisplayName(currentName, storageBucket);
   const extension = getExtension(displayName);
-  const isCloudinary = storageBucket === "cloudinary" && !!cloudinaryPublicId;
+  // Only files in the Supabase "media" bucket are addressed by a relative path that a rename can
+  // move. Openinary and Cloudinary rows store the delivery URL in file_path, so renaming them must
+  // change only the name the Library shows and downloads with (Cloudinary itself is disabled).
+  const renamesStoragePath = storageBucket === "media";
 
   useEffect(() => {
     if (open) {
@@ -98,34 +98,29 @@ export function RenameFileDialog({
         operationDetails: {
           oldName: displayName,
           newName: finalName,
-          isCloudinary,
+          renamesStoragePath,
         },
       });
 
-      if (isCloudinary) {
-        // Use Cloudinary rename API for actual rename
-        console.log("Calling cloudinary-rename edge function...");
-        const { data, error } = await supabase.functions.invoke("cloudinary-rename", {
-          body: {
-            fileId,
-            newName: newName.trim(), // Send without extension, API will preserve it
-          },
-        });
+      if (!renamesStoragePath) {
+        const { data: row, error: fetchError } = await supabase
+          .from("media_files")
+          .select("metadata")
+          .eq("id", fileId)
+          .single();
+        if (fetchError) throw fetchError;
+        const metadata = row?.metadata && typeof row.metadata === "object" && !Array.isArray(row.metadata)
+          ? row.metadata as Record<string, unknown>
+          : {};
+        const { error } = await supabase
+          .from("media_files")
+          .update({ metadata: { ...metadata, original_filename: finalName } })
+          .eq("id", fileId);
+        if (error) throw error;
 
-        if (error) {
-          console.error("Cloudinary rename error:", error);
-          throw new Error(error.message || "Failed to rename file in Cloudinary");
-        }
-
-        if (!data?.success) {
-          throw new Error(data?.error || "Rename failed");
-        }
-
-        console.log("Cloudinary rename successful:", data);
-        
         toast({
           title: t("toast.fileRenamed", "File renamed"),
-          description: t("toast.fileRenamedCloud", "Renamed to \"{{name}}\". All links have been updated.", { name: finalName }),
+          description: t("toast.fileRenamedDesc", "Renamed to \"{{name}}\"", { name: finalName }),
         });
       } else {
         // For Supabase storage, update the file_path
@@ -194,14 +189,6 @@ export function RenameFileDialog({
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
-          {isCloudinary && (
-            <Alert>
-              <AlertCircle className="h-4 w-4" />
-              <AlertDescription>
-                {t("rename.cloudinaryNotice", "This will rename the file in Cloudinary. All existing links will be updated to the new URL.")}
-              </AlertDescription>
-            </Alert>
-          )}
           <div className="space-y-2">
             <Label htmlFor="file-name">{t("rename.newName", "New Name")}</Label>
             <div className="flex items-center gap-2">
@@ -432,7 +419,10 @@ export const getFileDisplayName = (file: {
   file_path: string;
   storage_bucket: string;
   cloudinary_public_id?: string | null;
+  metadata?: { original_filename?: unknown } | null;
 }): string => {
+  const original = file.metadata?.original_filename;
+  if (typeof original === "string" && original.trim()) return original.trim();
   // For Cloudinary files, extract from public_id (cleaner than URL)
   if (file.storage_bucket === "cloudinary" && file.cloudinary_public_id) {
     const parts = file.cloudinary_public_id.split("/");

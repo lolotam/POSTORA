@@ -23,7 +23,7 @@ interface ReplaceFileDialogProps {
   file: {
     id: string;
     publicUrl: string;
-    file_type: "image" | "video";
+    file_type: string;
     file_path: string;
     cloudinary_public_id?: string;
     storage_bucket: string;

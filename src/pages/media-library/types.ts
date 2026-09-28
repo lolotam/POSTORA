@@ -1,7 +1,7 @@
 export interface MediaFile {
   id: string;
   file_path: string;
-  file_type: "image" | "video";
+  file_type: "image" | "video" | "audio" | "document" | "gif" | "raw";
   file_size: number;
   mime_type: string;
   created_at: string;
@@ -32,7 +32,7 @@ export interface SocialAccount {
 }
 
 export type ViewMode = "grid" | "list";
-export type FilterType = "all" | "image" | "video";
+export type FilterType = "all" | "image" | "video" | "audio" | "document" | "archive";
 
 export interface DownloadProgress {
   current: number;
