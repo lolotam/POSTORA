@@ -2,9 +2,9 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Clock, XCircle, CheckCircle2, Loader2, AlertCircle, MinusCircle } from "lucide-react";
+import { Clock, Loader2 } from "lucide-react";
+import { ScheduledMessageStatusBadge } from "@/components/messaging/ScheduledMessageStatusBadge";
 import { format } from "date-fns";
 import { SCHEDULED_CANCEL_BLOCKED, useWhatsAppScheduledMessages } from "@/hooks/useWhatsAppScheduledMessages";
 import { toast } from "sonner";
@@ -14,20 +14,6 @@ export function ScheduledMessageManager() {
   const { t } = useTranslation("inbox");
   const { messages, isLoading, cancel } = useWhatsAppScheduledMessages();
   const [scheduleOpen, setScheduleOpen] = useState(false);
-
-  const statusBadge = (status: string) => {
-    if (status === "claimed" || status === "sending") {
-      return <Badge variant="secondary" className="gap-1"><Loader2 className="h-3 w-3" /> {t("status.sending", "sending")}</Badge>;
-    }
-    switch (status) {
-      case "pending": return <Badge variant="secondary" className="gap-1"><Clock className="h-3 w-3" /> {t("common:status.pending", "Pending")}</Badge>;
-      case "sent": return <Badge variant="default" className="gap-1"><CheckCircle2 className="h-3 w-3" /> {t("common:status.sent", "Sent")}</Badge>;
-      case "failed": return <Badge variant="destructive" className="gap-1"><AlertCircle className="h-3 w-3" /> {t("common:status.failed", "Failed")}</Badge>;
-      case "cancelled": return <Badge variant="outline" className="gap-1"><XCircle className="h-3 w-3" /> {t("common:status.cancelled", "Cancelled")}</Badge>;
-      case "skipped": return <Badge variant="outline" className="gap-1"><MinusCircle className="h-3 w-3" /> {t("status.skipped", "skipped (opted out)")}</Badge>;
-      default: return <Badge variant="outline">{status}</Badge>;
-    }
-  };
 
   const handleCancel = (id: string) => {
     cancel.mutate(id, {
@@ -78,7 +64,7 @@ export function ScheduledMessageManager() {
                     {msg.message_text || `[${msg.media_type || t("scheduled.media", "media")}]`}
                   </TableCell>
                   <TableCell className="text-sm">{format(new Date(msg.scheduled_at), "MMM d, yyyy h:mm a")}</TableCell>
-                  <TableCell>{statusBadge(msg.status)}</TableCell>
+                  <TableCell><ScheduledMessageStatusBadge status={msg.status} /></TableCell>
                   <TableCell>
                     {msg.status === "pending" && (
                       <Button variant="ghost" size="sm" className="text-destructive h-7" onClick={() => handleCancel(msg.id)} disabled={cancel.isPending}>

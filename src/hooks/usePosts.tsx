@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
+import { ACTIVE_WHATSAPP_STATUSES } from "@/features/scheduled/domain/whatsAppSchedule";
 import { useAuth } from "./useAuth";
 import { Platform } from "@/lib/types";
 import { getPostActivityTimestamp } from "@/lib/postActivity";
@@ -79,6 +80,8 @@ export function usePosts(limit?: number) {
  * The key stays under the `"posts"` prefix so the ten call sites that already
  * run `invalidateQueries({ queryKey: ["posts"] })` after scheduling, rescheduling
  * or deleting keep refreshing this badge, as they did when it read `usePosts()`.
+ * WhatsApp rows in pending, claimed, or sending are added in the same query,
+ * including ones whose time has already passed.
  */
 export function useScheduledPostCount() {
   const { user } = useAuth();
@@ -88,18 +91,27 @@ export function useScheduledPostCount() {
     queryFn: async () => {
       if (!user) return 0;
 
-      const { count, error } = await supabase
+      const postsCount = supabase
         .from("posts")
         .select("id", { count: "exact", head: true })
         .eq("user_id", user.id)
         .in("status", ["pending", "scheduled"])
         .gt("scheduled_at", new Date().toISOString());
 
-      if (error) throw error;
-      return count ?? 0;
+      const whatsAppCount = supabase
+        .from("whatsapp_scheduled_messages")
+        .select("id", { count: "exact", head: true })
+        .eq("user_id", user.id)
+        .in("status", [...ACTIVE_WHATSAPP_STATUSES]);
+
+      const [postsResult, whatsAppResult] = await Promise.all([postsCount, whatsAppCount]);
+      if (postsResult.error) throw postsResult.error;
+      if (whatsAppResult.error) throw whatsAppResult.error;
+      return (postsResult.count ?? 0) + (whatsAppResult.count ?? 0);
     },
     enabled: !!user,
     retry: false,
+    refetchInterval: 60_000,
   });
 }
 
