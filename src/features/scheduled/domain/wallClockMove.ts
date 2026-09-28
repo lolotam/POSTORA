@@ -32,6 +32,47 @@ function earlierOccurrence(constructed: Date, year: number, month: number, day: 
   return earlier;
 }
 
+export type ResolvedLocalWallClock =
+  | { ok: true; when: Date }
+  | { ok: false; reason: "nonexistent" };
+
+export type ParsedDatetimeLocal =
+  | { ok: true; when: Date }
+  | { ok: false; reason: "invalid" | "nonexistent" };
+
+const DATETIME_LOCAL = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::\d{2})?$/;
+
+/**
+ * `month` is 0-based, matching `Date`.
+ * A spring-forward gap is refused. A fall-back overlap keeps the earlier instant.
+ */
+export function resolveLocalWallClock(
+  year: number,
+  month: number,
+  day: number,
+  hours: number,
+  minutes: number,
+): ResolvedLocalWallClock {
+  const constructed = new Date(year, month, day, hours, minutes, 0, 0);
+  if (!sameWallClock(constructed, year, month, day, hours, minutes)) {
+    return { ok: false, reason: "nonexistent" };
+  }
+  return { ok: true, when: earlierOccurrence(constructed, year, month, day, hours, minutes) };
+}
+
+/** datetime-local value as a local instant. A DST gap is `nonexistent`. */
+export function parseDatetimeLocal(localValue: string): ParsedDatetimeLocal {
+  const match = DATETIME_LOCAL.exec(localValue);
+  if (!match) return { ok: false, reason: "invalid" };
+  return resolveLocalWallClock(
+    Number(match[1]),
+    Number(match[2]) - 1,
+    Number(match[3]),
+    Number(match[4]),
+    Number(match[5]),
+  );
+}
+
 /**
  * Keep the source instant's local hours and minutes on `targetDay`.
  * A spring-forward gap is refused. A fall-back overlap uses the earlier instant.
@@ -42,20 +83,18 @@ export function moveKeepingLocalWallClock(sourceIso: string, targetDay: Date, no
   if (Number.isNaN(source.getTime()) || Number.isNaN(targetDay.getTime())) {
     return { ok: false, reason: "invalid" };
   }
-  const hours = source.getHours();
-  const minutes = source.getMinutes();
-  const year = targetDay.getFullYear();
-  const month = targetDay.getMonth();
-  const day = targetDay.getDate();
-  const constructed = new Date(year, month, day, hours, minutes, 0, 0);
-  if (!sameWallClock(constructed, year, month, day, hours, minutes)) {
-    return { ok: false, reason: "nonexistent" };
-  }
-  const resolved = earlierOccurrence(constructed, year, month, day, hours, minutes);
-  if (resolved.getTime() < nowMs + MIN_LEAD_MS) {
+  const resolved = resolveLocalWallClock(
+    targetDay.getFullYear(),
+    targetDay.getMonth(),
+    targetDay.getDate(),
+    source.getHours(),
+    source.getMinutes(),
+  );
+  if (resolved.ok === false) return { ok: false, reason: resolved.reason };
+  if (resolved.when.getTime() < nowMs + MIN_LEAD_MS) {
     return { ok: false, reason: "tooSoon" };
   }
-  return { ok: true, iso: resolved.toISOString() };
+  return { ok: true, iso: resolved.when.toISOString() };
 }
 
 /** Post drag: same local hours and minutes, no lead-time or DST refusal. */

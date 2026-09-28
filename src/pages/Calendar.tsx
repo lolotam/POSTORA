@@ -7,7 +7,7 @@ import { useToast } from "@/hooks/use-toast";
 import {
   SCHEDULED_CHANGE_BLOCKED,
   SCHEDULED_RESCHEDULE_TOO_SOON,
-  useWhatsAppScheduledMessages,
+  useWhatsAppScheduledMutations,
 } from "@/hooks/useWhatsAppScheduledMessages";
 import { format, addMonths, subMonths, parseISO, isSameDay, startOfMonth, endOfMonth, startOfWeek, endOfWeek, endOfDay } from "date-fns";
 import { useQueryClient } from "@tanstack/react-query";
@@ -36,7 +36,7 @@ export default function Calendar() {
   const { data: posts = [] } = usePosts();
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const { cancel, reschedule } = useWhatsAppScheduledMessages();
+  const { cancel, reschedule } = useWhatsAppScheduledMutations();
   const accountFallback = tInbox("scheduled.accountFallback", "WhatsApp account");
 
   const range = useMemo(() => {

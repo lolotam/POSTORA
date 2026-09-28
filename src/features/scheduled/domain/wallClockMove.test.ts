@@ -30,7 +30,7 @@ describe("DST wall clock", () => {
         new Date(2026, 10, 1),
         new Date("2026-10-01T00:00:00.000Z").getTime(),
       );
-      if (!moved.ok) throw new Error(moved.reason);
+      if (moved.ok === false) throw new Error(moved.reason);
       const chosen = new Date(moved.iso);
       const later = new Date(chosen.getTime() + 60 * 60 * 1000);
       expect(chosen.getHours()).toBe(1);

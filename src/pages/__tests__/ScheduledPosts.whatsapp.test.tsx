@@ -57,7 +57,7 @@ vi.mock("@/hooks/useWhatsAppScheduledMessages", () => ({
   SCHEDULED_CANCEL_BLOCKED: "This message is already being sent and can no longer be cancelled.",
   SCHEDULED_CHANGE_BLOCKED: "This message can no longer be changed (it is being sent, was sent, or was cancelled).",
   SCHEDULED_RESCHEDULE_TOO_SOON: "Choose a time at least one minute from now.",
-  useWhatsAppScheduledMessages: () => ({
+  useWhatsAppScheduledMutations: () => ({
     cancel: { mutate: vi.fn(), isPending: false },
     reschedule: { mutate: vi.fn(), isPending: false },
   }),

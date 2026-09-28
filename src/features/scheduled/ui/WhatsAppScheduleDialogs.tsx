@@ -20,7 +20,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { browserTimeZone } from "../domain/wallClockMove";
+import { browserTimeZone, parseDatetimeLocal } from "../domain/wallClockMove";
 
 function localInputValue(iso: string): string {
   const when = new Date(iso);
@@ -45,13 +45,19 @@ export function RescheduleWhatsAppDialog({
   onConfirm: (scheduledAtIso: string) => void;
 }) {
   const { t } = useTranslation("inbox");
+  const { t: tCalendar } = useTranslation("calendar");
   const [localValue, setLocalValue] = useState(() => localInputValue(scheduledAt));
+  const [missingHour, setMissingHour] = useState(false);
   const zone = browserTimeZone();
 
   const submit = () => {
-    const when = new Date(localValue);
-    if (Number.isNaN(when.getTime())) return;
-    onConfirm(when.toISOString());
+    const resolved = parseDatetimeLocal(localValue);
+    if (resolved.ok === false) {
+      setMissingHour(resolved.reason === "nonexistent");
+      return;
+    }
+    setMissingHour(false);
+    onConfirm(resolved.when.toISOString());
   };
 
   return (
@@ -71,8 +77,16 @@ export function RescheduleWhatsAppDialog({
             id="whatsapp-reschedule-time"
             type="datetime-local"
             value={localValue}
-            onChange={(event) => setLocalValue(event.target.value)}
+            onChange={(event) => {
+              setLocalValue(event.target.value);
+              setMissingHour(false);
+            }}
           />
+          {missingHour && (
+            <p className="text-sm text-destructive" role="alert">
+              {tCalendar("toast.missingHour", "That time does not exist on the selected day.")}
+            </p>
+          )}
           <p className="text-xs text-muted-foreground">
             {t("scheduled.timezoneLabel", "Timezone: {{zone}}", { zone })}
           </p>

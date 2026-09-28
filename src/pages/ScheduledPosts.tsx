@@ -92,7 +92,7 @@ import {
   SCHEDULED_CANCEL_BLOCKED,
   SCHEDULED_CHANGE_BLOCKED,
   SCHEDULED_RESCHEDULE_TOO_SOON,
-  useWhatsAppScheduledMessages,
+  useWhatsAppScheduledMutations,
 } from "@/hooks/useWhatsAppScheduledMessages";
 
 // Countdown timer component
@@ -158,7 +158,7 @@ export default function ScheduledPosts() {
   const [publishingPostId, setPublishingPostId] = useState<string | null>(null);
   const { data: posts = [], isLoading, error: postsError, refetch, isFetching } = usePosts();
   const whatsAppSchedule = useWhatsAppScheduledItems({ kind: "active" });
-  const { cancel: cancelWhatsApp, reschedule: rescheduleWhatsApp } = useWhatsAppScheduledMessages();
+  const { cancel: cancelWhatsApp, reschedule: rescheduleWhatsApp } = useWhatsAppScheduledMutations();
   const [rescheduleId, setRescheduleId] = useState<string | null>(null);
   const [cancelWhatsAppId, setCancelWhatsAppId] = useState<string | null>(null);
   const { data: socialAccounts = [] } = useSocialAccounts();

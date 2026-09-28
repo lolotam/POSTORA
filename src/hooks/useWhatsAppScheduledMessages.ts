@@ -167,6 +167,29 @@ export function useWhatsAppScheduledMessages(socialAccountId?: string) {
     },
   });
 
+  const { cancel, reschedule } = useWhatsAppScheduledMutations();
+
+  return {
+    messages: query.data || [],
+    isLoading: query.isLoading,
+    accounts: accountsQuery.data || [],
+    accountsLoading: accountsQuery.isLoading,
+    accountsError: accountsQuery.isError,
+    schedule,
+    cancel,
+    reschedule,
+  };
+}
+
+function invalidateScheduledViews(qc: ReturnType<typeof useQueryClient>): void {
+  void qc.invalidateQueries({ queryKey: ["whatsapp-scheduled"] });
+  void qc.invalidateQueries({ queryKey: ["posts"] });
+}
+
+/** Cancel and reschedule only. Does not load the message list or WhatsApp accounts. */
+export function useWhatsAppScheduledMutations() {
+  const qc = useQueryClient();
+
   const cancel = useMutation({
     mutationFn: async (id: string) => {
       const { data, error } = await supabase
@@ -204,19 +227,5 @@ export function useWhatsAppScheduledMessages(socialAccountId?: string) {
     },
   });
 
-  return {
-    messages: query.data || [],
-    isLoading: query.isLoading,
-    accounts: accountsQuery.data || [],
-    accountsLoading: accountsQuery.isLoading,
-    accountsError: accountsQuery.isError,
-    schedule,
-    cancel,
-    reschedule,
-  };
-}
-
-function invalidateScheduledViews(qc: ReturnType<typeof useQueryClient>): void {
-  void qc.invalidateQueries({ queryKey: ["whatsapp-scheduled"] });
-  void qc.invalidateQueries({ queryKey: ["posts"] });
+  return { cancel, reschedule };
 }
