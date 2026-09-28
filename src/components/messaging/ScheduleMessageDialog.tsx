@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
@@ -7,7 +7,29 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
+import { supabase } from "@/integrations/supabase/client";
+import { useQuotas } from "@/hooks/useQuotas";
+import { readUploadRefusal } from "@/components/media/uploadErrors";
+import { ScheduleLibraryPicker, type ScheduleLibraryFile } from "@/components/messaging/ScheduleLibraryPicker";
+import { sanitizeMediaFilename } from "@/lib/mediaFilename";
+import {
+  MEDIA_DECODED_BYTE_CAP,
+  MEDIA_TYPES,
+  downloadNameFor,
+  extensionOfName,
+  mediaTypeForFileName,
+  uploadFileTypeFor,
+  type MediaTypeEntry,
+} from "@/lib/mediaTypes";
+import {
+  CLOUD_SIZE_LIMITS_MB,
+  cloudAccount,
+  exceedsCloudSizeLimit,
+  scheduledMessageType,
+  type ScheduledMediaType,
+} from "@/lib/scheduledMedia";
 import {
   isHttpsUrl,
   recipientDigits,
@@ -19,9 +41,12 @@ import {
   type OwnWhatsAppAccount,
 } from "@/hooks/useWhatsAppScheduledMessages";
 
-const MEDIA_TYPES = ["image", "video", "document", "audio"] as const;
-type MediaType = (typeof MEDIA_TYPES)[number];
-const NO_MEDIA = "none";
+const MEDIA_TYPES_UI = ["image", "video", "document", "audio"] as const;
+type MediaType = (typeof MEDIA_TYPES_UI)[number];
+type MediaSource = "none" | "upload" | "library" | "link";
+
+/** Same allow-list as the Library. */
+const UPLOAD_ACCEPT = Object.keys(MEDIA_TYPES).map((extension) => `.${extension}`).join(",");
 
 interface ScheduleMessageDialogProps {
   open: boolean;
@@ -36,26 +61,53 @@ function localTimeZoneName(): string {
   return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
 }
 
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error ?? new Error("read_failed"));
+    reader.readAsDataURL(file);
+  });
+}
+
 export function ScheduleMessageDialog({ open, onOpenChange }: ScheduleMessageDialogProps) {
   const { t } = useTranslation("inbox");
   const { accounts, accountsLoading, accountsError, schedule } = useWhatsAppScheduledMessages();
+  const { canUploadMedia, incrementMediaUpload } = useQuotas();
   const [accountId, setAccountId] = useState("");
   const [phone, setPhone] = useState("");
   const [recipientName, setRecipientName] = useState("");
   const [message, setMessage] = useState("");
-  const [mediaType, setMediaType] = useState<MediaType | "">("");
+  const [mediaSource, setMediaSource] = useState<MediaSource>("none");
   const [mediaUrl, setMediaUrl] = useState("");
+  const [linkType, setLinkType] = useState<MediaType | "">("");
+  const [mediaFilename, setMediaFilename] = useState("");
+  const [picked, setPicked] = useState<{ name: string; size: number } | null>(null);
+  const [libraryPick, setLibraryPick] = useState<{ id: string; name: string; size: number | null } | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [uploadIssue, setUploadIssue] = useState<string | null>(null);
   const [whenLocal, setWhenLocal] = useState("");
   const [fieldError, setFieldError] = useState<Record<string, string>>({});
+  // A stale completion (dialog closed or reopened, or a different file
+  // picked) must never fill the media fields; every new pick or source
+  // change invalidates the in-flight upload.
+  const uploadTokenRef = useRef(0);
 
   useEffect(() => {
     if (open) return;
+    uploadTokenRef.current += 1;
     setAccountId("");
     setPhone("");
     setRecipientName("");
     setMessage("");
-    setMediaType("");
+    setMediaSource("none");
     setMediaUrl("");
+    setLinkType("");
+    setMediaFilename("");
+    setPicked(null);
+    setLibraryPick(null);
+    setUploading(false);
+    setUploadIssue(null);
     setWhenLocal("");
     setFieldError({});
   }, [open]);
@@ -67,10 +119,155 @@ export function ScheduleMessageDialog({ open, onOpenChange }: ScheduleMessageDia
 
   const selected = accounts.find((account) => account.id === accountId) ?? null;
   const sessionWindow = selected?.connection_mode === "cloud_api" || selected?.connection_mode === "coexistence";
-  const audio = mediaType === "audio";
+  const cloud = cloudAccount(selected?.connection_mode);
+
+  const activeName = mediaSource === "upload"
+    ? picked?.name ?? null
+    : mediaSource === "library"
+      ? libraryPick?.name ?? null
+      : null;
+  const activeSize = mediaSource === "upload"
+    ? picked?.size ?? null
+    : mediaSource === "library"
+      ? libraryPick?.size ?? null
+      : null;
+  const derivedType = activeName ? scheduledMessageType(extensionOfName(activeName), cloud) : null;
+  const effectiveType: ScheduledMediaType | null = mediaSource === "link" ? linkType || null : derivedType;
+  const audio = effectiveType === "audio";
   // With image, video or document media the text is sent as a caption.
-  const textMax = mediaType !== "" && !audio ? WHATSAPP_CAPTION_MAX : WHATSAPP_MESSAGE_MAX;
+  const textMax = effectiveType !== null && !audio ? WHATSAPP_CAPTION_MAX : WHATSAPP_MESSAGE_MAX;
   const noAccounts = !accountsLoading && !accountsError && accounts.length === 0;
+
+  // Per-account rules, re-validated whenever the account or the media
+  // selection changes. Null when nothing is selected yet.
+  const mediaBlocker = useMemo<string | null>(() => {
+    const label = (type: ScheduledMediaType): string =>
+      type === "image"
+        ? t("scheduled.mediaImage", "Image")
+        : type === "video"
+          ? t("scheduled.mediaVideo", "Video")
+          : type === "audio"
+            ? t("scheduled.mediaAudio", "Audio")
+            : t("scheduled.mediaDocument", "Document");
+    if (!selected) return null;
+    if (mediaSource === "upload" || mediaSource === "library") {
+      if (!activeName || !cloud) return null;
+      const extension = extensionOfName(activeName);
+      if (!scheduledMessageType(extension, true)) {
+        return t("scheduled.cloudTypeRefused", "WhatsApp Cloud API doesn't accept .{{ext}} files. Use a QR account or convert it.", { ext: extension || "?" });
+      }
+      if (effectiveType && exceedsCloudSizeLimit(effectiveType, activeSize)) {
+        return t("scheduled.cloudFileTooLarge", "WhatsApp Cloud API accepts {{kind}} up to {{limit}}.", {
+          kind: label(effectiveType),
+          limit: `${CLOUD_SIZE_LIMITS_MB[effectiveType]} MB`,
+        });
+      }
+      return null;
+    }
+    if (mediaSource === "link" && linkType && isHttpsUrl(mediaUrl) && cloud) {
+      const extension = extensionOfName(mediaUrl);
+      if (!extension) {
+        return t("scheduled.cloudLinkMissing", "WhatsApp Cloud API needs a link that ends in a known file extension.");
+      }
+      const derived = scheduledMessageType(extension, true);
+      if (!derived) {
+        return t("scheduled.cloudTypeRefused", "WhatsApp Cloud API doesn't accept .{{ext}} files. Use a QR account or convert it.", { ext: extension });
+      }
+      if (derived !== linkType) {
+        return t("scheduled.cloudLinkMismatch", "This link is a .{{ext}} file — pick {{type}} as the media type.", {
+          ext: extension,
+          type: label(derived),
+        });
+      }
+    }
+    return null;
+  }, [selected, mediaSource, activeName, activeSize, effectiveType, linkType, mediaUrl, cloud, t]);
+
+  const clearMedia = () => {
+    setMediaUrl("");
+    setLinkType("");
+    setMediaFilename("");
+    setPicked(null);
+    setLibraryPick(null);
+    setUploadIssue(null);
+  };
+
+  const handleSourceChange = (value: string) => {
+    uploadTokenRef.current += 1;
+    setUploading(false);
+    setMediaSource(value as MediaSource);
+    clearMedia();
+  };
+
+  const runUpload = async (file: File, entry: MediaTypeEntry, token: number) => {
+    setUploading(true);
+    try {
+      const quotaCheck = await canUploadMedia();
+      if (uploadTokenRef.current !== token) return;
+      if (!quotaCheck.allowed) {
+        setUploadIssue(quotaCheck.message || t("scheduled.uploadLimitReached", "Daily upload limit reached."));
+        return;
+      }
+      if (!(await incrementMediaUpload())) {
+        if (uploadTokenRef.current !== token) return;
+        setUploadIssue(t("scheduled.uploadLimitReached", "Daily upload limit reached."));
+        return;
+      }
+      const fileData = await readFileAsDataUrl(file);
+      const { data, error } = await supabase.functions.invoke("cloudinary-upload", {
+        body: {
+          fileData,
+          fileName: file.name,
+          fileType: uploadFileTypeFor(entry.kind),
+        },
+      });
+      if (error) throw error;
+      if (!(data?.success && data?.mediaFileId)) throw new Error((data as { error?: string })?.error || "Upload failed");
+      if (uploadTokenRef.current !== token) return;
+      setMediaUrl(String(data.url));
+      setMediaFilename(sanitizeMediaFilename(file.name));
+    } catch (uploadError) {
+      if (uploadTokenRef.current !== token) return;
+      const detail = await readUploadRefusal(uploadError);
+      setUploadIssue(detail || t("scheduled.uploadFailed", "Couldn't upload {{name}}.", { name: file.name }));
+    } finally {
+      if (uploadTokenRef.current === token) setUploading(false);
+    }
+  };
+
+  const handleFilePick = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    uploadTokenRef.current += 1;
+    const token = uploadTokenRef.current;
+    setPicked({ name: file.name, size: file.size });
+    setMediaUrl("");
+    setMediaFilename("");
+    setUploadIssue(null);
+    const entry = mediaTypeForFileName(file.name);
+    if (!entry) {
+      setUploadIssue(t("scheduled.uploadTypeRejected", "{{name}} is not an allowed file type.", { name: file.name }));
+      return;
+    }
+    if (file.size > MEDIA_DECODED_BYTE_CAP) {
+      setUploadIssue(t("scheduled.uploadTooLarge", "{{name}} is over the 10 MB limit.", { name: file.name }));
+      return;
+    }
+    void runUpload(file, entry, token);
+  };
+
+  const handleLibraryPick = (file: ScheduleLibraryFile, url: string) => {
+    if (!url) return;
+    uploadTokenRef.current += 1;
+    setUploading(false);
+    setPicked(null);
+    setUploadIssue(null);
+    const name = downloadNameFor(file);
+    setLibraryPick({ id: file.id, name, size: file.file_size });
+    setMediaUrl(url);
+    setMediaFilename(sanitizeMediaFilename(name));
+  };
 
   const handleSubmit = () => {
     const next: Record<string, string> = {};
@@ -78,13 +275,22 @@ export function ScheduleMessageDialog({ open, onOpenChange }: ScheduleMessageDia
     if (!accountId) next.account = t("scheduled.accountRequired", "Select a WhatsApp account.");
     if (!digits) next.phone = t("scheduled.phoneInvalid", "Enter a phone number with 8–15 digits. Letters, @ and extensions are not allowed.");
 
-    const typeSet = mediaType !== "";
+    const typeSet = effectiveType !== null;
     const urlTrimmed = mediaUrl.trim();
-    if (typeSet !== (urlTrimmed !== "")) {
-      next.media = t("scheduled.mediaPair", "Choose a media type and an https URL together.");
-    } else if (typeSet && !isHttpsUrl(urlTrimmed)) {
-      next.media = t("scheduled.mediaUrlInvalid", "Media URL must be a valid https:// link.");
+    if (mediaSource === "none") {
+      if (typeSet || urlTrimmed) next.media = t("scheduled.mediaPair", "Choose a media type and an https URL together.");
+    } else if (mediaSource === "link") {
+      if (typeSet !== (urlTrimmed !== "")) {
+        next.media = t("scheduled.mediaPair", "Choose a media type and an https URL together.");
+      } else if (typeSet && !isHttpsUrl(urlTrimmed)) {
+        next.media = t("scheduled.mediaUrlInvalid", "Media URL must be a valid https:// link.");
+      }
+    } else if (!typeSet || !urlTrimmed) {
+      next.media = mediaSource === "upload"
+        ? t("scheduled.uploadRequired", "Upload a file first.")
+        : t("scheduled.libraryRequired", "Pick a file from your Library.");
     }
+    if (!next.media && mediaBlocker) next.media = mediaBlocker;
 
     const text = message.trim();
     if (!audio && !text && !typeSet) {
@@ -111,7 +317,10 @@ export function ScheduleMessageDialog({ open, onOpenChange }: ScheduleMessageDia
         recipientName: recipientName.trim() || undefined,
         messageText: audio ? undefined : text || undefined,
         mediaUrl: typeSet ? urlTrimmed : undefined,
-        mediaType: typeSet ? mediaType : undefined,
+        mediaType: typeSet ? effectiveType : undefined,
+        mediaFilename: typeSet && (mediaSource === "upload" || mediaSource === "library")
+          ? mediaFilename.trim() || undefined
+          : undefined,
         scheduledAt,
       },
       {
@@ -216,44 +425,78 @@ export function ScheduleMessageDialog({ open, onOpenChange }: ScheduleMessageDia
             {fieldError.message && <p role="alert" className="text-xs text-destructive">{fieldError.message}</p>}
           </div>
 
-          <div className="grid gap-3 sm:grid-cols-2">
-            <div className="space-y-1.5">
-              <Label htmlFor="schedule-media-type">{t("scheduled.mediaType", "Media type")}</Label>
-              <Select
-                value={mediaType || NO_MEDIA}
-                onValueChange={(value) => {
-                  if (value === NO_MEDIA) {
-                    setMediaType("");
-                    setMediaUrl("");
-                  } else {
-                    setMediaType(value as MediaType);
-                  }
-                }}
-              >
-                <SelectTrigger id="schedule-media-type">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value={NO_MEDIA}>{t("scheduled.mediaNone", "None")}</SelectItem>
-                  <SelectItem value="image">{t("scheduled.mediaImage", "Image")}</SelectItem>
-                  <SelectItem value="video">{t("scheduled.mediaVideo", "Video")}</SelectItem>
-                  <SelectItem value="document">{t("scheduled.mediaDocument", "Document")}</SelectItem>
-                  <SelectItem value="audio">{t("scheduled.mediaAudio", "Audio")}</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="schedule-media-url">{t("scheduled.mediaUrl", "Media URL")}</Label>
-              <Input
-                id="schedule-media-url"
-                value={mediaUrl}
-                onChange={(event) => setMediaUrl(event.target.value)}
-                placeholder="https://"
-                inputMode="url"
-              />
-            </div>
+          <div className="space-y-1.5">
+            <Label>{t("scheduled.media", "Media")}</Label>
+            <Tabs value={mediaSource} onValueChange={handleSourceChange}>
+              <TabsList className="grid w-full grid-cols-4">
+                <TabsTrigger value="none">{t("scheduled.mediaNone", "None")}</TabsTrigger>
+                <TabsTrigger value="upload">{t("scheduled.mediaSourceUpload", "Upload file")}</TabsTrigger>
+                <TabsTrigger value="library">{t("scheduled.mediaSourceLibrary", "Choose from Library")}</TabsTrigger>
+                <TabsTrigger value="link">{t("scheduled.mediaSourceLink", "Paste link")}</TabsTrigger>
+              </TabsList>
+              <TabsContent value="upload" className="space-y-2 pt-3">
+                <div className="space-y-1.5">
+                  <Label htmlFor="schedule-upload">{t("scheduled.uploadPick", "Choose a file")}</Label>
+                  <Input id="schedule-upload" type="file" accept={UPLOAD_ACCEPT} onChange={handleFilePick} />
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  {t("scheduled.uploadHint", "Up to 10 MB. The file is stored in your Library too.")}
+                </p>
+                {uploading && picked && (
+                  <p className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    {t("scheduled.uploadProgress", "Uploading {{name}}…", { name: picked.name })}
+                  </p>
+                )}
+                {!uploading && picked && mediaUrl && (
+                  <p className="text-xs text-muted-foreground">
+                    {t("scheduled.uploadSelected", "Selected: {{name}}", { name: picked.name })}
+                  </p>
+                )}
+                {uploadIssue && <p role="alert" className="text-xs text-destructive">{uploadIssue}</p>}
+              </TabsContent>
+              <TabsContent value="library" className="pt-3">
+                <ScheduleLibraryPicker
+                  active={mediaSource === "library"}
+                  selectedId={libraryPick?.id ?? null}
+                  onPick={handleLibraryPick}
+                />
+              </TabsContent>
+              <TabsContent value="link" className="space-y-3 pt-3">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="schedule-media-type">{t("scheduled.mediaType", "Media type")}</Label>
+                    <Select value={linkType} onValueChange={(value) => setLinkType(value as MediaType)}>
+                      <SelectTrigger id="schedule-media-type">
+                        <SelectValue placeholder={t("scheduled.mediaType", "Media type")} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="image">{t("scheduled.mediaImage", "Image")}</SelectItem>
+                        <SelectItem value="video">{t("scheduled.mediaVideo", "Video")}</SelectItem>
+                        <SelectItem value="document">{t("scheduled.mediaDocument", "Document")}</SelectItem>
+                        <SelectItem value="audio">{t("scheduled.mediaAudio", "Audio")}</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="schedule-media-url">{t("scheduled.mediaUrl", "Media URL")}</Label>
+                    <Input
+                      id="schedule-media-url"
+                      value={mediaUrl}
+                      onChange={(event) => setMediaUrl(event.target.value)}
+                      placeholder="https://"
+                      inputMode="url"
+                    />
+                  </div>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  {t("scheduled.codecHint", "Video: MP4 (H.264/AAC). Audio: MP3 or OGG (Opus).")}
+                </p>
+              </TabsContent>
+            </Tabs>
+            {mediaBlocker && <p role="alert" className="text-xs text-destructive">{mediaBlocker}</p>}
+            {fieldError.media && <p role="alert" className="text-xs text-destructive">{fieldError.media}</p>}
           </div>
-          {fieldError.media && <p role="alert" className="text-xs text-destructive">{fieldError.media}</p>}
 
           <div className="space-y-1.5">
             <div className="flex items-center justify-between gap-2">
@@ -270,7 +513,11 @@ export function ScheduleMessageDialog({ open, onOpenChange }: ScheduleMessageDia
           </div>
         </div>
         <DialogFooter className="pt-4">
-          <Button type="button" onClick={handleSubmit} disabled={noAccounts || accountsLoading || accountsError || schedule.isPending}>
+          <Button
+            type="button"
+            onClick={handleSubmit}
+            disabled={noAccounts || accountsLoading || accountsError || schedule.isPending || uploading || !!mediaBlocker}
+          >
             {schedule.isPending && <Loader2 className="h-4 w-4 me-2 animate-spin" />}
             {t("scheduled.submit", "Schedule")}
           </Button>

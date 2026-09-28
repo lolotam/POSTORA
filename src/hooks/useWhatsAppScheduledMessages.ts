@@ -28,6 +28,7 @@ export interface ScheduleMessageInput {
   messageText?: string;
   mediaUrl?: string;
   mediaType?: string;
+  mediaFilename?: string;
   scheduledAt: string;
 }
 
@@ -70,6 +71,7 @@ export interface ScheduledMessage {
   message_text: string | null;
   media_url: string | null;
   media_type: string | null;
+  media_filename: string | null;
   scheduled_at: string;
   status: string;
   sent_at: string | null;
@@ -126,6 +128,7 @@ export function useWhatsAppScheduledMessages(socialAccountId?: string) {
           message_text: params.messageText?.trim() || null,
           media_url: params.mediaUrl?.trim() || null,
           media_type: params.mediaType?.trim() || null,
+          media_filename: params.mediaFilename?.trim() || null,
           scheduled_at: params.scheduledAt,
           status: "pending",
         })

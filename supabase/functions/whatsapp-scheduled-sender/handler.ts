@@ -3,6 +3,7 @@
 // and a miss means the row was cancelled, expired, or reclaimed — never send.
 import { digitsOnly, type SendRefusedInput } from "../_shared/optOutLookup.ts";
 import { EvolutionApiError } from "../_shared/evolutionApi.ts";
+import { sanitizeMediaFilename } from "../_shared/mediaFilename.ts";
 import { whatsappConversationId } from "../_shared/phone.ts";
 import { WhatsAppCloudApiError } from "../_shared/whatsappTransport.ts";
 import type {
@@ -28,6 +29,7 @@ export interface ClaimedScheduledMessage {
   message_text: string | null;
   media_url: string | null;
   media_type: string | null;
+  media_filename: string | null;
   claim_token: string;
   /** Claims so far, including this one. */
   attempts: number;
@@ -175,12 +177,6 @@ function transportAccount(row: ClaimedScheduledMessage): WhatsAppTransportAccoun
   };
 }
 
-function documentFileName(url: string): string | undefined {
-  const path = url.split("?")[0] ?? url;
-  const name = path.split("/").pop()?.trim();
-  return name || undefined;
-}
-
 function mediaInput(row: ClaimedScheduledMessage, recipientPhone: string): WhatsAppSendMediaInput {
   const mediaType = row.media_type as WhatsAppSendMediaInput["mediaType"];
   const input: WhatsAppSendMediaInput = {
@@ -193,8 +189,9 @@ function mediaInput(row: ClaimedScheduledMessage, recipientPhone: string): Whats
     if (caption) input.caption = caption;
   }
   if (mediaType === "document") {
-    const fileName = documentFileName(input.mediaUrl);
-    if (fileName) input.fileName = fileName;
+    // The customer sees the original name when present, otherwise today's
+    // name from the URL; both go through the shared sanitiser.
+    input.fileName = sanitizeMediaFilename(row.media_filename?.trim() ? row.media_filename : input.mediaUrl);
   }
   return input;
 }

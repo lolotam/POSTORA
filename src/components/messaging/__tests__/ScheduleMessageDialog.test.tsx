@@ -7,10 +7,25 @@ import { supabase } from "@/integrations/supabase/client";
 import { ScheduledMessageManager } from "@/components/messaging/ScheduledMessageManager";
 
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
-vi.mock("@/integrations/supabase/client", () => ({ supabase: { from: vi.fn() } }));
+vi.mock("@/integrations/supabase/client", () => ({
+  supabase: {
+    from: vi.fn(),
+    functions: { invoke: vi.fn() },
+    storage: { from: vi.fn(() => ({ getPublicUrl: () => ({ data: { publicUrl: "https://storage.example/object" } }) })) },
+  },
+}));
 vi.mock("@/hooks/useAuth", () => ({
   useAuth: () => ({ session: { user: { id: "user-1" } } }),
 }));
+vi.mock("@/hooks/useQuotas", () => ({
+  useQuotas: () => ({
+    canUploadMedia: async () => (quotaGate.allowed ? { allowed: true } : { allowed: false, message: quotaGate.message }),
+    incrementMediaUpload: async () => quotaGate.increment,
+    quota: null,
+    planLimits: { max_media_uploads_per_day: 20 },
+  }),
+}));
+vi.mock("@/hooks/useCdnConfig", () => ({ useCdnConfig: () => ({ data: undefined }) }));
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
     t: (key: string, fallback?: string | Record<string, unknown>, options?: Record<string, unknown>) => {
@@ -27,6 +42,64 @@ const OWN = [
   { id: "acc-2", platform_username: null, platform_user_id: "965222", connection_mode: "evolution_qr" },
 ];
 
+interface LibraryRow {
+  id: string;
+  file_path: string;
+  file_type: string;
+  file_size: number | null;
+  mime_type: string | null;
+  metadata: Record<string, unknown> | null;
+  storage_bucket: string | null;
+  current_object_version: number | null;
+  media_file_providers?: unknown[];
+}
+
+const LIB: LibraryRow[] = [
+  {
+    id: "mf-doc",
+    file_path: "https://res.cloudinary.com/demo/raw/upload/postora_doc1.pdf",
+    file_type: "document",
+    file_size: 2048,
+    mime_type: "application/pdf",
+    metadata: { kind: "document", original_filename: "invoice.pdf" },
+    storage_bucket: "cloudinary",
+    current_object_version: 1,
+  },
+  {
+    id: "mf-zip",
+    file_path: "https://res.cloudinary.com/demo/raw/upload/postora_zip9.zip",
+    file_type: "document",
+    file_size: 4096,
+    mime_type: "application/zip",
+    metadata: { kind: "archive", original_filename: "pack.zip" },
+    storage_bucket: "cloudinary",
+    current_object_version: 1,
+  },
+  {
+    id: "mf-webp",
+    file_path: "https://res.cloudinary.com/demo/image/upload/postora_img3.webp",
+    file_type: "image",
+    file_size: 1024,
+    mime_type: "image/webp",
+    metadata: { kind: "image", original_filename: "photo.webp" },
+    storage_bucket: "cloudinary",
+    current_object_version: 1,
+  },
+];
+
+const quotaGate = { allowed: true, increment: true, message: "limit reached" };
+
+class StubFileReader {
+  result: string | null = null;
+  onload: (() => void) | null = null;
+  onerror: ((event: unknown) => void) | null = null;
+  error: unknown = null;
+  readAsDataURL() {
+    this.result = "data:application/octet-stream;base64,SGVsbG8=";
+    this.onload?.();
+  }
+}
+
 /** A datetime-local value one day ahead of the real clock, so the suite never ages out. */
 function futureLocal(): string {
   const when = new Date(Date.now() + 24 * 60 * 60 * 1000);
@@ -35,16 +108,25 @@ function futureLocal(): string {
 }
 const FUTURE = futureLocal();
 const PHONE_ERROR = "Enter a phone number with 8–15 digits. Letters, @ and extensions are not allowed.";
+const CLOUD_REFUSED = (extension: string) => `WhatsApp Cloud API doesn't accept .${extension} files. Use a QR account or convert it.`;
 
 let accounts: Array<(typeof OWN)[number]> = [];
 let insertError: { code?: string; message: string } | null = null;
 let inserted: Record<string, unknown> | null = null;
+let insertCount = 0;
 let insertSelect: string | null = null;
+let holdInsert = false;
+let releaseInsert: (() => void) | null = null;
 let accountFilters: [string, unknown][] = [];
+let mediaFilters: [string, unknown][] = [];
+let libraryRows: LibraryRow[] = [];
+let invokeQueue: Array<{ data?: unknown; error?: unknown }> = [];
+const invokeCalls: Array<{ path: string; body: Record<string, unknown> }> = [];
 
 function builder(table: string) {
   const filters: [string, unknown][] = [];
   if (table === "social_accounts") accountFilters = filters;
+  if (table === "media_files") mediaFilters = filters;
   let inserting = false;
   const api = {
     select: (columns?: string) => {
@@ -56,6 +138,7 @@ function builder(table: string) {
       return api;
     },
     order: () => {
+      if (table === "media_files") return api;
       if (table !== "social_accounts") return Promise.resolve({ data: [], error: null });
       const owned = filters.some(([column, value]) => column === "user_id" && value === "user-1")
         && filters.some(([column, value]) => column === "platform" && value === "whatsapp")
@@ -67,14 +150,26 @@ function builder(table: string) {
         error: null,
       });
     },
+    limit: () => {
+      const owned = filters.some(([column, value]) => column === "user_id" && value === "user-1");
+      return Promise.resolve({ data: owned ? libraryRows : [], error: null });
+    },
     insert: (row: Record<string, unknown>) => {
       inserting = true;
       inserted = row;
+      insertCount += 1;
       return api;
     },
-    single: () => Promise.resolve(
-      insertError ? { data: null, error: insertError } : { data: { id: "sched-1" }, error: null },
-    ),
+    single: () => {
+      if (holdInsert) {
+        return new Promise<{ data: unknown; error: unknown }>((resolve) => {
+          releaseInsert = () => resolve({ data: { id: "sched-1" }, error: null });
+        }) as never;
+      }
+      return Promise.resolve(
+        insertError ? { data: null, error: insertError } : { data: { id: "sched-1" }, error: null },
+      );
+    },
   };
   return api;
 }
@@ -92,6 +187,11 @@ async function openDialog() {
   expect(await screen.findByRole("heading", { name: "Schedule message" })).toBeInTheDocument();
 }
 
+/** Radix tab triggers activate on mousedown, not click. */
+function openSourceTab(name: string) {
+  fireEvent.mouseDown(screen.getByRole("tab", { name }));
+}
+
 async function chooseOption(label: string, optionName: string) {
   const trigger = screen.getByLabelText(label);
   fireEvent.pointerDown(trigger, { button: 0, buttons: 1, pointerType: "mouse" });
@@ -106,16 +206,40 @@ async function fillReady(phone = "+965 5000 1111") {
   fireEvent.change(screen.getByLabelText("Date and time"), { target: { value: FUTURE } });
 }
 
+function pickFile(name: string, type = "application/octet-stream") {
+  fireEvent.change(screen.getByLabelText("Choose a file"), {
+    target: { files: [new File(["content"], name, { type })] },
+  });
+}
+
 describe("ScheduleMessageDialog", () => {
   beforeEach(() => {
     accounts = [OWN[0]];
     insertError = null;
     inserted = null;
+    insertCount = 0;
     insertSelect = null;
+    holdInsert = false;
+    releaseInsert = null;
     accountFilters = [];
+    mediaFilters = [];
+    libraryRows = [];
+    invokeQueue = [];
+    invokeCalls.length = 0;
+    quotaGate.allowed = true;
+    quotaGate.increment = true;
     vi.mocked(toast.success).mockClear();
     vi.mocked(toast.error).mockClear();
     vi.mocked(supabase.from).mockImplementation((table: string) => builder(table) as never);
+    vi.mocked(supabase.functions.invoke).mockClear();
+    vi.mocked(supabase.functions.invoke).mockImplementation(async (path: string, opts?: { body?: unknown }) => {
+      invokeCalls.push({ path, body: (opts?.body ?? {}) as Record<string, unknown> });
+      const next = invokeQueue.shift();
+      if (!next) return { data: undefined, error: null };
+      if (next.error) throw next.error;
+      return { data: next.data, error: null };
+    });
+    vi.stubGlobal("FileReader", StubFileReader);
   });
 
   it("lists only the signed-in user's active WhatsApp accounts", async () => {
@@ -150,7 +274,7 @@ describe("ScheduleMessageDialog", () => {
     expect(screen.getByRole("button", { name: "Schedule" })).toBeDisabled();
   });
 
-  it("rejects invalid phones, a past time, and media type without a URL", async () => {
+  it("rejects invalid phones, a past time, and a link type without a URL", async () => {
     renderManager();
     await openDialog();
     await fillReady();
@@ -167,6 +291,7 @@ describe("ScheduleMessageDialog", () => {
     expect(await screen.findByText("Pick a time at least 1 minute from now.")).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText("Date and time"), { target: { value: FUTURE } });
+    openSourceTab("Paste link");
     await chooseOption("Media type", "Image");
     fireEvent.click(screen.getByRole("button", { name: "Schedule" }));
     expect(await screen.findByText("Choose a media type and an https URL together.")).toBeInTheDocument();
@@ -180,22 +305,24 @@ describe("ScheduleMessageDialog", () => {
     expect(screen.getByText("5 / 4096")).toBeInTheDocument();
   });
 
-  it("choosing None for media clears the URL and lets the message schedule", async () => {
+  it("switching back to None clears the link and lets the message schedule", async () => {
     renderManager();
     await openDialog();
     await fillReady();
+    openSourceTab("Paste link");
     await chooseOption("Media type", "Image");
     fireEvent.change(screen.getByLabelText("Media URL"), { target: { value: "https://cdn.example/a.jpg" } });
-    await chooseOption("Media type", "None");
+    openSourceTab("None");
     fireEvent.click(screen.getByRole("button", { name: "Schedule" }));
     await waitFor(() => expect(inserted).not.toBeNull());
     expect((inserted as Record<string, unknown>).media_url).toBeNull();
   });
 
-  it("caps the text at the 1024-character caption limit when image media is attached", async () => {
+  it("caps the text at the 1024-character caption limit when image media is linked", async () => {
     renderManager();
     await openDialog();
     await fillReady();
+    openSourceTab("Paste link");
     await chooseOption("Media type", "Image");
     fireEvent.change(screen.getByLabelText("Media URL"), { target: { value: "https://cdn.example/a.jpg" } });
     fireEvent.change(screen.getByLabelText("Message"), { target: { value: "x".repeat(1025) } });
@@ -220,6 +347,7 @@ describe("ScheduleMessageDialog", () => {
       message_text: "See you then",
       media_url: null,
       media_type: null,
+      media_filename: null,
       scheduled_at: scheduledAt,
       status: "pending",
     }));
@@ -244,5 +372,161 @@ describe("ScheduleMessageDialog", () => {
     vi.mocked(toast.error).mockClear();
     fireEvent.click(screen.getByRole("button", { name: "Schedule" }));
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith("You can only schedule from your own WhatsApp accounts."));
+  });
+
+  it("an upload success fills the URL, type and filename, and the insert carries media_filename", async () => {
+    invokeQueue = [{ data: { success: true, mediaFileId: "mf-1", url: "https://res.cloudinary.com/demo/image/upload/postora_x1.jpg" } }];
+    renderManager();
+    await openDialog();
+    await fillReady();
+    openSourceTab("Upload file");
+    pickFile("invoice.jpg", "image/jpeg");
+
+    expect(await screen.findByText("Selected: invoice.jpg")).toBeInTheDocument();
+    expect(invokeCalls[0]).toMatchObject({ path: "cloudinary-upload", body: { fileName: "invoice.jpg", fileType: "image" } });
+    expect(String(invokeCalls[0].body.fileData)).toContain("base64");
+
+    fireEvent.click(screen.getByRole("button", { name: "Schedule" }));
+    await waitFor(() => expect(inserted).not.toBeNull());
+    expect(inserted).toMatchObject({
+      media_url: "https://res.cloudinary.com/demo/image/upload/postora_x1.jpg",
+      media_type: "image",
+      media_filename: "invoice.jpg",
+    });
+  });
+
+  it("an upload refusal shows the backend message", async () => {
+    invokeQueue = [{ data: { success: false, error: "Unsupported fileType" } }];
+    renderManager();
+    await openDialog();
+    openSourceTab("Upload file");
+    pickFile("invoice.jpg", "image/jpeg");
+    expect(await screen.findByText("Unsupported fileType")).toBeInTheDocument();
+    expect(inserted).toBeNull();
+  });
+
+  it("the Library picker lists documents and archives, and selecting one fills the fields", async () => {
+    accounts = [OWN[1]];
+    libraryRows = LIB;
+    renderManager();
+    await openDialog();
+    openSourceTab("Choose from Library");
+
+    expect(await screen.findByText("invoice.pdf")).toBeInTheDocument();
+    expect(screen.getByText("pack.zip")).toBeInTheDocument();
+    expect(screen.getByText("photo.webp")).toBeInTheDocument();
+    expect(mediaFilters).toContainEqual(["user_id", "user-1"]);
+
+    fireEvent.click(screen.getByText("pack.zip"));
+    fireEvent.change(screen.getByLabelText("Recipient phone"), { target: { value: "+965 5000 1111" } });
+    fireEvent.change(screen.getByLabelText("Date and time"), { target: { value: FUTURE } });
+    fireEvent.click(screen.getByRole("button", { name: "Schedule" }));
+
+    await waitFor(() => expect(inserted).not.toBeNull());
+    expect(inserted).toMatchObject({
+      media_url: "https://res.cloudinary.com/demo/raw/upload/postora_zip9.zip",
+      media_type: "document",
+      media_filename: "pack.zip",
+    });
+  });
+
+  it("a Cloud API account blocks zip and webp while a QR account allows them, re-validating on switch", async () => {
+    accounts = OWN;
+    libraryRows = LIB;
+    renderManager();
+    await openDialog();
+    await waitFor(() => expect(screen.getByLabelText("WhatsApp account")).toBeInTheDocument());
+    await chooseOption("WhatsApp account", "My Shop");
+    openSourceTab("Choose from Library");
+    fireEvent.click(await screen.findByText("pack.zip"));
+
+    expect(await screen.findByText(CLOUD_REFUSED("zip"))).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Schedule" })).toBeDisabled();
+
+    fireEvent.click(screen.getByText("photo.webp"));
+    expect(await screen.findByText(CLOUD_REFUSED("webp"))).toBeInTheDocument();
+
+    await chooseOption("WhatsApp account", "965222");
+    await waitFor(() => expect(screen.queryByText(CLOUD_REFUSED("zip"))).not.toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "Schedule" })).toBeEnabled();
+
+    fireEvent.click(screen.getByText("pack.zip"));
+    fireEvent.change(screen.getByLabelText("Recipient phone"), { target: { value: "+965 5000 1111" } });
+    fireEvent.change(screen.getByLabelText("Date and time"), { target: { value: FUTURE } });
+    fireEvent.click(screen.getByRole("button", { name: "Schedule" }));
+    await waitFor(() => expect(inserted).not.toBeNull());
+    expect(inserted).toMatchObject({ media_type: "document", media_filename: "pack.zip" });
+  });
+
+  it("a pasted link on a Cloud account needs a known whatsappCloud extension matching the type; QR allows the rest", async () => {
+    accounts = OWN;
+    renderManager();
+    await openDialog();
+    await waitFor(() => expect(screen.getByLabelText("WhatsApp account")).toBeInTheDocument());
+    await chooseOption("WhatsApp account", "My Shop");
+    await fillReady();
+    openSourceTab("Paste link");
+    await chooseOption("Media type", "Image");
+
+    fireEvent.change(screen.getByLabelText("Media URL"), { target: { value: "https://cdn.example/pack.zip" } });
+    expect(await screen.findByText(CLOUD_REFUSED("zip"))).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Media URL"), { target: { value: "https://cdn.example/redirect" } });
+    expect(await screen.findByText("WhatsApp Cloud API needs a link that ends in a known file extension.")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Media URL"), { target: { value: "https://cdn.example/a.jpg" } });
+    await chooseOption("Media type", "Document");
+    expect(await screen.findByText("This link is a .jpg file — pick Image as the media type.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Schedule" })).toBeDisabled();
+
+    await chooseOption("WhatsApp account", "965222");
+    await waitFor(() => expect(screen.queryByText(/WhatsApp Cloud API/)).not.toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText("Media URL"), { target: { value: "https://cdn.example/redirect" } });
+    expect(screen.getByRole("button", { name: "Schedule" })).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Schedule" }));
+    await waitFor(() => expect(inserted).not.toBeNull());
+    expect(inserted).toMatchObject({ media_url: "https://cdn.example/redirect", media_type: "document" });
+  });
+
+  it("a stale upload completion is ignored and the latest pick wins", async () => {
+    const pending: Array<(value: unknown) => void> = [];
+    vi.mocked(supabase.functions.invoke).mockImplementation(
+      () => new Promise((resolve) => { pending.push((value: unknown) => resolve(value as never)); }),
+    );
+    renderManager();
+    await openDialog();
+    openSourceTab("Upload file");
+    pickFile("a.jpg", "image/jpeg");
+    await waitFor(() => expect(pending.length).toBe(1));
+    pickFile("b.jpg", "image/jpeg");
+    await waitFor(() => expect(pending.length).toBe(2));
+
+    pending[1]({ data: { success: true, mediaFileId: "mf-2", url: "https://res.cloudinary.com/demo/image/upload/b.jpg" }, error: null });
+    expect(await screen.findByText("Selected: b.jpg")).toBeInTheDocument();
+
+    pending[0]({ data: { success: true, mediaFileId: "mf-1", url: "https://res.cloudinary.com/demo/image/upload/a.jpg" }, error: null });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Schedule" })).toBeEnabled());
+
+    fireEvent.change(screen.getByLabelText("Recipient phone"), { target: { value: "+965 5000 1111" } });
+    fireEvent.change(screen.getByLabelText("Date and time"), { target: { value: FUTURE } });
+    fireEvent.click(screen.getByRole("button", { name: "Schedule" }));
+    await waitFor(() => expect(inserted).not.toBeNull());
+    expect(inserted).toMatchObject({ media_url: "https://res.cloudinary.com/demo/image/upload/b.jpg" });
+  });
+
+  it("a duplicate submit while the insert is in flight does not schedule twice", async () => {
+    holdInsert = true;
+    renderManager();
+    await openDialog();
+    await fillReady();
+    const submit = screen.getByRole("button", { name: "Schedule" });
+    fireEvent.click(submit);
+    await waitFor(() => expect(insertCount).toBe(1));
+    expect(submit).toBeDisabled();
+    fireEvent.click(submit);
+    expect(insertCount).toBe(1);
+    releaseInsert?.();
+    await waitFor(() => expect(toast.success).toHaveBeenCalled());
+    expect(insertCount).toBe(1);
   });
 });
