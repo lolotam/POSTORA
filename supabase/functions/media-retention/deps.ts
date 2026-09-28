@@ -75,8 +75,12 @@ export function createRetentionPorts(supabase: ServiceClient): RetentionPorts {
       if (error) throw new Error("retention claim failed");
       return Array.isArray(data) ? data as ClaimedMediaFile[] : [];
     },
-    async release(id, failed) {
-      const { error } = await supabase.rpc("media_retention_release", { p_id: id, p_failed: failed });
+    async release(id, userId, failed) {
+      const { error } = await supabase.rpc("media_retention_release", {
+        p_id: id,
+        p_user_id: userId,
+        p_failed: failed,
+      });
       if (error) throw new Error("retention release failed");
     },
     async preview(userId) {
@@ -84,14 +88,23 @@ export function createRetentionPorts(supabase: ServiceClient): RetentionPorts {
       if (error) throw new Error("retention preview failed");
       return Array.isArray(data) ? data : [];
     },
-    async readDeleteEnabled() {
+    async readDeleteState() {
       const { data, error } = await supabase
         .from("media_retention_settings")
         .select("delete_enabled")
         .eq("id", 1)
         .maybeSingle();
-      if (error || !data) return false;
-      return data.delete_enabled === true;
+      if (error || !data || typeof data.delete_enabled !== "boolean") return "unknown";
+      return data.delete_enabled ? "enabled" : "disabled";
+    },
+    async logDeleteSwitchUnreadable() {
+      await logToDatabase(supabase, {
+        level: "error",
+        category: "system",
+        source: "media-retention",
+        message: "Delete switch could not be read",
+        metadata: { reason: "delete_switch_unreadable" },
+      });
     },
     async loadProviders(mediaFileId) {
       const { data, error } = await supabase
@@ -149,7 +162,7 @@ export function createRetentionPorts(supabase: ServiceClient): RetentionPorts {
           deleted: entry.deleted,
           failed: entry.failed,
           backlog: entry.backlog,
-          delete_enabled: entry.delete_enabled,
+          delete_state: entry.delete_state,
         },
       });
     },

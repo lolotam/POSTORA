@@ -469,6 +469,7 @@ END $$;
 DO $$
 DECLARE
   u_a uuid := 'a7a7a7a7-a7a7-47a7-87a7-a7a7a7a7a7a7';
+  u_b uuid := 'b7b7b7b7-b7b7-47b7-87b7-b7b7b7b7b7b7';
   v_now timestamptz := now();
   f_due uuid := '11111111-1111-4111-8111-111111111101';
   f_null uuid := '11111111-1111-4111-8111-11111111112f';
@@ -508,7 +509,15 @@ BEGIN
   SELECT retention_attempts, retention_next_attempt_at
     INTO v_attempts, v_next
   FROM public.media_files WHERE id = f_due;
-  PERFORM public.media_retention_release(f_due, false);
+
+  -- S10a: release scoped to the wrong owner changes nothing. The row stays
+  -- claimed exactly as claim() left it.
+  PERFORM public.media_retention_release(f_due, u_b, false);
+  ASSERT (SELECT retention_state = 'deleting' AND retention_claimed_at IS NOT NULL
+          FROM public.media_files WHERE id = f_due),
+    'S10a release with a non-owner user_id leaves the claim untouched';
+
+  PERFORM public.media_retention_release(f_due, u_a, false);
   ASSERT (SELECT retention_state = 'warned'
             AND retention_attempts = v_attempts
             AND retention_next_attempt_at IS NOT DISTINCT FROM v_next
@@ -520,7 +529,7 @@ BEGIN
   PERFORM public.media_retention_claim(v_now, 50);
   ASSERT (SELECT retention_state FROM public.media_files WHERE id = f_due) = 'deleting',
     'S11 the released row can be claimed again';
-  PERFORM public.media_retention_release(f_due, true);
+  PERFORM public.media_retention_release(f_due, u_a, true);
   ASSERT (SELECT retention_state = 'warned'
             AND retention_attempts = 1
             AND retention_next_attempt_at = v_now + interval '15 minutes'
@@ -538,7 +547,7 @@ BEGIN
   WHERE id = f_due;
   SELECT count(*) INTO v_logs FROM public.system_logs
   WHERE source = 'media-retention' AND message = 'Media retention stopped retrying a file delete';
-  PERFORM public.media_retention_release(f_due, true);
+  PERFORM public.media_retention_release(f_due, u_a, true);
   ASSERT (SELECT retention_state = 'warned' AND retention_attempts = 5
           FROM public.media_files WHERE id = f_due),
     'S11 the fifth failure stays warned';
@@ -675,6 +684,31 @@ BEGIN
       RAISE;
     END IF;
   END;
+
+  -- S15b: the url branch of the guard is scoped to the writing row's own
+  -- owner. B naming A's deleting file by url is not refused; A doing the
+  -- same against A's own deleting file is.
+  INSERT INTO public.whatsapp_messages
+    (user_id, social_account_id, conversation_id, media_url)
+  VALUES (u_b, acct_wa, 'retention-conv-b',
+          (SELECT file_path FROM public.media_files WHERE id = f_url));
+  ASSERT EXISTS (
+    SELECT 1 FROM public.whatsapp_messages
+    WHERE user_id = u_b AND conversation_id = 'retention-conv-b'
+  ), 'S15b another tenant referencing a deleting file by url is not refused';
+
+  BEGIN
+    INSERT INTO public.whatsapp_messages
+      (user_id, social_account_id, conversation_id, media_url)
+    VALUES (u_a, acct_wa, 'retention-conv-a',
+            (SELECT file_path FROM public.media_files WHERE id = f_url));
+    RAISE EXCEPTION 'S15b failed: owner reference to a deleting file was accepted'
+      USING ERRCODE = 'assert_failure';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM NOT LIKE '%being deleted from your library%' THEN
+      RAISE;
+    END IF;
+  END;
 END $$;
 
 SET LOCAL ROLE authenticated;
@@ -789,7 +823,7 @@ BEGIN
     'S18 service_role can execute sweep';
   ASSERT has_function_privilege('service_role', 'public.media_retention_claim(timestamptz, integer)', 'EXECUTE'),
     'S18 service_role can execute claim';
-  ASSERT has_function_privilege('service_role', 'public.media_retention_release(uuid, boolean)', 'EXECUTE'),
+  ASSERT has_function_privilege('service_role', 'public.media_retention_release(uuid, uuid, boolean)', 'EXECUTE'),
     'S18 service_role can execute release';
   ASSERT has_function_privilege('service_role', 'public.media_retention_preview(uuid)', 'EXECUTE'),
     'S18 service_role can execute preview';
@@ -797,7 +831,7 @@ BEGIN
     'S18 authenticated cannot execute sweep';
   ASSERT NOT has_function_privilege('anon', 'public.media_retention_claim(timestamptz, integer)', 'EXECUTE'),
     'S18 anon cannot execute claim';
-  ASSERT NOT has_function_privilege('authenticated', 'public.media_retention_release(uuid, boolean)', 'EXECUTE'),
+  ASSERT NOT has_function_privilege('authenticated', 'public.media_retention_release(uuid, uuid, boolean)', 'EXECUTE'),
     'S18 authenticated cannot execute release';
   ASSERT NOT has_function_privilege('anon', 'public.media_retention_preview(uuid)', 'EXECUTE'),
     'S18 anon cannot execute preview';

@@ -6,7 +6,7 @@
 -- from media_retention_settings.rollout_at, written once. delete_enabled
 -- stays false until an admin turns deletion on, so the job warns without
 -- claiming. supabase/functions/media-retention calls media_retention_sweep,
--- media_retention_claim, media_retention_release(p_id, p_failed) and
+-- media_retention_claim, media_retention_release(p_id, p_user_id, p_failed) and
 -- media_retention_preview(p_user). The library calls media_set_keep and
 -- reads media_retention_settings.delete_enabled with the user JWT.
 --
@@ -673,13 +673,17 @@ REVOKE ALL ON FUNCTION public.media_retention_claim(timestamptz, int) FROM PUBLI
 GRANT EXECUTE ON FUNCTION public.media_retention_claim(timestamptz, int) TO service_role;
 
 -- ---------------------------------------------------------------------------
--- 7. Release. p_failed true counts an attempt and backs off from the previous
+-- 7. Release. Scoped to the claim's owner: a release can only ever touch the
+--    row it claimed for that user, never another tenant's id collision.
+--    p_failed true counts an attempt and backs off from the previous
 --    attempt count (first failure waits 15 minutes, then 30, 60, 120). The
 --    5th failure stays warned, is not claimable, and writes one log row.
 --    p_failed false puts an unstarted claim back to warned with no attempt
 --    and no backoff (the worker ran out of time before touching the file).
+--    Drop first: the prior signature (p_id, p_failed) had no owner scope.
 -- ---------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION public.media_retention_release(p_id uuid, p_failed boolean)
+DROP FUNCTION IF EXISTS public.media_retention_release(uuid, boolean);
+CREATE OR REPLACE FUNCTION public.media_retention_release(p_id uuid, p_user_id uuid, p_failed boolean)
 RETURNS void
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -689,8 +693,8 @@ DECLARE
   v_user uuid;
   v_attempts int;
 BEGIN
-  IF p_id IS NULL OR p_failed IS NULL THEN
-    RAISE EXCEPTION 'media_retention_release: p_id and p_failed are required'
+  IF p_id IS NULL OR p_user_id IS NULL OR p_failed IS NULL THEN
+    RAISE EXCEPTION 'media_retention_release: p_id, p_user_id and p_failed are required'
       USING ERRCODE = '22023';
   END IF;
 
@@ -699,6 +703,7 @@ BEGIN
     SET retention_state = 'warned',
         retention_claimed_at = NULL
     WHERE m.id = p_id
+      AND m.user_id = p_user_id
       AND m.retention_state = 'deleting';
     RETURN;
   END IF;
@@ -715,6 +720,7 @@ BEGIN
         )
       END
   WHERE m.id = p_id
+    AND m.user_id = p_user_id
     AND m.retention_state = 'deleting'
   RETURNING m.user_id, m.retention_attempts INTO v_user, v_attempts;
 
@@ -738,8 +744,8 @@ BEGIN
 END;
 $function$;
 
-REVOKE ALL ON FUNCTION public.media_retention_release(uuid, boolean) FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.media_retention_release(uuid, boolean) TO service_role;
+REVOKE ALL ON FUNCTION public.media_retention_release(uuid, uuid, boolean) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.media_retention_release(uuid, uuid, boolean) TO service_role;
 
 -- ---------------------------------------------------------------------------
 -- 8. Preview. Same eligibility, no library or log writes.
@@ -897,7 +903,11 @@ CREATE TRIGGER media_files_retention_column_guard
   FOR EACH ROW EXECUTE FUNCTION public.media_files_retention_column_guard();
 
 -- ---------------------------------------------------------------------------
--- 11. Reference guard. PK or indexed url lookup, row-locked.
+-- 11. Reference guard. PK or indexed url lookup, row-locked, scoped to the
+--     writing row's own owner: every table this trigger fires on carries
+--     user_id, so a match against another tenant's deleting file must never
+--     abort this write. (The in-use protection used by sweep/claim/preview
+--     stays cross-tenant on purpose -- it is not this trigger.)
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION public.media_retention_reference_guard()
 RETURNS trigger
@@ -914,6 +924,7 @@ BEGIN
     FROM public.media_files AS m
     WHERE m.id = ANY (NEW.media_file_ids)
       AND m.retention_state = 'deleting'
+      AND m.user_id = NEW.user_id
     FOR UPDATE OF m;
   ELSIF TG_TABLE_NAME = 'comment_workflow_rules' THEN
     IF NEW.media_file_id IS NULL THEN
@@ -923,6 +934,7 @@ BEGIN
     FROM public.media_files AS m
     WHERE m.id = NEW.media_file_id
       AND m.retention_state = 'deleting'
+      AND m.user_id = NEW.user_id
     FOR UPDATE OF m;
   ELSE
     IF NEW.media_url IS NULL OR btrim(NEW.media_url) = '' THEN
@@ -931,6 +943,7 @@ BEGIN
     PERFORM 1
     FROM public.media_files AS m
     WHERE m.retention_state = 'deleting'
+      AND m.user_id = NEW.user_id
       AND (
         m.file_path = NEW.media_url
         OR m.cloudinary_public_id = NEW.media_url

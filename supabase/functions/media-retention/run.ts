@@ -30,6 +30,14 @@ export interface RetentionCounts {
   backlog: number;
 }
 
+/**
+ * Whether the admin delete switch could be read this run. "unknown" covers a
+ * missing settings row, a read error, or anything else that is not a clean
+ * boolean -- it is never coerced into "disabled", so a log reader can tell
+ * "admin turned it off" apart from "the switch could not be read".
+ */
+export type DeleteSwitchState = "enabled" | "disabled" | "unknown";
+
 /** Counts only. Never ids, urls, or names. */
 export interface RetentionLog {
   warned: number;
@@ -38,7 +46,7 @@ export interface RetentionLog {
   deleted: number;
   failed: number;
   backlog: number;
-  delete_enabled: boolean;
+  delete_state: DeleteSwitchState;
 }
 
 export interface RetentionReport {
@@ -51,10 +59,17 @@ export interface RetentionReport {
 export interface RetentionPorts {
   sweep(pNow: string, pLimit: number): Promise<Array<{ phase: string; count: number }>>;
   claim(pNow: string, pLimit: number): Promise<ClaimedMediaFile[]>;
-  /** `failed` true counts a failed attempt. False returns an unstarted claim to the queue. */
-  release(id: string, failed: boolean): Promise<void>;
+  /**
+   * `failed` true counts a failed attempt. False returns an unstarted claim to
+   * the queue. Scoped to `userId`, the owner the row was claimed under, so a
+   * release can only ever touch the file it claimed.
+   */
+  release(id: string, userId: string, failed: boolean): Promise<void>;
   preview(userId: string | null): Promise<PreviewRow[]>;
-  readDeleteEnabled(): Promise<boolean>;
+  /** Fail-closed: only "enabled" allows claiming or deleting. */
+  readDeleteState(): Promise<DeleteSwitchState>;
+  /** Best-effort. Called once when readDeleteState resolves to "unknown". */
+  logDeleteSwitchUnreadable(): Promise<void>;
   loadProviders(mediaFileId: string): Promise<{ rows: ProviderDeleteRow[] } | { error: string }>;
   deleteFile(file: ClaimedMediaFile, providers: ProviderDeleteRow[], timeoutMs: number): Promise<{ confirmed: boolean }>;
   /**
@@ -73,11 +88,19 @@ function phaseCount(rows: Array<{ phase: string; count: number }>, needle: strin
   return total;
 }
 
-async function safeRelease(ports: RetentionPorts, id: string, failed: boolean): Promise<void> {
+async function safeRelease(ports: RetentionPorts, id: string, userId: string, failed: boolean): Promise<void> {
   try {
-    await ports.release(id, failed);
+    await ports.release(id, userId, failed);
   } catch {
     console.error("[media-retention] release failed");
+  }
+}
+
+async function safeLogSwitchUnreadable(ports: RetentionPorts): Promise<void> {
+  try {
+    await ports.logDeleteSwitchUnreadable();
+  } catch {
+    console.error("[media-retention] delete-switch-unreadable log failed");
   }
 }
 
@@ -96,7 +119,9 @@ export async function runMediaRetention(args: {
   const budgetMs = args.budgetMs ?? RETENTION_BUDGET_MS;
   const started = now();
   const remaining = () => budgetMs - (now() - started);
-  const deleteEnabled = await args.ports.readDeleteEnabled().catch(() => false);
+  const deleteState = await args.ports.readDeleteState().catch(() => "unknown" as const);
+  if (deleteState === "unknown") await safeLogSwitchUnreadable(args.ports);
+  const deleteEnabled = deleteState === "enabled";
 
   if (args.dryRun) {
     const rows = await args.ports.preview(null);
@@ -136,14 +161,14 @@ export async function runMediaRetention(args: {
         const budgetLeft = remaining();
         if (budgetLeft <= 0) {
           stoppedForBudget = true;
-          await safeRelease(args.ports, file.media_file_id, false);
+          await safeRelease(args.ports, file.media_file_id, file.user_id, false);
           continue;
         }
 
         const loaded = await args.ports.loadProviders(file.media_file_id);
         if ("error" in loaded) {
           failed += 1;
-          await safeRelease(args.ports, file.media_file_id, true);
+          await safeRelease(args.ports, file.media_file_id, file.user_id, true);
           continue;
         }
 
@@ -156,7 +181,7 @@ export async function runMediaRetention(args: {
         }
         if (!confirmed) {
           failed += 1;
-          await safeRelease(args.ports, file.media_file_id, true);
+          await safeRelease(args.ports, file.media_file_id, file.user_id, true);
           continue;
         }
 
@@ -164,7 +189,7 @@ export async function runMediaRetention(args: {
         if (!removed.removed) {
           failed += 1;
           if (removed.error || removed.stillDeleting) {
-            await safeRelease(args.ports, file.media_file_id, true);
+            await safeRelease(args.ports, file.media_file_id, file.user_id, true);
           }
           continue;
         }
@@ -173,7 +198,7 @@ export async function runMediaRetention(args: {
       if (stoppedForBudget || remaining() <= 0) break;
     }
   } catch (error) {
-    await writeLog(args.ports, { warned, cleared, claimed, deleted, failed, backlog: 0, delete_enabled: deleteEnabled });
+    await writeLog(args.ports, { warned, cleared, claimed, deleted, failed, backlog: 0, delete_state: deleteState });
     throw error;
   }
 
@@ -185,7 +210,7 @@ export async function runMediaRetention(args: {
     console.error("[media-retention] backlog preview failed");
   }
 
-  await writeLog(args.ports, { warned, cleared, claimed, deleted, failed, backlog, delete_enabled: deleteEnabled });
+  await writeLog(args.ports, { warned, cleared, claimed, deleted, failed, backlog, delete_state: deleteState });
 
   return {
     dryRun: false,

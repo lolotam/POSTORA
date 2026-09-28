@@ -11,13 +11,13 @@ const file = (id: string): ClaimedMediaFile => ({
 
 function ports(overrides: Partial<RetentionPorts> = {}): RetentionPorts & {
   calls: string[];
-  releases: Array<[string, boolean]>;
+  releases: Array<[string, string, boolean]>;
   removed: string[];
   deleted: string[];
   logged: unknown[];
 } {
   const calls: string[] = [];
-  const releases: Array<[string, boolean]> = [];
+  const releases: Array<[string, string, boolean]> = [];
   const removed: string[] = [];
   const deleted: string[] = [];
   const logged: unknown[] = [];
@@ -30,16 +30,19 @@ function ports(overrides: Partial<RetentionPorts> = {}): RetentionPorts & {
       calls.push("claim");
       return [];
     },
-    release: async (id, failed) => {
-      releases.push([id, failed]);
+    release: async (id, userId, failed) => {
+      releases.push([id, userId, failed]);
     },
     preview: async () => {
       calls.push("preview");
       return [];
     },
-    readDeleteEnabled: async () => {
-      calls.push("readDeleteEnabled");
-      return true;
+    readDeleteState: async () => {
+      calls.push("readDeleteState");
+      return "enabled";
+    },
+    logDeleteSwitchUnreadable: async () => {
+      calls.push("logDeleteSwitchUnreadable");
     },
     loadProviders: async () => ({ rows: [] }),
     deleteFile: async (claimed) => {
@@ -60,7 +63,7 @@ function ports(overrides: Partial<RetentionPorts> = {}): RetentionPorts & {
 
 Deno.test("warn-only mode sweeps and deletes nothing", async () => {
   const fake = ports({
-    readDeleteEnabled: async () => false,
+    readDeleteState: async () => "disabled",
     claim: async () => {
       throw new Error("claim must not run when deletion is off");
     },
@@ -71,7 +74,21 @@ Deno.test("warn-only mode sweeps and deletes nothing", async () => {
   assertEquals(fake.deleted, []);
   assertEquals(fake.removed, []);
   assertEquals(fake.calls.includes("sweep"), true);
-  assertEquals((fake.logged[0] as { delete_enabled: boolean }).delete_enabled, false);
+  assertEquals((fake.logged[0] as { delete_state: string }).delete_state, "disabled");
+});
+
+Deno.test("an unknown delete switch fails closed and logs once", async () => {
+  const fake = ports({
+    readDeleteState: async () => "unknown",
+    claim: async () => {
+      throw new Error("claim must not run when the switch cannot be read");
+    },
+  });
+  const report = await runMediaRetention({ dryRun: false, ports: fake });
+  assertEquals(report.result.deleted, 0);
+  assertEquals(report.deleteEnabled, false);
+  assertEquals(fake.calls.filter((call) => call === "logDeleteSwitchUnreadable").length, 1);
+  assertEquals((fake.logged[0] as { delete_state: string }).delete_state, "unknown");
 });
 
 Deno.test("claimed files are deleted and only confirmed rows are removed", async () => {
@@ -81,7 +98,7 @@ Deno.test("claimed files are deleted and only confirmed rows are removed", async
   });
   const report = await runMediaRetention({ dryRun: false, ports: fake });
   assertEquals(fake.removed, ["ok"]);
-  assertEquals(fake.releases, [["nope", true]]);
+  assertEquals(fake.releases, [["nope", "user-1", true]]);
   assertEquals(report.result.deleted, 1);
   assertEquals(report.result.failed, 1);
   assertEquals(report.filesToDelete, []);
@@ -96,7 +113,7 @@ Deno.test("a failed provider delete calls release(id, true) and keeps the row", 
     },
   });
   await runMediaRetention({ dryRun: false, ports: fake });
-  assertEquals(fake.releases, [["bad", true]]);
+  assertEquals(fake.releases, [["bad", "user-1", true]]);
   assertEquals(fake.removed, []);
 
   const thrown = ports({
@@ -106,7 +123,7 @@ Deno.test("a failed provider delete calls release(id, true) and keeps the row", 
     },
   });
   await runMediaRetention({ dryRun: false, ports: thrown });
-  assertEquals(thrown.releases, [["boom", true]]);
+  assertEquals(thrown.releases, [["boom", "user-1", true]]);
   assertEquals(thrown.removed, []);
 });
 
@@ -140,7 +157,7 @@ Deno.test("a row that was not removed fails, and releases only while it is still
   const stuckReport = await runMediaRetention({ dryRun: false, ports: stuck });
   assertEquals(stuckReport.result.deleted, 0);
   assertEquals(stuckReport.result.failed, 1);
-  assertEquals(stuck.releases, [["stuck", true]]);
+  assertEquals(stuck.releases, [["stuck", "user-1", true]]);
 
   const gone = ports({
     claim: async () => [file("gone")],
@@ -173,8 +190,8 @@ Deno.test("the budget stops new claims", async () => {
   });
   assertEquals(claims, 1);
   assertEquals(fake.removed, ["first"]);
-  assertEquals(fake.releases, [["second", false]]);
+  assertEquals(fake.releases, [["second", "user-1", false]]);
   assertEquals(report.result.backlog, 1);
   const log = fake.logged[0] as Record<string, unknown>;
-  assertEquals(Object.keys(log).sort(), ["backlog", "claimed", "cleared", "delete_enabled", "deleted", "failed", "warned"]);
+  assertEquals(Object.keys(log).sort(), ["backlog", "claimed", "cleared", "delete_state", "deleted", "failed", "warned"]);
 });
