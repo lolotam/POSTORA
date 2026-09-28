@@ -86,17 +86,23 @@ BEGIN
   EXCEPTION WHEN insufficient_privilege THEN NULL;
   END;
 
-  -- S3: A cannot retarget their own row's object_key. With no UPDATE
-  -- policy the row is silently filtered, so assert the value is unchanged.
-  UPDATE public.media_file_providers
-  SET object_key = 'mfp-server/evil-key'
-  WHERE id = prov_a;
+  -- S3: A cannot retarget their own row's object_key. UPDATE is revoked, so
+  -- the statement is refused outright; either way the value must be unchanged.
+  BEGIN
+    UPDATE public.media_file_providers
+    SET object_key = 'mfp-server/evil-key'
+    WHERE id = prov_a;
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
   ASSERT (SELECT object_key FROM public.media_file_providers
           WHERE id = prov_a) = 'mfp-server/probe-key',
     'S3 owner UPDATE of object_key changes nothing';
 
   -- S4: A cannot delete their own provider row.
-  DELETE FROM public.media_file_providers WHERE id = prov_a;
+  BEGIN
+    DELETE FROM public.media_file_providers WHERE id = prov_a;
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
   ASSERT EXISTS (SELECT 1 FROM public.media_file_providers
                  WHERE id = prov_a),
     'S4 owner DELETE removes nothing';
