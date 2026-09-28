@@ -1,5 +1,5 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { authorisedPublicIds, cloudinaryResourceTypeFor, deleteAuthorisedMediaFiles, isDisabledCloudResponse } from "./deletePlan.ts";
+import { authorisedPublicIds, cloudinaryResourceTypeFor, deleteAuthorisedMediaFiles, isDisabledCloudResponse, openinaryObjectKeyMatches } from "./deletePlan.ts";
 
 Deno.test("a foreign id is refused and a row with no provider is not deleted", async () => {
   const calls: string[] = [];
@@ -79,6 +79,55 @@ Deno.test("a disabled Cloudinary account counts as nothing left, a failed provid
   assertEquals(outcome.results.map((result) => result.status), ["deleted", "deleted", "deleted"]);
   assertEquals(cloudinaryKeys, ["c1:image", "old/vid:video"]);
   assertEquals(reasons, ["provider_disabled", "user delete"]);
+});
+
+Deno.test("an openinary object key that does not match its delivery url is not destroyed", async () => {
+  const destroyed: string[] = [];
+  const marked: string[] = [];
+  const outcome = await deleteAuthorisedMediaFiles({
+    requestedIds: ["bad", "good"],
+    rows: [
+      { id: "bad", user_id: "user", file_type: "image", file_path: "https://cdn.example/t/postora.cloud/mine.png" },
+      { id: "good", user_id: "user", file_type: "image", file_path: "https://cdn.example/t/postora.cloud/good.png" },
+    ],
+    providers: [
+      {
+        id: "p-bad",
+        media_file_id: "bad",
+        provider: "openinary",
+        object_key: "postora.cloud/other-user/secret.png",
+        status: "ready",
+        delivery_url: "https://cdn.example/t/postora.cloud/mine.png",
+      },
+      {
+        id: "p-good",
+        media_file_id: "good",
+        provider: "openinary",
+        object_key: "postora.cloud/good.png",
+        status: "ready",
+        delivery_url: "https://cdn.example/t/postora.cloud/good.png",
+      },
+    ],
+    destroyOpeninary: async (key) => {
+      destroyed.push(key);
+      return { success: true };
+    },
+    destroyCloudinary: async () => {
+      throw new Error("unused");
+    },
+    markDeleted: async (id) => {
+      marked.push(id);
+      return {};
+    },
+  });
+  assertEquals(destroyed, ["postora.cloud/good.png"]);
+  assertEquals(marked, ["p-good"]);
+  assertEquals(outcome.results[0], { id: "bad", status: "failed", error: "provider object mismatch" });
+  assertEquals(outcome.results[1].status, "deleted");
+  assertEquals(outcome.mismatchCount, 1);
+  assertEquals(openinaryObjectKeyMatches("postora.cloud/a.png", null, null), true);
+  assertEquals(openinaryObjectKeyMatches("postora.cloud/a.png", null, "postora.cloud/a.png"), true);
+  assertEquals(openinaryObjectKeyMatches("postora.cloud/secret.png", "https://cdn.example/t/postora.cloud/mine.png", "postora.cloud/secret.png"), false);
 });
 
 Deno.test("missing Cloudinary credentials are a real failure, not a disabled account", async () => {

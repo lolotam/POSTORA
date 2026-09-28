@@ -94,6 +94,17 @@ Deno.serve(async (req) => {
       );
     }
 
+    const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+    if (!serviceRoleKey) {
+      console.error("[cloudinary-rename] missing service role key");
+      return new Response(
+        JSON.stringify({ success: false, error: "Server configuration error" }),
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+    // Ownership was verified above (media_files row scoped to the caller). Provider rows are server-managed.
+    const dbAdmin = createClient(supabaseUrl, serviceRoleKey);
+
     const currentPublicId = file.cloudinary_public_id;
     
     // Extract folder path from current public_id
@@ -201,12 +212,12 @@ Deno.serve(async (req) => {
 
     // The swap: everything below is DB-only, so the interval during which the old
     // version's now-dead Cloudinary URL is still current is a single round-trip.
-    const { data: currentProvider } = await supabase
+    const { data: currentProvider } = await dbAdmin
       .from("media_file_providers")
       .select("object_version, object_key")
       .eq("media_file_id", fileId).eq("provider", "cloudinary").eq("status", "ready")
       .order("object_version", { ascending: false }).limit(1).maybeSingle();
-    const { data: allProviderVersions, error: versionError } = await supabase.from("media_file_providers").select("object_version").eq("media_file_id", fileId);
+    const { data: allProviderVersions, error: versionError } = await dbAdmin.from("media_file_providers").select("object_version").eq("media_file_id", fileId);
     if (versionError) throw new Error(`Provider version lookup failed: ${versionError.message}`);
     const nextVersion = Math.max(file.current_object_version || 1, currentProvider?.object_version || 1, ...(allProviderVersions || []).map((row) => row.object_version || 1)) + 1;
 
@@ -223,7 +234,7 @@ Deno.serve(async (req) => {
       });
     }
 
-    const { error: providerError } = await supabase.from("media_file_providers").insert(providerRows);
+    const { error: providerError } = await dbAdmin.from("media_file_providers").insert(providerRows);
     if (providerError) {
       return new Response(
         JSON.stringify({ success: false, error: `Provider swap failed: ${providerError.message}` }),
@@ -239,7 +250,7 @@ Deno.serve(async (req) => {
     // would be suffixed rather than replacing it. Best-effort: a failure here is a
     // cleanup problem, not a correctness one, and must not fail a completed rename.
     if (stagedOpeninary) {
-      const { data: oldOpeninary } = await supabase
+      const { data: oldOpeninary } = await dbAdmin
         .from("media_file_providers")
         .select("id, object_key")
         .eq("media_file_id", fileId).eq("provider", "openinary")
@@ -249,7 +260,7 @@ Deno.serve(async (req) => {
         if (config) {
           let removed: { success: boolean; error?: string };
           try { removed = await deleteFromOpeninary(config, oldOpeninary.object_key); } catch (error) { removed = { success: false, error: error instanceof Error ? error.message : String(error) }; }
-          await supabase.from("media_file_providers").update({
+          await dbAdmin.from("media_file_providers").update({
             status: "deleted",
             deleted_at: new Date().toISOString(),
             deleted_reason: removed?.success ? "superseded by rename" : "superseded by rename (remote delete failed)",
