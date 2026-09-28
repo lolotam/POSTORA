@@ -188,22 +188,40 @@ export function ScheduleLibraryPicker({ active, selectedId, onPick }: ScheduleLi
             <div className="space-y-1 pe-2">
               {files.map((file) => {
                 const name = downloadNameFor(file);
-                return (
+                const url = resolveUrl(file);
+                const unavailable = url.length === 0;
+                const rowClass = cn(
+                  "flex w-full items-center gap-3 rounded-lg border p-2 text-start transition-colors",
+                  unavailable
+                    ? "pointer-events-none cursor-not-allowed border-border opacity-60"
+                    : selectedId === file.id
+                      ? "border-primary bg-primary/5"
+                      : "border-border hover:border-primary/50",
+                );
+                const control = (
                   <button
-                    key={file.id}
                     type="button"
-                    onClick={() => onPick(file, resolveUrl(file))}
-                    className={cn(
-                      "flex w-full items-center gap-3 rounded-lg border p-2 text-start transition-colors",
-                      selectedId === file.id ? "border-primary bg-primary/5" : "border-border hover:border-primary/50",
-                    )}
+                    disabled={unavailable}
+                    onClick={unavailable ? undefined : () => onPick(file, url)}
+                    className={rowClass}
                   >
                     <div className="h-10 w-10 shrink-0 overflow-hidden rounded-md">
                       <FileTypeTile {...libraryFilePresentation(file)} />
                     </div>
                     <span className="min-w-0 flex-1 truncate text-sm">{name}</span>
+                    {unavailable && (
+                      <span className="shrink-0 text-xs text-muted-foreground">
+                        {t("scheduled.libraryRowUnavailable", "unavailable")}
+                      </span>
+                    )}
                   </button>
                 );
+                // The disabled control cannot take the click. The row still
+                // reports it so the dialog drops the previous file instead of
+                // leaving that file armed for Schedule.
+                return unavailable
+                  ? <div key={file.id} onClick={() => onPick(file, "")}>{control}</div>
+                  : <div key={file.id}>{control}</div>;
               })}
             </div>
           </ScrollArea>

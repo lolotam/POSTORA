@@ -86,6 +86,7 @@ export function ScheduleMessageDialog({ open, onOpenChange }: ScheduleMessageDia
   const [libraryPick, setLibraryPick] = useState<{ id: string; name: string; size: number | null } | null>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadIssue, setUploadIssue] = useState<string | null>(null);
+  const [libraryIssue, setLibraryIssue] = useState<string | null>(null);
   const [whenLocal, setWhenLocal] = useState("");
   const [fieldError, setFieldError] = useState<Record<string, string>>({});
   // A stale completion (dialog closed or reopened, or a different file
@@ -112,6 +113,7 @@ export function ScheduleMessageDialog({ open, onOpenChange }: ScheduleMessageDia
     setPicked(null);
     setLibraryPick(null);
     setUploadIssue(null);
+    setLibraryIssue(null);
     setWhenLocal("");
     setFieldError({});
   }, [open, invalidateInFlightUpload]);
@@ -194,6 +196,7 @@ export function ScheduleMessageDialog({ open, onOpenChange }: ScheduleMessageDia
     setPicked(null);
     setLibraryPick(null);
     setUploadIssue(null);
+    setLibraryIssue(null);
   };
 
   const handleSourceChange = (value: string) => {
@@ -262,10 +265,20 @@ export function ScheduleMessageDialog({ open, onOpenChange }: ScheduleMessageDia
   };
 
   const handleLibraryPick = (file: ScheduleLibraryFile, url: string) => {
-    if (!url) return;
     invalidateInFlightUpload();
+    if (!url) {
+      // Drop the previous file entirely. Keeping it would let Schedule send
+      // file A after the user chose an unresolvable file B.
+      clearMedia();
+      setLibraryIssue(t(
+        "scheduled.libraryFileUnavailable",
+        "This file isn't available right now. Pick another file or upload it again.",
+      ));
+      return;
+    }
     setPicked(null);
     setUploadIssue(null);
+    setLibraryIssue(null);
     const name = downloadNameFor(file);
     setLibraryPick({ id: file.id, name, size: file.file_size });
     setMediaUrl(url);
@@ -288,6 +301,8 @@ export function ScheduleMessageDialog({ open, onOpenChange }: ScheduleMessageDia
       } else if (typeSet && !isHttpsUrl(urlTrimmed)) {
         next.media = t("scheduled.mediaUrlInvalid", "Media URL must be a valid https:// link.");
       }
+    } else if (mediaSource === "library" && libraryIssue) {
+      next.media = libraryIssue;
     } else if (!typeSet || !urlTrimmed) {
       next.media = mediaSource === "upload"
         ? t("scheduled.uploadRequired", "Upload a file first.")
@@ -458,12 +473,13 @@ export function ScheduleMessageDialog({ open, onOpenChange }: ScheduleMessageDia
                 )}
                 {uploadIssue && <p role="alert" className="text-xs text-destructive">{uploadIssue}</p>}
               </TabsContent>
-              <TabsContent value="library" className="pt-3">
+              <TabsContent value="library" className="space-y-2 pt-3">
                 <ScheduleLibraryPicker
                   active={mediaSource === "library"}
                   selectedId={libraryPick?.id ?? null}
                   onPick={handleLibraryPick}
                 />
+                {libraryIssue && <p role="alert" className="text-xs text-destructive">{libraryIssue}</p>}
               </TabsContent>
               <TabsContent value="link" className="space-y-3 pt-3">
                 <div className="grid gap-3 sm:grid-cols-2">
@@ -519,7 +535,7 @@ export function ScheduleMessageDialog({ open, onOpenChange }: ScheduleMessageDia
           <Button
             type="button"
             onClick={handleSubmit}
-            disabled={noAccounts || accountsLoading || accountsError || schedule.isPending || uploading || !!mediaBlocker}
+            disabled={noAccounts || accountsLoading || accountsError || schedule.isPending || uploading || !!mediaBlocker || !!libraryIssue}
           >
             {schedule.isPending && <Loader2 className="h-4 w-4 me-2 animate-spin" />}
             {t("scheduled.submit", "Schedule")}

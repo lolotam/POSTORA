@@ -589,6 +589,82 @@ describe("ScheduleMessageDialog", () => {
     expect(screen.queryByText(/Selected:/)).not.toBeInTheDocument();
   });
 
+  it("an unresolvable library file clears the previous selection and stays disabled", async () => {
+    const UNAVAILABLE = "This file isn't available right now. Pick another file or upload it again.";
+    libraryRows = [
+      {
+        id: "mf-a",
+        file_path: "https://res.cloudinary.com/demo/image/upload/postora_a.webp",
+        file_type: "image",
+        file_size: 1024,
+        mime_type: "image/webp",
+        metadata: { kind: "image", original_filename: "photo.webp" },
+        storage_bucket: "cloudinary",
+        current_object_version: 1,
+      },
+      {
+        id: "mf-b",
+        file_path: "https://res.cloudinary.com/demo/image/upload/postora_b.jpg",
+        file_type: "image",
+        file_size: 2048,
+        mime_type: "image/jpeg",
+        metadata: { kind: "image", original_filename: "pending.jpg" },
+        storage_bucket: "cloudinary",
+        current_object_version: 1,
+        media_file_providers: [
+          { provider: "cloudinary", object_version: 1, status: "pending" },
+          { provider: "cloudinary", object_version: 1, status: "failed", delivery_url: "https://cdn.example/failed.jpg" },
+          { provider: "cloudinary", object_version: 1, status: "deleted", delivery_url: "https://cdn.example/deleted.jpg" },
+        ],
+      },
+      {
+        id: "mf-c",
+        file_path: "https://res.cloudinary.com/demo/image/upload/postora_c.jpg",
+        file_type: "image",
+        file_size: 1500,
+        mime_type: "image/jpeg",
+        metadata: { kind: "image", original_filename: "ready.jpg" },
+        storage_bucket: "cloudinary",
+        current_object_version: 1,
+      },
+    ];
+    renderManager();
+    await openDialog();
+    await fillReady();
+    openSourceTab("Choose from Library");
+
+    const pending = await screen.findByRole("button", { name: /pending.jpg/ });
+    expect(pending).toBeDisabled();
+    expect(pending).toHaveTextContent("unavailable");
+    expect(screen.getByRole("button", { name: "Schedule" })).toBeEnabled();
+
+    fireEvent.click(screen.getByRole("button", { name: /photo\.webp/ }));
+    expect(await screen.findByText(CLOUD_REFUSED("webp"))).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Schedule" })).toBeDisabled();
+
+    // The disabled control does not take the click. The row behind it does,
+    // which is also where a pointer event lands (pointer-events-none).
+    fireEvent.click(pending.parentElement as HTMLElement);
+    expect(await screen.findByText(UNAVAILABLE)).toBeInTheDocument();
+    expect(screen.queryByText(CLOUD_REFUSED("webp"))).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Schedule" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "Schedule" }));
+    expect(inserted).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: /ready\.jpg/ }));
+    await waitFor(() => expect(screen.queryByText(UNAVAILABLE)).not.toBeInTheDocument());
+    expect(screen.queryByText(CLOUD_REFUSED("webp"))).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Schedule" })).toBeEnabled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Schedule" }));
+    await waitFor(() => expect(inserted).not.toBeNull());
+    expect(inserted).toMatchObject({
+      media_url: "https://res.cloudinary.com/demo/image/upload/postora_c.jpg",
+      media_type: "image",
+      media_filename: "ready.jpg",
+    });
+  });
+
   it("library search is sent to the server and does not hide rows the query returns", async () => {
     libraryRows = LIB;
     renderManager();
