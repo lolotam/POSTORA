@@ -13,27 +13,19 @@ import {
   parseISO,
 } from "date-fns";
 import { cn } from "@/lib/utils";
+import type { CalendarEntry } from "@/features/scheduled";
 import { ScheduledPostCard } from "./ScheduledPostCard";
+import { WhatsAppCalendarChip } from "./WhatsAppCalendarChip";
 
-interface Post {
-  id: string;
-  caption: string | null;
-  platforms: string[];
-  scheduled_at: string | null;
-}
-
-interface DraggedPost {
-  id: string;
-  caption: string | null;
-  platforms: string[];
-  scheduled_at: string | null;
-}
+export type CalendarDrag =
+  | { kind: "post"; id: string; caption: string | null; platforms: string[]; scheduled_at: string | null }
+  | { kind: "whatsapp"; id: string; when: string };
 
 interface CalendarGridProps {
   currentMonth: Date;
-  posts: Post[];
-  draggedPost: DraggedPost | null;
-  onDragStart: (post: DraggedPost) => void;
+  entries: CalendarEntry[];
+  draggedId: string | null;
+  onDragStart: (drag: CalendarDrag) => void;
   onDragOver: (e: React.DragEvent) => void;
   onDrop: (e: React.DragEvent, targetDate: Date) => void;
   onDayClick: (day: Date) => void;
@@ -41,8 +33,8 @@ interface CalendarGridProps {
 
 export function CalendarGrid({
   currentMonth,
-  posts,
-  draggedPost,
+  entries,
+  draggedId,
   onDragStart,
   onDragOver,
   onDrop,
@@ -68,12 +60,8 @@ export function CalendarGrid({
     { id: "sat", label: t("weekdays.sat", "Sat") },
   ];
 
-  const getPostsForDay = (day: Date) => {
-    return posts.filter((post) => {
-      if (!post.scheduled_at) return false;
-      const postDate = parseISO(post.scheduled_at);
-      return isSameDay(postDate, day);
-    });
+  const entriesForDay = (day: Date) => {
+    return entries.filter((entry) => isSameDay(parseISO(entry.when), day));
   };
 
   return (
@@ -93,7 +81,7 @@ export function CalendarGrid({
       {/* Calendar Days */}
       <div className="grid grid-cols-7 gap-1">
         {calendarDays.map((day) => {
-          const dayPosts = getPostsForDay(day);
+          const dayEntries = entriesForDay(day);
           const isCurrentMonth = isSameMonth(day, currentMonth);
           const isToday = isSameDay(day, new Date());
 
@@ -129,17 +117,29 @@ export function CalendarGrid({
               </div>
 
               <div className="space-y-1">
-                {dayPosts.slice(0, 3).map((post) => (
-                  <ScheduledPostCard
-                    key={post.id}
-                    post={post}
-                    isDragging={draggedPost?.id === post.id}
-                    onDragStart={onDragStart}
-                  />
+                {dayEntries.slice(0, 3).map((entry) => (
+                  entry.kind === "post" ? (
+                    <ScheduledPostCard
+                      key={`post-${entry.id}`}
+                      post={entry.post}
+                      isDragging={draggedId === entry.id}
+                      onDragStart={(post) => onDragStart({ kind: "post", ...post })}
+                    />
+                  ) : (
+                    <WhatsAppCalendarChip
+                      key={`whatsapp-${entry.id}`}
+                      label={entry.model.recipientLabel}
+                      when={entry.when}
+                      draggable={entry.model.draggable}
+                      muted={entry.model.muted}
+                      isDragging={draggedId === entry.id}
+                      onDragStart={() => onDragStart({ kind: "whatsapp", id: entry.id, when: entry.when })}
+                    />
+                  )
                 ))}
-                {dayPosts.length > 3 && (
+                {dayEntries.length > 3 && (
                   <div className="text-xs text-emerald-600/80 dark:text-emerald-300/80 ps-1 font-medium">
-                    {t("grid.more", "+{{count}} more", { count: dayPosts.length - 3 })}
+                    {t("grid.more", "+{{count}} more", { count: dayEntries.length - 3 })}
                   </div>
                 )}
               </div>

@@ -28,7 +28,7 @@ export function CalendarHeader({
             {t("header.title", "Content Calendar")}
           </GradientHeading>
           <p className="text-muted-foreground mt-1">
-            {t("header.subtitle", "View and reschedule your posts with drag and drop")}
+            {t("header.subtitle", "View and reschedule posts and WhatsApp messages with drag and drop")}
           </p>
         </div>
       </div>

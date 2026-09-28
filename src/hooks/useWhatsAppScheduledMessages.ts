@@ -4,6 +4,10 @@ import { useAuth } from "./useAuth";
 
 export const SCHEDULED_CANCEL_BLOCKED = "This message is already being sent and can no longer be cancelled.";
 
+export const SCHEDULED_CHANGE_BLOCKED = "This message can no longer be changed (it is being sent, was sent, or was cancelled).";
+
+export const SCHEDULED_RESCHEDULE_TOO_SOON = "Choose a time at least one minute from now.";
+
 export const SCHEDULED_OWN_ACCOUNT_ONLY = "You can only schedule from your own WhatsApp accounts.";
 
 /** Same shape `whatsapp-scheduled-sender` accepts: optional +, then digits and separators only. */
@@ -56,6 +60,26 @@ export function scheduledAtFromLocal(localValue: string, now = Date.now()): stri
   if (Number.isNaN(when.getTime())) return null;
   if (when.getTime() < now + 60_000) return null;
   return when.toISOString();
+}
+
+const RESCHEDULE_LEAD_MS = 60_000;
+
+export interface RescheduleMessageInput {
+  id: string;
+  scheduledAt: string;
+}
+
+function assertRescheduleLead(scheduledAt: string, now = Date.now()): void {
+  const when = new Date(scheduledAt);
+  if (Number.isNaN(when.getTime()) || when.getTime() < now + RESCHEDULE_LEAD_MS) {
+    throw new Error(SCHEDULED_RESCHEDULE_TOO_SOON);
+  }
+}
+
+function blockedChange(error: unknown): boolean {
+  return error instanceof Error && (
+    error.message === SCHEDULED_CANCEL_BLOCKED || error.message === SCHEDULED_CHANGE_BLOCKED
+  );
 }
 
 function scheduleFailure(error: { code?: string; message?: string } | null): Error {
@@ -137,8 +161,34 @@ export function useWhatsAppScheduledMessages(socialAccountId?: string) {
       if (error || !data) throw scheduleFailure(error);
       return data;
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["whatsapp-scheduled"] }),
+    onSuccess: () => invalidateScheduledViews(qc),
+    onError: (error) => {
+      if (blockedChange(error)) invalidateScheduledViews(qc);
+    },
   });
+
+  const { cancel, reschedule } = useWhatsAppScheduledMutations();
+
+  return {
+    messages: query.data || [],
+    isLoading: query.isLoading,
+    accounts: accountsQuery.data || [],
+    accountsLoading: accountsQuery.isLoading,
+    accountsError: accountsQuery.isError,
+    schedule,
+    cancel,
+    reschedule,
+  };
+}
+
+function invalidateScheduledViews(qc: ReturnType<typeof useQueryClient>): void {
+  void qc.invalidateQueries({ queryKey: ["whatsapp-scheduled"] });
+  void qc.invalidateQueries({ queryKey: ["posts"] });
+}
+
+/** Cancel and reschedule only. Does not load the message list or WhatsApp accounts. */
+export function useWhatsAppScheduledMutations() {
+  const qc = useQueryClient();
 
   const cancel = useMutation({
     mutationFn: async (id: string) => {
@@ -153,16 +203,29 @@ export function useWhatsAppScheduledMessages(socialAccountId?: string) {
         throw new Error(SCHEDULED_CANCEL_BLOCKED);
       }
     },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["whatsapp-scheduled"] }),
+    onSuccess: () => invalidateScheduledViews(qc),
+    onError: (error) => {
+      if (blockedChange(error)) invalidateScheduledViews(qc);
+    },
   });
 
-  return {
-    messages: query.data || [],
-    isLoading: query.isLoading,
-    accounts: accountsQuery.data || [],
-    accountsLoading: accountsQuery.isLoading,
-    accountsError: accountsQuery.isError,
-    schedule,
-    cancel,
-  };
+  const reschedule = useMutation({
+    mutationFn: async ({ id, scheduledAt }: RescheduleMessageInput) => {
+      assertRescheduleLead(scheduledAt);
+      const { data, error } = await supabase
+        .from("whatsapp_scheduled_messages")
+        .update({ scheduled_at: scheduledAt })
+        .eq("id", id)
+        .eq("status", "pending")
+        .select("id");
+      if (error) throw error;
+      if (!data || data.length === 0) throw new Error(SCHEDULED_CHANGE_BLOCKED);
+    },
+    onSuccess: () => invalidateScheduledViews(qc),
+    onError: (error) => {
+      if (blockedChange(error)) invalidateScheduledViews(qc);
+    },
+  });
+
+  return { cancel, reschedule };
 }

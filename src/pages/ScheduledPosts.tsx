@@ -8,7 +8,7 @@ import { usePosts, Post } from "@/hooks/usePosts";
 import { useSocialAccounts } from "@/hooks/useSocialAccounts";
 import { useSocialProfiles } from "@/hooks/useSocialProfiles";
 import { Platform } from "@/lib/types";
-import { formatDistanceToNow, format, isFuture, differenceInSeconds } from "date-fns";
+import { format, isFuture, differenceInSeconds } from "date-fns";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -84,6 +84,21 @@ import { PlatformAccountMultiSelect } from "@/components/post/PlatformAccountMul
 import { useAuth } from "@/hooks/useAuth";
 import { useUserRole } from "@/hooks/useUserRole";
 import { getScheduledPostTypes } from "@/components/scheduled/scheduledMediaControls";
+import {
+  buildScheduledBoard,
+  CancelWhatsAppDialog,
+  isOverdueWhen,
+  RescheduleWhatsAppDialog,
+  selectablePostIds,
+  useWhatsAppScheduledItems,
+  WhatsAppScheduledCard,
+} from "@/features/scheduled";
+import {
+  SCHEDULED_CANCEL_BLOCKED,
+  SCHEDULED_CHANGE_BLOCKED,
+  SCHEDULED_RESCHEDULE_TOO_SOON,
+  useWhatsAppScheduledMutations,
+} from "@/hooks/useWhatsAppScheduledMessages";
 
 // Countdown timer component
 function CountdownTimer({ scheduledAt }: { scheduledAt: string }) {
@@ -134,6 +149,7 @@ function CountdownTimer({ scheduledAt }: { scheduledAt: string }) {
 
 export default function ScheduledPosts() {
   const { t } = useTranslation("calendar");
+  const { t: tInbox } = useTranslation("inbox");
   const [search, setSearch] = useState("");
   const [editPost, setEditPost] = useState<Post | null>(null);
   const [cancelPost, setCancelPost] = useState<Post | null>(null);
@@ -146,6 +162,10 @@ export default function ScheduledPosts() {
   const [isCancelling, setIsCancelling] = useState(false);
   const [publishingPostId, setPublishingPostId] = useState<string | null>(null);
   const { data: posts = [], isLoading, error: postsError, refetch, isFetching } = usePosts();
+  const whatsAppSchedule = useWhatsAppScheduledItems({ kind: "active" });
+  const { cancel: cancelWhatsApp, reschedule: rescheduleWhatsApp } = useWhatsAppScheduledMutations();
+  const [rescheduleId, setRescheduleId] = useState<string | null>(null);
+  const [cancelWhatsAppId, setCancelWhatsAppId] = useState<string | null>(null);
   const { data: socialAccounts = [] } = useSocialAccounts();
   const { data: socialProfiles = [] } = useSocialProfiles();
   const { user } = useAuth();
@@ -211,42 +231,21 @@ export default function ScheduledPosts() {
     return () => clearInterval(interval);
   }, [refetch]);
 
-  // Get all platforms used in scheduled posts
-  const allPlatformsInPosts = [...new Set(posts.flatMap(p => p.platforms || []))];
-
-  // Filter for scheduled posts (pending with scheduled_at date - includes past dates awaiting processing)
-  const scheduledPosts = posts
-    .filter((post) => {
-      const isScheduled = (post.status === "pending" || post.status === "scheduled") && post.scheduled_at;
-      const matchesSearch = (post.caption || "").toLowerCase().includes(search.toLowerCase());
-      
-      // Platform filter
-      const matchesPlatform = platformFilter === "all" || post.platforms.includes(platformFilter);
-      
-      // Profile filter
-      const postProfiles = getPostProfiles(post);
-      const matchesProfile = profileFilter === "all" || postProfiles.some((p: any) => p?.id === profileFilter);
-      
-      // Status filter
-      const isOverdue = !isFuture(new Date(post.scheduled_at!));
-      const matchesStatus = statusFilter === "all" || 
-        (statusFilter === "pending" && !isOverdue) ||
-        (statusFilter === "overdue" && isOverdue);
-      
-      return isScheduled && matchesSearch && matchesPlatform && matchesProfile && matchesStatus;
-    })
-    .sort((a, b) => {
-      // Sort: future posts first (by scheduled time), then past posts
-      const dateA = new Date(a.scheduled_at!);
-      const dateB = new Date(b.scheduled_at!);
-      const now = new Date();
-      const aIsFuture = dateA > now;
-      const bIsFuture = dateB > now;
-      
-      if (aIsFuture && !bIsFuture) return -1;
-      if (!aIsFuture && bIsFuture) return 1;
-      return dateA.getTime() - dateB.getTime();
-    });
+  const allPlatformsInPosts = [...new Set(posts.flatMap(p => p.platforms || []))].filter((platform) => platform !== "whatsapp");
+  const accountFallback = tInbox("scheduled.accountFallback", "WhatsApp account");
+  const boardNow = new Date();
+  const board = buildScheduledBoard({
+    posts,
+    messages: whatsAppSchedule.data?.messages ?? [],
+    search,
+    platform: platformFilter,
+    profileId: profileFilter,
+    status: statusFilter,
+    now: boardNow,
+    accountFallback,
+    profileIdsForPost: (post) => getPostProfiles(post).flatMap((profile) => profile?.id ? [profile.id] : []),
+  });
+  const postIds = selectablePostIds(board);
 
   // Bulk selection handlers
   const togglePostSelection = (postId: string) => {
@@ -262,11 +261,8 @@ export default function ScheduledPosts() {
   };
 
   const selectAllPosts = () => {
-    if (selectedPostIds.size === scheduledPosts.length) {
-      setSelectedPostIds(new Set());
-    } else {
-      setSelectedPostIds(new Set(scheduledPosts.map(p => p.id)));
-    }
+    const allSelected = postIds.length > 0 && postIds.every((id) => selectedPostIds.has(id));
+    setSelectedPostIds(allSelected ? new Set() : new Set(postIds));
   };
 
   const clearSelection = () => {
@@ -499,7 +495,11 @@ export default function ScheduledPosts() {
   };
 
   // Count overdue posts
-  const overdueCount = scheduledPosts.filter(p => !isFuture(new Date(p.scheduled_at!))).length;
+  const overdueCount = board.filter((entry) => isOverdueWhen(entry.when, boardNow)).length;
+  const boardLoading = isLoading || whatsAppSchedule.isLoading;
+  const whatsAppError = whatsAppSchedule.error;
+  const rescheduleEntry = board.find((entry) => entry.kind === "whatsapp" && entry.id === rescheduleId);
+  const cancelEntry = board.find((entry) => entry.kind === "whatsapp" && entry.id === cancelWhatsAppId);
 
   return (
     <DashboardLayout>
@@ -514,7 +514,7 @@ export default function ScheduledPosts() {
                   {t("header.scheduledTitle", "Scheduled Posts")}
                 </GradientHeading>
                 <p className="text-muted-foreground mt-1">
-                  {t("header.scheduledSubtitle", "Manage your upcoming scheduled posts.")}
+                  {t("header.scheduledSubtitle", "Manage upcoming scheduled posts and WhatsApp messages.")}
                 </p>
               </div>
             </div>
@@ -522,16 +522,19 @@ export default function ScheduledPosts() {
               <Button
                 variant="ghost"
                 size="sm"
-                onClick={() => refetch()}
-                disabled={isFetching}
+                onClick={() => {
+                  void refetch();
+                  void whatsAppSchedule.refetch();
+                }}
+                disabled={isFetching || whatsAppSchedule.isFetching}
                 className="gap-2 rounded-full border border-border/60 bg-card/60 backdrop-blur-md hover:bg-amber-500/10 hover:text-amber-600"
               >
-                <RefreshCw className={cn("w-4 h-4", isFetching && "animate-spin")} />
+                <RefreshCw className={cn("w-4 h-4", (isFetching || whatsAppSchedule.isFetching) && "animate-spin")} />
                 {t("common:refresh", "Refresh")}
               </Button>
               <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium border border-amber-400/40 bg-gradient-to-r from-amber-500/15 to-orange-500/10 text-amber-700 dark:text-amber-300 tabular-nums">
                 <CalendarClock className="w-3.5 h-3.5" />
-                {t("header.scheduledCount", "{{count}} scheduled", { count: scheduledPosts.length })}
+                {t("header.scheduledCount", "{{count}} scheduled", { count: board.length })}
               </span>
               {overdueCount > 0 && (
                 <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium border border-rose-400/40 bg-gradient-to-r from-rose-500/15 to-pink-500/10 text-rose-600 dark:text-rose-300 tabular-nums">
@@ -566,7 +569,7 @@ export default function ScheduledPosts() {
                 <Input
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
-                  placeholder={t("filters.searchPlaceholder", "Search scheduled posts...")}
+                  placeholder={t("filters.searchPlaceholder", "Search scheduled posts and messages...")}
                   className="ps-10 rounded-full bg-background/60 backdrop-blur border-border/60 focus-visible:ring-cyan-500/40"
                 />
               </div>
@@ -578,6 +581,12 @@ export default function ScheduledPosts() {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">{t("filters.allPlatforms", "All Platforms")}</SelectItem>
+              <SelectItem value="whatsapp">
+                <div className="flex items-center gap-2">
+                  <PlatformIcon platform="whatsapp" size="xs" />
+                  {t("filters.whatsapp", "WhatsApp")}
+                </div>
+              </SelectItem>
               {allPlatformsInPosts.map((platform) => (
                 <SelectItem key={platform} value={platform}>
                   <div className="flex items-center gap-2">
@@ -626,7 +635,7 @@ export default function ScheduledPosts() {
               <Icon3D icon={CheckSquare} variant="violet" size="sm" />
               <div className="flex items-center gap-2">
                 <Checkbox
-                  checked={selectedPostIds.size === scheduledPosts.length}
+                  checked={postIds.length > 0 && postIds.every((id) => selectedPostIds.has(id))}
                   onCheckedChange={selectAllPosts}
                 />
                 <span className="text-sm font-medium">
@@ -663,23 +672,27 @@ export default function ScheduledPosts() {
         )}
 
         {/* Posts Grid */}
-        {isLoading ? (
+        {boardLoading ? (
           <div className="flex items-center justify-center py-16">
             <Loader2 className="w-8 h-8 animate-spin text-amber-500" />
           </div>
-        ) : postsError ? (
+        ) : postsError || whatsAppError ? (
           <Reveal delay={80}>
             <GradientRingCard variant="rose" hoverLift={false} innerClassName="py-16 text-center">
               <div className="group inline-flex flex-col items-center gap-4">
                 <Icon3D icon={AlertTriangle} variant="rose" size="lg" />
-                <h3 className="text-lg font-semibold">{t("error.failedToLoad", "Failed to load scheduled posts")}</h3>
+                <h3 className="text-lg font-semibold">
+                  {postsError
+                    ? t("error.failedToLoad", "Failed to load scheduled posts")
+                    : t("error.whatsappFailed", "Couldn't load scheduled WhatsApp messages.")}
+                </h3>
                 <p className="text-muted-foreground max-w-md text-sm">
-                  {postsError.message?.includes("JWT") || postsError.message?.includes("auth") || postsError.message?.includes("session")
+                  {postsError?.message?.includes("JWT") || postsError?.message?.includes("auth") || postsError?.message?.includes("session")
                     ? t("error.sessionExpired", "Your session may have expired. Please refresh the page or log in again.")
-                    : postsError.message || t("error.unexpected", "An unexpected error occurred while fetching your posts.")}
+                    : postsError?.message || (whatsAppError instanceof Error ? whatsAppError.message : null) || t("error.unexpected", "An unexpected error occurred while fetching your posts.")}
                 </p>
                 <div className="flex gap-3">
-                  <Button variant="outline" size="sm" className="gap-2 rounded-full" onClick={() => refetch()}>
+                  <Button variant="outline" size="sm" className="gap-2 rounded-full" onClick={() => { void refetch(); void whatsAppSchedule.refetch(); }}>
                     <RefreshCw className="w-4 h-4" />
                     {t("error.tryAgain", "Try Again")}
                   </Button>
@@ -690,18 +703,18 @@ export default function ScheduledPosts() {
               </div>
             </GradientRingCard>
           </Reveal>
-        ) : scheduledPosts.length === 0 ? (
+        ) : board.length === 0 ? (
           <Reveal delay={120}>
             <GradientRingCard variant="sky" hoverLift={false} innerClassName="py-16 text-center">
               <div className="group inline-flex flex-col items-center gap-4">
                 <Icon3D icon={CalendarClock} variant="sky" size="lg" />
-                <h3 className="text-lg font-semibold">{t("empty.title", "No scheduled posts")}</h3>
+                <h3 className="text-lg font-semibold">{t("empty.title", "No scheduled posts or messages")}</h3>
                 <p className="text-muted-foreground max-w-md">
                   {search
-                    ? t("empty.noSearchMatch", "No posts match your search")
-                    : posts.length === 0 && !isAdmin
+                    ? t("empty.noSearchMatch", "Nothing matches your search")
+                    : posts.length === 0 && (whatsAppSchedule.data?.messages.length ?? 0) === 0 && !isAdmin
                       ? t("empty.noPostsNonAdmin", "You don't have any scheduled posts under this account. If you expected to see posts here, make sure you're logged in with the account that created them.")
-                      : t("empty.noUpcoming", "You don't have any upcoming scheduled posts.")}
+                      : t("empty.noUpcoming", "You don't have any upcoming scheduled posts or WhatsApp messages.")}
                 </p>
                 {posts.length === 0 && !isAdmin && user?.email && (
                   <p className="text-xs text-muted-foreground/70 max-w-md">
@@ -724,17 +737,29 @@ export default function ScheduledPosts() {
           </Reveal>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {scheduledPosts.map((post) => {
+            {board.map((entry, index) => {
+              if (entry.kind === "whatsapp") {
+                return (
+                  <Reveal key={`whatsapp-${entry.id}`} delay={Math.min(index * 40, 320)}>
+                    <WhatsAppScheduledCard
+                      model={entry.model}
+                      overdue={isOverdueWhen(entry.when, boardNow)}
+                      onReschedule={() => setRescheduleId(entry.id)}
+                      onCancel={() => setCancelWhatsAppId(entry.id)}
+                    />
+                  </Reveal>
+                );
+              }
+              const post = entry.post;
               const isPublishing = publishingPostId === post.id;
-              const isOverdue = !isFuture(new Date(post.scheduled_at!));
+              const isOverdue = isOverdueWhen(entry.when, boardNow);
               const postAccounts = getPostAccounts(post);
               const postProfiles = getPostProfiles(post);
               const postType = post.source === "api" ? "API" : "Manual";
               const contentTypes = getScheduledPostTypes(post.metadata, post.platforms);
-              const index = scheduledPosts.indexOf(post);
 
               return (
-                <Reveal key={post.id} delay={Math.min(index * 40, 320)}>
+                <Reveal key={`post-${post.id}`} delay={Math.min(index * 40, 320)}>
                   <GradientRingCard
                     variant={isOverdue ? "rose" : "emerald"}
                     hoverLift
@@ -1147,6 +1172,62 @@ export default function ScheduledPosts() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {rescheduleEntry?.kind === "whatsapp" && (
+        <RescheduleWhatsAppDialog
+          key={rescheduleEntry.id}
+          open
+          recipientLabel={rescheduleEntry.model.recipientLabel}
+          scheduledAt={rescheduleEntry.model.scheduledAt}
+          pending={rescheduleWhatsApp.isPending}
+          onOpenChange={(open) => !open && setRescheduleId(null)}
+          onConfirm={(scheduledAt) => {
+            rescheduleWhatsApp.mutate({ id: rescheduleEntry.id, scheduledAt }, {
+              onSuccess: () => {
+                toast({ title: tInbox("scheduled.rescheduledToast", "Message rescheduled") });
+                setRescheduleId(null);
+              },
+              onError: (error) => {
+                const message = error instanceof Error ? error.message : t("toast.unknownError", "Unknown error");
+                toast({
+                  title: t("toast.rescheduleFailed", "Failed to reschedule"),
+                  description: message === SCHEDULED_CHANGE_BLOCKED
+                    ? tInbox("scheduled.changeBlocked", SCHEDULED_CHANGE_BLOCKED)
+                    : message === SCHEDULED_RESCHEDULE_TOO_SOON
+                      ? tInbox("scheduled.tooSoon", SCHEDULED_RESCHEDULE_TOO_SOON)
+                      : message,
+                  variant: "destructive",
+                });
+              },
+            });
+          }}
+        />
+      )}
+      <CancelWhatsAppDialog
+        open={cancelEntry?.kind === "whatsapp"}
+        recipientLabel={cancelEntry?.kind === "whatsapp" ? cancelEntry.model.recipientLabel : ""}
+        pending={cancelWhatsApp.isPending}
+        onOpenChange={(open) => !open && setCancelWhatsAppId(null)}
+        onConfirm={() => {
+          if (cancelEntry?.kind !== "whatsapp") return;
+          cancelWhatsApp.mutate(cancelEntry.id, {
+            onSuccess: () => {
+              toast({ title: tInbox("scheduled.cancelledToast", "Scheduled message cancelled") });
+              setCancelWhatsAppId(null);
+            },
+            onError: (error) => {
+              const message = error instanceof Error ? error.message : t("toast.unknownError", "Unknown error");
+              toast({
+                title: t("toast.cancelFailed", "Cancel failed"),
+                description: message === SCHEDULED_CANCEL_BLOCKED
+                  ? tInbox("scheduled.cancelTooLate", SCHEDULED_CANCEL_BLOCKED)
+                  : message,
+                variant: "destructive",
+              });
+            },
+          });
+        }}
+      />
 
       {/* Media Lightbox */}
       <MediaLightboxDialog
