@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { daysUntilDeletion, retentionBadgeTone, setMediaKeep } from "@/lib/mediaRetention";
+import { daysUntilDeletion, keepUpdateNotice, readDeleteEnabled, retentionBadgeTone, setMediaKeep } from "@/lib/mediaRetention";
 
 const rpc = vi.hoisted(() => vi.fn());
 
@@ -27,18 +27,34 @@ describe("retention badge thresholds", () => {
   });
 });
 
+describe("delete_enabled reading", () => {
+  it("stays unknown when the read fails or returns no row", () => {
+    expect(readDeleteEnabled({ error: { message: "permission denied" }, data: null })).toBe("unknown");
+    expect(readDeleteEnabled({ error: null, data: null })).toBe("unknown");
+    expect(readDeleteEnabled({ error: null, data: {} })).toBe("unknown");
+  });
+
+  it("returns the boolean only from a successful row", () => {
+    expect(readDeleteEnabled({ error: null, data: { delete_enabled: false } })).toBe(false);
+    expect(readDeleteEnabled({ error: null, data: { delete_enabled: true } })).toBe(true);
+  });
+});
+
 describe("media_set_keep", () => {
   it("Keep calls media_set_keep for one file", async () => {
-    rpc.mockResolvedValue({ error: null });
-    await setMediaKeep(["file-1"], true);
+    rpc.mockResolvedValue({ data: 1, error: null });
+    await expect(setMediaKeep(["file-1"], true)).resolves.toEqual({ error: null, updated: 1 });
     expect(rpc).toHaveBeenCalledWith("media_set_keep", { p_ids: ["file-1"], p_keep: true });
   });
 
-  it("Keep forever bulk sends every selected id", async () => {
-    rpc.mockResolvedValue({ error: null });
-    await setMediaKeep(["a", "b", "c"], true);
+  it("Keep forever bulk sends every selected id and returns the updated count", async () => {
+    rpc.mockResolvedValue({ data: 2, error: null });
+    await expect(setMediaKeep(["a", "b", "c"], true)).resolves.toEqual({ error: null, updated: 2 });
     expect(rpc).toHaveBeenCalledWith("media_set_keep", { p_ids: ["a", "b", "c"], p_keep: true });
-    await setMediaKeep(["a", "b"], false);
-    expect(rpc).toHaveBeenCalledWith("media_set_keep", { p_ids: ["a", "b"], p_keep: false });
+    expect(keepUpdateNotice(3, 2)).toBe("partial");
+    rpc.mockResolvedValue({ data: 0, error: null });
+    await expect(setMediaKeep(["a", "b"], false)).resolves.toEqual({ error: null, updated: 0 });
+    expect(keepUpdateNotice(2, 0)).toBe("partial");
+    expect(keepUpdateNotice(2, 2)).toBe("success");
   });
 });

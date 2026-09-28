@@ -15,6 +15,54 @@ export function createServiceClient(): ServiceClient {
   return createClient(supabaseUrl, serviceRoleKey);
 }
 
+/** Service-role delete of one claimed library row. Zero rows is not a removal. */
+export async function deleteClaimedMediaRow(
+  supabase: ServiceClient,
+  id: string,
+  claimedUserId: string,
+): Promise<{ removed: boolean; stillDeleting: boolean; error?: string }> {
+  const { data, error } = await supabase
+    .from("media_files")
+    .delete()
+    .eq("id", id)
+    .eq("user_id", claimedUserId)
+    .eq("retention_state", "deleting")
+    .select("id");
+  if (error) return { removed: false, stillDeleting: false, error: "media row delete failed" };
+  if (Array.isArray(data) && data.length > 0) return { removed: true, stillDeleting: false };
+
+  console.error("[media-retention] media row delete matched nothing");
+  const lookup = await supabase
+    .from("media_files")
+    .select("id")
+    .eq("id", id)
+    .eq("retention_state", "deleting")
+    .maybeSingle();
+  // Release is a no-op unless the row is still deleting, so a failed lookup
+  // still asks the caller to release rather than leave a claim stuck.
+  if (lookup.error) {
+    console.error("[media-retention] deleting-state lookup failed");
+    return { removed: false, stillDeleting: false, error: "media row delete failed" };
+  }
+  return { removed: false, stillDeleting: lookup.data != null };
+}
+
+/** Provider row was loaded for this media id. The write must name that id too. */
+export async function markProviderDeleted(
+  supabase: ServiceClient,
+  providerRowId: string,
+  mediaFileId: string,
+): Promise<{ error?: string }> {
+  const { data, error } = await supabase
+    .from("media_file_providers")
+    .update({ status: "deleted", deleted_at: new Date().toISOString(), deleted_reason: "retention" })
+    .eq("id", providerRowId)
+    .eq("media_file_id", mediaFileId)
+    .select("id");
+  if (error || !Array.isArray(data) || data.length === 0) return { error: "provider status update failed" };
+  return {};
+}
+
 export function createRetentionPorts(supabase: ServiceClient): RetentionPorts {
   return {
     async sweep(pNow, pLimit) {
@@ -81,19 +129,12 @@ export function createRetentionPorts(supabase: ServiceClient): RetentionPorts {
           if (left <= 0) return Promise.resolve({ success: false, error: "timed out" });
           return destroyCloudinary(objectKey, resourceType, { timeoutMs: left });
         },
-        markDeleted: async (providerRowId) => {
-          const { error } = await supabase
-            .from("media_file_providers")
-            .update({ status: "deleted", deleted_at: new Date().toISOString(), deleted_reason: "retention" })
-            .eq("id", providerRowId);
-          return { error: error ? "provider status update failed" : undefined };
-        },
+        markDeleted: (providerRowId) => markProviderDeleted(supabase, providerRowId, file.media_file_id),
       });
       return { confirmed: outcome.deletedMediaFileIds.includes(file.media_file_id) };
     },
-    async removeMediaRow(id) {
-      const { error } = await supabase.from("media_files").delete().eq("id", id);
-      return { error: error ? "media row delete failed" : undefined };
+    removeMediaRow(id, claimedUserId) {
+      return deleteClaimedMediaRow(supabase, id, claimedUserId);
     },
     async logRun(entry: RetentionLog) {
       await logToDatabase(supabase, {

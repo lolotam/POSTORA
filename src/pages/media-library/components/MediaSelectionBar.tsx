@@ -17,6 +17,8 @@ interface MediaSelectionBarProps {
   onDelete: () => void;
   onKeepForever: () => void;
   onAllowExpiry: () => void;
+  /** Hidden while an admin is viewing another user's library. */
+  showKeep?: boolean;
 }
 
 export function MediaSelectionBar({
@@ -34,6 +36,7 @@ export function MediaSelectionBar({
   onDelete,
   onKeepForever,
   onAllowExpiry,
+  showKeep = true,
 }: MediaSelectionBarProps) {
   const { t } = useTranslation("assets");
   if (totalCount === 0) return null;
@@ -70,13 +73,17 @@ export function MediaSelectionBar({
             <Move className="w-4 h-4 me-2" />
             Move
           </Button>
-          <Button variant="outline" size="sm" onClick={onKeepForever}>
-            <Pin className="w-4 h-4 me-2" />
-            {t("retention.keepForever", "Keep forever")}
-          </Button>
-          <Button variant="outline" size="sm" onClick={onAllowExpiry}>
-            {t("retention.allowExpiry", "Allow expiry")}
-          </Button>
+          {showKeep && (
+            <>
+              <Button variant="outline" size="sm" onClick={onKeepForever}>
+                <Pin className="w-4 h-4 me-2" />
+                {t("retention.keepForever", "Keep forever")}
+              </Button>
+              <Button variant="outline" size="sm" onClick={onAllowExpiry}>
+                {t("retention.allowExpiry", "Allow expiry")}
+              </Button>
+            </>
+          )}
           <Button variant="secondary" size="sm" onClick={onDownload}>
             <Download className="w-4 h-4 me-2" />
             Download

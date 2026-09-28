@@ -17,11 +17,23 @@ describe("RetentionBadge", () => {
     render(
       <RetentionBadge
         expiresAt={new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString()}
-        deletionPaused
+        deleteEnabled={false}
         onKeep={() => {}}
       />,
     );
     expect(screen.getByText("Would be deleted — deletion paused by admin")).toBeInTheDocument();
+  });
+
+  it("shows a neutral schedule when the delete switch could not be read", () => {
+    render(
+      <RetentionBadge
+        expiresAt={new Date(Date.now() + 3 * 24 * 60 * 60 * 1000).toISOString()}
+        deleteEnabled="unknown"
+      />,
+    );
+    expect(screen.getByText("Scheduled for deletion in 3 days")).toBeInTheDocument();
+    expect(screen.queryByText("Deletes in 3 days")).not.toBeInTheDocument();
+    expect(screen.queryByText("Would be deleted — deletion paused by admin")).not.toBeInTheDocument();
   });
 
   it("Keep calls the keep handler", () => {
@@ -29,7 +41,7 @@ describe("RetentionBadge", () => {
     render(
       <RetentionBadge
         expiresAt={new Date(Date.now() + 60 * 60 * 1000).toISOString()}
-        deletionPaused={false}
+        deleteEnabled
         onKeep={onKeep}
       />,
     );

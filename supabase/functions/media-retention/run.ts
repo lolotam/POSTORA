@@ -57,7 +57,11 @@ export interface RetentionPorts {
   readDeleteEnabled(): Promise<boolean>;
   loadProviders(mediaFileId: string): Promise<{ rows: ProviderDeleteRow[] } | { error: string }>;
   deleteFile(file: ClaimedMediaFile, providers: ProviderDeleteRow[], timeoutMs: number): Promise<{ confirmed: boolean }>;
-  removeMediaRow(id: string): Promise<{ error?: string }>;
+  /**
+   * Delete one claimed row. `removed` is false when no row matched the claim.
+   * `stillDeleting` is true only when that id is still in `deleting`.
+   */
+  removeMediaRow(id: string, claimedUserId: string): Promise<{ removed: boolean; stillDeleting: boolean; error?: string }>;
   logRun(entry: RetentionLog): Promise<void>;
 }
 
@@ -156,10 +160,12 @@ export async function runMediaRetention(args: {
           continue;
         }
 
-        const removed = await args.ports.removeMediaRow(file.media_file_id);
-        if (removed.error) {
+        const removed = await args.ports.removeMediaRow(file.media_file_id, file.user_id);
+        if (!removed.removed) {
           failed += 1;
-          await safeRelease(args.ports, file.media_file_id, true);
+          if (removed.error || removed.stillDeleting) {
+            await safeRelease(args.ports, file.media_file_id, true);
+          }
           continue;
         }
         deleted += 1;

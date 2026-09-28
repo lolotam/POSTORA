@@ -46,9 +46,10 @@ function ports(overrides: Partial<RetentionPorts> = {}): RetentionPorts & {
       deleted.push(claimed.media_file_id);
       return { confirmed: true };
     },
-    removeMediaRow: async (id) => {
+    removeMediaRow: async (id, userId) => {
       removed.push(id);
-      return {};
+      if (userId !== "user-1") throw new Error("delete was not scoped to the claim");
+      return { removed: true, stillDeleting: false };
     },
     logRun: async (entry) => {
       logged.push(entry);
@@ -129,6 +130,26 @@ Deno.test("dryRun makes no writes", async () => {
     { id: "b", action: "due" },
   ]);
   assertEquals(fake.logged, []);
+});
+
+Deno.test("a row that was not removed fails, and releases only while it is still deleting", async () => {
+  const stuck = ports({
+    claim: async () => [file("stuck")],
+    removeMediaRow: async () => ({ removed: false, stillDeleting: true }),
+  });
+  const stuckReport = await runMediaRetention({ dryRun: false, ports: stuck });
+  assertEquals(stuckReport.result.deleted, 0);
+  assertEquals(stuckReport.result.failed, 1);
+  assertEquals(stuck.releases, [["stuck", true]]);
+
+  const gone = ports({
+    claim: async () => [file("gone")],
+    removeMediaRow: async () => ({ removed: false, stillDeleting: false }),
+  });
+  const goneReport = await runMediaRetention({ dryRun: false, ports: gone });
+  assertEquals(goneReport.result.deleted, 0);
+  assertEquals(goneReport.result.failed, 1);
+  assertEquals(gone.releases, []);
 });
 
 Deno.test("the budget stops new claims", async () => {

@@ -691,6 +691,7 @@ DECLARE
   f_other uuid := '11111111-1111-4111-8111-111111111135';
   f_folder uuid := '11111111-1111-4111-8111-111111111121';
   v_enabled boolean;
+  v_updated integer;
 BEGIN
   SELECT delete_enabled INTO v_enabled FROM public.media_retention_settings LIMIT 1;
   ASSERT v_enabled IS NOT NULL, 'S16 authenticated can read delete_enabled';
@@ -745,16 +746,19 @@ BEGIN
   EXCEPTION WHEN insufficient_privilege THEN NULL;
   END;
 
-  PERFORM public.media_set_keep(ARRAY[f_keep], true);
+  v_updated := public.media_set_keep(ARRAY[f_keep], true);
+  ASSERT v_updated = 1, 'S17 media_set_keep returns the updated count';
   ASSERT (SELECT keep_forever IS TRUE AND expires_at IS NULL AND retention_state IS NULL
           FROM public.media_files WHERE id = f_keep),
     'S17 media_set_keep true sets keep_forever and clears the warning';
-  PERFORM public.media_set_keep(ARRAY[f_keep], false);
+  v_updated := public.media_set_keep(ARRAY[f_keep], false);
+  ASSERT v_updated = 1, 'S17 media_set_keep false returns the updated count';
   ASSERT (SELECT keep_forever IS FALSE AND expires_at IS NULL
           FROM public.media_files WHERE id = f_keep),
     'S17 media_set_keep false clears keep_forever and leaves expires_at null';
 
-  PERFORM public.media_set_keep(ARRAY[f_other], true);
+  v_updated := public.media_set_keep(ARRAY[f_other], true);
+  ASSERT v_updated = 0, 'S17 media_set_keep returns 0 for another user''s ids';
 
   BEGIN
     PERFORM public.media_set_keep(ARRAY[f_guard], true);

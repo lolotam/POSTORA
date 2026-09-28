@@ -12,7 +12,8 @@
 --
 -- Tenancy (ARCHITECTURE.md sections 23-24): the worker uses the service
 -- role, which bypasses RLS, so these functions are SECURITY DEFINER with a
--- fixed search_path. media_set_keep updates only rows owned by auth.uid().
+-- fixed search_path. media_set_keep updates only rows owned by auth.uid()
+-- and returns how many of those rows changed.
 -- End users cannot write the retention columns. The guard keys on
 -- current_user, not auth.role(), so a SECURITY DEFINER caller still can.
 --
@@ -791,15 +792,19 @@ GRANT EXECUTE ON FUNCTION public.media_retention_preview(uuid) TO service_role;
 
 -- ---------------------------------------------------------------------------
 -- 9. Owner keep. A row in 'deleting' is refused. Other users' ids are ignored.
+--    Returns the number of rows updated. Drop first so a re-apply can change
+--    the return type from an earlier draft of this file.
 -- ---------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION public.media_set_keep(p_ids uuid[], p_keep boolean)
-RETURNS void
+DROP FUNCTION IF EXISTS public.media_set_keep(uuid[], boolean);
+CREATE FUNCTION public.media_set_keep(p_ids uuid[], p_keep boolean)
+RETURNS integer
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $function$
 DECLARE
   v_uid uuid := auth.uid();
+  v_updated integer := 0;
 BEGIN
   IF v_uid IS NULL THEN
     RAISE EXCEPTION 'media_set_keep: not authenticated'
@@ -810,7 +815,7 @@ BEGIN
       USING ERRCODE = '22023';
   END IF;
   IF p_ids IS NULL OR cardinality(p_ids) = 0 THEN
-    RETURN;
+    RETURN 0;
   END IF;
 
   IF EXISTS (
@@ -824,27 +829,18 @@ BEGIN
       USING ERRCODE = 'P0001';
   END IF;
 
-  IF p_keep THEN
-    UPDATE public.media_files AS m
-    SET keep_forever = true,
-        expires_at = NULL,
-        retention_state = NULL,
-        retention_claimed_at = NULL,
-        retention_attempts = 0,
-        retention_next_attempt_at = NULL
-    WHERE m.id = ANY (p_ids)
-      AND m.user_id = v_uid;
-  ELSE
-    UPDATE public.media_files AS m
-    SET keep_forever = false,
-        expires_at = NULL,
-        retention_state = NULL,
-        retention_claimed_at = NULL,
-        retention_attempts = 0,
-        retention_next_attempt_at = NULL
-    WHERE m.id = ANY (p_ids)
-      AND m.user_id = v_uid;
-  END IF;
+  UPDATE public.media_files AS m
+  SET keep_forever = p_keep,
+      expires_at = NULL,
+      retention_state = NULL,
+      retention_claimed_at = NULL,
+      retention_attempts = 0,
+      retention_next_attempt_at = NULL
+  WHERE m.id = ANY (p_ids)
+    AND m.user_id = v_uid;
+
+  GET DIAGNOSTICS v_updated = ROW_COUNT;
+  RETURN v_updated;
 END;
 $function$;
 

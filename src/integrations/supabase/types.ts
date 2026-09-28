@@ -7833,7 +7833,7 @@ export type Database = {
       }
       media_set_keep: {
         Args: { p_ids: string[]; p_keep: boolean }
-        Returns: undefined
+        Returns: number
       }
       add_ticket_message: {
         Args: {
