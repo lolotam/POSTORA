@@ -1,5 +1,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { deleteFromOpeninary, getOpeninaryConfig } from "../_shared/openinary.ts";
+import { logToDatabase } from "../_shared/logging.ts";
+import { authorisedPublicIds, deleteAuthorisedMediaFiles, type CloudinaryResourceType } from "./deletePlan.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -52,6 +54,7 @@ Deno.serve(async (req) => {
     }
 
     console.log(`User ${user.id} requesting Cloudinary delete`);
+    const actorId = user.id;
 
     // Cloudinary credentials are only required by paths that delete a Cloudinary
     // object — an Openinary-only deployment must still be able to delete via mediaFileIds.
@@ -59,66 +62,104 @@ Deno.serve(async (req) => {
     const apiKey = Deno.env.get("CLOUDINARY_API_KEY");
     const apiSecret = Deno.env.get("CLOUDINARY_API_SECRET");
 
-    const { publicIds, resourceType = "image", mediaFileIds }: DeleteRequest = await req.json();
+    const { publicIds, mediaFileIds }: DeleteRequest = await req.json();
+    const { data: adminRole, error: roleError } = await supabase
+      .from("user_roles")
+      .select("role")
+      .eq("user_id", actorId)
+      .eq("role", "admin")
+      .maybeSingle();
+    if (roleError) console.error("[cloudinary-delete] admin role lookup failed");
+    const isAdmin = !!adminRole && !roleError;
 
-    // mediaFileIds path: resolve every stored provider object for each media row and
-    // delete from the right cloud (used for openinary-primary rows that have no
-    // Cloudinary public_id).
+    async function logDeleteRefusal(refusedCount: number) {
+      if (refusedCount === 0) return;
+      try {
+        const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+        if (!serviceRoleKey) return;
+        const admin = createClient(supabaseUrl, serviceRoleKey);
+        await logToDatabase(admin, {
+          level: "warn",
+          category: "auth",
+          source: "cloudinary-delete",
+          message: "Refused delete for unauthorised media",
+          user_id: actorId,
+          metadata: { refusedCount },
+        });
+      } catch {
+        console.error("[cloudinary-delete] refusal log failed");
+      }
+    }
+
+    async function destroyCloudinary(objectKey: string, resourceType: CloudinaryResourceType): Promise<{ success: boolean; error?: string }> {
+      if (!cloudName || !apiKey || !apiSecret) return { success: false, error: "cloudinary credentials unavailable" };
+      const timestamp = Math.floor(Date.now() / 1000);
+      const signatureParams = [`public_id=${objectKey}`, `timestamp=${timestamp}`].sort().join("&");
+      const encoder = new TextEncoder();
+      const signData = encoder.encode(signatureParams + apiSecret);
+      const hashBuffer = await crypto.subtle.digest("SHA-1", signData);
+      const signature = Array.from(new Uint8Array(hashBuffer)).map((b) => b.toString(16).padStart(2, "0")).join("");
+      const formData = new FormData();
+      formData.append("public_id", objectKey);
+      formData.append("api_key", apiKey);
+      formData.append("timestamp", timestamp.toString());
+      formData.append("signature", signature);
+      const response = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/${resourceType}/destroy`, { method: "POST", body: formData });
+      const result = await response.json();
+      if (result.result === "ok" || result.result === "not found") return { success: true };
+      return { success: false, error: result?.error?.message || `HTTP ${response.status}` };
+    }
+
     if (mediaFileIds && mediaFileIds.length > 0) {
-      const deletedIds: string[] = [];
-      const failedIds: string[] = [];
-      const errors: string[] = [];
-      const config = getOpeninaryConfig();
+      let mediaQuery = supabase
+        .from("media_files")
+        .select("id, user_id, file_type, cloudinary_public_id")
+        .in("id", mediaFileIds);
+      if (!isAdmin) mediaQuery = mediaQuery.eq("user_id", actorId);
+      const { data: mediaRows, error: mediaError } = await mediaQuery;
+      if (mediaError) {
+        console.error("[cloudinary-delete] media lookup failed");
+        return new Response(JSON.stringify({ success: false, error: "Could not load media files" }), { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
 
-      const { data: providerRows, error: providerError } = await supabase
-        .from("media_file_providers")
-        .select("id, media_file_id, provider, object_key, object_version, status")
-        .in("media_file_id", mediaFileIds)
-        .neq("status", "deleted");
-
+      const ownedIds = (mediaRows || []).map((row: { id: string }) => row.id);
+      const { data: providerRows, error: providerError } = ownedIds.length
+        ? await supabase
+          .from("media_file_providers")
+          .select("id, media_file_id, provider, object_key")
+          .in("media_file_id", ownedIds)
+          .neq("status", "deleted")
+        : { data: [], error: null };
       if (providerError) {
-        return new Response(JSON.stringify({ success: false, error: `Provider lookup failed: ${providerError.message}` }), { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+        console.error("[cloudinary-delete] provider lookup failed");
+        return new Response(JSON.stringify({ success: false, error: "Could not load stored objects" }), { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
       }
 
-      for (const mediaFileId of mediaFileIds) {
-        let anyFailure = false;
-        for (const row of (providerRows || []).filter((r: any) => r.media_file_id === mediaFileId)) {
-          try {
-            if (row.provider === "openinary") {
-              if (!config) { errors.push(`openinary: unavailable`); anyFailure = true; continue; }
-              const removed = await deleteFromOpeninary(config, row.object_key);
-              if (!removed.success) { errors.push(`openinary: ${removed.error}`); anyFailure = true; continue; }
-            } else if (row.provider === "cloudinary") {
-              if (!cloudName || !apiKey || !apiSecret) { errors.push("cloudinary: credentials unavailable"); anyFailure = true; continue; }
-              const timestamp = Math.floor(Date.now() / 1000);
-              const signatureParams = [`public_id=${row.object_key}`, `timestamp=${timestamp}`].sort().join("&");
-              const encoder = new TextEncoder();
-              const signData = encoder.encode(signatureParams + apiSecret);
-              const hashBuffer = await crypto.subtle.digest("SHA-1", signData);
-              const signature = Array.from(new Uint8Array(hashBuffer)).map((b) => b.toString(16).padStart(2, "0")).join("");
-              const formData = new FormData();
-              formData.append("public_id", row.object_key);
-              formData.append("api_key", apiKey);
-              formData.append("timestamp", timestamp.toString());
-              formData.append("signature", signature);
-              const response = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/${resourceType}/destroy`, { method: "POST", body: formData });
-              const result = await response.json();
-              if (result.result !== "ok" && result.result !== "not found") { errors.push(`cloudinary: ${result?.error?.message || response.status}`); anyFailure = true; continue; }
-            }
-            await supabase.from("media_file_providers").update({ status: "deleted", deleted_at: new Date().toISOString(), deleted_reason: "user delete" }).eq("id", row.id);
-          } catch (err: any) {
-            errors.push(`${row.provider}: ${err?.message || String(err)}`);
-            anyFailure = true;
-          }
-        }
-        if (anyFailure) failedIds.push(mediaFileId); else deletedIds.push(mediaFileId);
-      }
-
+      const config = getOpeninaryConfig();
+      const outcome = await deleteAuthorisedMediaFiles({
+        requestedIds: mediaFileIds,
+        rows: mediaRows || [],
+        providers: providerRows || [],
+        destroyOpeninary: async (objectKey) => {
+          if (!config) return { success: false, error: "openinary unavailable" };
+          return deleteFromOpeninary(config, objectKey);
+        },
+        destroyCloudinary,
+        markDeleted: async (providerRowId) => {
+          const { error } = await supabase
+            .from("media_file_providers")
+            .update({ status: "deleted", deleted_at: new Date().toISOString(), deleted_reason: "user delete" })
+            .eq("id", providerRowId);
+          return { error: error?.message };
+        },
+      });
+      await logDeleteRefusal(outcome.results.filter((result) => result.status === "refused").length);
       return new Response(JSON.stringify({
-        success: failedIds.length === 0,
-        deletedMediaFileIds: deletedIds,
-        failedMediaFileIds: failedIds.length ? failedIds : undefined,
-        errors: errors.length ? errors : undefined,
+        success: outcome.failedMediaFileIds.length === 0,
+        deletedMediaFileIds: outcome.deletedMediaFileIds,
+        failedMediaFileIds: outcome.failedMediaFileIds.length ? outcome.failedMediaFileIds : undefined,
+        results: outcome.results,
+        errors: outcome.errors.length ? outcome.errors : undefined,
       }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
@@ -139,69 +180,50 @@ Deno.serve(async (req) => {
 
     console.log(`Deleting ${publicIds.length} files from Cloudinary`);
 
+    let ownedQuery = supabase
+      .from("media_files")
+      .select("id, user_id, file_type, cloudinary_public_id")
+      .in("cloudinary_public_id", publicIds);
+    if (!isAdmin) ownedQuery = ownedQuery.eq("user_id", actorId);
+    const { data: ownedRows, error: ownedError } = await ownedQuery;
+    if (ownedError) {
+      console.error("[cloudinary-delete] public id lookup failed");
+      return new Response(JSON.stringify({ success: false, error: "Could not load media files" }), { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+    const { allowed, refused } = authorisedPublicIds(publicIds, ownedRows || []);
+    await logDeleteRefusal(refused.length);
+
     const deleted: string[] = [];
-    const failed: string[] = [];
+    const failed: string[] = [...refused];
     const providerErrors: string[] = [];
     const { data: setting } = await supabase.from("app_settings").select("value").eq("key", "cdn_storage").maybeSingle();
     const providers = setting?.value?.write_policy?.providers || ["cloudinary"];
 
-    // Delete each file from Cloudinary
-    for (const publicId of publicIds) {
+    for (const target of allowed) {
       try {
-        const timestamp = Math.floor(Date.now() / 1000);
-        
-        // Build signature string
-        const signatureParams = [
-          `public_id=${publicId}`,
-          `timestamp=${timestamp}`,
-        ].sort().join("&");
-
-        // Create SHA-1 signature
-        const encoder = new TextEncoder();
-        const data = encoder.encode(signatureParams + apiSecret);
-        const hashBuffer = await crypto.subtle.digest("SHA-1", data);
-        const hashArray = Array.from(new Uint8Array(hashBuffer));
-        const signature = hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
-
-        // Determine resource type from publicId or use provided
-        const deleteUrl = `https://api.cloudinary.com/v1_1/${cloudName}/${resourceType}/destroy`;
-
-        const formData = new FormData();
-        formData.append("public_id", publicId);
-        formData.append("api_key", apiKey);
-        formData.append("timestamp", timestamp.toString());
-        formData.append("signature", signature);
-
-        const response = await fetch(deleteUrl, {
-          method: "POST",
-          body: formData,
-        });
-
-        const result = await response.json();
-        
-        if (result.result === "ok" || result.result === "not found") {
-          deleted.push(publicId);
-          console.log(`Deleted from Cloudinary: ${publicId}`);
-        } else {
-          failed.push(publicId);
-          console.error(`Failed to delete ${publicId}:`, result);
-        }
+        const removed = await destroyCloudinary(target.publicId, target.resourceType);
+        if (removed.success) deleted.push(target.publicId);
+        else failed.push(target.publicId);
         if (providers.includes("openinary")) {
           const config = getOpeninaryConfig();
-          const { data: cloudinaryRow, error: lookupError } = await supabase.from("media_file_providers").select("media_file_id").eq("provider", "cloudinary").eq("object_key", publicId).neq("status", "deleted").maybeSingle();
-          if (lookupError) { providerErrors.push(`openinary lookup failed: ${lookupError.message}`); continue; }
-          const { data: rows, error: providerLookupError } = cloudinaryRow ? await supabase.from("media_file_providers").select("id, object_key, object_version").eq("media_file_id", cloudinaryRow.media_file_id).eq("provider", "openinary").neq("status", "deleted") : { data: [], error: null };
-          if (providerLookupError) { providerErrors.push(`openinary lookup failed: ${providerLookupError.message}`); continue; }
+          const { data: rows, error: providerLookupError } = await supabase
+            .from("media_file_providers")
+            .select("id, object_key")
+            .eq("media_file_id", target.mediaFileId)
+            .eq("provider", "openinary")
+            .neq("status", "deleted");
+          if (providerLookupError) { providerErrors.push("openinary lookup failed"); continue; }
           for (const row of rows || []) {
-            if (!config) { providerErrors.push(`openinary: ${publicId}: unavailable`); continue; }
-            const removed = await deleteFromOpeninary(config, row.object_key);
-            if (!removed.success) { providerErrors.push(`openinary: ${publicId}: ${removed.error}`); continue; }
-            await supabase.from("media_file_providers").update({ status: "deleted", deleted_at: new Date().toISOString(), deleted_reason: "user delete" }).eq("id", row.id);
+            if (!config) { providerErrors.push("openinary unavailable"); continue; }
+            const openRemoved = await deleteFromOpeninary(config, row.object_key);
+            if (!openRemoved.success) { providerErrors.push(openRemoved.error || "openinary delete failed"); continue; }
+            const { error: statusError } = await supabase.from("media_file_providers").update({ status: "deleted", deleted_at: new Date().toISOString(), deleted_reason: "user delete" }).eq("id", row.id);
+            if (statusError) providerErrors.push("openinary status update failed");
           }
         }
       } catch (err) {
-        failed.push(publicId);
-        console.error(`Error deleting ${publicId}:`, err);
+        failed.push(target.publicId);
+        console.error("[cloudinary-delete] public id delete failed");
       }
     }
 

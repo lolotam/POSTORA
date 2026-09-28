@@ -1,6 +1,18 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { isServiceRoleBearer } from "./serviceCaller.ts";
-import { extensionForBytes, extensionForContentType, getOpeninaryConfig, openinaryTarget, openinaryDeliveryUrl, uploadBytesToOpeninary } from "../_shared/openinary.ts";
+import { getOpeninaryConfig, openinaryTarget, openinaryDeliveryUrl, uploadBytesToOpeninary } from "../_shared/openinary.ts";
+import { logToDatabase } from "../_shared/logging.ts";
+import { MEDIA_DECODED_BYTE_CAP, dedupeEligible } from "../_shared/mediaTypes.ts";
+import {
+  BodyTooLargeError,
+  estimateBase64DecodedBytes,
+  isAcceptedFileType,
+  isAdvertisedBodyTooLarge,
+  limitProvidersForKind,
+  matchingDuplicateId,
+  readJsonBodyCapped,
+  resolveUpload,
+} from "./uploadPolicy.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -12,7 +24,7 @@ interface UploadRequest {
   fileData?: string; // base64 encoded file (required if no externalUrl)
   externalUrl?: string; // External URL to upload (for stock media)
   fileName: string;
-  fileType: "image" | "video" | "gif" | "raw"; // raw = documents (CSV/PDF/TXT/…)
+  fileType: "image" | "video" | "gif" | "raw" | "document" | "audio";
   platforms?: string[]; // Platforms this media is being posted to
   socialAccountIds?: string[]; // Social account IDs involved
   subfolder?: string; // Override daily folder with a custom subfolder
@@ -54,18 +66,30 @@ async function getCdnPolicy(db: any): Promise<CdnPolicy> {
   };
 }
 
-// Canonical MIME per extension — Openinary rejects application/octet-stream uploads.
-const MIME_BY_EXT: Record<string, string> = {
-  png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp",
-  avif: "image/avif", heic: "image/heic", heif: "image/heif", psd: "image/vnd.adobe.photoshop",
-  mp4: "video/mp4", mov: "video/quicktime", webm: "video/webm", mp3: "audio/mpeg", ogg: "audio/ogg", wav: "audio/wav",
-};
+async function logUploadRefusal(userId: string | undefined, message: string, metadata: Record<string, unknown>) {
+  try {
+    const supabaseUrl = Deno.env.get("SUPABASE_URL");
+    const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+    if (!supabaseUrl || !serviceRoleKey) return;
+    const admin = createClient(supabaseUrl, serviceRoleKey);
+    await logToDatabase(admin, {
+      level: "warn",
+      category: "system",
+      source: "cloudinary-upload",
+      message,
+      user_id: userId,
+      metadata,
+    });
+  } catch {
+    console.error("[cloudinary-upload] refusal log failed");
+  }
+}
 
 // SSRF hardening for externalUrl fetching (the Openinary path downloads bytes from
 // the edge runtime, unlike the Cloudinary path where Cloudinary's servers fetch).
 // Known limit (same as the n8n node): DNS is validated per hop, but a rebinding
 // race between check and fetch is not eliminated.
-const MAX_EXTERNAL_BYTES = 50 * 1024 * 1024;
+const MAX_EXTERNAL_BYTES = MEDIA_DECODED_BYTE_CAP;
 const MAX_REDIRECT_HOPS = 5;
 
 function ipv4ToUint32(ip: string): number | null {
@@ -244,10 +268,18 @@ function getTodayFolder(): string {
   return `${year}-${month}-${day}`;
 }
 
-Deno.serve(async (req) => {
+export async function handleCloudinaryUpload(req: Request): Promise<Response> {
   // Handle CORS preflight
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
+  }
+
+  if (isAdvertisedBodyTooLarge(req.headers.get("content-length"))) {
+    await logUploadRefusal(undefined, "Rejected oversized upload body", { reason: "content_length" });
+    return new Response(
+      JSON.stringify({ success: false, error: "Upload body exceeds the 14 MB limit" }),
+      { status: 413, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+    );
   }
 
   try {
@@ -373,15 +405,41 @@ Deno.serve(async (req) => {
       );
     }
 
-    // Use pre-parsed body if available (service-role path already consumed req.text())
-    const parsedBody = (req as any)._parsedBody || await req.json();
+    // The service-role branch parses its own body. This read is the user path:
+    // cap the bytes while reading, before JSON.parse.
+    let parsedBody: UploadRequest;
+    if ((req as any)._parsedBody) {
+      parsedBody = (req as any)._parsedBody;
+    } else {
+      try {
+        parsedBody = await readJsonBodyCapped(req) as UploadRequest;
+      } catch (parseError) {
+        if (parseError instanceof BodyTooLargeError) {
+          await logUploadRefusal(userId, "Rejected oversized upload body", { reason: "body_cap" });
+          return new Response(
+            JSON.stringify({ success: false, error: parseError.message }),
+            { status: 413, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+          );
+        }
+        return new Response(
+          JSON.stringify({ success: false, error: "Invalid JSON body" }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+    }
     const { fileData, externalUrl, fileName, fileType, platforms = [], socialAccountIds = [], subfolder, skipMediaFiles = false }: UploadRequest = parsedBody;
 
-    // Require either fileData OR externalUrl
     if ((!fileData && !externalUrl) || !fileName || !fileType) {
       return new Response(
         JSON.stringify({ success: false, error: "Missing required fields: (fileData or externalUrl), fileName, fileType" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+    if (!isAcceptedFileType(fileType)) {
+      await logUploadRefusal(userId, "Rejected upload file type", { fileType });
+      return new Response(
+        JSON.stringify({ success: false, error: "Unsupported fileType" }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
 
@@ -399,70 +457,104 @@ Deno.serve(async (req) => {
       }
     }
 
-    // Folder structure: media/{user_email_sanitized}/{YYYY-MM-DD}/
     const folder = subfolder
       ? `media/${userFolder}/${subfolder}`
       : `media/${userFolder}/${dailyFolder}`;
     const timestamp = Math.floor(Date.now() / 1000);
-    const cleanFileName = fileName.replace(/\.[^/.]+$/, "").replace(/[^a-zA-Z0-9_-]/g, "_");
-    
-    // Compute incoming file size for collision-proof dedupe
+
+    let payloadBytes: Uint8Array | null = null;
+    let externalContentType: string | null = null;
+    let uploadSource = externalUrl || "";
     let incomingFileSize: number | null = null;
-    try {
-      if (fileData) {
-        // base64 → bytes: roughly len * 0.75, minus padding
-        const b64 = fileData.includes(",") ? fileData.split(",")[1] : fileData;
-        const padding = (b64.endsWith("==") ? 2 : b64.endsWith("=") ? 1 : 0);
-        incomingFileSize = Math.floor((b64.length * 3) / 4) - padding;
-      } else if (externalUrl) {
-        try {
-          const headRes = await fetch(externalUrl, { method: "HEAD" });
-          const len = headRes.headers.get("content-length");
-          if (len) incomingFileSize = parseInt(len, 10);
-        } catch (e) {
-          console.warn(`[cloudinary-upload] HEAD failed for externalUrl, skipping size check:`, e);
-        }
+
+    if (fileData) {
+      if (estimateBase64DecodedBytes(fileData) > MEDIA_DECODED_BYTE_CAP) {
+        await logUploadRefusal(userId, "Rejected oversized upload", { reason: "encoded_length" });
+        return new Response(
+          JSON.stringify({ success: false, error: "File exceeds the 10 MB limit" }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
       }
-    } catch (e) {
-      console.warn(`[cloudinary-upload] Could not compute incoming file size:`, e);
-    }
-
-    console.log(`Checking for recent duplicate of original filename: ${cleanFileName} (size=${incomingFileSize ?? "unknown"})`);
-
-    // Dedupe window: last 5 minutes only (catches accidental double-clicks, not yesterday's file)
-    const dedupeWindowStart = new Date(Date.now() - 5 * 60 * 1000).toISOString();
-
-    // Find ANY recent uploads with the same original filename, then match on size in code
-    // (files are stored under generated postora_* names, so the original name lives in metadata)
-    const { data: recentCandidates } = await dbClient
-      .from("media_files")
-      .select("id, file_path, cloudinary_public_id, file_size, platforms, social_account_ids")
-      .eq("user_id", userId)
-      .eq("metadata->>original_filename", cleanFileName)
-      .gt("created_at", dedupeWindowStart)
-      .order("created_at", { ascending: false })
-      .limit(5);
-
-    let existingFile: any = null;
-    if (recentCandidates && recentCandidates.length > 0) {
-      if (incomingFileSize !== null) {
-        existingFile = recentCandidates.find((c: any) => c.file_size === incomingFileSize) || null;
-        if (!existingFile) {
-          const oldSizes = recentCandidates.map((c: any) => c.file_size).join(", ");
-          console.log(
-            `[cloudinary-upload] Skipping dedupe — same name '${cleanFileName}' but different size (old=[${oldSizes}] vs new=${incomingFileSize}). Uploading as new file.`
+      const b64Part = fileData.includes(",") ? fileData.split(",")[1] : fileData;
+      uploadSource = fileData.startsWith("data:") ? fileData : `data:application/octet-stream;base64,${b64Part}`;
+      try {
+        payloadBytes = Uint8Array.from(atob(b64Part), (c) => c.charCodeAt(0));
+      } catch {
+        await logUploadRefusal(userId, "Rejected upload payload", { reason: "invalid_base64" });
+        return new Response(
+          JSON.stringify({ success: false, error: "Invalid file data" }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+      incomingFileSize = payloadBytes.length;
+      if (incomingFileSize > MEDIA_DECODED_BYTE_CAP) {
+        await logUploadRefusal(userId, "Rejected oversized upload", { reason: "decoded_length" });
+        return new Response(
+          JSON.stringify({ success: false, error: "File exceeds the 10 MB limit" }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+    } else if (externalUrl) {
+      try {
+        const res = await safeFetchExternal(externalUrl);
+        if (!res.ok) {
+          await logUploadRefusal(userId, "Rejected external upload", { reason: "external_fetch", status: res.status });
+          return new Response(
+            JSON.stringify({ success: false, error: "Could not fetch the external file" }),
+            { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
           );
         }
-      } else {
-        // Size unknown — be conservative and DO NOT dedupe to avoid serving wrong content
-        console.log(
-          `[cloudinary-upload] Skipping dedupe — could not determine incoming size for '${cleanFileName}'. Uploading as new file.`
+        externalContentType = res.headers.get("content-type");
+        payloadBytes = await readCappedBytes(res, MAX_EXTERNAL_BYTES);
+        incomingFileSize = payloadBytes.length;
+      } catch (fetchError) {
+        const tooLarge = fetchError instanceof Error && fetchError.message.includes("byte limit");
+        await logUploadRefusal(userId, tooLarge ? "Rejected oversized external upload" : "Rejected external upload", { reason: tooLarge ? "external_length" : "external_fetch" });
+        return new Response(
+          JSON.stringify({ success: false, error: tooLarge ? "File exceeds the 10 MB limit" : "Could not fetch the external file" }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
         );
       }
     }
 
+    const resolved = resolveUpload({ fileName, fileType, bytes: payloadBytes, contentType: externalContentType });
+    if (!resolved.ok) {
+      await logUploadRefusal(userId, "Rejected upload type", { extension: resolved.extension, fileType });
+      return new Response(
+        JSON.stringify({ success: false, error: resolved.error }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
+    if ((payloadBytes?.byteLength ?? 0) > resolved.upload.entry.maxBytes) {
+      await logUploadRefusal(userId, "Rejected oversized upload", { reason: "kind_cap", extension: resolved.upload.ext });
+      return new Response(
+        JSON.stringify({ success: false, error: "File exceeds the 10 MB limit" }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
+
+    const originalFilename = resolved.upload.originalFilename;
+    let existingFile: any = null;
+    if (dedupeEligible(resolved.upload.entry.kind) && incomingFileSize !== null) {
+      const dedupeWindowStart = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+      const { data: recentCandidates, error: dedupeError } = await dbClient
+        .from("media_files")
+        .select("id, file_path, cloudinary_public_id, file_size, platforms, social_account_ids")
+        .eq("user_id", userId)
+        .eq("metadata->>original_filename", originalFilename)
+        .gt("created_at", dedupeWindowStart)
+        .order("created_at", { ascending: false })
+        .limit(5);
+      if (dedupeError) {
+        console.error("[cloudinary-upload] dedupe lookup failed");
+      } else {
+        const duplicateId = matchingDuplicateId(resolved.upload.entry.kind, incomingFileSize, recentCandidates || []);
+        existingFile = (recentCandidates || []).find((candidate: { id: string }) => candidate.id === duplicateId) || null;
+      }
+    }
+
     if (existingFile) {
-      console.log(`Found matching recent file for ${cleanFileName} (size=${incomingFileSize}), reusing: ${existingFile.id}`);
+      console.log(`Found matching recent file (size=${incomingFileSize}), reusing: ${existingFile.id}`);
       
       // Update platforms and social_account_ids if new ones provided
       const existingPlatforms = (existingFile.platforms as string[]) || [];
@@ -505,16 +597,13 @@ Deno.serve(async (req) => {
       console.warn(`[cloudinary-upload] next_media_seq failed (${seqError?.message}); falling back to timestamp suffix`);
     }
     const sequencePart = seqError || seq == null ? Date.now() : seq;
-    // Raw files are delivered by exact public_id, so it must keep the file
-    // extension (image/video public_ids must NOT have one).
-    const fileExtension = fileName.includes(".") ? fileName.split(".").pop()!.toLowerCase() : "";
-    const rawSuffix = fileType === "raw" && fileExtension ? `.${fileExtension}` : "";
-    const uniquePublicId = `postora_${dailyFolder}_${userId}_${sequencePart}${rawSuffix}`;
+    const uniquePublicId = `postora_${dailyFolder}_${userId}_${sequencePart}`;
+    const objectExt = resolved.upload.ext;
+    const uploadMime = resolved.upload.entry.mime;
 
     const cdnPolicy = await getCdnPolicy(dbClient);
     const openinaryConfig = getOpeninaryConfig();
     const openinaryUsable = cdnPolicy.openinaryEnabled && !!openinaryConfig;
-    // Openinary-first ordering (priority provider), dropping providers that cannot run.
     const orderedProviders: string[] = [];
     if (cdnPolicy.providers.includes("openinary") && openinaryUsable) orderedProviders.push("openinary");
     for (const p of cdnPolicy.providers) {
@@ -522,41 +611,21 @@ Deno.serve(async (req) => {
       if (p === "cloudinary" && !cloudinaryUsable) continue;
       orderedProviders.push(p);
     }
-    const effectiveProviders = [...new Set(orderedProviders.length ? orderedProviders : (cloudinaryUsable ? ["cloudinary"] : openinaryUsable ? ["openinary"] : []))];
-
-    console.log(`Uploading ${fileType}: ${fileName} to folder: ${folder}/${uniquePublicId} via providers: [${effectiveProviders.join(", ")}]`);
-
-    // Materialise payload bytes once so every provider stores identical content.
-    let uploadSource = externalUrl || ""; // Cloudinary accepts remote URLs or base64 data URIs
-    let payloadBytes: Uint8Array | null = null;
-    let externalContentType: string | null = null;
-    if (fileData) {
-      const b64Part = fileData.includes(",") ? fileData.split(",")[1] : fileData;
-      uploadSource = fileData.startsWith("data:") ? fileData : `data:application/octet-stream;base64,${b64Part}`;
-      if (effectiveProviders.includes("openinary")) {
-        payloadBytes = Uint8Array.from(atob(b64Part), (c) => c.charCodeAt(0));
-      }
-    } else if (externalUrl && effectiveProviders.includes("openinary")) {
-      try {
-        const res = await safeFetchExternal(externalUrl);
-        if (res.ok) {
-          externalContentType = res.headers.get("content-type");
-          payloadBytes = await readCappedBytes(res, MAX_EXTERNAL_BYTES);
-          if (!incomingFileSize) incomingFileSize = payloadBytes.length;
-        } else {
-          console.warn(`[cloudinary-upload] externalUrl fetch for Openinary failed: HTTP ${res.status}`);
-        }
-      } catch (e) {
-        console.warn(`[cloudinary-upload] externalUrl fetch for Openinary failed:`, e);
-      }
+    const orderedUnique = [...new Set(orderedProviders.length ? orderedProviders : (cloudinaryUsable ? ["cloudinary"] : openinaryUsable ? ["openinary"] : []))];
+    const limitedProviders = limitProvidersForKind(resolved.upload.entry.kind, orderedUnique, cdnPolicy.required);
+    const effectiveProviders = limitedProviders.attempted;
+    const requiredProviders = limitedProviders.required;
+    if (effectiveProviders.length === 0) {
+      await logUploadRefusal(userId, "No provider for this file type", { extension: objectExt });
+      return new Response(
+        JSON.stringify({ success: false, error: "Storage temporarily unavailable", retryable: true }),
+        { status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
     }
 
-    // Callers such as the admin identity settings send a bare key ("app_favicon") as the
-    // file name, so the extension has to come from the bytes themselves. Openinary checks the
-    // declared extension against the real content and rejects a mismatch with HTTP 400.
-    const sniffedExt = fileExtension ? null : (payloadBytes && extensionForBytes(payloadBytes)) || extensionForContentType(externalContentType);
-    const objectExt = fileExtension || sniffedExt || (fileType === "video" ? "mp4" : fileType === "gif" ? "gif" : "jpg");
-    const openinaryBaseName = fileType === "raw" && fileExtension ? uniquePublicId.slice(0, -(fileExtension.length + 1)) : uniquePublicId;
+    console.log(`Uploading ${resolved.upload.entry.storedFileType}: .${objectExt} to folder: ${folder}/${uniquePublicId} via providers: [${effectiveProviders.join(", ")}]`);
+
+    const openinaryBaseName = uniquePublicId;
     const openinaryFallbackKey = `${openinaryConfig?.folderPrefix || "postora.cloud"}/${folder}/${uniquePublicId}.${objectExt}`;
 
     const storedIn: string[] = [];
@@ -569,7 +638,6 @@ Deno.serve(async (req) => {
       try {
         if (provider === "openinary" && openinaryConfig && payloadBytes) {
           const target = openinaryTarget(`${folder}/${uniquePublicId}`, openinaryConfig.folderPrefix);
-          const uploadMime = MIME_BY_EXT[objectExt] || (fileType === "video" ? "video/mp4" : `image/${objectExt}`);
           const openResult = await uploadBytesToOpeninary(openinaryConfig, payloadBytes, target.folder, openinaryBaseName, objectExt, uploadMime, payloadBytes.length);
           if (openResult.success && openResult.path) {
             openinaryPath = openResult.path;
@@ -597,7 +665,7 @@ Deno.serve(async (req) => {
           const signature = hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
 
           // Determine upload endpoint
-          const resourceType = fileType === "video" ? "video" : fileType === "raw" ? "raw" : "image";
+          const resourceType = resolved.upload.entry.kind === "video" ? "video" : "image";
           const uploadUrl = `https://api.cloudinary.com/v1_1/${cloudName}/${resourceType}/upload`;
 
           // Prepare form data - Cloudinary accepts both base64 and URLs
@@ -649,16 +717,9 @@ Deno.serve(async (req) => {
         .insert({
           user_id: userId,
           file_path: primaryUrl,
-          file_type: fileType,
+          file_type: resolved.upload.entry.storedFileType,
           file_size: bytesOut ?? null,
-          mime_type:
-            fileType === "video"
-              ? "video/mp4"
-              : fileType === "gif"
-                ? "image/gif"
-                : fileType === "raw"
-                  ? "application/octet-stream"
-                  : `image/${cloudinaryResult?.format || objectExt}`,
+          mime_type: uploadMime,
           storage_bucket: cloudinaryResult ? "cloudinary" : "openinary",
           cloudinary_public_id: primaryPublicId ?? null,
           platforms: platforms,
@@ -669,7 +730,8 @@ Deno.serve(async (req) => {
             height: cloudinaryResult?.height || null,
             format: cloudinaryResult?.format || objectExt,
             duration: cloudinaryResult?.duration || null,
-            original_filename: cleanFileName,
+            original_filename: originalFilename,
+            kind: resolved.upload.entry.kind,
           },
         })
         .select("id")
@@ -696,7 +758,7 @@ Deno.serve(async (req) => {
           : (openinaryPath ?? openinaryFallbackKey),
         status: "pending",
         bytes: bytesOut ?? null,
-        mime_type: fileType === "video" ? "video/mp4" : fileType === "gif" ? "image/gif" : `image/${cloudinaryResult?.format || objectExt}`,
+        mime_type: uploadMime,
       }));
       const { error: providerInsertError } = await dbAdmin.from("media_file_providers").insert(providerRows);
       if (providerInsertError) return new Response(JSON.stringify({ success: false, error: `Provider state error: ${providerInsertError.message}` }), { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
@@ -717,7 +779,7 @@ Deno.serve(async (req) => {
       }
     }
 
-    const requiredSatisfied = cdnPolicy.required.every((provider) => storedIn.includes(provider));
+    const requiredSatisfied = requiredProviders.every((provider) => storedIn.includes(provider));
     const response: UploadResponse = {
       success: true,
       url: primaryUrl,
@@ -747,4 +809,6 @@ Deno.serve(async (req) => {
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }
-});
+}
+
+Deno.serve(handleCloudinaryUpload);

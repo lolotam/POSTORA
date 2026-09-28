@@ -432,7 +432,10 @@ export const getFileDisplayName = (file: {
   file_path: string;
   storage_bucket: string;
   cloudinary_public_id?: string | null;
+  metadata?: { original_filename?: unknown } | null;
 }): string => {
+  const original = file.metadata?.original_filename;
+  if (typeof original === "string" && original.trim()) return original.trim();
   // For Cloudinary files, extract from public_id (cleaner than URL)
   if (file.storage_bucket === "cloudinary" && file.cloudinary_public_id) {
     const parts = file.cloudinary_public_id.split("/");

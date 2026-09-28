@@ -107,6 +107,15 @@
     "contrast": "التباين",
     "date": "التاريخ",
     "images": "صور",
+    "archives": "أرشيفات",
+    "archivesLower": "أرشيفات",
+    "archivesOnly": "أرشيفات بس",
+    "audio": "صوت",
+    "audioLower": "صوت",
+    "audioOnly": "صوت بس",
+    "documents": "مستندات",
+    "documentsLower": "مستندات",
+    "documentsOnly": "مستندات بس",
     "imagesLower": "images",
     "imagesOnly": "صور بس",
     "itemsCount": "{{count}} عنصر",
@@ -276,6 +285,9 @@
     "widthPx": "العرض (px)"
   },
   "library": {
+    "archive": "أرشيف",
+    "audio": "صوت",
+    "document": "مستند",
     "image": "صورة",
     "myLibrary": "مكتبتي",
     "root": "الجذر",
@@ -376,6 +388,8 @@
     "downloadFailed": "فشل التنزيل",
     "downloadStarted": "التنزيل بدأ",
     "downloadStartedDesc": "صورتك المعالجة بتنزل دلوقتي",
+    "deletePartial": "في ملفات متحذفتش",
+    "deletePartialDesc": "اتحذف {{deleted}}، و{{failed}} مقدرناش نشيلهم.",
     "fileDeleted": "تم حذف الملف",
     "fileDeletedDesc": "الملف اتشال من مكتبتك.",
     "fileMoved": "تم نقل الملف",
@@ -411,6 +425,8 @@
     "noFeaturesConfigDesc": "فعّل وضبط تحويل واحد على الأقل",
     "noFilesSelected": "مفيش ملفات مختارة",
     "noFilesSelectedDesc": "اختار ملف واحد على الأقل عشان تبعته للمنشور",
+    "notPostable": "الملفات دي مش هتتنشر",
+    "notPostableDesc": "المنشورات بتقبل صور وفيديو بس. شيل المستندات والصوت والأرشيف من الاختيار.",
     "nowProcessing": "جاري معالجة صورتك...",
     "nowProcessingBg": "جاري إزالة الخلفية دلوقتي...",
     "processedDesc": "صورتك اتعالجت",
@@ -439,7 +455,13 @@
     "urlCopied": "تم نسخ الرابط",
     "urlCopiedDesc": "رابط الملف اتنسخ في حافظتك"
   },
+  "preview": {
+    "openPdf": "افتح في تاب جديد"
+  },
   "type": {
+    "archive": "أرشيف",
+    "audio": "صوت",
+    "document": "مستند",
     "gif": "gif",
     "imageLower": "image",
     "videoLower": "video"
@@ -451,7 +473,9 @@
     "dropOrClick": "سيّب الملفات هنا أو اضغط للتصفح",
     "filesToUpload": "ملفات للرفع ({{count}})",
     "remaining": "الرفع المتبقي النهاردة: <value>{{remaining}}</value>",
-    "sizeHint": "بيدعم الصور والفيديوهات لحد 100MB",
+    "sizeHint": "صور، فيديو، صوت، مستندات وأرشيفات، لحد 10 ميجا لكل ملف",
+    "tooLarge": "{{name}} أكبر من حد الـ 10 ميجا",
+    "typeRejected": "{{name}} نوعه مش مسموح",
     "successCount": "{{count}} ملف اترفع بنجاح",
     "title": "رفع وسائط",
     "unlimited": "غير محدود",

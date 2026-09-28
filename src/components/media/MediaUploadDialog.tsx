@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect } from "react";
 import { Trans, useTranslation } from "react-i18next";
-import { useDropzone } from "react-dropzone";
+import { useDropzone, type FileRejection } from "react-dropzone";
 import {
   Dialog,
   DialogContent,
@@ -34,12 +34,23 @@ import {
 } from "lucide-react";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
+import { FileTypeTile } from "@/components/media/FileTypeTile";
+import { readUploadRefusal } from "@/components/media/uploadErrors";
+import {
+  MEDIA_DECODED_BYTE_CAP,
+  dropzoneAccept,
+  libraryFilePresentation,
+  mediaTypeForFileName,
+  uploadFileTypeFor,
+  type MediaKind,
+} from "@/lib/mediaTypes";
 
 interface UploadedFile {
   id: string;
   name: string;
   url: string;
   type: "image" | "video" | "gif";
+  kind: MediaKind;
   size: number;
   format?: string;
   width?: number;
@@ -67,6 +78,7 @@ export function MediaUploadDialog({
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
   const [showResults, setShowResults] = useState(false);
   const [quotaError, setQuotaError] = useState<string | null>(null);
+  const [fileIssues, setFileIssues] = useState<string[]>([]);
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
   const { t } = useTranslation("assets");
   const { toast } = useToast();
@@ -91,16 +103,38 @@ export function MediaUploadDialog({
   }, [files.length, t]);
 
   const onDrop = useCallback((acceptedFiles: File[]) => {
-    setFiles((prev) => [...prev, ...acceptedFiles]);
-  }, []);
+    const accepted: File[] = [];
+    const issues: string[] = [];
+    for (const file of acceptedFiles) {
+      const entry = mediaTypeForFileName(file.name);
+      if (!entry) {
+        issues.push(t("upload.typeRejected", "{{name}} is not an allowed file type", { name: file.name }));
+        continue;
+      }
+      if (file.size > entry.maxBytes) {
+        issues.push(t("upload.tooLarge", "{{name}} is over the 10 MB limit", { name: file.name }));
+        continue;
+      }
+      accepted.push(file);
+    }
+    setFileIssues(issues);
+    setFiles((prev) => [...prev, ...accepted]);
+  }, [t]);
+
+  const onDropRejected = useCallback((rejections: FileRejection[]) => {
+    setFileIssues(rejections.map((rejection) => {
+      const tooLarge = rejection.errors.some((error) => error.code === "file-too-large");
+      return tooLarge
+        ? t("upload.tooLarge", "{{name}} is over the 10 MB limit", { name: rejection.file.name })
+        : t("upload.typeRejected", "{{name}} is not an allowed file type", { name: rejection.file.name });
+    }));
+  }, [t]);
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
-    accept: {
-      "image/*": [".jpeg", ".jpg", ".png", ".gif", ".webp"],
-      "video/*": [".mp4", ".mov", ".avi", ".webm"],
-    },
-    maxSize: 100 * 1024 * 1024, // 100MB
+    onDropRejected,
+    accept: dropzoneAccept(),
+    maxSize: MEDIA_DECODED_BYTE_CAP,
   });
 
   const removeFile = (index: number) => {
@@ -136,7 +170,14 @@ export function MediaUploadDialog({
       const startTime = Date.now();
       let operationId: string | null = null;
 
-      // Check quota for each file (in case we're uploading multiple)
+      const entry = mediaTypeForFileName(file.name);
+      if (!entry || file.size > (entry?.maxBytes ?? 0)) {
+        setFileIssues((prev) => [...prev, !entry
+          ? t("upload.typeRejected", "{{name}} is not an allowed file type", { name: file.name })
+          : t("upload.tooLarge", "{{name}} is over the 10 MB limit", { name: file.name })]);
+        continue;
+      }
+
       const canUpload = await incrementMediaUpload();
       if (!canUpload) {
         toast({
@@ -152,8 +193,7 @@ export function MediaUploadDialog({
         setUploadProgress((prev) => ({ ...prev, [fileId]: 10 }));
         
         // Log the upload operation
-        const isGif = file.type === "image/gif" || file.name.toLowerCase().endsWith(".gif");
-        const fileType = file.type.startsWith("video") ? "video" : isGif ? "gif" : "image";
+        const fileType = uploadFileTypeFor(entry.kind);
         
         operationId = await logOperation({
           operationType: "upload",
@@ -198,11 +238,10 @@ export function MediaUploadDialog({
           }
 
           // Determine display type
-          const isGifFile = file.type === "image/gif" || file.name.toLowerCase().endsWith(".gif");
-          const displayType: "image" | "video" | "gif" = file.type.startsWith("video") 
-            ? "video" 
-            : isGifFile 
-              ? "gif" 
+          const displayType: "image" | "video" | "gif" = entry.kind === "video"
+            ? "video"
+            : entry.mime === "image/gif"
+              ? "gif"
               : "image";
 
           uploaded.push({
@@ -210,6 +249,7 @@ export function MediaUploadDialog({
             name: file.name,
             url: data.url,
             type: displayType,
+            kind: entry.kind,
             size: data.bytes || file.size,
             format: data.format,
             width: data.width,
@@ -228,10 +268,12 @@ export function MediaUploadDialog({
           throw new Error(data?.error || "Upload failed");
         }
       } catch (error) {
-        console.error("Upload error:", error);
+        const detail = await readUploadRefusal(error);
+        console.error("Upload error");
+        setFileIssues((prev) => [...prev, detail || t("toast.uploadFailedFile", "Failed to upload {{name}}", { name: file.name })]);
         toast({
           title: t("toast.uploadFailed", "Upload failed"),
-          description: t("toast.uploadFailedFile", "Failed to upload {{name}}", { name: file.name }),
+          description: detail || t("toast.uploadFailedFile", "Failed to upload {{name}}", { name: file.name }),
           variant: "destructive",
         });
         setUploadProgress((prev) => ({ ...prev, [fileId]: -1 }));
@@ -295,6 +337,7 @@ export function MediaUploadDialog({
     setUploadedFiles([]);
     setShowResults(false);
     setQuotaError(null);
+    setFileIssues([]);
     onClose();
   };
 
@@ -313,6 +356,7 @@ export function MediaUploadDialog({
     setUploadedFiles([]);
     setShowResults(false);
     setQuotaError(null);
+    setFileIssues([]);
   };
 
   return (
@@ -345,17 +389,21 @@ export function MediaUploadDialog({
                   <div className="flex gap-4">
                     {/* Thumbnail */}
                     <div className="w-24 h-24 rounded-lg overflow-hidden bg-muted shrink-0">
-                      {file.type === "image" ? (
+                      {file.kind === "image" ? (
                         <img
                           src={file.url}
                           alt={file.name}
                           className="w-full h-full object-cover"
                         />
-                      ) : (
+                      ) : file.kind === "video" ? (
                         <video
                           src={file.url}
                           className="w-full h-full object-cover"
                         />
+                      ) : file.kind === "audio" ? (
+                        <audio src={file.url} controls className="w-full" />
+                      ) : (
+                        <FileTypeTile {...libraryFilePresentation({ file_type: "document", file_path: file.name, metadata: { original_filename: file.name, kind: file.kind } })} />
                       )}
                     </div>
 
@@ -370,7 +418,7 @@ export function MediaUploadDialog({
                             ) : (
                               <FileVideo className="w-3 h-3 me-1" />
                             )}
-                            {file.type === "video" ? t("type.videoLower", "video") : file.type === "gif" ? t("type.gif", "gif") : t("type.imageLower", "image")}
+                            {file.kind === "video" ? t("type.videoLower", "video") : file.kind === "audio" ? t("type.audio", "audio") : file.kind === "archive" ? t("type.archive", "archive") : file.kind === "document" ? t("type.document", "document") : file.type === "gif" ? t("type.gif", "gif") : t("type.imageLower", "image")}
                           </Badge>
                         </div>
                         <Check className="w-5 h-5 text-emerald-500 shrink-0" />
@@ -463,7 +511,7 @@ export function MediaUploadDialog({
                 <>
                   <p className="font-medium">{t("upload.dropOrClick", "Drop files here or click to browse")}</p>
                   <p className="text-sm text-muted-foreground mt-1">
-                    {t("upload.sizeHint", "Supports images and videos up to 100MB")}
+                    {t("upload.sizeHint", "Images, video, audio, documents and archives, up to 10 MB each")}
                   </p>
                 </>
               )}
@@ -490,6 +538,17 @@ export function MediaUploadDialog({
             </div>
 
             {/* Quota warning */}
+            {fileIssues.length > 0 && (
+              <Alert variant="destructive">
+                <AlertTriangle className="h-4 w-4" />
+                <AlertDescription>
+                  <ul className="space-y-1">
+                    {fileIssues.map((issue) => <li key={issue}>{issue}</li>)}
+                  </ul>
+                </AlertDescription>
+              </Alert>
+            )}
+
             {quotaError && (
               <Alert variant="destructive" className="cursor-pointer" onClick={() => setShowUpgradeModal(true)}>
                 <AlertTriangle className="h-4 w-4" />

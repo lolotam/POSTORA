@@ -7,6 +7,7 @@ import { type CommentActionResult, deleteComment, hideComment, replyToComment } 
 import { parseSubscriptionFilters } from "./webhookFilters.ts";
 import { describeBase64Failure, normalizeBase64Media } from "../_shared/base64Media.ts";
 import { clientIpFromHeaders, isValidUuid } from "./requestGuards.ts";
+import { relayUploadTarget } from "./mediaRelay.ts";
 import {
   fetchGlobalSetting,
   fetchPlanSlug,
@@ -305,35 +306,29 @@ async function downloadAndUploadMedia(supabase: any, userId: string, mediaUrl: s
 
   try {
     // Preflight: verify URL is accessible before sending to Cloudinary
+    let probedType: string | null = null;
     try {
       const headResp = await fetch(mediaUrl, { method: 'HEAD', redirect: 'follow' });
+      probedType = headResp.headers.get("content-type");
       if (!headResp.ok) {
-        // Some servers don't support HEAD — try GET as fallback
         const getResp = await fetch(mediaUrl, { method: 'GET', redirect: 'follow' });
+        probedType = probedType || getResp.headers.get("content-type");
         if (!getResp.ok) {
           return { id: '', error: `URL not accessible (HTTP ${getResp.status}). Ensure it is a direct, public link to a media file.` };
         }
-        // Consume and discard body to free resources
         await getResp.arrayBuffer();
       }
     } catch (fetchErr: any) {
       return { id: '', error: `Cannot reach URL: ${mediaUrl.substring(0, 100)} — ${fetchErr.message || 'network error'}` };
     }
 
-    // Determine file details - simple check
-    const urlPath = new URL(mediaUrl).pathname;
-    let fileExt = urlPath.split('.').pop()?.split('?')[0] || 'bin';
-    const fileName = `${userId}/${crypto.randomUUID()}.${fileExt}`;
-
-    // We assume image unless extension suggests video, cloudinary-upload will detect actual type
-    const isVideo = fileExt.match(/(mp4|mov|webm|avi|mpeg)/i);
-    const fileType = isVideo ? 'video' : 'image';
+    const target = relayUploadTarget(mediaUrl, probedType, crypto.randomUUID());
 
     // Delegate to cloudinary-upload
     const mediaFile = await uploadToCloudinary(supabase, userId, {
       externalUrl: mediaUrl,
-      fileName,
-      fileType,
+      fileName: target.fileName,
+      fileType: target.fileType,
       platforms: [], // Will be updated by the main flow if needed
       socialAccountIds: []
     });
@@ -356,18 +351,11 @@ async function uploadFileFromUrl(supabase: any, userId: string, mediaUrl: string
   // but we'll let Cloudinary handle the heavy lifting to ensure consistency.
 
   // Determine file details
-  const urlPath = new URL(mediaUrl).pathname;
-  let fileExt = urlPath.split('.').pop()?.split('?')[0] || 'bin';
-  const fileName = `${userId}/${crypto.randomUUID()}.${fileExt}`;
-
-  const isVideo = fileExt.match(/(mp4|mov|webm|avi|mpeg)/i);
-  const fileType = isVideo ? 'video' : 'image';
-
-  // Delegate to cloudinary-upload
+  const target = relayUploadTarget(mediaUrl, null, crypto.randomUUID());
   return await uploadToCloudinary(supabase, userId, {
     externalUrl: mediaUrl,
-    fileName,
-    fileType
+    fileName: target.fileName,
+    fileType: target.fileType,
   });
 }
 
@@ -382,25 +370,11 @@ async function uploadFileFromBase64(supabase: any, userId: string, fileData: str
   }
 
   const contentType = matches[1];
-
-  const isVideo = contentType.startsWith('video/');
-  const fileType = isVideo ? 'video' : 'image';
-
-  // Generate filename if not provided
-  if (!fileName) {
-    const extMap: Record<string, string> = {
-      'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif', 'image/webp': 'webp',
-      'video/mp4': 'mp4', 'video/quicktime': 'mov', 'video/webm': 'webm', 'video/mpeg': 'mpeg', 'video/x-msvideo': 'avi'
-    };
-    const ext = extMap[contentType] || 'bin';
-    fileName = `${crypto.randomUUID()}.${ext}`;
-  }
-
-  // Delegate to cloudinary-upload
+  const target = relayUploadTarget(fileName || "", contentType, crypto.randomUUID());
   return await uploadToCloudinary(supabase, userId, {
     fileData,
-    fileName,
-    fileType
+    fileName: target.fileName,
+    fileType: target.fileType,
   });
 }
 
@@ -1444,10 +1418,11 @@ async function handleUploadMedia(supabase: any, userId: string, request: Request
       const base64 = btoa(binary);
       const fileData = `data:${file.type};base64,${base64}`;
 
+      const target = relayUploadTarget(file.name, file.type, crypto.randomUUID());
       const mediaFile = await uploadToCloudinary(supabase, userId, {
         fileData,
-        fileName: file.name,
-        fileType: file.type.startsWith('video/') ? 'video' : 'image'
+        fileName: target.fileName,
+        fileType: target.fileType,
       });
 
       uploadedFiles.push(mediaFile);

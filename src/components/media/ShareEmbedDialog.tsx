@@ -19,7 +19,7 @@ interface ShareEmbedDialogProps {
   onClose: () => void;
   file: {
     publicUrl: string;
-    file_type: "image" | "video";
+    file_type: string;
     file_path: string;
   } | null;
 }
@@ -102,18 +102,20 @@ export function ShareEmbedDialog({
               <Label className="text-xs text-muted-foreground mb-2 block">
                 {t("share.preview", "Preview")}
               </Label>
-              {file.file_type === "image" ? (
+              {file.file_type === "image" || file.file_type === "gif" ? (
                 <img
                   src={file.publicUrl}
                   alt=""
                   className="max-h-40 rounded object-contain mx-auto"
                 />
-              ) : (
+              ) : file.file_type === "video" ? (
                 <video
                   src={file.publicUrl}
                   controls
                   className="max-h-40 rounded mx-auto"
                 />
+              ) : (
+                <p className="text-sm text-center truncate">{file.file_path.split("/").pop()}</p>
               )}
             </div>
           </TabsContent>

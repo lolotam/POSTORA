@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { format } from "date-fns";
 import {
   X,
@@ -26,6 +27,8 @@ import { PlatformIcon } from "@/components/PlatformIcon";
 import { MediaFile, SocialAccount } from "../types";
 import { formatFileSize } from "../utils";
 import { getFileDisplayName } from "@/components/media";
+import { FileTypeTile } from "@/components/media/FileTypeTile";
+import { libraryFilePresentation } from "@/lib/mediaTypes";
 
 interface MediaPreviewDialogProps {
   file: MediaFile | null;
@@ -56,7 +59,11 @@ export function MediaPreviewDialog({
   onImageTools,
   onBgRemoval,
 }: MediaPreviewDialogProps) {
+  const { t } = useTranslation("assets");
   if (!file) return null;
+  const presentation = libraryFilePresentation(file);
+  const isImage = file.file_type === "image" || file.file_type === "gif";
+  const isPdf = presentation.extension === "pdf" || file.mime_type === "application/pdf";
 
   const getAccountInfo = (accountId: string) => {
     return socialAccounts.find((a) => a.id === accountId);
@@ -73,18 +80,22 @@ export function MediaPreviewDialog({
         <div className="flex-1 overflow-auto">
           <div className="grid md:grid-cols-2 gap-6">
             <div className="bg-muted rounded-lg overflow-hidden flex items-center justify-center min-h-[300px]">
-              {file.file_type === "image" ? (
+              {isImage ? (
                 <img
                   src={file.publicUrl}
                   alt=""
                   className="max-w-full max-h-[60vh] object-contain"
                 />
-              ) : (
+              ) : file.file_type === "video" ? (
                 <video
                   src={file.publicUrl}
                   controls
                   className="max-w-full max-h-[60vh]"
                 />
+              ) : presentation.kind === "audio" ? (
+                <audio src={file.publicUrl} controls className="w-full" />
+              ) : (
+                <FileTypeTile kind={presentation.kind} icon={presentation.icon} extension={presentation.extension} className="min-h-[240px]" />
               )}
             </div>
             <div className="space-y-4">
@@ -155,6 +166,13 @@ export function MediaPreviewDialog({
                     <Link className="w-4 h-4 me-2" />
                     Copy Link
                   </Button>
+                  {isPdf && (
+                    <Button variant="outline" size="sm" asChild>
+                      <a href={file.publicUrl} target="_blank" rel="noopener noreferrer">
+                        {t("preview.openPdf", "Open in a new tab")}
+                      </a>
+                    </Button>
+                  )}
                   <Button
                     variant="outline"
                     size="sm"
@@ -179,6 +197,7 @@ export function MediaPreviewDialog({
                     <Move className="w-4 h-4 me-2" />
                     Move
                   </Button>
+                  {isImage && (
                   <Button
                     variant="outline"
                     size="sm"
@@ -187,7 +206,8 @@ export function MediaPreviewDialog({
                     <RefreshCw className="w-4 h-4 me-2" />
                     Replace
                   </Button>
-                  {file.file_type === "image" && (
+                  )}
+                  {isImage && (
                     <>
                       <Button
                         variant="outline"

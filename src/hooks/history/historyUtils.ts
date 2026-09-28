@@ -1,5 +1,6 @@
 import { supabase } from "@/integrations/supabase/client";
 import { useQueryClient } from "@tanstack/react-query";
+import { deleteLibraryFiles } from "@/lib/mediaDelete";
 
 export interface PlatformResult {
   id: string;
@@ -28,30 +29,27 @@ export const deleteMediaFiles = async (mediaFileIds: string[]) => {
 
   const { data: mediaFiles, error: fetchError } = await supabase
     .from("media_files")
-    .select("id, file_path, storage_bucket, cloudinary_public_id, file_type")
+    .select("id, file_path, storage_bucket")
     .in("id", mediaFileIds);
 
-  if (fetchError || !mediaFiles || mediaFiles.length === 0) return;
+  if (fetchError) throw fetchError;
+  if (!mediaFiles || mediaFiles.length === 0) return;
 
-  const cloudinaryFiles = mediaFiles.filter(f => f.storage_bucket === "cloudinary" && f.cloudinary_public_id);
-  const supabaseFiles = mediaFiles.filter(f => f.storage_bucket !== "cloudinary");
-
-  if (cloudinaryFiles.length > 0) {
-    try {
-      const imageIds = cloudinaryFiles.filter(f => f.file_type === "image").map(f => f.cloudinary_public_id!);
-      const videoIds = cloudinaryFiles.filter(f => f.file_type === "video").map(f => f.cloudinary_public_id!);
-      if (imageIds.length > 0) await supabase.functions.invoke("cloudinary-delete", { body: { publicIds: imageIds, resourceType: "image" } });
-      if (videoIds.length > 0) await supabase.functions.invoke("cloudinary-delete", { body: { publicIds: videoIds, resourceType: "video" } });
-    } catch (err) { console.error("Error deleting from Cloudinary:", err); }
-  }
-
-  if (supabaseFiles.length > 0) {
-    try {
-      await supabase.storage.from("media").remove(supabaseFiles.map(f => f.file_path));
-    } catch (err) { console.error("Error deleting from Supabase storage:", err); }
-  }
-
-  await supabase.from("media_files").delete().in("id", mediaFileIds);
+  const outcome = await deleteLibraryFiles(mediaFiles, {
+    removeStorage: async (paths) => {
+      const { error } = await supabase.storage.from("media").remove(paths);
+      return error;
+    },
+    invokeDelete: async (ids) => {
+      const { data, error } = await supabase.functions.invoke("cloudinary-delete", { body: { mediaFileIds: ids } });
+      return { data, error };
+    },
+    deleteRows: async (ids) => {
+      const { error } = await supabase.from("media_files").delete().in("id", ids);
+      if (error) throw error;
+    },
+  });
+  if (outcome.failedIds.length > 0) throw new Error("Some media files could not be deleted");
 };
 
 export const deletePostById = async (postId: string, mediaFileIds?: string[] | null) => {

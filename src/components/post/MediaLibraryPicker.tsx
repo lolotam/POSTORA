@@ -5,6 +5,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { useCdnConfig } from "@/hooks/useCdnConfig";
 import { resolveMediaPublicUrl } from "@/lib/mediaUrl";
+import { isPostableLibraryFile, librarySearchText } from "@/lib/mediaTypes";
 import { mergeHealedDimensions } from "@/lib/mediaMetadata";
 import { useAuth } from "@/hooks/useAuth";
 import {
@@ -79,6 +80,8 @@ interface MediaFile {
     height?: number;
     duration?: number;
     format?: string;
+    kind?: string;
+    original_filename?: string;
   } | null;
 }
 
@@ -184,7 +187,7 @@ export function MediaLibraryPicker({
         .eq("folder_path", currentPath)
         .order("created_at", { ascending: false });
       if (error) throw error;
-      return (data || []) as MediaFile[];
+      return ((data || []) as MediaFile[]).filter((file) => isPostableLibraryFile(file));
     },
     enabled: !!user && open,
   });
@@ -260,7 +263,7 @@ export function MediaLibraryPicker({
     let filtered = mediaFiles.filter((file) => {
       // Search filter
       const matchesSearch = searchQuery
-        ? file.file_path.toLowerCase().includes(searchQuery.toLowerCase())
+        ? librarySearchText(file).includes(searchQuery.toLowerCase())
         : true;
       
       // Type filter - if imagesOnly, always filter to images only
@@ -344,7 +347,8 @@ export function MediaLibraryPicker({
   };
 
   const handleConfirm = async () => {
-    const selectedFiles = mediaFiles.filter((f) => selectedIds.has(f.id));
+    const selectedFiles = mediaFiles.filter((f) => selectedIds.has(f.id) && isPostableLibraryFile(f));
+    if (selectedFiles.length === 0) return;
     
     const uploadedFiles: UploadedFile[] = selectedFiles.map((file) => {
       const publicUrl = resolvePublicUrl(file);
@@ -396,7 +400,7 @@ export function MediaLibraryPicker({
   const totalFilteredCount = useMemo(() => {
     return mediaFiles.filter((file) => {
       const matchesSearch = searchQuery
-        ? file.file_path.toLowerCase().includes(searchQuery.toLowerCase())
+        ? librarySearchText(file).includes(searchQuery.toLowerCase())
         : true;
       const typeToFilter = imagesOnly ? "image" : filterType;
       const matchesType = typeToFilter === "all" || file.file_type === typeToFilter;
