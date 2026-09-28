@@ -22,6 +22,7 @@ vi.mock("@/components/settings", () => ({
   SecuritySection: () => null,
   AppearanceSection: () => null,
   TimezoneSection: () => null,
+  MediaRetentionSection: () => null,
   NotificationsSection: () => null,
   SubscriptionSection: () => null,
 }));

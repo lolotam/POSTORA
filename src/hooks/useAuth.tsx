@@ -14,6 +14,8 @@ interface Profile {
   notification_sound_enabled: boolean | null;
   post_success_notifications_enabled: boolean | null;
   post_failure_notifications_enabled: boolean | null;
+  /** 7, 30, 90, or null for Never. */
+  media_retention_days: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -37,7 +39,7 @@ const PROFILE_COLUMNS =
   "id, email, full_name, avatar_url, api_key, ai_model, preferred_timezone, " +
   "email_notifications_enabled, notification_sound_enabled, " +
   "post_success_notifications_enabled, post_failure_notifications_enabled, " +
-  "created_at, updated_at";
+  "media_retention_days, created_at, updated_at";
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 

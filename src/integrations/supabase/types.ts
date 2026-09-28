@@ -2918,10 +2918,17 @@ export type Database = {
           file_size: number | null
           file_type: string
           folder_path: string | null
+          expires_at: string | null
           id: string
+          keep_forever: boolean
+          last_used_at: string | null
           metadata: Json | null
           mime_type: string | null
           platforms: string[] | null
+          retention_attempts: number
+          retention_claimed_at: string | null
+          retention_next_attempt_at: string | null
+          retention_state: string | null
           social_account_ids: string[] | null
           storage_bucket: string | null
           upload_date: string | null
@@ -2934,11 +2941,18 @@ export type Database = {
           file_path: string
           file_size?: number | null
           file_type: string
+          expires_at?: string | null
           folder_path?: string | null
           id?: string
+          keep_forever?: boolean
+          last_used_at?: string | null
           metadata?: Json | null
           mime_type?: string | null
           platforms?: string[] | null
+          retention_attempts?: number
+          retention_claimed_at?: string | null
+          retention_next_attempt_at?: string | null
+          retention_state?: string | null
           social_account_ids?: string[] | null
           storage_bucket?: string | null
           upload_date?: string | null
@@ -2951,11 +2965,18 @@ export type Database = {
           file_path?: string
           file_size?: number | null
           file_type?: string
+          expires_at?: string | null
           folder_path?: string | null
           id?: string
+          keep_forever?: boolean
+          last_used_at?: string | null
           metadata?: Json | null
           mime_type?: string | null
           platforms?: string[] | null
+          retention_attempts?: number
+          retention_claimed_at?: string | null
+          retention_next_attempt_at?: string | null
+          retention_state?: string | null
           social_account_ids?: string[] | null
           storage_bucket?: string | null
           upload_date?: string | null
@@ -3047,6 +3068,24 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      media_retention_settings: {
+        Row: {
+          id: number
+          rollout_at: string
+          delete_enabled: boolean
+        }
+        Insert: {
+          id?: number
+          rollout_at?: string
+          delete_enabled?: boolean
+        }
+        Update: {
+          id?: number
+          rollout_at?: string
+          delete_enabled?: boolean
+        }
+        Relationships: []
       }
       media_upload_counters: {
         Row: {
@@ -4203,6 +4242,7 @@ export type Database = {
           email_notifications_enabled: boolean | null
           full_name: string | null
           id: string
+          media_retention_days: number | null
           notification_sound_enabled: boolean | null
           post_failure_notifications_enabled: boolean | null
           post_success_notifications_enabled: boolean | null
@@ -4222,6 +4262,7 @@ export type Database = {
           email_notifications_enabled?: boolean | null
           full_name?: string | null
           id: string
+          media_retention_days?: number | null
           notification_sound_enabled?: boolean | null
           post_failure_notifications_enabled?: boolean | null
           post_success_notifications_enabled?: boolean | null
@@ -4241,6 +4282,7 @@ export type Database = {
           email_notifications_enabled?: boolean | null
           full_name?: string | null
           id?: string
+          media_retention_days?: number | null
           notification_sound_enabled?: boolean | null
           post_failure_notifications_enabled?: boolean | null
           post_success_notifications_enabled?: boolean | null
@@ -7766,6 +7808,32 @@ export type Database = {
       accept_workspace_invitation: {
         Args: { p_token: string }
         Returns: string
+      }
+      media_retention_sweep: {
+        Args: { p_now?: string; p_limit?: number }
+        Returns: { phase: string; count: number }[]
+      }
+      media_retention_claim: {
+        Args: { p_now?: string; p_limit?: number }
+        Returns: {
+          media_file_id: string
+          user_id: string
+          file_type: string
+          cloudinary_public_id: string | null
+          file_path: string
+        }[]
+      }
+      media_retention_release: {
+        Args: { p_id: string; p_user_id: string; p_failed: boolean }
+        Returns: undefined
+      }
+      media_retention_preview: {
+        Args: { p_user?: string | null }
+        Returns: { media_file_id: string; user_id: string; action: string }[]
+      }
+      media_set_keep: {
+        Args: { p_ids: string[]; p_keep: boolean }
+        Returns: number
       }
       add_ticket_message: {
         Args: {

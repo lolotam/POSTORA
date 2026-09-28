@@ -14,6 +14,7 @@ import {
   SecuritySection,
   AppearanceSection,
   TimezoneSection,
+  MediaRetentionSection,
   NotificationsSection,
   SubscriptionSection,
 } from "@/components/settings";
@@ -205,6 +206,7 @@ export default function Settings() {
               preferredTimezone={preferredTimezone}
               setPreferredTimezone={setPreferredTimezone}
             />
+            <MediaRetentionSection />
           </TabsContent>
 
           {/* Unified Integrations & Connectors Tab */}

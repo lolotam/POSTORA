@@ -70,9 +70,9 @@ export async function listOpeninaryFolder(config: OpeninaryConfig, folder: strin
   return Array.isArray(data?.files) ? data.files.filter((f: OpeninaryFile) => typeof f?.name === "string" && typeof f?.path === "string" && Number.isFinite(f?.size)) : [];
 }
 
-export async function deleteFromOpeninary(config: OpeninaryConfig, path: string): Promise<{ success: boolean; error?: string }> {
+export async function deleteFromOpeninary(config: OpeninaryConfig, path: string, timeoutMs = 30_000): Promise<{ success: boolean; error?: string }> {
   try {
-    const response = await request(`${config.serverUrl}/api/storage/${encodeOpeninaryPath(path)}`, { method: "DELETE", headers: { Authorization: `Bearer ${config.apiKey}` } });
+    const response = await request(`${config.serverUrl}/api/storage/${encodeOpeninaryPath(path)}`, { method: "DELETE", headers: { Authorization: `Bearer ${config.apiKey}` } }, timeoutMs);
     if (response.status === 404 || response.ok) return { success: true };
     return { success: false, error: `Openinary delete failed: ${response.status}` };
   } catch (error) {

@@ -1,4 +1,5 @@
-import { Send, Pencil, Wand2, Move, Download, Trash2 } from "lucide-react";
+import { useTranslation } from "react-i18next";
+import { Send, Pencil, Wand2, Move, Download, Trash2, Pin } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 interface MediaSelectionBarProps {
@@ -14,6 +15,10 @@ interface MediaSelectionBarProps {
   onMove: () => void;
   onDownload: () => void;
   onDelete: () => void;
+  onKeepForever: () => void;
+  onAllowExpiry: () => void;
+  /** Hidden while an admin is viewing another user's library. */
+  showKeep?: boolean;
 }
 
 export function MediaSelectionBar({
@@ -29,7 +34,11 @@ export function MediaSelectionBar({
   onMove,
   onDownload,
   onDelete,
+  onKeepForever,
+  onAllowExpiry,
+  showKeep = true,
 }: MediaSelectionBarProps) {
+  const { t } = useTranslation("assets");
   if (totalCount === 0) return null;
 
   return (
@@ -64,6 +73,17 @@ export function MediaSelectionBar({
             <Move className="w-4 h-4 me-2" />
             Move
           </Button>
+          {showKeep && (
+            <>
+              <Button variant="outline" size="sm" onClick={onKeepForever}>
+                <Pin className="w-4 h-4 me-2" />
+                {t("retention.keepForever", "Keep forever")}
+              </Button>
+              <Button variant="outline" size="sm" onClick={onAllowExpiry}>
+                {t("retention.allowExpiry", "Allow expiry")}
+              </Button>
+            </>
+          )}
           <Button variant="secondary" size="sm" onClick={onDownload}>
             <Download className="w-4 h-4 me-2" />
             Download

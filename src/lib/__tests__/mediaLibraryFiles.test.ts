@@ -56,4 +56,13 @@ describe("media delete confirmation", () => {
     expect(outcome.removeIds).toEqual([]);
     expect(partitionStoredMedia([{ id: "m", file_path: "p", storage_bucket: "media" }]).storage).toHaveLength(1);
   });
+
+  it("treats the supabase bucket like media storage", () => {
+    const split = partitionStoredMedia([
+      { id: "legacy", file_path: "user/a.png", storage_bucket: "supabase" },
+      { id: "cloud", file_path: "https://cdn.example/a.png", storage_bucket: "cloudinary" },
+    ]);
+    expect(split.storage.map((file) => file.id)).toEqual(["legacy"]);
+    expect(split.provider.map((file) => file.id)).toEqual(["cloud"]);
+  });
 });

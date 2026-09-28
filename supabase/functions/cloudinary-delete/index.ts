@@ -1,7 +1,8 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { deleteFromOpeninary, getOpeninaryConfig } from "../_shared/openinary.ts";
 import { logToDatabase } from "../_shared/logging.ts";
-import { authorisedPublicIds, deleteAuthorisedMediaFiles, isDisabledCloudResponse, openinaryObjectKeyMatches, type CloudinaryResourceType, type DestroyResult } from "./deletePlan.ts";
+import { destroyCloudinary } from "../_shared/cloudinaryDestroy.ts";
+import { authorisedPublicIds, deleteAuthorisedMediaFiles, openinaryObjectKeyMatches } from "./deletePlan.ts";
 
 // The service-role client, typed loosely: the generated schema types are not wired into edge functions.
 // deno-lint-ignore no-explicit-any
@@ -154,26 +155,6 @@ Deno.serve(async (req) => {
       } catch {
         console.error("[cloudinary-delete] refusal log failed");
       }
-    }
-
-    async function destroyCloudinary(objectKey: string, resourceType: CloudinaryResourceType): Promise<DestroyResult> {
-      if (!cloudName || !apiKey || !apiSecret) return { success: false, error: "cloudinary credentials unavailable" };
-      const timestamp = Math.floor(Date.now() / 1000);
-      const signatureParams = [`public_id=${objectKey}`, `timestamp=${timestamp}`].sort().join("&");
-      const encoder = new TextEncoder();
-      const signData = encoder.encode(signatureParams + apiSecret);
-      const hashBuffer = await crypto.subtle.digest("SHA-1", signData);
-      const signature = Array.from(new Uint8Array(hashBuffer)).map((b) => b.toString(16).padStart(2, "0")).join("");
-      const formData = new FormData();
-      formData.append("public_id", objectKey);
-      formData.append("api_key", apiKey);
-      formData.append("timestamp", timestamp.toString());
-      formData.append("signature", signature);
-      const response = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/${resourceType}/destroy`, { method: "POST", body: formData });
-      const result = await response.json().catch(() => ({}));
-      if (result.result === "ok" || result.result === "not found") return { success: true, reason: "removed" };
-      if (isDisabledCloudResponse(response.status, result?.error?.message)) return { success: true, reason: "provider_disabled" };
-      return { success: false, error: result?.error?.message || `HTTP ${response.status}` };
     }
 
     if (mediaFileIds && mediaFileIds.length > 0) {
