@@ -283,6 +283,18 @@ Deno.serve(async (req) => {
       // Service-role caller (e.g. n8n-api) — accept userId from body, but only for the service key.
       if (!isServiceRoleBearer(token, serviceRoleKey)) {
         console.error("Rejected unparseable bearer that is not the service-role key");
+        try {
+          const { error: logError } = await createClient(supabaseUrl, serviceRoleKey).from("system_logs").insert({
+            source: "cloudinary-upload",
+            category: "auth",
+            level: "warn",
+            message: "Upload refused: unparseable bearer is not the service-role key",
+            metadata: { reason: "non_service_bearer", claims_error: (claimsError as any).code ?? null },
+          });
+          if (logError) console.error("Auth refusal log insert failed");
+        } catch {
+          console.error("Auth refusal log insert failed");
+        }
         return new Response(
           JSON.stringify({ success: false, error: "Unauthorized" }),
           { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
