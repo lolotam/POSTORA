@@ -1,7 +1,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { deleteFromOpeninary, getOpeninaryConfig } from "../_shared/openinary.ts";
 import { logToDatabase } from "../_shared/logging.ts";
-import { authorisedPublicIds, deleteAuthorisedMediaFiles, isDisabledCloudResponse, type CloudinaryResourceType, type DestroyResult } from "./deletePlan.ts";
+import { authorisedPublicIds, deleteAuthorisedMediaFiles, isDisabledCloudResponse, openinaryObjectKeyMatches, type CloudinaryResourceType, type DestroyResult } from "./deletePlan.ts";
 
 // The service-role client, typed loosely: the generated schema types are not wired into edge functions.
 // deno-lint-ignore no-explicit-any
@@ -59,6 +59,8 @@ Deno.serve(async (req) => {
 
     console.log(`User ${user.id} requesting Cloudinary delete`);
     const actorId = user.id;
+    const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+    const serviceClient: ServiceClient | null = serviceRoleKey ? createClient(supabaseUrl, serviceRoleKey) : null;
 
     // Cloudinary credentials are only required by paths that delete a Cloudinary
     // object — an Openinary-only deployment must still be able to delete via mediaFileIds.
@@ -78,10 +80,9 @@ Deno.serve(async (req) => {
 
     /** A lookup failure refuses the whole request; it gets a durable row, never the ids or keys. */
     async function logLookupFailure(stage: string) {
+      if (!serviceClient) return;
       try {
-        const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
-        if (!serviceRoleKey) return;
-        await logToDatabase(createClient(supabaseUrl, serviceRoleKey), {
+        await logToDatabase(serviceClient, {
           level: "error",
           category: "system",
           source: "cloudinary-delete",
@@ -91,6 +92,22 @@ Deno.serve(async (req) => {
         });
       } catch {
         console.error("[cloudinary-delete] lookup failure log failed");
+      }
+    }
+
+    async function logProviderMismatch(count: number) {
+      if (count === 0 || !serviceClient) return;
+      try {
+        await logToDatabase(serviceClient, {
+          level: "warn",
+          category: "auth",
+          source: "cloudinary-delete",
+          message: "Refused provider delete: object mismatch",
+          user_id: actorId,
+          metadata: { reason: "provider_object_mismatch", count },
+        });
+      } catch {
+        console.error("[cloudinary-delete] mismatch log failed");
       }
     }
 
@@ -124,12 +141,9 @@ Deno.serve(async (req) => {
     }
 
     async function logDeleteRefusal(refusedCount: number) {
-      if (refusedCount === 0) return;
+      if (refusedCount === 0 || !serviceClient) return;
       try {
-        const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
-        if (!serviceRoleKey) return;
-        const admin = createClient(supabaseUrl, serviceRoleKey);
-        await logToDatabase(admin, {
+        await logToDatabase(serviceClient, {
           level: "warn",
           category: "auth",
           source: "cloudinary-delete",
@@ -165,7 +179,7 @@ Deno.serve(async (req) => {
     if (mediaFileIds && mediaFileIds.length > 0) {
       let mediaQuery = supabase
         .from("media_files")
-        .select("id, user_id, file_type, cloudinary_public_id")
+        .select("id, user_id, file_type, file_path, cloudinary_public_id")
         .in("id", mediaFileIds);
       if (!isAdmin) mediaQuery = mediaQuery.eq("user_id", actorId);
       const { data: mediaRows, error: mediaError } = await mediaQuery;
@@ -176,12 +190,21 @@ Deno.serve(async (req) => {
       }
 
       const ownedIds = (mediaRows || []).map((row: { id: string }) => row.id);
-      const { data: providerRows, error: providerError } = ownedIds.length
-        ? await supabase
+      let providerRows: Array<{ id: string; media_file_id: string; provider: string; object_key: string; status: string; delivery_url?: string | null }> = [];
+      let providerError: { message: string } | null = null;
+      if (ownedIds.length > 0) {
+        if (!serviceClient) {
+          console.error("[cloudinary-delete] provider lookup skipped: no service key");
+          await logLookupFailure("provider");
+          return new Response(JSON.stringify({ success: false, error: "Could not load stored objects" }), { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+        }
+        const providerLookup = await serviceClient
           .from("media_file_providers")
-          .select("id, media_file_id, provider, object_key, status")
-          .in("media_file_id", ownedIds)
-        : { data: [], error: null };
+          .select("id, media_file_id, provider, object_key, status, delivery_url")
+          .in("media_file_id", ownedIds);
+        providerRows = providerLookup.data || [];
+        providerError = providerLookup.error;
+      }
       if (providerError) {
         console.error("[cloudinary-delete] provider lookup failed");
         await logLookupFailure("provider");
@@ -192,14 +215,15 @@ Deno.serve(async (req) => {
       const outcome = await deleteAuthorisedMediaFiles({
         requestedIds: mediaFileIds,
         rows: mediaRows || [],
-        providers: providerRows || [],
+        providers: providerRows,
         destroyOpeninary: async (objectKey) => {
           if (!config) return { success: false, error: "openinary unavailable" };
           return deleteFromOpeninary(config, objectKey);
         },
         destroyCloudinary,
         markDeleted: async (providerRowId, reason) => {
-          const { error } = await supabase
+          if (!serviceClient) return { error: "provider status update unavailable" };
+          const { error } = await serviceClient
             .from("media_file_providers")
             .update({ status: "deleted", deleted_at: new Date().toISOString(), deleted_reason: reason })
             .eq("id", providerRowId);
@@ -207,8 +231,7 @@ Deno.serve(async (req) => {
         },
       });
       await logDeleteRefusal(outcome.results.filter((result) => result.status === "refused").length);
-      const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
-      const serviceClient = serviceRoleKey ? createClient(supabaseUrl, serviceRoleKey) : null;
+      await logProviderMismatch(outcome.mismatchCount);
       await logProviderFailures(serviceClient, outcome.failedMediaFileIds.length, outcome.errors.length);
       // The ids were authorised above (owner, or admin). Remove their rows here: an admin's browser
       // JWT cannot delete another user's row under RLS, which would leave a row for a removed object.
@@ -241,7 +264,7 @@ Deno.serve(async (req) => {
 
     let ownedQuery = supabase
       .from("media_files")
-      .select("id, user_id, file_type, cloudinary_public_id")
+      .select("id, user_id, file_type, file_path, cloudinary_public_id")
       .in("cloudinary_public_id", publicIds);
     if (!isAdmin) ownedQuery = ownedQuery.eq("user_id", actorId);
     const { data: ownedRows, error: ownedError } = await ownedQuery;
@@ -256,6 +279,8 @@ Deno.serve(async (req) => {
     const deleted: string[] = [];
     const failed: string[] = [...refused];
     const providerErrors: string[] = [];
+    let mismatchCount = 0;
+    const filePathById = new Map((ownedRows || []).map((row: { id: string; file_path?: string | null }) => [row.id, row.file_path ?? null]));
     const { data: setting } = await supabase.from("app_settings").select("value").eq("key", "cdn_storage").maybeSingle();
     const providers = setting?.value?.write_policy?.providers || ["cloudinary"];
 
@@ -266,18 +291,25 @@ Deno.serve(async (req) => {
         else failed.push(target.publicId);
         if (providers.includes("openinary")) {
           const config = getOpeninaryConfig();
-          const { data: rows, error: providerLookupError } = await supabase
+          if (!serviceClient) { providerErrors.push("openinary lookup failed"); continue; }
+          const { data: rows, error: providerLookupError } = await serviceClient
             .from("media_file_providers")
-            .select("id, object_key")
+            .select("id, media_file_id, object_key, delivery_url, status")
             .eq("media_file_id", target.mediaFileId)
             .eq("provider", "openinary")
             .neq("status", "deleted");
           if (providerLookupError) { providerErrors.push("openinary lookup failed"); continue; }
           for (const row of rows || []) {
+            if (row.status === "failed") continue;
+            if (row.media_file_id !== target.mediaFileId || !openinaryObjectKeyMatches(row.object_key, row.delivery_url, filePathById.get(target.mediaFileId))) {
+              mismatchCount += 1;
+              providerErrors.push("provider object mismatch");
+              continue;
+            }
             if (!config) { providerErrors.push("openinary unavailable"); continue; }
             const openRemoved = await deleteFromOpeninary(config, row.object_key);
             if (!openRemoved.success) { providerErrors.push(openRemoved.error || "openinary delete failed"); continue; }
-            const { error: statusError } = await supabase.from("media_file_providers").update({ status: "deleted", deleted_at: new Date().toISOString(), deleted_reason: "user delete" }).eq("id", row.id);
+            const { error: statusError } = await serviceClient.from("media_file_providers").update({ status: "deleted", deleted_at: new Date().toISOString(), deleted_reason: "user delete" }).eq("id", row.id);
             if (statusError) providerErrors.push("openinary status update failed");
           }
         }
@@ -287,8 +319,9 @@ Deno.serve(async (req) => {
       }
     }
 
+    await logProviderMismatch(mismatchCount);
     const response: DeleteResponse = {
-      success: failed.length === 0,
+      success: failed.length === 0 && mismatchCount === 0,
       deleted,
       failed: failed.length > 0 ? failed : undefined,
       errors: providerErrors.length ? providerErrors : undefined,

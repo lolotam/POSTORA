@@ -11,8 +11,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
-import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
+import { batchOriginalName, renameBatchFile, type BatchRenameFile } from "./batchRename";
 import { Loader2, FileEdit, Hash, ArrowRight } from "lucide-react";
 import {
   Select,
@@ -23,17 +23,10 @@ import {
 } from "@/components/ui/select";
 import { ScrollArea } from "@/components/ui/scroll-area";
 
-interface MediaFile {
-  id: string;
-  file_path: string;
-  cloudinary_public_id?: string;
-  storage_bucket: string;
-}
-
 interface BatchRenameDialogProps {
   open: boolean;
   onClose: () => void;
-  files: MediaFile[];
+  files: BatchRenameFile[];
   onRenameComplete?: () => void;
 }
 
@@ -51,7 +44,7 @@ function getNumberSuffix(index: number, style: NumberingStyle, padLength: number
       return String(index + 1);
     case "padded":
       return String(index + 1).padStart(padLength, "0");
-    case "alpha":
+    case "alpha": {
       // Convert to a, b, c... z, aa, ab, etc.
       let result = "";
       let n = index;
@@ -60,6 +53,7 @@ function getNumberSuffix(index: number, style: NumberingStyle, padLength: number
         n = Math.floor(n / 26) - 1;
       } while (n >= 0);
       return result;
+    }
     default:
       return String(index + 1);
   }
@@ -100,7 +94,7 @@ export function BatchRenameDialog({
   useEffect(() => {
     if (open && files.length > 0) {
       // Try to use the first file's base name as default
-      const firstFileBaseName = getBaseName(files[0].file_path);
+      const firstFileBaseName = getBaseName(batchOriginalName(files[0]));
       // Remove any existing numbering pattern
       const cleanName = firstFileBaseName.replace(/[-_]?\d+$/, "").replace(/[-_]?[a-z]$/, "");
       setBaseName(cleanName || "image");
@@ -109,17 +103,20 @@ export function BatchRenameDialog({
     }
   }, [open, files]);
 
-  const generateNewName = (index: number, originalPath: string): string => {
-    const ext = getExtension(originalPath.split("/").pop() || "");
+  const generateNewName = (index: number, originalName: string): string => {
+    const ext = getExtension(originalName);
     const suffix = getNumberSuffix(index + startNumber - 1, numberingStyle);
     const actualSeparator = separator === "none" ? "" : separator;
     return `${baseName}${actualSeparator}${suffix}${ext}`;
   };
 
-  const previewNames = files.slice(0, 5).map((file, index) => ({
-    original: file.file_path.split("/").pop() || "",
-    new: generateNewName(index, file.file_path),
-  }));
+  const previewNames = files.slice(0, 5).map((file, index) => {
+    const original = batchOriginalName(file);
+    return {
+      original,
+      new: generateNewName(index, original),
+    };
+  });
 
   const handleBatchRename = async () => {
     if (files.length === 0) return;
@@ -132,34 +129,10 @@ export function BatchRenameDialog({
 
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
-      const newName = generateNewName(i, file.file_path);
+      const newName = generateNewName(i, batchOriginalName(file));
 
       try {
-        // For Cloudinary files, use the rename edge function
-        if (file.storage_bucket === "cloudinary" && file.cloudinary_public_id) {
-          const { data, error } = await supabase.functions.invoke("cloudinary-rename", {
-            body: {
-              fileId: file.id,
-              newName: newName.replace(/\.[^/.]+$/, ""), // Remove extension for Cloudinary
-            },
-          });
-
-          if (error) throw error;
-          if (!data?.success) throw new Error(data?.error || "Rename failed");
-        } else {
-          // For non-Cloudinary files, just update the file_path in database
-          const pathParts = file.file_path.split("/");
-          pathParts[pathParts.length - 1] = newName;
-          const newPath = pathParts.join("/");
-
-          const { error } = await supabase
-            .from("media_files")
-            .update({ file_path: newPath })
-            .eq("id", file.id);
-
-          if (error) throw error;
-        }
-
+        await renameBatchFile(file, newName);
         successCount++;
       } catch (error) {
         console.error(`Failed to rename file ${file.id}:`, error);

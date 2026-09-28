@@ -5,6 +5,8 @@ export interface OwnedMediaRow {
   user_id: string;
   file_type: string;
   cloudinary_public_id?: string | null;
+  /** Delivery URL or storage path. Used only to confirm an Openinary object_key. */
+  file_path?: string | null;
 }
 
 export interface ProviderDeleteRow {
@@ -14,6 +16,7 @@ export interface ProviderDeleteRow {
   object_key: string;
   /** ready | pending | failed | deleted. `failed` was never stored; `deleted` is already gone. */
   status: string;
+  delivery_url?: string | null;
 }
 
 /**
@@ -42,6 +45,45 @@ export function cloudinaryResourceTypeFor(fileType: string): CloudinaryResourceT
   if (fileType === "video") return "video";
   if (fileType === "image" || fileType === "gif") return "image";
   return "raw";
+}
+
+/** Path stored in object_key: a bare path, or the path of a delivery URL with Openinary's `/t/` prefix removed. */
+export function referenceObjectPath(reference: string): string {
+  const withoutQuery = reference.trim().split(/[?#]/)[0];
+  let path = withoutQuery;
+  if (/^https?:\/\//i.test(withoutQuery)) {
+    try {
+      path = new URL(withoutQuery).pathname;
+    } catch {
+      path = withoutQuery;
+    }
+  }
+  path = path.split("/").map((segment) => {
+    try {
+      return decodeURIComponent(segment);
+    } catch {
+      return segment;
+    }
+  }).join("/").replace(/^\/+/, "");
+  if (path.startsWith("t/")) path = path.slice(2);
+  return path;
+}
+
+/**
+ * Openinary may be destroyed only when object_key is the path of delivery_url,
+ * or of file_path when delivery_url is unset. Both unset is allowed.
+ */
+export function openinaryObjectKeyMatches(
+  objectKey: string,
+  deliveryUrl: string | null | undefined,
+  filePath: string | null | undefined,
+): boolean {
+  const key = objectKey.replace(/^\/+/, "");
+  const delivery = typeof deliveryUrl === "string" && deliveryUrl.trim() ? deliveryUrl : null;
+  const storedPath = typeof filePath === "string" && filePath.trim() ? filePath : null;
+  if (delivery) return referenceObjectPath(delivery) === key;
+  if (storedPath) return referenceObjectPath(storedPath) === key;
+  return true;
 }
 
 export function authorisedPublicIds(
@@ -83,10 +125,11 @@ export async function deleteAuthorisedMediaFiles(args: {
   destroyOpeninary: (objectKey: string) => Promise<DestroyResult>;
   destroyCloudinary: (objectKey: string, resourceType: CloudinaryResourceType) => Promise<DestroyResult>;
   markDeleted: (providerRowId: string, reason: string) => Promise<{ error?: string }>;
-}): Promise<{ results: IdDeleteResult[]; deletedMediaFileIds: string[]; failedMediaFileIds: string[]; errors: string[] }> {
+}): Promise<{ results: IdDeleteResult[]; deletedMediaFileIds: string[]; failedMediaFileIds: string[]; errors: string[]; mismatchCount: number }> {
   const rowsById = new Map(args.rows.map((row) => [row.id, row]));
   const results: IdDeleteResult[] = [];
   const errors: string[] = [];
+  let mismatchCount = 0;
 
   for (const mediaFileId of args.requestedIds) {
     const row = rowsById.get(mediaFileId);
@@ -101,6 +144,17 @@ export async function deleteAuthorisedMediaFiles(args: {
     }
     // A failed provider row never stored an object and a deleted one is already gone.
     const providerRows = allProviderRows.filter((provider) => provider.status !== "failed" && provider.status !== "deleted");
+
+    // providerRows are already limited to this authorised media_file_id.
+    const mismatch = providerRows.find((provider) =>
+      provider.provider === "openinary" && !openinaryObjectKeyMatches(provider.object_key, provider.delivery_url, row.file_path)
+    );
+    if (mismatch) {
+      mismatchCount += 1;
+      errors.push("provider object mismatch");
+      results.push({ id: mediaFileId, status: "failed", error: "provider object mismatch" });
+      continue;
+    }
 
     let failure: string | null = null;
     for (const provider of providerRows) {
@@ -131,6 +185,7 @@ export async function deleteAuthorisedMediaFiles(args: {
     deletedMediaFileIds: results.filter((result) => result.status === "deleted").map((result) => result.id),
     failedMediaFileIds: results.filter((result) => result.status !== "deleted").map((result) => result.id),
     errors,
+    mismatchCount,
   };
 }
 
