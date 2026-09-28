@@ -1,4 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { isServiceRoleBearer } from "./serviceCaller.ts";
 import { extensionForBytes, extensionForContentType, getOpeninaryConfig, openinaryTarget, openinaryDeliveryUrl, uploadBytesToOpeninary } from "../_shared/openinary.ts";
 
 const corsHeaders = {
@@ -279,9 +280,28 @@ Deno.serve(async (req) => {
       userId = claimsData.claims.sub as string;
       userEmail = (claimsData.claims.email as string) || userId;
     } else if (claimsError && ['bad_jwt', 'invalid_jwt'].includes((claimsError as any).code)) {
-      // Service-role caller (e.g. n8n-api) — accept userId from body
-      console.log("JWT auth failed with bad_jwt, checking for service-role caller...");
-      
+      // Service-role caller (e.g. n8n-api) — accept userId from body, but only for the service key.
+      if (!isServiceRoleBearer(token, serviceRoleKey)) {
+        console.error("Rejected unparseable bearer that is not the service-role key");
+        try {
+          const { error: logError } = await createClient(supabaseUrl, serviceRoleKey).from("system_logs").insert({
+            source: "cloudinary-upload",
+            category: "auth",
+            level: "warn",
+            message: "Upload refused: unparseable bearer is not the service-role key",
+            metadata: { reason: "non_service_bearer", claims_error: (claimsError as any).code ?? null },
+          });
+          if (logError) console.error("Auth refusal log insert failed");
+        } catch {
+          console.error("Auth refusal log insert failed");
+        }
+        return new Response(
+          JSON.stringify({ success: false, error: "Unauthorized" }),
+          { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+      console.log("Service-role caller, reading userId from body...");
+
       const bodyText = await req.text();
       const bodyJson = JSON.parse(bodyText);
       
