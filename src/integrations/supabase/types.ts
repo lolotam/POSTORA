@@ -7824,7 +7824,7 @@ export type Database = {
         }[]
       }
       media_retention_release: {
-        Args: { p_id: string; p_failed: boolean }
+        Args: { p_id: string; p_user_id: string; p_failed: boolean }
         Returns: undefined
       }
       media_retention_preview: {
