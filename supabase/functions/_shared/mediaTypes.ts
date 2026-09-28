@@ -100,11 +100,11 @@ export function originalBasename(fileName: string): string {
     try {
       path = new URL(trimmed).pathname;
     } catch {
-      path = trimmed.split("?")[0];
+      path = trimmed.split("?")[0].split("#")[0];
     }
   }
-  const withoutQuery = path.split("?")[0].split("#")[0];
-  const base = withoutQuery.split(/[/\\]/).filter(Boolean).pop() || "file";
+  // Only a URL carries a query or fragment; "photo#1.jpg" from the file picker keeps its '#'.
+  const base = path.split(/[/\\]/).filter(Boolean).pop() || "file";
   try {
     return decodeURIComponent(base);
   } catch {

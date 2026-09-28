@@ -13,6 +13,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useCopyToClipboard } from "@/hooks/shared";
 import { Copy, Check, Link2, Code, Share2 } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
+import { embedSnippets } from "./embedSnippets";
 
 interface ShareEmbedDialogProps {
   open: boolean;
@@ -21,6 +22,7 @@ interface ShareEmbedDialogProps {
     publicUrl: string;
     file_type: string;
     file_path: string;
+    metadata?: { original_filename?: unknown } | null;
   } | null;
 }
 
@@ -34,24 +36,12 @@ export function ShareEmbedDialog({
 
   if (!file) return null;
 
-  const fileName = file.file_path.split("/").pop() || "media";
+  const original = file.metadata?.original_filename;
+  const fileName = typeof original === "string" && original.trim() ? original.trim() : file.file_path.split("/").pop() || "media";
 
   const directUrl = file.publicUrl;
 
-  const htmlEmbed =
-    file.file_type === "image"
-      ? `<img src="${file.publicUrl}" alt="${fileName}" />`
-      : `<video src="${file.publicUrl}" controls></video>`;
-
-  const markdownEmbed =
-    file.file_type === "image"
-      ? `![${fileName}](${file.publicUrl})`
-      : `[${fileName}](${file.publicUrl})`;
-
-  const bbCodeEmbed =
-    file.file_type === "image"
-      ? `[img]${file.publicUrl}[/img]`
-      : `[video]${file.publicUrl}[/video]`;
+  const { html: htmlEmbed, markdown: markdownEmbed, bbCode: bbCodeEmbed } = embedSnippets(file.file_type, file.publicUrl, fileName);
 
   return (
     <Dialog open={open} onOpenChange={onClose}>

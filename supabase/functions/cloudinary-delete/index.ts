@@ -3,6 +3,10 @@ import { deleteFromOpeninary, getOpeninaryConfig } from "../_shared/openinary.ts
 import { logToDatabase } from "../_shared/logging.ts";
 import { authorisedPublicIds, deleteAuthorisedMediaFiles, isDisabledCloudResponse, type CloudinaryResourceType, type DestroyResult } from "./deletePlan.ts";
 
+// The service-role client, typed loosely: the generated schema types are not wired into edge functions.
+// deno-lint-ignore no-explicit-any
+type ServiceClient = any;
+
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
@@ -90,6 +94,35 @@ Deno.serve(async (req) => {
       }
     }
 
+    async function logProviderFailures(client: ServiceClient | null, failedCount: number, errorCount: number) {
+      if (failedCount === 0 && errorCount === 0) return;
+      if (!client) { console.error("[cloudinary-delete] provider failure log skipped: no service key"); return; }
+      try {
+        await logToDatabase(client, {
+          level: "error",
+          category: "system",
+          source: "cloudinary-delete",
+          message: "Delete incomplete: provider delete or status update failed",
+          user_id: actorId,
+          metadata: { reason: "provider_delete_failed", failedCount, errorCount },
+        });
+      } catch {
+        console.error("[cloudinary-delete] provider failure log failed");
+      }
+    }
+
+    async function removeDeletedRows(client: ServiceClient | null, ids: string[]): Promise<boolean> {
+      if (ids.length === 0) return true;
+      if (!client) return false;
+      const { error } = await client.from("media_files").delete().in("id", ids);
+      if (error) {
+        console.error("[cloudinary-delete] media row delete failed");
+        await logLookupFailure("row_delete");
+        return false;
+      }
+      return true;
+    }
+
     async function logDeleteRefusal(refusedCount: number) {
       if (refusedCount === 0) return;
       try {
@@ -174,8 +207,14 @@ Deno.serve(async (req) => {
         },
       });
       await logDeleteRefusal(outcome.results.filter((result) => result.status === "refused").length);
+      const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+      const serviceClient = serviceRoleKey ? createClient(supabaseUrl, serviceRoleKey) : null;
+      await logProviderFailures(serviceClient, outcome.failedMediaFileIds.length, outcome.errors.length);
+      // The ids were authorised above (owner, or admin). Remove their rows here: an admin's browser
+      // JWT cannot delete another user's row under RLS, which would leave a row for a removed object.
+      const rowsRemoved = await removeDeletedRows(serviceClient, outcome.deletedMediaFileIds);
       return new Response(JSON.stringify({
-        success: outcome.failedMediaFileIds.length === 0,
+        success: outcome.failedMediaFileIds.length === 0 && rowsRemoved,
         deletedMediaFileIds: outcome.deletedMediaFileIds,
         failedMediaFileIds: outcome.failedMediaFileIds.length ? outcome.failedMediaFileIds : undefined,
         results: outcome.results,

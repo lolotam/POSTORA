@@ -7,6 +7,8 @@ import {
   matchesLibraryFilter,
   mediaTypeForFileName,
   mediaTypeForMime,
+  originalBasename,
+  extensionOfName,
 } from "./mediaTypes.ts";
 
 Deno.test("frontend and edge allow-lists are the same file text", async () => {
@@ -43,4 +45,10 @@ Deno.test("the post picker refuses a document", () => {
   assertEquals(isPostableLibraryFile({ file_type: "image", file_path: "photo.jpg" }), true);
   assertEquals(matchesLibraryFilter({ file_type: "document", file_path: "pack.zip", metadata: { kind: "archive" } }, "archive"), true);
   assertEquals(matchesLibraryFilter({ file_type: "document", file_path: "notes.pdf", metadata: { original_filename: "notes.pdf" } }, "document"), true);
+});
+
+Deno.test("a local file name keeps '#' and '?', while a URL drops its query and fragment", () => {
+  assertEquals(originalBasename("photo#1.jpg"), "photo#1.jpg");
+  assertEquals(extensionOfName("photo#1.jpg"), "jpg");
+  assertEquals(originalBasename("https://cdn.example/a/pic.png?token=1#x"), "pic.png");
 });
