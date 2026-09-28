@@ -25,6 +25,15 @@ vi.mock("@/hooks/useWhatsAppScheduledMessages", () => ({
   useWhatsAppScheduledMessages: () => state,
 }));
 
+vi.mock("@/hooks/useQuotas", () => ({
+  useQuotas: () => ({
+    canUploadMedia: async () => ({ allowed: true }),
+    incrementMediaUpload: async () => true,
+    quota: null,
+    planLimits: { max_media_uploads_per_day: 20 },
+  }),
+}));
+
 import { ScheduledMessageManager } from "@/components/messaging/ScheduledMessageManager";
 
 function row(id: string, status: string, errorMessage: string | null = null): ScheduledMessage {
@@ -36,6 +45,7 @@ function row(id: string, status: string, errorMessage: string | null = null): Sc
     message_text: "hello",
     media_url: null,
     media_type: null,
+    media_filename: null,
     scheduled_at: "2026-09-27T12:00:00Z",
     status,
     sent_at: null,

@@ -21,6 +21,7 @@ interface RecordedSend {
   text?: string;
   caption?: string;
   mediaType?: string;
+  fileName?: string;
 }
 
 function message(id: string, userId: string, over: Partial<ClaimedScheduledMessage> = {}): ClaimedScheduledMessage {
@@ -32,6 +33,7 @@ function message(id: string, userId: string, over: Partial<ClaimedScheduledMessa
     message_text: "hello",
     media_url: null,
     media_type: null,
+    media_filename: null,
     claim_token: `token-${id}`,
     attempts: 1,
     account_connection_mode: "cloud_api",
@@ -64,6 +66,7 @@ function deps(messages: ClaimedScheduledMessage[], extra: Partial<ScheduledSende
         recipient: input.recipientPhone,
         caption: input.caption,
         mediaType: input.mediaType,
+        fileName: input.fileName,
       });
       return Promise.resolve({ messageId: "wamid-media", raw: { leaked: "raw-secret" } } satisfies EvolutionSendResult);
     },
@@ -257,7 +260,7 @@ Deno.test("cloud and QR accounts both send through the transport with digits onl
   await handleScheduledSender(request(), gate);
   assertEquals(gate.accounts.map((account) => account.connection_mode), ["evolution_qr", "cloud_api"]);
   assertEquals(gate.sends, [
-    { mode: "evolution_qr", op: "media", recipient: DIGITS, caption: undefined, mediaType: "audio" },
+    { mode: "evolution_qr", op: "media", recipient: DIGITS, caption: undefined, mediaType: "audio", fileName: undefined },
     { mode: "cloud_api", op: "text", recipient: DIGITS, text: "hello" },
   ]);
   assertEquals(gate.inserts.map((row) => row.conversation_id), [
@@ -265,6 +268,25 @@ Deno.test("cloud and QR accounts both send through the transport with digits onl
     `wa_pn-cloud_${DIGITS}`,
   ]);
   assertEquals(gate.inserts.map((row) => row.message_id), ["wamid-media", "wamid"]);
+});
+
+Deno.test("a document sends the sanitised media_filename and falls back to the sanitised URL name", async () => {
+  const gate = deps([
+    message("named", "user-b", {
+      media_type: "document",
+      media_url: "https://cdn.example/postora_2026_ab12.pdf",
+      media_filename: "\u202Ein..voice\u0007.pdf",
+      message_text: null,
+    }),
+    message("fallback", "user-b", {
+      media_type: "document",
+      media_url: "https://cdn.example/a/report%20final.pdf?dl=1",
+      media_filename: "  ",
+      message_text: null,
+    }),
+  ]);
+  await handleScheduledSender(request(), gate);
+  assertEquals(gate.sends.map((send) => send.fileName), ["in..voice.pdf", "report final.pdf"]);
 });
 
 Deno.test("invalid media, empty text, an @lid recipient, and an inactive account fail before the provider", async () => {

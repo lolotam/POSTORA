@@ -500,5 +500,152 @@ END $$;
 
 RESET ROLE;
 
+-- S13: the media_filename column exists, its 240-char CHECK holds, and the
+-- client guard lets an authenticated insert carry it (it only guards
+-- claim/status columns).
+DO $$
+BEGIN
+  ASSERT EXISTS (SELECT 1 FROM information_schema.columns
+                 WHERE table_schema = 'public'
+                   AND table_name = 'whatsapp_scheduled_messages'
+                   AND column_name = 'media_filename'),
+    'S13 media_filename column exists';
+  ASSERT EXISTS (SELECT 1 FROM pg_constraint
+                 WHERE conname = 'whatsapp_scheduled_messages_media_filename_check'
+                   AND conrelid = 'public.whatsapp_scheduled_messages'::regclass),
+    'S13 media_filename length CHECK exists';
+END $$;
+
+DO $$
+DECLARE
+  u_a uuid := 'a1a1a1a1-a1a1-41a1-81a1-a1a1a1a1a1a1';
+  acct_wa_a uuid := 'e1e1e1e1-e1e1-41e1-81e1-e1e1e1e1e1e1';
+BEGIN
+  BEGIN
+    INSERT INTO public.whatsapp_scheduled_messages
+      (user_id, social_account_id, recipient_phone, scheduled_at, media_filename)
+    VALUES (u_a, acct_wa_a, '96555510071', now() + interval '1 day', repeat('x', 241));
+    RAISE EXCEPTION 'S13 failed: 241-char media_filename accepted'
+      USING ERRCODE = 'assert_failure';
+  EXCEPTION WHEN check_violation THEN NULL;
+  END;
+END $$;
+
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claims',
+  json_build_object('sub', 'a1a1a1a1-a1a1-41a1-81a1-a1a1a1a1a1a1',
+                    'role', 'authenticated')::text, true);
+
+DO $$
+DECLARE
+  u_a uuid := 'a1a1a1a1-a1a1-41a1-81a1-a1a1a1a1a1a1';
+  acct_wa_a uuid := 'e1e1e1e1-e1e1-41e1-81e1-e1e1e1e1e1e1';
+  msg_mf uuid := '13131313-1313-4313-8313-131313131313';
+BEGIN
+  INSERT INTO public.whatsapp_scheduled_messages
+    (id, user_id, social_account_id, recipient_phone, scheduled_at,
+     media_url, media_type, media_filename)
+  VALUES (msg_mf, u_a, acct_wa_a, '96555510072', now() + interval '1 day',
+          'https://cdn.example/invoice.pdf', 'document', 'invoice.pdf');
+  ASSERT (SELECT media_filename FROM public.whatsapp_scheduled_messages
+          WHERE id = msg_mf) = 'invoice.pdf',
+    'S13 authenticated insert with media_filename passes the guard';
+END $$;
+
+RESET ROLE;
+
+-- S14: the claim RPC round-trips media_filename to the sender.
+SET LOCAL ROLE service_role;
+
+DO $$
+DECLARE
+  u_a uuid := 'a1a1a1a1-a1a1-41a1-81a1-a1a1a1a1a1a1';
+  acct_wa_a uuid := 'e1e1e1e1-e1e1-41e1-81e1-e1e1e1e1e1e1';
+  msg_r uuid := '14141414-1414-4414-8414-141414141414';
+  v_name text;
+BEGIN
+  INSERT INTO public.whatsapp_scheduled_messages
+    (id, user_id, social_account_id, recipient_phone, scheduled_at,
+     media_url, media_type, media_filename)
+  VALUES (msg_r, u_a, acct_wa_a, '96555510073', now() - interval '1 hour',
+          'https://cdn.example/postora_2026_ab12.pdf', 'document', 'report.pdf');
+
+  SELECT c.media_filename
+    INTO v_name
+    FROM public.claim_whatsapp_scheduled_messages(10, interval '2 minutes') AS c
+   WHERE c.id = msg_r;
+
+  ASSERT v_name = 'report.pdf',
+    'S14 claim returns the media_filename the dialog stored';
+END $$;
+
+RESET ROLE;
+
+-- S15: a scheduled media_url matching a deleting library file is refused by
+-- the retention reference guard, for both the file_path address and a
+-- provider delivery_url; the same URL passes once nothing is deleting.
+DO $$
+DECLARE
+  u_a uuid := 'a1a1a1a1-a1a1-41a1-81a1-a1a1a1a1a1a1';
+  mf uuid := '15151515-1515-4515-8515-151515151515';
+BEGIN
+  INSERT INTO public.media_files
+    (id, user_id, file_path, file_type, file_size, mime_type,
+     storage_bucket, cloudinary_public_id, retention_state)
+  VALUES (mf, u_a, 'https://cdn.example/protected.pdf', 'document', 1024, 'application/pdf',
+          'cloudinary', 'sched-s15/protected', 'deleting');
+  INSERT INTO public.media_file_providers
+    (media_file_id, provider, object_key, delivery_url, status)
+  VALUES (mf, 'openinary', 'sched-s15/protected',
+          'https://open.example/t/sched-s15/protected', 'ready');
+END $$;
+
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claims',
+  json_build_object('sub', 'a1a1a1a1-a1a1-41a1-81a1-a1a1a1a1a1a1',
+                    'role', 'authenticated')::text, true);
+
+DO $$
+DECLARE
+  u_a uuid := 'a1a1a1a1-a1a1-41a1-81a1-a1a1a1a1a1a1';
+  acct_wa_a uuid := 'e1e1e1e1-e1e1-41e1-81e1-e1e1e1e1e1e1';
+BEGIN
+  BEGIN
+    INSERT INTO public.whatsapp_scheduled_messages
+      (user_id, social_account_id, recipient_phone, scheduled_at, media_url, media_type)
+    VALUES (u_a, acct_wa_a, '96555510074', now() + interval '1 day',
+            'https://cdn.example/protected.pdf', 'document');
+    RAISE EXCEPTION 'S15 failed: media_url matching a deleting file_path accepted'
+      USING ERRCODE = 'assert_failure';
+  EXCEPTION WHEN OTHERS THEN
+    ASSERT SQLERRM = 'This file is being deleted from your library',
+      'S15 expected the retention guard for the file_path match, got: ' || SQLERRM;
+  END;
+
+  BEGIN
+    INSERT INTO public.whatsapp_scheduled_messages
+      (user_id, social_account_id, recipient_phone, scheduled_at, media_url, media_type)
+    VALUES (u_a, acct_wa_a, '96555510075', now() + interval '1 day',
+            'https://open.example/t/sched-s15/protected', 'document');
+    RAISE EXCEPTION 'S15 failed: media_url matching a deleting delivery_url accepted'
+      USING ERRCODE = 'assert_failure';
+  EXCEPTION WHEN OTHERS THEN
+    ASSERT SQLERRM = 'This file is being deleted from your library',
+      'S15 expected the retention guard for the delivery_url match, got: ' || SQLERRM;
+  END;
+END $$;
+
+RESET ROLE;
+
+-- Once the file is no longer deleting, the same URL schedules fine.
+UPDATE public.media_files
+SET retention_state = NULL
+WHERE file_path = 'https://cdn.example/protected.pdf';
+
+INSERT INTO public.whatsapp_scheduled_messages
+  (user_id, social_account_id, recipient_phone, scheduled_at, media_url, media_type)
+VALUES ('a1a1a1a1-a1a1-41a1-81a1-a1a1a1a1a1a1', 'e1e1e1e1-e1e1-41e1-81e1-e1e1e1e1e1e1',
+        '96555510076', now() + interval '1 day', 'https://cdn.example/protected.pdf', 'document');
+
 ROLLBACK;
 \echo '=== whatsapp_scheduled_sender: ALL CHECKS PASSED ==='

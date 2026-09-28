@@ -70,6 +70,7 @@ describe("useWhatsAppScheduledMessages schedule", () => {
       message_text: "hello",
       media_url: null,
       media_type: null,
+      media_filename: null,
       scheduled_at: "2026-12-01T12:30:00.000Z",
       status: "pending",
     }]);
@@ -79,6 +80,24 @@ describe("useWhatsAppScheduledMessages schedule", () => {
     expect(inserts[0]).not.toHaveProperty("claim_token");
     expect(inserts[0]).not.toHaveProperty("attempts");
     expect(inserts[0]).not.toHaveProperty("sent_at");
+  });
+
+  it("stores the trimmed media_filename for the sender", async () => {
+    const { result } = renderSchedule();
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    await result.current.schedule.mutateAsync({
+      socialAccountId: "acc-1",
+      recipientPhone: "96550001111",
+      mediaUrl: "https://cdn.example/postora_2026_ab12.pdf",
+      mediaType: "document",
+      mediaFilename: "  invoice.pdf  ",
+      scheduledAt: "2026-12-01T12:30:00.000Z",
+    });
+    expect(inserts[0]).toMatchObject({
+      media_url: "https://cdn.example/postora_2026_ab12.pdf",
+      media_type: "document",
+      media_filename: "invoice.pdf",
+    });
   });
 
   it("maps a 42501 error to the own-account message and surfaces other failures", async () => {
