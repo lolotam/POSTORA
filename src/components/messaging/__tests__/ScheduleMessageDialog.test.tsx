@@ -120,21 +120,37 @@ let releaseInsert: (() => void) | null = null;
 let accountFilters: [string, unknown][] = [];
 let mediaFilters: [string, unknown][] = [];
 let libraryRows: LibraryRow[] = [];
+let libraryError: { message: string } | null = null;
+interface MediaQueryCapture {
+  eqs: [string, unknown][];
+  or: string | null;
+  range: [number, number] | null;
+  select: string | null;
+}
+let lastMediaQuery: MediaQueryCapture = { eqs: [], or: null, range: null, select: null };
 let invokeQueue: Array<{ data?: unknown; error?: unknown }> = [];
 const invokeCalls: Array<{ path: string; body: Record<string, unknown> }> = [];
 
 function builder(table: string) {
   const filters: [string, unknown][] = [];
   if (table === "social_accounts") accountFilters = filters;
-  if (table === "media_files") mediaFilters = filters;
+  if (table === "media_files") {
+    mediaFilters = filters;
+    lastMediaQuery = { eqs: filters, or: null, range: null, select: null };
+  }
   let inserting = false;
   const api = {
     select: (columns?: string) => {
       if (inserting) insertSelect = columns ?? null;
+      if (table === "media_files") lastMediaQuery.select = columns ?? null;
       return api;
     },
     eq: (column: string, value: unknown) => {
       filters.push([column, value]);
+      return api;
+    },
+    or: (expression: string) => {
+      if (table === "media_files") lastMediaQuery.or = expression;
       return api;
     },
     order: () => {
@@ -149,6 +165,12 @@ function builder(table: string) {
           : [{ id: "shared", platform_username: "Shared Workspace", platform_user_id: "999", connection_mode: "cloud_api" }],
         error: null,
       });
+    },
+    range: (from: number, to: number) => {
+      if (table === "media_files") lastMediaQuery.range = [from, to];
+      const owned = filters.some(([column, value]) => column === "user_id" && value === "user-1");
+      if (libraryError) return Promise.resolve({ data: null, error: libraryError });
+      return Promise.resolve({ data: owned ? libraryRows.slice(from, to + 1) : [], error: null });
     },
     limit: () => {
       const owned = filters.some(([column, value]) => column === "user_id" && value === "user-1");
@@ -224,6 +246,8 @@ describe("ScheduleMessageDialog", () => {
     accountFilters = [];
     mediaFilters = [];
     libraryRows = [];
+    libraryError = null;
+    lastMediaQuery = { eqs: [], or: null, range: null, select: null };
     invokeQueue = [];
     invokeCalls.length = 0;
     quotaGate.allowed = true;
@@ -528,5 +552,168 @@ describe("ScheduleMessageDialog", () => {
     releaseInsert?.();
     await waitFor(() => expect(toast.success).toHaveBeenCalled());
     expect(insertCount).toBe(1);
+  });
+
+  it("a rejected replacement file clears the in-flight upload so Schedule is enabled", async () => {
+    accounts = [OWN[1]];
+    const pending: Array<(value: unknown) => void> = [];
+    vi.mocked(supabase.functions.invoke).mockImplementation(
+      () => new Promise((resolve) => { pending.push((value: unknown) => resolve(value as never)); }),
+    );
+    renderManager();
+    await openDialog();
+    openSourceTab("Upload file");
+    const schedule = screen.getByRole("button", { name: "Schedule" });
+
+    pickFile("a.jpg", "image/jpeg");
+    await waitFor(() => expect(pending.length).toBe(1));
+    expect(schedule).toBeDisabled();
+
+    pickFile("notes.exe");
+    expect(await screen.findByText("notes.exe is not an allowed file type.")).toBeInTheDocument();
+    expect(schedule).toBeEnabled();
+
+    pickFile("b.jpg", "image/jpeg");
+    await waitFor(() => expect(pending.length).toBe(2));
+    expect(schedule).toBeDisabled();
+
+    const oversized = new File(["x"], "photo.jpg", { type: "image/jpeg" });
+    Object.defineProperty(oversized, "size", { value: 10 * 1024 * 1024 + 1 });
+    fireEvent.change(screen.getByLabelText("Choose a file"), { target: { files: [oversized] } });
+    expect(await screen.findByText("photo.jpg is over the 10 MB limit.")).toBeInTheDocument();
+    expect(schedule).toBeEnabled();
+
+    pending[0]({ data: { success: true, mediaFileId: "mf-stale", url: "https://cdn.example/a.jpg" }, error: null });
+    pending[1]({ data: { success: true, mediaFileId: "mf-stale-2", url: "https://cdn.example/b.jpg" }, error: null });
+    await waitFor(() => expect(schedule).toBeEnabled());
+    expect(screen.queryByText(/Selected:/)).not.toBeInTheDocument();
+  });
+
+  it("library search is sent to the server and does not hide rows the query returns", async () => {
+    libraryRows = LIB;
+    renderManager();
+    await openDialog();
+    openSourceTab("Choose from Library");
+    expect(await screen.findByText("photo.webp")).toBeInTheDocument();
+    expect(lastMediaQuery.or).toBeNull();
+    expect(lastMediaQuery.select).toContain("media_file_providers");
+    expect(lastMediaQuery.range).toEqual([0, 49]);
+
+    fireEvent.change(screen.getByPlaceholderText("Search files"), { target: { value: "invoice" } });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(lastMediaQuery.or).toBeNull();
+
+    await waitFor(() => {
+      expect(lastMediaQuery.or).toBe(
+        'metadata->>original_filename.ilike."%invoice%",file_path.ilike."%invoice%"',
+      );
+      expect(screen.getByText("photo.webp")).toBeInTheDocument();
+    });
+    expect(screen.getByText("pack.zip")).toBeInTheDocument();
+  });
+
+  it.each([
+    ["100%", 'metadata->>original_filename.ilike."%100\\\\%%",file_path.ilike."%100\\\\%%"'],
+    ["a,b", 'metadata->>original_filename.ilike."%a,b%",file_path.ilike."%a,b%"'],
+    ["a(b)", 'metadata->>original_filename.ilike."%a(b)%",file_path.ilike."%a(b)%"'],
+    ["a_b", 'metadata->>original_filename.ilike."%a\\\\_b%",file_path.ilike."%a\\\\_b%"'],
+  ])("library search escapes %s inside the PostgREST or filter", async (term, expected) => {
+    libraryRows = LIB;
+    renderManager();
+    await openDialog();
+    openSourceTab("Choose from Library");
+    await screen.findByText("photo.webp");
+    fireEvent.change(screen.getByPlaceholderText("Search files"), { target: { value: term } });
+    await waitFor(() => expect(lastMediaQuery.or).toBe(expected));
+  });
+
+  it("Load more requests the next 50-row range", async () => {
+    libraryRows = Array.from({ length: 60 }, (_, index) => ({
+      id: `mf-${index}`,
+      file_path: `https://cdn.example/f${index}.jpg`,
+      file_type: "image",
+      file_size: 10,
+      mime_type: "image/jpeg",
+      metadata: { kind: "image", original_filename: `file-${index}.jpg` },
+      storage_bucket: "cloudinary",
+      current_object_version: 1,
+      media_file_providers: [{ provider: "cloudinary", object_version: 1, status: "ready" }],
+    }));
+    renderManager();
+    await openDialog();
+    openSourceTab("Choose from Library");
+    expect(await screen.findByText("file-0.jpg")).toBeInTheDocument();
+    expect(lastMediaQuery.range).toEqual([0, 49]);
+    expect(screen.queryByText("file-50.jpg")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Load more" }));
+    expect(await screen.findByText("file-50.jpg")).toBeInTheDocument();
+    expect(screen.getByText("file-0.jpg")).toBeInTheDocument();
+    expect(lastMediaQuery.range).toEqual([50, 99]);
+  });
+
+  it.each([
+    ["Images", "image"],
+    ["Videos", "video"],
+    ["Audio", "audio"],
+  ] as const)("kind %s queries file_type %s from the first page", async (label, fileType) => {
+    libraryRows = LIB;
+    renderManager();
+    await openDialog();
+    openSourceTab("Choose from Library");
+    await screen.findByText("photo.webp");
+    await chooseOption("Kind", label);
+    await waitFor(() => expect(lastMediaQuery.eqs).toContainEqual(["file_type", fileType]));
+    expect(lastMediaQuery.or).toBeNull();
+    expect(lastMediaQuery.range).toEqual([0, 49]);
+    expect(lastMediaQuery.eqs).toContainEqual(["user_id", "user-1"]);
+  });
+
+  it("document and archive kinds are filtered on the server, and a kind change restarts the page", async () => {
+    libraryRows = Array.from({ length: 60 }, (_, index) => ({
+      id: `mf-${index}`,
+      file_path: `https://cdn.example/f${index}.pdf`,
+      file_type: "document",
+      file_size: 10,
+      mime_type: "application/pdf",
+      metadata: { kind: "document", original_filename: `doc-${index}.pdf` },
+      storage_bucket: "cloudinary",
+      current_object_version: 1,
+    }));
+    renderManager();
+    await openDialog();
+    openSourceTab("Choose from Library");
+    await screen.findByRole("button", { name: "Load more" });
+    fireEvent.click(screen.getByRole("button", { name: "Load more" }));
+    await waitFor(() => expect(lastMediaQuery.range).toEqual([50, 99]));
+
+    await chooseOption("Kind", "Documents");
+    await waitFor(() => expect(lastMediaQuery.or).toContain("metadata->>kind.neq.archive"));
+    expect(lastMediaQuery.eqs).toContainEqual(["file_type", "document"]);
+    expect(lastMediaQuery.or).toContain('file_path.not.ilike."%.zip"');
+    expect(lastMediaQuery.or).toContain('file_path.not.ilike."%.7z"');
+    expect(lastMediaQuery.or).toContain("metadata->>kind.is.null");
+    expect(lastMediaQuery.range).toEqual([0, 49]);
+
+    await chooseOption("Kind", "Archives");
+    await waitFor(() => expect(lastMediaQuery.or).toContain("metadata->>kind.eq.archive"));
+    expect(lastMediaQuery.eqs).toContainEqual(["file_type", "document"]);
+    expect(lastMediaQuery.or).toContain('file_path.ilike."%.zip"');
+    expect(lastMediaQuery.or).toContain('file_path.ilike."%.gz"');
+    expect(lastMediaQuery.range).toEqual([0, 49]);
+  });
+
+  it("a library load failure and an empty page each have their own message", async () => {
+    libraryError = { message: "statement timeout" };
+    renderManager();
+    await openDialog();
+    openSourceTab("Choose from Library");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Couldn't load your library.");
+
+    libraryError = null;
+    libraryRows = [];
+    openSourceTab("Upload file");
+    openSourceTab("Choose from Library");
+    expect(await screen.findByText("No files match.")).toBeInTheDocument();
   });
 });

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
@@ -89,13 +89,18 @@ export function ScheduleMessageDialog({ open, onOpenChange }: ScheduleMessageDia
   const [whenLocal, setWhenLocal] = useState("");
   const [fieldError, setFieldError] = useState<Record<string, string>>({});
   // A stale completion (dialog closed or reopened, or a different file
-  // picked) must never fill the media fields; every new pick or source
-  // change invalidates the in-flight upload.
+  // picked) must never fill the media fields. Invalidating also drops
+  // `uploading`: the superseded run's finally bails out on the token and
+  // cannot clear the flag itself.
   const uploadTokenRef = useRef(0);
+  const invalidateInFlightUpload = useCallback(() => {
+    uploadTokenRef.current += 1;
+    setUploading(false);
+  }, []);
 
   useEffect(() => {
     if (open) return;
-    uploadTokenRef.current += 1;
+    invalidateInFlightUpload();
     setAccountId("");
     setPhone("");
     setRecipientName("");
@@ -106,11 +111,10 @@ export function ScheduleMessageDialog({ open, onOpenChange }: ScheduleMessageDia
     setMediaFilename("");
     setPicked(null);
     setLibraryPick(null);
-    setUploading(false);
     setUploadIssue(null);
     setWhenLocal("");
     setFieldError({});
-  }, [open]);
+  }, [open, invalidateInFlightUpload]);
 
   useEffect(() => {
     if (!open || accounts.length !== 1) return;
@@ -193,13 +197,13 @@ export function ScheduleMessageDialog({ open, onOpenChange }: ScheduleMessageDia
   };
 
   const handleSourceChange = (value: string) => {
-    uploadTokenRef.current += 1;
-    setUploading(false);
+    invalidateInFlightUpload();
     setMediaSource(value as MediaSource);
     clearMedia();
   };
 
   const runUpload = async (file: File, entry: MediaTypeEntry, token: number) => {
+    if (uploadTokenRef.current !== token) return;
     setUploading(true);
     try {
       const quotaCheck = await canUploadMedia();
@@ -239,7 +243,7 @@ export function ScheduleMessageDialog({ open, onOpenChange }: ScheduleMessageDia
     const file = event.target.files?.[0];
     event.target.value = "";
     if (!file) return;
-    uploadTokenRef.current += 1;
+    invalidateInFlightUpload();
     const token = uploadTokenRef.current;
     setPicked({ name: file.name, size: file.size });
     setMediaUrl("");
@@ -259,8 +263,7 @@ export function ScheduleMessageDialog({ open, onOpenChange }: ScheduleMessageDia
 
   const handleLibraryPick = (file: ScheduleLibraryFile, url: string) => {
     if (!url) return;
-    uploadTokenRef.current += 1;
-    setUploading(false);
+    invalidateInFlightUpload();
     setPicked(null);
     setUploadIssue(null);
     const name = downloadNameFor(file);
