@@ -72,6 +72,24 @@ Deno.serve(async (req) => {
     if (roleError) console.error("[cloudinary-delete] admin role lookup failed");
     const isAdmin = !!adminRole && !roleError;
 
+    /** A lookup failure refuses the whole request; it gets a durable row, never the ids or keys. */
+    async function logLookupFailure(stage: string) {
+      try {
+        const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+        if (!serviceRoleKey) return;
+        await logToDatabase(createClient(supabaseUrl, serviceRoleKey), {
+          level: "error",
+          category: "system",
+          source: "cloudinary-delete",
+          message: "Delete refused: lookup failed",
+          user_id: actorId,
+          metadata: { reason: "lookup_failed", stage },
+        });
+      } catch {
+        console.error("[cloudinary-delete] lookup failure log failed");
+      }
+    }
+
     async function logDeleteRefusal(refusedCount: number) {
       if (refusedCount === 0) return;
       try {
@@ -120,6 +138,7 @@ Deno.serve(async (req) => {
       const { data: mediaRows, error: mediaError } = await mediaQuery;
       if (mediaError) {
         console.error("[cloudinary-delete] media lookup failed");
+        await logLookupFailure("media");
         return new Response(JSON.stringify({ success: false, error: "Could not load media files" }), { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
       }
 
@@ -132,6 +151,7 @@ Deno.serve(async (req) => {
         : { data: [], error: null };
       if (providerError) {
         console.error("[cloudinary-delete] provider lookup failed");
+        await logLookupFailure("provider");
         return new Response(JSON.stringify({ success: false, error: "Could not load stored objects" }), { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
       }
 
@@ -188,6 +208,7 @@ Deno.serve(async (req) => {
     const { data: ownedRows, error: ownedError } = await ownedQuery;
     if (ownedError) {
       console.error("[cloudinary-delete] public id lookup failed");
+        await logLookupFailure("public_id");
       return new Response(JSON.stringify({ success: false, error: "Could not load media files" }), { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
     const { allowed, refused } = authorisedPublicIds(publicIds, ownedRows || []);

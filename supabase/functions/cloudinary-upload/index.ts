@@ -334,8 +334,18 @@ export async function handleCloudinaryUpload(req: Request): Promise<Response> {
       }
       console.log("Service-role caller, reading userId from body...");
 
-      const bodyText = await req.text();
-      const bodyJson = JSON.parse(bodyText);
+      // Same byte cap as the user path: a service caller must not be able to exhaust the isolate.
+      let bodyJson: any;
+      try {
+        bodyJson = await readJsonBodyCapped(req);
+      } catch (parseError) {
+        const tooLarge = parseError instanceof BodyTooLargeError;
+        await logUploadRefusal(undefined, tooLarge ? "Rejected oversized upload body" : "Rejected malformed upload body", { reason: tooLarge ? "body_cap" : "invalid_json", caller: "service_role" });
+        return new Response(
+          JSON.stringify({ success: false, error: tooLarge ? (parseError as Error).message : "Invalid JSON body" }),
+          { status: tooLarge ? 413 : 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
       
       if (!bodyJson.userId) {
         console.error("Service-role caller did not provide userId in body");
@@ -405,7 +415,7 @@ export async function handleCloudinaryUpload(req: Request): Promise<Response> {
       );
     }
 
-    // The service-role branch parses its own body. This read is the user path:
+    // The service-role branch parses its own body with the same cap. This read is the user path:
     // cap the bytes while reading, before JSON.parse.
     let parsedBody: UploadRequest;
     if ((req as any)._parsedBody) {
@@ -421,6 +431,7 @@ export async function handleCloudinaryUpload(req: Request): Promise<Response> {
             { status: 413, headers: { ...corsHeaders, "Content-Type": "application/json" } },
           );
         }
+        await logUploadRefusal(userId, "Rejected malformed upload body", { reason: "invalid_json" });
         return new Response(
           JSON.stringify({ success: false, error: "Invalid JSON body" }),
           { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
