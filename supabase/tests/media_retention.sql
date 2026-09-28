@@ -391,7 +391,7 @@ BEGIN
   SET expires_at = v_now + interval '7 days', retention_state = 'warned', last_used_at = NULL
   WHERE id = '11111111-1111-4111-8111-11111111112d';
   INSERT INTO public.posts (user_id, platforms, media_file_ids)
-  VALUES (u_b, ARRAY['facebook']::text[], ARRAY['11111111-1111-4111-8111-11111111112d']);
+  VALUES (u_b, ARRAY['facebook']::text[], ARRAY['11111111-1111-4111-8111-11111111112d']::uuid[]);
   ASSERT (SELECT last_used_at IS NULL AND expires_at IS NOT NULL
           FROM public.media_files WHERE id = '11111111-1111-4111-8111-11111111112d'),
     'S4b another user''s post does not touch this owner''s retention columns';
