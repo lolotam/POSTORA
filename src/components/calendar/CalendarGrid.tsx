@@ -13,7 +13,7 @@ import {
   parseISO,
 } from "date-fns";
 import { cn } from "@/lib/utils";
-import type { CalendarEntry } from "@/features/scheduled/domain/scheduledBoard";
+import type { CalendarEntry } from "@/features/scheduled";
 import { ScheduledPostCard } from "./ScheduledPostCard";
 import { WhatsAppCalendarChip } from "./WhatsAppCalendarChip";
 

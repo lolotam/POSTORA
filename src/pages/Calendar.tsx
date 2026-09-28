@@ -18,10 +18,14 @@ import {
 } from "@/components/calendar";
 import type { CalendarDrag } from "@/components/calendar/CalendarGrid";
 import { Reveal, GradientDivider } from "@/components/fx";
-import { buildCalendarEntries } from "@/features/scheduled/domain/scheduledBoard";
-import { moveKeepingLocalWallClock, movePostToDay } from "@/features/scheduled/domain/wallClockMove";
-import { useWhatsAppScheduledItems } from "@/features/scheduled/whatsappScheduledItems";
-import { CancelWhatsAppDialog, RescheduleWhatsAppDialog } from "@/features/scheduled/ui/WhatsAppScheduleDialogs";
+import {
+  buildCalendarEntries,
+  CancelWhatsAppDialog,
+  moveKeepingLocalWallClock,
+  movePostToDay,
+  RescheduleWhatsAppDialog,
+  useWhatsAppScheduledItems,
+} from "@/features/scheduled";
 import { AlertTriangle } from "lucide-react";
 
 export default function Calendar() {

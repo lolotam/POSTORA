@@ -7,7 +7,7 @@ import {
   ACTIVE_WHATSAPP_STATUSES,
   CALENDAR_WHATSAPP_STATUSES,
   WHATSAPP_RANGE_LIMIT,
-} from "@/features/scheduled/domain/whatsAppSchedule";
+} from "@/features/scheduled";
 import { useWhatsAppScheduledMutations } from "@/hooks/useWhatsAppScheduledMessages";
 import Calendar from "@/pages/Calendar";
 import ScheduledPosts from "@/pages/ScheduledPosts";

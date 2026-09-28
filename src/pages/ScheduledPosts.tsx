@@ -84,10 +84,15 @@ import { PlatformAccountMultiSelect } from "@/components/post/PlatformAccountMul
 import { useAuth } from "@/hooks/useAuth";
 import { useUserRole } from "@/hooks/useUserRole";
 import { getScheduledPostTypes } from "@/components/scheduled/scheduledMediaControls";
-import { buildScheduledBoard, isOverdueWhen, selectablePostIds } from "@/features/scheduled/domain/scheduledBoard";
-import { useWhatsAppScheduledItems } from "@/features/scheduled/whatsappScheduledItems";
-import { WhatsAppScheduledCard } from "@/features/scheduled/ui/WhatsAppScheduledCard";
-import { CancelWhatsAppDialog, RescheduleWhatsAppDialog } from "@/features/scheduled/ui/WhatsAppScheduleDialogs";
+import {
+  buildScheduledBoard,
+  CancelWhatsAppDialog,
+  isOverdueWhen,
+  RescheduleWhatsAppDialog,
+  selectablePostIds,
+  useWhatsAppScheduledItems,
+  WhatsAppScheduledCard,
+} from "@/features/scheduled";
 import {
   SCHEDULED_CANCEL_BLOCKED,
   SCHEDULED_CHANGE_BLOCKED,

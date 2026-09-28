@@ -15,8 +15,7 @@ import {
 } from "@/components/ui/dialog";
 import { GradientRingCard, Icon3D, Reveal } from "@/components/fx";
 import { cn } from "@/lib/utils";
-import type { CalendarEntry } from "@/features/scheduled/domain/scheduledBoard";
-import { browserTimeZone } from "@/features/scheduled/domain/wallClockMove";
+import { browserTimeZone, type CalendarEntry } from "@/features/scheduled";
 
 interface DayDetailDialogProps {
   open: boolean;

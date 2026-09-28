@@ -50,9 +50,13 @@ vi.mock("@/hooks/usePosts", () => ({
     isFetching: false,
   }),
 }));
-vi.mock("@/features/scheduled/whatsappScheduledItems", () => ({
-  useWhatsAppScheduledItems: () => whatsAppState,
-}));
+vi.mock("@/features/scheduled", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/features/scheduled")>();
+  return {
+    ...actual,
+    useWhatsAppScheduledItems: () => whatsAppState,
+  };
+});
 vi.mock("@/hooks/useWhatsAppScheduledMessages", () => ({
   SCHEDULED_CANCEL_BLOCKED: "This message is already being sent and can no longer be cancelled.",
   SCHEDULED_CHANGE_BLOCKED: "This message can no longer be changed (it is being sent, was sent, or was cancelled).",

@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
-import { ACTIVE_WHATSAPP_STATUSES } from "@/features/scheduled/domain/whatsAppSchedule";
+import { ACTIVE_WHATSAPP_STATUSES } from "@/features/scheduled";
 import { useAuth } from "./useAuth";
 import { Platform } from "@/lib/types";
 import { getPostActivityTimestamp } from "@/lib/postActivity";
