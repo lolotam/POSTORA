@@ -6,6 +6,8 @@
 -- errors in nested BEGIN/EXCEPTION blocks, ROLLBACK, sentinel last.
 -- Fixtures are synthetic ('...@example.invalid'). No secrets or real data.
 BEGIN;
+-- Fixture posts must not hit the per-plan daily post quota; the ROLLBACK restores the trigger.
+ALTER TABLE public.posts DISABLE TRIGGER trg_enforce_post_quota_on_insert;
 
 CREATE FUNCTION pg_temp.mfile(
   p_id uuid,
