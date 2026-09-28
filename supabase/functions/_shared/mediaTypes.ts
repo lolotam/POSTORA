@@ -116,7 +116,10 @@ export function extensionOfName(fileName: string): string {
   const base = originalBasename(fileName);
   const dot = base.lastIndexOf(".");
   if (dot <= 0 || dot === base.length - 1) return "";
-  return base.slice(dot + 1).toLowerCase();
+  const suffix = base.slice(dot + 1).toLowerCase();
+  // "IMG_2026.09_bg-removed" or "Screenshot 2026.09.28" carry dots but no extension:
+  // only 1-5 alphanumerics with a letter count, so those fall through to byte sniffing.
+  return /^(?=.*[a-z])[a-z0-9]{1,5}$/.test(suffix) ? suffix : "";
 }
 
 export function isExcludedExtension(extension: string): boolean {

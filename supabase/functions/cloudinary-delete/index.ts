@@ -1,7 +1,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { deleteFromOpeninary, getOpeninaryConfig } from "../_shared/openinary.ts";
 import { logToDatabase } from "../_shared/logging.ts";
-import { authorisedPublicIds, deleteAuthorisedMediaFiles, type CloudinaryResourceType } from "./deletePlan.ts";
+import { authorisedPublicIds, deleteAuthorisedMediaFiles, isDisabledCloudResponse, type CloudinaryResourceType, type DestroyResult } from "./deletePlan.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -91,7 +91,7 @@ Deno.serve(async (req) => {
       }
     }
 
-    async function destroyCloudinary(objectKey: string, resourceType: CloudinaryResourceType): Promise<{ success: boolean; error?: string }> {
+    async function destroyCloudinary(objectKey: string, resourceType: CloudinaryResourceType): Promise<DestroyResult> {
       if (!cloudName || !apiKey || !apiSecret) return { success: false, error: "cloudinary credentials unavailable" };
       const timestamp = Math.floor(Date.now() / 1000);
       const signatureParams = [`public_id=${objectKey}`, `timestamp=${timestamp}`].sort().join("&");
@@ -105,8 +105,9 @@ Deno.serve(async (req) => {
       formData.append("timestamp", timestamp.toString());
       formData.append("signature", signature);
       const response = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/${resourceType}/destroy`, { method: "POST", body: formData });
-      const result = await response.json();
-      if (result.result === "ok" || result.result === "not found") return { success: true };
+      const result = await response.json().catch(() => ({}));
+      if (result.result === "ok" || result.result === "not found") return { success: true, reason: "removed" };
+      if (isDisabledCloudResponse(response.status, result?.error?.message)) return { success: true, reason: "provider_disabled" };
       return { success: false, error: result?.error?.message || `HTTP ${response.status}` };
     }
 
@@ -126,9 +127,8 @@ Deno.serve(async (req) => {
       const { data: providerRows, error: providerError } = ownedIds.length
         ? await supabase
           .from("media_file_providers")
-          .select("id, media_file_id, provider, object_key")
+          .select("id, media_file_id, provider, object_key, status")
           .in("media_file_id", ownedIds)
-          .neq("status", "deleted")
         : { data: [], error: null };
       if (providerError) {
         console.error("[cloudinary-delete] provider lookup failed");
@@ -145,10 +145,10 @@ Deno.serve(async (req) => {
           return deleteFromOpeninary(config, objectKey);
         },
         destroyCloudinary,
-        markDeleted: async (providerRowId) => {
+        markDeleted: async (providerRowId, reason) => {
           const { error } = await supabase
             .from("media_file_providers")
-            .update({ status: "deleted", deleted_at: new Date().toISOString(), deleted_reason: "user delete" })
+            .update({ status: "deleted", deleted_at: new Date().toISOString(), deleted_reason: reason })
             .eq("id", providerRowId);
           return { error: error?.message };
         },

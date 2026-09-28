@@ -12,6 +12,24 @@ export interface ProviderDeleteRow {
   media_file_id: string;
   provider: string;
   object_key: string;
+  /** ready | pending | failed | deleted. `failed` was never stored; `deleted` is already gone. */
+  status: string;
+}
+
+/**
+ * `removed`: the provider confirmed the object is gone (including "not found").
+ * `provider_disabled`: the provider says the whole account is disabled, so the object is
+ * unreachable for everyone and there is nothing left to delete.
+ */
+export interface DestroyResult {
+  success: boolean;
+  error?: string;
+  reason?: "removed" | "provider_disabled";
+}
+
+/** Cloudinary answers a disabled cloud with 401 "cloud_name is disabled". Env-less config is not this. */
+export function isDisabledCloudResponse(status: number, message: string | undefined): boolean {
+  return status === 401 && /disabled/i.test(message ?? "");
 }
 
 export interface IdDeleteResult {
@@ -62,9 +80,9 @@ export async function deleteAuthorisedMediaFiles(args: {
   requestedIds: string[];
   rows: OwnedMediaRow[];
   providers: ProviderDeleteRow[];
-  destroyOpeninary: (objectKey: string) => Promise<{ success: boolean; error?: string }>;
-  destroyCloudinary: (objectKey: string, resourceType: CloudinaryResourceType) => Promise<{ success: boolean; error?: string }>;
-  markDeleted: (providerRowId: string) => Promise<{ error?: string }>;
+  destroyOpeninary: (objectKey: string) => Promise<DestroyResult>;
+  destroyCloudinary: (objectKey: string, resourceType: CloudinaryResourceType) => Promise<DestroyResult>;
+  markDeleted: (providerRowId: string, reason: string) => Promise<{ error?: string }>;
 }): Promise<{ results: IdDeleteResult[]; deletedMediaFileIds: string[]; failedMediaFileIds: string[]; errors: string[] }> {
   const rowsById = new Map(args.rows.map((row) => [row.id, row]));
   const results: IdDeleteResult[] = [];
@@ -76,12 +94,13 @@ export async function deleteAuthorisedMediaFiles(args: {
       results.push({ id: mediaFileId, status: "refused", error: "Not allowed" });
       continue;
     }
-    const providerRows = args.providers.filter((provider) => provider.media_file_id === mediaFileId);
-    if (providerRows.length === 0) {
-      results.push({ id: mediaFileId, status: "failed", error: "No stored object for this file" });
-      errors.push(`${mediaFileId}: no provider record`);
+    const allProviderRows = args.providers.filter((provider) => provider.media_file_id === mediaFileId);
+    if (allProviderRows.length === 0) {
+      results.push(await deleteLegacyCloudinary(row, args.destroyCloudinary, errors));
       continue;
     }
+    // A failed provider row never stored an object and a deleted one is already gone.
+    const providerRows = allProviderRows.filter((provider) => provider.status !== "failed" && provider.status !== "deleted");
 
     let failure: string | null = null;
     for (const provider of providerRows) {
@@ -95,7 +114,7 @@ export async function deleteAuthorisedMediaFiles(args: {
         errors.push(`${provider.provider}: ${failure}`);
         break;
       }
-      const marked = await args.markDeleted(provider.id);
+      const marked = await args.markDeleted(provider.id, removed.reason === "provider_disabled" ? "provider_disabled" : "user delete");
       if (marked.error) {
         failure = marked.error;
         errors.push(`${provider.provider} status: ${marked.error}`);
@@ -113,4 +132,20 @@ export async function deleteAuthorisedMediaFiles(args: {
     failedMediaFileIds: results.filter((result) => result.status !== "deleted").map((result) => result.id),
     errors,
   };
+}
+
+/** A row that predates media_file_providers: its only object reference is cloudinary_public_id. */
+async function deleteLegacyCloudinary(
+  row: OwnedMediaRow,
+  destroyCloudinary: (objectKey: string, resourceType: CloudinaryResourceType) => Promise<DestroyResult>,
+  errors: string[],
+): Promise<IdDeleteResult> {
+  if (!row.cloudinary_public_id) {
+    errors.push(`${row.id}: no provider record`);
+    return { id: row.id, status: "failed", error: "No stored object for this file" };
+  }
+  const removed = await destroyCloudinary(row.cloudinary_public_id, cloudinaryResourceTypeFor(row.file_type));
+  if (removed.success) return { id: row.id, status: "deleted" };
+  errors.push(`cloudinary: ${removed.error || "delete failed"}`);
+  return { id: row.id, status: "failed", error: removed.error || "delete failed" };
 }

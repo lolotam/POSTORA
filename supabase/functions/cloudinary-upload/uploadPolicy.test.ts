@@ -72,3 +72,15 @@ Deno.test("an oversized body is rejected before JSON.parse", async () => {
   assertEquals(MEDIA_DECODED_BYTE_CAP, 10 * 1024 * 1024);
 });
 
+Deno.test("dotted names without a real extension fall through to byte sniffing instead of being refused", () => {
+  const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]);
+  for (const fileName of ["IMG_2026.09_bg-removed", "Screenshot 2026.09.28", "photo.v2_enhanced-sharpen"]) {
+    const resolved = resolveUpload({ fileName, fileType: "image", bytes: png });
+    assertEquals(resolved.ok, true, fileName);
+    if (resolved.ok) assertEquals(resolved.upload.ext, "png", fileName);
+  }
+  const exe = resolveUpload({ fileName: "setup.exe", fileType: "raw" });
+  assertEquals(exe.ok, false);
+  const sevenZip = resolveUpload({ fileName: "backup.7z", fileType: "raw" });
+  assertEquals(sevenZip.ok, true);
+});
