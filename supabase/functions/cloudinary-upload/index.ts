@@ -13,6 +13,7 @@ import {
   readJsonBodyCapped,
   resolveUpload,
 } from "./uploadPolicy.ts";
+import { commitMediaReplace, parseReplaceMediaFileId, prepareMediaReplace, type ReplaceTargetRow, type ReplaceUploadFacts } from "./replace.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -29,6 +30,7 @@ interface UploadRequest {
   socialAccountIds?: string[]; // Social account IDs involved
   subfolder?: string; // Override daily folder with a custom subfolder
   skipMediaFiles?: boolean; // Skip media_files DB insert (for non-media assets like avatars)
+  replaceMediaFileId?: string; // Swap this owned media_files row instead of inserting one
 }
 
 interface UploadResponse {
@@ -439,6 +441,10 @@ export async function handleCloudinaryUpload(req: Request): Promise<Response> {
       }
     }
     const { fileData, externalUrl, fileName, fileType, platforms = [], socialAccountIds = [], subfolder, skipMediaFiles = false }: UploadRequest = parsedBody;
+    const replaceRequest = parseReplaceMediaFileId(parsedBody);
+    if (replaceRequest.error) {
+      return new Response(JSON.stringify({ success: false, error: replaceRequest.error }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
 
     if ((!fileData && !externalUrl) || !fileName || !fileType) {
       return new Response(
@@ -545,8 +551,17 @@ export async function handleCloudinaryUpload(req: Request): Promise<Response> {
     }
 
     const originalFilename = resolved.upload.originalFilename;
+    let replaceRow: ReplaceTargetRow | null = null;
+    if (replaceRequest.id) {
+      const prepared = await prepareMediaReplace(dbAdmin, replaceRequest.id, userId, resolved.upload.entry.kind);
+      if (!prepared.ok) {
+        if (prepared.refusal) await logUploadRefusal(userId, prepared.refusal.message, prepared.refusal.metadata);
+        return new Response(JSON.stringify(prepared.body), { status: prepared.status, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+      replaceRow = prepared.row;
+    }
     let existingFile: any = null;
-    if (dedupeEligible(resolved.upload.entry.kind) && incomingFileSize !== null) {
+    if (!replaceRow && dedupeEligible(resolved.upload.entry.kind) && incomingFileSize !== null) {
       const dedupeWindowStart = new Date(Date.now() - 5 * 60 * 1000).toISOString();
       const { data: recentCandidates, error: dedupeError } = await dbClient
         .from("media_files")
@@ -722,8 +737,23 @@ export async function handleCloudinaryUpload(req: Request): Promise<Response> {
     const primaryPublicId: string | undefined = cloudinaryResult?.public_id ?? undefined;
     const bytesOut: number | undefined = cloudinaryResult?.bytes ?? payloadBytes?.length ?? incomingFileSize ?? undefined;
 
-    // Store reference in database with platform/account tracking
+    // Store reference in database with platform/account tracking.
+    // A replace swaps the loaded row instead of inserting, and ignores skipMediaFiles.
     let mediaFileId: string | null = null;
+    if (replaceRow) {
+      const facts: ReplaceUploadFacts = {
+        userId, primaryUrl: primaryUrl ?? null, bytes: bytesOut ?? null, mimeType: uploadMime,
+        storedFileType: resolved.upload.entry.storedFileType, kind: resolved.upload.entry.kind,
+        width: cloudinaryResult?.width ?? null, height: cloudinaryResult?.height ?? null,
+        format: cloudinaryResult?.format || objectExt, duration: cloudinaryResult?.duration ?? null,
+        storageBucket: cloudinaryResult ? "cloudinary" : "openinary", storedIn, errors,
+        providersAttempted: effectiveProviders, cloudinaryPublicId: cloudinaryResult?.public_id ?? null,
+        cloudinaryDeliveryUrl: cloudinaryResult?.secure_url ?? null, cloudinaryFallbackKey: `${folder}/${uniquePublicId}`,
+        openinaryPath, openinaryUrl, openinaryFallbackKey,
+      };
+      const outcome = await commitMediaReplace(dbAdmin, replaceRow, facts);
+      return new Response(JSON.stringify(outcome.body), { status: outcome.status, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
     if (!skipMediaFiles) {
       const { data: mediaRecord, error: dbError } = await dbClient
         .from("media_files")

@@ -14,6 +14,7 @@ import { useQuotas } from "@/hooks/useQuotas";
 import { readUploadRefusal } from "@/components/media/uploadErrors";
 import { ScheduleLibraryPicker, type ScheduleLibraryFile } from "@/components/messaging/ScheduleLibraryPicker";
 import { sanitizeMediaFilename } from "@/lib/mediaFilename";
+import { readFileAsDataUrl } from "@/lib/readFileAsDataUrl";
 import {
   MEDIA_DECODED_BYTE_CAP,
   MEDIA_TYPES,
@@ -59,15 +60,6 @@ function accountLabel(account: OwnWhatsAppAccount): string {
 
 function localTimeZoneName(): string {
   return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
-}
-
-function readFileAsDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result));
-    reader.onerror = () => reject(reader.error ?? new Error("read_failed"));
-    reader.readAsDataURL(file);
-  });
 }
 
 export function ScheduleMessageDialog({ open, onOpenChange }: ScheduleMessageDialogProps) {
@@ -446,11 +438,11 @@ export function ScheduleMessageDialog({ open, onOpenChange }: ScheduleMessageDia
           <div className="space-y-1.5">
             <Label>{t("scheduled.media", "Media")}</Label>
             <Tabs value={mediaSource} onValueChange={handleSourceChange}>
-              <TabsList className="grid w-full grid-cols-4">
-                <TabsTrigger value="none">{t("scheduled.mediaNone", "None")}</TabsTrigger>
-                <TabsTrigger value="upload">{t("scheduled.mediaSourceUpload", "Upload file")}</TabsTrigger>
-                <TabsTrigger value="library">{t("scheduled.mediaSourceLibrary", "Choose from Library")}</TabsTrigger>
-                <TabsTrigger value="link">{t("scheduled.mediaSourceLink", "Paste link")}</TabsTrigger>
+              <TabsList className="grid h-auto w-full grid-cols-4">
+                <TabsTrigger value="none" className="h-auto min-w-0 whitespace-normal px-1 text-xs leading-tight data-[state=active]:scale-100">{t("scheduled.mediaNone", "None")}</TabsTrigger>
+                <TabsTrigger value="upload" className="h-auto min-w-0 whitespace-normal px-1 text-xs leading-tight data-[state=active]:scale-100">{t("scheduled.mediaSourceUpload", "Upload file")}</TabsTrigger>
+                <TabsTrigger value="library" className="h-auto min-w-0 whitespace-normal px-1 text-xs leading-tight data-[state=active]:scale-100">{t("scheduled.mediaSourceLibrary", "Choose from Library")}</TabsTrigger>
+                <TabsTrigger value="link" className="h-auto min-w-0 whitespace-normal px-1 text-xs leading-tight data-[state=active]:scale-100">{t("scheduled.mediaSourceLink", "Paste link")}</TabsTrigger>
               </TabsList>
               <TabsContent value="upload" className="space-y-2 pt-3">
                 <div className="space-y-1.5">

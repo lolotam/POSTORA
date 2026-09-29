@@ -156,6 +156,18 @@ export function dropzoneAccept(): Record<string, string[]> {
   return accept;
 }
 
+/** Accept map for one library kind. A replace may only pick this kind. */
+export function dropzoneAcceptForKind(kind: MediaKind): Record<string, string[]> {
+  const accept: Record<string, string[]> = {};
+  for (const [ext, typeEntry] of Object.entries(MEDIA_TYPES)) {
+    if (typeEntry.kind !== kind) continue;
+    const list = accept[typeEntry.mime] ?? [];
+    list.push(`.${ext}`);
+    accept[typeEntry.mime] = list;
+  }
+  return accept;
+}
+
 export function dedupeEligible(kind: MediaKind): boolean {
   return kind === "image" || kind === "video";
 }

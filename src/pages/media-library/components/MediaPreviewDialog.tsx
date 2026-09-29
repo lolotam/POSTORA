@@ -197,7 +197,6 @@ export function MediaPreviewDialog({
                     <Move className="w-4 h-4 me-2" />
                     Move
                   </Button>
-                  {isImage && (
                   <Button
                     variant="outline"
                     size="sm"
@@ -206,7 +205,6 @@ export function MediaPreviewDialog({
                     <RefreshCw className="w-4 h-4 me-2" />
                     Replace
                   </Button>
-                  )}
                   {isImage && (
                     <>
                       <Button
