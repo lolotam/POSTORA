@@ -24,16 +24,16 @@
 BEGIN;
 
 -- ---------------------------------------------------------------------------
--- A. One reservation row per store event. Service-role only, same shape as
---    store_qr_opener_counts: RLS on, no policies (default deny), grants only
---    to service_role. The PK is the event, so a previous day and today share
---    one row; day says which UTC day the slot belongs to.
+-- A. One reservation row per store event, owned by the claim attempt that
+--    holds it (claim_token). Service-role only: RLS on, no policies, grants
+--    only to service_role.
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS public.store_qr_opener_reservations (
   store_event_id uuid PRIMARY KEY
     REFERENCES public.store_events (id) ON DELETE CASCADE,
   social_account_id uuid NOT NULL,
   day date NOT NULL,
+  claim_token uuid NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now()
 );
 
@@ -43,20 +43,22 @@ REVOKE ALL ON public.store_qr_opener_reservations FROM PUBLIC, anon, authenticat
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.store_qr_opener_reservations TO service_role;
 
 -- ---------------------------------------------------------------------------
--- B. reserve_qr_opener(account, limit, event)
+-- B. reserve_qr_opener(account, limit, event, claim)
 --
--- Same-event serialization is the reservation primary key, not the counter
--- row. The counter upsert locks one (account, day) row and therefore
--- serializes different events on that account, but two first-time calls for
--- one event both observe "no reservation" and would both increment before
--- either insert conflicts. Inserting the reservation first makes the loser
--- wait on store_event_id until this transaction commits: it then sees day =
--- today and returns without touching the counter. A refused cap deletes the
--- claim before the function returns, still inside the same transaction.
+-- The event must belong to the account: these run as service_role, so the
+-- pairing is checked here rather than trusted from the caller.
+--
+-- Same-event serialization is the reservation primary key. INSERT ... ON
+-- CONFLICT DO NOTHING waits for a concurrent first reservation of this event
+-- to commit; the loser then locks the committed row. A row for today means
+-- the slot is already held: the newer claim takes ownership (claim_token) and
+-- the counter is untouched. A row from an earlier UTC day takes a new slot.
+-- A refused cap removes the row before returning.
 -- ---------------------------------------------------------------------------
 DROP FUNCTION IF EXISTS public.reserve_qr_opener(uuid, int, uuid);
+DROP FUNCTION IF EXISTS public.reserve_qr_opener(uuid, int, uuid, uuid);
 
-CREATE FUNCTION public.reserve_qr_opener(p_account uuid, p_limit int, p_event uuid)
+CREATE FUNCTION public.reserve_qr_opener(p_account uuid, p_limit int, p_event uuid, p_claim uuid)
 RETURNS boolean
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -64,27 +66,35 @@ SET search_path = public, pg_temp
 AS $function$
 DECLARE
   v_day date := (now() AT TIME ZONE 'utc')::date;
-  v_claimed uuid;
+  v_inserted uuid;
+  v_held_day date;
   v_ok boolean;
 BEGIN
-  INSERT INTO public.store_qr_opener_reservations AS r
-    (store_event_id, social_account_id, day)
-  VALUES (p_event, p_account, v_day)
-  ON CONFLICT (store_event_id) DO UPDATE
-    SET social_account_id = EXCLUDED.social_account_id,
-        day = EXCLUDED.day
-    WHERE r.day IS DISTINCT FROM EXCLUDED.day
-  RETURNING r.store_event_id INTO v_claimed;
+  IF p_claim IS NULL OR NOT EXISTS (
+    SELECT 1 FROM public.store_events
+    WHERE id = p_event AND social_account_id = p_account
+  ) THEN
+    RAISE EXCEPTION 'reserve_qr_opener: event % does not belong to account', p_event
+      USING ERRCODE = 'invalid_parameter_value';
+  END IF;
 
-  -- Conflict target already stored today: the UPDATE WHERE skipped, RETURNING
-  -- is empty, and this event already holds today's slot.
-  IF v_claimed IS NULL THEN
-    RETURN EXISTS (
-      SELECT 1
-      FROM public.store_qr_opener_reservations
-      WHERE store_event_id = p_event
-        AND day = v_day
-    );
+  INSERT INTO public.store_qr_opener_reservations
+    (store_event_id, social_account_id, day, claim_token)
+  VALUES (p_event, p_account, v_day, p_claim)
+  ON CONFLICT (store_event_id) DO NOTHING
+  RETURNING store_event_id INTO v_inserted;
+
+  IF v_inserted IS NULL THEN
+    SELECT day INTO v_held_day
+    FROM public.store_qr_opener_reservations
+    WHERE store_event_id = p_event
+    FOR UPDATE;
+    IF v_held_day = v_day THEN
+      UPDATE public.store_qr_opener_reservations
+      SET claim_token = p_claim
+      WHERE store_event_id = p_event;
+      RETURN true;
+    END IF;
   END IF;
 
   INSERT INTO public.store_qr_opener_counts AS q (social_account_id, day, sent)
@@ -95,32 +105,33 @@ BEGIN
   RETURNING true INTO v_ok;
 
   IF COALESCE(v_ok, false) THEN
+    UPDATE public.store_qr_opener_reservations
+    SET day = v_day, claim_token = p_claim
+    WHERE store_event_id = p_event;
     RETURN true;
   END IF;
 
-  -- Cap refused. Drop the claim so a retry can try again and a concurrent
-  -- caller is not told this event already holds today's slot.
   DELETE FROM public.store_qr_opener_reservations
-  WHERE store_event_id = p_event
-    AND day = v_day;
-
+  WHERE store_event_id = p_event;
   RETURN false;
 END;
 $function$;
 
-REVOKE EXECUTE ON FUNCTION public.reserve_qr_opener(uuid, int, uuid)
+REVOKE EXECUTE ON FUNCTION public.reserve_qr_opener(uuid, int, uuid, uuid)
   FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.reserve_qr_opener(uuid, int, uuid) TO service_role;
+GRANT EXECUTE ON FUNCTION public.reserve_qr_opener(uuid, int, uuid, uuid) TO service_role;
 
 -- ---------------------------------------------------------------------------
--- C. release_qr_opener(account, event): delete that event's reservation and
---    decrement the counter for the deleted row's day only. A missing row
---    (never reserved, or already released) leaves the counter alone. The
---    counter never drops below zero.
+-- C. release_qr_opener(account, event, claim): only the claim attempt that
+--    currently owns the reservation can release it. A stale attempt (its
+--    event was reclaimed and re-reserved under a newer token) releases
+--    nothing, so it cannot hand back a slot the newer attempt is using. The
+--    counter is decremented for the deleted row's day, never below zero.
 -- ---------------------------------------------------------------------------
 DROP FUNCTION IF EXISTS public.release_qr_opener(uuid, uuid);
+DROP FUNCTION IF EXISTS public.release_qr_opener(uuid, uuid, uuid);
 
-CREATE FUNCTION public.release_qr_opener(p_account uuid, p_event uuid)
+CREATE FUNCTION public.release_qr_opener(p_account uuid, p_event uuid, p_claim uuid)
 RETURNS void
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -132,6 +143,7 @@ BEGIN
   DELETE FROM public.store_qr_opener_reservations
   WHERE store_event_id = p_event
     AND social_account_id = p_account
+    AND claim_token = p_claim
   RETURNING day INTO v_day;
 
   IF v_day IS NULL THEN
@@ -145,9 +157,9 @@ BEGIN
 END;
 $function$;
 
-REVOKE EXECUTE ON FUNCTION public.release_qr_opener(uuid, uuid)
+REVOKE EXECUTE ON FUNCTION public.release_qr_opener(uuid, uuid, uuid)
   FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.release_qr_opener(uuid, uuid) TO service_role;
+GRANT EXECUTE ON FUNCTION public.release_qr_opener(uuid, uuid, uuid) TO service_role;
 
 -- The account-only overloads stay for now: the deployed worker calls them
 -- until this branch's code ships (migration is applied first). A follow-up

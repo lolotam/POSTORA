@@ -161,14 +161,14 @@ function harness(options: {
           ? { outcome: "absent" as const }
           : { outcome: "snapshot" as const, snapshot: options.store }
     )),
-    reserveQr: (_accountId, limit, eventId) => {
-      state.qrReserveEventIds.push(eventId);
+    reserveQr: (_accountId, limit, eventId, claimToken) => {
+      state.qrReserveEventIds.push(`${eventId}:${claimToken}`);
       state.qrReserveLimits.push(limit);
       return Promise.resolve(options.reserve !== false);
     },
-    releaseQr: (_accountId, eventId) => {
+    releaseQr: (_accountId, eventId, claimToken) => {
       state.qrReleases += 1;
-      state.qrReleaseEventIds.push(eventId);
+      state.qrReleaseEventIds.push(`${eventId}:${claimToken}`);
       return Promise.resolve();
     },
     ensureThread: () => Promise.resolve(state.thread),
@@ -486,8 +486,8 @@ Deno.test("QR reserve and release receive the store event id", async () => {
       name: "daily cap refused",
       releases: 0,
       prepare: (box) => {
-        box.ports.reserveQr = (_accountId, limit, eventId) => {
-          box.qrReserveEventIds.push(eventId);
+        box.ports.reserveQr = (_accountId, limit, eventId, claimToken) => {
+          box.qrReserveEventIds.push(`${eventId}:${claimToken}`);
           box.qrReserveLimits.push(limit);
           return Promise.resolve(false);
         };
@@ -503,10 +503,11 @@ Deno.test("QR reserve and release receive the store event id", async () => {
   for (const item of cases) {
     const box = harness({ account: qrAccount() });
     item.prepare(box);
+    const claimed = `${box.row.id}:${box.row.claim_token}`;
     await runStoreEventWorker(box.ports);
-    assertEquals(box.qrReserveEventIds, [box.row.id], item.name);
+    assertEquals(box.qrReserveEventIds, [claimed], item.name);
     assertEquals(box.qrReserveLimits, [STORE_EVENT_LIMITS.qrDailyCap], item.name);
-    assertEquals(box.qrReleaseEventIds, item.releases === 0 ? [] : [box.row.id], item.name);
+    assertEquals(box.qrReleaseEventIds, item.releases === 0 ? [] : [claimed], item.name);
   }
 });
 

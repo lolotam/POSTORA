@@ -282,17 +282,18 @@ export function createStoreEventPorts(admin: any): WorkerPorts { // eslint-disab
       const snapshot = snapshotFromOutput(found.output);
       return snapshot ? { outcome: "snapshot", snapshot } : { outcome: "absent" };
     },
-    async reserveQr(accountId, limit, eventId) {
+    async reserveQr(accountId, limit, eventId, claimToken) {
       const { data, error } = await admin.rpc("reserve_qr_opener", {
         p_account: accountId,
         p_limit: limit,
         p_event: eventId,
+        p_claim: claimToken,
       });
       if (error) throw error;
       return data === true;
     },
-    async releaseQr(accountId, eventId) {
-      const { error } = await admin.rpc("release_qr_opener", { p_account: accountId, p_event: eventId });
+    async releaseQr(accountId, eventId, claimToken) {
+      const { error } = await admin.rpc("release_qr_opener", { p_account: accountId, p_event: eventId, p_claim: claimToken });
       if (error) throw error;
     },
     async ensureThread(input) {
