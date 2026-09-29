@@ -27,35 +27,25 @@ describe("fetchWhatsAppScheduleBoard", () => {
     await expect(fetchWhatsAppScheduleBoard("user-1", { kind: "active" })).rejects.toEqual({ message: "statement timeout" });
   });
 
-  it("returns a full page without calling it truncated, and drops the extra probe row", async () => {
-    const limits: number[] = [];
-    vi.mocked(supabase.from).mockImplementation((table: string) => {
-      if (table === "social_accounts") return accountLabels() as never;
-      return rangeMessages(WHATSAPP_RANGE_LIMIT, limits) as never;
-    });
-
-    const exact = await fetchWhatsAppScheduleBoard("user-1", {
-      kind: "range",
-      rangeStart: "2026-09-01T00:00:00.000Z",
-      rangeEnd: "2026-10-01T00:00:00.000Z",
-    });
-    expect(exact.truncated).toBe(false);
-    expect(exact.messages).toHaveLength(WHATSAPP_RANGE_LIMIT);
-    expect(limits).toEqual([WHATSAPP_RANGE_LIMIT + 1]);
-
-    limits.length = 0;
-    vi.mocked(supabase.from).mockImplementation((table: string) => {
-      if (table === "social_accounts") return accountLabels() as never;
-      return rangeMessages(WHATSAPP_RANGE_LIMIT + 1, limits) as never;
-    });
-    const over = await fetchWhatsAppScheduleBoard("user-1", {
-      kind: "range",
-      rangeStart: "2026-09-01T00:00:00.000Z",
-      rangeEnd: "2026-10-01T00:00:00.000Z",
-    });
-    expect(over.truncated).toBe(true);
-    expect(over.messages).toHaveLength(WHATSAPP_RANGE_LIMIT);
-    expect(limits).toEqual([WHATSAPP_RANGE_LIMIT + 1]);
+  it("uses the exact count, so a full page is not truncated and more rows are", async () => {
+    const range = { kind: "range" as const, rangeStart: "2026-09-01T00:00:00.000Z", rangeEnd: "2026-10-01T00:00:00.000Z" };
+    const cases: Array<[string, number, number, boolean]> = [
+      ["exactly the limit", WHATSAPP_RANGE_LIMIT, WHATSAPP_RANGE_LIMIT, false],
+      ["one more than the limit", WHATSAPP_RANGE_LIMIT + 1, WHATSAPP_RANGE_LIMIT, true],
+      // A PostgREST db-max-rows cap returns at most the limit, but Content-Range still reports the total.
+      ["server row cap with a larger total", 1500, WHATSAPP_RANGE_LIMIT, true],
+    ];
+    for (const [label, total, served, truncated] of cases) {
+      const limits: number[] = [];
+      vi.mocked(supabase.from).mockImplementation((table: string) => {
+        if (table === "social_accounts") return accountLabels() as never;
+        return rangeMessages(total, served, limits) as never;
+      });
+      const board = await fetchWhatsAppScheduleBoard("user-1", range);
+      expect(board.truncated, label).toBe(truncated);
+      expect(board.messages, label).toHaveLength(Math.min(total, WHATSAPP_RANGE_LIMIT));
+      expect(limits, label).toEqual([WHATSAPP_RANGE_LIMIT]);
+    }
   });
 });
 
@@ -68,8 +58,8 @@ function accountLabels() {
   return builder;
 }
 
-function rangeMessages(count: number, limits: number[]) {
-  const rows = Array.from({ length: count }, (_, index) => ({
+function rangeMessages(total: number, served: number, limits: number[]) {
+  const rows = Array.from({ length: Math.min(total, served) }, (_, index) => ({
     id: `msg-${index}`,
     social_account_id: "acc-1",
     recipient_phone: "100",
@@ -89,7 +79,7 @@ function rangeMessages(count: number, limits: number[]) {
     order: () => builder,
     limit: (size: number) => {
       limits.push(size);
-      return Promise.resolve({ data: rows.slice(0, size), error: null });
+      return Promise.resolve({ data: rows.slice(0, size), error: null, count: total });
     },
   };
   return builder;

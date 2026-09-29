@@ -48,22 +48,20 @@ async function fetchRangeRows(
   rangeStart: string,
   rangeEnd: string,
 ): Promise<{ rows: ScheduleRow[]; truncated: boolean }> {
-  const { data, error } = await supabase
+  // The exact count comes from Content-Range, so truncation is detected even when a
+  // PostgREST db-max-rows cap would stop an extra probe row from ever arriving.
+  const { data, error, count } = await supabase
     .from("whatsapp_scheduled_messages")
-    .select("*")
+    .select("*", { count: "exact" })
     .eq("user_id", userId)
     .in("status", [...CALENDAR_WHATSAPP_STATUSES])
     .gte("scheduled_at", rangeStart)
     .lte("scheduled_at", rangeEnd)
     .order("scheduled_at", { ascending: true })
-    .limit(WHATSAPP_RANGE_LIMIT + 1);
+    .limit(WHATSAPP_RANGE_LIMIT);
   if (error) throw error;
-  const fetched = data ?? [];
-  const truncated = fetched.length > WHATSAPP_RANGE_LIMIT;
-  return {
-    rows: truncated ? fetched.slice(0, WHATSAPP_RANGE_LIMIT) : fetched,
-    truncated,
-  };
+  const fetched = (data ?? []).slice(0, WHATSAPP_RANGE_LIMIT);
+  return { rows: fetched, truncated: (count ?? fetched.length) > WHATSAPP_RANGE_LIMIT };
 }
 
 async function fetchAccountLabels(userId: string, accountIds: string[]): Promise<Map<string, AccountLabel>> {
