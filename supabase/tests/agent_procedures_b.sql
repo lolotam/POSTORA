@@ -632,6 +632,10 @@ BEGIN
   ASSERT has_function_privilege('service_role',
              'public.release_qr_opener(uuid, uuid, uuid)', 'EXECUTE'),
     'B29 service_role can EXECUTE release_qr_opener';
+  ASSERT to_regprocedure('public.reserve_qr_opener(uuid, int)') IS NULL,
+    'B29 the account-only reserve_qr_opener overload is gone';
+  ASSERT to_regprocedure('public.release_qr_opener(uuid)') IS NULL,
+    'B29 the account-only release_qr_opener overload is gone';
   ASSERT NOT has_table_privilege('authenticated',
              'public.store_qr_opener_counts', 'SELECT'),
     'B29 authenticated holds no SELECT on store_qr_opener_counts';
