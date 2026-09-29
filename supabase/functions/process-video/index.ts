@@ -1,5 +1,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { handleCorsOptions, jsonResponse, errorResponse } from "../_shared/cors.ts";
+import { destroyCloudinary } from "../_shared/cloudinaryDestroy.ts";
+import { handleCorsOptions, jsonResponse } from "../_shared/cors.ts";
+import { MEDIA_QUOTA_CODE, isMediaQuotaMessage, mediaQuotaHumanMessage } from "../_shared/mediaQuotaError.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -319,6 +321,7 @@ Deno.serve(async (req) => {
 
   const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
   let requestBody: ProcessVideoRequest | null = null;
+  let orphanPublicId: string | null = null;
 
   try {
     requestBody = await req.json() as ProcessVideoRequest;
@@ -395,7 +398,8 @@ Deno.serve(async (req) => {
       videoMetadata
     );
 
-    // Create new media file record for processed video
+    // The derived asset exists before the row. A quota refusal must not leave it behind.
+    orphanPublicId = newPublicId;
     const { data: newMediaFile, error: insertError } = await supabaseAdmin
       .from("media_files")
       .insert({
@@ -423,6 +427,7 @@ Deno.serve(async (req) => {
     if (insertError) {
       throw new Error(`Failed to save processed file: ${insertError.message}`);
     }
+    orphanPublicId = null;
 
     console.log("Created new media file:", newMediaFile.id);
 
@@ -458,7 +463,19 @@ Deno.serve(async (req) => {
     
     const errorMessage = error instanceof Error ? error.message : "Unknown error";
     const errorCode = (error as { code?: string })?.code || "UNKNOWN_ERROR";
-    
+
+    if (isMediaQuotaMessage(errorMessage)) {
+      if (orphanPublicId) {
+        try { await destroyCloudinary(orphanPublicId, "video"); } catch { console.error("[process-video] quota cleanup failed"); }
+      }
+      const quotaBody: ProcessVideoResponse = {
+        success: false,
+        error: mediaQuotaHumanMessage(errorMessage),
+        error_code: MEDIA_QUOTA_CODE,
+      };
+      return jsonResponse(quotaBody, 429);
+    }
+
     const errorResponse: ProcessVideoResponse = {
       success: false,
       error: errorMessage,

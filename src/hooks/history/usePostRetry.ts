@@ -1,6 +1,7 @@
 import { useState, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { buildPostoraFileName } from "@/lib/postoraFileName";
+import { isMediaQuotaMessage, mediaQuotaHumanMessage } from "@/components/media/uploadErrors";
 import { useToast } from "@/hooks/use-toast";
 import { useQueryClient } from "@tanstack/react-query";
 import {
@@ -116,7 +117,13 @@ export function usePostRetry() {
         const { data: newMediaFile, error: mediaError } = await supabase.from("media_files").insert({
           user_id: user.id, file_path: uploadData.path, file_type: fileType, file_size: retryMediaFile.size, mime_type: retryMediaFile.type, storage_bucket: "media",
         }).select().single();
-        if (mediaError) throw mediaError;
+        if (mediaError) {
+          if (isMediaQuotaMessage(mediaError.message)) {
+            await supabase.storage.from("media").remove([uploadData.path]);
+            throw new Error(mediaQuotaHumanMessage(mediaError.message));
+          }
+          throw mediaError;
+        }
         return newMediaFile;
       }));
 

@@ -37,7 +37,6 @@ describe("MediaUploadDialog — quota denominator", () => {
     // ignoring it.
     useQuotasMock.mockReturnValue({
       canUploadMedia: vi.fn().mockResolvedValue({ allowed: true }),
-      incrementMediaUpload: vi.fn(),
       quota: {
         max_media_uploads_per_day: null,
         media_uploads_today: 3,

@@ -1,6 +1,7 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { isServiceRoleBearer } from "./serviceCaller.ts";
 import { getOpeninaryConfig, openinaryTarget, openinaryDeliveryUrl, uploadBytesToOpeninary } from "../_shared/openinary.ts";
+import { mediaQuotaBody } from "../_shared/mediaQuotaError.ts";
 import { logToDatabase } from "../_shared/logging.ts";
 import { MEDIA_DECODED_BYTE_CAP, dedupeEligible } from "../_shared/mediaTypes.ts";
 import {
@@ -14,6 +15,7 @@ import {
   resolveUpload,
 } from "./uploadPolicy.ts";
 import { commitMediaReplace, parseReplaceMediaFileId, prepareMediaReplace, type ReplaceTargetRow, type ReplaceUploadFacts } from "./replace.ts";
+import { deleteJustUploaded, mediaQuotaPreflight, quotaInsertRefusal } from "./mediaQuota.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -612,7 +614,21 @@ export async function handleCloudinaryUpload(req: Request): Promise<Response> {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
-    
+
+    // A new library row is the only upload that counts. Replace updates the
+    // existing row, and skipMediaFiles (avatars, contacts) never inserts one.
+    // Checked before any provider so a full quota does not store bytes.
+    if (!replaceRow && !skipMediaFiles) {
+      const blocked = await mediaQuotaPreflight(dbAdmin, userId);
+      if (blocked) {
+        await logUploadRefusal(userId, "Daily upload limit reached", { reason: "media_quota" });
+        return new Response(JSON.stringify(mediaQuotaBody(blocked.limit)), {
+          status: 429,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+    }
+
     // Postora naming convention: postora_<date>_<userId>_<seq>
     // Sequence numbers are allocated atomically per user per day, so concurrent
     // uploads never collide (Cloudinary uploads run with overwrite=true).
@@ -782,6 +798,19 @@ export async function handleCloudinaryUpload(req: Request): Promise<Response> {
         .single();
 
       if (dbError) {
+        const quotaRace = await quotaInsertRefusal(dbError.message ?? "", () => deleteJustUploaded({
+          storedIn,
+          openinaryPath,
+          cloudinaryPublicId: cloudinaryResult?.public_id ?? null,
+          kind: resolved.upload.entry.kind,
+        }));
+        if (quotaRace) {
+          await logUploadRefusal(userId, "Daily upload limit reached", { reason: "media_quota" });
+          return new Response(JSON.stringify(quotaRace.body), {
+            status: quotaRace.status,
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+          });
+        }
         console.error("Database insert error:", dbError);
         return new Response(
           JSON.stringify({ success: false, error: `Database error: ${dbError.message}` }),

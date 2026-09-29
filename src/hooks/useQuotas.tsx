@@ -536,27 +536,6 @@ export function useQuotas() {
     return { allowed: true };
   };
 
-  // Increment media upload count after successful upload
-  const incrementMediaUpload = async (): Promise<boolean> => {
-    if (!user?.id) return false;
-
-    const { data, error } = await supabase.rpc("increment_media_uploads", { p_user_id: user.id });
-
-    if (error) {
-      console.error("Error incrementing media upload:", error);
-      // F1 (CodeRabbit round 1): increment_media_uploads() atomically checks
-      // AND increments in one call. An RPC error means that call did not run
-      // to completion (e.g. two concurrent first uploads racing the
-      // user_quotas.user_id unique key), so nothing was recorded for THIS
-      // upload. Treating that as "allowed" let two concurrent requests both
-      // upload past the same limit. Fail closed instead.
-      return false;
-    }
-
-    queryClient.invalidateQueries({ queryKey: ["user-quota", user.id] });
-    return data ?? true;
-  };
-
   // Increment post count after successful post (both daily and monthly)
   const incrementPostCount = async () => {
     if (!user?.id) return;
@@ -611,7 +590,6 @@ export function useQuotas() {
     canCreatePost,
     canUploadMedia,
     incrementPostCount,
-    incrementMediaUpload,
     getUsageCounts,
     planLimits,
     effectivePlanSlug,

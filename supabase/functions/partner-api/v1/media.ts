@@ -200,6 +200,9 @@ export async function postMedia(
     filename: upload.payload.filename,
   });
   if (!stored.ok) {
+    if (stored.reason === "media_quota") {
+      return v1ErrorResponse("quota_exceeded", requestId, { message: stored.message });
+    }
     console.error(`[partner-api] media store failed (request ${requestId}): ${stored.reason}`);
     return v1ErrorResponse("internal_error", requestId);
   }

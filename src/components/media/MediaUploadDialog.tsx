@@ -82,7 +82,7 @@ export function MediaUploadDialog({
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
   const { t } = useTranslation("assets");
   const { toast } = useToast();
-  const { canUploadMedia, incrementMediaUpload, quota, planLimits } = useQuotas();
+  const { canUploadMedia, quota, planLimits } = useQuotas();
   const { logOperation, completeOperation, failOperation } = useLogMediaOperation();
 
   // Check quota when files are added
@@ -178,17 +178,6 @@ export function MediaUploadDialog({
         continue;
       }
 
-      const canUpload = await incrementMediaUpload();
-      if (!canUpload) {
-        toast({
-          title: t("toast.uploadLimit", "Upload limit reached"),
-          description: t("toast.uploadLimitFile", "Could not upload {{name}}. Daily upload limit reached.", { name: file.name }),
-          variant: "destructive",
-        });
-        setUploadProgress((prev) => ({ ...prev, [fileId]: -1 }));
-        continue;
-      }
-      
       try {
         setUploadProgress((prev) => ({ ...prev, [fileId]: 10 }));
         

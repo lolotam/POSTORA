@@ -8016,6 +8016,10 @@ export type Database = {
           max_media_uploads_per_day: number
         }[]
       }
+      media_upload_quota_remaining: {
+        Args: { p_user: string }
+        Returns: number
+      }
       enqueue_agent_reply: {
         Args: {
           p_social_account_id: string

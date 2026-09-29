@@ -5,6 +5,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { useQueryClient } from "@tanstack/react-query";
 import { useQuotas } from "@/hooks/useQuotas";
+import { isMediaQuotaMessage, mediaQuotaHumanMessage } from "@/components/media/uploadErrors";
 
 export interface WorkflowData {
   id?: string;
@@ -208,6 +209,9 @@ export function useCanvasWorkflow() {
             .select("id")
             .single();
           if (error) {
+            if (isMediaQuotaMessage(error.message)) {
+              throw new Error(mediaQuotaHumanMessage(error.message));
+            }
             console.error("Media insert error:", error);
           } else if (mediaRecord) {
             mediaFileIds.push(mediaRecord.id);

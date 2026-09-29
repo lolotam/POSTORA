@@ -28,7 +28,6 @@ vi.mock("@/hooks/useWhatsAppScheduledMessages", () => ({
 vi.mock("@/hooks/useQuotas", () => ({
   useQuotas: () => ({
     canUploadMedia: async () => ({ allowed: true }),
-    incrementMediaUpload: async () => true,
     quota: null,
     planLimits: { max_media_uploads_per_day: 20 },
   }),

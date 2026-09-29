@@ -65,7 +65,7 @@ function localTimeZoneName(): string {
 export function ScheduleMessageDialog({ open, onOpenChange }: ScheduleMessageDialogProps) {
   const { t } = useTranslation("inbox");
   const { accounts, accountsLoading, accountsError, schedule } = useWhatsAppScheduledMessages();
-  const { canUploadMedia, incrementMediaUpload } = useQuotas();
+  const { canUploadMedia } = useQuotas();
   const [accountId, setAccountId] = useState("");
   const [phone, setPhone] = useState("");
   const [recipientName, setRecipientName] = useState("");
@@ -205,11 +205,6 @@ export function ScheduleMessageDialog({ open, onOpenChange }: ScheduleMessageDia
       if (uploadTokenRef.current !== token) return;
       if (!quotaCheck.allowed) {
         setUploadIssue(quotaCheck.message || t("scheduled.uploadLimitReached", "Daily upload limit reached."));
-        return;
-      }
-      if (!(await incrementMediaUpload())) {
-        if (uploadTokenRef.current !== token) return;
-        setUploadIssue(t("scheduled.uploadLimitReached", "Daily upload limit reached."));
         return;
       }
       const fileData = await readFileAsDataUrl(file);

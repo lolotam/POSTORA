@@ -13,6 +13,7 @@
 // partnerMediaSniff.ts. What it does not reuse is the uploader, because that
 // one writes somewhere the contract cannot describe.
 
+import { isMediaQuotaMessage, mediaQuotaHumanMessage } from "./mediaQuotaError.ts";
 import { signedUrlTtlSeconds } from "./partnerMediaSniff.ts";
 import type { PartnerMedia } from "./partnerMediaSniff.ts";
 
@@ -58,7 +59,7 @@ export interface StorePartnerMediaInput {
   filename?: string | null;
 }
 
-export type StoreFailure = "no_workspace_owner" | "storage_failed" | "record_failed";
+export type StoreFailure = "no_workspace_owner" | "storage_failed" | "record_failed" | "media_quota";
 
 /**
  * Write the bytes, then the row.
@@ -75,7 +76,11 @@ export type StoreFailure = "no_workspace_owner" | "storage_failed" | "record_fai
  */
 export async function storePartnerMedia(
   input: StorePartnerMediaInput,
-): Promise<{ ok: true; stored: StoredPartnerMedia } | { ok: false; reason: StoreFailure }> {
+): Promise<
+  | { ok: true; stored: StoredPartnerMedia }
+  | { ok: false; reason: Exclude<StoreFailure, "media_quota"> }
+  | { ok: false; reason: "media_quota"; message: string }
+> {
   const { admin, workspaceId, keyId, bytes, media } = input;
 
   // media_files.user_id is NOT NULL and predates workspaces, so a partner
@@ -128,8 +133,11 @@ export async function storePartnerMedia(
 
   if (insertError || !row) {
     // Compensate: without this the object is unreferenced garbage that still
-    // counts against storage forever.
+    // counts against storage forever. A quota refusal inserts no row either.
     await admin.storage.from(PARTNER_MEDIA_BUCKET).remove([filePath]);
+    if (isMediaQuotaMessage(insertError?.message)) {
+      return { ok: false, reason: "media_quota", message: mediaQuotaHumanMessage(insertError?.message) };
+    }
     console.error("[partner-api] media record failed:", insertError?.message);
     return { ok: false, reason: "record_failed" };
   }

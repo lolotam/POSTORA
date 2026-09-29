@@ -8,6 +8,7 @@ import { parseSubscriptionFilters } from "./webhookFilters.ts";
 import { describeBase64Failure, normalizeBase64Media } from "../_shared/base64Media.ts";
 import { clientIpFromHeaders, isValidUuid } from "./requestGuards.ts";
 import { relayUploadTarget } from "./mediaRelay.ts";
+import { MEDIA_QUOTA_CODE, invokeErrorText, isMediaQuotaMessage, mediaQuotaHumanMessage, quotaOnlyMessage } from "../_shared/mediaQuotaError.ts";
 import {
   fetchGlobalSetting,
   fetchPlanSlug,
@@ -265,6 +266,24 @@ interface PlatformMetadata {
 // Operation types matching n8n node
 type OperationType = 'upload_photos' | 'upload_video' | 'upload_text' | 'upload_document';
 
+function mediaQuotaFailureResponse(corsHeaders: Record<string, string>, errors: unknown[]): Response | null {
+  const texts = errors.map((entry) => {
+    if (typeof entry === "string") return entry;
+    if (entry && typeof entry === "object" && typeof (entry as { error?: unknown }).error === "string") {
+      return (entry as { error: string }).error;
+    }
+    return "";
+  });
+  const message = quotaOnlyMessage(texts);
+  if (!message) return null;
+  return new Response(JSON.stringify({
+    success: false,
+    error: message,
+    code: MEDIA_QUOTA_CODE,
+    details: errors,
+  }), { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+}
+
 // Helper function to upload media via keys through cloudinary-upload function
 async function uploadToCloudinary(supabase: any, userId: string, payload: any): Promise<any> {
   console.log('Delegating upload to cloudinary-upload function...');
@@ -276,14 +295,18 @@ async function uploadToCloudinary(supabase: any, userId: string, payload: any): 
     }
   });
 
-  if (error) {
-    // The relay error is generic — extract actual error from result body if available
-    const detail = result?.error || error.message || 'Unknown upload error';
-    throw new Error(`Media upload failed: ${detail}`);
-  }
-
-  if (!result?.success) {
-    throw new Error(result?.error || 'Media upload failed');
+  if (error || !result?.success) {
+    const fromBody = typeof result?.error === "string" ? result.error : null;
+    const fromInvoke = error ? await invokeErrorText(error) : null;
+    const raw = fromBody || fromInvoke || "";
+    if (result?.code === MEDIA_QUOTA_CODE || isMediaQuotaMessage(raw)) {
+      throw new Error(mediaQuotaHumanMessage(raw));
+    }
+    if (error) {
+      const detail = fromBody || error.message || "Unknown upload error";
+      throw new Error(`Media upload failed: ${detail}`);
+    }
+    throw new Error(result?.error || "Media upload failed");
   }
 
   // Fetch the full media file record that was created by cloudinary-upload
@@ -677,6 +700,8 @@ async function handleCreatePost(req: Request, supabase: any, userId: string, bod
     }
 
     if (uploadErrors.length > 0 && finalMediaFileIds.length === 0) {
+      const quota = mediaQuotaFailureResponse(corsHeaders, uploadErrors);
+      if (quota) return quota;
       return new Response(
         JSON.stringify({
           error: 'Failed to upload media from URLs',
@@ -723,6 +748,8 @@ async function handleCreatePost(req: Request, supabase: any, userId: string, bod
     // as text and reported success. Someone asking for a post WITH media has not been
     // served by a post without it, and nothing downstream reported the difference.
     if (uploadErrors.length > 0 && finalMediaFileIds.length === 0) {
+      const quota = mediaQuotaFailureResponse(corsHeaders, uploadErrors);
+      if (quota) return quota;
       return new Response(
         JSON.stringify({
           error: 'None of the supplied base64 media could be uploaded.',
@@ -1369,6 +1396,11 @@ async function handleUploadMedia(supabase: any, userId: string, request: Request
       );
     }
 
+    if (uploadedFiles.length === 0) {
+      const quota = mediaQuotaFailureResponse(corsHeaders, errors);
+      if (quota) return quota;
+    }
+
     return new Response(
       JSON.stringify({
         success: uploadedFiles.length > 0,
@@ -1429,6 +1461,11 @@ async function handleUploadMedia(supabase: any, userId: string, request: Request
     } catch (error: any) {
       errors.push({ index: i, file_name: file.name, error: error.message });
     }
+  }
+
+  if (uploadedFiles.length === 0) {
+    const quota = mediaQuotaFailureResponse(corsHeaders, errors);
+    if (quota) return quota;
   }
 
   return new Response(

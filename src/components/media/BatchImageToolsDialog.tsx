@@ -14,6 +14,7 @@ import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Progress } from "@/components/ui/progress";
 import { supabase } from "@/integrations/supabase/client";
+import { readUploadRefusal } from "@/components/media/uploadErrors";
 import { useToast } from "@/hooks/use-toast";
 import {
   Loader2,
@@ -399,31 +400,19 @@ export function BatchImageToolsDialog({
       },
     });
 
-    if (uploadError) throw uploadError;
+    if (uploadError) throw new Error((await readUploadRefusal(uploadError)) || "Upload failed");
     if (!uploadData?.success) throw new Error(uploadData?.error || "Upload failed");
 
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) throw new Error("Not authenticated");
-
-    const urlMatch = uploadData.url.match(/res\.cloudinary\.com\/([^\/]+)/);
-    const savedCloudName = urlMatch ? urlMatch[1] : "";
-
-    await supabase.from("media_files").insert({
-      user_id: user.id,
-      file_path: uploadData.url, // Use full URL for consistent display
-      file_type: "image",
-      file_size: imageBlob.size,
-      storage_bucket: "cloudinary",
-      cloudinary_public_id: uploadData.publicId,
-      folder_path: file.folder_path,
-      metadata: {
-        cloudinary_url: uploadData.url,
-        cloud_name: savedCloudName,
-        batch_processed: true,
-        original_file_id: file.id,
-        original_file_name: newFileName,
-      },
-    });
+    // cloudinary-upload already created the library row (and its provider rows).
+    // Inserting another one here doubled every batch result and its quota count;
+    // the result only needs to land in the source file's folder.
+    if (file.folder_path && uploadData.mediaFileId) {
+      const { error: folderError } = await supabase
+        .from("media_files")
+        .update({ folder_path: file.folder_path })
+        .eq("id", uploadData.mediaFileId);
+      if (folderError) throw new Error(folderError.message);
+    }
   };
 
   const handleProcess = async () => {
