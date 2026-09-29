@@ -266,7 +266,9 @@ export async function commitMediaReplace(
     : update.eq("current_object_version", row.current_object_version);
   const { data: updated, error: updateError } = await update
     .or("retention_state.is.null,retention_state.neq.deleting")
-    .select("id");
+    // PostgREST 12 applies an or= filter to the returned rows too; a select that
+    // omits retention_state fails the PATCH with 42703 (seen live 2026-09-29).
+    .select("id, retention_state");
   if (updateError) {
     console.error("[cloudinary-upload] replace file update failed");
     await deleteNewRemote(facts);
