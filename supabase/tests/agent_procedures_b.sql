@@ -439,6 +439,7 @@ DECLARE
   v_ok boolean;
   v_stale_rows int := -1;
   v_i int;
+  v_qr uuid[];
 BEGIN
   INSERT INTO public.store_events
     (user_id, social_account_id, connector_id, binding_id, flow,
@@ -555,27 +556,48 @@ BEGIN
           WHERE binding_id = bind_a AND external_id = 'order-b26-sending') = 'b26-mid',
     'B26 expired sending row keeps its outbound id (worker must not resend)';
 
-  -- B27: the QR cap grants exactly p_limit reservations, then refuses.
+  -- B27: the QR cap grants exactly p_limit reservations, one event each,
+  -- then refuses. The fourth event gets no reservation row.
+  INSERT INTO public.store_events
+    (user_id, social_account_id, connector_id, binding_id, flow,
+     external_id, payload, status, due_at)
+  VALUES
+    (u_a, acct_a, tool_a, bind_a, 'cod_confirm', 'order-b27-1', '{}', 'pending', now()),
+    (u_a, acct_a, tool_a, bind_a, 'cod_confirm', 'order-b27-2', '{}', 'pending', now()),
+    (u_a, acct_a, tool_a, bind_a, 'cod_confirm', 'order-b27-3', '{}', 'pending', now()),
+    (u_a, acct_a, tool_a, bind_a, 'cod_confirm', 'order-b27-4', '{}', 'pending', now());
+  SELECT array_agg(id ORDER BY external_id)
+    INTO v_qr
+    FROM public.store_events
+    WHERE binding_id = bind_a
+      AND external_id LIKE 'order-b27-%';
+  UPDATE public.store_events SET claim_token = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'::uuid WHERE id = ANY (v_qr);
   FOR v_i IN 1..3 LOOP
-    v_ok := public.reserve_qr_opener(acct_a, 3);
+    v_ok := public.reserve_qr_opener(acct_a, 3, v_qr[v_i], 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'::uuid);
     ASSERT v_ok, 'B27 reservation ' || v_i || ' of 3 granted';
   END LOOP;
-  ASSERT NOT public.reserve_qr_opener(acct_a, 3),
+  ASSERT NOT public.reserve_qr_opener(acct_a, 3, v_qr[4], 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'::uuid),
     'B27 fourth reservation refused at the cap';
   ASSERT (SELECT sent FROM public.store_qr_opener_counts
           WHERE social_account_id = acct_a
             AND day = (now() AT TIME ZONE 'utc')::date) = 3,
     'B27 counter holds exactly the cap';
+  ASSERT NOT EXISTS (
+    SELECT 1 FROM public.store_qr_opener_reservations
+    WHERE store_event_id = v_qr[4]
+  ), 'B27 refused reservation leaves no row';
 
-  -- B28: release walks the counter down and never below zero.
-  PERFORM public.release_qr_opener(acct_a);
+  -- B28: release walks the counter down, one event at a time, and a release
+  -- with no reservation row does not move it. The counter never drops below zero.
+  PERFORM public.release_qr_opener(acct_a, v_qr[1], 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'::uuid);
   ASSERT (SELECT sent FROM public.store_qr_opener_counts
           WHERE social_account_id = acct_a
             AND day = (now() AT TIME ZONE 'utc')::date) = 2,
     'B28 release decrements the counter';
-  PERFORM public.release_qr_opener(acct_a);
-  PERFORM public.release_qr_opener(acct_a);
-  PERFORM public.release_qr_opener(acct_a);
+  PERFORM public.release_qr_opener(acct_a, v_qr[2], 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'::uuid);
+  PERFORM public.release_qr_opener(acct_a, v_qr[3], 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'::uuid);
+  PERFORM public.release_qr_opener(acct_a, v_qr[3], 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'::uuid);
+  PERFORM public.release_qr_opener(acct_a, v_qr[4], 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'::uuid);
   ASSERT (SELECT sent FROM public.store_qr_opener_counts
           WHERE social_account_id = acct_a
             AND day = (now() AT TIME ZONE 'utc')::date) = 0,
@@ -593,26 +615,35 @@ BEGIN
              'public.claim_store_events(int, interval)', 'EXECUTE'),
     'B29 service_role can EXECUTE claim_store_events';
   ASSERT NOT has_function_privilege('anon',
-             'public.reserve_qr_opener(uuid, int)', 'EXECUTE'),
+             'public.reserve_qr_opener(uuid, int, uuid, uuid)', 'EXECUTE'),
     'B29 anon cannot EXECUTE reserve_qr_opener';
   ASSERT NOT has_function_privilege('authenticated',
-             'public.reserve_qr_opener(uuid, int)', 'EXECUTE'),
+             'public.reserve_qr_opener(uuid, int, uuid, uuid)', 'EXECUTE'),
     'B29 authenticated cannot EXECUTE reserve_qr_opener';
   ASSERT has_function_privilege('service_role',
-             'public.reserve_qr_opener(uuid, int)', 'EXECUTE'),
+             'public.reserve_qr_opener(uuid, int, uuid, uuid)', 'EXECUTE'),
     'B29 service_role can EXECUTE reserve_qr_opener';
   ASSERT NOT has_function_privilege('anon',
-             'public.release_qr_opener(uuid)', 'EXECUTE'),
+             'public.release_qr_opener(uuid, uuid, uuid)', 'EXECUTE'),
     'B29 anon cannot EXECUTE release_qr_opener';
   ASSERT NOT has_function_privilege('authenticated',
-             'public.release_qr_opener(uuid)', 'EXECUTE'),
+             'public.release_qr_opener(uuid, uuid, uuid)', 'EXECUTE'),
     'B29 authenticated cannot EXECUTE release_qr_opener';
   ASSERT has_function_privilege('service_role',
-             'public.release_qr_opener(uuid)', 'EXECUTE'),
+             'public.release_qr_opener(uuid, uuid, uuid)', 'EXECUTE'),
     'B29 service_role can EXECUTE release_qr_opener';
   ASSERT NOT has_table_privilege('authenticated',
              'public.store_qr_opener_counts', 'SELECT'),
     'B29 authenticated holds no SELECT on store_qr_opener_counts';
+  ASSERT NOT has_table_privilege('anon',
+             'public.store_qr_opener_reservations', 'SELECT'),
+    'B29 anon holds no SELECT on store_qr_opener_reservations';
+  ASSERT NOT has_table_privilege('authenticated',
+             'public.store_qr_opener_reservations', 'SELECT'),
+    'B29 authenticated holds no SELECT on store_qr_opener_reservations';
+  ASSERT has_table_privilege('service_role',
+             'public.store_qr_opener_reservations', 'INSERT'),
+    'B29 service_role can INSERT store_qr_opener_reservations';
 END $$;
 
 -- B30: both cron jobs exist. Skipped with a NOTICE where pg_cron is absent:
@@ -886,6 +917,175 @@ BEGIN
     RAISE EXCEPTION 'E5 failed: bogus status accepted'
       USING ERRCODE = 'assert_failure';
   EXCEPTION WHEN check_violation THEN NULL;
+  END;
+END $$;
+
+-- Q1..Q5: a QR reservation is once per event per UTC day. Own tenant
+-- fixtures (earlier blocks remove the shared bind_a before this point).
+-- platform 'facebook' avoids the whatsapp-needs-workspace check.
+DO $$
+DECLARE
+  u_a uuid := 'a9a9a9a9-a9a9-49a9-89a9-a9a9a9a9a9a9';
+  acct_a uuid := 'b9b9b9b9-b9b9-49b9-89b9-b9b9b9b9b9b9';
+  tool_a uuid := 'c9c9c9c9-c9c9-49c9-89c9-c9c9c9c9c9c9';
+  bind_a uuid := 'd9d9d9d9-d9d9-49d9-89d9-d9d9d9d9d9d9';
+  v_same uuid;
+  v_never uuid;
+  v_cap uuid;
+  v_yest uuid;
+  v_ok boolean;
+  v_sent int;
+  v_today date := (now() AT TIME ZONE 'utc')::date;
+BEGIN
+  INSERT INTO auth.users (id, email)
+  VALUES (u_a, 'qr-q-' || u_a::text || '@example.invalid');
+  INSERT INTO public.social_accounts (id, user_id, platform, platform_user_id, access_token)
+  VALUES (acct_a, u_a, 'facebook', 'qr-q-acct', 'token-qr-q');
+  INSERT INTO public.ai_agent_tools (id, user_id, name, description, connector_type)
+  VALUES (tool_a, u_a, 'woo-qr-q', 'qr reservation fixture', 'woocommerce');
+  INSERT INTO public.store_webhook_bindings
+    (id, user_id, social_account_id, connector_id, secret_id)
+  VALUES (bind_a, u_a, acct_a, tool_a, gen_random_uuid());
+
+  INSERT INTO public.store_events
+    (user_id, social_account_id, connector_id, binding_id, flow,
+     external_id, payload, status, due_at)
+  VALUES
+    (u_a, acct_a, tool_a, bind_a, 'cod_confirm', 'order-q-same', '{}', 'pending', now())
+  RETURNING id INTO v_same;
+  INSERT INTO public.store_events
+    (user_id, social_account_id, connector_id, binding_id, flow,
+     external_id, payload, status, due_at)
+  VALUES
+    (u_a, acct_a, tool_a, bind_a, 'cod_confirm', 'order-q-never', '{}', 'pending', now())
+  RETURNING id INTO v_never;
+  INSERT INTO public.store_events
+    (user_id, social_account_id, connector_id, binding_id, flow,
+     external_id, payload, status, due_at)
+  VALUES
+    (u_a, acct_a, tool_a, bind_a, 'cod_confirm', 'order-q-cap', '{}', 'pending', now())
+  RETURNING id INTO v_cap;
+  INSERT INTO public.store_events
+    (user_id, social_account_id, connector_id, binding_id, flow,
+     external_id, payload, status, due_at)
+  VALUES
+    (u_a, acct_a, tool_a, bind_a, 'cod_confirm', 'order-q-yest', '{}', 'pending', now())
+  RETURNING id INTO v_yest;
+  UPDATE public.store_events SET claim_token = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'::uuid WHERE social_account_id = acct_a;
+
+  -- Q1: reserving the same event twice takes one slot and both calls succeed.
+  v_ok := public.reserve_qr_opener(acct_a, 50, v_same, 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'::uuid);
+  ASSERT v_ok, 'Q1 first reserve returns true';
+  v_ok := public.reserve_qr_opener(acct_a, 50, v_same, 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'::uuid);
+  ASSERT v_ok, 'Q1 second reserve returns true';
+  ASSERT (SELECT sent FROM public.store_qr_opener_counts
+          WHERE social_account_id = acct_a AND day = v_today) = 1,
+    'Q1 counter moved by one';
+  ASSERT (SELECT count(*) FROM public.store_qr_opener_reservations
+          WHERE store_event_id = v_same AND day = v_today) = 1,
+    'Q1 one reservation row for today';
+
+  -- Q2: release removes the row and hands the slot back.
+  PERFORM public.release_qr_opener(acct_a, v_same, 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'::uuid);
+  ASSERT (SELECT sent FROM public.store_qr_opener_counts
+          WHERE social_account_id = acct_a AND day = v_today) = 0,
+    'Q2 release returns the counter to zero';
+  ASSERT NOT EXISTS (
+    SELECT 1 FROM public.store_qr_opener_reservations WHERE store_event_id = v_same
+  ), 'Q2 release deletes the reservation row';
+
+  -- Q3: releasing an event that was never reserved leaves the counter.
+  -- Q2 left today's row at 0; update it rather than inserting a second key.
+  UPDATE public.store_qr_opener_counts
+  SET sent = 4
+  WHERE social_account_id = acct_a AND day = v_today;
+  PERFORM public.release_qr_opener(acct_a, v_never, 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'::uuid);
+  SELECT sent INTO v_sent FROM public.store_qr_opener_counts
+  WHERE social_account_id = acct_a AND day = v_today;
+  ASSERT v_sent = 4, 'Q3 release of a never-reserved event leaves the counter';
+  ASSERT NOT EXISTS (
+    SELECT 1 FROM public.store_qr_opener_reservations WHERE store_event_id = v_never
+  ), 'Q3 never-reserved event still has no row';
+
+  -- Q4: at the cap a new event is refused and no reservation row is written.
+  UPDATE public.store_qr_opener_counts
+  SET sent = 1
+  WHERE social_account_id = acct_a AND day = v_today;
+  v_ok := public.reserve_qr_opener(acct_a, 1, v_cap, 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'::uuid);
+  ASSERT NOT v_ok, 'Q4 reserve at the cap returns false';
+  ASSERT (SELECT sent FROM public.store_qr_opener_counts
+          WHERE social_account_id = acct_a AND day = v_today) = 1,
+    'Q4 refused reserve does not move the counter';
+  ASSERT NOT EXISTS (
+    SELECT 1 FROM public.store_qr_opener_reservations WHERE store_event_id = v_cap
+  ), 'Q4 refused reserve writes no reservation row';
+
+  -- Q5: a reservation dated yesterday does not count as today's slot.
+  DELETE FROM public.store_qr_opener_counts WHERE social_account_id = acct_a;
+  INSERT INTO public.store_qr_opener_reservations (store_event_id, social_account_id, day, claim_token)
+  VALUES (v_yest, acct_a, v_today - 1, 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'::uuid);
+  v_ok := public.reserve_qr_opener(acct_a, 50, v_yest, 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'::uuid);
+  ASSERT v_ok, 'Q5 retry the next day returns true';
+  ASSERT (SELECT sent FROM public.store_qr_opener_counts
+          WHERE social_account_id = acct_a AND day = v_today) = 1,
+    'Q5 yesterday reservation takes a new slot today';
+  ASSERT (SELECT day FROM public.store_qr_opener_reservations
+          WHERE store_event_id = v_yest) = v_today,
+    'Q5 reservation day advances to today';
+  v_ok := public.reserve_qr_opener(acct_a, 50, v_yest, 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'::uuid);
+  ASSERT v_ok, 'Q5 same-day retry still returns true';
+  ASSERT (SELECT sent FROM public.store_qr_opener_counts
+          WHERE social_account_id = acct_a AND day = v_today) = 1,
+    'Q5 same-day retry does not take a second slot';
+
+  -- Releasing that yesterday row, before it was advanced, must not punch a
+  -- hole in today's counter. Rebuild the stale row beside a live today count.
+  DELETE FROM public.store_qr_opener_reservations WHERE store_event_id = v_yest;
+  INSERT INTO public.store_qr_opener_reservations (store_event_id, social_account_id, day, claim_token)
+  VALUES (v_yest, acct_a, v_today - 1, 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'::uuid);
+  UPDATE public.store_qr_opener_counts
+  SET sent = 5
+  WHERE social_account_id = acct_a AND day = v_today;
+  PERFORM public.release_qr_opener(acct_a, v_yest, 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'::uuid);
+  ASSERT (SELECT sent FROM public.store_qr_opener_counts
+          WHERE social_account_id = acct_a AND day = v_today) = 5,
+    'Q5 release of a previous-day reservation leaves today''s counter';
+  ASSERT NOT EXISTS (
+    SELECT 1 FROM public.store_qr_opener_reservations WHERE store_event_id = v_yest
+  ), 'Q5 release deletes the stale reservation row';
+  -- Q6: a stale attempt cannot release a slot a newer claim re-owned.
+  DELETE FROM public.store_qr_opener_counts WHERE social_account_id = acct_a;
+  DELETE FROM public.store_qr_opener_reservations WHERE store_event_id = v_same;
+  UPDATE public.store_events SET claim_token = 'aaaaaaaa-0000-4000-8000-000000000001'::uuid WHERE id = v_same;
+  ASSERT public.reserve_qr_opener(acct_a, 50, v_same, 'aaaaaaaa-0000-4000-8000-000000000001'::uuid),
+    'Q6 first attempt reserves';
+  UPDATE public.store_events SET claim_token = 'aaaaaaaa-0000-4000-8000-000000000002'::uuid WHERE id = v_same;
+  ASSERT public.reserve_qr_opener(acct_a, 50, v_same, 'aaaaaaaa-0000-4000-8000-000000000002'::uuid),
+    'Q6 reclaimed attempt reuses the slot';
+  -- Q6b: the stale attempt cannot take the reservation back.
+  BEGIN
+    PERFORM public.reserve_qr_opener(acct_a, 50, v_same, 'aaaaaaaa-0000-4000-8000-000000000001'::uuid);
+    RAISE EXCEPTION 'Q6b failed: stale claim reserved' USING ERRCODE = 'assert_failure';
+  EXCEPTION WHEN object_not_in_prerequisite_state THEN NULL;
+  END;
+  PERFORM public.release_qr_opener(acct_a, v_same, 'aaaaaaaa-0000-4000-8000-000000000001'::uuid);
+  ASSERT (SELECT sent FROM public.store_qr_opener_counts
+          WHERE social_account_id = acct_a AND day = v_today) = 1,
+    'Q6 stale release leaves the counter';
+  ASSERT EXISTS (SELECT 1 FROM public.store_qr_opener_reservations
+                 WHERE store_event_id = v_same
+                   AND claim_token = 'aaaaaaaa-0000-4000-8000-000000000002'::uuid),
+    'Q6 the newer claim still owns the reservation';
+  PERFORM public.release_qr_opener(acct_a, v_same, 'aaaaaaaa-0000-4000-8000-000000000002'::uuid);
+  ASSERT (SELECT sent FROM public.store_qr_opener_counts
+          WHERE social_account_id = acct_a AND day = v_today) = 0,
+    'Q6 the owning claim releases the slot';
+
+  -- Q7: an event reserved against another account is refused.
+  BEGIN
+    PERFORM public.reserve_qr_opener(gen_random_uuid(), 50, v_never, 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'::uuid);
+    RAISE EXCEPTION 'Q7 failed: cross-account reserve accepted' USING ERRCODE = 'assert_failure';
+  EXCEPTION WHEN invalid_parameter_value THEN NULL;
   END;
 END $$;
 
