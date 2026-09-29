@@ -656,6 +656,7 @@ DECLARE
   acct uuid := 'f3f3f3f3-f3f3-43f3-83f3-f3f3f3f3f3f3';
   msg_pending uuid := 'f4f4f4f4-f4f4-44f4-84f4-f4f4f4f4f4f4';
   msg_sending uuid := 'f5f5f5f5-f5f5-45f5-85f5-f5f5f5f5f5f5';
+  msg_claimed uuid := 'f6f6f6f6-f6f6-46f6-86f6-f6f6f6f6f6f6';
 BEGIN
   ASSERT (SELECT is_nullable FROM information_schema.columns
           WHERE table_schema = 'public'
