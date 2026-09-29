@@ -6,14 +6,24 @@
 // The 24 h check matches the recipient's own phone only: a caller-supplied conversation_id
 // is not bound to the recipient, so it must not open the window for someone else.
 import {
+  digitsOnly,
   logSendRefused,
   optedOutPhones,
-  recipientDigits,
   type OptOutLookupAdmin,
   type OptOutRefusalReason,
 } from "../_shared/optOutLookup.ts";
 
 const WINDOW_MS = 24 * 60 * 60 * 1000;
+
+// The customer as the sender will address them. The Evolution path strips every
+// non-digit, so "96550001111@s.whatsapp.net" is delivered to 96550001111 and must be
+// checked as that phone. Only a WhatsApp @lid or a group id is not a phone.
+function sendTargetDigits(recipientId: string): string | null {
+  const id = recipientId.trim().toLowerCase();
+  if (id.endsWith("@lid") || id.endsWith("@g.us")) return null;
+  const digits = digitsOnly(id);
+  return digits.length >= 8 && digits.length <= 15 ? digits : null;
+}
 
 const OPTED_OUT_MESSAGE =
   "This customer has opted out of WhatsApp messages and has not written in the last 24 hours.";
@@ -82,7 +92,7 @@ export async function n8nWhatsAppSendRefusal(
   input: N8nWhatsAppSendInput,
 ): Promise<N8nSendRefusal | null> {
   const cutoff = new Date(input.now.getTime() - WINDOW_MS).toISOString();
-  const digits = recipientDigits(input.recipientId);
+  const digits = sendTargetDigits(input.recipientId);
 
   if (digits) {
     const byPhone = await inboundExists(admin, input.accountId, cutoff, digits);
@@ -102,7 +112,7 @@ export async function n8nWhatsAppSendRefusal(
 
   let optedOut: Set<string>;
   try {
-    optedOut = await optedOutPhones(admin, input.ownerId, [input.recipientId]);
+    optedOut = await optedOutPhones(admin, input.ownerId, [digits]);
   } catch {
     return refuse(admin, input, {
       status: 503,

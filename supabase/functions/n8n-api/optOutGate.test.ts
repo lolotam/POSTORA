@@ -187,6 +187,23 @@ const cases: Array<{
     code: "INBOUND_LOOKUP_FAILED",
   },
   {
+    name: "a JID-suffixed phone is checked as the phone the sender will deliver to",
+    recipientId: `${PHONE}@s.whatsapp.net`,
+    rows: [],
+    optedOut: true,
+    optOutLookups: 1,
+    status: 422,
+    code: "RECIPIENT_OPTED_OUT",
+  },
+  {
+    name: "a group id outside 24h is allowed",
+    recipientId: "120363000000000000@g.us",
+    rows: [],
+    optedOut: true,
+    optOutLookups: 0,
+    status: null,
+  },
+  {
     name: "a non-phone recipient outside 24h is allowed",
     recipientId: "16505551234@lid",
     rows: [],
