@@ -4,12 +4,11 @@ import { useInfiniteQuery } from "@tanstack/react-query";
 import { Loader2, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useCdnConfig } from "@/hooks/useCdnConfig";
-import { resolveMediaPublicUrl } from "@/lib/mediaUrl";
+import { getMediaThumbnailUrl, resolveMediaPublicUrl } from "@/lib/mediaUrl";
 import {
   downloadNameFor,
   libraryFilePresentation,
@@ -68,6 +67,26 @@ function escapeLibrarySearchTerm(term: string): string {
   const likeLiteral = term.replace(/\\/g, "\\\\").replace(/[%_]/g, "\\$&");
   const quoted = likeLiteral.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
   return `"%${quoted}%"`;
+}
+
+const THUMB_SIZE = 80;
+
+function LibraryThumb({ file, url }: { file: ScheduleLibraryFile; url: string }) {
+  const presentation = libraryFilePresentation(file);
+  const [failed, setFailed] = useState(false);
+  const { data: cdnConfig } = useCdnConfig();
+  if (presentation.kind === "image" && url && !failed) {
+    return (
+      <img
+        src={getMediaThumbnailUrl(url, THUMB_SIZE, cdnConfig?.openinary?.serverUrl)}
+        alt={downloadNameFor(file)}
+        loading="lazy"
+        className="h-full w-full object-cover"
+        onError={() => setFailed(true)}
+      />
+    );
+  }
+  return <FileTypeTile {...presentation} />;
 }
 
 function extensionClause(operator: "ilike" | "not.ilike"): string {
@@ -183,15 +202,15 @@ export function ScheduleLibraryPicker({ active, selectedId, onPick }: ScheduleLi
           {t("scheduled.libraryEmpty", "No files match.")}
         </p>
       ) : (
-        <div className="space-y-2">
-          <ScrollArea className="h-56">
-            <div className="space-y-1 pe-2">
+        <div className="w-full min-w-0 space-y-2">
+          <div className="h-56 w-full min-w-0 overflow-hidden overflow-y-auto">
+            <div className="w-full min-w-0 space-y-1">
               {files.map((file) => {
                 const name = downloadNameFor(file);
                 const url = resolveUrl(file);
                 const unavailable = url.length === 0;
                 const rowClass = cn(
-                  "flex w-full items-center gap-3 rounded-lg border p-2 text-start transition-colors",
+                  "flex w-full min-w-0 items-center gap-3 rounded-lg border p-2 text-start transition-colors",
                   unavailable
                     ? "pointer-events-none cursor-not-allowed border-border opacity-60"
                     : selectedId === file.id
@@ -206,7 +225,7 @@ export function ScheduleLibraryPicker({ active, selectedId, onPick }: ScheduleLi
                     className={rowClass}
                   >
                     <div className="h-10 w-10 shrink-0 overflow-hidden rounded-md">
-                      <FileTypeTile {...libraryFilePresentation(file)} />
+                      <LibraryThumb file={file} url={url} />
                     </div>
                     <span className="min-w-0 flex-1 truncate text-sm">{name}</span>
                     {unavailable && (
@@ -220,11 +239,11 @@ export function ScheduleLibraryPicker({ active, selectedId, onPick }: ScheduleLi
                 // reports it so the dialog drops the previous file instead of
                 // leaving that file armed for Schedule.
                 return unavailable
-                  ? <div key={file.id} onClick={() => onPick(file, "")}>{control}</div>
-                  : <div key={file.id}>{control}</div>;
+                  ? <div key={file.id} className="w-full min-w-0" onClick={() => onPick(file, "")}>{control}</div>
+                  : <div key={file.id} className="w-full min-w-0">{control}</div>;
               })}
             </div>
-          </ScrollArea>
+          </div>
           {query.hasNextPage && (
             <Button
               type="button"

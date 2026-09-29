@@ -376,7 +376,9 @@
     "progress": "جاري استبدال الملف...",
     "replacing": "جاري الاستبدال...",
     "selectNew": "اختار ملف {{fileType}} جديد",
-    "title": "استبدال الملف"
+    "title": "استبدال الملف",
+    "tooLarge": "الملف ده أكبر من حد الـ 10 ميجا",
+    "wrongKind": "الملف الجديد لازم يكون من نفس نوع الملف القديم"
   },
   "share": {
     "bbcode": "BBCode",
@@ -507,7 +509,9 @@
     "audio": "صوت",
     "document": "مستند",
     "gif": "gif",
+    "image": "صورة",
     "imageLower": "image",
+    "video": "فيديو",
     "videoLower": "video"
   },
   "upload": {

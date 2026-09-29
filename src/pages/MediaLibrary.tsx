@@ -1295,7 +1295,7 @@ export default function MediaLibrary() {
                               <DropdownMenuItem onClick={(e) => { e.stopPropagation(); setRenameFile(file); }}><Pencil className="w-4 h-4 me-2" />{t("common:rename", "Rename")}</DropdownMenuItem>
                               <DropdownMenuItem onClick={(e) => { e.stopPropagation(); setShareFile(file); }}><Share2 className="w-4 h-4 me-2" />{t("actions.shareEmbed", "Share / Embed")}</DropdownMenuItem>
                               <DropdownMenuItem onClick={(e) => { e.stopPropagation(); setSingleFileMoveId(file.id); }}><Move className="w-4 h-4 me-2" />{t("common:move", "Move")}</DropdownMenuItem>
-                              {(file.file_type === "image" || file.file_type === "gif") && <DropdownMenuItem onClick={(e) => { e.stopPropagation(); setReplaceFile(file); }}><RefreshCw className="w-4 h-4 me-2" />{t("actions.replace", "Replace")}</DropdownMenuItem>}
+                              <DropdownMenuItem onClick={(e) => { e.stopPropagation(); setReplaceFile(file); }}><RefreshCw className="w-4 h-4 me-2" />{t("actions.replace", "Replace")}</DropdownMenuItem>
                               {(file.file_type === "image" || file.file_type === "gif") && <DropdownMenuItem onClick={(e) => { e.stopPropagation(); setImageToolsFile(file); }}><Wand2 className="w-4 h-4 me-2" />{t("actions.imageTools", "Image Tools")}</DropdownMenuItem>}
                               <DropdownMenuSeparator />
                               <DropdownMenuItem onClick={(e) => { e.stopPropagation(); handleDownload(file); }}><Download className="w-4 h-4 me-2" />{t("common:download", "Download")}</DropdownMenuItem>
@@ -1339,6 +1339,7 @@ export default function MediaLibrary() {
                           <DropdownMenuItem onClick={(e) => { e.stopPropagation(); setPreviewFile(file); }}><Eye className="w-4 h-4 me-2" />{t("common:open", "Open")}</DropdownMenuItem>
                           <DropdownMenuSeparator />
                           <DropdownMenuItem onClick={(e) => { e.stopPropagation(); setRenameFile(file); }}><Pencil className="w-4 h-4 me-2" />{t("common:rename", "Rename")}</DropdownMenuItem>
+                          <DropdownMenuItem onClick={(e) => { e.stopPropagation(); setReplaceFile(file); }}><RefreshCw className="w-4 h-4 me-2" />{t("actions.replace", "Replace")}</DropdownMenuItem>
                           <DropdownMenuItem onClick={(e) => { e.stopPropagation(); handleDownload(file); }}><Download className="w-4 h-4 me-2" />{t("common:download", "Download")}</DropdownMenuItem>
                           <DropdownMenuSeparator />
                           {!viewingAnotherUser && (
@@ -1378,7 +1379,7 @@ export default function MediaLibrary() {
         {renameFile && <RenameFileDialog open={!!renameFile} onClose={() => setRenameFile(null)} fileId={renameFile.id} currentName={renameFile.storage_bucket === "media" ? renameFile.file_path : getFileDisplayName(renameFile)} storageBucket={renameFile.storage_bucket} onRenamed={() => refetch()} />}
         {renameFolder && <RenameFolderDialog open={!!renameFolder} onClose={() => setRenameFolder(null)} folderId={renameFolder.id} currentName={renameFolder.name} currentPath={renameFolder.full_path} parentPath={renameFolder.parent_path} onRenamed={() => refetchFolders()} />}
         {shareFile && <ShareEmbedDialog open={!!shareFile} file={shareFile} onClose={() => setShareFile(null)} />}
-        {replaceFile && user && (replaceFile.file_type === "image" || replaceFile.file_type === "video") && <ReplaceFileDialog open={!!replaceFile} onClose={() => setReplaceFile(null)} file={replaceFile} userId={user.id} onReplaced={() => refetch()} />}
+        {replaceFile && user && <ReplaceFileDialog open={!!replaceFile} onClose={() => setReplaceFile(null)} file={replaceFile} userId={user.id} onReplaced={() => refetch()} />}
         <BatchRenameDialog files={mediaFiles.filter((f) => selectedFiles.has(f.id))} open={batchRenameDialogOpen} onClose={() => setBatchRenameDialogOpen(false)} onRenameComplete={() => { refetch(); setSelectedFiles(new Set()); }} />
         <MediaPreviewDialog file={previewFile} socialAccounts={socialAccounts} onClose={() => setPreviewFile(null)} onDownload={handleDownload} onCopyLink={copyFileLink} onDelete={setFileToDelete} onMove={setSingleFileMoveId} onRename={setRenameFile} onShare={setShareFile} onReplace={setReplaceFile} onImageTools={setImageToolsFile} onBgRemoval={setBgRemovalFile} />
         <DeleteFileDialog open={!!fileToDelete} onClose={() => setFileToDelete(null)} onConfirm={() => { if (fileToDelete) { handleDelete(fileToDelete); setFileToDelete(null); } }} />
