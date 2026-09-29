@@ -156,7 +156,8 @@ Deno.serve(async (req) => {
     // and leave the old version completely intact while we do it.
     //
     // What remains is a single DB round-trip between the rename and the swap.
-    const { data: cdnSetting } = await supabase
+    // cdn_storage is admin-only under RLS; the user client would read nothing for non-admins.
+    const { data: cdnSetting } = await dbAdmin
       .from("app_settings").select("value").eq("key", "cdn_storage").maybeSingle();
     const providers = cdnSetting?.value?.write_policy?.providers || ["cloudinary"];
 
