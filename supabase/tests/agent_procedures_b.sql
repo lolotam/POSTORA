@@ -919,15 +919,15 @@ BEGIN
   END;
 END $$;
 
--- Q1..Q5: a QR reservation is once per event per UTC day. Reuses bind_a's
--- tenant (u_a, acct_a, tool_a) so the store_events FK holds. Clears this
--- account's counter first so B27's cap does not leak into these asserts.
+-- Q1..Q5: a QR reservation is once per event per UTC day. Own tenant
+-- fixtures (earlier blocks remove the shared bind_a before this point).
+-- platform 'facebook' avoids the whatsapp-needs-workspace check.
 DO $$
 DECLARE
-  u_a uuid := '11111111-1111-4111-8111-111111111111';
-  acct_a uuid := '33333333-3333-4333-8333-333333333333';
-  tool_a uuid := '55555555-5555-4555-8555-555555555555';
-  bind_a uuid := '77777777-7777-4777-8777-777777777777';
+  u_a uuid := 'a9a9a9a9-a9a9-49a9-89a9-a9a9a9a9a9a9';
+  acct_a uuid := 'b9b9b9b9-b9b9-49b9-89b9-b9b9b9b9b9b9';
+  tool_a uuid := 'c9c9c9c9-c9c9-49c9-89c9-c9c9c9c9c9c9';
+  bind_a uuid := 'd9d9d9d9-d9d9-49d9-89d9-d9d9d9d9d9d9';
   v_same uuid;
   v_never uuid;
   v_cap uuid;
@@ -936,8 +936,15 @@ DECLARE
   v_sent int;
   v_today date := (now() AT TIME ZONE 'utc')::date;
 BEGIN
-  DELETE FROM public.store_qr_opener_reservations WHERE social_account_id = acct_a;
-  DELETE FROM public.store_qr_opener_counts WHERE social_account_id = acct_a;
+  INSERT INTO auth.users (id, email)
+  VALUES (u_a, 'qr-q-' || u_a::text || '@example.invalid');
+  INSERT INTO public.social_accounts (id, user_id, platform, platform_user_id, access_token)
+  VALUES (acct_a, u_a, 'facebook', 'qr-q-acct', 'token-qr-q');
+  INSERT INTO public.ai_agent_tools (id, user_id, name, description, connector_type)
+  VALUES (tool_a, u_a, 'woo-qr-q', 'qr reservation fixture', 'woocommerce');
+  INSERT INTO public.store_webhook_bindings
+    (id, user_id, social_account_id, connector_id, secret_id)
+  VALUES (bind_a, u_a, acct_a, tool_a, gen_random_uuid());
 
   INSERT INTO public.store_events
     (user_id, social_account_id, connector_id, binding_id, flow,
