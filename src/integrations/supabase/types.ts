@@ -8055,6 +8055,10 @@ export type Database = {
           api_type: string
         }[]
       }
+      get_cdn_public_config: {
+        Args: Record<PropertyKey, never>
+        Returns: Json
+      }
       get_cdn_provider_counts: {
         Args: Record<PropertyKey, never>
         Returns: {

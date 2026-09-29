@@ -17,15 +17,28 @@ export const DEFAULT_CDN_STORAGE_CONFIG: CdnStorageConfig = {
   read_preference: "openinary",
 };
 
+/**
+ * cdn_storage is admin-only under RLS, so a non-admin's read returns no row.
+ * Admins get the full stored value (the settings editor saves it back whole);
+ * everyone else gets the non-secret subset from get_cdn_public_config.
+ */
+async function readCdnStorageValue(): Promise<unknown> {
+  const { data, error } = await supabase.from("app_settings").select("value").eq("key", "cdn_storage").maybeSingle();
+  if (error) throw error;
+  if (data?.value) return data.value;
+  const { data: publicConfig, error: rpcError } = await supabase.rpc("get_cdn_public_config");
+  if (rpcError) throw rpcError;
+  return publicConfig;
+}
+
 export function useCdnConfig() {
   return useQuery({
     queryKey: ["cdn-storage-config"],
     queryFn: async (): Promise<CdnStorageConfig> => {
-      const { data, error } = await supabase.from("app_settings").select("value").eq("key", "cdn_storage").maybeSingle();
-      if (error) throw error;
-      if (!data?.value) return DEFAULT_CDN_STORAGE_CONFIG;
+      const stored = await readCdnStorageValue();
+      if (!stored) return DEFAULT_CDN_STORAGE_CONFIG;
       let value: unknown;
-      try { value = typeof data.value === "string" ? JSON.parse(data.value) : data.value; } catch { return DEFAULT_CDN_STORAGE_CONFIG; }
+      try { value = typeof stored === "string" ? JSON.parse(stored) : stored; } catch { return DEFAULT_CDN_STORAGE_CONFIG; }
       if (!value || typeof value !== "object") return DEFAULT_CDN_STORAGE_CONFIG;
       const candidate = value as Record<string, unknown>;
       const writePolicy = candidate.write_policy;
