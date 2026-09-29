@@ -51,7 +51,9 @@ export interface RetentionLog {
 
 export interface RetentionReport {
   dryRun: boolean;
+  /** True only when the switch was read as enabled. False when disabled or unknown. */
   deleteEnabled: boolean;
+  deleteState: DeleteSwitchState;
   result: RetentionCounts;
   filesToDelete: RetentionFilePreview[];
 }
@@ -130,6 +132,7 @@ export async function runMediaRetention(args: {
     return {
       dryRun: true,
       deleteEnabled,
+      deleteState,
       result: { warned, due, deleted: 0, failed: 0, backlog: due },
       filesToDelete: rows.map((row) => ({ id: row.media_file_id, action: row.action })),
     };
@@ -215,6 +218,7 @@ export async function runMediaRetention(args: {
   return {
     dryRun: false,
     deleteEnabled,
+    deleteState,
     result: { warned, due: claimed, deleted, failed, backlog },
     filesToDelete: [],
   };

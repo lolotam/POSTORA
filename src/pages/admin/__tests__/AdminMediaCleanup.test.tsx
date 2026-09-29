@@ -41,7 +41,21 @@ describe("AdminMediaCleanup", () => {
     expect(screen.getByText("Warned")).toBeInTheDocument();
     expect(screen.getByText("Backlog")).toBeInTheDocument();
     expect(screen.getByText("file-1")).toBeInTheDocument();
-    expect(screen.getByTestId("delete-switch-state")).toHaveTextContent("paused");
+    expect(screen.getByTestId("delete-switch-state")).toHaveTextContent("Deletion paused by admin");
     expect(invoke).toHaveBeenCalledWith("cleanup-media", { body: { dryRun: true } });
+  });
+
+  it.each([
+    ["enabled", "Deletion enabled"],
+    ["disabled", "Deletion paused by admin"],
+    ["unknown", "Deletion switch unreadable — nothing will be deleted"],
+  ] as const)("shows the %s deletion switch", async (deleteState, label) => {
+    invoke.mockResolvedValue({
+      data: { deleteState, deleteEnabled: deleteState === "enabled", result: { warned: 0, due: 0, deleted: 0, failed: 0, backlog: 0 }, filesToDelete: [] },
+      error: null,
+    });
+    render(<AdminMediaCleanup />);
+    fireEvent.click(screen.getByRole("button", { name: "Preview" }));
+    expect(await screen.findByTestId("delete-switch-state")).toHaveTextContent(label);
   });
 });

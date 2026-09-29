@@ -76,6 +76,108 @@ Deno.test("a failed audit log write does not change the auth response", async ()
   });
 });
 
+function authorisedRequest(body: string): Request {
+  return new Request("https://functions.postora.cloud/media-retention", {
+    method: "POST",
+    headers: { "x-cron-secret": "cron-secret-value-0123456789" },
+    body,
+  });
+}
+
+function dryRunPorts(state: "enabled" | "disabled" | "unknown") {
+  return {
+    sweep: async () => [],
+    claim: async () => [],
+    release: async () => {},
+    preview: async () => [],
+    readDeleteState: async () => state,
+    logDeleteSwitchUnreadable: async () => {},
+    loadProviders: async () => ({ rows: [] }),
+    deleteFile: async () => ({ confirmed: true }),
+    removeMediaRow: async () => ({ removed: true, stillDeleting: false }),
+    logRun: async () => {},
+  };
+}
+
+Deno.test("the response keeps deleteEnabled and adds deleteState", async () => {
+  const CRON_SECRET = "cron-secret-value-0123456789";
+  await withEnv({ CRON_SECRET }, async () => {
+    for (const state of ["enabled", "disabled", "unknown"] as const) {
+      const res = await handleMediaRetentionRequest(authorisedRequest(JSON.stringify({ dryRun: true })), {
+        ports: dryRunPorts(state),
+        adminClient: fakeAdminClient([]),
+      });
+      assertEquals(res.status, 200);
+      const body = await res.json();
+      assertEquals(body.deleteState, state);
+      assertEquals(body.deleteEnabled, state === "enabled");
+    }
+  });
+});
+
+Deno.test("malformed JSON from an authorised caller is logged and refused", async () => {
+  const CRON_SECRET = "cron-secret-value-0123456789";
+  await withEnv({ CRON_SECRET }, async () => {
+    const inserts: Array<Record<string, unknown>> = [];
+    const res = await handleMediaRetentionRequest(authorisedRequest("{"), { adminClient: fakeAdminClient(inserts) });
+    assertEquals(res.status, 400);
+    assertEquals(await res.json(), { success: false, error: "Invalid request" });
+    assertEquals(inserts.length, 1);
+    assertEquals(inserts[0].table, "system_logs");
+    assertEquals(inserts[0].level, "warn");
+    assertEquals(inserts[0].category, "system");
+    assertEquals(inserts[0].source, "media-retention");
+    assertEquals(inserts[0].message, "Retention request rejected");
+    assertEquals(inserts[0].metadata, { reason: "invalid_json" });
+  });
+});
+
+Deno.test("a non-boolean dryRun from an authorised caller is logged and refused", async () => {
+  const CRON_SECRET = "cron-secret-value-0123456789";
+  await withEnv({ CRON_SECRET }, async () => {
+    const inserts: Array<Record<string, unknown>> = [];
+    const res = await handleMediaRetentionRequest(
+      authorisedRequest(JSON.stringify({ dryRun: "yes" })),
+      { adminClient: fakeAdminClient(inserts) },
+    );
+    assertEquals(res.status, 400);
+    assertEquals(await res.json(), { success: false, error: "Invalid request" });
+    assertEquals(inserts.length, 1);
+    assertEquals(inserts[0].metadata, { reason: "invalid_dry_run" });
+    assertEquals(inserts[0].message, "Retention request rejected");
+    assertEquals(inserts[0].level, "warn");
+    assertEquals(inserts[0].category, "system");
+  });
+});
+
+Deno.test("a failed rejection log does not change the 400", async () => {
+  const CRON_SECRET = "cron-secret-value-0123456789";
+  await withEnv({ CRON_SECRET }, async () => {
+    const errors: unknown[][] = [];
+    const original = console.error;
+    console.error = (...args: unknown[]) => {
+      errors.push(args);
+    };
+    const throwingClient = {
+      from() {
+        return {
+          insert() {
+            return Promise.reject(new Error("insert failed"));
+          },
+        };
+      },
+    };
+    try {
+      const res = await handleMediaRetentionRequest(authorisedRequest("{"), { adminClient: throwingClient });
+      assertEquals(res.status, 400);
+      assertEquals(await res.json(), { success: false, error: "Invalid request" });
+      assertEquals(errors.length > 0, true);
+    } finally {
+      console.error = original;
+    }
+  });
+});
+
 Deno.test("an authorized request does not write the refusal log", async () => {
   const CRON_SECRET = "cron-secret-value-0123456789";
   await withEnv({ CRON_SECRET }, async () => {

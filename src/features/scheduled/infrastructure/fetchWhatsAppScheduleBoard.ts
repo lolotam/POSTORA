@@ -43,10 +43,16 @@ async function fetchActiveRows(userId: string): Promise<ScheduleRow[]> {
   return data ?? [];
 }
 
-async function fetchRangeRows(userId: string, rangeStart: string, rangeEnd: string): Promise<ScheduleRow[]> {
-  const { data, error } = await supabase
+async function fetchRangeRows(
+  userId: string,
+  rangeStart: string,
+  rangeEnd: string,
+): Promise<{ rows: ScheduleRow[]; truncated: boolean }> {
+  // The exact count comes from Content-Range, so truncation is detected even when a
+  // PostgREST db-max-rows cap would stop an extra probe row from ever arriving.
+  const { data, error, count } = await supabase
     .from("whatsapp_scheduled_messages")
-    .select("*")
+    .select("*", { count: "exact" })
     .eq("user_id", userId)
     .in("status", [...CALENDAR_WHATSAPP_STATUSES])
     .gte("scheduled_at", rangeStart)
@@ -54,7 +60,8 @@ async function fetchRangeRows(userId: string, rangeStart: string, rangeEnd: stri
     .order("scheduled_at", { ascending: true })
     .limit(WHATSAPP_RANGE_LIMIT);
   if (error) throw error;
-  return data ?? [];
+  const fetched = (data ?? []).slice(0, WHATSAPP_RANGE_LIMIT);
+  return { rows: fetched, truncated: (count ?? fetched.length) > WHATSAPP_RANGE_LIMIT };
 }
 
 async function fetchAccountLabels(userId: string, accountIds: string[]): Promise<Map<string, AccountLabel>> {
@@ -92,13 +99,14 @@ export async function fetchWhatsAppScheduleBoard(
   userId: string,
   scope: WhatsAppScheduleScope,
 ): Promise<WhatsAppScheduleBoard> {
-  const rows = scope.kind === "active"
-    ? await fetchActiveRows(userId)
-    : await fetchRangeRows(userId, scope.rangeStart, scope.rangeEnd);
+  const range = scope.kind === "range"
+    ? await fetchRangeRows(userId, scope.rangeStart, scope.rangeEnd)
+    : null;
+  const rows = range ? range.rows : await fetchActiveRows(userId);
   const accountIds = [...new Set(rows.map((row) => row.social_account_id))];
   const accounts = await fetchAccountLabels(userId, accountIds);
   return {
     messages: rows.map((row) => toSource(row, accounts.get(row.social_account_id))),
-    truncated: scope.kind === "range" && rows.length >= WHATSAPP_RANGE_LIMIT,
+    truncated: range?.truncated ?? false,
   };
 }
