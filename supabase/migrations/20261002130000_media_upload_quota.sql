@@ -25,8 +25,11 @@ BEGIN
   END IF;
 
   -- The count is by created_at, which browser clients may set on insert: a
-  -- backdated row would never count toward today. Pin it for client roles.
-  IF current_user IN ('authenticated', 'anon') THEN
+  -- backdated row would never count toward today. Pin it for client requests.
+  -- current_user is this function's owner here (SECURITY DEFINER), so the
+  -- caller is read from the PostgREST JWT role claim instead.
+  IF coalesce(nullif(current_setting('request.jwt.claims', true), ''), '{}')::jsonb->>'role'
+     IN ('authenticated', 'anon') THEN
     NEW.created_at := now();
   END IF;
 
