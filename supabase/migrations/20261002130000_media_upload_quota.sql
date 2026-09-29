@@ -1,5 +1,8 @@
 -- Daily media-upload limit. Every new media_files row counts. A replace is an
 -- UPDATE and a dedupe reuse inserts nothing, so neither passes through here.
+-- Usage is the durable counter user_quotas.media_uploads_today (reset once
+-- media_daily_reset_date has passed), the same one can_upload_media() reads.
+-- Counting existing rows instead would let upload-then-delete free a slot.
 -- Direct EXECUTE is revoked. PostgreSQL checks that privilege when the trigger
 -- is created, not when it fires, so an authenticated INSERT still runs the body.
 
@@ -12,6 +15,7 @@ AS $$
 DECLARE
   v_max integer;
   v_count integer;
+  v_reset timestamptz;
   v_next_day timestamptz := date_trunc('day', now()) + interval '1 day';
   v_next_month timestamptz := date_trunc('month', now()) + interval '1 month';
 BEGIN
@@ -22,15 +26,6 @@ BEGIN
 
   IF public.has_role(NEW.user_id, 'admin'::public.app_role) THEN
     RETURN NEW;
-  END IF;
-
-  -- The count is by created_at, which browser clients may set on insert: a
-  -- backdated row would never count toward today. Pin it for client requests.
-  -- current_user is this function's owner here (SECURITY DEFINER), so the
-  -- caller is read from the PostgREST JWT role claim instead.
-  IF coalesce(nullif(current_setting('request.jwt.claims', true), ''), '{}')::jsonb->>'role'
-     IN ('authenticated', 'anon') THEN
-    NEW.created_at := now();
   END IF;
 
   -- The row exists to be locked and to hold counters. Limits stay NULL so an
@@ -45,16 +40,19 @@ BEGIN
   )
   ON CONFLICT (user_id) DO NOTHING;
 
-  PERFORM 1 FROM public.user_quotas WHERE user_id = NEW.user_id FOR UPDATE;
+  SELECT uq.media_uploads_today, uq.media_daily_reset_date
+  INTO v_count, v_reset
+  FROM public.user_quotas AS uq
+  WHERE uq.user_id = NEW.user_id
+  FOR UPDATE;
+  IF v_reset IS NULL OR v_reset <= now() THEN
+    v_count := 0;
+  END IF;
+  v_count := COALESCE(v_count, 0);
 
   SELECT e.max_media_uploads_per_day
   INTO v_max
   FROM public.effective_user_quotas(NEW.user_id) e;
-
-  SELECT COUNT(*)::integer INTO v_count
-  FROM public.media_files
-  WHERE user_id = NEW.user_id
-    AND created_at >= date_trunc('day', now());
 
   IF v_max IS NOT NULL AND v_max IS DISTINCT FROM -1 AND v_count >= v_max THEN
     RAISE EXCEPTION 'MEDIA_QUOTA_DAILY_EXCEEDED: Daily upload limit of % reached. Upgrade your plan or try again tomorrow.', v_max
@@ -89,6 +87,7 @@ AS $$
 DECLARE
   v_max integer;
   v_count integer;
+  v_reset timestamptz;
 BEGIN
   IF p_user IS NULL THEN
     RETURN 0;
@@ -106,12 +105,15 @@ BEGIN
     RETURN NULL;
   END IF;
 
-  SELECT COUNT(*)::integer INTO v_count
-  FROM public.media_files
-  WHERE user_id = p_user
-    AND created_at >= date_trunc('day', now());
+  SELECT uq.media_uploads_today, uq.media_daily_reset_date
+  INTO v_count, v_reset
+  FROM public.user_quotas AS uq
+  WHERE uq.user_id = p_user;
+  IF NOT FOUND OR v_reset IS NULL OR v_reset <= now() THEN
+    v_count := 0;
+  END IF;
 
-  RETURN GREATEST(0, v_max - v_count);
+  RETURN GREATEST(0, v_max - COALESCE(v_count, 0));
 END;
 $$;
 

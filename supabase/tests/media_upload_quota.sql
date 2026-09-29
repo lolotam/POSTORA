@@ -12,7 +12,6 @@ DECLARE
   u_admin uuid := 'c810c810-c810-48c8-88c8-c810c810c810';
   u_old uuid := 'd810d810-d810-48d8-88d8-d810d810d810';
   v_count integer;
-  v_today integer;
   v_remaining integer;
 BEGIN
   INSERT INTO auth.users (id, email) VALUES
@@ -81,15 +80,27 @@ BEGIN
   ASSERT public.media_upload_quota_remaining(u_limited) = 0,
     'Q5 remaining stays 0 after an update at the limit';
 
-  INSERT INTO public.media_files (user_id, file_path, file_type, created_at)
-  VALUES (u_old, 'quota/yesterday.jpg', 'image', date_trunc('day', now()) - interval '1 day');
-  SELECT count(*) INTO v_today FROM public.media_files
-  WHERE user_id = u_old AND created_at >= date_trunc('day', now());
-  ASSERT v_today = 0, 'Q6 a yesterday row is outside today''s window';
+  -- Q5b: deleting today's file does not free a slot (upload-then-delete bypass).
+  DELETE FROM public.media_files WHERE user_id = u_limited AND file_path = 'quota/one.jpg';
+  ASSERT public.media_upload_quota_remaining(u_limited) = 0,
+    'Q5b remaining stays 0 after deleting a file';
+  BEGIN
+    INSERT INTO public.media_files (user_id, file_path, file_type)
+    VALUES (u_limited, 'quota/after-delete.jpg', 'image');
+    RAISE EXCEPTION 'Q5b failed: upload after delete was accepted' USING ERRCODE = 'assert_failure';
+  EXCEPTION WHEN check_violation THEN NULL;
+  END;
+
+  -- Q6: a counter whose reset date has passed starts a fresh day.
+  UPDATE public.user_quotas
+  SET media_uploads_today = 5, media_daily_reset_date = now() - interval '1 hour'
+  WHERE user_id = u_old;
   v_remaining := public.media_upload_quota_remaining(u_old);
-  ASSERT v_remaining = 1, 'Q6 yesterday does not consume today''s remaining';
+  ASSERT v_remaining = 1, 'Q6 a rolled-over counter does not consume today''s slot';
   INSERT INTO public.media_files (user_id, file_path, file_type)
   VALUES (u_old, 'quota/today.jpg', 'image');
+  ASSERT (SELECT media_uploads_today FROM public.user_quotas WHERE user_id = u_old) = 1,
+    'Q6 the counter restarts at 1';
   ASSERT public.media_upload_quota_remaining(u_old) = 0,
     'Q6 the today insert consumes the one remaining slot';
 
@@ -130,20 +141,6 @@ BEGIN
 EXCEPTION WHEN insufficient_privilege THEN NULL;
 END $$;
 RESET ROLE;
-
--- Q10: a browser client cannot backdate a row out of today's count.
-SET LOCAL ROLE authenticated;
-SELECT set_config('request.jwt.claims',
-  json_build_object('sub', 'b810b810-b810-48b8-88b8-b810b810b810', 'role', 'authenticated')::text, true);
-INSERT INTO public.media_files (user_id, file_path, file_type, created_at)
-VALUES ('b810b810-b810-48b8-88b8-b810b810b810', 'q10-backdated', 'image', now() - interval '2 days');
-RESET ROLE;
-DO $$
-BEGIN
-  ASSERT (SELECT created_at >= date_trunc('day', now()) FROM public.media_files
-          WHERE file_path = 'q10-backdated'),
-    'Q10 client-supplied created_at is pinned to now';
-END $$;
 
 ROLLBACK;
 

@@ -210,6 +210,8 @@ export function useCanvasWorkflow() {
             .single();
           if (error) {
             if (isMediaQuotaMessage(error.message)) {
+              // The post is not created: remove the rows this run already added.
+              if (mediaFileIds.length > 0) await supabase.from("media_files").delete().in("id", mediaFileIds);
               throw new Error(mediaQuotaHumanMessage(error.message));
             }
             console.error("Media insert error:", error);
