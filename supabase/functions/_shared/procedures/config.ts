@@ -19,9 +19,14 @@ export interface ProcedureSettings {
 }
 export type ProcedureConfig = Partial<Record<ProcedureKey, ProcedureSettings>>;
 
-const MAX_TEXT = 300;
-const MAX_SERVICES = 20;
-const MAX_SERVICE = 60;
+/** Save-time bounds. The browser mirror in src/lib/procedureTemplates.ts must stay equal. */
+export const PROCEDURE_LIMITS = {
+  text: 300,
+  questionsMin: 2,
+  questionsMax: 3,
+  services: 20,
+  service: 60,
+} as const;
 
 function fail(message: string): never {
   throw new AgentBehaviorError(message);
@@ -40,10 +45,10 @@ function nonBlankText(value: unknown, field: string, max: number): string {
 }
 
 function parseQuestions(questions: unknown): string[] {
-  if (!Array.isArray(questions) || questions.length < 2 || questions.length > 3) {
-    fail("procedures.product_finder.questions must hold 2 or 3 questions");
+  if (!Array.isArray(questions) || questions.length < PROCEDURE_LIMITS.questionsMin || questions.length > PROCEDURE_LIMITS.questionsMax) {
+    fail(`procedures.product_finder.questions must hold ${PROCEDURE_LIMITS.questionsMin} or ${PROCEDURE_LIMITS.questionsMax} questions`);
   }
-  return questions.map((q, i) => nonBlankText(q, `procedures.product_finder.questions[${i}]`, MAX_TEXT));
+  return questions.map((q, i) => nonBlankText(q, `procedures.product_finder.questions[${i}]`, PROCEDURE_LIMITS.text));
 }
 
 const ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$/;
@@ -109,12 +114,12 @@ function parseSettings(key: ProcedureKey, value: unknown): ProcedureSettings {
   const prompts: Record<string, string> = {};
   for (const [name, text] of Object.entries(promptsIn)) {
     if (!fieldNames.has(name)) fail(`procedures.${key}.prompts.${name} is not a field of this procedure`);
-    prompts[name] = boundedText(text, `procedures.${key}.prompts.${name}`, MAX_TEXT);
+    prompts[name] = boundedText(text, `procedures.${key}.prompts.${name}`, PROCEDURE_LIMITS.text);
   }
   const settings: ProcedureSettings = {
     enabled: source.enabled,
     prompts,
-    closing: boundedText(source.closing ?? "", `procedures.${key}.closing`, MAX_TEXT),
+    closing: boundedText(source.closing ?? "", `procedures.${key}.closing`, PROCEDURE_LIMITS.text),
   };
   if (key === "product_finder") {
     // Questions are required only while the flow is on; a switched-off flow keeps a valid
@@ -126,10 +131,10 @@ function parseSettings(key: ProcedureKey, value: unknown): ProcedureSettings {
     }
   }
   if (key === "booking" && source.services !== undefined) {
-    if (!Array.isArray(source.services) || source.services.length > MAX_SERVICES) {
-      fail(`procedures.booking.services must hold at most ${MAX_SERVICES} items`);
+    if (!Array.isArray(source.services) || source.services.length > PROCEDURE_LIMITS.services) {
+      fail(`procedures.booking.services must hold at most ${PROCEDURE_LIMITS.services} items`);
     }
-    settings.services = source.services.map((s, i) => nonBlankText(s, `procedures.booking.services[${i}]`, MAX_SERVICE));
+    settings.services = source.services.map((s, i) => nonBlankText(s, `procedures.booking.services[${i}]`, PROCEDURE_LIMITS.service));
   }
   if (isEventProcedureKey(key)) applyEventSettings(key, source, settings);
   return settings;

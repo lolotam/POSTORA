@@ -28,7 +28,6 @@ import {
   phaseTimings,
   procedurePromptBlock,
   procedureStateAfterTurn,
-  procedureStoreTool,
   procedureTurnGate,
   replyIntentFields,
   resolveEngagementMode,
@@ -47,12 +46,12 @@ import {
   type EscalationTarget,
   executeTool,
   agentToolDefinitions,
-  notifyAdmins,
   type CustomTool,
   type ToolContext,
   type ToolResult,
 } from "./tools.ts";
-import { connectorCallFailed, executeProcedureStoreCall, executeRoutedCustomTool } from "./connectorExecution.ts";
+import { executeProcedureStoreCall, executeRoutedCustomTool } from "./connectorExecution.ts";
+import { createProcedurePorts } from "./procedurePorts.ts";
 import { deliverModelOutageFloor } from "./outage-floor.ts";
 import { applyIntentLabel, intentLabelFor, shouldLabel, type LabelDb } from "./intentLabels.ts";
 import { dashboardColumns } from "./dashboardColumns.ts";
@@ -97,14 +96,11 @@ import {
   PROCEDURE_TOOL_NAMES,
   procedureToolDefinitions,
   stepGuidance,
-  scopeStoreEventRead,
   stockSightingsFromToolOutput,
   stockWaitlistJoinOffered,
-  storeEventReadScope,
   waitlistRound,
   type StockSighting,
   type StoreBindingPort,
-  type StoreEventEq,
 } from "./procedureRuntime.ts";
 import { PROCEDURE_STATE_CONFLICT, persistProcedureState } from "./procedureState.ts";
 
@@ -731,7 +727,7 @@ Deno.serve(async (req) => {
     const initialProcedureState = proceduresOn ? expireIfStale(thread.procedure_state ?? null, procedureNow) : null;
     // The claim port advances this. The final write must expect it, not the value read above:
     // the winner then moves claimed -> null, and the loser's compare-and-set still expects what it read.
-    let durableProcedureState: unknown = thread.procedure_state ?? null;
+    const durableProcedureState = { current: thread.procedure_state ?? null };
 
     // Sandbox runs bypass the delivery gates — they test the agent's brain,
     // not the conversation's delivery state. The sender is built only after
@@ -1130,140 +1126,25 @@ Deno.serve(async (req) => {
       : toolResolution.tools;
     const customToolByName = new Map(customTools.map((tool) => [tool.name, tool]));
 
-    const storeTool = (capability: "lookup_orders" | "search_products") => procedureStoreTool(customTools, capability);
-    const wooById = (connectorId: string) =>
-      customTools.find((tool) => tool.id === connectorId && tool.connector_type === "woocommerce") ?? null;
-    const readStorePayload = (found: ToolResult): Record<string, unknown> => {
-      if (connectorCallFailed(found)) {
-        if (found.output.includes("[store_write_denied]") || found.output.includes("[read_only_violation]")) {
-          return { error: "store_write_denied" };
-        }
-        throw new Error("store_lookup_failed");
-      }
-      const marker = "returned: ";
-      const at = found.output.indexOf(marker);
-      if (at < 0) throw new Error("store_lookup_failed");
-      const parsed = JSON.parse(found.output.slice(at + marker.length));
-      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw new Error("store_lookup_failed");
-      return parsed as Record<string, unknown>;
-    };
     const procedureTurn = proceduresOn ? createProcedureTurn({
       state: initialProcedureState, config: procedureConfig, dryRun, now: () => new Date(),
       runId: outboxId ?? crypto.randomUUID(),
       userId: request.user_id,
       customerPhone: request.recipient_phone,
       leadContext: { platform: request.platform, socialAccountId: toolContext.socialAccountId, conversationId: request.conversation_id },
-      ports: {
-        claim: async (claimed) => {
-          const won = await persistProcedureState(admin, thread.id, durableProcedureState, claimed);
-          if (won) durableProcedureState = claimed;
-          return won;
-        },
-        saveLead: async (row) => {
-          const { data, error } = await admin.from("leads").upsert(
-            { user_id: request.user_id, form_id: null, status: "new", ...row },
-            { onConflict: "meta_lead_id", ignoreDuplicates: true },
-          ).select("id");
-          if (error) throw new Error(error.message);
-          return (data ?? []).length > 0;
-        },
-        notifyAdmin: (message) => notifyAdmins(toolContext, message),
-        escalate: (reason, summary) => executeTool(toolContext, "escalate_to_human", { reason, summary }),
-        hasStoreCapability: (capability) => storeTool(capability) !== null,
-        storeLookup: async (capability, parameters) => {
-          const tool = storeTool(capability);
-          if (!tool) return null;
-          const found = await executeRoutedCustomTool(toolContext, tool, { capability, parameters }, {}, modelBudgetRemaining(startedAt, Date.now()));
-          // Connector failures come back as text, not exceptions; the flow must keep its
-          // final step for a retry instead of completing on an error (debate verdict 3).
-          if (connectorCallFailed(found)) throw new Error("store_lookup_failed");
-          return found;
-        },
-        logFailure: async (message, metadata) => {
-          const { error } = await admin.from("system_logs").insert({
-            source: "ai-agent-reply", category: "ai", level: "warn", message, user_id: request.user_id,
-            metadata: { platform: request.platform, ...metadata },
-          });
-          if (error) console.error("[ai-agent-reply] Procedure failure log rejected:", error.message);
-        },
-        eventFor: async (runId) => {
-          const scope = storeEventReadScope(runId, request.user_id, toolContext.socialAccountId);
-          if (!scope) return null;
-          // The generated filter builder is too deep to pass through a generic.
-          // The cast keeps the three equality filters on the real query.
-          const scoped = scopeStoreEventRead(
-            admin.from("store_events").select("id, user_id, social_account_id, connector_id, flow, payload") as unknown as StoreEventEq,
-            scope,
-          ) as unknown as {
-            maybeSingle(): Promise<{
-              data: {
-                id: unknown;
-                user_id: unknown;
-                social_account_id: unknown;
-                connector_id: unknown;
-                flow: unknown;
-                payload: unknown;
-              } | null;
-              error: { message: string } | null;
-            }>;
-          };
-          const { data, error } = await scoped.maybeSingle();
-          if (error) throw new Error("store_event_read_failed");
-          if (!data || typeof data.user_id !== "string" || typeof data.social_account_id !== "string" || typeof data.connector_id !== "string" || typeof data.flow !== "string") {
-            return null;
-          }
-          const payload: Record<string, string> = {};
-          if (data.payload && typeof data.payload === "object" && !Array.isArray(data.payload)) {
-            for (const [key, value] of Object.entries(data.payload as Record<string, unknown>)) {
-              if (typeof value === "string") payload[key] = value;
-              else if (typeof value === "number" && Number.isFinite(value)) payload[key] = String(value);
-            }
-          }
-          return {
-            id: String(data.id), user_id: data.user_id, social_account_id: data.social_account_id,
-            connector_id: data.connector_id, flow: data.flow, payload,
-          };
-        },
-        updateOrder: async (order) => {
-          const tool = wooById(order.connectorId);
-          if (!tool) return { error: "missing" as const };
-          const found = await executeProcedureStoreCall(toolContext, tool, {
-            capability: "update_order",
-            method: "POST",
-            parameters: {
-              order_id: order.orderId,
-              note: order.note,
-              expected_statuses: order.expectedStatuses,
-              ...(order.status ? { status: order.status } : {}),
-            },
-          }, modelBudgetRemaining(startedAt, Date.now()));
-          const data = readStorePayload(found);
-          if (data.error === "store_write_denied") return { error: "store_write_denied" as const };
-          if (data.changed === true && typeof data.status === "string") return { changed: true as const, status: data.status };
-          if (data.changed === false && typeof data.status === "string") return { changed: false as const, status: data.status };
-          throw new Error("store_lookup_failed");
-        },
-        getProduct: async (product) => {
-          const tool = wooById(product.connectorId);
-          if (!tool) return { ok: false as const };
-          const found = await executeProcedureStoreCall(toolContext, tool, {
-            capability: "get_product",
-            method: "GET",
-            parameters: {
-              product_id: product.productId,
-              ...(product.parentId ? { parent_id: product.parentId } : {}),
-            },
-          }, modelBudgetRemaining(startedAt, Date.now()));
-          const data = readStorePayload(found);
-          if (data.error === "store_write_denied") return { ok: false as const };
-          return {
-            ok: true as const,
-            name: typeof data.name === "string" ? data.name : "",
-            price: typeof data.price === "number" || typeof data.price === "string" ? String(data.price) : "",
-            permalink: typeof data.permalink === "string" ? data.permalink : "",
-          };
-        },
-      },
+      ports: createProcedurePorts({
+        admin,
+        threadId: thread.id,
+        durableState: durableProcedureState,
+        userId: request.user_id,
+        platform: request.platform,
+        toolContext,
+        customTools,
+        startedAt,
+        dryRun,
+        executeRoutedCustomTool,
+        executeProcedureStoreCall,
+      }),
     }) : null;
 
     // Both off removes escalate_to_human entirely; one off narrows its
@@ -1669,14 +1550,14 @@ Deno.serve(async (req) => {
     }
 
     const procedureStateToWrite = procedureStateAfterTurn({
-      hadTurn: procedureTurn !== null, storedState: durableProcedureState,
+      hadTurn: procedureTurn !== null, storedState: durableProcedureState.current,
       initialState: initialProcedureState, turnState: procedureTurn?.state ?? null,
       progressed: procedureTurn?.progressed ?? false, escalated, now: new Date(),
     });
     if (
       procedureTurn?.claimConflict ||
       (procedureStateToWrite !== undefined &&
-        !(await persistProcedureState(admin, thread.id, durableProcedureState, procedureStateToWrite)))
+        !(await persistProcedureState(admin, thread.id, durableProcedureState.current, procedureStateToWrite)))
     ) {
       // The reply claims a transition durable state does not hold (a concurrent turn won,
       // or the write failed). Sending it would re-ask answered questions next turn.

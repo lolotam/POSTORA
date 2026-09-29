@@ -4,7 +4,7 @@
 // A lost race or a failed write means this turn's reply no longer matches durable state,
 // and the caller must not deliver it.
 
-interface ProcedureStateDb {
+export interface ProcedureStateDb {
   from(table: "ai_threads"): {
     update(values: { procedure_state: unknown }): ProcedureStateFilter;
   };

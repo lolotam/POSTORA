@@ -1,6 +1,7 @@
 // supabase/functions/_shared/procedures/config.test.ts
 import { assertEquals, assertThrows } from "jsr:@std/assert@1";
-import { enabledProcedures, parseProcedureConfig, readProcedureConfig, reviewDelayDays } from "./config.ts";
+import { enabledProcedures, parseProcedureConfig, PROCEDURE_LIMITS, readProcedureConfig, reviewDelayDays } from "./config.ts";
+import { PROCEDURE_LIMITS as browserProcedureLimits } from "../../../../src/lib/procedureTemplates.ts";
 import { AgentBehaviorError } from "../agentBehaviorError.ts";
 
 const valid = {
@@ -101,4 +102,8 @@ Deno.test("a switched-off product finder with unfinished questions saves without
     product_finder: { enabled: false, prompts: {}, closing: "", questions: ["", ""] },
   });
   assertEquals(parsed.product_finder, { enabled: false, prompts: {}, closing: "" });
+});
+
+Deno.test("browser procedure limits match the edge save bounds", () => {
+  assertEquals(browserProcedureLimits, PROCEDURE_LIMITS);
 });
