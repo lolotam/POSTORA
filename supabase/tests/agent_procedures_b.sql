@@ -614,22 +614,22 @@ BEGIN
              'public.claim_store_events(int, interval)', 'EXECUTE'),
     'B29 service_role can EXECUTE claim_store_events';
   ASSERT NOT has_function_privilege('anon',
-             'public.reserve_qr_opener(uuid, int, uuid, 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'::uuid)', 'EXECUTE'),
+             'public.reserve_qr_opener(uuid, int, uuid, uuid)', 'EXECUTE'),
     'B29 anon cannot EXECUTE reserve_qr_opener';
   ASSERT NOT has_function_privilege('authenticated',
-             'public.reserve_qr_opener(uuid, int, uuid, 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'::uuid)', 'EXECUTE'),
+             'public.reserve_qr_opener(uuid, int, uuid, uuid)', 'EXECUTE'),
     'B29 authenticated cannot EXECUTE reserve_qr_opener';
   ASSERT has_function_privilege('service_role',
-             'public.reserve_qr_opener(uuid, int, uuid, 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'::uuid)', 'EXECUTE'),
+             'public.reserve_qr_opener(uuid, int, uuid, uuid)', 'EXECUTE'),
     'B29 service_role can EXECUTE reserve_qr_opener';
   ASSERT NOT has_function_privilege('anon',
-             'public.release_qr_opener(uuid, uuid, 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'::uuid)', 'EXECUTE'),
+             'public.release_qr_opener(uuid, uuid, uuid)', 'EXECUTE'),
     'B29 anon cannot EXECUTE release_qr_opener';
   ASSERT NOT has_function_privilege('authenticated',
-             'public.release_qr_opener(uuid, uuid, 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'::uuid)', 'EXECUTE'),
+             'public.release_qr_opener(uuid, uuid, uuid)', 'EXECUTE'),
     'B29 authenticated cannot EXECUTE release_qr_opener';
   ASSERT has_function_privilege('service_role',
-             'public.release_qr_opener(uuid, uuid, 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'::uuid)', 'EXECUTE'),
+             'public.release_qr_opener(uuid, uuid, uuid)', 'EXECUTE'),
     'B29 service_role can EXECUTE release_qr_opener';
   ASSERT NOT has_table_privilege('authenticated',
              'public.store_qr_opener_counts', 'SELECT'),
