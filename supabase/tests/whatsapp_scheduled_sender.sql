@@ -674,12 +674,16 @@ BEGIN
     (id, user_id, social_account_id, recipient_phone, scheduled_at, status)
   VALUES
     (msg_pending, u_a, acct, '96555510081', now() + interval '1 day', 'pending'),
-    (msg_sending, u_a, acct, '96555510082', now() + interval '1 day', 'sending');
+    (msg_sending, u_a, acct, '96555510082', now() + interval '1 day', 'sending'),
+    (msg_claimed, u_a, acct, '96555510083', now() + interval '1 day', 'claimed');
 
   DELETE FROM public.social_accounts WHERE id = acct;
 
   ASSERT NOT EXISTS (SELECT 1 FROM public.whatsapp_scheduled_messages WHERE id = msg_pending),
     'S16 deleting the account removes its pending row';
+  -- claimed is still pre-send: keeping it would let the worker send from a deleted account.
+  ASSERT NOT EXISTS (SELECT 1 FROM public.whatsapp_scheduled_messages WHERE id = msg_claimed),
+    'S16 deleting the account removes its claimed (pre-send) row';
   ASSERT EXISTS (SELECT 1 FROM public.whatsapp_scheduled_messages
                  WHERE id = msg_sending
                    AND status = 'sending'

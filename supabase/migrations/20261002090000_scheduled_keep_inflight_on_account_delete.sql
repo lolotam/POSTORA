@@ -3,14 +3,18 @@
 -- WHY
 -- whatsapp_scheduled_messages.social_account_id used to reference
 -- social_accounts ON DELETE CASCADE. Deleting the account while a row was
--- claimed or sending erased the only record of a provider call still in
--- progress, so the later sent-write lost its compare-and-set.
+-- sending erased the only record of a provider call still in progress, so
+-- the later sent-write lost its compare-and-set.
 --
--- Resting rows (anything other than claimed/sending) are still removed, by
+-- Every row except 'sending' is still removed, by
 -- a BEFORE DELETE trigger, so pending, sent, failed, cancelled and skipped
 -- keep the old cascade behaviour. The FK is then ON DELETE SET NULL, which
--- only the surviving in-flight rows reach. social_account_id is nullable
--- for that.
+-- only the surviving sending rows reach. A 'claimed' row is deleted too:
+-- it has not reached the provider, and keeping it would let the worker
+-- (which already holds the account credentials from the claim) move it to
+-- sending and send from an account the user just deleted. Its
+-- claimed->sending compare-and-set then finds no row and stops.
+-- social_account_id is nullable for that.
 --
 -- Lease cleanup does not need the account row. claim_whatsapp_scheduled_messages
 -- (b) and (c) update expired sending/claimed rows with no join to
@@ -49,7 +53,7 @@ AS $function$
 BEGIN
   DELETE FROM public.whatsapp_scheduled_messages
   WHERE social_account_id = OLD.id
-    AND status NOT IN ('claimed', 'sending');
+    AND status <> 'sending';
   RETURN OLD;
 END;
 $function$;
