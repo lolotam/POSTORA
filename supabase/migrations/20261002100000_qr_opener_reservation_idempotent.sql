@@ -45,8 +45,9 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON public.store_qr_opener_reservations TO s
 -- ---------------------------------------------------------------------------
 -- B. reserve_qr_opener(account, limit, event, claim)
 --
--- The event must belong to the account: these run as service_role, so the
--- pairing is checked here rather than trusted from the caller.
+-- The event must belong to the account and p_claim must be the event's live
+-- claim_token: these run as service_role, so neither is trusted from the
+-- caller. A stale attempt is refused instead of taking the reservation back.
 --
 -- Same-event serialization is the reservation primary key. INSERT ... ON
 -- CONFLICT DO NOTHING waits for a concurrent first reservation of this event
@@ -69,13 +70,23 @@ DECLARE
   v_inserted uuid;
   v_held_day date;
   v_ok boolean;
+  v_event_account uuid;
+  v_live_claim uuid;
 BEGIN
-  IF p_claim IS NULL OR NOT EXISTS (
-    SELECT 1 FROM public.store_events
-    WHERE id = p_event AND social_account_id = p_account
-  ) THEN
+  SELECT e.social_account_id, e.claim_token
+  INTO v_event_account, v_live_claim
+  FROM public.store_events AS e
+  WHERE e.id = p_event
+  FOR SHARE;
+  IF v_event_account IS DISTINCT FROM p_account THEN
     RAISE EXCEPTION 'reserve_qr_opener: event % does not belong to account', p_event
       USING ERRCODE = 'invalid_parameter_value';
+  END IF;
+  -- Only the event's current claim may take or re-own a reservation. The row
+  -- lock holds off a reclaim until this function returns.
+  IF p_claim IS NULL OR v_live_claim IS DISTINCT FROM p_claim THEN
+    RAISE EXCEPTION 'reserve_qr_opener: claim is not current for event %', p_event
+      USING ERRCODE = 'object_not_in_prerequisite_state';
   END IF;
 
   INSERT INTO public.store_qr_opener_reservations

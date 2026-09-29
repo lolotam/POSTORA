@@ -571,6 +571,7 @@ BEGIN
     FROM public.store_events
     WHERE binding_id = bind_a
       AND external_id LIKE 'order-b27-%';
+  UPDATE public.store_events SET claim_token = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'::uuid WHERE id = ANY (v_qr);
   FOR v_i IN 1..3 LOOP
     v_ok := public.reserve_qr_opener(acct_a, 3, v_qr[v_i], 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'::uuid);
     ASSERT v_ok, 'B27 reservation ' || v_i || ' of 3 granted';
@@ -970,6 +971,7 @@ BEGIN
   VALUES
     (u_a, acct_a, tool_a, bind_a, 'cod_confirm', 'order-q-yest', '{}', 'pending', now())
   RETURNING id INTO v_yest;
+  UPDATE public.store_events SET claim_token = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'::uuid WHERE social_account_id = acct_a;
 
   -- Q1: reserving the same event twice takes one slot and both calls succeed.
   v_ok := public.reserve_qr_opener(acct_a, 50, v_same, 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'::uuid);
@@ -1054,10 +1056,18 @@ BEGIN
   -- Q6: a stale attempt cannot release a slot a newer claim re-owned.
   DELETE FROM public.store_qr_opener_counts WHERE social_account_id = acct_a;
   DELETE FROM public.store_qr_opener_reservations WHERE store_event_id = v_same;
+  UPDATE public.store_events SET claim_token = 'aaaaaaaa-0000-4000-8000-000000000001'::uuid WHERE id = v_same;
   ASSERT public.reserve_qr_opener(acct_a, 50, v_same, 'aaaaaaaa-0000-4000-8000-000000000001'::uuid),
     'Q6 first attempt reserves';
+  UPDATE public.store_events SET claim_token = 'aaaaaaaa-0000-4000-8000-000000000002'::uuid WHERE id = v_same;
   ASSERT public.reserve_qr_opener(acct_a, 50, v_same, 'aaaaaaaa-0000-4000-8000-000000000002'::uuid),
     'Q6 reclaimed attempt reuses the slot';
+  -- Q6b: the stale attempt cannot take the reservation back.
+  BEGIN
+    PERFORM public.reserve_qr_opener(acct_a, 50, v_same, 'aaaaaaaa-0000-4000-8000-000000000001'::uuid);
+    RAISE EXCEPTION 'Q6b failed: stale claim reserved' USING ERRCODE = 'assert_failure';
+  EXCEPTION WHEN object_not_in_prerequisite_state THEN NULL;
+  END;
   PERFORM public.release_qr_opener(acct_a, v_same, 'aaaaaaaa-0000-4000-8000-000000000001'::uuid);
   ASSERT (SELECT sent FROM public.store_qr_opener_counts
           WHERE social_account_id = acct_a AND day = v_today) = 1,
