@@ -3,6 +3,7 @@
     "admin": "أدمن",
     "hidden": "مخفي",
     "hiddenTooltip": "الميزة دي معطلة حالياً. الأدمن بس اللي يقدر يشوفها.",
+    "scheduledCountUnavailable": "مقدرناش نحمّل عدد المنشورات المجدولة",
     "upgrade": "ترقية"
   },
   "footer": {

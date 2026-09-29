@@ -24,6 +24,22 @@ interface CleanupResult {
   backlog: number;
 }
 
+type DeleteSwitchState = "enabled" | "disabled" | "unknown";
+
+function deletionStateFrom(data: { deleteState?: unknown; deleteEnabled?: boolean }): DeleteSwitchState | null {
+  if (data.deleteState === "enabled" || data.deleteState === "disabled" || data.deleteState === "unknown") {
+    return data.deleteState;
+  }
+  if (typeof data.deleteEnabled === "boolean") return data.deleteEnabled ? "enabled" : "disabled";
+  return null;
+}
+
+function deletionStateLabel(state: DeleteSwitchState, t: (key: string, fallback: string) => string): string {
+  if (state === "enabled") return t("retentionAdmin.switchEnabled", "Deletion enabled");
+  if (state === "disabled") return t("retentionAdmin.switchPaused", "Deletion paused by admin");
+  return t("retentionAdmin.switchUnknown", "Deletion switch unreadable — nothing will be deleted");
+}
+
 export default function AdminMediaCleanup() {
   const { t } = useTranslation("assets");
   const { toast } = useToast();
@@ -31,17 +47,19 @@ export default function AdminMediaCleanup() {
   const [isDeleting, setIsDeleting] = useState(false);
   const [files, setFiles] = useState<RetentionFile[]>([]);
   const [cleanupResult, setCleanupResult] = useState<CleanupResult | null>(null);
-  const [deleteEnabled, setDeleteEnabled] = useState<boolean | null>(null);
+  const [deleteState, setDeleteState] = useState<DeleteSwitchState | null>(null);
   const [dryRun, setDryRun] = useState(true);
 
   const applyResponse = (data: {
     result?: CleanupResult;
     filesToDelete?: RetentionFile[];
     deleteEnabled?: boolean;
+    deleteState?: unknown;
   }) => {
     setCleanupResult(data.result ?? null);
     setFiles(Array.isArray(data.filesToDelete) ? data.filesToDelete : []);
-    if (typeof data.deleteEnabled === "boolean") setDeleteEnabled(data.deleteEnabled);
+    const nextState = deletionStateFrom(data);
+    if (nextState) setDeleteState(nextState);
   };
 
   const preview = async () => {
@@ -81,11 +99,14 @@ export default function AdminMediaCleanup() {
       });
       if (error) throw error;
       applyResponse(data ?? {});
+      const ranState = deletionStateFrom(data ?? {});
       toast({
         title: t("retentionAdmin.runDone", "Retention run complete"),
-        description: data?.deleteEnabled
+        description: ranState === "enabled"
           ? t("retentionAdmin.deletedCount", "Deleted {{count}} files.", { count: data?.result?.deleted ?? 0 })
-          : t("retentionAdmin.pausedRun", "Deletion is paused by the admin switch. Nothing was deleted."),
+          : ranState === "unknown"
+            ? t("retentionAdmin.switchUnknown", "Deletion switch unreadable — nothing will be deleted")
+            : t("retentionAdmin.pausedRun", "Deletion is paused by the admin switch. Nothing was deleted."),
       });
     } catch (error: unknown) {
       toast({
@@ -138,11 +159,9 @@ export default function AdminMediaCleanup() {
               <Switch id="dryRun" checked={dryRun} onCheckedChange={setDryRun} />
             </div>
 
-            {deleteEnabled !== null && (
+            {deleteState !== null && (
               <p className="text-sm" data-testid="delete-switch-state">
-                {deleteEnabled
-                  ? t("retentionAdmin.switchOn", "Server deletion switch: on")
-                  : t("retentionAdmin.switchOff", "Server deletion switch: paused")}
+                {deletionStateLabel(deleteState, (key, fallback) => t(key, fallback))}
               </p>
             )}
 

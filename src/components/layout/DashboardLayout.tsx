@@ -97,6 +97,50 @@ interface NavItemDropdown {
 
 type NavEntry = NavItemDirect | NavItemDropdown;
 
+function ScheduledCountBadge({
+  count,
+  unavailable,
+  label,
+  className,
+}: {
+  count: number | undefined;
+  unavailable: boolean;
+  label: string;
+  className?: string;
+}) {
+  if (unavailable) {
+    return (
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span
+              role="img"
+              aria-label={label}
+              className={cn(
+                "inline-flex h-4 w-4 items-center justify-center rounded-full bg-muted text-[10px] font-bold text-muted-foreground",
+                className,
+              )}
+            >
+              !
+            </span>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">
+            <p className="text-xs">{label}</p>
+          </TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
+    );
+  }
+
+  if (count === undefined || count <= 0) return null;
+
+  return (
+    <span className={cn("flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 text-[10px] font-bold text-white px-1", className)}>
+      {count}
+    </span>
+  );
+}
+
 export function DashboardLayout({ children, contentClassName, noPadding = false, hideFooter = false }: DashboardLayoutProps) {
   const { t } = useTranslation("nav");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -109,7 +153,10 @@ export function DashboardLayout({ children, contentClassName, noPadding = false,
   const { planName, isPro, isBusiness, isFree } = useSubscription();
   const { publishingPosts, isPublishing } = usePublishing();
   const { flags, isLoading: flagsLoading } = useFeatureFlags();
-  const { data: scheduledCount = 0 } = useScheduledPostCount();
+  const scheduledQuery = useScheduledPostCount();
+  const scheduledCount = scheduledQuery.data;
+  const scheduledCountUnavailable = scheduledQuery.isError && scheduledCount === undefined;
+  const scheduledCountLabel = t("badge.scheduledCountUnavailable", "Couldn't load the scheduled count");
 
   const showCanvas = isAdmin || (!flagsLoading && flags.canvas);
 
@@ -403,10 +450,13 @@ export function DashboardLayout({ children, contentClassName, noPadding = false,
                       )}
                       <span className="relative z-10"><item.icon className={cn("h-4 w-4 shrink-0", isActive && "text-primary")} /></span>
                       <span className="relative z-10">{item.label}</span>
-                      {item.path === "/scheduled" && scheduledCount > 0 && (
-                        <span className="relative z-10 ms-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 text-[10px] font-bold text-white px-1">
-                          {scheduledCount}
-                        </span>
+                      {item.path === "/scheduled" && (
+                        <ScheduledCountBadge
+                          count={scheduledCount}
+                          unavailable={scheduledCountUnavailable}
+                          label={scheduledCountLabel}
+                          className="relative z-10 ms-1"
+                        />
                       )}
                       {canvasHidden && (
                         <TooltipProvider>
@@ -459,10 +509,13 @@ export function DashboardLayout({ children, contentClassName, noPadding = false,
                       <span className="relative z-10"><dropdown.icon className={cn("h-4 w-4 shrink-0", active && "text-primary")} /></span>
                       <span className="relative z-10">{dropdown.label}</span>
                       <ChevronDown className="relative z-10 h-3 w-3 ms-0.5 opacity-60" />
-                      {dropdown.basePath === "/post" && scheduledCount > 0 && (
-                        <span className="relative z-10 ms-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 text-[10px] font-bold text-white px-1">
-                          {scheduledCount}
-                        </span>
+                      {dropdown.basePath === "/post" && (
+                        <ScheduledCountBadge
+                          count={scheduledCount}
+                          unavailable={scheduledCountUnavailable}
+                          label={scheduledCountLabel}
+                          className="relative z-10 ms-0.5"
+                        />
                       )}
                     </button>
                   </DropdownMenuTrigger>
@@ -483,10 +536,13 @@ export function DashboardLayout({ children, contentClassName, noPadding = false,
                             <child.icon className="h-4 w-4" />
                             {child.label}
                             {childHidden && <EyeOff className="h-3 w-3 text-amber-500" />}
-                            {child.path === "/scheduled" && scheduledCount > 0 && (
-                              <span className="ms-auto flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 text-[10px] font-bold text-white px-1">
-                                {scheduledCount}
-                              </span>
+                            {child.path === "/scheduled" && (
+                              <ScheduledCountBadge
+                                count={scheduledCount}
+                                unavailable={scheduledCountUnavailable}
+                                label={scheduledCountLabel}
+                                className="ms-auto"
+                              />
                             )}
                           </Link>
                         </DropdownMenuItem>

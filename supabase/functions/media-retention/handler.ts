@@ -34,6 +34,23 @@ async function logAuthRefusal(adminClient?: any): Promise<void> {
   }
 }
 
+/** Best effort: a failed insert only console.errors, and never changes the 400. */
+// deno-lint-ignore no-explicit-any
+async function logRejectedRequest(adminClient: any, reason: "invalid_json" | "invalid_dry_run"): Promise<void> {
+  try {
+    const admin = adminClient ?? createServiceClient();
+    await logToDatabase(admin, {
+      level: "warn",
+      category: "system",
+      source: "media-retention",
+      message: "Retention request rejected",
+      metadata: { reason },
+    });
+  } catch {
+    console.error("[media-retention] rejection log failed");
+  }
+}
+
 export async function handleMediaRetentionRequest(
   req: Request,
   // deno-lint-ignore no-explicit-any
@@ -55,10 +72,14 @@ export async function handleMediaRetentionRequest(
       try {
         parsed = JSON.parse(text);
       } catch {
+        await logRejectedRequest(deps?.adminClient, "invalid_json");
         return json(400, { success: false, error: "Invalid request" });
       }
       const body = BodySchema.safeParse(parsed);
-      if (!body.success) return json(400, { success: false, error: "Invalid request" });
+      if (!body.success) {
+        await logRejectedRequest(deps?.adminClient, "invalid_dry_run");
+        return json(400, { success: false, error: "Invalid request" });
+      }
       dryRun = body.data.dryRun === true;
     }
   }

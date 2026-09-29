@@ -43,7 +43,11 @@ async function fetchActiveRows(userId: string): Promise<ScheduleRow[]> {
   return data ?? [];
 }
 
-async function fetchRangeRows(userId: string, rangeStart: string, rangeEnd: string): Promise<ScheduleRow[]> {
+async function fetchRangeRows(
+  userId: string,
+  rangeStart: string,
+  rangeEnd: string,
+): Promise<{ rows: ScheduleRow[]; truncated: boolean }> {
   const { data, error } = await supabase
     .from("whatsapp_scheduled_messages")
     .select("*")
@@ -52,9 +56,14 @@ async function fetchRangeRows(userId: string, rangeStart: string, rangeEnd: stri
     .gte("scheduled_at", rangeStart)
     .lte("scheduled_at", rangeEnd)
     .order("scheduled_at", { ascending: true })
-    .limit(WHATSAPP_RANGE_LIMIT);
+    .limit(WHATSAPP_RANGE_LIMIT + 1);
   if (error) throw error;
-  return data ?? [];
+  const fetched = data ?? [];
+  const truncated = fetched.length > WHATSAPP_RANGE_LIMIT;
+  return {
+    rows: truncated ? fetched.slice(0, WHATSAPP_RANGE_LIMIT) : fetched,
+    truncated,
+  };
 }
 
 async function fetchAccountLabels(userId: string, accountIds: string[]): Promise<Map<string, AccountLabel>> {
@@ -92,13 +101,14 @@ export async function fetchWhatsAppScheduleBoard(
   userId: string,
   scope: WhatsAppScheduleScope,
 ): Promise<WhatsAppScheduleBoard> {
-  const rows = scope.kind === "active"
-    ? await fetchActiveRows(userId)
-    : await fetchRangeRows(userId, scope.rangeStart, scope.rangeEnd);
+  const range = scope.kind === "range"
+    ? await fetchRangeRows(userId, scope.rangeStart, scope.rangeEnd)
+    : null;
+  const rows = range ? range.rows : await fetchActiveRows(userId);
   const accountIds = [...new Set(rows.map((row) => row.social_account_id))];
   const accounts = await fetchAccountLabels(userId, accountIds);
   return {
     messages: rows.map((row) => toSource(row, accounts.get(row.social_account_id))),
-    truncated: scope.kind === "range" && rows.length >= WHATSAPP_RANGE_LIMIT,
+    truncated: range?.truncated ?? false,
   };
 }
