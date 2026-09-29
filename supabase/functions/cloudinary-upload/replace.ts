@@ -178,6 +178,10 @@ export function buildReplacementProviderRows(mediaFileId: string, nextVersion: n
   });
 }
 
+function replaceRefusal(reason: string): { message: string; metadata: Record<string, unknown> } {
+  return { message: "Rejected replace", metadata: { reason } };
+}
+
 export type PreparedReplace =
   | { ok: true; row: ReplaceTargetRow }
   | { ok: false; status: number; body: { success: false; error: string }; refusal?: { message: string; metadata: Record<string, unknown> } };
@@ -195,10 +199,12 @@ export async function prepareMediaReplace(
     .maybeSingle();
   if (error) {
     console.error("[cloudinary-upload] replace target lookup failed");
-    return { ok: false, status: 500, body: { success: false, error: SAVE_FAILED } };
+    return { ok: false, status: 500, body: { success: false, error: SAVE_FAILED }, refusal: replaceRefusal("replace_lookup_failed") };
   }
-  if (!data) return { ok: false, status: 404, body: { success: false, error: FILE_MISSING } };
-  if (data.retention_state === "deleting") return { ok: false, status: 409, body: { success: false, error: FILE_DELETING } };
+  if (!data) return { ok: false, status: 404, body: { success: false, error: FILE_MISSING }, refusal: replaceRefusal("replace_target_missing") };
+  if (data.retention_state === "deleting") {
+    return { ok: false, status: 409, body: { success: false, error: FILE_DELETING }, refusal: replaceRefusal("replace_target_deleting") };
+  }
   const targetKind = targetMediaKind(data);
   if (!replaceKindsMatch(targetKind, incomingKind)) {
     return {
@@ -363,6 +369,13 @@ export async function commitMediaReplace(
     }
   }
 
+  // Sent WhatsApp messages keep their media_url forever, and a failed rewrite
+  // leaves pending ones on the old URL: in either case the old objects stay live.
+  const keepPrevious = responseErrors.includes(SCHEDULED_REWRITE_FAILED) || await oldUrlsStillReferenced(db, facts.userId, oldUrls);
+  if (keepPrevious) {
+    return { status: 200, body: replaceSuccessBody(row.id, facts, scheduledMessagesUpdated, 0, true, responseErrors) };
+  }
+
   let retired = 0;
   const decisions = planProviderRetirement(oldProviders, nextVersion, row.file_path);
   for (const decision of decisions) {
@@ -376,17 +389,40 @@ export async function commitMediaReplace(
     try { await db.storage.from("media").remove([row.file_path]); } catch { console.error("[cloudinary-upload] replace legacy storage remove failed"); }
   }
 
+  return { status: 200, body: replaceSuccessBody(row.id, facts, scheduledMessagesUpdated, retired, false, responseErrors) };
+}
+
+/** True when a sent WhatsApp message still links an old URL. A failed lookup counts as referenced. */
+async function oldUrlsStillReferenced(db: { from: (table: string) => any }, userId: string, oldUrls: string[]): Promise<boolean> {
+  if (oldUrls.length === 0) return false;
+  const { count, error } = await db.from("whatsapp_messages")
+    .select("id", { count: "exact", head: true })
+    .eq("user_id", userId)
+    .in("media_url", oldUrls);
+  if (error) {
+    console.error("[cloudinary-upload] replace reference lookup failed");
+    return true;
+  }
+  return (count ?? 0) > 0;
+}
+
+function replaceSuccessBody(
+  mediaFileId: string,
+  facts: ReplaceUploadFacts,
+  scheduledMessagesUpdated: number,
+  retired: number,
+  keptPrevious: boolean,
+  errors: string[],
+): Record<string, unknown> {
   return {
-    status: 200,
-    body: {
-      success: true,
-      mediaFileId: row.id,
-      url: facts.primaryUrl,
-      replaced: true,
-      storedIn: facts.storedIn,
-      scheduledMessagesUpdated,
-      retired,
-      errors: responseErrors.length ? responseErrors : undefined,
-    },
+    success: true,
+    mediaFileId,
+    url: facts.primaryUrl,
+    replaced: true,
+    storedIn: facts.storedIn,
+    scheduledMessagesUpdated,
+    retired,
+    keptPrevious,
+    errors: errors.length ? errors : undefined,
   };
 }

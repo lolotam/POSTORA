@@ -1,5 +1,6 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
+  commitMediaReplace,
   mergeReplaceMetadata,
   nextObjectVersion,
   planProviderRetirement,
@@ -7,6 +8,8 @@ import {
   scheduledMatchUrls,
   targetMediaKind,
   type ReplaceProviderRow,
+  type ReplaceTargetRow,
+  type ReplaceUploadFacts,
 } from "./replace.ts";
 
 Deno.test("replace kind follows metadata.kind, and a legacy row without it follows mime and file_type", () => {
@@ -109,4 +112,54 @@ Deno.test("metadata merge keeps the display name and replaces the new file's own
     kind: "image",
     folder: "trips",
   });
+});
+
+// Fake PostgREST: every chain resolves to the canned result for its table and verb,
+// and every update's payload is recorded so the test can see what was written.
+function fakeDb(results: { sentMessages: number; scheduledError?: boolean }) {
+  const updates: Array<{ table: string; payload: Record<string, unknown> }> = [];
+  const from = (table: string) => {
+    let verb = "select";
+    let payload: Record<string, unknown> = {};
+    const outcome = () => {
+      if (table === "media_file_providers" && verb === "select") {
+        return { data: [{ id: "old-openinary", provider: "openinary", object_version: 1, object_key: "p/old.png", status: "ready", delivery_url: "https://o.example/t/p/old.png" }], error: null };
+      }
+      if (table === "media_files" && verb === "update") return { data: [{ id: "file-1" }], error: null };
+      if (table === "whatsapp_scheduled_messages") {
+        return results.scheduledError ? { data: null, error: { message: "boom" } } : { data: [], error: null };
+      }
+      if (table === "whatsapp_messages") return { count: results.sentMessages, error: null };
+      return { data: null, error: null };
+    };
+    const chain: Record<string, unknown> = {};
+    for (const method of ["select", "eq", "in", "is", "or"]) chain[method] = () => chain;
+    chain.insert = () => { verb = "insert"; return chain; };
+    chain.update = (body: Record<string, unknown>) => { verb = "update"; payload = body; updates.push({ table, payload }); return chain; };
+    chain.then = (resolve: (value: unknown) => unknown) => Promise.resolve(outcome()).then(resolve);
+    return chain;
+  };
+  return { db: { from, storage: { from: () => ({ remove: () => Promise.resolve() }) } }, updates };
+}
+
+const target: ReplaceTargetRow = {
+  id: "file-1", file_path: "https://o.example/t/p/old.png", file_type: "image", mime_type: "image/png",
+  storage_bucket: "openinary", metadata: { original_filename: "old.png", kind: "image" }, current_object_version: 1, retention_state: null,
+};
+const facts: ReplaceUploadFacts = {
+  userId: "user-1", primaryUrl: "https://o.example/t/p/new.png", bytes: 10, mimeType: "image/png", storedFileType: "image", kind: "image",
+  width: null, height: null, format: "png", duration: null, storageBucket: "openinary", storedIn: ["openinary"], errors: [],
+  providersAttempted: ["openinary"], cloudinaryPublicId: null, cloudinaryDeliveryUrl: null, cloudinaryFallbackKey: "k",
+  openinaryPath: "p/new.png", openinaryUrl: "https://o.example/t/p/new.png", openinaryFallbackKey: "k",
+};
+
+Deno.test("replace keeps the previous objects while a sent message or a failed rewrite still points at them", async () => {
+  for (const scenario of [{ sentMessages: 2 }, { sentMessages: 0, scheduledError: true }]) {
+    const { db, updates } = fakeDb(scenario);
+    const outcome = await commitMediaReplace(db, target, facts);
+    assertEquals(outcome.status, 200);
+    assertEquals(outcome.body.keptPrevious, true);
+    assertEquals(outcome.body.retired, 0);
+    assertEquals(updates.some((u) => u.table === "media_file_providers" && u.payload.status === "deleted"), false);
+  }
 });
