@@ -3,11 +3,9 @@ import {
   commitMediaReplace,
   mergeReplaceMetadata,
   nextObjectVersion,
-  planProviderRetirement,
   replaceKindsMatch,
   scheduledMatchUrls,
   targetMediaKind,
-  type ReplaceProviderRow,
   type ReplaceTargetRow,
   type ReplaceUploadFacts,
 } from "./replace.ts";
@@ -47,42 +45,6 @@ Deno.test("next object version is one past the highest stored version", () => {
   assertEquals(nextObjectVersion(null, []), 2);
   assertEquals(nextObjectVersion(1, [7]), 8);
   assertEquals(nextObjectVersion(undefined, [null]), 2);
-});
-
-Deno.test("retirement skips deleted, failed, and the version just written, and refuses an Openinary key mismatch", () => {
-  const nextVersion = 3;
-  const matchingKey = "postora.cloud/media/old.png";
-  const rows: ReplaceProviderRow[] = [
-    { id: "gone", provider: "cloudinary", object_version: 1, object_key: "old-cloud", status: "deleted", delivery_url: "https://cdn.example/old" },
-    { id: "never-stored", provider: "openinary", object_version: 1, object_key: matchingKey, status: "failed", delivery_url: null },
-    { id: "just-written", provider: "cloudinary", object_version: 3, object_key: "new-cloud", status: "ready", delivery_url: "https://cdn.example/new" },
-    { id: "old-cloud", provider: "cloudinary", object_version: 2, object_key: "cloud-2", status: "ready", delivery_url: "https://cdn.example/cloud-2" },
-    {
-      id: "old-open",
-      provider: "openinary",
-      object_version: 2,
-      object_key: matchingKey,
-      status: "ready",
-      delivery_url: "https://cdn.example/t/postora.cloud/media/old.png",
-    },
-    {
-      id: "mismatch",
-      provider: "openinary",
-      object_version: 2,
-      object_key: "postora.cloud/media/someone-else.png",
-      status: "ready",
-      delivery_url: "https://cdn.example/t/postora.cloud/media/old.png",
-    },
-  ];
-
-  assertEquals(planProviderRetirement(rows, nextVersion, "https://cdn.example/t/postora.cloud/media/old.png"), [
-    { action: "skip", id: "gone", reason: "deleted" },
-    { action: "skip", id: "never-stored", reason: "failed" },
-    { action: "skip", id: "just-written", reason: "current_version" },
-    { action: "retire", id: "old-cloud" },
-    { action: "retire", id: "old-open" },
-    { action: "refuse", id: "mismatch", reason: "key_mismatch" },
-  ]);
 });
 
 Deno.test("pending scheduled messages match the old file path and every old delivery URL once", () => {
@@ -139,7 +101,7 @@ function fakeDb(results: { sentMessages: number; scheduledError?: boolean }) {
     chain.then = (resolve: (value: unknown) => unknown) => Promise.resolve(outcome()).then(resolve);
     return chain;
   };
-  return { db: { from, storage: { from: () => ({ remove: () => Promise.resolve() }) } }, updates };
+  return { db: { from }, updates };
 }
 
 const target: ReplaceTargetRow = {
@@ -153,13 +115,15 @@ const facts: ReplaceUploadFacts = {
   openinaryPath: "p/new.png", openinaryUrl: "https://o.example/t/p/new.png", openinaryFallbackKey: "k",
 };
 
-Deno.test("replace keeps the previous objects while a sent message or a failed rewrite still points at them", async () => {
-  for (const scenario of [{ sentMessages: 2 }, { sentMessages: 0, scheduledError: true }]) {
+Deno.test("replace swaps the row and never deletes the previous version's objects", async () => {
+  for (const scenario of [{ sentMessages: 2 }, { sentMessages: 0, scheduledError: true }, { sentMessages: 0 }]) {
     const { db, updates } = fakeDb(scenario);
     const outcome = await commitMediaReplace(db, target, facts);
     assertEquals(outcome.status, 200);
-    assertEquals(outcome.body.keptPrevious, true);
-    assertEquals(outcome.body.retired, 0);
+    assertEquals(outcome.body.mediaFileId, "file-1");
+    const fileUpdate = updates.find((u) => u.table === "media_files");
+    assertEquals(fileUpdate?.payload.file_path, facts.primaryUrl);
+    assertEquals(fileUpdate?.payload.current_object_version, 2);
     assertEquals(updates.some((u) => u.table === "media_file_providers" && u.payload.status === "deleted"), false);
   }
 });

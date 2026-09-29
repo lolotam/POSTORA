@@ -443,6 +443,7 @@ export async function handleCloudinaryUpload(req: Request): Promise<Response> {
     const { fileData, externalUrl, fileName, fileType, platforms = [], socialAccountIds = [], subfolder, skipMediaFiles = false }: UploadRequest = parsedBody;
     const replaceRequest = parseReplaceMediaFileId(parsedBody);
     if (replaceRequest.error) {
+      await logUploadRefusal(userId, "Rejected replace", { reason: "replace_invalid_id" });
       return new Response(JSON.stringify({ success: false, error: replaceRequest.error }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 

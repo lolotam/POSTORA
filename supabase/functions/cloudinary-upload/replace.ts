@@ -1,6 +1,5 @@
 import { logToDatabase } from "../_shared/logging.ts";
 import { destroyCloudinary } from "../_shared/cloudinaryDestroy.ts";
-import { openinaryObjectKeyMatches } from "../_shared/mediaDeletePlan.ts";
 import { deleteFromOpeninary, getOpeninaryConfig } from "../_shared/openinary.ts";
 import { mediaTypeForMime, type MediaKind } from "../_shared/mediaTypes.ts";
 
@@ -33,11 +32,6 @@ export interface ReplaceProviderRow {
   status: string;
   delivery_url: string | null;
 }
-
-export type RetirementDecision =
-  | { action: "skip"; id: string; reason: "deleted" | "failed" | "current_version" }
-  | { action: "refuse"; id: string; reason: "key_mismatch" }
-  | { action: "retire"; id: string };
 
 export interface ReplaceUploadFacts {
   userId: string;
@@ -99,28 +93,6 @@ export function replaceKindsMatch(targetKind: MediaKind, incomingKind: MediaKind
 /** max(current || 1, every provider object_version || 1) + 1. An empty provider list uses current only. */
 export function nextObjectVersion(current: number | null | undefined, providerVersions: Array<number | null | undefined>): number {
   return Math.max(current || 1, ...providerVersions.map((version) => version || 1)) + 1;
-}
-
-/**
- * Old provider rows are retired. The version just written, and rows that never
- * stored an object (failed) or are already gone (deleted), are skipped.
- * Openinary is refused when object_key is not the path of its delivery URL
- * (or of file_path when the delivery URL is empty).
- */
-export function planProviderRetirement(
-  rows: ReplaceProviderRow[],
-  nextVersion: number,
-  oldFilePath: string | null | undefined,
-): RetirementDecision[] {
-  return rows.map((row) => {
-    if (row.status === "deleted") return { action: "skip", id: row.id, reason: "deleted" };
-    if (row.status === "failed") return { action: "skip", id: row.id, reason: "failed" };
-    if ((row.object_version ?? 0) >= nextVersion) return { action: "skip", id: row.id, reason: "current_version" };
-    if (row.provider === "openinary" && !openinaryObjectKeyMatches(row.object_key ?? "", row.delivery_url, oldFilePath)) {
-      return { action: "refuse", id: row.id, reason: "key_mismatch" };
-    }
-    return { action: "retire", id: row.id };
-  });
 }
 
 /** file_path plus every old provider delivery_url, trimmed and de-duplicated. */
@@ -239,41 +211,8 @@ async function markVersionDeleted(db: { from: (table: string) => any }, mediaFil
   if (error) console.error("[cloudinary-upload] replace provider mark-deleted failed");
 }
 
-async function retireOneProvider(
-  db: { from: (table: string) => any },
-  row: ReplaceTargetRow,
-  provider: ReplaceProviderRow,
-): Promise<boolean> {
-  let reason = "superseded by replace";
-  try {
-    if (provider.provider === "openinary" && provider.object_key) {
-      const config = getOpeninaryConfig();
-      if (!config) {
-        reason = "superseded by replace (remote delete failed)";
-      } else {
-        const removed = await deleteFromOpeninary(config, provider.object_key);
-        if (!removed.success) reason = "superseded by replace (remote delete failed)";
-      }
-    } else if (provider.provider === "cloudinary" && provider.object_key) {
-      const resourceType = targetMediaKind(row) === "video" ? "video" : "image";
-      const destroyed = await destroyCloudinary(provider.object_key, resourceType);
-      if (destroyed.reason === "provider_disabled") reason = "superseded by replace (provider disabled)";
-      else if (!destroyed.success) reason = "superseded by replace (remote delete failed)";
-    }
-  } catch {
-    reason = "superseded by replace (remote delete failed)";
-  }
-  const { error } = await db.from("media_file_providers").update({
-    status: "deleted",
-    deleted_at: new Date().toISOString(),
-    deleted_reason: reason,
-  }).eq("id", provider.id);
-  if (error) console.error("[cloudinary-upload] replace retire update failed");
-  return !error;
-}
-
 export async function commitMediaReplace(
-  db: { from: (table: string) => any; storage: { from: (bucket: string) => { remove: (paths: string[]) => Promise<unknown> } } },
+  db: { from: (table: string) => any },
   row: ReplaceTargetRow,
   facts: ReplaceUploadFacts,
 ): Promise<{ status: number; body: Record<string, unknown> }> {
@@ -369,49 +308,17 @@ export async function commitMediaReplace(
     }
   }
 
-  // Sent WhatsApp messages keep their media_url forever, and a failed rewrite
-  // leaves pending ones on the old URL: in either case the old objects stay live.
-  const keepPrevious = responseErrors.includes(SCHEDULED_REWRITE_FAILED) || await oldUrlsStillReferenced(db, facts.userId, oldUrls);
-  if (keepPrevious) {
-    return { status: 200, body: replaceSuccessBody(row.id, facts, scheduledMessagesUpdated, 0, true, responseErrors) };
-  }
-
-  let retired = 0;
-  const decisions = planProviderRetirement(oldProviders, nextVersion, row.file_path);
-  for (const decision of decisions) {
-    if (decision.action !== "retire") continue;
-    const provider = oldProviders.find((candidate) => candidate.id === decision.id);
-    if (!provider) continue;
-    if (await retireOneProvider(db, row, provider)) retired += 1;
-  }
-
-  if (oldProviders.length === 0 && row.storage_bucket === "media" && row.file_path) {
-    try { await db.storage.from("media").remove([row.file_path]); } catch { console.error("[cloudinary-upload] replace legacy storage remove failed"); }
-  }
-
-  return { status: 200, body: replaceSuccessBody(row.id, facts, scheduledMessagesUpdated, retired, false, responseErrors) };
-}
-
-/** True when a sent WhatsApp message still links an old URL. A failed lookup counts as referenced. */
-async function oldUrlsStillReferenced(db: { from: (table: string) => any }, userId: string, oldUrls: string[]): Promise<boolean> {
-  if (oldUrls.length === 0) return false;
-  const { count, error } = await db.from("whatsapp_messages")
-    .select("id", { count: "exact", head: true })
-    .eq("user_id", userId)
-    .in("media_url", oldUrls);
-  if (error) {
-    console.error("[cloudinary-upload] replace reference lookup failed");
-    return true;
-  }
-  return (count ?? 0) > 0;
+  // The previous version's objects are kept. Sent messages, in-flight schedules,
+  // avatars, workflows and documents may still link its URLs; they are removed
+  // with every other version when the library file itself is deleted, and the
+  // retention sweep already counts every version's URL as a live reference.
+  return { status: 200, body: replaceSuccessBody(row.id, facts, scheduledMessagesUpdated, responseErrors) };
 }
 
 function replaceSuccessBody(
   mediaFileId: string,
   facts: ReplaceUploadFacts,
   scheduledMessagesUpdated: number,
-  retired: number,
-  keptPrevious: boolean,
   errors: string[],
 ): Record<string, unknown> {
   return {
@@ -421,8 +328,6 @@ function replaceSuccessBody(
     replaced: true,
     storedIn: facts.storedIn,
     scheduledMessagesUpdated,
-    retired,
-    keptPrevious,
     errors: errors.length ? errors : undefined,
   };
 }
