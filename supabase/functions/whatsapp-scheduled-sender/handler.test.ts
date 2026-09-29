@@ -51,7 +51,7 @@ function deps(messages: ClaimedScheduledMessage[], extra: Partial<ScheduledSende
   const inserts: Record<string, unknown>[] = [];
   const lookups: Array<{ userId: string; phones: string[] }> = [];
   const logs: Array<{ userId: string; reason: string; metadata: Record<string, unknown> }> = [];
-  const events: Array<{ userId: string; message: string; metadata: Record<string, unknown> }> = [];
+  const events: Array<{ userId: string; level: string; message: string; metadata: Record<string, unknown> }> = [];
   const accounts: WhatsAppTransportAccount[] = [];
 
   const transport = (mode: string | null): WhatsAppTransport => ({
@@ -90,8 +90,8 @@ function deps(messages: ClaimedScheduledMessage[], extra: Partial<ScheduledSende
     logSendRefused: async (input: { userId: string; reason: string; metadata: Record<string, unknown> }) => {
       logs.push({ userId: input.userId, reason: input.reason, metadata: input.metadata });
     },
-    logEvent: async (entry: { userId: string; message: string; metadata: Record<string, unknown> }) => {
-      events.push({ userId: entry.userId, message: entry.message, metadata: entry.metadata });
+    logEvent: async (entry: { userId: string; level: string; message: string; metadata: Record<string, unknown> }) => {
+      events.push({ userId: entry.userId, level: entry.level, message: entry.message, metadata: entry.metadata });
     },
     transition: async (input: ScheduledTransition) => {
       transitions.push(input);
@@ -424,6 +424,60 @@ function failingTransport(gate: ReturnType<typeof deps>, failure: Error) {
     };
   };
 }
+
+Deno.test("a provider 429 releases the sending row under the attempt cap, fails it at the cap, and a 400 still fails", async () => {
+  const transports: Array<[string, (status: number) => Error]> = [
+    ["evolution", (status) => new EvolutionApiError(`Evolution API request failed with status ${status}`, status, {})],
+    ["cloud", (status) => new WhatsAppCloudApiError(`Cloud API request failed with status ${status}`, status)],
+  ];
+  for (const [transport, makeError] of transports) {
+    const released = deps([message(`${transport}-429`, "user-b", { attempts: 4 })]);
+    failingTransport(released, makeError(429));
+    assertEquals(await (await handleScheduledSender(request(), released)).json(), summary({ released: 1, total: 1 }), transport);
+    assertEquals(released.transitions.map((update) => [update.expectedStatus, update.patch]), [
+      ["claimed", { status: "sending" }],
+      ["sending", { status: "pending", claim_token: null, claimed_at: null }],
+    ], transport);
+    assertEquals(released.transitions.some((update) => update.patch.status === "failed"), false, transport);
+    assertEquals(released.events.some((event) => event.level === "warn" && event.metadata.reason === "rate_limited"), true, transport);
+
+    const capped = deps([message(`${transport}-cap`, "user-b", { attempts: 5 })]);
+    failingTransport(capped, makeError(429));
+    assertEquals(await (await handleScheduledSender(request(), capped)).json(), summary({ failed: 1, total: 1 }), `${transport}-cap`);
+    assertEquals(capped.transitions.map((update) => [update.expectedStatus, update.patch]), [
+      ["claimed", { status: "sending" }],
+      ["sending", { status: "failed", error_message: "rate_limited", claim_token: null }],
+    ], `${transport}-cap`);
+
+    const refused = deps([message(`${transport}-400`, "user-b")]);
+    failingTransport(refused, makeError(400));
+    assertEquals(await (await handleScheduledSender(request(), refused)).json(), summary({ failed: 1, total: 1 }), `${transport}-400`);
+    assertEquals(refused.transitions.map((update) => update.patch.status), ["sending", "failed"], `${transport}-400`);
+    assertEquals(refused.transitions.some((update) => update.patch.error_message === "rate_limited"), false, `${transport}-400`);
+  }
+});
+
+Deno.test("a 429 whose compare-and-set is lost or errors is not counted", async () => {
+  const lost = deps([message("lost-429", "user-b")]);
+  failingTransport(lost, new EvolutionApiError("Evolution API request failed with status 429", 429, {}));
+  lost.transition = async (input) => {
+    lost.transitions.push(input);
+    return input.expectedStatus !== "sending";
+  };
+  assertEquals(await (await handleScheduledSender(request(), lost)).json(), summary({ total: 1 }));
+  assertEquals(lost.events.some((event) => event.level === "warn" && event.metadata.expected_status === "sending"), true);
+  assertEquals(lost.events.some((event) => event.metadata.reason === "rate_limited"), false);
+
+  const errored = deps([message("err-429", "user-b", { attempts: 5 })]);
+  failingTransport(errored, new WhatsAppCloudApiError("Cloud API request failed with status 429", 429));
+  errored.transition = async (input) => {
+    errored.transitions.push(input);
+    if (input.expectedStatus === "sending") throw new Error("rate limit write failed");
+    return true;
+  };
+  assertEquals(await (await handleScheduledSender(request(), errored)).json(), summary({ total: 1 }));
+  assertEquals(errored.events.some((event) => event.level === "error" && event.metadata.reason === "rate_limit_write_failed"), true);
+});
 
 Deno.test("a Meta 5xx leaves the row sending and a Meta 4xx is recorded as failed", async () => {
   const unknown = deps([message("meta-5xx", "user-b")]);

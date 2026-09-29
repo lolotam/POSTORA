@@ -23,6 +23,64 @@ describe("fetchWhatsAppScheduleBoard", () => {
     });
   });
 
+  it("keeps a message whose account was cleared and does not look that id up", async () => {
+    let lookedUp: string[] | null = null;
+    vi.mocked(supabase.from).mockImplementation((table: string) => {
+      if (table === "social_accounts") {
+        const builder = {
+          select: () => builder,
+          eq: () => builder,
+          in: (_column: string, ids: string[]) => {
+            lookedUp = ids;
+            return Promise.resolve({
+              data: [{ id: "acc-1", platform_username: "Shop", avatar_url: null }],
+              error: null,
+            });
+          },
+        };
+        return builder as never;
+      }
+      const rows = [
+        {
+          id: "cleared",
+          social_account_id: null,
+          recipient_phone: "100",
+          recipient_name: null,
+          message_text: "in flight",
+          media_url: null,
+          media_type: null,
+          scheduled_at: "2026-09-15T00:00:00.000Z",
+          status: "sending",
+        },
+        {
+          id: "live",
+          social_account_id: "acc-1",
+          recipient_phone: "200",
+          recipient_name: null,
+          message_text: "waiting",
+          media_url: null,
+          media_type: null,
+          scheduled_at: "2026-09-16T00:00:00.000Z",
+          status: "pending",
+        },
+      ];
+      const builder = {
+        select: () => builder,
+        eq: () => builder,
+        in: () => builder,
+        order: () => Promise.resolve({ data: rows, error: null }),
+      };
+      return builder as never;
+    });
+
+    const board = await fetchWhatsAppScheduleBoard("user-1", { kind: "active" });
+    expect(lookedUp).toEqual(["acc-1"]);
+    expect(board.messages.map((message) => [message.id, message.account_name])).toEqual([
+      ["cleared", null],
+      ["live", "Shop"],
+    ]);
+  });
+
   it("rejects a failed read instead of looking like an empty list", async () => {
     await expect(fetchWhatsAppScheduleBoard("user-1", { kind: "active" })).rejects.toEqual({ message: "statement timeout" });
   });

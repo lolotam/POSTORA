@@ -79,6 +79,14 @@ async function fetchAccountLabels(userId: string, accountIds: string[]): Promise
   return labels;
 }
 
+function accountIdsOf(rows: ScheduleRow[]): string[] {
+  const ids = new Set<string>();
+  for (const row of rows) {
+    if (row.social_account_id) ids.add(row.social_account_id);
+  }
+  return [...ids];
+}
+
 function toSource(row: ScheduleRow, account: AccountLabel | undefined): ScheduledWhatsAppSource {
   return {
     id: row.id,
@@ -103,10 +111,9 @@ export async function fetchWhatsAppScheduleBoard(
     ? await fetchRangeRows(userId, scope.rangeStart, scope.rangeEnd)
     : null;
   const rows = range ? range.rows : await fetchActiveRows(userId);
-  const accountIds = [...new Set(rows.map((row) => row.social_account_id))];
-  const accounts = await fetchAccountLabels(userId, accountIds);
+  const accounts = await fetchAccountLabels(userId, accountIdsOf(rows));
   return {
-    messages: rows.map((row) => toSource(row, accounts.get(row.social_account_id))),
+    messages: rows.map((row) => toSource(row, row.social_account_id ? accounts.get(row.social_account_id) : undefined)),
     truncated: range?.truncated ?? false,
   };
 }

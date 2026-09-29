@@ -120,14 +120,25 @@ function storedProviderError(error: unknown): string {
  * Evolution client's timeout, an abort, a network failure (fetch TypeError),
  * an Evolution 5xx, or anything unrecognised. Such a row stays `sending` and
  * the lease turns it indeterminate; it is never marked failed or resent.
- * Only a definite refusal (a provider response, or a pre-send config error)
- * is recorded as failed.
+ * A definite refusal (a provider 4xx other than 429, or a pre-send config
+ * error) is recorded as failed. A 429 is released for another claim.
  */
+function providerHttpStatus(error: unknown): number | null {
+  if (error instanceof EvolutionApiError || error instanceof WhatsAppCloudApiError) return error.status;
+  return null;
+}
+
 function sendOutcomeUnknown(error: unknown): boolean {
   if (!(error instanceof Error)) return true;
-  if (error instanceof EvolutionApiError || error instanceof WhatsAppCloudApiError) return error.status >= 500;
+  const status = providerHttpStatus(error);
+  // 5xx may have been accepted. 429 is a definite non-acceptance and is retried below.
+  if (status !== null) return status >= 500;
   if (error.name === "TypeError" || error.name === "AbortError") return true;
   return error.message === "provider_timeout" || /timed out|aborted/i.test(error.message);
+}
+
+function rateLimited(error: unknown): boolean {
+  return providerHttpStatus(error) === 429;
 }
 
 function withTimeout<T>(work: Promise<T>, timeoutMs: number): Promise<T> {
@@ -432,6 +443,34 @@ async function recordProviderRefusal(deps: ScheduledSenderDeps, row: ClaimedSche
   return true;
 }
 
+/** 429 did not accept the message. Release the sending row, or fail it once the claim cap is spent. */
+async function releaseOrFailRateLimit(
+  deps: ScheduledSenderDeps,
+  row: ClaimedScheduledMessage,
+  summary: ScheduledTickSummary,
+): Promise<void> {
+  const capped = row.attempts >= MAX_CLAIM_ATTEMPTS;
+  const outcome = await compareAndSet(
+    deps,
+    row,
+    "sending",
+    capped
+      ? { status: "failed", error_message: "rate_limited", claim_token: null }
+      : { status: "pending", claim_token: null, claimed_at: null },
+  );
+  if (outcome === "lost") {
+    await noteClaimLost(deps, row, "sending");
+    return;
+  }
+  if (outcome === "error") {
+    await note(deps, row, "error", "Scheduled rate limit could not be saved", { reason: "rate_limit_write_failed" });
+    return;
+  }
+  if (capped) summary.failed += 1;
+  else summary.released += 1;
+  await note(deps, row, "warn", "Scheduled send rate limited", { reason: "rate_limited" });
+}
+
 async function sendClaimed(deps: ScheduledSenderDeps, row: ClaimedScheduledMessage, summary: ScheduledTickSummary): Promise<void> {
   // Resolved before `sending`: a resolver failure (e.g. the QR instance lookup) never reached the
   // provider, so the claim is released for a retry instead of being discarded.
@@ -460,6 +499,10 @@ async function sendClaimed(deps: ScheduledSenderDeps, row: ClaimedScheduledMessa
     // A timeout means the provider may already have accepted. Leave `sending` so the lease can mark it indeterminate.
     if (sendOutcomeUnknown(error)) {
       await note(deps, row, "warn", "Scheduled send outcome unknown", { reason: "send_outcome_unknown" });
+      return;
+    }
+    if (rateLimited(error)) {
+      await releaseOrFailRateLimit(deps, row, summary);
       return;
     }
     if (await recordProviderRefusal(deps, row, error)) summary.failed += 1;
