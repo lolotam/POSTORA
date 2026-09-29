@@ -10,6 +10,18 @@ export function digitsOnly(phone: string): string {
   return String(phone ?? "").replace(/\D/g, "");
 }
 
+// Digits with optional leading +, spaces, dashes, dots and brackets only. Letters,
+// "ext" and '@' (a WhatsApp @lid) are refused: stripping them would check a different number.
+const PHONE_FORMAT = /^\+?[0-9][0-9\s\-().]*$/;
+
+/** 8–15 digits from a strictly phone-shaped value, else null. */
+export function recipientDigits(recipientPhone: string): string | null {
+  if (!PHONE_FORMAT.test(recipientPhone.trim())) return null;
+  const digits = digitsOnly(recipientPhone);
+  if (digits.length < 8 || digits.length > 15) return null;
+  return digits;
+}
+
 // `from` stays loose on purpose: a precise builder type makes `deno check` instantiate
 // the Supabase client's generics until it gives up.
 export interface OptOutLookupAdmin {
@@ -47,13 +59,19 @@ export async function optedOutPhones(
   return optedOut;
 }
 
-export type OptOutRefusalReason = "opted_out" | "opt_out_lookup_failed" | "opt_out_skip_failed" | "invalid_recipient";
+export type OptOutRefusalReason =
+  | "opted_out"
+  | "opt_out_lookup_failed"
+  | "opt_out_skip_failed"
+  | "invalid_recipient"
+  | "inbound_lookup_failed";
 
 const REFUSAL_MESSAGES: Record<OptOutRefusalReason, string> = {
   opted_out: "WhatsApp send refused: customer opted out",
   opt_out_lookup_failed: "WhatsApp send refused: opt-out lookup failed",
   opt_out_skip_failed: "WhatsApp send refused: opted-out status could not be saved",
   invalid_recipient: "WhatsApp send refused: recipient is not a phone number",
+  inbound_lookup_failed: "WhatsApp send refused: recent inbound lookup failed",
 };
 
 export interface SendRefusedInput {

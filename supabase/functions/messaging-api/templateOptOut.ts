@@ -1,6 +1,6 @@
 // Operator template sends (messaging-api) stop for messaging_opt_outs.
 // Free-form session messages never call this. A failed lookup does not send.
-import { digitsOnly, logSendRefused, optedOutPhones, type OptOutLookupAdmin } from "../_shared/optOutLookup.ts";
+import { logSendRefused, optedOutPhones, recipientDigits, type OptOutLookupAdmin } from "../_shared/optOutLookup.ts";
 
 export type OperatorTemplateAction = "whatsapp_send_message" | "whatsapp_send_template";
 
@@ -13,18 +13,6 @@ const LOOKUP_FAILED_MESSAGE = "WhatsApp opt-out status could not be checked. The
 interface TemplateRefusal {
   message: string;
   errorType: "INVALID_RECIPIENT" | "RECIPIENT_OPTED_OUT" | "OPT_OUT_LOOKUP_FAILED";
-}
-
-// Digits with optional leading +, spaces, dashes, dots and brackets only. Letters,
-// "ext" and '@' (a WhatsApp @lid) are refused: stripping them would check a different number.
-const PHONE_FORMAT = /^\+?[0-9][0-9\s\-().]*$/;
-
-/** 8–15 digits from a strictly phone-shaped value, else null. */
-function recipientDigits(recipientPhone: string): string | null {
-  if (!PHONE_FORMAT.test(recipientPhone.trim())) return null;
-  const digits = digitsOnly(recipientPhone);
-  if (digits.length < 8 || digits.length > 15) return null;
-  return digits;
 }
 
 async function templateOptOutRefusal(
