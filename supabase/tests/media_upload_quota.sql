@@ -131,6 +131,20 @@ EXCEPTION WHEN insufficient_privilege THEN NULL;
 END $$;
 RESET ROLE;
 
+-- Q10: a browser client cannot backdate a row out of today's count.
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claims',
+  json_build_object('sub', 'b810b810-b810-48b8-88b8-b810b810b810', 'role', 'authenticated')::text, true);
+INSERT INTO public.media_files (user_id, file_path, file_type, created_at)
+VALUES ('b810b810-b810-48b8-88b8-b810b810b810', 'q10-backdated', 'image', now() - interval '2 days');
+RESET ROLE;
+DO $$
+BEGIN
+  ASSERT (SELECT created_at >= date_trunc('day', now()) FROM public.media_files
+          WHERE file_path = 'q10-backdated'),
+    'Q10 client-supplied created_at is pinned to now';
+END $$;
+
 ROLLBACK;
 
 \echo '=== media_upload_quota: ALL CHECKS PASSED ==='
