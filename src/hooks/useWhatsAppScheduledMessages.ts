@@ -89,7 +89,7 @@ function scheduleFailure(error: { code?: string; message?: string } | null): Err
 
 export interface ScheduledMessage {
   id: string;
-  social_account_id: string;
+  social_account_id: string | null;
   recipient_phone: string;
   recipient_name: string | null;
   message_text: string | null;

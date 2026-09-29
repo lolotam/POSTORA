@@ -7096,7 +7096,7 @@ export type Database = {
           recipient_phone: string
           scheduled_at: string
           sent_at: string | null
-          social_account_id: string
+          social_account_id: string | null
           status: string
           updated_at: string | null
           user_id: string
@@ -7116,7 +7116,7 @@ export type Database = {
           recipient_phone: string
           scheduled_at: string
           sent_at?: string | null
-          social_account_id: string
+          social_account_id: string | null
           status?: string
           updated_at?: string | null
           user_id: string
@@ -7136,7 +7136,7 @@ export type Database = {
           recipient_phone?: string
           scheduled_at?: string
           sent_at?: string | null
-          social_account_id?: string
+          social_account_id?: string | null
           status?: string
           updated_at?: string | null
           user_id?: string

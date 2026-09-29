@@ -647,5 +647,83 @@ INSERT INTO public.whatsapp_scheduled_messages
 VALUES ('a1a1a1a1-a1a1-41a1-81a1-a1a1a1a1a1a1', 'e1e1e1e1-e1e1-41e1-81e1-e1e1e1e1e1e1',
         '96555510076', now() + interval '1 day', 'https://cdn.example/protected.pdf', 'document');
 
+-- S16: deleting an account removes resting rows and nulls an in-flight one.
+-- A client still cannot insert or update a row onto a NULL account.
+DO $$
+DECLARE
+  u_a uuid := 'a1a1a1a1-a1a1-41a1-81a1-a1a1a1a1a1a1';
+  ws_a uuid := 'c0c0c0c0-c0c0-4cc0-8cc0-c0c0c0c0c0c0';
+  acct uuid := 'f3f3f3f3-f3f3-43f3-83f3-f3f3f3f3f3f3';
+  msg_pending uuid := 'f4f4f4f4-f4f4-44f4-84f4-f4f4f4f4f4f4';
+  msg_sending uuid := 'f5f5f5f5-f5f5-45f5-85f5-f5f5f5f5f5f5';
+BEGIN
+  ASSERT (SELECT is_nullable FROM information_schema.columns
+          WHERE table_schema = 'public'
+            AND table_name = 'whatsapp_scheduled_messages'
+            AND column_name = 'social_account_id') = 'YES',
+    'S16 social_account_id is nullable';
+  ASSERT (SELECT confdeltype FROM pg_constraint
+          WHERE conname = 'whatsapp_scheduled_messages_social_account_id_fkey'
+            AND conrelid = 'public.whatsapp_scheduled_messages'::regclass) = 'n',
+    'S16 social_account_id FK is ON DELETE SET NULL';
+
+  INSERT INTO public.social_accounts
+    (id, user_id, platform, platform_user_id, access_token, workspace_id)
+  VALUES (acct, u_a, 'whatsapp', 'wss-s16', 'token-wss-s16', ws_a);
+  INSERT INTO public.whatsapp_scheduled_messages
+    (id, user_id, social_account_id, recipient_phone, scheduled_at, status)
+  VALUES
+    (msg_pending, u_a, acct, '96555510081', now() + interval '1 day', 'pending'),
+    (msg_sending, u_a, acct, '96555510082', now() + interval '1 day', 'sending');
+
+  DELETE FROM public.social_accounts WHERE id = acct;
+
+  ASSERT NOT EXISTS (SELECT 1 FROM public.whatsapp_scheduled_messages WHERE id = msg_pending),
+    'S16 deleting the account removes its pending row';
+  ASSERT EXISTS (SELECT 1 FROM public.whatsapp_scheduled_messages
+                 WHERE id = msg_sending
+                   AND status = 'sending'
+                   AND social_account_id IS NULL),
+    'S16 a sending row survives with social_account_id null';
+END $$;
+
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claims',
+  json_build_object('sub', 'a1a1a1a1-a1a1-41a1-81a1-a1a1a1a1a1a1',
+                    'role', 'authenticated')::text, true);
+
+DO $$
+DECLARE
+  u_a uuid := 'a1a1a1a1-a1a1-41a1-81a1-a1a1a1a1a1a1';
+  acct_wa_a uuid := 'e1e1e1e1-e1e1-41e1-81e1-e1e1e1e1e1e1';
+  msg_owned uuid := 'f6f6f6f6-f6f6-46f6-86f6-f6f6f6f6f6f6';
+BEGIN
+  BEGIN
+    INSERT INTO public.whatsapp_scheduled_messages
+      (user_id, social_account_id, recipient_phone, scheduled_at)
+    VALUES (u_a, NULL, '96555510083', now() + interval '1 day');
+    RAISE EXCEPTION 'S16 failed: null account insert accepted'
+      USING ERRCODE = 'assert_failure';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+
+  INSERT INTO public.whatsapp_scheduled_messages
+    (id, user_id, social_account_id, recipient_phone, scheduled_at)
+  VALUES (msg_owned, u_a, acct_wa_a, '96555510084', now() + interval '1 day');
+  BEGIN
+    UPDATE public.whatsapp_scheduled_messages
+    SET social_account_id = NULL
+    WHERE id = msg_owned;
+    RAISE EXCEPTION 'S16 failed: null account update accepted'
+      USING ERRCODE = 'assert_failure';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+  ASSERT (SELECT social_account_id FROM public.whatsapp_scheduled_messages
+          WHERE id = msg_owned) = acct_wa_a,
+    'S16 a rejected null update leaves the owned account in place';
+END $$;
+
+RESET ROLE;
+
 ROLLBACK;
 \echo '=== whatsapp_scheduled_sender: ALL CHECKS PASSED ==='
