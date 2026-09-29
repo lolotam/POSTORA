@@ -92,7 +92,7 @@ describe("scheduled pages do not list every WhatsApp message", () => {
       expect(statusFilter(call.ops)).toEqual([...CALENDAR_WHATSAPP_STATUSES]);
       expect(call.ops.some((op) => op.method === "gte" && op.args[0] === "scheduled_at")).toBe(true);
       expect(call.ops.some((op) => op.method === "lte" && op.args[0] === "scheduled_at")).toBe(true);
-      expect(call.ops).toContainEqual({ method: "limit", args: [WHATSAPP_RANGE_LIMIT + 1] });
+      expect(call.ops).toContainEqual({ method: "limit", args: [WHATSAPP_RANGE_LIMIT] });
       expect(call.ops.some((op) => op.method === "eq" && op.args[0] === "user_id" && op.args[1] === "user-1")).toBe(true);
     }
   });
