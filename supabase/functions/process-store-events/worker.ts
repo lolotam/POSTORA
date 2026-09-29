@@ -124,8 +124,8 @@ export interface WorkerPorts {
   releaseClaim(id: string, claimToken: string): Promise<boolean>;
   loadAccount(event: StoreEventRow): Promise<AccountContext | null>;
   readStore(event: StoreEventRow): Promise<StoreRead>;
-  reserveQr(accountId: string, limit: number): Promise<boolean>;
-  releaseQr(accountId: string): Promise<void>;
+  reserveQr(accountId: string, limit: number, eventId: string): Promise<boolean>;
+  releaseQr(accountId: string, eventId: string): Promise<void>;
   ensureThread(input: { userId: string; conversationId: string }): Promise<ThreadRow>;
   /**
    * Read the thread if one exists. Unlike ensureThread this does not insert,
@@ -265,7 +265,7 @@ async function clearPendingOrLog(ports: WorkerPorts, thread: ThreadRow, event: S
 async function releaseReservedQr(ports: WorkerPorts, event: StoreEventRow, reserved: boolean): Promise<void> {
   if (!reserved) return;
   try {
-    await ports.releaseQr(event.social_account_id);
+    await ports.releaseQr(event.social_account_id, event.id);
   } catch {
     // The lease still returns the row; the cap slot is the smaller loss.
   }
@@ -529,7 +529,7 @@ async function markFailed(
 ): Promise<"failed" | "released" | "left"> {
   const gate = await refuseTerminal(ports, event, clearance, "release");
   if (gate !== "go") return gate;
-  if (clearance.reserved) await ports.releaseQr(event.social_account_id);
+  if (clearance.reserved) await ports.releaseQr(event.social_account_id, event.id);
   return await writeFailure(ports, event, failure.reason, failure.alert) ? "failed" : "left";
 }
 
@@ -540,7 +540,7 @@ async function markSent(
 ): Promise<"sent" | "released" | "left"> {
   const gate = await refuseTerminal(ports, event, clearance, "release");
   if (gate !== "go") return gate;
-  if (clearance.reserved) await ports.releaseQr(event.social_account_id);
+  if (clearance.reserved) await ports.releaseQr(event.social_account_id, event.id);
   const marked = await ports.updateEvent(event.id, event.claim_token, {
     status: "sent",
     processed_at: iso(ports.now()),
@@ -594,7 +594,7 @@ async function deferUnapprovedTemplate(
 ): Promise<"released" | "left"> {
   const gate = await refuseTerminal(ports, event, clearance, "release");
   if (gate !== "go") return gate;
-  if (clearance.reserved) await ports.releaseQr(event.social_account_id);
+  if (clearance.reserved) await ports.releaseQr(event.social_account_id, event.id);
   return await deferPendingTemplate(ports, event) ? "released" : "left";
 }
 
@@ -606,7 +606,7 @@ async function skip(
 ): Promise<"skipped" | "released" | "left"> {
   const gate = await refuseTerminal(ports, event, clearance, "release");
   if (gate !== "go") return gate;
-  if (clearance.reserved) await ports.releaseQr(event.social_account_id);
+  if (clearance.reserved) await ports.releaseQr(event.social_account_id, event.id);
   const marked = await ports.updateEvent(event.id, event.claim_token, {
     status: "skipped",
     skip_reason: reason,
@@ -654,7 +654,7 @@ async function processClaimed(
       });
     }
     if (loaded.connectionMode === "evolution_qr") {
-      reserved = await ports.reserveQr(event.social_account_id, qrCap);
+      reserved = await ports.reserveQr(event.social_account_id, qrCap, event.id);
       if (!reserved) {
         return await skip(ports, event, "qr_daily_cap", {
           account: loaded,
@@ -684,7 +684,7 @@ async function processClaimed(
       openerState = pendingState(event, ports.now());
       const started = await ports.persistState(thread.id, thread.procedure_state ?? null, openerState);
       if (!started) {
-        if (reserved) await ports.releaseQr(event.social_account_id);
+        if (reserved) await ports.releaseQr(event.social_account_id, event.id);
         if (await ports.releaseClaim(event.id, event.claim_token)) return "released";
         return "left";
       }
@@ -717,7 +717,7 @@ async function processClaimed(
       send_attempt_id: crypto.randomUUID(),
     });
     if (!intent) {
-      if (reserved) await ports.releaseQr(event.social_account_id);
+      if (reserved) await ports.releaseQr(event.social_account_id, event.id);
       return "left";
     }
     sending = true;
@@ -755,7 +755,7 @@ async function processClaimed(
   } catch (error) {
     if (reserved && !sending && account) {
       try {
-        await ports.releaseQr(event.social_account_id);
+        await ports.releaseQr(event.social_account_id, event.id);
       } catch {
         // The lease still returns the row; the cap slot is the smaller loss.
       }

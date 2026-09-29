@@ -94,6 +94,9 @@ interface Harness {
   alerts: string[];
   logs: StoreEventLog[];
   qrReleases: number;
+  qrReserveEventIds: string[];
+  qrReleaseEventIds: string[];
+  qrReserveLimits: number[];
   deleted: number;
   thread: ThreadRow;
 }
@@ -123,6 +126,9 @@ function harness(options: {
     alerts: [],
     logs: [],
     qrReleases: 0,
+    qrReserveEventIds: [],
+    qrReleaseEventIds: [],
+    qrReserveLimits: [],
     deleted: 0,
     thread: options.thread ?? { id: "thread-1", procedure_state: null },
   };
@@ -155,9 +161,14 @@ function harness(options: {
           ? { outcome: "absent" as const }
           : { outcome: "snapshot" as const, snapshot: options.store }
     )),
-    reserveQr: () => Promise.resolve(options.reserve !== false),
-    releaseQr: () => {
+    reserveQr: (_accountId, limit, eventId) => {
+      state.qrReserveEventIds.push(eventId);
+      state.qrReserveLimits.push(limit);
+      return Promise.resolve(options.reserve !== false);
+    },
+    releaseQr: (_accountId, eventId) => {
       state.qrReleases += 1;
+      state.qrReleaseEventIds.push(eventId);
       return Promise.resolve();
     },
     ensureThread: () => Promise.resolve(state.thread),
@@ -385,6 +396,118 @@ Deno.test("an indeterminate send fails the row, alerts, and keeps the QR slot", 
   assertEquals(box.qrReleases, 0);
   assertEquals(activated(box), false);
   assertEquals(box.sends.length, 1);
+});
+
+Deno.test("QR reserve and release receive the store event id", async () => {
+  const at = new Date(NOW).toISOString();
+  const cases: Array<{ name: string; releases: number; prepare: (box: Harness) => void }> = [
+    {
+      name: "definite send failure",
+      releases: 1,
+      prepare: (box) => {
+        box.ports.sendOpener = () => {
+          const outcome = { accepted: false as const, definite: true as const, reason: "unreachable" };
+          box.sends.push(outcome);
+          return Promise.resolve(outcome);
+        };
+      },
+    },
+    {
+      name: "opener clear lost after a definite failure",
+      releases: 1,
+      prepare: (box) => {
+        box.thread = { id: "thread-1", procedure_state: pending(box.row.id) };
+        box.ports.ensureThread = () => Promise.resolve(box.thread);
+        box.ports.sendOpener = () => {
+          const outcome = { accepted: false as const, definite: true as const, reason: "unreachable" };
+          box.sends.push(outcome);
+          return Promise.resolve(outcome);
+        };
+        box.ports.persistState = () => Promise.resolve(false);
+      },
+    },
+    {
+      name: "another live procedure",
+      releases: 1,
+      prepare: (box) => {
+        box.thread = {
+          id: "thread-1",
+          procedure_state: {
+            run_id: "other",
+            key: "order_status",
+            version: 1,
+            step: 0,
+            fields: {},
+            off_script: 0,
+            origin: "model",
+            started_at: at,
+            updated_at: at,
+          },
+        };
+        box.ports.ensureThread = () => Promise.resolve(box.thread);
+      },
+    },
+    {
+      name: "already active for this event",
+      releases: 1,
+      prepare: (box) => {
+        box.thread = { id: "thread-1", procedure_state: { ...pending(box.row.id), phase: "active" } };
+        box.ports.ensureThread = () => Promise.resolve(box.thread);
+      },
+    },
+    {
+      name: "claim token lost before sending",
+      releases: 1,
+      prepare: (box) => {
+        const row = box.row;
+        box.ports.updateEvent = async (id, token, patch) => {
+          if (patch.status === "sending") return false;
+          if (row.id !== id || row.claim_token !== token) return false;
+          Object.assign(row, patch);
+          return true;
+        };
+      },
+    },
+    {
+      name: "pending state did not persist",
+      releases: 1,
+      prepare: (box) => {
+        box.ports.persistState = () => Promise.resolve(false);
+      },
+    },
+    {
+      name: "worker threw before sending",
+      releases: 1,
+      prepare: (box) => {
+        box.ports.ensureThread = () => Promise.reject(new Error("db down"));
+      },
+    },
+    {
+      name: "daily cap refused",
+      releases: 0,
+      prepare: (box) => {
+        box.ports.reserveQr = (_accountId, limit, eventId) => {
+          box.qrReserveEventIds.push(eventId);
+          box.qrReserveLimits.push(limit);
+          return Promise.resolve(false);
+        };
+      },
+    },
+    {
+      name: "accepted send keeps the slot",
+      releases: 0,
+      prepare: () => {},
+    },
+  ];
+
+  for (const item of cases) {
+    const box = harness({ account: qrAccount() });
+    item.prepare(box);
+    await runStoreEventWorker(box.ports);
+    assertEquals(box.qrReserveEventIds, [box.row.id], item.name);
+    assertEquals(box.qrReserveLimits, [STORE_EVENT_LIMITS.qrDailyCap], item.name);
+    assertEquals(box.qrReleaseEventIds, item.releases === 0 ? [] : [box.row.id], item.name);
+  }
 });
 
 Deno.test("the QR daily cap skips without a send", async () => {
