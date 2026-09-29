@@ -612,7 +612,9 @@ export async function handleCloudinaryUpload(req: Request): Promise<Response> {
     const objectExt = resolved.upload.ext;
     const uploadMime = resolved.upload.entry.mime;
 
-    const cdnPolicy = await getCdnPolicy(dbClient);
+    // cdn_storage is admin-only under RLS. Read through the user client, a non-admin got an
+    // empty policy, Openinary counted as disabled, and every upload fell back to Cloudinary.
+    const cdnPolicy = await getCdnPolicy(dbAdmin);
     const openinaryConfig = getOpeninaryConfig();
     const openinaryUsable = cdnPolicy.openinaryEnabled && !!openinaryConfig;
     const orderedProviders: string[] = [];

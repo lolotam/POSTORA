@@ -262,7 +262,8 @@ Deno.serve(async (req) => {
     const providerErrors: string[] = [];
     let mismatchCount = 0;
     const filePathById = new Map((ownedRows || []).map((row: { id: string; file_path?: string | null }) => [row.id, row.file_path ?? null]));
-    const { data: setting } = await supabase.from("app_settings").select("value").eq("key", "cdn_storage").maybeSingle();
+    // cdn_storage is admin-only under RLS; read it as the service role or non-admins see no Openinary.
+    const { data: setting } = await (serviceClient ?? supabase).from("app_settings").select("value").eq("key", "cdn_storage").maybeSingle();
     const providers = setting?.value?.write_policy?.providers || ["cloudinary"];
 
     for (const target of allowed) {
