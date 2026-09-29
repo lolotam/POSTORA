@@ -2,6 +2,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { sanitizeErrorMessage, sanitizeErrorDetails, getSafeErrorResponse, containsSensitiveInfo } from "../_shared/errorSanitizer.ts";
 import { postWebhook, validateWebhookTarget } from "../_shared/webhookSecurity.ts";
 import { EVOLUTION_MEDIA_TYPES, sendMessage, type MessageSendAccount } from "../_shared/messageSend.ts";
+import { n8nWhatsAppSendRefusal } from "./optOutGate.ts";
 import { describeMessagingAccount } from "../_shared/n8nMessagingDispatch.ts";
 import { type CommentActionResult, deleteComment, hideComment, replyToComment } from "../_shared/commentActions.ts";
 import { parseSubscriptionFilters } from "./webhookFilters.ts";
@@ -1987,6 +1988,17 @@ async function handleMessageReply(req: Request, supabase: any, userId: string, b
   const platform = body?.platform || account.platform;
   if (!['whatsapp', 'instagram', 'facebook'].includes(platform) || platform !== account.platform) {
     return apiError(req, 'platform does not match the selected social account', 400, 'INVALID_PLATFORM');
+  }
+
+  if (account.platform === 'whatsapp') {
+    const refusal = await n8nWhatsAppSendRefusal(supabase, {
+      ownerId: account.user_id,
+      accountId: account.id,
+      recipientId,
+      route: 'messages/reply',
+      now: new Date(),
+    });
+    if (refusal) return apiError(req, refusal.message, refusal.status, refusal.code);
   }
 
   try {
