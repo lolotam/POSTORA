@@ -8,7 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 import { useCdnConfig } from "@/hooks/useCdnConfig";
-import { resolveMediaPublicUrl } from "@/lib/mediaUrl";
+import { getMediaThumbnailUrl, resolveMediaPublicUrl } from "@/lib/mediaUrl";
 import {
   downloadNameFor,
   libraryFilePresentation,
@@ -69,13 +69,16 @@ function escapeLibrarySearchTerm(term: string): string {
   return `"%${quoted}%"`;
 }
 
+const THUMB_SIZE = 80;
+
 function LibraryThumb({ file, url }: { file: ScheduleLibraryFile; url: string }) {
   const presentation = libraryFilePresentation(file);
   const [failed, setFailed] = useState(false);
+  const { data: cdnConfig } = useCdnConfig();
   if (presentation.kind === "image" && url && !failed) {
     return (
       <img
-        src={url}
+        src={getMediaThumbnailUrl(url, THUMB_SIZE, cdnConfig?.openinary?.serverUrl)}
         alt={downloadNameFor(file)}
         loading="lazy"
         className="h-full w-full object-cover"
