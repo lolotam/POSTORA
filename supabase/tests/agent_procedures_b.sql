@@ -1020,8 +1020,8 @@ BEGIN
 
   -- Q5: a reservation dated yesterday does not count as today's slot.
   DELETE FROM public.store_qr_opener_counts WHERE social_account_id = acct_a;
-  INSERT INTO public.store_qr_opener_reservations (store_event_id, social_account_id, day)
-  VALUES (v_yest, acct_a, v_today - 1);
+  INSERT INTO public.store_qr_opener_reservations (store_event_id, social_account_id, day, claim_token)
+  VALUES (v_yest, acct_a, v_today - 1, 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'::uuid);
   v_ok := public.reserve_qr_opener(acct_a, 50, v_yest, 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'::uuid);
   ASSERT v_ok, 'Q5 retry the next day returns true';
   ASSERT (SELECT sent FROM public.store_qr_opener_counts
@@ -1039,8 +1039,8 @@ BEGIN
   -- Releasing that yesterday row, before it was advanced, must not punch a
   -- hole in today's counter. Rebuild the stale row beside a live today count.
   DELETE FROM public.store_qr_opener_reservations WHERE store_event_id = v_yest;
-  INSERT INTO public.store_qr_opener_reservations (store_event_id, social_account_id, day)
-  VALUES (v_yest, acct_a, v_today - 1);
+  INSERT INTO public.store_qr_opener_reservations (store_event_id, social_account_id, day, claim_token)
+  VALUES (v_yest, acct_a, v_today - 1, 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'::uuid);
   UPDATE public.store_qr_opener_counts
   SET sent = 5
   WHERE social_account_id = acct_a AND day = v_today;
