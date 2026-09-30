@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Dialog,
@@ -14,7 +14,7 @@ import type { ShortcutName } from "../domain/scheduleRules";
 
 export type ConfirmDialog = { mode: "now" | "scheduled"; requestId: string };
 
-interface PublishControlsProps {
+export interface PublishControlsViewModel {
   timeZone: string;
   scheduleLocal: string;
   scheduleNote: string | null;
@@ -47,40 +47,47 @@ interface PublishControlsProps {
   onRejectOpenChange: (open: boolean) => void;
 }
 
-export function PublishControls({
-  timeZone,
-  scheduleLocal,
-  scheduleNote,
-  onScheduleLocal,
-  onNow,
-  onShortcut,
-  destination,
-  approveReason,
-  scheduleReason,
-  canReject,
-  canEdit,
-  canArchive,
-  canRestore,
-  settings,
-  settingsOpen,
-  onSettingsOpenChange,
-  onEdit,
-  onArchive,
-  onRestore,
-  onReject,
-  rejectPending,
-  confirm,
-  onOpenConfirm,
-  onCloseConfirm,
-  confirmSummary,
-  onConfirm,
-  confirmPending,
-  confirmError,
-  rejectOpen,
-  onRejectOpenChange,
-}: PublishControlsProps) {
+export function PublishControls({ model }: { model: PublishControlsViewModel }) {
+  const {
+    timeZone,
+    scheduleLocal,
+    scheduleNote,
+    onScheduleLocal,
+    onNow,
+    onShortcut,
+    destination,
+    approveReason,
+    scheduleReason,
+    canReject,
+    canEdit,
+    canArchive,
+    canRestore,
+    settings,
+    settingsOpen,
+    onSettingsOpenChange,
+    onEdit,
+    onArchive,
+    onRestore,
+    onReject,
+    rejectPending,
+    confirm,
+    onOpenConfirm,
+    onCloseConfirm,
+    confirmSummary,
+    onConfirm,
+    confirmPending,
+    confirmError,
+    rejectOpen,
+    onRejectOpenChange,
+  } = model;
   const { t } = useTranslation("post");
   const [rejectReason, setRejectReason] = useState("");
+  const approveReasonId = useId();
+  const scheduleReasonId = useId();
+
+  useEffect(() => {
+    if (rejectOpen) setRejectReason("");
+  }, [rejectOpen]);
 
   return (
     <div>
@@ -106,18 +113,12 @@ export function PublishControls({
       </p>
       <p className="tiktok-review-eyebrow">{destination}</p>
       {scheduleNote ? <p className="tiktok-review-alert" role="status">{scheduleNote}</p> : null}
-      <p className="tiktok-review-reason" id="tiktok-review-disabled-reason">
-        {scheduleReason ?? approveReason ?? ""}
-      </p>
       <div className="tiktok-review-actions">
         <button
           type="button"
           className="tiktok-review-button tiktok-review-button-reject"
           disabled={!canReject}
-          onClick={() => {
-            setRejectReason("");
-            onRejectOpenChange(true);
-          }}
+          onClick={() => onRejectOpenChange(true)}
         >
           {t("tiktokReview.reject", "Reject")}
         </button>
@@ -155,7 +156,7 @@ export function PublishControls({
             type="button"
             className="tiktok-review-button tiktok-review-button-approve"
             disabled={approveReason !== null}
-            aria-describedby="tiktok-review-disabled-reason"
+            aria-describedby={approveReason ? approveReasonId : undefined}
             onClick={() => onOpenConfirm("now")}
           >
             {t("tiktokReview.approve", "Approve & publish")}
@@ -164,15 +165,15 @@ export function PublishControls({
             type="button"
             className="tiktok-review-button tiktok-review-button-schedule"
             disabled={scheduleReason !== null}
-            aria-describedby="tiktok-review-disabled-reason"
+            aria-describedby={scheduleReason ? scheduleReasonId : undefined}
             onClick={() => onOpenConfirm("scheduled")}
           >
             {t("tiktokReview.schedule", "Schedule")}
           </button>
         </div>
       </div>
-      {approveReason ? <p className="tiktok-review-reason">{approveReason}</p> : null}
-      {scheduleReason ? <p className="tiktok-review-reason">{scheduleReason}</p> : null}
+      {approveReason ? <p id={approveReasonId} className="tiktok-review-reason">{approveReason}</p> : null}
+      {scheduleReason ? <p id={scheduleReasonId} className="tiktok-review-reason">{scheduleReason}</p> : null}
 
       <Dialog open={rejectOpen} onOpenChange={onRejectOpenChange}>
         <DialogContent className="tiktok-review tiktok-review-dialog">

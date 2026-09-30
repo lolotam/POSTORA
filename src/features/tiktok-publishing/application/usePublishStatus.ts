@@ -5,7 +5,7 @@ import { ReviewGatewayError, useTikTokReviewGateway } from "./ports";
 const BACKOFF_MS = [3_000, 5_000, 10_000, 20_000, 30_000];
 const MAX_POLL_MS = 10 * 60 * 1000;
 
-const TERMINAL: ReadonlySet<PublishState> = new Set(["published", "failed", "needs_attention"]);
+const RESTING: ReadonlySet<PublishState> = new Set(["scheduled", "published", "failed", "needs_attention"]);
 
 function asGatewayError(caught: unknown): ReviewGatewayError {
   if (caught instanceof ReviewGatewayError) return caught;
@@ -64,7 +64,7 @@ export function usePublishStatus(submissionId: string | null): {
         if (cancelled) return;
         setStatus(next);
         setError(null);
-        stop = TERMINAL.has(next.state);
+        stop = RESTING.has(next.state);
       } catch (caught) {
         if (cancelled) return;
         setError(asGatewayError(caught));
@@ -81,8 +81,7 @@ export function usePublishStatus(submissionId: string | null): {
       schedule(delay);
     }
 
-    schedule(BACKOFF_MS[0] ?? 3_000);
-    attempt = 1;
+    void poll();
 
     return () => {
       cancelled = true;

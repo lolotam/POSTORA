@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import type { ReviewState } from "../domain/types";
 import { ReviewGatewayError, useTikTokReviewGateway, type ReviewSavePatch } from "./ports";
 
@@ -89,7 +89,7 @@ export function useTikTokMediaPreview(mediaFileId: string | null) {
 export function useTikTokReviewCommands() {
   const gateway = useTikTokReviewGateway();
   const client = useQueryClient();
-  const [revisionConflict, setRevisionConflict] = useState(false);
+  const [conflictedDraftId, setConflictedDraftId] = useState<string | null>(null);
 
   function remember(draft: { id: string }) {
     client.setQueryData(tiktokReviewKeys.draft(draft.id), draft);
@@ -100,72 +100,73 @@ export function useTikTokReviewCommands() {
     if (draftId) await client.invalidateQueries({ queryKey: tiktokReviewKeys.draft(draftId) });
   }
 
-  function noteError(error: unknown) {
-    setRevisionConflict(isRevisionConflict(error));
+  function noteError(error: unknown, input: { draftId: string }) {
+    if (isRevisionConflict(error)) setConflictedDraftId(input.draftId);
   }
 
   const createDraft = useMutation({
     mutationFn: (accountId: string) => gateway.create(accountId),
     onSuccess: (draft) => {
-      setRevisionConflict(false);
+      setConflictedDraftId((current) => current === draft.id ? null : current);
       remember(draft);
       return refresh(draft.id);
     },
-    onError: noteError,
   });
 
   const saveDraft = useMutation({
     mutationFn: (input: { draftId: string; expectedRevision: number; patch: ReviewSavePatch }) =>
       gateway.save(input.draftId, input.expectedRevision, input.patch),
     onSuccess: (draft) => {
-      setRevisionConflict(false);
+      setConflictedDraftId((current) => current === draft.id ? null : current);
       remember(draft);
       return refresh(draft.id);
     },
-    onError: noteError,
+    onError: (error, input) => noteError(error, input),
   });
 
   const rejectDraft = useMutation({
     mutationFn: (input: { draftId: string; expectedRevision: number; reason: string }) =>
       gateway.reject(input.draftId, input.expectedRevision, input.reason),
     onSuccess: (draft) => {
-      setRevisionConflict(false);
+      setConflictedDraftId((current) => current === draft.id ? null : current);
       remember(draft);
       return refresh(draft.id);
     },
-    onError: noteError,
+    onError: (error, input) => noteError(error, input),
   });
 
   const archiveDraft = useMutation({
     mutationFn: (input: { draftId: string; expectedRevision: number }) =>
       gateway.archive(input.draftId, input.expectedRevision),
     onSuccess: (draft) => {
-      setRevisionConflict(false);
+      setConflictedDraftId((current) => current === draft.id ? null : current);
       remember(draft);
       return refresh(draft.id);
     },
-    onError: noteError,
+    onError: (error, input) => noteError(error, input),
   });
 
   const restoreDraft = useMutation({
     mutationFn: (input: { draftId: string; expectedRevision: number }) =>
       gateway.restore(input.draftId, input.expectedRevision),
     onSuccess: (draft) => {
-      setRevisionConflict(false);
+      setConflictedDraftId((current) => current === draft.id ? null : current);
       remember(draft);
       return refresh(draft.id);
     },
-    onError: noteError,
+    onError: (error, input) => noteError(error, input),
   });
 
   const submitDraft = useMutation({
     mutationFn: gateway.submit,
     onSuccess: (_result, command) => {
-      setRevisionConflict(false);
+      setConflictedDraftId((current) => current === command.draftId ? null : current);
       return refresh(command.draftId);
     },
-    onError: noteError,
+    onError: (error, input) => noteError(error, input),
   });
+
+  const clearRevisionConflict = useCallback(() => setConflictedDraftId(null), []);
 
   return {
     createDraft,
@@ -174,7 +175,7 @@ export function useTikTokReviewCommands() {
     archiveDraft,
     restoreDraft,
     submitDraft,
-    revisionConflict,
-    clearRevisionConflict: () => setRevisionConflict(false),
+    conflictedDraftId,
+    clearRevisionConflict,
   };
 }

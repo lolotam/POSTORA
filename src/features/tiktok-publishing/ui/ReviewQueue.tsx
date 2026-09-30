@@ -68,7 +68,9 @@ export function ReviewQueue({
     ? t("tiktokReview.waitingLoading", "Loading the waiting count…")
     : pendingCount === null
       ? t("tiktokReview.waitingUnknown", "Waiting count unavailable.")
-      : t("tiktokReview.waiting", `${pendingCount} items waiting.`);
+      : pendingCount >= 100
+        ? t("tiktokReview.waitingCapped", "100+ items waiting.")
+        : t("tiktokReview.waiting", "{{count}} items waiting.", { count: pendingCount });
 
   return (
     <section className="tiktok-review-queue" aria-label={t("tiktokReview.queueLabel", "TikTok review queue")}>

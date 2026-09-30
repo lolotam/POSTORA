@@ -18,7 +18,12 @@ export type ClientBlockerCode =
   | "CREATOR_INFO_UNAVAILABLE"
   | "SETTINGS_NOT_CONFIRMED"
   | "CONSENT_REQUIRED"
-  | "SCHEDULE_TIME_REQUIRED";
+  | "SCHEDULE_TIME_REQUIRED"
+  | "UNSAVED_EDITS"
+  | "DRAFT_REQUIRED"
+  | "CANNOT_SUBMIT"
+  | "SCHEDULE_TIME_PAST"
+  | "SCHEDULE_TIME_INVALID";
 
 export type ReviewBlockerCode = PolicyBlockerCode | ClientBlockerCode;
 
@@ -41,7 +46,7 @@ export interface ReviewBlockerInput {
 
 export type ReviewTransition = "reject" | "archive" | "restore" | "edit" | "save" | "submit";
 
-const CAPTION_LIMIT = 2200;
+export const CAPTION_MAX = 2200;
 
 const PRIVACY_LABELS: Record<string, string> = {
   PUBLIC_TO_EVERYONE: "Everyone",
@@ -54,23 +59,16 @@ export function privacyLabel(level: string): string {
   return PRIVACY_LABELS[level] ?? level;
 }
 
-export function defaultSettings(): TikTokSettings {
-  return {
-    privacy: null,
-    allowComment: false,
-    allowDuet: false,
-    allowStitch: false,
-    disclose: false,
-    yourBrand: false,
-    brandedContent: false,
-    aiGenerated: false,
-  };
-}
-
 export function reviewBlockers(input: ReviewBlockerInput): ReviewBlocker[] {
   const blockers: ReviewBlocker[] = [];
   const { creator, settings } = input;
 
+  if (input.mode === "scheduled" && !input.scheduledAt) {
+    blockers.push({
+      code: "SCHEDULE_TIME_REQUIRED",
+      message: "Pick a time to enable schedule.",
+    });
+  }
   if (creator?.postingBlocked) {
     const reason = creator.postingBlockedReason?.trim();
     blockers.push({
@@ -111,13 +109,13 @@ export function reviewBlockers(input: ReviewBlockerInput): ReviewBlocker[] {
   if (settings.disclose && !settings.yourBrand && !settings.brandedContent) {
     blockers.push({ code: "DISCLOSURE_INCOMPLETE", message: "Select at least one." });
   }
-  if (settings.brandedContent && settings.privacy === "SELF_ONLY") {
+  if (settings.disclose && settings.brandedContent && settings.privacy === "SELF_ONLY") {
     blockers.push({
       code: "BRANDED_CONTENT_PRIVATE",
       message: "Branded content visibility cannot be set to private.",
     });
   }
-  if (input.caption.length > CAPTION_LIMIT) {
+  if (input.caption.length > CAPTION_MAX) {
     blockers.push({
       code: "CAPTION_TOO_LONG",
       message: "Caption must be 2200 characters or fewer.",
@@ -157,17 +155,12 @@ export function reviewBlockers(input: ReviewBlockerInput): ReviewBlocker[] {
       message: "Consent is required before this post can be sent.",
     });
   }
-  if (input.mode === "scheduled" && !input.scheduledAt) {
-    blockers.push({
-      code: "SCHEDULE_TIME_REQUIRED",
-      message: "Pick a time to enable schedule.",
-    });
-  }
   return blockers;
 }
 
 /** Stable across browsers. Consent is valid only while this equals the key it was granted for. */
 export function consentKey(
+  draftId: string,
   accountId: string,
   revision: number,
   mediaFileId: string | null,
@@ -186,6 +179,7 @@ export function consentKey(
     settings.aiGenerated ? "1" : "0",
   ].join(",");
   return [
+    draftId,
     accountId,
     String(revision),
     mediaFileId ?? "",
@@ -207,7 +201,7 @@ export function sanitizeSettingsForCreator(settings: TikTokSettings, creator: Cr
     allowStitch: creator.stitchDisabled ? false : settings.allowStitch,
     disclose: settings.disclose,
     yourBrand: settings.yourBrand,
-    brandedContent: privacy === "SELF_ONLY" ? false : settings.brandedContent,
+    brandedContent: settings.disclose && privacy === "SELF_ONLY" ? false : settings.brandedContent,
     aiGenerated: settings.aiGenerated,
   };
 }

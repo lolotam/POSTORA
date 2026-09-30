@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import type { UploadedFile } from "@/hooks/usePostForm";
-import { browserTimeZone, parseDatetimeLocal } from "@/features/scheduled/domain/wallClockMove";
+import { browserTimeZone } from "@/features/scheduled";
 import {
   isRevisionConflict,
   useTikTokAccounts,
@@ -12,28 +12,31 @@ import {
   useTikTokReviewCommands,
 } from "../application/useTikTokReview";
 import { usePublishStatus } from "../application/usePublishStatus";
-import { ReviewGatewayError, type ReviewSavePatch } from "../application/ports";
+import type { ReviewSavePatch } from "../application/ports";
 import {
   canTransition,
   consentKey,
-  reviewBlockers,
   type ReviewBlocker,
 } from "../domain/reviewRules";
-import { formatInZone, shortcutInstant, validateScheduledAt, type ShortcutName } from "../domain/scheduleRules";
+import { formatInZone } from "../domain/scheduleRules";
 import type { ReviewDraft, ReviewState } from "../domain/types";
-import { PublishControls, type ConfirmDialog } from "./PublishControls";
+import type { ConfirmDialog } from "./PublishControls";
 import { ReviewDetail, type DetailScreen } from "./ReviewDetail";
 import { ReviewQueue, type QueueScreen } from "./ReviewQueue";
 import { TikTokSettingsPanel } from "./TikTokSettingsPanel";
 import { describeBlocker, describeError } from "./reviewCopy";
+
+import type { Confirmation } from "../domain/evaluateSubmission";
+import { useSubmissionController } from "../application/useSubmissionController";
+import { useScheduleSelection } from "./useScheduleSelection";
+import { useReviewShortcuts } from "./useReviewShortcuts";
+import { readLibraryDuration, measureVideoDuration } from "./mediaDuration";
 
 type Overlay =
   | { kind: "closed" }
   | { kind: "settings" }
   | { kind: "reject" }
   | { kind: "confirm"; mode: "now" | "scheduled"; requestId: string };
-
-type Confirmation = { key: string; caption: string; consent: boolean };
 
 interface TikTokReviewWorkspaceProps {
   headerLink: ReactNode;
@@ -50,10 +53,8 @@ export function TikTokReviewWorkspace({ headerLink }: TikTokReviewWorkspaceProps
   const [narrow, setNarrow] = useState(() => window.matchMedia("(max-width: 767px)").matches);
   const [editing, setEditing] = useState(false);
   const [captionDraft, setCaptionDraft] = useState("");
-  const [mode, setMode] = useState<"now" | "scheduled">("now");
-  const [scheduledAt, setScheduledAt] = useState<string | null>(null);
-  const [scheduleLocal, setScheduleLocal] = useState("");
-  const [scheduleNote, setScheduleNote] = useState<string | null>(null);
+  const schedule = useScheduleSelection(selectedId, timeZone);
+  const { mode, scheduledAt, scheduleLocal, scheduleNote, onNow, onShortcut, onScheduleLocal } = schedule;
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
   const [overlay, setOverlay] = useState<Overlay>({ kind: "closed" });
   const [mediaNotice, setMediaNotice] = useState<string | null>(null);
@@ -67,7 +68,12 @@ export function TikTokReviewWorkspace({ headerLink }: TikTokReviewWorkspaceProps
   const draftQuery = useTikTokDraft(selectedId);
   const creatorQuery = useTikTokCreatorInfo(accountId);
   const commands = useTikTokReviewCommands();
+  const { clearRevisionConflict } = commands;
   const draft = draftQuery.data ?? null;
+  const selectionRef = useRef({ draftId: selectedId, accountId });
+  if (selectionRef.current.draftId !== selectedId || selectionRef.current.accountId !== accountId) {
+    selectionRef.current = { draftId: selectedId, accountId };
+  }
   const mediaQuery = useTikTokMediaPreview(draft?.mediaFileId ?? null);
   const submissionId = draft?.submission?.id ?? liveSubmission?.id ?? null;
   const publish = usePublishStatus(submissionId);
@@ -86,131 +92,65 @@ export function TikTokReviewWorkspace({ headerLink }: TikTokReviewWorkspaceProps
   useEffect(() => {
     setEditing(false);
     setCaptionDraft("");
-    setMode("now");
-    setScheduledAt(null);
-    setScheduleLocal("");
-    setScheduleNote(null);
     setConfirmation(null);
     setOverlay({ kind: "closed" });
     setMediaNotice(null);
     setActionError(null);
     setConfirmError(null);
     setLiveSubmission(null);
-  }, [selectedId]);
+    clearRevisionConflict();
+  }, [selectedId, accountId, clearRevisionConflict]);
 
   useEffect(() => {
     if (draft && !editing) setCaptionDraft(draft.caption);
   }, [draft, editing]);
 
-  useEffect(() => {
-    function onKey(event: KeyboardEvent) {
-      if (event.metaKey || event.ctrlKey || event.altKey) return;
-      const target = event.target;
-      if (!(target instanceof HTMLElement)) return;
-      if (target.closest("input, textarea, select, [contenteditable='true']")) return;
-      if (overlay.kind !== "closed") return;
-      // Dialogs owned by child components (e.g. the media picker) are not in
-      // `overlay`, so any open dialog, menu or listbox also disables shortcuts.
-      if (target.closest("[role='dialog'], [role='alertdialog'], [role='menu'], [role='listbox']")) return;
-      if (document.querySelector("[role='dialog'][data-state='open'], [role='alertdialog'][data-state='open'], [role='menu'][data-state='open']")) return;
-      if (event.key === "a" || event.key === "A") {
-        event.preventDefault();
-        openConfirm("now");
-      } else if (event.key === "r" || event.key === "R") {
-        event.preventDefault();
-        if (draft && canTransition(draft.state, "reject")) setOverlay({ kind: "reject" });
-      } else if (event.key === "ArrowRight") {
-        event.preventDefault();
-        const rows = listQuery.data ?? [];
-        const index = rows.findIndex((row) => row.id === selectedId);
-        const next = rows[index + 1];
-        if (next) setSelectedId(next.id);
-      }
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  });
-
-  const creator = creatorQuery.data ?? null;
+  const creator = creatorQuery.isError || creatorQuery.isPending ? null : creatorQuery.data ?? null;
   const captionDirty = editing && !!draft && captionDraft !== draft.caption;
   const scheduleLabel = mode === "scheduled" && scheduledAt
     ? formatInZone(scheduledAt, timeZone)
     : t("tiktokReview.notScheduled", "—");
 
-  function keyFor(nextMode: "now" | "scheduled", source: ReviewDraft): string {
-    return consentKey(
-      source.accountId,
-      source.revision,
-      source.mediaFileId,
-      source.settings,
-      nextMode,
-      nextMode === "scheduled" ? scheduledAt : null,
-    );
-  }
+  const submission = useSubmissionController({
+    draft: draftQuery.isSuccess ? draft : null,
+    creator,
+    confirmation,
+    mode,
+    scheduledAt,
+    captionDirty,
+    timeZone,
+    refreshCreator: () => creatorQuery.refetch(),
+    submit: commands.submitDraft.mutateAsync,
+  });
 
-  function confirmed(nextMode: "now" | "scheduled"): boolean {
-    if (!draft || captionDirty || !confirmation) return false;
-    return confirmation.key === keyFor(nextMode, draft) && confirmation.caption === draft.caption;
-  }
-
-  function blockersFor(nextMode: "now" | "scheduled"): ReviewBlocker[] {
-    if (!draft) return [];
-    return reviewBlockers({
-      caption: draft.caption,
-      settings: draft.settings,
-      mediaFileId: draft.mediaFileId,
-      durationSec: draft.mediaDurationSec,
-      creator,
-      settingsConfirmed: confirmed(nextMode),
-      consentGranted: confirmed(nextMode) && confirmation?.consent === true,
-      mode: nextMode,
-      scheduledAt: nextMode === "scheduled" ? scheduledAt : null,
-    });
-  }
-
-  const approveBlockers = blockersFor("now");
-  const scheduleBlockers = blockersFor("scheduled");
-  const intentBlockers = mode === "scheduled" ? scheduleBlockers : approveBlockers;
-
-  function disabledReason(blockers: ReviewBlocker[], scheduledCheck: boolean): string | null {
-    if (!draft) return null;
-    if (!canTransition(draft.state, "submit")) {
-      return t("tiktokReview.cannotSubmit", "This post cannot be published from its current state.");
-    }
-    if (creatorQuery.isPending) return t("tiktokReview.creatorLoading", "Loading TikTok account details.");
-    if (scheduledCheck && scheduledAt) {
-      const verdict = validateScheduledAt(scheduledAt, new Date());
-      if (verdict === "past") return t("tiktokReview.timePast", "Choose a future time.");
-      if (verdict === "invalid") return t("tiktokReview.timeInvalid", "That time is not valid.");
-    }
+  function disabledReason(blockers: ReviewBlocker[]): string | null {
     const blocker = blockers[0];
-    if (!blocker) return null;
-    if (blocker.code === "SCHEDULE_TIME_REQUIRED") {
-      return t("tiktokReview.pickTime", "PICK A TIME TO ENABLE SCHEDULE");
-    }
-    return describeBlocker(translate, blocker);
+    return blocker ? describeBlocker(translate, blocker) : null;
   }
 
-  const approveReason = disabledReason(approveBlockers, false);
-  const scheduleReason = disabledReason(scheduleBlockers, true);
+  const approveReason = disabledReason(submission.approveBlockers);
+  const scheduleReason = disabledReason(submission.scheduleBlockers);
 
   function openConfirm(nextMode: "now" | "scheduled") {
     const reason = nextMode === "scheduled" ? scheduleReason : approveReason;
-    if (reason || overlay.kind !== "closed") return;
+    if (detail.kind !== "ready" || reason || overlay.kind !== "closed") return;
     setConfirmError(null);
     setOverlay({ kind: "confirm", mode: nextMode, requestId: crypto.randomUUID() });
   }
 
   async function runSave(patch: ReviewSavePatch) {
     if (!draft || !canTransition(draft.state, "save")) return null;
+    const selection = selectionRef.current;
     setActionError(null);
     try {
-      return await commands.saveDraft.mutateAsync({
+      const saved = await commands.saveDraft.mutateAsync({
         draftId: draft.id,
         expectedRevision: draft.revision,
         patch,
       });
+      return selectionRef.current === selection ? saved : null;
     } catch (error) {
+      if (selectionRef.current !== selection) return null;
       setActionError(describeError(translate, error));
       return null;
     }
@@ -268,6 +208,7 @@ export function TikTokReviewWorkspace({ headerLink }: TikTokReviewWorkspaceProps
     });
     if (!saved) return;
     const key = consentKey(
+      saved.id,
       saved.accountId,
       saved.revision,
       saved.mediaFileId,
@@ -280,54 +221,13 @@ export function TikTokReviewWorkspace({ headerLink }: TikTokReviewWorkspaceProps
   }
 
   async function onConfirm() {
-    if (overlay.kind !== "confirm" || !draft) return;
-    const fresh = await creatorQuery.refetch();
-    if (fresh.error || !fresh.data) {
-      setConfirmError(describeError(translate, fresh.error ?? new ReviewGatewayError("CREATOR_INFO_UNAVAILABLE", "TikTok account details could not be loaded.", 502)));
-      return;
-    }
-    const blockers = reviewBlockers({
-      caption: draft.caption,
-      settings: draft.settings,
-      mediaFileId: draft.mediaFileId,
-      durationSec: draft.mediaDurationSec,
-      creator: fresh.data,
-      settingsConfirmed: confirmed(overlay.mode),
-      consentGranted: confirmed(overlay.mode) && confirmation?.consent === true,
-      mode: overlay.mode,
-      scheduledAt: overlay.mode === "scheduled" ? scheduledAt : null,
-    });
-    if (!canTransition(draft.state, "submit") || blockers.length > 0) {
-      const blocker = blockers[0];
-      setConfirmError(blocker ? describeBlocker(translate, blocker) : t("tiktokReview.cannotSubmit", "This post cannot be published from its current state."));
-      return;
-    }
-    if (overlay.mode === "scheduled") {
-      if (!scheduledAt) {
-        setConfirmError(t("tiktokReview.pickTime", "PICK A TIME TO ENABLE SCHEDULE"));
-        return;
-      }
-      const verdict = validateScheduledAt(scheduledAt, new Date());
-      if (verdict !== "ok") {
-        setConfirmError(verdict === "past"
-          ? t("tiktokReview.timePast", "Choose a future time.")
-          : t("tiktokReview.timeInvalid", "That time is not valid."));
-        return;
-      }
-    }
+    if (overlay.kind !== "confirm") return;
     try {
-      const result = await commands.submitDraft.mutateAsync({
-        draftId: draft.id,
-        expectedRevision: draft.revision,
-        requestId: overlay.requestId,
-        mode: overlay.mode,
-        scheduledAt: overlay.mode === "scheduled" ? scheduledAt : null,
-        timeZone,
-        consent: true,
-      });
+      const submitted = await submission.confirmSubmission(overlay);
+      if (!submitted) return;
       setLiveSubmission({
-        id: result.submissionId,
-        state: result.state,
+        id: submitted.submissionId,
+        state: submitted.state,
         scheduledFor: overlay.mode === "scheduled" ? scheduledAt : null,
       });
       setOverlay({ kind: "closed" });
@@ -339,18 +239,6 @@ export function TikTokReviewWorkspace({ headerLink }: TikTokReviewWorkspaceProps
       }
       setConfirmError(describeError(translate, error));
     }
-  }
-
-  function onShortcut(name: ShortcutName) {
-    const result = shortcutInstant(name, new Date(), timeZone);
-    if (!result.ok) {
-      setScheduleNote(result.resolution ?? t("tiktokReview.timeInvalid", "That time is not valid."));
-      return;
-    }
-    setMode("scheduled");
-    setScheduledAt(result.iso);
-    setScheduleLocal(toDatetimeLocal(result.iso));
-    setScheduleNote(result.resolution);
   }
 
   const queue = buildQueue({
@@ -367,7 +255,7 @@ export function TikTokReviewWorkspace({ headerLink }: TikTokReviewWorkspaceProps
     emptyAccount: t("tiktokReview.emptyAccount", "Connect a TikTok account to start a review."),
   });
 
-  const detail: DetailScreen = commands.revisionConflict
+  const detail: DetailScreen = selectedId !== null && commands.conflictedDraftId === selectedId
     ? { kind: "conflict" }
     : !selectedId
       ? { kind: "none" }
@@ -378,6 +266,20 @@ export function TikTokReviewWorkspace({ headerLink }: TikTokReviewWorkspaceProps
           : draft
             ? { kind: "ready", draft }
             : { kind: "loading" };
+
+  useReviewShortcuts({
+    ready: detail.kind === "ready",
+    overlayOpen: overlay.kind !== "closed",
+    canReject: detail.kind === "ready" && canTransition(detail.draft.state, "reject"),
+    onApprove: () => openConfirm("now"),
+    onReject: () => setOverlay({ kind: "reject" }),
+    onNext: () => {
+      const rows = listQuery.data ?? [];
+      const index = rows.findIndex((row) => row.id === selectedId);
+      const next = rows[index + 1];
+      if (next) setSelectedId(next.id);
+    },
+  });
 
   const confirm: ConfirmDialog | null = overlay.kind === "confirm"
     ? { mode: overlay.mode, requestId: overlay.requestId }
@@ -425,7 +327,7 @@ export function TikTokReviewWorkspace({ headerLink }: TikTokReviewWorkspaceProps
         <ReviewDetail
           screen={detail}
           onReloadConflict={() => {
-            commands.clearRevisionConflict();
+            clearRevisionConflict();
             void draftQuery.refetch();
             void listQuery.refetch();
           }}
@@ -433,8 +335,11 @@ export function TikTokReviewWorkspace({ headerLink }: TikTokReviewWorkspaceProps
           onBack={() => setSelectedId(null)}
           account={account}
           creator={creator}
-          preview={mediaQuery.data ?? null}
-          previewError={mediaQuery.isError ? describeError(translate, mediaQuery.error) : null}
+          preview={mediaQuery.isError
+            ? { kind: "error", message: describeError(translate, mediaQuery.error) }
+            : mediaQuery.isPending
+              ? { kind: "loading" }
+              : { kind: "ready", media: mediaQuery.data }}
           onRetryPreview={() => { void mediaQuery.refetch(); }}
           editing={editing}
           captionDraft={captionDraft}
@@ -452,87 +357,62 @@ export function TikTokReviewWorkspace({ headerLink }: TikTokReviewWorkspaceProps
           mediaNotice={mediaNotice}
           onPickMedia={(file) => { void onPickMedia(file); }}
           onRemoveMedia={() => { void onRemoveMedia(); }}
-          blockerMessage={intentBlockers[0] ? describeBlocker(translate, intentBlockers[0]) : null}
           scheduleLabel={scheduleLabel}
-          timeZone={timeZone}
-          scheduleLocal={scheduleLocal}
-          scheduleNote={scheduleNote}
-          onScheduleLocal={(value) => {
-            setScheduleLocal(value);
-            if (!value) {
-              setScheduledAt(null);
-              setMode("scheduled");
-              setScheduleNote(null);
-              return;
-            }
-            const parsed = parseDatetimeLocal(value);
-            if (parsed.ok === false) {
-              setScheduledAt(null);
-              setMode("scheduled");
-              const missing = parsed.reason === "nonexistent";
-              setScheduleNote(missing
-                ? t("tiktokReview.dstGap", "That time does not exist because clocks change on that day.")
-                : t("tiktokReview.timeInvalid", "That time is not valid."));
-              return;
-            }
-            setMode("scheduled");
-            setScheduledAt(parsed.when.toISOString());
-            setScheduleNote(null);
+          controls={{
+            timeZone,
+            scheduleLocal,
+            scheduleNote,
+            onScheduleLocal,
+            onNow,
+            onShortcut,
+            approveReason,
+            scheduleReason,
+            canReject: !!draft && canTransition(draft.state, "reject"),
+            canEdit: !!draft && canTransition(draft.state, "edit"),
+            canArchive: !!draft && canTransition(draft.state, "archive"),
+            canRestore: !!draft && canTransition(draft.state, "restore"),
+            settings: draft ? (
+              <TikTokSettingsPanel
+                draft={draft}
+                creator={creator}
+                creatorError={creatorQuery.isError ? describeError(translate, creatorQuery.error) : null}
+                onRetryCreator={() => { void creatorQuery.refetch(); }}
+                saving={commands.saveDraft.isPending}
+                onCancel={() => setOverlay({ kind: "closed" })}
+                onSave={(settings, consentChecked) => { void onSaveSettings(settings, consentChecked); }}
+              />
+            ) : null,
+            settingsOpen: overlay.kind === "settings",
+            onSettingsOpenChange: (open) => setOverlay(open ? { kind: "settings" } : { kind: "closed" }),
+            onArchive: () => {
+              if (!draft || commands.archiveDraft.isPending) return;
+              void commands.archiveDraft.mutateAsync({ draftId: draft.id, expectedRevision: draft.revision })
+                .catch((error: unknown) => setActionError(describeError(translate, error)));
+            },
+            onRestore: () => {
+              if (!draft || commands.restoreDraft.isPending) return;
+              void commands.restoreDraft.mutateAsync({ draftId: draft.id, expectedRevision: draft.revision })
+                .catch((error: unknown) => setActionError(describeError(translate, error)));
+            },
+            onReject: (reason) => {
+              if (!draft) return;
+              void commands.rejectDraft.mutateAsync({ draftId: draft.id, expectedRevision: draft.revision, reason })
+                .then(() => setOverlay({ kind: "closed" }))
+                .catch((error: unknown) => setActionError(describeError(translate, error)));
+            },
+            rejectPending: commands.rejectDraft.isPending,
+            confirm,
+            onOpenConfirm: openConfirm,
+            onCloseConfirm: () => {
+              setOverlay({ kind: "closed" });
+              setConfirmError(null);
+            },
+            onConfirm: () => { void onConfirm(); },
+            confirmPending: submission.confirmPending,
+            confirmError,
+            rejectOpen: overlay.kind === "reject",
+            onRejectOpenChange: (open) => setOverlay(open ? { kind: "reject" } : { kind: "closed" }),
           }}
-          onNow={() => {
-            setMode("now");
-            setScheduledAt(null);
-            setScheduleLocal("");
-            setScheduleNote(null);
-          }}
-          onShortcut={onShortcut}
-          approveReason={approveReason}
-          scheduleReason={scheduleReason}
-          canReject={!!draft && canTransition(draft.state, "reject")}
-          canEdit={!!draft && canTransition(draft.state, "edit")}
-          canArchive={!!draft && canTransition(draft.state, "archive")}
-          canRestore={!!draft && canTransition(draft.state, "restore")}
-          settings={draft ? (
-            <TikTokSettingsPanel
-              draft={draft}
-              creator={creator}
-              creatorError={creatorQuery.isError ? describeError(translate, creatorQuery.error) : null}
-              onRetryCreator={() => { void creatorQuery.refetch(); }}
-              saving={commands.saveDraft.isPending}
-              onCancel={() => setOverlay({ kind: "closed" })}
-              onSave={(settings, consentChecked) => { void onSaveSettings(settings, consentChecked); }}
-            />
-          ) : null}
-          settingsOpen={overlay.kind === "settings"}
-          onSettingsOpenChange={(open) => setOverlay(open ? { kind: "settings" } : { kind: "closed" })}
-          onArchive={() => {
-            if (!draft || commands.archiveDraft.isPending) return;
-            void commands.archiveDraft.mutateAsync({ draftId: draft.id, expectedRevision: draft.revision })
-              .catch((error: unknown) => setActionError(describeError(translate, error)));
-          }}
-          onRestore={() => {
-            if (!draft || commands.restoreDraft.isPending) return;
-            void commands.restoreDraft.mutateAsync({ draftId: draft.id, expectedRevision: draft.revision })
-              .catch((error: unknown) => setActionError(describeError(translate, error)));
-          }}
-          onReject={(reason) => {
-            if (!draft) return;
-            void commands.rejectDraft.mutateAsync({ draftId: draft.id, expectedRevision: draft.revision, reason })
-              .then(() => setOverlay({ kind: "closed" }))
-              .catch((error: unknown) => setActionError(describeError(translate, error)));
-          }}
-          rejectPending={commands.rejectDraft.isPending}
-          confirm={confirm}
-          onOpenConfirm={openConfirm}
-          onCloseConfirm={() => {
-            setOverlay({ kind: "closed" });
-            setConfirmError(null);
-          }}
-          onConfirm={() => { void onConfirm(); }}
-          confirmPending={commands.submitDraft.isPending}
-          confirmError={confirmError}
-          rejectOpen={overlay.kind === "reject"}
-          onRejectOpenChange={(open) => setOverlay(open ? { kind: "reject" } : { kind: "closed" })}
           publish={showPublish ? {
             status: publish.status,
             error: publish.error,
@@ -577,42 +457,4 @@ function submissionSnapshot(
   if (draft?.submission?.mode === "scheduled") return "scheduled";
   if (draft?.submission) return "queued";
   return null;
-}
-
-function toDatetimeLocal(iso: string): string {
-  const when = new Date(iso);
-  if (Number.isNaN(when.getTime())) return "";
-  const pad = (value: number) => String(value).padStart(2, "0");
-  return `${when.getFullYear()}-${pad(when.getMonth() + 1)}-${pad(when.getDate())}T${pad(when.getHours())}:${pad(when.getMinutes())}`;
-}
-
-function readLibraryDuration(file: UploadedFile): number | null {
-  // MediaLibraryPicker sets duration from metadata, but UploadedFile does not declare it.
-  if (!("duration" in file)) return null;
-  const duration = file.duration;
-  return typeof duration === "number" && Number.isFinite(duration) ? duration : null;
-}
-
-function measureVideoDuration(previewUrl: string): Promise<number | null> {
-  return new Promise((resolve) => {
-    const video = document.createElement("video");
-    video.preload = "metadata";
-    let settled = false;
-    const finish = (value: number | null) => {
-      if (settled) return;
-      settled = true;
-      window.clearTimeout(timer);
-      video.onloadedmetadata = null;
-      video.onerror = null;
-      video.removeAttribute("src");
-      video.load();
-      resolve(value);
-    };
-    const timer = window.setTimeout(() => finish(null), 8000);
-    video.onloadedmetadata = () => {
-      finish(Number.isFinite(video.duration) ? video.duration : null);
-    };
-    video.onerror = () => finish(null);
-    video.src = previewUrl;
-  });
 }

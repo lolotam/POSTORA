@@ -4,14 +4,10 @@ import { MediaLibraryPicker } from "@/components/post/MediaLibraryPicker";
 import { TikTokVideoPreview } from "@/components/post/TikTokVideoPreview";
 import type { UploadedFile } from "@/hooks/usePostForm";
 import type { CreatorInfo, MediaPreview, PublishStatus, ReviewDraft, TikTokAccount } from "../domain/types";
-import { musicConsentText, privacyLabel } from "../domain/reviewRules";
+import { CAPTION_MAX, musicConsentText, privacyLabel } from "../domain/reviewRules";
 import { formatInZone } from "../domain/scheduleRules";
 import { captionTitle, describeError } from "./reviewCopy";
-import { PublishControls, type ConfirmDialog } from "./PublishControls";
-import type { ShortcutName } from "../domain/scheduleRules";
-import type { ReactNode } from "react";
-
-const CAPTION_LIMIT = 2200;
+import { PublishControls, type PublishControlsViewModel } from "./PublishControls";
 
 export type DetailScreen =
   | { kind: "none" }
@@ -20,6 +16,11 @@ export type DetailScreen =
   | { kind: "conflict" }
   | { kind: "ready"; draft: ReviewDraft };
 
+export type PreviewScreen =
+  | { kind: "loading" }
+  | { kind: "error"; message: string }
+  | { kind: "ready"; media: MediaPreview };
+
 interface ReviewDetailProps {
   screen: DetailScreen;
   onReloadConflict: () => void;
@@ -27,8 +28,7 @@ interface ReviewDetailProps {
   onBack: () => void;
   account: TikTokAccount | null;
   creator: CreatorInfo | null;
-  preview: MediaPreview | null;
-  previewError: string | null;
+  preview: PreviewScreen;
   onRetryPreview: () => void;
   editing: boolean;
   captionDraft: string;
@@ -40,35 +40,8 @@ interface ReviewDetailProps {
   mediaNotice: string | null;
   onPickMedia: (file: UploadedFile) => void;
   onRemoveMedia: () => void;
-  blockerMessage: string | null;
   scheduleLabel: string;
-  timeZone: string;
-  scheduleLocal: string;
-  scheduleNote: string | null;
-  onScheduleLocal: (value: string) => void;
-  onNow: () => void;
-  onShortcut: (name: ShortcutName) => void;
-  approveReason: string | null;
-  scheduleReason: string | null;
-  canReject: boolean;
-  canEdit: boolean;
-  canArchive: boolean;
-  canRestore: boolean;
-  settings: ReactNode;
-  settingsOpen: boolean;
-  onSettingsOpenChange: (open: boolean) => void;
-  onArchive: () => void;
-  onRestore: () => void;
-  onReject: (reason: string) => void;
-  rejectPending: boolean;
-  confirm: ConfirmDialog | null;
-  onOpenConfirm: (mode: "now" | "scheduled") => void;
-  onCloseConfirm: () => void;
-  onConfirm: () => void;
-  confirmPending: boolean;
-  confirmError: string | null;
-  rejectOpen: boolean;
-  onRejectOpenChange: (open: boolean) => void;
+  controls: Omit<PublishControlsViewModel, "destination" | "confirmSummary" | "onEdit">;
   publish: {
     status: PublishStatus | null;
     error: unknown;
@@ -90,7 +63,7 @@ export function ReviewDetail(props: ReviewDetailProps) {
     );
   }
   if (screen.kind === "loading") {
-    return <section className="tiktok-review-detail" role="status">{t("tiktokReview.loadingPost", "Loading post…")}</section>;
+    return <section className="tiktok-review-detail" role="status">{t("tiktokReview.loadingPost", "Loading postâ€¦")}</section>;
   }
   if (screen.kind === "error") {
     return (
@@ -106,7 +79,7 @@ export function ReviewDetail(props: ReviewDetailProps) {
     return (
       <section className="tiktok-review-detail" role="alert">
         <p className="tiktok-review-alert">
-          {t("tiktokReview.revisionConflict", "This post changed elsewhere — reload")}
+          {t("tiktokReview.revisionConflict", "This post changed elsewhere â€” reload")}
         </p>
         <button type="button" className="tiktok-review-button tiktok-review-button-edit" onClick={props.onReloadConflict}>
           {t("tiktokReview.reload", "Reload")}
@@ -114,7 +87,7 @@ export function ReviewDetail(props: ReviewDetailProps) {
       </section>
     );
   }
-  return <ReadyDetail {...props} draft={screen.draft} />;
+  return <ReadyDetail key={screen.draft.id} {...props} draft={screen.draft} />;
 }
 
 function ReadyDetail({ draft, ...props }: ReviewDetailProps & { draft: ReviewDraft }) {
@@ -138,7 +111,7 @@ function ReadyDetail({ draft, ...props }: ReviewDetailProps & { draft: ReviewDra
     t("tiktokReview.summaryYourBrand", "Your brand: {{value}}", { value: draft.settings.yourBrand ? t("tiktokReview.on", "on") : t("tiktokReview.off", "off") }),
     t("tiktokReview.summaryBranded", "Branded content: {{value}}", { value: draft.settings.brandedContent ? t("tiktokReview.on", "on") : t("tiktokReview.off", "off") }),
     t("tiktokReview.summaryAi", "AI-generated: {{value}}", { value: draft.settings.aiGenerated ? t("tiktokReview.on", "on") : t("tiktokReview.off", "off") }),
-    props.confirm?.mode === "scheduled"
+    props.controls.confirm?.mode === "scheduled"
       ? t("tiktokReview.summaryWhen", "When: {{when}}", { when: props.scheduleLabel })
       : t("tiktokReview.summaryNow", "When: Now"),
   ];
@@ -155,29 +128,32 @@ function ReadyDetail({ draft, ...props }: ReviewDetailProps & { draft: ReviewDra
       </h2>
       <StatusBadge state={draft.state} />
       {draft.rejectionReason ? <p className="tiktok-review-alert">{draft.rejectionReason}</p> : null}
-      {props.preview && props.preview.fileType === "video" ? (
+      {draft.mediaFileId === null ? (
+        <p className="tiktok-review-muted">{t("tiktokReview.noPreview", "No video attached.")}</p>
+      ) : props.preview.kind === "loading" ? (
+        <p role="status">{t("tiktokReview.previewLoading", "Loading video preview…")}</p>
+      ) : props.preview.kind === "ready" && props.preview.media.fileType === "video" ? (
         <TikTokVideoPreview
           caption={draft.caption}
-          mediaFile={{ previewUrl: props.preview.previewUrl, fileType: "video" }}
+          mediaFile={{ previewUrl: props.preview.media.previewUrl, fileType: "video" }}
           username={username}
           avatarUrl={props.creator?.avatarUrl ?? props.account?.avatarUrl ?? undefined}
         />
       ) : (
-        <p className="tiktok-review-muted">{t("tiktokReview.noPreview", "No video attached.")}</p>
-      )}
-      {props.previewError ? (
         <div role="alert">
-          <p className="tiktok-review-alert">{props.previewError}</p>
+          <p className="tiktok-review-alert">
+            {props.preview.kind === "error" ? props.preview.message : t("tiktokReview.previewUnavailable", "That video could not be loaded.")}
+          </p>
           <button type="button" className="tiktok-review-button tiktok-review-button-edit" onClick={props.onRetryPreview}>
             {t("tiktokReview.retry", "Retry")}
           </button>
         </div>
-      ) : null}
+      )}
       <div className="tiktok-review-actions">
-        <button type="button" className="tiktok-review-pill" onClick={() => setPickerOpen(true)} disabled={!props.canEdit}>
+        <button type="button" className="tiktok-review-pill" onClick={() => setPickerOpen(true)} disabled={!props.controls.canEdit}>
           {t("tiktokReview.changeVideo", "Change video")}
         </button>
-        <button type="button" className="tiktok-review-pill" onClick={props.onRemoveMedia} disabled={!props.canEdit || !draft.mediaFileId}>
+        <button type="button" className="tiktok-review-pill" onClick={props.onRemoveMedia} disabled={!props.controls.canEdit || !draft.mediaFileId}>
           {t("tiktokReview.removeVideo", "Remove video")}
         </button>
       </div>
@@ -197,7 +173,7 @@ function ReadyDetail({ draft, ...props }: ReviewDetailProps & { draft: ReviewDra
         </div>
         <div>
           <dt>{t("tiktokReview.summaryTikTok", "TikTok")}</dt>
-          <dd>{`${audience} · ${t("tiktokReview.video", "Video")} · ${comments}`}</dd>
+          <dd>{`${audience} Â· ${t("tiktokReview.video", "Video")} Â· ${comments}`}</dd>
         </div>
       </dl>
       {props.editing ? (
@@ -211,7 +187,7 @@ function ReadyDetail({ draft, ...props }: ReviewDetailProps & { draft: ReviewDra
               onChange={(event) => props.onCaptionDraft(event.target.value)}
             />
           </label>
-          <p className="tiktok-review-counter">{`${props.captionDraft.length} / ${CAPTION_LIMIT}`}</p>
+          <p className="tiktok-review-counter">{`${props.captionDraft.length} / ${CAPTION_MAX}`}</p>
           <div className="tiktok-review-actions">
             <button type="button" className="tiktok-review-button tiktok-review-button-archive" onClick={props.onCancelEdit}>
               {t("tiktokReview.cancel", "Cancel")}
@@ -223,7 +199,6 @@ function ReadyDetail({ draft, ...props }: ReviewDetailProps & { draft: ReviewDra
         </div>
       ) : null}
       <p>{t("tiktokReview.destination", "TikTok: {{nickname}}", { nickname })}</p>
-      {props.blockerMessage ? <p className="tiktok-review-alert" role="status">{props.blockerMessage}</p> : null}
       <p className="tiktok-review-notice">
         {t(
           draft.settings.disclose && draft.settings.brandedContent
@@ -235,39 +210,13 @@ function ReadyDetail({ draft, ...props }: ReviewDetailProps & { draft: ReviewDra
       <p className="tiktok-review-notice">
         {t("tiktokReview.processingNotice", "After publishing, TikTok may take a few minutes to process your post and show it on your profile.")}
       </p>
-      <PublishControls
-        timeZone={props.timeZone}
-        scheduleLocal={props.scheduleLocal}
-        scheduleNote={props.scheduleNote}
-        onScheduleLocal={props.onScheduleLocal}
-        onNow={props.onNow}
-        onShortcut={props.onShortcut}
-        destination={t("tiktokReview.publishesTo", "Publishes to @{{username}} · TikTok", { username })}
-        approveReason={props.approveReason}
-        scheduleReason={props.scheduleReason}
-        canReject={props.canReject}
-        canEdit={props.canEdit}
-        canArchive={props.canArchive}
-        canRestore={props.canRestore}
-        settings={props.settings}
-        settingsOpen={props.settingsOpen}
-        onSettingsOpenChange={props.onSettingsOpenChange}
-        onEdit={props.onStartEdit}
-        onArchive={props.onArchive}
-        onRestore={props.onRestore}
-        onReject={props.onReject}
-        rejectPending={props.rejectPending}
-        confirm={props.confirm}
-        onOpenConfirm={props.onOpenConfirm}
-        onCloseConfirm={props.onCloseConfirm}
-        confirmSummary={summary}
-        onConfirm={props.onConfirm}
-        confirmPending={props.confirmPending}
-        confirmError={props.confirmError}
-        rejectOpen={props.rejectOpen}
-        onRejectOpenChange={props.onRejectOpenChange}
-      />
-      {props.publish ? <PublishOutcome publish={props.publish} timeZone={props.timeZone} /> : null}
+      <PublishControls model={{
+        ...props.controls,
+        destination: t("tiktokReview.publishesTo", "Publishes to @{{username}} · TikTok", { username }),
+        confirmSummary: summary,
+        onEdit: props.onStartEdit,
+      }} />
+      {props.publish ? <PublishOutcome publish={props.publish} timeZone={props.controls.timeZone} /> : null}
       <MediaLibraryPicker
         open={pickerOpen}
         onOpenChange={setPickerOpen}
@@ -302,7 +251,7 @@ function PublishOutcome({
 }) {
   const { t } = useTranslation("post");
   const state = publish.status?.state ?? publish.immediate;
-  let body = t("tiktokReview.statusWaiting", "Checking publish status…");
+  let body = t("tiktokReview.statusWaiting", "Checking publish statusâ€¦");
   if (state === "scheduled") {
     const when = publish.scheduledFor ? formatInZone(publish.scheduledFor, timeZone) : "";
     body = when

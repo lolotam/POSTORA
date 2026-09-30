@@ -85,13 +85,13 @@ export function TikTokSettingsPanel({
         >
           <option value="" disabled>{t("tiktokReview.chooseAudience", "Choose audience…")}</option>
           {(creator?.privacyLevelOptions ?? []).map((level) => (
-            <option key={level} value={level} disabled={level === "SELF_ONLY" && settings.brandedContent}>
+            <option key={level} value={level} disabled={level === "SELF_ONLY" && settings.disclose && settings.brandedContent}>
               {t(`tiktokReview.privacy.${level}`, privacyLabel(level))}
             </option>
           ))}
         </select>
       </label>
-      {settings.brandedContent ? (
+      {settings.disclose && settings.brandedContent ? (
         <p className="tiktok-review-secondary">
           {t("tiktokReview.brandedPrivateHint", "Branded content visibility cannot be set to private")}
         </p>
@@ -149,7 +149,7 @@ export function TikTokSettingsPanel({
           <DisclosureBox
             label={t("tiktokReview.brandedContent", "Branded content")}
             checked={settings.brandedContent}
-            disabled={settings.privacy === "SELF_ONLY"}
+            disabled={settings.disclose && settings.privacy === "SELF_ONLY"}
             preview={t("tiktokReview.paidPartnershipLabel", "Your video will be labeled as 'Paid partnership'")}
             onChange={(brandedContent) => update({ brandedContent })}
           />

@@ -19,7 +19,3 @@ export function captionTitle(caption: string, fallback: string): string {
   const line = caption.split(/\r?\n/).find((part) => part.trim().length > 0);
   return line?.trim() || fallback;
 }
-
-export function portalClassName(extra: string): string {
-  return `tiktok-review tiktok-review-portal ${extra}`.trim();
-}

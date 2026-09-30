@@ -1,5 +1,5 @@
 import { supabase } from "@/integrations/supabase/client";
-import { fetchCdnStorageConfig, type CdnStorageConfig } from "@/hooks/useCdnConfig";
+import { fetchCdnStorageConfig, type CdnStorageConfig } from "@/lib/cdnConfig";
 import { resolveMediaPublicUrl, type MediaProviderRow } from "@/lib/mediaUrl";
 import type { TikTokReviewGateway } from "../application/ports";
 import { ReviewGatewayError } from "../application/ports";
