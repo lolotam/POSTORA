@@ -54,7 +54,7 @@ review table records why.
 | D9 | Webhooks: parse `content` and dedupe into a new `tiktok_webhook_events` table (`UNIQUE(event, publish_id, create_time)`). Match by publish_id **and** `social_accounts.platform_user_id = user_openid`. Apply terminal outcomes only to a `pending` row, via `partner_settle_platform_post`; never regress. Unmatched events stay unapplied, and the status reader applies them later. | Covers early arrival, duplicates, disorder and spoofing (AC8). |
 | D10 | The status reader (`tiktok-review` `status` action) is owner-scoped. If the row is pending and was last checked more than 15 s ago, it does one bounded `status/fetch` with the owner's token and settles through the RPC. The UI polls it with backoff. `tiktok-check-status` gains owner authentication and a safe filter; it keeps its response shape. | Spec R6: no manual publish-ID entry. Fixes the IDOR. |
 | D11 | `tiktok-demo-publish` `publish`/`schedule` return `{success:false, error_code:'deprecated', user_message:'Use the TikTok review workspace.'}`; `status` stays, owner-scoped as today. | The new page replaces its only caller. A stale browser tab gets a clear refusal instead of a bypass. |
-| D12 | Review states are `pending_review`, `rejected`, `archived`, `submitted`. The plan's `draft` state is dropped. | No transition produced it (YAGNI). A new draft starts in `pending_review` and the queue defaults to it. |
+| D12 | Review states are `pending_review`, `rejected`, `archived`, `submitted`. The plan's `draft` state is dropped. A `submitted` draft can be **reopened** (`submitted → pending_review`, revision + 1, so consent is invalidated) only when no pending/success TikTok row exists for its latest submission and either no publish id was recorded (`dispatch_state` in `needs_attention`, `dispatched`, or `unknown` older than 10 minutes) or TikTok reported that attempt FAILED. | No transition produced it (YAGNI). A new draft starts in `pending_review` and the queue defaults to it. |
 | D13 | FILE_UPLOAD only, via `process-post`'s existing chunked upload. No `PULL_FROM_URL`. | `PULL_FROM_URL` needs a verified domain, which is not configured. |
 | D14 | "Send to TikTok inbox" (Brandora popover) is **out of scope**. | Upload/inbox mode is a different endpoint. |
 
@@ -180,7 +180,7 @@ tiktok_review_set_dispatch_state(p_submission_id uuid, p_from text[], p_to text)
 
 ## 5. `tiktok-review` HTTP contract
 
-`POST /functions/v1/tiktok-review`, user JWT only. A service-role bearer gets 403. CORS uses `restrictedCorsHeaders`. The shape is `index.ts` (wiring), `handler.ts` (`handleRequest(req, deps)`), `validation.ts` (zod `npm:zod@3.23.8`), `errors.ts`, following `supabase/functions/user-ai-providers/`. Envelope: `200 {ok:true,data}`; errors `{ok:false, code, message}` with HTTP 400 validation, 401 auth, 403 forbidden, 404 `NOT_FOUND`, 409 `REVISION_CONFLICT`/`INVALID_STATE`, 422 business (`MEDIA_REQUIRED`, `MEDIA_NOT_OWNED`, `MEDIA_NOT_VIDEO`, `POLICY_*`, `SCHEDULE_INVALID`, `REASON_REQUIRED`, `TOKEN_INVALID`), 429 quota, 502 `PROVIDER_UNAVAILABLE`, 500 `INTERNAL`. Every refusal writes a sanitized `system_logs` row via `_shared/logging.ts` (`source:'tiktok-review'`) with action, code, draft/submission id and user id. Tokens, captions, signed URLs and payloads are never logged. All provider calls use `_shared/request-timeout.ts` (10 s).
+`POST /functions/v1/tiktok-review`, user JWT only. A service-role bearer gets 403. CORS uses `restrictedCorsHeaders`. The shape is `index.ts` (wiring), `handler.ts` (`handleRequest(req, deps)`), `validation.ts` (zod `npm:zod@3.23.8`), `errors.ts`, following `supabase/functions/user-ai-providers/`. Envelope: `200 {ok:true,data}`; errors `{ok:false, code, message}` with HTTP 400 validation, 401 auth, 403 forbidden, 404 `NOT_FOUND`, 409 `REVISION_CONFLICT`/`INVALID_STATE`/`REQUEST_REUSED` (a requestId already used for another draft), 422 business (`MEDIA_REQUIRED`, `MEDIA_NOT_OWNED`, `MEDIA_NOT_VIDEO`, `POLICY_*`, `SCHEDULE_INVALID`, `REASON_REQUIRED`, `TOKEN_INVALID`), 429 quota, 502 `PROVIDER_UNAVAILABLE`, 500 `INTERNAL`. Every refusal writes a sanitized `system_logs` row via `_shared/logging.ts` (`source:'tiktok-review'`) with action, code, draft/submission id and user id. Tokens, captions, signed URLs and payloads are never logged. All provider calls use `_shared/request-timeout.ts` (10 s).
 
 ```ts
 type TikTokSettings = { privacy: string | null; allowComment: boolean; allowDuet: boolean;
@@ -209,7 +209,7 @@ type PublishStatus = { state: PublishState; updatedAt: string; reason: string | 
 | `create` | `{accountId}` | `ReviewDraft` |
 | `save` | `{draftId, expectedRevision, caption, mediaFileId, mediaDurationSec, settings}` | `ReviewDraft` |
 | `reject` | `{draftId, expectedRevision, reason}` | `ReviewDraft` |
-| `archive` / `restore` | `{draftId, expectedRevision}` | `ReviewDraft` |
+| `archive` / `restore` / `reopen` | `{draftId, expectedRevision}` | `ReviewDraft` |
 | `submit` | `{draftId, expectedRevision, requestId, mode, scheduledAt, timeZone, consent: true}` | `{submissionId, postId, state: 'queued'\|'scheduled'}` |
 | `status` | `{submissionId}` | `PublishStatus` |
 

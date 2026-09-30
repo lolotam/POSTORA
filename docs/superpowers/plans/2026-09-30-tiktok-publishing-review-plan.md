@@ -338,12 +338,12 @@ Each implementation task ends with source review, relevant passing tests, guard 
 - [x] Implementation plan written locally.
 - [x] Documentation self-review: evidence boundaries, relative links, proposed versus existing paths, and acceptance coverage checked.
 - [x] Task 1 complete. Deployed hashes match; Brandora desktop captured and 390 px blocked; the contract is in `docs/investigations/`.
-- [ ] Task 2 complete.
-- [ ] Task 3 complete.
-- [ ] Task 4 complete.
-- [ ] Task 5 complete.
-- [ ] Task 6 complete.
-- [ ] Task 7 complete.
+- [x] Task 2 complete. Schema, RPCs and harness T1–T15 (Contabo PG17).
+- [x] Task 3 complete. Shared mapping/policy; snapshot-only publishing; atomic `publishing` claim.
+- [x] Task 4 complete. Webhook reconciliation, owner-scoped status, automatic tracking.
+- [x] Task 5 complete. Existing scheduler; no provider init at schedule time; revalidation at execution.
+- [x] Task 6 complete. Review workspace UI at `/tiktok-publish`.
+- [ ] Task 7 complete. Partial: unit/UI/DB suites and guard reviews done; comparable screenshots, 390 px and keyboard/RTL browser checks run at deploy verification (Task 8).
 - [ ] Task 8 complete.
 
 User requested specification and planning only in this turn. Execution begins under a subsequent implementation instruction; this document does not itself authorize external publishing or destructive migration operations.
