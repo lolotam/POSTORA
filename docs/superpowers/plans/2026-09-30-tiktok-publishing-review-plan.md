@@ -10,7 +10,7 @@
 
 **Spec:** [TikTok publishing review specification](../specs/2026-09-30-tiktok-publishing-review-design.md)
 
-**Status:** Planning complete; all implementation tasks are pending. No application code, database, or deployment was changed while preparing this plan.
+**Status (2026-09-30):** Tasks 1–6 implemented on `feat/tiktok-review`; Task 7 partially done (automated suites and reviews; browser acceptance pending); Task 8 (production release and live evidence) pending authorization.
 
 ## Orchestrator review (2026-09-30)
 
