@@ -56,3 +56,6 @@ verify_jwt = true
 
 [functions.ai-generation-status]
 verify_jwt = true
+
+[functions.tiktok-review]
+verify_jwt = true
