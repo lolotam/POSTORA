@@ -19,9 +19,9 @@ const ORDER = JSON.stringify({
   billing: { phone: "+965 5551 2345", first_name: "Sara", country: "KW" },
 });
 
-function deps(extra: Partial<StoreWebhookDeps> = {}): StoreWebhookDeps & { connectorChecks: number; inserted: Array<Record<string, unknown>> } {
+function deps(extra: Partial<StoreWebhookDeps> = {}): StoreWebhookDeps & { connectorChecks: number; inserted: Array<Record<string, unknown>>; ignored: string[] } {
   const inserted: Array<Record<string, unknown>> = [];
-  const base: StoreWebhookDeps & { connectorChecks: number; inserted: Array<Record<string, unknown>> } = {
+  const base: StoreWebhookDeps & { connectorChecks: number; inserted: Array<Record<string, unknown>>; ignored: string[] } = {
     connectorChecks: 0,
     inserted,
     limitIp: async () => ({ allowed: true }),
@@ -31,6 +31,8 @@ function deps(extra: Partial<StoreWebhookDeps> = {}): StoreWebhookDeps & { conne
     loadProcedures: async () => ({}),
     loadWaitlist: async () => [],
     insertEvents: async (rows) => { inserted.push(...rows); return { ok: true, stored: rows.length }; },
+    logIgnored: async (entry) => { base.ignored.push(entry.reason); },
+    ignored: [],
     now: () => NOW,
   };
   return Object.assign(base, extra);
@@ -244,7 +246,7 @@ Deno.test("an event flow without its required consent is not stored", async () =
     },
     body: ORDER,
   }), gate);
-  assertEquals(await response.json(), { ok: true, stored: 0 });
+  assertEquals(await response.json(), { ok: true, stored: 0, ignored: "cod_confirm_not_active" });
   assertEquals(gate.inserted, []);
   assertEquals(enabledStoreFlows({ cod_confirm: { enabled: true, prompts: {}, closing: "" } }).size, 0);
 });
@@ -399,4 +401,49 @@ Deno.test("a variation update reaches a customer waiting on its parent product",
   const raw = JSON.stringify({ id: 42, parent_id: 9, name: "Oud 50ml", stock_status: "instock" });
   assertEquals((await handleStoreWebhook(jsonPost(raw, await mac(SECRET, raw), "product.updated"), gate)).status, 200);
   assertEquals(gate.inserted.map((row) => row.external_id), ["waitlist:w1"]);
+});
+
+Deno.test("an order.created the COD flow cannot start is logged with its reason and echoed to WooCommerce", async () => {
+  const cases: Array<{ name: string; body: Record<string, unknown>; enabled: string[]; reason: string }> = [
+    { name: "flow off", body: JSON.parse(ORDER), enabled: [], reason: "cod_confirm_not_active" },
+    { name: "card payment", body: { ...JSON.parse(ORDER), payment_method: "myfatoorah_v2" }, enabled: ["cod_confirm"], reason: "not_cash_on_delivery" },
+    { name: "cancelled", body: { ...JSON.parse(ORDER), status: "cancelled" }, enabled: ["cod_confirm"], reason: "order_status_not_eligible" },
+    { name: "no country", body: { ...JSON.parse(ORDER), billing: { phone: "66106604", first_name: "Sara" } }, enabled: ["cod_confirm"], reason: "customer_phone_unrecognised" },
+  ];
+  for (const testCase of cases) {
+    const body = JSON.stringify(testCase.body);
+    const gate = deps({ flowsFrom: () => new Set(testCase.enabled) });
+    const response = await handleStoreWebhook(new Request(URL, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-wc-webhook-topic": "order.created", "x-wc-webhook-signature": await mac(SECRET, body) },
+      body,
+    }), gate);
+    assertEquals(await response.json(), { ok: true, stored: 0, ignored: testCase.reason }, testCase.name);
+    assertEquals(gate.ignored, [testCase.reason], testCase.name);
+  }
+});
+
+Deno.test("a routine order update is not logged as ignored", async () => {
+  const body = ORDER;
+  const gate = deps({ flowsFrom: () => new Set(["cod_confirm"]) });
+  const response = await handleStoreWebhook(new Request(URL, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-wc-webhook-topic": "order.updated", "x-wc-webhook-signature": await mac(SECRET, body) },
+    body,
+  }), gate);
+  assertEquals(await response.json(), { ok: true, stored: 0 });
+  assertEquals(gate.ignored, []);
+});
+
+Deno.test("an authentic delivery whose body is not a JSON object is refused and logged", async () => {
+  for (const body of ["[1,2]", "null", "not json"]) {
+    const gate = deps();
+    const response = await handleStoreWebhook(new Request(URL, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-wc-webhook-topic": "order.created", "x-wc-webhook-signature": await mac(SECRET, body) },
+      body,
+    }), gate);
+    assertEquals(response.status, 400, body);
+    assertEquals(gate.ignored, ["invalid_json"], body);
+  }
 });
