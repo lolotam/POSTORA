@@ -427,13 +427,13 @@ BEGIN
   WHERE s.user_id = u_a AND s.request_id = req_now;
 
   ASSERT public.tiktok_review_set_dispatch_state(
-      v_sub_id, ARRAY['pending_dispatch'], 'dispatching') = true,
+      'a1a1a1a1-1111-4111-8111-aaaaaaaaaaaa'::uuid, v_sub_id, ARRAY['pending_dispatch'], 'dispatching') = true,
     'T8 pending_dispatch -> dispatching swaps';
   ASSERT (SELECT s.dispatch_state FROM public.tiktok_review_submissions s
            WHERE s.id = v_sub_id) = 'dispatching',
     'T8 the new dispatch_state is stored';
   ASSERT public.tiktok_review_set_dispatch_state(
-      v_sub_id, ARRAY['pending_dispatch'], 'dispatching') = false,
+      'a1a1a1a1-1111-4111-8111-aaaaaaaaaaaa'::uuid, v_sub_id, ARRAY['pending_dispatch'], 'dispatching') = false,
     'T8 repeating the same compare-and-set swaps nothing';
 END $$;
 
@@ -566,7 +566,7 @@ BEGIN
       'EXECUTE'),
     'T11 authenticated cannot EXECUTE transition';
   ASSERT NOT has_function_privilege(
-      'authenticated', 'public.tiktok_review_set_dispatch_state(uuid,text[],text)',
+      'authenticated', 'public.tiktok_review_set_dispatch_state(uuid,uuid,text[],text)',
       'EXECUTE'),
     'T11 authenticated cannot EXECUTE set_dispatch_state';
   ASSERT has_function_privilege(
@@ -639,7 +639,7 @@ BEGIN
     'T12 new submission waits for dispatch';
 
   ASSERT public.tiktok_review_set_dispatch_state(
-      v_sub_id, ARRAY['pending_dispatch'], 'dispatching') = true,
+      'a1a1a1a1-1111-4111-8111-aaaaaaaaaaaa'::uuid, v_sub_id, ARRAY['pending_dispatch'], 'dispatching') = true,
     'T12 pending_dispatch -> dispatching swaps';
 
   UPDATE public.tiktok_review_submissions SET dispatch_state='publishing'
@@ -790,6 +790,64 @@ BEGIN
   v_draft := public.tiktok_review_transition(u_a, v_draft.id, v_rev, 'reopen', NULL);
   ASSERT v_draft.state = 'pending_review' AND v_draft.revision = v_rev + 1,
     'T15 needs_attention with no publish id reopens';
+END $$;
+
+-- T16: dispatch-state writes are owner-scoped; a stranded pending_dispatch
+-- (stale) and a failed TikTok row both reopen (migration 20261002160000).
+DO $$
+DECLARE
+  u_a uuid := 'a1a1a1a1-1111-4111-8111-aaaaaaaaaaaa';
+  u_b uuid := 'b2b2b2b2-2222-4222-8222-bbbbbbbbbbbb';
+  acct_a_tt uuid := 'a1a1a1a1-aaaa-4111-8111-aaaaaaaaaaaa';
+  media_a uuid := 'aa000001-aaaa-4111-8111-aaaaaaaaaaaa';
+  v_draft public.tiktok_review_drafts%ROWTYPE;
+  v_res jsonb;
+  v_sub uuid;
+  v_post uuid;
+BEGIN
+  v_draft := public.tiktok_review_create_draft(u_a, acct_a_tt);
+  PERFORM public.tiktok_review_save_draft(u_a, v_draft.id, 1, 'owner', media_a, 9, '{}'::jsonb);
+  v_res := public.tiktok_review_submit(
+    u_a, v_draft.id, 2, 'c1000017-0000-4000-8000-000000000017', 'now', NULL, 'UTC');
+  v_sub := (v_res->>'submission_id')::uuid;
+  v_post := (v_res->>'post_id')::uuid;
+
+  ASSERT public.tiktok_review_set_dispatch_state(u_b, v_sub, ARRAY['pending_dispatch'], 'dispatching') = false,
+    'T16 another user cannot move the dispatch state';
+  ASSERT (SELECT dispatch_state FROM public.tiktok_review_submissions WHERE id = v_sub) = 'pending_dispatch',
+    'T16 the foreign call changed nothing';
+
+  UPDATE public.tiktok_review_submissions SET updated_at = now() - interval '1 minute' WHERE id = v_sub;
+  BEGIN
+    PERFORM public.tiktok_review_transition(u_a, v_draft.id, 2, 'reopen', NULL);
+    RAISE EXCEPTION 'T16 failed: reopen of a fresh pending_dispatch was accepted'
+      USING ERRCODE = 'assert_failure';
+  EXCEPTION WHEN raise_exception THEN
+    ASSERT SQLERRM = 'TIKTOK_REVIEW_INVALID_STATE', 'T16 fresh pending_dispatch refusal, got: ' || SQLERRM;
+  END;
+
+  UPDATE public.tiktok_review_submissions SET updated_at = now() - interval '6 minutes' WHERE id = v_sub;
+  v_draft := public.tiktok_review_transition(u_a, v_draft.id, 2, 'reopen', NULL);
+  ASSERT v_draft.state = 'pending_review' AND v_draft.revision = 3,
+    'T16 a stale pending_dispatch reopens';
+
+  -- A failed TikTok row reopens even while dispatch_state still says publishing.
+  v_res := public.tiktok_review_submit(
+    u_a, v_draft.id, 3, 'c1000018-0000-4000-8000-000000000018', 'now', NULL, 'UTC');
+  v_sub := (v_res->>'submission_id')::uuid;
+  v_post := (v_res->>'post_id')::uuid;
+  ASSERT public.tiktok_review_set_dispatch_state(u_a, v_sub, ARRAY['pending_dispatch'], 'dispatching') = true,
+    'T16 the owner moves the dispatch state';
+  UPDATE public.tiktok_review_submissions SET dispatch_state = 'publishing' WHERE id = v_sub;
+  INSERT INTO public.platform_posts (post_id, social_account_id, platform, status)
+  VALUES (v_post, acct_a_tt, 'tiktok', 'failed');
+  v_draft := public.tiktok_review_transition(u_a, v_draft.id, 3, 'reopen', NULL);
+  ASSERT v_draft.state = 'pending_review' AND v_draft.revision = 4,
+    'T16 a failed TikTok row reopens regardless of dispatch_state';
+
+  ASSERT (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+           WHERE n.nspname = 'public' AND p.proname = 'tiktok_review_set_dispatch_state') = 1,
+    'T16 exactly one tiktok_review_set_dispatch_state (no overload)';
 END $$;
 
 ROLLBACK;
