@@ -66,6 +66,7 @@ import {
   CONNECTOR_CATEGORY_LABELS,
   CONNECTOR_TYPES,
   connectorDefinition,
+  hasGuardedWrites,
   isComposioType,
   shouldUseAdapter,
   type ConnectorCategory,
@@ -2360,9 +2361,17 @@ function DatabaseConnectorsEditor({
                             {directoryTitle(form.connector_type, CONNECTOR_DIRECTORY.find((d) => d.id === form.connector_type)?.title || form.connector_type, t)}
                           </span>
                         </div>
-                        <Badge variant="secondary" className="text-[9px] py-0 h-4 shrink-0 font-normal">
-                          {t("form.readOnly", "Read-Only")}
-                        </Badge>
+                        {/* The Read-Only Guard only governs native adapters (a live ai-agent-adapters
+                            implementation). Among those, only types with a guarded write path can be
+                            Read & Write; the rest never write. Composio and custom connectors are gated
+                            elsewhere (settings.allow_writes / admin sender), so no claim is shown. */}
+                        {shouldUseAdapter({ connector_type: form.connector_type }) && (
+                          <Badge variant="secondary" className="text-[9px] py-0 h-4 shrink-0 font-normal">
+                            {form.read_only_mode || !hasGuardedWrites(form.connector_type)
+                              ? t("form.readOnly", "Read-Only")
+                              : t("form.readWrite", "Read & Write")}
+                          </Badge>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -2538,6 +2547,11 @@ function DatabaseConnectorsEditor({
                       <div className="space-y-0.5">
                         <Label className="text-xs font-medium">{t("form.readOnlyGuard", "Read-Only Guard")}</Label>
                         <p className="text-[10px] text-muted-foreground">{t("form.readOnlyGuardHint", "Disallows any write operations")}</p>
+                        {form.connector_type === "woocommerce" && form.read_only_mode && (
+                          <p className="text-[10px] text-amber-600 dark:text-amber-400">
+                            {t("form.readOnlyGuardWooHint", "Turn this off to let COD confirmation update orders.")}
+                          </p>
+                        )}
                       </div>
                       <Switch
                         checked={form.read_only_mode}

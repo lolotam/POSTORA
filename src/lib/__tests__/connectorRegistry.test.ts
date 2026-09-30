@@ -8,6 +8,7 @@ import {
   PENDING_DB_CONNECTOR_TYPES as BROWSER_PENDING_TYPES,
   composioBinding as browserComposioBinding,
   connectorDefinition as browserConnectorDefinition,
+  hasGuardedWrites,
   isComposioType as browserIsComposioType,
   shouldUseAdapter as browserShouldUseAdapter,
 } from "../connectorRegistry";
@@ -174,5 +175,25 @@ describe("browser mirror parity", () => {
         expect(definition.composio.toolkitVersion).toMatch(/^\d{8}_\d{2}$|^latest$/);
       }
     }
+  });
+});
+
+describe("hasGuardedWrites", () => {
+  // 2026-09-30: the connector badge said Read & Write for adapters that never write.
+  it.each([
+    ["woocommerce", true],
+    ["supabase", false],
+    ["shopify", false],
+    ["google_sheets", false],
+  ])("%s → %s", (type, expected) => {
+    expect(hasGuardedWrites(type)).toBe(expected);
+  });
+});
+
+describe("connector badge categories", () => {
+  // The badge renders only for adapter-backed types; Composio connectors are gated elsewhere.
+  it("shows no read/write claim for Composio connectors", () => {
+    expect(browserShouldUseAdapter({ connector_type: "google_sheets" })).toBe(false);
+    expect(browserShouldUseAdapter({ connector_type: "woocommerce" })).toBe(true);
   });
 });
