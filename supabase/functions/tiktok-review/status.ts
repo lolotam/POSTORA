@@ -72,7 +72,7 @@ function attentionSentence(errorMessage: string): string {
   const policyCode = codes.find(isPolicyViolationCode);
   if (policyCode) return policyViolationMessage(policyCode);
   for (const code of codes) {
-    if (["CREATOR_INFO_UNAVAILABLE", "SUBMISSION_READ_FAILED", "SUBMISSION_NOT_FOUND", "MEDIA_READ_FAILED"].includes(code)) {
+    if (["CREATOR_INFO_UNAVAILABLE", "SUBMISSION_READ_FAILED", "SUBMISSION_NOT_FOUND", "MEDIA_READ_FAILED", "PUBLISH_ID_RECORD_FAILED"].includes(code)) {
       return "TikTok or Postora was temporarily unavailable when publishing. Choose Edit and resubmit in TikTok review to try again.";
     }
     if (code === "ALREADY_DISPATCHED") {

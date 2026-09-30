@@ -480,6 +480,7 @@ Deno.test("submit mode now with created=true transitions pending_dispatch to dis
 
   // Transition 1: pending_dispatch -> dispatching
   assertEquals(dispatchStateRpcs[0].args?.[0], {
+    p_user_id: testUserId,
     p_submission_id: testSubmissionId,
     p_from: ["pending_dispatch"],
     p_to: "dispatching",
@@ -487,6 +488,7 @@ Deno.test("submit mode now with created=true transitions pending_dispatch to dis
 
   // Transition 2: dispatching -> dispatched on 2xx
   assertEquals(dispatchStateRpcs[1].args?.[0], {
+    p_user_id: testUserId,
     p_submission_id: testSubmissionId,
     p_from: ["dispatching", "publishing"],
     p_to: "dispatched",
@@ -569,6 +571,7 @@ Deno.test("submit mode now dispatch failure transitions state correctly (409 -> 
     const dispatchStateRpcs = f.calls.filter((c) => c.name === "rpc:tiktok_review_set_dispatch_state");
     assertEquals(dispatchStateRpcs.length, 2);
     assertEquals(dispatchStateRpcs[1].args?.[0], {
+      p_user_id: testUserId,
       p_submission_id: testSubmissionId,
       p_from: tc.expectedFrom,
       p_to: tc.expectedNextState,
@@ -601,6 +604,7 @@ Deno.test("submit mode now with dispatch claim refused returns 200 with ZERO pro
   const dispatchStateRpcs = f.calls.filter((c) => c.name === "rpc:tiktok_review_set_dispatch_state");
   assertEquals(dispatchStateRpcs.length, 1);
   assertEquals(dispatchStateRpcs[0].args?.[0], {
+    p_user_id: testUserId,
     p_submission_id: testSubmissionId,
     p_from: ["pending_dispatch"],
     p_to: "dispatching",
@@ -659,6 +663,7 @@ Deno.test("submit mode now uses edgeRuntime.waitUntil when provided and still di
   const dispatchStateRpcs = f.calls.filter((c) => c.name === "rpc:tiktok_review_set_dispatch_state");
   assertEquals(dispatchStateRpcs.length, 2);
   assertEquals(dispatchStateRpcs[1].args?.[0], {
+    p_user_id: testUserId,
     p_submission_id: testSubmissionId,
     p_from: ["dispatching", "publishing"],
     p_to: "dispatched",
@@ -1044,4 +1049,49 @@ Deno.test("submit with RPC TIKTOK_REVIEW_REQUEST_REUSED returns 409 REQUEST_REUS
   assertEquals(res.status, 409);
   assertEquals(res.body.code, "REQUEST_REUSED");
   assertEquals(res.body.message, "This request was already used for another post. Try again.");
+});
+
+Deno.test("submit replay re-drives a stranded immediate dispatch exactly once (pending_dispatch) and never a dispatched one", async () => {
+  for (const [dispatchState, expectedFetches] of [["pending_dispatch", 1], ["dispatched", 0]] as const) {
+    const f = createFixture({
+      tableResults: {
+        tiktok_review_submissions: {
+          data: {
+            id: testSubmissionId,
+            draft_id: testDraftId,
+            post_id: testPostId,
+            mode: "now",
+            dispatch_state: dispatchState,
+          },
+          error: null,
+        },
+      },
+    });
+
+    const res = await f.run({
+      action: "submit",
+      draftId: testDraftId,
+      expectedRevision: 1,
+      requestId: testRequestId,
+      mode: "now",
+      scheduledAt: null,
+      timeZone: "UTC",
+      consent: true,
+    });
+
+    assertEquals(res.status, 200, dispatchState);
+    const processPostCalls = f.fetchCalls.filter((c) => c.url.includes("process-post"));
+    assertEquals(processPostCalls.length, expectedFetches, `process-post fetches for ${dispatchState}`);
+    const tiktokCalls = f.fetchCalls.filter((c) => c.url.includes("open.tiktokapis.com"));
+    assertEquals(tiktokCalls.length, 0, `no TikTok calls on replay (${dispatchState})`);
+    if (expectedFetches === 1) {
+      const claim = f.calls.find((c) => c.name === "rpc:tiktok_review_set_dispatch_state");
+      assertEquals(claim?.args?.[0], {
+        p_user_id: testUserId,
+        p_submission_id: testSubmissionId,
+        p_from: ["pending_dispatch"],
+        p_to: "dispatching",
+      });
+    }
+  }
 });

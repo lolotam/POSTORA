@@ -351,7 +351,7 @@ async function submitDraft(
   request: Extract<ReviewRequest, { action: "submit" }>,
 ): Promise<Result> {
   const replay = await deps.admin.from("tiktok_review_submissions")
-    .select("id, draft_id, post_id, mode")
+    .select("id, draft_id, post_id, mode, dispatch_state")
     .eq("user_id", userId)
     .eq("request_id", request.requestId)
     .maybeSingle();
@@ -364,6 +364,11 @@ async function submitDraft(
     }
     if (typeof id !== "string" || typeof postId !== "string" || (mode !== "now" && mode !== "scheduled")) {
       throw readFailed(new Error("Submission row is incomplete."));
+    }
+    // A replay re-drives an immediate submission whose first dispatch claim
+    // failed transiently; dispatchNow's compare-and-set still allows one dispatch.
+    if (mode === "now" && replay.data.dispatch_state === "pending_dispatch") {
+      await dispatchNow(deps, userId, id, postId);
     }
     return success({ submissionId: id, postId, state: mode === "scheduled" ? "scheduled" : "queued" });
   }

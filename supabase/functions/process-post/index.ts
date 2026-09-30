@@ -6492,10 +6492,13 @@ async function postToTikTok(
     try {
       await onPublishIdAssigned(publishId);
     } catch (recordError) {
+      // Without a recorded publish id nothing can reconcile this attempt, so
+      // stop before uploading: an init with no upload never goes live.
       console.error(
         "tiktok_review_publish_id_record_failed",
         recordError instanceof Error ? recordError.message : "unknown",
       );
+      throw new Error("TIKTOK_REVIEW_NEEDS_ATTENTION:PUBLISH_ID_RECORD_FAILED");
     }
   }
 

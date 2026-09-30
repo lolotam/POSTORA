@@ -6,12 +6,13 @@ const PROCESS_POST_TIMEOUT_MS = 50_000;
 
 async function setDispatchState(
   admin: AdminClient,
-  submissionId: string,
+  target: { userId: string; submissionId: string },
   from: string[],
   to: string,
 ): Promise<boolean> {
   const { data, error } = await admin.rpc("tiktok_review_set_dispatch_state", {
-    p_submission_id: submissionId,
+    p_user_id: target.userId,
+    p_submission_id: target.submissionId,
     p_from: from,
     p_to: to,
   });
@@ -38,7 +39,7 @@ export async function dispatchNow(
 
   let claimed = false;
   try {
-    claimed = await setDispatchState(deps.admin, submissionId, ["pending_dispatch"], "dispatching");
+    claimed = await setDispatchState(deps.admin, { userId, submissionId }, ["pending_dispatch"], "dispatching");
   } catch {
     await logDispatch("DISPATCH_CLAIM_FAILED");
     return;
@@ -65,7 +66,7 @@ export async function dispatchNow(
       await response.body?.cancel().catch(() => undefined);
       const next = response.ok ? "dispatched" : "needs_attention";
       try {
-        await setDispatchState(deps.admin, submissionId, ["dispatching", "publishing"], next);
+        await setDispatchState(deps.admin, { userId, submissionId }, ["dispatching", "publishing"], next);
       } catch {
         await logDispatch("DISPATCH_STATE_FAILED");
         return;
@@ -73,7 +74,7 @@ export async function dispatchNow(
       if (!response.ok) await logDispatch(`DISPATCH_HTTP_${httpStatus}`);
     } catch {
       try {
-        await setDispatchState(deps.admin, submissionId, ["dispatching"], "unknown");
+        await setDispatchState(deps.admin, { userId, submissionId }, ["dispatching"], "unknown");
       } catch {
         await logDispatch("DISPATCH_STATE_FAILED");
       }

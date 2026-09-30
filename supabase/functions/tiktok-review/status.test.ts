@@ -409,3 +409,23 @@ Deno.test("status.ts: stale 'publishing' WITH a recorded publish id stays proces
   assertEquals(status.state, "processing");
   assertEquals(status.reason, null);
 });
+
+Deno.test("status.ts: PUBLISH_ID_RECORD_FAILED maps to the transient resubmit sentence, never a raw code", () => {
+  const status = mapPublishStatus({
+    platformPost: {
+      status: "failed",
+      platformPostUrl: null,
+      errorMessage: "TIKTOK_REVIEW_NEEDS_ATTENTION:PUBLISH_ID_RECORD_FAILED",
+      createdAt: new Date(nowMs).toISOString(),
+      postedAt: null,
+    },
+    post: defaultPost,
+    submission: { dispatchState: "dispatched", updatedAt: new Date(nowMs).toISOString(), providerPublishId: null },
+    nowMs,
+  });
+  assertEquals(status.state, "needs_attention");
+  assertEquals(
+    status.reason,
+    "TikTok or Postora was temporarily unavailable when publishing. Choose Edit and resubmit in TikTok review to try again.",
+  );
+});
