@@ -13,7 +13,7 @@
 // partner. Deferring it keeps the phase's exposure to one consumer whose
 // behaviour we control.
 
-import { claimIdempotency, completeIdempotency, hashRequest } from "../../_shared/partnerApiIdempotency.ts";
+import { claimIdempotency, completeIdempotency, hashRequest, releaseIdempotency } from "../../_shared/partnerApiIdempotency.ts";
 import {
   describePartnerMediaRejection,
   MAX_BYTES_ANY_KIND,
@@ -168,10 +168,6 @@ export async function postMedia(
     return v1ErrorResponse("invalid_request", requestId, { message });
   }
 
-  // Before the claim: a refused upload must not hold the Idempotency-Key for its lease.
-  const quotaRefusal = await partnerMediaQuotaRefusal(admin, record.workspaceId);
-  if (quotaRefusal) return v1ErrorResponse("quota_exceeded", requestId, { message: quotaRefusal });
-
   // The hash covers the BYTES, not just the metadata: two different files sent
   // under one key must not look like a replay of each other.
   const claim = await claimIdempotency(
@@ -195,6 +191,15 @@ export async function postMedia(
     return replayed;
   }
 
+  // After the claim, so a retry of a completed upload still replays its media id.
+  // Any quota refusal releases the claim: nothing was stored, and a retry after the
+  // limit resets (or is raised) must not wait out the lease as idempotency_in_progress.
+  const quotaRefusal = await partnerMediaQuotaRefusal(admin, record.workspaceId);
+  if (quotaRefusal) {
+    await releaseIdempotency(admin, record.id, idempotencyKey, claim.attemptToken);
+    return v1ErrorResponse("quota_exceeded", requestId, { message: quotaRefusal });
+  }
+
   const stored = await storePartnerMedia({
     admin,
     workspaceId: record.workspaceId,
@@ -205,6 +210,7 @@ export async function postMedia(
   });
   if (!stored.ok) {
     if (stored.reason === "media_quota") {
+      await releaseIdempotency(admin, record.id, idempotencyKey, claim.attemptToken);
       return v1ErrorResponse("quota_exceeded", requestId, { message: stored.message });
     }
     console.error(`[partner-api] media store failed (request ${requestId}): ${stored.reason}`);
