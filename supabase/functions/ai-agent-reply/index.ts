@@ -18,6 +18,7 @@ import {
   formatRelatedFacts,
   formatModelRef,
   type GraphRelationFact,
+  historyWindow,
   ModelChainExhaustedError,
   iterationBudget,
   jevStartKey,
@@ -878,10 +879,13 @@ Deno.serve(async (req) => {
     ] = await Promise.all([
       admin
         .from("ai_thread_messages")
-        .select("role, content")
+        .select("role, content, created_at")
         .eq("thread_id", thread.id)
         .in("role", ["user", "assistant"])
         .order("created_at", { ascending: false })
+        // A turn's user and assistant rows are inserted together and share created_at;
+        // "assistant" sorting first here puts the user row first once reversed.
+        .order("role", { ascending: true })
         .limit(HISTORY_LIMIT),
       resolveDualEmbeddingConfigFromDb(admin),
       cachedConversationQuery.maybeSingle(),
@@ -904,10 +908,7 @@ Deno.serve(async (req) => {
     ]);
 
     const { data: historyRows } = historyResult;
-    const history = (historyRows || []).reverse().map((row: { role: string; content: string | null }) => ({
-      role: row.role,
-      content: row.content || "",
-    }));
+    const { turns: history, staleNote: historyStaleNote } = historyWindow(historyRows || [], Date.now());
 
     let toolLinks: ToolAccountLink[] = [];
     let toolLinksDegraded = false;
@@ -1247,6 +1248,7 @@ Deno.serve(async (req) => {
 
     const messages: any[] = [
       { role: "system", content: systemPrompt },
+      ...(historyStaleNote ? [{ role: "system", content: historyStaleNote }] : []),
       ...history,
       { role: "user", content: request.inbound_text.slice(0, MAX_INBOUND_CHARS) },
     ];
