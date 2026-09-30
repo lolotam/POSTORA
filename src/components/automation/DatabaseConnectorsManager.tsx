@@ -2360,9 +2360,13 @@ function DatabaseConnectorsEditor({
                             {directoryTitle(form.connector_type, CONNECTOR_DIRECTORY.find((d) => d.id === form.connector_type)?.title || form.connector_type, t)}
                           </span>
                         </div>
-                        {/* Mirrors the Read-Only Guard switch below; it used to say Read-Only whatever the guard was. */}
+                        {/* Mirrors the Read-Only Guard switch below; it used to say Read-Only whatever the guard was.
+                            Composio writes are gated by settings.allow_writes (composioExecution), which this
+                            form never sets, so those connectors stay Read-Only here. */}
                         <Badge variant="secondary" className="text-[9px] py-0 h-4 shrink-0 font-normal">
-                          {form.read_only_mode ? t("form.readOnly", "Read-Only") : t("form.readWrite", "Read & Write")}
+                          {form.read_only_mode || isComposioType(form.connector_type)
+                            ? t("form.readOnly", "Read-Only")
+                            : t("form.readWrite", "Read & Write")}
                         </Badge>
                       </div>
                     </div>
