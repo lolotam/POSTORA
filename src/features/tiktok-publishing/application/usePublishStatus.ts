@@ -6,6 +6,9 @@ const BACKOFF_MS = [3_000, 5_000, 10_000, 20_000, 30_000];
 const MAX_POLL_MS = 10 * 60 * 1000;
 
 const RESTING: ReadonlySet<PublishState> = new Set(["scheduled", "published", "failed", "needs_attention"]);
+// Signed out, not allowed, or the submission is gone: polling again cannot
+// succeed, so it stops and the manual refresh stays available.
+const UNRECOVERABLE_STATUS: ReadonlySet<number> = new Set([401, 403, 404]);
 
 function asGatewayError(caught: unknown): ReviewGatewayError {
   if (caught instanceof ReviewGatewayError) return caught;
@@ -67,7 +70,9 @@ export function usePublishStatus(submissionId: string | null): {
         stop = RESTING.has(next.state);
       } catch (caught) {
         if (cancelled) return;
-        setError(asGatewayError(caught));
+        const failure = asGatewayError(caught);
+        setError(failure);
+        stop = UNRECOVERABLE_STATUS.has(failure.status);
       } finally {
         inFlight.current = false;
       }
