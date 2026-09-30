@@ -58,8 +58,13 @@ CREATE TABLE IF NOT EXISTS public.tiktok_review_submissions (
   time_zone text NOT NULL,
   snapshot jsonb NOT NULL,
   consented_at timestamptz NOT NULL,
+  -- WHY 'publishing' exists: 'publishing' is set by process-post in ONE atomic
+  -- UPDATE immediately before it calls TikTok's init, only from 'dispatching' or
+  -- 'scheduled' and only while provider_publish_id IS NULL, so a second
+  -- process-post invocation for the same review post (History retry, "Publish now",
+  -- a concurrent scheduler run) cannot claim it and cannot publish the video twice.
   dispatch_state text NOT NULL CHECK (dispatch_state IN
-    ('scheduled', 'pending_dispatch', 'dispatching', 'dispatched', 'unknown', 'needs_attention')),
+    ('scheduled', 'pending_dispatch', 'dispatching', 'publishing', 'dispatched', 'unknown', 'needs_attention')),
   provider_publish_id text NULL,
   last_status_check_at timestamptz NULL,
   created_at timestamptz NOT NULL DEFAULT now(),
@@ -238,10 +243,9 @@ BEGIN
     RAISE EXCEPTION 'TIKTOK_REVIEW_INVALID_STATE' USING ERRCODE = 'P0001';
   END IF;
 
-  -- No ownership pre-check on p_media_file_id: a file owned by someone else
-  -- must fail here through the composite FK (SQLSTATE 23503), which the
-  -- handler maps to 422. A SELECT pre-check would turn that structural refusal
-  -- into a readable error and could mask it.
+  -- The composite FK is the structural backstop that refuses another user's
+  -- media even under the service role; the tiktok-review handler additionally
+  -- pre-checks ownership and file_type='video' so the user gets a precise error.
   UPDATE public.tiktok_review_drafts
   SET caption = p_caption,
       media_file_id = p_media_file_id,

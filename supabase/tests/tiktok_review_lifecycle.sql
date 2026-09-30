@@ -613,6 +613,62 @@ BEGIN
     'T11 webhook events carry no policies';
 END $$;
 
+-- T12: the 'publishing' claim is a single-claim atomic UPDATE; a second
+-- identical claim swaps nothing, and unknown states are refused.
+DO $$
+DECLARE
+  u_a uuid := 'a1a1a1a1-1111-4111-8111-aaaaaaaaaaaa';
+  acct_a_tt uuid := 'a1a1a1a1-aaaa-4111-8111-aaaaaaaaaaaa';
+  media_a uuid := 'aa000001-aaaa-4111-8111-aaaaaaaaaaaa';
+  req_claim uuid := 'c1000004-0000-4000-8000-000000000004';
+  v_id uuid;
+  v_sub_id uuid;
+  v_n integer;
+  v_res jsonb;
+  v_draft public.tiktok_review_drafts%ROWTYPE;
+BEGIN
+  v_draft := public.tiktok_review_create_draft(u_a, acct_a_tt);
+  v_id := v_draft.id;
+  PERFORM public.tiktok_review_save_draft(
+    u_a, v_id, 1, 'claim me', media_a, 9, '{}'::jsonb);
+
+  v_res := public.tiktok_review_submit(
+    u_a, v_id, 2, req_claim, 'now', NULL, 'UTC');
+  v_sub_id := (v_res->>'submission_id')::uuid;
+  ASSERT v_res->>'dispatch_state' = 'pending_dispatch',
+    'T12 new submission waits for dispatch';
+
+  ASSERT public.tiktok_review_set_dispatch_state(
+      v_sub_id, ARRAY['pending_dispatch'], 'dispatching') = true,
+    'T12 pending_dispatch -> dispatching swaps';
+
+  UPDATE public.tiktok_review_submissions SET dispatch_state='publishing'
+  WHERE id = v_sub_id
+    AND dispatch_state IN ('dispatching','scheduled')
+    AND provider_publish_id IS NULL;
+  GET DIAGNOSTICS v_n = ROW_COUNT;
+  ASSERT v_n = 1, 'T12 first publishing claim swaps exactly one row';
+  ASSERT (SELECT s.dispatch_state FROM public.tiktok_review_submissions s
+           WHERE s.id = v_sub_id) = 'publishing',
+    'T12 the submission is publishing after the claim';
+
+  UPDATE public.tiktok_review_submissions SET dispatch_state='publishing'
+  WHERE id = v_sub_id
+    AND dispatch_state IN ('dispatching','scheduled')
+    AND provider_publish_id IS NULL;
+  GET DIAGNOSTICS v_n = ROW_COUNT;
+  ASSERT v_n = 0, 'T12 repeating the publishing claim swaps zero rows';
+
+  BEGIN
+    UPDATE public.tiktok_review_submissions SET dispatch_state='bogus'
+    WHERE id = v_sub_id;
+    RAISE EXCEPTION 'T12 failed: bogus dispatch_state was accepted'
+      USING ERRCODE = 'assert_failure';
+  EXCEPTION WHEN check_violation THEN
+    ASSERT SQLSTATE = '23514', 'T12 bogus dispatch_state SQLSTATE is 23514';
+  END;
+END $$;
+
 ROLLBACK;
 
 \echo '=== tiktok_review_lifecycle: ALL CHECKS PASSED ==='
