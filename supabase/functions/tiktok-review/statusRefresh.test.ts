@@ -25,10 +25,12 @@ function createStatusFixture(options: {
   platformPost?: Row | null;
   tiktokStatusResponse?: unknown;
   claimSucceeds?: boolean;
+  webhookEventsError?: unknown;
 } = {}) {
   const calls: Call[] = [];
   const rpcCalls: { name: string; params: Row }[] = [];
   const fetchCalls: { url: string; init?: RequestInit }[] = [];
+  const logs: Array<{ event: string; level: string; context?: Record<string, unknown> }> = [];
   let currentPlatformPost: Row | null = options.platformPost ?? null;
   const submissionExists = options.submissionExists ?? true;
 
@@ -127,7 +129,11 @@ function createStatusFixture(options: {
             }
             result = { data: currentPlatformPost ? [currentPlatformPost] : [], error: null };
           } else if (table === "tiktok_webhook_events") {
-            result = { data: [], error: null };
+            if (options.webhookEventsError) {
+              result = { data: null, error: options.webhookEventsError };
+            } else {
+              result = { data: [], error: null };
+            }
           }
           return Promise.resolve(result).then(resolve, reject);
         },
@@ -175,10 +181,12 @@ function createStatusFixture(options: {
       }));
     },
     now: () => nowMs,
-    log: () => {},
+    log: (event: unknown) => {
+      logs.push(event as { event: string; level: string; context?: Record<string, unknown> });
+    },
   };
 
-  return { deps, admin, calls, rpcCalls, fetchCalls };
+  return { deps, admin, calls, rpcCalls, fetchCalls, logs };
 }
 
 function stateOf(res: { body: { data?: unknown } }): unknown {
@@ -469,3 +477,36 @@ Deno.test("orphan gate: dispatch_state dispatching/pending_dispatch or provider_
     assertEquals(f.rpcCalls.length, 0, `Expected 0 RPC calls for ${tc.name}`);
   }
 });
+
+Deno.test("orphan reconciliation: when applyPendingWebhookEvents throws after orphan settle, readStatus still returns 200 with settled state and writes sanitized log", async () => {
+  const f = createStatusFixture({
+    platformPost: null,
+    submissionUpdatedAt: new Date(nowMs - 4 * 60 * 1000).toISOString(),
+    webhookEventsError: { message: "database error reading webhook events" },
+    tiktokStatusResponse: {
+      data: {
+        status: "PUBLISH_COMPLETE",
+        publicaly_available_post_id: ["video-settled-456"],
+      },
+      error: { code: "ok" },
+    },
+  });
+
+  const res = await readStatus(f.deps, testUserId, testSubmissionId);
+  assertEquals(res.status, 200);
+  assertEquals(stateOf(res), "published");
+  assertEquals((res.body.data as Record<string, unknown>).postUrl, "https://www.tiktok.com/@creator_handle/video/video-settled-456");
+
+  // Verify sanitized log entry was written
+  const replayFailedLog = f.logs.find(
+    (l) => l.event === "tiktok_review_provider_failed" && (l as Record<string, unknown>).code === "WEBHOOK_REPLAY_FAILED",
+  );
+  assert(replayFailedLog, "Expected WEBHOOK_REPLAY_FAILED log entry");
+  assertEquals(replayFailedLog.level, "error");
+  assertEquals((replayFailedLog as Record<string, unknown>).submission_id, testSubmissionId);
+  assertEquals((replayFailedLog as Record<string, unknown>).action, "status");
+  // Ensure no sensitive tokens appear in the logged data
+  const logStr = JSON.stringify(replayFailedLog);
+  assert(!logStr.includes("tiktok-valid-access-token"), "Access token must not appear in log");
+});
+

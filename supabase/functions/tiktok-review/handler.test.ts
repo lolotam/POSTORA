@@ -268,6 +268,15 @@ Deno.test("service-role bearer returns 403 FORBIDDEN", async () => {
   assertEquals(f.calls.length, 0);
 });
 
+Deno.test("bearer differing from service-role key by one character is treated as user token path (401 when getUser fails)", async () => {
+  const f = createFixture();
+  const alteredKey = fakeServiceKey.slice(0, -1) + "6";
+  const res = await f.run({ action: "get", draftId: testDraftId }, alteredKey);
+  assertEquals(res.status, 401);
+  assertEquals(res.body.code, "UNAUTHORIZED");
+  assertEquals(f.calls.length, 0);
+});
+
 Deno.test("invalid request body returns 400 and makes no database calls", async () => {
   const f = createFixture();
   const res = await f.run({ action: "not_a_real_action" });
@@ -335,10 +344,16 @@ Deno.test("save maps RPC error codes to appropriate HTTP statuses (409, 422, 429
       expectedCode: "REVISION_CONFLICT",
     },
     {
-      name: "foreign key 23503 maps to 422 MEDIA_NOT_OWNED",
-      error: { code: "23503", message: "foreign key violation" },
+      name: "foreign key 23503 naming tiktok_review_drafts_media_fkey maps to 422 MEDIA_NOT_OWNED",
+      error: { code: "23503", message: "violates foreign key constraint tiktok_review_drafts_media_fkey" },
       expectedStatus: 422,
       expectedCode: "MEDIA_NOT_OWNED",
+    },
+    {
+      name: "foreign key 23503 naming other constraint maps to 500 INTERNAL",
+      error: { code: "23503", message: "violates foreign key constraint other_fkey" },
+      expectedStatus: 500,
+      expectedCode: "INTERNAL",
     },
     {
       name: "POST_QUOTA_ maps to 429 QUOTA_EXCEEDED",
@@ -509,13 +524,15 @@ Deno.test("submit mode now with created=true transitions pending_dispatch to dis
 Deno.test("submit mode now dispatch failure transitions state correctly (409 -> needs_attention, network error -> unknown)", async () => {
   const cases = [
     {
-      name: "process-post 409 transitions dispatching to needs_attention",
+      name: "process-post 409 transitions dispatching/publishing to needs_attention",
       fetchResult: () => Promise.resolve(new Response(JSON.stringify({ error: "Conflict" }), { status: 409 })),
+      expectedFrom: ["dispatching", "publishing"],
       expectedNextState: "needs_attention",
     },
     {
       name: "process-post network error transitions dispatching to unknown",
       fetchResult: () => Promise.reject(new Error("Network drop during dispatch")),
+      expectedFrom: ["dispatching"],
       expectedNextState: "unknown",
     },
   ];
@@ -553,7 +570,7 @@ Deno.test("submit mode now dispatch failure transitions state correctly (409 -> 
     assertEquals(dispatchStateRpcs.length, 2);
     assertEquals(dispatchStateRpcs[1].args?.[0], {
       p_submission_id: testSubmissionId,
-      p_from: ["dispatching", "publishing"],
+      p_from: tc.expectedFrom,
       p_to: tc.expectedNextState,
     });
   }
@@ -762,6 +779,7 @@ Deno.test("submit replay: an existing submission for (user, requestId) returns 2
       tiktok_review_submissions: {
         data: {
           id: "replayed-sub-id",
+          draft_id: testDraftId,
           post_id: "replayed-post-id",
           mode: "now",
         },
@@ -795,6 +813,45 @@ Deno.test("submit replay: an existing submission for (user, requestId) returns 2
   const userFilter = replayEqCalls.find((c) => c.args?.[0] === "user_id");
   assert(userFilter, "Expected eq('user_id', testUserId) on replay query");
   assertEquals(userFilter.args?.[1], testUserId);
+
+  // ZERO TikTok calls
+  const tiktokCalls = f.fetchCalls.filter((c) => c.url.includes("open.tiktokapis.com"));
+  assertEquals(tiktokCalls.length, 0);
+
+  // ZERO RPC calls
+  const rpcCalls = f.calls.filter((c) => c.name.startsWith("rpc:"));
+  assertEquals(rpcCalls.length, 0);
+});
+
+Deno.test("submit replay whose draft_id differs returns 409 REQUEST_REUSED with zero TikTok calls and zero RPC calls", async () => {
+  const f = createFixture({
+    tableResults: {
+      tiktok_review_submissions: {
+        data: {
+          id: "replayed-sub-id",
+          draft_id: "99999999-9999-4999-8999-999999999999",
+          post_id: "replayed-post-id",
+          mode: "now",
+        },
+        error: null,
+      },
+    },
+  });
+
+  const res = await f.run({
+    action: "submit",
+    draftId: testDraftId,
+    expectedRevision: 1,
+    requestId: testRequestId,
+    mode: "now",
+    scheduledAt: null,
+    timeZone: "UTC",
+    consent: true,
+  });
+
+  assertEquals(res.status, 409);
+  assertEquals(res.body.code, "REQUEST_REUSED");
+  assertEquals(res.body.message, "This request was already used for another post. Try again.");
 
   // ZERO TikTok calls
   const tiktokCalls = f.fetchCalls.filter((c) => c.url.includes("open.tiktokapis.com"));
@@ -896,4 +953,85 @@ Deno.test("submit media validation refusals (MEDIA_NOT_VIDEO vs MEDIA_NOT_OWNED)
 
     tc.assertFilters(f);
   }
+});
+
+Deno.test("action reopen calls tiktok_review_transition with p_action 'reopen', p_user_id = JWT user, p_reason null and returns 200 ReviewDraft", async () => {
+  const f = createFixture();
+  const res = await f.run({
+    action: "reopen",
+    draftId: testDraftId,
+    expectedRevision: 2,
+  });
+
+  assertEquals(res.status, 200);
+  assert(res.body.data);
+  assertEquals((res.body.data as Record<string, unknown>).id, testDraftId);
+
+  const transitionRpc = f.calls.find((c) => c.name === "rpc:tiktok_review_transition");
+  assert(transitionRpc, "Expected rpc:tiktok_review_transition");
+  assertEquals(transitionRpc.args?.[0], {
+    p_user_id: testUserId,
+    p_draft_id: testDraftId,
+    p_expected_revision: 2,
+    p_action: "reopen",
+    p_reason: null,
+  });
+});
+
+Deno.test("action reopen with RPC TIKTOK_REVIEW_INVALID_STATE returns 409", async () => {
+  const f = createFixture({
+    rpcResults: {
+      tiktok_review_transition: {
+        data: null,
+        error: { message: "TIKTOK_REVIEW_INVALID_STATE: cannot reopen" },
+      },
+    },
+  });
+  const res = await f.run({
+    action: "reopen",
+    draftId: testDraftId,
+    expectedRevision: 2,
+  });
+
+  assertEquals(res.status, 409);
+  assertEquals(res.body.code, "INVALID_STATE");
+  assertEquals(res.body.message, "TikTok may still have this post. Check TikTok before trying again.");
+});
+
+Deno.test("action reopen with invalid body returns 400 with no DB call", async () => {
+  const f = createFixture();
+  const res = await f.run({
+    action: "reopen",
+    draftId: "not-a-valid-uuid",
+    expectedRevision: -1,
+  });
+
+  assertEquals(res.status, 400);
+  assertEquals(res.body.code, "INVALID_REQUEST");
+  assertEquals(f.calls.length, 0);
+});
+
+Deno.test("submit with RPC TIKTOK_REVIEW_REQUEST_REUSED returns 409 REQUEST_REUSED", async () => {
+  const f = createFixture({
+    rpcResults: {
+      tiktok_review_submit: {
+        data: null,
+        error: { message: "TIKTOK_REVIEW_REQUEST_REUSED: request reused" },
+      },
+    },
+  });
+  const res = await f.run({
+    action: "submit",
+    draftId: testDraftId,
+    expectedRevision: 1,
+    requestId: testRequestId,
+    mode: "now",
+    scheduledAt: null,
+    timeZone: "UTC",
+    consent: true,
+  });
+
+  assertEquals(res.status, 409);
+  assertEquals(res.body.code, "REQUEST_REUSED");
+  assertEquals(res.body.message, "This request was already used for another post. Try again.");
 });

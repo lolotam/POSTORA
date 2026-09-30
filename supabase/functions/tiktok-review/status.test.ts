@@ -76,31 +76,31 @@ Deno.test("platform row failed errorMessage mapping (table-driven)", () => {
       name: "transient CREATOR_INFO_UNAVAILABLE",
       errorMessage: "TIKTOK_REVIEW_NEEDS_ATTENTION:CREATOR_INFO_UNAVAILABLE",
       expectedState: "needs_attention",
-      expectedReason: "TikTok or Postora was temporarily unavailable when publishing. Submit the post again from review.",
+      expectedReason: "TikTok or Postora was temporarily unavailable when publishing. Choose Edit and resubmit in TikTok review to try again.",
     },
     {
       name: "transient SUBMISSION_READ_FAILED",
       errorMessage: "TIKTOK_REVIEW_NEEDS_ATTENTION:SUBMISSION_READ_FAILED",
       expectedState: "needs_attention",
-      expectedReason: "TikTok or Postora was temporarily unavailable when publishing. Submit the post again from review.",
+      expectedReason: "TikTok or Postora was temporarily unavailable when publishing. Choose Edit and resubmit in TikTok review to try again.",
     },
     {
       name: "transient SUBMISSION_NOT_FOUND",
       errorMessage: "TIKTOK_REVIEW_NEEDS_ATTENTION:SUBMISSION_NOT_FOUND",
       expectedState: "needs_attention",
-      expectedReason: "TikTok or Postora was temporarily unavailable when publishing. Submit the post again from review.",
+      expectedReason: "TikTok or Postora was temporarily unavailable when publishing. Choose Edit and resubmit in TikTok review to try again.",
     },
     {
       name: "transient MEDIA_READ_FAILED",
       errorMessage: "TIKTOK_REVIEW_NEEDS_ATTENTION:MEDIA_READ_FAILED",
       expectedState: "needs_attention",
-      expectedReason: "TikTok or Postora was temporarily unavailable when publishing. Submit the post again from review.",
+      expectedReason: "TikTok or Postora was temporarily unavailable when publishing. Choose Edit and resubmit in TikTok review to try again.",
     },
     {
       name: "ALREADY_DISPATCHED",
       errorMessage: "TIKTOK_REVIEW_NEEDS_ATTENTION:ALREADY_DISPATCHED",
       expectedState: "needs_attention",
-      expectedReason: "This post was already sent to TikTok. Check TikTok before trying again.",
+      expectedReason: "This post can't be retried from History. Open it in TikTok review and choose Edit and resubmit if TikTok didn't receive it.",
     },
     {
       name: "SNAPSHOT_MISMATCH",
@@ -354,5 +354,43 @@ Deno.test("no platform row status mapping (table-driven)", () => {
     const status = mapPublishStatus(c.input);
     assertEquals(status.state, c.expectedState, `State mismatch for: ${c.name}`);
     assertEquals(status.reason, c.expectedReason, `Reason mismatch for: ${c.name}`);
+  }
+});
+
+Deno.test("status.ts: 'publishing' with no platform row and no publish id (table-driven)", () => {
+  const cases = [
+    {
+      name: "younger than 5 min (4m ago) -> processing",
+      updatedAt: new Date(nowMs - 4 * 60 * 1000).toISOString(),
+      expectedState: "processing",
+      expectedReason: null,
+    },
+    {
+      name: "exactly 5:00 ago -> processing",
+      updatedAt: new Date(nowMs - 5 * 60 * 1000).toISOString(),
+      expectedState: "processing",
+      expectedReason: null,
+    },
+    {
+      name: "older than 5 min (5m 1s ago) -> needs_attention",
+      updatedAt: new Date(nowMs - (5 * 60 * 1000 + 1000)).toISOString(),
+      expectedState: "needs_attention",
+      expectedReason: "Publishing did not confirm it started.",
+    },
+  ];
+
+  for (const tc of cases) {
+    const status = mapPublishStatus({
+      platformPost: null,
+      post: defaultPost,
+      submission: {
+        dispatchState: "publishing",
+        updatedAt: tc.updatedAt,
+        providerPublishId: null,
+      },
+      nowMs,
+    });
+    assertEquals(status.state, tc.expectedState, `State mismatch for: ${tc.name}`);
+    assertEquals(status.reason, tc.expectedReason, `Reason mismatch for: ${tc.name}`);
   }
 });

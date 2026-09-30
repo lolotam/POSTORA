@@ -16,6 +16,7 @@ function createFakeGateway(overrides: Partial<TikTokReviewGateway> = {}): TikTok
     reject: vi.fn(),
     archive: vi.fn(),
     restore: vi.fn(),
+    reopen: vi.fn(),
     submit: vi.fn(),
     status: vi.fn().mockResolvedValue({
       state: "processing",
@@ -431,4 +432,124 @@ describe("usePublishStatus", () => {
 
     expect(gateway.status).toHaveBeenCalledTimes(callsBeforeRefresh + 2);
   });
+
+  describe("scheduled status polling behavior with scheduledAt", () => {
+    it("with scheduledAt in the future, rests (no polls) until scheduled instant, then resumes polling on backoff", async () => {
+      const baseTime = new Date("2026-10-01T10:00:00Z").getTime();
+      vi.setSystemTime(baseTime);
+
+      const futureScheduledAt = new Date("2026-10-01T10:05:00Z").toISOString(); // 5 min in future (300_000ms)
+      const scheduledStatus: PublishStatus = {
+        state: "scheduled",
+        updatedAt: "2026-10-01T10:00:00Z",
+        reason: null,
+        postUrl: null,
+      };
+      const gateway = createFakeGateway({
+        status: vi.fn().mockResolvedValue(scheduledStatus),
+      });
+
+      renderHook(() => usePublishStatus("sub-scheduled-future", futureScheduledAt), {
+        wrapper: createWrapper(gateway),
+      });
+      await act(async () => {});
+
+      // 1st poll happens on mount -> scheduled
+      expect(gateway.status).toHaveBeenCalledTimes(1);
+
+      // Advance by 4 minutes (240_000ms) - still resting
+      vi.setSystemTime(baseTime + 240_000);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(240_000);
+      });
+      // Zero polls during the resting period
+      expect(gateway.status).toHaveBeenCalledTimes(1);
+
+      // Advance to the exact scheduled instant (remaining 60_000ms)
+      vi.setSystemTime(baseTime + 300_000);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000);
+      });
+      // Wakes up and polls!
+      expect(gateway.status).toHaveBeenCalledTimes(2);
+
+      // Now scheduledAt is reached, backoff starts with 3s (3_000ms)
+      vi.setSystemTime(baseTime + 300_000 + 3_000);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3_000);
+      });
+      expect(gateway.status).toHaveBeenCalledTimes(3);
+
+      // Next backoff delay is 5s (5_000ms)
+      vi.setSystemTime(baseTime + 300_000 + 3_000 + 5_000);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000);
+      });
+      expect(gateway.status).toHaveBeenCalledTimes(4);
+    });
+
+    it("with scheduledAt in the past, 'scheduled' keeps polling on backoff", async () => {
+      const baseTime = new Date("2026-10-01T10:05:00Z").getTime();
+      vi.setSystemTime(baseTime);
+
+      const pastScheduledAt = new Date("2026-10-01T10:00:00Z").toISOString(); // 5 min in past
+      const scheduledStatus: PublishStatus = {
+        state: "scheduled",
+        updatedAt: "2026-10-01T10:00:00Z",
+        reason: null,
+        postUrl: null,
+      };
+      const gateway = createFakeGateway({
+        status: vi.fn().mockResolvedValue(scheduledStatus),
+      });
+
+      renderHook(() => usePublishStatus("sub-scheduled-past", pastScheduledAt), {
+        wrapper: createWrapper(gateway),
+      });
+      await act(async () => {});
+
+      // 1st poll on mount
+      expect(gateway.status).toHaveBeenCalledTimes(1);
+
+      // 2nd poll after 3s (first backoff)
+      vi.setSystemTime(baseTime + 3_000);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3_000);
+      });
+      expect(gateway.status).toHaveBeenCalledTimes(2);
+
+      // 3rd poll after +5s (second backoff)
+      vi.setSystemTime(baseTime + 3_000 + 5_000);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000);
+      });
+      expect(gateway.status).toHaveBeenCalledTimes(3);
+    });
+
+    it("without scheduledAt, 'scheduled' stops polling immediately (existing behaviour)", async () => {
+      const scheduledStatus: PublishStatus = {
+        state: "scheduled",
+        updatedAt: "2026-10-01T10:00:00Z",
+        reason: null,
+        postUrl: null,
+      };
+      const gateway = createFakeGateway({
+        status: vi.fn().mockResolvedValue(scheduledStatus),
+      });
+
+      renderHook(() => usePublishStatus("sub-scheduled-none"), {
+        wrapper: createWrapper(gateway),
+      });
+      await act(async () => {});
+
+      expect(gateway.status).toHaveBeenCalledTimes(1);
+
+      // Advance by 60s: no more calls made
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000);
+      });
+      expect(gateway.status).toHaveBeenCalledTimes(1);
+    });
+  });
 });
+

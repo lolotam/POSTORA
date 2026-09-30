@@ -100,7 +100,7 @@ function createFakeAdmin(options: {
   submission?: { data: unknown; error: unknown };
   media?: { data: unknown; error: unknown };
   claim?: { data: unknown; error: unknown };
-  recordPublishId?: { error: unknown };
+  recordPublishId?: { data?: unknown; error?: unknown };
 } = {}) {
   const calls: AdminCall[] = [];
   const client = {
@@ -160,7 +160,9 @@ function createFakeAdmin(options: {
           if (currentTable === "tiktok_review_submissions" && updatePayload) {
             const payload = updatePayload as Record<string, unknown>;
             if ("provider_publish_id" in payload) {
-              result = options.recordPublishId ?? { data: null, error: null };
+              result = options.recordPublishId !== undefined
+                ? { data: options.recordPublishId.data ?? null, error: options.recordPublishId.error ?? null }
+                : { data: [{ id: "sub-123" }], error: null };
             } else {
               result = options.claim ?? { data: [{ id: "sub-uuid-1" }], error: null };
             }
@@ -592,7 +594,7 @@ Deno.test("valid input returns postInfo matching snapshot settings with explicit
   });
 });
 
-Deno.test("recordReviewPublishId filters on dispatch_state 'publishing' and provider_publish_id null and throws on error", async () => {
+Deno.test("recordReviewPublishId filters on dispatch_state 'publishing' and 'unknown' and provider_publish_id null and throws on error or row count !== 1", async () => {
   // 1. Success case: verify filters and update payload
   const { client: adminSuccess, calls } = createFakeAdmin({});
   await recordReviewPublishId(adminSuccess, {
@@ -610,10 +612,16 @@ Deno.test("recordReviewPublishId filters on dispatch_state 'publishing' and prov
   assertEquals(updateCall.filters?.["id"], "sub-123");
   assertEquals(updateCall.filters?.["post_id"], "post-456");
   assertEquals(updateCall.filters?.["user_id"], "user-789");
-  assertEquals(updateCall.filters?.["dispatch_state"], "publishing");
+  assertEquals(updateCall.filters?.["in:dispatch_state"], ["publishing", "unknown"]);
   assertEquals(updateCall.filters?.["is:provider_publish_id"], null);
 
-  // 2. Error case: throws tiktok_review_publish_id_record_failed
+  const selectCall = calls.find(
+    (c) => c.table === "tiktok_review_submissions" && c.action === "select",
+  );
+  assert(selectCall, "Expected select('id') call in recordReviewPublishId");
+  assertEquals(selectCall.args?.[0], "id");
+
+  // 2. Error case: throws tiktok_review_publish_id_record_failed on DB error
   const { client: adminError } = createFakeAdmin({
     recordPublishId: { error: { message: "database deadlock" } },
   });
@@ -628,4 +636,28 @@ Deno.test("recordReviewPublishId filters on dispatch_state 'publishing' and prov
     Error,
     "tiktok_review_publish_id_record_failed",
   );
+
+  // 3. Row count cases: throws when update did not change exactly one row
+  const rowCountCases = [
+    { name: "zero rows updated", data: [] },
+    { name: "null data returned", data: null },
+    { name: "multiple rows updated", data: [{ id: "sub-1" }, { id: "sub-2" }] },
+  ];
+  for (const tc of rowCountCases) {
+    const { client: adminCount } = createFakeAdmin({
+      recordPublishId: { data: tc.data, error: null },
+    });
+    await assertRejects(
+      () =>
+        recordReviewPublishId(adminCount, {
+          submissionId: "sub-123",
+          postId: "post-456",
+          userId: "user-789",
+          publishId: "v_pub_tiktok_abc",
+        }),
+      Error,
+      "tiktok_review_publish_id_record_failed",
+      `Expected reject for: ${tc.name}`,
+    );
+  }
 });

@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import "@/i18n";
 import { ReviewGatewayError, TikTokReviewGatewayProvider, type TikTokReviewGateway } from "../application/ports";
 import type { CreatorInfo, MediaPreview, ReviewDraft, ReviewState, SubmissionResult, TikTokAccount } from "../domain/types";
+import { ReviewDetail } from "./ReviewDetail";
 import { TikTokReviewWorkspace } from "./TikTokReviewWorkspace";
 
 vi.mock("@/components/post/MediaLibraryPicker", () => ({
@@ -147,6 +148,20 @@ function renderReviewFixture(options: FixtureOptions = {}) {
     }),
     restore: vi.fn().mockImplementation((draftId, expectedRevision) => {
       const index = draftStore.findIndex((d) => d.id === draftId);
+      const existing = draftStore[index]!;
+      const updated: ReviewDraft = {
+        ...existing,
+        state: "pending_review",
+        revision: expectedRevision + 1,
+      };
+      draftStore[index] = updated;
+      return Promise.resolve(updated);
+    }),
+    reopen: vi.fn().mockImplementation((draftId, expectedRevision) => {
+      const index = draftStore.findIndex((d) => d.id === draftId);
+      if (index === -1) {
+        return Promise.reject(new ReviewGatewayError("NOT_FOUND", "Draft not found", 404));
+      }
       const existing = draftStore[index]!;
       const updated: ReviewDraft = {
         ...existing,
@@ -637,5 +652,298 @@ describe("TikTokReviewWorkspace Screen", () => {
     expect(getButtonDisabledReason(approveBtn)).toBe(
       "Open TikTok settings and confirm this post for the selected account.",
     );
+  });
+
+  describe("Edit and resubmit (reopen) behavior for submitted drafts", () => {
+    it.each(["failed", "needs_attention"] as const)(
+      "a submitted draft whose status is '%s' shows 'Edit and resubmit'; clicking it calls gateway.reopen once, returning draft to pending_review with disabled Approve button",
+      async (publishState) => {
+        const submittedDraft = createDefaultDraft({
+          id: "draft-submitted-1",
+          accountId: "acc-1",
+          revision: 3,
+          state: "submitted",
+          caption: "Submitted test draft",
+          submission: {
+            id: "sub-submitted-1",
+            postId: "post-submitted-1",
+            mode: "now",
+            scheduledAt: null,
+          },
+        });
+
+        const { gateway } = renderReviewFixture({
+          drafts: [submittedDraft],
+        });
+
+        (gateway.status as ReturnType<typeof vi.fn>).mockResolvedValue({
+          state: publishState,
+          updatedAt: "2026-10-01T12:00:00Z",
+          reason: publishState === "failed" ? "Upload failed" : "Needs attention reason",
+          postUrl: null,
+        });
+
+        // Switch status filter to 'submitted' in queue
+        const statusSelect = screen.getByRole("combobox", { name: "Status" });
+        fireEvent.change(statusSelect, { target: { value: "submitted" } });
+
+        // Select the submitted draft
+        const draftBtn = await screen.findByRole("button", { name: /Submitted test draft/i });
+        fireEvent.click(draftBtn);
+
+        // Verify the 'Edit and resubmit' button is shown
+        const reopenBtn = await screen.findByRole("button", { name: "Edit and resubmit" });
+        expect(reopenBtn).toBeInTheDocument();
+
+        // Click 'Edit and resubmit'
+        fireEvent.click(reopenBtn);
+
+        // Assert gateway.reopen was called once with (draftId, currentRevision)
+        await waitFor(() => {
+          expect(gateway.reopen).toHaveBeenCalledTimes(1);
+        });
+        expect(gateway.reopen).toHaveBeenCalledWith("draft-submitted-1", 3);
+
+        // On success, draft returns to pending_review and Approve & publish is disabled again
+        const approveBtn = await screen.findByRole("button", { name: "Approve & publish" });
+        expect(approveBtn).toBeInTheDocument();
+        expect(approveBtn).toBeDisabled();
+        expect(getButtonDisabledReason(approveBtn)).toBe(
+          "Open TikTok settings and confirm this post for the selected account.",
+        );
+      },
+    );
+
+    it("on a 409 INVALID_STATE error when clicking 'Edit and resubmit', the server message is shown and no state changes", async () => {
+      const submittedDraft = createDefaultDraft({
+        id: "draft-submitted-err",
+        accountId: "acc-1",
+        revision: 2,
+        state: "submitted",
+        caption: "Submitted draft err",
+        submission: {
+          id: "sub-submitted-err",
+          postId: "post-submitted-err",
+          mode: "now",
+          scheduledAt: null,
+        },
+      });
+
+      const { gateway } = renderReviewFixture({
+        drafts: [submittedDraft],
+      });
+
+      (gateway.status as ReturnType<typeof vi.fn>).mockResolvedValue({
+        state: "failed",
+        updatedAt: "2026-10-01T12:00:00Z",
+        reason: "Upload failed",
+        postUrl: null,
+      });
+
+      (gateway.reopen as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+        new ReviewGatewayError(
+          "INVALID_STATE",
+          "TikTok may still have this post. Check TikTok before trying again.",
+          409,
+        ),
+      );
+
+      const statusSelect = screen.getByRole("combobox", { name: "Status" });
+      fireEvent.change(statusSelect, { target: { value: "submitted" } });
+
+      const draftBtn = await screen.findByRole("button", { name: /Submitted draft err/i });
+      fireEvent.click(draftBtn);
+
+      const reopenBtn = await screen.findByRole("button", { name: "Edit and resubmit" });
+      fireEvent.click(reopenBtn);
+
+      const alert = await screen.findByRole("alert");
+      expect(alert).toHaveTextContent("TikTok may still have this post. Check TikTok before trying again.");
+
+      // State did not change: still showing Edit and resubmit, draft is still submitted, filter still submitted
+      expect(screen.getByRole("button", { name: "Edit and resubmit" })).toBeInTheDocument();
+      expect(screen.getByText("Submitted", { selector: "p.tiktok-review-chip" })).toBeInTheDocument();
+      expect(statusSelect).toHaveValue("submitted");
+    });
+
+    it.each(["processing", "published", "queued", "scheduled"] as const)(
+      "'Edit and resubmit' button is absent for status '%s'",
+      async (publishState) => {
+        const submittedDraft = createDefaultDraft({
+          id: `draft-sub-${publishState}`,
+          accountId: "acc-1",
+          revision: 2,
+          state: "submitted",
+          caption: `Submitted draft ${publishState}`,
+          submission: {
+            id: `sub-${publishState}`,
+            postId: `post-${publishState}`,
+            mode: "now",
+            scheduledAt: null,
+          },
+        });
+
+        const { gateway } = renderReviewFixture({
+          drafts: [submittedDraft],
+        });
+
+        (gateway.status as ReturnType<typeof vi.fn>).mockResolvedValue({
+          state: publishState,
+          updatedAt: "2026-10-01T12:00:00Z",
+          reason: null,
+          postUrl: publishState === "published" ? "https://tiktok.com/@creator/video/1" : null,
+        });
+
+        const statusSelect = screen.getByRole("combobox", { name: "Status" });
+        fireEvent.change(statusSelect, { target: { value: "submitted" } });
+
+        const draftBtn = await screen.findByRole("button", { name: new RegExp(`Submitted draft ${publishState}`, "i") });
+        fireEvent.click(draftBtn);
+
+        await screen.findByText("Outcome");
+        expect(screen.queryByRole("button", { name: "Edit and resubmit" })).not.toBeInTheDocument();
+      },
+    );
+
+    it("pressing KeyA or KeyR does not trigger reopen on a submitted draft", async () => {
+      const submittedDraft = createDefaultDraft({
+        id: "draft-submitted-keys",
+        accountId: "acc-1",
+        revision: 2,
+        state: "submitted",
+        caption: "Submitted draft keys",
+        submission: {
+          id: "sub-keys",
+          postId: "post-keys",
+          mode: "now",
+          scheduledAt: null,
+        },
+      });
+
+      const { gateway } = renderReviewFixture({
+        drafts: [submittedDraft],
+      });
+
+      (gateway.status as ReturnType<typeof vi.fn>).mockResolvedValue({
+        state: "failed",
+        updatedAt: "2026-10-01T12:00:00Z",
+        reason: "Failed publish",
+        postUrl: null,
+      });
+
+      const statusSelect = screen.getByRole("combobox", { name: "Status" });
+      fireEvent.change(statusSelect, { target: { value: "submitted" } });
+
+      const draftBtn = await screen.findByRole("button", { name: /Submitted draft keys/i });
+      fireEvent.click(draftBtn);
+
+      await screen.findByRole("button", { name: "Edit and resubmit" });
+
+      // Press KeyA and KeyR
+      fireEvent.keyDown(window, { code: "KeyA" });
+      fireEvent.keyDown(window, { code: "KeyR" });
+
+      expect(gateway.reopen).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("mojibake check for user-visible strings", () => {
+    it("renders loading, conflict, and status texts without any mojibake ('â€')", () => {
+      const defaultDetailProps = {
+        onReloadConflict: vi.fn(),
+        narrow: false,
+        onBack: vi.fn(),
+        account: null,
+        creator: null,
+        preview: { kind: "ready" as const, media: { previewUrl: "https://example.com/v.mp4", fileType: "video" as const, durationSec: 30 } },
+        onRetryPreview: vi.fn(),
+        editing: false,
+        captionDraft: "",
+        onCaptionDraft: vi.fn(),
+        onStartEdit: vi.fn(),
+        onCancelEdit: vi.fn(),
+        onSaveCaption: vi.fn(),
+        saving: false,
+        mediaNotice: null,
+        onPickMedia: vi.fn(),
+        onRemoveMedia: vi.fn(),
+        scheduleLabel: "Schedule",
+        controls: {
+          timeZone: "UTC",
+          scheduleLocal: "",
+          scheduleNote: null,
+          onScheduleLocal: vi.fn(),
+          onNow: vi.fn(),
+          onShortcut: vi.fn(),
+          approveReason: null,
+          scheduleReason: null,
+          canReject: false,
+          canEdit: false,
+          canArchive: false,
+          canRestore: false,
+          settings: null,
+          settingsOpen: false,
+          onSettingsOpenChange: vi.fn(),
+          onArchive: vi.fn(),
+          onRestore: vi.fn(),
+          onReject: vi.fn(),
+          rejectPending: false,
+          confirm: null,
+          onOpenConfirm: vi.fn(),
+          onCloseConfirm: vi.fn(),
+          onConfirm: vi.fn(),
+          confirmPending: false,
+          confirmError: null,
+          rejectOpen: false,
+          onRejectOpenChange: vi.fn(),
+        },
+        publish: null,
+      };
+
+      // 1. Loading text
+      const { container: loadingContainer } = render(
+        <ReviewDetail {...defaultDetailProps} screen={{ kind: "loading" }} />,
+      );
+      expect(loadingContainer.textContent).toContain("Loading post…");
+      expect(loadingContainer.textContent).not.toContain("â€");
+
+      // 2. Conflict text
+      const { container: conflictContainer } = render(
+        <ReviewDetail {...defaultDetailProps} screen={{ kind: "conflict" }} />,
+      );
+      expect(conflictContainer.textContent).toContain("This post changed elsewhere — reload");
+      expect(conflictContainer.textContent).not.toContain("â€");
+
+      // 3. Status waiting text
+      const { container: statusContainer } = render(
+        <ReviewDetail
+          {...defaultDetailProps}
+          screen={{ kind: "ready", draft: createDefaultDraft({ state: "submitted" }) }}
+          publish={{
+            status: null,
+            error: null,
+            timedOut: false,
+            refresh: vi.fn(),
+            immediate: null,
+            scheduledFor: null,
+            reopen: null,
+            reopening: false,
+          }}
+        />,
+      );
+      expect(statusContainer.textContent).toContain("Checking publish status…");
+      expect(statusContainer.textContent).not.toContain("â€");
+
+      // 4. Ready summary text (middle dot)
+      const { container: readyContainer } = render(
+        <ReviewDetail
+          {...defaultDetailProps}
+          screen={{ kind: "ready", draft: createDefaultDraft() }}
+        />,
+      );
+      expect(readyContainer.textContent).toContain("·");
+      expect(readyContainer.textContent).not.toContain("Â·");
+      expect(readyContainer.textContent).not.toContain("â€");
+    });
   });
 });
