@@ -189,3 +189,11 @@ describe("hasGuardedWrites", () => {
     expect(hasGuardedWrites(type)).toBe(expected);
   });
 });
+
+describe("connector badge categories", () => {
+  // The badge renders only for adapter-backed types; Composio connectors are gated elsewhere.
+  it("shows no read/write claim for Composio connectors", () => {
+    expect(browserShouldUseAdapter({ connector_type: "google_sheets" })).toBe(false);
+    expect(browserShouldUseAdapter({ connector_type: "woocommerce" })).toBe(true);
+  });
+});

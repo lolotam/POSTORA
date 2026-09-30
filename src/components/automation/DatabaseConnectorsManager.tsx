@@ -2361,14 +2361,17 @@ function DatabaseConnectorsEditor({
                             {directoryTitle(form.connector_type, CONNECTOR_DIRECTORY.find((d) => d.id === form.connector_type)?.title || form.connector_type, t)}
                           </span>
                         </div>
-                        {/* Mirrors the Read-Only Guard switch below; it used to say Read-Only whatever the guard was.
-                            Only types whose runtime has a guarded write path can be Read & Write: read-only
-                            adapters never write, and Composio writes are gated by settings.allow_writes. */}
-                        <Badge variant="secondary" className="text-[9px] py-0 h-4 shrink-0 font-normal">
-                          {form.read_only_mode || !hasGuardedWrites(form.connector_type)
-                            ? t("form.readOnly", "Read-Only")
-                            : t("form.readWrite", "Read & Write")}
-                        </Badge>
+                        {/* The Read-Only Guard only governs native adapters (a live ai-agent-adapters
+                            implementation). Among those, only types with a guarded write path can be
+                            Read & Write; the rest never write. Composio and custom connectors are gated
+                            elsewhere (settings.allow_writes / admin sender), so no claim is shown. */}
+                        {shouldUseAdapter({ connector_type: form.connector_type }) && (
+                          <Badge variant="secondary" className="text-[9px] py-0 h-4 shrink-0 font-normal">
+                            {form.read_only_mode || !hasGuardedWrites(form.connector_type)
+                              ? t("form.readOnly", "Read-Only")
+                              : t("form.readWrite", "Read & Write")}
+                          </Badge>
+                        )}
                       </div>
                     </div>
                   </div>
