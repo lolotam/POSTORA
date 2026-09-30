@@ -151,7 +151,7 @@ BEGIN
       USING ERRCODE = 'assert_failure';
   EXCEPTION WHEN foreign_key_violation THEN
     ASSERT SQLSTATE = '23503', 'T2 foreign media SQLSTATE is 23503';
-    ASSERT SQLERRM LIKE '%media_files%',
+    ASSERT SQLERRM LIKE '%tiktok_review_drafts_media_fkey%',
       'T2 foreign media fails on the media composite FK, got: ' || SQLERRM;
   END;
 END $$;
