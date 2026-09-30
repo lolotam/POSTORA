@@ -5,6 +5,7 @@ import { HiggsfieldAuthError, resolveHiggsfieldCredential } from "../_shared/hig
 import { HiggsfieldMcpClient, readJobSnapshot } from "../_shared/higgsfield-mcp.ts";
 import { redactProviderError } from "../_shared/ai-routing-errors.ts";
 import { resolveVercelKey, vercelVideoStatus } from "../_shared/vercelGateway.ts";
+import { MEDIA_QUOTA_CODE, isMediaQuotaMessage, mediaQuotaHumanMessage } from "../_shared/mediaQuotaError.ts";
 import { archiveBody as buildArchiveBody } from "./archiveBody.ts";
 const json = (b: unknown, s = 200) =>
   new Response(JSON.stringify(b), {
@@ -151,7 +152,15 @@ serve(async (req) => {
         body: JSON.stringify(buildArchiveBody(job, snap)),
       });
       archiveBody = await archived.json().catch(() => ({}));
-      if (!archived.ok || !archiveBody.success) throw new Error("Could not archive generated media");
+      if (!archived.ok || !archiveBody.success) {
+        const raw = typeof archiveBody.error === "string" ? archiveBody.error : "";
+        if (archiveBody.code === MEDIA_QUOTA_CODE || isMediaQuotaMessage(raw)) {
+          const quotaError = new Error(mediaQuotaHumanMessage(raw));
+          (quotaError as Error & { code?: string }).code = MEDIA_QUOTA_CODE;
+          throw quotaError;
+        }
+        throw new Error("Could not archive generated media");
+      }
     } catch (archiveErr) {
       // We hold the claim, so release it or the job is stranded in `archiving`
       // until the 30-minute timeout with no poll able to retry it.
@@ -210,6 +219,9 @@ serve(async (req) => {
   } catch (err) {
     if (err instanceof HiggsfieldAuthError)
       return json({ error: err.message, code: err.code }, 409);
+    if (err instanceof Error && ((err as { code?: string }).code === MEDIA_QUOTA_CODE || isMediaQuotaMessage(err.message))) {
+      return json({ error: mediaQuotaHumanMessage(err.message), code: MEDIA_QUOTA_CODE }, 429);
+    }
     console.error("[ai-generation-status]", err);
     return json({ error: err instanceof Error ? err.message : "Status failed" }, 500);
   }

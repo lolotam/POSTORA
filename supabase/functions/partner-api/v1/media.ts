@@ -13,13 +13,13 @@
 // partner. Deferring it keeps the phase's exposure to one consumer whose
 // behaviour we control.
 
-import { claimIdempotency, completeIdempotency, hashRequest } from "../../_shared/partnerApiIdempotency.ts";
+import { claimIdempotency, completeIdempotency, hashRequest, releaseIdempotency } from "../../_shared/partnerApiIdempotency.ts";
 import {
   describePartnerMediaRejection,
   MAX_BYTES_ANY_KIND,
   validatePartnerMedia,
 } from "../../_shared/partnerMediaSniff.ts";
-import { loadPartnerMedia, storePartnerMedia } from "../../_shared/partnerMediaStore.ts";
+import { loadPartnerMedia, storePartnerMedia, partnerMediaQuotaRefusal } from "../../_shared/partnerMediaStore.ts";
 import { decodeId, encodeId } from "./ids.ts";
 import { v1ErrorResponse } from "./errors.ts";
 import { v1JsonResponse } from "./respond.ts";
@@ -191,6 +191,15 @@ export async function postMedia(
     return replayed;
   }
 
+  // After the claim, so a retry of a completed upload still replays its media id.
+  // Any quota refusal releases the claim: nothing was stored, and a retry after the
+  // limit resets (or is raised) must not wait out the lease as idempotency_in_progress.
+  const quotaRefusal = await partnerMediaQuotaRefusal(admin, record.workspaceId);
+  if (quotaRefusal) {
+    await releaseIdempotency(admin, record.id, idempotencyKey, claim.attemptToken);
+    return v1ErrorResponse("quota_exceeded", requestId, { message: quotaRefusal });
+  }
+
   const stored = await storePartnerMedia({
     admin,
     workspaceId: record.workspaceId,
@@ -200,6 +209,10 @@ export async function postMedia(
     filename: upload.payload.filename,
   });
   if (!stored.ok) {
+    if (stored.reason === "media_quota") {
+      await releaseIdempotency(admin, record.id, idempotencyKey, claim.attemptToken);
+      return v1ErrorResponse("quota_exceeded", requestId, { message: stored.message });
+    }
     console.error(`[partner-api] media store failed (request ${requestId}): ${stored.reason}`);
     return v1ErrorResponse("internal_error", requestId);
   }

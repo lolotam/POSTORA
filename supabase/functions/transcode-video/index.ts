@@ -1,5 +1,8 @@
+import { logToDatabase } from "../_shared/logging.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { destroyCloudinary } from "../_shared/cloudinaryDestroy.ts";
 import { handleCorsOptions, jsonResponse, errorResponse } from "../_shared/cors.ts";
+import { MEDIA_QUOTA_CODE, isMediaQuotaMessage, mediaQuotaHumanMessage } from "../_shared/mediaQuotaError.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -18,6 +21,7 @@ interface TranscodeResponse {
   transcoded_url?: string;
   new_media_file_id?: string;
   error?: string;
+  error_code?: string;
 }
 
 // Use Cloudinary's eager transformation API with signed upload
@@ -109,9 +113,12 @@ Deno.serve(async (req) => {
     return handleCorsOptions();
   }
 
+  let orphanPublicId: string | null = null;
+  let requestUserId: string | null = null;
   try {
     const { media_file_id, user_id, target_platform } = await req.json() as TranscodeRequest;
 
+    requestUserId = typeof user_id === "string" ? user_id : null;
     if (!media_file_id || !user_id) {
       throw new Error("Missing media_file_id or user_id");
     }
@@ -165,8 +172,8 @@ Deno.serve(async (req) => {
       target_platform || "tiktok"
     );
 
-    // The transcoded video is a Cloudinary derived asset — store it directly as a
-    // Cloudinary-backed media row (no Supabase Storage write, no byte re-upload).
+    // The derived asset exists before the row. A quota refusal must not leave it behind.
+    orphanPublicId = publicId;
     const { data: newMediaFile, error: insertError } = await supabase
       .from("media_files")
       .insert({
@@ -188,8 +195,10 @@ Deno.serve(async (req) => {
 
     if (insertError) {
       console.error("DB insert error:", insertError);
+      if (isMediaQuotaMessage(insertError.message)) throw new Error(insertError.message);
       throw new Error("Failed to create media file record");
     }
+    orphanPublicId = null;
 
     console.log("Created new media file record:", newMediaFile.id);
 
@@ -221,10 +230,30 @@ Deno.serve(async (req) => {
 
   } catch (error) {
     console.error("Transcode error:", error);
-    const response: TranscodeResponse = {
-      success: false,
-      error: error instanceof Error ? error.message : "Unknown error",
-    };
-    return errorResponse(response.error || "Unknown error");
+    const message = error instanceof Error ? error.message : "Unknown error";
+    if (isMediaQuotaMessage(message)) {
+      if (orphanPublicId) {
+        try { await destroyCloudinary(orphanPublicId, "video"); } catch { console.error("[transcode-video] quota cleanup failed"); }
+      }
+      const response: TranscodeResponse = {
+        success: false,
+        error: mediaQuotaHumanMessage(message),
+        error_code: MEDIA_QUOTA_CODE,
+      };
+      try {
+        await logToDatabase(createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY), {
+          level: "warn",
+          category: "system",
+          source: "transcode-video",
+          message: "Transcode refused: daily upload limit reached",
+          user_id: requestUserId ?? undefined,
+          metadata: { reason: "media_quota" },
+        });
+      } catch {
+        console.error("[transcode-video] quota refusal log failed");
+      }
+      return jsonResponse(response, 429);
+    }
+    return errorResponse(message);
   }
 });

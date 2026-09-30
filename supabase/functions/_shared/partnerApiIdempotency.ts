@@ -116,6 +116,31 @@ export async function completeIdempotency(
   }
 }
 
+/**
+ * Give up a claim that never reached a provider (e.g. a quota refusal), so a
+ * retry with the same key is evaluated afresh instead of waiting out the lease.
+ * Clearing the lease hands the row to claim_partner_idempotency's stale-lease
+ * takeover (a new attempt token); only a row still in flight and still owned by
+ * this attempt is touched. service_role has UPDATE here, not DELETE.
+ */
+export async function releaseIdempotency(
+  // deno-lint-ignore no-explicit-any
+  client: any,
+  keyId: string,
+  idempotencyKey: string,
+  attemptToken: string,
+): Promise<void> {
+  const { error } = await client
+    .from("partner_api_idempotency")
+    .update({ locked_until: null })
+    .eq("key_id", keyId)
+    .eq("idempotency_key", idempotencyKey)
+    .eq("state", "processing")
+    .eq("attempt_token", attemptToken);
+  // A lost release only costs the lease wait; the stale-lease path recovers it.
+  if (error) console.error("[partner-api] idempotency release failed:", error.message);
+}
+
 export async function markIndeterminate(
   // deno-lint-ignore no-explicit-any
   client: any,

@@ -1,6 +1,7 @@
 import { useState, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { buildPostoraFileName } from "@/lib/postoraFileName";
+import { isMediaQuotaMessage, mediaQuotaHumanMessage } from "@/components/media/uploadErrors";
 import { useToast } from "@/hooks/use-toast";
 import { useQueryClient } from "@tanstack/react-query";
 import {
@@ -105,7 +106,7 @@ export function usePostRetry() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error("Not authenticated");
 
-      const newMediaFiles = await Promise.all(retryMediaFiles.map(async (retryMediaFile) => {
+      const settled = await Promise.allSettled(retryMediaFiles.map(async (retryMediaFile) => {
         const fileExt = retryMediaFile.name.split(".").pop() || "bin";
         const fileName = `${user.id}/${await buildPostoraFileName(user.id, fileExt)}`;
         const { data: uploadData, error: uploadError } = await supabase.storage.from("media").upload(fileName, retryMediaFile, { cacheControl: "3600", upsert: false });
@@ -116,9 +117,28 @@ export function usePostRetry() {
         const { data: newMediaFile, error: mediaError } = await supabase.from("media_files").insert({
           user_id: user.id, file_path: uploadData.path, file_type: fileType, file_size: retryMediaFile.size, mime_type: retryMediaFile.type, storage_bucket: "media",
         }).select().single();
-        if (mediaError) throw mediaError;
+        if (mediaError) {
+          if (isMediaQuotaMessage(mediaError.message)) {
+            await supabase.storage.from("media").remove([uploadData.path]);
+            throw new Error(mediaQuotaHumanMessage(mediaError.message));
+          }
+          throw mediaError;
+        }
         return newMediaFile;
       }));
+      const failed = settled.find((result): result is PromiseRejectedResult => result.status === "rejected");
+      const stored = settled
+        .flatMap((result) => (result.status === "fulfilled" ? [result.value] : []));
+      if (failed) {
+        // One file failing (e.g. the daily limit) aborts the retry: drop the siblings that
+        // did land so they are not left as unreferenced library rows and storage objects.
+        if (stored.length > 0) {
+          await supabase.from("media_files").delete().in("id", stored.map((mediaFile) => mediaFile.id));
+          await supabase.storage.from("media").remove(stored.map((mediaFile) => mediaFile.file_path));
+        }
+        throw failed.reason;
+      }
+      const newMediaFiles = stored;
 
       await deleteFailedPlatformPosts(retryMediaDialogPost.id);
       const { error: updateError } = await supabase.from("posts").update({ media_file_ids: newMediaFiles.map((mediaFile) => mediaFile.id), status: "pending" }).eq("id", retryMediaDialogPost.id);

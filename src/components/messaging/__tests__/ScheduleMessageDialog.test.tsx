@@ -20,7 +20,6 @@ vi.mock("@/hooks/useAuth", () => ({
 vi.mock("@/hooks/useQuotas", () => ({
   useQuotas: () => ({
     canUploadMedia: async () => (quotaGate.allowed ? { allowed: true } : { allowed: false, message: quotaGate.message }),
-    incrementMediaUpload: async () => quotaGate.increment,
     quota: null,
     planLimits: { max_media_uploads_per_day: 20 },
   }),
@@ -87,7 +86,7 @@ const LIB: LibraryRow[] = [
   },
 ];
 
-const quotaGate = { allowed: true, increment: true, message: "limit reached" };
+const quotaGate = { allowed: true, message: "limit reached" };
 
 class StubFileReader {
   result: string | null = null;
@@ -251,7 +250,6 @@ describe("ScheduleMessageDialog", () => {
     invokeQueue = [];
     invokeCalls.length = 0;
     quotaGate.allowed = true;
-    quotaGate.increment = true;
     vi.mocked(toast.success).mockClear();
     vi.mocked(toast.error).mockClear();
     vi.mocked(supabase.from).mockImplementation((table: string) => builder(table) as never);
@@ -417,6 +415,21 @@ describe("ScheduleMessageDialog", () => {
       media_type: "image",
       media_filename: "invoice.jpg",
     });
+  });
+
+  it("an upload refusal shows the server daily limit", async () => {
+    const sentence = "Daily upload limit of 5 reached. Upgrade your plan or try again tomorrow.";
+    invokeQueue = [{
+      error: Object.assign(new Error("Edge Function returned a non-2xx status code"), {
+        context: new Response(JSON.stringify({ success: false, error: sentence, code: "MEDIA_QUOTA_DAILY_EXCEEDED" }), { status: 429 }),
+      }),
+    }];
+    renderManager();
+    await openDialog();
+    openSourceTab("Upload file");
+    pickFile("invoice.jpg", "image/jpeg");
+    expect(await screen.findByText(sentence)).toBeInTheDocument();
+    expect(inserted).toBeNull();
   });
 
   it("an upload refusal shows the backend message", async () => {

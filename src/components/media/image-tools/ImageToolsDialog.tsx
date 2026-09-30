@@ -24,6 +24,7 @@ import {
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { cn } from "@/lib/utils";
 import { parseApiError } from "@/lib/errorMessages";
+import { readUploadRefusal } from "@/components/media/uploadErrors";
 import { useLogMediaOperation, OperationType } from "@/hooks/useMediaOperationsHistory";
 import { useFeatureFlags } from "@/hooks/useFeatureFlags";
 
@@ -319,10 +320,12 @@ export function ImageToolsDialog({
           fileData: base64Data,
           fileName: fileName,
           fileType: "image",
+          // Staging copy for the transform only: not a Library file, not an upload.
+          skipMediaFiles: true,
         },
       });
 
-      if (error) throw error;
+      if (error) throw new Error((await readUploadRefusal(error)) || "Upload failed");
       if (!data?.success) throw new Error(data?.error || "Upload failed");
 
       // Use cloudName from response directly, fallback to extracting from URL
@@ -700,7 +703,7 @@ export function ImageToolsDialog({
         }
       );
 
-      if (error) throw error;
+      if (error) throw new Error((await readUploadRefusal(error)) || "Upload failed");
       if (!data?.success) throw new Error(data?.error || "Upload failed");
 
       if (file.folder_path && data.mediaFileId) {

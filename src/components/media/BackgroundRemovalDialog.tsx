@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { supabase } from "@/integrations/supabase/client";
+import { readUploadRefusal } from "@/components/media/uploadErrors";
 import { useToast } from "@/hooks/use-toast";
 import {
   Loader2,
@@ -165,10 +166,12 @@ export function BackgroundRemovalDialog({
           fileData: base64Data,
           fileName: fileName,
           fileType: "image",
+          // Staging copy for the transform only: not a Library file, not an upload.
+          skipMediaFiles: true,
         },
       });
 
-      if (error) throw error;
+      if (error) throw new Error((await readUploadRefusal(error)) || "Upload failed");
       if (!data?.success) throw new Error(data?.error || "Upload failed");
 
       // Extract cloud name from returned URL
@@ -327,7 +330,7 @@ export function BackgroundRemovalDialog({
         }
       );
 
-      if (error) throw error;
+      if (error) throw new Error((await readUploadRefusal(error)) || "Upload failed");
       if (!data?.success) throw new Error(data?.error || "Upload failed");
 
       // Update the folder_path to match the original file's folder

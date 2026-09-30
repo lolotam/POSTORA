@@ -324,13 +324,13 @@ export function useQuotas() {
   const { data: realUsage, isLoading: isLoadingRealUsage } = useQuery({
     queryKey: ["real-usage", user?.id],
     queryFn: async () => {
-      if (!user?.id) return { postsToday: 0, postsThisMonth: 0, mediaUploadsToday: 0 };
+      if (!user?.id) return { postsToday: 0, postsThisMonth: 0 };
 
       const now = new Date();
       const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
       const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
 
-      const [dailyResult, monthlyResult, mediaResult] = await Promise.all([
+      const [dailyResult, monthlyResult] = await Promise.all([
         supabase
           .from("posts")
           .select("*", { count: "exact", head: true })
@@ -341,17 +341,11 @@ export function useQuotas() {
           .select("*", { count: "exact", head: true })
           .eq("user_id", user.id)
           .gte("created_at", startOfMonth),
-        supabase
-          .from("media_files")
-          .select("*", { count: "exact", head: true })
-          .eq("user_id", user.id)
-          .gte("created_at", startOfDay),
       ]);
 
       return {
         postsToday: dailyResult.count || 0,
         postsThisMonth: monthlyResult.count || 0,
-        mediaUploadsToday: mediaResult.count || 0,
       };
     },
     enabled: !!user?.id,
@@ -536,27 +530,6 @@ export function useQuotas() {
     return { allowed: true };
   };
 
-  // Increment media upload count after successful upload
-  const incrementMediaUpload = async (): Promise<boolean> => {
-    if (!user?.id) return false;
-
-    const { data, error } = await supabase.rpc("increment_media_uploads", { p_user_id: user.id });
-
-    if (error) {
-      console.error("Error incrementing media upload:", error);
-      // F1 (CodeRabbit round 1): increment_media_uploads() atomically checks
-      // AND increments in one call. An RPC error means that call did not run
-      // to completion (e.g. two concurrent first uploads racing the
-      // user_quotas.user_id unique key), so nothing was recorded for THIS
-      // upload. Treating that as "allowed" let two concurrent requests both
-      // upload past the same limit. Fail closed instead.
-      return false;
-    }
-
-    queryClient.invalidateQueries({ queryKey: ["user-quota", user.id] });
-    return data ?? true;
-  };
-
   // Increment post count after successful post (both daily and monthly)
   const incrementPostCount = async () => {
     if (!user?.id) return;
@@ -605,13 +578,17 @@ export function useQuotas() {
     // a display consumer can use it to show a loading state instead of a
     // number that may not reflect the user's real plan yet.
     isEntitlementsLoading,
-    realUsage: realUsage || { postsToday: 0, postsThisMonth: 0, mediaUploadsToday: 0 },
+    realUsage: {
+      ...(realUsage || { postsToday: 0, postsThisMonth: 0 }),
+      // The server's media_files trigger owns this counter and keeps it charged after a
+      // delete; counting surviving rows showed a freed slot the server still refuses.
+      mediaUploadsToday: quota?.media_uploads_today ?? 0,
+    },
     canCreateProfile,
     canConnectSocialAccount,
     canCreatePost,
     canUploadMedia,
     incrementPostCount,
-    incrementMediaUpload,
     getUsageCounts,
     planLimits,
     effectivePlanSlug,
