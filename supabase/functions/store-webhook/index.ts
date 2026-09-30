@@ -62,6 +62,23 @@ function deps(): StoreWebhookDeps {
       if (error) return { ok: false };
       return { ok: true, stored: data?.length ?? 0 };
     },
+    async logIgnored({ binding, topic, reason, externalId }) {
+      const { error } = await admin.from("system_logs").insert({
+        level: "info",
+        category: "system",
+        source: "store-webhook",
+        message: "Store webhook delivery ignored",
+        user_id: binding.user_id,
+        metadata: {
+          reason,
+          topic,
+          order_id: externalId,
+          binding_id: binding.id,
+          social_account_id: binding.social_account_id,
+        },
+      });
+      if (error) console.error("[store-webhook] ignored-delivery log rejected:", error.message);
+    },
     now: () => new Date(),
   };
 }

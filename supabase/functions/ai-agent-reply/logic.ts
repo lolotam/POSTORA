@@ -377,6 +377,47 @@ export function behaviorRules(behavior?: AgentBehavior | null): string[] {
   return lines;
 }
 
+// A thread never expires, so the last stored turns can be weeks old. Replayed as-is they
+// read as the current topic: on 2026-09-28 a bare "السلام عليكم" got a list of chick
+// diseases because the previous turn, 23 days earlier, had asked about them. Turns past
+// the cutoff are dropped; turns past the gap stay (a customer confirming yesterday's
+// quote needs them) but are labelled as an earlier conversation.
+const HISTORY_STALE_GAP_MS = 12 * 60 * 60 * 1000;
+const HISTORY_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
+export interface StoredTurn {
+  role: string;
+  content: string | null;
+  created_at: string;
+}
+
+export interface HistoryWindow {
+  turns: Array<{ role: string; content: string }>;
+  /** System note for the chat model when the newest kept turn is past the gap, else null. */
+  staleNote: string | null;
+}
+
+function describeAge(ms: number): string {
+  const hours = Math.floor(ms / (60 * 60 * 1000));
+  if (hours < 48) return `about ${hours} hours`;
+  return `${Math.floor(hours / 24)} days`;
+}
+
+/** `newestFirst` is the stored-turn query result; the returned turns are oldest first. */
+export function historyWindow(newestFirst: StoredTurn[], nowMs: number): HistoryWindow {
+  const fresh = newestFirst.filter((row) => nowMs - Date.parse(row.created_at) <= HISTORY_MAX_AGE_MS);
+  if (!fresh.length) return { turns: [], staleNote: null };
+  const gap = nowMs - Date.parse(fresh[0].created_at);
+  const turns = [...fresh].reverse().map((row) => ({ role: row.role, content: row.content || "" }));
+  if (gap < HISTORY_STALE_GAP_MS) return { turns, staleNote: null };
+  return {
+    turns,
+    staleNote: `The earlier messages below are from a previous conversation, ${describeAge(gap)} ago. ` +
+      "Reply only to the customer's new message, the last one. Do not repeat or continue earlier answers " +
+      "or topics unless the new message refers to them.",
+  };
+}
+
 // The chat model still writes the reply; triage only tells it what kind of turn this is.
 export function triageSystemHint(plan: TriagePlan | null): string | null {
   if (plan?.handoff) {
