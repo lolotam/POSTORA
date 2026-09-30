@@ -47,8 +47,8 @@ review table records why.
 | D2 | Submitting creates an ordinary `posts` row (`source='tiktok_review'`) through one RPC that also writes the submission link and flips the draft, all in one transaction. | Reuses the existing claim, dispatch, settle, history and scheduler. Keeps a single publishing engine (spec §3, option 3). |
 | D3 | The RPC builds `posts.metadata.tiktok_*` **from the locked draft row**, not from handler input. | The published snapshot is then exactly the reviewed revision. |
 | D4 | Strict TikTok validation lives in pure `_shared/tiktokPublishPolicy.ts`. The review handler calls it before submit. `process-post` calls it **only** for posts whose metadata carries `tiktok_review_submission_id`, and uses `buildTikTokPostInfo` for them. CreatePost's legacy path is untouched. | Stop condition "two modules own one rule": one module owns it, with two callers. It does not change CreatePost behaviour in this release. |
-| D5 | Immediate dispatch: after the RPC commits, the handler sets `dispatch_state` from `pending_dispatch` to `dispatching` (compare-and-set) and calls `process-post {post_id, expected_scheduled_at:null}` with the service role inside `EdgeRuntime.waitUntil`. A 2xx sets `dispatched`; 409 and non-2xx set `needs_attention`; a timeout or throw sets `unknown`. The handler **never re-dispatches**. A repeat `submit` with the same `requestId` returns the existing submission. | No blind retry after an ambiguous outcome (AC7). Returns fast. |
-| D6 | `process-post` records `provider_publish_id` on the submission immediately after a successful init (review posts only): `UPDATE tiktok_review_submissions SET provider_publish_id=$1 WHERE id=$2 AND provider_publish_id IS NULL`. | This closes the unrecorded window between TikTok accepting the post and the `platform_posts` insert, so webhooks and polling can reconcile. |
+| D5 | Immediate dispatch: after the RPC commits, the handler sets `dispatch_state` from `pending_dispatch` to `dispatching` (compare-and-set) and calls `process-post {post_id, expected_scheduled_at:null}` with the service role inside `EdgeRuntime.waitUntil` (50 s timeout, under the worker ceiling). Completion compare-and-sets from `dispatching` or `publishing`: a 2xx sets `dispatched`; 409 and non-2xx set `needs_attention`; a timeout or throw sets `unknown`. The handler **never re-dispatches**. A repeat `submit` with the same `requestId` returns the existing submission. | No blind retry after an ambiguous outcome (AC7). Returns fast. |
+| D6 | Before init, `process-post` claims a review submission in one atomic UPDATE (`dispatching`\|`scheduled` → `publishing`, scoped to id/post/user, only while `provider_publish_id IS NULL`); zero rows → `NEEDS_ATTENTION:ALREADY_DISPATCHED`, no init. Right after a successful init it records `provider_publish_id` (same scoping, only in `publishing`). Publishing uses the submission **snapshot** (caption, media, settings), and a post edited after consent fails with `SNAPSHOT_MISMATCH`. If the worker dies after init, the status reader settles the publish from `provider_publish_id` once the submission is older than 3 minutes. | A History retry or "Publish now" cannot publish twice; the published content is exactly what was approved; an init with no `platform_posts` row is still reconciled. |
 | D7 | Scheduling uses the existing scheduler. The due-time claim uses `expected_scheduled_at`. At execution, `process-post`'s strict review branch re-fetches creator info. If the reviewed settings are no longer allowed (privacy not offered, a disabled interaction requested, duration over the maximum, posting blocked), the attempt fails with a `TIKTOK_REVIEW_NEEDS_ATTENTION:<reason>` error and **no init**. The status reader maps that to `needs_attention`. | Spec §7: never silently alter the user's choices. |
 | D8 | Duration: use `media_files.metadata.duration` when present, else the browser-measured `mediaDurationSec` saved on the draft. The policy blocks when both are missing. TikTok's `duration_check_failed` is the final authority. | A server-side probe is unavailable (no ffprobe in the edge runtime, Cloudinary disabled). The client value is a UX gate, not a security boundary. |
 | D9 | Webhooks: parse `content` and dedupe into a new `tiktok_webhook_events` table (`UNIQUE(event, publish_id, create_time)`). Match by publish_id **and** `social_accounts.platform_user_id = user_openid`. Apply terminal outcomes only to a `pending` row, via `partner_settle_platform_post`; never regress. Unmatched events stay unapplied, and the status reader applies them later. | Covers early arrival, duplicates, disorder and spoofing (AC8). |
@@ -92,7 +92,7 @@ tiktok_review_submissions (
   scheduled_at timestamptz NULL, time_zone text NOT NULL,
   snapshot jsonb NOT NULL, consented_at timestamptz NOT NULL,
   dispatch_state text NOT NULL CHECK (dispatch_state IN
-    ('scheduled','pending_dispatch','dispatching','dispatched','unknown','needs_attention')),
+    ('scheduled','pending_dispatch','dispatching','publishing','dispatched','unknown','needs_attention')),
   provider_publish_id text NULL,
   last_status_check_at timestamptz NULL,
   created_at, updated_at timestamptz NOT NULL DEFAULT now(),
@@ -180,7 +180,7 @@ tiktok_review_set_dispatch_state(p_submission_id uuid, p_from text[], p_to text)
 
 ## 5. `tiktok-review` HTTP contract
 
-`POST /functions/v1/tiktok-review`, user JWT only. A service-role bearer gets 403. CORS uses `restrictedCorsHeaders`. The shape is `index.ts` (wiring), `handler.ts` (`handleRequest(req, deps)`), `validation.ts` (zod `npm:zod@3.23.8`), `errors.ts`, following `supabase/functions/user-ai-providers/`. Envelope: `200 {ok:true,data}`; errors `{ok:false, code, message}` with HTTP 400 validation, 401 auth, 403 forbidden, 404 `NOT_FOUND`, 409 `REVISION_CONFLICT`/`INVALID_STATE`, 422 business (`MEDIA_REQUIRED`, `POLICY_*`, `QUOTA_EXCEEDED`, `SCHEDULE_INVALID`, `REASON_REQUIRED`), 429 quota, 502 `PROVIDER_UNAVAILABLE`, 500 `INTERNAL`. Every refusal writes a sanitized `system_logs` row via `_shared/logging.ts` (`source:'tiktok-review'`) with action, code, draft/submission id and user id. Tokens, captions, signed URLs and payloads are never logged. All provider calls use `_shared/request-timeout.ts` (10 s).
+`POST /functions/v1/tiktok-review`, user JWT only. A service-role bearer gets 403. CORS uses `restrictedCorsHeaders`. The shape is `index.ts` (wiring), `handler.ts` (`handleRequest(req, deps)`), `validation.ts` (zod `npm:zod@3.23.8`), `errors.ts`, following `supabase/functions/user-ai-providers/`. Envelope: `200 {ok:true,data}`; errors `{ok:false, code, message}` with HTTP 400 validation, 401 auth, 403 forbidden, 404 `NOT_FOUND`, 409 `REVISION_CONFLICT`/`INVALID_STATE`, 422 business (`MEDIA_REQUIRED`, `MEDIA_NOT_OWNED`, `MEDIA_NOT_VIDEO`, `POLICY_*`, `SCHEDULE_INVALID`, `REASON_REQUIRED`, `TOKEN_INVALID`), 429 quota, 502 `PROVIDER_UNAVAILABLE`, 500 `INTERNAL`. Every refusal writes a sanitized `system_logs` row via `_shared/logging.ts` (`source:'tiktok-review'`) with action, code, draft/submission id and user id. Tokens, captions, signed URLs and payloads are never logged. All provider calls use `_shared/request-timeout.ts` (10 s).
 
 ```ts
 type TikTokSettings = { privacy: string | null; allowComment: boolean; allowDuet: boolean;
@@ -227,11 +227,12 @@ type PublishStatus = { state: PublishState; updatedAt: string; reason: string | 
 | Condition | State |
 | --- | --- |
 | `scheduled` and `posts.status='scheduled'` | `scheduled` |
-| `pending_dispatch` / `dispatching` / `dispatched` with no platform row | `queued` |
+| no platform row: `publishing`, or `unknown`/`dispatching` younger than 5 minutes | `processing` |
+| no platform row: `pending_dispatch` younger than 5 minutes, or `dispatched` | `queued` |
 | platform row `pending` | `processing` |
 | row `success` | `published` (postUrl from `platform_post_url`) |
 | row `failed` | `failed` (reason = sanitized `error_message`) |
-| `unknown` / `needs_attention`, or error prefixed `TIKTOK_REVIEW_NEEDS_ATTENTION` | `needs_attention` |
+| no platform row: `needs_attention`, or `unknown`/`dispatching`/`pending_dispatch` older than 5 minutes; or a failed row whose error starts `TIKTOK_REVIEW_NEEDS_ATTENTION` (reason text from `policyViolationMessage`, never raw codes) | `needs_attention` |
 
 ## 6. Shared pure modules (Deno, no Supabase imports)
 
