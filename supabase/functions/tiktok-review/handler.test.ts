@@ -853,6 +853,16 @@ Deno.test("submit replay whose draft_id differs returns 409 REQUEST_REUSED with 
   assertEquals(res.body.code, "REQUEST_REUSED");
   assertEquals(res.body.message, "This request was already used for another post. Try again.");
 
+  // The replay lookup must actually select draft_id; the fake returns it regardless.
+  const replaySelect = f.calls.find((c) =>
+    c.name === "select" && c.table === "tiktok_review_submissions"
+  );
+  assert(
+    replaySelect &&
+      String(replaySelect.args?.[0]).split(",").map((col) => col.trim()).includes("draft_id"),
+    "replay lookup selects draft_id",
+  );
+
   // ZERO TikTok calls
   const tiktokCalls = f.fetchCalls.filter((c) => c.url.includes("open.tiktokapis.com"));
   assertEquals(tiktokCalls.length, 0);

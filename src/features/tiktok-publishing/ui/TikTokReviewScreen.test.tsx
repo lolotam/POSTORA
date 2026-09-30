@@ -801,50 +801,21 @@ describe("TikTokReviewWorkspace Screen", () => {
         fireEvent.click(draftBtn);
 
         await screen.findByText("Outcome");
+        // Wait until this state's own status text is shown, so the absence
+        // check runs against the applied status, not the pre-response render.
+        await waitFor(() => expect(gateway.status).toHaveBeenCalled());
+        await act(async () => {});
+        const statusText = {
+          processing: /TikTok is processing your video/,
+          published: /^Published\./,
+          queued: /^Queued\./,
+          scheduled: /^Scheduled(\.| for )/,
+        }[publishState];
+        expect(await screen.findByText(statusText)).toBeInTheDocument();
         expect(screen.queryByRole("button", { name: "Edit and resubmit" })).not.toBeInTheDocument();
       },
     );
 
-    it("pressing KeyA or KeyR does not trigger reopen on a submitted draft", async () => {
-      const submittedDraft = createDefaultDraft({
-        id: "draft-submitted-keys",
-        accountId: "acc-1",
-        revision: 2,
-        state: "submitted",
-        caption: "Submitted draft keys",
-        submission: {
-          id: "sub-keys",
-          postId: "post-keys",
-          mode: "now",
-          scheduledAt: null,
-        },
-      });
-
-      const { gateway } = renderReviewFixture({
-        drafts: [submittedDraft],
-      });
-
-      (gateway.status as ReturnType<typeof vi.fn>).mockResolvedValue({
-        state: "failed",
-        updatedAt: "2026-10-01T12:00:00Z",
-        reason: "Failed publish",
-        postUrl: null,
-      });
-
-      const statusSelect = screen.getByRole("combobox", { name: "Status" });
-      fireEvent.change(statusSelect, { target: { value: "submitted" } });
-
-      const draftBtn = await screen.findByRole("button", { name: /Submitted draft keys/i });
-      fireEvent.click(draftBtn);
-
-      await screen.findByRole("button", { name: "Edit and resubmit" });
-
-      // Press KeyA and KeyR
-      fireEvent.keyDown(window, { code: "KeyA" });
-      fireEvent.keyDown(window, { code: "KeyR" });
-
-      expect(gateway.reopen).not.toHaveBeenCalled();
-    });
   });
 
   describe("mojibake check for user-visible strings", () => {

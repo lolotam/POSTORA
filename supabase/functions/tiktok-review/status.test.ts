@@ -394,3 +394,18 @@ Deno.test("status.ts: 'publishing' with no platform row and no publish id (table
     assertEquals(status.reason, tc.expectedReason, `Reason mismatch for: ${tc.name}`);
   }
 });
+
+Deno.test("status.ts: stale 'publishing' WITH a recorded publish id stays processing (upload in flight)", () => {
+  const status = mapPublishStatus({
+    platformPost: null,
+    post: defaultPost,
+    submission: {
+      dispatchState: "publishing",
+      updatedAt: new Date(nowMs - 30 * 60 * 1000).toISOString(),
+      providerPublishId: "v_pub_in_flight",
+    },
+    nowMs,
+  });
+  assertEquals(status.state, "processing");
+  assertEquals(status.reason, null);
+});

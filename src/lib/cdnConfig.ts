@@ -44,4 +44,3 @@ export async function fetchCdnStorageConfig(): Promise<CdnStorageConfig> {
     write_policy: { providers, required },
   };
 }
-
