@@ -49,6 +49,8 @@ interface ReviewDetailProps {
     refresh: () => void;
     immediate: "queued" | "scheduled" | null;
     scheduledFor: string | null;
+    reopen: (() => void) | null;
+    reopening: boolean;
   } | null;
 }
 
@@ -63,7 +65,7 @@ export function ReviewDetail(props: ReviewDetailProps) {
     );
   }
   if (screen.kind === "loading") {
-    return <section className="tiktok-review-detail" role="status">{t("tiktokReview.loadingPost", "Loading postâ€¦")}</section>;
+    return <section className="tiktok-review-detail" role="status">{t("tiktokReview.loadingPost", "Loading post…")}</section>;
   }
   if (screen.kind === "error") {
     return (
@@ -79,7 +81,7 @@ export function ReviewDetail(props: ReviewDetailProps) {
     return (
       <section className="tiktok-review-detail" role="alert">
         <p className="tiktok-review-alert">
-          {t("tiktokReview.revisionConflict", "This post changed elsewhere â€” reload")}
+          {t("tiktokReview.revisionConflict", "This post changed elsewhere — reload")}
         </p>
         <button type="button" className="tiktok-review-button tiktok-review-button-edit" onClick={props.onReloadConflict}>
           {t("tiktokReview.reload", "Reload")}
@@ -173,7 +175,7 @@ function ReadyDetail({ draft, ...props }: ReviewDetailProps & { draft: ReviewDra
         </div>
         <div>
           <dt>{t("tiktokReview.summaryTikTok", "TikTok")}</dt>
-          <dd>{`${audience} Â· ${t("tiktokReview.video", "Video")} Â· ${comments}`}</dd>
+          <dd>{`${audience} · ${t("tiktokReview.video", "Video")} · ${comments}`}</dd>
         </div>
       </dl>
       {props.editing ? (
@@ -251,7 +253,7 @@ function PublishOutcome({
 }) {
   const { t } = useTranslation("post");
   const state = publish.status?.state ?? publish.immediate;
-  let body = t("tiktokReview.statusWaiting", "Checking publish statusâ€¦");
+  let body = t("tiktokReview.statusWaiting", "Checking publish status…");
   if (state === "scheduled") {
     const when = publish.scheduledFor ? formatInZone(publish.scheduledFor, timeZone) : "";
     body = when
@@ -274,7 +276,7 @@ function PublishOutcome({
       <p>{body}</p>
       {state === "needs_attention" ? (
         <p className="tiktok-review-notice">
-          {t("tiktokReview.attentionGuidance", "TikTok did not accept this post as-is. Refresh after you have reviewed the reason. A new send needs a new confirmation.")}
+          {t("tiktokReview.resubmitGuidance", "Check TikTok before trying again. Edit and resubmit returns this post to review; sending it again needs a new confirmation.")}
         </p>
       ) : null}
       {publish.status?.state === "published" && publish.status.postUrl ? (
@@ -287,6 +289,11 @@ function PublishOutcome({
       <button type="button" className="tiktok-review-button tiktok-review-button-edit" onClick={publish.refresh}>
         {t("tiktokReview.refresh", "Refresh")}
       </button>
+      {publish.reopen ? (
+        <button type="button" className="tiktok-review-button tiktok-review-button-edit" disabled={publish.reopening} onClick={publish.reopen}>
+          {t("tiktokReview.editAndResubmit", "Edit and resubmit")}
+        </button>
+      ) : null}
     </div>
   );
 }

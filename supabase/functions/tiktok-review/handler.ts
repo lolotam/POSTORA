@@ -1,4 +1,5 @@
 import { createLogger } from "../_shared/logging.ts";
+import { timingSafeTokenEqual } from "../_shared/auth-helper.ts";
 import { sanitizeErrorMessage } from "../_shared/errorSanitizer.ts";
 import {
   evaluateTikTokPublishPolicy,
@@ -64,6 +65,7 @@ const ACTIONS = [
   "reject",
   "archive",
   "restore",
+  "reopen",
   "submit",
   "status",
 ];
@@ -349,13 +351,17 @@ async function submitDraft(
   request: Extract<ReviewRequest, { action: "submit" }>,
 ): Promise<Result> {
   const replay = await deps.admin.from("tiktok_review_submissions")
-    .select("id, post_id, mode")
+    .select("id, draft_id, post_id, mode")
     .eq("user_id", userId)
     .eq("request_id", request.requestId)
     .maybeSingle();
   await assertRead(replay);
   if (isRow(replay.data)) {
-    const { id, post_id: postId, mode } = replay.data;
+    const { id, draft_id: draftId, post_id: postId, mode } = replay.data;
+    if (typeof draftId !== "string") throw readFailed(new Error("Submission row is incomplete."));
+    if (draftId !== request.draftId) {
+      throw mapDatabaseError(new Error("TIKTOK_REVIEW_REQUEST_REUSED"));
+    }
     if (typeof id !== "string" || typeof postId !== "string" || (mode !== "now" && mode !== "scheduled")) {
       throw readFailed(new Error("Submission row is incomplete."));
     }
@@ -471,7 +477,8 @@ async function perform(
       return success(await draftFromRpc(deps.admin, userId, data));
     }
     case "archive":
-    case "restore": {
+    case "restore":
+    case "reopen": {
       const data = await callRpc(deps.admin, "tiktok_review_transition", {
         p_user_id: userId,
         p_draft_id: request.draftId,
@@ -508,7 +515,7 @@ export async function handleRequest(
       result = failure(401, "UNAUTHORIZED", "Sign in to continue.");
       return result;
     }
-    if (token === deps.serviceRoleKey) {
+    if (timingSafeTokenEqual(token, deps.serviceRoleKey)) {
       result = failure(403, "FORBIDDEN", "This action isn't available.");
       return result;
     }
@@ -547,7 +554,10 @@ export async function handleRequest(
     if (error instanceof InvalidReviewRequest) {
       result = failure(400, "INVALID_REQUEST", "The request is invalid.");
     } else if (error instanceof ReviewError) {
-      result = failure(error.status, error.code, error.message, error.details);
+      const message = ctx.action === "reopen" && error.code === "INVALID_STATE"
+        ? "TikTok may still have this post. Check TikTok before trying again."
+        : error.message;
+      result = failure(error.status, error.code, message, error.details);
     } else {
       result = failure(500, "INTERNAL", sanitizeErrorMessage(error));
     }

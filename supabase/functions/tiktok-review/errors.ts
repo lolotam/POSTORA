@@ -31,6 +31,11 @@ const RPC_ERRORS: Record<string, { status: number; code: string; message: string
     code: "INVALID_STATE",
     message: "This draft can't be changed from its current state.",
   },
+  TIKTOK_REVIEW_REQUEST_REUSED: {
+    status: 409,
+    code: "REQUEST_REUSED",
+    message: "This request was already used for another post. Try again.",
+  },
   TIKTOK_REVIEW_ACCOUNT_NOT_FOUND: {
     status: 404,
     code: "ACCOUNT_NOT_FOUND",
@@ -76,7 +81,10 @@ function textFields(error: unknown): { code: string; texts: string[] } {
 export function mapDatabaseError(error: unknown): ReviewError {
   const { code, texts } = textFields(error);
   if (code === "23503") {
-    return new ReviewError(422, "MEDIA_NOT_OWNED", "Choose a video from your library.");
+    if (texts.some((text) => /\btiktok_review_drafts_media_fkey\b/.test(text))) {
+      return new ReviewError(422, "MEDIA_NOT_OWNED", "Choose a video from your library.");
+    }
+    return new ReviewError(500, "INTERNAL", sanitizeErrorMessage(error));
   }
   if (texts.some((text) => text.startsWith("POST_QUOTA_"))) {
     return new ReviewError(429, "QUOTA_EXCEEDED", "You've reached your posting limit.");

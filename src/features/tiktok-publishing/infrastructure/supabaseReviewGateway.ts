@@ -122,6 +122,10 @@ export function createSupabaseReviewGateway(): TikTokReviewGateway {
       return parseDraft(await invoke({ action: "restore", draftId, expectedRevision }));
     },
 
+    async reopen(draftId, expectedRevision) {
+      return parseDraft(await invoke({ action: "reopen", draftId, expectedRevision }));
+    },
+
     async submit(command) {
       return parseSubmissionResult(await invoke({
         action: "submit",

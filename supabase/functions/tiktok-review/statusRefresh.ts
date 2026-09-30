@@ -215,7 +215,11 @@ async function refreshStatus(
   if (fetched.kind === "pending") return true;
   if (!current) {
     await settleOrphan(deps.admin, { submission, publishId, account, fetched });
-    await applyPendingWebhookEvents(asServiceRole(deps.admin), publishId);
+    try {
+      await applyPendingWebhookEvents(asServiceRole(deps.admin), publishId);
+    } catch {
+      await logProvider("WEBHOOK_REPLAY_FAILED");
+    }
     return true;
   }
   try {
@@ -273,6 +277,7 @@ export async function readStatus(deps: Dependencies, userId: string, submissionI
     submission: {
       dispatchState: currentSubmission.dispatchState,
       updatedAt: currentSubmission.updatedAt,
+      providerPublishId: currentSubmission.providerPublishId,
     },
     nowMs: deps.now(),
   }));

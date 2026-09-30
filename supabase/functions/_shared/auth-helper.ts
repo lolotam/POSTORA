@@ -16,6 +16,12 @@ export interface AuthResult {
   isServiceRole: boolean;
 }
 
+export function timingSafeTokenEqual(token: string, expectedToken: string): boolean {
+  const actual = crypto.createHash('sha256').update(token).digest();
+  const expected = crypto.createHash('sha256').update(expectedToken).digest();
+  return crypto.timingSafeEqual(actual, expected);
+}
+
 /**
  * Validates the caller's identity from the Authorization header.
  * 
@@ -41,9 +47,7 @@ export async function authenticateCaller(
   const token = authHeader.replace("Bearer ", "");
 
   // Check if this is a service-role call (internal system call)
-  const actual = crypto.createHash('sha256').update(token).digest();
-  const expected = crypto.createHash('sha256').update(SUPABASE_SERVICE_ROLE_KEY).digest();
-  if (crypto.timingSafeEqual(actual, expected)) {
+  if (timingSafeTokenEqual(token, SUPABASE_SERVICE_ROLE_KEY)) {
     if (!bodyUserId) {
       throw new Error("Service-role call requires user_id in request body");
     }

@@ -76,7 +76,8 @@ export function TikTokReviewWorkspace({ headerLink }: TikTokReviewWorkspaceProps
   }
   const mediaQuery = useTikTokMediaPreview(draft?.mediaFileId ?? null);
   const submissionId = draft?.submission?.id ?? liveSubmission?.id ?? null;
-  const publish = usePublishStatus(submissionId);
+  const submissionScheduledAt = draft?.submission?.scheduledAt ?? liveSubmission?.scheduledFor ?? null;
+  const publish = usePublishStatus(submissionId, submissionScheduledAt);
 
   useEffect(() => {
     if (!accountId && accounts.length > 0) setAccountId(accounts[0]?.id ?? null);
@@ -153,6 +154,24 @@ export function TikTokReviewWorkspace({ headerLink }: TikTokReviewWorkspaceProps
       if (selectionRef.current !== selection) return null;
       setActionError(describeError(translate, error));
       return null;
+    }
+  }
+
+  const canReopen = draft?.state === "submitted" &&
+    (publish.status?.state === "failed" || publish.status?.state === "needs_attention");
+
+  async function onReopen() {
+    if (!draft || !canReopen || commands.reopenDraft.isPending) return;
+    const selection = selectionRef.current;
+    setActionError(null);
+    try {
+      await commands.reopenDraft.mutateAsync({ draftId: draft.id, expectedRevision: draft.revision });
+      if (selectionRef.current !== selection) return;
+      setLiveSubmission(null);
+      setFilter("pending_review");
+    } catch (error) {
+      if (selectionRef.current !== selection) return;
+      setActionError(describeError(translate, error));
     }
   }
 
@@ -419,7 +438,9 @@ export function TikTokReviewWorkspace({ headerLink }: TikTokReviewWorkspaceProps
             timedOut: publish.timedOut,
             refresh: publish.refresh,
             immediate: submissionSnapshot(draft, liveSubmission),
-            scheduledFor: draft?.submission?.scheduledAt ?? liveSubmission?.scheduledFor ?? null,
+            scheduledFor: submissionScheduledAt,
+            reopen: canReopen ? () => { void onReopen(); } : null,
+            reopening: commands.reopenDraft.isPending,
           } : null}
         />
       </div>

@@ -157,6 +157,17 @@ export function useTikTokReviewCommands() {
     onError: (error, input) => noteError(error, input),
   });
 
+  const reopenDraft = useMutation({
+    mutationFn: (input: { draftId: string; expectedRevision: number }) =>
+      gateway.reopen(input.draftId, input.expectedRevision),
+    onSuccess: (draft) => {
+      setConflictedDraftId((current) => current === draft.id ? null : current);
+      remember(draft);
+      return refresh(draft.id);
+    },
+    onError: (error, input) => noteError(error, input),
+  });
+
   const submitDraft = useMutation({
     mutationFn: gateway.submit,
     onSuccess: (_result, command) => {
@@ -174,6 +185,7 @@ export function useTikTokReviewCommands() {
     rejectDraft,
     archiveDraft,
     restoreDraft,
+    reopenDraft,
     submitDraft,
     conflictedDraftId,
     clearRevisionConflict,

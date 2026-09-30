@@ -73,7 +73,7 @@ export async function dispatchNow(
       if (!response.ok) await logDispatch(`DISPATCH_HTTP_${httpStatus}`);
     } catch {
       try {
-        await setDispatchState(deps.admin, submissionId, ["dispatching", "publishing"], "unknown");
+        await setDispatchState(deps.admin, submissionId, ["dispatching"], "unknown");
       } catch {
         await logDispatch("DISPATCH_STATE_FAILED");
       }

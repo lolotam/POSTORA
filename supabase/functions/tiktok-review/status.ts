@@ -35,6 +35,7 @@ export type PostSnapshot = {
 export type SubmissionSnapshot = {
   dispatchState: string;
   updatedAt: string;
+  providerPublishId?: string | null;
 };
 
 export type MapPublishStatusInput = {
@@ -72,10 +73,10 @@ function attentionSentence(errorMessage: string): string {
   if (policyCode) return policyViolationMessage(policyCode);
   for (const code of codes) {
     if (["CREATOR_INFO_UNAVAILABLE", "SUBMISSION_READ_FAILED", "SUBMISSION_NOT_FOUND", "MEDIA_READ_FAILED"].includes(code)) {
-      return "TikTok or Postora was temporarily unavailable when publishing. Submit the post again from review.";
+      return "TikTok or Postora was temporarily unavailable when publishing. Choose Edit and resubmit in TikTok review to try again.";
     }
     if (code === "ALREADY_DISPATCHED") {
-      return "This post was already sent to TikTok. Check TikTok before trying again.";
+      return "This post can't be retried from History. Open it in TikTok review and choose Edit and resubmit if TikTok didn't receive it.";
     }
     if (code === "SNAPSHOT_MISMATCH") {
       return "This post changed after it was approved. Review it again before publishing.";
@@ -138,10 +139,10 @@ export function mapPublishStatus(input: MapPublishStatusInput): PublishStatus {
   if (submission.dispatchState === "needs_attention") {
     return statusOf("needs_attention", updatedAt, "This post needs attention before it can go out.", null);
   }
-  if (submission.dispatchState === "publishing") {
+  if (submission.dispatchState === "publishing" && submission.providerPublishId) {
     return statusOf("processing", updatedAt, null, null);
   }
-  if (["unknown", "dispatching", "pending_dispatch"].includes(submission.dispatchState)) {
+  if (["unknown", "dispatching", "pending_dispatch", "publishing"].includes(submission.dispatchState)) {
     const updatedMs = Date.parse(submission.updatedAt);
     if (!Number.isFinite(updatedMs) || input.nowMs - updatedMs > DISPATCH_STALE_MS) {
       return statusOf("needs_attention", updatedAt, "Publishing did not confirm it started.", null);

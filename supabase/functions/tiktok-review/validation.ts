@@ -52,6 +52,11 @@ const ReviewRequestSchema = z.discriminatedUnion("action", [
     expectedRevision: revision,
   }),
   z.object({
+    action: z.literal("reopen"),
+    draftId: uuid,
+    expectedRevision: revision,
+  }),
+  z.object({
     action: z.literal("submit"),
     draftId: uuid,
     expectedRevision: revision,

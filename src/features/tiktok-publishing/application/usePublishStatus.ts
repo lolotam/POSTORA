@@ -5,7 +5,7 @@ import { ReviewGatewayError, useTikTokReviewGateway } from "./ports";
 const BACKOFF_MS = [3_000, 5_000, 10_000, 20_000, 30_000];
 const MAX_POLL_MS = 10 * 60 * 1000;
 
-const RESTING: ReadonlySet<PublishState> = new Set(["scheduled", "published", "failed", "needs_attention"]);
+const RESTING: ReadonlySet<PublishState> = new Set(["published", "failed", "needs_attention"]);
 // Signed out, not allowed, or the submission is gone: polling again cannot
 // succeed, so it stops and the manual refresh stays available.
 const UNRECOVERABLE_STATUS: ReadonlySet<number> = new Set([401, 403, 404]);
@@ -18,7 +18,7 @@ function asGatewayError(caught: unknown): ReviewGatewayError {
   return new ReviewGatewayError("INTERNAL", message, 500);
 }
 
-export function usePublishStatus(submissionId: string | null): {
+export function usePublishStatus(submissionId: string | null, scheduledAt?: string | null): {
   status: PublishStatus | null;
   error: ReviewGatewayError | null;
   timedOut: boolean;
@@ -40,7 +40,8 @@ export function usePublishStatus(submissionId: string | null): {
   useEffect(() => {
     if (!submissionId) return undefined;
     let cancelled = false;
-    const started = Date.now();
+    const scheduledMs = scheduledAt ? Date.parse(scheduledAt) : Number.NaN;
+    let started = Date.now();
     let attempt = 0;
     let timer = 0;
 
@@ -62,12 +63,17 @@ export function usePublishStatus(submissionId: string | null): {
       }
       inFlight.current = true;
       let stop = false;
+      let wakeIn: number | null = null;
       try {
         const next = await gateway.status(submissionId);
         if (cancelled) return;
         setStatus(next);
         setError(null);
         stop = RESTING.has(next.state);
+        if (next.state === "scheduled") {
+          stop = !Number.isFinite(scheduledMs);
+          if (scheduledMs > Date.now()) wakeIn = scheduledMs - Date.now();
+        }
       } catch (caught) {
         if (cancelled) return;
         const failure = asGatewayError(caught);
@@ -77,6 +83,15 @@ export function usePublishStatus(submissionId: string | null): {
         inFlight.current = false;
       }
       if (cancelled || stop) return;
+      if (wakeIn !== null) {
+        // Waiting for a future schedule does not consume the active polling budget.
+        // Cap the wait at the browser's signed 32-bit timeout limit.
+        timer = window.setTimeout(() => {
+          started = Date.now();
+          void poll();
+        }, Math.min(wakeIn, 2_147_483_647));
+        return;
+      }
       if (Date.now() - started >= MAX_POLL_MS) {
         setTimedOut(true);
         return;
@@ -92,7 +107,7 @@ export function usePublishStatus(submissionId: string | null): {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [submissionId, cycle, gateway]);
+  }, [submissionId, scheduledAt, cycle, gateway]);
 
   const refresh = useCallback(() => {
     setTimedOut(false);

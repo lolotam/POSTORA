@@ -28,6 +28,7 @@ export interface TikTokReviewGateway {
   reject(draftId: string, expectedRevision: number, reason: string): Promise<ReviewDraft>;
   archive(draftId: string, expectedRevision: number): Promise<ReviewDraft>;
   restore(draftId: string, expectedRevision: number): Promise<ReviewDraft>;
+  reopen(draftId: string, expectedRevision: number): Promise<ReviewDraft>;
   submit(command: SubmitReviewCommand): Promise<SubmissionResult>;
   status(submissionId: string): Promise<PublishStatus>;
   resolveMediaPreview(mediaFileId: string): Promise<MediaPreview | null>;

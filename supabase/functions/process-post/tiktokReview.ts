@@ -119,12 +119,13 @@ export async function recordReviewPublishId(
   admin: SupabaseClient,
   input: { submissionId: string; postId: string; userId: string; publishId: string },
 ): Promise<void> {
-  const { error } = await admin.from("tiktok_review_submissions")
+  const { data: recorded, error } = await admin.from("tiktok_review_submissions")
     .update({ provider_publish_id: input.publishId })
     .eq("id", input.submissionId)
     .eq("post_id", input.postId)
     .eq("user_id", input.userId)
-    .eq("dispatch_state", "publishing")
-    .is("provider_publish_id", null);
-  if (error) throw new Error("tiktok_review_publish_id_record_failed");
+    .in("dispatch_state", ["publishing", "unknown"])
+    .is("provider_publish_id", null)
+    .select("id");
+  if (error || recorded?.length !== 1) throw new Error("tiktok_review_publish_id_record_failed");
 }
