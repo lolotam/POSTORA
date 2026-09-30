@@ -37,8 +37,8 @@ export interface TikTokWebhookDeps {
   log: (message: string) => void;
 }
 
-function json(body: unknown, status: number): Response {
-  return new Response(JSON.stringify(body), {
+function json(payload: unknown, status: number): Response {
+  return new Response(JSON.stringify(payload), {
     status,
     headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
