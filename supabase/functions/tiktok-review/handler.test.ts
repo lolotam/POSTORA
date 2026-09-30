@@ -73,8 +73,10 @@ type Call = { name: string; table?: string; args?: unknown[] };
 function createFixture(options: {
   userId?: string;
   tableResults?: Record<string, DbResult>;
+  mediaHandler?: (filters: Record<string, unknown>) => Promise<DbResult>;
   rpcResults?: Record<string, DbResult>;
   fetchHandler?: (url: string, init?: RequestInit) => Promise<Response>;
+  edgeRuntime?: { waitUntil(promise: Promise<unknown>): void };
 } = {}) {
   const calls: Call[] = [];
   const logs: LogEvent[] = [];
@@ -129,6 +131,9 @@ function createFixture(options: {
             return Promise.resolve({ data: defaultAccountRow, error: null });
           }
           if (table === "media_files") {
+            if (options.mediaHandler) {
+              return options.mediaHandler(filters);
+            }
             return Promise.resolve({ data: { id: testMediaId, metadata: { duration: 30 } }, error: null });
           }
           return Promise.resolve({ data: null, error: null });
@@ -218,6 +223,7 @@ function createFixture(options: {
     supabaseUrl: "https://api.postora.cloud",
     fetch: defaultFetch as typeof fetch,
     now: () => Date.UTC(2026, 9, 2, 12, 0, 0),
+    edgeRuntime: options.edgeRuntime,
     log: (event: LogEvent) => {
       logs.push(event);
     },
@@ -320,68 +326,49 @@ Deno.test("get of another user's draft returns 404 with query filtered by authen
   assertEquals(userFilter.args?.[1], testUserId);
 });
 
-Deno.test("save maps RPC error TIKTOK_REVIEW_REVISION_CONFLICT to 409 and 23503 to 422 MEDIA_NOT_OWNED", async () => {
-  const fConflict = createFixture({
-    rpcResults: {
-      tiktok_review_save_draft: {
-        data: null,
-        error: { message: "TIKTOK_REVIEW_REVISION_CONFLICT: revision changed" },
-      },
+Deno.test("save maps RPC error codes to appropriate HTTP statuses (409, 422, 429)", async () => {
+  const cases = [
+    {
+      name: "TIKTOK_REVIEW_REVISION_CONFLICT maps to 409 REVISION_CONFLICT",
+      error: { message: "TIKTOK_REVIEW_REVISION_CONFLICT: revision changed" },
+      expectedStatus: 409,
+      expectedCode: "REVISION_CONFLICT",
     },
-  });
-  const resConflict = await fConflict.run({
-    action: "save",
-    draftId: testDraftId,
-    expectedRevision: 1,
-    caption: "Caption edit",
-    mediaFileId: testMediaId,
-    mediaDurationSec: 30,
-    settings: defaultSettings,
-  });
-  assertEquals(resConflict.status, 409);
-  assertEquals(resConflict.body.code, "REVISION_CONFLICT");
+    {
+      name: "foreign key 23503 maps to 422 MEDIA_NOT_OWNED",
+      error: { code: "23503", message: "foreign key violation" },
+      expectedStatus: 422,
+      expectedCode: "MEDIA_NOT_OWNED",
+    },
+    {
+      name: "POST_QUOTA_ maps to 429 QUOTA_EXCEEDED",
+      error: { message: "POST_QUOTA_MONTHLY_LIMIT_EXCEEDED: posting quota reached" },
+      expectedStatus: 429,
+      expectedCode: "QUOTA_EXCEEDED",
+    },
+  ];
 
-  const fFk = createFixture({
-    rpcResults: {
-      tiktok_review_save_draft: {
-        data: null,
-        error: { code: "23503", message: "foreign key violation" },
+  for (const tc of cases) {
+    const f = createFixture({
+      rpcResults: {
+        tiktok_review_save_draft: {
+          data: null,
+          error: tc.error,
+        },
       },
-    },
-  });
-  const resFk = await fFk.run({
-    action: "save",
-    draftId: testDraftId,
-    expectedRevision: 1,
-    caption: "Caption edit",
-    mediaFileId: testMediaId,
-    mediaDurationSec: 30,
-    settings: defaultSettings,
-  });
-  assertEquals(resFk.status, 422);
-  assertEquals(resFk.body.code, "MEDIA_NOT_OWNED");
-});
-
-Deno.test("save maps POST_QUOTA_ database error to 429 QUOTA_EXCEEDED", async () => {
-  const f = createFixture({
-    rpcResults: {
-      tiktok_review_save_draft: {
-        data: null,
-        error: { message: "POST_QUOTA_MONTHLY_LIMIT_EXCEEDED: posting quota reached" },
-      },
-    },
-  });
-  const res = await f.run({
-    action: "save",
-    draftId: testDraftId,
-    expectedRevision: 1,
-    caption: "Caption edit",
-    mediaFileId: testMediaId,
-    mediaDurationSec: 30,
-    settings: defaultSettings,
-  });
-  assertEquals(res.status, 429);
-  assertEquals(res.body.code, "QUOTA_EXCEEDED");
+    });
+    const res = await f.run({
+      action: "save",
+      draftId: testDraftId,
+      expectedRevision: 1,
+      caption: "Caption edit",
+      mediaFileId: testMediaId,
+      mediaDurationSec: 30,
+      settings: defaultSettings,
+    });
+    assertEquals(res.status, tc.expectedStatus, `Expected status ${tc.expectedStatus} for ${tc.name}`);
+    assertEquals(res.body.code, tc.expectedCode, `Expected code ${tc.expectedCode} for ${tc.name}`);
+  }
 });
 
 Deno.test("submit with a policy violation returns 422 POLICY_* and NEVER calls the submit RPC", async () => {
@@ -486,7 +473,7 @@ Deno.test("submit mode now with created=true transitions pending_dispatch to dis
   // Transition 2: dispatching -> dispatched on 2xx
   assertEquals(dispatchStateRpcs[1].args?.[0], {
     p_submission_id: testSubmissionId,
-    p_from: ["dispatching"],
+    p_from: ["dispatching", "publishing"],
     p_to: "dispatched",
   });
 
@@ -500,23 +487,82 @@ Deno.test("submit mode now with created=true transitions pending_dispatch to dis
     post_id: testPostId,
     expected_scheduled_at: null,
   });
+
+  // Verify findAccount queried with user_id, platform tiktok, and is_active
+  const accountEqCalls = f.calls.filter((c) => c.name === "eq" && c.table === "social_accounts");
+  const accountUserFilter = accountEqCalls.find((c) => c.args?.[0] === "user_id");
+  assert(accountUserFilter, "Expected findAccount eq('user_id', testUserId)");
+  assertEquals(accountUserFilter.args?.[1], testUserId);
+  const accountPlatformFilter = accountEqCalls.find((c) => c.args?.[0] === "platform");
+  assert(accountPlatformFilter, "Expected findAccount eq('platform', 'tiktok')");
+  assertEquals(accountPlatformFilter.args?.[1], "tiktok");
+  const accountActiveFilter = accountEqCalls.find((c) => c.args?.[0] === "is_active");
+  assert(accountActiveFilter, "Expected findAccount eq('is_active', true)");
+  assertEquals(accountActiveFilter.args?.[1], true);
+
+  // Verify submit RPC received p_user_id = JWT user
+  const submitRpc = f.calls.find((c) => c.name === "rpc:tiktok_review_submit");
+  assert(submitRpc, "Expected rpc:tiktok_review_submit");
+  assertEquals((submitRpc.args?.[0] as Record<string, unknown>).p_user_id, testUserId);
 });
 
-Deno.test("submit mode now with process-post 409 transitions dispatching to needs_attention", async () => {
+Deno.test("submit mode now dispatch failure transitions state correctly (409 -> needs_attention, network error -> unknown)", async () => {
+  const cases = [
+    {
+      name: "process-post 409 transitions dispatching to needs_attention",
+      fetchResult: () => Promise.resolve(new Response(JSON.stringify({ error: "Conflict" }), { status: 409 })),
+      expectedNextState: "needs_attention",
+    },
+    {
+      name: "process-post network error transitions dispatching to unknown",
+      fetchResult: () => Promise.reject(new Error("Network drop during dispatch")),
+      expectedNextState: "unknown",
+    },
+  ];
+
+  for (const tc of cases) {
+    const f = createFixture({
+      fetchHandler: (url) => {
+        if (url.includes("process-post")) return tc.fetchResult();
+        if (url.includes("creator_info")) {
+          return Promise.resolve(
+            new Response(JSON.stringify(defaultCreatorApiResponse), {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            }),
+          );
+        }
+        return Promise.resolve(new Response(null, { status: 200 }));
+      },
+    });
+
+    const res = await f.run({
+      action: "submit",
+      draftId: testDraftId,
+      expectedRevision: 1,
+      requestId: testRequestId,
+      mode: "now",
+      scheduledAt: null,
+      timeZone: "UTC",
+      consent: true,
+    });
+
+    assertEquals(res.status, 200);
+
+    const dispatchStateRpcs = f.calls.filter((c) => c.name === "rpc:tiktok_review_set_dispatch_state");
+    assertEquals(dispatchStateRpcs.length, 2);
+    assertEquals(dispatchStateRpcs[1].args?.[0], {
+      p_submission_id: testSubmissionId,
+      p_from: ["dispatching", "publishing"],
+      p_to: tc.expectedNextState,
+    });
+  }
+});
+
+Deno.test("submit mode now with dispatch claim refused returns 200 with ZERO process-post fetches and exactly ONE dispatch-state RPC", async () => {
   const f = createFixture({
-    fetchHandler: (url) => {
-      if (url.includes("process-post")) {
-        return Promise.resolve(new Response(JSON.stringify({ error: "Conflict" }), { status: 409 }));
-      }
-      if (url.includes("creator_info")) {
-        return Promise.resolve(
-          new Response(JSON.stringify(defaultCreatorApiResponse), {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          }),
-        );
-      }
-      return Promise.resolve(new Response(null, { status: 200 }));
+    rpcResults: {
+      tiktok_review_set_dispatch_state: { data: false, error: null },
     },
   });
 
@@ -532,31 +578,46 @@ Deno.test("submit mode now with process-post 409 transitions dispatching to need
   });
 
   assertEquals(res.status, 200);
+  const processPostCalls = f.fetchCalls.filter((c) => c.url.includes("process-post"));
+  assertEquals(processPostCalls.length, 0);
 
   const dispatchStateRpcs = f.calls.filter((c) => c.name === "rpc:tiktok_review_set_dispatch_state");
-  assertEquals(dispatchStateRpcs.length, 2);
-  assertEquals(dispatchStateRpcs[1].args?.[0], {
+  assertEquals(dispatchStateRpcs.length, 1);
+  assertEquals(dispatchStateRpcs[0].args?.[0], {
     p_submission_id: testSubmissionId,
-    p_from: ["dispatching"],
-    p_to: "needs_attention",
+    p_from: ["pending_dispatch"],
+    p_to: "dispatching",
   });
 });
 
-Deno.test("submit mode now with process-post throwing network error transitions dispatching to unknown", async () => {
+Deno.test("submit with draft.revision !== expectedRevision returns 409 and zero TikTok calls", async () => {
+  const f = createFixture();
+
+  const res = await f.run({
+    action: "submit",
+    draftId: testDraftId,
+    expectedRevision: 999, // Mismatched revision
+    requestId: testRequestId,
+    mode: "now",
+    scheduledAt: null,
+    timeZone: "UTC",
+    consent: true,
+  });
+
+  assertEquals(res.status, 409);
+  assertEquals(res.body.code, "REVISION_CONFLICT");
+
+  const tiktokCalls = f.fetchCalls.filter((c) => c.url.includes("open.tiktokapis.com"));
+  assertEquals(tiktokCalls.length, 0);
+});
+
+Deno.test("submit mode now uses edgeRuntime.waitUntil when provided and still dispatches exactly once", async () => {
+  let waitUntilPromise: Promise<unknown> | null = null;
   const f = createFixture({
-    fetchHandler: (url) => {
-      if (url.includes("process-post")) {
-        return Promise.reject(new Error("Network drop during dispatch"));
-      }
-      if (url.includes("creator_info")) {
-        return Promise.resolve(
-          new Response(JSON.stringify(defaultCreatorApiResponse), {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          }),
-        );
-      }
-      return Promise.resolve(new Response(null, { status: 200 }));
+    edgeRuntime: {
+      waitUntil: (promise: Promise<unknown>) => {
+        waitUntilPromise = promise;
+      },
     },
   });
 
@@ -572,13 +633,18 @@ Deno.test("submit mode now with process-post throwing network error transitions 
   });
 
   assertEquals(res.status, 200);
+  assert(waitUntilPromise !== null, "Expected edgeRuntime.waitUntil to be called with task");
+  await waitUntilPromise;
+
+  const processPostCalls = f.fetchCalls.filter((c) => c.url.includes("process-post"));
+  assertEquals(processPostCalls.length, 1);
 
   const dispatchStateRpcs = f.calls.filter((c) => c.name === "rpc:tiktok_review_set_dispatch_state");
   assertEquals(dispatchStateRpcs.length, 2);
   assertEquals(dispatchStateRpcs[1].args?.[0], {
     p_submission_id: testSubmissionId,
-    p_from: ["dispatching"],
-    p_to: "unknown",
+    p_from: ["dispatching", "publishing"],
+    p_to: "dispatched",
   });
 });
 
@@ -656,15 +722,178 @@ Deno.test("submit mode scheduled executes ZERO process-post fetches", async () =
   assertEquals(dispatchStateRpcs.length, 0);
 });
 
-Deno.test("creator_info request never includes the provider access token in logs", async () => {
-  const f = createFixture();
+Deno.test("creator_info 502 path never includes the provider access token in logs or body", async () => {
+  const f = createFixture({
+    fetchHandler: (url) => {
+      if (url.includes("creator_info")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              error: {
+                code: "server_error",
+                message: `TikTok gateway failure with secret ${fakeTiktokToken}`,
+              },
+            }),
+            { status: 500, headers: { "Content-Type": "application/json" } },
+          ),
+        );
+      }
+      return Promise.resolve(new Response(null, { status: 200 }));
+    },
+  });
 
   const res = await f.run({
     action: "creator_info",
     accountId: testAccountId,
   });
 
-  assertEquals(res.status, 200);
+  assertEquals(res.status, 502);
+  assertEquals(res.body.code, "PROVIDER_UNAVAILABLE");
+  assert(f.logs.length > 0, "Expected logs to be recorded on 502 failure");
   const loggedString = JSON.stringify(f.logs);
-  assert(!loggedString.includes(fakeTiktokToken));
+  assert(!loggedString.includes(fakeTiktokToken), "Token must not appear in any log entry");
+  const bodyString = JSON.stringify(res.body);
+  assert(!bodyString.includes(fakeTiktokToken), "Token must not appear in response body");
+});
+
+Deno.test("submit replay: an existing submission for (user, requestId) returns 200 with its ids and makes ZERO TikTok calls and ZERO RPC calls", async () => {
+  const f = createFixture({
+    tableResults: {
+      tiktok_review_submissions: {
+        data: {
+          id: "replayed-sub-id",
+          post_id: "replayed-post-id",
+          mode: "now",
+        },
+        error: null,
+      },
+    },
+  });
+
+  const res = await f.run({
+    action: "submit",
+    draftId: testDraftId,
+    expectedRevision: 1,
+    requestId: testRequestId,
+    mode: "now",
+    scheduledAt: null,
+    timeZone: "UTC",
+    consent: true,
+  });
+
+  assertEquals(res.status, 200);
+  assertEquals(res.body.data, {
+    submissionId: "replayed-sub-id",
+    postId: "replayed-post-id",
+    state: "queued",
+  });
+
+  // Replay lookup must filter by authenticated JWT user
+  const replayEqCalls = f.calls.filter(
+    (c) => c.name === "eq" && c.table === "tiktok_review_submissions",
+  );
+  const userFilter = replayEqCalls.find((c) => c.args?.[0] === "user_id");
+  assert(userFilter, "Expected eq('user_id', testUserId) on replay query");
+  assertEquals(userFilter.args?.[1], testUserId);
+
+  // ZERO TikTok calls
+  const tiktokCalls = f.fetchCalls.filter((c) => c.url.includes("open.tiktokapis.com"));
+  assertEquals(tiktokCalls.length, 0);
+
+  // ZERO RPC calls
+  const rpcCalls = f.calls.filter((c) => c.name.startsWith("rpc:"));
+  assertEquals(rpcCalls.length, 0);
+});
+
+Deno.test("submit of draft not in pending_review returns 409 INVALID_STATE with ZERO TikTok calls", async () => {
+  const f = createFixture({
+    tableResults: {
+      tiktok_review_drafts: {
+        data: { ...defaultDraftRow, state: "rejected" },
+        error: null,
+      },
+    },
+  });
+
+  const res = await f.run({
+    action: "submit",
+    draftId: testDraftId,
+    expectedRevision: 1,
+    requestId: testRequestId,
+    mode: "now",
+    scheduledAt: null,
+    timeZone: "UTC",
+    consent: true,
+  });
+
+  assertEquals(res.status, 409);
+  assertEquals(res.body.code, "INVALID_STATE");
+
+  // ZERO TikTok calls
+  const tiktokCalls = f.fetchCalls.filter((c) => c.url.includes("open.tiktokapis.com"));
+  assertEquals(tiktokCalls.length, 0);
+});
+
+Deno.test("submit media validation refusals (MEDIA_NOT_VIDEO vs MEDIA_NOT_OWNED)", async () => {
+  const cases = [
+    {
+      name: "media not a video returns 422 MEDIA_NOT_VIDEO with ZERO TikTok calls",
+      code: "MEDIA_NOT_VIDEO",
+      mediaHandler: (filters: Record<string, unknown>) => {
+        // First query has eq("file_type", "video") -> returns not found
+        if (filters["file_type"] === "video") {
+          return Promise.resolve({ data: null, error: null });
+        }
+        // Second query has no file_type filter -> media exists for user, but is not a video
+        return Promise.resolve({ data: { id: testMediaId, file_type: "image" }, error: null });
+      },
+      assertFilters: (f: ReturnType<typeof createFixture>) => {
+        const mediaEq = f.calls.filter((c) => c.name === "eq" && c.table === "media_files");
+        const userFilter = mediaEq.find((c) => c.args?.[0] === "user_id");
+        assert(userFilter, "Expected eq('user_id', testUserId)");
+        assertEquals(userFilter.args?.[1], testUserId);
+        const typeFilter = mediaEq.find((c) => c.args?.[0] === "file_type");
+        assert(typeFilter, "Expected eq('file_type', 'video')");
+        assertEquals(typeFilter.args?.[1], "video");
+      },
+    },
+    {
+      name: "media not owned returns 422 MEDIA_NOT_OWNED with ZERO TikTok calls",
+      code: "MEDIA_NOT_OWNED",
+      mediaHandler: () => {
+        // Both queries return null -> media not owned by user
+        return Promise.resolve({ data: null, error: null });
+      },
+      assertFilters: (f: ReturnType<typeof createFixture>) => {
+        const mediaEq = f.calls.filter((c) => c.name === "eq" && c.table === "media_files");
+        const userFilter = mediaEq.find((c) => c.args?.[0] === "user_id");
+        assert(userFilter, "Expected eq('user_id', testUserId)");
+        assertEquals(userFilter.args?.[1], testUserId);
+      },
+    },
+  ];
+
+  for (const tc of cases) {
+    const f = createFixture({ mediaHandler: tc.mediaHandler });
+
+    const res = await f.run({
+      action: "submit",
+      draftId: testDraftId,
+      expectedRevision: 1,
+      requestId: testRequestId,
+      mode: "now",
+      scheduledAt: null,
+      timeZone: "UTC",
+      consent: true,
+    });
+
+    assertEquals(res.status, 422, `Expected 422 for ${tc.name}`);
+    assertEquals(res.body.code, tc.code, `Expected code ${tc.code} for ${tc.name}`);
+
+    // ZERO TikTok calls
+    const tiktokCalls = f.fetchCalls.filter((c) => c.url.includes("open.tiktokapis.com"));
+    assertEquals(tiktokCalls.length, 0);
+
+    tc.assertFilters(f);
+  }
 });

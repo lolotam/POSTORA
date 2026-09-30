@@ -1,95 +1,124 @@
 import {
-  assert,
   assertEquals,
   assertThrows,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   buildTikTokPostInfo,
-  tiktokPostSettingsFromMetadata,
+  tiktokPostSettingsFromReview,
   type TikTokPostSettings,
 } from "./tiktokPostInfo.ts";
 
-Deno.test("core regression: maps privacy, disabled interactions, organic disclosure, and aigc correctly", () => {
-  const settings: TikTokPostSettings = {
-    privacy: "SELF_ONLY",
-    allowComment: false,
-    allowDuet: false,
-    allowStitch: false,
-    disclose: true,
-    yourBrand: true,
-    brandedContent: false,
-    aiGenerated: true,
-  };
-  const caption = "Original caption for review";
-  const actual = buildTikTokPostInfo(caption, settings);
-  assertEquals(actual.title, caption);
-  assertEquals(actual.privacy_level, "SELF_ONLY");
-  assertEquals(actual.brand_organic_toggle, true);
-  assertEquals(actual.brand_content_toggle, false);
-  assertEquals(actual.disable_comment, true);
-  assertEquals(actual.disable_duet, true);
-  assertEquals(actual.disable_stitch, true);
-  assertEquals(actual.is_aigc, true);
-});
+Deno.test("buildTikTokPostInfo mapping scenarios (table-driven)", () => {
+  const cases = [
+    {
+      name: "core regression: maps privacy, disabled interactions, organic disclosure, and aigc correctly",
+      caption: "Original caption for review",
+      settings: {
+        privacy: "SELF_ONLY",
+        allowComment: false,
+        allowDuet: false,
+        allowStitch: false,
+        disclose: true,
+        yourBrand: true,
+        brandedContent: false,
+        aiGenerated: true,
+      },
+      expected: {
+        title: "Original caption for review",
+        privacy_level: "SELF_ONLY",
+        disable_comment: true,
+        disable_duet: true,
+        disable_stitch: true,
+        brand_organic_toggle: true,
+        brand_content_toggle: false,
+        is_aigc: true,
+      },
+    },
+    {
+      name: "disclose=false forces both brand toggles false even when yourBrand and brandedContent are true",
+      caption: "Caption",
+      settings: {
+        privacy: "PUBLIC_TO_EVERYONE",
+        allowComment: true,
+        allowDuet: true,
+        allowStitch: true,
+        disclose: false,
+        yourBrand: true,
+        brandedContent: true,
+        aiGenerated: false,
+      },
+      expected: {
+        title: "Caption",
+        privacy_level: "PUBLIC_TO_EVERYONE",
+        disable_comment: false,
+        disable_duet: false,
+        disable_stitch: false,
+        brand_organic_toggle: false,
+        brand_content_toggle: false,
+        is_aigc: false,
+      },
+    },
+    {
+      name: "disclose=true with brandedContent=true and yourBrand=false maps content toggle accurately",
+      caption: "Caption",
+      settings: {
+        privacy: "PUBLIC_TO_EVERYONE",
+        allowComment: true,
+        allowDuet: true,
+        allowStitch: true,
+        disclose: true,
+        yourBrand: false,
+        brandedContent: true,
+        aiGenerated: false,
+      },
+      expected: {
+        title: "Caption",
+        privacy_level: "PUBLIC_TO_EVERYONE",
+        disable_comment: false,
+        disable_duet: false,
+        disable_stitch: false,
+        brand_organic_toggle: false,
+        brand_content_toggle: true,
+        is_aigc: false,
+      },
+    },
+    {
+      name: "every boolean key is explicitly present and false when toggles are enabled or flags are false",
+      caption: "All false flags",
+      settings: {
+        privacy: "PUBLIC_TO_EVERYONE",
+        allowComment: true,
+        allowDuet: true,
+        allowStitch: true,
+        disclose: false,
+        yourBrand: false,
+        brandedContent: false,
+        aiGenerated: false,
+      },
+      expected: {
+        title: "All false flags",
+        privacy_level: "PUBLIC_TO_EVERYONE",
+        disable_comment: false,
+        disable_duet: false,
+        disable_stitch: false,
+        brand_organic_toggle: false,
+        brand_content_toggle: false,
+        is_aigc: false,
+      },
+    },
+  ];
 
-Deno.test("disclose=false forces both brand toggles false even when yourBrand and brandedContent are true", () => {
-  const settings: TikTokPostSettings = {
-    privacy: "PUBLIC_TO_EVERYONE",
-    allowComment: true,
-    allowDuet: true,
-    allowStitch: true,
-    disclose: false,
-    yourBrand: true,
-    brandedContent: true,
-    aiGenerated: false,
-  };
-  const actual = buildTikTokPostInfo("Caption", settings);
-  assertEquals(actual.brand_organic_toggle, false);
-  assertEquals(actual.brand_content_toggle, false);
-});
-
-Deno.test("disclose=true with brandedContent=true and yourBrand=false maps content toggle accurately", () => {
-  const settings: TikTokPostSettings = {
-    privacy: "PUBLIC_TO_EVERYONE",
-    allowComment: true,
-    allowDuet: true,
-    allowStitch: true,
-    disclose: true,
-    yourBrand: false,
-    brandedContent: true,
-    aiGenerated: false,
-  };
-  const actual = buildTikTokPostInfo("Caption", settings);
-  assertEquals(actual.brand_organic_toggle, false);
-  assertEquals(actual.brand_content_toggle, true);
-});
-
-Deno.test("every boolean key is explicitly present and false when toggles are enabled or flags are false", () => {
-  const settings: TikTokPostSettings = {
-    privacy: "PUBLIC_TO_EVERYONE",
-    allowComment: true,
-    allowDuet: true,
-    allowStitch: true,
-    disclose: false,
-    yourBrand: false,
-    brandedContent: false,
-    aiGenerated: false,
-  };
-  const actual = buildTikTokPostInfo("All false flags", settings);
-  assertEquals(actual.disable_comment, false);
-  assertEquals(actual.disable_duet, false);
-  assertEquals(actual.disable_stitch, false);
-  assertEquals(actual.brand_organic_toggle, false);
-  assertEquals(actual.brand_content_toggle, false);
-  assertEquals(actual.is_aigc, false);
-
-  const keys = Object.keys(actual);
-  assert(keys.includes("disable_comment"));
-  assert(keys.includes("disable_duet"));
-  assert(keys.includes("disable_stitch"));
-  assert(keys.includes("brand_organic_toggle"));
-  assert(keys.includes("brand_content_toggle"));
-  assert(keys.includes("is_aigc"));
+  for (const c of cases) {
+    const actual = buildTikTokPostInfo(c.caption, c.settings);
+    assertEquals(actual.title, c.expected.title, `Title mismatch for ${c.name}`);
+    assertEquals(actual.privacy_level, c.expected.privacy_level, `privacy_level mismatch for ${c.name}`);
+    assertEquals(actual.disable_comment, c.expected.disable_comment, `disable_comment mismatch for ${c.name}`);
+    assertEquals(actual.disable_duet, c.expected.disable_duet, `disable_duet mismatch for ${c.name}`);
+    assertEquals(actual.disable_stitch, c.expected.disable_stitch, `disable_stitch mismatch for ${c.name}`);
+    assertEquals(actual.brand_organic_toggle, c.expected.brand_organic_toggle, `brand_organic_toggle mismatch for ${c.name}`);
+    assertEquals(actual.brand_content_toggle, c.expected.brand_content_toggle, `brand_content_toggle mismatch for ${c.name}`);
+    assertEquals(actual.is_aigc, c.expected.is_aigc, `is_aigc mismatch for ${c.name}`);
+  }
 });
 
 Deno.test("caption longer than 2200 characters is not truncated by buildTikTokPostInfo", () => {
@@ -127,27 +156,30 @@ Deno.test("buildTikTokPostInfo throws when privacy string is empty", () => {
   );
 });
 
-Deno.test("tiktokPostSettingsFromMetadata returns null without a valid non-empty privacy string", () => {
-  assertEquals(tiktokPostSettingsFromMetadata({}), null);
-  assertEquals(tiktokPostSettingsFromMetadata({ tiktok_privacy_level: null }), null);
-  assertEquals(tiktokPostSettingsFromMetadata({ tiktok_privacy_level: "" }), null);
-  assertEquals(tiktokPostSettingsFromMetadata({ tiktok_privacy_level: 123 }), null);
-  assertEquals(tiktokPostSettingsFromMetadata({ tiktok_privacy_level: undefined }), null);
-  assertEquals(tiktokPostSettingsFromMetadata({ tiktok_privacy_level: false }), null);
+Deno.test("tiktokPostSettingsFromReview returns null without a valid non-empty privacy string", () => {
+  assertEquals(tiktokPostSettingsFromReview({}), null);
+  assertEquals(tiktokPostSettingsFromReview({ privacy: null }), null);
+  assertEquals(tiktokPostSettingsFromReview({ privacy: "" }), null);
+  assertEquals(tiktokPostSettingsFromReview({ privacy: 123 }), null);
+  assertEquals(tiktokPostSettingsFromReview({ privacy: undefined }), null);
+  assertEquals(tiktokPostSettingsFromReview({ privacy: false }), null);
+  assertEquals(tiktokPostSettingsFromReview(null), null);
+  assertEquals(tiktokPostSettingsFromReview("not an object"), null);
+  assertEquals(tiktokPostSettingsFromReview([1, 2, 3]), null);
 });
 
-Deno.test("tiktokPostSettingsFromMetadata treats non-true values as false", () => {
-  const metadata = {
-    tiktok_privacy_level: "SELF_ONLY",
-    tiktok_allow_comment: "true",
-    tiktok_allow_duet: 1,
-    tiktok_allow_stitch: "1",
-    tiktok_disclose_content: {},
-    tiktok_your_brand: "yes",
-    tiktok_branded_content: [true],
-    tiktok_ai_generated: "TRUE",
+Deno.test("tiktokPostSettingsFromReview treats non-true values as false", () => {
+  const settings = {
+    privacy: "SELF_ONLY",
+    allowComment: "true",
+    allowDuet: 1,
+    allowStitch: "1",
+    disclose: {},
+    yourBrand: "yes",
+    brandedContent: [true],
+    aiGenerated: "TRUE",
   };
-  const actual = tiktokPostSettingsFromMetadata(metadata);
+  const actual = tiktokPostSettingsFromReview(settings);
   assertEquals(actual, {
     privacy: "SELF_ONLY",
     allowComment: false,
@@ -160,18 +192,18 @@ Deno.test("tiktokPostSettingsFromMetadata treats non-true values as false", () =
   });
 });
 
-Deno.test("tiktokPostSettingsFromMetadata extracts boolean flags when strictly true", () => {
-  const metadata = {
-    tiktok_privacy_level: "MUTUAL_FOLLOW_FRIENDS",
-    tiktok_allow_comment: true,
-    tiktok_allow_duet: true,
-    tiktok_allow_stitch: true,
-    tiktok_disclose_content: true,
-    tiktok_your_brand: true,
-    tiktok_branded_content: true,
-    tiktok_ai_generated: true,
+Deno.test("tiktokPostSettingsFromReview extracts boolean flags when strictly true", () => {
+  const settings = {
+    privacy: "MUTUAL_FOLLOW_FRIENDS",
+    allowComment: true,
+    allowDuet: true,
+    allowStitch: true,
+    disclose: true,
+    yourBrand: true,
+    brandedContent: true,
+    aiGenerated: true,
   };
-  const actual = tiktokPostSettingsFromMetadata(metadata);
+  const actual = tiktokPostSettingsFromReview(settings);
   assertEquals(actual, {
     privacy: "MUTUAL_FOLLOW_FRIENDS",
     allowComment: true,

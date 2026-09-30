@@ -4,6 +4,10 @@ import {
 import {
   creatorCapabilitiesFromTikTok,
   evaluateTikTokPublishPolicy,
+  isPolicyViolationCode,
+  policyViolationMessage,
+  resolveReviewDurationSec,
+  type PolicyViolationCode,
   type TikTokCreatorCapabilities,
   type TikTokPublishPolicyInput,
   type TikTokReviewSettings,
@@ -42,167 +46,137 @@ Deno.test("empty result for a fully valid input", () => {
   assertEquals(violations, []);
 });
 
-Deno.test("violation code: POSTING_BLOCKED when creator posting is blocked", () => {
-  const violations = evaluateTikTokPublishPolicy({
-    ...validInput,
-    creator: { ...validCreator, postingBlocked: true },
-  });
-  assertEquals(violations, [
+Deno.test("single-rule violation tests (table-driven)", () => {
+  const cases: Array<{
+    name: string;
+    input: TikTokPublishPolicyInput;
+    expectedCode: PolicyViolationCode;
+    expectedMessage: string;
+  }> = [
     {
-      code: "POSTING_BLOCKED",
-      message: "TikTok is blocking new posts from this account.",
+      name: "POSTING_BLOCKED when creator posting is blocked",
+      input: { ...validInput, creator: { ...validCreator, postingBlocked: true } },
+      expectedCode: "POSTING_BLOCKED",
+      expectedMessage: "TikTok is blocking new posts from this account.",
     },
-  ]);
+    {
+      name: "MEDIA_REQUIRED when mediaFileId is null",
+      input: { ...validInput, mediaFileId: null },
+      expectedCode: "MEDIA_REQUIRED",
+      expectedMessage: "Add a video before publishing.",
+    },
+    {
+      name: "MEDIA_REQUIRED when mediaFileId is empty",
+      input: { ...validInput, mediaFileId: "" },
+      expectedCode: "MEDIA_REQUIRED",
+      expectedMessage: "Add a video before publishing.",
+    },
+    {
+      name: "PRIVACY_REQUIRED when privacy is null",
+      input: { ...validInput, settings: { ...validSettings, privacy: null } },
+      expectedCode: "PRIVACY_REQUIRED",
+      expectedMessage: "Choose who can view this post.",
+    },
+    {
+      name: "PRIVACY_REQUIRED when privacy is empty",
+      input: { ...validInput, settings: { ...validSettings, privacy: "" } },
+      expectedCode: "PRIVACY_REQUIRED",
+      expectedMessage: "Choose who can view this post.",
+    },
+    {
+      name: "PRIVACY_NOT_OFFERED when privacy is not in creator options",
+      input: { ...validInput, settings: { ...validSettings, privacy: "FOO_UNSUPPORTED" } },
+      expectedCode: "PRIVACY_NOT_OFFERED",
+      expectedMessage: "This privacy setting isn't available for this account.",
+    },
+    {
+      name: "COMMENT_NOT_ALLOWED when comments enabled but creator disabled them",
+      input: {
+        ...validInput,
+        settings: { ...validSettings, allowComment: true },
+        creator: { ...validCreator, commentDisabled: true },
+      },
+      expectedCode: "COMMENT_NOT_ALLOWED",
+      expectedMessage: "Comments can't be turned on for this account.",
+    },
+    {
+      name: "DUET_NOT_ALLOWED when duet enabled but creator disabled it",
+      input: {
+        ...validInput,
+        settings: { ...validSettings, allowDuet: true },
+        creator: { ...validCreator, duetDisabled: true },
+      },
+      expectedCode: "DUET_NOT_ALLOWED",
+      expectedMessage: "Duet can't be turned on for this account.",
+    },
+    {
+      name: "STITCH_NOT_ALLOWED when stitch enabled but creator disabled it",
+      input: {
+        ...validInput,
+        settings: { ...validSettings, allowStitch: true },
+        creator: { ...validCreator, stitchDisabled: true },
+      },
+      expectedCode: "STITCH_NOT_ALLOWED",
+      expectedMessage: "Stitch can't be turned on for this account.",
+    },
+    {
+      name: "DISCLOSURE_INCOMPLETE when disclose is true without selecting yourBrand or brandedContent",
+      input: {
+        ...validInput,
+        settings: {
+          ...validSettings,
+          disclose: true,
+          yourBrand: false,
+          brandedContent: false,
+        },
+      },
+      expectedCode: "DISCLOSURE_INCOMPLETE",
+      expectedMessage: "Indicate whether this promotes you, a third party, or both.",
+    },
+    {
+      name: "BRANDED_CONTENT_PRIVATE when branded content paired with SELF_ONLY",
+      input: {
+        ...validInput,
+        settings: {
+          ...validSettings,
+          privacy: "SELF_ONLY",
+          disclose: true,
+          yourBrand: false,
+          brandedContent: true,
+        },
+      },
+      expectedCode: "BRANDED_CONTENT_PRIVATE",
+      expectedMessage: "Branded content can't be set to Only me.",
+    },
+  ];
+
+  for (const c of cases) {
+    const violations = evaluateTikTokPublishPolicy(c.input);
+    assertEquals(
+      violations,
+      [{ code: c.expectedCode, message: c.expectedMessage }],
+      `Mismatch for case: ${c.name}`,
+    );
+  }
 });
 
-Deno.test("violation code: MEDIA_REQUIRED when mediaFileId is null or empty", () => {
-  const violationsNull = evaluateTikTokPublishPolicy({
-    ...validInput,
-    mediaFileId: null,
-  });
-  assertEquals(violationsNull, [
-    {
-      code: "MEDIA_REQUIRED",
-      message: "Add a video before publishing.",
-    },
-  ]);
-
-  const violationsEmpty = evaluateTikTokPublishPolicy({
-    ...validInput,
-    mediaFileId: "",
-  });
-  assertEquals(violationsEmpty, [
-    {
-      code: "MEDIA_REQUIRED",
-      message: "Add a video before publishing.",
-    },
-  ]);
-});
-
-Deno.test("violation code: PRIVACY_REQUIRED when privacy is null or empty", () => {
-  const violationsNull = evaluateTikTokPublishPolicy({
-    ...validInput,
-    settings: { ...validSettings, privacy: null },
-  });
-  assertEquals(violationsNull, [
-    {
-      code: "PRIVACY_REQUIRED",
-      message: "Choose who can view this post.",
-    },
-  ]);
-
-  const violationsEmpty = evaluateTikTokPublishPolicy({
-    ...validInput,
-    settings: { ...validSettings, privacy: "" },
-  });
-  assertEquals(violationsEmpty, [
-    {
-      code: "PRIVACY_REQUIRED",
-      message: "Choose who can view this post.",
-    },
-  ]);
-});
-
-Deno.test("violation code: PRIVACY_NOT_OFFERED when privacy is not in creator options", () => {
-  const violations = evaluateTikTokPublishPolicy({
-    ...validInput,
-    settings: { ...validSettings, privacy: "FOO_UNSUPPORTED" },
-  });
-  assertEquals(violations, [
-    {
-      code: "PRIVACY_NOT_OFFERED",
-      message: "This privacy setting isn't available for this account.",
-    },
-  ]);
-});
-
-Deno.test("violation code: COMMENT_NOT_ALLOWED when comments are enabled but creator disabled them", () => {
-  const violations = evaluateTikTokPublishPolicy({
-    ...validInput,
-    settings: { ...validSettings, allowComment: true },
-    creator: { ...validCreator, commentDisabled: true },
-  });
-  assertEquals(violations, [
-    {
-      code: "COMMENT_NOT_ALLOWED",
-      message: "Comments can't be turned on for this account.",
-    },
-  ]);
-});
-
-Deno.test("violation code: DUET_NOT_ALLOWED when duet is enabled but creator disabled it", () => {
-  const violations = evaluateTikTokPublishPolicy({
-    ...validInput,
-    settings: { ...validSettings, allowDuet: true },
-    creator: { ...validCreator, duetDisabled: true },
-  });
-  assertEquals(violations, [
-    {
-      code: "DUET_NOT_ALLOWED",
-      message: "Duet can't be turned on for this account.",
-    },
-  ]);
-});
-
-Deno.test("violation code: STITCH_NOT_ALLOWED when stitch is enabled but creator disabled it", () => {
-  const violations = evaluateTikTokPublishPolicy({
-    ...validInput,
-    settings: { ...validSettings, allowStitch: true },
-    creator: { ...validCreator, stitchDisabled: true },
-  });
-  assertEquals(violations, [
-    {
-      code: "STITCH_NOT_ALLOWED",
-      message: "Stitch can't be turned on for this account.",
-    },
-  ]);
-});
-
-Deno.test("violation code: DISCLOSURE_INCOMPLETE when disclose is true without selecting yourBrand or brandedContent", () => {
-  const violations = evaluateTikTokPublishPolicy({
-    ...validInput,
-    settings: {
-      ...validSettings,
-      disclose: true,
-      yourBrand: false,
-      brandedContent: false,
-    },
-  });
-  assertEquals(violations, [
-    {
-      code: "DISCLOSURE_INCOMPLETE",
-      message: "Indicate whether this promotes you, a third party, or both.",
-    },
-  ]);
-});
-
-Deno.test("violation code: BRANDED_CONTENT_PRIVATE when branded content is paired with SELF_ONLY privacy", () => {
+Deno.test("brandedContent + SELF_ONLY + disclose=false → no violation", () => {
   const violations = evaluateTikTokPublishPolicy({
     ...validInput,
     settings: {
       ...validSettings,
       privacy: "SELF_ONLY",
-      disclose: true,
+      disclose: false,
       yourBrand: false,
       brandedContent: true,
     },
   });
-  assertEquals(violations, [
-    {
-      code: "BRANDED_CONTENT_PRIVATE",
-      message: "Branded content can't be set to Only me.",
-    },
-  ]);
+  assertEquals(violations, []);
 });
 
 Deno.test("violation code: CAPTION_TOO_LONG at 2201 UTF-16 units but not at 2200 using surrogate pairs", () => {
-  // A surrogate pair emoji has .length === 2 in JavaScript (UTF-16 code units)
   const surrogateEmoji = "🎉";
-  assertEquals(surrogateEmoji.length, 2);
-
-  // 1100 surrogate pairs = 2200 UTF-16 code units (allowed maximum)
   const caption2200 = surrogateEmoji.repeat(1100);
-  assertEquals(caption2200.length, 2200);
 
   const violationsAtLimit = evaluateTikTokPublishPolicy({
     ...validInput,
@@ -210,10 +184,7 @@ Deno.test("violation code: CAPTION_TOO_LONG at 2201 UTF-16 units but not at 2200
   });
   assertEquals(violationsAtLimit, []);
 
-  // 2200 + 1 = 2201 UTF-16 code units (exceeds limit)
   const caption2201 = caption2200 + "x";
-  assertEquals(caption2201.length, 2201);
-
   const violationsOverLimit = evaluateTikTokPublishPolicy({
     ...validInput,
     caption: caption2201,
@@ -373,4 +344,56 @@ Deno.test("creatorCapabilitiesFromTikTok strictly maps boolean flags and sets po
     maxVideoPostDurationSec: 180,
     postingBlocked: false,
   });
+});
+
+Deno.test("resolveReviewDurationSec: media metadata duration wins when finite positive; else fallback; numeric strings rejected; null when neither", () => {
+  // Media metadata duration wins when finite positive
+  assertEquals(resolveReviewDurationSec({ duration: 45 }, 60), 45);
+  assertEquals(resolveReviewDurationSec({ duration: 12.5 }, 30), 12.5);
+  assertEquals(resolveReviewDurationSec({ duration: 45 }, null), 45);
+  assertEquals(resolveReviewDurationSec({ duration: 45 }, undefined), 45);
+
+  // When media metadata duration is invalid/non-positive, fallback wins if finite positive
+  assertEquals(resolveReviewDurationSec({ duration: 0 }, 60), 60);
+  assertEquals(resolveReviewDurationSec({ duration: -10 }, 60), 60);
+  assertEquals(resolveReviewDurationSec({ duration: NaN }, 60), 60);
+  assertEquals(resolveReviewDurationSec({ duration: Infinity }, 60), 60);
+  assertEquals(resolveReviewDurationSec({ duration: null }, 60), 60);
+  assertEquals(resolveReviewDurationSec({}, 60), 60);
+  assertEquals(resolveReviewDurationSec(null, 60), 60);
+  assertEquals(resolveReviewDurationSec("not-an-object", 60), 60);
+
+  // Numeric strings rejected for both media metadata and fallback
+  assertEquals(resolveReviewDurationSec({ duration: "45" }, 60), 60);
+  assertEquals(resolveReviewDurationSec({ duration: "45" }, "60"), null);
+  assertEquals(resolveReviewDurationSec(null, "60"), null);
+  assertEquals(resolveReviewDurationSec({ duration: 45 }, "60"), 45);
+
+  // Null when neither is finite positive
+  assertEquals(resolveReviewDurationSec(null, null), null);
+  assertEquals(resolveReviewDurationSec({}, undefined), null);
+  assertEquals(resolveReviewDurationSec({ duration: 0 }, 0), null);
+  assertEquals(resolveReviewDurationSec({ duration: -5 }, -10), null);
+  assertEquals(resolveReviewDurationSec({ duration: NaN }, NaN), null);
+  assertEquals(resolveReviewDurationSec({ duration: Infinity }, -1), null);
+});
+
+Deno.test("isPolicyViolationCode returns false for non-policy codes and object prototype properties", () => {
+  const nonPolicyCodes = [
+    "toString",
+    "constructor",
+    "__proto__",
+    "CREATOR_INFO_UNAVAILABLE",
+    "SUBMISSION_READ_FAILED",
+    "SUBMISSION_NOT_FOUND",
+    "MEDIA_READ_FAILED",
+    "ALREADY_DISPATCHED",
+    "SNAPSHOT_MISMATCH",
+    "TOKEN_INVALID",
+    "UNKNOWN_CODE",
+    "",
+  ];
+  for (const nonCode of nonPolicyCodes) {
+    assertEquals(isPolicyViolationCode(nonCode), false, `Expected ${nonCode} to NOT be a policy violation code`);
+  }
 });

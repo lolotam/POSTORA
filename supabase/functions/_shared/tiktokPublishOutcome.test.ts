@@ -14,9 +14,9 @@ type Call = { name: string; args: unknown[] };
 
 function createFakeSupabase(handlers: {
   platformPostsSelect?: () => Promise<{ data: unknown; error: unknown }>;
-  platformPostsUpdate?: (values: unknown) => Promise<{ data: unknown; error: unknown }>;
+  platformPostsUpdate?: (values: unknown, filters: Record<string, unknown>) => Promise<{ data: unknown; error: unknown }>;
   webhookEventsSelect?: () => Promise<{ data: unknown; error: unknown }>;
-  webhookEventsUpdate?: (values: unknown) => Promise<{ data: unknown; error: unknown }>;
+  webhookEventsUpdate?: (values: unknown, filters: Record<string, unknown>) => Promise<{ data: unknown; error: unknown }>;
   rpc?: (name: string, params: unknown) => Promise<{ data: unknown; error: unknown }>;
 }) {
   const calls: Call[] = [];
@@ -24,6 +24,7 @@ function createFakeSupabase(handlers: {
     from: (table: string) => {
       calls.push({ name: `from:${table}`, args: [] });
       const currentTable = table;
+      const filters: Record<string, unknown> = {};
       let updateValues: unknown = null;
 
       // deno-lint-ignore no-explicit-any
@@ -33,10 +34,12 @@ function createFakeSupabase(handlers: {
           return builder;
         },
         eq: (col: string, val: unknown) => {
+          filters[col] = val;
           calls.push({ name: `${currentTable}:eq`, args: [col, val] });
           return builder;
         },
         is: (col: string, val: unknown) => {
+          filters[`is:${col}`] = val;
           calls.push({ name: `${currentTable}:is`, args: [col, val] });
           return builder;
         },
@@ -55,7 +58,7 @@ function createFakeSupabase(handlers: {
           if (currentTable === "platform_posts") {
             if (updateValues !== null) {
               promise = handlers.platformPostsUpdate
-                ? handlers.platformPostsUpdate(updateValues)
+                ? handlers.platformPostsUpdate(updateValues, filters)
                 : Promise.resolve({ data: null, error: null });
             } else {
               promise = handlers.platformPostsSelect
@@ -65,7 +68,7 @@ function createFakeSupabase(handlers: {
           } else if (currentTable === "tiktok_webhook_events") {
             if (updateValues !== null) {
               promise = handlers.webhookEventsUpdate
-                ? handlers.webhookEventsUpdate(updateValues)
+                ? handlers.webhookEventsUpdate(updateValues, filters)
                 : Promise.resolve({ data: null, error: null });
             } else {
               promise = handlers.webhookEventsSelect
@@ -396,7 +399,10 @@ Deno.test("applyPendingWebhookEvents: applies events in create_time order, marks
     platformPostsUpdate: (_vals) => {
       return Promise.resolve({ data: null, error: null });
     },
-    webhookEventsUpdate: (_vals) => {
+    webhookEventsUpdate: (_vals, filters) => {
+      if (filters["id"] !== undefined) {
+        markedAppliedIds.push(filters["id"]);
+      }
       return Promise.resolve({ data: null, error: null });
     },
   });
@@ -416,4 +422,154 @@ Deno.test("applyPendingWebhookEvents: applies events in create_time order, marks
   // Both terminal events (102 and 103) were applied / already_terminal, so both were marked
   const updateCalls = calls.filter((c) => c.name === "tiktok_webhook_events:update");
   assertEquals(updateCalls.length, 2);
+
+  // 1. use markedAppliedIds: assert 102 and 103 were marked
+  assertEquals(markedAppliedIds, [102, 103]);
+
+  // 2. assert the mark updates filter eq("id", 102) and eq("id", 103)
+  const markEqCalls = calls.filter(
+    (c) => c.name === "tiktok_webhook_events:eq" && c.args?.[0] === "id",
+  );
+  assertEquals(markEqCalls.length, 2);
+  assertEquals(markEqCalls[0].args?.[1], 102);
+  assertEquals(markEqCalls[1].args?.[1], 103);
+
+  // 3. assert the events read used is("applied_at", null)
+  const eventsIsCall = calls.find((c) => c.name === "tiktok_webhook_events:is");
+  assert(eventsIsCall);
+  assertEquals(eventsIsCall.args, ["applied_at", null]);
+
+  // 4. assert the platform_posts match used eq("platform", "tiktok") and eq("response_data->>tiktok_publish_id", id)
+  const platformEqCalls = calls.filter((c) => c.name === "platform_posts:eq");
+  const platformFilter = platformEqCalls.find((c) => c.args?.[0] === "platform");
+  assert(platformFilter, "Expected eq('platform', 'tiktok')");
+  assertEquals(platformFilter.args?.[1], "tiktok");
+  const publishIdFilter = platformEqCalls.find(
+    (c) => c.args?.[0] === "response_data->>tiktok_publish_id",
+  );
+  assert(publishIdFilter, "Expected eq('response_data->>tiktok_publish_id', 'pub-multi')");
+  assertEquals(publishIdFilter.args?.[1], "pub-multi");
+
+  // 5. assert the URL-fill payload and its is("platform_post_url", null) guard for event 103
+  const ppUpdateCalls = calls.filter((c) => c.name === "platform_posts:update");
+  assertEquals(ppUpdateCalls.length, 1);
+  assertEquals(ppUpdateCalls[0].args?.[0], {
+    platform_post_id: "final-video-id",
+    platform_post_url: "https://www.tiktok.com/@user_a/video/final-video-id",
+  });
+  const ppIsCalls = calls.filter((c) => c.name === "platform_posts:is");
+  assert(
+    ppIsCalls.some((c) => c.args?.[0] === "platform_post_url" && c.args?.[1] === null),
+    "Expected is('platform_post_url', null) guard on URL fill",
+  );
+});
+
+Deno.test("applyPendingWebhookEvents: an event whose apply returns unmatched is NOT marked applied (zero updates)", async () => {
+  const markedAppliedIds: unknown[] = [];
+  const { client, calls } = createFakeSupabase({
+    webhookEventsSelect: () =>
+      Promise.resolve({
+        data: [
+          {
+            id: 201,
+            event: "post.publish.complete",
+            user_openid: "open-unmatched",
+            provider_post_id: null,
+            reason: null,
+            create_time: 1000,
+          },
+        ],
+        error: null,
+      }),
+    platformPostsSelect: () => Promise.resolve({ data: [], error: null }),
+    webhookEventsUpdate: (_vals, filters) => {
+      if (filters["id"] !== undefined) {
+        markedAppliedIds.push(filters["id"]);
+      }
+      return Promise.resolve({ data: null, error: null });
+    },
+  });
+
+  const result = await applyPendingWebhookEvents(client, "pub-unmatched");
+  assertEquals(result, "unmatched");
+  assertEquals(markedAppliedIds.length, 0);
+  const updateCalls = calls.filter((c) => c.name === "tiktok_webhook_events:update");
+  assertEquals(updateCalls.length, 0);
+});
+
+Deno.test("applyTikTokPublishOutcome: settle RPC returning already terminal reason returns already_terminal", async () => {
+  const { client } = createFakeSupabase({
+    platformPostsSelect: () =>
+      Promise.resolve({
+        data: [
+          {
+            id: "pp-term",
+            post_id: "post-term",
+            social_account_id: "sa-term",
+            status: "pending",
+            platform_post_url: null,
+            social_accounts: {
+              platform_user_id: "open-term",
+              platform_username: "user_term",
+              account_metadata: {},
+            },
+          },
+        ],
+        error: null,
+      }),
+    rpc: (_name, _params) => {
+      return Promise.resolve({
+        data: { reason: "already terminal" },
+        error: null,
+      });
+    },
+  });
+
+  const result = await applyTikTokPublishOutcome(client, {
+    publishId: "pub-term",
+    userOpenId: "open-term",
+    outcome: { kind: "published", providerPostId: "video-term" },
+  });
+
+  assertEquals(result, "already_terminal");
+});
+
+Deno.test("applyTikTokPublishOutcome: settle RPC error rejects with tiktok_outcome_settle_failed", async () => {
+  const { client } = createFakeSupabase({
+    platformPostsSelect: () =>
+      Promise.resolve({
+        data: [
+          {
+            id: "pp-err",
+            post_id: "post-err",
+            social_account_id: "sa-err",
+            status: "pending",
+            platform_post_url: null,
+            social_accounts: {
+              platform_user_id: "open-err",
+              platform_username: "user_err",
+              account_metadata: {},
+            },
+          },
+        ],
+        error: null,
+      }),
+    rpc: (_name, _params) => {
+      return Promise.resolve({
+        data: null,
+        error: { message: "database deadlock" },
+      });
+    },
+  });
+
+  await assertRejects(
+    () =>
+      applyTikTokPublishOutcome(client, {
+        publishId: "pub-err",
+        userOpenId: "open-err",
+        outcome: { kind: "published", providerPostId: "video-err" },
+      }),
+    Error,
+    "tiktok_outcome_settle_failed",
+  );
 });

@@ -1,4 +1,5 @@
 import {
+  assert,
   assertEquals,
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.89.0";
@@ -134,26 +135,38 @@ Deno.test("POST with body > 64 KB returns 413 Payload Too Large", async () => {
   assertEquals(res.status, 413);
 });
 
-Deno.test("timestamp 301 seconds old returns 401", async () => {
-  const deps: TikTokWebhookDeps = {
-    clientSecret,
-    webhookSecret: null,
-    nowSeconds: () => nowSeconds,
-    admin: null,
-    log: () => {},
-  };
-
-  const body = JSON.stringify({ event: "post.publish.complete" });
-  const oldTimestamp = nowSeconds - 301;
-  const signature = await computeSignature(clientSecret, oldTimestamp, body);
-
-  const req = new Request("https://example.com/tiktok-webhook", {
-    method: "POST",
-    headers: { "TikTok-Signature": signature },
-    body,
-  });
-  const res = await handleTikTokWebhook(req, deps);
-  assertEquals(res.status, 401);
+Deno.test("timestamp replay window: 300s accepted, 301s rejected, now+301 rejected (table-driven)", async () => {
+  const cases = [
+    { offset: -300, expectedStatus: 200, name: "exactly 300s old accepted" },
+    { offset: -301, expectedStatus: 401, name: "301s old rejected" },
+    { offset: 301, expectedStatus: 401, name: "now+301 (future) rejected" },
+  ];
+  for (const c of cases) {
+    const { client } = createFakeWebhookAdmin({});
+    const deps: TikTokWebhookDeps = {
+      clientSecret,
+      webhookSecret: null,
+      nowSeconds: () => nowSeconds,
+      admin: client,
+      applyPending: () => Promise.resolve("applied"),
+      log: () => {},
+    };
+    const body = JSON.stringify({
+      event: "post.publish.complete",
+      user_openid: "open_id_test",
+      create_time: nowSeconds,
+      content: JSON.stringify({ publish_id: "pub_time_test" }),
+    });
+    const timestamp = nowSeconds + c.offset;
+    const signature = await computeSignature(clientSecret, timestamp, body);
+    const req = new Request("https://example.com/tiktok-webhook", {
+      method: "POST",
+      headers: { "TikTok-Signature": signature },
+      body,
+    });
+    const res = await handleTikTokWebhook(req, deps);
+    assertEquals(res.status, c.expectedStatus, `Failed for case: ${c.name}`);
+  }
 });
 
 Deno.test("wrong signature returns 401", async () => {
@@ -258,19 +271,19 @@ Deno.test("malformed content returns 200 and nothing is recorded", async () => {
   assertEquals(calls.length, 0);
 });
 
-Deno.test("duplicate event (upsert returns no row) does NOT call applyPendingWebhookEvents", async () => {
+Deno.test("duplicate event (upsert returns no row) STILL calls applyPendingWebhookEvents (retry of a failed apply)", async () => {
   const { client } = createFakeWebhookAdmin({
     upsertResult: { data: [], error: null },
   });
-  let applyPendingCalled = false;
+  let applyPendingCalledWith: string | null = null;
 
   const deps: TikTokWebhookDeps = {
     clientSecret,
     webhookSecret: null,
     nowSeconds: () => nowSeconds,
     admin: client,
-    applyPending: () => {
-      applyPendingCalled = true;
+    applyPending: (_admin, pubId) => {
+      applyPendingCalledWith = pubId;
       return Promise.resolve("applied");
     },
     log: () => {},
@@ -292,7 +305,41 @@ Deno.test("duplicate event (upsert returns no row) does NOT call applyPendingWeb
   });
   const res = await handleTikTokWebhook(req, deps);
   assertEquals(res.status, 200);
-  assertEquals(applyPendingCalled, false);
+  assertEquals(applyPendingCalledWith, "pub_dup_1");
+});
+
+Deno.test("apply error during webhook processing returns 500", async () => {
+  const { client } = createFakeWebhookAdmin({});
+
+  const deps: TikTokWebhookDeps = {
+    clientSecret,
+    webhookSecret: null,
+    nowSeconds: () => nowSeconds,
+    admin: client,
+    applyPending: () => {
+      return Promise.reject(new Error("apply failed"));
+    },
+    log: () => {},
+  };
+
+  const payload = {
+    event: "post.publish.complete",
+    user_openid: "open_id_err",
+    create_time: 1727700015,
+    content: JSON.stringify({ publish_id: "pub_err_1" }),
+  };
+  const body = JSON.stringify(payload);
+  const signature = await computeSignature(clientSecret, nowSeconds, body);
+
+  const req = new Request("https://example.com/tiktok-webhook", {
+    method: "POST",
+    headers: { "TikTok-Signature": signature },
+    body,
+  });
+  const res = await handleTikTokWebhook(req, deps);
+  assertEquals(res.status, 500);
+  const json = await res.json();
+  assertEquals(json, { error: "Internal error" });
 });
 
 Deno.test("realistic opaque publish ids with characters like v_pub_url~v2.123/+= are accepted", async () => {
@@ -363,4 +410,284 @@ Deno.test("database error on record returns 500", async () => {
   });
   const res = await handleTikTokWebhook(req, deps);
   assertEquals(res.status, 500);
+});
+
+function createComprehensiveWebhookAdmin(initialState?: {
+  events?: Array<Record<string, unknown>>;
+  platformPosts?: Array<Record<string, unknown>>;
+  isDuplicateUpsert?: boolean;
+}) {
+  const events = [...(initialState?.events ?? [])];
+  const platformPosts = [...(initialState?.platformPosts ?? [])];
+  const rpcCalls: Array<{ name: string; params: Record<string, unknown> }> = [];
+  const updates: Array<{ table: string; values: unknown; filters: Record<string, unknown> }> = [];
+  let nextEventId = 100;
+
+  const client = {
+    from: (table: string) => {
+      const filters: Record<string, unknown> = {};
+      let updateValues: unknown = null;
+      let upsertValues: unknown = null;
+
+      // deno-lint-ignore no-explicit-any
+      const builder: any = {
+        select: (_cols?: string) => builder,
+        eq: (col: string, val: unknown) => {
+          filters[col] = val;
+          return builder;
+        },
+        is: (col: string, val: unknown) => {
+          filters[`is:${col}`] = val;
+          return builder;
+        },
+        order: () => builder,
+        upsert: (values: unknown, _options: unknown) => {
+          upsertValues = values;
+          return builder;
+        },
+        update: (values: unknown) => {
+          updateValues = values;
+          return builder;
+        },
+        then: (resolve: (val: unknown) => void) => {
+          if (table === "tiktok_webhook_events") {
+            if (upsertValues) {
+              if (initialState?.isDuplicateUpsert) {
+                return resolve({ data: [], error: null });
+              }
+              const row = { id: ++nextEventId, ...(upsertValues as Record<string, unknown>), applied_at: null };
+              events.push(row);
+              return resolve({ data: [{ id: row.id }], error: null });
+            }
+            if (updateValues) {
+              updates.push({ table, values: updateValues, filters: { ...filters } });
+              const id = filters["id"];
+              const ev = events.find((e) => e.id === id);
+              if (ev) Object.assign(ev, updateValues);
+              return resolve({ data: null, error: null });
+            }
+            // select
+            const filtered = events.filter((e) => {
+              if ("publish_id" in filters && e.publish_id !== filters["publish_id"]) return false;
+              if ("is:applied_at" in filters && filters["is:applied_at"] === null && e.applied_at !== null) return false;
+              return true;
+            });
+            return resolve({ data: filtered, error: null });
+          }
+
+          if (table === "platform_posts") {
+            if (updateValues) {
+              updates.push({ table, values: updateValues, filters: { ...filters } });
+              return resolve({ data: null, error: null });
+            }
+            // select
+            const filtered = platformPosts.filter((p) => {
+              if ("platform" in filters && p.platform !== filters["platform"]) return false;
+              const resp = p.response_data as Record<string, unknown> | undefined;
+              if (
+                "response_data->>tiktok_publish_id" in filters &&
+                resp?.tiktok_publish_id !== filters["response_data->>tiktok_publish_id"]
+              ) {
+                return false;
+              }
+              return true;
+            });
+            return resolve({ data: filtered, error: null });
+          }
+
+          return resolve({ data: [], error: null });
+        },
+      };
+      return builder;
+    },
+    rpc: (name: string, params: Record<string, unknown>) => {
+      rpcCalls.push({ name, params });
+      return Promise.resolve({ data: { success: true }, error: null });
+    },
+  };
+
+  return { client: client as unknown as SupabaseClient, events, platformPosts, rpcCalls, updates };
+}
+
+Deno.test("real applyPendingWebhookEvents: initial and duplicate retry delivery settle platform post and mark applied", async () => {
+  const deliveryCases = [
+    { isDuplicate: false, name: "initial delivery" },
+    { isDuplicate: true, name: "duplicate retry delivery" },
+  ];
+
+  for (const tc of deliveryCases) {
+    const pubId = `pub-real-${tc.isDuplicate ? "dup" : "init"}`;
+    const userOpenId = tc.isDuplicate ? "user_dup" : "open_id_user_init";
+    const initialEvents = tc.isDuplicate
+      ? [
+          {
+            id: 201,
+            event: "post.publish.complete",
+            user_openid: userOpenId,
+            publish_id: pubId,
+            provider_post_id: "video-dup-123",
+            reason: null,
+            create_time: 1727700050,
+            received_at: "2026-09-30T12:00:00Z",
+            applied_at: null,
+          },
+        ]
+      : [];
+
+    const f = createComprehensiveWebhookAdmin({
+      isDuplicateUpsert: tc.isDuplicate,
+      events: initialEvents,
+      platformPosts: [
+        {
+          id: "plat-post-real",
+          post_id: "post-real-123",
+          social_account_id: "soc-real-456",
+          platform: "tiktok",
+          status: "pending",
+          platform_post_id: null,
+          platform_post_url: null,
+          response_data: { tiktok_publish_id: pubId },
+          error_message: null,
+          updated_at: "2026-09-30T12:00:00Z",
+          social_accounts: {
+            platform_user_id: userOpenId,
+            platform_username: "creator_handle",
+            account_metadata: { tiktok_username: "creator_handle" },
+          },
+        },
+      ],
+    });
+
+    const deps: TikTokWebhookDeps = {
+      clientSecret,
+      webhookSecret: null,
+      nowSeconds: () => nowSeconds,
+      admin: f.client,
+      // NOT injecting deps.applyPending: uses real applyPendingWebhookEvents
+      log: () => {},
+    };
+
+    const payload = {
+      event: "post.publish.complete",
+      user_openid: userOpenId,
+      create_time: 1727700050,
+      content: JSON.stringify({
+        publish_id: pubId,
+        post_id: tc.isDuplicate ? "video-dup-123" : "video-init-456",
+      }),
+    };
+    const body = JSON.stringify(payload);
+    const signature = await computeSignature(clientSecret, nowSeconds, body);
+
+    const req = new Request("https://example.com/tiktok-webhook", {
+      method: "POST",
+      headers: { "TikTok-Signature": signature },
+      body,
+    });
+    const res = await handleTikTokWebhook(req, deps);
+    assertEquals(res.status, 200, `Expected 200 for ${tc.name}`);
+
+    // Assert settle RPC call
+    const settleCalls = f.rpcCalls.filter((c) => c.name === "partner_settle_platform_post");
+    assertEquals(settleCalls.length, 1, `Expected 1 settle RPC for ${tc.name}`);
+    assertEquals(settleCalls[0].params.p_platform_post_id, "plat-post-real");
+    assertEquals(settleCalls[0].params.p_status, "success");
+
+    // Assert applied_at mark on tiktok_webhook_events
+    const appliedUpdates = f.updates.filter(
+      (u) => u.table === "tiktok_webhook_events" && (u.values as Record<string, unknown>).applied_at !== undefined,
+    );
+    assertEquals(appliedUpdates.length, 1, `Expected 1 applied_at update for ${tc.name}`);
+    const expectedEventId = tc.isDuplicate ? 201 : 101;
+    assertEquals(appliedUpdates[0].filters["id"], expectedEventId);
+  }
+});
+
+Deno.test("webhookSecret Authorization fallback accept and reject (table-driven)", async () => {
+  const cases = [
+    { authHeader: "my-webhook-secret", expectedStatus: 200, name: "correct secret accepted" },
+    { authHeader: "wrong-secret", expectedStatus: 401, name: "wrong secret rejected" },
+    { authHeader: "", expectedStatus: 401, name: "empty secret rejected" },
+  ];
+
+  for (const c of cases) {
+    const { client } = createFakeWebhookAdmin({});
+    const deps: TikTokWebhookDeps = {
+      clientSecret: null, // No client secret, forcing webhookSecret fallback
+      webhookSecret: "my-webhook-secret",
+      nowSeconds: () => nowSeconds,
+      admin: client,
+      applyPending: () => Promise.resolve("applied"),
+      log: () => {},
+    };
+    const body = JSON.stringify({
+      event: "post.publish.complete",
+      user_openid: "open_id_auth",
+      create_time: nowSeconds,
+      content: JSON.stringify({ publish_id: "pub_auth_fallback" }),
+    });
+    const headers: Record<string, string> = {};
+    if (c.authHeader) {
+      headers["Authorization"] = c.authHeader;
+    }
+    const req = new Request("https://example.com/tiktok-webhook", {
+      method: "POST",
+      headers,
+      body,
+    });
+    const res = await handleTikTokWebhook(req, deps);
+    assertEquals(res.status, c.expectedStatus, `Failed for case: ${c.name}`);
+  }
+});
+
+Deno.test("invalid envelopes return 200 and nothing is recorded (table-driven)", async () => {
+  const cases = [
+    {
+      name: "missing user_openid",
+      payload: {
+        event: "post.publish.complete",
+        create_time: 1727700000,
+        content: JSON.stringify({ publish_id: "pub_valid_id" }),
+      },
+    },
+    {
+      name: "non-numeric create_time",
+      payload: {
+        event: "post.publish.complete",
+        user_openid: "open_id_valid",
+        create_time: "1727700000",
+        content: JSON.stringify({ publish_id: "pub_valid_id" }),
+      },
+    },
+    {
+      name: "publish_id > 256 chars",
+      payload: {
+        event: "post.publish.complete",
+        user_openid: "open_id_valid",
+        create_time: 1727700000,
+        content: JSON.stringify({ publish_id: "p".repeat(257) }),
+      },
+    },
+  ];
+
+  for (const c of cases) {
+    const { client, calls } = createFakeWebhookAdmin({});
+    const deps: TikTokWebhookDeps = {
+      clientSecret,
+      webhookSecret: null,
+      nowSeconds: () => nowSeconds,
+      admin: client,
+      log: () => {},
+    };
+    const body = JSON.stringify(c.payload);
+    const signature = await computeSignature(clientSecret, nowSeconds, body);
+    const req = new Request("https://example.com/tiktok-webhook", {
+      method: "POST",
+      headers: { "TikTok-Signature": signature },
+      body,
+    });
+    const res = await handleTikTokWebhook(req, deps);
+    assertEquals(res.status, 200, `Expected 200 for ${c.name}`);
+    assertEquals(calls.length, 0, `Expected 0 calls for ${c.name}`);
+  }
 });
