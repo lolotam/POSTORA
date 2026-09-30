@@ -31,27 +31,30 @@ async function readCdnStorageValue(): Promise<unknown> {
   return publicConfig;
 }
 
+/** The resolved CDN config; a failed read throws rather than guessing. */
+export async function fetchCdnStorageConfig(): Promise<CdnStorageConfig> {
+  const stored = await readCdnStorageValue();
+  if (!stored) return DEFAULT_CDN_STORAGE_CONFIG;
+  let value: unknown;
+  try { value = typeof stored === "string" ? JSON.parse(stored) : stored; } catch { return DEFAULT_CDN_STORAGE_CONFIG; }
+  if (!value || typeof value !== "object") return DEFAULT_CDN_STORAGE_CONFIG;
+  const candidate = value as Record<string, unknown>;
+  const writePolicy = candidate.write_policy;
+  if (!writePolicy || typeof writePolicy !== "object") return DEFAULT_CDN_STORAGE_CONFIG;
+  const providers = (writePolicy as Record<string, unknown>).providers;
+  const required = (writePolicy as Record<string, unknown>).required;
+  if (!Array.isArray(providers) || !Array.isArray(required) || !providers.every((p) => p === "cloudinary" || p === "openinary") || !required.every((p) => p === "cloudinary" || p === "openinary")) return DEFAULT_CDN_STORAGE_CONFIG;
+  return {
+    ...DEFAULT_CDN_STORAGE_CONFIG,
+    ...value,
+    write_policy: { providers, required },
+  };
+}
+
 export function useCdnConfig() {
   return useQuery({
     queryKey: ["cdn-storage-config"],
-    queryFn: async (): Promise<CdnStorageConfig> => {
-      const stored = await readCdnStorageValue();
-      if (!stored) return DEFAULT_CDN_STORAGE_CONFIG;
-      let value: unknown;
-      try { value = typeof stored === "string" ? JSON.parse(stored) : stored; } catch { return DEFAULT_CDN_STORAGE_CONFIG; }
-      if (!value || typeof value !== "object") return DEFAULT_CDN_STORAGE_CONFIG;
-      const candidate = value as Record<string, unknown>;
-      const writePolicy = candidate.write_policy;
-      if (!writePolicy || typeof writePolicy !== "object") return DEFAULT_CDN_STORAGE_CONFIG;
-      const providers = (writePolicy as Record<string, unknown>).providers;
-      const required = (writePolicy as Record<string, unknown>).required;
-      if (!Array.isArray(providers) || !Array.isArray(required) || !providers.every((p) => p === "cloudinary" || p === "openinary") || !required.every((p) => p === "cloudinary" || p === "openinary")) return DEFAULT_CDN_STORAGE_CONFIG;
-      return {
-        ...DEFAULT_CDN_STORAGE_CONFIG,
-        ...value,
-        write_policy: { providers, required },
-      };
-    },
+    queryFn: fetchCdnStorageConfig,
     staleTime: 5 * 60 * 1000,
   });
 }
