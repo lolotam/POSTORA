@@ -3,7 +3,7 @@
 // enables the flow, including the consent timestamp cod and review require.
 import { rateLimitExceededResponse } from "../_shared/rate-limiter.ts";
 import { corsHeaders, jsonResponse } from "../_shared/cors.ts";
-import { classifyWooDelivery, isWooPing, verifyWooSignature, type WaitlistMatch } from "../_shared/wooWebhook.ts";
+import { classifyWooDelivery, ignoredDeliveryReason, isWooPing, verifyWooSignature, type WaitlistMatch } from "../_shared/wooWebhook.ts";
 import { enabledProcedures, readProcedureConfig, reviewDelayDays } from "../_shared/procedures/config.ts";
 
 const BODY_CAP = 262144;
@@ -52,6 +52,8 @@ export interface StoreWebhookDeps {
   /** Only rows whose product or parent is one of productIds (validated positive integers). */
   loadWaitlist(binding: StoreBinding, productIds: number[]): Promise<ScopedWaitlistRow[]>;
   insertEvents(rows: Array<Record<string, unknown>>): Promise<{ ok: true; stored: number } | { ok: false }>;
+  /** Best-effort record of a delivery that could have started a flow but did not. */
+  logIgnored(entry: { binding: StoreBinding; topic: string | null; reason: string; externalId: string | null }): Promise<void>;
   now(): Date;
 }
 
@@ -122,7 +124,7 @@ export async function handleStoreWebhook(req: Request, deps: StoreWebhookDeps): 
   } catch {
     return json({ error: "store_failed" }, 500);
   }
-  const drafts = classifyWooDelivery({
+  const classifyInput = {
     topic,
     body: parsed,
     now: deps.now(),
@@ -130,8 +132,21 @@ export async function handleStoreWebhook(req: Request, deps: StoreWebhookDeps): 
     reviewDelayDays: reviewDelayDays(procedures),
     country: null,
     waitlist,
-  });
-  if (!drafts.length) return json({ ok: true, stored: 0 });
+  };
+  const drafts = classifyWooDelivery(classifyInput);
+  if (!drafts.length) {
+    // An ignored order used to leave no trace at all. The reason also goes back
+    // in the response body, which WooCommerce shows in its webhook delivery log.
+    const reason = ignoredDeliveryReason(classifyInput);
+    if (!reason) return json({ ok: true, stored: 0 });
+    const id = (parsed as { id?: unknown }).id;
+    try {
+      await deps.logIgnored({ binding, topic, reason, externalId: id == null ? null : String(id) });
+    } catch {
+      console.error("[store-webhook] ignored-delivery log failed");
+    }
+    return json({ ok: true, stored: 0, ignored: reason });
+  }
   const deliveryId = req.headers.get("x-wc-webhook-delivery-id");
   const rows = drafts.map((draft) => ({
     user_id: binding.user_id,

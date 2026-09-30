@@ -109,6 +109,33 @@ export function classifyWooDelivery(input: {
   return drafts;
 }
 
+/**
+ * Why a delivery that could have started a flow produced no event ("not_active"
+ * covers a flow switched off or missing its consent / QR acknowledgement). Null for
+ * routine traffic (an order update that is not a completion, product updates)
+ * so the log only carries deliveries a merchant would expect to act on.
+ */
+export function ignoredDeliveryReason(input: Parameters<typeof classifyWooDelivery>[0]): string | null {
+  if (!input.topic) return "missing_topic";
+  if (typeof input.body !== "object" || input.body === null || Array.isArray(input.body)) return "invalid_body";
+  const body = input.body as Record<string, unknown>;
+  if (input.topic === "order.created") {
+    if (!input.enabled.has("cod_confirm")) return "cod_confirm_not_active";
+    if (String(body.payment_method ?? "").toLowerCase() !== "cod") return "not_cash_on_delivery";
+    if (!COD_STATUSES.has(String(body.status ?? ""))) return "order_status_not_eligible";
+    if (!orderPayload(body, input.country)) return "customer_phone_unrecognised";
+    return null;
+  }
+  if (input.topic === "order.updated") {
+    if (body.status !== "completed") return null;
+    if (!input.enabled.has("review_request")) return "review_request_not_active";
+    if (!orderPayload(body, input.country)) return "customer_phone_unrecognised";
+    return "review_not_due";
+  }
+  if (input.topic === "product.updated") return null;
+  return "topic_not_handled";
+}
+
 function isCod(body: Record<string, unknown>): boolean {
   return String(body.payment_method ?? "").toLowerCase() === "cod" && COD_STATUSES.has(String(body.status ?? ""));
 }
