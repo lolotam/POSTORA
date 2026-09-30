@@ -99,15 +99,17 @@ export async function handleStoreWebhook(req: Request, deps: StoreWebhookDeps): 
   const connectorLimit = await deps.limitConnector(binding.connector_id);
   if (!connectorLimit.allowed) return limited(connectorLimit.retryAfter);
 
-  let parsed: unknown;
+  const topic = req.headers.get("x-wc-webhook-topic");
+  let parsed: unknown = null;
   try {
     parsed = JSON.parse(body.text);
   } catch {
+    parsed = null;
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    await logIgnoredSafely(deps, { binding, topic, reason: "invalid_json", externalId: null });
     return json({ error: "invalid_json" }, 400);
   }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return json({ error: "invalid_json" }, 400);
-
-  const topic = req.headers.get("x-wc-webhook-topic");
   let procedures: unknown;
   let waitlist: WaitlistMatch[] = [];
   try {
@@ -140,11 +142,7 @@ export async function handleStoreWebhook(req: Request, deps: StoreWebhookDeps): 
     const reason = ignoredDeliveryReason(classifyInput);
     if (!reason) return json({ ok: true, stored: 0 });
     const id = (parsed as { id?: unknown }).id;
-    try {
-      await deps.logIgnored({ binding, topic, reason, externalId: id == null ? null : String(id) });
-    } catch {
-      console.error("[store-webhook] ignored-delivery log failed");
-    }
+    await logIgnoredSafely(deps, { binding, topic, reason, externalId: id == null ? null : String(id) });
     return json({ ok: true, stored: 0, ignored: reason });
   }
   const deliveryId = req.headers.get("x-wc-webhook-delivery-id");
@@ -163,6 +161,14 @@ export async function handleStoreWebhook(req: Request, deps: StoreWebhookDeps): 
   const inserted = await deps.insertEvents(rows);
   if (!inserted.ok) return json({ error: "store_failed" }, 500);
   return json({ ok: true, stored: inserted.stored });
+}
+
+async function logIgnoredSafely(deps: StoreWebhookDeps, entry: Parameters<StoreWebhookDeps["logIgnored"]>[0]): Promise<void> {
+  try {
+    await deps.logIgnored(entry);
+  } catch {
+    console.error("[store-webhook] ignored-delivery log failed");
+  }
 }
 
 function limited(retryAfter: number | undefined): Response {

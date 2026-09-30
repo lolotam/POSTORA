@@ -434,3 +434,16 @@ Deno.test("a routine order update is not logged as ignored", async () => {
   assertEquals(await response.json(), { ok: true, stored: 0 });
   assertEquals(gate.ignored, []);
 });
+
+Deno.test("an authentic delivery whose body is not a JSON object is refused and logged", async () => {
+  for (const body of ["[1,2]", "null", "not json"]) {
+    const gate = deps();
+    const response = await handleStoreWebhook(new Request(URL, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-wc-webhook-topic": "order.created", "x-wc-webhook-signature": await mac(SECRET, body) },
+      body,
+    }), gate);
+    assertEquals(response.status, 400, body);
+    assertEquals(gate.ignored, ["invalid_json"], body);
+  }
+});

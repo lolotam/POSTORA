@@ -117,7 +117,7 @@ export function classifyWooDelivery(input: {
  */
 export function ignoredDeliveryReason(input: Parameters<typeof classifyWooDelivery>[0]): string | null {
   if (!input.topic) return "missing_topic";
-  if (typeof input.body !== "object" || input.body === null || Array.isArray(input.body)) return "invalid_body";
+  // The handler refuses a non-object body (invalid_json) before classifying.
   const body = input.body as Record<string, unknown>;
   if (input.topic === "order.created") {
     if (!input.enabled.has("cod_confirm")) return "cod_confirm_not_active";
