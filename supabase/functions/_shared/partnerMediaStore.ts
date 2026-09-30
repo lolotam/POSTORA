@@ -13,7 +13,7 @@
 // partnerMediaSniff.ts. What it does not reuse is the uploader, because that
 // one writes somewhere the contract cannot describe.
 
-import { isMediaQuotaMessage, mediaQuotaHumanMessage } from "./mediaQuotaError.ts";
+import { isMediaQuotaMessage, mediaQuotaHumanMessage, mediaQuotaBody, mediaQuotaPreflight } from "./mediaQuotaError.ts";
 import { signedUrlTtlSeconds } from "./partnerMediaSniff.ts";
 import type { PartnerMedia } from "./partnerMediaSniff.ts";
 
@@ -74,6 +74,30 @@ export type StoreFailure = "no_workspace_owner" | "storage_failed" | "record_fai
  * If the row insert fails the object is deleted, so the usual case leaves
  * nothing behind either.
  */
+/**
+ * The daily-limit refusal for this workspace's owner, or null to proceed. Run
+ * before the idempotency claim so a refused upload never holds the key; a failed
+ * read proceeds and the media_files INSERT trigger remains the backstop.
+ */
+export async function partnerMediaQuotaRefusal(
+  // deno-lint-ignore no-explicit-any
+  admin: any,
+  workspaceId: string,
+): Promise<string | null> {
+  try {
+    const { data: workspace, error } = await admin
+      .from("workspaces")
+      .select("owner_id")
+      .eq("id", workspaceId)
+      .maybeSingle();
+    if (error || !workspace?.owner_id) return null;
+    const blocked = await mediaQuotaPreflight(admin, workspace.owner_id);
+    return blocked ? mediaQuotaBody(blocked.limit).error : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function storePartnerMedia(
   input: StorePartnerMediaInput,
 ): Promise<

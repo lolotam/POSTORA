@@ -120,3 +120,28 @@ $$;
 REVOKE ALL ON FUNCTION public.enforce_media_quota_on_insert() FROM PUBLIC, anon, authenticated;
 REVOKE ALL ON FUNCTION public.media_upload_quota_remaining(uuid) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.media_upload_quota_remaining(uuid) TO service_role;
+
+-- increment_media_uploads() was how the browser charged an upload. The trigger
+-- above now charges every insert, so a cached old bundle calling it would be
+-- charged twice (and it was callable by anon for any user_id, which would now
+-- let anyone spend another user's daily slots). It stays as a read-only
+-- compatibility preflight with its old signature: the same answer as
+-- can_upload_media(), no counter write.
+CREATE OR REPLACE FUNCTION public.increment_media_uploads(p_user_id uuid)
+RETURNS boolean
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+  -- A browser may only ask about itself; the service role may ask about anyone.
+  IF auth.uid() IS NOT NULL AND p_user_id IS DISTINCT FROM auth.uid() THEN
+    RETURN false;
+  END IF;
+  RETURN public.media_upload_quota_remaining(p_user_id) IS DISTINCT FROM 0;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.increment_media_uploads(uuid) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.increment_media_uploads(uuid) TO authenticated, service_role;

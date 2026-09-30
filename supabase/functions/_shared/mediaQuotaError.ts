@@ -55,3 +55,28 @@ export async function invokeErrorText(error: unknown): Promise<string | null> {
   const payload = await response.clone().json().catch(() => null) as { error?: unknown } | null;
   return typeof payload?.error === "string" ? payload.error : null;
 }
+
+export interface QuotaRpc {
+  rpc: (fn: string, args: Record<string, unknown>) => Promise<{ data: unknown; error: { message?: string } | null }>;
+}
+
+/**
+ * Null means the upload may proceed: unlimited, slots left, or the read failed
+ * (the INSERT trigger is the backstop). A returned limit means remaining is 0
+ * and the number came from effective_user_quotas.
+ */
+export async function mediaQuotaPreflight(db: QuotaRpc, userId: string): Promise<{ limit: number } | null> {
+  const remaining = await db.rpc("media_upload_quota_remaining", { p_user: userId });
+  if (remaining.error || remaining.data == null) return null;
+  const left = Number(remaining.data);
+  if (!Number.isFinite(left) || left !== 0) return null;
+
+  const limits = await db.rpc("effective_user_quotas", { p_user_id: userId });
+  if (limits.error || limits.data == null) return null;
+  const row = Array.isArray(limits.data) ? limits.data[0] : limits.data;
+  const raw = (row as { max_media_uploads_per_day?: unknown } | null)?.max_media_uploads_per_day;
+  if (raw == null) return null;
+  const limit = Number(raw);
+  if (!Number.isInteger(limit) || limit < 0) return null;
+  return { limit };
+}

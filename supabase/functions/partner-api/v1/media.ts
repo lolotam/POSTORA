@@ -19,7 +19,7 @@ import {
   MAX_BYTES_ANY_KIND,
   validatePartnerMedia,
 } from "../../_shared/partnerMediaSniff.ts";
-import { loadPartnerMedia, storePartnerMedia } from "../../_shared/partnerMediaStore.ts";
+import { loadPartnerMedia, storePartnerMedia, partnerMediaQuotaRefusal } from "../../_shared/partnerMediaStore.ts";
 import { decodeId, encodeId } from "./ids.ts";
 import { v1ErrorResponse } from "./errors.ts";
 import { v1JsonResponse } from "./respond.ts";
@@ -167,6 +167,10 @@ export async function postMedia(
     }
     return v1ErrorResponse("invalid_request", requestId, { message });
   }
+
+  // Before the claim: a refused upload must not hold the Idempotency-Key for its lease.
+  const quotaRefusal = await partnerMediaQuotaRefusal(admin, record.workspaceId);
+  if (quotaRefusal) return v1ErrorResponse("quota_exceeded", requestId, { message: quotaRefusal });
 
   // The hash covers the BYTES, not just the metadata: two different files sent
   // under one key must not look like a replay of each other.

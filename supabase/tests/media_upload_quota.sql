@@ -142,6 +142,21 @@ EXCEPTION WHEN insufficient_privilege THEN NULL;
 END $$;
 RESET ROLE;
 
+-- Q11: the legacy increment_media_uploads() is a read-only preflight now.
+DO $$
+DECLARE
+  u_limited uuid := 'a810a810-a810-48a8-88a8-a810a810a810';
+  v_before integer;
+BEGIN
+  SELECT media_uploads_today INTO v_before FROM public.user_quotas WHERE user_id = u_limited;
+  ASSERT public.increment_media_uploads(u_limited) = false,
+    'Q11 at the limit the preflight answers false';
+  ASSERT (SELECT media_uploads_today FROM public.user_quotas WHERE user_id = u_limited) = v_before,
+    'Q11 the preflight does not charge the counter';
+  ASSERT NOT has_function_privilege('anon', 'public.increment_media_uploads(uuid)', 'EXECUTE'),
+    'Q11 anon cannot EXECUTE increment_media_uploads';
+END $$;
+
 ROLLBACK;
 
 \echo '=== media_upload_quota: ALL CHECKS PASSED ==='
