@@ -6,6 +6,7 @@ const sources = {
   verifyMfaReset: "supabase/functions/verify-mfa-reset/index.ts",
   stripeWebhook: "supabase/functions/stripe-webhook/index.ts",
   tiktokWebhook: "supabase/functions/tiktok-webhook/index.ts",
+  tiktokWebhookHandler: "supabase/functions/tiktok-webhook/handler.ts",
   whatsappWebhook: "supabase/functions/whatsapp-webhook/index.ts",
 } as const;
 
@@ -64,13 +65,14 @@ it("tiktok-webhook reads the configured webhook secret", () => {
 });
 
 it("tiktok-webhook checks the Authorization header", () => {
-  expect(readSource(sources.tiktokWebhook)).toMatch(
+  expect(readSource(sources.tiktokWebhookHandler)).toMatch(
     /headers\.get\(["']Authorization["']\)/i,
   );
 });
 
 it("tiktok-webhook does not serialize the full request body into logs", () => {
   expect(readSource(sources.tiktokWebhook)).not.toContain("JSON.stringify(body");
+  expect(readSource(sources.tiktokWebhookHandler)).not.toContain("JSON.stringify(body");
 });
 
 it("whatsapp-webhook reads the Meta signature header", () => {

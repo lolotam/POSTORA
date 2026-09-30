@@ -1,0 +1,413 @@
+.tiktok-review {
+  --tr-page: #f5f0e3;
+  --tr-card: #fbf8ef;
+  --tr-secondary: #ede5cf;
+  --tr-text: #1a1814;
+  --tr-text-secondary: #4a463e;
+  --tr-muted: #8a8578;
+  --tr-red: #e63946;
+  --tr-green: #2d7a4c;
+  --tr-badge-bg: #fdf7bf;
+  --tr-badge-border: #f7e733;
+  --tr-border: rgba(26, 24, 20, 0.1);
+  --tr-border-strong: rgba(26, 24, 20, 0.2);
+  --tr-edited: #1d3557;
+  --tr-radius-card: 12px;
+  --tr-radius-pill: 9999px;
+  --tr-radius-input: 10px;
+  box-sizing: border-box;
+  min-height: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
+  background: var(--tr-page);
+  color: var(--tr-text);
+  padding: 1rem 1.25rem 2rem;
+  text-align: start;
+}
+
+.tiktok-review *,
+.tiktok-review *::before,
+.tiktok-review *::after {
+  box-sizing: border-box;
+}
+
+.tiktok-review :focus-visible {
+  outline: 2px solid var(--tr-text);
+  outline-offset: 2px;
+}
+
+.tiktok-review-topbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-block-end: 0.75rem;
+}
+
+.tiktok-review-auth-link {
+  color: var(--tr-text-secondary);
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.tiktok-review-layout {
+  display: grid;
+  grid-template-columns: minmax(16rem, 22rem) minmax(0, 1fr);
+  gap: 1rem;
+  align-items: start;
+}
+
+.tiktok-review-queue,
+.tiktok-review-detail {
+  min-width: 0;
+  background: var(--tr-card);
+  border: 1px solid var(--tr-border);
+  border-radius: var(--tr-radius-card);
+}
+
+.tiktok-review-queue {
+  padding: 1rem;
+}
+
+.tiktok-review-detail {
+  padding: 1.25rem;
+}
+
+.tiktok-review-eyebrow {
+  margin: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--tr-red);
+}
+
+.tiktok-review-title {
+  margin: 0.15rem 0 0.25rem;
+  font-weight: 800;
+  font-size: 2rem;
+  letter-spacing: -0.03em;
+  line-height: 1.1;
+}
+
+.tiktok-review-waiting {
+  margin: 0 0 0.85rem;
+  color: var(--tr-text-secondary);
+}
+
+.tiktok-review-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-block-end: 0.75rem;
+}
+
+.tiktok-review-field,
+.tiktok-review-input,
+.tiktok-review-select,
+.tiktok-review-textarea {
+  width: 100%;
+  max-width: 100%;
+  border: 1px solid var(--tr-border-strong);
+  border-radius: var(--tr-radius-input);
+  background: var(--tr-secondary);
+  color: var(--tr-text);
+  font: inherit;
+  padding: 0.5rem 0.7rem;
+}
+
+.tiktok-review-select {
+  min-height: 2.5rem;
+}
+
+.tiktok-review-textarea {
+  min-height: 7rem;
+  resize: vertical;
+}
+
+.tiktok-review-button,
+.tiktok-review-pill {
+  border-radius: var(--tr-radius-pill);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--tr-text);
+  font: inherit;
+  font-weight: 600;
+  min-height: 2.5rem;
+  padding: 0.35rem 0.9rem;
+  cursor: pointer;
+}
+
+.tiktok-review-button:disabled,
+.tiktok-review-pill:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.tiktok-review-pill {
+  background: var(--tr-page);
+  min-height: 1.75rem;
+  font-size: 0.72rem;
+}
+
+.tiktok-review-button-edit {
+  background: var(--tr-secondary);
+}
+
+.tiktok-review-button-reject {
+  color: var(--tr-red);
+  border-color: var(--tr-red);
+}
+
+.tiktok-review-button-archive {
+  color: var(--tr-text-secondary);
+  border-color: var(--tr-border-strong);
+}
+
+.tiktok-review-button-approve {
+  border-radius: var(--tr-radius-card);
+  color: var(--tr-green);
+  border-color: var(--tr-green);
+  background: transparent;
+}
+
+.tiktok-review-button-schedule {
+  border-radius: var(--tr-radius-card);
+  background: var(--tr-green);
+  color: var(--tr-card);
+}
+
+.tiktok-review-new {
+  background: var(--tr-text);
+  color: var(--tr-card);
+  border-radius: var(--tr-radius-card);
+}
+
+.tiktok-review-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tiktok-review-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.25rem;
+  width: 100%;
+  text-align: start;
+  background: transparent;
+  border: 0;
+  border-inline-start: 3px solid transparent;
+  border-radius: 8px;
+  padding: 0.65rem 0.7rem;
+  color: inherit;
+  cursor: pointer;
+}
+
+.tiktok-review-row.is-selected {
+  background: var(--tr-page);
+  border-inline-start-color: var(--tr-red);
+}
+
+.tiktok-review-row-title {
+  font-weight: 600;
+  font-size: 0.9rem;
+  overflow-wrap: anywhere;
+}
+
+.tiktok-review-chip,
+.tiktok-review-badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: var(--tr-radius-pill);
+  padding: 0.15rem 0.55rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.tiktok-review-chip {
+  color: var(--tr-text-secondary);
+  background: var(--tr-secondary);
+}
+
+.tiktok-review-chip-rejected {
+  color: var(--tr-red);
+  background: transparent;
+  border: 1px solid var(--tr-red);
+}
+
+.tiktok-review-badge {
+  color: var(--tr-text);
+  background: var(--tr-badge-bg);
+  border: 1px solid var(--tr-badge-border);
+}
+
+.tiktok-review-muted {
+  color: var(--tr-muted);
+}
+
+.tiktok-review-secondary {
+  color: var(--tr-text-secondary);
+}
+
+.tiktok-review-alert {
+  color: var(--tr-red);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  overflow-wrap: anywhere;
+}
+
+.tiktok-review-notice {
+  margin: 0.75rem 0;
+  color: var(--tr-text-secondary);
+  font-size: 0.875rem;
+}
+
+.tiktok-review-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin: 1rem 0;
+}
+
+.tiktok-review-summary dt {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--tr-muted);
+}
+
+.tiktok-review-summary dd {
+  margin: 0.2rem 0 0;
+  overflow-wrap: anywhere;
+}
+
+.tiktok-review-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin-block-start: 0.75rem;
+}
+
+.tiktok-review-actions-end {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin-inline-start: auto;
+}
+
+.tiktok-review-kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.35rem;
+  height: 1.35rem;
+  border-radius: 4px;
+  border: 1px solid var(--tr-border-strong);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+
+.tiktok-review-reason {
+  min-height: 1.1rem;
+  margin: 0.35rem 0 0;
+  color: var(--tr-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.tiktok-review-counter {
+  margin: 0.25rem 0 0;
+  text-align: end;
+  color: var(--tr-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.tiktok-review-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  max-height: min(32rem, 70vh);
+  overflow: auto;
+  padding-inline-end: 0.25rem;
+}
+
+.tiktok-review-check {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-start;
+}
+
+.tiktok-review-check.is-disabled {
+  opacity: 0.55;
+}
+
+.tiktok-review-status {
+  margin-block-start: 1rem;
+  padding: 0.85rem;
+  border-radius: var(--tr-radius-card);
+  border: 1px solid var(--tr-border);
+  background: var(--tr-page);
+}
+
+.tiktok-review-portal {
+  width: min(20rem, calc(100vw - 1.5rem));
+  max-width: calc(100vw - 1.5rem);
+  background: var(--tr-card);
+  color: var(--tr-text);
+  border: 1px solid var(--tr-border-strong);
+  border-radius: var(--tr-radius-card);
+}
+
+.tiktok-review-dialog {
+  width: min(28rem, calc(100vw - 1.5rem));
+  max-width: calc(100vw - 1.5rem);
+  background: var(--tr-card);
+  color: var(--tr-text);
+  border: 1px solid var(--tr-border-strong);
+  border-radius: var(--tr-radius-card);
+}
+
+@media (max-width: 767px) {
+  .tiktok-review {
+    padding: 0.75rem;
+  }
+
+  .tiktok-review-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .tiktok-review-layout[data-pane="detail"] .tiktok-review-queue,
+  .tiktok-review-layout[data-pane="queue"] .tiktok-review-detail {
+    display: none;
+  }
+
+  .tiktok-review-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .tiktok-review-actions-end {
+    margin-inline-start: 0;
+  }
+
+  .tiktok-review-title {
+    font-size: 1.6rem;
+  }
+}

@@ -20,24 +20,12 @@ function sameWallClock(when: Date, year: number, month: number, day: number, hou
     && when.getSeconds() === 0;
 }
 
-/** Earlier of two local instants that share a wall clock during a DST overlap. */
-function earlierOccurrence(constructed: Date, year: number, month: number, day: number, hours: number, minutes: number): Date {
-  let earlier = constructed;
-  for (let delta = 1; delta <= OVERLAP_SCAN_MINUTES; delta += 1) {
-    const candidate = new Date(constructed.getTime() - delta * 60_000);
-    if (sameWallClock(candidate, year, month, day, hours, minutes) && candidate.getTime() < earlier.getTime()) {
-      earlier = candidate;
-    }
-  }
-  return earlier;
-}
-
 export type ResolvedLocalWallClock =
-  | { ok: true; when: Date }
+  | { ok: true; when: Date; ambiguous: boolean }
   | { ok: false; reason: "nonexistent" };
 
 export type ParsedDatetimeLocal =
-  | { ok: true; when: Date }
+  | { ok: true; when: Date; ambiguous: boolean }
   | { ok: false; reason: "invalid" | "nonexistent" };
 
 const DATETIME_LOCAL = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::\d{2})?$/;
@@ -57,7 +45,18 @@ export function resolveLocalWallClock(
   if (!sameWallClock(constructed, year, month, day, hours, minutes)) {
     return { ok: false, reason: "nonexistent" };
   }
-  return { ok: true, when: earlierOccurrence(constructed, year, month, day, hours, minutes) };
+  let earlier = constructed;
+  let ambiguous = false;
+  // Scan both sides: Date normally constructs the earlier occurrence already.
+  for (let delta = -OVERLAP_SCAN_MINUTES; delta <= OVERLAP_SCAN_MINUTES; delta += 1) {
+    if (delta === 0) continue;
+    const candidate = new Date(constructed.getTime() + delta * 60_000);
+    if (sameWallClock(candidate, year, month, day, hours, minutes)) {
+      ambiguous = true;
+      if (candidate.getTime() < earlier.getTime()) earlier = candidate;
+    }
+  }
+  return { ok: true, when: earlier, ambiguous };
 }
 
 /** datetime-local value as a local instant. A DST gap is `nonexistent`. */

@@ -471,13 +471,21 @@ Deno.serve(async (req) => {
     // ---------- creator_info (UX compliance, unchanged) ----------
     if (action === "creator_info") {
       if (!account_id) throw new Error("Missing account_id for creator_info");
+      const caller = await authenticateCaller(req, body.user_id);
       const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-      const { data: account, error: fetchError } = await supabase
+      let accountQuery = supabase
         .from("social_accounts")
         .select("access_token, platform_username, avatar_url")
-        .eq("id", account_id)
-        .single();
-      if (fetchError || !account) throw new Error("Account not found");
+        .eq("id", account_id);
+      if (!caller.isServiceRole) accountQuery = accountQuery.eq("user_id", caller.userId);
+      const { data: account, error: fetchError } = await accountQuery.maybeSingle();
+      if (fetchError) throw new Error("Account lookup failed");
+      if (!account) {
+        return new Response(JSON.stringify({ error: "Account not found" }), {
+          status: 404,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
 
       const creatorInfoResponse = await fetch(
         "https://open.tiktokapis.com/v2/post/publish/creator_info/query/",
@@ -552,13 +560,21 @@ Deno.serve(async (req) => {
       }
       if (!account_id) throw new Error("Missing account_id for token refresh");
 
+      const caller = await authenticateCaller(req, body.user_id);
       const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-      const { data: account, error: fetchError } = await supabase
+      let accountQuery = supabase
         .from("social_accounts")
         .select("refresh_token, platform_username")
-        .eq("id", account_id)
-        .single();
-      if (fetchError || !account) throw new Error("Account not found");
+        .eq("id", account_id);
+      if (!caller.isServiceRole) accountQuery = accountQuery.eq("user_id", caller.userId);
+      const { data: account, error: fetchError } = await accountQuery.maybeSingle();
+      if (fetchError) throw new Error("Account lookup failed");
+      if (!account) {
+        return new Response(JSON.stringify({ error: "Account not found" }), {
+          status: 404,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
       if (!account.refresh_token) {
         throw new Error("No refresh token available for this account");
       }
@@ -588,7 +604,7 @@ Deno.serve(async (req) => {
       const newExpiresAt = new Date(
         Date.now() + tokenData.expires_in * 1000,
       ).toISOString();
-      const { error: updateError } = await supabase
+      let tokenUpdate = supabase
         .from("social_accounts")
         .update({
           access_token: tokenData.access_token,
@@ -602,6 +618,8 @@ Deno.serve(async (req) => {
           updated_at: new Date().toISOString(),
         })
         .eq("id", account_id);
+      if (!caller.isServiceRole) tokenUpdate = tokenUpdate.eq("user_id", caller.userId);
+      const { error: updateError } = await tokenUpdate;
       if (updateError) throw new Error("Failed to save refreshed token");
 
       return new Response(

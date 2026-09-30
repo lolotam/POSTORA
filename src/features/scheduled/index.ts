@@ -12,7 +12,7 @@ export type {
   ScheduledWhatsAppSource,
   WhatsAppCardModel,
 } from "./domain/scheduledBoard";
-export { browserTimeZone, moveKeepingLocalWallClock, movePostToDay } from "./domain/wallClockMove";
+export { browserTimeZone, moveKeepingLocalWallClock, movePostToDay, resolveLocalWallClock, parseDatetimeLocal } from "./domain/wallClockMove";
 export {
   ACTIVE_WHATSAPP_STATUSES,
   CALENDAR_WHATSAPP_STATUSES,
@@ -21,3 +21,4 @@ export {
 export { useWhatsAppScheduledItems } from "./whatsappScheduledItems";
 export { WhatsAppScheduledCard } from "./ui/WhatsAppScheduledCard";
 export { CancelWhatsAppDialog, RescheduleWhatsAppDialog } from "./ui/WhatsAppScheduleDialogs";
+export type { ResolvedLocalWallClock, ParsedDatetimeLocal } from "./domain/wallClockMove";

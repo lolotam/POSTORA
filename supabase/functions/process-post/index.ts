@@ -94,6 +94,7 @@ import { selectedLinkedInDestinationIds } from "../_shared/linkedinDestinations.
 import { fetchWithTimeout } from "../_shared/request-timeout.ts";
 import { composioClientFromEnv } from "../_shared/composioClient.ts";
 import { publishYouTubeViaComposio } from "./youtubeComposio.ts";
+import { prepareTikTokReviewPublish, recordReviewPublishId, tiktokReviewSubmissionId } from "./tiktokReview.ts";
 import { z } from "npm:zod@3.23.8";
 
 const ProcessPostSchema = z.object({
@@ -1647,9 +1648,16 @@ Deno.serve(async (req) => {
           case "threads":
             result = await postToThreads(account, post, mediaUrls);
             break;
-          case "tiktok":
-            result = await postToTikTok(account, post, mediaUrls);
+          case "tiktok": {
+            const reviewSubmissionId = tiktokReviewSubmissionId(post.metadata);
+            result = reviewSubmissionId
+              ? await postToTikTok(account, post, mediaUrls, (publishId) =>
+                recordReviewPublishId(supabase, {
+                  submissionId: reviewSubmissionId, postId: post.id, userId: post.user_id, publishId,
+                }))
+              : await postToTikTok(account, post, mediaUrls);
             break;
+          }
           case "twitter":
             result = await postToTwitter(account, post, mediaUrls, supabase);
             break;
@@ -6248,16 +6256,36 @@ async function postToThreads(
 async function postToTikTok(
   account: SocialAccount,
   post: PostData,
-  mediaUrls: string[]
+  mediaUrls: string[],
+  onPublishIdAssigned?: (publishId: string) => Promise<void>,
 ): Promise<PlatformPostResult> {
   const accessToken = account.access_token;
   const metadata = post.metadata;
 
   console.log(`TikTok posting - mediaUrls received:`, mediaUrls);
 
+  const reviewSubmissionId = tiktokReviewSubmissionId(metadata);
+  let reviewPostInfo: Record<string, unknown> | null = null;
+  if (reviewSubmissionId) {
+    const prepared = await prepareTikTokReviewPublish({
+      admin: createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY),
+      accessToken,
+      submissionId: reviewSubmissionId,
+      post: {
+        id: post.id,
+        user_id: post.user_id,
+        caption: post.caption,
+        media_file_ids: post.media_file_ids,
+        metadata: (metadata ?? null) as Record<string, unknown> | null,
+      },
+    });
+    reviewPostInfo = { ...prepared.postInfo };
+  }
+
   // ─────────────────────────────────────────────────────────────────────
   // Pre-flight check: Query creator_info to verify account privacy settings
   // ─────────────────────────────────────────────────────────────────────
+  if (!reviewPostInfo) {
   console.log("TikTok: Checking creator info and account privacy...");
   try {
     const creatorInfoResponse = await fetch(
@@ -6312,6 +6340,7 @@ async function postToTikTok(
     }
     console.warn("TikTok pre-flight check failed, proceeding with post attempt:", preflightError);
   }
+  }
 
   if (mediaUrls.length === 0) {
     throw new Error("TikTok requires media (video or photos)");
@@ -6361,6 +6390,10 @@ async function postToTikTok(
   }
 
   // Get TikTok settings from post metadata
+  let postInfo: Record<string, unknown>;
+  if (reviewPostInfo) {
+    postInfo = reviewPostInfo;
+  } else {
   const privacyLevel = metadata?.tiktok_privacy_level || "SELF_ONLY";
   const disableComment = metadata?.tiktok_allow_comment === false;
   const disableDuet = metadata?.tiktok_allow_duet === false;
@@ -6379,7 +6412,7 @@ async function postToTikTok(
 
   console.log(`TikTok title - using override: ${!!metadata?.tiktok_title?.trim()}, title: "${titleToUse.substring(0, 50)}..."`);
 
-  const postInfo: Record<string, unknown> = {
+  postInfo = {
     privacy_level: privacyLevel,
     title: titleToUse?.substring(0, 2200) || "",
     disable_comment: disableComment,
@@ -6396,6 +6429,7 @@ async function postToTikTok(
   // Add AI-generated content flag if enabled
   if (isAigc) {
     postInfo.is_aigc = true;
+  }
   }
 
   // Step 1: Initialize the upload
@@ -6452,6 +6486,20 @@ async function postToTikTok(
 
   if (!publishId || !uploadUrl) {
     throw new Error("TikTok upload init failed: missing publish_id or upload_url");
+  }
+
+  if (onPublishIdAssigned) {
+    try {
+      await onPublishIdAssigned(publishId);
+    } catch (recordError) {
+      // Without a recorded publish id nothing can reconcile this attempt, so
+      // stop before uploading: an init with no upload never goes live.
+      console.error(
+        "tiktok_review_publish_id_record_failed",
+        recordError instanceof Error ? recordError.message : "unknown",
+      );
+      throw new Error("TIKTOK_REVIEW_NEEDS_ATTENTION:PUBLISH_ID_RECORD_FAILED");
+    }
   }
 
   console.log(

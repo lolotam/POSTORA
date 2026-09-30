@@ -128,6 +128,8 @@ SUITES=(
   whatsapp_scheduled_sender.sql
   media_file_providers_server_managed.sql
   media_retention.sql
+  media_upload_quota.sql
+  tiktok_review_lifecycle.sql
 )
 # These fixtures build their own focused schema and apply the migration under
 # test. They must never run against the restored production-shaped database.

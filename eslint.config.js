@@ -57,4 +57,20 @@ export default tseslint.config(
       }],
     },
   },
+  {
+    files: [
+      "src/features/tiktok-publishing/application/**/*.{ts,tsx}",
+      "src/features/tiktok-publishing/ui/**/*.{ts,tsx}",
+      "src/features/tiktok-publishing/domain/**/*.{ts,tsx}",
+    ],
+    ignores: ["src/features/tiktok-publishing/ui/TikTokReviewScreen.tsx", "**/*.test.{ts,tsx}"],
+    rules: {
+      "no-restricted-imports": ["error", {
+        patterns: [{
+          group: ["**/infrastructure/**", "**/infrastructure/*", "@/integrations/supabase/client"],
+          message: "TikTok publishing depends on application/ports.ts. Only TikTokReviewScreen composes infrastructure; only infrastructure imports Supabase.",
+        }],
+      }],
+    },
+  },
 );

@@ -43,6 +43,15 @@ Deno.serve(async (req) => {
     const body = await req.json();
     const { action, social_account_id } = body;
 
+    if (action === "publish" || action === "schedule") {
+      return new Response(JSON.stringify({
+        success: false,
+        error: "deprecated",
+        error_code: "deprecated",
+        user_message: "Publishing moved to the TikTok review workspace. Reload the page.",
+      }), { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+
     const { data: account, error: accountError } = await supabase
       .from("social_accounts")
       .select("*")
@@ -58,129 +67,17 @@ Deno.serve(async (req) => {
 
     const accessToken = account.access_token;
 
-    if (action === "publish" || action === "schedule") {
-      return await handlePublish(body, accessToken, corsHeaders);
-    } else if (action === "status") {
+    if (action === "status") {
       return await handleStatus(body, accessToken, corsHeaders);
     } else {
       return new Response(JSON.stringify({ success: false, error: "Invalid action", user_message: "Invalid action specified." }), { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
   } catch (error) {
-    console.error("tiktok-demo-publish error:", error);
-    return new Response(JSON.stringify({ success: false, error: error.message || "Internal server error", user_message: "Something went wrong. Please try again." }), { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    console.error("tiktok-demo-publish error:", error instanceof Error ? error.message : "unknown");
+    const message = error instanceof Error ? error.message : "Internal server error";
+    return new Response(JSON.stringify({ success: false, error: message, user_message: "Something went wrong. Please try again." }), { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } });
   }
 });
-
-async function handlePublish(body: any, accessToken: string, headers: Record<string, string>) {
-  const {
-    video_url,
-    privacy_level,
-    title,
-    caption,
-    allow_comment = false,
-    disclose = false,
-    auto_add_music = false,
-    scheduled_at,
-  } = body;
-
-  // TikTok exposes only ONE text field (post_info.title) which serves as the video caption.
-  // Merge our UI's Title + Description into a single string so both pieces of text appear
-  // under the published video. Newlines are preserved per TikTok docs. Limit: 2200 UTF-16 runes.
-  const combinedCaption = [
-    typeof title === "string" ? title.trim() : "",
-    typeof caption === "string" ? caption.trim() : "",
-  ].filter(Boolean).join("\n\n");
-  const finalCaption = combinedCaption.slice(0, 2200);
-  console.log("TikTok final caption length:", finalCaption.length);
-
-  const postInfo: any = {
-    privacy_level,
-    disable_comment: !allow_comment,
-    auto_add_music,
-    title: finalCaption || undefined,
-  };
-
-  if (disclose) {
-    postInfo.brand_content_toggle = true;
-    postInfo.brand_organic_toggle = true;
-  }
-
-  let sourceInfo: any;
-  if (video_url) {
-    sourceInfo = { source: "PULL_FROM_URL", video_url };
-  } else {
-    const videoSize = body.video_size || (body.video_base64 ? Math.ceil(body.video_base64.length * 3 / 4) : 0);
-    sourceInfo = {
-      source: "FILE_UPLOAD",
-      video_size: videoSize,
-      chunk_size: body.chunk_size || videoSize,
-      total_chunk_count: body.total_chunk_count || 1,
-    };
-  }
-
-  if (scheduled_at) {
-    postInfo.schedule_time = Math.floor(new Date(scheduled_at).getTime() / 1000);
-  }
-
-  const initPayload = { post_info: postInfo, source_info: sourceInfo };
-  console.log("TikTok publish init payload:", JSON.stringify(initPayload));
-
-  const initResponse = await fetch("https://open.tiktokapis.com/v2/post/publish/video/init/", {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${accessToken}`,
-      "Content-Type": "application/json; charset=UTF-8",
-    },
-    body: JSON.stringify(initPayload),
-  });
-
-  const initData = await initResponse.json();
-  console.log("TikTok publish init response:", JSON.stringify(initData));
-
-  if (initData.error?.code !== "ok" && initData.error?.code) {
-    const errorCode = initData.error.code;
-    const rawMessage = initData.error.message || "TikTok API error";
-    const userMessage = getUserMessage(errorCode, rawMessage);
-    return new Response(JSON.stringify({
-      success: false,
-      error: rawMessage,
-      error_code: errorCode,
-      user_message: userMessage,
-    }), { status: 200, headers: { ...headers, "Content-Type": "application/json" } });
-  }
-
-  const publishId = initData.data?.publish_id;
-  const uploadUrl = initData.data?.upload_url;
-
-  if (body.video_base64 && uploadUrl) {
-    const videoBytes = Uint8Array.from(atob(body.video_base64), (c) => c.charCodeAt(0));
-    const uploadResponse = await fetch(uploadUrl, {
-      method: "PUT",
-      headers: {
-        "Content-Type": "video/mp4",
-        "Content-Range": `bytes 0-${videoBytes.length - 1}/${videoBytes.length}`,
-      },
-      body: videoBytes,
-    });
-
-    if (!uploadResponse.ok) {
-      const uploadError = await uploadResponse.text();
-      console.error("TikTok upload error:", uploadError);
-      return new Response(JSON.stringify({
-        success: false,
-        error: "Video upload failed",
-        user_message: "Failed to upload video to TikTok. Please try again.",
-        publish_id: publishId,
-      }), { status: 200, headers: { ...headers, "Content-Type": "application/json" } });
-    }
-  }
-
-  return new Response(JSON.stringify({
-    success: true,
-    publish_id: publishId,
-    upload_url: uploadUrl,
-  }), { status: 200, headers: { ...headers, "Content-Type": "application/json" } });
-}
 
 async function handleStatus(body: any, accessToken: string, headers: Record<string, string>) {
   const { publish_id } = body;
