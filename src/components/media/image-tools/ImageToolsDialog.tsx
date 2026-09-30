@@ -320,6 +320,8 @@ export function ImageToolsDialog({
           fileData: base64Data,
           fileName: fileName,
           fileType: "image",
+          // Staging copy for the transform only: not a Library file, not an upload.
+          skipMediaFiles: true,
         },
       });
 

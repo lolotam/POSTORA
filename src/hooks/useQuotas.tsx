@@ -324,13 +324,13 @@ export function useQuotas() {
   const { data: realUsage, isLoading: isLoadingRealUsage } = useQuery({
     queryKey: ["real-usage", user?.id],
     queryFn: async () => {
-      if (!user?.id) return { postsToday: 0, postsThisMonth: 0, mediaUploadsToday: 0 };
+      if (!user?.id) return { postsToday: 0, postsThisMonth: 0 };
 
       const now = new Date();
       const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
       const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
 
-      const [dailyResult, monthlyResult, mediaResult] = await Promise.all([
+      const [dailyResult, monthlyResult] = await Promise.all([
         supabase
           .from("posts")
           .select("*", { count: "exact", head: true })
@@ -341,17 +341,11 @@ export function useQuotas() {
           .select("*", { count: "exact", head: true })
           .eq("user_id", user.id)
           .gte("created_at", startOfMonth),
-        supabase
-          .from("media_files")
-          .select("*", { count: "exact", head: true })
-          .eq("user_id", user.id)
-          .gte("created_at", startOfDay),
       ]);
 
       return {
         postsToday: dailyResult.count || 0,
         postsThisMonth: monthlyResult.count || 0,
-        mediaUploadsToday: mediaResult.count || 0,
       };
     },
     enabled: !!user?.id,
@@ -584,7 +578,12 @@ export function useQuotas() {
     // a display consumer can use it to show a loading state instead of a
     // number that may not reflect the user's real plan yet.
     isEntitlementsLoading,
-    realUsage: realUsage || { postsToday: 0, postsThisMonth: 0, mediaUploadsToday: 0 },
+    realUsage: {
+      ...(realUsage || { postsToday: 0, postsThisMonth: 0 }),
+      // The server's media_files trigger owns this counter and keeps it charged after a
+      // delete; counting surviving rows showed a freed slot the server still refuses.
+      mediaUploadsToday: quota?.media_uploads_today ?? 0,
+    },
     canCreateProfile,
     canConnectSocialAccount,
     canCreatePost,

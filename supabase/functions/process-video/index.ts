@@ -473,6 +473,10 @@ Deno.serve(async (req) => {
         error: mediaQuotaHumanMessage(errorMessage),
         error_code: MEDIA_QUOTA_CODE,
       };
+      // Unlike other errors (logged only in debug mode), a quota refusal is always recorded.
+      if (requestBody?.user_id) {
+        await logToApiLogs(supabaseAdmin, requestBody.user_id, "process-video", requestBody, quotaBody, 429);
+      }
       return jsonResponse(quotaBody, 429);
     }
 
