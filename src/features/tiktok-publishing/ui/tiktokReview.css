@@ -16,7 +16,10 @@
   --tr-radius-pill: 9999px;
   --tr-radius-input: 10px;
   box-sizing: border-box;
-  min-height: 100%;
+  /* The route renders outside any layout, so no ancestor has a height for 100% to resolve
+     against; fill the viewport or the body's white shows below short content. */
+  min-height: 100vh;
+  min-height: 100dvh;
   max-width: 100%;
   overflow-x: hidden;
   background: var(--tr-page);
