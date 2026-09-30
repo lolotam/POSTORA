@@ -295,19 +295,27 @@ serve(async (req) => {
         }
 
         case "jev_triage_failure": {
+          // Counted server-side: a row select is capped at db-max-rows and would rate a partial page.
+          // `->>` turns a stored JSON null into SQL null: `triage: null` (triage off) drops out of
+          // the triaged count, and `outcome: null` (triage failed) lands in the failed one.
           const windowStart = new Date(now.getTime() - config.time_window_minutes * 60 * 1000).toISOString();
-          const { data: replyLogs, error: replyLogsError } = await supabase
+          const triagedReplies = () => supabase
             .from("system_logs")
-            .select("triage:metadata->triage")
+            .select("id", { count: "exact", head: true })
             .eq("source", "ai-agent-reply")
-            .gte("created_at", windowStart);
-          if (replyLogsError) {
+            .gte("created_at", windowStart)
+            .not("metadata->>triage", "is", null);
+          const [triaged, failed] = await Promise.all([
+            triagedReplies(),
+            triagedReplies().is("metadata->triage->>outcome", null),
+          ]);
+          if (triaged.error || failed.error) {
             // Skip only this rule: throwing would leave every later rule unevaluated this run.
-            console.error(`[OBSERVABILITY-ALERTS] ${config.name}: reply log read failed:`, replyLogsError.message);
+            console.error(`[OBSERVABILITY-ALERTS] ${config.name}: reply log count failed:`, (triaged.error ?? failed.error)!.message);
             continue;
           }
 
-          currentValue = triageFailurePercent(replyLogs ?? []);
+          currentValue = triageFailurePercent(triaged.count ?? 0, failed.count ?? 0);
           shouldTrigger = currentValue !== null && compareValue(currentValue, config.threshold_value, config.threshold_operator);
           break;
         }
