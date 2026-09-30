@@ -119,6 +119,7 @@ const TRIGGER_TYPES = [
   { value: "health_score", label: "Health Score", icon: Heart, description: "Alert when health score drops below threshold" },
   { value: "token_health", label: "Token Health", icon: Zap, description: "Alert when token health drops below threshold" },
   { value: "cron_failure", label: "Cron Job Failure", icon: Clock, description: "Alert when scheduled jobs fail" },
+  { value: "jev_triage_failure", label: "Jev Triage Failure (%)", icon: Gauge, description: "Alert when AI agent triage fails on more than this share of replies (needs 10+ replies in the window)" },
 ];
 
 const OPERATORS = [

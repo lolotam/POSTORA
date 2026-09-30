@@ -193,6 +193,22 @@ Deno.test("no key, a throw, or an exhausted budget returns no outcome instead of
   assertEquals(spent.errors.length, 1);
 });
 
+// Regression 2026-09-30: a cold Vercel call held the whole 1.5 s budget and no fallback ran.
+Deno.test("a hanging first tier is cut at 0.9 s so the fallback still answers inside the budget", async () => {
+  const fetchImpl = ((url: string, init?: RequestInit) => {
+    if (url.includes("vercel")) return Promise.resolve(new Response(JSON.stringify(okJson), { status: 200 }));
+    return new Promise<Response>((_, reject) => init?.signal?.addEventListener("abort", () => reject(init.signal!.reason)));
+  }) as typeof fetch;
+  const startedAt = Date.now();
+
+  const run = await runTriage(tiers, input, key, 1500, fetchImpl);
+
+  assertEquals(run.outcome?.provider, "vercel");
+  assertEquals(run.errors, [{ model: "openrouter/a", error: "TimeoutError" }]);
+  const elapsed = Date.now() - startedAt;
+  assertEquals(elapsed >= 850 && elapsed < 1400, true, `took ${elapsed} ms`);
+});
+
 // Regression 2026-09-25: with "I want a human" in the recent turns, a later "hi" was
 // judged a handoff (0.97), because the question did not say which message it was about.
 Deno.test("every yes/no question is about the new message, not the earlier turns", () => {
