@@ -26,15 +26,31 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+// The post row is editable from Calendar, Scheduled Posts and History; consent
+// covered one account and one publish time, so both must still match.
+function keepsConsentedTarget(
+  submission: { social_account_id: unknown; mode: unknown; scheduled_at: unknown },
+  accountId: string,
+  postScheduledAt: string | null,
+): boolean {
+  if (submission.social_account_id !== accountId) return false;
+  if (submission.mode === "now") return postScheduledAt === null;
+  if (submission.mode !== "scheduled" || typeof submission.scheduled_at !== "string") return false;
+  return postScheduledAt !== null &&
+    Date.parse(postScheduledAt) === Date.parse(submission.scheduled_at);
+}
+
 export async function prepareTikTokReviewPublish(input: {
   admin: SupabaseClient;
   accessToken: string;
   submissionId: string;
+  accountId: string;
   post: {
     id: string;
     user_id: string;
     caption: string | null;
     media_file_ids: string[] | null;
+    scheduled_at: string | null;
     metadata: Record<string, unknown> | null;
   };
 }): Promise<{ postInfo: TikTokPostInfo }> {
@@ -51,7 +67,7 @@ export async function prepareTikTokReviewPublish(input: {
 
   const { data: submission, error: submissionError } = await input.admin
     .from("tiktok_review_submissions")
-    .select("snapshot")
+    .select("snapshot, social_account_id, mode, scheduled_at")
     .eq("id", input.submissionId)
     .eq("post_id", input.post.id)
     .eq("user_id", input.post.user_id)
@@ -68,7 +84,8 @@ export async function prepareTikTokReviewPublish(input: {
   const mediaFileId = typeof snapshot?.media_file_id === "string" ? snapshot.media_file_id : null;
   if (
     typeof caption !== "string" || input.post.caption !== caption ||
-    (input.post.media_file_ids?.[0] ?? null) !== mediaFileId
+    (input.post.media_file_ids?.[0] ?? null) !== mediaFileId ||
+    !keepsConsentedTarget(submission, input.accountId, input.post.scheduled_at)
   ) {
     throw new Error("TIKTOK_REVIEW_NEEDS_ATTENTION:SNAPSHOT_MISMATCH");
   }
