@@ -669,6 +669,129 @@ BEGIN
   END;
 END $$;
 
+-- T13: a throttling write of last_status_check_at alone leaves updated_at
+-- alone (it is the staleness clock); a dispatch_state change moves it.
+DO $$
+DECLARE
+  u_a uuid := 'a1a1a1a1-1111-4111-8111-aaaaaaaaaaaa';
+  acct_a_tt uuid := 'a1a1a1a1-aaaa-4111-8111-aaaaaaaaaaaa';
+  media_a uuid := 'aa000001-aaaa-4111-8111-aaaaaaaaaaaa';
+  v_past timestamptz := '2020-01-01T00:00:00Z';
+  v_draft public.tiktok_review_drafts%ROWTYPE;
+  v_sub uuid;
+BEGIN
+  v_draft := public.tiktok_review_create_draft(u_a, acct_a_tt);
+  PERFORM public.tiktok_review_save_draft(u_a, v_draft.id, 1, 'clock', media_a, 9, '{}'::jsonb);
+  v_sub := (public.tiktok_review_submit(
+    u_a, v_draft.id, 2, 'c1000013-0000-4000-8000-000000000013', 'now', NULL, 'UTC')
+    ->>'submission_id')::uuid;
+
+  UPDATE public.tiktok_review_submissions SET updated_at = v_past WHERE id = v_sub;
+  ASSERT (SELECT updated_at FROM public.tiktok_review_submissions WHERE id = v_sub) = v_past,
+    'T13 updated_at can be pinned for the test';
+
+  UPDATE public.tiktok_review_submissions SET last_status_check_at = now() WHERE id = v_sub;
+  ASSERT (SELECT updated_at FROM public.tiktok_review_submissions WHERE id = v_sub) = v_past,
+    'T13 a last_status_check_at-only write does not move updated_at';
+
+  UPDATE public.tiktok_review_submissions SET dispatch_state = 'dispatching' WHERE id = v_sub;
+  ASSERT (SELECT updated_at FROM public.tiktok_review_submissions WHERE id = v_sub) > v_past,
+    'T13 a dispatch_state change moves updated_at';
+END $$;
+
+-- T14: a request_id belongs to the draft it was first used with.
+DO $$
+DECLARE
+  u_a uuid := 'a1a1a1a1-1111-4111-8111-aaaaaaaaaaaa';
+  acct_a_tt uuid := 'a1a1a1a1-aaaa-4111-8111-aaaaaaaaaaaa';
+  media_a uuid := 'aa000001-aaaa-4111-8111-aaaaaaaaaaaa';
+  req uuid := 'c1000014-0000-4000-8000-000000000014';
+  v_one public.tiktok_review_drafts%ROWTYPE;
+  v_two public.tiktok_review_drafts%ROWTYPE;
+BEGIN
+  v_one := public.tiktok_review_create_draft(u_a, acct_a_tt);
+  PERFORM public.tiktok_review_save_draft(u_a, v_one.id, 1, 'first', media_a, 9, '{}'::jsonb);
+  PERFORM public.tiktok_review_submit(u_a, v_one.id, 2, req, 'now', NULL, 'UTC');
+
+  v_two := public.tiktok_review_create_draft(u_a, acct_a_tt);
+  PERFORM public.tiktok_review_save_draft(u_a, v_two.id, 1, 'second', media_a, 9, '{}'::jsonb);
+  BEGIN
+    PERFORM public.tiktok_review_submit(u_a, v_two.id, 2, req, 'now', NULL, 'UTC');
+    RAISE EXCEPTION 'T14 failed: request_id reused across drafts was accepted'
+      USING ERRCODE = 'assert_failure';
+  EXCEPTION WHEN raise_exception THEN
+    ASSERT SQLERRM = 'TIKTOK_REVIEW_REQUEST_REUSED', 'T14 reuse refusal, got: ' || SQLERRM;
+  END;
+  ASSERT (SELECT state FROM public.tiktok_review_drafts WHERE id = v_two.id) = 'pending_review',
+    'T14 the second draft was not consumed';
+END $$;
+
+-- T15: reopen only when nothing reached TikTok, or TikTok reported FAILED.
+DO $$
+DECLARE
+  u_a uuid := 'a1a1a1a1-1111-4111-8111-aaaaaaaaaaaa';
+  acct_a_tt uuid := 'a1a1a1a1-aaaa-4111-8111-aaaaaaaaaaaa';
+  media_a uuid := 'aa000001-aaaa-4111-8111-aaaaaaaaaaaa';
+  v_draft public.tiktok_review_drafts%ROWTYPE;
+  v_res jsonb;
+  v_sub uuid;
+  v_post uuid;
+  v_rev integer;
+BEGIN
+  v_draft := public.tiktok_review_create_draft(u_a, acct_a_tt);
+  PERFORM public.tiktok_review_save_draft(u_a, v_draft.id, 1, 'reopen', media_a, 9, '{}'::jsonb);
+
+  BEGIN
+    PERFORM public.tiktok_review_transition(u_a, v_draft.id, 2, 'reopen', NULL);
+    RAISE EXCEPTION 'T15 failed: reopen of a pending_review draft was accepted'
+      USING ERRCODE = 'assert_failure';
+  EXCEPTION WHEN raise_exception THEN
+    ASSERT SQLERRM = 'TIKTOK_REVIEW_INVALID_STATE', 'T15 not-submitted refusal, got: ' || SQLERRM;
+  END;
+
+  v_res := public.tiktok_review_submit(
+    u_a, v_draft.id, 2, 'c1000015-0000-4000-8000-000000000015', 'now', NULL, 'UTC');
+  v_sub := (v_res->>'submission_id')::uuid;
+  v_post := (v_res->>'post_id')::uuid;
+
+  UPDATE public.tiktok_review_submissions SET dispatch_state = 'publishing' WHERE id = v_sub;
+  BEGIN
+    PERFORM public.tiktok_review_transition(u_a, v_draft.id, 2, 'reopen', NULL);
+    RAISE EXCEPTION 'T15 failed: reopen while publishing was accepted'
+      USING ERRCODE = 'assert_failure';
+  EXCEPTION WHEN raise_exception THEN
+    ASSERT SQLERRM = 'TIKTOK_REVIEW_INVALID_STATE', 'T15 publishing refusal, got: ' || SQLERRM;
+  END;
+
+  UPDATE public.tiktok_review_submissions
+  SET dispatch_state = 'dispatched', provider_publish_id = 'v_pub_t15'
+  WHERE id = v_sub;
+  INSERT INTO public.platform_posts (post_id, social_account_id, platform, status)
+  VALUES (v_post, acct_a_tt, 'tiktok', 'pending');
+  BEGIN
+    PERFORM public.tiktok_review_transition(u_a, v_draft.id, 2, 'reopen', NULL);
+    RAISE EXCEPTION 'T15 failed: reopen with a pending TikTok row was accepted'
+      USING ERRCODE = 'assert_failure';
+  EXCEPTION WHEN raise_exception THEN
+    ASSERT SQLERRM = 'TIKTOK_REVIEW_INVALID_STATE', 'T15 pending-row refusal, got: ' || SQLERRM;
+  END;
+
+  UPDATE public.platform_posts SET status = 'failed' WHERE post_id = v_post;
+  v_draft := public.tiktok_review_transition(u_a, v_draft.id, 2, 'reopen', NULL);
+  ASSERT v_draft.state = 'pending_review', 'T15 TikTok-failed attempt reopens to pending_review';
+  ASSERT v_draft.revision = 3, 'T15 reopen bumps the revision (consent invalidated)';
+
+  -- Second round: nothing reached TikTok (no publish id, no row).
+  v_rev := v_draft.revision;
+  v_res := public.tiktok_review_submit(
+    u_a, v_draft.id, v_rev, 'c1000016-0000-4000-8000-000000000016', 'now', NULL, 'UTC');
+  v_sub := (v_res->>'submission_id')::uuid;
+  UPDATE public.tiktok_review_submissions SET dispatch_state = 'needs_attention' WHERE id = v_sub;
+  v_draft := public.tiktok_review_transition(u_a, v_draft.id, v_rev, 'reopen', NULL);
+  ASSERT v_draft.state = 'pending_review' AND v_draft.revision = v_rev + 1,
+    'T15 needs_attention with no publish id reopens';
+END $$;
+
 ROLLBACK;
 
 \echo '=== tiktok_review_lifecycle: ALL CHECKS PASSED ==='

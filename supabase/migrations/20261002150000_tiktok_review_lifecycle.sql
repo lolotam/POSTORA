@@ -163,11 +163,31 @@ CREATE TRIGGER trg_tiktok_review_drafts_updated_at
   FOR EACH ROW
   EXECUTE FUNCTION public.update_updated_at_column();
 
+-- The status reader writes only last_status_check_at to throttle provider
+-- polls. updated_at is the clock for the orphan and dispatch staleness windows,
+-- so that throttling write must not move it, or those windows never mature.
+CREATE OR REPLACE FUNCTION public.tiktok_review_submissions_touch_updated_at()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+  IF (to_jsonb(NEW) - 'last_status_check_at' - 'updated_at')
+     IS DISTINCT FROM (to_jsonb(OLD) - 'last_status_check_at' - 'updated_at') THEN
+    NEW.updated_at := now();
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.tiktok_review_submissions_touch_updated_at()
+  FROM PUBLIC, anon, authenticated;
+
 DROP TRIGGER IF EXISTS trg_tiktok_review_submissions_updated_at ON public.tiktok_review_submissions;
 CREATE TRIGGER trg_tiktok_review_submissions_updated_at
   BEFORE UPDATE ON public.tiktok_review_submissions
   FOR EACH ROW
-  EXECUTE FUNCTION public.update_updated_at_column();
+  EXECUTE FUNCTION public.tiktok_review_submissions_touch_updated_at();
 
 -- ---------------------------------------------------------------------------
 -- RPCs. All SECURITY INVOKER with a controlled search_path; EXECUTE is
@@ -280,6 +300,7 @@ SET search_path = public, pg_temp
 AS $$
 DECLARE
   v_draft public.tiktok_review_drafts%ROWTYPE;
+  v_submission public.tiktok_review_submissions%ROWTYPE;
   v_reason text;
 BEGIN
   SELECT * INTO v_draft
@@ -319,6 +340,47 @@ BEGIN
   ELSIF p_action = 'restore' THEN
     IF v_draft.state <> 'archived' THEN
       RAISE EXCEPTION 'TIKTOK_REVIEW_INVALID_STATE' USING ERRCODE = 'P0001';
+    END IF;
+    UPDATE public.tiktok_review_drafts
+    SET state = 'pending_review',
+        revision = v_draft.revision + 1
+    WHERE id = p_draft_id AND user_id = p_user_id
+    RETURNING * INTO v_draft;
+  ELSIF p_action = 'reopen' THEN
+    -- Reopening is safe only when nothing reached TikTok (process-post records
+    -- the publish id before uploading), or TikTok itself reported the attempt
+    -- FAILED. Anything pending or live on TikTok must be checked there first.
+    IF v_draft.state <> 'submitted' THEN
+      RAISE EXCEPTION 'TIKTOK_REVIEW_INVALID_STATE' USING ERRCODE = 'P0001';
+    END IF;
+    SELECT * INTO v_submission
+    FROM public.tiktok_review_submissions s
+    WHERE s.draft_id = v_draft.id AND s.user_id = p_user_id
+    ORDER BY s.created_at DESC, s.revision DESC
+    LIMIT 1;
+    IF FOUND THEN
+      IF EXISTS (
+        SELECT 1 FROM public.platform_posts pp
+        WHERE pp.post_id = v_submission.post_id
+          AND pp.platform = 'tiktok'
+          AND pp.status IN ('pending', 'success')
+      ) THEN
+        RAISE EXCEPTION 'TIKTOK_REVIEW_INVALID_STATE' USING ERRCODE = 'P0001';
+      END IF;
+      IF v_submission.provider_publish_id IS NOT NULL THEN
+        IF NOT EXISTS (
+          SELECT 1 FROM public.platform_posts pp
+          WHERE pp.post_id = v_submission.post_id
+            AND pp.platform = 'tiktok'
+            AND pp.status = 'failed'
+        ) THEN
+          RAISE EXCEPTION 'TIKTOK_REVIEW_INVALID_STATE' USING ERRCODE = 'P0001';
+        END IF;
+      ELSIF v_submission.dispatch_state NOT IN ('needs_attention', 'dispatched', 'unknown')
+         OR (v_submission.dispatch_state = 'unknown'
+             AND v_submission.updated_at >= now() - interval '10 minutes') THEN
+        RAISE EXCEPTION 'TIKTOK_REVIEW_INVALID_STATE' USING ERRCODE = 'P0001';
+      END IF;
     END IF;
     UPDATE public.tiktok_review_drafts
     SET state = 'pending_review',
@@ -371,6 +433,9 @@ BEGIN
   FROM public.tiktok_review_submissions s
   WHERE s.user_id = p_user_id AND s.request_id = p_request_id;
   IF FOUND THEN
+    IF v_existing.draft_id <> p_draft_id THEN
+      RAISE EXCEPTION 'TIKTOK_REVIEW_REQUEST_REUSED' USING ERRCODE = 'P0001';
+    END IF;
     RETURN jsonb_build_object(
       'submission_id', v_existing.id,
       'post_id', v_existing.post_id,
@@ -398,6 +463,9 @@ BEGIN
   FROM public.tiktok_review_submissions s
   WHERE s.user_id = p_user_id AND s.request_id = p_request_id;
   IF FOUND THEN
+    IF v_existing.draft_id <> p_draft_id THEN
+      RAISE EXCEPTION 'TIKTOK_REVIEW_REQUEST_REUSED' USING ERRCODE = 'P0001';
+    END IF;
     RETURN jsonb_build_object(
       'submission_id', v_existing.id,
       'post_id', v_existing.post_id,
