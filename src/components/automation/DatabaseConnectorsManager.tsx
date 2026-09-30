@@ -66,6 +66,7 @@ import {
   CONNECTOR_CATEGORY_LABELS,
   CONNECTOR_TYPES,
   connectorDefinition,
+  hasGuardedWrites,
   isComposioType,
   shouldUseAdapter,
   type ConnectorCategory,
@@ -2361,10 +2362,10 @@ function DatabaseConnectorsEditor({
                           </span>
                         </div>
                         {/* Mirrors the Read-Only Guard switch below; it used to say Read-Only whatever the guard was.
-                            Composio writes are gated by settings.allow_writes (composioExecution), which this
-                            form never sets, so those connectors stay Read-Only here. */}
+                            Only types whose runtime has a guarded write path can be Read & Write: read-only
+                            adapters never write, and Composio writes are gated by settings.allow_writes. */}
                         <Badge variant="secondary" className="text-[9px] py-0 h-4 shrink-0 font-normal">
-                          {form.read_only_mode || isComposioType(form.connector_type)
+                          {form.read_only_mode || !hasGuardedWrites(form.connector_type)
                             ? t("form.readOnly", "Read-Only")
                             : t("form.readWrite", "Read & Write")}
                         </Badge>

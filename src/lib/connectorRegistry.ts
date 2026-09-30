@@ -751,6 +751,20 @@ export function connectorDefinition(type: string): ConnectorDefinition {
   return CONNECTOR_DEFINITIONS[type as ConnectorType];
 }
 
+/**
+ * Connector types whose ai-agent-adapters implementation has a write path that
+ * honours read_only_mode, so turning the Read-Only Guard off really makes them
+ * writable. Declared capabilities are not enough: the Supabase definition lists
+ * every capability name, but its adapter only ever reads. Add a type here when
+ * its adapter gains a guarded write.
+ */
+const GUARDED_WRITE_CONNECTOR_TYPES: ReadonlySet<string> = new Set(["woocommerce"]);
+
+/** True when read_only_mode really controls writes for this connector type. */
+export function hasGuardedWrites(type: string): boolean {
+  return GUARDED_WRITE_CONNECTOR_TYPES.has(type);
+}
+
 export function isComposioType(type: string | null | undefined): boolean {
   return Boolean(type && Object.prototype.hasOwnProperty.call(CONNECTOR_DEFINITIONS, type) &&
     CONNECTOR_DEFINITIONS[type as ConnectorType].auth_strategy === "composio_oauth");
