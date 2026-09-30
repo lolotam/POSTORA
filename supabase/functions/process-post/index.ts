@@ -387,6 +387,7 @@ interface PostData {
   caption: string | null;
   platforms: string[];
   media_file_ids: string[] | null;
+  scheduled_at?: string | null;
   metadata?: PlatformMetadata | null;
 }
 
@@ -6271,11 +6272,13 @@ async function postToTikTok(
       admin: createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY),
       accessToken,
       submissionId: reviewSubmissionId,
+      accountId: account.id,
       post: {
         id: post.id,
         user_id: post.user_id,
         caption: post.caption,
         media_file_ids: post.media_file_ids,
+        scheduled_at: post.scheduled_at ?? null,
         metadata: (metadata ?? null) as Record<string, unknown> | null,
       },
     });

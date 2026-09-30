@@ -776,9 +776,33 @@ BEGIN
     ASSERT SQLERRM = 'TIKTOK_REVIEW_INVALID_STATE', 'T15 pending-row refusal, got: ' || SQLERRM;
   END;
 
+  -- A failed row alone is not TikTok's verdict once a publish id exists:
+  -- process-post writes one when its own poll or database write fails after
+  -- the upload (migration 20261002170000).
   UPDATE public.platform_posts SET status = 'failed' WHERE post_id = v_post;
+  BEGIN
+    PERFORM public.tiktok_review_transition(u_a, v_draft.id, 2, 'reopen', NULL);
+    RAISE EXCEPTION 'T15 failed: reopen on a locally failed row with a publish id was accepted'
+      USING ERRCODE = 'assert_failure';
+  EXCEPTION WHEN raise_exception THEN
+    ASSERT SQLERRM = 'TIKTOK_REVIEW_INVALID_STATE', 'T15 local-failure refusal, got: ' || SQLERRM;
+  END;
+
+  -- A FAILED event for this publish id from another TikTok account frees nothing.
+  INSERT INTO public.tiktok_webhook_events (event, user_openid, publish_id, create_time)
+  VALUES ('post.publish.failed', 'tt-user-b', 'v_pub_t15', 1);
+  BEGIN
+    PERFORM public.tiktok_review_transition(u_a, v_draft.id, 2, 'reopen', NULL);
+    RAISE EXCEPTION 'T15 failed: a foreign account''s FAILED event reopened the draft'
+      USING ERRCODE = 'assert_failure';
+  EXCEPTION WHEN raise_exception THEN
+    ASSERT SQLERRM = 'TIKTOK_REVIEW_INVALID_STATE', 'T15 foreign-event refusal, got: ' || SQLERRM;
+  END;
+
+  INSERT INTO public.tiktok_webhook_events (event, user_openid, publish_id, create_time)
+  VALUES ('post.publish.failed', 'tt-user-a', 'v_pub_t15', 2);
   v_draft := public.tiktok_review_transition(u_a, v_draft.id, 2, 'reopen', NULL);
-  ASSERT v_draft.state = 'pending_review', 'T15 TikTok-failed attempt reopens to pending_review';
+  ASSERT v_draft.state = 'pending_review', 'T15 TikTok-reported FAILED reopens to pending_review';
   ASSERT v_draft.revision = 3, 'T15 reopen bumps the revision (consent invalidated)';
 
   -- Second round: nothing reached TikTok (no publish id, no row).
