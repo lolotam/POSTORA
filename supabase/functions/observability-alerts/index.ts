@@ -2,6 +2,7 @@ import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { Resend } from "https://esm.sh/resend@2.0.0";
 import { verifyCronAuth } from "../_shared/cron-auth.ts";
+import { triageFailurePercent } from "./jevTriage.ts";
 
 import { restrictedCorsHeaders } from "../_shared/cors.ts";
 
@@ -290,6 +291,24 @@ serve(async (req) => {
           
           currentValue = cronLogs?.length || 0;
           shouldTrigger = compareValue(currentValue, config.threshold_value, config.threshold_operator);
+          break;
+        }
+
+        case "jev_triage_failure": {
+          const windowStart = new Date(now.getTime() - config.time_window_minutes * 60 * 1000).toISOString();
+          const { data: replyLogs, error: replyLogsError } = await supabase
+            .from("system_logs")
+            .select("triage:metadata->triage")
+            .eq("source", "ai-agent-reply")
+            .gte("created_at", windowStart);
+          if (replyLogsError) {
+            // Skip only this rule: throwing would leave every later rule unevaluated this run.
+            console.error(`[OBSERVABILITY-ALERTS] ${config.name}: reply log read failed:`, replyLogsError.message);
+            continue;
+          }
+
+          currentValue = triageFailurePercent(replyLogs ?? []);
+          shouldTrigger = currentValue !== null && compareValue(currentValue, config.threshold_value, config.threshold_operator);
           break;
         }
 

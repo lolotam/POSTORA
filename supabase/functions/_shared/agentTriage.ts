@@ -158,6 +158,9 @@ export function selectConnectorTools<T extends { name: string }>(tools: T[], pla
 // ========== Task 3: Triage runtime ==========
 
 export const TRIAGE_BUDGET_MS = 1500;
+// A slow first tier used to spend the whole budget: on 2026-09-30 a cold Vercel call
+// timed out at 1521 ms and neither fallback ran. Capping it leaves the rest for them.
+const FIRST_TIER_CAP_MS = 900;
 const ENABLED_KEY = "agent_triage_enabled";
 const SLOT_KEYS = [
   "default_ai_model_agent_triage",
@@ -214,9 +217,11 @@ export async function runTriage(
     }
     return cached;
   };
-  for (const tier of tiers) {
+  for (const [index, tier] of tiers.entries()) {
     const remaining = budgetMs - (now() - startedAt);
     if (remaining <= 0) break;
+    const firstWithFallbacks = index === 0 && tiers.length > 1;
+    const timeoutMs = firstWithFallbacks ? Math.min(remaining, FIRST_TIER_CAP_MS) : remaining;
     const label = `${tier.provider}/${tier.model}`;
     try {
       const key = await resolveCachedKey(tier.provider);
@@ -228,7 +233,7 @@ export async function runTriage(
         method: "POST",
         headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
         body: JSON.stringify(triageRequestBody(tier, input)),
-        signal: AbortSignal.timeout(remaining),
+        signal: AbortSignal.timeout(timeoutMs),
       });
       if (!response.ok) {
         errors.push({ model: label, error: `HTTP ${response.status}` });
