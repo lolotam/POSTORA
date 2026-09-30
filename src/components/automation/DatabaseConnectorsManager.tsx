@@ -2360,8 +2360,9 @@ function DatabaseConnectorsEditor({
                             {directoryTitle(form.connector_type, CONNECTOR_DIRECTORY.find((d) => d.id === form.connector_type)?.title || form.connector_type, t)}
                           </span>
                         </div>
+                        {/* Mirrors the Read-Only Guard switch below; it used to say Read-Only whatever the guard was. */}
                         <Badge variant="secondary" className="text-[9px] py-0 h-4 shrink-0 font-normal">
-                          {t("form.readOnly", "Read-Only")}
+                          {form.read_only_mode ? t("form.readOnly", "Read-Only") : t("form.readWrite", "Read & Write")}
                         </Badge>
                       </div>
                     </div>
@@ -2538,6 +2539,11 @@ function DatabaseConnectorsEditor({
                       <div className="space-y-0.5">
                         <Label className="text-xs font-medium">{t("form.readOnlyGuard", "Read-Only Guard")}</Label>
                         <p className="text-[10px] text-muted-foreground">{t("form.readOnlyGuardHint", "Disallows any write operations")}</p>
+                        {form.connector_type === "woocommerce" && form.read_only_mode && (
+                          <p className="text-[10px] text-amber-600 dark:text-amber-400">
+                            {t("form.readOnlyGuardWooHint", "Turn this off to let COD confirmation update orders.")}
+                          </p>
+                        )}
                       </div>
                       <Switch
                         checked={form.read_only_mode}
