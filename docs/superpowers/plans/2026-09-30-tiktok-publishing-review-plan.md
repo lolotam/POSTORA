@@ -12,6 +12,27 @@
 
 **Status:** Planning complete; all implementation tasks are pending. No application code, database, or deployment was changed while preparing this plan.
 
+## Orchestrator review (2026-09-30)
+
+The plan was written by Codex. The user waived a separate debate round and asked the orchestrator (Claude) to review it against the code before implementation. The Task 1 trace is in [the integration contract](../../investigations/tiktok-review-integration.md), which **supersedes this plan wherever they differ**. The Brandora capture is in [the reference](../../investigations/tiktok-review-reference.md).
+
+| # | Finding | Verdict | Resolution |
+| --- | --- | --- | --- |
+| 1 | `src/hooks/useTikTokStatusPolling.ts` does not exist; the file is `.tsx` and, like `TikTokProcessingStatus.tsx`, has no consumer. | accept | File map corrected. The new `usePublishStatus` replaces it; the old hook is left untouched. |
+| 2 | `tiktok-check-status` and `tiktok-oauth` (`creator_info`, `refresh`) are missing from the map, and neither checks account ownership. | accept | Added to Task 4 (slice S3) as security fixes (contract D10). |
+| 3 | The webhook reads `publish_id` at the top level. The real envelope nests it in the JSON-string `content`, so nothing has ever matched. `publicly_available` is unhandled and there is no `user_openid` check. | accept | Contract D9 and the `tiktok_webhook_events` table. |
+| 4 | The plan says "Use a `codex/` branch". | reject | The pipeline runs in the `feat/tiktok-review` worktree. |
+| 5 | Planned migration timestamp `20260930000000` sorts before existing `20261002140000`. | accept | Renamed `20261002150000_tiktok_review_lifecycle.sql`. |
+| 6 | `ReviewState` includes `draft`, but no transition produces it. | accept | Dropped (contract D12). |
+| 7 | Tightening TikTok validation inside `process-post` would change CreatePost for all users; tightening only in the review handler would split rule ownership. | partial | One pure owner, `_shared/tiktokPublishPolicy.ts`, called by the review handler and by `process-post` for review-origin posts only (contract D4, D7). |
+| 8 | "Block unknown duration" would block every upload since Cloudinary was disabled, because `metadata.duration` is null. | partial | Stored duration, else browser-measured, is a UX gate; TikTok enforces finally (contract D8). |
+| 9 | A draft stored in `posts` would consume post quota and fire partner events. | accept | Separate `tiktok_review_drafts`; submit creates the post atomically (contract D1–D3). |
+| 10 | The publish_id is not persisted until after upload plus about 60 s of polling, so an ambiguous outcome cannot be reconciled. | accept | `process-post` records `provider_publish_id` right after init for review posts, and dispatch never re-sends (contract D5, D6). |
+| 11 | `post_info.schedule_time` does not exist in the provider contract. | accept (already Task 5) | Confirmed from the TikTok docs. |
+| 12 | Task 8 live posts from an unaudited app. | accept | Evidence must use `SELF_ONLY`. |
+| 13 | Brandora 390 px reference. | partial | Blocked (the window could not be resized); the narrow layout is a POSTORA design decision. |
+| 14 | "Send to TikTok inbox" appears in Brandora's settings. | reject | Out of scope (contract D14). |
+
 ## Global constraints
 
 - Route: `/tiktok-publish`; preserve `/tiktok-auth`.
@@ -70,7 +91,9 @@ Proposed new files (these are intended deliverables, not existing APIs):
 | `supabase/functions/tiktok-review/index.ts` | Thin authenticated router for review actions. |
 | `supabase/functions/tiktok-review/handler.ts` | Authorized draft lifecycle and publishing adapter. |
 
-Proposed schema migration file: `supabase/migrations/20260930000000_tiktok_review_lifecycle.sql`. At execution, replace this planned timestamp if occupied or older than the migration sequence; record the actual filename in this plan. The exact integration schema is finalized in Task 1 before SQL is written.
+Schema migration file: `supabase/migrations/20261002150000_tiktok_review_lifecycle.sql`, with harness `supabase/tests/tiktok_review_lifecycle.sql`. The exact schema and RPCs are fixed in the integration contract §4.
+
+Added by the Task 1 trace: `src/hooks/useTikTokStatusPolling.tsx` (not `.ts`; no consumer), `supabase/functions/tiktok-check-status/index.ts`, `supabase/functions/_shared/tiktokPublishPolicy.ts`, `src/features/tiktok-publishing/tests/architecture.test.ts`, and the `eslint.config.js` feature block. Slice ownership is in the integration contract §8.
 
 ## Phase 1 — Freeze evidence and integration contracts
 
@@ -314,7 +337,7 @@ Each implementation task ends with source review, relevant passing tests, guard 
 - [x] Specification written locally.
 - [x] Implementation plan written locally.
 - [x] Documentation self-review: evidence boundaries, relative links, proposed versus existing paths, and acceptance coverage checked.
-- [ ] Task 1 complete.
+- [x] Task 1 complete. Deployed hashes match; Brandora desktop captured and 390 px blocked; the contract is in `docs/investigations/`.
 - [ ] Task 2 complete.
 - [ ] Task 3 complete.
 - [ ] Task 4 complete.
