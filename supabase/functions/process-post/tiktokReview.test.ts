@@ -84,11 +84,14 @@ const defaultSnapshot = {
   },
 };
 
+const defaultConsent = { social_account_id: "acct-uuid-1", mode: "now", scheduled_at: null };
+
 const defaultPost = {
   id: "post-uuid-1",
   user_id: "user-uuid-1",
   caption: "Reviewed TikTok caption",
   media_file_ids: ["media-uuid-1"],
+  scheduled_at: null as string | null,
   metadata: {
     tiktok_review_submission_id: "sub-uuid-1",
     tiktok_privacy_level: "SELF_ONLY", // Ignored: snapshot settings win
@@ -140,7 +143,7 @@ function createFakeAdmin(options: {
           if (currentTable === "tiktok_review_submissions") {
             return Promise.resolve(
               options.submission ?? {
-                data: { snapshot: defaultSnapshot },
+                data: { ...defaultConsent, snapshot: defaultSnapshot },
                 error: null,
               },
             );
@@ -217,6 +220,7 @@ Deno.test("creator_info network failure rejects with TIKTOK_REVIEW_NEEDS_ATTENTI
           admin,
           accessToken: "token-1",
           submissionId: "sub-uuid-1",
+          accountId: "acct-uuid-1",
           post: defaultPost,
         }),
       Error,
@@ -237,6 +241,7 @@ Deno.test("creator_info posting-blocked code rejects with TIKTOK_REVIEW_NEEDS_AT
             admin,
             accessToken: "token-1",
             submissionId: "sub-uuid-1",
+            accountId: "acct-uuid-1",
             post: defaultPost,
           }),
         Error,
@@ -258,6 +263,7 @@ Deno.test("creator_info access_token_invalid and scope_not_authorized both rejec
             admin,
             accessToken: "token-bad",
             submissionId: "sub-uuid-1",
+            accountId: "acct-uuid-1",
             post: defaultPost,
           }),
         Error,
@@ -279,6 +285,7 @@ Deno.test("submission read error rejects with TIKTOK_REVIEW_NEEDS_ATTENTION:SUBM
           admin,
           accessToken: "token-1",
           submissionId: "sub-uuid-1",
+          accountId: "acct-uuid-1",
           post: defaultPost,
         }),
       Error,
@@ -300,6 +307,7 @@ Deno.test("missing submission row rejects with TIKTOK_REVIEW_NEEDS_ATTENTION:SUB
           admin,
           accessToken: "token-1",
           submissionId: "missing-sub",
+          accountId: "acct-uuid-1",
           post: defaultPost,
         }),
       Error,
@@ -315,7 +323,7 @@ Deno.test("prepareTikTokReviewPublish: SNAPSHOT_MISMATCH when post.caption or po
     // 1. Post caption modified after review
     const { client: adminDiffCaption, calls: callsDiffCaption } = createFakeAdmin({
       submission: {
-        data: { snapshot: { ...defaultSnapshot, caption: "Original approved caption" } },
+        data: { ...defaultConsent, snapshot: { ...defaultSnapshot, caption: "Original approved caption" } },
         error: null,
       },
     });
@@ -325,6 +333,7 @@ Deno.test("prepareTikTokReviewPublish: SNAPSHOT_MISMATCH when post.caption or po
           admin: adminDiffCaption,
           accessToken: "token-1",
           submissionId: "sub-uuid-1",
+          accountId: "acct-uuid-1",
           post: { ...defaultPost, caption: "Modified unapproved caption" },
         }),
       Error,
@@ -336,7 +345,7 @@ Deno.test("prepareTikTokReviewPublish: SNAPSHOT_MISMATCH when post.caption or po
     // 2. Post media file modified after review
     const { client: adminDiffMedia, calls: callsDiffMedia } = createFakeAdmin({
       submission: {
-        data: { snapshot: { ...defaultSnapshot, media_file_id: "media-uuid-1" } },
+        data: { ...defaultConsent, snapshot: { ...defaultSnapshot, media_file_id: "media-uuid-1" } },
         error: null,
       },
     });
@@ -346,6 +355,7 @@ Deno.test("prepareTikTokReviewPublish: SNAPSHOT_MISMATCH when post.caption or po
           admin: adminDiffMedia,
           accessToken: "token-1",
           submissionId: "sub-uuid-1",
+          accountId: "acct-uuid-1",
           post: { ...defaultPost, media_file_ids: ["media-uuid-DIFFERENT"] },
         }),
       Error,
@@ -357,7 +367,7 @@ Deno.test("prepareTikTokReviewPublish: SNAPSHOT_MISMATCH when post.caption or po
     // 3. Snapshot caption is not a string
     const { client: adminNonStringCaption, calls: callsNonStringCaption } = createFakeAdmin({
       submission: {
-        data: { snapshot: { ...defaultSnapshot, caption: 12345 } },
+        data: { ...defaultConsent, snapshot: { ...defaultSnapshot, caption: 12345 } },
         error: null,
       },
     });
@@ -367,6 +377,7 @@ Deno.test("prepareTikTokReviewPublish: SNAPSHOT_MISMATCH when post.caption or po
           admin: adminNonStringCaption,
           accessToken: "token-1",
           submissionId: "sub-uuid-1",
+          accountId: "acct-uuid-1",
           post: defaultPost,
         }),
       Error,
@@ -378,7 +389,7 @@ Deno.test("prepareTikTokReviewPublish: SNAPSHOT_MISMATCH when post.caption or po
     // 4. Post has no media but snapshot expected media
     const { client: adminNullMedia, calls: callsNullMedia } = createFakeAdmin({
       submission: {
-        data: { snapshot: { ...defaultSnapshot, media_file_id: "media-uuid-1" } },
+        data: { ...defaultConsent, snapshot: { ...defaultSnapshot, media_file_id: "media-uuid-1" } },
         error: null,
       },
     });
@@ -388,6 +399,7 @@ Deno.test("prepareTikTokReviewPublish: SNAPSHOT_MISMATCH when post.caption or po
           admin: adminNullMedia,
           accessToken: "token-1",
           submissionId: "sub-uuid-1",
+          accountId: "acct-uuid-1",
           post: { ...defaultPost, media_file_ids: null },
         }),
       Error,
@@ -402,7 +414,7 @@ Deno.test("privacy required when snapshot settings are missing or invalid", asyn
   await withCreatorResponse(validCreatorResponse, async () => {
     const { client: admin, calls } = createFakeAdmin({
       submission: {
-        data: { snapshot: { ...defaultSnapshot, settings: null } },
+        data: { ...defaultConsent, snapshot: { ...defaultSnapshot, settings: null } },
         error: null,
       },
     });
@@ -412,6 +424,7 @@ Deno.test("privacy required when snapshot settings are missing or invalid", asyn
           admin,
           accessToken: "token-1",
           submissionId: "sub-uuid-1",
+          accountId: "acct-uuid-1",
           post: defaultPost,
         }),
       Error,
@@ -433,6 +446,7 @@ Deno.test("media_files read error rejects with TIKTOK_REVIEW_NEEDS_ATTENTION:MED
           admin,
           accessToken: "token-1",
           submissionId: "sub-uuid-1",
+          accountId: "acct-uuid-1",
           post: defaultPost,
         }),
       Error,
@@ -461,6 +475,7 @@ Deno.test("privacy no longer offered by creator rejects with TIKTOK_REVIEW_NEEDS
             admin,
             accessToken: "token-1",
             submissionId: "sub-uuid-1",
+            accountId: "acct-uuid-1",
             post: defaultPost,
           }),
         Error,
@@ -485,7 +500,7 @@ Deno.test("media_files duration overrides snapshot duration", async () => {
     async () => {
       const { client: admin, calls } = createFakeAdmin({
         submission: {
-          data: { snapshot: { ...defaultSnapshot, media_duration_sec: 40 } },
+          data: { ...defaultConsent, snapshot: { ...defaultSnapshot, media_duration_sec: 40 } },
           error: null,
         },
         media: {
@@ -500,6 +515,7 @@ Deno.test("media_files duration overrides snapshot duration", async () => {
             admin,
             accessToken: "token-1",
             submissionId: "sub-uuid-1",
+            accountId: "acct-uuid-1",
             post: defaultPost,
           }),
         Error,
@@ -519,6 +535,7 @@ Deno.test("atomic claim update is sent with filters id/post_id/user_id, dispatch
       admin,
       accessToken: "token-valid",
       submissionId: "sub-uuid-1",
+      accountId: "acct-uuid-1",
       post: defaultPost,
     });
 
@@ -546,6 +563,7 @@ Deno.test("zero claimed rows rejects with TIKTOK_REVIEW_NEEDS_ATTENTION:ALREADY_
           admin,
           accessToken: "token-valid",
           submissionId: "sub-uuid-1",
+          accountId: "acct-uuid-1",
           post: defaultPost,
         }),
       Error,
@@ -565,6 +583,7 @@ Deno.test("claim error rejects with TIKTOK_REVIEW_NEEDS_ATTENTION:SUBMISSION_REA
           admin,
           accessToken: "token-valid",
           submissionId: "sub-uuid-1",
+          accountId: "acct-uuid-1",
           post: defaultPost,
         }),
       Error,
@@ -580,6 +599,7 @@ Deno.test("valid input returns postInfo matching snapshot settings with explicit
       admin,
       accessToken: "token-valid",
       submissionId: "sub-uuid-1",
+      accountId: "acct-uuid-1",
       post: defaultPost,
     });
 
@@ -660,4 +680,58 @@ Deno.test("recordReviewPublishId filters on dispatch_state 'publishing' and 'unk
       `Expected reject for: ${tc.name}`,
     );
   }
+});
+
+Deno.test("a post moved to another account or publish time after consent is refused before the claim", async () => {
+  const scheduledAt = "2026-10-05T09:00:00+00:00";
+  const cases = [
+    { name: "History retry switched the account", consent: defaultConsent, accountId: "acct-uuid-2", postScheduledAt: null },
+    { name: "a publish-now post was scheduled later", consent: defaultConsent, accountId: "acct-uuid-1", postScheduledAt: scheduledAt },
+    {
+      name: "Calendar rescheduled the approved time",
+      consent: { ...defaultConsent, mode: "scheduled", scheduled_at: scheduledAt },
+      accountId: "acct-uuid-1",
+      postScheduledAt: "2026-10-06T09:00:00+00:00",
+    },
+  ];
+  for (const testCase of cases) {
+    await withCreatorResponse(validCreatorResponse, async () => {
+      const { client, calls } = createFakeAdmin({
+        submission: { data: { ...testCase.consent, snapshot: defaultSnapshot }, error: null },
+      });
+      await assertRejects(
+        () =>
+          prepareTikTokReviewPublish({
+            admin: client,
+            accessToken: "token-1",
+            submissionId: "sub-uuid-1",
+            accountId: testCase.accountId,
+            post: { ...defaultPost, scheduled_at: testCase.postScheduledAt },
+          }),
+        Error,
+        "TIKTOK_REVIEW_NEEDS_ATTENTION:SNAPSHOT_MISMATCH",
+        testCase.name,
+      );
+      assertZeroSubmissionUpdates(calls);
+    });
+  }
+});
+
+Deno.test("a scheduled post publishes at its approved time whatever the timestamp spelling", async () => {
+  await withCreatorResponse(validCreatorResponse, async () => {
+    const { client } = createFakeAdmin({
+      submission: {
+        data: { ...defaultConsent, mode: "scheduled", scheduled_at: "2026-10-05T09:00:00+00:00", snapshot: defaultSnapshot },
+        error: null,
+      },
+    });
+    const prepared = await prepareTikTokReviewPublish({
+      admin: client,
+      accessToken: "token-1",
+      submissionId: "sub-uuid-1",
+      accountId: "acct-uuid-1",
+      post: { ...defaultPost, scheduled_at: "2026-10-05T09:00:00.000Z" },
+    });
+    assertEquals(prepared.postInfo.privacy_level, "PUBLIC_TO_EVERYONE");
+  });
 });
