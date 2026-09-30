@@ -68,16 +68,30 @@ export type TikTokPublishPolicyInput = {
   readonly creator: TikTokCreatorCapabilities;
 };
 
-function violation(code: PolicyViolationCode): PolicyViolation {
-  return { code, message: VIOLATION_MESSAGES[code] };
+export function policyViolationMessage(code: PolicyViolationCode): string {
+  return VIOLATION_MESSAGES[code];
 }
 
-function isPositiveFiniteNumber(value: number | null): value is number {
+export function isPolicyViolationCode(value: string): value is PolicyViolationCode {
+  return Object.hasOwn(VIOLATION_MESSAGES, value);
+}
+
+function violation(code: PolicyViolationCode): PolicyViolation {
+  return { code, message: policyViolationMessage(code) };
+}
+
+function isPositiveFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+export function resolveReviewDurationSec(mediaMetadata: unknown, fallbackSec: unknown): number | null {
+  const duration = isRecord(mediaMetadata) ? mediaMetadata.duration : null;
+  if (isPositiveFiniteNumber(duration)) return duration;
+  return isPositiveFiniteNumber(fallbackSec) ? fallbackSec : null;
 }
 
 function isStringArray(value: unknown): value is string[] {

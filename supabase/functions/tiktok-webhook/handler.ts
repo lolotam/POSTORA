@@ -230,7 +230,7 @@ export async function handleTikTokWebhook(
     deps.log(`tiktok_webhook_publish:${publishId}`);
     if (!deps.admin) throw new Error("tiktok_webhook_unavailable");
 
-    const recorded = await recordPublishEvent({ ...deps, admin: deps.admin }, {
+    await recordPublishEvent({ ...deps, admin: deps.admin }, {
       event,
       user_openid: userOpenId,
       publish_id: publishId,
@@ -238,7 +238,6 @@ export async function handleTikTokWebhook(
       reason,
       create_time: body.create_time,
     });
-    if (recorded === "duplicate") return json({ success: true }, 200);
 
     const applyPending = deps.applyPending ?? applyPendingWebhookEvents;
     const result: ApplyOutcomeResult | "none" = await applyPending(deps.admin, publishId);

@@ -5,26 +5,16 @@
  * is set. Legacy posts never enter this module. Throws before any init call.
  */
 import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.89.0";
-import { fetchWithTimeout } from "../_shared/request-timeout.ts";
+import { queryCreatorInfo } from "../_shared/tiktokContentPostingApi.ts";
 import {
   buildTikTokPostInfo,
-  tiktokPostSettingsFromMetadata,
+  tiktokPostSettingsFromReview,
   type TikTokPostInfo,
 } from "../_shared/tiktokPostInfo.ts";
 import {
-  creatorCapabilitiesFromTikTok,
   evaluateTikTokPublishPolicy,
+  resolveReviewDurationSec,
 } from "../_shared/tiktokPublishPolicy.ts";
-
-const CREATOR_INFO_URL = "https://open.tiktokapis.com/v2/post/publish/creator_info/query/";
-const CREATOR_INFO_TIMEOUT_MS = 10_000;
-
-const POSTING_BLOCKED_CODES = new Set([
-  "spam_risk_too_many_posts",
-  "spam_risk_user_banned_from_posting",
-  "reached_active_user_cap",
-  "user_posting_banned",
-]);
 
 export function tiktokReviewSubmissionId(metadata: unknown): string | null {
   if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return null;
@@ -34,36 +24,6 @@ export function tiktokReviewSubmissionId(metadata: unknown): string | null {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function positiveDuration(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : null;
-}
-
-function reviewCaption(metadata: Record<string, unknown> | null, caption: string | null): string {
-  const title = metadata?.tiktok_title;
-  if (typeof title === "string") return title;
-  return caption ?? "";
-}
-
-async function fetchCreatorInfo(accessToken: string): Promise<unknown> {
-  try {
-    const response = await fetchWithTimeout(
-      CREATOR_INFO_URL,
-      {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${accessToken}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({}),
-      },
-      CREATOR_INFO_TIMEOUT_MS,
-    );
-    return await response.json();
-  } catch {
-    throw new Error("TIKTOK_REVIEW_NEEDS_ATTENTION:CREATOR_INFO_UNAVAILABLE");
-  }
 }
 
 export async function prepareTikTokReviewPublish(input: {
@@ -78,29 +38,16 @@ export async function prepareTikTokReviewPublish(input: {
     metadata: Record<string, unknown> | null;
   };
 }): Promise<{ postInfo: TikTokPostInfo }> {
-  const creatorBody = await fetchCreatorInfo(input.accessToken);
-  if (!isRecord(creatorBody)) {
+  const lookup = await queryCreatorInfo(fetch, input.accessToken, null, null);
+  if (lookup.kind === "token_invalid") {
+    throw new Error("TikTok session expired. Please reconnect your TikTok account.");
+  }
+  if (lookup.kind === "blocked") {
+    throw new Error("TIKTOK_REVIEW_NEEDS_ATTENTION:POSTING_BLOCKED");
+  }
+  if (lookup.kind === "unavailable") {
     throw new Error("TIKTOK_REVIEW_NEEDS_ATTENTION:CREATOR_INFO_UNAVAILABLE");
   }
-  const errorCode = isRecord(creatorBody.error) && typeof creatorBody.error.code === "string"
-    ? creatorBody.error.code
-    : null;
-  if (errorCode && errorCode !== "ok") {
-    if (errorCode === "access_token_invalid") {
-      throw new Error("TikTok session expired. Please reconnect your TikTok account.");
-    }
-    if (POSTING_BLOCKED_CODES.has(errorCode)) {
-      throw new Error("TIKTOK_REVIEW_NEEDS_ATTENTION:POSTING_BLOCKED");
-    }
-    throw new Error("TIKTOK_REVIEW_NEEDS_ATTENTION:CREATOR_INFO_UNAVAILABLE");
-  }
-
-  const creator = creatorCapabilitiesFromTikTok(creatorBody.data);
-  if (!creator) throw new Error("TIKTOK_REVIEW_NEEDS_ATTENTION:CREATOR_INFO_UNAVAILABLE");
-
-  const metadata = input.post.metadata;
-  const settings = tiktokPostSettingsFromMetadata(metadata ?? {});
-  if (!settings) throw new Error("TIKTOK_REVIEW_NEEDS_ATTENTION:PRIVACY_REQUIRED");
 
   const { data: submission, error: submissionError } = await input.admin
     .from("tiktok_review_submissions")
@@ -109,14 +56,25 @@ export async function prepareTikTokReviewPublish(input: {
     .eq("post_id", input.post.id)
     .eq("user_id", input.post.user_id)
     .maybeSingle();
-  if (submissionError || !submission) {
+  if (submissionError) {
+    throw new Error("TIKTOK_REVIEW_NEEDS_ATTENTION:SUBMISSION_READ_FAILED");
+  }
+  if (!submission) {
     throw new Error("TIKTOK_REVIEW_NEEDS_ATTENTION:SUBMISSION_NOT_FOUND");
   }
 
   const snapshot = isRecord(submission.snapshot) ? submission.snapshot : null;
-  let durationSec = positiveDuration(snapshot?.media_duration_sec);
-
-  const mediaFileId = input.post.media_file_ids?.[0] ?? null;
+  const caption = snapshot?.caption;
+  const mediaFileId = typeof snapshot?.media_file_id === "string" ? snapshot.media_file_id : null;
+  if (
+    typeof caption !== "string" || input.post.caption !== caption ||
+    (input.post.media_file_ids?.[0] ?? null) !== mediaFileId
+  ) {
+    throw new Error("TIKTOK_REVIEW_NEEDS_ATTENTION:SNAPSHOT_MISMATCH");
+  }
+  const settings = tiktokPostSettingsFromReview(snapshot?.settings);
+  if (!settings) throw new Error("TIKTOK_REVIEW_NEEDS_ATTENTION:PRIVACY_REQUIRED");
+  let mediaMetadata: unknown = null;
   if (typeof mediaFileId === "string" && mediaFileId.length > 0) {
     const { data: media, error: mediaError } = await input.admin
       .from("media_files")
@@ -125,18 +83,16 @@ export async function prepareTikTokReviewPublish(input: {
       .eq("user_id", input.post.user_id)
       .maybeSingle();
     if (mediaError) throw new Error("TIKTOK_REVIEW_NEEDS_ATTENTION:MEDIA_READ_FAILED");
-    const mediaMetadata = media && isRecord(media.metadata) ? media.metadata : null;
-    const mediaDuration = positiveDuration(mediaMetadata?.duration);
-    if (mediaDuration !== null) durationSec = mediaDuration;
+    mediaMetadata = media?.metadata;
   }
 
-  const caption = reviewCaption(metadata, input.post.caption);
+  const durationSec = resolveReviewDurationSec(mediaMetadata, snapshot?.media_duration_sec);
   const violations = evaluateTikTokPublishPolicy({
     caption,
     settings,
     mediaFileId: typeof mediaFileId === "string" && mediaFileId.length > 0 ? mediaFileId : null,
     durationSec,
-    creator,
+    creator: lookup.capabilities,
   });
   if (violations.length > 0) {
     throw new Error(
@@ -144,5 +100,31 @@ export async function prepareTikTokReviewPublish(input: {
     );
   }
 
+  const { data: claimed, error: claimError } = await input.admin
+    .from("tiktok_review_submissions")
+    .update({ dispatch_state: "publishing" })
+    .eq("id", input.submissionId)
+    .eq("post_id", input.post.id)
+    .eq("user_id", input.post.user_id)
+    .in("dispatch_state", ["dispatching", "scheduled"])
+    .is("provider_publish_id", null)
+    .select("id");
+  if (claimError) throw new Error("TIKTOK_REVIEW_NEEDS_ATTENTION:SUBMISSION_READ_FAILED");
+  if (!claimed?.length) throw new Error("TIKTOK_REVIEW_NEEDS_ATTENTION:ALREADY_DISPATCHED");
+
   return { postInfo: buildTikTokPostInfo(caption, settings) };
+}
+
+export async function recordReviewPublishId(
+  admin: SupabaseClient,
+  input: { submissionId: string; postId: string; userId: string; publishId: string },
+): Promise<void> {
+  const { error } = await admin.from("tiktok_review_submissions")
+    .update({ provider_publish_id: input.publishId })
+    .eq("id", input.submissionId)
+    .eq("post_id", input.postId)
+    .eq("user_id", input.userId)
+    .eq("dispatch_state", "publishing")
+    .is("provider_publish_id", null);
+  if (error) throw new Error("tiktok_review_publish_id_record_failed");
 }

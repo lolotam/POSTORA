@@ -1,4 +1,6 @@
-import { containsSensitiveInfo, sanitizeErrorMessage } from "../_shared/errorSanitizer.ts";
+import { sanitizeErrorMessage } from "../_shared/errorSanitizer.ts";
+
+import { isPolicyViolationCode, policyViolationMessage } from "../_shared/tiktokPublishPolicy.ts";
 
 export type PublishState =
   | "scheduled"
@@ -46,22 +48,6 @@ const ATTENTION_PREFIX = "TIKTOK_REVIEW_NEEDS_ATTENTION";
 const DISPATCH_STALE_MS = 5 * 60 * 1000;
 const GENERIC_ATTENTION = "These settings are no longer allowed. Review them before trying again.";
 
-/** Same sentences as the publish-policy module, keyed by the code process-post stores after the prefix. */
-const ATTENTION_SENTENCES: Record<string, string> = {
-  POSTING_BLOCKED: "TikTok is blocking new posts from this account.",
-  MEDIA_REQUIRED: "Add a video before publishing.",
-  PRIVACY_REQUIRED: "Choose who can view this post.",
-  PRIVACY_NOT_OFFERED: "This privacy setting isn't available for this account.",
-  COMMENT_NOT_ALLOWED: "Comments can't be turned on for this account.",
-  DUET_NOT_ALLOWED: "Duet can't be turned on for this account.",
-  STITCH_NOT_ALLOWED: "Stitch can't be turned on for this account.",
-  DISCLOSURE_INCOMPLETE: "Indicate whether this promotes you, a third party, or both.",
-  BRANDED_CONTENT_PRIVATE: "Branded content can't be set to Only me.",
-  CAPTION_TOO_LONG: "Caption must be 2,200 characters or fewer.",
-  DURATION_UNKNOWN: "Video length is required before publishing.",
-  DURATION_EXCEEDED: "This video is longer than this account can post.",
-};
-
 function newestIso(values: Array<string | null | undefined>, fallback: string): string {
   let bestValue = fallback;
   let bestMs = Date.parse(fallback);
@@ -78,16 +64,24 @@ function newestIso(values: Array<string | null | undefined>, fallback: string): 
 }
 
 function attentionSentence(errorMessage: string): string {
-  const rest = errorMessage.trim().startsWith(ATTENTION_PREFIX)
-    ? errorMessage.trim().slice(ATTENTION_PREFIX.length).replace(/^[:\s]+/, "").trim()
-    : "";
-  const known = ATTENTION_SENTENCES[rest];
-  if (known) return known;
-  if (rest.length === 0 || /^[A-Z0-9_]+$/.test(rest) || containsSensitiveInfo(rest)) {
-    return GENERIC_ATTENTION;
+  const prefix = `${ATTENTION_PREFIX}:`;
+  const codes = errorMessage.trim().startsWith(prefix)
+    ? errorMessage.trim().slice(prefix.length).split(",").map((code) => code.trim())
+    : [];
+  const policyCode = codes.find(isPolicyViolationCode);
+  if (policyCode) return policyViolationMessage(policyCode);
+  for (const code of codes) {
+    if (["CREATOR_INFO_UNAVAILABLE", "SUBMISSION_READ_FAILED", "SUBMISSION_NOT_FOUND", "MEDIA_READ_FAILED"].includes(code)) {
+      return "TikTok or Postora was temporarily unavailable when publishing. Submit the post again from review.";
+    }
+    if (code === "ALREADY_DISPATCHED") {
+      return "This post was already sent to TikTok. Check TikTok before trying again.";
+    }
+    if (code === "SNAPSHOT_MISMATCH") {
+      return "This post changed after it was approved. Review it again before publishing.";
+    }
   }
-  const sentence = /[.!?]$/.test(rest) ? rest : `${rest}.`;
-  return sentence.length > 300 ? sentence.slice(0, 300) : sentence;
+  return GENERIC_ATTENTION;
 }
 
 function failedReason(errorMessage: string | null): string {
@@ -141,18 +135,18 @@ export function mapPublishStatus(input: MapPublishStatusInput): PublishStatus {
   if (post.status === "failed") {
     return statusOf("failed", updatedAt, "Publishing could not start.", null);
   }
-  if (submission.dispatchState === "unknown" || submission.dispatchState === "needs_attention") {
-    const reason = submission.dispatchState === "unknown"
-      ? "Publishing did not confirm it started."
-      : "This post needs attention before it can go out.";
-    return statusOf("needs_attention", updatedAt, reason, null);
+  if (submission.dispatchState === "needs_attention") {
+    return statusOf("needs_attention", updatedAt, "This post needs attention before it can go out.", null);
   }
-  if (submission.dispatchState === "dispatching") {
+  if (submission.dispatchState === "publishing") {
+    return statusOf("processing", updatedAt, null, null);
+  }
+  if (["unknown", "dispatching", "pending_dispatch"].includes(submission.dispatchState)) {
     const updatedMs = Date.parse(submission.updatedAt);
-    const age = input.nowMs - updatedMs;
-    if (!Number.isFinite(updatedMs) || age > DISPATCH_STALE_MS) {
+    if (!Number.isFinite(updatedMs) || input.nowMs - updatedMs > DISPATCH_STALE_MS) {
       return statusOf("needs_attention", updatedAt, "Publishing did not confirm it started.", null);
     }
+    return statusOf(submission.dispatchState === "pending_dispatch" ? "queued" : "processing", updatedAt, null, null);
   }
   return statusOf("queued", updatedAt, null, null);
 }

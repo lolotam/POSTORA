@@ -94,7 +94,7 @@ import { selectedLinkedInDestinationIds } from "../_shared/linkedinDestinations.
 import { fetchWithTimeout } from "../_shared/request-timeout.ts";
 import { composioClientFromEnv } from "../_shared/composioClient.ts";
 import { publishYouTubeViaComposio } from "./youtubeComposio.ts";
-import { prepareTikTokReviewPublish, tiktokReviewSubmissionId } from "./tiktokReview.ts";
+import { prepareTikTokReviewPublish, recordReviewPublishId, tiktokReviewSubmissionId } from "./tiktokReview.ts";
 import { z } from "npm:zod@3.23.8";
 
 const ProcessPostSchema = z.object({
@@ -1651,16 +1651,10 @@ Deno.serve(async (req) => {
           case "tiktok": {
             const reviewSubmissionId = tiktokReviewSubmissionId(post.metadata);
             result = reviewSubmissionId
-              ? await postToTikTok(account, post, mediaUrls, async (publishId) => {
-                const { error: recordError } = await supabase
-                  .from("tiktok_review_submissions")
-                  .update({ provider_publish_id: publishId })
-                  .eq("id", reviewSubmissionId)
-                  .is("provider_publish_id", null);
-                if (recordError) {
-                  console.error("tiktok_review_publish_id_record_failed", recordError.message);
-                }
-              })
+              ? await postToTikTok(account, post, mediaUrls, (publishId) =>
+                recordReviewPublishId(supabase, {
+                  submissionId: reviewSubmissionId, postId: post.id, userId: post.user_id, publishId,
+                }))
               : await postToTikTok(account, post, mediaUrls);
             break;
           }

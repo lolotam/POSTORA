@@ -28,27 +28,29 @@ export type TikTokPostInfo = {
 };
 
 /**
- * Reads the `posts.metadata` keys written by `tiktok_review_submit`.
+ * Reads the camelCase settings in the consented review snapshot.
  * Returns null when privacy was not stored as a non-empty string so a failed
  * or partial snapshot cannot be published as an unrestricted post.
  * Booleans are strict: only JSON `true` enables the flag.
  */
-export function tiktokPostSettingsFromMetadata(
-  metadata: Record<string, unknown>,
+export function tiktokPostSettingsFromReview(
+  value: unknown,
 ): TikTokPostSettings | null {
-  const privacy = metadata.tiktok_privacy_level;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const settings = value as Record<string, unknown>;
+  const privacy = settings.privacy;
   if (typeof privacy !== "string" || privacy.length === 0) {
     return null;
   }
   return {
     privacy,
-    allowComment: metadata.tiktok_allow_comment === true,
-    allowDuet: metadata.tiktok_allow_duet === true,
-    allowStitch: metadata.tiktok_allow_stitch === true,
-    disclose: metadata.tiktok_disclose_content === true,
-    yourBrand: metadata.tiktok_your_brand === true,
-    brandedContent: metadata.tiktok_branded_content === true,
-    aiGenerated: metadata.tiktok_ai_generated === true,
+    allowComment: settings.allowComment === true,
+    allowDuet: settings.allowDuet === true,
+    allowStitch: settings.allowStitch === true,
+    disclose: settings.disclose === true,
+    yourBrand: settings.yourBrand === true,
+    brandedContent: settings.brandedContent === true,
+    aiGenerated: settings.aiGenerated === true,
   };
 }
 

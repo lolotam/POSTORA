@@ -2,6 +2,7 @@ export async function fetchWithTimeout(
   url: string,
   init: RequestInit,
   timeoutMs: number,
+  fetcher: typeof fetch = fetch,
 ): Promise<Response> {
   const controller = new AbortController();
   let timeout: ReturnType<typeof setTimeout> | undefined;
@@ -14,7 +15,7 @@ export async function fetchWithTimeout(
 
   try {
     return await Promise.race([
-      fetch(url, { ...init, signal: controller.signal }),
+      fetcher(url, { ...init, signal: controller.signal }),
       timeoutResponse,
     ]);
   } finally {

@@ -1,9 +1,9 @@
 import { z } from "npm:zod@3.23.8";
-import { fetchWithTimeout } from "../_shared/request-timeout.ts";
+import { fetchWithTimeout } from "./request-timeout.ts";
 import {
   creatorCapabilitiesFromTikTok,
   type TikTokCreatorCapabilities,
-} from "../_shared/tiktokPublishPolicy.ts";
+} from "./tiktokPublishPolicy.ts";
 
 const TIKTOK_TIMEOUT_MS = 10_000;
 const CREATOR_INFO_URL = "https://open.tiktokapis.com/v2/post/publish/creator_info/query/";
@@ -52,7 +52,7 @@ export type CreatorLookup =
 export type PublishFetch =
   | { kind: "pending" }
   | { kind: "complete"; providerPostId: string | null }
-  | { kind: "failed"; reason: string }
+  | { kind: "failed"; reason: string; providerPostId: string | null }
   | { kind: "unavailable"; code: "TOKEN_INVALID" | "PROVIDER_UNAVAILABLE" };
 
 const ErrorSchema = z.object({
@@ -73,33 +73,6 @@ const StatusEnvelope = z.object({
   }).optional(),
   error: ErrorSchema.optional(),
 });
-
-/**
- * Production calls go through `fetchWithTimeout`. A test double is used only
- * when `fetcher` is not the runtime fetch, with the same timeout.
- */
-export async function fetchBounded(
-  fetcher: typeof fetch,
-  url: string,
-  init: RequestInit,
-  timeoutMs: number,
-): Promise<Response> {
-  if (fetcher === globalThis.fetch) {
-    return await fetchWithTimeout(url, init, timeoutMs);
-  }
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    return await fetcher(url, { ...init, signal: controller.signal });
-  } catch (error) {
-    if (error instanceof Error && error.name === "AbortError") {
-      throw new Error("Request timed out");
-    }
-    throw error;
-  } finally {
-    clearTimeout(timer);
-  }
-}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -139,7 +112,7 @@ async function postTikTok(
   accessToken: string,
   body: unknown,
 ): Promise<unknown> {
-  const response = await fetchBounded(fetcher, url, {
+  const response = await fetchWithTimeout(url, {
     method: "POST",
     redirect: "error",
     headers: {
@@ -147,7 +120,7 @@ async function postTikTok(
       "Content-Type": "application/json",
     },
     body: JSON.stringify(body),
-  }, TIKTOK_TIMEOUT_MS);
+  }, TIKTOK_TIMEOUT_MS, fetcher);
   const text = await response.text();
   if (text.trim() === "") return null;
   try {
@@ -242,6 +215,7 @@ export async function fetchPublishStatus(
     return {
       kind: "failed",
       reason: reason && reason.length > 0 ? reason : "TikTok could not publish this post.",
+      providerPostId: data.publicaly_available_post_id?.[0] ?? null,
     };
   }
   return { kind: "pending" };
