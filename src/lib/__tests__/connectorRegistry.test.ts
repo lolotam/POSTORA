@@ -184,7 +184,7 @@ describe("hasGuardedWrites", () => {
     ["woocommerce", true],
     ["supabase", false],
     ["shopify", false],
-    ["googlesheets", false],
+    ["google_sheets", false],
   ])("%s → %s", (type, expected) => {
     expect(hasGuardedWrites(type)).toBe(expected);
   });
