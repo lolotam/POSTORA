@@ -1,3 +1,4 @@
+import { logToDatabase } from "../_shared/logging.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { destroyCloudinary } from "../_shared/cloudinaryDestroy.ts";
 import { handleCorsOptions, jsonResponse, errorResponse } from "../_shared/cors.ts";
@@ -113,9 +114,11 @@ Deno.serve(async (req) => {
   }
 
   let orphanPublicId: string | null = null;
+  let requestUserId: string | null = null;
   try {
     const { media_file_id, user_id, target_platform } = await req.json() as TranscodeRequest;
 
+    requestUserId = typeof user_id === "string" ? user_id : null;
     if (!media_file_id || !user_id) {
       throw new Error("Missing media_file_id or user_id");
     }
@@ -237,6 +240,18 @@ Deno.serve(async (req) => {
         error: mediaQuotaHumanMessage(message),
         error_code: MEDIA_QUOTA_CODE,
       };
+      try {
+        await logToDatabase(createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY), {
+          level: "warn",
+          category: "system",
+          source: "transcode-video",
+          message: "Transcode refused: daily upload limit reached",
+          user_id: requestUserId ?? undefined,
+          metadata: { reason: "media_quota" },
+        });
+      } catch {
+        console.error("[transcode-video] quota refusal log failed");
+      }
       return jsonResponse(response, 429);
     }
     return errorResponse(message);
