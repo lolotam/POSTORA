@@ -53,7 +53,7 @@ BEGIN
   );
 END;
 $$;
-REVOKE ALL ON FUNCTION public.get_whatsapp_account_setup_summary(uuid) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.get_whatsapp_account_setup_summary(uuid) FROM PUBLIC, anon, authenticated, service_role;
 -- Browser-only: auth.uid() is null under the service role, so it is not granted there.
 GRANT EXECUTE ON FUNCTION public.get_whatsapp_account_setup_summary(uuid) TO authenticated;
 
