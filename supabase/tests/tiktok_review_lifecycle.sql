@@ -1019,6 +1019,26 @@ BEGIN
     GET STACKED DIAGNOSTICS v_detail = PG_EXCEPTION_DETAIL;
     ASSERT v_detail = 'TIKTOK_REVIEW_POST_LOCKED', 'T19 delete refusal, got: ' || coalesce(v_detail, SQLERRM);
   END;
+  -- History deletes the platform rows first; that half is refused too, and the row survives.
+  INSERT INTO public.platform_posts (post_id, social_account_id, platform, status)
+  VALUES (v_post, acct_a_tt, 'tiktok', 'pending');
+  BEGIN
+    DELETE FROM public.platform_posts WHERE post_id = v_post;
+    RAISE EXCEPTION 'T19 failed: a platform row delete while publishing was accepted' USING ERRCODE = 'assert_failure';
+  EXCEPTION WHEN raise_exception THEN
+    GET STACKED DIAGNOSTICS v_detail = PG_EXCEPTION_DETAIL;
+    ASSERT v_detail = 'TIKTOK_REVIEW_POST_LOCKED', 'T19 platform-row refusal, got: ' || coalesce(v_detail, SQLERRM);
+  END;
+  ASSERT EXISTS (SELECT 1 FROM public.platform_posts WHERE post_id = v_post),
+    'T19 the publishing record survives a refused delete';
+  -- Changing source would switch the lock off.
+  BEGIN
+    UPDATE public.posts SET source = 'manual' WHERE id = v_post;
+    RAISE EXCEPTION 'T19 failed: a source change was accepted' USING ERRCODE = 'assert_failure';
+  EXCEPTION WHEN raise_exception THEN
+    GET STACKED DIAGNOSTICS v_detail = PG_EXCEPTION_DETAIL;
+    ASSERT v_detail = 'TIKTOK_REVIEW_POST_LOCKED', 'T19 source refusal, got: ' || coalesce(v_detail, SQLERRM);
+  END;
 
   -- The publisher's own writes: status and metadata keys other than the target.
   UPDATE public.posts

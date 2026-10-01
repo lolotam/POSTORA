@@ -13,8 +13,9 @@
 --    and one revision. process-post already refuses a changed post before it claims it
 --    (SNAPSHOT_MISMATCH); this refuses the edit itself once the claim exists, so the
 --    screen no longer shows a time or account that is not what TikTok received. A direct
---    delete is refused while the post is mid-publish; cascades (account or user deletion)
---    still pass.
+--    delete is refused while the post is mid-publish -- of the post, and of its TikTok
+--    platform_posts row, which History deletes first -- while cascades (account or user
+--    deletion) still pass. A review post's source can never change, since the lock keys on it.
 --
 -- 3. The reopen rule moves into tiktok_review_reopen_allowed() so the workspace can ask it
 --    before offering "Edit and resubmit". tiktok_review_transition keeps its exact
@@ -232,6 +233,24 @@ CREATE TRIGGER trg_tiktok_review_release_draft
 -- 2. Lock a review post once publishing has started.
 -- ---------------------------------------------------------------------------
 
+-- Mid-publish: process-post has claimed the submission and TikTok may be receiving the video.
+CREATE OR REPLACE FUNCTION public.tiktok_review_post_in_flight(p_post_id uuid)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY INVOKER
+SET search_path = public, pg_temp
+AS $$
+  SELECT EXISTS (
+    SELECT 1 FROM public.tiktok_review_submissions s
+    WHERE s.post_id = p_post_id
+      AND s.dispatch_state IN ('dispatching', 'publishing')
+  );
+$$;
+
+REVOKE ALL ON FUNCTION public.tiktok_review_post_in_flight(uuid)
+  FROM PUBLIC, anon, authenticated;
+
 -- SECURITY DEFINER for the same reason as above: Calendar edits run as the signed-in user.
 CREATE OR REPLACE FUNCTION public.tiktok_review_guard_post()
 RETURNS trigger
@@ -243,15 +262,17 @@ BEGIN
   IF TG_OP = 'DELETE' THEN
     -- A cascade (account or user deletion) runs nested in a referential trigger; only a
     -- direct delete of a post that is mid-publish is refused.
-    IF pg_trigger_depth() = 1 AND EXISTS (
-      SELECT 1 FROM public.tiktok_review_submissions s
-      WHERE s.post_id = OLD.id
-        AND s.dispatch_state IN ('dispatching', 'publishing')
-    ) THEN
+    IF pg_trigger_depth() = 1 AND public.tiktok_review_post_in_flight(OLD.id) THEN
       RAISE EXCEPTION 'This TikTok post is being published right now and can''t be deleted. Try again in a few minutes.'
         USING ERRCODE = 'P0001', DETAIL = 'TIKTOK_REVIEW_POST_LOCKED';
     END IF;
     RETURN OLD;
+  END IF;
+
+  -- The lock keys on source; changing it would switch the lock off for every later write.
+  IF NEW.source IS DISTINCT FROM OLD.source THEN
+    RAISE EXCEPTION 'A TikTok review post can''t be turned into another kind of post.'
+      USING ERRCODE = 'P0001', DETAIL = 'TIKTOK_REVIEW_POST_LOCKED';
   END IF;
 
   -- The columns Calendar, Scheduled Posts and History retry write; status, posted_at and
@@ -292,5 +313,32 @@ CREATE TRIGGER trg_tiktok_review_guard_post_delete
   FOR EACH ROW
   WHEN (OLD.source = 'tiktok_review')
   EXECUTE FUNCTION public.tiktok_review_guard_post();
+
+-- History deletes a post's platform_posts rows before the post itself, so refusing only the
+-- post would leave the publishing record already gone.
+CREATE OR REPLACE FUNCTION public.tiktok_review_guard_platform_post()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+  IF pg_trigger_depth() = 1 AND public.tiktok_review_post_in_flight(OLD.post_id) THEN
+    RAISE EXCEPTION 'This TikTok post is being published right now and can''t be deleted. Try again in a few minutes.'
+      USING ERRCODE = 'P0001', DETAIL = 'TIKTOK_REVIEW_POST_LOCKED';
+  END IF;
+  RETURN OLD;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.tiktok_review_guard_platform_post()
+  FROM PUBLIC, anon, authenticated;
+
+DROP TRIGGER IF EXISTS trg_tiktok_review_guard_platform_post_delete ON public.platform_posts;
+CREATE TRIGGER trg_tiktok_review_guard_platform_post_delete
+  BEFORE DELETE ON public.platform_posts
+  FOR EACH ROW
+  WHEN (OLD.platform = 'tiktok')
+  EXECUTE FUNCTION public.tiktok_review_guard_platform_post();
 
 COMMIT;
