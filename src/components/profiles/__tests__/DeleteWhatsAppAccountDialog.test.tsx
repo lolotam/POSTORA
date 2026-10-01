@@ -56,13 +56,21 @@ function renderDialog(props: DeleteWhatsAppAccountDialogProps) {
     },
   });
 
-  return render(
+  const Wrapper = ({ children }: { children: React.ReactNode }) => (
     <QueryClientProvider client={client}>
-      <MemoryRouter>
-        <DeleteWhatsAppAccountDialog {...props} />
-      </MemoryRouter>
-    </QueryClientProvider>,
+      <MemoryRouter>{children}</MemoryRouter>
+    </QueryClientProvider>
   );
+
+  const utils = render(<DeleteWhatsAppAccountDialog {...props} />, {
+    wrapper: Wrapper,
+  });
+
+  return {
+    ...utils,
+    rerender: (nextProps: DeleteWhatsAppAccountDialogProps) =>
+      utils.rerender(<DeleteWhatsAppAccountDialog {...nextProps} />),
+  };
 }
 
 describe("DeleteWhatsAppAccountDialog", () => {
@@ -211,5 +219,95 @@ describe("DeleteWhatsAppAccountDialog", () => {
     expect(onConfirm).toHaveBeenCalledTimes(1);
 
     finish();
+  });
+
+  it("disables the confirm button while setup summary is loading and does not call onConfirm on click", () => {
+    vi.mocked(useWhatsAppSetupSummary).mockReturnValue({
+      data: undefined,
+      isLoading: true,
+    } as any);
+
+    const onConfirm = vi.fn().mockResolvedValue(undefined);
+
+    renderDialog({
+      account: sampleAccount,
+      onCancel: vi.fn(),
+      onConfirm,
+    });
+
+    const confirmBtn = screen.getByRole("button", { name: /delete account/i });
+    expect(confirmBtn).toBeDisabled();
+
+    fireEvent.click(confirmBtn);
+    expect(onConfirm).not.toHaveBeenCalled();
+  });
+
+  it("disables confirm button and shows warning message when setup summary query fails", () => {
+    vi.mocked(useWhatsAppSetupSummary).mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: true,
+    } as any);
+
+    const onConfirm = vi.fn().mockResolvedValue(undefined);
+
+    renderDialog({
+      account: sampleAccount,
+      onCancel: vi.fn(),
+      onConfirm,
+    });
+
+    const confirmBtn = screen.getByRole("button", { name: /delete account/i });
+    expect(confirmBtn).toBeDisabled();
+
+    expect(
+      screen.getByText("We couldn't load what is attached to this account. Try again later."),
+    ).toBeInTheDocument();
+
+    fireEvent.click(confirmBtn);
+    expect(onConfirm).not.toHaveBeenCalled();
+  });
+
+  it("clears error text when re-rendered with null account and then a different account", async () => {
+    const onCancel = vi.fn();
+    const onConfirm = vi.fn().mockRejectedValue(new Error("unexpected error"));
+
+    const { rerender } = renderDialog({
+      account: sampleAccount,
+      onCancel,
+      onConfirm,
+    });
+
+    const confirmBtn = screen.getByRole("button", { name: /delete account/i });
+    fireEvent.click(confirmBtn);
+
+    expect(
+      await screen.findByText("The account could not be deleted. Try again."),
+    ).toBeInTheDocument();
+
+    rerender({
+      account: null,
+      onCancel,
+      onConfirm,
+    });
+
+    expect(
+      screen.queryByText("The account could not be deleted. Try again."),
+    ).not.toBeInTheDocument();
+
+    rerender({
+      account: {
+        id: "wa-acc-999",
+        platform_username: "otheraccount",
+        platform_user_id: "96599999999",
+      },
+      onCancel,
+      onConfirm,
+    });
+
+    expect(screen.getByText(/otheraccount/i)).toBeInTheDocument();
+    expect(
+      screen.queryByText("The account could not be deleted. Try again."),
+    ).not.toBeInTheDocument();
   });
 });

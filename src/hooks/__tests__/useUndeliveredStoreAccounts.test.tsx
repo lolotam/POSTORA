@@ -76,15 +76,15 @@ describe("useUndeliveredStoreAccounts", () => {
     expect(result.current.data).toEqual(mockAccounts);
   });
 
-  it("returns [] on query error without throwing", async () => {
-    queryResult = { data: null, error: new Error("db failure") };
+  it("fails the query and surfaces the error when a supabase query error occurs", async () => {
+    const dbError = new Error("db failure");
+    queryResult = { data: null, error: dbError };
 
     const { result } = renderHook(() => useUndeliveredStoreAccounts(), {
       wrapper: createWrapper(),
     });
 
-    await waitFor(() => expect(result.current.isSuccess || result.current.data !== undefined).toBe(true));
-    expect(result.current.data).toEqual([]);
-    expect(result.current.error).toBeNull();
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(result.current.error).toEqual(dbError);
   });
 });
