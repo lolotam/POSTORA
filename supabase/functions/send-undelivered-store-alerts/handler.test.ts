@@ -1,0 +1,284 @@
+import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import {
+  buildAlertEmail,
+  selectAccountsToEmail,
+  sendAlerts,
+  type SendAlertsDeps,
+} from "./handler.ts";
+
+type FlaggedRow = Parameters<typeof selectAccountsToEmail>[0][number];
+
+function makeAccount(
+  overrides: {
+    id?: string;
+    userId?: string;
+    username?: string | null;
+    since?: string;
+    lastAt?: string;
+    emailedAt?: string;
+    snoozed?: boolean;
+  } = {},
+): FlaggedRow {
+  return {
+    id: overrides.id ?? "acc-1",
+    user_id: overrides.userId ?? "user-1",
+    platform: "whatsapp",
+    platform_username: overrides.username !== undefined ? overrides.username : "xsellpoint",
+    // A social_accounts column (20260116191438), not a metadata key.
+    alerts_snoozed: overrides.snoozed ?? false,
+    account_metadata: {
+      undelivered_store_events: overrides.since
+        ? {
+            since: overrides.since,
+            last_at: overrides.lastAt ?? overrides.since,
+          }
+        : undefined,
+      undelivered_alert_email_at: overrides.emailedAt,
+    },
+  } as unknown as FlaggedRow;
+}
+
+function createFakeDeps(overrides: Partial<SendAlertsDeps> = {}) {
+  const calls: string[] = [];
+  const claimed: Array<{ accountId: string; since: string }> = [];
+  const marked: Array<{ accountId: string; since: string }> = [];
+  const sentEmails: Array<{ to: string; subject: string; html: string }> = [];
+
+  const defaultRow = makeAccount({
+    id: "acc-1",
+    userId: "user-1",
+    username: "xsellpoint",
+    since: "2026-10-01T10:00:00Z",
+    lastAt: "2026-10-01T12:00:00Z",
+  });
+
+  const deps: SendAlertsDeps = {
+    listFlagged: overrides.listFlagged ?? (() => Promise.resolve([defaultRow])),
+    loadProfile: overrides.loadProfile ?? ((_userId: string) => Promise.resolve({
+      email: "owner@example.com",
+      full_name: "Store Owner",
+      email_notifications_enabled: true,
+    })),
+    // The overrides decide the BEHAVIOUR (return value / rejection); the recording
+    // wrappers always run so the assertions below see every call the orchestrator
+    // made, including the ones an override answers.
+    claim: async (accountId: string, since: string) => {
+      calls.push(`claim:${accountId}`);
+      claimed.push({ accountId, since });
+      return overrides.claim ? await overrides.claim(accountId, since) : true;
+    },
+    send: async (payload: { to: string; subject: string; html: string }) => {
+      calls.push(`send:${payload.to}`);
+      sentEmails.push(payload);
+      if (overrides.send) await overrides.send(payload);
+    },
+    mark: async (accountId: string, since: string) => {
+      calls.push(`mark:${accountId}`);
+      marked.push({ accountId, since });
+      return overrides.mark ? await overrides.mark(accountId, since) : true;
+    },
+    now: overrides.now ?? (() => new Date("2026-10-01T12:00:00Z")),
+  };
+
+  return { deps, calls, claimed, marked, sentEmails };
+}
+
+Deno.test("selectAccountsToEmail: eligible when never emailed before", () => {
+  const now = new Date("2026-10-01T12:00:00Z");
+  const row = makeAccount({
+    since: "2026-10-01T10:00:00Z",
+    lastAt: "2026-10-01T11:00:00Z",
+    emailedAt: undefined,
+  });
+
+  const selected = selectAccountsToEmail([row], now);
+  assertEquals(selected.length, 1);
+  assertEquals(selected[0].id, "acc-1");
+});
+
+Deno.test("selectAccountsToEmail: a row with undelivered_alert_email_at set is not eligible regardless of since", () => {
+  const now = new Date("2026-10-01T15:00:00Z");
+
+  const acc = makeAccount({
+    id: "acc-1",
+    since: "2026-10-01T13:00:00Z",
+    emailedAt: "2026-10-01T11:00:00Z",
+    lastAt: "2026-10-01T14:00:00Z",
+  });
+
+  const selected = selectAccountsToEmail([acc], now);
+  assertEquals(selected.length, 0);
+});
+
+Deno.test("selectAccountsToEmail: rows without undelivered_store_events are ignored", () => {
+  const now = new Date("2026-10-01T12:00:00Z");
+  const unflagged = makeAccount({
+    id: "acc-unflagged",
+    since: undefined,
+  });
+
+  const selected = selectAccountsToEmail([unflagged], now);
+  assertEquals(selected.length, 0);
+});
+
+Deno.test("sendAlerts: claim called BEFORE send, mark called AFTER send, email contains account name and no phone digits", async () => {
+  const fake = createFakeDeps();
+  await sendAlerts(fake.deps);
+
+  // Claim before send, mark after send
+  assertEquals(fake.calls, ["claim:acc-1", "send:owner@example.com", "mark:acc-1"]);
+  assertEquals(fake.claimed, [{ accountId: "acc-1", since: "2026-10-01T10:00:00Z" }]);
+  assertEquals(fake.marked, [{ accountId: "acc-1", since: "2026-10-01T10:00:00Z" }]);
+
+  // Email content assertions
+  assertEquals(fake.sentEmails.length, 1);
+  const email = fake.sentEmails[0];
+  assertEquals(email.to, "owner@example.com");
+  assertEquals(email.html.includes("xsellpoint"), true, "HTML must contain account name");
+  assertEquals(email.html.includes("/messaging/whatsapp/setup"), true, "HTML must contain setup link");
+  assertEquals(/\b\d{8,}\b/.test(email.html), false, "HTML must NOT contain full phone number");
+  assertEquals(/\b\d{7,}\b/.test(email.html), false, "HTML must NOT contain local phone digits");
+  assertEquals(/\b\d{7,}\b/.test(email.subject), false, "Subject must NOT contain phone digits");
+});
+
+Deno.test("sendAlerts: a claim returning false sends nothing and does not mark", async () => {
+  const fake = createFakeDeps({
+    claim: () => Promise.resolve(false),
+  });
+
+  await sendAlerts(fake.deps);
+
+  assertEquals(fake.calls, ["claim:acc-1"]);
+  assertEquals(fake.sentEmails.length, 0);
+  assertEquals(fake.marked.length, 0);
+});
+
+Deno.test("sendAlerts: a send failure on acc-1 does not mark acc-1 while acc-2 is sent and marked", async () => {
+  const row1 = makeAccount({ id: "acc-1", userId: "user-1", username: "acc-1", since: "2026-10-01T10:00:00Z" });
+  const row2 = makeAccount({ id: "acc-2", userId: "user-2", username: "acc-2", since: "2026-10-01T10:00:00Z" });
+  const fake = createFakeDeps({
+    listFlagged: () => Promise.resolve([row1, row2]),
+    send: (payload) => {
+      if (payload.html.includes("acc-1")) {
+        return Promise.reject(new Error("Resend rate limit exceeded for acc-1"));
+      }
+      return Promise.resolve();
+    },
+  });
+
+  const result = await sendAlerts(fake.deps);
+
+  assertEquals(result.failed, ["acc-1"]);
+  assertEquals(fake.marked.some((m) => m.accountId === "acc-2"), true);
+  assertEquals(fake.marked.some((m) => m.accountId === "acc-1"), false);
+  assertEquals(fake.sentEmails.some((e) => e.html.includes("acc-2")), true);
+});
+
+Deno.test("sendAlerts: loadProfile throwing for acc-1 continues to process acc-2", async () => {
+  const row1 = makeAccount({ id: "acc-1", userId: "user-1", username: "acc-1", since: "2026-10-01T10:00:00Z" });
+  const row2 = makeAccount({ id: "acc-2", userId: "user-2", username: "acc-2", since: "2026-10-01T10:00:00Z" });
+  const fake = createFakeDeps({
+    listFlagged: () => Promise.resolve([row1, row2]),
+    loadProfile: (userId: string) => {
+      if (userId === "user-1") return Promise.reject(new Error("db error"));
+      return Promise.resolve({
+        email: "owner-2@example.com",
+        full_name: "Store Owner 2",
+        email_notifications_enabled: true,
+      });
+    },
+  });
+
+  const result = await sendAlerts(fake.deps);
+  assertEquals(result.failed.includes("acc-1"), true);
+  assertEquals(fake.marked.some((m) => m.accountId === "acc-2"), true);
+  assertEquals(fake.sentEmails.some((e) => e.to === "owner-2@example.com"), true);
+});
+
+Deno.test("sendAlerts: mark rejecting for acc-1 continues to process acc-2", async () => {
+  const row1 = makeAccount({ id: "acc-1", userId: "user-1", username: "acc-1", since: "2026-10-01T10:00:00Z" });
+  const row2 = makeAccount({ id: "acc-2", userId: "user-2", username: "acc-2", since: "2026-10-01T10:00:00Z" });
+  const fake = createFakeDeps({
+    listFlagged: () => Promise.resolve([row1, row2]),
+    mark: (accountId: string) => {
+      if (accountId === "acc-1") return Promise.reject(new Error("mark rpc error"));
+      return Promise.resolve(true);
+    },
+  });
+
+  const result = await sendAlerts(fake.deps);
+  assertEquals(result.failed.includes("acc-1"), true);
+  assertEquals(fake.marked.some((m) => m.accountId === "acc-2"), true);
+  assertEquals(fake.sentEmails.length, 2);
+});
+
+Deno.test("sendAlerts: profile email_notifications_enabled !== true is never emailed, claimed, or marked", async (t) => {
+  const cases: Array<[string, boolean | null | undefined, boolean]> = [
+    ["explicitly false", false, false],
+    ["null", null, false],
+    ["profile missing", undefined, true],
+  ];
+
+  for (const [label, pref, missingProfile] of cases) {
+    await t.step(label, async () => {
+      const fake = createFakeDeps({
+        loadProfile: () =>
+          missingProfile
+            ? Promise.resolve(null)
+            : Promise.resolve({
+                email: "owner@example.com",
+                full_name: "Store Owner",
+                email_notifications_enabled: pref as boolean | null,
+              }),
+      });
+
+      await sendAlerts(fake.deps);
+
+      assertEquals(fake.sentEmails.length, 0);
+      assertEquals(fake.claimed.length, 0);
+      assertEquals(fake.marked.length, 0);
+      assertEquals(fake.calls, []);
+    });
+  }
+});
+
+Deno.test("sendAlerts: alerts_snoozed is never claimed or emailed", async () => {
+  const snoozedRow = makeAccount({
+    id: "acc-snoozed",
+    since: "2026-10-01T10:00:00Z",
+    snoozed: true,
+  });
+
+  const fake = createFakeDeps({
+    listFlagged: () => Promise.resolve([snoozedRow]),
+  });
+
+  await sendAlerts(fake.deps);
+
+  assertEquals(fake.calls.length, 0);
+  assertEquals(fake.sentEmails.length, 0);
+  assertEquals(fake.claimed.length, 0);
+  assertEquals(fake.marked.length, 0);
+});
+
+Deno.test("buildAlertEmail: HTML escaping: platform_username and fullName are escaped", () => {
+  const account = makeAccount({
+    username: '<img src=x onerror=alert(1)>&"\'',
+  });
+  const fullName = "</p><script>x</script>";
+
+  const html = buildAlertEmail(account, fullName);
+
+  assertEquals(html.includes("<img"), false, "HTML must not contain unescaped '<img'");
+  assertEquals(html.includes("<script"), false, "HTML must not contain unescaped '<script'");
+  assertEquals(html.includes("&lt;img"), true, "HTML must contain '&lt;img'");
+  assertEquals(html.includes("&lt;script&gt;"), true, "HTML must contain '&lt;script&gt;'");
+});
+
+Deno.test("buildAlertEmail: no invented controls: html does not contain the word 'snooze'", () => {
+  const account = makeAccount();
+  const html = buildAlertEmail(account, "Store Owner");
+
+  assertEquals(html.includes("snooze"), false, "HTML must not contain the word 'snooze'");
+});
+

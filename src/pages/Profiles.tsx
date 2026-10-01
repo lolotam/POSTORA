@@ -45,6 +45,8 @@ import { InstagramSelectionDialog } from "@/components/profiles/InstagramSelecti
 import { TikTokDebugPanel } from "@/components/profiles/TikTokDebugPanel";
 import { ThreadsDebugPanel } from "@/components/admin/ThreadsDebugPanel";
 import { UpgradeModal } from "@/components/UpgradeModal";
+import { DeleteWhatsAppAccountDialog } from "@/components/profiles/DeleteWhatsAppAccountDialog";
+import { routeAccountRemoval } from "@/pages/profilesRemoval";
 import { useFeatureFlags } from "@/hooks/useFeatureFlags";
 import { useBetaPlatforms } from "@/hooks/useBetaPlatforms";
 import {
@@ -56,6 +58,9 @@ export default function Profiles() {
   const { t } = useTranslation("accounts");
   const [pageSearchQuery, setPageSearchQuery] = useState("");
   const [disconnectAccount, setDisconnectAccount] = useState<SocialAccountWithProfile | null>(null);
+  // Deleting a WhatsApp row takes its AI agent setup with it, so that step gets its own
+  // confirmation showing what is attached.
+  const [pendingWhatsAppDelete, setPendingWhatsAppDelete] = useState<SocialAccountWithProfile | null>(null);
   const [upgradeModal, setUpgradeModal] = useState<{
     open: boolean;
     type: "profile" | "social_account" | "post";
@@ -172,6 +177,11 @@ export default function Profiles() {
   };
 
   const handleDisconnectAccount = async (account: SocialAccountWithProfile) => {
+    if (routeAccountRemoval(account.platform) === "whatsapp-dialog") {
+      setDisconnectAccount(null);
+      setPendingWhatsAppDelete(account);
+      return;
+    }
     try {
       await disconnectAccountMutation.mutateAsync(account.id);
       toast({
@@ -186,7 +196,7 @@ export default function Profiles() {
 
   // Group accounts by platform
   const accountsByPlatform = useMemo(() => {
-    const map: Record<Platform, SocialAccountWithProfile[]> = {} as any;
+    const map = {} as Record<Platform, SocialAccountWithProfile[]>;
     for (const config of allPlatforms) {
       map[config.platform] = [];
     }
@@ -346,6 +356,19 @@ export default function Profiles() {
         account={disconnectAccount}
         onOpenChange={() => setDisconnectAccount(null)}
         onDisconnect={handleDisconnectAccount}
+      />
+
+      <DeleteWhatsAppAccountDialog
+        account={pendingWhatsAppDelete}
+        onCancel={() => setPendingWhatsAppDelete(null)}
+        onConfirm={async (id) => {
+          await disconnectAccountMutation.mutateAsync(id);
+          toast({
+            title: t("profiles.toast.disconnected", "Account disconnected"),
+            description: t("profiles.toast.disconnectedDesc", "Your {{platform}} account has been disconnected.", { platform: getPlatformName("whatsapp") }),
+          });
+          setPendingWhatsAppDelete(null);
+        }}
       />
 
       <YouTubeConnectMethodDialog

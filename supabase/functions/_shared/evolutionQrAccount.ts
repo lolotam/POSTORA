@@ -167,6 +167,17 @@ async function emitConnectionTransition(
   }
 }
 
+// The undelivered-store-orders flag (PR-D) holds incoming store orders while the
+// account cannot send. A successful activation means it can send again, so the flag
+// goes with it. Best effort on purpose: a failed clear must never undo the
+// activation/identity claim callers depend on.
+export async function clearUndeliveredSafely(admin: any, accountId: string): Promise<void> {
+  const { error } = await admin.rpc("clear_undelivered_store_events", { p_account_id: accountId });
+  if (error) {
+    console.error(`[evolution-qr] account ${accountId}: undelivered flag clear failed`);
+  }
+}
+
 // Returns the owner number now stored for the account. Callers need it because activation
 // replaces a provisional "pending_<uuid>" placeholder, and anything that builds conversation
 // ids straight afterwards would otherwise use the stale value it passed in -- writing a whole
@@ -203,7 +214,10 @@ export async function syncEvolutionAccountConnection(
 
   // Re-pairing a different number leaves platform_user_id at the old value (the claim
   // below is gated on the pending_ placeholder), and a rename can mask that. Migration is
-  // out of scope, so the mismatch is detected and flagged for follow-up instead.
+  // out of scope, so the mismatch is detected and flagged for follow-up instead. The row
+  // still activates in this branch -- the stored number is a working connection, and held
+  // store orders resume with it; only the identity claim is blocked, because the later
+  // claim path would rewrite the number every existing conversation id was built from.
   if (ownerNumber && !isProvisional && ownerNumber !== account.platform_user_id) {
     // The numbers themselves stay out of the log: these are the end user's and their
     // contact's phone numbers, and a function log is not the place for them. The account
@@ -243,6 +257,7 @@ export async function syncEvolutionAccountConnection(
   // is the record of that, because rewriting the number would orphan every conversation id
   // already derived from it.
   if (!claimsIdentity) {
+    await clearUndeliveredSafely(admin, account.id);
     await emitConnectionTransition(admin, account.id, previous, true);
     return account.platform_user_id;
   }
@@ -255,6 +270,7 @@ export async function syncEvolutionAccountConnection(
     p_owner_number: ownerNumber,
   });
   if (claimError) throw claimError;
+  await clearUndeliveredSafely(admin, account.id);
   await emitConnectionTransition(admin, account.id, previous, true);
   return (claimed as string | null) ?? account.platform_user_id;
 }

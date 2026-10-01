@@ -39,6 +39,7 @@ interface AccountRow {
   access_token: string | null;
   account_metadata: Record<string, unknown> | null;
   workspace_id: string | null;
+  is_active: boolean | null;
 }
 
 function stringPayload(value: unknown): Record<string, string> {
@@ -140,7 +141,7 @@ function snapshotFromOutput(output: string): StoreSnapshot | null {
 export function createStoreEventPorts(admin: any): WorkerPorts { // eslint-disable-line @typescript-eslint/no-explicit-any -- service-role client has no generated type here
   async function accountRow(event: StoreEventRow): Promise<AccountRow | null> {
     const { data, error } = await admin.from("social_accounts")
-      .select("id, user_id, platform, connection_mode, platform_user_id, access_token, account_metadata, workspace_id")
+      .select("id, user_id, platform, connection_mode, platform_user_id, access_token, account_metadata, workspace_id, is_active")
       .eq("id", event.social_account_id)
       .eq("user_id", event.user_id)
       .maybeSingle();
@@ -243,6 +244,7 @@ export function createStoreEventPorts(admin: any): WorkerPorts { // eslint-disab
         connectorVisible: visible && bindingOk,
         connectorReadOnly: connector?.read_only_mode !== false,
         optedOut: optedOutFromLookup(lookupPhone, optOutResult.data),
+        connected: row.is_active === true && !String(row.platform_user_id ?? "").startsWith("retired_"),
       };
     },
     async readStore(event): Promise<StoreRead> {
@@ -294,6 +296,14 @@ export function createStoreEventPorts(admin: any): WorkerPorts { // eslint-disab
     },
     async releaseQr(accountId, eventId, claimToken) {
       const { error } = await admin.rpc("release_qr_opener", { p_account: accountId, p_event: eventId, p_claim: claimToken });
+      if (error) throw error;
+    },
+    async noteUndelivered(accountId) {
+      const { error } = await admin.rpc("note_undelivered_store_event", { p_account_id: accountId });
+      if (error) throw error;
+    },
+    async resolveUndelivered(accountId) {
+      const { error } = await admin.rpc("clear_undelivered_if_none_held", { p_account_id: accountId });
       if (error) throw error;
     },
     async ensureThread(input) {

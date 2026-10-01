@@ -8839,6 +8839,10 @@ export type Database = {
         Args: { p_workspace_id: string; p_user_id?: string }
         Returns: string
       }
+      get_whatsapp_account_setup_summary: {
+        Args: { p_account_id: string }
+        Returns: Json
+      }
     }
     Enums: {
       app_role: "user" | "admin" | "subscriber" | "support"

@@ -19,11 +19,23 @@ const ORDER = JSON.stringify({
   billing: { phone: "+965 5551 2345", first_name: "Sara", country: "KW" },
 });
 
-function deps(extra: Partial<StoreWebhookDeps> = {}): StoreWebhookDeps & { connectorChecks: number; inserted: Array<Record<string, unknown>>; ignored: string[] } {
+function deps(extra: Partial<StoreWebhookDeps> = {}): StoreWebhookDeps & {
+  connectorChecks: number;
+  inserted: Array<Record<string, unknown>>;
+  ignored: string[];
+  undeliveredNotes: string[];
+} {
   const inserted: Array<Record<string, unknown>> = [];
-  const base: StoreWebhookDeps & { connectorChecks: number; inserted: Array<Record<string, unknown>>; ignored: string[] } = {
+  const undeliveredNotes: string[] = [];
+  const base: StoreWebhookDeps & {
+    connectorChecks: number;
+    inserted: Array<Record<string, unknown>>;
+    ignored: string[];
+    undeliveredNotes: string[];
+  } = {
     connectorChecks: 0,
     inserted,
+    undeliveredNotes,
     limitIp: async () => ({ allowed: true }),
     limitConnector: async () => { base.connectorChecks += 1; return { allowed: true }; },
     loadBinding: async () => ({ id: BINDING_ID, user_id: "user-1", social_account_id: "acc-1", connector_id: "con-1" }),
@@ -32,6 +44,8 @@ function deps(extra: Partial<StoreWebhookDeps> = {}): StoreWebhookDeps & { conne
     loadWaitlist: async () => [],
     insertEvents: async (rows) => { inserted.push(...rows); return { ok: true, stored: rows.length }; },
     logIgnored: async (entry) => { base.ignored.push(entry.reason); },
+    accountConnected: async (_socialAccountId: string) => true,
+    noteUndelivered: async (socialAccountId: string) => { undeliveredNotes.push(socialAccountId); },
     ignored: [],
     now: () => NOW,
   };
@@ -447,3 +461,49 @@ Deno.test("an authentic delivery whose body is not a JSON object is refused and 
     assertEquals(gate.ignored, ["invalid_json"], body);
   }
 });
+
+Deno.test("stored order for connected account returns ok without warning and does not note undelivered", async () => {
+  const gate = accepting({
+    accountConnected: async () => true,
+  });
+  const response = await handleStoreWebhook(jsonPost(ORDER, await mac(SECRET, ORDER)), gate);
+  assertEquals(response.status, 200);
+  const body = await response.json();
+  assertEquals(body, { ok: true, stored: 1 });
+  assertEquals("warning" in body, false);
+  assertEquals(gate.undeliveredNotes, []);
+});
+
+Deno.test("stored order for disconnected account warns and notes undelivered once with binding account id", async () => {
+  const gate = accepting({
+    accountConnected: async () => false,
+  });
+  const response = await handleStoreWebhook(jsonPost(ORDER, await mac(SECRET, ORDER)), gate);
+  assertEquals(response.status, 200);
+  assertEquals(await response.json(), { ok: true, stored: 1, warning: "account_disconnected" });
+  assertEquals(gate.inserted.length, 1);
+  assertEquals(gate.undeliveredNotes, ["acc-1"]);
+});
+
+Deno.test("stored order when accountConnected throws returns 200 with account_state_unknown warning and does not note undelivered", async () => {
+  const gate = accepting({
+    accountConnected: async () => { throw new Error("database unavailable"); },
+  });
+  const response = await handleStoreWebhook(jsonPost(ORDER, await mac(SECRET, ORDER)), gate);
+  assertEquals(response.status, 200);
+  assertEquals(await response.json(), { ok: true, stored: 1, warning: "account_state_unknown" });
+  assertEquals(gate.inserted.length, 1);
+  assertEquals(gate.undeliveredNotes, []);
+});
+
+Deno.test("stored order when accountConnected is false and noteUndelivered throws returns 200 with account_disconnected warning", async () => {
+  const gate = accepting({
+    accountConnected: async () => false,
+    noteUndelivered: async () => { throw new Error("database unavailable"); },
+  });
+  const response = await handleStoreWebhook(jsonPost(ORDER, await mac(SECRET, ORDER)), gate);
+  assertEquals(response.status, 200);
+  assertEquals(await response.json(), { ok: true, stored: 1, warning: "account_disconnected" });
+  assertEquals(gate.inserted.length, 1);
+});
+
