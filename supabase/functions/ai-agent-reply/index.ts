@@ -14,6 +14,7 @@ import { resolveConversationOverride } from "../_shared/conversationModeOverride
 import {
   buildSystemPrompt,
   completionFailure,
+  customerLanguageSignal,
   formatRelatedFacts,
   formatModelRef,
   type GraphRelationFact,
@@ -808,6 +809,13 @@ Deno.serve(async (req) => {
         },
       ]);
       if (threadWriteError) console.error("[ai-agent-reply] Thread write failed:", threadWriteError.message);
+      const shown = customerLanguageSignal(request.inbound_text, request.language_hint);
+      if (shown && shown !== thread.customer_language) {
+        const { error: languageError } = await admin.from("ai_threads")
+          .update({ customer_language: shown })
+          .eq("id", thread.id);
+        if (languageError) console.error("[ai-agent-reply] Thread language write failed:", languageError.message);
+      }
     };
 
     // The outbox decides what this invocation may do, and it decides BEFORE any billable
@@ -1038,6 +1046,9 @@ Deno.serve(async (req) => {
           startedAt: initialProcedureState.started_at,
           openerLanguage: initialProcedureState.opener_language ?? openerLanguage(config.language_mode),
         }
+        : null,
+      customerLanguage: thread.customer_language === "ar" || thread.customer_language === "en"
+        ? thread.customer_language
         : null,
       storedTurns: historyRows || [],
       windowTurns: history,

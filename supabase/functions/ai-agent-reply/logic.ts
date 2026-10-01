@@ -46,20 +46,31 @@ export function detectReplyLanguage(
   inboundText: string,
   languageMode: LanguageMode,
   hint?: string | null,
-  thread: { flowLanguage?: ReplyLanguage | null; earlierTurns?: string[] } = {},
+  thread: { flowLanguage?: ReplyLanguage | null; customerLanguage?: ReplyLanguage | null; earlierTurns?: string[] } = {},
 ): ReplyLanguage {
   if (languageMode === "ar" || languageMode === "en") return languageMode;
-  const normalized = (hint ?? "").trim().toLowerCase();
-  if (normalized.startsWith("ar")) return "ar";
-  if (normalized.startsWith("en")) return "en";
-  const typed = letterLanguage(inboundText);
-  if (typed) return typed;
+  const shown = customerLanguageSignal(inboundText, hint);
+  if (shown) return shown;
   if (thread.flowLanguage) return thread.flowLanguage;
+  if (thread.customerLanguage) return thread.customerLanguage;
+  // Threads from before customer_language was stored: recount what the window still holds.
   for (const text of thread.earlierTurns ?? []) {
     const language = letterLanguage(text);
     if (language) return language;
   }
   return "en";
+}
+
+/**
+ * The language the customer's own message shows: a transcription's detected language, else its
+ * letters. Null for an emoji, a number or a rating. Only this is remembered on the thread
+ * (ai_threads.customer_language), so the reply's own fallback never feeds itself.
+ */
+export function customerLanguageSignal(inboundText: string, hint?: string | null): ReplyLanguage | null {
+  const normalized = (hint ?? "").trim().toLowerCase();
+  if (normalized.startsWith("ar")) return "ar";
+  if (normalized.startsWith("en")) return "en";
+  return letterLanguage(inboundText);
 }
 
 /**
@@ -90,6 +101,8 @@ export function threadReplyLanguage(input: {
   languageMode: LanguageMode;
   hint?: string | null;
   eventFlow: { startedAt: string; openerLanguage: ReplyLanguage } | null;
+  /** ai_threads.customer_language: the customer's newest message that showed a language. */
+  customerLanguage: ReplyLanguage | null;
   storedTurns: StoredTurn[];
   windowTurns: Array<{ role: string; content: string }>;
 }): ReplyLanguage {
@@ -103,6 +116,7 @@ export function threadReplyLanguage(input: {
           .map((row) => row.content || ""),
       )
       : null,
+    customerLanguage: input.customerLanguage,
     earlierTurns: input.windowTurns.filter((turn) => turn.role === "user").map((turn) => turn.content).reverse(),
   });
 }

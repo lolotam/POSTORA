@@ -348,6 +348,7 @@ Deno.test("a letterless message ignores the assistant's earlier replies", async 
     inboundText: "👍",
     languageMode: "auto",
     eventFlow: null,
+    customerLanguage: null,
     storedTurns: [],
     windowTurns: [{ role: "user", content: "عندكم ايفون؟" }, { role: "assistant", content: assistantReply }],
   });
@@ -364,10 +365,36 @@ Deno.test("a letterless message after an Arabic voice note stays Arabic", async 
     inboundText: "👍",
     languageMode: "auto",
     eventFlow: null,
+    customerLanguage: null,
     storedTurns: [],
     windowTurns: [{ role: "user", content: voiceTurn }],
   });
   assertEquals(language, "ar");
+});
+
+// The model's history window holds six rows; after three letterless replies the customer's last
+// Arabic message has left it, and a recount fell through to English (#256 review).
+Deno.test("the thread's stored customer language holds once the window has no letters left", async () => {
+  const { threadReplyLanguage, customerLanguageSignal } = await import("./logic.ts");
+  const letterless = ["5", "👍", "96555512345"].flatMap((content) => [
+    { role: "user", content },
+    { role: "assistant", content: "Thanks! Order #1042 — https://shop.example.com/o/1042" },
+  ]);
+  const reply = (customerLanguage: "ar" | "en" | null) => threadReplyLanguage({
+    inboundText: "2026-10-05",
+    languageMode: "auto",
+    eventFlow: null,
+    customerLanguage,
+    storedTurns: [],
+    windowTurns: letterless,
+  });
+  assertEquals(reply(null), "en", "a recount of the window alone gets this wrong");
+  assertEquals(reply("ar"), "ar");
+  // What is stored comes from the customer's own message only; an emoji or a number stores nothing.
+  assertEquals(customerLanguageSignal("👍"), null);
+  assertEquals(customerLanguageSignal("96555512345"), null);
+  assertEquals(customerLanguageSignal("تمام"), "ar");
+  assertEquals(customerLanguageSignal("5", "ara"), "ar", "a transcript's detected language counts");
 });
 
 // An English opener sent under language_mode "en" stays English after the account moves to
@@ -379,6 +406,7 @@ Deno.test("an event flow uses the opener language it was given, not one derived 
     inboundText: "5",
     languageMode: "auto",
     eventFlow: { startedAt, openerLanguage },
+    customerLanguage: null,
     storedTurns: [{ role: "user", content: "مرحبا", created_at: "2026-10-01T09:00:00.000Z" }],
     windowTurns: [{ role: "user", content: "مرحبا" }],
   });
