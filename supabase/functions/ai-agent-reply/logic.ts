@@ -4,6 +4,7 @@
 // uses the same adapter decision as reply dispatch, TRIAGE_CONFIDENCE so the
 // reply's intent field cannot drift from triage, and the procedure engine so
 // the turn gate and the state write stay free of I/O.
+import { withoutAgentTextEnvelope } from "../_shared/agentTextEnvelope.ts";
 import { connectorCapabilities, shouldUseAdapter } from "../_shared/connectorRegistry.ts";
 import type {
   AgentBehavior,
@@ -106,10 +107,14 @@ export function threadReplyLanguage(input: {
   });
 }
 
-/** The language a text's letters point to, or null when it has none. */
+/**
+ * The language a text's letters point to, or null when it has none. A stored voice-note or
+ * image turn carries Postora's English envelope around the customer's words; only the words count.
+ */
 function letterLanguage(text: string): ReplyLanguage | null {
-  const arabicCount = (text.match(ARABIC_CHAR_RE) || []).length;
-  const latinCount = (text.match(LATIN_CHAR_RE) || []).length;
+  const customerText = withoutAgentTextEnvelope(text);
+  const arabicCount = (customerText.match(ARABIC_CHAR_RE) || []).length;
+  const latinCount = (customerText.match(LATIN_CHAR_RE) || []).length;
   if (arabicCount === 0 && latinCount === 0) return null;
   return arabicCount > latinCount ? "ar" : "en";
 }
