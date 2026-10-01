@@ -19,11 +19,19 @@ const ORDER = JSON.stringify({
   billing: { phone: "+965 5551 2345", first_name: "Sara", country: "KW" },
 });
 
-function deps(extra: Partial<StoreWebhookDeps> = {}): StoreWebhookDeps & { connectorChecks: number; inserted: Array<Record<string, unknown>>; ignored: string[] } {
+type TestDeps = StoreWebhookDeps & {
+  connectorChecks: number;
+  inserted: Array<Record<string, unknown>>;
+  ignored: string[];
+  heartbeats: string[];
+};
+
+function deps(extra: Partial<StoreWebhookDeps> = {}): TestDeps {
   const inserted: Array<Record<string, unknown>> = [];
-  const base: StoreWebhookDeps & { connectorChecks: number; inserted: Array<Record<string, unknown>>; ignored: string[] } = {
+  const base: TestDeps = {
     connectorChecks: 0,
     inserted,
+    heartbeats: [],
     limitIp: async () => ({ allowed: true }),
     limitConnector: async () => { base.connectorChecks += 1; return { allowed: true }; },
     loadBinding: async () => ({ id: BINDING_ID, user_id: "user-1", social_account_id: "acc-1", connector_id: "con-1" }),
@@ -32,6 +40,7 @@ function deps(extra: Partial<StoreWebhookDeps> = {}): StoreWebhookDeps & { conne
     loadWaitlist: async () => [],
     insertEvents: async (rows) => { inserted.push(...rows); return { ok: true, stored: rows.length }; },
     logIgnored: async (entry) => { base.ignored.push(entry.reason); },
+    recordDelivery: async (binding) => { base.heartbeats.push(binding.connector_id); },
     ignored: [],
     now: () => NOW,
   };
@@ -446,4 +455,27 @@ Deno.test("an authentic delivery whose body is not a JSON object is refused and 
     assertEquals(response.status, 400, body);
     assertEquals(gate.ignored, ["invalid_json"], body);
   }
+});
+
+// The silence alert reads this heartbeat. A routine update starts no flow and is not
+// "ignored" either, so before the heartbeat it left no trace and a busy store looked silent.
+Deno.test("every verified delivery records a heartbeat, routine updates included", async () => {
+  const gate = deps({ flowsFrom: () => new Set(["cod_confirm"]) });
+  const response = await handleStoreWebhook(jsonPost(ORDER, await mac(SECRET, ORDER), "order.updated"), gate);
+  assertEquals(await response.json(), { ok: true, stored: 0 });
+  assertEquals(gate.heartbeats, ["con-1"]);
+});
+
+Deno.test("an unverified delivery records no heartbeat", async () => {
+  const gate = deps();
+  const response = await handleStoreWebhook(jsonPost(ORDER, "aaaa"), gate);
+  assertEquals(response.status, 401);
+  assertEquals(gate.heartbeats, []);
+});
+
+Deno.test("a failed heartbeat does not fail the delivery", async () => {
+  const gate = accepting({ recordDelivery: async () => { throw new Error("db down"); } });
+  const response = await handleStoreWebhook(jsonPost(ORDER, await mac(SECRET, ORDER)), gate);
+  assertEquals(response.status, 200);
+  assertEquals(gate.inserted.length, 1);
 });

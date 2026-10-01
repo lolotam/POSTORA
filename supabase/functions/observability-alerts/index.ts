@@ -36,7 +36,7 @@ interface HealthSnapshot {
 }
 
 // A store counts as silent only if it delivered something this recently; see the
-// silent_store_webhook_bindings migration for why a floor is needed at all.
+// silent_store_connections migration for why a floor is needed at all.
 const STORE_ACTIVE_DAYS = 7;
 
 function compareValue(value: number, threshold: number, operator: string): boolean {
@@ -326,19 +326,19 @@ serve(async (req) => {
         }
 
         case "store_webhook_silence": {
-          // Grouped in SQL: a store's activity spans store_events and the ignored-delivery logs.
-          const { data: silent, error: silentError } = await supabase.rpc("silent_store_webhook_bindings", {
+          // One heartbeat per store connection, written by store-webhook on every verified delivery.
+          const { data: silent, error: silentError } = await supabase.rpc("silent_store_connections", {
             p_quiet_minutes: config.time_window_minutes,
             p_active_days: STORE_ACTIVE_DAYS,
           });
           if (silentError) {
             // Skip only this rule: throwing would leave every later rule unevaluated this run.
-            console.error(`[OBSERVABILITY-ALERTS] ${config.name}: silent binding read failed:`, silentError.message);
+            console.error(`[OBSERVABILITY-ALERTS] ${config.name}: silent connection read failed:`, silentError.message);
             continue;
           }
-          const bindings = (silent ?? []) as unknown[];
-          currentValue = bindings.length;
-          ruleDetails = { silent_bindings: bindings };
+          const connections = (silent ?? []) as unknown[];
+          currentValue = connections.length;
+          ruleDetails = { silent_connections: connections };
           shouldTrigger = compareValue(currentValue, config.threshold_value, config.threshold_operator);
           break;
         }
