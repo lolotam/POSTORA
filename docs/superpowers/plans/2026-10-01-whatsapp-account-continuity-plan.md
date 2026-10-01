@@ -65,6 +65,15 @@ Branch `feat/wa-continuity-d`, from `origin/main`.
   - Merges `account_metadata.undelivered_store_events = {since: <first time, kept>, last_at: now()}`.
   - It is idempotent: it carries **no count**, because the receiver and every worker retry call it, and a count would count retries rather than orders (debate 1, point 7).
   - `GRANT EXECUTE TO service_role` only.
+- `public.clear_undelivered_if_none_held(p_account_id uuid) RETURNS boolean`
+  - Clears the incident (`undelivered_store_events`, `undelivered_alert_email_at`, `undelivered_alert_claimed_at`) only when no `store_events` row for that account is still `pending`, `claimed` or `sending`.
+  - Returns whether it cleared.
+  - service_role only.
+  - The worker calls it after every terminal `account_disconnected` skip, so an expired hold does not leave a permanent banner, and the next order starts a new `since` (debate 2, new 3).
+- `public.claim_undelivered_alert_email(p_account_id uuid, p_since text) RETURNS boolean`
+  - Atomically reserves the email for this incident: it sets `undelivered_alert_claimed_at = now()` only while `since = p_since`, no `undelivered_alert_email_at` exists, and any earlier claim is older than 30 minutes.
+  - The email function claims **before** sending and marks emailed **after** a successful send. A failed send is retried by the next run once the 30-minute claim lapses (debate 2, new 4).
+  - service_role only.
 - `public.mark_undelivered_alert_emailed(p_account_id uuid, p_since text) RETURNS boolean`
   - Atomically sets `account_metadata.undelivered_alert_email_at = now()`, only while `undelivered_store_events->>'since' = p_since`.
   - Returns whether a row changed.
@@ -316,6 +325,7 @@ In `index.ts`, add:
 
   In `deps.test.ts`, assert that `loadAccount` maps `is_active:false` → `connected:false`, and `platform_user_id:"retired_x"` → `connected:false`.
 - [ ] **Step 2: Run.** `deno test --allow-env --allow-read --node-modules-dir=none supabase/functions/process-store-events/`. Expected: FAIL.
+- [ ] **Step 2b: Expired-hold test (agy).** After the 25 h skip (case 2), `ports.resolveUndelivered(event.social_account_id)` is called once. A failure of that call does not change the `skipped` outcome.
 - [ ] **Step 3: Implement (GLM).** In `worker.ts`:
 
 ```ts
@@ -323,7 +333,7 @@ export const DISCONNECTED_HOLD_MS = 24 * 60 * 60 * 1000;
 const DISCONNECTED_RETRY_MS = 15 * 60 * 1000;
 ```
 
-Add `connected: boolean;` to `AccountContext`, and `noteUndelivered(accountId: string): Promise<void>;` to `WorkerPorts`.
+Add `connected: boolean;` to `AccountContext`, and both `noteUndelivered(accountId: string): Promise<void>;` and `resolveUndelivered(accountId: string): Promise<void>;` to `WorkerPorts`. The `deps.ts` port for the latter calls `admin.rpc("clear_undelivered_if_none_held", { p_account_id: accountId })` and throws on `{ error }`.
 
 In `processClaimed`, directly after `account = await ports.loadAccount(event);` and **before** `accountSkipReason`:
 
@@ -347,7 +357,13 @@ async function deferDisconnected(
 ): Promise<"released" | "skipped" | "left"> {
   const created = Date.parse(event.created_at);
   if (!Number.isFinite(created) || ports.now() - created > DISCONNECTED_HOLD_MS) {
-    return await skip(ports, event, "account_disconnected", { account, thread: null, expected: null, reserved: false });
+    const outcome = await skip(ports, event, "account_disconnected", { account, thread: null, expected: null, reserved: false });
+    try {
+      await ports.resolveUndelivered(event.social_account_id);
+    } catch {
+      console.error("[process-store-events] undelivered flag resolve failed");
+    }
+    return outcome;
   }
   try {
     await ports.noteUndelivered(event.social_account_id);
@@ -402,7 +418,9 @@ In `deps.ts`:
     - (b) One row (`platform_username:"xsellpoint"`, flag `{since, last_at}`): renders the text "Store orders are waiting for a disconnected WhatsApp account (xsellpoint)" and a link to `/messaging/whatsapp/setup` (route: `src/components/AnimatedRoutes.tsx:280-281,303`) labelled "Reconnect or move setup".
     - (c) A query error: renders nothing and does not throw.
   - **Deno, `handler.test.ts`:**
-    - Given two accounts with the flag, where one has `last_at` older than `last_email_at`, exactly one email is sent, and `undelivered_alert_email_at` is written for that account.
+    - Given two flagged accounts, one already emailed for its current `since` and one not: exactly one email is sent, `claim_undelivered_alert_email` is called before the send and `mark_undelivered_alert_emailed` after it, for that account only. Eligibility is by `since`, not `last_at`.
+    - A claim returning false (a concurrent run holds it) sends nothing.
+    - A Resend failure does not call mark.
     - An `alerts_snoozed` account is never emailed.
     - The email body contains the account name and no phone number.
 - [ ] **Step 2: Run both.** Expected: FAIL (modules missing).
@@ -661,15 +679,18 @@ The callers catch `NumberMismatchError`, with an explicit result contract (debat
 - returns `{ ownerNumber: account.platform_user_id, mismatch: true }`.
 
 `getQrStatus`:
+- **first**, before asking Evolution for state, it re-reads the account. If `account_metadata.number_mismatch === true`, it returns the mismatch response below without calling Evolution or overwriting `last_connection_state`. The mismatch screen therefore survives the next 2-second poll, where Evolution would answer `close` after the logout (debate 2, new 2). `reconnect_qr` (A2) clears `number_mismatch` with a read-merge-write on that key, before it returns a new QR. Add the step "clear `account_metadata.number_mismatch`" between A2 steps 3 and 4, and a test: a second poll after a mismatch still returns `number_mismatch`, and a `reconnect_qr` clears it.
 - when `result.mismatch`, returns `{ success: true, social_account_id, qr: null, state: "number_mismatch", expected_last4: account.platform_user_id.slice(-4) }` and **never** calls `autoImportHistory`;
 - otherwise behaves as today, using `result.ownerNumber`.
 
-**Webhook** (`whatsapp-evolution-webhook/index.ts:378`): wraps the sync call; on `NumberMismatchError`, logs out (same call) and returns 200 `{ ok: true, state: "number_mismatch" }` without running any code that follows the sync.
+**Webhook** (`whatsapp-evolution-webhook/index.ts:364-378`): `handleConnectionUpdate` currently returns `Promise<void>`. Change it to return `Promise<"number_mismatch" | void>`.
+- It wraps the sync call; on `NumberMismatchError` it logs out (same call) and `return "number_mismatch";` before any code that follows the sync.
+- The outer request handler (`:442-447`) checks the marker and responds `200 { ok: true, state: "number_mismatch" }`; otherwise it keeps its current response (debate 2, #10).
 
 **`whatsappPairingOps.ts`:**
 - Its own `reconcileAccountConnection` (`:255-279`) returns `ReconcileResult` too.
 - On `NumberMismatchError` it logs out via `api.logout` and returns `{ ownerNumber: account.platform_user_id, mismatch: true }`. `PairingApi` must include `logout`; add it to the type if it is missing.
-- `pairingStatus` (`:240-252`) returns `{ account_id, state: result.mismatch ? "number_mismatch" : state, phone_number: result.mismatch || ownerNumber.startsWith("pending_") ? null : result.ownerNumber }`.
+- `pairingStatus` (`:240-252`): `const result = await reconcileAccountConnection(...)`, then returns `{ account_id: accountId, state: result.mismatch ? "number_mismatch" : state, phone_number: result.mismatch || result.ownerNumber.startsWith("pending_") ? null : result.ownerNumber }`. No other local named `ownerNumber` remains (debate 2, #10).
 - A pairing never reports `open` for a refused phone.
 
 **Tests (agy):** each path (bridge poll, webhook, partner pairing):
@@ -860,7 +881,7 @@ Branch `feat/wa-continuity-bc`, from `origin/main` after PR-A merges.
 - Returns `{status, moved:{<table>:n}, left:[{item, reason}], conflicts:[{item, name?}]}`.
 
 - [ ] **Step 1: Suite cases (red first).** Fixtures:
-  - for `u_a`: `src` (inactive QR `'96500000009'` with full setup: config, a woo connector, a link, a binding + 3 `store_events` (one `pending` unclaimed, one `claimed`, one `sent`), 2 knowledge links, a waitlist row, a template with `meta_template_id`, partner key primary + link + webhook in the same workspace, an n8n `app_settings` row, `account_metadata.automation_handler='internal'`);
+  - for `u_a`: `src` (inactive QR `'96500000009'` with full setup: config, a woo connector, a link, a binding + 2 `store_events` (one `pending` unclaimed, one `sent`; **no** claimed or sending event, because that would defer group S, debate 2 #12), 2 knowledge links, a waitlist row, a template with `meta_template_id`, partner key primary + link + webhook in the same workspace, an n8n `app_settings` row, `account_metadata.automation_handler='internal'`);
   - for `u_a`: `dst` (active QR, same number, retired-merge scenario, but the test calls the mover directly);
   - for `u_a`: `dst_other` (different number, different `waba_id`);
   - for `u_a`: `dst_ws2` (a different workspace);
@@ -871,7 +892,7 @@ Branch `feat/wa-continuity-bc`, from `origin/main` after PR-A merges.
 | # | Case | Expect |
 |---|---|---|
 | M1 | auto, dst empty | status `moved`; config, connector, link, binding, knowledge, waitlist, partner, n8n, handler all on dst; the binding id unchanged |
-| M2 | store events after M1 | the pending unclaimed event's `social_account_id` = dst; the claimed and sent ones still = src |
+| M2 | store events after M1 | the pending unclaimed event's `social_account_id` = dst; the sent one still = src |
 | M3 | repeated call | status `noop`, no row changes |
 | M4 | auto, dst already has a config | status `deferred`; config, connector, link, binding and waitlist still on src; knowledge moved; dst `account_metadata.setup_move_pending.from` = src |
 | M5 | interactive, dst has a config, `agent_config:"source"` | dst config replaced; the old dst config is in `ai_agent_config_archive` |
@@ -884,7 +905,7 @@ Branch `feat/wa-continuity-bc`, from `origin/main` after PR-A merges.
 | M12 | test cases: dst has 99, src has 3 | 1 moved, `left` reports 2 with `test_case_cap` |
 | M13 | FK | inserting a `store_events` row whose `binding_id` belongs to `u_b` fails |
 | M14 | validation + rollback | `p_choices` naming an unknown connector → `22023`; `agent_config:"source"` + skip of a bound connector → `22023`; in both, no row changed |
-| M17 | in-flight | a `claimed` event on a group-S binding: `auto` → `deferred` with reason `store_event_in_flight`; `interactive` → `55006`; nothing in group S moved |
+| M17 | in-flight (its **own** fixture: a second user-a pair `src2`/`dst2` with its own connector and binding, plus one `claimed` event) | a `claimed` event on a group-S binding: `auto` → `deferred` with reason `store_event_in_flight`; `interactive` → `55006`; nothing in group S moved |
 | M18 | account FK | inserting a `store_events` row whose `social_account_id` belongs to `u_b` (binding of `u_a`) fails |
 | M19 | n8n prefix | the nonmatching `n8nXwebhookX<u_a>X1` key is untouched; the real key is rewritten |
 | M21 | dismissal | `dismiss_whatsapp_setup_move(dst, src)` twice leaves `setup_move_dismissed = [src]`; it is not executable by authenticated |
@@ -961,6 +982,37 @@ REVOKE ALL ON public.ai_agent_config_archive FROM PUBLIC, anon, authenticated;
 ```
 
 End the migration with `REVOKE ALL ON FUNCTION public.move_whatsapp_account_setup(uuid, uuid, text, jsonb) FROM PUBLIC, anon, authenticated; GRANT EXECUTE ON FUNCTION … TO service_role;`.
+
+The same migration creates the dismissal RPC (debate 2, #14):
+
+```sql
+CREATE OR REPLACE FUNCTION public.dismiss_whatsapp_setup_move(p_to uuid, p_from uuid)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM social_accounts t JOIN social_accounts f ON f.user_id = t.user_id
+     WHERE t.id = p_to AND f.id = p_from AND t.platform = 'whatsapp' AND f.platform = 'whatsapp'
+  ) THEN
+    RAISE EXCEPTION 'dismiss_whatsapp_setup_move: accounts not found for one owner' USING errcode = '22023';
+  END IF;
+  UPDATE social_accounts
+     SET account_metadata = jsonb_set(
+           coalesce(account_metadata, '{}'::jsonb), '{setup_move_dismissed}',
+           CASE WHEN coalesce(account_metadata->'setup_move_dismissed', '[]'::jsonb) ? p_from::text
+                THEN coalesce(account_metadata->'setup_move_dismissed', '[]'::jsonb)
+                ELSE coalesce(account_metadata->'setup_move_dismissed', '[]'::jsonb) || to_jsonb(p_from::text) END)
+   WHERE id = p_to;
+END;
+$$;
+REVOKE ALL ON FUNCTION public.dismiss_whatsapp_setup_move(uuid, uuid) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.dismiss_whatsapp_setup_move(uuid, uuid) TO service_role;
+```
+
+M21 also asserts that a `p_from` owned by `u_b` raises `22023`.
 - [ ] **Step 5: Run the harness until M1–M14 pass.**
 - [ ] **Step 6: Mutation checks**, one at a time, then revert. Each must turn its case red:
 
@@ -989,7 +1041,7 @@ End the migration with `REVOKE ALL ON FUNCTION public.move_whatsapp_account_setu
   3. Directly after the retire `update`, **claim the number on the destination first**: `update social_accounts set platform_user_id = p_owner_number, is_active = true where id = p_account_id;`. The mover rejects a `pending_` destination, so it must not run while the destination is still provisional (debate 1, point 1). The unique key is free, because the duplicate was just retired.
   4. Then add `PERFORM public.move_whatsapp_account_setup(v_duplicate_id, p_account_id, 'auto');`.
 
-  The existing final `update … set platform_user_id = p_owner_number, is_active = true where id = p_account_id` stays. It is now a no-op on the duplicate path and still required on the no-duplicate path.
+  Wrap the existing final `update … set platform_user_id = p_owner_number, is_active = true where id = p_account_id` in `IF v_duplicate_id IS NULL THEN … END IF;`. The duplicate path already claimed the number in edit 3, and a second update would fire the `updated_at` trigger again (debate 2, new 5).
 
   Keep the REVOKE/GRANT block identical.
 - [ ] **Step 2:** Append to the suite:
@@ -1052,6 +1104,40 @@ End the migration with `REVOKE ALL ON FUNCTION public.move_whatsapp_account_setu
   - The banner uses shadcn `Alert` + `Checkbox` + `RadioGroup`, with the copy above.
 - [ ] **Step 4: Gates. Commit.** `feat(whatsapp): bring over the AI agent setup from a previous connection`
 
+### Task BC3b: The worker follows a moved binding (debate 2, new 1)
+
+A delivery that races a move can be inserted with the binding's old account after the mover scanned the events (`store-webhook/handler.ts:75-83,148-163`). Rather than a transactional receiver path, the worker heals any event whose account no longer matches its binding. This also covers stragglers from any cause.
+
+**Files:**
+- Modify: `supabase/functions/process-store-events/worker.ts`, `deps.ts`
+- Test: `worker.test.ts`, `deps.test.ts`
+
+**Interfaces — Produces:**
+- `AccountContext.bindingAccountId: string | null`: the binding's current `social_account_id`, read in `loadAccount`, which already loads the binding at `deps.ts:215`.
+- `WorkerPorts.retargetEvent(id: string, claimToken: string, accountId: string): Promise<boolean>`
+
+- [ ] **Step 1: Tests (agy).**
+  - An event whose `social_account_id` differs from `bindingAccountId`, where the binding still has the same `user_id` and `connector_id`:
+    - `retargetEvent(event.id, claim_token, bindingAccountId)` is called once;
+    - nothing is sent;
+    - the summary counts `released`;
+    - no skip is written.
+  - A matching event proceeds as before.
+  - `deps.test.ts`: `retargetEvent` issues one update with `{ social_account_id, status: "pending", claimed_at: null, claim_token: null, send_attempt_id: null }`, filtered by `id` and `claim_token`, and `attempts` decremented through the existing compare-and-set helper.
+- [ ] **Step 2: Implement (GLM).**
+  - In `processClaimed`, directly after `loadAccount` and before the D3 `connected` check, add:
+
+```ts
+    if (account && account.bindingAccountId && account.bindingAccountId !== event.social_account_id) {
+      return (await ports.retargetEvent(event.id, event.claim_token, account.bindingAccountId)) ? "released" : "left";
+    }
+```
+
+  - `storeBindingMatches` (`deps.ts:90-99`) stops comparing `social_account_id`; it keeps the `user_id` and `connector_id` checks, since the FK now guarantees `(binding_id, user_id, connector_id)`.
+  - `loadAccount` sets `bindingAccountId: binding?.social_account_id ?? null`.
+  - Because of this task, `BC1`'s in-flight rule stays as written but is no longer the only guard.
+- [ ] **Step 3: Gates. Commit.** `fix(store-events): an event follows its binding's current account`
+
 ### Task BC4: PR-BC land
 
 - [ ] Guards: clean-code-guard, test-guard, docs-guard on the spec and plan if edited.
@@ -1104,3 +1190,18 @@ End the migration with `REVOKE ALL ON FUNCTION public.move_whatsapp_account_setu
 | 13 | `LIKE` underscore wildcard | literal prefix; S8/M19 |
 | 14 | dismissal action names | `dismiss_setup_move` + `dismiss_whatsapp_setup_move` RPC; M21 |
 | 15 | undefined strict mode; M15 placement | validation contract; M15/M16/M20 in BC2 |
+
+**Round 2** (the same Codex session): 12 of 15 round-1 points conceded as resolved. The three still open and five new points were resolved as follows:
+
+| Point | Resolution |
+|---|---|
+| R1 #10 pairing local name; webhook returns a Response | `result.ownerNumber`; webhook marker returned to the outer handler |
+| R1 #12 M1 fixture had a claimed event | M1/M2 fixture without in-flight events; M17 has its own |
+| R1 #14 dismissal RPC unspecified | full SQL in BC1; M21 owner check |
+| new 1 receiver insert races the move | BC3b: the worker re-targets an event to its binding's current account |
+| new 2 mismatch screen lost on the next poll | `getQrStatus` checks the durable flag first; `reconnect_qr` clears it |
+| new 3 expired hold leaves a permanent incident | `clear_undelivered_if_none_held` after a terminal skip |
+| new 4 email not reserved before send | `claim_undelivered_alert_email` before send, mark after |
+| new 5 duplicate final update | final update only when there is no duplicate |
+
+Codex confirmed there is no deadlock between the event-row lock and `claim_store_events` (`20260928120000_store_events_worker.sql:104-141`), and that D3's check runs before the 48-hour staleness check.
