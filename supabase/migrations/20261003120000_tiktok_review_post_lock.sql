@@ -6,7 +6,8 @@
 --    Posts or History cascades away its submission, and the draft stayed 'submitted'
 --    with nothing behind it: it could not be polled, reopened, edited or archived. An
 --    AFTER DELETE trigger on submissions now hands the draft back -- to pending_review
---    when nothing reached TikTok, to archived when something may have.
+--    when nothing reached TikTok, to archived when something may have. Drafts already
+--    stranded before this migration are archived once, since their submission is gone.
 --
 -- 2. Once publishing has started, the post's target and content are locked. Calendar and
 --    Scheduled Posts edit posts rows directly, and consent covered one account, one time
@@ -233,6 +234,18 @@ CREATE TRIGGER trg_tiktok_review_release_draft
   AFTER DELETE ON public.tiktok_review_submissions
   FOR EACH ROW
   EXECUTE FUNCTION public.tiktok_review_release_draft_on_submission_delete();
+
+-- Drafts stranded before this trigger existed: a post deleted earlier took its submission with
+-- it, so nothing above will ever fire for them. Whether that attempt reached TikTok is unknown
+-- once the submission is gone, so they take the trigger's cautious branch and are archived.
+UPDATE public.tiktok_review_drafts d
+SET state = 'archived',
+    revision = d.revision + 1
+WHERE d.state = 'submitted'
+  AND NOT EXISTS (
+    SELECT 1 FROM public.tiktok_review_submissions s
+    WHERE s.draft_id = d.id AND s.revision = d.revision
+  );
 
 -- ---------------------------------------------------------------------------
 -- 2. Lock a review post once publishing has started.
