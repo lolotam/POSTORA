@@ -50,12 +50,12 @@ Deno.test("classifySendError and a QR send without a message id", () => {
   assertEquals(classifyQrTextResult("wamid.1"), { accepted: true, messageId: "wamid.1" });
 });
 
-Deno.test("store binding must match the event connector, account, and user", () => {
+Deno.test("store binding must match the event connector and user, ignoring social_account_id", () => {
   const cases: Array<{ name: string; binding: typeof binding | null; matches: boolean }> = [
     { name: "match", binding, matches: true },
     { name: "null", binding: null, matches: false },
     { name: "connector", binding: { ...binding, connector_id: "other" }, matches: false },
-    { name: "account", binding: { ...binding, social_account_id: "other" }, matches: false },
+    { name: "account differs", binding: { ...binding, social_account_id: "other" }, matches: true },
     { name: "user", binding: { ...binding, user_id: "other" }, matches: false },
   ];
   for (const item of cases) {
@@ -224,7 +224,19 @@ Deno.test("opt-out lookup runs only for a phone the event named", () => {
   }
 });
 
-function fakeAccountAdmin(socialAccountRow: Record<string, unknown>) {
+function fakeAccountAdmin(
+  socialAccountRow: Record<string, unknown>,
+  bindingRow?: Record<string, unknown> | null,
+) {
+  const bindingData = bindingRow === undefined
+    ? {
+        id: "binding-1",
+        connector_id: "connector-1",
+        social_account_id: "account-1",
+        user_id: "user-1",
+      }
+    : bindingRow;
+
   const admin = {
     from(table: string) {
       const builder = {
@@ -236,12 +248,7 @@ function fakeAccountAdmin(socialAccountRow: Record<string, unknown>) {
           }
           if (table === "store_webhook_bindings") {
             return Promise.resolve({
-              data: {
-                id: "binding-1",
-                connector_id: "connector-1",
-                social_account_id: "account-1",
-                user_id: "user-1",
-              },
+              data: bindingData,
               error: null,
             });
           }
@@ -334,3 +341,77 @@ Deno.test("loadAccount maps is_active and retired platform_user_id to connected 
     assertEquals(account?.connected, item.expectedConnected, item.name);
   }
 });
+
+Deno.test("loadAccount sets bindingAccountId from the binding row and keeps connectorVisible true when binding account differs", async () => {
+  const admin = fakeAccountAdmin(
+    {
+      id: "account-event",
+      user_id: "user-1",
+      platform: "whatsapp",
+      connection_mode: "cloud_api",
+      is_active: true,
+      platform_user_id: "96500000001",
+      access_token: null,
+      account_metadata: {},
+      workspace_id: null,
+    },
+    {
+      id: "binding-1",
+      connector_id: "connector-1",
+      social_account_id: "account-binding-other",
+      user_id: "user-1",
+    },
+  );
+  const ports = createStoreEventPorts(admin);
+  const account = await ports.loadAccount(openerInput().event);
+  assertEquals((account as any)?.bindingAccountId, "account-binding-other");
+  assertEquals(account?.connectorVisible, true);
+});
+
+Deno.test("retargetEvent issues one update filtered by id and claim_token with target account and pending status", async () => {
+  let updateTable = "";
+  let updatePayload: Record<string, unknown> = {};
+  const eqFilters: Array<[string, unknown]> = [];
+
+  const admin = {
+    from(table: string) {
+      updateTable = table;
+      const builder = {
+        update(patch: Record<string, unknown>) {
+          updatePayload = patch;
+          return builder;
+        },
+        eq(col: string, val: unknown) {
+          eqFilters.push([col, val]);
+          return builder;
+        },
+        select(_cols?: string) {
+          return Promise.resolve({ data: [{ id: "event-1" }], error: null });
+        },
+      };
+      return builder;
+    },
+  };
+
+  const ports = createStoreEventPorts(admin as any);
+  const retarget = (ports as any).retargetEvent;
+  if (typeof retarget !== "function") {
+    throw new Error("retargetEvent is not implemented on WorkerPorts");
+  }
+  const result = await retarget("event-1", "claim-token-123", "target-account-id");
+
+  assertEquals(result, true);
+  assertEquals(updateTable, "store_events");
+  assertEquals(updatePayload, {
+    social_account_id: "target-account-id",
+    status: "pending",
+    claimed_at: null,
+    claim_token: null,
+    send_attempt_id: null,
+  });
+  assertEquals(eqFilters, [
+    ["id", "event-1"],
+    ["claim_token", "claim-token-123"],
+  ]);
+});
+
