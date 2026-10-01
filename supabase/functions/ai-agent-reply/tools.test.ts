@@ -319,17 +319,20 @@ Deno.test("a forced language is stated as an override and repeated last", async 
   assertEquals(prompt.trimEnd().endsWith("must be written in Arabic (العربية)."), true);
 });
 
-Deno.test("auto-detect mirrors the customer instead of overriding", async () => {
+Deno.test("auto-detect names the customer's language over an Arabic persona and repeats it last", async () => {
   const { buildSystemPrompt } = await import("./logic.ts");
   const prompt = buildSystemPrompt({
-    persona: null,
-    language: "ar",
+    persona: "تستخدم اللهجة العربية الفصحى المبسطة أو الكويتية بحسب أسلوب رسالة العميل",
+    language: "en",
     languageForced: false,
-    knowledgeBlocks: [],
+    knowledgeBlocks: ["opening hours are 9-5"],
     nowIso: "2026-08-25T00:00:00Z",
   });
+  // Not the business's fixed choice, so it is not framed as one.
   assertEquals(prompt.includes("NON-NEGOTIABLE"), false);
-  assertEquals(prompt.includes("matching the language the customer used"), true);
+  assertStringIncludes(prompt, "the language of the customer's latest message");
+  assertStringIncludes(prompt, "takes precedence over the language of the business persona");
+  assertEquals(prompt.trimEnd().endsWith("must be written in English."), true);
 });
 
 // The floor in index.ts escalates without going through the model, so the

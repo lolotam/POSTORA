@@ -2,7 +2,7 @@
 import { assertEquals, assertStringIncludes } from "jsr:@std/assert@1";
 import {
   boundWaitlistSightings, createProcedureTurn, enrollWaitlist, executeOfferedWaitlistJoin, planBoundWaitlistJoin, planWaitlistJoin,
-  procedureToolDefinitions, scopeStoreEventRead, STOCK_WAITLIST_ON_CONFLICT, stockWaitlistToolDefinition,
+  procedureToolDefinitions, scopeStoreEventRead, stepGuidance, STOCK_WAITLIST_ON_CONFLICT, stockWaitlistToolDefinition,
   stockWaitlistJoinOffered, storeEventReadScope, WAITLIST_BINDING_REFUSAL, waitlistRound,
   type ProcedurePorts, type ProcedureTurnInput, type StockSighting, type StoreEventRow, type WaitlistEnrollmentLog,
 } from "./procedureRuntime.ts";
@@ -772,4 +772,17 @@ Deno.test("procedure_cancel on a COD confirmation keeps the flow and points at t
   assertEquals(turn.completed, null);
   assertEquals(updates.length, 0);
   assertStringIncludes(result.output, '"decision": "cancel"');
+});
+
+// "Ask it this way, in the customer's language: <Arabic>" read as "say this Arabic", so the
+// business's wording chose the reply language instead of the customer (2026-10-01).
+Deno.test("stepGuidance hands over the business's wording to translate, not to copy", () => {
+  const guidance = stepGuidance(
+    { run_id: "r", key: "cod_confirm", version: 1, step: 0, fields: {}, off_script: 0, origin: "event",
+      started_at: T.toISOString(), updated_at: T.toISOString() },
+    { cod_confirm: { enabled: true, prompts: { decision: "هل تريد تأكيد شحن الطلب؟" }, closing: "" } },
+  );
+  assertStringIncludes(guidance, "هل تريد تأكيد شحن الطلب؟");
+  assertStringIncludes(guidance, "translated into the reply language");
+  assertEquals(guidance.includes("in the customer's language"), false);
 });

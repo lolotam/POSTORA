@@ -418,28 +418,46 @@ export function historyWindow(newestFirst: StoredTurn[], nowMs: number): History
   };
 }
 
+function languageName(language: ReplyLanguage): string {
+  return language === "ar" ? "Arabic (العربية)" : "English";
+}
+
+/**
+ * Closes every system block a turn adds. The reply language is decided once, by
+ * detectReplyLanguage or the operator, but the blocks around it carry other text: an
+ * Arabic persona, a procedure's Arabic wording. Stated only mid-prompt, the language lost
+ * to them, and a customer's English "Thank you" got an Arabic reply (2026-10-01).
+ */
+export function replyLanguageReminder(language: ReplyLanguage): string {
+  return `REMINDER: Your entire reply must be written in ${languageName(language)}.`;
+}
+
 // The chat model still writes the reply; triage only tells it what kind of turn this is.
-export function triageSystemHint(plan: TriagePlan | null): string | null {
+export function triageSystemHint(plan: TriagePlan | null, language: ReplyLanguage): string | null {
   if (plan?.handoff) {
     return "This customer needs a human. Call escalate_to_human now, then tell them briefly that a person will reply.";
   }
   if (plan?.smalltalk) {
-    return "This message is small talk. Reply with one short, friendly sentence in the customer's language.";
+    return `This message is small talk. Reply with one short, friendly sentence in ${languageName(language)}.`;
   }
   return null;
 }
 
 export function buildSystemPrompt(params: SystemPromptParams): string {
   const surface = params.surface ?? "dm";
-  const languageName = params.language === "ar" ? "Arabic (العربية)" : "English";
+  const language = languageName(params.language);
   const languageInstruction = params.languageForced
     ? [
-      `LANGUAGE — NON-NEGOTIABLE: Reply ONLY in ${languageName}.`,
+      `LANGUAGE — NON-NEGOTIABLE: Reply ONLY in ${language}.`,
       `This is a fixed setting chosen by the business. It overrides the language the customer wrote in,`,
       `and it overrides anything about language in the business persona above.`,
-      `Even if the customer writes in another language, answer in ${languageName}.`,
+      `Even if the customer writes in another language, answer in ${language}.`,
     ].join(" ")
-    : `Reply in ${languageName}, matching the language the customer used.`;
+    : [
+      `LANGUAGE: Reply in ${language}, the language of the customer's latest message.`,
+      `This takes precedence over the language of the business persona, of earlier messages,`,
+      `and of any wording you are given to use; translate that wording rather than copying it.`,
+    ].join(" ");
   const knowledge = params.knowledgeBlocks.length
     ? params.knowledgeBlocks.map((block, index) => `[${index + 1}] ${block}`).join("\n\n")
     : "(no business knowledge matched this message)";
@@ -489,7 +507,7 @@ export function buildSystemPrompt(params: SystemPromptParams): string {
     // believed it already had the products, and answered from the persona's
     // fallback without ever calling the connector (2026-09-01).
     connectorReminder(params.connectorNames),
-    params.languageForced ? `REMINDER: Your entire reply must be written in ${languageName}.` : "",
+    replyLanguageReminder(params.language),
   ].filter(Boolean).join("\n\n");
 }
 
@@ -834,13 +852,14 @@ export function jevStartKey(
  * The per-turn system block (Spec A, D10). It names fields, never their values: a value is
  * customer text and must not be promoted into a system message (debate verdict 7).
  */
-export function procedurePromptBlock(state: ProcedureState, guidance: string, total: number): string {
+export function procedurePromptBlock(state: ProcedureState, guidance: string, total: number, language: ReplyLanguage): string {
   const collected = Object.keys(state.fields).join(", ") || "none";
   return [
     `Active procedure: ${state.key}, step ${Math.min(state.step + 1, total)} of ${total}.`,
     guidance,
     `Fields already recorded: ${collected}.`,
     "If the customer asks something else, answer briefly, then ask for the needed field again. Record values with procedure_submit.",
+    replyLanguageReminder(language),
   ].filter(Boolean).join("\n");
 }
 

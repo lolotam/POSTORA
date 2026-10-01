@@ -107,7 +107,7 @@ export function stepGuidance(state: ProcedureState, config: ProcedureConfig): st
     ? ` Offer only these services: ${settings.services.join(", ")}.`
     : "";
   const accept = next.hint ? ` (accept: ${next.hint})` : "";
-  return `Needed now: ${next.name}${accept}.${wording ? ` Ask it this way, in the customer's language: ${wording}` : ""}${services}`;
+  return `Needed now: ${next.name}${accept}.${wording ? ` Ask it with this wording, translated into the reply language if it differs: ${wording}` : ""}${services}`;
 }
 
 export function procedureToolDefinitions(enabled: ProcedureKey[], activeKey: ProcedureKey | null = null) {
@@ -657,7 +657,7 @@ export function createProcedureTurn(input: ProcedureTurnInput): ProcedureTurn {
   const finish = async (done: ProcedureState): Promise<ToolResult> => {
     const closing = input.config[done.key]?.closing;
     const withClosing = (result: ToolResult): ToolResult =>
-      closing ? { ...result, output: `${result.output}\nClose with this message, in the customer's language: ${closing}` } : result;
+      closing ? { ...result, output: `${result.output}\nClose with this message, translated into the reply language if it differs: ${closing}` } : result;
     switch (TEMPLATES[done.key].endAction) {
       case "order_lookup": {
         const found = await input.ports.storeLookup("lookup_orders", { order_id: done.fields.order_number });

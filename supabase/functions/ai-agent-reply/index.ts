@@ -1252,12 +1252,12 @@ Deno.serve(async (req) => {
       ...history,
       { role: "user", content: request.inbound_text.slice(0, MAX_INBOUND_CHARS) },
     ];
-    const hint = triageSystemHint(triagePlan);
+    const hint = triageSystemHint(triagePlan, language);
     if (hint) messages.splice(1, 0, { role: "system", content: hint });
     if (procedureTurn?.state) {
       const fields = fieldsFor(procedureTurn.state.key, procedureConfig);
       messages.splice(1, 0, { role: "system", content:
-        procedurePromptBlock(procedureTurn.state, stepGuidance(procedureTurn.state, procedureConfig), fields.length) });
+        procedurePromptBlock(procedureTurn.state, stepGuidance(procedureTurn.state, procedureConfig), fields.length, language) });
     }
     let promptTokens = 0;
     let completionTokens = 0;
