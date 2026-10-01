@@ -2,6 +2,7 @@ import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { Resend } from "https://esm.sh/resend@2.0.0";
 import { verifyCronAuth } from "../_shared/cron-auth.ts";
+import { createLogger } from "../_shared/logging.ts";
 import { errorRatePercent, triageFailurePercent } from "./rates.ts";
 
 import { restrictedCorsHeaders } from "../_shared/cors.ts";
@@ -176,6 +177,7 @@ serve(async (req) => {
     const resendApiKey = Deno.env.get("RESEND_API_KEY");
     
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
+    const logger = createLogger(supabase, "observability-alerts", "system");
 
     console.log("[OBSERVABILITY-ALERTS] Evaluating alert rules...");
 
@@ -251,7 +253,10 @@ serve(async (req) => {
           const [all, errors] = await Promise.all([windowLogs(), windowLogs().eq("level", "error")]);
           if (all.error || errors.error) {
             // Skip only this rule: throwing would leave every later rule unevaluated this run.
-            console.error(`[OBSERVABILITY-ALERTS] ${config.name}: log count failed:`, (all.error ?? errors.error)!.message);
+            await logger.error(`Alert rule "${config.name}" skipped: log count failed`, {
+              alert_config_id: config.id,
+              error: (all.error ?? errors.error)!.message,
+            });
             continue;
           }
 
@@ -315,7 +320,10 @@ serve(async (req) => {
           ]);
           if (triaged.error || failed.error) {
             // Skip only this rule: throwing would leave every later rule unevaluated this run.
-            console.error(`[OBSERVABILITY-ALERTS] ${config.name}: reply log count failed:`, (triaged.error ?? failed.error)!.message);
+            await logger.error(`Alert rule "${config.name}" skipped: reply log count failed`, {
+              alert_config_id: config.id,
+              error: (triaged.error ?? failed.error)!.message,
+            });
             continue;
           }
 
