@@ -80,6 +80,10 @@ function validatePublicToolUrl(toolUrl: string): string {
   }
   try {
     const parsedUrl = new URL(toolUrl);
+    // "https://shop@gmail.com" is user "shop" on host gmail.com, not a shop.
+    if (parsedUrl.username || parsedUrl.password) {
+      throw new ToolWriteError("Tool URL must not contain an @ before the host — enter the website address, not an email");
+    }
     const host = parsedUrl.hostname.toLowerCase();
     const privateIpLiteral = /^(0\.|10\.|127\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/;
     if (

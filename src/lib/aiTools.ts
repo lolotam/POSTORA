@@ -24,5 +24,16 @@ export function validateAiToolName(name: string): string | null {
 }
 
 export function validateAiToolUrl(url: string): string | null {
-  return /^https:\/\/.+/.test(url) ? null : "URL must start with https://";
+  if (!/^https:\/\/.+/.test(url)) return "URL must start with https://";
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return "URL is not a valid web address";
+  }
+  // "https://shop@gmail.com" is user "shop" on host gmail.com, not a shop.
+  if (parsed.username || parsed.password) {
+    return "URL must not contain an @ before the website name. Enter the website address (https://yourshop.com), not an email.";
+  }
+  return null;
 }

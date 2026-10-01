@@ -627,3 +627,9 @@ Deno.test("a native tool still refuses a missing or private URL", () => {
     "public host",
   );
 });
+
+Deno.test("a native tool refuses a URL with a user name before the host", () => {
+  for (const url of ["https://shop@gmail.com", "https://user:pass@example.com/wp"]) {
+    assertThrows(() => parseUpsertToolInput(toolPayload({ url })), ToolWriteError, "@");
+  }
+});

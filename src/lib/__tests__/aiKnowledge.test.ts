@@ -47,6 +47,13 @@ describe("AI connector tool validation", () => {
     expect(validateAiToolUrl("http://insecure.example.com/hook")).not.toBeNull();
     expect(validateAiToolUrl("not-a-url")).not.toBeNull();
   });
+
+  // An email pasted into Store URL parses as user "shop" on host gmail.com,
+  // so the connection test silently called gmail.com and got a 404.
+  it.each(["https://shop@gmail.com", "https://user:pass@example.com/wp"])(
+    "rejects %s because it carries a user name before the host",
+    (url) => expect(validateAiToolUrl(url)).toMatch(/@/),
+  );
 });
 
 describe("AI knowledge upload locations", () => {
