@@ -79,7 +79,7 @@ SECURITY DEFINER
 SET search_path = public
 AS $$
   UPDATE social_accounts
-     SET account_metadata = account_metadata - 'undelivered_store_events' - 'undelivered_alert_email_at'
+     SET account_metadata = account_metadata - 'undelivered_store_events' - 'undelivered_alert_email_at' - 'undelivered_alert_claimed_at'
    WHERE id = p_account_id
      AND (account_metadata ? 'undelivered_store_events' OR account_metadata ? 'undelivered_alert_email_at');
 $$;
@@ -102,3 +102,54 @@ END;
 $$;
 REVOKE ALL ON FUNCTION public.mark_undelivered_alert_emailed(uuid, text) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.mark_undelivered_alert_emailed(uuid, text) TO service_role;
+
+-- An expired hold (the worker skips it after 24h) must not leave a permanent incident:
+-- clear it once nothing for the account is still waiting, so the next order starts a new
+-- incident with its own 'since' and its own email.
+CREATE OR REPLACE FUNCTION public.clear_undelivered_if_none_held(p_account_id uuid)
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM store_events
+     WHERE social_account_id = p_account_id
+       AND status IN ('pending', 'claimed', 'sending')
+  ) THEN
+    RETURN false;
+  END IF;
+  UPDATE social_accounts
+     SET account_metadata = account_metadata - 'undelivered_store_events'
+                                             - 'undelivered_alert_email_at'
+                                             - 'undelivered_alert_claimed_at'
+   WHERE id = p_account_id
+     AND account_metadata ? 'undelivered_store_events';
+  RETURN FOUND;
+END;
+$$;
+REVOKE ALL ON FUNCTION public.clear_undelivered_if_none_held(uuid) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.clear_undelivered_if_none_held(uuid) TO service_role;
+
+-- Reserve the alert email for one incident before sending, so two overlapping runs cannot
+-- both send. A claim older than 30 minutes is treated as a failed send and may be retaken.
+CREATE OR REPLACE FUNCTION public.claim_undelivered_alert_email(p_account_id uuid, p_since text)
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  UPDATE social_accounts
+     SET account_metadata = jsonb_set(account_metadata, '{undelivered_alert_claimed_at}', to_jsonb(clock_timestamp()::text))
+   WHERE id = p_account_id
+     AND account_metadata->'undelivered_store_events'->>'since' = p_since
+     AND NOT (account_metadata ? 'undelivered_alert_email_at')
+     AND (NOT (account_metadata ? 'undelivered_alert_claimed_at')
+          OR (account_metadata->>'undelivered_alert_claimed_at')::timestamptz < clock_timestamp() - interval '30 minutes');
+  RETURN FOUND;
+END;
+$$;
+REVOKE ALL ON FUNCTION public.claim_undelivered_alert_email(uuid, text) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.claim_undelivered_alert_email(uuid, text) TO service_role;

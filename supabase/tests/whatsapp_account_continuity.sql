@@ -98,6 +98,53 @@ BEGIN
     'S6 clear keeps other metadata keys';
 END $$;
 
+-- S9: an expired hold clears the incident only once nothing is still waiting.
+-- S10: the alert email is reserved before sending; a fresh claim blocks a second run.
+DO $$
+DECLARE
+  u_a uuid := 'c1c1c1c1-1111-4111-8111-cccccccccccc';
+  acc uuid := 'c1c1c1c1-0001-4111-8111-cccccccccccc';
+  v_bind uuid;
+  v_tool uuid := 'c1c1c1c1-0003-4111-8111-cccccccccccc';
+  v_event uuid;
+  v_since text;
+BEGIN
+  SELECT id INTO v_bind FROM public.store_webhook_bindings WHERE social_account_id = acc;
+  INSERT INTO public.store_events (user_id, social_account_id, connector_id, binding_id, flow, external_id, payload, status, due_at)
+  VALUES (u_a, acc, v_tool, v_bind, 'cod_confirm', 'continuity-1', '{"order_id":"1"}', 'pending', now())
+  RETURNING id INTO v_event;
+  PERFORM public.note_undelivered_store_event(acc);
+
+  ASSERT public.clear_undelivered_if_none_held(acc) = false, 'S9 a pending event keeps the incident open';
+  ASSERT (SELECT account_metadata ? 'undelivered_store_events' FROM public.social_accounts WHERE id = acc),
+    'S9 the flag survives while an order is held';
+  UPDATE public.store_events SET status = 'skipped', skip_reason = 'account_disconnected', processed_at = now()
+   WHERE id = v_event;
+  ASSERT public.clear_undelivered_if_none_held(acc) = true, 'S9 nothing held: the incident clears';
+  ASSERT NOT (SELECT account_metadata ? 'undelivered_store_events' FROM public.social_accounts WHERE id = acc),
+    'S9 the flag is gone after the last hold expires';
+  ASSERT NOT has_function_privilege('authenticated', 'public.clear_undelivered_if_none_held(uuid)', 'EXECUTE'),
+    'S9 authenticated cannot clear an incident';
+
+  PERFORM public.note_undelivered_store_event(acc);
+  SELECT account_metadata->'undelivered_store_events'->>'since' INTO v_since FROM public.social_accounts WHERE id = acc;
+  ASSERT public.claim_undelivered_alert_email(acc, v_since) = true, 'S10 the first run reserves the email';
+  ASSERT public.claim_undelivered_alert_email(acc, v_since) = false, 'S10 a concurrent run cannot reserve it again';
+  UPDATE public.social_accounts
+     SET account_metadata = jsonb_set(account_metadata, '{undelivered_alert_claimed_at}', to_jsonb((now() - interval '31 minutes')::text))
+   WHERE id = acc;
+  ASSERT public.claim_undelivered_alert_email(acc, v_since) = true, 'S10 a lapsed claim (failed send) can be retaken';
+  ASSERT public.mark_undelivered_alert_emailed(acc, v_since) = true, 'S10 a successful send marks the incident';
+  ASSERT public.claim_undelivered_alert_email(acc, v_since) = false, 'S10 an emailed incident is never claimed again';
+  ASSERT public.claim_undelivered_alert_email(acc, 'other-since') = false, 'S10 a stale since claims nothing';
+  ASSERT NOT has_function_privilege('authenticated', 'public.claim_undelivered_alert_email(uuid, text)', 'EXECUTE'),
+    'S10 authenticated cannot claim the alert email';
+  PERFORM public.clear_undelivered_store_events(acc);
+  ASSERT NOT (SELECT account_metadata ?| ARRAY['undelivered_store_events', 'undelivered_alert_email_at', 'undelivered_alert_claimed_at']
+                FROM public.social_accounts WHERE id = acc),
+    'S10 clear removes every incident key';
+END $$;
+
 -- S1, S2, S8: the browser surface as user A.
 SET LOCAL ROLE authenticated;
 SELECT set_config('request.jwt.claims',
