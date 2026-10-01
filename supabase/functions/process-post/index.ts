@@ -427,6 +427,9 @@ interface MediaFile {
 interface PlatformPostResult {
   id?: string;
   url?: string;
+  /** The platform's public post id when it differs from `id`. TikTok's `id` is the publish_id
+   *  that webhooks are matched on, so the post id it reports on completion travels here. */
+  providerPostId?: string;
   /** When true, the platform handler has already written its own platform_posts rows
    *  (one or more) and the outer loop must skip the default insert. */
   selfWroteRows?: boolean;
@@ -1746,7 +1749,7 @@ Deno.serve(async (req) => {
             socialAccountId: account.id,
             platform: account.platform,
             status: resultStatus,
-            providerPostId: result.id ?? null,
+            providerPostId: result.providerPostId ?? result.id ?? null,
             providerPostUrl: result.url ?? null,
             responseData,
           });
@@ -6543,6 +6546,7 @@ async function postToTikTok(
   console.log(`TikTok: Polling publish status for publish_id: ${publishId}`);
 
   let postUrl: string | undefined;
+  let providerPostId: string | undefined;
   let attempts = 0;
   const maxAttempts = 30;
 
@@ -6572,6 +6576,7 @@ async function postToTikTok(
 
     if (status === "PUBLISH_COMPLETE") {
       const publiclyAvailablePostId = statusData?.data?.publicaly_available_post_id;
+      providerPostId = publiclyAvailablePostId || undefined;
       // Use creator_username from earlier API response if available, fallback to account.platform_username
       // TikTok API returns the actual handle in creator_info response
       const tiktokHandle = (account.account_metadata as Record<string, unknown>)?.tiktok_username ||
@@ -6610,6 +6615,7 @@ async function postToTikTok(
   return {
     id: publishId,
     url: postUrl,
+    providerPostId,
   };
 }
 
