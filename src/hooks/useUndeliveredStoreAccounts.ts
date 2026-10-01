@@ -23,7 +23,7 @@ export function useUndeliveredStoreAccounts() {
         .eq("user_id", user!.id)
         .eq("platform", "whatsapp")
         .not("account_metadata->undelivered_store_events", "is", null);
-      if (error) return [];
+      if (error) throw error;
       return (rows ?? []) as FlaggedUndeliveredAccount[];
     },
   });

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 import {
@@ -54,6 +54,11 @@ export function DeleteWhatsAppAccountDialog({
   const [errorText, setErrorText] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
 
+  useEffect(() => {
+    setErrorText(null);
+    setDeleting(false);
+  }, [account?.id]);
+
   if (!account) return null;
 
   const handleConfirm = async () => {
@@ -100,12 +105,20 @@ export function DeleteWhatsAppAccountDialog({
             </div>
           </AlertDialogDescription>
         </AlertDialogHeader>
+        {summary.isError && (
+          <p className="text-sm text-destructive">
+            {t(
+              "deleteWhatsApp.summaryFailed",
+              "We couldn't load what is attached to this account. Try again later.",
+            )}
+          </p>
+        )}
         {errorText && <p className="text-sm text-destructive">{errorText}</p>}
         <AlertDialogFooter>
           <AlertDialogCancel>{t("common:cancel", "Cancel")}</AlertDialogCancel>
           <AlertDialogAction
             className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-            disabled={deleting}
+            disabled={deleting || !summary.data}
             onClick={(event) => {
               // Radix closes an AlertDialog on Action unless preventDefault is
               // called; the parent owns closing by clearing the account, and a
