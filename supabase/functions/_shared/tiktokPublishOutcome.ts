@@ -13,6 +13,15 @@ export type TikTokOutcome =
 
 export type ApplyOutcomeResult = "applied" | "already_terminal" | "unmatched";
 
+/**
+ * TikTok's status endpoint reports `publicaly_available_post_id` (sic) as an array of ids.
+ * Read raw, the array reached a text column and a URL template; every raw caller takes it here.
+ */
+export function firstPublicPostId(raw: unknown): string | null {
+  const first = Array.isArray(raw) ? raw[0] : null;
+  return typeof first === "string" && first.length > 0 ? first : null;
+}
+
 type AccountRow = {
   platform_user_id: string | null;
   platform_username: string | null;
@@ -24,6 +33,7 @@ type PlatformPostMatch = {
   post_id: string;
   social_account_id: string;
   status: string;
+  platform_post_id: string | null;
   platform_post_url: string | null;
   social_accounts: AccountRow | AccountRow[] | null;
 };
@@ -52,20 +62,32 @@ function contradicts(status: string, outcome: TikTokOutcome): boolean {
     (status === "failed" && outcome.kind === "published");
 }
 
-async function fillPublishedUrl(
+/**
+ * A settled row still needs TikTok's post id when it has no URL, or when it was settled
+ * with the publish_id standing in for the post id -- process-post's own poll does that
+ * and builds the URL itself, so a non-null URL is no proof the id is right (#246).
+ */
+function lacksProviderPostId(row: PlatformPostMatch, publishId: string): boolean {
+  return row.platform_post_url === null || row.platform_post_id === publishId;
+}
+
+async function fillPublishedPost(
   admin: SupabaseClient,
-  rowId: string,
-  providerPostId: string,
-  url: string,
+  row: PlatformPostMatch,
+  publishId: string,
+  published: { providerPostId: string; url: string },
 ): Promise<void> {
-  const { error } = await admin
+  const update = admin
     .from("platform_posts")
     .update({
-      platform_post_id: providerPostId,
-      platform_post_url: url,
+      platform_post_id: published.providerPostId,
+      platform_post_url: published.url,
     })
-    .eq("id", rowId)
-    .is("platform_post_url", null);
+    .eq("id", row.id);
+  // Compare-and-set on the state that was read, so a concurrent correction is not overwritten.
+  const { error } = row.platform_post_url === null
+    ? await update.is("platform_post_url", null)
+    : await update.eq("platform_post_id", publishId);
   if (error) throw new Error("tiktok_outcome_url_update_failed");
 }
 
@@ -105,7 +127,7 @@ export async function applyTikTokPublishOutcome(
   const { data, error } = await admin
     .from("platform_posts")
     .select(
-      "id, post_id, social_account_id, status, platform_post_url, social_accounts!inner(platform_user_id, platform_username, account_metadata)",
+      "id, post_id, social_account_id, status, platform_post_id, platform_post_url, social_accounts!inner(platform_user_id, platform_username, account_metadata)",
     )
     .eq("platform", "tiktok")
     .eq("response_data->>tiktok_publish_id", input.publishId);
@@ -148,9 +170,9 @@ export async function applyTikTokPublishOutcome(
       input.outcome.kind === "published" &&
       providerPostId &&
       url &&
-      row.platform_post_url === null
+      lacksProviderPostId(row, input.publishId)
     ) {
-      await fillPublishedUrl(admin, row.id, providerPostId, url);
+      await fillPublishedPost(admin, row, input.publishId, { providerPostId, url });
       sawTerminal = true;
       continue;
     }

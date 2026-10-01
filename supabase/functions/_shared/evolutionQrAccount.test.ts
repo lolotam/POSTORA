@@ -28,6 +28,7 @@ function recordingAdmin(
     updateError?: unknown; rpcError?: unknown; readError?: unknown;
     active?: boolean; workspaceId?: string | null; updatedAt?: string;
     emissionFailure?: "lookup" | "insert";
+    clearError?: unknown;
   } = {},
 ) {
   const updates: RecordedUpdate[] = [];
@@ -43,12 +44,21 @@ function recordingAdmin(
     get active() { return active; },
     rpc: (name: string, args: Record<string, unknown>) => {
       rpcs.push({ name, args });
-      if (!overrides.rpcError) { active = true; writeTick += 1; }
-      return Promise.resolve(
-        overrides.rpcError
-          ? { data: null, error: overrides.rpcError }
-          : { data: args.p_owner_number as string, error: null },
-      );
+      if (name === "activate_evolution_qr_account") {
+        if (!overrides.rpcError) { active = true; writeTick += 1; }
+        return Promise.resolve(
+          overrides.rpcError
+            ? { data: null, error: overrides.rpcError }
+            : { data: args.p_owner_number as string, error: null },
+        );
+      }
+      if (name === "clear_undelivered_store_events") {
+        return Promise.resolve({
+          data: null,
+          error: overrides.clearError ?? null,
+        });
+      }
+      return Promise.resolve({ data: null, error: null });
     },
     from: (table: string) => {
       if (table === "partner_webhooks") {
@@ -208,10 +218,10 @@ Deno.test("a linked session names the account from whichever identity source rep
       // in the same transaction that takes the number, so a rejected claim cannot leave a
       // live-looking account sitting on its pending_ placeholder.
       assertEquals(admin.updates[0].values, { platform_username: "Xsellpoint" });
-      assertEquals(admin.rpcs, [{
-        name: "activate_evolution_qr_account",
-        args: { p_account_id: "acc-1", p_owner_number: "96597950350" },
-      }]);
+      assertEquals(admin.rpcs.map((r) => r.name), [
+        "activate_evolution_qr_account",
+        "clear_undelivered_store_events",
+      ]);
     });
   }
 });
@@ -260,7 +270,8 @@ Deno.test("a reconnect from a DIFFERENT number keeps the stored id but flags the
   });
   // The number itself is deliberately NOT changed, so no identity claim is attempted.
   assertEquals(admin.updates[0].values.platform_user_id, undefined);
-  assertEquals(admin.rpcs, []);
+  assertEquals(admin.rpcs.map((r) => r.name), ["clear_undelivered_store_events"]);
+  assertEquals(admin.rpcs[0]?.args, { p_account_id: "acc-2" });
 });
 
 Deno.test("a rejected write is surfaced instead of being swallowed", async (t) => {
@@ -347,3 +358,40 @@ Deno.test("activation reports the number it stored so callers stop using the pla
     });
   }
 });
+
+Deno.test("close->open on an established row calls clear once", async () => {
+  const admin = recordingAdmin();
+  const connected = { id: "acc-2", platform_user_id: "96597950350" };
+  await syncEvolutionAccountConnection(admin, connected, "open", { ownerJid: "96597950350@s.whatsapp.net" });
+  const clearCalls = admin.rpcs.filter((r) => r.name === "clear_undelivered_store_events");
+  assertEquals(clearCalls.length, 1);
+  assertEquals(clearCalls[0].args, { p_account_id: "acc-2" });
+});
+
+Deno.test("claim path calls clear once after the claim RPC", async () => {
+  const admin = recordingAdmin();
+  await syncEvolutionAccountConnection(admin, PENDING, "open", { ownerJid: "96597950350@s.whatsapp.net" });
+  assertEquals(admin.rpcs.map((r) => r.name), [
+    "activate_evolution_qr_account",
+    "clear_undelivered_store_events",
+  ]);
+  const clearCall = admin.rpcs.find((r) => r.name === "clear_undelivered_store_events");
+  assertEquals(clearCall?.args, { p_account_id: "acc-1" });
+});
+
+Deno.test("clear error does not reject", async () => {
+  const admin = recordingAdmin(null, { clearError: { message: "clear failed" } });
+  const connected = { id: "acc-2", platform_user_id: "96597950350" };
+  const result = await syncEvolutionAccountConnection(admin, connected, "open", { ownerJid: "96597950350@s.whatsapp.net" });
+  assertEquals(result, "96597950350");
+  assertEquals(admin.active, true);
+});
+
+Deno.test("open->close does not call clear", async () => {
+  const admin = recordingAdmin(null, { active: true });
+  const connected = { id: "acc-2", platform_user_id: "96597950350" };
+  await syncEvolutionAccountConnection(admin, connected, "close", null);
+  const clearCalls = admin.rpcs.filter((r) => r.name === "clear_undelivered_store_events");
+  assertEquals(clearCalls, []);
+});
+

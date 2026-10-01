@@ -19,6 +19,11 @@ interface RecordedUpdate {
   filters: Array<[string, unknown]>;
 }
 
+interface RecordedRpc {
+  name: string;
+  args: Record<string, unknown>;
+}
+
 // Stands in for the Supabase client the way evolutionQrAccount.test.ts does: the
 // assertions are on the rows the teardown would write, not on how it called the
 // client. `updateError` makes the write for one table fail, for the propagation case.
@@ -26,10 +31,16 @@ function recordingAdmin(
   options: {
     instanceRow?: { instance_name: string } | null;
     updateError?: { table: string; error: unknown };
+    rpcError?: unknown;
   } = {},
 ) {
   const updates: RecordedUpdate[] = [];
+  const rpcs: RecordedRpc[] = [];
   const admin = {
+    rpc(name: string, args: Record<string, unknown>) {
+      rpcs.push({ name, args });
+      return Promise.resolve({ data: null, error: options.rpcError ?? null });
+    },
     from(table: string) {
       return {
         select(_columns: string) {
@@ -69,7 +80,7 @@ function recordingAdmin(
       };
     },
   };
-  return { updates, admin: admin as unknown as WhatsAppDisconnectAdmin };
+  return { updates, rpcs, admin: admin as unknown as WhatsAppDisconnectAdmin };
 }
 
 function evolutionRecorder(
@@ -327,7 +338,7 @@ Deno.test("reconnect resubscribes the WABA webhook and reactivates the account",
   // The state this exists for: a healthy, already-onboarded coexistence number
   // that the product disconnected. Embedded Signup lists numbers available to
   // ONBOARD, so it never shows this one and the operator has no way back.
-  const { updates, admin } = recordingAdmin();
+  const { updates, admin, rpcs } = recordingAdmin();
   const graphCalls: Array<{ url: string; method?: string; authorization?: string }> = [];
 
   const result = await reconnectWhatsAppAccount(
@@ -351,7 +362,34 @@ Deno.test("reconnect resubscribes the WABA webhook and reactivates the account",
     values: { is_active: true },
     filters: [["id", "acc-9"], ["workspace_id", "ws-9"]],
   });
+  assertEquals(rpcs, [{
+    name: "clear_undelivered_store_events",
+    args: { p_account_id: "acc-9" },
+  }]);
   assertEquals(result, { deactivated: false, evolution: "skipped", graph: "ok", warnings: [] });
+});
+
+Deno.test("reconnect succeeds even when clear_undelivered_store_events RPC fails", async () => {
+  const { updates, admin, rpcs } = recordingAdmin({ rpcError: new Error("rpc failed") });
+
+  const result = await reconnectWhatsAppAccount(
+    {
+      accountId: "acc-9",
+      workspaceId: "ws-9",
+      connectionMode: "coexistence",
+      wabaId: "waba-9",
+      accessToken: "token-9",
+    },
+    { admin, fetcher: graphRecorder([]) },
+  );
+
+  assertEquals(result.deactivated, false);
+  assertEquals(rpcs.length, 1);
+  assertEquals(rpcs[0], {
+    name: "clear_undelivered_store_events",
+    args: { p_account_id: "acc-9" },
+  });
+  assertEquals(deactivationOf(updates)?.values, { is_active: true });
 });
 
 Deno.test("reconnect leaves the account disconnected when the resubscribe fails", async () => {

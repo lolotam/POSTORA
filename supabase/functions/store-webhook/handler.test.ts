@@ -24,14 +24,17 @@ type TestDeps = StoreWebhookDeps & {
   inserted: Array<Record<string, unknown>>;
   ignored: string[];
   heartbeats: string[];
+  undeliveredNotes: string[];
 };
 
 function deps(extra: Partial<StoreWebhookDeps> = {}): TestDeps {
   const inserted: Array<Record<string, unknown>> = [];
+  const undeliveredNotes: string[] = [];
   const base: TestDeps = {
     connectorChecks: 0,
     inserted,
     heartbeats: [],
+    undeliveredNotes,
     limitIp: async () => ({ allowed: true }),
     limitConnector: async () => { base.connectorChecks += 1; return { allowed: true }; },
     loadBinding: async () => ({ id: BINDING_ID, user_id: "user-1", social_account_id: "acc-1", connector_id: "con-1" }),
@@ -41,6 +44,8 @@ function deps(extra: Partial<StoreWebhookDeps> = {}): TestDeps {
     insertEvents: async (rows) => { inserted.push(...rows); return { ok: true, stored: rows.length }; },
     logIgnored: async (entry) => { base.ignored.push(entry.reason); },
     recordDelivery: async (binding) => { base.heartbeats.push(binding.connector_id); },
+    accountConnected: async (_socialAccountId: string) => true,
+    noteUndelivered: async (socialAccountId: string) => { undeliveredNotes.push(socialAccountId); },
     ignored: [],
     now: () => NOW,
   };
@@ -479,3 +484,48 @@ Deno.test("a failed heartbeat does not fail the delivery", async () => {
   assertEquals(response.status, 200);
   assertEquals(gate.inserted.length, 1);
 });
+Deno.test("stored order for connected account returns ok without warning and does not note undelivered", async () => {
+  const gate = accepting({
+    accountConnected: async () => true,
+  });
+  const response = await handleStoreWebhook(jsonPost(ORDER, await mac(SECRET, ORDER)), gate);
+  assertEquals(response.status, 200);
+  const body = await response.json();
+  assertEquals(body, { ok: true, stored: 1 });
+  assertEquals("warning" in body, false);
+  assertEquals(gate.undeliveredNotes, []);
+});
+
+Deno.test("stored order for disconnected account warns and notes undelivered once with binding account id", async () => {
+  const gate = accepting({
+    accountConnected: async () => false,
+  });
+  const response = await handleStoreWebhook(jsonPost(ORDER, await mac(SECRET, ORDER)), gate);
+  assertEquals(response.status, 200);
+  assertEquals(await response.json(), { ok: true, stored: 1, warning: "account_disconnected" });
+  assertEquals(gate.inserted.length, 1);
+  assertEquals(gate.undeliveredNotes, ["acc-1"]);
+});
+
+Deno.test("stored order when accountConnected throws returns 200 with account_state_unknown warning and does not note undelivered", async () => {
+  const gate = accepting({
+    accountConnected: async () => { throw new Error("database unavailable"); },
+  });
+  const response = await handleStoreWebhook(jsonPost(ORDER, await mac(SECRET, ORDER)), gate);
+  assertEquals(response.status, 200);
+  assertEquals(await response.json(), { ok: true, stored: 1, warning: "account_state_unknown" });
+  assertEquals(gate.inserted.length, 1);
+  assertEquals(gate.undeliveredNotes, []);
+});
+
+Deno.test("stored order when accountConnected is false and noteUndelivered throws returns 200 with account_disconnected warning", async () => {
+  const gate = accepting({
+    accountConnected: async () => false,
+    noteUndelivered: async () => { throw new Error("database unavailable"); },
+  });
+  const response = await handleStoreWebhook(jsonPost(ORDER, await mac(SECRET, ORDER)), gate);
+  assertEquals(response.status, 200);
+  assertEquals(await response.json(), { ok: true, stored: 1, warning: "account_disconnected" });
+  assertEquals(gate.inserted.length, 1);
+});
+

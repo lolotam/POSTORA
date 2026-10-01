@@ -59,6 +59,10 @@ export interface StoreWebhookDeps {
   recordDelivery(binding: StoreBinding): Promise<void>;
   /** Best-effort record of a delivery that could have started a flow but did not. */
   logIgnored(entry: { binding: StoreBinding; topic: string | null; reason: string; externalId: string | null }): Promise<void>;
+  /** False when the bound WhatsApp account is inactive or retired. A thrown read counts as unknown. */
+  accountConnected(socialAccountId: string): Promise<boolean>;
+  /** Raises the owner's disconnected-account alert. Best effort. */
+  noteUndelivered(socialAccountId: string): Promise<void>;
   now(): Date;
 }
 
@@ -166,6 +170,14 @@ export async function handleStoreWebhook(req: Request, deps: StoreWebhookDeps): 
   }));
   const inserted = await deps.insertEvents(rows);
   if (!inserted.ok) return json({ error: "store_failed" }, 500);
+  if (inserted.stored > 0) {
+    const state = await accountState(deps, binding.social_account_id);
+    if (state === "disconnected") {
+      await noteUndeliveredSafely(deps, binding.social_account_id);
+      return json({ ok: true, stored: inserted.stored, warning: "account_disconnected" });
+    }
+    if (state === "unknown") return json({ ok: true, stored: inserted.stored, warning: "account_state_unknown" });
+  }
   return json({ ok: true, stored: inserted.stored });
 }
 
@@ -174,6 +186,23 @@ async function recordDeliverySafely(deps: StoreWebhookDeps, binding: StoreBindin
     await deps.recordDelivery(binding);
   } catch {
     console.error("[store-webhook] delivery heartbeat failed");
+  }
+}
+
+async function accountState(deps: StoreWebhookDeps, accountId: string): Promise<"connected" | "disconnected" | "unknown"> {
+  try {
+    return (await deps.accountConnected(accountId)) ? "connected" : "disconnected";
+  } catch {
+    console.error("[store-webhook] account state read failed");
+    return "unknown";
+  }
+}
+
+async function noteUndeliveredSafely(deps: StoreWebhookDeps, accountId: string): Promise<void> {
+  try {
+    await deps.noteUndelivered(accountId);
+  } catch {
+    console.error("[store-webhook] undelivered flag failed");
   }
 }
 

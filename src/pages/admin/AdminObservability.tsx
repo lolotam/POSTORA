@@ -113,7 +113,7 @@ interface EdgeFunctionMetric {
 }
 
 const TRIGGER_TYPES = [
-  { value: "error_rate", label: "Error Rate (%)", icon: AlertTriangle, description: "Alert when error percentage exceeds threshold" },
+  { value: "error_rate", label: "Error Rate (%)", icon: AlertTriangle, description: "Alert when error percentage exceeds threshold (needs 20+ logs in the window)" },
   { value: "response_time", label: "Response Time (ms)", icon: Timer, description: "Alert when average response time exceeds threshold" },
   { value: "function_failure", label: "Function Failure", icon: XCircle, description: "Alert when edge functions fail" },
   { value: "health_score", label: "Health Score", icon: Heart, description: "Alert when health score drops below threshold" },

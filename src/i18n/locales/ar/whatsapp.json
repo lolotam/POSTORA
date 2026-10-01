@@ -308,6 +308,7 @@
     "disconnectContinue": "افصل وكمل",
     "disconnectDesc": "<strong>{{name}}</strong> هيتوقف عن المزامنة مع Postora.",
     "disconnectHint": "تطبيق WhatsApp Business على الموبايل هيفضل شغال عادي. تقدر تعيد الربط في أي وقت عن طريق Coexistence.",
+    "disconnectKeepsSetup": "كل ده هيفضل على الحساب ده. تقدر تعيد ربطه بعدين، أو تنقله لاتصال جديد.",
     "disconnectedMeta": "اتفصل. الرقم لسه مسجّل عند Meta — أعد الربط عشان ترجّع الرسائل.",
     "eligibilityCheck": "فحص أهلية من Meta",
     "eligibilityRequired": "مطلوب",
@@ -394,6 +395,106 @@
     "pending": "pending",
     "sending": "sending",
     "sent": "sent"
+  },
+  "summary": {
+    "agent_config": "إعدادات وكيل الذكاء الاصطناعي",
+    "automation_handlers": "إعدادات الأتمتة",
+    "connectors": {
+      "zero": "لا موصلات",
+      "one": "موصل واحد",
+      "two": "موصلان",
+      "few": "{{count}} موصلات",
+      "many": "{{count}} موصلًا",
+      "other": "{{count}} موصل"
+    },
+    "connector_links": {
+      "zero": "لا موصلات مرتبطة",
+      "one": "موصل مرتبط واحد",
+      "two": "موصلان مرتبطان",
+      "few": "{{count}} موصلات مرتبطة",
+      "many": "{{count}} موصلًا مرتبطًا",
+      "other": "{{count}} موصل مرتبط"
+    },
+    "store_bindings": {
+      "zero": "لا ويب هوكات متجر",
+      "one": "ويب هوك متجر واحد",
+      "two": "ويب هوك متجران",
+      "few": "{{count}} ويب هوكات متجر",
+      "many": "{{count}} ويب هوك متجرًا",
+      "other": "{{count}} ويب هوك متجر"
+    },
+    "knowledge_sources": {
+      "zero": "لا مصادر معرفة",
+      "one": "مصدر معرفة واحد",
+      "two": "مصدرا معرفة",
+      "few": "{{count}} مصادر معرفة",
+      "many": "{{count}} مصدر معرفة",
+      "other": "{{count}} مصدر معرفة"
+    },
+    "test_cases": {
+      "zero": "لا حالات اختبار",
+      "one": "حالة اختبار واحدة",
+      "two": "حالتا اختبار",
+      "few": "{{count}} حالات اختبار",
+      "many": "{{count}} حالة اختبار",
+      "other": "{{count}} حالة اختبار"
+    },
+    "waitlist": {
+      "zero": "لا عملاء في قائمة الانتظار",
+      "one": "عميل واحد في قائمة الانتظار",
+      "two": "عميلان في قائمة الانتظار",
+      "few": "{{count}} عملاء في قائمة الانتظار",
+      "many": "{{count}} عميلًا في قائمة الانتظار",
+      "other": "{{count}} عميل في قائمة الانتظار"
+    },
+    "templates": {
+      "zero": "لا قوالب رسائل",
+      "one": "قالب رسالة واحد",
+      "two": "قالبا رسالة",
+      "few": "{{count}} قوالب رسائل",
+      "many": "{{count}} قالب رسالة",
+      "other": "{{count}} قالب رسالة"
+    },
+    "partner_keys_primary": {
+      "zero": "لا مفاتيح API للشركاء",
+      "one": "مفتاح API واحد للشركاء",
+      "two": "مفتاحا API للشركاء",
+      "few": "{{count}} مفاتيح API للشركاء",
+      "many": "{{count}} مفتاح API للشركاء",
+      "other": "{{count}} مفتاح API للشركاء"
+    },
+    "partner_key_links": {
+      "zero": "لا مفاتيح شركاء مرتبطة",
+      "one": "مفتاح شركاء مرتبط واحد",
+      "two": "مفتاحا شركاء مرتبطان",
+      "few": "{{count}} مفاتيح شركاء مرتبطة",
+      "many": "{{count}} مفتاح شركاء مرتبطًا",
+      "other": "{{count}} مفتاح شركاء مرتبط"
+    },
+    "partner_webhooks": {
+      "zero": "لا ويب هوكات شركاء",
+      "one": "ويب هوك شركاء واحد",
+      "two": "ويب هوكا شركاء",
+      "few": "{{count}} ويب هوكات شركاء",
+      "many": "{{count}} ويب هوك شركاء",
+      "other": "{{count}} ويب هوك شركاء"
+    },
+    "n8n_subscriptions": {
+      "zero": "لا أتمتة n8n",
+      "one": "أتمتة n8n واحدة",
+      "two": "أتمتتا n8n",
+      "few": "{{count}} أتمتات n8n",
+      "many": "{{count}} أتمتة n8n",
+      "other": "{{count}} أتمتة n8n"
+    },
+    "scheduled_messages": {
+      "zero": "لا رسائل مجدولة",
+      "one": "رسالة مجدولة واحدة",
+      "two": "رسالتان مجدولتان",
+      "few": "{{count}} رسائل مجدولة",
+      "many": "{{count}} رسالة مجدولة",
+      "other": "{{count}} رسالة مجدولة"
+    }
   },
   "team": {
     "activeConversations": "{{count}} محادثة نشطة",

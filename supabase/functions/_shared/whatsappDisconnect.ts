@@ -2,6 +2,7 @@
 // product's only disconnect path (whatsapp-oauth) spoke solely to the Meta Graph
 // API, so an Evolution QR account was deactivated in Postora while its Baileys
 // session stayed linked and kept receiving (and auto-replying to) messages.
+import { clearUndeliveredSafely } from "./evolutionQrAccount.ts";
 import type { EvolutionApi } from "./evolutionApi.ts";
 
 const GRAPH_API = "https://graph.facebook.com/v22.0";
@@ -205,6 +206,15 @@ export async function reconnectWhatsAppAccount(
       .eq("id", input.accountId);
   const { error: reactivateError } = await reactivation;
   if (reactivateError) throw reactivateError;
+
+  // The reconnect already succeeded, so a held store-order flag can now be released.
+  // Best effort: this module's admin contract predates rpc, and a failed clear must
+  // never turn a completed reconnect into an error for the user.
+  try {
+    await clearUndeliveredSafely(deps.admin, input.accountId);
+  } catch {
+    console.error(`[whatsapp-disconnect] account ${input.accountId}: undelivered flag clear failed`);
+  }
 
   return { deactivated: false, evolution: "skipped", graph, warnings };
 }

@@ -3,6 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { WebhookManager } from "@/components/messaging/WebhookManager";
 import { WhatsAppDiagnostics } from "@/components/messaging/WhatsAppDiagnostics";
 import { WhatsAppSetup } from "@/components/messaging/WhatsAppSetup";
+import { UndeliveredStoreOrdersBanner } from "@/components/dashboard/UndeliveredStoreOrdersBanner";
 import { WhatsAppPageHeader } from "@/components/whatsapp/WhatsAppPageHeader";
 import { Card, CardContent } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -49,6 +50,7 @@ export default function Setup() {
         </TabsList>
 
         <TabsContent value="connect" className="space-y-6">
+          <UndeliveredStoreOrdersBanner />
           <WhatsAppSetup connectedAccounts={whatsappAccounts} />
         </TabsContent>
 

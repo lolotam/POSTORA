@@ -130,6 +130,7 @@ SUITES=(
   media_retention.sql
   media_upload_quota.sql
   tiktok_review_lifecycle.sql
+  whatsapp_account_continuity.sql
   store_webhook_silence.sql
 )
 # These fixtures build their own focused schema and apply the migration under
