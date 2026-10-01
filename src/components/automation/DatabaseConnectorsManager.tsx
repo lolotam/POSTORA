@@ -2543,6 +2543,9 @@ function DatabaseConnectorsEditor({
 
                   {/* Toggles */}
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                    {/* Same rule as the badge above: only a native adapter reads read_only_mode, so the
+                        switch would promise Composio and custom connectors a guard they do not have. */}
+                    {shouldUseAdapter({ connector_type: form.connector_type }) && (
                     <div className="flex items-center justify-between p-2.5 rounded-xl border border-border/60 bg-muted/10">
                       <div className="space-y-0.5">
                         <Label className="text-xs font-medium">{t("form.readOnlyGuard", "Read-Only Guard")}</Label>
@@ -2558,6 +2561,7 @@ function DatabaseConnectorsEditor({
                         onCheckedChange={(c) => setForm({ ...form, read_only_mode: c })}
                       />
                     </div>
+                    )}
 
                     <div className="flex items-center justify-between p-2.5 rounded-xl border border-border/60 bg-muted/10">
                       <div className="space-y-0.5">

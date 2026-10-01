@@ -185,6 +185,14 @@ describe("the tool form for a Composio connector", () => {
     expect(payload.connection_id).toBe("conn-sheets");
   });
 
+  // read_only_mode is enforced only by the native adapters; a Composio call never reads it,
+  // so a switch here would claim a protection the connector does not have (#239).
+  it("does not offer the Read-Only Guard switch", async () => {
+    await openComposioForm();
+    await screen.findByLabelText("Connection");
+    expect(screen.queryByText("Read-Only Guard")).not.toBeInTheDocument();
+  });
+
   it("refuses to save a Composio tool with no connection chosen", async () => {
     await openComposioForm();
     await screen.findByLabelText("Connection");

@@ -154,6 +154,13 @@ describe("registry-driven credential fields", () => {
     expect(screen.queryByLabelText(/API Endpoint/i)).not.toBeInTheDocument();
   });
 
+  it("offers the Read-Only Guard switch for a native adapter that enforces it", () => {
+    tools = [WOO];
+    renderManager();
+    openEdit("woo_store");
+    expect(screen.getByText("Read-Only Guard")).toBeInTheDocument();
+  });
+
   it("renders every registry field for supabase, paging settings included", () => {
     tools = [SUPA];
     renderManager();
