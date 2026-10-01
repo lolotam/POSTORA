@@ -37,20 +37,26 @@ const LATIN_CHAR_RE = /[A-Za-z]/g;
  * A detected language is better evidence than a character tally either way.
  *
  * A message with no letters at all -- a "5" answering the review opener's 1-5 rating, an
- * emoji, an order number -- says nothing about language, so the newest earlier turn that
- * does decides. `earlierTurns` is newest first.
+ * emoji, an order number -- says nothing about language, so the thread decides:
+ * - `flowLanguage`, when a store-event flow is active: the language its opener was sent in,
+ *   by the same rule the worker used. Counting the rendered opener misreads it whenever the
+ *   interpolated product or customer name outweighs the fixed Arabic text.
+ * - otherwise the newest earlier turn with letters (`earlierTurns`, newest first).
  */
 export function detectReplyLanguage(
   inboundText: string,
   languageMode: LanguageMode,
   hint?: string | null,
-  earlierTurns: string[] = [],
+  thread: { flowLanguage?: ReplyLanguage | null; earlierTurns?: string[] } = {},
 ): ReplyLanguage {
   if (languageMode === "ar" || languageMode === "en") return languageMode;
   const normalized = (hint ?? "").trim().toLowerCase();
   if (normalized.startsWith("ar")) return "ar";
   if (normalized.startsWith("en")) return "en";
-  for (const text of [inboundText, ...earlierTurns]) {
+  const typed = letterLanguage(inboundText);
+  if (typed) return typed;
+  if (thread.flowLanguage) return thread.flowLanguage;
+  for (const text of thread.earlierTurns ?? []) {
     const language = letterLanguage(text);
     if (language) return language;
   }

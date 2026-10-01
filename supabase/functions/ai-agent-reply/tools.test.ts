@@ -308,13 +308,24 @@ Deno.test("a detected language beats character counting", async () => {
 Deno.test("a message with no letters takes the newest earlier turn's language", async () => {
   const { detectReplyLanguage } = await import("./logic.ts");
   const arabicOpener = "قيّم تجربتك من 1 إلى 5";
-  assertEquals(detectReplyLanguage("5", "auto", null, [arabicOpener]), "ar");
-  assertEquals(detectReplyLanguage("👍", "auto", null, ["🙏", arabicOpener, "Hello"]), "ar");
-  assertEquals(detectReplyLanguage("#82935", "auto", null, ["Hello there"]), "en");
+  assertEquals(detectReplyLanguage("5", "auto", null, { earlierTurns: [arabicOpener] }), "ar");
+  assertEquals(detectReplyLanguage("👍", "auto", null, { earlierTurns: ["🙏", arabicOpener, "Hello"] }), "ar");
+  assertEquals(detectReplyLanguage("#82935", "auto", null, { earlierTurns: ["Hello there"] }), "en");
   // Letters in the new message still win over the thread.
-  assertEquals(detectReplyLanguage("Thank you", "auto", null, [arabicOpener]), "en");
+  assertEquals(detectReplyLanguage("Thank you", "auto", null, { earlierTurns: [arabicOpener] }), "en");
   // Nothing anywhere keeps the English default.
-  assertEquals(detectReplyLanguage("5", "auto", null, []), "en");
+  assertEquals(detectReplyLanguage("5", "auto", null), "en");
+});
+
+// An Arabic back-in-stock opener whose product name is long Latin text has a Latin majority
+// once rendered; the flow's own language must decide, not a recount (#256 review).
+Deno.test("an active store flow's opener language beats a recount of the rendered opener", async () => {
+  const { detectReplyLanguage } = await import("./logic.ts");
+  const rendered = "مرحباً Sarah، Apple iPhone 17 Pro Max 256GB Cosmic Orange رجع للمخزون. تحب نكمّل الطلب؟";
+  assertEquals(detectReplyLanguage("👍", "auto", null, { earlierTurns: [rendered] }), "en", "a recount alone gets this wrong");
+  assertEquals(detectReplyLanguage("👍", "auto", null, { flowLanguage: "ar", earlierTurns: [rendered] }), "ar");
+  // Typed letters still win over the flow.
+  assertEquals(detectReplyLanguage("ok thanks", "auto", null, { flowLanguage: "ar" }), "en");
 });
 
 Deno.test("a forced language is stated as an override and repeated last", async () => {

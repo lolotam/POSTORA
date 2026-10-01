@@ -87,6 +87,7 @@ import { runTriage, selectConnectorTools, TRIAGE_SETTING_KEYS, triageChainFromSe
 import { resolveProviderKey } from "../_shared/providerKeys.ts";
 import { enabledProcedures, readProcedureConfig } from "../_shared/procedures/config.ts";
 import { expireIfStale, isLivePendingOpener } from "../_shared/procedures/engine.ts";
+import { openerLanguage } from "../_shared/procedures/openers.ts";
 import {
   boundWaitlistSightings,
   createProcedureTurn,
@@ -1027,12 +1028,10 @@ Deno.serve(async (req) => {
       ? actAsAdmin
       : request.platform === "whatsapp" && adminNumbers.includes(waRecipient(request.recipient_phone));
 
-    language = detectReplyLanguage(
-      request.inbound_text,
-      config.language_mode,
-      request.language_hint,
-      history.map((turn) => turn.content).reverse(),
-    );
+    language = detectReplyLanguage(request.inbound_text, config.language_mode, request.language_hint, {
+      flowLanguage: initialProcedureState?.origin === "event" ? openerLanguage(config.language_mode) : null,
+      earlierTurns: history.map((turn) => turn.content).reverse(),
+    });
     // Resolved on first use rather than up front. buildAdminNotifier throws when the user has
     // no connected WhatsApp account, and awaiting it here made that throw abort the entire
     // reply -- so a Facebook, Instagram or Threads user without WhatsApp got no answer at all,
