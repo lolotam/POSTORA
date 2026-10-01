@@ -1,7 +1,7 @@
 // Workspace-scoped registration and Direct QR pairing. The browser bridge is
 // deliberately not repointed yet; its extraction/parity test is Task 8b.
 import type { WhatsAppNumberContext } from "./whatsappNumberOps.ts";
-import { normalizeConnectionName, syncEvolutionAccountConnection } from "./evolutionQrAccount.ts";
+import { normalizeConnectionName, syncEvolutionAccountConnection, NumberMismatchError } from "./evolutionQrAccount.ts";
 import { createEvolutionApi, EvolutionApiError, type EvolutionApi } from "./evolutionApi.ts";
 import { WhatsAppOpError } from "./whatsappPartnerOps.ts";
 import { disconnectWhatsAppAccount, type WhatsAppDisconnectDeps } from "./whatsappDisconnect.ts";
@@ -98,7 +98,9 @@ interface PairingInstance {
   last_qr: string | null;
 }
 
-type PairingApi = Pick<EvolutionApi, "createInstance" | "connect" | "connectionState" | "fetchInstance">;
+// logout is part of the pairing contract since the mismatch flow: a refused phone has its
+// remote session killed, and this module owns that call for the partner path.
+type PairingApi = Pick<EvolutionApi, "createInstance" | "connect" | "connectionState" | "fetchInstance" | "logout">;
 interface PairingDependencies { api?: PairingApi; webhookBaseUrl?: string }
 
 function configuredPairingApi(deps: PairingDependencies): PairingApi {
@@ -247,15 +249,25 @@ export async function pairingStatus(
   const state = extractState(await api.connectionState(instance.instance_name));
   if (!state) throw new WhatsAppOpError("Invalid pairing status response", "internal_error", 502);
   await savePairing(ctx, accountId, { last_connection_state: state });
-  const ownerNumber = await reconcileAccountConnection(ctx, api, { account, instanceName: instance.instance_name, state });
-  return { account_id: accountId, state,
-    phone_number: ownerNumber.startsWith("pending_") ? null : ownerNumber };
+  const result = await reconcileAccountConnection(ctx, api, { account, instanceName: instance.instance_name, state });
+  return {
+    account_id: accountId,
+    // A refused phone never reports "open": the pairing is blocked until the right
+    // phone scans, and the status says so instead of a state the UI would celebrate.
+    state: result.mismatch ? "number_mismatch" : state,
+    phone_number: result.mismatch || result.ownerNumber.startsWith("pending_") ? null : result.ownerNumber,
+  };
+}
+
+interface ReconcileResult {
+  ownerNumber: string;
+  mismatch: boolean;
 }
 
 async function reconcileAccountConnection(
   ctx: WhatsAppNumberContext, api: PairingApi,
   input: { account: PairingAccount; instanceName: string; state: string },
-): Promise<string> {
+): Promise<ReconcileResult> {
   const { account, instanceName, state } = input;
   // Keep all reads/metadata merges/writes in the existing reconciler scoped to
   // this workspace too. No user identity crosses this application boundary.
@@ -272,11 +284,22 @@ async function reconcileAccountConnection(
     rpc: (name: string, args: Record<string, unknown>) => ctx.admin.rpc(name, args),
   };
   if (state === "open") {
-    if (account.is_active && !account.platform_user_id.startsWith("pending_")) return account.platform_user_id;
-    return await syncEvolutionAccountConnection(scopedAdmin, account, state, await api.fetchInstance(instanceName));
+    if (account.is_active && !account.platform_user_id.startsWith("pending_")) {
+      return { ownerNumber: account.platform_user_id, mismatch: false };
+    }
+    try {
+      const ownerNumber = await syncEvolutionAccountConnection(scopedAdmin, account, state, await api.fetchInstance(instanceName));
+      return { ownerNumber, mismatch: false };
+    } catch (error) {
+      if (!(error instanceof NumberMismatchError)) throw error;
+      // The stored number and the linked phone disagree: kill the remote session and
+      // report the block. The flag itself was persisted by the sync write.
+      await api.logout(instanceName).catch(() => undefined);
+      return { ownerNumber: account.platform_user_id, mismatch: true };
+    }
   }
   if (state === "close" && account.is_active) await syncEvolutionAccountConnection(scopedAdmin, account, state, null);
-  return account.platform_user_id;
+  return { ownerNumber: account.platform_user_id, mismatch: false };
 }
 
 export async function endSession(

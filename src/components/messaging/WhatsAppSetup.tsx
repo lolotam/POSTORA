@@ -50,6 +50,7 @@ import {
   useWhatsAppRequestSync,
 } from "@/hooks/useWhatsAppConnect";
 import { useReconnectableWhatsApp } from "@/hooks/useReconnectableWhatsApp";
+import { useReconnectableQrAccounts } from "@/hooks/useReconnectableQrAccounts";
 import { useUserRole } from "@/hooks/useUserRole";
 import { useFeatureFlags } from "@/hooks/useFeatureFlags";
 import { useWhatsAppTpStatus } from "@/hooks/useWhatsAppTpStatus";
@@ -75,6 +76,7 @@ export function WhatsAppSetup({ connectedAccounts }: WhatsAppSetupProps) {
   const disconnect = useWhatsAppDisconnect();
   const reconnect = useWhatsAppReconnect();
   const { data: reconnectable = [] } = useReconnectableWhatsApp();
+  const { data: reconnectableQr = [] } = useReconnectableQrAccounts();
   const requestSync = useWhatsAppRequestSync();
   const { isAdmin } = useUserRole();
   const { flags } = useFeatureFlags();
@@ -93,6 +95,7 @@ export function WhatsAppSetup({ connectedAccounts }: WhatsAppSetupProps) {
   const [switchTarget, setSwitchTarget] = useState<MessagingAccount | null>(null);
   const [disconnectTarget, setDisconnectTarget] = useState<MessagingAccount | null>(null);
   const [syncingAccountId, setSyncingAccountId] = useState<string | null>(null);
+  const [qrReconnectingId, setQrReconnectingId] = useState<string | null>(null);
   // Loaded while the dialog is open so the user sees what stays attached before
   // disconnecting — the reassurance that a disconnect is reversible.
   const disconnectSummary = useWhatsAppSetupSummary(disconnectTarget?.id ?? null);
@@ -154,6 +157,24 @@ export function WhatsAppSetup({ connectedAccounts }: WhatsAppSetupProps) {
       });
     } finally {
       setSyncingAccountId(null);
+    }
+  };
+
+  // Reconnect-in-place keeps the account row, so the AI agent setup and history attached
+  // to it survive; the scanner that mounts on success polls the same id.
+  const handleQrReconnect = async (accountId: string) => {
+    setQrReconnectingId(accountId);
+    try {
+      const { data, error } = await supabase.functions.invoke("whatsapp-evolution-bridge", {
+        body: { action: "reconnect_qr", social_account_id: accountId },
+      });
+      if (error || data?.error) {
+        toast({ title: t("setup.qrReconnectFailed", "Couldn't start the reconnect. Try again in a minute."), variant: "destructive" });
+        return;
+      }
+      setQrAccountId(accountId);
+    } finally {
+      setQrReconnectingId(null);
     }
   };
 
@@ -336,8 +357,9 @@ export function WhatsAppSetup({ connectedAccounts }: WhatsAppSetupProps) {
           )}
           {/* A disconnected Meta number is invisible everywhere else in the app,
               and Embedded Signup will not offer it back because it is already
-              onboarded. This is the only route back to it. */}
-          {reconnectable.length > 0 && (
+              onboarded. This is the only route back to it. A disconnected Direct QR
+              account has the same problem, but comes back through a QR scan instead. */}
+          {(reconnectable.length > 0 || reconnectableQr.length > 0) && (
             <div className="mt-4 space-y-2 border-t pt-4">
               <p className="text-xs font-medium text-muted-foreground">{t("setup.previouslyConnected", "Previously connected")}</p>
               {reconnectable.map((account) => (
@@ -371,6 +393,37 @@ export function WhatsAppSetup({ connectedAccounts }: WhatsAppSetupProps) {
                   </Button>
                 </div>
               ))}
+              {reconnectableQr.map((account) => (
+                <div
+                  key={account.id}
+                  className="flex items-center gap-3 p-3 rounded-lg border border-dashed bg-muted/20"
+                  data-testid="reconnectable-account"
+                >
+                  <Phone className="w-4 h-4 text-muted-foreground shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium truncate">
+                      {account.platform_username || account.platform_user_id}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {t("setup.qrDisconnectedHint", "Disconnected. Scan a new QR code with the same phone to restore it.")}
+                    </p>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={qrReconnectingId === account.id}
+                    onClick={() => void handleQrReconnect(account.id)}
+                    className="gap-1.5"
+                  >
+                    {qrReconnectingId === account.id ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <RefreshCw className="w-3.5 h-3.5" />
+                    )}
+                    {t("common:reconnect", "Reconnect")}
+                  </Button>
+                </div>
+              ))}
             </div>
           )}
         </CardContent>
@@ -383,6 +436,10 @@ export function WhatsAppSetup({ connectedAccounts }: WhatsAppSetupProps) {
             setQrAccountId(null);
             queryClient.invalidateQueries({ queryKey: ["social_accounts"] });
             queryClient.invalidateQueries({ queryKey: ["messaging_accounts"] });
+          }}
+          onConnectAsNew={() => {
+            setQrAccountId(null);
+            setQrNameOpen(true);
           }}
         />
       )}

@@ -10,34 +10,42 @@ import { toast } from "@/hooks/use-toast";
 interface WhatsAppQrScannerProps {
   socialAccountId: string;
   onComplete: () => void;
+  /** Offered on a number mismatch: abandon this connection and onboard a new one. */
+  onConnectAsNew?: () => void;
 }
 
 interface QrStatus {
   qr: string | null;
   state: string | null;
+  expectedLast4: string | null;
 }
 
 function qrImageSource(qr: string): string {
   return qr.startsWith("data:image/") ? qr : `data:image/png;base64,${qr}`;
 }
 
-export function WhatsAppQrScanner({ socialAccountId, onComplete }: WhatsAppQrScannerProps) {
+export function WhatsAppQrScanner({ socialAccountId, onComplete, onConnectAsNew }: WhatsAppQrScannerProps) {
   const { t } = useTranslation("whatsapp");
-  const [status, setStatus] = useState<QrStatus>({ qr: null, state: null });
+  const [status, setStatus] = useState<QrStatus>({ qr: null, state: null, expectedLast4: null });
   const [secondsLeft, setSecondsLeft] = useState(45);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isReconnecting, setIsReconnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const completionReported = useRef(false);
+  // Once a mismatch is seen, a later "open" (a settling session, a stray webhook) must
+  // not report completion while the owner is being asked which phone this is.
+  const mismatchSeen = useRef(false);
 
   const pollStatus = useCallback(async (refreshQr = false) => {
     const { data, error: invokeError } = await supabase.functions.invoke("whatsapp-evolution-bridge", {
       body: { action: "get_qr_status", social_account_id: socialAccountId, refresh_qr: refreshQr },
     });
     if (invokeError || data?.error) throw new Error(invokeError?.message || data?.error || t("qr.statusFallback", "Unable to read QR status"));
-    const nextStatus = { qr: data.qr || null, state: data.state || null };
+    const nextStatus = { qr: data.qr || null, state: data.state || null, expectedLast4: data.expected_last4 || null };
     setStatus(nextStatus);
     setError(null);
-    if (nextStatus.state === "open" && !completionReported.current) {
+    if (nextStatus.state === "number_mismatch") mismatchSeen.current = true;
+    if (nextStatus.state === "open" && !mismatchSeen.current && !completionReported.current) {
       completionReported.current = true;
       window.setTimeout(onComplete, 1500);
     }
@@ -68,6 +76,49 @@ export function WhatsAppQrScanner({ socialAccountId, onComplete }: WhatsAppQrSca
       setIsRefreshing(false);
     }
   };
+
+  // The owner chose to scan the right phone: restart the same connection's QR flow.
+  const restartScan = async () => {
+    setIsReconnecting(true);
+    try {
+      const { data, error: invokeError } = await supabase.functions.invoke("whatsapp-evolution-bridge", {
+        body: { action: "reconnect_qr", social_account_id: socialAccountId },
+      });
+      if (invokeError || data?.error) {
+        throw new Error(invokeError?.message || data?.error || t("qr.refreshFailedFallback", "Unable to refresh QR code"));
+      }
+      mismatchSeen.current = false;
+      setStatus({ qr: data.qr || null, state: data.state || null, expectedLast4: null });
+      setSecondsLeft(45);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : t("qr.refreshFailedFallback", "Unable to refresh QR code");
+      setError(message);
+      toast({ title: t("qr.refreshFailed", "QR refresh failed"), description: message, variant: "destructive" });
+    } finally {
+      setIsReconnecting(false);
+    }
+  };
+
+  if (status.state === "number_mismatch") {
+    return (
+      <Card className="border-destructive/40">
+        <CardContent className="space-y-4 p-6">
+          <p className="text-sm font-medium text-destructive">
+            {t("qr.mismatch", "You scanned a different phone. This connection belongs to the number ending {{last4}}.", { last4: status.expectedLast4 ?? "" })}
+          </p>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <Button variant="outline" className="gap-2" onClick={() => void restartScan()} disabled={isReconnecting}>
+              {isReconnecting ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+              {t("qr.mismatchRescan", "Scan the right phone")}
+            </Button>
+            <Button variant="outline" onClick={() => onConnectAsNew?.()}>
+              {t("qr.mismatchConnectNew", "Connect as a new account")}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    );
+  }
 
   if (status.state === "open") {
     return (

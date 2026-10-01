@@ -10,6 +10,16 @@ export interface EvolutionQrAccount {
   platform_user_id: string;
 }
 
+// Thrown when a different phone was scanned onto an established connection. The row is
+// flagged and deactivated before this is raised, so callers treat it as a blocked state,
+// not a transient error.
+export class NumberMismatchError extends Error {
+  constructor(public readonly accountId: string) {
+    super("number_mismatch");
+    this.name = "NumberMismatchError";
+  }
+}
+
 // Evolution names the linked account differently per source: `wuid` on a
 // connection.update webhook, `ownerJid` on fetchInstances. Both carry the same
 // "<number>@s.whatsapp.net" form.
@@ -64,6 +74,7 @@ export interface OwnedEvolutionAccount extends EvolutionQrAccount {
   connection_mode: string | null;
   platform_username: string | null;
   is_active: boolean;
+  account_metadata: Record<string, unknown> | null;
 }
 
 export async function findOwnedEvolutionAccount(
@@ -73,7 +84,7 @@ export async function findOwnedEvolutionAccount(
 ): Promise<OwnedEvolutionAccount | null> {
   const { data, error } = await admin
     .from("social_accounts")
-    .select("id, user_id, workspace_id, platform, connection_mode, platform_user_id, platform_username, is_active")
+    .select("id, user_id, workspace_id, platform, connection_mode, platform_user_id, platform_username, is_active, account_metadata")
     .eq("id", socialAccountId)
     .eq("user_id", userId)
     .eq("platform", "whatsapp")
@@ -214,22 +225,31 @@ export async function syncEvolutionAccountConnection(
 
   // Re-pairing a different number leaves platform_user_id at the old value (the claim
   // below is gated on the pending_ placeholder), and a rename can mask that. Migration is
-  // out of scope, so the mismatch is detected and flagged for follow-up instead. The row
-  // still activates in this branch -- the stored number is a working connection, and held
-  // store orders resume with it; only the identity claim is blocked, because the later
-  // claim path would rewrite the number every existing conversation id was built from.
+  // out of scope, so the mismatch is refused outright: the row keeps the OLD identity but
+  // is deactivated and flagged number_mismatch, so the owner is sent to the reconnect
+  // screen instead of a session whose conversations would split across two identities.
+  // Activating here would put a live account on a number the linked phone does not own.
   if (ownerNumber && !isProvisional && ownerNumber !== account.platform_user_id) {
     // The numbers themselves stay out of the log: these are the end user's and their
     // contact's phone numbers, and a function log is not the place for them. The account
     // id identifies the row, and account_metadata.number_mismatch is the durable record
     // for anyone diagnosing it.
-    console.error(
-      `[evolution-qr] account ${account.id}: the linked number does not match the stored one; ` +
-        `conversations may be split across two identities`,
-    );
+    console.error(`[evolution-qr] account ${account.id}: a different phone was linked; activation refused`);
     // Read-modify-merge on the named key: account_metadata already carries the
     // connection mode and the consent trail, and replacing the object would erase them.
     metadata.number_mismatch = true;
+    const { error } = await admin.from("social_accounts")
+      .update({ account_metadata: metadata, is_active: false })
+      .eq("id", account.id);
+    if (error) throw error;
+    throw new NumberMismatchError(account.id);
+  }
+
+  // The reconnect flow clears the block by pairing the right phone again: the flag is
+  // removed in the same update that reactivates the row, so no poll can observe an
+  // active account that still carries it.
+  if (ownerNumber === account.platform_user_id && metadata.number_mismatch) {
+    delete metadata.number_mismatch;
     updates.account_metadata = metadata;
   }
 
