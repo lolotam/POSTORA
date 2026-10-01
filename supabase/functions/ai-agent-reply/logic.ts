@@ -76,6 +76,36 @@ export function storeFlowLanguage(openerLanguage: ReplyLanguage, customerReplies
   return openerLanguage;
 }
 
+/**
+ * The reply language for one turn of a thread. An active store-event flow holds the language
+ * its opener was sent in until the customer writes letters (`storeFlowLanguage`). Otherwise the
+ * newest earlier *customer* turn with letters decides: assistant replies are generated text, and
+ * the Latin product names and links in an Arabic answer would read as English.
+ * `storedTurns` is newest first (it bounds the flow by time); `windowTurns` is the oldest-first
+ * history the chat model sees.
+ */
+export function threadReplyLanguage(input: {
+  inboundText: string;
+  languageMode: LanguageMode;
+  hint?: string | null;
+  eventFlow: { startedAt: string; openerLanguage: ReplyLanguage } | null;
+  storedTurns: StoredTurn[];
+  windowTurns: Array<{ role: string; content: string }>;
+}): ReplyLanguage {
+  const flowStartedMs = input.eventFlow ? Date.parse(input.eventFlow.startedAt) : NaN;
+  return detectReplyLanguage(input.inboundText, input.languageMode, input.hint, {
+    flowLanguage: input.eventFlow && Number.isFinite(flowStartedMs)
+      ? storeFlowLanguage(
+        input.eventFlow.openerLanguage,
+        input.storedTurns
+          .filter((row) => row.role === "user" && Date.parse(row.created_at) >= flowStartedMs)
+          .map((row) => row.content || ""),
+      )
+      : null,
+    earlierTurns: input.windowTurns.filter((turn) => turn.role === "user").map((turn) => turn.content).reverse(),
+  });
+}
+
 /** The language a text's letters point to, or null when it has none. */
 function letterLanguage(text: string): ReplyLanguage | null {
   const arabicCount = (text.match(ARABIC_CHAR_RE) || []).length;

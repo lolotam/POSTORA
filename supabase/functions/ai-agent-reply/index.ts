@@ -14,8 +14,6 @@ import { resolveConversationOverride } from "../_shared/conversationModeOverride
 import {
   buildSystemPrompt,
   completionFailure,
-  detectReplyLanguage,
-  storeFlowLanguage,
   formatRelatedFacts,
   formatModelRef,
   type GraphRelationFact,
@@ -39,6 +37,7 @@ import {
   type ReplyLanguage,
   SIMILARITY_FLOOR,
   shouldAiReply,
+  threadReplyLanguage,
   triageSystemHint,
   waRecipient,
 } from "./logic.ts";
@@ -1029,17 +1028,19 @@ Deno.serve(async (req) => {
       ? actAsAdmin
       : request.platform === "whatsapp" && adminNumbers.includes(waRecipient(request.recipient_phone));
 
-    const flowStartedMs = initialProcedureState?.origin === "event" ? Date.parse(initialProcedureState.started_at) : NaN;
-    language = detectReplyLanguage(request.inbound_text, config.language_mode, request.language_hint, {
-      flowLanguage: Number.isFinite(flowStartedMs)
-        ? storeFlowLanguage(
-          openerLanguage(config.language_mode),
-          (historyRows || [])
-            .filter((row) => row.role === "user" && Date.parse(row.created_at) >= flowStartedMs)
-            .map((row) => row.content || ""),
-        )
+    language = threadReplyLanguage({
+      inboundText: request.inbound_text,
+      languageMode: config.language_mode,
+      hint: request.language_hint,
+      // A flow stored before opener_language existed falls back to the account setting.
+      eventFlow: initialProcedureState?.origin === "event"
+        ? {
+          startedAt: initialProcedureState.started_at,
+          openerLanguage: initialProcedureState.opener_language ?? openerLanguage(config.language_mode),
+        }
         : null,
-      earlierTurns: history.map((turn) => turn.content).reverse(),
+      storedTurns: historyRows || [],
+      windowTurns: history,
     });
     // Resolved on first use rather than up front. buildAdminNotifier throws when the user has
     // no connected WhatsApp account, and awaiting it here made that throw abort the entire

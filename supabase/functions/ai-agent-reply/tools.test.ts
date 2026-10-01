@@ -338,6 +338,37 @@ Deno.test("a store flow's language follows the customer's newest reply with lett
   assertEquals(storeFlowLanguage("en", ["تمام", "ok"]), "ar", "the newest reply with letters wins");
 });
 
+// Only customer turns decide a letterless message: an Arabic answer that names Latin products
+// or carries a link reads as English when its letters are counted (#256 review).
+Deno.test("a letterless message ignores the assistant's earlier replies", async () => {
+  const { threadReplyLanguage } = await import("./logic.ts");
+  const assistantReply = "تفضل: Apple iPhone 17 Pro Max 256GB https://shop.example.com/apple-iphone-17-pro-max";
+  const language = threadReplyLanguage({
+    inboundText: "👍",
+    languageMode: "auto",
+    eventFlow: null,
+    storedTurns: [],
+    windowTurns: [{ role: "user", content: "عندكم ايفون؟" }, { role: "assistant", content: assistantReply }],
+  });
+  assertEquals(language, "ar");
+});
+
+// An English opener sent under language_mode "en" stays English after the account moves to
+// auto, whose opener rule would now say Arabic (#256 review).
+Deno.test("an event flow uses the opener language it was given, not one derived later", async () => {
+  const { threadReplyLanguage } = await import("./logic.ts");
+  const startedAt = "2026-10-01T10:00:00.000Z";
+  const flow = (openerLanguage: "ar" | "en") => threadReplyLanguage({
+    inboundText: "5",
+    languageMode: "auto",
+    eventFlow: { startedAt, openerLanguage },
+    storedTurns: [{ role: "user", content: "مرحبا", created_at: "2026-10-01T09:00:00.000Z" }],
+    windowTurns: [{ role: "user", content: "مرحبا" }],
+  });
+  assertEquals(flow("en"), "en", "a customer turn from before the flow does not count");
+  assertEquals(flow("ar"), "ar");
+});
+
 Deno.test("a forced language is stated as an override and repeated last", async () => {
   const { buildSystemPrompt } = await import("./logic.ts");
   const prompt = buildSystemPrompt({

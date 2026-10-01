@@ -3,6 +3,7 @@ import {
   CLAIM_LEASE_MS, EVENT_STALE_AFTER_MS, OFF_SCRIPT_LIMIT, type ProcedureField, type ProcedureKey, type ProcedureOrigin,
   STALE_AFTER_MS, TEMPLATES,
 } from "./templates.ts";
+import type { OpenerLanguage } from "./openers.ts";
 
 export interface ProcedureState {
   run_id: string;
@@ -20,6 +21,11 @@ export interface ProcedureState {
   claimed_at?: string;
   /** Set by the store-event worker. pending_opener is not a live procedure yet. */
   phase?: "pending_opener" | "active";
+  /**
+   * Store-event flows only: the language the worker sent the opener in, fixed when the state is
+   * first written. The account's language setting can change during the flow's 72 hours.
+   */
+  opener_language?: OpenerLanguage;
 }
 
 /** Customers answer a business-started template late, so event flows live longer. */
@@ -148,5 +154,6 @@ function isStoredState(value: unknown): value is ProcedureState {
     (state.claimed_by === undefined || typeof state.claimed_by === "string") &&
     (state.claimed_at === undefined || typeof state.claimed_at === "string") &&
     (state.phase === undefined || state.phase === "pending_opener" || state.phase === "active") &&
+    (state.opener_language === undefined || state.opener_language === "ar" || state.opener_language === "en") &&
     (state.origin === undefined || state.origin === "jev" || state.origin === "model" || state.origin === "event");
 }
