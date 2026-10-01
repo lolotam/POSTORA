@@ -77,19 +77,39 @@ vi.mock("@/hooks/useWhatsAppSetupSummary", () => ({
 }));
 
 vi.mock("../WhatsAppQrScanner", () => ({
-  WhatsAppQrScanner: ({ socialAccountId }: { socialAccountId: string }) => (
+  WhatsAppQrScanner: ({
+    socialAccountId,
+    onComplete,
+    onConnectAsNew,
+  }: {
+    socialAccountId: string;
+    onComplete?: () => void;
+    onConnectAsNew?: () => void;
+  }) => (
     <div data-testid="qr-scanner" data-account-id={socialAccountId}>
       QR Scanner Mock
+      {onConnectAsNew && (
+        <button data-testid="mock-connect-as-new" onClick={onConnectAsNew}>
+          Connect As New Mock
+        </button>
+      )}
+      {onComplete && (
+        <button data-testid="mock-complete" onClick={onComplete}>
+          Complete Mock
+        </button>
+      )}
     </div>
   ),
 }));
 
+let currentQueryClient: QueryClient;
+
 function renderSetup() {
-  const queryClient = new QueryClient({
+  currentQueryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
   return render(
-    <QueryClientProvider client={queryClient}>
+    <QueryClientProvider client={currentQueryClient}>
       <MemoryRouter>
         <WhatsAppSetup connectedAccounts={[]} />
       </MemoryRouter>
@@ -146,11 +166,36 @@ describe("WhatsAppSetup QR reconnect", () => {
     });
   });
 
-  it("shows toast when reconnect fails with 502", async () => {
+  it("scanner mock renders button that calls onConnectAsNew: clicking it unmounts scanner and opens connection-name dialog", async () => {
     invoke.mockResolvedValue({
-      data: null,
-      error: { message: "Server error", status: 502 },
+      data: { success: true, social_account_id: "qr-acc-1", qr: "qr-code", state: "connecting" },
+      error: null,
     });
+
+    renderSetup();
+
+    const reconnectBtn = screen.getByRole("button", { name: "Reconnect" });
+    fireEvent.click(reconnectBtn);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("qr-scanner")).toBeInTheDocument();
+    });
+
+    const connectAsNewBtn = screen.getByTestId("mock-connect-as-new");
+    fireEvent.click(connectAsNewBtn);
+
+    await waitFor(() => {
+      expect(screen.queryByTestId("qr-scanner")).not.toBeInTheDocument();
+    });
+
+    expect(screen.getByText("Name this connection")).toBeInTheDocument();
+  });
+
+  it.each([
+    ["error object", { data: null, error: { message: "Server error", status: 502 } }],
+    ["error inside data payload", { data: { error: "reconnect_failed" }, error: null }],
+  ])("shows toast when reconnect fails with %s", async (_, response) => {
+    invoke.mockResolvedValue(response);
 
     renderSetup();
 
@@ -167,5 +212,30 @@ describe("WhatsAppSetup QR reconnect", () => {
     });
 
     expect(screen.queryByTestId("qr-scanner")).not.toBeInTheDocument();
+  });
+
+  it("NEW: after scanner calls onComplete, the query key ['whatsapp-reconnectable-qr'] is invalidated", async () => {
+    invoke.mockResolvedValue({
+      data: { success: true, social_account_id: "qr-acc-1", qr: "qr-code", state: "connecting" },
+      error: null,
+    });
+
+    renderSetup();
+
+    const invalidateQueriesSpy = vi.spyOn(currentQueryClient, "invalidateQueries");
+
+    const reconnectBtn = screen.getByRole("button", { name: "Reconnect" });
+    fireEvent.click(reconnectBtn);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("qr-scanner")).toBeInTheDocument();
+    });
+
+    const completeBtn = screen.getByTestId("mock-complete");
+    fireEvent.click(completeBtn);
+
+    expect(invalidateQueriesSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ queryKey: ["whatsapp-reconnectable-qr"] }),
+    );
   });
 });

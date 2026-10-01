@@ -1,19 +1,15 @@
-// Note: Per Task A2 and debate-2 requirements, ReconnectDeps includes:
-//   clearMismatch(id: string): Promise<void>
-// which is called on successful reconnect to clear account_metadata.number_mismatch
-// before returning the QR code.
-
 import { assertEquals, assertRejects } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { EvolutionApiError, type EvolutionEvent } from "../_shared/evolutionApi.ts";
 import { reconnectQr, ReconnectError, type ReconnectDeps } from "./reconnect.ts";
 
 function createDeps(
   overrides: {
-    account?: { id: string; platform_user_id: string; connection_mode: string | null } | null;
+    account?: { id: string; platform_user_id: string; connection_mode: string | null; is_active?: boolean } | null;
     instance?: { instance_name: string; jwt_key: string } | null;
     fetchInstance?: () => Promise<unknown>;
     connectionState?: () => Promise<unknown>;
     connect?: () => Promise<unknown>;
+    logoutError?: unknown;
     setWebhookError?: unknown;
     createInstanceError?: unknown;
     clearMismatchError?: unknown;
@@ -21,7 +17,7 @@ function createDeps(
 ) {
   const calls: Array<{ method: string; args: unknown[] }> = [];
   const account = overrides.account === undefined
-    ? { id: "acc-1", platform_user_id: "96597950350", connection_mode: "evolution_qr" }
+    ? { id: "acc-1", platform_user_id: "96597950350", connection_mode: "evolution_qr", is_active: false }
     : overrides.account;
   const instance = overrides.instance === undefined
     ? { instance_name: "postora_acc-1", jwt_key: "jwt-stored-key" }
@@ -62,6 +58,7 @@ function createDeps(
       },
       logout: (instanceName: string) => {
         calls.push({ method: "logout", args: [instanceName] });
+        if (overrides.logoutError) return Promise.reject(overrides.logoutError);
         return Promise.resolve({ status: "SUCCESS" });
       },
       setWebhook: (instanceName: string, webhook: unknown) => {
@@ -99,7 +96,7 @@ Deno.test("reconnectQr: account not found throws ReconnectError 404", async () =
 
 Deno.test("reconnectQr: pending_ account throws ReconnectError 409", async () => {
   const { deps } = createDeps({
-    account: { id: "acc-1", platform_user_id: "pending_acc-1", connection_mode: "evolution_qr" },
+    account: { id: "acc-1", platform_user_id: "pending_acc-1", connection_mode: "evolution_qr", is_active: false },
   });
   const error = (await assertRejects(
     () => reconnectQr(deps, "user-1", "acc-1"),
@@ -110,7 +107,7 @@ Deno.test("reconnectQr: pending_ account throws ReconnectError 409", async () =>
 
 Deno.test("reconnectQr: retired_ account throws ReconnectError 409", async () => {
   const { deps } = createDeps({
-    account: { id: "acc-1", platform_user_id: "retired_96597950350", connection_mode: "evolution_qr" },
+    account: { id: "acc-1", platform_user_id: "retired_96597950350", connection_mode: "evolution_qr", is_active: false },
   });
   const error = (await assertRejects(
     () => reconnectQr(deps, "user-1", "acc-1"),
@@ -121,13 +118,28 @@ Deno.test("reconnectQr: retired_ account throws ReconnectError 409", async () =>
 
 Deno.test("reconnectQr: non evolution_qr connection mode throws ReconnectError 409", async () => {
   const { deps } = createDeps({
-    account: { id: "acc-1", platform_user_id: "96597950350", connection_mode: "cloud_api" },
+    account: { id: "acc-1", platform_user_id: "96597950350", connection_mode: "cloud_api", is_active: false },
   });
   const error = (await assertRejects(
     () => reconnectQr(deps, "user-1", "acc-1"),
     ReconnectError,
   )) as ReconnectError;
   assertEquals(error.status, 409);
+});
+
+Deno.test("reconnectQr: an active account throws ReconnectError 409 without calling Evolution", async () => {
+  const { deps, calls } = createDeps({
+    account: { id: "acc-1", platform_user_id: "96597950350", connection_mode: "evolution_qr", is_active: true },
+  });
+  const error = (await assertRejects(
+    () => reconnectQr(deps, "user-1", "acc-1"),
+    ReconnectError,
+  )) as ReconnectError;
+  assertEquals(error.status, 409);
+  const evolutionCalls = calls.filter((c) =>
+    ["fetchInstance", "connectionState", "createInstance", "connect", "logout", "setWebhook"].includes(c.method),
+  );
+  assertEquals(evolutionCalls.length, 0);
 });
 
 Deno.test("reconnectQr: instance row missing throws ReconnectError 409 reconnect_unavailable", async () => {
@@ -153,6 +165,10 @@ Deno.test("reconnectQr: remote instance missing shape 1 (fetchInstance resolves 
     qr: "reconnect-qr-base64",
     state: "connecting",
   });
+
+  const findAccountCalls = calls.filter((c) => c.method === "findAccount");
+  assertEquals(findAccountCalls.length, 1);
+  assertEquals(findAccountCalls[0].args, ["user-1", "acc-1"]);
 
   const createCalls = calls.filter((c) => c.method === "createInstance");
   assertEquals(createCalls.length, 1);
@@ -187,6 +203,13 @@ Deno.test("reconnectQr: remote instance missing shape 1 (fetchInstance resolves 
   const saveCalls = calls.filter((c) => c.method === "saveQr");
   assertEquals(saveCalls.length, 1);
   assertEquals(saveCalls[0].args, ["acc-1", "reconnect-qr-base64", "connecting"]);
+
+  const callOrder = calls.map((c) => c.method);
+  const clearIndex = callOrder.indexOf("clearMismatch");
+  const saveIndex = callOrder.indexOf("saveQr");
+  assertEquals(clearIndex !== -1, true);
+  assertEquals(saveIndex !== -1, true);
+  assertEquals(clearIndex <= saveIndex, true);
 });
 
 Deno.test("reconnectQr: remote instance missing shape 2 (fetchInstance throws 404) creates instance, connects, and saves QR", async () => {
@@ -266,52 +289,51 @@ Deno.test("reconnectQr: remote present and connectionState is close calls connec
   assertEquals(connectCalls.length, 1);
 });
 
-Deno.test("reconnectQr: any step throws an Evolution error throws ReconnectError 502 and never calls saveQr", async () => {
-  const { deps, calls } = createDeps({
-    connect: () => Promise.reject(new EvolutionApiError("Evolution connection failed", 500, null)),
-  });
-
-  const error = (await assertRejects(
-    () => reconnectQr(deps, "user-1", "acc-1"),
-    ReconnectError,
-    "reconnect_failed",
-  )) as ReconnectError;
-  assertEquals(error.status, 502);
-
-  const saveCalls = calls.filter((c) => c.method === "saveQr");
-  assertEquals(saveCalls.length, 0);
-});
-
-Deno.test("reconnectQr: every success calls setWebhook once with stored jwt_key", async () => {
-  const { deps, calls } = createDeps();
-
-  await reconnectQr(deps, "user-1", "acc-1");
-
-  const webhookCalls = calls.filter((c) => c.method === "setWebhook");
-  assertEquals(webhookCalls.length, 1);
-  assertEquals(webhookCalls[0].args, [
-    "postora_acc-1",
-    {
-      url: deps.webhook.url,
-      headers: { jwt_key: "jwt-stored-key" },
-      events: deps.webhook.events,
+const failingSteps = [
+  {
+    step: "createInstance",
+    overrides: {
+      fetchInstance: () => Promise.resolve(null),
+      createInstanceError: new EvolutionApiError("create fail", 500, null),
     },
-  ]);
-});
+  },
+  {
+    step: "setWebhook",
+    overrides: {
+      setWebhookError: new EvolutionApiError("webhook fail", 500, null),
+    },
+  },
+  {
+    step: "connect",
+    overrides: {
+      connect: () => Promise.reject(new EvolutionApiError("connect fail", 500, null)),
+    },
+  },
+  {
+    step: "clearMismatch",
+    overrides: {
+      clearMismatchError: new Error("clearMismatch fail"),
+    },
+  },
+  {
+    step: "logout when state is open",
+    overrides: {
+      connectionState: () => Promise.resolve({ instance: { state: "open" } }),
+      logoutError: new EvolutionApiError("logout fail", 500, null),
+    },
+  },
+];
 
-Deno.test("reconnectQr: clears account_metadata.number_mismatch via clearMismatch before returning QR", async () => {
-  const { deps, calls } = createDeps();
-
-  await reconnectQr(deps, "user-1", "acc-1");
-
-  const clearCalls = calls.filter((c) => c.method === "clearMismatch");
-  assertEquals(clearCalls.length, 1);
-  assertEquals(clearCalls[0].args, ["acc-1"]);
-
-  const callOrder = calls.map((c) => c.method);
-  const clearIndex = callOrder.indexOf("clearMismatch");
-  const saveIndex = callOrder.indexOf("saveQr");
-  assertEquals(clearIndex !== -1, true);
-  assertEquals(saveIndex !== -1, true);
-  assertEquals(clearIndex <= saveIndex, true);
-});
+for (const { step, overrides } of failingSteps) {
+  Deno.test(`reconnectQr: failing step ${step} throws ReconnectError 502 and never calls saveQr`, async () => {
+    const { deps, calls } = createDeps(overrides);
+    const error = (await assertRejects(
+      () => reconnectQr(deps, "user-1", "acc-1"),
+      ReconnectError,
+      "reconnect_failed",
+    )) as ReconnectError;
+    assertEquals(error.status, 502);
+    const saveCalls = calls.filter((c) => c.method === "saveQr");
+    assertEquals(saveCalls.length, 0);
+  });
+}

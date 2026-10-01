@@ -279,7 +279,19 @@ Deno.test("a matching number on a row whose metadata has number_mismatch:true cl
   const connected = { id: "acc-2", platform_user_id: "96597950350" };
   await syncEvolutionAccountConnection(admin, connected, "open", { ownerJid: "96597950350@s.whatsapp.net" });
   assertEquals(admin.updates[0].values.is_active, true);
-  assertEquals((admin.updates[0].values.account_metadata as Record<string, unknown>)?.number_mismatch, undefined);
+  assertEquals(admin.updates[0].values.account_metadata, {});
+});
+
+Deno.test("established row that was active receiving open with mismatched number emits partner disconnect transition before NumberMismatchError", async () => {
+  const admin = recordingAdmin(null, { active: true });
+  const connected = { id: "acc-2", platform_user_id: "96597950350" };
+  await assertRejects(
+    () => syncEvolutionAccountConnection(admin, connected, "open", { ownerJid: "99999999@s.whatsapp.net" }),
+    NumberMismatchError,
+  );
+  assertEquals(admin.active, false);
+  assertEquals(admin.deliveries.length > 0, true);
+  assertEquals(admin.deliveries[0].event_type, "whatsapp_number.disconnected");
 });
 
 Deno.test("a rejected write is surfaced instead of being swallowed", async (t) => {

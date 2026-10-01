@@ -27,7 +27,7 @@ describe("useReconnectableQrAccounts", () => {
     vi.clearAllMocks();
   });
 
-  it("queries social_accounts with expected filters: platform=whatsapp, connection_mode=evolution_qr, is_active=false, not pending_%, not retired_%, ordered by updated_at desc", async () => {
+  it("queries social_accounts with expected filters: platform=whatsapp, connection_mode=evolution_qr, is_active=false, not pending_%, not retired_%, ordered by updated_at desc, and user_id scoped", async () => {
     const mockAccounts = [
       {
         id: "qr-acc-1",
@@ -55,6 +55,7 @@ describe("useReconnectableQrAccounts", () => {
     expect(chain.select).toHaveBeenCalledWith(
       "id, platform_user_id, platform_username, connection_mode, updated_at",
     );
+    expect(chain.eq).toHaveBeenCalledWith("user_id", "test-user-id");
     expect(chain.eq).toHaveBeenCalledWith("platform", "whatsapp");
     expect(chain.eq).toHaveBeenCalledWith("connection_mode", "evolution_qr");
     expect(chain.eq).toHaveBeenCalledWith("is_active", false);
@@ -78,6 +79,6 @@ describe("useReconnectableQrAccounts", () => {
     const { result } = renderHook(() => useReconnectableQrAccounts(), { wrapper });
 
     await waitFor(() => expect(result.current.isError).toBe(true));
-    expect(result.current.error).toBeDefined();
+    expect((result.current.error as Error).message).toBe("Failed to load reconnectable accounts");
   });
 });

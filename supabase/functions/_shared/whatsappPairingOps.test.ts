@@ -140,11 +140,11 @@ for (const [data, error, expected] of [
   });
 }
 
-function fixture(options: { existing?: boolean; active?: boolean; resolved?: boolean; failTable?: string; mode?: string; leaseHeld?: boolean; noWorkspace?: boolean } = {}) {
+function fixture(options: { existing?: boolean; active?: boolean; resolved?: boolean; failTable?: string; mode?: string; leaseHeld?: boolean; noWorkspace?: boolean; metadata?: Record<string, unknown> } = {}) {
   const calls: Array<{ url: URL; method: string; body: Record<string, unknown> }> = [];
   // Advances per read, standing in for Postgres bumping updated_at on write.
   let accountReads = 0;
-  const metadata = { display_name: "Support", risk_consent: CONSENT, arbitrary_marker: "preserve" };
+  const metadata = { display_name: "Support", risk_consent: CONSENT, arbitrary_marker: "preserve", ...(options.metadata ?? {}) };
   const admin = createClient("https://database.example", "test-key", {
     auth: { persistSession: false, autoRefreshToken: false },
     global: { fetch: (input, init) => {
@@ -343,6 +343,19 @@ Deno.test("pairingStatus on a mismatch returns state number_mismatch and phone_n
   assertEquals(logouts[0].input, `postora_${ID}`);
   assertEquals(db.calls.find((call) => call.method === "PATCH" && call.url.pathname.endsWith("/social_accounts"))!.body,
     { is_active: false, account_metadata: { ...db.metadata, number_mismatch: true } });
+});
+
+Deno.test("pairingStatus on an account with durable number_mismatch returns state number_mismatch without calling provider connectionState", async () => {
+  const db = fixture({ existing: true, resolved: true, metadata: { number_mismatch: true } });
+  const remote = provider("open");
+  const response = await pairingStatus({ ...CTX, admin: db.admin }, ID, { api: remote.api });
+  assertEquals(response, {
+    account_id: ID,
+    state: "number_mismatch",
+    phone_number: null,
+  });
+  const stateCalls = remote.calls.filter((c) => c.method === "state");
+  assertEquals(stateCalls.length, 0);
 });
 
 for (const failTable of ["social_accounts", "whatsapp_evolution_instances"]) {
