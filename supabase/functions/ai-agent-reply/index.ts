@@ -907,7 +907,12 @@ Deno.serve(async (req) => {
         : Promise.resolve({ data: null, error: null }),
     ]);
 
-    const { data: historyRows } = historyResult;
+    const { data: historyRows, error: historyError } = historyResult;
+    if (historyError) {
+      // Same degrade-and-say rule as the link read below: the reply proceeds without the
+      // thread, which also leaves a letterless message ("5", an emoji) to the English default.
+      console.error("[ai-agent-reply] history read failed; replying without the thread:", historyError.message);
+    }
     const { turns: history, staleNote: historyStaleNote } = historyWindow(historyRows || [], Date.now());
 
     let toolLinks: ToolAccountLink[] = [];
