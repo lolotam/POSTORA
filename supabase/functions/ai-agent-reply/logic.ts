@@ -38,9 +38,7 @@ const LATIN_CHAR_RE = /[A-Za-z]/g;
  *
  * A message with no letters at all -- a "5" answering the review opener's 1-5 rating, an
  * emoji, an order number -- says nothing about language, so the thread decides:
- * - `flowLanguage`, when a store-event flow is active: the language its opener was sent in,
- *   by the same rule the worker used. Counting the rendered opener misreads it whenever the
- *   interpolated product or customer name outweighs the fixed Arabic text.
+ * - `flowLanguage`, when a store-event flow is active (see storeFlowLanguage).
  * - otherwise the newest earlier turn with letters (`earlierTurns`, newest first).
  */
 export function detectReplyLanguage(
@@ -61,6 +59,21 @@ export function detectReplyLanguage(
     if (language) return language;
   }
   return "en";
+}
+
+/**
+ * The language an active store-event flow is being held in. The customer's newest reply
+ * since the opener that has letters decides -- they may have asked to switch. With none,
+ * the opener's own language, by the rule the worker sent it in: counting the rendered
+ * opener misreads it whenever an interpolated product or customer name outweighs the fixed
+ * Arabic text. `customerRepliesSinceOpener` is newest first.
+ */
+export function storeFlowLanguage(openerLanguage: ReplyLanguage, customerRepliesSinceOpener: string[]): ReplyLanguage {
+  for (const text of customerRepliesSinceOpener) {
+    const language = letterLanguage(text);
+    if (language) return language;
+  }
+  return openerLanguage;
 }
 
 /** The language a text's letters point to, or null when it has none. */

@@ -328,6 +328,16 @@ Deno.test("an active store flow's opener language beats a recount of the rendere
   assertEquals(detectReplyLanguage("ok thanks", "auto", null, { flowLanguage: "ar" }), "en");
 });
 
+// The flow language holds for the flow's whole life, so a customer who asked to switch must
+// move it: "Please use English" then "5" stays English (#256 review).
+Deno.test("a store flow's language follows the customer's newest reply with letters", async () => {
+  const { storeFlowLanguage } = await import("./logic.ts");
+  assertEquals(storeFlowLanguage("ar", []), "ar", "no reply yet: the opener's language");
+  assertEquals(storeFlowLanguage("ar", ["👍", "5"]), "ar", "letterless replies change nothing");
+  assertEquals(storeFlowLanguage("ar", ["5", "Please use English"]), "en");
+  assertEquals(storeFlowLanguage("en", ["تمام", "ok"]), "ar", "the newest reply with letters wins");
+});
+
 Deno.test("a forced language is stated as an override and repeated last", async () => {
   const { buildSystemPrompt } = await import("./logic.ts");
   const prompt = buildSystemPrompt({

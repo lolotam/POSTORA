@@ -15,6 +15,7 @@ import {
   buildSystemPrompt,
   completionFailure,
   detectReplyLanguage,
+  storeFlowLanguage,
   formatRelatedFacts,
   formatModelRef,
   type GraphRelationFact,
@@ -1028,8 +1029,16 @@ Deno.serve(async (req) => {
       ? actAsAdmin
       : request.platform === "whatsapp" && adminNumbers.includes(waRecipient(request.recipient_phone));
 
+    const flowStartedMs = initialProcedureState?.origin === "event" ? Date.parse(initialProcedureState.started_at) : NaN;
     language = detectReplyLanguage(request.inbound_text, config.language_mode, request.language_hint, {
-      flowLanguage: initialProcedureState?.origin === "event" ? openerLanguage(config.language_mode) : null,
+      flowLanguage: Number.isFinite(flowStartedMs)
+        ? storeFlowLanguage(
+          openerLanguage(config.language_mode),
+          (historyRows || [])
+            .filter((row) => row.role === "user" && Date.parse(row.created_at) >= flowStartedMs)
+            .map((row) => row.content || ""),
+        )
+        : null,
       earlierTurns: history.map((turn) => turn.content).reverse(),
     });
     // Resolved on first use rather than up front. buildAdminNotifier throws when the user has
