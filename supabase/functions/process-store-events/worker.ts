@@ -21,6 +21,8 @@ export const STORE_EVENT_LIMITS = {
 
 const STALE_AFTER_MS = 48 * 60 * 60 * 1000;
 const PENDING_TEMPLATE_DEFER_MS = 15 * 60 * 1000;
+export const DISCONNECTED_HOLD_MS = 24 * 60 * 60 * 1000;
+const DISCONNECTED_RETRY_MS = 15 * 60 * 1000;
 const ORDER_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 const COD_STATUSES = new Set(["pending", "on-hold", "processing"]);
 
@@ -56,6 +58,8 @@ export interface AccountContext {
   /** True unless this event's ai_agent_tools row has read_only_mode === false. */
   connectorReadOnly: boolean;
   optedOut: boolean;
+  /** False when the row is inactive or its number was retired by a re-pair. */
+  connected: boolean;
 }
 
 export interface StoreSnapshot {
@@ -143,6 +147,10 @@ export interface WorkerPorts {
   alertAdmin(event: StoreEventRow, reason: string): Promise<void>;
   /** A failed insert is logged by the adapter and must not change the worker outcome. */
   logEvent(entry: StoreEventLog): Promise<void>;
+  /** Raises the owner's disconnected-account alert. Best effort at the call site. */
+  noteUndelivered(accountId: string): Promise<void>;
+  /** Clears the undelivered flag once nothing is held for this account any more. */
+  resolveUndelivered(accountId: string): Promise<void>;
 }
 
 export interface WorkerSummary {
@@ -587,6 +595,42 @@ async function deferPendingTemplate(ports: WorkerPorts, event: StoreEventRow): P
   return marked;
 }
 
+/**
+ * The bound account cannot send. Hold the order (15-minute retries, attempt returned) so a
+ * reconnect or a setup move still delivers it, and raise the owner's alert. After 24h it is skipped.
+ */
+async function deferDisconnected(
+  ports: WorkerPorts,
+  event: StoreEventRow,
+  account: AccountContext,
+): Promise<"released" | "skipped" | "left"> {
+  const created = Date.parse(event.created_at);
+  if (!Number.isFinite(created) || ports.now() - created > DISCONNECTED_HOLD_MS) {
+    const skipped = await skip(ports, event, "account_disconnected", { account, thread: null, expected: null, reserved: false });
+    try {
+      await ports.resolveUndelivered(event.social_account_id);
+    } catch {
+      console.error("[process-store-events] undelivered flag resolve failed");
+    }
+    return skipped;
+  }
+  try {
+    await ports.noteUndelivered(event.social_account_id);
+  } catch {
+    console.error("[process-store-events] undelivered flag failed");
+  }
+  const marked = await ports.updateEvent(event.id, event.claim_token, {
+    status: "pending",
+    due_at: iso(ports.now() + DISCONNECTED_RETRY_MS),
+    attempts: event.attempts - 1,
+    claimed_at: null,
+    claim_token: null,
+    send_attempt_id: null,
+  });
+  if (marked) await writeOutcomeLog(ports, event, "info", "Store event deferred", "account_disconnected");
+  return marked ? "released" : "left";
+}
+
 async function deferUnapprovedTemplate(
   ports: WorkerPorts,
   event: StoreEventRow,
@@ -629,6 +673,9 @@ async function processClaimed(
     const held = await ports.updateEvent(event.id, event.claim_token, { claimed_at: iso(ports.now()) });
     if (!held) return "left";
     account = await ports.loadAccount(event);
+    if (account && !account.connected) {
+      return await deferDisconnected(ports, event, account);
+    }
     const early = accountSkipReason(event, account, ports.now());
     if (early) {
       return await skip(ports, event, early, { account, thread: null, expected: null, reserved: false });

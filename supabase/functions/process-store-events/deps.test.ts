@@ -36,7 +36,7 @@ Deno.test("classifySendError and a QR send without a message id", () => {
     { name: "401", outcome: classifySendError(denied) },
     { name: "QR send without messageId", outcome: classifyQrTextResult(undefined) },
   ];
-  const expected = [
+  const expected: Array<{ accepted: false; definite: boolean; reason?: string } | { accepted: true; messageId: string }> = [
     { accepted: false, definite: false },
     { accepted: false, definite: false },
     { accepted: false, definite: false },
@@ -126,6 +126,7 @@ function openerInput(): RecordOpenerInput {
       connectorVisible: true,
       connectorReadOnly: false,
       optedOut: false,
+      connected: true,
     },
     threadId: "thread-1",
     conversationId: "conv-1",

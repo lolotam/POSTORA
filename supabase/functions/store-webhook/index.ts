@@ -79,6 +79,16 @@ function deps(): StoreWebhookDeps {
       });
       if (error) console.error("[store-webhook] ignored-delivery log rejected:", error.message);
     },
+    async accountConnected(socialAccountId) {
+      const { data, error } = await admin.from("social_accounts")
+        .select("is_active, platform_user_id").eq("id", socialAccountId).maybeSingle();
+      if (error) throw new Error("account_read_failed");
+      return !!data && data.is_active === true && !String(data.platform_user_id ?? "").startsWith("retired_");
+    },
+    async noteUndelivered(socialAccountId) {
+      const { error } = await admin.rpc("note_undelivered_store_event", { p_account_id: socialAccountId });
+      if (error) throw new Error("undelivered_flag_failed");
+    },
     now: () => new Date(),
   };
 }

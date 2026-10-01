@@ -219,6 +219,7 @@ function harness(options: {
       undeliveredNotes.push(accountId);
       return Promise.resolve();
     },
+    resolveUndelivered: () => Promise.resolve(),
   };
   return state;
 }
