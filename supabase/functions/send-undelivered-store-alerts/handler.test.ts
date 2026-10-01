@@ -13,6 +13,7 @@
 
 import { assertEquals, assertRejects } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
+  buildAlertEmail,
   selectAccountsToEmail,
   sendAlerts,
   type SendAlertsDeps,
@@ -74,21 +75,24 @@ function createFakeDeps(overrides: Partial<SendAlertsDeps> = {}) {
       full_name: "Store Owner",
       email_notifications_enabled: true,
     })),
-    claim: overrides.claim ?? ((accountId: string, since: string) => {
+    // The overrides decide the BEHAVIOUR (return value / rejection); the recording
+    // wrappers always run so the assertions below see every call the orchestrator
+    // made, including the ones an override answers.
+    claim: async (accountId: string, since: string) => {
       calls.push(`claim:${accountId}`);
       claimed.push({ accountId, since });
-      return Promise.resolve(true);
-    }),
-    send: overrides.send ?? ((payload: { to: string; subject: string; html: string }) => {
+      return overrides.claim ? await overrides.claim(accountId, since) : true;
+    },
+    send: async (payload: { to: string; subject: string; html: string }) => {
       calls.push(`send:${payload.to}`);
       sentEmails.push(payload);
-      return Promise.resolve();
-    }),
-    mark: overrides.mark ?? ((accountId: string, since: string) => {
+      if (overrides.send) await overrides.send(payload);
+    },
+    mark: async (accountId: string, since: string) => {
       calls.push(`mark:${accountId}`);
       marked.push({ accountId, since });
-      return Promise.resolve(true);
-    }),
+      return overrides.mark ? await overrides.mark(accountId, since) : true;
+    },
     now: overrides.now ?? (() => new Date("2026-10-01T12:00:00Z")),
   };
 
@@ -248,3 +252,25 @@ Deno.test("sendAlerts: alerts_snoozed is never claimed or emailed", async () => 
   assertEquals(fake.claimed.length, 0);
   assertEquals(fake.marked.length, 0);
 });
+
+Deno.test("buildAlertEmail: HTML escaping: platform_username and fullName are escaped", () => {
+  const account = makeAccount({
+    username: '<img src=x onerror=alert(1)>&"\'',
+  });
+  const fullName = "</p><script>x</script>";
+
+  const html = buildAlertEmail(account, fullName);
+
+  assertEquals(html.includes("<img"), false, "HTML must not contain unescaped '<img'");
+  assertEquals(html.includes("<script"), false, "HTML must not contain unescaped '<script'");
+  assertEquals(html.includes("&lt;img"), true, "HTML must contain '&lt;img'");
+  assertEquals(html.includes("&lt;script&gt;"), true, "HTML must contain '&lt;script&gt;'");
+});
+
+Deno.test("buildAlertEmail: no invented controls: html does not contain the word 'snooze'", () => {
+  const account = makeAccount();
+  const html = buildAlertEmail(account, "Store Owner");
+
+  assertEquals(html.includes("snooze"), false, "HTML must not contain the word 'snooze'");
+});
+
