@@ -86,18 +86,40 @@ GRANT EXECUTE ON FUNCTION public.silent_store_connections(integer, integer) TO s
 
 -- Seed from the deliveries already on record, so a store that went quiet before this deploy
 -- is not invisible until its next delivery. Ignored deliveries live in system_logs.
-INSERT INTO public.store_webhook_heartbeats (connector_id, user_id, social_account_id, last_delivery_at)
-SELECT b.connector_id, b.user_id, b.social_account_id, max(d.created_at)
-FROM public.store_webhook_bindings b
-JOIN (
-  SELECT e.binding_id, e.created_at FROM public.store_events e
-  UNION ALL
-  SELECT (l.metadata->>'binding_id')::uuid, l.created_at
+-- Evidence is credited to the connection the store should be calling now, not only to the
+-- binding that received it: deleting a binding cascades its store_events and leaves its logs
+-- naming a binding that no longer exists -- the stale-URL outage this alert is for. Such a log
+-- counts for its account's live binding when the account has exactly one.
+WITH live AS (
+  SELECT b.id, b.connector_id, b.user_id, b.social_account_id,
+         count(*) OVER (PARTITION BY b.user_id, b.social_account_id) AS per_account
+  FROM public.store_webhook_bindings b
+),
+logged AS (
+  SELECT l.user_id, l.created_at, (l.metadata->>'binding_id')::uuid AS binding_id,
+         l.metadata->>'social_account_id' AS social_account_id
   FROM public.system_logs l
   WHERE l.source = 'store-webhook'
     AND l.metadata->>'binding_id' ~ '^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$'
-) d ON d.binding_id = b.id
-GROUP BY b.connector_id, b.user_id, b.social_account_id
+),
+evidence AS (
+  SELECT v.connector_id, e.created_at
+  FROM public.store_events e
+  JOIN live v ON v.connector_id = e.connector_id
+  UNION ALL
+  SELECT v.connector_id, g.created_at
+  FROM logged g
+  JOIN live v ON v.user_id = g.user_id
+  WHERE g.binding_id = v.id
+     OR (v.per_account = 1
+         AND g.social_account_id = v.social_account_id::text
+         AND NOT EXISTS (SELECT 1 FROM public.store_webhook_bindings x WHERE x.id = g.binding_id))
+)
+INSERT INTO public.store_webhook_heartbeats (connector_id, user_id, social_account_id, last_delivery_at)
+SELECT v.connector_id, v.user_id, v.social_account_id, max(ev.created_at)
+FROM evidence ev
+JOIN live v ON v.connector_id = ev.connector_id
+GROUP BY v.connector_id, v.user_id, v.social_account_id
 ON CONFLICT (connector_id) DO UPDATE
   SET last_delivery_at = greatest(public.store_webhook_heartbeats.last_delivery_at, EXCLUDED.last_delivery_at);
 
