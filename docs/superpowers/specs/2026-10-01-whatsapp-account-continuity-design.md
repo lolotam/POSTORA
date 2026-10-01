@@ -77,11 +77,13 @@ The move covers **setup** only. History stays with the row that produced it.
 Activation continues through `get_qr_status` → `syncEvolutionAccountConnection` → `activate_evolution_qr_account`. The webhook cannot activate an inactive row (`whatsapp-evolution-webhook/index.ts:66-82` filters `is_active`).
 
 **Number mismatch is a blocked state, not a warning.** Today a different number scanned onto an established row sets `number_mismatch` **and** `is_active = true` (`evolutionQrAccount.ts:193,207,241`), and the scanner treats `open` as success. The fix has three parts:
-- **RPC:** the redefined `activate_evolution_qr_account` (§5.4) returns `'mismatch'` without touching `is_active` when the row is established and the scanned number differs.
-- **Shared sync:** `syncEvolutionAccountConnection` handles `'mismatch'`:
-  - it logs out the instance;
-  - it keeps `is_active = false` and sets `account_metadata.number_mismatch`;
-  - it returns state `number_mismatch`, so no history import starts (`bridge:341`) and nothing is sent.
+- **Where:** the established-row mismatch never reaches the activation RPC, which `syncEvolutionAccountConnection` calls only for `pending_` rows (`evolutionQrAccount.ts:248-253`). The block lives in the shared sync, and the RPC's established-row branch is unchanged.
+- **Shared sync:** on a mismatch, `syncEvolutionAccountConnection`:
+  - keeps `is_active = false` and sets `account_metadata.number_mismatch`;
+  - throws `NumberMismatchError`.
+- **Callers** (bridge poll, webhook, partner pairing):
+  - log the instance out;
+  - report state `number_mismatch`, so no history import starts (`bridge:341`) and nothing is sent.
 - **Scanner:** it shows *"You scanned +965…, but this connection is +965…"*, with **Scan the right phone** (a new `reconnect_qr`) or **Connect as a new account** (the normal connect; C then offers the move).
 - **Tests:** both the webhook and the poll paths.
 
@@ -147,7 +149,7 @@ These rows therefore move **together or not at all**: the agent config, the acco
 
 A new migration redefines `activate_evolution_qr_account`. The applied one is never edited.
 - It takes the §5.1 lock 1 first, then the existing per-number lock.
-- It returns `'mismatch'` for an established row and a different number (§4), without activating.
+- It stores `account_metadata.retired_number` on the row it retires, so the mover can still match numbers afterwards.
 - In the duplicate branch, after the existing message, cache and schedule moves, it calls `move_whatsapp_account_setup(v_duplicate_id, p_account_id, 'auto')`.
 
 ### 5.5 Caller C: "Bring over my setup"
@@ -216,7 +218,7 @@ Three PRs, in this order. Each has its migrations applied by hand (as `supabase_
 2. **A:**
    - `reconnect_qr`;
    - the inactive-QR query and Reconnect button;
-   - the mismatch-blocked state. This includes the redefined activation RPC's `'mismatch'` return. The mover call is **not** wired yet.
+   - the mismatch-blocked state, in the shared sync (no migration in PR-A).
 3. **B + C:**
    - FK replacement migration;
    - `move_whatsapp_account_setup`;
