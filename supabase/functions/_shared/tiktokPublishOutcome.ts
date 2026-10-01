@@ -13,6 +13,15 @@ export type TikTokOutcome =
 
 export type ApplyOutcomeResult = "applied" | "already_terminal" | "unmatched";
 
+/**
+ * TikTok's status endpoint reports `publicaly_available_post_id` (sic) as an array of ids.
+ * Read raw, the array reached a text column and a URL template; every raw caller takes it here.
+ */
+export function firstPublicPostId(raw: unknown): string | null {
+  const first = Array.isArray(raw) ? raw[0] : null;
+  return typeof first === "string" && first.length > 0 ? first : null;
+}
+
 type AccountRow = {
   platform_user_id: string | null;
   platform_username: string | null;

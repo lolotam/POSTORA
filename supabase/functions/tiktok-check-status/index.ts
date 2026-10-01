@@ -6,7 +6,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.89.0";
 import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.89.0";
 import { authenticateCaller } from "../_shared/auth-helper.ts";
 import { fetchWithTimeout } from "../_shared/request-timeout.ts";
-import { applyTikTokPublishOutcome } from "../_shared/tiktokPublishOutcome.ts";
+import { applyTikTokPublishOutcome, firstPublicPostId } from "../_shared/tiktokPublishOutcome.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -209,9 +209,7 @@ serve(async (req) => {
 
     const statusData = data.data || {};
     const status = statusData.status || "unknown";
-    const publicIds = statusData.publicaly_available_post_id;
-    const firstPublicId = Array.isArray(publicIds) ? publicIds[0] : null;
-    const postId = (typeof firstPublicId === "string" ? firstPublicId : null) ||
+    const postId = firstPublicPostId(statusData.publicaly_available_post_id) ||
       (typeof statusData.post_id === "string" ? statusData.post_id : null);
     const failReason = statusData.fail_reason || null;
 

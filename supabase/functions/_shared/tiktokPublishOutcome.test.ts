@@ -7,6 +7,7 @@ import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.89.0
 import {
   applyPendingWebhookEvents,
   applyTikTokPublishOutcome,
+  firstPublicPostId,
   type TikTokOutcome,
 } from "./tiktokPublishOutcome.ts";
 
@@ -629,4 +630,16 @@ Deno.test("applyTikTokPublishOutcome: leaves a row that already holds TikTok's p
 
   assertEquals(result, "already_terminal");
   assertEquals(updateCount, 0);
+});
+
+// The status endpoint's shape is `publicaly_available_post_id: ["7300"]`; the raw array once
+// reached platform_post_id and the URL template (#257 review).
+Deno.test("firstPublicPostId takes the first id from TikTok's array and nothing else", () => {
+  assertEquals(firstPublicPostId(["7300", "7301"]), "7300");
+  assertEquals(firstPublicPostId([]), null);
+  assertEquals(firstPublicPostId([""]), null);
+  assertEquals(firstPublicPostId([7300]), null);
+  assertEquals(firstPublicPostId("7300"), null);
+  assertEquals(firstPublicPostId(null), null);
+  assertEquals(firstPublicPostId(undefined), null);
 });

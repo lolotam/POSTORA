@@ -95,6 +95,7 @@ import { fetchWithTimeout } from "../_shared/request-timeout.ts";
 import { composioClientFromEnv } from "../_shared/composioClient.ts";
 import { publishYouTubeViaComposio } from "./youtubeComposio.ts";
 import { prepareTikTokReviewPublish, recordReviewPublishId, tiktokReviewSubmissionId } from "./tiktokReview.ts";
+import { firstPublicPostId } from "../_shared/tiktokPublishOutcome.ts";
 import { z } from "npm:zod@3.23.8";
 
 const ProcessPostSchema = z.object({
@@ -1049,7 +1050,7 @@ async function pollTikTokPublishStatus(
 
       if (status === "PUBLISH_COMPLETE") {
         // TikTok API may or may not return the video ID depending on the publishing method
-        const publiclyAvailablePostId = statusData?.data?.publicaly_available_post_id;
+        const publiclyAvailablePostId = firstPublicPostId(statusData?.data?.publicaly_available_post_id);
         let postUrl: string | undefined;
 
         // Prefer the tiktokUsername (the actual handle like "nonywaleed.tam201") over the display name
@@ -6575,8 +6576,8 @@ async function postToTikTok(
     const status = statusData?.data?.status;
 
     if (status === "PUBLISH_COMPLETE") {
-      const publiclyAvailablePostId = statusData?.data?.publicaly_available_post_id;
-      providerPostId = publiclyAvailablePostId || undefined;
+      const publiclyAvailablePostId = firstPublicPostId(statusData?.data?.publicaly_available_post_id);
+      providerPostId = publiclyAvailablePostId ?? undefined;
       // Use creator_username from earlier API response if available, fallback to account.platform_username
       // TikTok API returns the actual handle in creator_info response
       const tiktokHandle = (account.account_metadata as Record<string, unknown>)?.tiktok_username ||
