@@ -206,12 +206,13 @@ DECLARE
   v jsonb;
 BEGIN
   -- Give dst the same number and WABA as src so waitlist and templates qualify.
-  UPDATE public.social_accounts SET platform_user_id = '96500000009',
-         account_metadata = '{"waba_id":"waba-1"}'
-   WHERE id = pg_temp.id('dst');
+  -- Retire src first: (user_id, platform, platform_user_id) is unique.
   UPDATE public.social_accounts SET platform_user_id = 'retired_' || pg_temp.id('src')::text,
          account_metadata = account_metadata || '{"retired_number":"96500000009"}'
    WHERE id = pg_temp.id('src');
+  UPDATE public.social_accounts SET platform_user_id = '96500000009',
+         account_metadata = '{"waba_id":"waba-1"}'
+   WHERE id = pg_temp.id('dst');
 
   v := public.move_whatsapp_account_setup(pg_temp.id('src'), pg_temp.id('dst'), 'auto');
   ASSERT v->>'status' = 'moved', 'M1 status moved: ' || v::text;
