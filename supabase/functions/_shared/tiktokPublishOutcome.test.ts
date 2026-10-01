@@ -7,6 +7,7 @@ import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.89.0
 import {
   applyPendingWebhookEvents,
   applyTikTokPublishOutcome,
+  firstPublicPostId,
   type TikTokOutcome,
 } from "./tiktokPublishOutcome.ts";
 
@@ -572,4 +573,73 @@ Deno.test("applyTikTokPublishOutcome: settle RPC error rejects with tiktok_outco
     Error,
     "tiktok_outcome_settle_failed",
   );
+});
+
+// process-post's own poll can settle a row with the publish_id as platform_post_id and a
+// URL already set; the webhook must still replace the publish_id with TikTok's post id (#246).
+function settledRow(platformPostId: string, url: string | null) {
+  return {
+    id: "pp-246", post_id: "post-246", social_account_id: "sa-246", status: "success",
+    platform_post_id: platformPostId, platform_post_url: url,
+    social_accounts: { platform_user_id: "open-1", platform_username: "user_a", account_metadata: {} },
+  };
+}
+
+Deno.test("applyTikTokPublishOutcome: replaces a publish_id stored as the post id even when a URL exists", async () => {
+  const updates: Array<{ values: unknown; filters: Record<string, unknown> }> = [];
+  const { client } = createFakeSupabase({
+    platformPostsSelect: () => Promise.resolve({ data: [settledRow("pub-246", "https://www.tiktok.com/@user_a")], error: null }),
+    platformPostsUpdate: (values, filters) => {
+      updates.push({ values, filters: { ...filters } });
+      return Promise.resolve({ data: null, error: null });
+    },
+  });
+
+  const result = await applyTikTokPublishOutcome(client, {
+    publishId: "pub-246",
+    userOpenId: "open-1",
+    outcome: { kind: "published", providerPostId: "7300" },
+  });
+
+  assertEquals(result, "already_terminal");
+  assertEquals(updates.length, 1);
+  assertEquals(updates[0].values, {
+    platform_post_id: "7300",
+    platform_post_url: "https://www.tiktok.com/@user_a/video/7300",
+  });
+  // Compare-and-set on what was read, so a concurrent correction is not overwritten.
+  assertEquals(updates[0].filters["platform_post_id"], "pub-246");
+});
+
+Deno.test("applyTikTokPublishOutcome: leaves a row that already holds TikTok's post id alone", async () => {
+  let updateCount = 0;
+  const { client } = createFakeSupabase({
+    platformPostsSelect: () =>
+      Promise.resolve({ data: [settledRow("7300", "https://www.tiktok.com/@user_a/video/7300")], error: null }),
+    platformPostsUpdate: () => {
+      updateCount++;
+      return Promise.resolve({ data: null, error: null });
+    },
+  });
+
+  const result = await applyTikTokPublishOutcome(client, {
+    publishId: "pub-246",
+    userOpenId: "open-1",
+    outcome: { kind: "published", providerPostId: "7300" },
+  });
+
+  assertEquals(result, "already_terminal");
+  assertEquals(updateCount, 0);
+});
+
+// The status endpoint's shape is `publicaly_available_post_id: ["7300"]`; the raw array once
+// reached platform_post_id and the URL template (#257 review).
+Deno.test("firstPublicPostId takes the first id from TikTok's array and nothing else", () => {
+  assertEquals(firstPublicPostId(["7300", "7301"]), "7300");
+  assertEquals(firstPublicPostId([]), null);
+  assertEquals(firstPublicPostId([""]), null);
+  assertEquals(firstPublicPostId([7300]), null);
+  assertEquals(firstPublicPostId("7300"), null);
+  assertEquals(firstPublicPostId(null), null);
+  assertEquals(firstPublicPostId(undefined), null);
 });
