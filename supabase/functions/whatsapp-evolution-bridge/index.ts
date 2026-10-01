@@ -11,7 +11,8 @@ import { runInBackground } from "../_shared/background.ts";
 import { disconnectWhatsAppAccount, type WhatsAppDisconnectAdmin } from "../_shared/whatsappDisconnect.ts";
 import { resolveMaxSocialAccounts, type SocialAccountQuotaClient } from "../_shared/socialAccountQuota.ts";
 import { extractQr, extractState } from "./qr.ts";
-import { mismatchStatus, reconcileAccountConnection } from "./reconcile.ts";
+import { reconcileAccountConnection } from "./reconcile.ts";
+import { getQrStatusResult } from "./qrStatus.ts";
 import { reconnectQr, ReconnectError, type ReconnectDeps } from "./reconnect.ts";
 
 const EVOLUTION_EVENTS: EvolutionEvent[] = [
@@ -302,50 +303,35 @@ async function resubscribeWebhook(context: Awaited<ReturnType<typeof authenticat
 }
 
 // The webhook is the primary activation path; this keeps a dropped delivery from
-// leaving an already-linked session permanently inactive in Postora. Reconciliation
-// (and the number_mismatch contract) lives in reconcile.ts.
+// leaving an already-linked session permanently inactive in Postora. The decision
+// tree itself lives in qrStatus.ts so the mismatch contract stays in one place.
 async function getQrStatus(admin: any, userId: string, body: BridgeBody) {
   if (!body.social_account_id) throw new BridgeError("social_account_id is required", 400);
   const account = await findOwnedAccount(admin, userId, body.social_account_id);
   const instance = await findInstance(admin, body.social_account_id);
-  // A durable mismatch from an earlier refusal is answered before any provider call:
-  // the session was already logged out, so polling would only see a closed instance
-  // and could never clear the flag that must reach the owner.
-  const durableMismatch = mismatchStatus(account);
-  if (durableMismatch) return durableMismatch;
   const api = createEvolutionApi();
-  let qr = instance.last_qr;
-  if (body.refresh_qr) {
-    qr = extractQr(await api.connect(instance.instance_name));
-    await admin.from("whatsapp_evolution_instances").update({ last_qr: qr }).eq("social_account_id", body.social_account_id);
-  }
-  const statePayload = await api.connectionState(instance.instance_name);
-  const state = extractState(statePayload);
-  if (state) {
-    await admin.from("whatsapp_evolution_instances").update({ last_connection_state: state }).eq("social_account_id", body.social_account_id);
-    // Reconciliation may have just replaced the provisional owner id, and conversation ids
-    // are built from it, so the sweep uses the value the reconciler returns rather than the
-    // one loaded at the top of this request.
-    const result = await reconcileAccountConnection({
-      admin, api, account, instanceName: instance.instance_name, state,
-    });
-    if (result.mismatch) {
-      // The flag was just persisted by the sync, but this request's account snapshot
-      // predates that write -- so the payload is built here instead of via mismatchStatus.
-      return {
-        success: true,
-        social_account_id: body.social_account_id,
-        qr: null,
-        state: "number_mismatch",
-        expected_last4: account.platform_user_id.slice(-4),
-      };
-    }
-    if (state.toLowerCase() === "open") {
-      const linked = { ...account, platform_user_id: result.ownerNumber };
-      await runInBackground("whatsapp history sync", () => autoImportHistory(admin, linked, instance));
-    }
-  }
-  return { success: true, social_account_id: body.social_account_id, qr, state };
+  return await getQrStatusResult({
+    api,
+    saveConnectionState: async (socialAccountId, state) => {
+      const { error } = await admin
+        .from("whatsapp_evolution_instances")
+        .update({ last_connection_state: state })
+        .eq("social_account_id", socialAccountId);
+      if (error) throw error;
+    },
+    saveQr: async (socialAccountId, qr) => {
+      const { error } = await admin
+        .from("whatsapp_evolution_instances")
+        .update({ last_qr: qr })
+        .eq("social_account_id", socialAccountId);
+      if (error) throw error;
+    },
+    reconcile: ({ account, instanceName, state }) =>
+      reconcileAccountConnection({ admin, api, account, instanceName, state }),
+    autoImport: (linked, instanceRow) =>
+      // instanceRow is the same row passed in as input; qrStatus only narrows its type.
+      runInBackground("whatsapp history sync", () => autoImportHistory(admin, linked, instanceRow as EvolutionInstanceRow)),
+  }, { account, instance, refreshQr: body.refresh_qr === true });
 }
 
 // Deps for the reconnect action. findAccount uses the raw shared lookup rather than the

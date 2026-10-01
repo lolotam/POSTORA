@@ -13,12 +13,12 @@ export class ReconnectError extends Error {
 }
 
 export interface ReconnectDeps {
-  findAccount(userId: string, id: string): Promise<{ id: string; platform_user_id: string; connection_mode: string | null } | null>;
+  findAccount(userId: string, id: string): Promise<{ id: string; platform_user_id: string; connection_mode: string | null; is_active?: boolean } | null>;
   findInstance(id: string): Promise<{ instance_name: string; jwt_key: string } | null>;
   api: Pick<EvolutionApi, "fetchInstance" | "connectionState" | "createInstance" | "connect" | "logout" | "setWebhook">;
   webhook: { url: string; events: EvolutionEvent[] };
   saveQr(id: string, qr: string | null, state: string | null): Promise<void>;
-  /** Clears the durable number_mismatch flag once the reconnect is provably working. */
+  /** The flag is cleared when a new QR is issued, before any scan: pairing the right phone is what lifts the block. */
   clearMismatch(id: string): Promise<void>;
 }
 
@@ -31,6 +31,11 @@ export async function reconnectQr(deps: ReconnectDeps, userId: string, socialAcc
     || account.platform_user_id.startsWith("pending_")
     || account.platform_user_id.startsWith("retired_")) {
     throw new ReconnectError("This connection can't be reconnected; connect a new one instead", 409);
+  }
+  // An active row has a live session: reconnecting would log the owner out mid-use.
+  // Refused before any Evolution call so no provider state changes.
+  if (account.is_active) {
+    throw new ReconnectError("This connection is already connected", 409);
   }
   const instance = await deps.findInstance(socialAccountId);
   // Without the stored jwt_key the recreated instance would be unreachable by our webhook.

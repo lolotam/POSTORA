@@ -33,19 +33,29 @@ export function WhatsAppQrScanner({ socialAccountId, onComplete, onConnectAsNew 
   const [error, setError] = useState<string | null>(null);
   const completionReported = useRef(false);
   // Once a mismatch is seen, a later "open" (a settling session, a stray webhook) must
-  // not report completion while the owner is being asked which phone this is.
+  // not report completion or show the success card while the owner is being asked
+  // which phone this connection belongs to.
   const mismatchSeen = useRef(false);
+  // Bumped by restartScan: a poll answer issued before the restart belongs to the
+  // abandoned attempt and must not overwrite the fresh QR with a stale state.
+  const pollGeneration = useRef(0);
 
   const pollStatus = useCallback(async (refreshQr = false) => {
+    const generation = pollGeneration.current;
     const { data, error: invokeError } = await supabase.functions.invoke("whatsapp-evolution-bridge", {
       body: { action: "get_qr_status", social_account_id: socialAccountId, refresh_qr: refreshQr },
     });
     if (invokeError || data?.error) throw new Error(invokeError?.message || data?.error || t("qr.statusFallback", "Unable to read QR status"));
-    const nextStatus = { qr: data.qr || null, state: data.state || null, expectedLast4: data.expected_last4 || null };
-    setStatus(nextStatus);
+    if (generation !== pollGeneration.current) return;
+    setStatus((prev) => ({
+      qr: data.qr || null,
+      state: data.state || null,
+      // A mismatch's last4 survives later polls so the card keeps saying which phone is the right one.
+      expectedLast4: data.expected_last4 || prev.expectedLast4,
+    }));
     setError(null);
-    if (nextStatus.state === "number_mismatch") mismatchSeen.current = true;
-    if (nextStatus.state === "open" && !mismatchSeen.current && !completionReported.current) {
+    if (data.state === "number_mismatch") mismatchSeen.current = true;
+    if (data.state === "open" && !mismatchSeen.current && !completionReported.current) {
       completionReported.current = true;
       window.setTimeout(onComplete, 1500);
     }
@@ -80,6 +90,8 @@ export function WhatsAppQrScanner({ socialAccountId, onComplete, onConnectAsNew 
   // The owner chose to scan the right phone: restart the same connection's QR flow.
   const restartScan = async () => {
     setIsReconnecting(true);
+    // Invalidate everything already in flight before the new attempt starts.
+    pollGeneration.current += 1;
     try {
       const { data, error: invokeError } = await supabase.functions.invoke("whatsapp-evolution-bridge", {
         body: { action: "reconnect_qr", social_account_id: socialAccountId },
@@ -99,7 +111,11 @@ export function WhatsAppQrScanner({ socialAccountId, onComplete, onConnectAsNew 
     }
   };
 
-  if (status.state === "number_mismatch") {
+  // After a mismatch, a settling "open" must not flip the card back to success: the
+  // owner still has not answered which phone this connection belongs to.
+  const showMismatch = status.state === "number_mismatch" || (status.state === "open" && mismatchSeen.current);
+
+  if (showMismatch) {
     return (
       <Card className="border-destructive/40">
         <CardContent className="space-y-4 p-6">
@@ -111,9 +127,11 @@ export function WhatsAppQrScanner({ socialAccountId, onComplete, onConnectAsNew 
               {isReconnecting ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
               {t("qr.mismatchRescan", "Scan the right phone")}
             </Button>
-            <Button variant="outline" onClick={() => onConnectAsNew?.()}>
-              {t("qr.mismatchConnectNew", "Connect as a new account")}
-            </Button>
+            {onConnectAsNew && (
+              <Button variant="outline" onClick={() => onConnectAsNew()}>
+                {t("qr.mismatchConnectNew", "Connect as a new account")}
+              </Button>
+            )}
           </div>
         </CardContent>
       </Card>

@@ -2,6 +2,7 @@
 // deliberately not repointed yet; its extraction/parity test is Task 8b.
 import type { WhatsAppNumberContext } from "./whatsappNumberOps.ts";
 import { normalizeConnectionName, syncEvolutionAccountConnection, NumberMismatchError } from "./evolutionQrAccount.ts";
+import { handleNumberMismatch } from "./numberMismatch.ts";
 import { createEvolutionApi, EvolutionApiError, type EvolutionApi } from "./evolutionApi.ts";
 import { WhatsAppOpError } from "./whatsappPartnerOps.ts";
 import { disconnectWhatsAppAccount, type WhatsAppDisconnectDeps } from "./whatsappDisconnect.ts";
@@ -85,6 +86,7 @@ interface PairingAccount {
   platform_user_id: string;
   is_active: boolean;
   connection_mode: string;
+  account_metadata: Record<string, unknown> | null;
 }
 
 // A request-local resolved context lets the HTTP door authorize before replay
@@ -116,7 +118,7 @@ function configuredPairingApi(deps: PairingDependencies): PairingApi {
 export async function resolveNumberContext(ctx: WhatsAppNumberContext, accountId: string): Promise<ResolvedNumberContext> {
   if (!ctx.accountIds.includes(accountId)) throw new WhatsAppOpError("Number not found", "resource_not_found", 404);
   const { data, error } = await ctx.admin.from("social_accounts")
-    .select("id, platform_user_id, is_active, connection_mode")
+    .select("id, platform_user_id, is_active, connection_mode, account_metadata")
     .eq("workspace_id", ctx.workspaceId).eq("platform", "whatsapp").eq("id", accountId).maybeSingle();
   if (error) throw new WhatsAppOpError("Unable to read number", "internal_error", 500);
   if (!data) throw new WhatsAppOpError("Number not found", "resource_not_found", 404);
@@ -245,6 +247,13 @@ export async function pairingStatus(
   const account = await pairingAccount(ctx, accountId);
   const instance = await pairingInstance(ctx, accountId);
   if (!instance) throw new WhatsAppOpError("Pairing not found; start pairing first", "resource_not_found", 404);
+  // A durable mismatch from an earlier refusal is answered from the stored flag alone:
+  // the remote session was already killed, so a provider poll would only see a closed
+  // instance and could never clear the flag the owner must see. The stored state is
+  // left untouched too -- it already says number_mismatch.
+  if (account.account_metadata?.number_mismatch === true) {
+    return { account_id: accountId, state: "number_mismatch", phone_number: null };
+  }
   const api = configuredPairingApi(deps);
   const state = extractState(await api.connectionState(instance.instance_name));
   if (!state) throw new WhatsAppOpError("Invalid pairing status response", "internal_error", 502);
@@ -292,9 +301,10 @@ async function reconcileAccountConnection(
       return { ownerNumber, mismatch: false };
     } catch (error) {
       if (!(error instanceof NumberMismatchError)) throw error;
-      // The stored number and the linked phone disagree: kill the remote session and
-      // report the block. The flag itself was persisted by the sync write.
-      await api.logout(instanceName).catch(() => undefined);
+      // The stored number and the linked phone disagree: the shared handler kills the
+      // remote session and records why in the instance row. The flag itself was
+      // persisted by the sync write.
+      await handleNumberMismatch(ctx.admin, api, { accountId: account.id, instanceName });
       return { ownerNumber: account.platform_user_id, mismatch: true };
     }
   }

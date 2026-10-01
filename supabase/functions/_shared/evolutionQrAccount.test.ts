@@ -284,7 +284,9 @@ Deno.test("a matching number on a row whose metadata has number_mismatch:true cl
 
 Deno.test("established row that was active receiving open with mismatched number emits partner disconnect transition before NumberMismatchError", async () => {
   const admin = recordingAdmin(null, { active: true });
-  const connected = { id: "acc-2", platform_user_id: "96597950350" };
+  // acc-1 is the account the fixture's "matching" partner subscription is scoped to;
+  // fan-out never delivers one account's event to another account's subscription.
+  const connected = { id: "acc-1", platform_user_id: "96597950350" };
   await assertRejects(
     () => syncEvolutionAccountConnection(admin, connected, "open", { ownerJid: "99999999@s.whatsapp.net" }),
     NumberMismatchError,

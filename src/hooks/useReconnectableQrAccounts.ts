@@ -19,6 +19,9 @@ export function useReconnectableQrAccounts() {
       const { data, error } = await supabase
         .from("social_accounts")
         .select("id, platform_user_id, platform_username, connection_mode, updated_at")
+        // The user_id term mirrors the RLS boundary in the query itself, so the list can
+        // never widen if a policy changes underneath it.
+        .eq("user_id", user!.id)
         .eq("platform", "whatsapp")
         .eq("connection_mode", "evolution_qr")
         .eq("is_active", false)

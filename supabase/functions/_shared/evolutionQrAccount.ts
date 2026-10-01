@@ -242,6 +242,10 @@ export async function syncEvolutionAccountConnection(
       .update({ account_metadata: metadata, is_active: false })
       .eq("id", account.id);
     if (error) throw error;
+    // Partners subscribed to the workspace must observe the refused phone as a
+    // disconnect like any other: the row was live before this observation, and no
+    // success path runs after this point that would emit for it.
+    await emitConnectionTransition(admin, account.id, previous, false);
     throw new NumberMismatchError(account.id);
   }
 

@@ -2,6 +2,7 @@
 // mismatch contract is importable and testable on its own: every caller must observe a
 // refused phone as the same durable state, never as "still connected".
 import { NumberMismatchError, syncEvolutionAccountConnection } from "../_shared/evolutionQrAccount.ts";
+import { handleNumberMismatch } from "../_shared/numberMismatch.ts";
 import type { EvolutionApi } from "../_shared/evolutionApi.ts";
 
 // The admin seam is exactly what syncEvolutionAccountConnection accepts (the Supabase
@@ -54,15 +55,11 @@ export async function reconcileAccountConnection(reconciliation: {
       return { ownerNumber, mismatch: false };
     } catch (error) {
       if (!(error instanceof NumberMismatchError)) throw error;
-      // The linked phone is not the stored one: kill the remote session so it stops
-      // answering polls, record why, and report the block. A logout failure must not
-      // hide the mismatch -- the flag in account_metadata is the durable record.
-      await api.logout(instanceName).catch(() => undefined);
-      const { error: stateError } = await admin
-        .from("whatsapp_evolution_instances")
-        .update({ last_connection_state: "number_mismatch" })
-        .eq("social_account_id", account.id);
-      if (stateError) throw stateError;
+      // The linked phone is not the stored one: the shared handler kills the remote
+      // session so it stops answering polls, and records why in the instance row. A
+      // logout failure must not hide the mismatch -- the flag in account_metadata is
+      // the durable record.
+      await handleNumberMismatch(admin, api, { accountId: account.id, instanceName });
       return { ownerNumber: account.platform_user_id, mismatch: true };
     }
   }
