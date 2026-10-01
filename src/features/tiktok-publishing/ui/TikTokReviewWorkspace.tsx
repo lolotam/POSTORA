@@ -157,8 +157,7 @@ export function TikTokReviewWorkspace({ headerLink }: TikTokReviewWorkspaceProps
     }
   }
 
-  const canReopen = draft?.state === "submitted" &&
-    (publish.status?.state === "failed" || publish.status?.state === "needs_attention");
+  const canReopen = draft?.state === "submitted" && publish.status?.reopenable === true;
 
   async function onReopen() {
     if (!draft || !canReopen || commands.reopenDraft.isPending) return;

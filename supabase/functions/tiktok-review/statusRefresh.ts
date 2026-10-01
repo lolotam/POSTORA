@@ -24,6 +24,7 @@ const ORPHAN_STALE_MS = 3 * 60 * 1000;
 
 type StoredSubmission = SubmissionSnapshot & {
   id: string;
+  draftId: string;
   postId: string;
   socialAccountId: string;
   providerPublishId: string | null;
@@ -70,7 +71,7 @@ function mapPlatform(row: Row): PlatformPostSnapshot {
 async function loadSubmission(admin: AdminClient, userId: string, submissionId: string): Promise<StoredSubmission> {
   const result = await admin.from("tiktok_review_submissions")
     .select(
-      "id, post_id, social_account_id, dispatch_state, provider_publish_id, last_status_check_at, updated_at",
+      "id, draft_id, post_id, social_account_id, dispatch_state, provider_publish_id, last_status_check_at, updated_at",
     )
     .eq("id", submissionId)
     .eq("user_id", userId)
@@ -81,15 +82,17 @@ async function loadSubmission(admin: AdminClient, userId: string, submissionId: 
   }
   const row = result.data;
   const id = readString(row.id);
+  const draftId = readString(row.draft_id);
   const postId = readString(row.post_id);
   const socialAccountId = readString(row.social_account_id);
   const dispatchState = readString(row.dispatch_state);
   const updatedAt = readString(row.updated_at);
-  if (!id || !postId || !socialAccountId || !dispatchState || !updatedAt) {
+  if (!id || !draftId || !postId || !socialAccountId || !dispatchState || !updatedAt) {
     throw readFailed(new Error("Submission row is incomplete."));
   }
   return {
     id,
+    draftId,
     postId,
     socialAccountId,
     dispatchState,
@@ -263,6 +266,21 @@ async function settleOrphan(
   if (error) throw readFailed(error);
 }
 
+/**
+ * Asked of the database rather than derived from the publish state: a failed attempt
+ * with a publish id reopens only after TikTok's own FAILED event, and offering "Edit and
+ * resubmit" on anything less sent the user into a refusal (#246).
+ */
+async function reopenAllowed(admin: AdminClient, userId: string, draftId: string): Promise<boolean> {
+  const { data, error } = await admin.rpc("tiktok_review_reopen_allowed", {
+    p_user_id: userId,
+    p_draft_id: draftId,
+  });
+  if (error) throw readFailed(error);
+  if (typeof data !== "boolean") throw readFailed(new Error("Reopen check returned no answer."));
+  return data;
+}
+
 export async function readStatus(deps: Dependencies, userId: string, submissionId: string): Promise<Result> {
   const submission = await loadSubmission(deps.admin, userId, submissionId);
   const post = await loadOwnedPost(deps.admin, userId, submission.postId);
@@ -271,7 +289,7 @@ export async function readStatus(deps: Dependencies, userId: string, submissionI
   const currentSubmission = refreshed ? await loadSubmission(deps.admin, userId, submissionId) : submission;
   const currentPost = refreshed ? await loadOwnedPost(deps.admin, userId, submission.postId) : post;
   const currentPlatform = refreshed ? await loadPlatformPost(deps.admin, submission.postId) : platform;
-  return success(mapPublishStatus({
+  const status = mapPublishStatus({
     platformPost: currentPlatform,
     post: currentPost,
     submission: {
@@ -280,5 +298,6 @@ export async function readStatus(deps: Dependencies, userId: string, submissionI
       providerPublishId: currentSubmission.providerPublishId,
     },
     nowMs: deps.now(),
-  }));
+  });
+  return success({ ...status, reopenable: await reopenAllowed(deps.admin, userId, currentSubmission.draftId) });
 }

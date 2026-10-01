@@ -150,6 +150,7 @@ describe("usePublishStatus", () => {
         updatedAt: "2026-09-30T12:05:00Z",
         reason: terminalState === "published" || terminalState === "scheduled" ? null : "Terminal condition occurred",
         postUrl: terminalState === "published" ? "https://tiktok.com/@user/video/1" : null,
+        reopenable: false,
       };
 
       const gateway = createFakeGateway({
@@ -339,6 +340,7 @@ describe("usePublishStatus", () => {
       updatedAt: "2026-09-30T12:00:00Z",
       reason: "Stale failure",
       postUrl: null,
+      reopenable: false,
     };
     await act(async () => {
       resolveFirst(staleStatus);
@@ -359,6 +361,7 @@ describe("usePublishStatus", () => {
       updatedAt: "2026-09-30T12:01:00Z",
       reason: null,
       postUrl: null,
+      reopenable: false,
     };
     await act(async () => {
       resolveSecond(freshStatus);
@@ -444,6 +447,7 @@ describe("usePublishStatus", () => {
         updatedAt: "2026-10-01T10:00:00Z",
         reason: null,
         postUrl: null,
+        reopenable: false,
       };
       const gateway = createFakeGateway({
         status: vi.fn().mockResolvedValue(scheduledStatus),
@@ -498,6 +502,7 @@ describe("usePublishStatus", () => {
         updatedAt: "2026-10-01T10:00:00Z",
         reason: null,
         postUrl: null,
+        reopenable: false,
       };
       const gateway = createFakeGateway({
         status: vi.fn().mockResolvedValue(scheduledStatus),
@@ -532,6 +537,7 @@ describe("usePublishStatus", () => {
         updatedAt: "2026-10-01T10:00:00Z",
         reason: null,
         postUrl: null,
+        reopenable: false,
       };
       const gateway = createFakeGateway({
         status: vi.fn().mockResolvedValue(scheduledStatus),
