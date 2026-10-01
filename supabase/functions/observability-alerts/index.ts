@@ -345,7 +345,10 @@ serve(async (req) => {
           });
           if (silentError) {
             // Skip only this rule: throwing would leave every later rule unevaluated this run.
-            console.error(`[OBSERVABILITY-ALERTS] ${config.name}: silent connection read failed:`, silentError.message);
+            await logger.error(`Alert rule "${config.name}" skipped: silent connection read failed`, {
+              alert_config_id: config.id,
+              error: silentError.message,
+            });
             continue;
           }
           const connections = (silent ?? []) as unknown[];
