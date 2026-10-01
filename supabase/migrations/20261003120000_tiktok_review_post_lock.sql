@@ -16,6 +16,11 @@
 --    delete is refused while the post is mid-publish -- of the post, and of its TikTok
 --    platform_posts row, which History deletes first -- while cascades (account or user
 --    deletion) still pass. A review post's source can never change, since the lock keys on it.
+--    The lock starts at process-post's claim (posts.status = 'processing'), before the
+--    submission leaves 'scheduled', so an edit can't land between the claim and the dispatch.
+--    The submission marker in metadata is immutable: process-post picks the review path
+--    from it, and a post without it would take the legacy TikTok path, with no submission
+--    claim and no consent snapshot.
 --
 -- 3. The reopen rule moves into tiktok_review_reopen_allowed() so the workspace can ask it
 --    before offering "Edit and resubmit". tiktok_review_transition keeps its exact
@@ -275,6 +280,12 @@ BEGIN
       USING ERRCODE = 'P0001', DETAIL = 'TIKTOK_REVIEW_POST_LOCKED';
   END IF;
 
+  -- Written once, at submission. A full-metadata rewrite (the composer's edit) drops it too.
+  IF NEW.metadata->'tiktok_review_submission_id' IS DISTINCT FROM OLD.metadata->'tiktok_review_submission_id' THEN
+    RAISE EXCEPTION 'A TikTok review post can only be edited in TikTok review.'
+      USING ERRCODE = 'P0001', DETAIL = 'TIKTOK_REVIEW_POST_LOCKED';
+  END IF;
+
   -- The columns Calendar, Scheduled Posts and History retry write; status, posted_at and
   -- the rest of metadata stay free for process-post and the settle seam.
   IF NEW.scheduled_at IS DISTINCT FROM OLD.scheduled_at
@@ -283,7 +294,8 @@ BEGIN
     OR NEW.media_file_ids IS DISTINCT FROM OLD.media_file_ids
     OR NEW.metadata->'selected_account_ids' IS DISTINCT FROM OLD.metadata->'selected_account_ids'
   THEN
-    IF EXISTS (
+    -- 'processing' is process-post's claim: from there it publishes the row it already read.
+    IF OLD.status = 'processing' OR EXISTS (
       SELECT 1 FROM public.tiktok_review_submissions s
       WHERE s.post_id = OLD.id
         AND (s.dispatch_state IN ('dispatching', 'publishing', 'dispatched', 'unknown')

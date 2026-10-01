@@ -94,7 +94,7 @@ import { selectedLinkedInDestinationIds } from "../_shared/linkedinDestinations.
 import { fetchWithTimeout } from "../_shared/request-timeout.ts";
 import { composioClientFromEnv } from "../_shared/composioClient.ts";
 import { publishYouTubeViaComposio } from "./youtubeComposio.ts";
-import { prepareTikTokReviewPublish, recordReviewPublishId, tiktokReviewSubmissionId } from "./tiktokReview.ts";
+import { prepareTikTokReviewPublish, recordReviewPublishId, requiredReviewSubmissionId } from "./tiktokReview.ts";
 import { firstPublicPostId } from "../_shared/tiktokPublishOutcome.ts";
 import { z } from "npm:zod@3.23.8";
 
@@ -390,6 +390,7 @@ interface PostData {
   media_file_ids: string[] | null;
   scheduled_at?: string | null;
   metadata?: PlatformMetadata | null;
+  source?: string | null;
 }
 
 /**
@@ -1654,7 +1655,7 @@ Deno.serve(async (req) => {
             result = await postToThreads(account, post, mediaUrls);
             break;
           case "tiktok": {
-            const reviewSubmissionId = tiktokReviewSubmissionId(post.metadata);
+            const reviewSubmissionId = requiredReviewSubmissionId(post);
             result = reviewSubmissionId
               ? await postToTikTok(account, post, mediaUrls, (publishId) =>
                 recordReviewPublishId(supabase, {
@@ -6269,7 +6270,7 @@ async function postToTikTok(
 
   console.log(`TikTok posting - mediaUrls received:`, mediaUrls);
 
-  const reviewSubmissionId = tiktokReviewSubmissionId(metadata);
+  const reviewSubmissionId = requiredReviewSubmissionId(post);
   let reviewPostInfo: Record<string, unknown> | null = null;
   if (reviewSubmissionId) {
     const prepared = await prepareTikTokReviewPublish({

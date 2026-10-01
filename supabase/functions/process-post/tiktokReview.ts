@@ -22,6 +22,19 @@ export function tiktokReviewSubmissionId(metadata: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
+/**
+ * The review submission a TikTok publish must go through, or null for a legacy post. A review
+ * post without its marker is refused, not published down the legacy path, which has no
+ * submission claim and no consent snapshot.
+ */
+export function requiredReviewSubmissionId(post: { source?: string | null; metadata?: unknown }): string | null {
+  const submissionId = tiktokReviewSubmissionId(post.metadata);
+  if (!submissionId && post.source === "tiktok_review") {
+    throw new Error("TIKTOK_REVIEW_NEEDS_ATTENTION:SUBMISSION_NOT_FOUND");
+  }
+  return submissionId;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -38,6 +51,48 @@ function keepsConsentedTarget(
   if (submission.mode !== "scheduled" || typeof submission.scheduled_at !== "string") return false;
   return postScheduledAt !== null &&
     Date.parse(postScheduledAt) === Date.parse(submission.scheduled_at);
+}
+
+interface PostRevision {
+  caption: string | null;
+  media_file_ids: string[] | null;
+  scheduled_at: string | null;
+}
+
+function matchesConsent(
+  post: PostRevision,
+  snapshot: { caption: string; mediaFileId: string | null },
+  submission: { social_account_id: unknown; mode: unknown; scheduled_at: unknown },
+  accountId: string,
+): boolean {
+  return post.caption === snapshot.caption &&
+    (post.media_file_ids?.[0] ?? null) === snapshot.mediaFileId &&
+    keepsConsentedTarget(submission, accountId, post.scheduled_at);
+}
+
+function selectsOnly(metadata: unknown, accountId: string): boolean {
+  const ids = isRecord(metadata) ? metadata.selected_account_ids : null;
+  return Array.isArray(ids) && ids.length === 1 && ids[0] === accountId;
+}
+
+/**
+ * The post as it stands now. process-post loaded it before claiming it; an edit that landed in
+ * between is only visible here. The claim set `processing`, which the posts trigger locks
+ * against further edits, so this read holds for the rest of the publish.
+ */
+async function readClaimedPost(
+  admin: SupabaseClient,
+  post: { id: string; user_id: string },
+): Promise<PostRevision & { metadata: unknown }> {
+  const { data, error } = await admin
+    .from("posts")
+    .select("caption, media_file_ids, scheduled_at, status, metadata")
+    .eq("id", post.id)
+    .eq("user_id", post.user_id)
+    .maybeSingle();
+  if (error || !data) throw new Error("TIKTOK_REVIEW_NEEDS_ATTENTION:POST_READ_FAILED");
+  if (data.status !== "processing") throw new Error("TIKTOK_REVIEW_NEEDS_ATTENTION:POST_NOT_CLAIMED");
+  return data;
 }
 
 export async function prepareTikTokReviewPublish(input: {
@@ -82,11 +137,13 @@ export async function prepareTikTokReviewPublish(input: {
   const snapshot = isRecord(submission.snapshot) ? submission.snapshot : null;
   const caption = snapshot?.caption;
   const mediaFileId = typeof snapshot?.media_file_id === "string" ? snapshot.media_file_id : null;
-  if (
-    typeof caption !== "string" || input.post.caption !== caption ||
-    (input.post.media_file_ids?.[0] ?? null) !== mediaFileId ||
-    !keepsConsentedTarget(submission, input.accountId, input.post.scheduled_at)
-  ) {
+  if (typeof caption !== "string") throw new Error("TIKTOK_REVIEW_NEEDS_ATTENTION:SNAPSHOT_MISMATCH");
+  const consented = { caption, mediaFileId };
+  if (!matchesConsent(input.post, consented, submission, input.accountId)) {
+    throw new Error("TIKTOK_REVIEW_NEEDS_ATTENTION:SNAPSHOT_MISMATCH");
+  }
+  const current = await readClaimedPost(input.admin, input.post);
+  if (!matchesConsent(current, consented, submission, input.accountId) || !selectsOnly(current.metadata, input.accountId)) {
     throw new Error("TIKTOK_REVIEW_NEEDS_ATTENTION:SNAPSHOT_MISMATCH");
   }
   const settings = tiktokPostSettingsFromReview(snapshot?.settings);

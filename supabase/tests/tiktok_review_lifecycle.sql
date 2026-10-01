@@ -1064,6 +1064,75 @@ BEGIN
     'T19 a dispatched post can be deleted';
 END $$;
 
+-- T20: the lock starts at process-post's claim, while the submission is still
+-- 'scheduled', and the submission marker can never be removed (#260 review).
+DO $$
+DECLARE
+  u_a uuid := 'a1a1a1a1-1111-4111-8111-aaaaaaaaaaaa';
+  acct_a_tt uuid := 'a1a1a1a1-aaaa-4111-8111-aaaaaaaaaaaa';
+  media_a uuid := 'aa000001-aaaa-4111-8111-aaaaaaaaaaaa';
+  v_draft public.tiktok_review_drafts%ROWTYPE;
+  v_res jsonb;
+  v_post uuid;
+  v_sub uuid;
+  v_detail text;
+BEGIN
+  v_draft := public.tiktok_review_create_draft(u_a, acct_a_tt);
+  PERFORM public.tiktok_review_save_draft(u_a, v_draft.id, 1, 'claimed', media_a, 9, '{}'::jsonb);
+  v_res := public.tiktok_review_submit(
+    u_a, v_draft.id, 2, 'c1000025-0000-4000-8000-000000000025', 'scheduled',
+    now() + interval '2 days', 'UTC');
+  v_post := (v_res->>'post_id')::uuid;
+  v_sub := (v_res->>'submission_id')::uuid;
+
+  -- The marker is refused even before any claim: dropped by a whole-metadata rewrite,
+  -- or removed on its own.
+  BEGIN
+    UPDATE public.posts SET metadata = '{"selected_account_ids": ["a1a1a1a1-aaaa-4111-8111-aaaaaaaaaaaa"]}'::jsonb
+    WHERE id = v_post;
+    RAISE EXCEPTION 'T20 failed: a metadata rewrite without the marker was accepted' USING ERRCODE = 'assert_failure';
+  EXCEPTION WHEN raise_exception THEN
+    GET STACKED DIAGNOSTICS v_detail = PG_EXCEPTION_DETAIL;
+    ASSERT v_detail = 'TIKTOK_REVIEW_POST_LOCKED', 'T20 marker rewrite refusal, got: ' || coalesce(v_detail, SQLERRM);
+  END;
+  BEGIN
+    UPDATE public.posts SET metadata = metadata - 'tiktok_review_submission_id' WHERE id = v_post;
+    RAISE EXCEPTION 'T20 failed: removing the marker was accepted' USING ERRCODE = 'assert_failure';
+  EXCEPTION WHEN raise_exception THEN
+    GET STACKED DIAGNOSTICS v_detail = PG_EXCEPTION_DETAIL;
+    ASSERT v_detail = 'TIKTOK_REVIEW_POST_LOCKED', 'T20 marker removal refusal, got: ' || coalesce(v_detail, SQLERRM);
+  END;
+  ASSERT (SELECT metadata->>'tiktok_review_submission_id' FROM public.posts WHERE id = v_post) = v_sub::text,
+    'T20 the marker survives';
+
+  -- process-post's claim; the submission has not left 'scheduled' yet.
+  UPDATE public.posts SET status = 'processing' WHERE id = v_post;
+  ASSERT (SELECT dispatch_state FROM public.tiktok_review_submissions WHERE id = v_sub) = 'scheduled',
+    'T20 fixture: the submission is still scheduled';
+  BEGIN
+    UPDATE public.posts SET scheduled_at = now() + interval '5 days' WHERE id = v_post;
+    RAISE EXCEPTION 'T20 failed: a reschedule after the claim was accepted' USING ERRCODE = 'assert_failure';
+  EXCEPTION WHEN raise_exception THEN
+    GET STACKED DIAGNOSTICS v_detail = PG_EXCEPTION_DETAIL;
+    ASSERT v_detail = 'TIKTOK_REVIEW_POST_LOCKED', 'T20 claimed reschedule refusal, got: ' || coalesce(v_detail, SQLERRM);
+  END;
+  BEGIN
+    UPDATE public.posts SET caption = 'edited after the claim' WHERE id = v_post;
+    RAISE EXCEPTION 'T20 failed: a caption edit after the claim was accepted' USING ERRCODE = 'assert_failure';
+  EXCEPTION WHEN raise_exception THEN
+    GET STACKED DIAGNOSTICS v_detail = PG_EXCEPTION_DETAIL;
+    ASSERT v_detail = 'TIKTOK_REVIEW_POST_LOCKED', 'T20 claimed caption refusal, got: ' || coalesce(v_detail, SQLERRM);
+  END;
+
+  -- The publisher's own writes still pass: other metadata keys, then the failure status.
+  UPDATE public.posts SET metadata = metadata || '{"tiktok_note": "claimed"}'::jsonb WHERE id = v_post;
+  UPDATE public.posts SET status = 'failed' WHERE id = v_post;
+  -- Out of 'processing' and never dispatched, the post is the user's to move again.
+  UPDATE public.posts SET scheduled_at = now() + interval '6 days' WHERE id = v_post;
+  ASSERT (SELECT status FROM public.posts WHERE id = v_post) = 'failed',
+    'T20 the publisher can still set the outcome';
+END $$;
+
 ROLLBACK;
 
 \echo '=== tiktok_review_lifecycle: ALL CHECKS PASSED ==='

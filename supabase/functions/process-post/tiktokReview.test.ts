@@ -7,6 +7,7 @@ import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.89.0
 import {
   prepareTikTokReviewPublish,
   recordReviewPublishId,
+  requiredReviewSubmissionId,
   tiktokReviewSubmissionId,
 } from "./tiktokReview.ts";
 
@@ -99,7 +100,17 @@ const defaultPost = {
   },
 };
 
+// The posts row as process-post's claim left it.
+const claimedPostRow = {
+  caption: defaultPost.caption,
+  media_file_ids: defaultPost.media_file_ids,
+  scheduled_at: null as string | null,
+  status: "processing",
+  metadata: { ...defaultPost.metadata, selected_account_ids: ["acct-uuid-1"] },
+};
+
 function createFakeAdmin(options: {
+  post?: { data: unknown; error: unknown };
   submission?: { data: unknown; error: unknown };
   media?: { data: unknown; error: unknown };
   claim?: { data: unknown; error: unknown };
@@ -147,6 +158,9 @@ function createFakeAdmin(options: {
                 error: null,
               },
             );
+          }
+          if (currentTable === "posts") {
+            return Promise.resolve(options.post ?? { data: claimedPostRow, error: null });
           }
           if (currentTable === "media_files") {
             return Promise.resolve(
@@ -724,6 +738,7 @@ Deno.test("a scheduled post publishes at its approved time whatever the timestam
         data: { ...defaultConsent, mode: "scheduled", scheduled_at: "2026-10-05T09:00:00+00:00", snapshot: defaultSnapshot },
         error: null,
       },
+      post: { data: { ...claimedPostRow, scheduled_at: "2026-10-05 09:00:00+00" }, error: null },
     });
     const prepared = await prepareTikTokReviewPublish({
       admin: client,
@@ -734,4 +749,75 @@ Deno.test("a scheduled post publishes at its approved time whatever the timestam
     });
     assertEquals(prepared.postInfo.privacy_level, "PUBLIC_TO_EVERYONE");
   });
+});
+
+// process-post reads the post, then claims it; a Calendar or Scheduled Posts edit in between
+// used to be accepted while TikTok received the earlier row (#260 review).
+Deno.test("an edit that landed before process-post's claim is refused before the submission claim", async () => {
+  const cases = [
+    { name: "caption", row: { ...claimedPostRow, caption: "Edited caption" } },
+    { name: "publish time", row: { ...claimedPostRow, scheduled_at: "2026-10-09T09:00:00+00:00" } },
+    { name: "account", row: { ...claimedPostRow, metadata: { ...claimedPostRow.metadata, selected_account_ids: ["acct-uuid-2"] } } },
+  ];
+  for (const testCase of cases) {
+    await withCreatorResponse(validCreatorResponse, async () => {
+      const { client, calls } = createFakeAdmin({ post: { data: testCase.row, error: null } });
+      await assertRejects(
+        () =>
+          prepareTikTokReviewPublish({
+            admin: client,
+            accessToken: "token-1",
+            submissionId: "sub-uuid-1",
+            accountId: "acct-uuid-1",
+            post: defaultPost,
+          }),
+        Error,
+        "TIKTOK_REVIEW_NEEDS_ATTENTION:SNAPSHOT_MISMATCH",
+        testCase.name,
+      );
+      assertZeroSubmissionUpdates(calls);
+    });
+  }
+});
+
+Deno.test("a post that is unreadable or no longer claimed is not published", async () => {
+  const cases = [
+    { post: { data: null, error: { message: "boom" } }, code: "POST_READ_FAILED" },
+    { post: { data: null, error: null }, code: "POST_READ_FAILED" },
+    { post: { data: { ...claimedPostRow, status: "scheduled" }, error: null }, code: "POST_NOT_CLAIMED" },
+  ];
+  for (const testCase of cases) {
+    await withCreatorResponse(validCreatorResponse, async () => {
+      const { client, calls } = createFakeAdmin({ post: testCase.post });
+      await assertRejects(
+        () =>
+          prepareTikTokReviewPublish({
+            admin: client,
+            accessToken: "token-1",
+            submissionId: "sub-uuid-1",
+            accountId: "acct-uuid-1",
+            post: defaultPost,
+          }),
+        Error,
+        `TIKTOK_REVIEW_NEEDS_ATTENTION:${testCase.code}`,
+      );
+      assertZeroSubmissionUpdates(calls);
+    });
+  }
+});
+
+// A review post whose marker was removed must not fall back to the legacy TikTok path,
+// which skips the submission claim and the consent snapshot (#260 review).
+Deno.test("a review post without its submission marker is refused, a legacy post is not", () => {
+  const error = (() => {
+    try {
+      requiredReviewSubmissionId({ source: "tiktok_review", metadata: { selected_account_ids: ["acct-uuid-1"] } });
+    } catch (caught) {
+      return caught as Error;
+    }
+    return null;
+  })();
+  assertEquals(error?.message, "TIKTOK_REVIEW_NEEDS_ATTENTION:SUBMISSION_NOT_FOUND");
+  assertEquals(requiredReviewSubmissionId({ source: "dashboard", metadata: {} }), null);
+  assertEquals(requiredReviewSubmissionId({ source: "tiktok_review", metadata: defaultPost.metadata }), "sub-uuid-1");
 });
