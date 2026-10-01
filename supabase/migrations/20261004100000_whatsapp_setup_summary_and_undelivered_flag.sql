@@ -54,7 +54,8 @@ BEGIN
 END;
 $$;
 REVOKE ALL ON FUNCTION public.get_whatsapp_account_setup_summary(uuid) FROM PUBLIC, anon, authenticated;
-GRANT EXECUTE ON FUNCTION public.get_whatsapp_account_setup_summary(uuid) TO authenticated, service_role;
+-- Browser-only: auth.uid() is null under the service role, so it is not granted there.
+GRANT EXECUTE ON FUNCTION public.get_whatsapp_account_setup_summary(uuid) TO authenticated;
 
 CREATE OR REPLACE FUNCTION public.note_undelivered_store_event(p_account_id uuid)
 RETURNS void

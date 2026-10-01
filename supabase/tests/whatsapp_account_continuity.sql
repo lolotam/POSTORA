@@ -48,6 +48,8 @@ BEGIN
     'S3 anon cannot run the setup summary';
   ASSERT has_function_privilege('authenticated', 'public.get_whatsapp_account_setup_summary(uuid)', 'EXECUTE'),
     'S3 authenticated can run the setup summary';
+  ASSERT NOT has_function_privilege('service_role', 'public.get_whatsapp_account_setup_summary(uuid)', 'EXECUTE'),
+    'S3 service_role is not granted the browser-only summary';
   ASSERT NOT has_function_privilege('authenticated', 'public.note_undelivered_store_event(uuid)', 'EXECUTE'),
     'S4 authenticated cannot raise the undelivered flag';
   ASSERT NOT has_function_privilege('anon', 'public.note_undelivered_store_event(uuid)', 'EXECUTE'),
@@ -77,6 +79,9 @@ BEGIN
   PERFORM public.note_undelivered_store_event(acc);
   ASSERT (SELECT account_metadata->'undelivered_store_events'->>'since' FROM public.social_accounts WHERE id = acc) = v_since,
     'S5 a second note keeps since';
+  ASSERT (SELECT (account_metadata->'undelivered_store_events'->>'last_at')::timestamptz FROM public.social_accounts WHERE id = acc)
+         > v_last1::timestamptz,
+    'S5 a second note advances last_at';
   ASSERT NOT (SELECT account_metadata->'undelivered_store_events' ? 'count' FROM public.social_accounts WHERE id = acc),
     'S5 the flag carries no retry count';
   ASSERT (SELECT account_metadata->>'automation_handler' FROM public.social_accounts WHERE id = acc) = 'internal',
@@ -118,6 +123,10 @@ BEGIN
   ASSERT public.clear_undelivered_if_none_held(acc) = false, 'S9 a pending event keeps the incident open';
   ASSERT (SELECT account_metadata ? 'undelivered_store_events' FROM public.social_accounts WHERE id = acc),
     'S9 the flag survives while an order is held';
+  UPDATE public.store_events SET status = 'claimed', claimed_at = now(), claim_token = gen_random_uuid() WHERE id = v_event;
+  ASSERT public.clear_undelivered_if_none_held(acc) = false, 'S9 a claimed event keeps the incident open';
+  UPDATE public.store_events SET status = 'sending' WHERE id = v_event;
+  ASSERT public.clear_undelivered_if_none_held(acc) = false, 'S9 a sending event keeps the incident open';
   UPDATE public.store_events SET status = 'skipped', skip_reason = 'account_disconnected', processed_at = now()
    WHERE id = v_event;
   ASSERT public.clear_undelivered_if_none_held(acc) = true, 'S9 nothing held: the incident clears';
