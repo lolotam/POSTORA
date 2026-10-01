@@ -231,6 +231,7 @@ function provider(state = "connecting") {
     connect: (input: string) => { calls.push({ method: "connect", input }); return Promise.resolve({ qrcode: { base64: "qr-image" }, instance: { state } }); },
     connectionState: (input: string) => { calls.push({ method: "state", input }); return Promise.resolve({ instance: { state } }); },
     fetchInstance: (input: string) => { calls.push({ method: "identity", input }); return Promise.resolve({ ownerJid: "15550001111@s.whatsapp.net", profileName: "Provider Name" }); },
+    logout: (input: string) => { calls.push({ method: "logout", input }); return Promise.resolve({}); },
   };
   return { api, calls };
 }
@@ -330,13 +331,18 @@ for (const state of ["open", "close"]) {
   });
 }
 
-Deno.test("reconciliation merges mismatch metadata without erasing consent or the chosen name", async () => {
+Deno.test("pairingStatus on a mismatch returns state number_mismatch and phone_number null, and calls logout once", async () => {
   const db = fixture({ existing: true, resolved: true });
   const remote = provider("open");
   remote.api.fetchInstance = () => Promise.resolve({ ownerJid: "15550002222@s.whatsapp.net", profileName: "Other Name" });
-  await pairingStatus({ ...CTX, admin: db.admin }, ID, { api: remote.api });
+  const response = await pairingStatus({ ...CTX, admin: db.admin }, ID, { api: remote.api });
+  assertEquals(response.state, "number_mismatch");
+  assertEquals(response.phone_number, null);
+  const logouts = remote.calls.filter((c) => c.method === "logout");
+  assertEquals(logouts.length, 1);
+  assertEquals(logouts[0].input, `postora_${ID}`);
   assertEquals(db.calls.find((call) => call.method === "PATCH" && call.url.pathname.endsWith("/social_accounts"))!.body,
-    { is_active: true, account_metadata: { ...db.metadata, number_mismatch: true } });
+    { is_active: false, account_metadata: { ...db.metadata, number_mismatch: true } });
 });
 
 for (const failTable of ["social_accounts", "whatsapp_evolution_instances"]) {

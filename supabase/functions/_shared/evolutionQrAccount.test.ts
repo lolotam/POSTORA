@@ -3,6 +3,7 @@ import {
   findOwnedEvolutionAccount,
   mergeDisplayName,
   normalizeConnectionName,
+  NumberMismatchError,
   syncEvolutionAccountConnection,
 } from "./evolutionQrAccount.ts";
 
@@ -256,22 +257,29 @@ Deno.test("an already-identified account keeps its number when the same phone re
   assertEquals(admin.updates[0].values, { is_active: true });
 });
 
-Deno.test("a reconnect from a DIFFERENT number keeps the stored id but flags the mismatch", async () => {
-  // This case used to be indistinguishable from the one above, which is the hazard: the
-  // stored platform_user_id stays put (conversation ids are built from it), so a rename
-  // could quietly present someone else's phone as the same account. Migrating the
-  // identity is out of scope; detecting it is not.
-  const admin = recordingAdmin();
+Deno.test("established row receiving open with mismatched number rejects with NumberMismatchError and flags mismatch without activating", async () => {
+  const admin = recordingAdmin(null, { active: false });
   const connected = { id: "acc-2", platform_user_id: "96597950350" };
-  await syncEvolutionAccountConnection(admin, connected, "open", { ownerJid: "99999999@s.whatsapp.net" });
-  assertEquals(admin.updates[0].values, {
-    is_active: true,
-    account_metadata: { number_mismatch: true },
-  });
-  // The number itself is deliberately NOT changed, so no identity claim is attempted.
-  assertEquals(admin.updates[0].values.platform_user_id, undefined);
-  assertEquals(admin.rpcs.map((r) => r.name), ["clear_undelivered_store_events"]);
-  assertEquals(admin.rpcs[0]?.args, { p_account_id: "acc-2" });
+  await assertRejects(
+    () => syncEvolutionAccountConnection(admin, connected, "open", { ownerJid: "99999999@s.whatsapp.net" }),
+    NumberMismatchError,
+  );
+  assertEquals(admin.updates.length, 1);
+  assertEquals(admin.updates[0].table, "social_accounts");
+  assertEquals(admin.updates[0].id, "acc-2");
+  assertEquals(admin.updates[0].values.account_metadata, { number_mismatch: true });
+  assertEquals(admin.updates[0].values.is_active, false);
+  assertEquals(admin.deliveries, []);
+  const clearCalls = admin.rpcs.filter((r) => r.name === "clear_undelivered_store_events");
+  assertEquals(clearCalls, []);
+});
+
+Deno.test("a matching number on a row whose metadata has number_mismatch:true clears the flag in the update", async () => {
+  const admin = recordingAdmin({ number_mismatch: true });
+  const connected = { id: "acc-2", platform_user_id: "96597950350" };
+  await syncEvolutionAccountConnection(admin, connected, "open", { ownerJid: "96597950350@s.whatsapp.net" });
+  assertEquals(admin.updates[0].values.is_active, true);
+  assertEquals((admin.updates[0].values.account_metadata as Record<string, unknown>)?.number_mismatch, undefined);
 });
 
 Deno.test("a rejected write is surfaced instead of being swallowed", async (t) => {
