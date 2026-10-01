@@ -133,6 +133,7 @@ SUITES=(
   whatsapp_account_continuity.sql
   store_webhook_silence.sql
   whatsapp_number_mismatch.sql
+  whatsapp_account_setup_move.sql
 )
 # These fixtures build their own focused schema and apply the migration under
 # test. They must never run against the restored production-shaped database.
