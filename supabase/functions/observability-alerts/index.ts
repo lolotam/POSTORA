@@ -2,7 +2,7 @@ import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { Resend } from "https://esm.sh/resend@2.0.0";
 import { verifyCronAuth } from "../_shared/cron-auth.ts";
-import { triageFailurePercent } from "./jevTriage.ts";
+import { errorRatePercent, triageFailurePercent } from "./rates.ts";
 
 import { restrictedCorsHeaders } from "../_shared/cors.ts";
 
@@ -242,17 +242,21 @@ serve(async (req) => {
 
       switch (config.trigger_type) {
         case "error_rate": {
-          // Calculate error rate from recent logs
+          // Counted server-side: a row select is capped at db-max-rows and would rate a partial page.
           const windowStart = new Date(now.getTime() - config.time_window_minutes * 60 * 1000).toISOString();
-          const { data: logs } = await supabase
+          const windowLogs = () => supabase
             .from("system_logs")
-            .select("level")
+            .select("id", { count: "exact", head: true })
             .gte("created_at", windowStart);
-          
-          const total = logs?.length || 0;
-          const errors = logs?.filter(l => l.level === "error").length || 0;
-          currentValue = total > 0 ? Math.round((errors / total) * 100) : 0;
-          shouldTrigger = compareValue(currentValue, config.threshold_value, config.threshold_operator);
+          const [all, errors] = await Promise.all([windowLogs(), windowLogs().eq("level", "error")]);
+          if (all.error || errors.error) {
+            // Skip only this rule: throwing would leave every later rule unevaluated this run.
+            console.error(`[OBSERVABILITY-ALERTS] ${config.name}: log count failed:`, (all.error ?? errors.error)!.message);
+            continue;
+          }
+
+          currentValue = errorRatePercent(all.count ?? 0, errors.count ?? 0);
+          shouldTrigger = currentValue !== null && compareValue(currentValue, config.threshold_value, config.threshold_operator);
           break;
         }
 
