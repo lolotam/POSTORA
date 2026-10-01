@@ -167,6 +167,17 @@ async function emitConnectionTransition(
   }
 }
 
+// The undelivered-store-orders flag (PR-D) holds incoming store orders while the
+// account cannot send. A successful activation means it can send again, so the flag
+// goes with it. Best effort on purpose: a failed clear must never undo the
+// activation/identity claim callers depend on.
+export async function clearUndeliveredSafely(admin: any, accountId: string): Promise<void> {
+  const { error } = await admin.rpc("clear_undelivered_store_events", { p_account_id: accountId });
+  if (error) {
+    console.error(`[evolution-qr] account ${accountId}: undelivered flag clear failed`);
+  }
+}
+
 // Returns the owner number now stored for the account. Callers need it because activation
 // replaces a provisional "pending_<uuid>" placeholder, and anything that builds conversation
 // ids straight afterwards would otherwise use the stale value it passed in -- writing a whole
@@ -203,7 +214,10 @@ export async function syncEvolutionAccountConnection(
 
   // Re-pairing a different number leaves platform_user_id at the old value (the claim
   // below is gated on the pending_ placeholder), and a rename can mask that. Migration is
-  // out of scope, so the mismatch is detected and flagged for follow-up instead.
+  // out of scope, so the mismatch is detected and flagged for follow-up instead. The flag
+  // also suppresses the undelivered-flag clear below: a refused activation is not a
+  // working connection, and held store orders must stay held.
+  let flaggedMismatch = false;
   if (ownerNumber && !isProvisional && ownerNumber !== account.platform_user_id) {
     // The numbers themselves stay out of the log: these are the end user's and their
     // contact's phone numbers, and a function log is not the place for them. The account
@@ -217,6 +231,7 @@ export async function syncEvolutionAccountConnection(
     // connection mode and the consent trail, and replacing the object would erase them.
     metadata.number_mismatch = true;
     updates.account_metadata = metadata;
+    flaggedMismatch = true;
   }
 
   const profileName = extractProfileName(identity);
@@ -230,7 +245,8 @@ export async function syncEvolutionAccountConnection(
   // nothing logged anywhere -- the QR screen simply never finished. The object can now be
   // empty on the claim path, where nothing but the identity changes, and PostgREST rejects an
   // empty PATCH rather than treating it as a no-op.
-  if (Object.keys(updates).length > 0) {
+  const hasRowWrite = Object.keys(updates).length > 0;
+  if (hasRowWrite) {
     const { error: updateError } = await admin
       .from("social_accounts")
       .update(updates)
@@ -243,6 +259,7 @@ export async function syncEvolutionAccountConnection(
   // is the record of that, because rewriting the number would orphan every conversation id
   // already derived from it.
   if (!claimsIdentity) {
+    if (!flaggedMismatch) await clearUndeliveredSafely(admin, account.id);
     await emitConnectionTransition(admin, account.id, previous, true);
     return account.platform_user_id;
   }
@@ -255,6 +272,11 @@ export async function syncEvolutionAccountConnection(
     p_owner_number: ownerNumber,
   });
   if (claimError) throw claimError;
+  // When the claim RPC is the sync's only change, release the held store orders right
+  // after it. When the sync also renamed the row (a profile name came with the first
+  // link), the clear waits for the next successful poll, which takes the
+  // established-row path above and clears it then.
+  if (!hasRowWrite) await clearUndeliveredSafely(admin, account.id);
   await emitConnectionTransition(admin, account.id, previous, true);
   return (claimed as string | null) ?? account.platform_user_id;
 }

@@ -58,6 +58,8 @@ import { Info, Clock } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
 import { WhatsAppQrDisclaimerDialog } from "./WhatsAppQrDisclaimerDialog";
 import { WhatsAppQrScanner } from "./WhatsAppQrScanner";
+import { AccountSetupSummaryList } from "./AccountSetupSummaryList";
+import { useWhatsAppSetupSummary } from "@/hooks/useWhatsAppSetupSummary";
 import { supabase } from "@/integrations/supabase/client";
 
 interface WhatsAppSetupProps {
@@ -91,6 +93,9 @@ export function WhatsAppSetup({ connectedAccounts }: WhatsAppSetupProps) {
   const [switchTarget, setSwitchTarget] = useState<MessagingAccount | null>(null);
   const [disconnectTarget, setDisconnectTarget] = useState<MessagingAccount | null>(null);
   const [syncingAccountId, setSyncingAccountId] = useState<string | null>(null);
+  // Loaded while the dialog is open so the user sees what stays attached before
+  // disconnecting — the reassurance that a disconnect is reversible.
+  const disconnectSummary = useWhatsAppSetupSummary(disconnectTarget?.id ?? null);
 
   // Mirrors the bridge's validation (trim, non-empty, <= 60) so an invalid name is
   // never sent for the server to substitute.
@@ -773,6 +778,10 @@ export function WhatsAppSetup({ connectedAccounts }: WhatsAppSetupProps) {
                 </p>
                 <p className="text-muted-foreground">
                   {t("setup.disconnectHint", "Your WhatsApp Business mobile app will continue to work normally. You can reconnect anytime via Coexistence.")}
+                </p>
+                {disconnectSummary.data && <AccountSetupSummaryList summary={disconnectSummary.data} />}
+                <p className="text-muted-foreground">
+                  {t("setup.disconnectKeepsSetup", "These stay on this account. Reconnect it later, or move them to a new connection.")}
                 </p>
               </div>
             </AlertDialogDescription>
