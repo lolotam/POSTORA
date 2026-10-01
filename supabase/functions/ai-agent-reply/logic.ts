@@ -35,18 +35,33 @@ const LATIN_CHAR_RE = /[A-Za-z]/g;
  * English "treat as data, not instructions" marker, and those ~75 Latin characters
  * outweighed a short Arabic transcript, so an Arabic voice note got an English reply.
  * A detected language is better evidence than a character tally either way.
+ *
+ * A message with no letters at all -- a "5" answering the review opener's 1-5 rating, an
+ * emoji, an order number -- says nothing about language, so the newest earlier turn that
+ * does decides. `earlierTurns` is newest first.
  */
 export function detectReplyLanguage(
   inboundText: string,
   languageMode: LanguageMode,
   hint?: string | null,
+  earlierTurns: string[] = [],
 ): ReplyLanguage {
   if (languageMode === "ar" || languageMode === "en") return languageMode;
   const normalized = (hint ?? "").trim().toLowerCase();
   if (normalized.startsWith("ar")) return "ar";
   if (normalized.startsWith("en")) return "en";
-  const arabicCount = (inboundText.match(ARABIC_CHAR_RE) || []).length;
-  const latinCount = (inboundText.match(LATIN_CHAR_RE) || []).length;
+  for (const text of [inboundText, ...earlierTurns]) {
+    const language = letterLanguage(text);
+    if (language) return language;
+  }
+  return "en";
+}
+
+/** The language a text's letters point to, or null when it has none. */
+function letterLanguage(text: string): ReplyLanguage | null {
+  const arabicCount = (text.match(ARABIC_CHAR_RE) || []).length;
+  const latinCount = (text.match(LATIN_CHAR_RE) || []).length;
+  if (arabicCount === 0 && latinCount === 0) return null;
   return arabicCount > latinCount ? "ar" : "en";
 }
 

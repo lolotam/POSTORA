@@ -303,6 +303,20 @@ Deno.test("a detected language beats character counting", async () => {
   assertEquals(detectReplyLanguage("مرحبا كيف حالك", "auto"), "ar");
 });
 
+// The Arabic review opener asks for a 1-5 rating; "5" has no letters, and treating that as
+// English forced the follow-up out of the conversation's language (#256 review).
+Deno.test("a message with no letters takes the newest earlier turn's language", async () => {
+  const { detectReplyLanguage } = await import("./logic.ts");
+  const arabicOpener = "قيّم تجربتك من 1 إلى 5";
+  assertEquals(detectReplyLanguage("5", "auto", null, [arabicOpener]), "ar");
+  assertEquals(detectReplyLanguage("👍", "auto", null, ["🙏", arabicOpener, "Hello"]), "ar");
+  assertEquals(detectReplyLanguage("#82935", "auto", null, ["Hello there"]), "en");
+  // Letters in the new message still win over the thread.
+  assertEquals(detectReplyLanguage("Thank you", "auto", null, [arabicOpener]), "en");
+  // Nothing anywhere keeps the English default.
+  assertEquals(detectReplyLanguage("5", "auto", null, []), "en");
+});
+
 Deno.test("a forced language is stated as an override and repeated last", async () => {
   const { buildSystemPrompt } = await import("./logic.ts");
   const prompt = buildSystemPrompt({
