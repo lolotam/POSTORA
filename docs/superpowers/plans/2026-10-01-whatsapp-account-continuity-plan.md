@@ -62,8 +62,13 @@ Branch `feat/wa-continuity-d`, from `origin/main`.
   - Raises `42501` unless the row's `user_id = auth.uid()`.
   - `GRANT EXECUTE TO authenticated`.
 - `public.note_undelivered_store_event(p_account_id uuid) RETURNS void`
-  - Merges `account_metadata.undelivered_store_events = {since: <first time>, count: n+1, last_at: now()}`.
+  - Merges `account_metadata.undelivered_store_events = {since: <first time, kept>, last_at: now()}`.
+  - It is idempotent: it carries **no count**, because the receiver and every worker retry call it, and a count would count retries rather than orders (debate 1, point 7).
   - `GRANT EXECUTE TO service_role` only.
+- `public.mark_undelivered_alert_emailed(p_account_id uuid, p_since text) RETURNS boolean`
+  - Atomically sets `account_metadata.undelivered_alert_email_at = now()`, only while `undelivered_store_events->>'since' = p_since`.
+  - Returns whether a row changed.
+  - service_role only. This avoids a client-side read–merge–write of the whole metadata object (debate 1, point 9).
 - `public.clear_undelivered_store_events(p_account_id uuid) RETURNS void`
   - Removes that key.
   - service_role only.
@@ -80,8 +85,13 @@ Branch `feat/wa-continuity-d`, from `origin/main`.
   - **S2:** as `u_a`, the summary for `acc_b1` raises `42501`.
   - **S3:** `has_function_privilege('anon', 'public.get_whatsapp_account_setup_summary(uuid)', 'EXECUTE')` is false.
   - **S4:** `note_undelivered_store_event` is not executable by `authenticated`.
-  - **S5:** as service role, two calls produce `count=2` with `since` unchanged.
+  - **S5:** as service role, two calls keep `since` unchanged and advance `last_at`; there is no `count` key.
   - **S6:** `clear_undelivered_store_events` removes the key.
+  - **S7:**
+    - `mark_undelivered_alert_emailed(acc, <current since>)` returns true and sets the timestamp;
+    - with a stale `since` it returns false and changes nothing;
+    - it is not executable by `authenticated`.
+  - **S8:** an `app_settings` row keyed `n8nXwebhookX<u_a>X1` (underscores replaced) with `value.social_account_id = acc_a1` is **not** counted, while `n8n_webhook_<u_a>_1` is. This proves the literal-prefix match (debate 1, point 13).
 
   End with `ROLLBACK;` and a sentinel `SELECT 'whatsapp_account_continuity: ok';`, matching the style of `supabase/tests/tiktok_review_lifecycle.sql`.
 
@@ -129,8 +139,10 @@ BEGIN
     'partner_keys_primary',(SELECT count(*) FROM partner_api_keys WHERE social_account_id = p_account_id AND revoked_at IS NULL),
     'partner_key_links',   (SELECT count(*) FROM partner_api_key_accounts WHERE social_account_id = p_account_id),
     'partner_webhooks',    (SELECT count(*) FROM partner_webhooks WHERE social_account_id = p_account_id AND is_active),
+    -- Literal prefix, not LIKE: '_' is a LIKE wildcard. Keys are n8n_webhook_<userId>_<webhookId>
+    -- (n8n-api/index.ts:1685).
     'n8n_subscriptions',   (SELECT count(*) FROM app_settings
-                             WHERE key LIKE 'n8n_webhook_' || v_user::text || '_%'
+                             WHERE left(key, length('n8n_webhook_' || v_user::text || '_')) = 'n8n_webhook_' || v_user::text || '_'
                                AND value->>'social_account_id' = p_account_id::text),
     'scheduled_messages',  (SELECT count(*) FROM whatsapp_scheduled_messages WHERE social_account_id = p_account_id),
     'automation_handlers', to_jsonb(ARRAY(
@@ -152,12 +164,28 @@ AS $$
      SET account_metadata = coalesce(account_metadata, '{}'::jsonb) || jsonb_build_object(
            'undelivered_store_events', jsonb_build_object(
              'since', coalesce(account_metadata->'undelivered_store_events'->>'since', now()::text),
-             'count', coalesce((account_metadata->'undelivered_store_events'->>'count')::int, 0) + 1,
              'last_at', now()::text))
    WHERE id = p_account_id;
 $$;
 REVOKE ALL ON FUNCTION public.note_undelivered_store_event(uuid) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.note_undelivered_store_event(uuid) TO service_role;
+
+CREATE OR REPLACE FUNCTION public.mark_undelivered_alert_emailed(p_account_id uuid, p_since text)
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  UPDATE social_accounts
+     SET account_metadata = jsonb_set(account_metadata, '{undelivered_alert_email_at}', to_jsonb(now()::text))
+   WHERE id = p_account_id
+     AND account_metadata->'undelivered_store_events'->>'since' = p_since;
+  RETURN FOUND;
+END;
+$$;
+REVOKE ALL ON FUNCTION public.mark_undelivered_alert_emailed(uuid, text) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.mark_undelivered_alert_emailed(uuid, text) TO service_role;
 
 CREATE OR REPLACE FUNCTION public.clear_undelivered_store_events(p_account_id uuid)
 RETURNS void
@@ -196,7 +224,7 @@ GRANT EXECUTE ON FUNCTION public.clear_undelivered_store_events(uuid) TO service
   - **Connected:** response `{ok:true, stored:1}`, with no `warning` key and no `noteUndelivered` call.
   - **Not connected** (`accountConnected` → false): the event is still stored, the response is `{ok:true, stored:1, warning:"account_disconnected"}`, and `noteUndelivered` is called once with the binding's `social_account_id`.
 
-  Also add a third case: `accountConnected` throws, and the response is still 200 with `stored:1`. The warning is best-effort and never fails a stored delivery.
+  Also add a third case: `accountConnected` throws. The response is still 200 with body exactly `{ok:true, stored:1, warning:"account_state_unknown"}`, and `noteUndelivered` is not called. A stored delivery never fails because of the warning, and an unknown state is reported rather than shown as connected (debate 1, point 8).
 - [ ] **Step 2: Run.** `deno test --allow-env --allow-read --node-modules-dir=none supabase/functions/store-webhook/handler.test.ts`. Expected: FAIL (type error: unknown deps).
 - [ ] **Step 3: Implement (GLM).** In `handler.ts`, add to `StoreWebhookDeps`:
 
@@ -210,9 +238,13 @@ GRANT EXECUTE ON FUNCTION public.clear_undelivered_store_events(uuid) TO service
 Replace the final `return json({ ok: true, stored: inserted.stored });` with:
 
 ```ts
-  if (inserted.stored > 0 && !(await accountConnectedSafely(deps, binding.social_account_id))) {
-    await noteUndeliveredSafely(deps, binding.social_account_id);
-    return json({ ok: true, stored: inserted.stored, warning: "account_disconnected" });
+  if (inserted.stored > 0) {
+    const state = await accountState(deps, binding.social_account_id);
+    if (state === "disconnected") {
+      await noteUndeliveredSafely(deps, binding.social_account_id);
+      return json({ ok: true, stored: inserted.stored, warning: "account_disconnected" });
+    }
+    if (state === "unknown") return json({ ok: true, stored: inserted.stored, warning: "account_state_unknown" });
   }
   return json({ ok: true, stored: inserted.stored });
 ```
@@ -220,12 +252,12 @@ Replace the final `return json({ ok: true, stored: inserted.stored });` with:
 with helpers:
 
 ```ts
-async function accountConnectedSafely(deps: StoreWebhookDeps, accountId: string): Promise<boolean> {
+async function accountState(deps: StoreWebhookDeps, accountId: string): Promise<"connected" | "disconnected" | "unknown"> {
   try {
-    return await deps.accountConnected(accountId);
+    return (await deps.accountConnected(accountId)) ? "connected" : "disconnected";
   } catch {
     console.error("[store-webhook] account state read failed");
-    return true;
+    return "unknown";
   }
 }
 
@@ -367,7 +399,7 @@ In `deps.ts`:
 - [ ] **Step 1: Tests (agy).**
   - **Vitest:** mock `supabase.from("social_accounts")` per `src/test` conventions (no `userEvent`; use `fireEvent`, see the frontend test conventions memory).
     - (a) No row with the flag: renders nothing.
-    - (b) One row (`platform_username:"xsellpoint"`, flag `count:3`): renders the text "Store orders are waiting for a disconnected WhatsApp account (xsellpoint)", a link to `/whatsapp/setup` labelled "Reconnect or move setup", and the count "3".
+    - (b) One row (`platform_username:"xsellpoint"`, flag `{since, last_at}`): renders the text "Store orders are waiting for a disconnected WhatsApp account (xsellpoint)" and a link to `/messaging/whatsapp/setup` (route: `src/components/AnimatedRoutes.tsx:280-281,303`) labelled "Reconnect or move setup".
     - (c) A query error: renders nothing and does not throw.
   - **Deno, `handler.test.ts`:**
     - Given two accounts with the flag, where one has `last_at` older than `last_email_at`, exactly one email is sent, and `undelivered_alert_email_at` is written for that account.
@@ -389,7 +421,7 @@ import { useAuth } from "@/hooks/useAuth";
 interface FlaggedAccount {
   id: string;
   platform_username: string | null;
-  account_metadata: { undelivered_store_events?: { count?: number } } | null;
+  account_metadata: { undelivered_store_events?: { since?: string } } | null;
 }
 
 export function UndeliveredStoreOrdersBanner() {
@@ -423,12 +455,10 @@ export function UndeliveredStoreOrdersBanner() {
           </AlertTitle>
           <AlertDescription className="flex flex-wrap items-center gap-3">
             <span>
-              {t("undeliveredStore.body", "{{count}} order message(s) are on hold. Reconnect the account or move its setup to your current connection.", {
-                count: account.account_metadata?.undelivered_store_events?.count ?? 0,
-              })}
+              {t("undeliveredStore.body", "Order messages are on hold. Reconnect the account or move its setup to your current connection.")}
             </span>
             <Button asChild size="sm" variant="outline">
-              <Link to="/whatsapp/setup">{t("undeliveredStore.action", "Reconnect or move setup")}</Link>
+              <Link to="/messaging/whatsapp/setup">{t("undeliveredStore.action", "Reconnect or move setup")}</Link>
             </Button>
           </AlertDescription>
         </Alert>
@@ -438,7 +468,7 @@ export function UndeliveredStoreOrdersBanner() {
 }
 ```
 
-Confirm the WhatsApp setup route path (`git grep -n "whatsapp/setup\|path=\"setup\"" src/components/AnimatedRoutes.tsx`) and use the real one.
+The route is `/messaging/whatsapp/setup` (`src/components/AnimatedRoutes.tsx:280-281,303`).
 
 - [ ] **Step 4: Implement the email function (GLM).** Copy the structure of `supabase/functions/send-token-expiry-notifications/index.ts`: cron auth via `_shared/cron-auth.ts`, Resend send, the snooze check on `alerts_snoozed`.
   - `handler.ts` exports `selectAccountsToEmail(rows, now)`. It returns flagged WhatsApp accounts where:
@@ -448,11 +478,60 @@ Confirm the WhatsApp setup route path (`git grep -n "whatsapp/setup\|path=\"setu
     That gives one email per incident.
   - `index.ts` sends:
     - **subject:** "Store orders are waiting on a disconnected WhatsApp account";
-    - **body:** the account name, a link to `https://postora.cloud/whatsapp/setup`, and no phone numbers.
+    - **body:** the account name, a link to `https://postora.cloud/messaging/whatsapp/setup`, and no phone numbers.
 
-    Then it sets `account_metadata.undelivered_alert_email_at = now()` with a read-merge-write on that key only.
-- [ ] **Step 5: Cron migration (orchestrator).** `20261004100500_undelivered_store_alert_cron.sql` schedules `send-undelivered-store-alerts` every 15 min. Use the same `cron.schedule` + `net.http_post` + `CRON_SECRET` pattern as the existing token-expiry job. Find it with `git grep -n "send-token-expiry-notifications" supabase/migrations`, copy that statement and change the name, path and schedule. Apply it as `supabase_admin`. Afterwards, `SELECT jobname, schedule FROM cron.job WHERE jobname LIKE '%undelivered%'` returns 1 row.
-- [ ] **Step 6: Clear the flag on reconnect.** In `supabase/functions/_shared/evolutionQrAccount.ts` `emitConnectionTransition`, when the transition is to active, call `admin.rpc("clear_undelivered_store_events", { p_account_id: accountId })`. Check `{ error }` and log without throwing. Do the same in `_shared/whatsappDisconnect.ts` `reconnectWhatsAppAccount` after a successful reactivation. Test (agy): in `evolutionQrAccount.test.ts`, `close`→`open` calls the RPC once, and `open`→`close` does not.
+    - Then it calls `admin.rpc("mark_undelivered_alert_emailed", { p_account_id, p_since })` with the `since` it emailed about, checks `{ error }`, and never writes `account_metadata` from the client.
+    - It honours the user's email preference exactly as `send-token-expiry-notifications/index.ts:310-329` does: it reads `profiles.email, full_name, email_notifications_enabled` and skips unless `email_notifications_enabled === true`. The banner always shows regardless.
+    - Test: a profile with `email_notifications_enabled:false` is never emailed.
+- [ ] **Step 5: Cron migration (orchestrator).** `20261004100500_undelivered_store_alert_cron.sql` schedules `send-undelivered-store-alerts` every 15 min. Do **not** copy the token-expiry job's migration: it points at the retired Supabase Cloud URL. Use exactly this self-hosted shape (from `20261003100000_jev_triage_failure_alert.sql:25-44`):
+
+```sql
+DO $do_undelivered_store_alerts_cron$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_cron')
+    AND EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_net')
+    AND to_regprocedure('public.get_cron_secret()') IS NOT NULL THEN
+    IF NOT EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'send-undelivered-store-alerts') THEN
+      PERFORM cron.schedule(
+        'send-undelivered-store-alerts',
+        '*/15 * * * *',
+        $cron$
+        SELECT net.http_post(
+          url := 'https://api.postora.cloud/functions/v1/send-undelivered-store-alerts',
+          headers := jsonb_build_object(
+            'Content-Type', 'application/json',
+            'Authorization', 'Bearer ' || get_cron_secret()
+          ),
+          body := '{}'::jsonb
+        );
+        $cron$
+      );
+    END IF;
+  ELSE
+    RAISE NOTICE 'send-undelivered-store-alerts cron skipped: pg_cron, pg_net, or get_cron_secret() unavailable';
+  END IF;
+END $do_undelivered_store_alerts_cron$;
+```
+
+The job belongs to `supabase_admin` once applied (see the pg_cron owner memory). Apply it as `supabase_admin`. Afterwards, `SELECT jobname, schedule FROM cron.job WHERE jobname LIKE '%undelivered%'` returns 1 row.
+- [ ] **Step 6: Clear the flag on reconnect.** In `supabase/functions/_shared/evolutionQrAccount.ts` `syncEvolutionAccountConnection` (**not** inside `emitConnectionTransition`, which returns early at `:118-128` when the state did not change or the workspace is null), add a helper `clearUndeliveredSafely(admin, accountId)`:
+  - it calls `admin.rpc("clear_undelivered_store_events", { p_account_id: accountId })`;
+  - it checks `{ error }` and logs `[evolution-qr] account <id>: undelivered flag clear failed` without throwing.
+
+  Call it in exactly two places:
+  1. directly before `await emitConnectionTransition(admin, account.id, previous, true);` in the `!claimsIdentity` branch;
+  2. directly before the final `emitConnectionTransition(..., true)` after the claim RPC.
+
+  Do the same in `_shared/whatsappDisconnect.ts` `reconnectWhatsAppAccount`, after its successful `is_active = true` update.
+
+  **Test fake change (agy):** `evolutionQrAccount.test.ts:44-50` treats every `rpc()` call as the activation claim. Change the fake to dispatch on the function name: `activate_evolution_qr_account` → the existing claim behaviour; `clear_undelivered_store_events` → record the call and return `{ error: null }` (or a configured error).
+
+  Tests:
+  - `close`→`open` on an established row calls clear once;
+  - a claim path calls clear once, after the claim;
+  - a clear error does not reject;
+  - `open`→`close` does not call clear;
+  - a mismatch (A1) does not call clear.
 - [ ] **Step 7: Run all gates. Commit.** `feat: alert the owner when store orders wait on a disconnected WhatsApp account`
 
 ### Task D5: Disconnect dialogs show what is attached
@@ -574,10 +653,30 @@ export class NumberMismatchError extends Error {
 
 In the matching-number path, clear a stale flag: when `ownerNumber === account.platform_user_id && metadata.number_mismatch`, `delete metadata.number_mismatch` and include `account_metadata: metadata` in `updates`.
 
-The callers catch `NumberMismatchError`:
-- **Bridge:** `await api.logout(instanceName).catch(() => undefined)`, update `whatsapp_evolution_instances.last_connection_state = 'number_mismatch'`, and return the mismatch state from `getQrStatus`, skipping `autoImportHistory`.
-- **Webhook:** log out and return 200.
-- **`whatsappPairingOps`:** log out and return `account.platform_user_id`.
+The callers catch `NumberMismatchError`, with an explicit result contract (debate 1, point 10).
+
+**Bridge.** `reconcileAccountConnection` (moved to `whatsapp-evolution-bridge/reconcile.ts`) now returns `type ReconcileResult = { ownerNumber: string; mismatch: boolean }`. On `NumberMismatchError` it:
+- awaits `api.logout(instanceName).catch(() => undefined)`;
+- updates `whatsapp_evolution_instances` `last_connection_state = 'number_mismatch'` for that account, checking `{ error }` and throwing on error;
+- returns `{ ownerNumber: account.platform_user_id, mismatch: true }`.
+
+`getQrStatus`:
+- when `result.mismatch`, returns `{ success: true, social_account_id, qr: null, state: "number_mismatch", expected_last4: account.platform_user_id.slice(-4) }` and **never** calls `autoImportHistory`;
+- otherwise behaves as today, using `result.ownerNumber`.
+
+**Webhook** (`whatsapp-evolution-webhook/index.ts:378`): wraps the sync call; on `NumberMismatchError`, logs out (same call) and returns 200 `{ ok: true, state: "number_mismatch" }` without running any code that follows the sync.
+
+**`whatsappPairingOps.ts`:**
+- Its own `reconcileAccountConnection` (`:255-279`) returns `ReconcileResult` too.
+- On `NumberMismatchError` it logs out via `api.logout` and returns `{ ownerNumber: account.platform_user_id, mismatch: true }`. `PairingApi` must include `logout`; add it to the type if it is missing.
+- `pairingStatus` (`:240-252`) returns `{ account_id, state: result.mismatch ? "number_mismatch" : state, phone_number: result.mismatch || ownerNumber.startsWith("pending_") ? null : result.ownerNumber }`.
+- A pairing never reports `open` for a refused phone.
+
+**Tests (agy):** each path (bridge poll, webhook, partner pairing):
+- (a) does not report `open`;
+- (b) starts no history import;
+- (c) calls `logout` once;
+- (d) persists `number_mismatch`.
 - [ ] **Step 4: Run.** `deno test … supabase/functions/_shared/evolutionQrAccount.test.ts supabase/functions/whatsapp-evolution-bridge/`. Expected: PASS. `deno check` all four entrypoints.
 - [ ] **Step 5: Commit.** `fix(whatsapp-qr): a different phone scanned onto a connection is refused, not activated`
 
@@ -597,7 +696,7 @@ export interface ReconnectDeps {
   findAccount(userId: string, id: string): Promise<{ id: string; platform_user_id: string; connection_mode: string | null } | null>;
   findInstance(id: string): Promise<{ instance_name: string; jwt_key: string } | null>;
   api: Pick<EvolutionApi, "fetchInstance" | "connectionState" | "createInstance" | "connect" | "logout" | "setWebhook">;
-  webhook: { url: string; events: string[] };
+  webhook: { url: string; events: EvolutionEvent[] };
   saveQr(id: string, qr: string | null, state: string | null): Promise<void>;
 }
 ```
@@ -609,7 +708,9 @@ export interface ReconnectDeps {
 | account not found | `ReconnectError` 404 |
 | `pending_…` or `retired_…` or not `evolution_qr` | 409 |
 | instance row missing | 409 `reconnect_unavailable` |
-| remote instance missing (`fetchInstance` throws an object with status 404) | `createInstance` called with the **same** `instanceName` and `headers.jwt_key` = stored key; then `connect`; `saveQr` called |
+| remote instance missing, shape 1: `fetchInstance` resolves `null` (empty list, `evolutionApi.ts:208-210`) | `createInstance` called with the **same** `instanceName` and `headers.jwt_key` = stored key; then `connect`; `saveQr` called |
+| remote instance missing, shape 2: `fetchInstance` throws `new EvolutionApiError("x", 404, null)` | same as shape 1 |
+| `fetchInstance` throws `EvolutionApiError` with status 500 | 502; `createInstance` not called |
 | remote present, `connectionState` → `open` | `logout` then `connect`, in that order |
 | remote present, `close` | no `logout`; `connect` |
 | any step throws an Evolution error | `ReconnectError` 502; `saveQr` never called |
@@ -635,9 +736,12 @@ export async function reconnectQr(deps: ReconnectDeps, userId: string, socialAcc
   if (!instance) throw new ReconnectError("reconnect_unavailable", 409);
   const name = instance.instance_name;
   try {
-    let exists = true;
-    try { await deps.api.fetchInstance(name); } catch (error) {
-      if ((error as { status?: number }).status === 404) exists = false; else throw error;
+    let exists: boolean;
+    try {
+      exists = (await deps.api.fetchInstance(name)) !== null;
+    } catch (error) {
+      if (error instanceof EvolutionApiError && error.status === 404) exists = false;
+      else throw error;
     }
     if (!exists) {
       await deps.api.createInstance({ instanceName: name, webhook: { url: deps.webhook.url, headers: { jwt_key: instance.jwt_key }, events: deps.webhook.events } });
@@ -658,7 +762,7 @@ export async function reconnectQr(deps: ReconnectDeps, userId: string, socialAcc
 }
 ```
 
-Move `extractQr` and `extractState` from `index.ts` into a new `supabase/functions/whatsapp-evolution-bridge/qr.ts` and export them; `index.ts` imports from there. Check the 404 shape thrown by `evolutionApi.ts` `request()` (`git grep -n "status" supabase/functions/_shared/evolutionApi.ts`) and match the test to it.
+Imports in `reconnect.ts`: `import { EvolutionApiError, type EvolutionApi, type EvolutionEvent } from "../_shared/evolutionApi.ts";`. Move `extractQr` and `extractState` from `index.ts:61-68` into a new `supabase/functions/whatsapp-evolution-bridge/qr.ts` and export them; `index.ts` imports from there. The deps wiring passes the existing `EVOLUTION_EVENTS` constant (`index.ts:15`, already typed `EvolutionEvent[]`).
 
 In `index.ts`, route it:
 
@@ -744,6 +848,15 @@ Branch `feat/wa-continuity-bc`, from `origin/main` after PR-A merges.
 **Interfaces — Produces:** `public.move_whatsapp_account_setup(p_from uuid, p_to uuid, p_mode text, p_choices jsonb DEFAULT NULL) RETURNS jsonb`, service_role only.
 - `p_mode` ∈ `('auto','interactive')`.
 - `p_choices` (interactive) is `{"agent_config":"source"|"destination", "connectors":{"<name>":"replace"|"skip"}, "partner":true|false}`.
+- **Validation** (debate 1, points 4 and 15), applied before any row changes; each failure raises `22023` with `move_whatsapp_account_setup: <reason>`:
+  - an unknown top-level key or value in `p_choices`;
+  - a connector name that is not an account-scoped connector on `p_from`;
+  - `agent_config:"source"` together with any `"skip"` for a connector that has a store binding. The binding would stay on the source with no agent config left there, which is the incident's failure.
+- **In-flight store events** (debate 1, point 12): if any `store_events` row for a binding in group S has `status IN ('claimed','sending')`:
+  - `auto` defers group S (reason `store_event_in_flight`; activation and independent items still proceed);
+  - `interactive` raises `55006` (`object_in_use`), which the edge action maps to 409 "An order message is being sent right now. Try again in a minute."
+
+  The mover takes `FOR UPDATE` on those bindings' `store_events` rows that are `pending`, `claimed` or `sending` before deciding (no `SKIP LOCKED`), so a claim already in progress commits first and is then seen as in flight.
 - Returns `{status, moved:{<table>:n}, left:[{item, reason}], conflicts:[{item, name?}]}`.
 
 - [ ] **Step 1: Suite cases (red first).** Fixtures:
@@ -770,9 +883,13 @@ Branch `feat/wa-continuity-bc`, from `origin/main` after PR-A merges.
 | M11 | grants | anon and authenticated cannot EXECUTE |
 | M12 | test cases: dst has 99, src has 3 | 1 moved, `left` reports 2 with `test_case_cap` |
 | M13 | FK | inserting a `store_events` row whose `binding_id` belongs to `u_b` fails |
-| M14 | rollback | force an error (choices referencing an unknown connector name in strict mode) and nothing moved |
-| M15 | B wiring (after BC2) | activation of a pending row for the same number retires src and moves its setup |
-| M16 | B mismatch | activation never touches `is_active` for an established row (covered in A1; assert here that the RPC still returns `v_current`) |
+| M14 | validation + rollback | `p_choices` naming an unknown connector → `22023`; `agent_config:"source"` + skip of a bound connector → `22023`; in both, no row changed |
+| M17 | in-flight | a `claimed` event on a group-S binding: `auto` → `deferred` with reason `store_event_in_flight`; `interactive` → `55006`; nothing in group S moved |
+| M18 | account FK | inserting a `store_events` row whose `social_account_id` belongs to `u_b` (binding of `u_a`) fails |
+| M19 | n8n prefix | the nonmatching `n8nXwebhookX<u_a>X1` key is untouched; the real key is rewritten |
+| M21 | dismissal | `dismiss_whatsapp_setup_move(dst, src)` twice leaves `setup_move_dismissed = [src]`; it is not executable by authenticated |
+
+M15, M16 and M20 are written in BC2 (they need BC2's migration).
 
 - [ ] **Step 2: Run the harness.** Expected: FAIL at M1 (function missing).
 - [ ] **Step 3: FK migration.**
@@ -789,9 +906,24 @@ ALTER TABLE public.store_events
   REFERENCES public.store_webhook_bindings (id, user_id, connector_id) ON DELETE CASCADE;
 ```
 
-Before writing the next step, read `20260927130000_store_events_tenant_fk.sql:20-90` to confirm:
-- there is no other dependent object on the old FK;
-- the `store_events.social_account_id → social_accounts(id, user_id)` FK exists. If it does not, add it here, `ON DELETE CASCADE`, so events can't name a foreign account.
+`store_events.social_account_id` has **no** FK of its own today (`20260927120000_store_events.sql:87-94`); the dropped four-column FK was its only tenancy proof. The same migration therefore adds one (debate 1, point 5), after a preflight:
+
+```sql
+DO $pre$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM public.store_events e
+     WHERE NOT EXISTS (SELECT 1 FROM public.social_accounts a WHERE a.id = e.social_account_id AND a.user_id = e.user_id)
+  ) THEN
+    RAISE EXCEPTION 'store_events has rows whose account is not the owner''s; resolve before adding the FK';
+  END IF;
+END $pre$;
+ALTER TABLE public.store_events
+  ADD CONSTRAINT store_events_account_owner_fk
+  FOREIGN KEY (social_account_id, user_id) REFERENCES public.social_accounts (id, user_id) ON DELETE CASCADE;
+```
+
+`social_accounts` already carries `UNIQUE (id, user_id)` (`20260927120000_store_events.sql:9`).
 
 - [ ] **Step 4: Mover migration.** Write `move_whatsapp_account_setup` in plpgsql, implementing spec §5.1–§5.3 exactly.
   - **Locks:** `pg_advisory_xact_lock(hashtextextended(v_user::text || ':wa-setup', 0))` first; then `SELECT … FOR UPDATE` on both `social_accounts` rows `ORDER BY id`.
@@ -809,7 +941,7 @@ Before writing the next step, read `20260927130000_store_events_tenant_fk.sql:20
     - test cases: up to `100 - count(dst)`, by `position`;
     - templates only when `waba_id` matches;
     - partner (auto: always; interactive: only when `p_choices->>'partner' = 'true'`): `partner_api_keys.social_account_id`, `partner_api_key_accounts` (on conflict do nothing), `partner_webhooks.social_account_id`;
-    - `app_settings`: `UPDATE … SET value = jsonb_set(value, '{social_account_id}', to_jsonb(p_to::text)) WHERE key LIKE 'n8n_webhook_' || v_user || '_%' AND value->>'social_account_id' = p_from::text`;
+    - `app_settings`: `UPDATE … SET value = jsonb_set(value, '{social_account_id}', to_jsonb(p_to::text)) WHERE left(key, length('n8n_webhook_' || v_user::text || '_')) = 'n8n_webhook_' || v_user::text || '_' AND value->>'social_account_id' = p_from::text`. This is a literal prefix, not `LIKE`, whose `_` is a wildcard;
     - `account_metadata` handler keys: copied only where dst lacks the key;
     - `whatsapp_scheduled_messages` with `status = 'pending'`.
   - **Bookkeeping:**
@@ -851,13 +983,27 @@ End the migration with `REVOKE ALL ON FUNCTION public.move_whatsapp_account_setu
 **Files:**
 - Create: `supabase/migrations/20261004111000_activate_evolution_qr_moves_setup.sql`
 
-- [ ] **Step 1:** Copy the full `CREATE OR REPLACE FUNCTION public.activate_evolution_qr_account` from `20260824000000_evolution_qr_activation_merges_duplicate_numbers.sql` verbatim, and apply exactly three edits:
+- [ ] **Step 1:** Copy the full `CREATE OR REPLACE FUNCTION public.activate_evolution_qr_account` from `20260824000000_evolution_qr_activation_merges_duplicate_numbers.sql` verbatim, and apply exactly four edits:
   1. As the first statement after the initial unlocked `SELECT user_id`, add `PERFORM pg_advisory_xact_lock(hashtextextended(v_user_id::text || ':wa-setup', 0));`. It comes before the existing per-number lock, matching the mover's lock order.
   2. In the duplicate branch, before `update social_accounts set platform_user_id = 'retired_' …`, add `update social_accounts set account_metadata = coalesce(account_metadata,'{}'::jsonb) || jsonb_build_object('retired_number', p_owner_number) where id = v_duplicate_id;` so the mover's number match still works after retirement.
-  3. Directly after the retire `update`, add `PERFORM public.move_whatsapp_account_setup(v_duplicate_id, p_account_id, 'auto');`.
+  3. Directly after the retire `update`, **claim the number on the destination first**: `update social_accounts set platform_user_id = p_owner_number, is_active = true where id = p_account_id;`. The mover rejects a `pending_` destination, so it must not run while the destination is still provisional (debate 1, point 1). The unique key is free, because the duplicate was just retired.
+  4. Then add `PERFORM public.move_whatsapp_account_setup(v_duplicate_id, p_account_id, 'auto');`.
+
+  The existing final `update … set platform_user_id = p_owner_number, is_active = true where id = p_account_id` stays. It is now a no-op on the duplicate path and still required on the no-duplicate path.
 
   Keep the REVOKE/GRANT block identical.
-- [ ] **Step 2:** Harness: M15 passes, the existing activation behaviour suites stay green, and the concurrency rehearsal (BC1 Step 7) is re-run with activation as session 1.
+- [ ] **Step 2:** Append to the suite:
+  - **M15:** a `pending_` row activated for src's number:
+    - src retired with `retired_number` set;
+    - dst active with that number;
+    - group S on dst;
+    - the binding id unchanged.
+
+    If the mover raised, the whole activation would roll back and M15 would fail.
+  - **M16:** an established row passed a different number. The RPC returns the stored number and leaves `platform_user_id` unchanged; the mismatch block itself lives in the TypeScript sync (A1).
+  - **M20:** a duplicate whose dst already had a config. Activation still succeeds, the move is `deferred`, and dst has `setup_move_pending`.
+
+  Harness: M15, M16 and M20 pass, and the existing activation suites stay green. Re-run the concurrency rehearsal (BC1 Step 7) with activation as session 1.
 - [ ] **Step 3: Commit.** `feat(db): QR re-pair carries the AI agent setup to the surviving account`
 
 ### Task BC3: `move_setup` action and the C banner
@@ -886,17 +1032,22 @@ End the migration with `REVOKE ALL ON FUNCTION public.move_whatsapp_account_setu
     - are the most recently deactivated row when the owner has exactly one active WhatsApp account.
 
     It excludes pairs listed in `account_metadata.setup_move_dismissed` of the active account. Whenever the active account has `setup_move_pending`, that `from` row is always included.
+  - **`dismiss_setup_move`:** a non-owned `to` → 404; otherwise it calls the `rpc("dismiss_whatsapp_setup_move", {p_to, p_from})` port once. The RPC appends `from` to `account_metadata.setup_move_dismissed`, deduplicated, with an atomic `jsonb_set`; it is service_role only, created in the BC1 mover migration and covered by M21.
   - **Banner:**
     - renders "xsellpoint (old) has an AI agent, 1 WooCommerce connector, a store webhook and 5 knowledge sources. Move them to xsellpoint?";
     - a checklist, with "Store webhook" disabled and the hint "Moves with its WooCommerce connector" when the connector is unchecked;
     - when the summary shows the destination already has an agent config, a radio "Keep this account's AI agent / Use the one from xsellpoint (old)";
     - "Move" invokes the bridge with `{action:"move_setup", from, to, choices}`;
     - on success it shows the toast "Setup moved" and invalidates `["whatsapp-setup-summary"]`, `["ai-agent-config"]` and `["ai-agent-tools"]`;
-    - "Not now" writes the dismissal through the `update_whatsapp_setup_dismissal` action (see Step 3) and hides the banner.
+    - "Not now" invokes the bridge with `{action:"dismiss_setup_move", from, to}` and hides the banner.
 - [ ] **Step 2: Run.** Expected: FAIL.
 - [ ] **Step 3: Implement (GLM).**
   - `moveSetup.ts` follows the `reconnect.ts` pattern: a deps object, a typed error class `MoveSetupError` with `status`, and pure functions.
-  - Route `move_setup` and `dismiss_setup_move` in `index.ts`. For the latter, read-merge-write `account_metadata.setup_move_dismissed` (an array of `from` ids) on the owner's active account.
+  - Route `move_setup` and `dismiss_setup_move` in `index.ts`.
+    - Extend the closed `BridgeBody` action union (`index.ts:31-44`) with `"reconnect_qr" | "move_setup" | "dismiss_setup_move"`, plus the optional fields `from?: string; to?: string; choices?: Record<string, unknown>`.
+    - `move_setup` request `{action, from, to, choices}` → response: the mover's jsonb. Errors: `22023` → 409 "These two connections can't share setup (different workspace or not finished connecting)"; `55006` → 409 "An order message is being sent right now. Try again in a minute.".
+    - `dismiss_setup_move` request `{action, from, to}` → `{success:true}`.
+    - Both check ownership of both ids first.
   - The bridge's `findOwnedAccount` filters `connection_mode === "evolution_qr"`. Add a separate `findOwnedWhatsAppAccount` for these two actions, so a Meta row is also accepted.
   - The banner uses shadcn `Alert` + `Checkbox` + `RadioGroup`, with the copy above.
 - [ ] **Step 4: Gates. Commit.** `feat(whatsapp): bring over the AI agent setup from a previous connection`
@@ -931,3 +1082,25 @@ End the migration with `REVOKE ALL ON FUNCTION public.move_whatsapp_account_setu
 | §9 | each task's tests and harness cases |
 
 **Deviation from spec:** spec §4 put the mismatch return in the activation RPC. The mismatch path for an *established* row never reaches the RPC (`syncEvolutionAccountConnection` only calls it for `pending_` rows, `evolutionQrAccount.ts:248-253`), so A1 implements the block in the shared sync instead. BC2 leaves the RPC's established-row branch unchanged (M16).
+
+## Debate log
+
+**Round 1** (Codex gpt-6-sol, high, read-only): 15 points; all accepted and resolved in place. Each fix is tagged "debate 1, point N" in the text above.
+
+| # | Point | Resolution |
+|---|---|---|
+| 1 | BC2 calls the mover while the destination is still `pending_` | claim the number on the destination before the mover call; M15 |
+| 2 | wrong route | `/messaging/whatsapp/setup` |
+| 3 | `fetchInstance` returns `null` for missing; event typing | both shapes handled; `EvolutionEvent[]` |
+| 4 | an interactive choice can split group S | rejected with `22023` before any change |
+| 5 | `store_events` has no account FK | `store_events_account_owner_fk` + preflight; M18 |
+| 6 | cron pattern copied from a Cloud-era job | self-hosted SQL embedded |
+| 7 | the count measured retries | count dropped; the flag is idempotent |
+| 8 | a thrown state read looked connected | `account_state_unknown` warning |
+| 9 | email flag write raced | `mark_undelivered_alert_emailed` RPC; email preference honoured |
+| 10 | mismatch result incomplete across callers | `ReconcileResult` in bridge and pairing; webhook early return |
+| 11 | clear-flag placement; test fake | explicit call sites in sync; RPC-name dispatch in the fake |
+| 12 | a claimed event during a move | rows locked; `auto` defers, `interactive` 409; M17 |
+| 13 | `LIKE` underscore wildcard | literal prefix; S8/M19 |
+| 14 | dismissal action names | `dismiss_setup_move` + `dismiss_whatsapp_setup_move` RPC; M21 |
+| 15 | undefined strict mode; M15 placement | validation contract; M15/M16/M20 in BC2 |
