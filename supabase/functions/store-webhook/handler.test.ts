@@ -495,3 +495,15 @@ Deno.test("stored order when accountConnected throws returns 200 with account_st
   assertEquals(gate.inserted.length, 1);
   assertEquals(gate.undeliveredNotes, []);
 });
+
+Deno.test("stored order when accountConnected is false and noteUndelivered throws returns 200 with account_disconnected warning", async () => {
+  const gate = accepting({
+    accountConnected: async () => false,
+    noteUndelivered: async () => { throw new Error("database unavailable"); },
+  });
+  const response = await handleStoreWebhook(jsonPost(ORDER, await mac(SECRET, ORDER)), gate);
+  assertEquals(response.status, 200);
+  assertEquals(await response.json(), { ok: true, stored: 1, warning: "account_disconnected" });
+  assertEquals(gate.inserted.length, 1);
+});
+

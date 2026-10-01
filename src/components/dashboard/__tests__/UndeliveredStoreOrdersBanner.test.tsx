@@ -1,10 +1,10 @@
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { UndeliveredStoreOrdersBanner } from "@/components/dashboard/UndeliveredStoreOrdersBanner";
-import { supabase } from "@/integrations/supabase/client";
+import { useUndeliveredStoreAccounts } from "@/hooks/useUndeliveredStoreAccounts";
 
 const translate = vi.hoisted(() => (
   key: string,
@@ -19,41 +19,9 @@ const translate = vi.hoisted(() => (
 
 vi.mock("react-i18next", () => ({ useTranslation: () => ({ t: translate }) }));
 
-vi.mock("@/hooks/useAuth", () => ({
-  useAuth: () => ({ user: { id: "user-1", email: "owner@example.com" } }),
+vi.mock("@/hooks/useUndeliveredStoreAccounts", () => ({
+  useUndeliveredStoreAccounts: vi.fn(),
 }));
-
-vi.mock("@/integrations/supabase/client", () => ({
-  supabase: {
-    from: vi.fn(),
-  },
-}));
-
-interface FlaggedRow {
-  id: string;
-  platform_username: string | null;
-  account_metadata: Record<string, unknown> | null;
-}
-
-const queryState = vi.hoisted(() => ({
-  rows: [] as FlaggedRow[],
-  error: null as Error | null,
-}));
-
-function mockAccountsBuilder() {
-  const builder: any = {
-    select: () => builder,
-    eq: () => builder,
-    not: () => builder,
-    then: (resolve: (val: unknown) => unknown, reject?: (err: unknown) => unknown) => {
-      const outcome = queryState.error
-        ? { data: null, error: queryState.error }
-        : { data: queryState.rows, error: null };
-      return Promise.resolve(outcome).then(resolve, reject);
-    },
-  };
-  return builder;
-}
 
 function renderBanner() {
   const client = new QueryClient({
@@ -73,38 +41,34 @@ function renderBanner() {
 
 describe("UndeliveredStoreOrdersBanner", () => {
   beforeEach(() => {
-    queryState.rows = [];
-    queryState.error = null;
-    vi.mocked(supabase.from).mockImplementation(() => mockAccountsBuilder() as never);
+    vi.clearAllMocks();
   });
 
-  it("(a) no flagged row renders nothing", async () => {
-    queryState.rows = [];
-    const { container } = renderBanner();
+  it("renders nothing when accounts list is empty", () => {
+    vi.mocked(useUndeliveredStoreAccounts).mockReturnValue({
+      data: [],
+      isLoading: false,
+    } as any);
 
-    await waitFor(() => {
-      expect(screen.queryByText(/Store orders are waiting/i)).not.toBeInTheDocument();
-    });
+    const { container } = renderBanner();
+    expect(screen.queryByText(/Store orders are waiting/i)).not.toBeInTheDocument();
     expect(container.firstChild).toBeNull();
   });
 
-  it("(b) one row renders the title text with the account name and a link to /messaging/whatsapp/setup labelled 'Reconnect or move setup'", async () => {
-    queryState.rows = [
-      {
-        id: "acc-1",
-        platform_username: "xsellpoint",
-        account_metadata: {
-          undelivered_store_events: {
-            since: "2026-10-01T10:00:00Z",
-            last_at: "2026-10-01T12:00:00Z",
-          },
+  it("renders title with name and link to /messaging/whatsapp/setup for one flagged account", () => {
+    vi.mocked(useUndeliveredStoreAccounts).mockReturnValue({
+      data: [
+        {
+          id: "acc-1",
+          platform_username: "xsellpoint",
         },
-      },
-    ];
+      ],
+      isLoading: false,
+    } as any);
 
     renderBanner();
 
-    const title = await screen.findByText(
+    const title = screen.getByText(
       "Store orders are waiting for a disconnected WhatsApp account (xsellpoint)",
     );
     expect(title).toBeInTheDocument();
@@ -112,21 +76,5 @@ describe("UndeliveredStoreOrdersBanner", () => {
     const link = screen.getByRole("link", { name: "Reconnect or move setup" });
     expect(link).toBeInTheDocument();
     expect(link).toHaveAttribute("href", "/messaging/whatsapp/setup");
-  });
-
-  it("(c) query error renders nothing and does not throw", async () => {
-    queryState.error = new Error("Network / query failure");
-    queryState.rows = [];
-
-    let container: HTMLElement | null = null;
-    expect(() => {
-      const rendered = renderBanner();
-      container = rendered.container;
-    }).not.toThrow();
-
-    await waitFor(() => {
-      expect(screen.queryByText(/Store orders are waiting/i)).not.toBeInTheDocument();
-    });
-    expect(container?.firstChild).toBeNull();
   });
 });

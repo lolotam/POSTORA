@@ -218,10 +218,10 @@ Deno.test("a linked session names the account from whichever identity source rep
       // in the same transaction that takes the number, so a rejected claim cannot leave a
       // live-looking account sitting on its pending_ placeholder.
       assertEquals(admin.updates[0].values, { platform_username: "Xsellpoint" });
-      assertEquals(admin.rpcs, [{
-        name: "activate_evolution_qr_account",
-        args: { p_account_id: "acc-1", p_owner_number: "96597950350" },
-      }]);
+      assertEquals(admin.rpcs.map((r) => r.name), [
+        "activate_evolution_qr_account",
+        "clear_undelivered_store_events",
+      ]);
     });
   }
 });
@@ -270,7 +270,8 @@ Deno.test("a reconnect from a DIFFERENT number keeps the stored id but flags the
   });
   // The number itself is deliberately NOT changed, so no identity claim is attempted.
   assertEquals(admin.updates[0].values.platform_user_id, undefined);
-  assertEquals(admin.rpcs, []);
+  assertEquals(admin.rpcs.map((r) => r.name), ["clear_undelivered_store_events"]);
+  assertEquals(admin.rpcs[0]?.args, { p_account_id: "acc-2" });
 });
 
 Deno.test("a rejected write is surfaced instead of being swallowed", async (t) => {

@@ -102,6 +102,7 @@ interface Harness {
   deleted: number;
   thread: ThreadRow;
   undeliveredNotes: string[];
+  resolvedAccounts: string[];
   updates: Array<{ id: string; claimToken: string; patch: Record<string, unknown> }>;
 }
 
@@ -123,6 +124,7 @@ function harness(options: {
   const rows = options.rows ?? [row];
   const updates: Array<{ id: string; claimToken: string; patch: Record<string, unknown> }> = [];
   const undeliveredNotes: string[] = [];
+  const resolvedAccounts: string[] = [];
   const state: Harness = {
     ports: {} as WorkerPorts,
     row,
@@ -138,6 +140,7 @@ function harness(options: {
     deleted: 0,
     thread: options.thread ?? { id: "thread-1", procedure_state: null },
     undeliveredNotes,
+    resolvedAccounts,
     updates,
   };
   const apply = options.update ?? (async (id, token, patch) => {
@@ -219,7 +222,10 @@ function harness(options: {
       undeliveredNotes.push(accountId);
       return Promise.resolve();
     },
-    resolveUndelivered: () => Promise.resolve(),
+    resolveUndelivered: (accountId: string) => {
+      resolvedAccounts.push(accountId);
+      return Promise.resolve();
+    },
   };
   return state;
 }
@@ -1082,6 +1088,7 @@ Deno.test("disconnected account with event created 1h ago defers retry, notes un
   assertEquals(summary.skipped, 0);
   assertEquals(box.sends.length, 0);
   assertEquals(box.undeliveredNotes, ["account-1"]);
+  assertEquals(box.resolvedAccounts, []);
   const lastUpdate = box.updates.filter((u) => u.id === row.id).at(-1);
   assertEquals(lastUpdate?.patch, {
     status: "pending",
@@ -1108,6 +1115,7 @@ Deno.test("disconnected account with event created 25h ago is skipped as account
   assertEquals(box.sends.length, 0);
   assertEquals(box.row.status, "skipped");
   assertEquals(reasonOf(box.row), "account_disconnected");
+  assertEquals(box.resolvedAccounts, ["account-1"]);
 });
 
 Deno.test("connected: true preserves normal delivery and sends opener", async () => {
@@ -1135,4 +1143,77 @@ Deno.test("cloud_api connection mode with connected: false is deferred and never
   assertEquals(box.sends.length, 0);
   assertEquals(box.undeliveredNotes, ["account-1"]);
   assertEquals(box.row.status, "pending");
+});
+
+Deno.test("1h disconnected where noteUndelivered rejects still releases event for retry", async () => {
+  const row = event({
+    created_at: new Date(NOW - 60 * 60 * 1000).toISOString(),
+    attempts: 2,
+  });
+  const box = harness({
+    row,
+    account: account({ connected: false }),
+  });
+  box.ports.noteUndelivered = () => Promise.reject(new Error("db error"));
+  const summary = await runStoreEventWorker(box.ports);
+  assertEquals(summary.released, 1);
+  assertEquals(box.row.status, "pending");
+});
+
+Deno.test("successful send on connected account calls resolveUndelivered once", async () => {
+  const box = harness({
+    account: account({ connected: true }),
+  });
+  const summary = await runStoreEventWorker(box.ports);
+  assertEquals(summary.sent, 1);
+  assertEquals(box.sends.length, 1);
+  assertEquals(box.resolvedAccounts, ["account-1"]);
+});
+
+Deno.test("failed send on connected account does not call resolveUndelivered", async () => {
+  const box = harness({
+    account: account({ connected: true }),
+    send: { accepted: false, definite: true, reason: "blocked" },
+  });
+  const summary = await runStoreEventWorker(box.ports);
+  assertEquals(summary.sent, 0);
+  assertEquals(box.resolvedAccounts, []);
+});
+
+Deno.test("disconnected account with flow disabled is skipped as flow_disabled and not held", async () => {
+  const row = event({
+    created_at: new Date(NOW - 60 * 60 * 1000).toISOString(),
+  });
+  const box = harness({
+    row,
+    account: account({
+      connected: false,
+      settings: { ...account().settings!, enabled: false },
+    }),
+  });
+  const summary = await runStoreEventWorker(box.ports);
+  assertEquals(summary.skipped, 1);
+  assertEquals(summary.released, 0);
+  assertEquals(box.row.status, "skipped");
+  assertEquals(reasonOf(box.row), "flow_disabled");
+  assertEquals(box.undeliveredNotes, []);
+});
+
+Deno.test("disconnected account with optedOut is skipped as opted_out and not held", async () => {
+  const row = event({
+    created_at: new Date(NOW - 60 * 60 * 1000).toISOString(),
+  });
+  const box = harness({
+    row,
+    account: account({
+      connected: false,
+      optedOut: true,
+    }),
+  });
+  const summary = await runStoreEventWorker(box.ports);
+  assertEquals(summary.skipped, 1);
+  assertEquals(summary.released, 0);
+  assertEquals(box.row.status, "skipped");
+  assertEquals(reasonOf(box.row), "opted_out");
+  assertEquals(box.undeliveredNotes, []);
 });

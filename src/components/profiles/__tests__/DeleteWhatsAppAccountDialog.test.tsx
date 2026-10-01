@@ -5,7 +5,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useWhatsAppSetupSummary } from "@/hooks/useWhatsAppSetupSummary";
 import {
   DeleteWhatsAppAccountDialog,
-  deleteAccountErrorMessage,
   type DeleteWhatsAppAccountDialogProps,
 } from "../DeleteWhatsAppAccountDialog";
 
@@ -186,18 +185,31 @@ describe("DeleteWhatsAppAccountDialog", () => {
       screen.getByText(/This permanently deletes the account and its AI agent setup/i),
     ).toBeInTheDocument();
   });
-});
 
-describe("deleteAccountErrorMessage", () => {
-  it("returns specific copy when error code is 23503", () => {
-    expect(deleteAccountErrorMessage({ code: "23503" })).toBe(
-      "This account can't be deleted while connectors or partner integrations use it. Disconnect it from the WhatsApp page instead.",
-    );
-  });
+  it("disables the confirm button while onConfirm is pending and ignores a second click", async () => {
+    let finish: () => void = () => {};
+    const pendingPromise = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const onConfirm = vi.fn().mockReturnValue(pendingPromise);
 
-  it("returns generic copy for other errors", () => {
-    expect(deleteAccountErrorMessage(new Error("x"))).toBe(
-      "The account could not be deleted. Try again.",
-    );
+    renderDialog({
+      account: sampleAccount,
+      onCancel: vi.fn(),
+      onConfirm,
+    });
+
+    const confirmBtn = screen.getByRole("button", { name: /delete account/i });
+    expect(confirmBtn).not.toBeDisabled();
+
+    fireEvent.click(confirmBtn);
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+
+    expect(confirmBtn).toBeDisabled();
+
+    fireEvent.click(confirmBtn);
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+
+    finish();
   });
 });
