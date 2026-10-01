@@ -1,6 +1,6 @@
 -- supabase/tests/whatsapp_account_continuity.sql
 -- WhatsApp account continuity (spec 2026-10-01). PR-D slice: migration
--- 20261004100000 (setup summary, undelivered-store-event flag, alert-email
+-- 20261004100000 + 20261004100100 (setup summary, undelivered-store-event flag, alert-email
 -- mark). One transaction, synthetic fixtures, labelled ASSERTs, expected
 -- refusals in nested BEGIN/EXCEPTION blocks, ROLLBACK, sentinel last.
 -- No secrets and no real accounts. Assumes the migration is applied.
@@ -69,6 +69,8 @@ DECLARE
   v_since text;
   v_last1 text;
 BEGIN
+  -- The flag is raised only while the account cannot send (20261004100100).
+  UPDATE public.social_accounts SET is_active = false WHERE id = acc;
   PERFORM public.note_undelivered_store_event(acc);
   SELECT account_metadata->'undelivered_store_events'->>'since',
          account_metadata->'undelivered_store_events'->>'last_at'
@@ -152,6 +154,23 @@ BEGIN
   ASSERT NOT (SELECT account_metadata ?| ARRAY['undelivered_store_events', 'undelivered_alert_email_at', 'undelivered_alert_claimed_at']
                 FROM public.social_accounts WHERE id = acc),
     'S10 clear removes every incident key';
+END $$;
+
+-- S11: an active account is never flagged (a reconnect that races the note wins).
+DO $$
+DECLARE
+  acc uuid := 'c1c1c1c1-0001-4111-8111-cccccccccccc';
+BEGIN
+  PERFORM public.clear_undelivered_store_events(acc);
+  UPDATE public.social_accounts SET is_active = true WHERE id = acc;
+  PERFORM public.note_undelivered_store_event(acc);
+  ASSERT NOT (SELECT account_metadata ? 'undelivered_store_events' FROM public.social_accounts WHERE id = acc),
+    'S11 an active account is not flagged';
+  UPDATE public.social_accounts SET platform_user_id = 'retired_' || acc::text WHERE id = acc;
+  PERFORM public.note_undelivered_store_event(acc);
+  ASSERT (SELECT account_metadata ? 'undelivered_store_events' FROM public.social_accounts WHERE id = acc),
+    'S11 a retired account is flagged even though is_active was never cleared';
+  UPDATE public.social_accounts SET platform_user_id = '96500000001' WHERE id = acc;
 END $$;
 
 -- S1, S2, S8: the browser surface as user A.
