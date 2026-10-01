@@ -46,6 +46,7 @@ import { TikTokDebugPanel } from "@/components/profiles/TikTokDebugPanel";
 import { ThreadsDebugPanel } from "@/components/admin/ThreadsDebugPanel";
 import { UpgradeModal } from "@/components/UpgradeModal";
 import { DeleteWhatsAppAccountDialog } from "@/components/profiles/DeleteWhatsAppAccountDialog";
+import { routeAccountRemoval } from "@/pages/profilesRemoval";
 import { useFeatureFlags } from "@/hooks/useFeatureFlags";
 import { useBetaPlatforms } from "@/hooks/useBetaPlatforms";
 import {
@@ -176,7 +177,7 @@ export default function Profiles() {
   };
 
   const handleDisconnectAccount = async (account: SocialAccountWithProfile) => {
-    if (account.platform === "whatsapp") {
+    if (routeAccountRemoval(account.platform) === "whatsapp-dialog") {
       setDisconnectAccount(null);
       setPendingWhatsAppDelete(account);
       return;
@@ -362,6 +363,10 @@ export default function Profiles() {
         onCancel={() => setPendingWhatsAppDelete(null)}
         onConfirm={async (id) => {
           await disconnectAccountMutation.mutateAsync(id);
+          toast({
+            title: t("profiles.toast.disconnected", "Account disconnected"),
+            description: t("profiles.toast.disconnectedDesc", "Your {{platform}} account has been disconnected.", { platform: getPlatformName("whatsapp") }),
+          });
           setPendingWhatsAppDelete(null);
         }}
       />

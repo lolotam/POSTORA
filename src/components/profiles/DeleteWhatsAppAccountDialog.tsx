@@ -26,13 +26,22 @@ export interface DeleteWhatsAppAccountDialogProps {
   onConfirm: (accountId: string) => Promise<void>;
 }
 
-// 23503 = foreign key violation: connectors or partner integrations still reference
-// the account, so the server refused the delete rather than orphaning them.
-export function deleteAccountErrorMessage(error: unknown): string {
+// One place decides what a refused delete means: the key is what the dialog translates,
+// the message is the English fallback both callers share. 23503 = foreign key violation:
+// connectors or partner integrations still reference the account, so the server refused
+// the delete rather than orphaning them.
+export function deleteAccountError(error: unknown): { key: string; message: string } {
   if ((error as { code?: string } | null)?.code === "23503") {
-    return "This account can't be deleted while connectors or partner integrations use it. Disconnect it from the WhatsApp page instead.";
+    return {
+      key: "deleteWhatsApp.inUse",
+      message: "This account can't be deleted while connectors or partner integrations use it. Disconnect it from the WhatsApp page instead.",
+    };
   }
-  return "The account could not be deleted. Try again.";
+  return { key: "deleteWhatsApp.failed", message: "The account could not be deleted. Try again." };
+}
+
+export function deleteAccountErrorMessage(error: unknown): string {
+  return deleteAccountError(error).message;
 }
 
 export function DeleteWhatsAppAccountDialog({
@@ -43,16 +52,20 @@ export function DeleteWhatsAppAccountDialog({
   const { t } = useTranslation("accounts");
   const summary = useWhatsAppSetupSummary(account?.id ?? null);
   const [errorText, setErrorText] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   if (!account) return null;
 
   const handleConfirm = async () => {
     setErrorText(null);
+    setDeleting(true);
     try {
       await onConfirm(account.id);
     } catch (error) {
-      const inUse = (error as { code?: string } | null)?.code === "23503";
-      setErrorText(t(inUse ? "deleteWhatsApp.inUse" : "deleteWhatsApp.failed", deleteAccountErrorMessage(error)));
+      const { key, message } = deleteAccountError(error);
+      setErrorText(t(key, message));
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -92,6 +105,7 @@ export function DeleteWhatsAppAccountDialog({
           <AlertDialogCancel>{t("common:cancel", "Cancel")}</AlertDialogCancel>
           <AlertDialogAction
             className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            disabled={deleting}
             onClick={(event) => {
               // Radix closes an AlertDialog on Action unless preventDefault is
               // called; the parent owns closing by clearing the account, and a

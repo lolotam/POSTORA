@@ -7,7 +7,6 @@ export interface UndeliveredAccountRow {
   user_id: string;
   platform: string;
   platform_username: string | null;
-  platform_user_id: string | null;
   // A social_accounts column (20260116191438), not a metadata key.
   alerts_snoozed: boolean | null;
   account_metadata: {
@@ -33,9 +32,10 @@ export interface SendAlertsDeps {
 
 export const ALERT_SUBJECT = "Store orders are waiting on a disconnected WhatsApp account";
 
-// One email per incident: eligible until an alert email has been sent for the
-// CURRENT incident (last_at moves on every retry, so it must never gate this —
-// only the incident's own `since` does).
+// One email per flagged account: once an alert email has gone out the row is never
+// eligible again. There is no "new incident on the same flag" case — the flag and this
+// marker are removed together by clear_undelivered_if_none_held, so the next incident
+// starts with neither set.
 export function selectAccountsToEmail(
   rows: UndeliveredAccountRow[],
   now: Date,
@@ -48,11 +48,7 @@ export function selectAccountsToEmail(
     if (!since) return false;
     const sinceMs = Date.parse(since);
     if (!Number.isFinite(sinceMs) || sinceMs > nowMs) return false;
-    const emailedAt = row.account_metadata?.undelivered_alert_email_at;
-    if (!emailedAt) return true;
-    const emailedMs = Date.parse(emailedAt);
-    if (!Number.isFinite(emailedMs)) return true;
-    return emailedMs < sinceMs;
+    return !row.account_metadata?.undelivered_alert_email_at;
   });
 }
 
@@ -122,9 +118,9 @@ export function buildAlertEmail(
 }
 
 /**
- * Claim before send, mark after send, and a send failure only fails its own account.
- * The claim is what keeps two overlapping cron runs from double-emailing; the mark is
- * what keeps the next run from re-emailing the same incident.
+ * Claim before send, mark after send. A failure at any stage — profile, claim, send or
+ * mark — is isolated to its own account: it is recorded in `failed` and the loop moves
+ * on, so one broken account can never stop the others from being alerted.
  */
 export async function sendAlerts(
   deps: SendAlertsDeps,
@@ -138,27 +134,35 @@ export async function sendAlerts(
     const since = account.account_metadata?.undelivered_store_events?.since;
     if (!since) continue;
 
-    const profile = await deps.loadProfile(account.user_id);
-    if (!profile || profile.email_notifications_enabled !== true) continue;
-
-    const claimed = await deps.claim(account.id, since);
-    if (!claimed) continue;
-
+    let stage: "profile" | "claim" | "send" | "mark" = "profile";
     try {
+      const profile = await deps.loadProfile(account.user_id);
+      if (!profile || profile.email_notifications_enabled !== true) continue;
+
+      stage = "claim";
+      const claimed = await deps.claim(account.id, since);
+      if (!claimed) continue;
+
+      stage = "send";
       await deps.send({
         to: profile.email,
         subject: ALERT_SUBJECT,
         html: buildAlertEmail(account, profile.full_name),
       });
-    } catch {
-      // Logged without the recipient address or any phone identifier.
-      console.error(`[send-undelivered-store-alerts] account ${account.id}: email send failed`);
-      failed.push(account.id);
-      continue;
-    }
 
-    await deps.mark(account.id, since);
-    sent += 1;
+      stage = "mark";
+      const marked = await deps.mark(account.id, since);
+      if (!marked) {
+        console.error(`[send-undelivered-store-alerts] account ${account.id}: mark refused`);
+        failed.push(account.id);
+        continue;
+      }
+      sent += 1;
+    } catch {
+      // Logged with the account id only: never the recipient email or a phone number.
+      console.error(`[send-undelivered-store-alerts] account ${account.id}: ${stage} failed`);
+      failed.push(account.id);
+    }
   }
 
   return { eligible: eligible.length, sent, failed };

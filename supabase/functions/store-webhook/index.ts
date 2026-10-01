@@ -83,7 +83,10 @@ function deps(): StoreWebhookDeps {
       const { data, error } = await admin.from("social_accounts")
         .select("is_active, platform_user_id").eq("id", socialAccountId).maybeSingle();
       if (error) throw new Error("account_read_failed");
-      return !!data && data.is_active === true && !String(data.platform_user_id ?? "").startsWith("retired_");
+      // A missing row is an unreadable state, not a disconnected one: throwing lets the
+      // handler answer account_state_unknown instead of mistaking it for a real hold.
+      if (!data) throw new Error("account_row_missing");
+      return data.is_active === true && !String(data.platform_user_id ?? "").startsWith("retired_");
     },
     async noteUndelivered(socialAccountId) {
       const { error } = await admin.rpc("note_undelivered_store_event", { p_account_id: socialAccountId });

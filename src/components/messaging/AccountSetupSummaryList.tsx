@@ -2,24 +2,27 @@ import { useTranslation } from "react-i18next";
 import type { WhatsAppSetupSummary } from "@/hooks/useWhatsAppSetupSummary";
 
 // One line per attached capability, in the same order the summary RPC builds them,
-// so the disconnect dialogs read like the database's own inventory.
+// so the disconnect dialogs read like the database's own inventory. `one`/`other` are
+// i18next plural defaults for English; the Arabic bundle carries its own six forms.
 const SUMMARY_LINES: Array<{
   key: keyof Omit<WhatsAppSetupSummary, "automation_handlers">;
   fallback: string;
+  one: string;
+  other: string;
 }> = [
-  { key: "agent_config", fallback: "AI agent settings" },
-  { key: "connectors", fallback: "{{count}} connector" },
-  { key: "connector_links", fallback: "{{count}} linked connector" },
-  { key: "store_bindings", fallback: "{{count}} store webhook" },
-  { key: "knowledge_sources", fallback: "{{count}} knowledge sources" },
-  { key: "test_cases", fallback: "{{count}} test case" },
-  { key: "waitlist", fallback: "{{count}} waitlist entry" },
-  { key: "templates", fallback: "{{count}} message template" },
-  { key: "partner_keys_primary", fallback: "{{count}} partner API key" },
-  { key: "partner_key_links", fallback: "{{count}} linked partner key" },
-  { key: "partner_webhooks", fallback: "{{count}} partner webhook" },
-  { key: "n8n_subscriptions", fallback: "{{count}} n8n automation" },
-  { key: "scheduled_messages", fallback: "{{count}} scheduled message" },
+  { key: "agent_config", fallback: "AI agent settings", one: "AI agent settings", other: "AI agent settings" },
+  { key: "connectors", fallback: "{{count}} connector", one: "{{count}} connector", other: "{{count}} connectors" },
+  { key: "connector_links", fallback: "{{count}} linked connector", one: "{{count}} linked connector", other: "{{count}} linked connectors" },
+  { key: "store_bindings", fallback: "{{count}} store webhook", one: "{{count}} store webhook", other: "{{count}} store webhooks" },
+  { key: "knowledge_sources", fallback: "{{count}} knowledge sources", one: "{{count}} knowledge source", other: "{{count}} knowledge sources" },
+  { key: "test_cases", fallback: "{{count}} test case", one: "{{count}} test case", other: "{{count}} test cases" },
+  { key: "waitlist", fallback: "{{count}} waitlist entry", one: "{{count}} waitlist entry", other: "{{count}} waitlist entries" },
+  { key: "templates", fallback: "{{count}} message template", one: "{{count}} message template", other: "{{count}} message templates" },
+  { key: "partner_keys_primary", fallback: "{{count}} partner API key", one: "{{count}} partner API key", other: "{{count}} partner API keys" },
+  { key: "partner_key_links", fallback: "{{count}} linked partner key", one: "{{count}} linked partner key", other: "{{count}} linked partner keys" },
+  { key: "partner_webhooks", fallback: "{{count}} partner webhook", one: "{{count}} partner webhook", other: "{{count}} partner webhooks" },
+  { key: "n8n_subscriptions", fallback: "{{count}} n8n automation", one: "{{count}} n8n automation", other: "{{count}} n8n automations" },
+  { key: "scheduled_messages", fallback: "{{count}} scheduled message", one: "{{count}} scheduled message", other: "{{count}} scheduled messages" },
 ];
 
 interface AccountSetupSummaryListProps {
@@ -38,7 +41,11 @@ export function AccountSetupSummaryList({ summary }: AccountSetupSummaryListProp
     <ul className="list-disc space-y-1 ps-5 text-sm">
       {lines.map((line) => (
         <li key={line.key}>
-          {t(`summary.${line.key}`, line.fallback, { count: summary[line.key] })}
+          {t(`summary.${line.key}`, line.fallback, {
+            count: summary[line.key],
+            defaultValue_one: line.one,
+            defaultValue_other: line.other,
+          })}
         </li>
       ))}
       {hasAutomation && (

@@ -40,7 +40,7 @@ Deno.serve(async (req) => {
       async listFlagged() {
         const { data, error } = await admin
           .from("social_accounts")
-          .select("id, user_id, platform, platform_username, platform_user_id, alerts_snoozed, account_metadata")
+          .select("id, user_id, platform, platform_username, alerts_snoozed, account_metadata")
           .eq("platform", "whatsapp")
           .not("account_metadata->undelivered_store_events", "is", null);
         if (error) throw error;

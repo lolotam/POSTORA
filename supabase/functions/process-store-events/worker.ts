@@ -553,7 +553,15 @@ async function markSent(
     status: "sent",
     processed_at: iso(ports.now()),
   });
-  return marked ? "sent" : "left";
+  if (!marked) return "left";
+  // The account just delivered, so a stale "orders on hold" flag is wrong however the
+  // reconnect happened. Best effort: the send already succeeded and must not re-fail.
+  try {
+    await ports.resolveUndelivered(event.social_account_id);
+  } catch {
+    console.error("[process-store-events] undelivered flag resolve failed");
+  }
+  return "sent";
 }
 
 async function settleIndeterminate(ports: WorkerPorts, event: StoreEventRow): Promise<boolean> {
@@ -673,12 +681,15 @@ async function processClaimed(
     const held = await ports.updateEvent(event.id, event.claim_token, { claimed_at: iso(ports.now()) });
     if (!held) return "left";
     account = await ports.loadAccount(event);
-    if (account && !account.connected) {
-      return await deferDisconnected(ports, event, account);
-    }
+    // The skip reasons decide before the hold does: an account whose flow is off,
+    // whose agent is off or whose customer opted out is skipped outright, even when
+    // the row is disconnected -- those orders are never going out, held or not.
     const early = accountSkipReason(event, account, ports.now());
     if (early) {
       return await skip(ports, event, early, { account, thread: null, expected: null, reserved: false });
+    }
+    if (account && !account.connected) {
+      return await deferDisconnected(ports, event, account);
     }
     const loaded = account!;
     const read = await ports.readStore(event);

@@ -1,36 +1,13 @@
-import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 import { AlertTriangle } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { supabase } from "@/integrations/supabase/client";
-import { useAuth } from "@/hooks/useAuth";
-
-interface FlaggedAccount {
-  id: string;
-  platform_username: string | null;
-  account_metadata: { undelivered_store_events?: { since?: string } } | null;
-}
+import { useUndeliveredStoreAccounts } from "@/hooks/useUndeliveredStoreAccounts";
 
 export function UndeliveredStoreOrdersBanner() {
   const { t } = useTranslation("dashboard");
-  const { user } = useAuth();
-  const { data = [] } = useQuery({
-    queryKey: ["undelivered-store-orders", user?.id],
-    enabled: !!user,
-    refetchInterval: 60000,
-    queryFn: async () => {
-      const { data: rows, error } = await supabase
-        .from("social_accounts")
-        .select("id, platform_username, account_metadata")
-        .eq("user_id", user!.id)
-        .eq("platform", "whatsapp")
-        .not("account_metadata->undelivered_store_events", "is", null);
-      if (error) return [];
-      return (rows ?? []) as FlaggedAccount[];
-    },
-  });
+  const { data = [] } = useUndeliveredStoreAccounts();
   if (data.length === 0) return null;
   return (
     <div className="space-y-2">
