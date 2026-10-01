@@ -222,3 +222,114 @@ Deno.test("opt-out lookup runs only for a phone the event named", () => {
     assertEquals(optedOutFromLookup(lookup, item.row), item.optedOut, item.name);
   }
 });
+
+function fakeAccountAdmin(socialAccountRow: Record<string, unknown>) {
+  const admin = {
+    from(table: string) {
+      const builder = {
+        select() { return builder; },
+        eq() { return builder; },
+        maybeSingle() {
+          if (table === "social_accounts") {
+            return Promise.resolve({ data: socialAccountRow, error: null });
+          }
+          if (table === "store_webhook_bindings") {
+            return Promise.resolve({
+              data: {
+                id: "binding-1",
+                connector_id: "connector-1",
+                social_account_id: "account-1",
+                user_id: "user-1",
+              },
+              error: null,
+            });
+          }
+          if (table === "ai_agent_configs") {
+            return Promise.resolve({
+              data: {
+                user_id: "user-1",
+                social_account_id: "account-1",
+                is_enabled: true,
+                language_mode: "en",
+                default_mode: "ai_first",
+                agent_behavior: { procedures: { cod_confirm: { enabled: true } } },
+              },
+              error: null,
+            });
+          }
+          return Promise.resolve({ data: null, error: null });
+        },
+        then(resolve: (value: { data: unknown[]; error: null }) => void) {
+          if (table === "ai_agent_tools") {
+            resolve({
+              data: [{
+                id: "connector-1",
+                name: "woo",
+                connector_type: "woocommerce",
+                is_enabled: true,
+                read_only_mode: false,
+                scope: "account",
+              }],
+              error: null,
+            });
+            return;
+          }
+          if (table === "ai_agent_tool_accounts") {
+            resolve({
+              data: [{ tool_id: "connector-1", social_account_id: "account-1" }],
+              error: null,
+            });
+            return;
+          }
+          resolve({ data: [], error: null });
+        },
+      };
+      return builder;
+    },
+  };
+  return admin;
+}
+
+Deno.test("loadAccount maps is_active and retired platform_user_id to connected boolean", async () => {
+  const cases: Array<{
+    name: string;
+    isActive: boolean;
+    platformUserId: string;
+    expectedConnected: boolean;
+  }> = [
+    {
+      name: "is_active:false -> connected:false",
+      isActive: false,
+      platformUserId: "96500000001",
+      expectedConnected: false,
+    },
+    {
+      name: 'platform_user_id "retired_x" -> connected:false',
+      isActive: true,
+      platformUserId: "retired_x",
+      expectedConnected: false,
+    },
+    {
+      name: "is_active:true with a digits number -> connected:true",
+      isActive: true,
+      platformUserId: "96500000001",
+      expectedConnected: true,
+    },
+  ];
+  for (const item of cases) {
+    const admin = fakeAccountAdmin({
+      id: "account-1",
+      user_id: "user-1",
+      platform: "whatsapp",
+      connection_mode: "cloud_api",
+      is_active: item.isActive,
+      platform_user_id: item.platformUserId,
+      access_token: null,
+      account_metadata: {},
+      workspace_id: null,
+    });
+    const ports = createStoreEventPorts(admin);
+    const account = await ports.loadAccount(openerInput().event);
+    assertEquals(account?.connected, item.expectedConnected, item.name);
+  }
+});

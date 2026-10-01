@@ -3,6 +3,7 @@ import type { TemplateGraph } from "../_shared/procedures/eventTemplates.ts";
 import { openerText } from "../_shared/procedures/openers.ts";
 import {
   accountSkipReason,
+  DISCONNECTED_HOLD_MS,
   runStoreEventWorker,
   STORE_EVENT_LIMITS,
   storeSkipReason,
@@ -54,6 +55,7 @@ function account(overrides: Partial<AccountContext> = {}): AccountContext {
     connectorVisible: true,
     connectorReadOnly: false,
     optedOut: false,
+    connected: true,
     ...overrides,
   };
 }
@@ -99,6 +101,8 @@ interface Harness {
   qrReserveLimits: number[];
   deleted: number;
   thread: ThreadRow;
+  undeliveredNotes: string[];
+  updates: Array<{ id: string; claimToken: string; patch: Record<string, unknown> }>;
 }
 
 function harness(options: {
@@ -117,6 +121,8 @@ function harness(options: {
 } = {}): Harness {
   const row = options.row ?? event();
   const rows = options.rows ?? [row];
+  const updates: Array<{ id: string; claimToken: string; patch: Record<string, unknown> }> = [];
+  const undeliveredNotes: string[] = [];
   const state: Harness = {
     ports: {} as WorkerPorts,
     row,
@@ -131,8 +137,11 @@ function harness(options: {
     qrReserveLimits: [],
     deleted: 0,
     thread: options.thread ?? { id: "thread-1", procedure_state: null },
+    undeliveredNotes,
+    updates,
   };
   const apply = options.update ?? (async (id, token, patch) => {
+    updates.push({ id, claimToken: token, patch });
     const target = rows.find((item) => item.id === id && item.claim_token === token);
     if (!target) return false;
     Object.assign(target, patch);
@@ -204,6 +213,10 @@ function harness(options: {
     },
     logEvent: (entry) => {
       state.logs.push(entry);
+      return Promise.resolve();
+    },
+    noteUndelivered: (accountId: string) => {
+      undeliveredNotes.push(accountId);
       return Promise.resolve();
     },
   };
@@ -1051,4 +1064,74 @@ Deno.test("a review request is skipped when the order's phone changed since the 
   assertEquals(storeSkipReason("review_request", { phone: PHONE }, snapshot({ status: "completed", phone: "96599990000" }), NOW), "phone_changed");
   assertEquals(storeSkipReason("review_request", { phone: PHONE }, snapshot({ status: "completed", phone: "" }), NOW), "phone_changed");
   assertEquals(storeSkipReason("review_request", { phone: PHONE }, snapshot({ status: "completed" }), NOW), null);
+});
+
+Deno.test("disconnected account with event created 1h ago defers retry, notes undelivered, and releases claim", async () => {
+  const row = event({
+    created_at: new Date(NOW - 60 * 60 * 1000).toISOString(),
+    attempts: 2,
+  });
+  const box = harness({
+    row,
+    account: account({ connected: false }),
+  });
+  const summary = await runStoreEventWorker(box.ports);
+  assertEquals(summary.released, 1);
+  assertEquals(summary.sent, 0);
+  assertEquals(summary.skipped, 0);
+  assertEquals(box.sends.length, 0);
+  assertEquals(box.undeliveredNotes, ["account-1"]);
+  const lastUpdate = box.updates.filter((u) => u.id === row.id).at(-1);
+  assertEquals(lastUpdate?.patch, {
+    status: "pending",
+    due_at: new Date(NOW + 15 * 60 * 1000).toISOString(),
+    attempts: 1,
+    claimed_at: null,
+    claim_token: null,
+    send_attempt_id: null,
+  });
+  assertEquals(box.row.status, "pending");
+});
+
+Deno.test("disconnected account with event created 25h ago is skipped as account_disconnected without sending", async () => {
+  const row = event({
+    created_at: new Date(NOW - (DISCONNECTED_HOLD_MS + 60 * 60 * 1000)).toISOString(),
+  });
+  const box = harness({
+    row,
+    account: account({ connected: false }),
+  });
+  const summary = await runStoreEventWorker(box.ports);
+  assertEquals(summary.skipped, 1);
+  assertEquals(summary.sent, 0);
+  assertEquals(box.sends.length, 0);
+  assertEquals(box.row.status, "skipped");
+  assertEquals(reasonOf(box.row), "account_disconnected");
+});
+
+Deno.test("connected: true preserves normal delivery and sends opener", async () => {
+  const box = harness({
+    account: account({ connected: true }),
+  });
+  const summary = await runStoreEventWorker(box.ports);
+  assertEquals(summary.sent, 1);
+  assertEquals(box.sends.length, 1);
+  assertEquals(box.row.status, "sent");
+  assertEquals(box.undeliveredNotes, []);
+});
+
+Deno.test("cloud_api connection mode with connected: false is deferred and never sent", async () => {
+  const row = event({
+    created_at: new Date(NOW - 60 * 60 * 1000).toISOString(),
+  });
+  const box = harness({
+    row,
+    account: account({ connectionMode: "cloud_api", connected: false }),
+  });
+  const summary = await runStoreEventWorker(box.ports);
+  assertEquals(summary.released, 1);
+  assertEquals(summary.sent, 0);
+  assertEquals(box.sends.length, 0);
+  assertEquals(box.undeliveredNotes, ["account-1"]);
+  assertEquals(box.row.status, "pending");
 });
