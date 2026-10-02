@@ -251,7 +251,7 @@ BEGIN
       INTO v_moving_bindings, v_moving_connectors
       FROM store_webhook_bindings b JOIN ai_agent_tools t ON t.id = b.connector_id
      WHERE b.social_account_id = p_from
-       AND NOT (t.social_account_id = p_from AND t.id <> ALL (v_moving_tools));
+       AND NOT (t.social_account_id IS NOT DISTINCT FROM p_from AND t.id <> ALL (v_moving_tools));
 
     -- Connector sharing links.
     INSERT INTO ai_agent_tool_accounts (tool_id, social_account_id, user_id, created_at)
