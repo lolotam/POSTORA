@@ -8,6 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { type AiAgentConfigInput, type AiAgentPlatform, useAiAgentConfig } from "@/hooks/useAiAgentConfig";
 import { useSocialAccounts } from "@/hooks/useSocialAccounts";
+import { BringOverSetupBanner } from "@/components/messaging/BringOverSetupBanner";
 import { normalizeE164Phone } from "@/lib/phone";
 import { AutomationHandlerCard } from "@/components/messaging/AutomationHandlerCard";
 import { AutoReplyManager } from "@/components/messaging/AutoReplyManager";
@@ -122,6 +123,11 @@ export function AiAgentManager({ platform = "whatsapp", initialAccountId = null,
   const accountId = selectedAccountId && accounts.some((account) => account.id === selectedAccountId)
     ? selectedAccountId
     : accounts[0]?.id ?? null;
+  // The banner wants only the account identity, not the whole row.
+  const bannerAccount = useMemo(() => {
+    const account = accounts.find((item) => item.id === accountId);
+    return account ? { id: account.id, platform_username: account.platform_username } : null;
+  }, [accounts, accountId]);
 
   const { config, isLoading, error, upsertConfig } = useAiAgentConfig(platform, accountId);
   const [form, setForm] = useState<AiAgentConfigInput>(defaultConfig);
@@ -301,6 +307,11 @@ export function AiAgentManager({ platform = "whatsapp", initialAccountId = null,
 
       <TabsContent value="settings" className="mt-0">
         <div className="space-y-4">
+          {/* A previous connection may still own this account's agent setup; offer the
+              move above the settings the selected account is about to show. The
+              banner wants only the account identity, not the whole row. Its RPCs
+              accept only WhatsApp accounts, so other platforms never mount it. */}
+          {platform === "whatsapp" && <BringOverSetupBanner activeAccount={bannerAccount} />}
           {/* One selection drives the handler card, this form and the
               knowledge tab; AutomationHandlerCard's own selector is
               suppressed by passing accountId down. Markup matches that

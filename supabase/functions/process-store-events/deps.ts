@@ -88,14 +88,18 @@ export interface StoreBindingIdentity {
   user_id?: string;
 }
 
-/** The webhook binding must name this event's connector, account, and owner. */
+/**
+ * The webhook binding must name this event's connector and owner. The account is no
+ * longer part of binding identity (PR-BC): the composite FK now guarantees
+ * (binding_id, user_id, connector_id), and the account may legitimately differ
+ * after a setup move — the worker re-points the event to the binding's account.
+ */
 export function storeBindingMatches(
   binding: StoreBindingIdentity | null,
   event: { connector_id: string; social_account_id: string; user_id: string },
 ): boolean {
   return Boolean(binding)
     && binding?.connector_id === event.connector_id
-    && binding?.social_account_id === event.social_account_id
     && binding?.user_id === event.user_id;
 }
 
@@ -207,6 +211,25 @@ export function createStoreEventPorts(admin: any): WorkerPorts { // eslint-disab
       if (error) throw error;
       return ((data ?? []) as unknown[]).length === 1;
     },
+    // One compare-and-set: the event follows its binding's current account and the
+    // claim is released, so the next tick claims it under the new account. Filtered
+    // by id + claim_token; a lost race (the mover already rewrote the row) touches
+    // nothing and returns false.
+    async retargetEvent(id, claimToken, accountId) {
+      const { data, error } = await admin.from("store_events")
+        .update({
+          social_account_id: accountId,
+          status: "pending",
+          claimed_at: null,
+          claim_token: null,
+          send_attempt_id: null,
+        })
+        .eq("id", id)
+        .eq("claim_token", claimToken)
+        .select("id");
+      if (error) throw error;
+      return ((data ?? []) as unknown[]).length === 1;
+    },
     async loadAccount(event) {
       const row = await accountRow(event);
       if (!row) return null;
@@ -227,7 +250,11 @@ export function createStoreEventPorts(admin: any): WorkerPorts { // eslint-disab
       const binding = bindingResult.data as StoreBindingIdentity | null;
       const tools = (toolResult.data ?? []) as Array<ResolvableTool & { read_only_mode?: boolean | null }>;
       const links = (linkResult.data ?? []) as ToolAccountLink[];
-      const visible = resolveToolsForAccount(tools, links, row.id).tools.some((tool) => tool.id === event.connector_id);
+      // Resolve visibility against the account the event names. accountRow keys the row
+      // by event.social_account_id, so the two are the same value in production; after a
+      // setup move the binding points elsewhere and the worker retargets the event, but
+      // the connector must not flip invisible for that account in the meantime.
+      const visible = resolveToolsForAccount(tools, links, event.social_account_id).tools.some((tool) => tool.id === event.connector_id);
       const connector = tools.find((tool) => tool.id === event.connector_id);
       const bindingOk = storeBindingMatches(binding, event);
       const procedures = readProcedureConfig((config?.agent_behavior as { procedures?: unknown } | undefined)?.procedures);
@@ -245,6 +272,7 @@ export function createStoreEventPorts(admin: any): WorkerPorts { // eslint-disab
         connectorReadOnly: connector?.read_only_mode !== false,
         optedOut: optedOutFromLookup(lookupPhone, optOutResult.data),
         connected: row.is_active === true && !String(row.platform_user_id ?? "").startsWith("retired_"),
+        bindingAccountId: binding?.social_account_id ?? null,
       };
     },
     async readStore(event): Promise<StoreRead> {
