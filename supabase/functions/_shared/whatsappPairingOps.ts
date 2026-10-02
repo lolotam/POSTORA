@@ -161,10 +161,26 @@ async function savePairing(ctx: WhatsAppNumberContext, accountId: string, patch:
   if (error) throw new WhatsAppOpError("Unable to save pairing", "internal_error", 500, undefined, true);
 }
 
+// Read-merge-write of exactly the number_mismatch key: account_metadata also carries the
+// consent trail, and every write in this file filters on workspace and account id, never
+// user_id -- no owner identity crosses this partner-API boundary.
+async function clearNumberMismatchFlag(ctx: WhatsAppNumberContext, accountId: string) {
+  const { data, error } = await ctx.admin.from("social_accounts")
+    .select("account_metadata").eq("workspace_id", ctx.workspaceId).eq("id", accountId).maybeSingle();
+  if (error) throw new WhatsAppOpError("Unable to read number", "internal_error", 500);
+  const stored = data?.account_metadata;
+  if (!stored || typeof stored !== "object" || Array.isArray(stored) || stored.number_mismatch === undefined) return;
+  const metadata = { ...(stored as Record<string, unknown>) };
+  delete metadata.number_mismatch;
+  const { error: updateError } = await ctx.admin.from("social_accounts")
+    .update({ account_metadata: metadata }).eq("workspace_id", ctx.workspaceId).eq("id", accountId);
+  if (updateError) throw new WhatsAppOpError("Unable to save pairing", "internal_error", 500, undefined, true);
+}
+
 export async function startPairing(
   ctx: PairingContext, accountId: string, deps: PairingDependencies = {},
 ) {
-  await pairingAccount(ctx, accountId);
+  const account = await pairingAccount(ctx, accountId);
   let instance = await pairingInstance(ctx, accountId);
   const api = configuredPairingApi(deps);
   if (!instance) {
@@ -207,6 +223,12 @@ export async function startPairing(
   const state = extractState(connection);
   if (!qr && !state) throw new WhatsAppOpError("Invalid pairing response", "internal_error", 502, undefined, true);
   await savePairing(ctx, accountId, { last_qr: qr, last_connection_state: state });
+  // A fresh pairing supersedes an earlier refusal: the durable mismatch flag is dropped
+  // so the next status poll reads the live provider state again. A failed start throws
+  // before this point, so the flag survives a refused pairing.
+  if (account.account_metadata?.number_mismatch === true) {
+    await clearNumberMismatchFlag(ctx, accountId);
+  }
   // Evolution does not provide a reliable expiry timestamp; never invent one.
   return { account_id: accountId, qr: qr ? { code: qr, expires_at: null } : null, state };
 }

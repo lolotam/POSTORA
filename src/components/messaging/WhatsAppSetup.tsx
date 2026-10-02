@@ -76,7 +76,7 @@ export function WhatsAppSetup({ connectedAccounts }: WhatsAppSetupProps) {
   const disconnect = useWhatsAppDisconnect();
   const reconnect = useWhatsAppReconnect();
   const { data: reconnectable = [] } = useReconnectableWhatsApp();
-  const { data: reconnectableQr = [] } = useReconnectableQrAccounts();
+  const { data: reconnectableQr = [], isError: qrAccountsError, refetch: refetchQrAccounts } = useReconnectableQrAccounts();
   const requestSync = useWhatsAppRequestSync();
   const { isAdmin } = useUserRole();
   const { flags } = useFeatureFlags();
@@ -359,9 +359,25 @@ export function WhatsAppSetup({ connectedAccounts }: WhatsAppSetupProps) {
               and Embedded Signup will not offer it back because it is already
               onboarded. This is the only route back to it. A disconnected Direct QR
               account has the same problem, but comes back through a QR scan instead. */}
-          {(reconnectable.length > 0 || reconnectableQr.length > 0) && (
+          {(qrAccountsError || reconnectable.length > 0 || reconnectableQr.length > 0) && (
             <div className="mt-4 space-y-2 border-t pt-4">
               <p className="text-xs font-medium text-muted-foreground">{t("setup.previouslyConnected", "Previously connected")}</p>
+              {qrAccountsError && (
+                <div className="flex items-center gap-3 p-3 rounded-lg border border-dashed bg-muted/20">
+                  <p className="flex-1 text-xs text-muted-foreground">
+                    {t("setup.qrReconnectListFailed", "Couldn't load your disconnected connections.")}
+                  </p>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => void refetchQrAccounts()}
+                    className="gap-1.5"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    {t("common:retry", "Retry")}
+                  </Button>
+                </div>
+              )}
               {reconnectable.map((account) => (
                 <div
                   key={account.id}

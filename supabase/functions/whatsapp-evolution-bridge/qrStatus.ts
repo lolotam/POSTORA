@@ -53,11 +53,14 @@ export async function getQrStatusResult(deps: QrStatusDeps, input: QrStatusInput
   }
   const state = extractState(await deps.api.connectionState(instance.instance_name));
   if (state) {
+    // The reconciler deactivates the account when the remote session closed; it must
+    // run before the observed state is persisted, so a failed reconcile never stores a
+    // state this request could not actually verify.
+    const result = await deps.reconcile({ api: deps.api, account, instanceName: instance.instance_name, state });
     await deps.saveConnectionState(account.id, state);
     // Reconciliation may have just replaced the provisional owner id, and conversation
     // ids are built from it, so the sweep uses the value the reconciler returns rather
     // than the one loaded at the top of this request.
-    const result = await deps.reconcile({ api: deps.api, account, instanceName: instance.instance_name, state });
     if (result.mismatch) {
       // This request's account snapshot predates the flag the sync just persisted, so
       // the flag is merged here only to reuse the mismatch payload shape.

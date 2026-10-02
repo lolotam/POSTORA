@@ -338,6 +338,7 @@
     "qrFailed": "ربط QR فشل",
     "qrFailedFallback": "مقدرناش نبدأ اتصال QR",
     "qrReconnectFailed": "مقدرناش نبدأ إعادة الربط. حاول تاني بعد دقيقة.",
+    "qrReconnectListFailed": "مقدرناش نحمّل الاتصالات اللي اتفصلت.",
     "receiveInPostora": "استقبل واردّ من Postora",
     "recommended": "موصى به",
     "stillImporting": "لسه بيستورد",

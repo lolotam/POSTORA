@@ -11,6 +11,7 @@ import { runInBackground } from "../_shared/background.ts";
 import { disconnectWhatsAppAccount, type WhatsAppDisconnectAdmin } from "../_shared/whatsappDisconnect.ts";
 import { resolveMaxSocialAccounts, type SocialAccountQuotaClient } from "../_shared/socialAccountQuota.ts";
 import { extractQr, extractState } from "./qr.ts";
+import { clearMismatchFor } from "./clearMismatch.ts";
 import { reconcileAccountConnection } from "./reconcile.ts";
 import { getQrStatusResult } from "./qrStatus.ts";
 import { reconnectQr, ReconnectError, type ReconnectDeps } from "./reconnect.ts";
@@ -361,25 +362,9 @@ function reconnectDeps(context: Awaited<ReturnType<typeof authenticateRequest>>)
         .eq("social_account_id", id);
       if (error) throw error;
     },
-    // The mismatch flag is a metadata key, not a column: read-merge-write only that key,
-    // because account_metadata also carries the connection mode and the consent trail.
-    clearMismatch: async (id) => {
-      const { data, error } = await context.admin
-        .from("social_accounts")
-        .select("account_metadata")
-        .eq("id", id)
-        .maybeSingle();
-      if (error) throw error;
-      const stored = data?.account_metadata;
-      if (!stored || typeof stored !== "object" || Array.isArray(stored) || stored.number_mismatch === undefined) return;
-      const metadata = { ...(stored as Record<string, unknown>) };
-      delete metadata.number_mismatch;
-      const { error: updateError } = await context.admin
-        .from("social_accounts")
-        .update({ account_metadata: metadata })
-        .eq("id", id);
-      if (updateError) throw updateError;
-    },
+    // The flag blocks a refused phone; a freshly issued QR is what lets the right phone
+    // lift it. The helper keeps the caller's id on both the read and the write.
+    clearMismatch: (id) => clearMismatchFor(context.admin, context.user.id, id),
   };
 }
 
