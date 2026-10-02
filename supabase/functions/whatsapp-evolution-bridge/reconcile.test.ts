@@ -86,7 +86,7 @@ function fakeApi(options: {
   return api;
 }
 
-Deno.test("reconcileAccountConnection: on NumberMismatchError calls api.logout once, updates last_connection_state = number_mismatch, and returns mismatch:true", async () => {
+Deno.test("reconcileAccountConnection: on NumberMismatchError calls api.logout once, does not update whatsapp_evolution_instances directly, and returns mismatch:true", async () => {
   const admin = fakeAdmin();
   const api = fakeApi({
     fetchInstanceResult: { ownerJid: "99999999@s.whatsapp.net" },
@@ -119,9 +119,7 @@ Deno.test("reconcileAccountConnection: on NumberMismatchError calls api.logout o
   assertEquals(logoutCalls[0].args, ["postora_acc-established"]);
 
   const instanceUpdates = admin.updates.filter((u) => u.table === "whatsapp_evolution_instances");
-  assertEquals(instanceUpdates.length, 1);
-  assertEquals(instanceUpdates[0].values, { last_connection_state: "number_mismatch" });
-  assertEquals(instanceUpdates[0].filters, { social_account_id: "acc-established" });
+  assertEquals(instanceUpdates.length, 0, "reconcileAccountConnection must not update whatsapp_evolution_instances directly on mismatch");
 });
 
 Deno.test("reconcileAccountConnection: bridge poll passes userId scope to syncEvolutionAccountConnection on mismatch", async () => {
@@ -162,7 +160,7 @@ Deno.test("reconcileAccountConnection: bridge poll passes userId scope to syncEv
   });
 });
 
-Deno.test("reconcileAccountConnection: swallows api.logout rejection on mismatch and still persists state", async () => {
+Deno.test("reconcileAccountConnection: swallows api.logout rejection on mismatch and does not update whatsapp_evolution_instances directly", async () => {
   const admin = fakeAdmin();
   const api = fakeApi({
     fetchInstanceResult: { ownerJid: "99999999@s.whatsapp.net" },
@@ -191,11 +189,10 @@ Deno.test("reconcileAccountConnection: swallows api.logout rejection on mismatch
     mismatch: true,
   });
   const instanceUpdates = admin.updates.filter((u) => u.table === "whatsapp_evolution_instances");
-  assertEquals(instanceUpdates.length, 1);
-  assertEquals(instanceUpdates[0].values, { last_connection_state: "number_mismatch" });
+  assertEquals(instanceUpdates.length, 0, "reconcileAccountConnection must not update whatsapp_evolution_instances directly on mismatch");
 });
 
-Deno.test("reconcileAccountConnection: throws if updating whatsapp_evolution_instances fails on mismatch", async () => {
+Deno.test("reconcileAccountConnection: does not attempt whatsapp_evolution_instances update even if instance table errors", async () => {
   const dbError = new Error("db failure");
   const admin = fakeAdmin({ instanceUpdateError: dbError });
   const api = fakeApi({
@@ -210,18 +207,18 @@ Deno.test("reconcileAccountConnection: throws if updating whatsapp_evolution_ins
     user_id: "user-bridge-123",
   };
 
-  await assertRejects(
-    () => (reconcileAccountConnection as any)({
-      admin,
-      api: api as unknown as EvolutionApi,
-      account,
-      instanceName: "postora_acc-established",
-      state: "open",
-      userId: "user-bridge-123",
-    }),
-    Error,
-    "db failure",
-  );
+  const result = await (reconcileAccountConnection as any)({
+    admin,
+    api: api as unknown as EvolutionApi,
+    account,
+    instanceName: "postora_acc-established",
+    state: "open",
+    userId: "user-bridge-123",
+  });
+
+  assertEquals(result.mismatch, true);
+  const instanceUpdates = admin.updates.filter((u) => u.table === "whatsapp_evolution_instances");
+  assertEquals(instanceUpdates.length, 0, "must not attempt whatsapp_evolution_instances update on mismatch");
 });
 
 Deno.test("reconcileAccountConnection: open on an active established row returns mismatch:false without calling sync or fetchInstance", async () => {

@@ -345,7 +345,7 @@ for (const state of ["open", "close"]) {
   });
 }
 
-Deno.test("pairingStatus on a mismatch returns state number_mismatch and phone_number null, calls logout once, passes workspaceId scope to flag RPC, and does not update social_accounts directly", async () => {
+Deno.test("pairingStatus on a mismatch returns state number_mismatch and phone_number null, calls logout once, passes workspaceId scope to flag RPC, and does not update social_accounts or whatsapp_evolution_instances directly", async () => {
   const db = fixture({ existing: true, resolved: true });
   const remote = provider("open");
   remote.api.fetchInstance = () => Promise.resolve({ ownerJid: "15550002222@s.whatsapp.net", profileName: "Other Name" });
@@ -370,10 +370,10 @@ Deno.test("pairingStatus on a mismatch returns state number_mismatch and phone_n
   );
   assertEquals(metaUpdates.length, 0, "Must NOT update social_accounts with account_metadata after mismatch (old persistNumberMismatch is gone)");
 
-  const instanceUpdate = db.calls.find(
+  const instanceUpdates = db.calls.filter(
     (call) => call.method === "PATCH" && call.url.pathname.endsWith("/whatsapp_evolution_instances"),
   );
-  assertEquals(instanceUpdate?.body, { last_connection_state: "number_mismatch" });
+  assertEquals(instanceUpdates.length, 0, "Must NOT update whatsapp_evolution_instances directly after mismatch");
 });
 
 Deno.test("pairingStatus on an account with durable number_mismatch returns state number_mismatch without calling provider connectionState", async () => {

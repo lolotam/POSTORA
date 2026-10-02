@@ -205,3 +205,111 @@ Deno.test("getQrStatusResult: when provider reports close for ACTIVE account and
   const saveCalls = calls.filter((c) => c.target === "saveConnectionState");
   assertEquals(saveCalls.length, 0, "saveConnectionState must NOT be called if reconcile throws");
 });
+
+type BuildQrStatusDepsFn = (
+  admin: any,
+  ctx: { userId: string },
+  api?: any,
+) => any;
+
+async function loadBuildQrStatusDeps(): Promise<BuildQrStatusDepsFn> {
+  const mod = await import("./qrStatus.ts");
+  const fn = (mod as any).buildQrStatusDeps;
+  assert(typeof fn === "function", "buildQrStatusDeps must be exported from ./qrStatus.ts");
+  return fn;
+}
+
+interface RecordedRpc {
+  name: string;
+  args: Record<string, unknown>;
+}
+
+interface RecordedFrom {
+  table: string;
+}
+
+function createMockAdminForDeps(options: {
+  rpcResult?: { data: unknown; error: unknown };
+} = {}) {
+  const rpcCalls: RecordedRpc[] = [];
+  const fromCalls: RecordedFrom[] = [];
+
+  const admin = {
+    rpc(name: string, args: Record<string, unknown>) {
+      rpcCalls.push({ name, args });
+      return Promise.resolve(options.rpcResult ?? { data: true, error: null });
+    },
+    from(table: string) {
+      fromCalls.push({ table });
+      return {
+        update() {
+          return {
+            eq() {
+              return Promise.resolve({ error: null });
+            },
+          };
+        },
+      };
+    },
+  };
+
+  return { admin, rpcCalls, fromCalls };
+}
+
+Deno.test("buildQrStatusDeps: saveConnectionState makes exactly one admin.rpc('save_owned_evolution_state') with user scope and no .from('whatsapp_evolution_instances')", async () => {
+  const buildQrStatusDeps = await loadBuildQrStatusDeps();
+  const { admin, rpcCalls, fromCalls } = createMockAdminForDeps({
+    rpcResult: { data: true, error: null },
+  });
+  const ctx = { userId: "user-123" };
+  const fakeApi = {} as any;
+  const deps = buildQrStatusDeps(admin, ctx, fakeApi);
+
+  await deps.saveConnectionState("acc-1", "open");
+
+  assertEquals(rpcCalls.length, 1);
+  assertEquals(rpcCalls[0], {
+    name: "save_owned_evolution_state",
+    args: {
+      p_account_id: "acc-1",
+      p_user_id: "user-123",
+      p_state: "open",
+    },
+  });
+  const instanceFromCalls = fromCalls.filter((c) => c.table === "whatsapp_evolution_instances");
+  assertEquals(instanceFromCalls.length, 0, "Must not update whatsapp_evolution_instances directly");
+});
+
+Deno.test("buildQrStatusDeps: saveConnectionState throws when save_owned_evolution_state returns an rpc error", async () => {
+  const buildQrStatusDeps = await loadBuildQrStatusDeps();
+  const dbError = new Error("rpc statement timeout");
+  const { admin } = createMockAdminForDeps({
+    rpcResult: { data: null, error: dbError },
+  });
+  const ctx = { userId: "user-123" };
+  const fakeApi = {} as any;
+  const deps = buildQrStatusDeps(admin, ctx, fakeApi);
+
+  await assertRejects(
+    () => deps.saveConnectionState("acc-1", "open"),
+    Error,
+    "rpc statement timeout",
+  );
+});
+
+Deno.test("buildQrStatusDeps: saveConnectionState throws when save_owned_evolution_state returns false", async () => {
+  const buildQrStatusDeps = await loadBuildQrStatusDeps();
+  const { admin, rpcCalls } = createMockAdminForDeps({
+    rpcResult: { data: false, error: null },
+  });
+  const ctx = { userId: "user-123" };
+  const fakeApi = {} as any;
+  const deps = buildQrStatusDeps(admin, ctx, fakeApi);
+
+  await assertRejects(
+    () => deps.saveConnectionState("acc-alien", "open"),
+    Error,
+  );
+  assertEquals(rpcCalls.length, 1);
+});
+

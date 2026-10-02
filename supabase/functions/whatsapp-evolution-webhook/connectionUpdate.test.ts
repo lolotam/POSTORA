@@ -82,10 +82,14 @@ Deno.test("handleConnectionUpdate: on NumberMismatchError calls handleNumberMism
   const mismatchCalls = calls.filter((c) => c.target === "handleNumberMismatch");
   assertEquals(mismatchCalls.length, 1);
   assertEquals(mismatchCalls[0].args, [
-    deps.admin,
     deps.api,
-    { accountId: "acc-1", instanceName: "postora_acc-1" },
+    { instanceName: "postora_acc-1" },
   ]);
+
+  const mismatchUpdates = admin.updates.filter(
+    (u) => u.table === "whatsapp_evolution_instances" && u.values.last_connection_state === "number_mismatch",
+  );
+  assertEquals(mismatchUpdates.length, 0, "No whatsapp_evolution_instances update with number_mismatch after mismatch");
 
   const importCalls = calls.filter((c) => c.target === "importEvolutionHistory");
   assertEquals(importCalls.length, 0);
