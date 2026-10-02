@@ -8,13 +8,20 @@ interface RecordedUpdate {
   filters: Record<string, unknown>;
 }
 
+interface RecordedRpc {
+  name: string;
+  args: Record<string, unknown>;
+}
+
 function fakeAdmin(options: {
   instanceUpdateError?: unknown;
   accountMetadata?: Record<string, unknown> | null;
 } = {}) {
   const updates: RecordedUpdate[] = [];
+  const rpcs: RecordedRpc[] = [];
   const admin = {
     updates,
+    rpcs,
     from(table: string) {
       return {
         update(values: Record<string, unknown>) {
@@ -51,7 +58,8 @@ function fakeAdmin(options: {
         },
       };
     },
-    rpc() {
+    rpc(name: string, args: Record<string, unknown>) {
+      rpcs.push({ name, args });
       return Promise.resolve({ data: null, error: null });
     },
   };
@@ -89,14 +97,16 @@ Deno.test("reconcileAccountConnection: on NumberMismatchError calls api.logout o
     platform_user_id: "96597950350",
     is_active: false,
     account_metadata: {},
+    user_id: "user-bridge-123",
   };
 
-  const result = await reconcileAccountConnection({
+  const result = await (reconcileAccountConnection as any)({
     admin,
     api: api as unknown as EvolutionApi,
     account,
     instanceName: "postora_acc-established",
     state: "open",
+    userId: "user-bridge-123",
   });
 
   assertEquals(result, {
@@ -114,6 +124,44 @@ Deno.test("reconcileAccountConnection: on NumberMismatchError calls api.logout o
   assertEquals(instanceUpdates[0].filters, { social_account_id: "acc-established" });
 });
 
+Deno.test("reconcileAccountConnection: bridge poll passes userId scope to syncEvolutionAccountConnection on mismatch", async () => {
+  const admin = fakeAdmin();
+  const api = fakeApi({
+    fetchInstanceResult: { ownerJid: "99999999@s.whatsapp.net" },
+  });
+
+  const account = {
+    id: "acc-established",
+    platform_user_id: "96597950350",
+    is_active: false,
+    account_metadata: {},
+    user_id: "user-bridge-123",
+  };
+
+  const result = await (reconcileAccountConnection as any)({
+    admin,
+    api: api as unknown as EvolutionApi,
+    account,
+    instanceName: "postora_acc-established",
+    state: "open",
+    userId: "user-bridge-123",
+  });
+
+  assertEquals(result, {
+    ownerNumber: "96597950350",
+    mismatch: true,
+  });
+
+  const flagCalls = admin.rpcs.filter((r) => r.name === "flag_whatsapp_number_mismatch");
+  assertEquals(flagCalls.length, 1, "Expected exactly one flag_whatsapp_number_mismatch RPC call");
+  assertEquals(flagCalls[0].args, {
+    p_account_id: "acc-established",
+    p_user_id: "user-bridge-123",
+    p_workspace_id: null,
+    p_instance_name: null,
+  });
+});
+
 Deno.test("reconcileAccountConnection: swallows api.logout rejection on mismatch and still persists state", async () => {
   const admin = fakeAdmin();
   const api = fakeApi({
@@ -126,14 +174,16 @@ Deno.test("reconcileAccountConnection: swallows api.logout rejection on mismatch
     platform_user_id: "96597950350",
     is_active: false,
     account_metadata: {},
+    user_id: "user-bridge-123",
   };
 
-  const result = await reconcileAccountConnection({
+  const result = await (reconcileAccountConnection as any)({
     admin,
     api: api as unknown as EvolutionApi,
     account,
     instanceName: "postora_acc-established",
     state: "open",
+    userId: "user-bridge-123",
   });
 
   assertEquals(result, {
@@ -157,15 +207,17 @@ Deno.test("reconcileAccountConnection: throws if updating whatsapp_evolution_ins
     platform_user_id: "96597950350",
     is_active: false,
     account_metadata: {},
+    user_id: "user-bridge-123",
   };
 
   await assertRejects(
-    () => reconcileAccountConnection({
+    () => (reconcileAccountConnection as any)({
       admin,
       api: api as unknown as EvolutionApi,
       account,
       instanceName: "postora_acc-established",
       state: "open",
+      userId: "user-bridge-123",
     }),
     Error,
     "db failure",

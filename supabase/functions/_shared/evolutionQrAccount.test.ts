@@ -270,12 +270,17 @@ Deno.test("established row receiving open with mismatched number calls flag_what
   const admin = recordingAdmin(null, { active: false });
   const connected = { id: "acc-2", platform_user_id: "96597950350" };
   await assertRejects(
-    () => syncEvolutionAccountConnection(admin, connected, "open", { ownerJid: "99999999@s.whatsapp.net" }),
+    () => (syncEvolutionAccountConnection as any)(admin, connected, "open", { ownerJid: "99999999@s.whatsapp.net" }, { userId: "user-1" }),
     NumberMismatchError,
   );
   const flagCalls = admin.rpcs.filter((r) => r.name === "flag_whatsapp_number_mismatch");
   assertEquals(flagCalls.length, 1, "Expected exactly one flag_whatsapp_number_mismatch RPC call");
-  assertEquals(flagCalls[0].args, { p_account_id: "acc-2" });
+  assertEquals(flagCalls[0].args, {
+    p_account_id: "acc-2",
+    p_user_id: "user-1",
+    p_workspace_id: null,
+    p_instance_name: null,
+  });
 
   const directUpdates = admin.updates.filter(
     (u) => u.table === "social_accounts" && ("account_metadata" in u.values || "is_active" in u.values),
@@ -286,12 +291,89 @@ Deno.test("established row receiving open with mismatched number calls flag_what
   assertEquals(clearCalls, []);
 });
 
+Deno.test("syncEvolutionAccountConnection mismatch with userId scope calls flag_whatsapp_number_mismatch with p_user_id", async () => {
+  const admin = recordingAdmin(null, { active: false });
+  const connected = { id: "acc-2", platform_user_id: "96597950350" };
+  await assertRejects(
+    () => (syncEvolutionAccountConnection as any)(admin, connected, "open", { ownerJid: "99999999@s.whatsapp.net" }, { userId: "usr-42" }),
+    NumberMismatchError,
+  );
+  const flagCalls = admin.rpcs.filter((r) => r.name === "flag_whatsapp_number_mismatch");
+  assertEquals(flagCalls.length, 1);
+  assertEquals(flagCalls[0].args, {
+    p_account_id: "acc-2",
+    p_user_id: "usr-42",
+    p_workspace_id: null,
+    p_instance_name: null,
+  });
+});
+
+Deno.test("syncEvolutionAccountConnection mismatch with workspaceId scope calls flag_whatsapp_number_mismatch with p_workspace_id", async () => {
+  const admin = recordingAdmin(null, { active: false });
+  const connected = { id: "acc-2", platform_user_id: "96597950350" };
+  await assertRejects(
+    () => (syncEvolutionAccountConnection as any)(admin, connected, "open", { ownerJid: "99999999@s.whatsapp.net" }, { workspaceId: "ws-99" }),
+    NumberMismatchError,
+  );
+  const flagCalls = admin.rpcs.filter((r) => r.name === "flag_whatsapp_number_mismatch");
+  assertEquals(flagCalls.length, 1);
+  assertEquals(flagCalls[0].args, {
+    p_account_id: "acc-2",
+    p_user_id: null,
+    p_workspace_id: "ws-99",
+    p_instance_name: null,
+  });
+});
+
+Deno.test("syncEvolutionAccountConnection mismatch with instanceName scope calls flag_whatsapp_number_mismatch with p_instance_name", async () => {
+  const admin = recordingAdmin(null, { active: false });
+  const connected = { id: "acc-2", platform_user_id: "96597950350" };
+  await assertRejects(
+    () => (syncEvolutionAccountConnection as any)(admin, connected, "open", { ownerJid: "99999999@s.whatsapp.net" }, { instanceName: "postora_inst_1" }),
+    NumberMismatchError,
+  );
+  const flagCalls = admin.rpcs.filter((r) => r.name === "flag_whatsapp_number_mismatch");
+  assertEquals(flagCalls.length, 1);
+  assertEquals(flagCalls[0].args, {
+    p_account_id: "acc-2",
+    p_user_id: null,
+    p_workspace_id: null,
+    p_instance_name: "postora_inst_1",
+  });
+});
+
+Deno.test("syncEvolutionAccountConnection mismatch with NO scope throws plain Error mentioning scope BEFORE any rpc (fail closed)", async () => {
+  const admin = recordingAdmin(null, { active: false });
+  const connected = { id: "acc-2", platform_user_id: "96597950350" };
+  const err = await assertRejects(
+    () => syncEvolutionAccountConnection(admin, connected, "open", { ownerJid: "99999999@s.whatsapp.net" }),
+    Error,
+    "scope",
+  );
+  assertEquals(err instanceof NumberMismatchError, false);
+  const flagCalls = admin.rpcs.filter((r) => r.name === "flag_whatsapp_number_mismatch");
+  assertEquals(flagCalls.length, 0, "Must NOT call flag_whatsapp_number_mismatch RPC when scope is missing");
+});
+
+Deno.test("syncEvolutionAccountConnection mismatch with empty scope throws plain Error mentioning scope BEFORE any rpc (fail closed)", async () => {
+  const admin = recordingAdmin(null, { active: false });
+  const connected = { id: "acc-2", platform_user_id: "96597950350" };
+  const err = await assertRejects(
+    () => (syncEvolutionAccountConnection as any)(admin, connected, "open", { ownerJid: "99999999@s.whatsapp.net" }, {}),
+    Error,
+    "scope",
+  );
+  assertEquals(err instanceof NumberMismatchError, false);
+  const flagCalls = admin.rpcs.filter((r) => r.name === "flag_whatsapp_number_mismatch");
+  assertEquals(flagCalls.length, 0, "Must NOT call flag_whatsapp_number_mismatch RPC when scope is empty");
+});
+
 Deno.test("mismatched number when flag_whatsapp_number_mismatch RPC fails rejects with that error not NumberMismatchError", async () => {
   const flagErr = new Error("flag_whatsapp_number_mismatch failed");
   const admin = recordingAdmin(null, { active: false, flagMismatchError: flagErr });
   const connected = { id: "acc-2", platform_user_id: "96597950350" };
   const caught = await assertRejects(
-    () => syncEvolutionAccountConnection(admin, connected, "open", { ownerJid: "99999999@s.whatsapp.net" }),
+    () => (syncEvolutionAccountConnection as any)(admin, connected, "open", { ownerJid: "99999999@s.whatsapp.net" }, { userId: "user-1" }),
   );
   assertEquals(caught, flagErr);
 });
@@ -310,7 +392,7 @@ Deno.test("established row that was active receiving open with mismatched number
   // fan-out never delivers one account's event to another account's subscription.
   const connected = { id: "acc-1", platform_user_id: "96597950350" };
   await assertRejects(
-    () => syncEvolutionAccountConnection(admin, connected, "open", { ownerJid: "99999999@s.whatsapp.net" }),
+    () => (syncEvolutionAccountConnection as any)(admin, connected, "open", { ownerJid: "99999999@s.whatsapp.net" }, { workspaceId: "ws-1" }),
     NumberMismatchError,
   );
   assertEquals(admin.active, false);
@@ -318,7 +400,12 @@ Deno.test("established row that was active receiving open with mismatched number
   assertEquals(admin.deliveries[0].event_type, "whatsapp_number.disconnected");
   const flagCalls = admin.rpcs.filter((r) => r.name === "flag_whatsapp_number_mismatch");
   assertEquals(flagCalls.length, 1, "Expected exactly one flag_whatsapp_number_mismatch RPC call");
-  assertEquals(flagCalls[0].args, { p_account_id: "acc-1" });
+  assertEquals(flagCalls[0].args, {
+    p_account_id: "acc-1",
+    p_user_id: null,
+    p_workspace_id: "ws-1",
+    p_instance_name: null,
+  });
   const directUpdates = admin.updates.filter(
     (u) => u.table === "social_accounts" && ("account_metadata" in u.values || "is_active" in u.values),
   );

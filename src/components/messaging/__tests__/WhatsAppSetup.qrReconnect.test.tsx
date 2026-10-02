@@ -82,31 +82,46 @@ vi.mock("@/hooks/useWhatsAppSetupSummary", () => ({
   useWhatsAppSetupSummary: () => ({ data: null, isLoading: false }),
 }));
 
-vi.mock("../WhatsAppQrScanner", () => ({
-  WhatsAppQrScanner: ({
-    socialAccountId,
-    onComplete,
-    onConnectAsNew,
-  }: {
-    socialAccountId: string;
-    onComplete?: () => void;
-    onConnectAsNew?: () => void;
-  }) => (
-    <div data-testid="qr-scanner" data-account-id={socialAccountId}>
-      QR Scanner Mock
-      {onConnectAsNew && (
-        <button data-testid="mock-connect-as-new" onClick={onConnectAsNew}>
-          Connect As New Mock
-        </button>
-      )}
-      {onComplete && (
-        <button data-testid="mock-complete" onClick={onComplete}>
-          Complete Mock
-        </button>
-      )}
-    </div>
-  ),
+const scannerMounts = vi.hoisted(() => ({
+  counts: {} as Record<string, number>,
+  reset() {
+    this.counts = {};
+  },
 }));
+
+vi.mock("../WhatsAppQrScanner", async () => {
+  const React = await import("react");
+  return {
+    WhatsAppQrScanner: ({
+      socialAccountId,
+      onComplete,
+      onConnectAsNew,
+    }: {
+      socialAccountId: string;
+      onComplete?: () => void;
+      onConnectAsNew?: () => void;
+    }) => {
+      React.useEffect(() => {
+        scannerMounts.counts[socialAccountId] = (scannerMounts.counts[socialAccountId] ?? 0) + 1;
+      }, []);
+      return (
+        <div data-testid="qr-scanner" data-account-id={socialAccountId}>
+          QR Scanner Mock
+          {onConnectAsNew && (
+            <button data-testid="mock-connect-as-new" onClick={onConnectAsNew}>
+              Connect As New Mock
+            </button>
+          )}
+          {onComplete && (
+            <button data-testid="mock-complete" onClick={onComplete}>
+              Complete Mock
+            </button>
+          )}
+        </div>
+      );
+    },
+  };
+});
 
 let currentQueryClient: QueryClient;
 
@@ -134,6 +149,7 @@ describe("WhatsAppSetup QR reconnect", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    scannerMounts.reset();
     mockQrAccounts.current = [sampleQrAccount];
     mockQrAccounts.isError = false;
     mockQrAccounts.refetch = vi.fn();
@@ -264,4 +280,60 @@ describe("WhatsAppSetup QR reconnect", () => {
     fireEvent.click(retryBtn);
     expect(refetchSpy).toHaveBeenCalledTimes(1);
   });
+
+  it("when Reconnect is clicked on a second disconnected account while the scanner for the first is mounted, the scanner is REMOUNTED for the second", async () => {
+    const sampleQrAccount1 = {
+      id: "qr-acc-1",
+      platform_user_id: "96597950350",
+      platform_username: "Direct QR Support 1",
+      connection_mode: "evolution_qr",
+      updated_at: "2026-10-01T12:00:00Z",
+    };
+    const sampleQrAccount2 = {
+      id: "qr-acc-2",
+      platform_user_id: "96597950351",
+      platform_username: "Direct QR Support 2",
+      connection_mode: "evolution_qr",
+      updated_at: "2026-10-01T12:00:00Z",
+    };
+    mockQrAccounts.current = [sampleQrAccount1, sampleQrAccount2];
+
+    invoke.mockImplementation(async (_fn: string, options?: any) => {
+      const accountId = options?.body?.social_account_id;
+      return {
+        data: {
+          success: true,
+          social_account_id: accountId,
+          qr: `qr-code-${accountId}`,
+          state: "connecting",
+        },
+        error: null,
+      };
+    });
+
+    renderSetup();
+
+    const reconnectBtns = screen.getAllByRole("button", { name: "Reconnect" });
+    expect(reconnectBtns).toHaveLength(2);
+
+    // Click Reconnect on the first account
+    fireEvent.click(reconnectBtns[0]);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("qr-scanner")).toBeInTheDocument();
+      expect(screen.getByTestId("qr-scanner")).toHaveAttribute("data-account-id", "qr-acc-1");
+    });
+    expect(scannerMounts.counts["qr-acc-1"]).toBe(1);
+
+    // Click Reconnect on the second account while the scanner for the first is mounted
+    fireEvent.click(reconnectBtns[1]);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("qr-scanner")).toHaveAttribute("data-account-id", "qr-acc-2");
+    });
+
+    // Scanner must be remounted for the second id (fresh mount counter == 1)
+    expect(scannerMounts.counts["qr-acc-2"]).toBe(1);
+  });
 });
+

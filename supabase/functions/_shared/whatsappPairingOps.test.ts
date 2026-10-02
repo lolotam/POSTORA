@@ -164,6 +164,9 @@ function fixture(options: { existing?: boolean; active?: boolean; resolved?: boo
         }
         return Promise.resolve(Response.json(true));
       }
+      if (table === "flag_whatsapp_number_mismatch") {
+        return Promise.resolve(Response.json(true));
+      }
       if (table === "partner_webhooks") {
         assertEquals(url.searchParams.get("workspace_id"), "eq.ws-1");
         assertEquals(url.searchParams.get("id"), null);
@@ -342,7 +345,7 @@ for (const state of ["open", "close"]) {
   });
 }
 
-Deno.test("pairingStatus on a mismatch returns state number_mismatch and phone_number null, and calls logout once", async () => {
+Deno.test("pairingStatus on a mismatch returns state number_mismatch and phone_number null, calls logout once, passes workspaceId scope to flag RPC, and does not update social_accounts directly", async () => {
   const db = fixture({ existing: true, resolved: true });
   const remote = provider("open");
   remote.api.fetchInstance = () => Promise.resolve({ ownerJid: "15550002222@s.whatsapp.net", profileName: "Other Name" });
@@ -352,8 +355,25 @@ Deno.test("pairingStatus on a mismatch returns state number_mismatch and phone_n
   const logouts = remote.calls.filter((c) => c.method === "logout");
   assertEquals(logouts.length, 1);
   assertEquals(logouts[0].input, `postora_${ID}`);
-  assertEquals(db.calls.find((call) => call.method === "PATCH" && call.url.pathname.endsWith("/social_accounts"))!.body,
-    { is_active: false, account_metadata: { ...db.metadata, number_mismatch: true } });
+
+  const flagRpcCalls = db.calls.filter((call) => call.url.pathname.endsWith("/rpc/flag_whatsapp_number_mismatch"));
+  assertEquals(flagRpcCalls.length, 1, "Expected exactly one flag_whatsapp_number_mismatch RPC call");
+  assertEquals(flagRpcCalls[0].body, {
+    p_account_id: ID,
+    p_user_id: null,
+    p_workspace_id: CTX.workspaceId,
+    p_instance_name: null,
+  });
+
+  const metaUpdates = db.calls.filter(
+    (call) => call.method === "PATCH" && call.url.pathname.endsWith("/social_accounts") && "account_metadata" in call.body,
+  );
+  assertEquals(metaUpdates.length, 0, "Must NOT update social_accounts with account_metadata after mismatch (old persistNumberMismatch is gone)");
+
+  const instanceUpdate = db.calls.find(
+    (call) => call.method === "PATCH" && call.url.pathname.endsWith("/whatsapp_evolution_instances"),
+  );
+  assertEquals(instanceUpdate?.body, { last_connection_state: "number_mismatch" });
 });
 
 Deno.test("pairingStatus on an account with durable number_mismatch returns state number_mismatch without calling provider connectionState", async () => {

@@ -136,3 +136,19 @@ Deno.test("handleConnectionUpdate: open without mismatch runs history import", a
   const importCalls = calls.filter((c) => c.target === "importEvolutionHistory");
   assertEquals(importCalls.length, 1);
 });
+
+Deno.test("handleConnectionUpdate: passes instanceName scope to syncEvolutionAccountConnection", async () => {
+  const handleConnectionUpdate = await loadHandleConnectionUpdate();
+  const { deps, calls } = createDeps();
+
+  const account = { id: "acc-1", platform_user_id: "pending_acc-1" };
+  const instance = { instance_name: "postora_acc-1", last_sync_at: null };
+  const data = { state: "open" };
+
+  await handleConnectionUpdate(deps, { account, instance, data });
+
+  const syncCalls = calls.filter((c) => c.target === "syncEvolutionAccountConnection");
+  assertEquals(syncCalls.length, 1);
+  assertEquals(syncCalls[0].args[4], { instanceName: "postora_acc-1" });
+});
+
