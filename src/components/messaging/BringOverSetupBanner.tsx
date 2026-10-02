@@ -155,9 +155,16 @@ function SetupMoveCard({
     const connectors: Record<string, "skip" | "replace"> = {};
     for (const connector of preview.connectors) {
       if (connector.name_clash) {
-        connectors[connector.name] = clashChoice[connector.name] ?? "replace";
-      } else if (!(connectorChecked[connector.name] ?? true)) {
-        connectors[connector.name] = "skip";
+        // The connector already on this account owns the store webhook, so it
+        // can't be replaced — the incoming one is skipped unless overridden.
+        connectors[connector.name] = clashChoice[connector.name]
+          ?? (connector.destination_has_store_webhook ? "skip" : "replace");
+      } else {
+        const disabled = connector.has_store_webhook && agentMoves;
+        const effectiveChecked = disabled || (connectorChecked[connector.name] ?? true);
+        if (!effectiveChecked) {
+          connectors[connector.name] = "skip";
+        }
       }
       // An unchecked box means skip; anything left checked simply moves and
       // names nothing in choices.
@@ -181,7 +188,15 @@ function SetupMoveCard({
           choices: buildChoices(),
         },
       });
-      const code = typeof data?.error === "string" ? data.error : null;
+      let code = typeof data?.error === "string" ? data.error : null;
+      if (!code && error) {
+        // A non-2xx reply arrives as FunctionsHttpError with `data` null; the
+        // mover's stable refusal code rides on the JSON body of its Response.
+        const envelope = error.context instanceof Response
+          ? await error.context.clone().json().catch(() => null)
+          : null;
+        if (envelope && typeof envelope.error === "string") code = envelope.error;
+      }
       if (error || code) {
         setErrorText(
           (code && refusalCopy[code])
@@ -235,23 +250,37 @@ function SetupMoveCard({
           {preview.connectors.map((connector) => {
             const checkId = `bring-over-connector-${candidate.id}-${connector.name}`;
             if (connector.name_clash) {
+              const value = clashChoice[connector.name]
+                ?? (connector.destination_has_store_webhook ? "skip" : "replace");
+              const replaceDisabled = connector.destination_has_store_webhook === true;
+              // The agent is leaving, so a webhook-bearing connector cannot
+              // stay behind as "skip" — it must move (replace) or nothing moves.
+              const skipDisabled = connector.has_store_webhook === true && agentMoves;
               return (
                 <div key={connector.name} className="space-y-2 rounded-md border p-2">
                   <p className="text-sm font-medium">{connector.name}</p>
                   <RadioGroup
-                    value={clashChoice[connector.name] ?? "replace"}
-                    onValueChange={(value) =>
-                      setClashChoice((prev) => ({ ...prev, [connector.name]: value as "replace" | "skip" }))}
+                    value={value}
+                    onValueChange={(next) =>
+                      setClashChoice((prev) => ({ ...prev, [connector.name]: next as "replace" | "skip" }))}
                     className="space-y-1"
                   >
                     <div className="flex items-center space-x-2">
-                      <RadioGroupItem value="replace" id={`${checkId}-replace`} disabled={busy} />
+                      <RadioGroupItem
+                        value="replace"
+                        id={`${checkId}-replace`}
+                        disabled={busy || replaceDisabled}
+                      />
                       <Label htmlFor={`${checkId}-replace`}>
                         {t("bringOver.replaceHere", "Replace the one here")}
                       </Label>
                     </div>
                     <div className="flex items-center space-x-2">
-                      <RadioGroupItem value="skip" id={`${checkId}-skip`} disabled={busy} />
+                      <RadioGroupItem
+                        value="skip"
+                        id={`${checkId}-skip`}
+                        disabled={busy || skipDisabled}
+                      />
                       <Label htmlFor={`${checkId}-skip`}>
                         {t("bringOver.keepHere", "Keep the one here (skip)")}
                       </Label>
@@ -261,12 +290,13 @@ function SetupMoveCard({
               );
             }
             const disabled = connector.has_store_webhook && agentMoves;
+            const effectiveChecked = disabled || (connectorChecked[connector.name] ?? true);
             return (
               <div key={connector.name} className="space-y-1">
                 <div className="flex items-center space-x-2">
                   <Checkbox
                     id={checkId}
-                    checked={connectorChecked[connector.name] ?? true}
+                    checked={effectiveChecked}
                     disabled={disabled || busy}
                     onCheckedChange={(next) =>
                       setConnectorChecked((prev) => ({ ...prev, [connector.name]: next === true }))}

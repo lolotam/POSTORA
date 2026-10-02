@@ -37,27 +37,15 @@ interface DismissSetupMoveParams {
 
 /**
  * The mover refuses owner-fixable states with 22023 whose message names the
- * reason (the message IS the code). Each token maps to one stable code plus the
- * sentence the owner sees for it.
+ * reason (the message IS the code). Only the stable code is surfaced here —
+ * the banner owns the human copy for each.
  */
-const MOVER_REFUSALS: Array<{ token: string; message: string }> = [
-  {
-    token: "accounts_not_compatible",
-    message: "These two connections can't share setup (different workspace or not finished connecting)",
-  },
-  {
-    token: "connector_name_clash",
-    message: "A connector with the same name already exists here. Choose replace or skip for it.",
-  },
-  {
-    token: "store_connector_left_behind",
-    message: "A store connector with a webhook can't stay behind without the agent. Move them together or keep both here.",
-  },
-  {
-    token: "replaced_connector_has_store_webhook",
-    message: "The connector already on this account owns a store webhook and can't be replaced.",
-  },
-];
+const MOVER_REFUSAL_CODES = [
+  "accounts_not_compatible",
+  "connector_name_clash",
+  "store_connector_left_behind",
+  "replaced_connector_has_store_webhook",
+] as const;
 
 function mapMoveRpcError(error: { code?: string; message?: string } | null): MoveSetupError {
   if (error?.code === "55006") {
@@ -68,9 +56,9 @@ function mapMoveRpcError(error: { code?: string; message?: string } | null): Mov
     );
   }
   if (error?.code === "22023" && typeof error.message === "string") {
-    for (const refusal of MOVER_REFUSALS) {
-      if (error.message.includes(refusal.token)) {
-        return new MoveSetupError(refusal.message, 409, refusal.token);
+    for (const code of MOVER_REFUSAL_CODES) {
+      if (error.message.includes(code)) {
+        return new MoveSetupError(code, 409, code);
       }
     }
   }
