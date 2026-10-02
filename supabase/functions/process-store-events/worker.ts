@@ -60,6 +60,12 @@ export interface AccountContext {
   optedOut: boolean;
   /** False when the row is inactive or its number was retired by a re-pair. */
   connected: boolean;
+  /**
+   * The binding's current social_account_id, when the binding still exists.
+   * Differs from the event's account after a setup move; the worker then
+   * re-points the event before any skip logic runs.
+   */
+  bindingAccountId?: string | null;
 }
 
 export interface StoreSnapshot {
@@ -126,6 +132,12 @@ export interface WorkerPorts {
   /** False when id + claim_token no longer match: the update touched nothing. */
   updateEvent(id: string, claimToken: string, patch: Record<string, unknown>): Promise<boolean>;
   releaseClaim(id: string, claimToken: string): Promise<boolean>;
+  /**
+   * One compare-and-set that re-points a claimed event to its binding's current
+   * account and releases the claim (status pending, token cleared). False when
+   * the id + claim_token fence no longer matches.
+   */
+  retargetEvent?: (id: string, claimToken: string, accountId: string) => Promise<boolean>;
   loadAccount(event: StoreEventRow): Promise<AccountContext | null>;
   readStore(event: StoreEventRow): Promise<StoreRead>;
   reserveQr(accountId: string, limit: number, eventId: string, claimToken: string): Promise<boolean>;
@@ -684,6 +696,14 @@ async function processClaimed(
     const held = await ports.updateEvent(event.id, event.claim_token, { claimed_at: iso(ports.now()) });
     if (!held) return "left";
     account = await ports.loadAccount(event);
+    // PR-BC: the binding may have been moved to another account after this event was
+    // inserted (or the webhook raced the move). The order belongs to the binding's
+    // current account, so re-point it before any skip logic looks at the old account.
+    if (account && account.bindingAccountId && account.bindingAccountId !== event.social_account_id) {
+      return (await ports.retargetEvent!(event.id, event.claim_token, account.bindingAccountId))
+        ? "released"
+        : "left";
+    }
     // The skip reasons decide before the hold does: an account whose flow is off,
     // whose agent is off or whose customer opted out is skipped outright, even when
     // the row is disconnected -- those orders are never going out, held or not.

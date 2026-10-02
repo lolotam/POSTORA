@@ -14,6 +14,12 @@ import { extractQr, extractState } from "./qr.ts";
 import { buildQrStatusDeps, getQrStatusResult } from "./qrStatus.ts";
 import { reconnectQr, ReconnectError } from "./reconnect.ts";
 import { buildReconnectDeps, EVOLUTION_EVENTS } from "./reconnectDeps.ts";
+import {
+  dismissSetupMove,
+  moveSetup,
+  MoveSetupError,
+  type MoveSetupDeps,
+} from "./moveSetup.ts";
 
 class BridgeError extends Error {
   constructor(message: string, public readonly status = 400) {
@@ -30,12 +36,17 @@ interface BridgeBody {
     | "logout_instance"
     | "sync_past_chats"
     | "get_sync_status"
-    | "resubscribe_webhook";
+    | "resubscribe_webhook"
+    | "move_setup"
+    | "dismiss_setup_move";
   social_account_id?: string;
   workspace_id?: string;
   risk_consent?: boolean;
   refresh_qr?: boolean;
   connection_name?: string;
+  from?: string;
+  to?: string;
+  choices?: Record<string, unknown>;
 }
 
 interface EvolutionInstanceRow {
@@ -140,6 +151,26 @@ async function findOwnedAccount(admin: any, userId: string, socialAccountId: str
   const data = await findOwnedEvolutionAccount(admin, userId, socialAccountId);
   if (!data || data.connection_mode !== "evolution_qr") throw new BridgeError("WhatsApp Direct QR account not found", 404);
   return data;
+}
+
+// Setup moves must also work between a Direct QR row and a Meta (Cloud API) row, so
+// unlike findOwnedAccount this accepts any WhatsApp connection mode. moveSetup.ts
+// turns the null into its own 404, so this stays a raw lookup like the reconnect one.
+async function findOwnedWhatsAppAccount(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- service-role client has no generated type here, matching every other lookup in this file
+  admin: any,
+  userId: string,
+  socialAccountId: string,
+): Promise<{ id: string } | null> {
+  const { data, error } = await admin
+    .from("social_accounts")
+    .select("id")
+    .eq("id", socialAccountId)
+    .eq("user_id", userId)
+    .eq("platform", "whatsapp")
+    .maybeSingle();
+  if (error) throw error;
+  return data ? { id: data.id } : null;
 }
 
 async function findInstance(admin: any, socialAccountId: string): Promise<EvolutionInstanceRow> {
@@ -309,6 +340,19 @@ async function getQrStatus(admin: any, userId: string, body: BridgeBody) {
   }, { account, instance, refreshQr: body.refresh_qr === true });
 }
 
+// Deps for the setup-move actions. Ownership uses the any-mode WhatsApp lookup and
+// the RPCs run through the service-role client: both mover functions are SECURITY
+// DEFINER and service_role-only, and they enforce same-owner/same-workspace in SQL.
+function moveSetupDeps(context: Awaited<ReturnType<typeof authenticateRequest>>): MoveSetupDeps {
+  return {
+    findOwnedWhatsAppAccount: (userId, id) => findOwnedWhatsAppAccount(context.admin, userId, id),
+    rpc: async (name, args) => {
+      const { data, error } = await context.admin.rpc(name, args);
+      return { data, error };
+    },
+  };
+}
+
 // Delegates to the shared teardown: whatsapp-oauth's "disconnect" action and this
 // action must not grow two different notions of what disconnecting an Evolution
 // account means. Nothing in the frontend calls this anymore, but a deployed n8n
@@ -365,6 +409,31 @@ Deno.serve(async (req) => {
     }
     if (body.action === "resubscribe_webhook") {
       return restrictedJsonResponse(req, await resubscribeWebhook(context, body));
+    }
+    if (body.action === "move_setup") {
+      if (!body.from || !body.to) throw new BridgeError("from and to are required", 400);
+      try {
+        return restrictedJsonResponse(req, await moveSetup(moveSetupDeps(context), context.user.id, {
+          from: body.from,
+          to: body.to,
+          choices: body.choices,
+        }));
+      } catch (error) {
+        if (error instanceof MoveSetupError) throw new BridgeError(error.message, error.status);
+        throw error;
+      }
+    }
+    if (body.action === "dismiss_setup_move") {
+      if (!body.from || !body.to) throw new BridgeError("from and to are required", 400);
+      try {
+        return restrictedJsonResponse(req, await dismissSetupMove(moveSetupDeps(context), context.user.id, {
+          from: body.from,
+          to: body.to,
+        }));
+      } catch (error) {
+        if (error instanceof MoveSetupError) throw new BridgeError(error.message, error.status);
+        throw error;
+      }
     }
     if (body.action === "logout_instance") {
       return restrictedJsonResponse(req, await logoutInstance(context.admin, context.user.id, body));

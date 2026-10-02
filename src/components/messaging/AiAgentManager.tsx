@@ -8,6 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { type AiAgentConfigInput, type AiAgentPlatform, useAiAgentConfig } from "@/hooks/useAiAgentConfig";
 import { useSocialAccounts } from "@/hooks/useSocialAccounts";
+import { BringOverSetupBanner } from "@/components/messaging/BringOverSetupBanner";
 import { normalizeE164Phone } from "@/lib/phone";
 import { AutomationHandlerCard } from "@/components/messaging/AutomationHandlerCard";
 import { AutoReplyManager } from "@/components/messaging/AutoReplyManager";
@@ -301,6 +302,11 @@ export function AiAgentManager({ platform = "whatsapp", initialAccountId = null,
 
       <TabsContent value="settings" className="mt-0">
         <div className="space-y-4">
+          {/* A previous connection may still own this account's agent setup; offer the
+              move above the settings the selected account is about to show. */}
+          <BringOverSetupBanner
+            activeAccount={accounts.find((account) => account.id === accountId) ?? null}
+          />
           {/* One selection drives the handler card, this form and the
               knowledge tab; AutomationHandlerCard's own selector is
               suppressed by passing accountId down. Markup matches that

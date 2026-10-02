@@ -3,6 +3,7 @@ import { useSearchParams } from "react-router-dom";
 import { WebhookManager } from "@/components/messaging/WebhookManager";
 import { WhatsAppDiagnostics } from "@/components/messaging/WhatsAppDiagnostics";
 import { WhatsAppSetup } from "@/components/messaging/WhatsAppSetup";
+import { BringOverSetupBanner } from "@/components/messaging/BringOverSetupBanner";
 import { UndeliveredStoreOrdersBanner } from "@/components/dashboard/UndeliveredStoreOrdersBanner";
 import { WhatsAppPageHeader } from "@/components/whatsapp/WhatsAppPageHeader";
 import { Card, CardContent } from "@/components/ui/card";
@@ -51,6 +52,9 @@ export default function Setup() {
 
         <TabsContent value="connect" className="space-y-6">
           <UndeliveredStoreOrdersBanner />
+          {whatsappAccounts[0] && (
+            <BringOverSetupBanner activeAccount={whatsappAccounts[0]} />
+          )}
           <WhatsAppSetup connectedAccounts={whatsappAccounts} />
         </TabsContent>
 
