@@ -1,6 +1,6 @@
 -- supabase/tests/whatsapp_number_mismatch.sql
 -- WhatsApp account continuity, PR-A follow-up: migration 20261004100200 (atomic
--- number_mismatch flag set / clear) and 20261004100300 (scoped flag), 20261004100400 (owned instance read/save). One transaction, synthetic fixtures, labelled
+-- number_mismatch flag set / clear) and 20261004100300 (scoped flag), 20261004100400 (owned instance read/save), 20261004100410 (instance state scoped). One transaction, synthetic fixtures, labelled
 -- ASSERTs, ROLLBACK, sentinel last.
 BEGIN;
 
@@ -69,6 +69,20 @@ BEGIN
   ASSERT (SELECT last_qr FROM public.whatsapp_evolution_instances WHERE social_account_id = acc) = 'qr-ok', 'N5 QR stored';
   ASSERT NOT has_function_privilege('authenticated', 'public.get_owned_evolution_instance(uuid,uuid)', 'EXECUTE'), 'N5 instance read not browser-callable (it carries the webhook key)';
   ASSERT NOT has_function_privilege('authenticated', 'public.save_owned_evolution_qr(uuid,uuid,text,text)', 'EXECUTE'), 'N5 QR save not browser-callable';
+
+  -- N6: a scoped flag also marks the instance; a refused (wrong-tenant) flag marks nothing.
+  UPDATE public.whatsapp_evolution_instances SET last_connection_state = 'open' WHERE social_account_id = acc;
+  PERFORM public.flag_whatsapp_number_mismatch(acc, u_b, NULL, NULL);
+  ASSERT (SELECT last_connection_state FROM public.whatsapp_evolution_instances WHERE social_account_id = acc) = 'open',
+    'N6 a wrong-tenant flag leaves the instance state alone';
+  PERFORM public.flag_whatsapp_number_mismatch(acc, u_a, NULL, NULL);
+  ASSERT (SELECT last_connection_state FROM public.whatsapp_evolution_instances WHERE social_account_id = acc) = 'number_mismatch',
+    'N6 the scoped flag marks the instance';
+  -- N7: the poll's observed-state write is owner-scoped.
+  ASSERT public.save_owned_evolution_state(acc, u_b, 'close') = false, 'N7 another user writes no state';
+  ASSERT public.save_owned_evolution_state(acc, u_a, 'close') = true, 'N7 the owner writes the state';
+  ASSERT (SELECT last_connection_state FROM public.whatsapp_evolution_instances WHERE social_account_id = acc) = 'close', 'N7 state stored';
+  ASSERT NOT has_function_privilege('authenticated', 'public.save_owned_evolution_state(uuid,uuid,text)', 'EXECUTE'), 'N7 not browser-callable';
 
   -- N4: grants.
   ASSERT NOT has_function_privilege('authenticated', 'public.flag_whatsapp_number_mismatch(uuid,uuid,uuid,text)', 'EXECUTE'), 'N4 flag not browser-callable';
