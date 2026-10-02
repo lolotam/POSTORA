@@ -52,8 +52,21 @@ export function BringOverSetupBanner({ activeAccount }: BringOverSetupBannerProp
 
 function BringOverSetupBannerInner({ activeAccount }: BringOverSetupBannerProps & { activeAccount: BannerAccount }) {
   const { t } = useTranslation("whatsapp");
-  const { data: candidates } = useSetupMoveCandidates(activeAccount.id);
+  const { data: candidates, isError, isFetching, refetch } = useSetupMoveCandidates(activeAccount.id);
   const [handledIds, setHandledIds] = useState<Set<string>>(new Set());
+  if (isError) {
+    // A pending setup transfer could be hiding behind this failure, so say so.
+    return (
+      <Alert variant="destructive">
+        <AlertDescription className="flex flex-wrap items-center gap-2">
+          <span>{t("bringOver.candidatesFailed", "Couldn't check for setup from an earlier WhatsApp connection.")}</span>
+          <Button size="sm" variant="outline" onClick={() => void refetch()} disabled={isFetching}>
+            {t("bringOver.retry", "Try again")}
+          </Button>
+        </AlertDescription>
+      </Alert>
+    );
+  }
   const candidate = (candidates ?? []).find((item) => !handledIds.has(item.id));
   if (!candidate) return null;
   return (
@@ -135,6 +148,11 @@ function SetupMoveCard({
     accounts_not_compatible: t(
       "bringOver.errorAccounts",
       "These two connections can't share setup (different workspace or not finished connecting)",
+    ),
+    linked_connector_name_clash: t(
+      "bringOver.errorLinkedClash",
+      "A store connector shared with {{from}} has the same name as one on this account, so its orders wouldn't reach this account. Rename one of them, then try again.",
+      { from: fromName },
     ),
     connector_name_clash: t(
       "bringOver.errorClash",

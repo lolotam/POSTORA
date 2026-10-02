@@ -2,7 +2,7 @@
 -- WhatsApp account continuity, PR-BC: migrations 20261004110000 (store_events FKs),
 -- 20261004110500 (move_whatsapp_account_setup, dismiss_whatsapp_setup_move) and
 -- 20261004111000 (activation carries the setup), 20261004112000 (owner-bound wrappers,
--- store flows in the preview). One transaction, synthetic fixtures,
+-- store flows in the preview), 20261004112500 (linked/shared connector clashes). One transaction, synthetic fixtures,
 -- labelled ASSERTs, expected refusals in nested BEGIN/EXCEPTION blocks, ROLLBACK,
 -- sentinel last. No secrets, no real accounts.
 --
@@ -796,6 +796,70 @@ BEGIN
     'M51 activation still calls the mover';
   ASSERT (SELECT count(*) FROM pg_proc WHERE proname IN ('move_whatsapp_account_setup', 'move_owned_whatsapp_account_setup')) = 2,
     'M51 no overloads';
+END $$;
+
+-- M53-M56: Codex review round 2 on PR #263 — a moving binding whose linked or shared
+-- connector would lose to a same-named connector the destination owns.
+DO $$
+DECLARE
+  u uuid := pg_temp.id('u_a');
+  ws uuid := pg_temp.id('ws_a');
+  f uuid := gen_random_uuid();
+  t uuid := gen_random_uuid();
+  third uuid := gen_random_uuid();
+  t_linked uuid := gen_random_uuid();
+  t_shared uuid := gen_random_uuid();
+  t_dst uuid := gen_random_uuid();
+  b_linked uuid := gen_random_uuid();
+  v jsonb;
+BEGIN
+  INSERT INTO public.social_accounts (id, user_id, platform, platform_user_id, access_token, workspace_id, is_active, connection_mode, account_metadata) VALUES
+    (f, u, 'whatsapp', '96599970001', '', ws, false, 'evolution_qr', '{}'),
+    (t, u, 'whatsapp', '96599970002', '', ws, true, 'evolution_qr', '{}'),
+    (third, u, 'whatsapp', '96599970003', '', ws, false, 'evolution_qr', '{}');
+  INSERT INTO public.ai_agent_configs (user_id, platform, social_account_id) VALUES (u, 'whatsapp', f);
+  -- An account-scoped connector owned by a third account, linked to the source and store-bound there.
+  INSERT INTO public.ai_agent_tools (id, user_id, name, description, connector_type, social_account_id, platform, scope) VALUES
+    (t_linked, u, 'woo_m53', 'linked', 'woocommerce', third, 'whatsapp', 'account'),
+    (t_dst, u, 'woo_m53', 'destination', 'woocommerce', t, 'whatsapp', 'account');
+  INSERT INTO public.ai_agent_tool_accounts (tool_id, social_account_id, user_id) VALUES (t_linked, f, u);
+  INSERT INTO public.store_webhook_bindings (id, user_id, social_account_id, connector_id, secret_id)
+  VALUES (b_linked, u, f, t_linked, gen_random_uuid());
+
+  ASSERT public.whatsapp_setup_move_hidden_store_connectors(f, t, '{}', '{}') = ARRAY['woo_m53'],
+    'M53 the helper names the linked connector the destination would hide';
+
+  -- M53: an interactive move refuses rather than strand the binding.
+  BEGIN
+    PERFORM public.move_whatsapp_account_setup(f, t, 'interactive', '{"agent_config":"source"}');
+    RAISE EXCEPTION 'M53 failed: a hidden linked binding moved' USING ERRCODE = 'assert_failure';
+  EXCEPTION WHEN invalid_parameter_value THEN
+    ASSERT SQLERRM LIKE '%linked_connector_name_clash%', 'M53 reason: ' || SQLERRM;
+  END;
+  ASSERT (SELECT social_account_id FROM public.store_webhook_bindings WHERE id = b_linked) = f, 'M53 binding stayed';
+
+  -- M54: an automatic (re-pair) move defers the whole agent group instead.
+  v := public.move_whatsapp_account_setup(f, t, 'auto');
+  ASSERT v->>'status' = 'deferred', 'M54 auto defers: ' || v::text;
+  ASSERT v->'conflicts' @> '[{"item":"connector","name":"woo_m53"}]'::jsonb, 'M54 conflict named: ' || v::text;
+  ASSERT (SELECT social_account_id FROM public.store_webhook_bindings WHERE id = b_linked) = f, 'M54 binding stayed';
+  ASSERT (SELECT count(*) FROM public.ai_agent_configs WHERE social_account_id = f) = 1, 'M54 agent stayed';
+
+  -- M55: the same holds for an all-accounts connector.
+  INSERT INTO public.ai_agent_tools (id, user_id, name, description, connector_type, platform, scope)
+  VALUES (t_shared, u, 'woo_m55', 'shared', 'woocommerce', 'whatsapp', 'all_accounts');
+  UPDATE public.store_webhook_bindings SET connector_id = t_shared WHERE id = b_linked;
+  UPDATE public.ai_agent_tools SET name = 'woo_m55' WHERE id = t_dst;
+  ASSERT public.whatsapp_setup_move_hidden_store_connectors(f, t, '{}', '{}') = ARRAY['woo_m55'],
+    'M55 an all-accounts connector hidden by a destination-owned one is named';
+
+  -- M56: once the destination's connector is renamed, the shared binding moves.
+  UPDATE public.ai_agent_tools SET name = 'woo_m56_dst' WHERE id = t_dst;
+  ASSERT public.whatsapp_setup_move_hidden_store_connectors(f, t, '{}', '{}') = '{}', 'M56 nothing hidden';
+  v := public.move_whatsapp_account_setup(f, t, 'interactive', '{"agent_config":"source"}');
+  ASSERT (SELECT social_account_id FROM public.store_webhook_bindings WHERE id = b_linked) = t, 'M56 binding moved: ' || v::text;
+  ASSERT NOT has_function_privilege('service_role', 'public.whatsapp_setup_move_hidden_store_connectors(uuid,uuid,text[],text[])', 'EXECUTE'),
+    'M56 helper is internal';
 END $$;
 
 ROLLBACK;

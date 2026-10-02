@@ -445,6 +445,21 @@ Deno.test("moveSetup: a failing refusal log never replaces the refusal", async (
   assertEquals(error.code, "accounts_not_compatible");
 });
 
+Deno.test("moveSetup: linked_connector_name_clash keeps its own code (not the connector_name_clash it contains)", async () => {
+  const { deps } = createDeps({
+    rpcHandler: () =>
+      Promise.resolve({ data: null, error: { code: "22023", message: "move_whatsapp_account_setup: linked_connector_name_clash" } }),
+  });
+
+  const error = (await assertRejects(
+    () => moveSetup(deps, "user-1", { from: "acc-src", to: "acc-dst" }),
+    MoveSetupError,
+  )) as MoveSetupError;
+
+  assertEquals(error.status, 409);
+  assertEquals(error.code, "linked_connector_name_clash");
+});
+
 Deno.test("moveSetup: a successful move logs nothing", async () => {
   const { deps, refusals } = createDeps();
 

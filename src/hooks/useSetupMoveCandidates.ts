@@ -37,5 +37,6 @@ export function useSetupMoveCandidates(activeAccountId: string | null) {
   // exactly how every host renders the banner before the RPC answers.
   // placeholderData is deliberately not used: it reports isSuccess before the
   // RPC resolves, which a caller waiting for real data would take at face value.
-  return { ...query, data: query.data ?? [] };
+  // A failed read stays undefined: "couldn't check" must not look like "nothing to move".
+  return { ...query, data: query.isError ? undefined : (query.data ?? []) };
 }

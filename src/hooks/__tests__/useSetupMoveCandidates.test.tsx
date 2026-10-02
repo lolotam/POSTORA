@@ -99,5 +99,7 @@ describe("useSetupMoveCandidates", () => {
     });
 
     await waitFor(() => expect(result.current.isError).toBe(true), { timeout: 500 });
+    // A failed read must not look like "nothing to move".
+    expect(result.current.data).toBeUndefined();
   });
 });

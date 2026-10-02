@@ -53,6 +53,8 @@ interface DismissSetupMoveParams {
  * the banner owns the human copy for each.
  */
 const MOVER_REFUSAL_CODES = [
+  // Before connector_name_clash: the message is matched by substring, and this token contains it.
+  "linked_connector_name_clash",
   "accounts_not_compatible",
   "connector_name_clash",
   "store_connector_left_behind",

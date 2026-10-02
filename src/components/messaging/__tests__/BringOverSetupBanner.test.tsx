@@ -22,9 +22,14 @@ function mockQueryResult<T>(data: T, overrides: Record<string, unknown> = {}) {
 
 const mockCandidatesData = vi.hoisted(() => ({ current: [] as SetupMoveCandidate[] }));
 const mockPreviewData = vi.hoisted(() => ({ current: null as SetupMovePreview | null }));
+const mockCandidatesFailed = vi.hoisted(() => ({ current: false }));
+const candidatesRefetch = vi.hoisted(() => vi.fn());
 
 vi.mock("@/hooks/useSetupMoveCandidates", () => ({
-  useSetupMoveCandidates: () => mockQueryResult(mockCandidatesData.current),
+  useSetupMoveCandidates: () =>
+    mockCandidatesFailed.current
+      ? mockQueryResult(undefined, { isError: true, isSuccess: false, status: "error", refetch: candidatesRefetch })
+      : mockQueryResult(mockCandidatesData.current),
 }));
 
 vi.mock("@/hooks/useSetupMovePreview", () => ({
@@ -137,6 +142,7 @@ describe("BringOverSetupBanner", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockCandidatesData.current = [];
+    mockCandidatesFailed.current = false;
     mockPreviewData.current = createPreview();
     invokeSpy.mockResolvedValue({ data: { status: "moved" }, error: null });
   });
@@ -642,6 +648,29 @@ describe("BringOverSetupBanner", () => {
 
       expect(screen.queryByText(/This account's AI agent doesn't send/)).not.toBeInTheDocument();
     });
+  });
+
+  it("s. a failed candidates read says so and offers a retry instead of rendering nothing", () => {
+    mockCandidatesFailed.current = true;
+
+    renderBanner(activeAccount);
+
+    expect(screen.getByText("Couldn't check for setup from an earlier WhatsApp connection.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(candidatesRefetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("t. error body { error: 'linked_connector_name_clash' } explains the shared connector clash and stays open", async () => {
+    mockCandidatesData.current = [candidateWithSetup];
+    invokeSpy.mockResolvedValueOnce({ data: { error: "linked_connector_name_clash" }, error: null });
+
+    renderBanner(activeAccount);
+    fireEvent.click(screen.getByRole("button", { name: /^Move$/i }));
+
+    expect(
+      await screen.findByText(/A store connector shared with xsellpoint \(old\) has the same name as one on this account/),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Move$/i })).toBeInTheDocument();
   });
 
   it("r. choices made for one old account never carry into the next candidate", async () => {
