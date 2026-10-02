@@ -23,6 +23,8 @@ function mockQueryResult<T>(data: T, overrides: Record<string, unknown> = {}) {
 const mockCandidatesData = vi.hoisted(() => ({ current: [] as SetupMoveCandidate[] }));
 const mockPreviewData = vi.hoisted(() => ({ current: null as SetupMovePreview | null }));
 const mockCandidatesFailed = vi.hoisted(() => ({ current: false }));
+const mockPreviewFailed = vi.hoisted(() => ({ current: false }));
+const previewRefetch = vi.hoisted(() => vi.fn());
 const candidatesRefetch = vi.hoisted(() => vi.fn());
 
 vi.mock("@/hooks/useSetupMoveCandidates", () => ({
@@ -33,7 +35,10 @@ vi.mock("@/hooks/useSetupMoveCandidates", () => ({
 }));
 
 vi.mock("@/hooks/useSetupMovePreview", () => ({
-  useSetupMovePreview: () => mockQueryResult(mockPreviewData.current),
+  useSetupMovePreview: () =>
+    mockPreviewFailed.current
+      ? mockQueryResult(undefined, { isError: true, isSuccess: false, status: "error", refetch: previewRefetch })
+      : mockQueryResult(mockPreviewData.current),
 }));
 
 vi.mock("@/hooks/useWhatsAppSetupSummary", () => ({
@@ -143,6 +148,7 @@ describe("BringOverSetupBanner", () => {
     vi.clearAllMocks();
     mockCandidatesData.current = [];
     mockCandidatesFailed.current = false;
+    mockPreviewFailed.current = false;
     mockPreviewData.current = createPreview();
     invokeSpy.mockResolvedValue({ data: { status: "moved" }, error: null });
   });
@@ -296,7 +302,7 @@ describe("BringOverSetupBanner", () => {
     }, { timeout: 250 });
   });
 
-  it("h. on success: toast 'Setup moved', the card is hidden, and queryClient.invalidateQueries is called for ['whatsapp-setup-move-candidates'], ['whatsapp-setup-summary'], ['ai-agent-config'], ['ai-agent-tools']", async () => {
+  it("h. on success: toast 'Setup moved', the card is hidden, and queryClient.invalidateQueries is called for ['whatsapp-setup-move-candidates'], ['whatsapp-setup-summary'], ['ai-agent-config'], ['ai-agent-tools'], ['ai-agent-tool-accounts'], ['store-webhook-bindings']", async () => {
     mockCandidatesData.current = [candidateWithSetup];
     mockPreviewData.current = createPreview();
     invokeSpy.mockResolvedValueOnce({
@@ -338,6 +344,8 @@ describe("BringOverSetupBanner", () => {
     expect(invalidateSpy).toHaveBeenCalledWith({
       queryKey: ["ai-agent-tools"],
     });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["ai-agent-tool-accounts"] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["store-webhook-bindings"] });
   });
 
   it("i. error body { error: 'connector_name_clash' } shows 'A connector with the same name already exists here. Choose replace or skip for it.' and stays open", async () => {
@@ -633,6 +641,23 @@ describe("BringOverSetupBanner", () => {
       );
     });
 
+    it("q2. a binding on a linked or shared connector counts as a moving store webhook", () => {
+      mockCandidatesData.current = [candidateWithSetup];
+      mockPreviewData.current = createPreview({
+        source_has_agent: true,
+        destination_has_agent: true,
+        destination_agent_enabled: true,
+        source_store_flows: ["cod_confirm"],
+        destination_store_flows: [],
+        shared_store_bindings: 1,
+        connectors: [],
+      });
+
+      renderBanner(activeAccount);
+
+      expect(screen.getByText(/This account's AI agent doesn't send/)).toHaveTextContent("order confirmations");
+    });
+
     it("q. no warning when no store webhook moves", () => {
       mockCandidatesData.current = [candidateWithSetup];
       mockPreviewData.current = createPreview({
@@ -671,6 +696,17 @@ describe("BringOverSetupBanner", () => {
       await screen.findByText(/A store connector shared with xsellpoint \(old\) has the same name as one on this account/),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^Move$/i })).toBeInTheDocument();
+  });
+
+  it("u. a failed preview read says so and offers a retry instead of hiding the candidate", () => {
+    mockCandidatesData.current = [candidateWithSetup];
+    mockPreviewFailed.current = true;
+
+    renderBanner(activeAccount);
+
+    expect(screen.getByText("Couldn't load what xsellpoint (old) would bring over.")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(previewRefetch).toHaveBeenCalledTimes(1);
   });
 
   it("r. choices made for one old account never carry into the next candidate", async () => {

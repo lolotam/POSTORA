@@ -2,7 +2,8 @@
 -- WhatsApp account continuity, PR-BC: migrations 20261004110000 (store_events FKs),
 -- 20261004110500 (move_whatsapp_account_setup, dismiss_whatsapp_setup_move) and
 -- 20261004111000 (activation carries the setup), 20261004112000 (owner-bound wrappers,
--- store flows in the preview), 20261004112500 (linked/shared connector clashes). One transaction, synthetic fixtures,
+-- store flows in the preview), 20261004112500 (linked/shared connector clashes),
+-- 20261004113000 (disabled connectors, pending scheduled messages, shared bindings). One transaction, synthetic fixtures,
 -- labelled ASSERTs, expected refusals in nested BEGIN/EXCEPTION blocks, ROLLBACK,
 -- sentinel last. No secrets, no real accounts.
 --
@@ -860,6 +861,61 @@ BEGIN
   ASSERT (SELECT social_account_id FROM public.store_webhook_bindings WHERE id = b_linked) = t, 'M56 binding moved: ' || v::text;
   ASSERT NOT has_function_privilege('service_role', 'public.whatsapp_setup_move_hidden_store_connectors(uuid,uuid,text[],text[])', 'EXECUTE'),
     'M56 helper is internal';
+END $$;
+
+-- M57-M59: Codex review round 3 on PR #263.
+DO $$
+DECLARE
+  u uuid := pg_temp.id('u_a');
+  ws uuid := pg_temp.id('ws_a');
+  f uuid := gen_random_uuid();
+  t uuid := gen_random_uuid();
+  third uuid := gen_random_uuid();
+  old_pending uuid := gen_random_uuid();
+  old_history uuid := gen_random_uuid();
+  t_linked uuid := gen_random_uuid();
+  t_dst uuid := gen_random_uuid();
+  v jsonb;
+BEGIN
+  INSERT INTO public.social_accounts (id, user_id, platform, platform_user_id, access_token, workspace_id, is_active, connection_mode, account_metadata) VALUES
+    (f, u, 'whatsapp', '96599960001', '', ws, false, 'evolution_qr', '{}'),
+    (t, u, 'whatsapp', '96599960002', '', ws, true, 'evolution_qr', '{}'),
+    (third, u, 'whatsapp', '96599960003', '', ws, false, 'evolution_qr', '{}'),
+    (old_pending, u, 'whatsapp', 'retired_' || gen_random_uuid()::text, '', ws, false, 'evolution_qr', '{"retired_number":"96599960002"}'),
+    (old_history, u, 'whatsapp', 'retired_' || gen_random_uuid()::text, '', ws, false, 'evolution_qr', '{"retired_number":"96599960002"}');
+  INSERT INTO public.ai_agent_tools (id, user_id, name, description, connector_type, social_account_id, platform, scope, is_enabled) VALUES
+    (t_linked, u, 'woo_m57', 'linked', 'woocommerce', third, 'whatsapp', 'account', true),
+    (t_dst, u, 'woo_m57', 'destination, disabled', 'woocommerce', t, 'whatsapp', 'account', false);
+  INSERT INTO public.ai_agent_tool_accounts (tool_id, social_account_id, user_id) VALUES (t_linked, f, u);
+  INSERT INTO public.store_webhook_bindings (user_id, social_account_id, connector_id, secret_id)
+  VALUES (u, f, t_linked, gen_random_uuid());
+
+  -- M57: a disabled destination connector cannot hide the moving one (the worker never loads it).
+  ASSERT public.whatsapp_setup_move_hidden_store_connectors(f, t, '{}', '{}') = '{}',
+    'M57 a disabled same-named connector does not count';
+  UPDATE public.ai_agent_tools SET is_enabled = true WHERE id = t_dst;
+  ASSERT public.whatsapp_setup_move_hidden_store_connectors(f, t, '{}', '{}') = ARRAY['woo_m57'],
+    'M57 enabled again, it does';
+
+  -- M59: the preview counts a binding on a linked connector, which 'connectors' never lists.
+  PERFORM set_config('request.jwt.claims', json_build_object('sub', u, 'role', 'authenticated')::text, true);
+  v := public.get_whatsapp_setup_move_preview(f, t);
+  ASSERT (v->>'shared_store_bindings')::int = 1, 'M59 shared_store_bindings: ' || v::text;
+  ASSERT v->'connectors' = '[]'::jsonb, 'M59 the linked connector is not a source connector';
+
+  -- M58: an old row whose only setup is a pending scheduled message is offered; one with
+  -- only sent history is not.
+  PERFORM set_config('request.jwt.claims', '', true);
+  INSERT INTO public.whatsapp_scheduled_messages (user_id, social_account_id, recipient_phone, message_text, scheduled_at, status) VALUES
+    (u, old_pending, '96555500058', 'later', now() + interval '1 day', 'pending'),
+    (u, old_history, '96555500059', 'done', now() - interval '1 day', 'sent');
+  PERFORM set_config('request.jwt.claims', json_build_object('sub', u, 'role', 'authenticated')::text, true);
+  v := public.list_whatsapp_setup_move_candidates(t);
+  PERFORM set_config('request.jwt.claims', '', true);
+  ASSERT v @> jsonb_build_array(jsonb_build_object('id', old_pending::text, 'reason', 'same_number')),
+    'M58 a pending scheduled message is offered: ' || v::text;
+  ASSERT NOT (v @> jsonb_build_array(jsonb_build_object('id', old_history::text))),
+    'M58 sent history alone is not offered: ' || v::text;
 END $$;
 
 ROLLBACK;

@@ -106,7 +106,27 @@ function SetupMoveCard({
   const [errorText, setErrorText] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const { data: preview } = useSetupMovePreview(candidate.id, activeAccount.id);
+  const {
+    data: preview,
+    isError: previewFailed,
+    isFetching: previewFetching,
+    refetch: refetchPreview,
+  } = useSetupMovePreview(candidate.id, activeAccount.id);
+  if (previewFailed) {
+    // Without the preview there are no real choices to offer, but the candidate exists.
+    return (
+      <Alert variant="destructive">
+        <AlertDescription className="flex flex-wrap items-center gap-2">
+          <span>
+            {t("bringOver.previewFailed", "Couldn't load what {{from}} would bring over.", { from: fromName })}
+          </span>
+          <Button size="sm" variant="outline" onClick={() => void refetchPreview()} disabled={previewFetching}>
+            {t("bringOver.retry", "Try again")}
+          </Button>
+        </AlertDescription>
+      </Alert>
+    );
+  }
   if (!preview) return null;
 
   const { summary } = candidate;
@@ -201,7 +221,7 @@ function SetupMoveCard({
   // When that is this account's own agent, any store flow it has off (or the whole agent
   // being off) means those customers silently stop getting the message.
   const choiceConnectors = buildChoices().connectors;
-  const storeMoves = preview.connectors.some(
+  const storeMoves = (preview.shared_store_bindings ?? 0) > 0 || preview.connectors.some(
     (connector) => connector.has_store_webhook && choiceConnectors[connector.name] !== "skip",
   );
   const sourceFlows = preview.source_store_flows ?? [];
@@ -248,6 +268,8 @@ function SetupMoveCard({
       queryClient.invalidateQueries({ queryKey: ["whatsapp-setup-summary"] });
       queryClient.invalidateQueries({ queryKey: ["ai-agent-config"] });
       queryClient.invalidateQueries({ queryKey: ["ai-agent-tools"] });
+      queryClient.invalidateQueries({ queryKey: ["ai-agent-tool-accounts"] });
+      queryClient.invalidateQueries({ queryKey: ["store-webhook-bindings"] });
       onHandled(candidate.id);
     } catch {
       setErrorText(t("bringOver.moveFailed", "Couldn't move the setup. Try again in a minute."));

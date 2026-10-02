@@ -25,6 +25,8 @@ export interface SetupMovePreview {
   /** Store flows (cod_confirm, review_request, back_in_stock) each side's agent has on. */
   source_store_flows?: SetupMoveStoreFlow[];
   destination_store_flows?: SetupMoveStoreFlow[];
+  /** Bindings on linked or all-accounts connectors; they always move (20261004113000). */
+  shared_store_bindings?: number;
   connectors: SetupMovePreviewConnector[];
   partner_items: number;
   waitlist_count: number;

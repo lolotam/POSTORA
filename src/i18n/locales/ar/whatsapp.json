@@ -49,6 +49,7 @@
     "movedToast": "الإعداد اتنقل",
     "notNow": "مش دلوقتي",
     "partnerLabel": "مفاتيح API وويب هوكات الشركاء ({{count}})",
+    "previewFailed": "مقدرناش نحمّل اللي هيتنقل من {{from}}.",
     "replaceHere": "استبدل اللي هنا",
     "retry": "حاول تاني",
     "savedSetup": "إعداد محفوظ",
