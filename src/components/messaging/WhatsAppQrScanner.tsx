@@ -39,6 +39,9 @@ export function WhatsAppQrScanner({ socialAccountId, onComplete, onConnectAsNew 
   // Bumped by restartScan: a poll answer issued before the restart belongs to the
   // abandoned attempt and must not overwrite the fresh QR with a stale state.
   const pollGeneration = useRef(0);
+  // True while the reconnect_qr request is in flight: the poll interval pauses so no
+  // new status poll starts behind it.
+  const reconnectInFlight = useRef(false);
 
   const pollStatus = useCallback(async (refreshQr = false) => {
     const generation = pollGeneration.current;
@@ -65,6 +68,7 @@ export function WhatsAppQrScanner({ socialAccountId, onComplete, onConnectAsNew 
   useEffect(() => {
     void pollStatus().catch((err: Error) => setError(err.message));
     const pollTimer = window.setInterval(() => {
+      if (reconnectInFlight.current) return;
       void pollStatus().catch((err: Error) => setError(err.message));
     }, 2000);
     const countdownTimer = window.setInterval(() => setSecondsLeft((value) => Math.max(0, value - 1)), 1000);
@@ -93,6 +97,11 @@ export function WhatsAppQrScanner({ socialAccountId, onComplete, onConnectAsNew 
     // Invalidate everything already in flight before the new attempt starts.
     pollGeneration.current += 1;
     try {
+      // One last status refresh before the reconnect takes over polling; the interval
+      // is paused for the duration, and the generation bump in the finally block
+      // discards this answer if it lands after the reconnect completed.
+      void pollStatus().catch((err: Error) => setError(err.message));
+      reconnectInFlight.current = true;
       const { data, error: invokeError } = await supabase.functions.invoke("whatsapp-evolution-bridge", {
         body: { action: "reconnect_qr", social_account_id: socialAccountId },
       });
@@ -102,11 +111,17 @@ export function WhatsAppQrScanner({ socialAccountId, onComplete, onConnectAsNew 
       mismatchSeen.current = false;
       setStatus({ qr: data.qr || null, state: data.state || null, expectedLast4: null });
       setSecondsLeft(45);
+      // The reconnect response is authoritative: a status answer issued before it
+      // completed belongs to the abandoned attempt and must not overwrite the fresh
+      // QR with a stale state. On failure there is no fresh QR, so the racing refresh
+      // is left to land and describe the current state.
+      pollGeneration.current += 1;
     } catch (err) {
       const message = err instanceof Error ? err.message : t("qr.refreshFailedFallback", "Unable to refresh QR code");
       setError(message);
       toast({ title: t("qr.refreshFailed", "QR refresh failed"), description: message, variant: "destructive" });
     } finally {
+      reconnectInFlight.current = false;
       setIsReconnecting(false);
     }
   };

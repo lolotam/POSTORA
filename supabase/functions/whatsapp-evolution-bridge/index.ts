@@ -1,6 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { handleRestrictedCorsOptions, restrictedErrorResponse, restrictedJsonResponse } from "../_shared/cors.ts";
-import { createEvolutionApi, type EvolutionEvent } from "../_shared/evolutionApi.ts";
+import { createEvolutionApi } from "../_shared/evolutionApi.ts";
 import {
   findOwnedEvolutionAccount,
   mergeDisplayName,
@@ -11,19 +11,10 @@ import { runInBackground } from "../_shared/background.ts";
 import { disconnectWhatsAppAccount, type WhatsAppDisconnectAdmin } from "../_shared/whatsappDisconnect.ts";
 import { resolveMaxSocialAccounts, type SocialAccountQuotaClient } from "../_shared/socialAccountQuota.ts";
 import { extractQr, extractState } from "./qr.ts";
-import { clearMismatchFor } from "./clearMismatch.ts";
 import { reconcileAccountConnection } from "./reconcile.ts";
 import { getQrStatusResult } from "./qrStatus.ts";
-import { reconnectQr, ReconnectError, type ReconnectDeps } from "./reconnect.ts";
-
-const EVOLUTION_EVENTS: EvolutionEvent[] = [
-  "MESSAGES_UPSERT",
-  // Delivery / read / rejection acks for our own sends. Instances paired before this event
-  // was listed need the resubscribe_webhook action once.
-  "MESSAGES_UPDATE",
-  "CONNECTION_UPDATE",
-  "QRCODE_UPDATED",
-];
+import { reconnectQr, ReconnectError } from "./reconnect.ts";
+import { buildReconnectDeps, EVOLUTION_EVENTS } from "./reconnectDeps.ts";
 
 class BridgeError extends Error {
   constructor(message: string, public readonly status = 400) {
@@ -335,53 +326,6 @@ async function getQrStatus(admin: any, userId: string, body: BridgeBody) {
   }, { account, instance, refreshQr: body.refresh_qr === true });
 }
 
-// Deps for the reconnect action. findAccount uses the raw shared lookup rather than the
-// throwing wrapper: reconnectQr distinguishes "not yours/missing" (404) from "exists but
-// cannot be reconnected" (409), which findOwnedAccount's single 404 would collapse.
-function reconnectDeps(context: Awaited<ReturnType<typeof authenticateRequest>>): ReconnectDeps {
-  return {
-    findAccount: (userId, id) => findOwnedEvolutionAccount(context.admin, userId, id),
-    findInstance: async (id) => {
-      const { data, error } = await context.admin
-        .from("whatsapp_evolution_instances")
-        .select("instance_name, jwt_key")
-        .eq("social_account_id", id)
-        .maybeSingle();
-      if (error) throw error;
-      return data;
-    },
-    api: createEvolutionApi(),
-    webhook: {
-      url: `${context.webhookBaseUrl}/functions/v1/whatsapp-evolution-webhook`,
-      events: EVOLUTION_EVENTS,
-    },
-    saveQr: async (id, qr, state) => {
-      const { error } = await context.admin
-        .from("whatsapp_evolution_instances")
-        .update({ last_qr: qr, last_connection_state: state })
-        .eq("social_account_id", id);
-      if (error) throw error;
-    },
-    // The flag blocks a refused phone; a freshly issued QR is what lets the right phone
-    // lift it. The helper keeps the caller's id on both the read and the write.
-    clearMismatch: (id) => clearMismatchFor(context.admin, context.user.id, id),
-    // Reconnect refusals go to system_logs so /admin/logs can explain a 404/409 the
-    // user saw. Best effort: reconnect.ts wraps this in its own try/catch, and a
-    // failed log write must never turn a refusal into a 500.
-    logRefusal: async (refusal) => {
-      const { error } = await context.admin.from("system_logs").insert({
-        level: "info",
-        category: "system",
-        source: "whatsapp-evolution-bridge",
-        message: "WhatsApp reconnect refused",
-        user_id: refusal.userId,
-        metadata: { account_id: refusal.accountId, reason: refusal.reason },
-      });
-      if (error) console.error("[whatsapp-evolution-bridge] reconnect refusal log failed:", error.message ?? error);
-    },
-  };
-}
-
 // Delegates to the shared teardown: whatsapp-oauth's "disconnect" action and this
 // action must not grow two different notions of what disconnecting an Evolution
 // account means. Nothing in the frontend calls this anymore, but a deployed n8n
@@ -416,7 +360,15 @@ Deno.serve(async (req) => {
     if (body.action === "reconnect_qr") {
       if (!body.social_account_id) throw new BridgeError("social_account_id is required", 400);
       try {
-        return restrictedJsonResponse(req, await reconnectQr(reconnectDeps(context), context.user.id, body.social_account_id));
+        return restrictedJsonResponse(req, await reconnectQr(
+          buildReconnectDeps(
+            context.admin,
+            { userId: context.user.id, webhookBaseUrl: context.webhookBaseUrl },
+            createEvolutionApi(),
+          ),
+          context.user.id,
+          body.social_account_id,
+        ));
       } catch (error) {
         if (error instanceof ReconnectError) throw new BridgeError(error.message, error.status);
         throw error;

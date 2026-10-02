@@ -144,6 +144,12 @@ describe("WhatsAppQrScanner mismatch handling", () => {
   });
 
   it("clicking 'Scan the right phone' with reconnect_qr mocked to return a QR: mismatch card disappears and QR image is shown", async () => {
+    // Polls after the reconnect keep reporting the fresh QR. vi.clearAllMocks keeps mock
+    // implementations, so without this default another test's "open" answer leaks in.
+    invoke.mockResolvedValue({
+      data: { success: true, social_account_id: "acc-qr-1", qr: "fresh-reconnect-qr-code", state: "connecting" },
+      error: null,
+    });
     invoke
       .mockResolvedValueOnce({
         data: {
