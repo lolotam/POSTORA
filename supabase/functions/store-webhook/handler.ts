@@ -52,6 +52,11 @@ export interface StoreWebhookDeps {
   /** Only rows whose product or parent is one of productIds (validated positive integers). */
   loadWaitlist(binding: StoreBinding, productIds: number[]): Promise<ScopedWaitlistRow[]>;
   insertEvents(rows: Array<Record<string, unknown>>): Promise<{ ok: true; stored: number } | { ok: false }>;
+  /**
+   * Best-effort heartbeat for a delivery that passed signature verification, whatever it
+   * contains: the store-webhook silence alert reads it (migration 20261003110000).
+   */
+  recordDelivery(binding: StoreBinding): Promise<void>;
   /** Best-effort record of a delivery that could have started a flow but did not. */
   logIgnored(entry: { binding: StoreBinding; topic: string | null; reason: string; externalId: string | null }): Promise<void>;
   /** False when the bound WhatsApp account is inactive or retired. A thrown read counts as unknown. */
@@ -99,6 +104,7 @@ export async function handleStoreWebhook(req: Request, deps: StoreWebhookDeps): 
     rotatedAt: secrets.rotatedAt ? new Date(secrets.rotatedAt) : null,
   }, deps.now());
   if (!verified) return json({ error: "unauthorized" }, 401);
+  await recordDeliverySafely(deps, binding);
 
   const connectorLimit = await deps.limitConnector(binding.connector_id);
   if (!connectorLimit.allowed) return limited(connectorLimit.retryAfter);
@@ -173,6 +179,14 @@ export async function handleStoreWebhook(req: Request, deps: StoreWebhookDeps): 
     if (state === "unknown") return json({ ok: true, stored: inserted.stored, warning: "account_state_unknown" });
   }
   return json({ ok: true, stored: inserted.stored });
+}
+
+async function recordDeliverySafely(deps: StoreWebhookDeps, binding: StoreBinding): Promise<void> {
+  try {
+    await deps.recordDelivery(binding);
+  } catch {
+    console.error("[store-webhook] delivery heartbeat failed");
+  }
 }
 
 async function accountState(deps: StoreWebhookDeps, accountId: string): Promise<"connected" | "disconnected" | "unknown"> {

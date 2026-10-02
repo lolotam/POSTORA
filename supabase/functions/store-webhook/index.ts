@@ -62,6 +62,10 @@ function deps(): StoreWebhookDeps {
       if (error) return { ok: false };
       return { ok: true, stored: data?.length ?? 0 };
     },
+    async recordDelivery(binding) {
+      const { error } = await admin.rpc("record_store_webhook_delivery", { p_binding_id: binding.id });
+      if (error) console.error("[store-webhook] delivery heartbeat rejected:", error.message);
+    },
     async logIgnored({ binding, topic, reason, externalId }) {
       const { error } = await admin.from("system_logs").insert({
         level: "info",

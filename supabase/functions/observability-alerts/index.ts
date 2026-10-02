@@ -36,6 +36,10 @@ interface HealthSnapshot {
   metrics_breakdown: Record<string, any>;
 }
 
+// A store counts as silent only if it delivered something this recently; see the
+// silent_store_connections migration for why a floor is needed at all.
+const STORE_ACTIVE_DAYS = 7;
+
 function compareValue(value: number, threshold: number, operator: string): boolean {
   switch (operator) {
     case "gt": return value > threshold;
@@ -241,6 +245,7 @@ serve(async (req) => {
 
       let currentValue: number | null = null;
       let shouldTrigger = false;
+      let ruleDetails: Record<string, unknown> = {};
 
       switch (config.trigger_type) {
         case "error_rate": {
@@ -332,6 +337,27 @@ serve(async (req) => {
           break;
         }
 
+        case "store_webhook_silence": {
+          // One heartbeat per store connection, written by store-webhook on every verified delivery.
+          const { data: silent, error: silentError } = await supabase.rpc("silent_store_connections", {
+            p_quiet_minutes: config.time_window_minutes,
+            p_active_days: STORE_ACTIVE_DAYS,
+          });
+          if (silentError) {
+            // Skip only this rule: throwing would leave every later rule unevaluated this run.
+            await logger.error(`Alert rule "${config.name}" skipped: silent connection read failed`, {
+              alert_config_id: config.id,
+              error: silentError.message,
+            });
+            continue;
+          }
+          const connections = (silent ?? []) as unknown[];
+          currentValue = connections.length;
+          ruleDetails = { silent_connections: connections };
+          shouldTrigger = compareValue(currentValue, config.threshold_value, config.threshold_operator);
+          break;
+        }
+
         default:
           console.log(`[OBSERVABILITY-ALERTS] Unknown trigger type: ${config.trigger_type}`);
           continue;
@@ -364,6 +390,7 @@ serve(async (req) => {
                 tokens: latestHealth.token_health,
                 cron: latestHealth.cron_health,
               } : null,
+              ...ruleDetails,
             },
           })
           .select()
