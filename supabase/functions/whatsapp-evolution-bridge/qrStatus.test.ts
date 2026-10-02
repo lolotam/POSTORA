@@ -313,3 +313,60 @@ Deno.test("buildQrStatusDeps: saveConnectionState throws when save_owned_evoluti
   assertEquals(rpcCalls.length, 1);
 });
 
+Deno.test("buildQrStatusDeps: saveQr makes exactly one admin.rpc('save_owned_evolution_qr') with user scope and no .from('whatsapp_evolution_instances')", async () => {
+  const buildQrStatusDeps = await loadBuildQrStatusDeps();
+  const { admin, rpcCalls, fromCalls } = createMockAdminForDeps({
+    rpcResult: { data: true, error: null },
+  });
+  const ctx = { userId: "user-123" };
+  const fakeApi = {} as any;
+  const deps = buildQrStatusDeps(admin, ctx, fakeApi);
+
+  await deps.saveQr("acc-1", "qr-data");
+
+  assertEquals(rpcCalls.length, 1);
+  assertEquals(rpcCalls[0], {
+    name: "save_owned_evolution_qr",
+    args: {
+      p_account_id: "acc-1",
+      p_user_id: "user-123",
+      p_qr: "qr-data",
+      p_state: null,
+    },
+  });
+  const instanceFromCalls = fromCalls.filter((c) => c.table === "whatsapp_evolution_instances");
+  assertEquals(instanceFromCalls.length, 0, "Must not update whatsapp_evolution_instances directly");
+});
+
+Deno.test("buildQrStatusDeps: saveQr throws when save_owned_evolution_qr returns an rpc error", async () => {
+  const buildQrStatusDeps = await loadBuildQrStatusDeps();
+  const dbError = new Error("rpc statement timeout");
+  const { admin } = createMockAdminForDeps({
+    rpcResult: { data: null, error: dbError },
+  });
+  const ctx = { userId: "user-123" };
+  const fakeApi = {} as any;
+  const deps = buildQrStatusDeps(admin, ctx, fakeApi);
+
+  await assertRejects(
+    () => deps.saveQr("acc-1", "qr-data"),
+    Error,
+    "rpc statement timeout",
+  );
+});
+
+Deno.test("buildQrStatusDeps: saveQr throws when save_owned_evolution_qr returns false", async () => {
+  const buildQrStatusDeps = await loadBuildQrStatusDeps();
+  const { admin, rpcCalls } = createMockAdminForDeps({
+    rpcResult: { data: false, error: null },
+  });
+  const ctx = { userId: "user-123" };
+  const fakeApi = {} as any;
+  const deps = buildQrStatusDeps(admin, ctx, fakeApi);
+
+  await assertRejects(
+    () => deps.saveQr("acc-alien", "qr-data"),
+    Error,
+  );
+  assertEquals(rpcCalls.length, 1);
+});
