@@ -309,8 +309,9 @@ export function AiAgentManager({ platform = "whatsapp", initialAccountId = null,
         <div className="space-y-4">
           {/* A previous connection may still own this account's agent setup; offer the
               move above the settings the selected account is about to show. The
-              banner wants only the account identity, not the whole row. */}
-          <BringOverSetupBanner activeAccount={bannerAccount} />
+              banner wants only the account identity, not the whole row. Its RPCs
+              accept only WhatsApp accounts, so other platforms never mount it. */}
+          {platform === "whatsapp" && <BringOverSetupBanner activeAccount={bannerAccount} />}
           {/* One selection drives the handler card, this form and the
               knowledge tab; AutomationHandlerCard's own selector is
               suppressed by passing accountId down. Markup matches that

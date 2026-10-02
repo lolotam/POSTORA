@@ -24,6 +24,9 @@ vi.mock("@/hooks/useSocialAccounts", () => ({
 }));
 
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+vi.mock("@/components/messaging/BringOverSetupBanner", () => ({
+  BringOverSetupBanner: () => <div data-testid="bring-over-banner" />,
+}));
 
 // The settings tab is the subject; its neighbours pull in Supabase and are covered elsewhere.
 vi.mock("@/components/messaging/AutomationHandlerCard", () => ({ AutomationHandlerCard: () => null }));
@@ -74,6 +77,20 @@ describe("AiAgentManager", () => {
   // reported as "the persona text is gone when I come back". Since 2026-08-27 the
   // model is global and admin-managed, so the page must send no model field at
   // all: messaging-api only validates fields the payload actually carries.
+  // Codex review round 5 on PR #263: the banner's RPCs accept only WhatsApp accounts,
+  // so on Instagram, Facebook or Threads it could only ever show a false error.
+  it("mounts the bring-over banner on WhatsApp only", () => {
+    const { unmount } = render(<AiAgentManager platform="whatsapp" />);
+    expect(screen.getByTestId("bring-over-banner")).toBeInTheDocument();
+    unmount();
+
+    for (const platform of ["instagram", "facebook", "threads"] as const) {
+      const view = render(<AiAgentManager platform={platform} />);
+      expect(screen.queryByTestId("bring-over-banner")).not.toBeInTheDocument();
+      view.unmount();
+    }
+  });
+
   it("saves the persona and sends no model fields", () => {
     render(<AiAgentManager platform="threads" />);
 
