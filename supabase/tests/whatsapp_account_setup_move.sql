@@ -350,6 +350,75 @@ BEGIN
   END;
 END $$;
 
+-- M22-M25: review fixes (clean-code-guard on PR-BC).
+DO $$
+DECLARE
+  u uuid := pg_temp.id('u_a');
+  s1 uuid := gen_random_uuid();
+  d1 uuid := gen_random_uuid();
+  d_inactive uuid := gen_random_uuid();
+  d_retired uuid := gen_random_uuid();
+  t_bound uuid := gen_random_uuid();
+  t_shared uuid := gen_random_uuid();
+  b_bound uuid := gen_random_uuid();
+  b_shared uuid := gen_random_uuid();
+  v jsonb;
+BEGIN
+  INSERT INTO public.social_accounts (id, user_id, platform, platform_user_id, access_token, workspace_id, is_active, connection_mode, account_metadata)
+  VALUES
+    (s1, u, 'whatsapp', '96577777771', '', pg_temp.id('ws_a'), false, 'evolution_qr', '{}'),
+    (d1, u, 'whatsapp', '96577777772', '', pg_temp.id('ws_a'), true, 'evolution_qr', '{}'),
+    (d_inactive, u, 'whatsapp', '96577777773', '', pg_temp.id('ws_a'), false, 'evolution_qr', '{}'),
+    (d_retired, u, 'whatsapp', 'retired_' || gen_random_uuid()::text, '', pg_temp.id('ws_a'), true, 'evolution_qr', '{}');
+  INSERT INTO public.ai_agent_configs (user_id, platform, social_account_id) VALUES (u, 'whatsapp', s1);
+  INSERT INTO public.ai_agent_tools (id, user_id, name, description, connector_type, social_account_id, platform, scope)
+  VALUES (t_bound, u, 'woo_m22', 'm22', 'woocommerce', s1, 'whatsapp', 'account');
+  INSERT INTO public.ai_agent_tools (id, user_id, name, description, connector_type, scope)
+  VALUES (t_shared, u, 'woo_shared_m23', 'm23', 'woocommerce', 'all_accounts');
+  INSERT INTO public.store_webhook_bindings (id, user_id, social_account_id, connector_id, secret_id) VALUES
+    (b_bound, u, s1, t_bound, gen_random_uuid()),
+    (b_shared, u, s1, t_shared, gen_random_uuid());
+
+  -- M22: dst has no config, so the agent moves even with agent_config "destination";
+  -- skipping the store-bound connector would strand its webhook -> refused.
+  BEGIN
+    PERFORM public.move_whatsapp_account_setup(s1, d1, 'interactive',
+      '{"agent_config":"destination","connectors":{"woo_m22":"skip"}}');
+    RAISE EXCEPTION 'M22 failed: the agent moved away from a skipped store connector' USING ERRCODE = 'assert_failure';
+  EXCEPTION WHEN invalid_parameter_value THEN
+    ASSERT SQLERRM LIKE '%store_connector_left_behind%', 'M22 reason token: ' || SQLERRM;
+  END;
+
+  -- M24: a retired or disconnected destination is refused.
+  BEGIN
+    PERFORM public.move_whatsapp_account_setup(s1, d_inactive, 'auto');
+    RAISE EXCEPTION 'M24 failed: an inactive destination accepted' USING ERRCODE = 'assert_failure';
+  EXCEPTION WHEN invalid_parameter_value THEN
+    ASSERT SQLERRM LIKE '%accounts_not_compatible%', 'M24 reason token: ' || SQLERRM;
+  END;
+  BEGIN
+    PERFORM public.move_whatsapp_account_setup(s1, d_retired, 'auto');
+    RAISE EXCEPTION 'M24 failed: a retired destination accepted' USING ERRCODE = 'assert_failure';
+  EXCEPTION WHEN invalid_parameter_value THEN NULL;
+  END;
+
+  -- M23: a binding on an all-accounts connector moves with the setup.
+  v := public.move_whatsapp_account_setup(s1, d1, 'auto');
+  ASSERT v->>'status' = 'moved', 'M23 moved: ' || v::text;
+  ASSERT (SELECT social_account_id FROM public.store_webhook_bindings WHERE id = b_shared) = d1,
+    'M23 the shared connector''s binding moved';
+  ASSERT (SELECT social_account_id FROM public.store_webhook_bindings WHERE id = b_bound) = d1,
+    'M23 the account connector''s binding moved';
+
+  -- M25: dismissing the source of a pending deferral clears setup_move_pending.
+  UPDATE public.social_accounts
+     SET account_metadata = jsonb_build_object('setup_move_pending', jsonb_build_object('from', s1::text))
+   WHERE id = d1;
+  PERFORM public.dismiss_whatsapp_setup_move(d1, s1);
+  ASSERT NOT (SELECT account_metadata ? 'setup_move_pending' FROM public.social_accounts WHERE id = d1),
+    'M25 dismissing the pending source clears setup_move_pending';
+END $$;
+
 -- M15 / M16 / M20: activation carries the setup (20261004111000).
 DO $$
 DECLARE

@@ -58,5 +58,9 @@ BEGIN
   END IF;
 END $$;
 
+-- The new account FK cascades on account delete; index its column so that cascade and the
+-- mover's per-account event updates do not scan the table.
+CREATE INDEX IF NOT EXISTS store_events_social_account_idx ON public.store_events (social_account_id);
+
 -- Dropped last, once both replacements exist, so no window lacks a tenancy proof.
 ALTER TABLE public.store_events DROP CONSTRAINT IF EXISTS store_events_binding_identity_fk;

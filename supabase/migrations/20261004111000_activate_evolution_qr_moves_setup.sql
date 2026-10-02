@@ -169,8 +169,10 @@ begin
            is_active = true
      where id = p_account_id;
 
-    -- Carry the AI agent setup across with the messages. A conflict defers the store group
-    -- as a whole and flags setup_move_pending; it never fails the activation.
+    -- Carry the AI agent setup across with the messages. A conflict (an existing config, a
+    -- connector-name clash, an order being sent) defers the store group as a whole and flags
+    -- setup_move_pending instead of failing the activation; an unexpected database error
+    -- still aborts the whole activation, which leaves both rows as they were.
     perform public.move_whatsapp_account_setup(v_duplicate_id, p_account_id, 'auto');
   end if;
 

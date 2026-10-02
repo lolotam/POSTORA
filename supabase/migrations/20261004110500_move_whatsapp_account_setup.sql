@@ -65,6 +65,7 @@ DECLARE
   v_any boolean := false;
   v_same_number boolean;
   v_cfg_choice text := 'destination';
+  v_cfg_moves boolean;
   v_partner boolean := true;
   v_src_has_config boolean;
   v_dst_has_config boolean;
@@ -108,8 +109,11 @@ BEGIN
      OR v_to.user_id IS DISTINCT FROM v_from.user_id
      OR v_from.platform <> 'whatsapp' OR v_to.platform <> 'whatsapp'
      OR v_from.workspace_id IS DISTINCT FROM v_to.workspace_id
-     OR v_from.platform_user_id LIKE 'pending\_%' OR v_to.platform_user_id LIKE 'pending\_%' THEN
-    RAISE EXCEPTION 'move_whatsapp_account_setup: accounts are not two settled WhatsApp connections of one owner and workspace'
+     OR v_from.platform_user_id LIKE 'pending\_%' OR v_to.platform_user_id LIKE 'pending\_%'
+     OR v_to.platform_user_id LIKE 'retired\_%' OR v_to.is_active IS NOT TRUE THEN
+    -- The destination must be a live connection: setup moved onto a retired or
+    -- disconnected row would be stranded again.
+    RAISE EXCEPTION 'move_whatsapp_account_setup: accounts_not_compatible'
       USING errcode = '22023';
   END IF;
 
@@ -193,29 +197,28 @@ BEGIN
     END IF;
     -- Every name clash needs an explicit choice.
     IF EXISTS (SELECT 1 FROM unnest(v_name_clash) n WHERE n <> ALL (v_skip_names) AND n <> ALL (v_replace_names)) THEN
-      RAISE EXCEPTION 'move_whatsapp_account_setup: a connector with the same name exists on the destination; choose replace or skip'
-        USING errcode = '22023';
+      RAISE EXCEPTION 'move_whatsapp_account_setup: connector_name_clash' USING errcode = '22023';
     END IF;
     -- Moving the agent config away while a store-bound connector stays behind would leave
     -- that store webhook with no procedures on its account: the original incident.
-    IF v_cfg_choice = 'source' AND EXISTS (
+    IF v_src_has_config AND (NOT v_dst_has_config OR v_cfg_choice = 'source') AND EXISTS (
       SELECT 1 FROM ai_agent_tools t JOIN store_webhook_bindings b ON b.connector_id = t.id
        WHERE t.social_account_id = p_from AND t.name = ANY (v_skip_names)) THEN
-      RAISE EXCEPTION 'move_whatsapp_account_setup: a connector with a store webhook cannot stay behind when the agent moves'
-        USING errcode = '22023';
+      RAISE EXCEPTION 'move_whatsapp_account_setup: store_connector_left_behind' USING errcode = '22023';
     END IF;
     -- A replaced destination connector must not own a store webhook (deleting it would drop the binding).
     IF EXISTS (
       SELECT 1 FROM ai_agent_tools d JOIN store_webhook_bindings b ON b.connector_id = d.id
        WHERE d.social_account_id = p_to AND d.name = ANY (v_replace_names)) THEN
-      RAISE EXCEPTION 'move_whatsapp_account_setup: the destination connector to replace has a store webhook' USING errcode = '22023';
+      RAISE EXCEPTION 'move_whatsapp_account_setup: replaced_connector_has_store_webhook' USING errcode = '22023';
     END IF;
   END IF;
 
   -- ---------------------------------------------------------------- group S
   IF v_group_exists AND v_group_ok THEN
     -- Agent config.
-    IF v_src_has_config AND (NOT v_dst_has_config OR v_cfg_choice = 'source') THEN
+    v_cfg_moves := v_src_has_config AND (NOT v_dst_has_config OR v_cfg_choice = 'source');
+    IF v_cfg_moves THEN
       IF v_dst_has_config THEN
         INSERT INTO ai_agent_config_archive (user_id, social_account_id, config)
         SELECT c.user_id, c.social_account_id, to_jsonb(c) FROM ai_agent_configs c WHERE c.social_account_id = p_to;
@@ -241,6 +244,15 @@ BEGIN
       v_left := v_left || (SELECT jsonb_agg(jsonb_build_object('item', 'connector', 'name', n, 'reason', 'skipped')) FROM unnest(v_skip_names) n);
     END IF;
 
+    -- Store bindings move with the setup unless their connector is a source-scoped one
+    -- that stays behind (skipped): a shared, linked or all-accounts connector is visible
+    -- from the destination once the links below move, so its binding must move too.
+    SELECT coalesce(array_agg(b.id), '{}'), coalesce(array_agg(b.connector_id), '{}')
+      INTO v_moving_bindings, v_moving_connectors
+      FROM store_webhook_bindings b JOIN ai_agent_tools t ON t.id = b.connector_id
+     WHERE b.social_account_id = p_from
+       AND NOT (t.social_account_id = p_from AND t.id <> ALL (v_moving_tools));
+
     -- Connector sharing links.
     INSERT INTO ai_agent_tool_accounts (tool_id, social_account_id, user_id, created_at)
     SELECT tool_id, p_to, user_id, created_at FROM ai_agent_tool_accounts WHERE social_account_id = p_from
@@ -249,20 +261,13 @@ BEGIN
     GET DIAGNOSTICS v_n = ROW_COUNT;
     v_moved := v_moved || jsonb_build_object('connector_links', v_n); v_any := v_any OR v_n > 0;
 
-    -- Store bindings follow their connector: a moved account-scoped connector, or a
-    -- shared (all-accounts) one that is not tied to either row.
-    SELECT coalesce(array_agg(b.id), '{}'), coalesce(array_agg(b.connector_id), '{}')
-      INTO v_moving_bindings, v_moving_connectors
-      FROM store_webhook_bindings b JOIN ai_agent_tools t ON t.id = b.connector_id
-     WHERE b.social_account_id = p_from
-       AND (t.id = ANY (v_moving_tools) OR t.social_account_id IS NULL);
     UPDATE store_webhook_bindings SET social_account_id = p_to WHERE id = ANY (v_moving_bindings);
     GET DIAGNOSTICS v_n = ROW_COUNT;
     v_moved := v_moved || jsonb_build_object('store_bindings', v_n); v_any := v_any OR v_n > 0;
 
     -- Orders not yet started now go out from the destination; everything else is history.
     UPDATE store_events SET social_account_id = p_to
-     WHERE binding_id = ANY (v_moving_bindings) AND status = 'pending' AND claimed_at IS NULL;
+     WHERE binding_id = ANY (v_moving_bindings) AND status = 'pending';
     GET DIAGNOSTICS v_n = ROW_COUNT;
     v_moved := v_moved || jsonb_build_object('pending_store_events', v_n);
 
@@ -408,6 +413,7 @@ BEGIN
            CASE WHEN coalesce(account_metadata->'setup_move_dismissed', '[]'::jsonb) ? p_from::text
                 THEN coalesce(account_metadata->'setup_move_dismissed', '[]'::jsonb)
                 ELSE coalesce(account_metadata->'setup_move_dismissed', '[]'::jsonb) || to_jsonb(p_from::text) END)
+         - CASE WHEN account_metadata->'setup_move_pending'->>'from' = p_from::text THEN 'setup_move_pending' ELSE '' END
    WHERE id = p_to;
 END;
 $$;
