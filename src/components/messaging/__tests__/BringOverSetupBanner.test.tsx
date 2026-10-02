@@ -2,6 +2,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { BringOverSetupBanner } from "@/components/messaging/BringOverSetupBanner";
+import type { SetupMoveCandidate } from "@/hooks/useSetupMoveCandidates";
+import type { SetupMovePreview } from "@/hooks/useSetupMovePreview";
 
 function mockQueryResult<T>(data: T, overrides: Record<string, unknown> = {}) {
   return {
@@ -18,8 +20,8 @@ function mockQueryResult<T>(data: T, overrides: Record<string, unknown> = {}) {
   };
 }
 
-const mockCandidatesData = vi.hoisted(() => ({ current: [] as any[] }));
-const mockPreviewData = vi.hoisted(() => ({ current: null as any }));
+const mockCandidatesData = vi.hoisted(() => ({ current: [] as SetupMoveCandidate[] }));
+const mockPreviewData = vi.hoisted(() => ({ current: null as SetupMovePreview | null }));
 
 vi.mock("@/hooks/useSetupMoveCandidates", () => ({
   useSetupMoveCandidates: () => mockQueryResult(mockCandidatesData.current),
@@ -93,7 +95,7 @@ function renderBanner(
   return {
     ...render(
       <QueryClientProvider client={client}>
-        <BringOverSetupBanner activeAccount={activeAccount as any} />
+        <BringOverSetupBanner activeAccount={activeAccount} />
       </QueryClientProvider>,
     ),
     queryClient: client,

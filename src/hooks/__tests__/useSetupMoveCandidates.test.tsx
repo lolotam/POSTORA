@@ -37,8 +37,7 @@ describe("useSetupMoveCandidates", () => {
   });
 
   it("null id → no rpc, data []", async () => {
-    const hook = useSetupMoveCandidates as unknown as (activeAccountId: string | null) => any;
-    const { result } = renderHook(() => hook(null), {
+    const { result } = renderHook(() => useSetupMoveCandidates(null), {
       wrapper: createWrapper(),
     });
 
@@ -74,10 +73,9 @@ describe("useSetupMoveCandidates", () => {
     vi.mocked(supabase.rpc).mockResolvedValueOnce({
       data: mockCandidates,
       error: null,
-    } as any);
+    } as never);
 
-    const hook = useSetupMoveCandidates as unknown as (activeAccountId: string | null) => any;
-    const { result } = renderHook(() => hook("acc-active-1"), {
+    const { result } = renderHook(() => useSetupMoveCandidates("acc-active-1"), {
       wrapper: createWrapper(),
     });
 
@@ -94,10 +92,9 @@ describe("useSetupMoveCandidates", () => {
     vi.mocked(supabase.rpc).mockResolvedValueOnce({
       data: null,
       error: { code: "42501", message: "list_whatsapp_setup_move_candidates: not found" },
-    } as any);
+    } as never);
 
-    const hook = useSetupMoveCandidates as unknown as (activeAccountId: string | null) => any;
-    const { result } = renderHook(() => hook("acc-active-1"), {
+    const { result } = renderHook(() => useSetupMoveCandidates("acc-active-1"), {
       wrapper: createWrapper(),
     });
 

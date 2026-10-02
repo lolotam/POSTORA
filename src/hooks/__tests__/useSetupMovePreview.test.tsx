@@ -63,7 +63,7 @@ describe("useSetupMovePreview", () => {
     vi.mocked(supabase.rpc).mockResolvedValueOnce({
       data: mockPreview,
       error: null,
-    } as any);
+    } as never);
 
     const { result } = renderHook(() => useSetupMovePreview("acc-from", "acc-to"), {
       wrapper: createWrapper(),
@@ -83,7 +83,7 @@ describe("useSetupMovePreview", () => {
     vi.mocked(supabase.rpc).mockResolvedValueOnce({
       data: null,
       error: { code: "42501", message: "get_whatsapp_setup_move_preview: not found" },
-    } as any);
+    } as never);
 
     const { result } = renderHook(() => useSetupMovePreview("acc-from", "acc-to"), {
       wrapper: createWrapper(),
