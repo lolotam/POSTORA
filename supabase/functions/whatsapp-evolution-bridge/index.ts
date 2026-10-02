@@ -328,7 +328,7 @@ async function getQrStatus(admin: any, userId: string, body: BridgeBody) {
       if (error) throw error;
     },
     reconcile: ({ account, instanceName, state }) =>
-      reconcileAccountConnection({ admin, api, account, instanceName, state }),
+      reconcileAccountConnection({ admin, api, account, instanceName, state, userId }),
     autoImport: (linked, instanceRow) =>
       // instanceRow is the same row passed in as input; qrStatus only narrows its type.
       runInBackground("whatsapp history sync", () => autoImportHistory(admin, linked, instanceRow as EvolutionInstanceRow)),

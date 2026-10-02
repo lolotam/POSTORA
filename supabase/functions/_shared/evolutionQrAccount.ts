@@ -198,6 +198,7 @@ export async function syncEvolutionAccountConnection(
   account: EvolutionQrAccount,
   state: string,
   identity: unknown,
+  scope?: { userId?: string; workspaceId?: string; instanceName?: string },
 ): Promise<string> {
   const connection = state.toLowerCase();
   if (connection !== "open" && connection !== "close") return account.platform_user_id;
@@ -235,11 +236,25 @@ export async function syncEvolutionAccountConnection(
     // id identifies the row, and account_metadata.number_mismatch is the durable record
     // for anyone diagnosing it.
     console.error(`[evolution-qr] account ${account.id}: a different phone was linked; activation refused`);
+    // The flag RPC is SECURITY DEFINER under service role, so a caller without a tenant
+    // scope it has already proven could flag an account it cannot name. Failing closed
+    // here -- before any write -- pushes every caller to pass the scope it owns.
+    const scopeUserId = scope?.userId ?? null;
+    const scopeWorkspaceId = scope?.workspaceId ?? null;
+    const scopeInstanceName = scope?.instanceName ?? null;
+    if (scopeUserId === null && scopeWorkspaceId === null && scopeInstanceName === null) {
+      throw new Error("number mismatch flag requires a tenant scope");
+    }
     // The flag is set by the RPC so it changes only its own metadata key, atomically:
     // a concurrent account_metadata write between a read and a whole-object write here
     // would silently be overwritten (this is how a note_undelivered_store_event flag
     // was once lost).
-    const { error } = await admin.rpc("flag_whatsapp_number_mismatch", { p_account_id: account.id });
+    const { error } = await admin.rpc("flag_whatsapp_number_mismatch", {
+      p_account_id: account.id,
+      p_user_id: scopeUserId,
+      p_workspace_id: scopeWorkspaceId,
+      p_instance_name: scopeInstanceName,
+    });
     if (error) throw error;
     // Partners subscribed to the workspace must observe the refused phone as a
     // disconnect like any other: the row was live before this observation, and no

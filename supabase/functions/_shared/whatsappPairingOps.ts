@@ -270,8 +270,14 @@ export async function pairingStatus(
   const api = configuredPairingApi(deps);
   const state = extractState(await api.connectionState(instance.instance_name));
   if (!state) throw new WhatsAppOpError("Invalid pairing status response", "internal_error", 502);
-  await savePairing(ctx, accountId, { last_connection_state: state });
+  // The reconciler runs before the observed state is persisted, mirroring the bridge's
+  // ordering contract: a refused phone must not have "open" stored over the
+  // number_mismatch state the mismatch handler writes, and a failed reconcile must not
+  // leave behind a state this request could not actually verify.
   const result = await reconcileAccountConnection(ctx, api, { account, instanceName: instance.instance_name, state });
+  if (!result.mismatch) {
+    await savePairing(ctx, accountId, { last_connection_state: state });
+  }
   return {
     account_id: accountId,
     // A refused phone never reports "open": the pairing is blocked until the right
@@ -284,39 +290,6 @@ export async function pairingStatus(
 interface ReconcileResult {
   ownerNumber: string;
   mismatch: boolean;
-}
-
-// Workspace-scoped read and write of one account row, as the scopedAdmin wrapper
-// below builds them. Spelled structurally so this helper neither takes an explicit-any
-// nor imports its callers' types.
-interface ScopedAccountAdmin {
-  from(table: string): {
-    select(columns: string): {
-      eq(column: string, value: unknown): { maybeSingle(): Promise<{ data: { account_metadata?: unknown } | null; error: unknown }> };
-    };
-    update(patch: Record<string, unknown>): {
-      eq(column: string, value: unknown): Promise<{ error: unknown }>;
-    };
-  };
-}
-
-// Records a refused phone on the account row: only the number_mismatch key is merged
-// into account_metadata and the row is deactivated, under the workspace scope every
-// write in this file already uses. The sync path's flag RPC makes the same change
-// atomically server-side; persisting it here too keeps the partner path's observable
-// state owned by this module rather than by an rpc side effect it cannot read back.
-async function persistNumberMismatch(scopedAdmin: ScopedAccountAdmin, accountId: string) {
-  const { data, error } = await scopedAdmin.from("social_accounts")
-    .select("account_metadata").eq("id", accountId).maybeSingle();
-  if (error) throw error;
-  const stored = data?.account_metadata;
-  const metadata = stored && typeof stored === "object" && !Array.isArray(stored)
-    ? { ...(stored as Record<string, unknown>) }
-    : {};
-  metadata.number_mismatch = true;
-  const { error: updateError } = await scopedAdmin.from("social_accounts")
-    .update({ is_active: false, account_metadata: metadata }).eq("id", accountId);
-  if (updateError) throw updateError;
 }
 
 async function reconcileAccountConnection(
@@ -343,14 +316,17 @@ async function reconcileAccountConnection(
       return { ownerNumber: account.platform_user_id, mismatch: false };
     }
     try {
-      const ownerNumber = await syncEvolutionAccountConnection(scopedAdmin, account, state, await api.fetchInstance(instanceName));
+      // The partner path has no owner identity; its workspace is the tenant scope the
+      // mismatch flag requires, and no user id crosses this boundary.
+      const ownerNumber = await syncEvolutionAccountConnection(scopedAdmin, account, state, await api.fetchInstance(instanceName), {
+        workspaceId: ctx.workspaceId,
+      });
       return { ownerNumber, mismatch: false };
     } catch (error) {
       if (!(error instanceof NumberMismatchError)) throw error;
-      // The stored number and the linked phone disagree: persist the refusal on the
-      // account row first, then the shared handler kills the remote session and
-      // records why in the instance row.
-      await persistNumberMismatch(scopedAdmin, account.id);
+      // The stored number and the linked phone disagree: the flag RPC inside the sync
+      // already recorded the refusal on the account row; the shared handler kills the
+      // remote session and records why in the instance row.
       await handleNumberMismatch(ctx.admin, api, { accountId: account.id, instanceName });
       return { ownerNumber: account.platform_user_id, mismatch: true };
     }

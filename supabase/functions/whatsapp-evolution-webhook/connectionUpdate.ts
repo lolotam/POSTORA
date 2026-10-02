@@ -44,7 +44,12 @@ export async function handleConnectionUpdate(
   // value that was just stored rather than the one this request loaded.
   let ownerNumber: string;
   try {
-    ownerNumber = await deps.syncEvolutionAccountConnection(admin, account, state, data);
+    // The callback is authenticated against this instance's jwt_key, so the instance
+    // name is the tenant scope the mismatch flag requires -- the SQL joins it
+    // structurally to the account it belongs to.
+    ownerNumber = await deps.syncEvolutionAccountConnection(admin, account, state, data, {
+      instanceName: instance.instance_name,
+    });
   } catch (error) {
     if (!(error instanceof NumberMismatchError)) throw error;
     // A different phone scanned onto this connection: the row is flagged and deactivated

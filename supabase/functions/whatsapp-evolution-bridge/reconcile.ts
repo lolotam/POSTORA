@@ -43,6 +43,7 @@ export async function reconcileAccountConnection(reconciliation: {
   account: { id: string; platform_user_id: string; is_active: boolean };
   instanceName: string;
   state: string;
+  userId?: string;
 }): Promise<ReconcileResult> {
   const { admin, api, account, instanceName } = reconciliation;
   const connection = reconciliation.state.toLowerCase();
@@ -51,7 +52,15 @@ export async function reconcileAccountConnection(reconciliation: {
       return { ownerNumber: account.platform_user_id, mismatch: false };
     }
     try {
-      const ownerNumber = await syncEvolutionAccountConnection(admin, account, connection, await api.fetchInstance(instanceName));
+      // The bridge runs behind an authenticated user session, so the caller's user id is
+      // the tenant scope the mismatch flag requires.
+      const ownerNumber = await syncEvolutionAccountConnection(
+        admin,
+        account,
+        connection,
+        await api.fetchInstance(instanceName),
+        { userId: reconciliation.userId },
+      );
       return { ownerNumber, mismatch: false };
     } catch (error) {
       if (!(error instanceof NumberMismatchError)) throw error;

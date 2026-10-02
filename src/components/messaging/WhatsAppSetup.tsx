@@ -447,6 +447,7 @@ export function WhatsAppSetup({ connectedAccounts }: WhatsAppSetupProps) {
 
       {qrAccountId && (
         <WhatsAppQrScanner
+          key={qrAccountId}
           socialAccountId={qrAccountId}
           onComplete={() => {
             setQrAccountId(null);
