@@ -118,6 +118,37 @@ Deno.test("getQrStatusResult: reconcile returns mismatch:true returns mismatch p
   assertEquals(autoImportCalls.length, 0);
 });
 
+Deno.test("getQrStatusResult: when provider reports open and reconcile returns mismatch:true, saveConnectionState is NEVER called and mismatch payload is returned", async () => {
+  const getQrStatusResult = await loadGetQrStatusResult();
+  const { deps, calls } = createDeps({
+    connectionState: () => Promise.resolve({ instance: { state: "open" } }),
+    reconcileResult: { ownerNumber: "96597950350", mismatch: true },
+  });
+
+  const account = {
+    id: "acc-1",
+    platform_user_id: "96597950350",
+    account_metadata: {},
+  };
+  const instance = {
+    instance_name: "postora_acc-1",
+    last_qr: "existing-qr",
+  };
+
+  const result = await getQrStatusResult(deps, { account, instance, refreshQr: false });
+
+  assertEquals(result, {
+    success: true,
+    social_account_id: "acc-1",
+    qr: null,
+    state: "number_mismatch",
+    expected_last4: "0350",
+  });
+
+  const saveCalls = calls.filter((c) => c.target === "saveConnectionState");
+  assertEquals(saveCalls.length, 0, "saveConnectionState must NEVER be called when reconcile detects mismatch");
+});
+
 Deno.test("getQrStatusResult: open + no mismatch calls autoImport once with ownerNumber", async () => {
   const getQrStatusResult = await loadGetQrStatusResult();
   const { deps, calls } = createDeps({
@@ -138,6 +169,10 @@ Deno.test("getQrStatusResult: open + no mismatch calls autoImport once with owne
 
   assertEquals(result.success, true);
   assertEquals(result.state, "open");
+
+  const saveCalls = calls.filter((c) => c.target === "saveConnectionState");
+  assertEquals(saveCalls.length, 1);
+  assertEquals(saveCalls[0].args, ["acc-1", "open"]);
 
   const autoImportCalls = calls.filter((c) => c.target === "autoImport");
   assertEquals(autoImportCalls.length, 1);
