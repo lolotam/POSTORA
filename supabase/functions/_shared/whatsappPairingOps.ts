@@ -161,22 +161,6 @@ async function savePairing(ctx: WhatsAppNumberContext, accountId: string, patch:
   if (error) throw new WhatsAppOpError("Unable to save pairing", "internal_error", 500, undefined, true);
 }
 
-// Read-merge-write of exactly the number_mismatch key: account_metadata also carries the
-// consent trail, and every write in this file filters on workspace and account id, never
-// user_id -- no owner identity crosses this partner-API boundary.
-async function clearNumberMismatchFlag(ctx: WhatsAppNumberContext, accountId: string) {
-  const { data, error } = await ctx.admin.from("social_accounts")
-    .select("account_metadata").eq("workspace_id", ctx.workspaceId).eq("id", accountId).maybeSingle();
-  if (error) throw new WhatsAppOpError("Unable to read number", "internal_error", 500);
-  const stored = data?.account_metadata;
-  if (!stored || typeof stored !== "object" || Array.isArray(stored) || stored.number_mismatch === undefined) return;
-  const metadata = { ...(stored as Record<string, unknown>) };
-  delete metadata.number_mismatch;
-  const { error: updateError } = await ctx.admin.from("social_accounts")
-    .update({ account_metadata: metadata }).eq("workspace_id", ctx.workspaceId).eq("id", accountId);
-  if (updateError) throw new WhatsAppOpError("Unable to save pairing", "internal_error", 500, undefined, true);
-}
-
 export async function startPairing(
   ctx: PairingContext, accountId: string, deps: PairingDependencies = {},
 ) {
@@ -225,9 +209,16 @@ export async function startPairing(
   await savePairing(ctx, accountId, { last_qr: qr, last_connection_state: state });
   // A fresh pairing supersedes an earlier refusal: the durable mismatch flag is dropped
   // so the next status poll reads the live provider state again. A failed start throws
-  // before this point, so the flag survives a refused pairing.
+  // before this point, so the flag survives a refused pairing. The clear runs through
+  // the RPC with the workspace as the tenant scope -- no owner identity crosses this
+  // partner-API boundary, and only the number_mismatch key changes, atomically.
   if (account.account_metadata?.number_mismatch === true) {
-    await clearNumberMismatchFlag(ctx, accountId);
+    const { error } = await ctx.admin.rpc("clear_whatsapp_number_mismatch", {
+      p_account_id: accountId,
+      p_user_id: null,
+      p_workspace_id: ctx.workspaceId,
+    });
+    if (error) throw error;
   }
   // Evolution does not provide a reliable expiry timestamp; never invent one.
   return { account_id: accountId, qr: qr ? { code: qr, expires_at: null } : null, state };
@@ -295,6 +286,39 @@ interface ReconcileResult {
   mismatch: boolean;
 }
 
+// Workspace-scoped read and write of one account row, as the scopedAdmin wrapper
+// below builds them. Spelled structurally so this helper neither takes an explicit-any
+// nor imports its callers' types.
+interface ScopedAccountAdmin {
+  from(table: string): {
+    select(columns: string): {
+      eq(column: string, value: unknown): { maybeSingle(): Promise<{ data: { account_metadata?: unknown } | null; error: unknown }> };
+    };
+    update(patch: Record<string, unknown>): {
+      eq(column: string, value: unknown): Promise<{ error: unknown }>;
+    };
+  };
+}
+
+// Records a refused phone on the account row: only the number_mismatch key is merged
+// into account_metadata and the row is deactivated, under the workspace scope every
+// write in this file already uses. The sync path's flag RPC makes the same change
+// atomically server-side; persisting it here too keeps the partner path's observable
+// state owned by this module rather than by an rpc side effect it cannot read back.
+async function persistNumberMismatch(scopedAdmin: ScopedAccountAdmin, accountId: string) {
+  const { data, error } = await scopedAdmin.from("social_accounts")
+    .select("account_metadata").eq("id", accountId).maybeSingle();
+  if (error) throw error;
+  const stored = data?.account_metadata;
+  const metadata = stored && typeof stored === "object" && !Array.isArray(stored)
+    ? { ...(stored as Record<string, unknown>) }
+    : {};
+  metadata.number_mismatch = true;
+  const { error: updateError } = await scopedAdmin.from("social_accounts")
+    .update({ is_active: false, account_metadata: metadata }).eq("id", accountId);
+  if (updateError) throw updateError;
+}
+
 async function reconcileAccountConnection(
   ctx: WhatsAppNumberContext, api: PairingApi,
   input: { account: PairingAccount; instanceName: string; state: string },
@@ -323,9 +347,10 @@ async function reconcileAccountConnection(
       return { ownerNumber, mismatch: false };
     } catch (error) {
       if (!(error instanceof NumberMismatchError)) throw error;
-      // The stored number and the linked phone disagree: the shared handler kills the
-      // remote session and records why in the instance row. The flag itself was
-      // persisted by the sync write.
+      // The stored number and the linked phone disagree: persist the refusal on the
+      // account row first, then the shared handler kills the remote session and
+      // records why in the instance row.
+      await persistNumberMismatch(scopedAdmin, account.id);
       await handleNumberMismatch(ctx.admin, api, { accountId: account.id, instanceName });
       return { ownerNumber: account.platform_user_id, mismatch: true };
     }

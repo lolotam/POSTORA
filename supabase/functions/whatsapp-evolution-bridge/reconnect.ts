@@ -12,6 +12,8 @@ export class ReconnectError extends Error {
   }
 }
 
+export type ReconnectRefusalReason = "not_found" | "already_connected" | "not_reconnectable";
+
 export interface ReconnectDeps {
   findAccount(userId: string, id: string): Promise<{ id: string; platform_user_id: string; connection_mode: string | null; is_active?: boolean } | null>;
   findInstance(id: string): Promise<{ instance_name: string; jwt_key: string } | null>;
@@ -20,26 +22,46 @@ export interface ReconnectDeps {
   saveQr(id: string, qr: string | null, state: string | null): Promise<void>;
   /** The flag is cleared when a new QR is issued, before any scan: pairing the right phone is what lifts the block. */
   clearMismatch(id: string): Promise<void>;
+  /** Called before every refusal throw so /admin/logs can explain why a reconnect did not happen. Best effort by contract. */
+  logRefusal(refusal: { userId: string; accountId: string; reason: ReconnectRefusalReason }): Promise<void> | void;
+}
+
+// Best effort on purpose: a failed refusal log must never change the refusal
+// itself -- the caller still gets the original 404/409.
+async function logRefusalSafely(deps: ReconnectDeps, userId: string, accountId: string, reason: ReconnectRefusalReason): Promise<void> {
+  try {
+    await deps.logRefusal({ userId, accountId, reason });
+  } catch {
+    // The index.ts wiring reports its own insert failures; nothing further here.
+  }
 }
 
 export async function reconnectQr(deps: ReconnectDeps, userId: string, socialAccountId: string) {
   const account = await deps.findAccount(userId, socialAccountId);
-  if (!account) throw new ReconnectError("WhatsApp Direct QR account not found", 404);
+  if (!account) {
+    await logRefusalSafely(deps, userId, socialAccountId, "not_found");
+    throw new ReconnectError("WhatsApp Direct QR account not found", 404);
+  }
   // Placeholder ids never finished pairing and retired rows were merged away; neither
   // has a live session to reconnect, so the user is sent to the new-connection flow.
   if (account.connection_mode !== "evolution_qr"
     || account.platform_user_id.startsWith("pending_")
     || account.platform_user_id.startsWith("retired_")) {
+    await logRefusalSafely(deps, userId, socialAccountId, "not_reconnectable");
     throw new ReconnectError("This connection can't be reconnected; connect a new one instead", 409);
   }
   // An active row has a live session: reconnecting would log the owner out mid-use.
   // Refused before any Evolution call so no provider state changes.
   if (account.is_active) {
+    await logRefusalSafely(deps, userId, socialAccountId, "already_connected");
     throw new ReconnectError("This connection is already connected", 409);
   }
   const instance = await deps.findInstance(socialAccountId);
   // Without the stored jwt_key the recreated instance would be unreachable by our webhook.
-  if (!instance) throw new ReconnectError("reconnect_unavailable", 409);
+  if (!instance) {
+    await logRefusalSafely(deps, userId, socialAccountId, "not_reconnectable");
+    throw new ReconnectError("reconnect_unavailable", 409);
+  }
   const name = instance.instance_name;
   try {
     // The remote instance may be gone (Evolution restart, manual delete). Both shapes of

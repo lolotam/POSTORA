@@ -235,12 +235,11 @@ export async function syncEvolutionAccountConnection(
     // id identifies the row, and account_metadata.number_mismatch is the durable record
     // for anyone diagnosing it.
     console.error(`[evolution-qr] account ${account.id}: a different phone was linked; activation refused`);
-    // Read-modify-merge on the named key: account_metadata already carries the
-    // connection mode and the consent trail, and replacing the object would erase them.
-    metadata.number_mismatch = true;
-    const { error } = await admin.from("social_accounts")
-      .update({ account_metadata: metadata, is_active: false })
-      .eq("id", account.id);
+    // The flag is set by the RPC so it changes only its own metadata key, atomically:
+    // a concurrent account_metadata write between a read and a whole-object write here
+    // would silently be overwritten (this is how a note_undelivered_store_event flag
+    // was once lost).
+    const { error } = await admin.rpc("flag_whatsapp_number_mismatch", { p_account_id: account.id });
     if (error) throw error;
     // Partners subscribed to the workspace must observe the refused phone as a
     // disconnect like any other: the row was live before this observation, and no

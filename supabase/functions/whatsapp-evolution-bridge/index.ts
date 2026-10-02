@@ -365,6 +365,20 @@ function reconnectDeps(context: Awaited<ReturnType<typeof authenticateRequest>>)
     // The flag blocks a refused phone; a freshly issued QR is what lets the right phone
     // lift it. The helper keeps the caller's id on both the read and the write.
     clearMismatch: (id) => clearMismatchFor(context.admin, context.user.id, id),
+    // Reconnect refusals go to system_logs so /admin/logs can explain a 404/409 the
+    // user saw. Best effort: reconnect.ts wraps this in its own try/catch, and a
+    // failed log write must never turn a refusal into a 500.
+    logRefusal: async (refusal) => {
+      const { error } = await context.admin.from("system_logs").insert({
+        level: "info",
+        category: "system",
+        source: "whatsapp-evolution-bridge",
+        message: "WhatsApp reconnect refused",
+        user_id: refusal.userId,
+        metadata: { account_id: refusal.accountId, reason: refusal.reason },
+      });
+      if (error) console.error("[whatsapp-evolution-bridge] reconnect refusal log failed:", error.message ?? error);
+    },
   };
 }
 
