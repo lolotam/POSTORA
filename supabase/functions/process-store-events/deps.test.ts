@@ -364,7 +364,7 @@ Deno.test("loadAccount sets bindingAccountId from the binding row and keeps conn
   );
   const ports = createStoreEventPorts(admin);
   const account = await ports.loadAccount(openerInput().event);
-  assertEquals((account as any)?.bindingAccountId, "account-binding-other");
+  assertEquals(account?.bindingAccountId, "account-binding-other");
   assertEquals(account?.connectorVisible, true);
 });
 
@@ -394,11 +394,7 @@ Deno.test("retargetEvent issues one update filtered by id and claim_token with t
   };
 
   const ports = createStoreEventPorts(admin as any);
-  const retarget = (ports as any).retargetEvent;
-  if (typeof retarget !== "function") {
-    throw new Error("retargetEvent is not implemented on WorkerPorts");
-  }
-  const result = await retarget("event-1", "claim-token-123", "target-account-id");
+  const result = await ports.retargetEvent!("event-1", "claim-token-123", "target-account-id");
 
   assertEquals(result, true);
   assertEquals(updateTable, "store_events");
@@ -413,5 +409,28 @@ Deno.test("retargetEvent issues one update filtered by id and claim_token with t
     ["id", "event-1"],
     ["claim_token", "claim-token-123"],
   ]);
+});
+
+Deno.test("(D2) retargetEvent returns false when the update matched no row (data [])", async () => {
+  const admin = {
+    from(_table: string) {
+      const builder = {
+        update(_patch: Record<string, unknown>) {
+          return builder;
+        },
+        eq(_col: string, _val: unknown) {
+          return builder;
+        },
+        select(_cols?: string) {
+          return Promise.resolve({ data: [], error: null });
+        },
+      };
+      return builder;
+    },
+  };
+
+  const ports = createStoreEventPorts(admin as any);
+  const result = await ports.retargetEvent!("event-1", "claim-token-123", "target-account-id");
+  assertEquals(result, false);
 });
 

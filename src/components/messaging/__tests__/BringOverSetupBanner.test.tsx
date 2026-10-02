@@ -3,17 +3,34 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { BringOverSetupBanner } from "@/components/messaging/BringOverSetupBanner";
 
-const mockCandidates = vi.hoisted(() => ({ current: [] as any[] }));
+function mockQueryResult<T>(data: T, overrides: Record<string, unknown> = {}) {
+  return {
+    data,
+    isLoading: false,
+    isError: false,
+    isSuccess: true,
+    isPending: false,
+    isFetching: false,
+    status: "success",
+    error: null,
+    refetch: vi.fn(),
+    ...overrides,
+  };
+}
+
+const mockCandidatesData = vi.hoisted(() => ({ current: [] as any[] }));
+const mockPreviewData = vi.hoisted(() => ({ current: null as any }));
+
 vi.mock("@/hooks/useSetupMoveCandidates", () => ({
-  useSetupMoveCandidates: () => mockCandidates.current,
+  useSetupMoveCandidates: () => mockQueryResult(mockCandidatesData.current),
 }));
 
-const mockActiveSummary = vi.hoisted(() => ({ current: null as any }));
+vi.mock("@/hooks/useSetupMovePreview", () => ({
+  useSetupMovePreview: () => mockQueryResult(mockPreviewData.current),
+}));
+
 vi.mock("@/hooks/useWhatsAppSetupSummary", () => ({
-  useWhatsAppSetupSummary: () => ({
-    data: mockActiveSummary.current,
-    isLoading: false,
-  }),
+  useWhatsAppSetupSummary: () => mockQueryResult(null),
 }));
 
 const toastSpy = vi.hoisted(() => vi.fn());
@@ -32,19 +49,14 @@ vi.mock("@/integrations/supabase/client", () => ({
     functions: {
       invoke: invokeSpy,
     },
-    rpc: vi.fn().mockImplementation((name: string) => {
-      if (name === "get_whatsapp_account_setup_summary") {
-        return Promise.resolve({ data: mockActiveSummary.current, error: null });
-      }
-      return Promise.resolve({ data: null, error: null });
-    }),
+    rpc: vi.fn().mockResolvedValue({ data: null, error: null }),
   },
 }));
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
-    t: (_key: string, fallback?: string | Record<string, unknown>, options?: Record<string, unknown>) => {
-      const template = typeof fallback === "string" ? fallback : _key;
+    t: (key: string, fallback?: string | Record<string, unknown>, options?: Record<string, unknown>) => {
+      const template = typeof fallback === "string" ? fallback : key;
       const vars = typeof fallback === "string" ? options : fallback;
       if (!vars || typeof vars !== "object") return template;
       return template.replace(/\{\{(\w+)\}\}/g, (_, name: string) => String(vars[name] ?? ""));
@@ -52,40 +64,56 @@ vi.mock("react-i18next", () => ({
   }),
 }));
 
-function renderBanner(activeAccount: any) {
-  const queryClient = new QueryClient({
-    defaultOptions: {
-      queries: { retry: false },
-    },
-  });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <BringOverSetupBanner activeAccount={activeAccount} />
-    </QueryClientProvider>,
-  );
+function createPreview(overrides: Record<string, unknown> = {}) {
+  return {
+    same_workspace: true,
+    source_has_agent: true,
+    destination_has_agent: false,
+    connectors: [],
+    partner_items: 0,
+    waitlist_count: 0,
+    waitlist_moves: true,
+    template_count: 0,
+    templates_move: true,
+    ...overrides,
+  };
+}
+
+function renderBanner(
+  activeAccount: { id: string; platform_username: string | null },
+  queryClient?: QueryClient,
+) {
+  const client =
+    queryClient ??
+    new QueryClient({
+      defaultOptions: {
+        queries: { retry: false },
+      },
+    });
+  return {
+    ...render(
+      <QueryClientProvider client={client}>
+        <BringOverSetupBanner activeAccount={activeAccount as any} />
+      </QueryClientProvider>,
+    ),
+    queryClient: client,
+  };
 }
 
 describe("BringOverSetupBanner", () => {
   const activeAccount = {
-    id: "active-1",
-    name: "xsellpoint",
+    id: "acc-active-1",
     platform_username: "xsellpoint",
-    platform_user_id: "96597950350",
-    connection_mode: "evolution_qr",
-    account_metadata: {},
   };
 
   const candidateWithSetup = {
+    id: "cand-1",
+    platform_username: "xsellpoint (old)",
+    reason: "same_number" as const,
     from: {
       id: "cand-1",
-      name: "xsellpoint (old)",
       platform_username: "xsellpoint (old)",
-      platform_user_id: "96597950350",
-      connection_mode: "evolution_qr",
     },
-    id: "cand-1",
-    name: "xsellpoint (old)",
-    platform_username: "xsellpoint (old)",
     summary: {
       agent_config: 1,
       connectors: 1,
@@ -106,64 +134,209 @@ describe("BringOverSetupBanner", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mockCandidates.current = [];
-    mockActiveSummary.current = null;
+    mockCandidatesData.current = [];
+    mockPreviewData.current = createPreview();
     invokeSpy.mockResolvedValue({ data: { status: "moved" }, error: null });
   });
 
-  it("renders nothing when there are no setup move candidates", () => {
-    mockCandidates.current = [];
+  it("a. no candidates → nothing rendered", () => {
+    mockCandidatesData.current = [];
+    mockPreviewData.current = createPreview();
     const { container } = renderBanner(activeAccount);
     expect(container.firstChild).toBeNull();
   });
 
-  it("renders explanation text with candidate name, active name, and summarized setup items", () => {
-    mockCandidates.current = [candidateWithSetup];
+  it("b. one candidate 'xsellpoint (old)' whose summary has agent_config 1, connectors 1, store_bindings 1, knowledge_sources 5, active 'xsellpoint' → the sentence 'xsellpoint (old) has an AI agent, 1 WooCommerce connector, a store webhook and 5 knowledge sources. Move them to xsellpoint?'", () => {
+    mockCandidatesData.current = [candidateWithSetup];
+    mockPreviewData.current = createPreview();
+    renderBanner(activeAccount);
+
+    expect(
+      screen.getByText(
+        "xsellpoint (old) has an AI agent, 1 WooCommerce connector, a store webhook and 5 knowledge sources. Move them to xsellpoint?",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("c. preview connector 'woo_store' (has_store_webhook true, name_clash false) as checked checkbox; source_has_agent true and destination_has_agent false → store-bound connector checkbox is DISABLED with hint 'The agent moves, so its store connector must move too'", () => {
+    mockCandidatesData.current = [candidateWithSetup];
+    mockPreviewData.current = createPreview({
+      source_has_agent: true,
+      destination_has_agent: false,
+      connectors: [
+        {
+          name: "woo_store",
+          connector_type: "woocommerce",
+          has_store_webhook: true,
+          name_clash: false,
+          destination_has_store_webhook: false,
+        },
+      ],
+    });
 
     renderBanner(activeAccount);
 
-    const expectedText =
-      "xsellpoint (old) has an AI agent, 1 WooCommerce connector, a store webhook and 5 knowledge sources. Move them to xsellpoint?";
-    expect(screen.getByText(expectedText)).toBeInTheDocument();
+    const checkbox = screen.getByRole("checkbox", { name: /woo_store/i });
+    expect(checkbox).toBeChecked();
+    expect(checkbox).toBeDisabled();
+    expect(
+      screen.getByText("The agent moves, so its store connector must move too"),
+    ).toBeInTheDocument();
   });
 
-  it("checklist: unchecking WooCommerce connector disables Store webhook checkbox and shows helper text", () => {
-    mockCandidates.current = [candidateWithSetup];
+  it("d. connector 'woo_two' (has_store_webhook false, name_clash true, destination_has_store_webhook false) shows radio/select 'Replace the one here' / 'Keep the one here (skip)'; choosing skip", async () => {
+    mockCandidatesData.current = [candidateWithSetup];
+    mockPreviewData.current = createPreview({
+      connectors: [
+        {
+          name: "woo_two",
+          connector_type: "woocommerce",
+          has_store_webhook: false,
+          name_clash: true,
+          destination_has_store_webhook: false,
+        },
+      ],
+    });
 
     renderBanner(activeAccount);
 
-    const wooCheckbox = screen.getByLabelText(/WooCommerce connector/i);
-    const storeWebhookCheckbox = screen.getByLabelText(/Store webhook/i);
+    expect(screen.getByText(/Replace the one here/i)).toBeInTheDocument();
+    const skipOption = screen.getByLabelText(/Keep the one here \(skip\)/i);
+    expect(skipOption).toBeInTheDocument();
 
-    expect(wooCheckbox).toBeChecked();
-    expect(storeWebhookCheckbox).not.toBeDisabled();
-
-    fireEvent.click(wooCheckbox);
-
-    expect(wooCheckbox).not.toBeChecked();
-    expect(storeWebhookCheckbox).toBeDisabled();
-    expect(screen.getByText("Moves with its WooCommerce connector")).toBeInTheDocument();
+    fireEvent.click(skipOption);
+    expect(skipOption).toBeChecked();
   });
 
-  it("renders radio group to choose between active agent and candidate agent when active account also has an agent config", () => {
-    mockCandidates.current = [candidateWithSetup];
-    mockActiveSummary.current = {
-      agent_config: 1,
-      connectors: 0,
-      store_bindings: 0,
-      knowledge_sources: 0,
-    };
+  it("e. partner_items 3 → a 'Partner API keys and webhooks (3)' checkbox, unchecked by default", () => {
+    mockCandidatesData.current = [candidateWithSetup];
+    mockPreviewData.current = createPreview({ partner_items: 3 });
 
     renderBanner(activeAccount);
 
-    expect(screen.getByText("Keep this account's AI agent")).toBeInTheDocument();
-    expect(screen.getByText("Use the one from xsellpoint (old)")).toBeInTheDocument();
+    const partnerCheckbox = screen.getByRole("checkbox", {
+      name: /Partner API keys and webhooks \(3\)/i,
+    });
+    expect(partnerCheckbox).toBeInTheDocument();
+    expect(partnerCheckbox).not.toBeChecked();
   });
 
-  it("clicking Move invokes move_setup on whatsapp-evolution-bridge and shows toast Setup moved on success", async () => {
-    mockCandidates.current = [candidateWithSetup];
+  it("f. both have an agent → radio 'Keep this account's AI agent' (default) / 'Use the one from xsellpoint (old)'", () => {
+    mockCandidatesData.current = [candidateWithSetup];
+    mockPreviewData.current = createPreview({
+      source_has_agent: true,
+      destination_has_agent: true,
+    });
+
+    renderBanner(activeAccount);
+
+    const keepRadio = screen.getByLabelText("Keep this account's AI agent");
+    const useSourceRadio = screen.getByLabelText("Use the one from xsellpoint (old)");
+
+    expect(keepRadio).toBeInTheDocument();
+    expect(keepRadio).toBeChecked();
+    expect(useSourceRadio).toBeInTheDocument();
+    expect(useSourceRadio).not.toBeChecked();
+  });
+
+  it("g. clicking 'Move' invokes move_setup with exact choices object { agent_config: 'source', connectors: { 'woo_two': 'skip' }, partner: true }", async () => {
+    mockCandidatesData.current = [candidateWithSetup];
+    mockPreviewData.current = createPreview({
+      source_has_agent: true,
+      destination_has_agent: true,
+      partner_items: 3,
+      connectors: [
+        {
+          name: "woo_two",
+          connector_type: "woocommerce",
+          has_store_webhook: false,
+          name_clash: true,
+          destination_has_store_webhook: false,
+        },
+      ],
+    });
+
+    renderBanner(activeAccount);
+
+    const partnerCheckbox = screen.getByRole("checkbox", {
+      name: /Partner API keys and webhooks \(3\)/i,
+    });
+    fireEvent.click(partnerCheckbox);
+
+    const skipOption = screen.getByLabelText(/Keep the one here \(skip\)/i);
+    fireEvent.click(skipOption);
+
+    const useSourceRadio = screen.getByLabelText("Use the one from xsellpoint (old)");
+    fireEvent.click(useSourceRadio);
+
+    const moveButton = screen.getByRole("button", { name: /^Move$/i });
+    fireEvent.click(moveButton);
+
+    await waitFor(() => {
+      expect(invokeSpy).toHaveBeenCalledWith("whatsapp-evolution-bridge", {
+        body: {
+          action: "move_setup",
+          from: "cand-1",
+          to: "acc-active-1",
+          choices: {
+            agent_config: "source",
+            connectors: { woo_two: "skip" },
+            partner: true,
+          },
+        },
+      });
+    }, { timeout: 250 });
+  });
+
+  it("h. on success: toast 'Setup moved', the card is hidden, and queryClient.invalidateQueries is called for ['whatsapp-setup-move-candidates'], ['whatsapp-setup-summary'], ['ai-agent-config'], ['ai-agent-tools']", async () => {
+    mockCandidatesData.current = [candidateWithSetup];
+    mockPreviewData.current = createPreview();
     invokeSpy.mockResolvedValueOnce({
-      data: { status: "moved", moved: { agent_config: 1 } },
+      data: { status: "moved" },
+      error: null,
+    });
+
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+
+    renderBanner(activeAccount, queryClient);
+
+    const moveButton = screen.getByRole("button", { name: /^Move$/i });
+    fireEvent.click(moveButton);
+
+    await waitFor(() => {
+      expect(toastSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ title: "Setup moved" }),
+      );
+    }, { timeout: 250 });
+
+    await waitFor(() => {
+      expect(
+        screen.queryByText(/xsellpoint \(old\) has an AI agent/),
+      ).not.toBeInTheDocument();
+    }, { timeout: 250 });
+
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: ["whatsapp-setup-move-candidates"],
+    });
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: ["whatsapp-setup-summary"],
+    });
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: ["ai-agent-config"],
+    });
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: ["ai-agent-tools"],
+    });
+  });
+
+  it("i. error body { error: 'connector_name_clash' } shows 'A connector with the same name already exists here. Choose replace or skip for it.' and stays open", async () => {
+    mockCandidatesData.current = [candidateWithSetup];
+    mockPreviewData.current = createPreview();
+    invokeSpy.mockResolvedValueOnce({
+      data: { error: "connector_name_clash" },
       error: null,
     });
 
@@ -173,33 +346,76 @@ describe("BringOverSetupBanner", () => {
     fireEvent.click(moveButton);
 
     await waitFor(() => {
-      expect(invokeSpy).toHaveBeenCalledWith("whatsapp-evolution-bridge", {
-        body: expect.objectContaining({
-          action: "move_setup",
-          from: "cand-1",
-          to: "active-1",
-          choices: expect.any(Object),
-        }),
-      });
-    });
+      expect(
+        screen.getByText(
+          "A connector with the same name already exists here. Choose replace or skip for it.",
+        ),
+      ).toBeInTheDocument();
+    }, { timeout: 250 });
 
-    await waitFor(() => {
-      expect(toastSpy).toHaveBeenCalledWith(
-        expect.objectContaining({
-          title: "Setup moved",
-        }),
-      );
-    });
+    expect(
+      screen.getByText(/xsellpoint \(old\) has an AI agent/),
+    ).toBeInTheDocument();
   });
 
-  it("clicking Not now invokes dismiss_setup_move on whatsapp-evolution-bridge and hides the banner", async () => {
-    mockCandidates.current = [candidateWithSetup];
+  it("i. error body { error: 'order_in_flight' } shows 'An order message is being sent right now. Try again in a minute.' and stays open", async () => {
+    mockCandidatesData.current = [candidateWithSetup];
+    mockPreviewData.current = createPreview();
+    invokeSpy.mockResolvedValueOnce({
+      data: { error: "order_in_flight" },
+      error: null,
+    });
+
+    renderBanner(activeAccount);
+
+    const moveButton = screen.getByRole("button", { name: /^Move$/i });
+    fireEvent.click(moveButton);
+
+    await waitFor(() => {
+      expect(
+        screen.getByText(
+          "An order message is being sent right now. Try again in a minute.",
+        ),
+      ).toBeInTheDocument();
+    }, { timeout: 250 });
+
+    expect(
+      screen.getByText(/xsellpoint \(old\) has an AI agent/),
+    ).toBeInTheDocument();
+  });
+
+  it("j. preview waitlist_moves false with waitlist_count 3 → line '3 waitlisted customers stay — they agreed to messages from the old number'; templates_move false with template_count 2 → '2 message templates must be recreated on this account'", () => {
+    mockCandidatesData.current = [candidateWithSetup];
+    mockPreviewData.current = createPreview({
+      waitlist_count: 3,
+      waitlist_moves: false,
+      template_count: 2,
+      templates_move: false,
+    });
+
+    renderBanner(activeAccount);
+
+    expect(
+      screen.getByText(
+        "3 waitlisted customers stay — they agreed to messages from the old number",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "2 message templates must be recreated on this account",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("k. 'Not now' invokes {action:'dismiss_setup_move', from, to} and hides the card", async () => {
+    mockCandidatesData.current = [candidateWithSetup];
+    mockPreviewData.current = createPreview();
     invokeSpy.mockResolvedValueOnce({
       data: { success: true },
       error: null,
     });
 
-    const { container } = renderBanner(activeAccount);
+    renderBanner(activeAccount);
 
     const notNowButton = screen.getByRole("button", { name: /Not now/i });
     fireEvent.click(notNowButton);
@@ -209,7 +425,7 @@ describe("BringOverSetupBanner", () => {
         body: {
           action: "dismiss_setup_move",
           from: "cand-1",
-          to: "active-1",
+          to: "acc-active-1",
         },
       });
     });

@@ -17,15 +17,6 @@ import {
   type WorkerPorts,
 } from "./worker.ts";
 
-declare module "./worker.ts" {
-  interface AccountContext {
-    bindingAccountId?: string | null;
-  }
-  interface WorkerPorts {
-    retargetEvent?: (id: string, claimToken: string, accountId: string) => Promise<boolean>;
-  }
-}
-
 const PHONE = "96555512345";
 const NOW = Date.parse("2026-09-27T12:00:00.000Z");
 
@@ -130,6 +121,7 @@ function harness(options: {
   reserve?: boolean;
   now?: () => number;
   update?: WorkerPorts["updateEvent"];
+  retargetSuccess?: boolean;
 } = {}): Harness {
   const row = options.row ?? event();
   const rows = options.rows ?? [row];
@@ -180,7 +172,7 @@ function harness(options: {
     },
     retargetEvent: (id: string, claimToken: string, accountId: string) => {
       retargetCalls.push({ id, claimToken, accountId });
-      return Promise.resolve(true);
+      return Promise.resolve(options.retargetSuccess ?? true);
     },
     loadAccount: (e) => Promise.resolve(options.account === undefined ? account({ bindingAccountId: e.social_account_id }) : options.account),
     readStore: () => Promise.resolve(options.read ?? (
@@ -1284,16 +1276,39 @@ Deno.test("event whose social_account_id differs from bindingAccountId retargets
   assertEquals(summary.released, 1);
 });
 
-Deno.test("event whose social_account_id matches bindingAccountId proceeds normally without retargeting", async () => {
-  const row = event({ social_account_id: "same-account-id" });
-  const acc = account({ bindingAccountId: "same-account-id" });
+Deno.test("(W1) an event whose bindingAccountId differs AND whose loaded account is disconnected is retargeted (no undelivered note, no hold, no skip)", async () => {
+  const row = event({ social_account_id: "old-account-id" });
+  const acc = account({ bindingAccountId: "new-account-id", connected: false });
   const h = harness({ row, account: acc });
 
   const summary = await runStoreEventWorker(h.ports);
 
-  assertEquals(h.retargetCalls.length, 0);
-  assertEquals(h.sends.length, 1);
-  assertEquals(summary.sent, 1);
+  assertEquals(h.retargetCalls, [
+    { id: row.id, claimToken: row.claim_token, accountId: "new-account-id" },
+  ]);
+  assertEquals(h.sends.length, 0);
+  assertEquals(h.undeliveredNotes, []);
+  // No hold update (due_at / deferral) and no skip update
+  const holdUpdates = h.updates.filter((u) => u.patch.due_at !== undefined || u.patch.status === "pending" || u.patch.status === "skipped");
+  assertEquals(holdUpdates, []);
+  assertEquals(summary.sent, 0);
+  assertEquals(summary.skipped, 0);
+  assertEquals(summary.released, 1);
+});
+
+Deno.test("(W2) retargetEvent returning false results in outcome 'left' (not released)", async () => {
+  const row = event({ social_account_id: "old-account-id" });
+  const acc = account({ bindingAccountId: "new-account-id", connected: true });
+  const h = harness({ row, account: acc, retargetSuccess: false });
+
+  const summary = await runStoreEventWorker(h.ports);
+
+  assertEquals(h.retargetCalls, [
+    { id: row.id, claimToken: row.claim_token, accountId: "new-account-id" },
+  ]);
   assertEquals(summary.released, 0);
+  assertEquals(summary.sent, 0);
+  assertEquals(summary.skipped, 0);
+  assertEquals(summary.failed, 0);
 });
 

@@ -8,6 +8,7 @@ import {
 
 function createDeps(
   overrides: {
+    // Keyed by `${userId}:${id}`: an account owned by another user returns null
     ownedAccounts?: Record<string, { id: string } | null>;
     rpcHandler?: (
       name: "move_whatsapp_account_setup" | "dismiss_whatsapp_setup_move",
@@ -24,8 +25,9 @@ function createDeps(
   const deps: MoveSetupDeps = {
     findOwnedWhatsAppAccount: (userId: string, id: string) => {
       findAccountCalls.push({ userId, id });
-      if (overrides.ownedAccounts && id in overrides.ownedAccounts) {
-        return Promise.resolve(overrides.ownedAccounts[id]);
+      if (overrides.ownedAccounts) {
+        const key = `${userId}:${id}`;
+        return Promise.resolve(overrides.ownedAccounts[key] ?? null);
       }
       return Promise.resolve({ id });
     },
@@ -50,8 +52,52 @@ function createDeps(
 Deno.test("moveSetup: throws MoveSetupError 404 when 'from' account is not owned (no rpc)", async () => {
   const { deps, rpcCalls } = createDeps({
     ownedAccounts: {
-      "acc-from": null,
-      "acc-to": { id: "acc-to" },
+      "user-1:acc-from": null,
+      "user-1:acc-to": { id: "acc-to" },
+    },
+  });
+
+  const error = (await assertRejects(
+    () =>
+      moveSetup(deps, "user-1", {
+        from: "acc-from",
+        to: "acc-to",
+        choices: { agent_config: "source" },
+      }),
+    MoveSetupError,
+  )) as MoveSetupError;
+
+  assertEquals(error.status, 404);
+  assertEquals(rpcCalls.length, 0);
+});
+
+Deno.test("moveSetup: (S1) account owned by another user is 404 even if the id exists", async () => {
+  const { deps, rpcCalls } = createDeps({
+    ownedAccounts: {
+      "user-2:acc-from": { id: "acc-from" }, // exists in DB, but owned by user-2
+      "user-1:acc-to": { id: "acc-to" },
+    },
+  });
+
+  const error = (await assertRejects(
+    () =>
+      moveSetup(deps, "user-1", {
+        from: "acc-from",
+        to: "acc-to",
+        choices: { agent_config: "source" },
+      }),
+    MoveSetupError,
+  )) as MoveSetupError;
+
+  assertEquals(error.status, 404);
+  assertEquals(rpcCalls.length, 0);
+});
+
+Deno.test("moveSetup: (S1) destination account owned by another user is 404 even if the id exists", async () => {
+  const { deps, rpcCalls } = createDeps({
+    ownedAccounts: {
+      "user-1:acc-from": { id: "acc-from" },
+      "user-2:acc-to": { id: "acc-to" }, // exists in DB, but owned by user-2
     },
   });
 
@@ -72,8 +118,8 @@ Deno.test("moveSetup: throws MoveSetupError 404 when 'from' account is not owned
 Deno.test("moveSetup: throws MoveSetupError 404 when 'to' account is not owned (no rpc)", async () => {
   const { deps, rpcCalls } = createDeps({
     ownedAccounts: {
-      "acc-from": { id: "acc-from" },
-      "acc-to": null,
+      "user-1:acc-from": { id: "acc-from" },
+      "user-1:acc-to": null,
     },
   });
 
@@ -139,12 +185,36 @@ Deno.test("moveSetup: success calls rpc once with p_from, p_to, p_mode:'interact
   });
 });
 
-Deno.test("moveSetup: rpc error code 22023 maps to MoveSetupError 409 with specific message", async () => {
+Deno.test("moveSetup: choices undefined is treated as {} in rpc call", async () => {
+  const expectedData = { status: "moved" };
+  const { deps, rpcCalls } = createDeps({
+    rpcHandler: () => Promise.resolve({ data: expectedData, error: null }),
+  });
+
+  const result = await moveSetup(deps, "user-1", {
+    from: "acc-src",
+    to: "acc-dst",
+  });
+
+  assertEquals(result, expectedData);
+  assertEquals(rpcCalls.length, 1);
+  assertEquals(rpcCalls[0], {
+    name: "move_whatsapp_account_setup",
+    args: {
+      p_from: "acc-src",
+      p_to: "acc-dst",
+      p_mode: "interactive",
+      p_choices: {},
+    },
+  });
+});
+
+Deno.test("moveSetup: accounts_not_compatible maps to 409 code 'accounts_not_compatible'", async () => {
   const { deps } = createDeps({
     rpcHandler: () =>
       Promise.resolve({
         data: null,
-        error: { code: "22023", message: "move_whatsapp_account_setup: workspace mismatch" },
+        error: { code: "22023", message: "move_whatsapp_account_setup: accounts_not_compatible" },
       }),
   });
 
@@ -156,16 +226,82 @@ Deno.test("moveSetup: rpc error code 22023 maps to MoveSetupError 409 with speci
         choices: {},
       }),
     MoveSetupError,
-  )) as MoveSetupError;
+  )) as MoveSetupError & { code?: string };
 
   assertEquals(error.status, 409);
-  assertEquals(
-    error.message,
-    "These two connections can't share setup (different workspace or not finished connecting)",
-  );
+  assertEquals(error.code, "accounts_not_compatible");
 });
 
-Deno.test("moveSetup: rpc error code 55006 maps to MoveSetupError 409 with specific message", async () => {
+Deno.test("moveSetup: connector_name_clash maps to 409 code 'connector_name_clash'", async () => {
+  const { deps } = createDeps({
+    rpcHandler: () =>
+      Promise.resolve({
+        data: null,
+        error: { code: "22023", message: "move_whatsapp_account_setup: connector_name_clash" },
+      }),
+  });
+
+  const error = (await assertRejects(
+    () =>
+      moveSetup(deps, "user-1", {
+        from: "acc-src",
+        to: "acc-dst",
+        choices: {},
+      }),
+    MoveSetupError,
+  )) as MoveSetupError & { code?: string };
+
+  assertEquals(error.status, 409);
+  assertEquals(error.code, "connector_name_clash");
+});
+
+Deno.test("moveSetup: store_connector_left_behind maps to 409 code 'store_connector_left_behind'", async () => {
+  const { deps } = createDeps({
+    rpcHandler: () =>
+      Promise.resolve({
+        data: null,
+        error: { code: "22023", message: "move_whatsapp_account_setup: store_connector_left_behind" },
+      }),
+  });
+
+  const error = (await assertRejects(
+    () =>
+      moveSetup(deps, "user-1", {
+        from: "acc-src",
+        to: "acc-dst",
+        choices: {},
+      }),
+    MoveSetupError,
+  )) as MoveSetupError & { code?: string };
+
+  assertEquals(error.status, 409);
+  assertEquals(error.code, "store_connector_left_behind");
+});
+
+Deno.test("moveSetup: replaced_connector_has_store_webhook maps to 409 code 'replaced_connector_has_store_webhook'", async () => {
+  const { deps } = createDeps({
+    rpcHandler: () =>
+      Promise.resolve({
+        data: null,
+        error: { code: "22023", message: "move_whatsapp_account_setup: replaced_connector_has_store_webhook" },
+      }),
+  });
+
+  const error = (await assertRejects(
+    () =>
+      moveSetup(deps, "user-1", {
+        from: "acc-src",
+        to: "acc-dst",
+        choices: {},
+      }),
+    MoveSetupError,
+  )) as MoveSetupError & { code?: string };
+
+  assertEquals(error.status, 409);
+  assertEquals(error.code, "replaced_connector_has_store_webhook");
+});
+
+Deno.test("moveSetup: 55006 maps to 409 code 'order_in_flight'", async () => {
   const { deps } = createDeps({
     rpcHandler: () =>
       Promise.resolve({
@@ -182,16 +318,17 @@ Deno.test("moveSetup: rpc error code 55006 maps to MoveSetupError 409 with speci
         choices: {},
       }),
     MoveSetupError,
-  )) as MoveSetupError;
+  )) as MoveSetupError & { code?: string };
 
   assertEquals(error.status, 409);
+  assertEquals(error.code, "order_in_flight");
   assertEquals(
     error.message,
     "An order message is being sent right now. Try again in a minute.",
   );
 });
 
-Deno.test("moveSetup: other rpc error maps to MoveSetupError 500 without leaking internal message", async () => {
+Deno.test("moveSetup: other rpc error maps to MoveSetupError 500 code 'move_failed' without leaking internal message", async () => {
   const sensitiveDbMessage = "syntax error at or near 'SELECT' in private_schema_table";
   const { deps } = createDeps({
     rpcHandler: () =>
@@ -209,17 +346,18 @@ Deno.test("moveSetup: other rpc error maps to MoveSetupError 500 without leaking
         choices: {},
       }),
     MoveSetupError,
-  )) as MoveSetupError;
+  )) as MoveSetupError & { code?: string };
 
   assertEquals(error.status, 500);
+  assertEquals(error.code, "move_failed");
   assertEquals(error.message.includes(sensitiveDbMessage), false);
 });
 
 Deno.test("dismissSetupMove: throws MoveSetupError 404 when 'from' account is not owned (no rpc)", async () => {
   const { deps, rpcCalls } = createDeps({
     ownedAccounts: {
-      "acc-from": null,
-      "acc-to": { id: "acc-to" },
+      "user-1:acc-from": null,
+      "user-1:acc-to": { id: "acc-to" },
     },
   });
 
@@ -239,8 +377,8 @@ Deno.test("dismissSetupMove: throws MoveSetupError 404 when 'from' account is no
 Deno.test("dismissSetupMove: throws MoveSetupError 404 when 'to' account is not owned (no rpc)", async () => {
   const { deps, rpcCalls } = createDeps({
     ownedAccounts: {
-      "acc-from": { id: "acc-from" },
-      "acc-to": null,
+      "user-1:acc-from": { id: "acc-from" },
+      "user-1:acc-to": null,
     },
   });
 
