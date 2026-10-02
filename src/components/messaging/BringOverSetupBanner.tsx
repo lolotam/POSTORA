@@ -58,7 +58,10 @@ function BringOverSetupBannerInner({ activeAccount }: BringOverSetupBannerProps 
   if (!candidate) return null;
   return (
     <div className="space-y-3" aria-label={t("bringOver.title", "Bring over your setup")}>
+      {/* Keyed per pair: every choice below belongs to one old account, and a reused
+          card would carry them into the next candidate's move. */}
       <SetupMoveCard
+        key={`${activeAccount.id}:${candidate.id}`}
         candidate={candidate}
         activeAccount={activeAccount}
         onHandled={(id) => setHandledIds((prev) => new Set(prev).add(id))}
@@ -174,6 +177,24 @@ function SetupMoveCard({
       connectors,
       partner: movePartner,
     };
+  };
+
+  // Store orders that move are answered by whichever agent config stays on this account.
+  // When that is this account's own agent, any store flow it has off (or the whole agent
+  // being off) means those customers silently stop getting the message.
+  const choiceConnectors = buildChoices().connectors;
+  const storeMoves = preview.connectors.some(
+    (connector) => connector.has_store_webhook && choiceConnectors[connector.name] !== "skip",
+  );
+  const sourceFlows = preview.source_store_flows ?? [];
+  const destinationFlows = preview.destination_store_flows ?? [];
+  const lostFlows = storeMoves && preview.destination_has_agent && !agentMoves
+    ? sourceFlows.filter((flow) => preview.destination_agent_enabled === false || !destinationFlows.includes(flow))
+    : [];
+  const flowLabel: Record<string, string> = {
+    cod_confirm: t("bringOver.flowCod", "order confirmations"),
+    review_request: t("bringOver.flowReview", "review requests"),
+    back_in_stock: t("bringOver.flowBackInStock", "back-in-stock alerts"),
   };
 
   const handleMove = async () => {
@@ -357,6 +378,18 @@ function SetupMoveCard({
               </Label>
             </div>
           </RadioGroup>
+        )}
+        {lostFlows.length > 0 && (
+          <p className="text-xs text-destructive">
+            {t(
+              "bringOver.flowsOffWarning",
+              "This account's AI agent doesn't send {{flows}}, so store orders moved from {{from}} won't get them. Turn them on in this agent's settings, or use the agent from {{from}}.",
+              {
+                flows: formatList(lostFlows.map((flow) => flowLabel[flow] ?? flow), i18n?.language || "en-GB"),
+                from: fromName,
+              },
+            )}
+          </p>
         )}
         {!preview.waitlist_moves && preview.waitlist_count > 0 && (
           <p className="text-xs text-muted-foreground">

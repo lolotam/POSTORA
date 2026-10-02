@@ -341,14 +341,26 @@ async function getQrStatus(admin: any, userId: string, body: BridgeBody) {
 }
 
 // Deps for the setup-move actions. Ownership uses the any-mode WhatsApp lookup and
-// the RPCs run through the service-role client: both mover functions are SECURITY
-// DEFINER and service_role-only, and they enforce same-owner/same-workspace in SQL.
+// the RPCs run through the service-role client: both owner-bound functions are SECURITY
+// DEFINER and service_role-only, and they enforce owner/same-workspace in SQL.
 function moveSetupDeps(context: Awaited<ReturnType<typeof authenticateRequest>>): MoveSetupDeps {
   return {
     findOwnedWhatsAppAccount: (userId, id) => findOwnedWhatsAppAccount(context.admin, userId, id),
     rpc: async (name, args) => {
       const { data, error } = await context.admin.rpc(name, args);
       return { data, error };
+    },
+    // Refusals go to system_logs so /admin/logs can explain a move the owner saw do nothing.
+    logRefusal: async (refusal) => {
+      const { error } = await context.admin.from("system_logs").insert({
+        level: "info",
+        category: "system",
+        source: "whatsapp-evolution-bridge",
+        message: "WhatsApp setup move refused",
+        user_id: refusal.userId,
+        metadata: { action: refusal.action, from: refusal.from, to: refusal.to, code: refusal.code },
+      });
+      if (error) throw new Error(error.message ?? "system_logs insert failed");
     },
   };
 }

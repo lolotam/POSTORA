@@ -4,6 +4,7 @@ import {
   moveSetup,
   MoveSetupError,
   type MoveSetupDeps,
+  type SetupMoveRefusal,
 } from "./moveSetup.ts";
 
 function createDeps(
@@ -11,13 +12,15 @@ function createDeps(
     // Keyed by `${userId}:${id}`: an account owned by another user returns null
     ownedAccounts?: Record<string, { id: string } | null>;
     rpcHandler?: (
-      name: "move_whatsapp_account_setup" | "dismiss_whatsapp_setup_move",
+      name: "move_owned_whatsapp_account_setup" | "dismiss_owned_whatsapp_setup_move",
       args: Record<string, unknown>,
     ) => Promise<{ data: unknown; error: { code?: string; message?: string } | null }>;
+    logRefusal?: (refusal: SetupMoveRefusal) => Promise<void>;
   } = {},
 ) {
+  const refusals: SetupMoveRefusal[] = [];
   const rpcCalls: Array<{
-    name: "move_whatsapp_account_setup" | "dismiss_whatsapp_setup_move";
+    name: "move_owned_whatsapp_account_setup" | "dismiss_owned_whatsapp_setup_move";
     args: Record<string, unknown>;
   }> = [];
   const findAccountCalls: Array<{ userId: string; id: string }> = [];
@@ -32,7 +35,7 @@ function createDeps(
       return Promise.resolve({ id });
     },
     rpc: (
-      name: "move_whatsapp_account_setup" | "dismiss_whatsapp_setup_move",
+      name: "move_owned_whatsapp_account_setup" | "dismiss_owned_whatsapp_setup_move",
       args: Record<string, unknown>,
     ) => {
       rpcCalls.push({ name, args });
@@ -44,9 +47,13 @@ function createDeps(
         error: null,
       });
     },
+    logRefusal: (refusal: SetupMoveRefusal) => {
+      refusals.push(refusal);
+      return overrides.logRefusal ? overrides.logRefusal(refusal) : Promise.resolve();
+    },
   };
 
-  return { deps, rpcCalls, findAccountCalls };
+  return { deps, rpcCalls, findAccountCalls, refusals };
 }
 
 Deno.test("moveSetup: throws MoveSetupError 404 when 'from' account is not owned (no rpc)", async () => {
@@ -179,11 +186,11 @@ Deno.test("moveSetup: success calls rpc once when caller owns both accounts ('us
   assertEquals(result, expectedData);
   assertEquals(rpcCalls.length, 1);
   assertEquals(rpcCalls[0], {
-    name: "move_whatsapp_account_setup",
+    name: "move_owned_whatsapp_account_setup",
     args: {
+      p_user_id: "user-1",
       p_from: "acc-from",
       p_to: "acc-to",
-      p_mode: "interactive",
       p_choices: choices,
     },
   });
@@ -216,11 +223,11 @@ Deno.test("moveSetup: choices undefined is treated as {} in rpc call", async () 
   assertEquals(result, expectedData);
   assertEquals(rpcCalls.length, 1);
   assertEquals(rpcCalls[0], {
-    name: "move_whatsapp_account_setup",
+    name: "move_owned_whatsapp_account_setup",
     args: {
+      p_user_id: "user-1",
       p_from: "acc-src",
       p_to: "acc-dst",
-      p_mode: "interactive",
       p_choices: {},
     },
   });
@@ -352,9 +359,9 @@ Deno.test("dismissSetupMove: throws MoveSetupError 404 when 'to' account is not 
   assertEquals(rpcCalls.length, 0);
 });
 
-Deno.test("dismissSetupMove: success calls rpc once with p_to and p_from and returns { success: true }", async () => {
+Deno.test("dismissSetupMove: success calls the owner-bound rpc once and returns { success: true }", async () => {
   const { deps, rpcCalls } = createDeps({
-    rpcHandler: () => Promise.resolve({ data: null, error: null }),
+    rpcHandler: () => Promise.resolve({ data: true, error: null }),
   });
 
   const result = await dismissSetupMove(deps, "user-1", {
@@ -365,8 +372,9 @@ Deno.test("dismissSetupMove: success calls rpc once with p_to and p_from and ret
   assertEquals(result, { success: true });
   assertEquals(rpcCalls.length, 1);
   assertEquals(rpcCalls[0], {
-    name: "dismiss_whatsapp_setup_move",
+    name: "dismiss_owned_whatsapp_setup_move",
     args: {
+      p_user_id: "user-1",
       p_to: "acc-dst",
       p_from: "acc-src",
     },
@@ -394,4 +402,69 @@ Deno.test("dismissSetupMove: rpc error maps to MoveSetupError 500 without leakin
 
   assertEquals(error.status, 500);
   assertEquals(error.message.includes(sensitiveDbMessage), false);
+});
+
+Deno.test("moveSetup: a refusal is logged with its code before it is returned", async () => {
+  const { deps, refusals } = createDeps({
+    rpcHandler: () =>
+      Promise.resolve({ data: null, error: { code: "55006", message: "move_whatsapp_account_setup: in flight" } }),
+  });
+
+  const error = (await assertRejects(
+    () => moveSetup(deps, "user-1", { from: "acc-src", to: "acc-dst" }),
+    MoveSetupError,
+  )) as MoveSetupError;
+
+  assertEquals(error.code, "order_in_flight");
+  assertEquals(refusals, [
+    { userId: "user-1", action: "move_setup", from: "acc-src", to: "acc-dst", code: "order_in_flight" },
+  ]);
+});
+
+Deno.test("moveSetup: an ownership refusal is logged too", async () => {
+  const { deps, refusals } = createDeps({ ownedAccounts: { "user-1:acc-dst": { id: "acc-dst" } } });
+
+  await assertRejects(() => moveSetup(deps, "user-1", { from: "acc-src", to: "acc-dst" }), MoveSetupError);
+
+  assertEquals(refusals.map((r) => r.code), ["account_not_found"]);
+});
+
+Deno.test("moveSetup: a failing refusal log never replaces the refusal", async () => {
+  const { deps } = createDeps({
+    rpcHandler: () =>
+      Promise.resolve({ data: null, error: { code: "22023", message: "move_owned_whatsapp_account_setup: accounts_not_compatible" } }),
+    logRefusal: () => Promise.reject(new Error("system_logs down")),
+  });
+
+  const error = (await assertRejects(
+    () => moveSetup(deps, "user-1", { from: "acc-src", to: "acc-dst" }),
+    MoveSetupError,
+  )) as MoveSetupError;
+
+  assertEquals(error.status, 409);
+  assertEquals(error.code, "accounts_not_compatible");
+});
+
+Deno.test("moveSetup: a successful move logs nothing", async () => {
+  const { deps, refusals } = createDeps();
+
+  await moveSetup(deps, "user-1", { from: "acc-src", to: "acc-dst" });
+
+  assertEquals(refusals, []);
+});
+
+Deno.test("dismissSetupMove: the SQL ownership check returning false is a 404, and is logged", async () => {
+  const { deps, refusals } = createDeps({
+    rpcHandler: () => Promise.resolve({ data: false, error: null }),
+  });
+
+  const error = (await assertRejects(
+    () => dismissSetupMove(deps, "user-1", { from: "acc-src", to: "acc-dst" }),
+    MoveSetupError,
+  )) as MoveSetupError;
+
+  assertEquals(error.status, 404);
+  assertEquals(refusals, [
+    { userId: "user-1", action: "dismiss_setup_move", from: "acc-src", to: "acc-dst", code: "account_not_found" },
+  ]);
 });

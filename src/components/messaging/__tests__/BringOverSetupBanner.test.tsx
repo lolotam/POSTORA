@@ -578,4 +578,101 @@ describe("BringOverSetupBanner", () => {
       ).not.toBeInTheDocument();
     });
   });
+
+  describe("store flows the kept agent has off (Codex review on PR #263)", () => {
+    const storeConnector = {
+      name: "woo_store",
+      connector_type: "woocommerce",
+      has_store_webhook: true,
+      name_clash: false,
+      destination_has_store_webhook: false,
+    };
+
+    it("o. keeping this account's agent warns about each store flow it has off, and the warning goes once the old agent is chosen", () => {
+      mockCandidatesData.current = [candidateWithSetup];
+      mockPreviewData.current = createPreview({
+        source_has_agent: true,
+        destination_has_agent: true,
+        destination_agent_enabled: true,
+        source_store_flows: ["cod_confirm", "review_request"],
+        destination_store_flows: ["review_request"],
+        connectors: [storeConnector],
+      });
+
+      renderBanner(activeAccount);
+
+      const warning = screen.getByText(/This account's AI agent doesn't send/);
+      expect(warning).toHaveTextContent("doesn't send order confirmations, so store orders");
+      expect(warning).not.toHaveTextContent("review requests");
+
+      fireEvent.click(screen.getByLabelText("Use the one from xsellpoint (old)"));
+      expect(screen.queryByText(/This account's AI agent doesn't send/)).not.toBeInTheDocument();
+    });
+
+    it("p. an agent that is switched off here loses every store flow the old agent had on", () => {
+      mockCandidatesData.current = [candidateWithSetup];
+      mockPreviewData.current = createPreview({
+        source_has_agent: true,
+        destination_has_agent: true,
+        destination_agent_enabled: false,
+        source_store_flows: ["cod_confirm", "review_request"],
+        destination_store_flows: ["cod_confirm", "review_request"],
+        connectors: [storeConnector],
+      });
+
+      renderBanner(activeAccount);
+
+      expect(screen.getByText(/This account's AI agent doesn't send/)).toHaveTextContent(
+        "doesn't send order confirmations and review requests",
+      );
+    });
+
+    it("q. no warning when no store webhook moves", () => {
+      mockCandidatesData.current = [candidateWithSetup];
+      mockPreviewData.current = createPreview({
+        source_has_agent: true,
+        destination_has_agent: true,
+        destination_agent_enabled: true,
+        source_store_flows: ["cod_confirm"],
+        destination_store_flows: [],
+        connectors: [{ ...storeConnector, has_store_webhook: false }],
+      });
+
+      renderBanner(activeAccount);
+
+      expect(screen.queryByText(/This account's AI agent doesn't send/)).not.toBeInTheDocument();
+    });
+  });
+
+  it("r. choices made for one old account never carry into the next candidate", async () => {
+    const secondCandidate = {
+      ...candidateWithSetup,
+      id: "cand-2",
+      platform_username: "xsellpoint (older)",
+      from: { id: "cand-2", platform_username: "xsellpoint (older)" },
+    };
+    mockCandidatesData.current = [candidateWithSetup, secondCandidate];
+    mockPreviewData.current = createPreview({ partner_items: 2 });
+    invokeSpy.mockResolvedValueOnce({ data: { success: true }, error: null });
+
+    renderBanner(activeAccount);
+
+    fireEvent.click(screen.getByRole("checkbox", { name: /Partner API keys and webhooks \(2\)/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Not now/i }));
+
+    await screen.findByText(/xsellpoint \(older\) has an AI agent/);
+    expect(screen.getByRole("checkbox", { name: /Partner API keys and webhooks \(2\)/i })).not.toBeChecked();
+
+    invokeSpy.mockResolvedValueOnce({ data: { status: "moved" }, error: null });
+    fireEvent.click(screen.getByRole("button", { name: /^Move$/i }));
+    await waitFor(() => {
+      expect(invokeSpy).toHaveBeenLastCalledWith("whatsapp-evolution-bridge", {
+        body: expect.objectContaining({
+          action: "move_setup",
+          from: "cand-2",
+          choices: expect.objectContaining({ partner: false }),
+        }),
+      });
+    });
+  });
 });

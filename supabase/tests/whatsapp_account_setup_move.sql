@@ -1,7 +1,8 @@
 -- supabase/tests/whatsapp_account_setup_move.sql
 -- WhatsApp account continuity, PR-BC: migrations 20261004110000 (store_events FKs),
 -- 20261004110500 (move_whatsapp_account_setup, dismiss_whatsapp_setup_move) and
--- 20261004111000 (activation carries the setup). One transaction, synthetic fixtures,
+-- 20261004111000 (activation carries the setup), 20261004112000 (owner-bound wrappers,
+-- store flows in the preview). One transaction, synthetic fixtures,
 -- labelled ASSERTs, expected refusals in nested BEGIN/EXCEPTION blocks, ROLLBACK,
 -- sentinel last. No secrets, no real accounts.
 --
@@ -113,8 +114,16 @@ BEGIN
     'M11 anon cannot move setup';
   ASSERT NOT has_function_privilege('authenticated', 'public.move_whatsapp_account_setup(uuid,uuid,text,jsonb)', 'EXECUTE'),
     'M11 authenticated cannot move setup';
-  ASSERT has_function_privilege('service_role', 'public.move_whatsapp_account_setup(uuid,uuid,text,jsonb)', 'EXECUTE'),
-    'M11 service_role can move setup';
+  ASSERT NOT has_function_privilege('service_role', 'public.move_whatsapp_account_setup(uuid,uuid,text,jsonb)', 'EXECUTE'),
+    'M11 service_role cannot call the unbound mover (20261004112000)';
+  ASSERT has_function_privilege('service_role', 'public.move_owned_whatsapp_account_setup(uuid,uuid,uuid,jsonb)', 'EXECUTE'),
+    'M11 service_role moves setup through the owner-bound wrapper';
+  ASSERT NOT has_function_privilege('authenticated', 'public.move_owned_whatsapp_account_setup(uuid,uuid,uuid,jsonb)', 'EXECUTE'),
+    'M11 authenticated cannot call the owner-bound mover';
+  ASSERT NOT has_function_privilege('service_role', 'public.dismiss_whatsapp_setup_move(uuid,uuid)', 'EXECUTE'),
+    'M21 service_role cannot call the unbound dismiss';
+  ASSERT has_function_privilege('service_role', 'public.dismiss_owned_whatsapp_setup_move(uuid,uuid,uuid)', 'EXECUTE'),
+    'M21 service_role dismisses through the owner-bound wrapper';
   ASSERT NOT has_function_privilege('authenticated', 'public.dismiss_whatsapp_setup_move(uuid,uuid)', 'EXECUTE'),
     'M21 authenticated cannot dismiss';
   ASSERT NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'store_events_binding_identity_fk'),
@@ -728,6 +737,65 @@ BEGIN
   ASSERT (SELECT social_account_id FROM public.store_webhook_bindings WHERE id = b_linked) = dst, 'M46 a linked connector''s binding moved';
   ASSERT (SELECT social_account_id FROM public.store_webhook_bindings WHERE id = b_shared) = dst, 'M47 a shared connector''s binding moved';
   ASSERT (SELECT social_account_id FROM public.store_events WHERE id = ev) = dst, 'M47 its pending order followed';
+END $$;
+
+-- M48-M52: Codex review on PR #263 — the owner-bound wrappers and the store-flow preview.
+DO $$
+DECLARE
+  u uuid := pg_temp.id('u_a');
+  stranger uuid := pg_temp.id('u_b');
+  ws uuid := pg_temp.id('ws_a');
+  f uuid := gen_random_uuid();
+  t uuid := gen_random_uuid();
+  v jsonb;
+BEGIN
+  INSERT INTO public.social_accounts (id, user_id, platform, platform_user_id, access_token, workspace_id, is_active, connection_mode, account_metadata) VALUES
+    (f, u, 'whatsapp', '96599980001', '', ws, false, 'evolution_qr', '{}'),
+    (t, u, 'whatsapp', '96599980002', '', ws, true, 'evolution_qr', '{}');
+  INSERT INTO public.ai_agent_configs (user_id, platform, social_account_id, is_enabled, agent_behavior) VALUES
+    (u, 'whatsapp', f, true, '{"procedures":{"cod_confirm":{"enabled":true},"review_request":{"enabled":true},"back_in_stock":{"enabled":false}}}'),
+    (u, 'whatsapp', t, false, '{"procedures":{"review_request":{"enabled":true}}}');
+
+  -- M52: the preview names the store flows each side has on, and whether the
+  -- destination's agent is on.
+  PERFORM set_config('request.jwt.claims', json_build_object('sub', u, 'role', 'authenticated')::text, true);
+  v := public.get_whatsapp_setup_move_preview(f, t);
+  PERFORM set_config('request.jwt.claims', '', true);
+  ASSERT v->'source_store_flows' = '["cod_confirm", "review_request"]'::jsonb, 'M52 source flows: ' || v::text;
+  ASSERT v->'destination_store_flows' = '["review_request"]'::jsonb, 'M52 destination flows: ' || v::text;
+  ASSERT v->>'destination_agent_enabled' = 'false', 'M52 destination agent off: ' || v::text;
+
+  -- M48: another user cannot move this owner's setup, even naming two of its accounts.
+  BEGIN
+    PERFORM public.move_owned_whatsapp_account_setup(stranger, f, t, '{"agent_config":"destination"}');
+    RAISE EXCEPTION 'M48 failed: a stranger moved the setup' USING ERRCODE = 'assert_failure';
+  EXCEPTION WHEN invalid_parameter_value THEN
+    ASSERT SQLERRM LIKE '%accounts_not_compatible%', 'M48 reason: ' || SQLERRM;
+  END;
+  ASSERT (SELECT social_account_id FROM public.ai_agent_configs WHERE agent_behavior #>> '{procedures,cod_confirm,enabled}' = 'true' AND user_id = u AND social_account_id IN (f, t)) = f,
+    'M48 nothing moved for the stranger';
+  BEGIN
+    PERFORM public.move_owned_whatsapp_account_setup(NULL, f, t, '{}');
+    RAISE EXCEPTION 'M48 failed: an unscoped move accepted' USING ERRCODE = 'assert_failure';
+  EXCEPTION WHEN invalid_parameter_value THEN NULL;
+  END;
+
+  -- M50: dismiss is owner-bound too.
+  ASSERT public.dismiss_owned_whatsapp_setup_move(stranger, t, f) = false, 'M50 a stranger dismisses nothing';
+  ASSERT NOT ((SELECT account_metadata FROM public.social_accounts WHERE id = t) ? 'setup_move_dismissed'), 'M50 metadata untouched by the stranger';
+  ASSERT public.dismiss_owned_whatsapp_setup_move(u, t, f) = true, 'M50 the owner dismisses';
+  ASSERT (SELECT account_metadata->'setup_move_dismissed' FROM public.social_accounts WHERE id = t) ? f::text, 'M50 dismissal stored';
+
+  -- M49: the owner moves through the wrapper; choices reach the mover.
+  v := public.move_owned_whatsapp_account_setup(u, f, t, '{"agent_config":"source"}');
+  ASSERT (SELECT count(*) FROM public.ai_agent_configs WHERE social_account_id = t AND agent_behavior #>> '{procedures,cod_confirm,enabled}' = 'true') = 1,
+    'M49 the owner''s chosen agent moved: ' || v::text;
+
+  -- M51: the activation path still reaches the unbound mover (it runs as the function owner).
+  ASSERT EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'activate_evolution_qr_account' AND prosrc LIKE '%move_whatsapp_account_setup(%'),
+    'M51 activation still calls the mover';
+  ASSERT (SELECT count(*) FROM pg_proc WHERE proname IN ('move_whatsapp_account_setup', 'move_owned_whatsapp_account_setup')) = 2,
+    'M51 no overloads';
 END $$;
 
 ROLLBACK;

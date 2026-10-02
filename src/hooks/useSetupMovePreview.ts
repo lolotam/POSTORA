@@ -10,6 +10,8 @@ export interface SetupMovePreviewConnector {
   destination_has_store_webhook: boolean;
 }
 
+export type SetupMoveStoreFlow = "back_in_stock" | "cod_confirm" | "review_request";
+
 /**
  * What an interactive move from `fromAccountId` to `toAccountId` would touch —
  * the shape of public.get_whatsapp_setup_move_preview (migration 20261004111500).
@@ -18,6 +20,11 @@ export interface SetupMovePreview {
   same_workspace: boolean;
   source_has_agent: boolean;
   destination_has_agent: boolean;
+  /** Whether the destination's agent is switched on (20261004112000). */
+  destination_agent_enabled?: boolean;
+  /** Store flows (cod_confirm, review_request, back_in_stock) each side's agent has on. */
+  source_store_flows?: SetupMoveStoreFlow[];
+  destination_store_flows?: SetupMoveStoreFlow[];
   connectors: SetupMovePreviewConnector[];
   partner_items: number;
   waitlist_count: number;
