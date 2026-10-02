@@ -306,4 +306,217 @@ describe("WhatsAppQrScanner mismatch handling", () => {
       screen.queryByText("You scanned a different phone. This connection belongs to the number ending 0350."),
     ).not.toBeInTheDocument();
   });
+
+  it("while 'Scan the right phone' (reconnect_qr) is in flight, no status poll is started", async () => {
+    vi.useFakeTimers();
+
+    let getQrStatusCallsDuringReconnect = 0;
+    let isReconnectInFlight = false;
+    let resolveReconnect!: (value: any) => void;
+    const reconnectPromise = new Promise((resolve) => {
+      resolveReconnect = resolve;
+    });
+
+    invoke.mockImplementation((fn: string, options: any) => {
+      const action = options?.body?.action;
+      if (action === "reconnect_qr") {
+        isReconnectInFlight = true;
+        return reconnectPromise.then((val) => {
+          isReconnectInFlight = false;
+          return val;
+        });
+      }
+      if (action === "get_qr_status") {
+        if (isReconnectInFlight) {
+          getQrStatusCallsDuringReconnect++;
+        }
+        return Promise.resolve({
+          data: {
+            success: true,
+            social_account_id: "acc-qr-1",
+            qr: null,
+            state: "number_mismatch",
+            expected_last4: "0350",
+          },
+          error: null,
+        });
+      }
+      return Promise.resolve({ data: {}, error: null });
+    });
+
+    render(
+      <WhatsAppQrScanner
+        socialAccountId="acc-qr-1"
+        onComplete={vi.fn()}
+      />,
+    );
+
+    // Let the initial poll resolve
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(
+      screen.getByText("You scanned a different phone. This connection belongs to the number ending 0350."),
+    ).toBeInTheDocument();
+
+    // User clicks "Scan the right phone"
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Scan the right phone" }));
+    });
+
+    expect(isReconnectInFlight).toBe(true);
+
+    // Advance time > 2s while reconnect is still in flight (2500ms)
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2500);
+    });
+
+    // No status poll should have started during the window while reconnect is in flight
+    expect(getQrStatusCallsDuringReconnect).toBe(0);
+
+    // Reconnect finishes
+    await act(async () => {
+      resolveReconnect({
+        data: {
+          success: true,
+          social_account_id: "acc-qr-1",
+          qr: "fresh-reconnect-qr-code",
+          state: "connecting",
+        },
+        error: null,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(screen.getByRole("img", { name: "WhatsApp connection QR code" })).toBeInTheDocument();
+  });
+
+  it("a get_qr_status answer issued BEFORE reconnect finished and resolves AFTER it with number_mismatch is ignored (fresh QR stays, onComplete fires on later open)", async () => {
+    vi.useFakeTimers();
+
+    let resolveInFlightPoll!: (value: any) => void;
+    const inFlightPollPromise = new Promise((resolve) => {
+      resolveInFlightPoll = resolve;
+    });
+
+    let resolveReconnect!: (value: any) => void;
+    const reconnectPromise = new Promise((resolve) => {
+      resolveReconnect = resolve;
+    });
+
+    let pollCount = 0;
+    invoke.mockImplementation((fn: string, options: any) => {
+      const action = options?.body?.action;
+      if (action === "reconnect_qr") {
+        return reconnectPromise;
+      }
+      if (action === "get_qr_status") {
+        pollCount++;
+        if (pollCount === 1) {
+          return Promise.resolve({
+            data: {
+              success: true,
+              social_account_id: "acc-qr-1",
+              qr: null,
+              state: "number_mismatch",
+              expected_last4: "0350",
+            },
+            error: null,
+          });
+        }
+        if (pollCount === 2) {
+          return inFlightPollPromise;
+        }
+        return Promise.resolve({
+          data: {
+            success: true,
+            social_account_id: "acc-qr-1",
+            qr: null,
+            state: "open",
+          },
+          error: null,
+        });
+      }
+      return Promise.resolve({ data: {}, error: null });
+    });
+
+    const onComplete = vi.fn();
+
+    render(
+      <WhatsAppQrScanner
+        socialAccountId="acc-qr-1"
+        onComplete={onComplete}
+      />,
+    );
+
+    // Let the initial poll resolve
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(
+      screen.getByText("You scanned a different phone. This connection belongs to the number ending 0350."),
+    ).toBeInTheDocument();
+
+    // User clicks "Scan the right phone"
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Scan the right phone" }));
+    });
+
+    // Advance 2s to issue poll #2 before reconnect finishes
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+    expect(pollCount).toBe(2);
+
+    // Reconnect finishes
+    await act(async () => {
+      resolveReconnect({
+        data: {
+          success: true,
+          social_account_id: "acc-qr-1",
+          qr: "fresh-reconnect-qr-code",
+          state: "connecting",
+        },
+        error: null,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(screen.getByRole("img", { name: "WhatsApp connection QR code" })).toBeInTheDocument();
+
+    // In-flight poll issued before reconnect finished resolves with number_mismatch
+    await act(async () => {
+      resolveInFlightPoll({
+        data: {
+          success: true,
+          social_account_id: "acc-qr-1",
+          qr: null,
+          state: "number_mismatch",
+          expected_last4: "0350",
+        },
+        error: null,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    // Fresh QR must stay, mismatch message must not be shown
+    expect(screen.getByRole("img", { name: "WhatsApp connection QR code" })).toBeInTheDocument();
+    expect(
+      screen.queryByText("You scanned a different phone. This connection belongs to the number ending 0350."),
+    ).not.toBeInTheDocument();
+
+    // Subsequent poll returns open
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+
+    // Advance 1.5s for onComplete
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+
+    expect(onComplete).toHaveBeenCalledTimes(1);
+  });
 });
