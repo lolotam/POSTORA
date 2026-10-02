@@ -11,8 +11,7 @@ import { runInBackground } from "../_shared/background.ts";
 import { disconnectWhatsAppAccount, type WhatsAppDisconnectAdmin } from "../_shared/whatsappDisconnect.ts";
 import { resolveMaxSocialAccounts, type SocialAccountQuotaClient } from "../_shared/socialAccountQuota.ts";
 import { extractQr, extractState } from "./qr.ts";
-import { reconcileAccountConnection } from "./reconcile.ts";
-import { getQrStatusResult } from "./qrStatus.ts";
+import { buildQrStatusDeps, getQrStatusResult } from "./qrStatus.ts";
 import { reconnectQr, ReconnectError } from "./reconnect.ts";
 import { buildReconnectDeps, EVOLUTION_EVENTS } from "./reconnectDeps.ts";
 
@@ -303,23 +302,7 @@ async function getQrStatus(admin: any, userId: string, body: BridgeBody) {
   const instance = await findInstance(admin, body.social_account_id);
   const api = createEvolutionApi();
   return await getQrStatusResult({
-    api,
-    saveConnectionState: async (socialAccountId, state) => {
-      const { error } = await admin
-        .from("whatsapp_evolution_instances")
-        .update({ last_connection_state: state })
-        .eq("social_account_id", socialAccountId);
-      if (error) throw error;
-    },
-    saveQr: async (socialAccountId, qr) => {
-      const { error } = await admin
-        .from("whatsapp_evolution_instances")
-        .update({ last_qr: qr })
-        .eq("social_account_id", socialAccountId);
-      if (error) throw error;
-    },
-    reconcile: ({ account, instanceName, state }) =>
-      reconcileAccountConnection({ admin, api, account, instanceName, state, userId }),
+    ...buildQrStatusDeps(admin, { userId }, api),
     autoImport: (linked, instanceRow) =>
       // instanceRow is the same row passed in as input; qrStatus only narrows its type.
       runInBackground("whatsapp history sync", () => autoImportHistory(admin, linked, instanceRow as EvolutionInstanceRow)),

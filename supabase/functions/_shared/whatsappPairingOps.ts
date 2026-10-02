@@ -325,9 +325,9 @@ async function reconcileAccountConnection(
     } catch (error) {
       if (!(error instanceof NumberMismatchError)) throw error;
       // The stored number and the linked phone disagree: the flag RPC inside the sync
-      // already recorded the refusal on the account row; the shared handler kills the
-      // remote session and records why in the instance row.
-      await handleNumberMismatch(ctx.admin, api, { accountId: account.id, instanceName });
+      // already recorded the refusal on the account row and its instance state; the
+      // shared handler kills the remote session so it stops answering polls.
+      await handleNumberMismatch(api, { instanceName });
       return { ownerNumber: account.platform_user_id, mismatch: true };
     }
   }

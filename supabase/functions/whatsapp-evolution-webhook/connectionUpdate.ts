@@ -53,11 +53,11 @@ export async function handleConnectionUpdate(
   } catch (error) {
     if (!(error instanceof NumberMismatchError)) throw error;
     // A different phone scanned onto this connection: the row is flagged and deactivated
-    // by the sync. The shared handler kills the remote session and persists the blocked
-    // state, and the mismatch reaches the owner instead of a history import under a
-    // number the phone does not own.
-    await deps.handleNumberMismatch(deps.admin, deps.api, {
-      accountId: account.id,
+    // by the sync's flag RPC, which also records the blocked state on the instance in its
+    // tenant-scoped transaction. The shared handler only kills the remote session, so the
+    // mismatch reaches the owner instead of a history import under a number the phone
+    // does not own.
+    await deps.handleNumberMismatch(deps.api, {
       instanceName: instance.instance_name,
     });
     return "number_mismatch";

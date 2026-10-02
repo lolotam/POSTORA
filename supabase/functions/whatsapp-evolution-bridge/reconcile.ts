@@ -64,11 +64,11 @@ export async function reconcileAccountConnection(reconciliation: {
       return { ownerNumber, mismatch: false };
     } catch (error) {
       if (!(error instanceof NumberMismatchError)) throw error;
-      // The linked phone is not the stored one: the shared handler kills the remote
-      // session so it stops answering polls, and records why in the instance row. A
-      // logout failure must not hide the mismatch -- the flag in account_metadata is
-      // the durable record.
-      await handleNumberMismatch(admin, api, { accountId: account.id, instanceName });
+      // The linked phone is not the stored one: the flag RPC inside the sync already
+      // recorded the refusal on the account row and its instance state. The shared
+      // handler kills the remote session so it stops answering polls -- a logout
+      // failure must not hide the mismatch, the flag is the durable record.
+      await handleNumberMismatch(api, { instanceName });
       return { ownerNumber: account.platform_user_id, mismatch: true };
     }
   }

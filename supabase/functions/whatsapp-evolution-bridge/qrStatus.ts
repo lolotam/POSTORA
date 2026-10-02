@@ -3,7 +3,8 @@
 // call, a just-detected one never reaches the history import, and only a genuinely
 // open session starts one.
 import { extractQr, extractState } from "./qr.ts";
-import { mismatchStatus, type ReconcileResult } from "./reconcile.ts";
+import { mismatchStatus, reconcileAccountConnection, type ReconcileResult } from "./reconcile.ts";
+import type { EvolutionApi } from "../_shared/evolutionApi.ts";
 
 export interface QrStatusAccount {
   id: string;
@@ -36,6 +37,55 @@ export interface QrStatusInput {
   account: QrStatusAccount & { is_active: boolean };
   instance: QrStatusInstance;
   refreshQr: boolean;
+}
+
+// The admin seam is the Supabase service client, spelled structurally like the other
+// seams in this file so the module neither takes an explicit-any nor imports its
+// callers' types.
+interface QrStatusAdmin {
+  rpc(name: string, args: Record<string, unknown>): Promise<{ data: unknown; error: unknown }>;
+  from(table: string): {
+    update(values: Record<string, unknown>): {
+      eq(column: string, value: unknown): Promise<{ error: unknown }>;
+    };
+  };
+}
+
+type BuiltQrStatusDeps = Omit<QrStatusDeps, "autoImport">;
+
+// Everything the poller's decision tree needs that the admin client and the caller's
+// user id can construct; index.ts adds only the background autoImport wiring. Every
+// write goes through a SECURITY DEFINER RPC scoped by ctx.userId, so a guessed account
+// id cannot store a state or QR into another user's instance even though this module
+// runs under the service role.
+export function buildQrStatusDeps(
+  admin: QrStatusAdmin,
+  ctx: { userId: string },
+  api: EvolutionApi,
+): BuiltQrStatusDeps {
+  return {
+    api,
+    saveConnectionState: async (socialAccountId, state) => {
+      const { data, error } = await admin.rpc("save_owned_evolution_state", {
+        p_account_id: socialAccountId,
+        p_user_id: ctx.userId,
+        p_state: state,
+      });
+      if (error) throw error;
+      // The RPC returns false when the tenant-scoped update matched nothing: treating
+      // that as success would report a state this request never actually stored.
+      if (data === false) throw new Error("instance not found for owner");
+    },
+    saveQr: async (socialAccountId, qr) => {
+      const { error } = await admin
+        .from("whatsapp_evolution_instances")
+        .update({ last_qr: qr })
+        .eq("social_account_id", socialAccountId);
+      if (error) throw error;
+    },
+    reconcile: ({ account, instanceName, state }) =>
+      reconcileAccountConnection({ admin, api, account, instanceName, state, userId: ctx.userId }),
+  };
 }
 
 export async function getQrStatusResult(deps: QrStatusDeps, input: QrStatusInput) {
