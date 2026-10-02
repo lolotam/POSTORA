@@ -1,6 +1,6 @@
 -- supabase/tests/whatsapp_number_mismatch.sql
 -- WhatsApp account continuity, PR-A follow-up: migration 20261004100200 (atomic
--- number_mismatch flag set / clear) and 20261004100300 (scoped flag). One transaction, synthetic fixtures, labelled
+-- number_mismatch flag set / clear) and 20261004100300 (scoped flag), 20261004100400 (owned instance read/save). One transaction, synthetic fixtures, labelled
 -- ASSERTs, ROLLBACK, sentinel last.
 BEGIN;
 
@@ -59,6 +59,16 @@ BEGIN
     RAISE EXCEPTION 'N3 failed: unscoped clear accepted' USING ERRCODE = 'assert_failure';
   EXCEPTION WHEN invalid_parameter_value THEN NULL;
   END;
+
+  -- N5: the reconnect path's instance read and QR save are owner-scoped in SQL.
+  ASSERT public.get_owned_evolution_instance(acc, u_a)->>'instance_name' = 'postora_' || acc::text, 'N5 the owner reads the instance';
+  ASSERT public.get_owned_evolution_instance(acc, u_b) IS NULL, 'N5 another user reads nothing';
+  ASSERT public.save_owned_evolution_qr(acc, u_b, 'qr-x', 'connecting') = false, 'N5 another user saves nothing';
+  ASSERT (SELECT last_qr IS DISTINCT FROM 'qr-x' FROM public.whatsapp_evolution_instances WHERE social_account_id = acc), 'N5 instance untouched by the stranger';
+  ASSERT public.save_owned_evolution_qr(acc, u_a, 'qr-ok', 'connecting') = true, 'N5 the owner saves the QR';
+  ASSERT (SELECT last_qr FROM public.whatsapp_evolution_instances WHERE social_account_id = acc) = 'qr-ok', 'N5 QR stored';
+  ASSERT NOT has_function_privilege('authenticated', 'public.get_owned_evolution_instance(uuid,uuid)', 'EXECUTE'), 'N5 instance read not browser-callable (it carries the webhook key)';
+  ASSERT NOT has_function_privilege('authenticated', 'public.save_owned_evolution_qr(uuid,uuid,text,text)', 'EXECUTE'), 'N5 QR save not browser-callable';
 
   -- N4: grants.
   ASSERT NOT has_function_privilege('authenticated', 'public.flag_whatsapp_number_mismatch(uuid,uuid,uuid,text)', 'EXECUTE'), 'N4 flag not browser-callable';
