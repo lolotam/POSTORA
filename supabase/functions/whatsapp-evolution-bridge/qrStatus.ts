@@ -77,11 +77,14 @@ export function buildQrStatusDeps(
       if (data === false) throw new Error("instance not found for owner");
     },
     saveQr: async (socialAccountId, qr) => {
-      const { error } = await admin
-        .from("whatsapp_evolution_instances")
-        .update({ last_qr: qr })
-        .eq("social_account_id", socialAccountId);
+      const { data, error } = await admin.rpc("save_owned_evolution_qr", {
+        p_account_id: socialAccountId,
+        p_user_id: ctx.userId,
+        p_qr: qr,
+        p_state: null,
+      });
       if (error) throw error;
+      if (data === false) throw new Error("instance not found for owner");
     },
     reconcile: ({ account, instanceName, state }) =>
       reconcileAccountConnection({ admin, api, account, instanceName, state, userId: ctx.userId }),
