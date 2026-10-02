@@ -13,6 +13,7 @@ function createDeps(
     setWebhookError?: unknown;
     createInstanceError?: unknown;
     clearMismatchError?: unknown;
+    logRefusalError?: unknown;
   } = {},
 ) {
   const calls: Array<{ method: string; args: unknown[] }> = [];
@@ -23,7 +24,9 @@ function createDeps(
     ? { instance_name: "postora_acc-1", jwt_key: "jwt-stored-key" }
     : overrides.instance;
 
-  const deps: ReconnectDeps = {
+  const deps: ReconnectDeps & {
+    logRefusal?: (refusal: { userId: string; accountId: string; reason: "already_connected" | "not_reconnectable" | "not_found" }) => Promise<void> | void;
+  } = {
     findAccount: (userId: string, id: string) => {
       calls.push({ method: "findAccount", args: [userId, id] });
       return Promise.resolve(account);
@@ -80,22 +83,30 @@ function createDeps(
       if (overrides.clearMismatchError) return Promise.reject(overrides.clearMismatchError);
       return Promise.resolve();
     },
+    logRefusal: (refusal: { userId: string; accountId: string; reason: "already_connected" | "not_reconnectable" | "not_found" }) => {
+      calls.push({ method: "logRefusal", args: [refusal] });
+      if (overrides.logRefusalError) throw overrides.logRefusalError;
+      return Promise.resolve();
+    },
   };
 
   return { deps, calls };
 }
 
 Deno.test("reconnectQr: account not found throws ReconnectError 404", async () => {
-  const { deps } = createDeps({ account: null });
+  const { deps, calls } = createDeps({ account: null });
   const error = (await assertRejects(
     () => reconnectQr(deps, "user-1", "acc-missing"),
     ReconnectError,
   )) as ReconnectError;
   assertEquals(error.status, 404);
+  const refusalCalls = calls.filter((c) => c.method === "logRefusal");
+  assertEquals(refusalCalls.length, 1);
+  assertEquals(refusalCalls[0].args, [{ userId: "user-1", accountId: "acc-missing", reason: "not_found" }]);
 });
 
 Deno.test("reconnectQr: pending_ account throws ReconnectError 409", async () => {
-  const { deps } = createDeps({
+  const { deps, calls } = createDeps({
     account: { id: "acc-1", platform_user_id: "pending_acc-1", connection_mode: "evolution_qr", is_active: false },
   });
   const error = (await assertRejects(
@@ -103,10 +114,13 @@ Deno.test("reconnectQr: pending_ account throws ReconnectError 409", async () =>
     ReconnectError,
   )) as ReconnectError;
   assertEquals(error.status, 409);
+  const refusalCalls = calls.filter((c) => c.method === "logRefusal");
+  assertEquals(refusalCalls.length, 1);
+  assertEquals(refusalCalls[0].args, [{ userId: "user-1", accountId: "acc-1", reason: "not_reconnectable" }]);
 });
 
 Deno.test("reconnectQr: retired_ account throws ReconnectError 409", async () => {
-  const { deps } = createDeps({
+  const { deps, calls } = createDeps({
     account: { id: "acc-1", platform_user_id: "retired_96597950350", connection_mode: "evolution_qr", is_active: false },
   });
   const error = (await assertRejects(
@@ -114,10 +128,13 @@ Deno.test("reconnectQr: retired_ account throws ReconnectError 409", async () =>
     ReconnectError,
   )) as ReconnectError;
   assertEquals(error.status, 409);
+  const refusalCalls = calls.filter((c) => c.method === "logRefusal");
+  assertEquals(refusalCalls.length, 1);
+  assertEquals(refusalCalls[0].args, [{ userId: "user-1", accountId: "acc-1", reason: "not_reconnectable" }]);
 });
 
 Deno.test("reconnectQr: non evolution_qr connection mode throws ReconnectError 409", async () => {
-  const { deps } = createDeps({
+  const { deps, calls } = createDeps({
     account: { id: "acc-1", platform_user_id: "96597950350", connection_mode: "cloud_api", is_active: false },
   });
   const error = (await assertRejects(
@@ -125,6 +142,9 @@ Deno.test("reconnectQr: non evolution_qr connection mode throws ReconnectError 4
     ReconnectError,
   )) as ReconnectError;
   assertEquals(error.status, 409);
+  const refusalCalls = calls.filter((c) => c.method === "logRefusal");
+  assertEquals(refusalCalls.length, 1);
+  assertEquals(refusalCalls[0].args, [{ userId: "user-1", accountId: "acc-1", reason: "not_reconnectable" }]);
 });
 
 Deno.test("reconnectQr: an active account throws ReconnectError 409 without calling Evolution", async () => {
@@ -140,6 +160,45 @@ Deno.test("reconnectQr: an active account throws ReconnectError 409 without call
     ["fetchInstance", "connectionState", "createInstance", "connect", "logout", "setWebhook"].includes(c.method),
   );
   assertEquals(evolutionCalls.length, 0);
+  const refusalCalls = calls.filter((c) => c.method === "logRefusal");
+  assertEquals(refusalCalls.length, 1);
+  assertEquals(refusalCalls[0].args, [{ userId: "user-1", accountId: "acc-1", reason: "already_connected" }]);
+});
+
+Deno.test("reconnectQr: logRefusal throwing must not change the ReconnectError thrown", async () => {
+  for (const tc of [
+    {
+      account: null,
+      id: "acc-missing",
+      expectedStatus: 404,
+      expectedReason: "not_found",
+    },
+    {
+      account: { id: "acc-1", platform_user_id: "96597950350", connection_mode: "evolution_qr", is_active: true },
+      id: "acc-1",
+      expectedStatus: 409,
+      expectedReason: "already_connected",
+    },
+    {
+      account: { id: "acc-1", platform_user_id: "pending_acc-1", connection_mode: "evolution_qr", is_active: false },
+      id: "acc-1",
+      expectedStatus: 409,
+      expectedReason: "not_reconnectable",
+    },
+  ] as const) {
+    const { deps, calls } = createDeps({
+      account: tc.account,
+      logRefusalError: new Error("log failure from logging system"),
+    });
+    const error = (await assertRejects(
+      () => reconnectQr(deps, "user-1", tc.id),
+      ReconnectError,
+    )) as ReconnectError;
+    assertEquals(error.status, tc.expectedStatus);
+    const refusalCalls = calls.filter((c) => c.method === "logRefusal");
+    assertEquals(refusalCalls.length, 1);
+    assertEquals(refusalCalls[0].args, [{ userId: "user-1", accountId: tc.id, reason: tc.expectedReason }]);
+  }
 });
 
 Deno.test("reconnectQr: instance row missing throws ReconnectError 409 reconnect_unavailable", async () => {
@@ -356,153 +415,72 @@ async function loadClearMismatchFor(): Promise<ClearMismatchForFn> {
   throw new Error("clearMismatchFor not exported from clearMismatch.ts or reconnect.ts");
 }
 
-interface DbCall {
-  operation: "select" | "update";
-  table: string;
-  filters: Record<string, string>;
-  updateBody?: Record<string, unknown>;
+interface RecordedRpcCall {
+  name: string;
+  args: Record<string, unknown>;
 }
 
 function createClearMismatchAdmin(options: {
-  accountData?: { account_metadata: Record<string, unknown>; user_id: string } | null;
-  readError?: Error | null;
-  updateError?: Error | null;
+  rpcError?: unknown;
 } = {}) {
-  const calls: DbCall[] = [];
+  const rpcCalls: RecordedRpcCall[] = [];
+  const fromCalls: Array<{ table: string; method: string }> = [];
 
   const admin = {
+    rpc: (name: string, args: Record<string, unknown>) => {
+      rpcCalls.push({ name, args });
+      return Promise.resolve({
+        data: options.rpcError ? null : true,
+        error: options.rpcError ?? null,
+      });
+    },
     from: (table: string) => {
-      const filters: Record<string, string> = {};
-      let updatePayload: Record<string, unknown> | undefined;
-
       const builder: any = {
         select: (_cols?: string) => {
+          fromCalls.push({ table, method: "select" });
           return builder;
         },
-        update: (payload: Record<string, unknown>) => {
-          updatePayload = payload;
+        update: (_payload: Record<string, unknown>) => {
+          fromCalls.push({ table, method: "update" });
           return builder;
         },
-        eq: (col: string, val: string) => {
-          filters[col] = String(val);
-          return builder;
-        },
-        maybeSingle: async () => {
-          calls.push({ operation: "select", table, filters: { ...filters } });
-          if (options.readError) return { data: null, error: options.readError };
-          if (!options.accountData) return { data: null, error: null };
-          if (filters.user_id && filters.user_id !== options.accountData.user_id) {
-            return { data: null, error: null };
-          }
-          return { data: { account_metadata: options.accountData.account_metadata }, error: null };
-        },
-        then: (onfulfilled?: (res: any) => any) => {
-          calls.push({ operation: "update", table, filters: { ...filters }, updateBody: updatePayload });
-          const res = options.updateError ? { error: options.updateError } : { error: null };
-          return Promise.resolve(res).then(onfulfilled);
-        },
+        eq: () => builder,
+        maybeSingle: () => Promise.resolve({ data: null, error: null }),
+        then: (onfulfilled?: (res: any) => any) => Promise.resolve({ error: null }).then(onfulfilled),
       };
-
       return builder;
     },
   };
 
-  return { admin, calls };
+  return { admin, rpcCalls, fromCalls };
 }
 
-Deno.test("clearMismatchFor: the read and the update both filter by user_id = caller AND id = account", async () => {
+Deno.test("clearMismatchFor: makes exactly one clear_whatsapp_number_mismatch rpc with user scope and no direct social_accounts access", async () => {
   const clearMismatchFor = await loadClearMismatchFor();
-  const { admin, calls } = createClearMismatchAdmin({
-    accountData: {
-      user_id: "user-caller",
-      account_metadata: { number_mismatch: true, custom_flag: "kept" },
-    },
-  });
+  const { admin, rpcCalls, fromCalls } = createClearMismatchAdmin();
 
   await clearMismatchFor(admin, "user-caller", "acc-target");
 
-  const selectCall = calls.find((c) => c.operation === "select");
-  assert(selectCall, "Expected select on social_accounts");
-  assertEquals(selectCall.table, "social_accounts");
-  assertEquals(selectCall.filters.id, "acc-target");
-  assertEquals(selectCall.filters.user_id, "user-caller");
-
-  const updateCall = calls.find((c) => c.operation === "update");
-  assert(updateCall, "Expected update on social_accounts");
-  assertEquals(updateCall.table, "social_accounts");
-  assertEquals(updateCall.filters.id, "acc-target");
-  assertEquals(updateCall.filters.user_id, "user-caller");
-});
-
-Deno.test("clearMismatchFor: a row belonging to another user is not changed", async () => {
-  const clearMismatchFor = await loadClearMismatchFor();
-  const { admin, calls } = createClearMismatchAdmin({
-    accountData: {
-      user_id: "user-different",
-      account_metadata: { number_mismatch: true, foo: "bar" },
+  assertEquals(rpcCalls.length, 1, "Expected exactly one rpc call");
+  assertEquals(rpcCalls[0], {
+    name: "clear_whatsapp_number_mismatch",
+    args: {
+      p_account_id: "acc-target",
+      p_user_id: "user-caller",
+      p_workspace_id: null,
     },
   });
-
-  await clearMismatchFor(admin, "user-caller", "acc-target");
-
-  const updateCall = calls.find((c) => c.operation === "update");
-  assertEquals(updateCall, undefined, "Row belonging to another user must not be updated");
+  assertEquals(fromCalls.length, 0, "Must not select or update social_accounts directly");
 });
 
-Deno.test("clearMismatchFor: metadata keys other than number_mismatch are preserved", async () => {
+Deno.test("clearMismatchFor: an error on clear_whatsapp_number_mismatch rpc throws", async () => {
   const clearMismatchFor = await loadClearMismatchFor();
-  const initialMeta = {
-    number_mismatch: true,
-    display_name: "Desk",
-    consent: { ok: true },
-    retry_count: 3,
-  };
-  const { admin, calls } = createClearMismatchAdmin({
-    accountData: {
-      user_id: "user-1",
-      account_metadata: initialMeta,
-    },
-  });
-
-  await clearMismatchFor(admin, "user-1", "acc-1");
-
-  const updateCall = calls.find((c) => c.operation === "update");
-  assert(updateCall, "Expected update call");
-  assertEquals(updateCall.updateBody, {
-    account_metadata: {
-      display_name: "Desk",
-      consent: { ok: true },
-      retry_count: 3,
-    },
-  });
-});
-
-Deno.test("clearMismatchFor: an error on read throws", async () => {
-  const clearMismatchFor = await loadClearMismatchFor();
-  const { admin } = createClearMismatchAdmin({
-    readError: new Error("select failure"),
-  });
+  const rpcError = new Error("clear_whatsapp_number_mismatch rpc failure");
+  const { admin } = createClearMismatchAdmin({ rpcError });
 
   await assertRejects(
     () => clearMismatchFor(admin, "user-1", "acc-1"),
     Error,
-    "select failure",
-  );
-});
-
-Deno.test("clearMismatchFor: an error on update throws", async () => {
-  const clearMismatchFor = await loadClearMismatchFor();
-  const { admin } = createClearMismatchAdmin({
-    accountData: {
-      user_id: "user-1",
-      account_metadata: { number_mismatch: true },
-    },
-    updateError: new Error("update failure"),
-  });
-
-  await assertRejects(
-    () => clearMismatchFor(admin, "user-1", "acc-1"),
-    Error,
-    "update failure",
+    "clear_whatsapp_number_mismatch rpc failure",
   );
 });

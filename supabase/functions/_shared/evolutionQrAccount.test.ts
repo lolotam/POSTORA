@@ -30,6 +30,7 @@ function recordingAdmin(
     active?: boolean; workspaceId?: string | null; updatedAt?: string;
     emissionFailure?: "lookup" | "insert";
     clearError?: unknown;
+    flagMismatchError?: unknown;
   } = {},
 ) {
   const updates: RecordedUpdate[] = [];
@@ -58,6 +59,14 @@ function recordingAdmin(
           data: null,
           error: overrides.clearError ?? null,
         });
+      }
+      if (name === "flag_whatsapp_number_mismatch") {
+        if (!overrides.flagMismatchError) { active = false; writeTick += 1; }
+        return Promise.resolve(
+          overrides.flagMismatchError
+            ? { data: null, error: overrides.flagMismatchError }
+            : { data: true, error: null },
+        );
       }
       return Promise.resolve({ data: null, error: null });
     },
@@ -257,21 +266,34 @@ Deno.test("an already-identified account keeps its number when the same phone re
   assertEquals(admin.updates[0].values, { is_active: true });
 });
 
-Deno.test("established row receiving open with mismatched number rejects with NumberMismatchError and flags mismatch without activating", async () => {
+Deno.test("established row receiving open with mismatched number calls flag_whatsapp_number_mismatch RPC and rejects with NumberMismatchError without updating social_accounts directly", async () => {
   const admin = recordingAdmin(null, { active: false });
   const connected = { id: "acc-2", platform_user_id: "96597950350" };
   await assertRejects(
     () => syncEvolutionAccountConnection(admin, connected, "open", { ownerJid: "99999999@s.whatsapp.net" }),
     NumberMismatchError,
   );
-  assertEquals(admin.updates.length, 1);
-  assertEquals(admin.updates[0].table, "social_accounts");
-  assertEquals(admin.updates[0].id, "acc-2");
-  assertEquals(admin.updates[0].values.account_metadata, { number_mismatch: true });
-  assertEquals(admin.updates[0].values.is_active, false);
+  const flagCalls = admin.rpcs.filter((r) => r.name === "flag_whatsapp_number_mismatch");
+  assertEquals(flagCalls.length, 1, "Expected exactly one flag_whatsapp_number_mismatch RPC call");
+  assertEquals(flagCalls[0].args, { p_account_id: "acc-2" });
+
+  const directUpdates = admin.updates.filter(
+    (u) => u.table === "social_accounts" && ("account_metadata" in u.values || "is_active" in u.values),
+  );
+  assertEquals(directUpdates.length, 0, "Must NOT update social_accounts account_metadata or is_active directly");
   assertEquals(admin.deliveries, []);
   const clearCalls = admin.rpcs.filter((r) => r.name === "clear_undelivered_store_events");
   assertEquals(clearCalls, []);
+});
+
+Deno.test("mismatched number when flag_whatsapp_number_mismatch RPC fails rejects with that error not NumberMismatchError", async () => {
+  const flagErr = new Error("flag_whatsapp_number_mismatch failed");
+  const admin = recordingAdmin(null, { active: false, flagMismatchError: flagErr });
+  const connected = { id: "acc-2", platform_user_id: "96597950350" };
+  const caught = await assertRejects(
+    () => syncEvolutionAccountConnection(admin, connected, "open", { ownerJid: "99999999@s.whatsapp.net" }),
+  );
+  assertEquals(caught, flagErr);
 });
 
 Deno.test("a matching number on a row whose metadata has number_mismatch:true clears the flag in the update", async () => {
@@ -294,6 +316,13 @@ Deno.test("established row that was active receiving open with mismatched number
   assertEquals(admin.active, false);
   assertEquals(admin.deliveries.length > 0, true);
   assertEquals(admin.deliveries[0].event_type, "whatsapp_number.disconnected");
+  const flagCalls = admin.rpcs.filter((r) => r.name === "flag_whatsapp_number_mismatch");
+  assertEquals(flagCalls.length, 1, "Expected exactly one flag_whatsapp_number_mismatch RPC call");
+  assertEquals(flagCalls[0].args, { p_account_id: "acc-1" });
+  const directUpdates = admin.updates.filter(
+    (u) => u.table === "social_accounts" && ("account_metadata" in u.values || "is_active" in u.values),
+  );
+  assertEquals(directUpdates.length, 0, "Must NOT update social_accounts account_metadata or is_active directly");
 });
 
 Deno.test("a rejected write is surfaced instead of being swallowed", async (t) => {

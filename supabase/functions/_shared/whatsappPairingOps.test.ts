@@ -156,6 +156,14 @@ function fixture(options: { existing?: boolean; active?: boolean; resolved?: boo
       if (options.failTable === table) return Promise.resolve(Response.json({ code: "57014", message: "private failure" }, { status: 500 }));
       if (table === "activate_evolution_qr_account") return Promise.resolve(Response.json("15550001111"));
       if (table === "claim_whatsapp_history_sync") return Promise.resolve(Response.json(!options.leaseHeld));
+      if (table === "clear_whatsapp_number_mismatch") {
+        if (metadata && typeof metadata === "object") {
+          const copy = { ...metadata };
+          delete copy.number_mismatch;
+          metadata = copy;
+        }
+        return Promise.resolve(Response.json(true));
+      }
       if (table === "partner_webhooks") {
         assertEquals(url.searchParams.get("workspace_id"), "eq.ws-1");
         assertEquals(url.searchParams.get("id"), null);
@@ -361,26 +369,27 @@ Deno.test("pairingStatus on an account with durable number_mismatch returns stat
   assertEquals(stateCalls.length, 0);
 });
 
-Deno.test("startPairing clears number_mismatch from account_metadata on success, scopes write to workspace, and subsequent pairingStatus does not return mismatch", async () => {
+Deno.test("startPairing clears number_mismatch via clear_whatsapp_number_mismatch RPC on success, scopes write to workspace, does not update account_metadata directly, and subsequent pairingStatus does not return mismatch", async () => {
   const db = fixture({ existing: true, resolved: true, metadata: { number_mismatch: true } });
   const remote = provider("connecting");
   const response = await startPairing({ ...CTX, admin: db.admin }, ID, { api: remote.api });
   assertEquals(response.state, "connecting");
 
-  // The account metadata update removes number_mismatch while preserving other keys
-  const updateCall = db.calls.find(
+  // Exactly one rpc("clear_whatsapp_number_mismatch", { p_account_id, p_user_id: null, p_workspace_id: <ctx workspace id> })
+  const rpcCalls = db.calls.filter((call) => call.url.pathname.endsWith("/rpc/clear_whatsapp_number_mismatch"));
+  assertEquals(rpcCalls.length, 1, "Expected exactly one clear_whatsapp_number_mismatch RPC call");
+  assertEquals(rpcCalls[0].method, "POST");
+  assertEquals(rpcCalls[0].body, {
+    p_account_id: ID,
+    p_user_id: null,
+    p_workspace_id: CTX.workspaceId,
+  });
+
+  // NO social_accounts update of account_metadata
+  const metaUpdateCall = db.calls.find(
     (call) => call.method === "PATCH" && call.url.pathname.endsWith("/social_accounts") && "account_metadata" in call.body,
   );
-  assert(updateCall, "Expected PATCH on social_accounts with account_metadata");
-  const updatedMeta = updateCall.body.account_metadata as Record<string, unknown>;
-  assertEquals("number_mismatch" in updatedMeta, false);
-  assertEquals(updatedMeta.display_name, "Support");
-  assertEquals(updatedMeta.arbitrary_marker, "preserve");
-
-  // Write is scoped to the workspace (the existing scoped-admin pattern in that file)
-  assertEquals(updateCall.url.searchParams.get("workspace_id"), `eq.${CTX.workspaceId}`);
-  assertEquals(updateCall.url.searchParams.get("id"), `eq.${ID}`);
-  assert(!updateCall.url.searchParams.has("user_id"));
+  assertEquals(metaUpdateCall, undefined, "Must NOT update social_accounts with account_metadata directly");
 
   // Subsequent pairingStatus no longer returns the durable number_mismatch answer
   const status = await pairingStatus({ ...CTX, admin: db.admin }, ID, { api: remote.api });
@@ -388,7 +397,7 @@ Deno.test("startPairing clears number_mismatch from account_metadata on success,
   assert(status.state !== "number_mismatch");
 });
 
-Deno.test("startPairing failure does not clear durable number_mismatch flag", async () => {
+Deno.test("startPairing failure does not clear durable number_mismatch flag and makes no clear_whatsapp_number_mismatch rpc", async () => {
   const db = fixture({ existing: true, resolved: true, metadata: { number_mismatch: true } });
   const remote = provider();
   remote.api.connect = () => Promise.reject(new EvolutionApiError("provider rejected", 400, {}));
@@ -397,6 +406,9 @@ Deno.test("startPairing failure does not clear durable number_mismatch flag", as
     () => startPairing({ ...CTX, admin: db.admin }, ID, { api: remote.api }),
     WhatsAppOpError,
   );
+
+  const rpcCalls = db.calls.filter((call) => call.url.pathname.endsWith("/rpc/clear_whatsapp_number_mismatch"));
+  assertEquals(rpcCalls.length, 0, "Failed start must make no clear_whatsapp_number_mismatch RPC");
 
   const clearCall = db.calls.find(
     (call) => call.method === "PATCH" && call.url.pathname.endsWith("/social_accounts") && "account_metadata" in call.body,
