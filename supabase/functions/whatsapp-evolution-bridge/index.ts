@@ -1,25 +1,19 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { handleRestrictedCorsOptions, restrictedErrorResponse, restrictedJsonResponse } from "../_shared/cors.ts";
-import { createEvolutionApi, type EvolutionApi, type EvolutionEvent } from "../_shared/evolutionApi.ts";
+import { createEvolutionApi } from "../_shared/evolutionApi.ts";
 import {
   findOwnedEvolutionAccount,
   mergeDisplayName,
   normalizeConnectionName,
-  syncEvolutionAccountConnection,
 } from "../_shared/evolutionQrAccount.ts";
 import { importEvolutionHistory } from "../_shared/whatsappSyncEngine.ts";
 import { runInBackground } from "../_shared/background.ts";
 import { disconnectWhatsAppAccount, type WhatsAppDisconnectAdmin } from "../_shared/whatsappDisconnect.ts";
 import { resolveMaxSocialAccounts, type SocialAccountQuotaClient } from "../_shared/socialAccountQuota.ts";
-
-const EVOLUTION_EVENTS: EvolutionEvent[] = [
-  "MESSAGES_UPSERT",
-  // Delivery / read / rejection acks for our own sends. Instances paired before this event
-  // was listed need the resubscribe_webhook action once.
-  "MESSAGES_UPDATE",
-  "CONNECTION_UPDATE",
-  "QRCODE_UPDATED",
-];
+import { extractQr, extractState } from "./qr.ts";
+import { buildQrStatusDeps, getQrStatusResult } from "./qrStatus.ts";
+import { reconnectQr, ReconnectError } from "./reconnect.ts";
+import { buildReconnectDeps, EVOLUTION_EVENTS } from "./reconnectDeps.ts";
 
 class BridgeError extends Error {
   constructor(message: string, public readonly status = 400) {
@@ -32,6 +26,7 @@ interface BridgeBody {
   action:
     | "create_and_get_qr"
     | "get_qr_status"
+    | "reconnect_qr"
     | "logout_instance"
     | "sync_past_chats"
     | "get_sync_status"
@@ -56,15 +51,6 @@ interface EvolutionInstanceRow {
 function clientIp(req: Request): string | null {
   const forwarded = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
   return forwarded || req.headers.get("x-real-ip");
-}
-
-function extractQr(payload: any): string | null {
-  const qr = payload?.qrcode || payload?.qr || payload;
-  return qr?.base64 || qr?.image || qr?.code || null;
-}
-
-function extractState(payload: any): string | null {
-  return payload?.instance?.state || payload?.state || payload?.connectionStatus || null;
 }
 
 // Evolution runs in its own stack and can only reach the public gateway, while
@@ -308,52 +294,19 @@ async function resubscribeWebhook(context: Awaited<ReturnType<typeof authenticat
 }
 
 // The webhook is the primary activation path; this keeps a dropped delivery from
-// leaving an already-linked session permanently inactive in Postora.
-async function reconcileAccountConnection(reconciliation: {
-  admin: any;
-  api: EvolutionApi;
-  account: { id: string; platform_user_id: string; is_active: boolean };
-  instanceName: string;
-  state: string;
-}): Promise<string> {
-  const { admin, api, account, instanceName } = reconciliation;
-  const connection = reconciliation.state.toLowerCase();
-  if (connection === "open") {
-    if (account.is_active && !account.platform_user_id.startsWith("pending_")) return account.platform_user_id;
-    return await syncEvolutionAccountConnection(admin, account, connection, await api.fetchInstance(instanceName));
-  }
-  if (connection === "close" && account.is_active) {
-    await syncEvolutionAccountConnection(admin, account, connection, null);
-  }
-  return account.platform_user_id;
-}
-
+// leaving an already-linked session permanently inactive in Postora. The decision
+// tree itself lives in qrStatus.ts so the mismatch contract stays in one place.
 async function getQrStatus(admin: any, userId: string, body: BridgeBody) {
   if (!body.social_account_id) throw new BridgeError("social_account_id is required", 400);
   const account = await findOwnedAccount(admin, userId, body.social_account_id);
   const instance = await findInstance(admin, body.social_account_id);
   const api = createEvolutionApi();
-  let qr = instance.last_qr;
-  if (body.refresh_qr) {
-    qr = extractQr(await api.connect(instance.instance_name));
-    await admin.from("whatsapp_evolution_instances").update({ last_qr: qr }).eq("social_account_id", body.social_account_id);
-  }
-  const statePayload = await api.connectionState(instance.instance_name);
-  const state = extractState(statePayload);
-  if (state) {
-    await admin.from("whatsapp_evolution_instances").update({ last_connection_state: state }).eq("social_account_id", body.social_account_id);
-    // Reconciliation may have just replaced the provisional owner id, and conversation ids
-    // are built from it, so the sweep uses the value it returns rather than the one loaded
-    // at the top of this request.
-    const ownerNumber = await reconcileAccountConnection({
-      admin, api, account, instanceName: instance.instance_name, state,
-    });
-    if (state.toLowerCase() === "open") {
-      const linked = { ...account, platform_user_id: ownerNumber };
-      await runInBackground("whatsapp history sync", () => autoImportHistory(admin, linked, instance));
-    }
-  }
-  return { success: true, social_account_id: body.social_account_id, qr, state };
+  return await getQrStatusResult({
+    ...buildQrStatusDeps(admin, { userId }, api),
+    autoImport: (linked, instanceRow) =>
+      // instanceRow is the same row passed in as input; qrStatus only narrows its type.
+      runInBackground("whatsapp history sync", () => autoImportHistory(admin, linked, instanceRow as EvolutionInstanceRow)),
+  }, { account, instance, refreshQr: body.refresh_qr === true });
 }
 
 // Delegates to the shared teardown: whatsapp-oauth's "disconnect" action and this
@@ -386,6 +339,23 @@ Deno.serve(async (req) => {
     }
     if (body.action === "get_qr_status") {
       return restrictedJsonResponse(req, await getQrStatus(context.admin, context.user.id, body));
+    }
+    if (body.action === "reconnect_qr") {
+      if (!body.social_account_id) throw new BridgeError("social_account_id is required", 400);
+      try {
+        return restrictedJsonResponse(req, await reconnectQr(
+          buildReconnectDeps(
+            context.admin,
+            { userId: context.user.id, webhookBaseUrl: context.webhookBaseUrl },
+            createEvolutionApi(),
+          ),
+          context.user.id,
+          body.social_account_id,
+        ));
+      } catch (error) {
+        if (error instanceof ReconnectError) throw new BridgeError(error.message, error.status);
+        throw error;
+      }
     }
     if (body.action === "sync_past_chats") {
       return restrictedJsonResponse(req, await syncPastChats(context.admin, context.user.id, body));

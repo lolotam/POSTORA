@@ -1,0 +1,101 @@
+// Reconnect-in-place for a Direct QR connection: same account row, same Evolution
+// instance name and webhook credential, fresh QR. The alternative -- create a new
+// account -- would orphan the AI agent setup, store bindings and conversation history
+// attached to the row this reuses.
+import { EvolutionApiError, type EvolutionApi, type EvolutionEvent } from "../_shared/evolutionApi.ts";
+import { extractQr, extractState } from "./qr.ts";
+
+export class ReconnectError extends Error {
+  constructor(message: string, public readonly status: 404 | 409 | 502) {
+    super(message);
+    this.name = "ReconnectError";
+  }
+}
+
+export type ReconnectRefusalReason = "not_found" | "already_connected" | "not_reconnectable";
+
+export interface ReconnectDeps {
+  findAccount(userId: string, id: string): Promise<{ id: string; platform_user_id: string; connection_mode: string | null; is_active?: boolean } | null>;
+  findInstance(id: string): Promise<{ instance_name: string; jwt_key: string } | null>;
+  api: Pick<EvolutionApi, "fetchInstance" | "connectionState" | "createInstance" | "connect" | "logout" | "setWebhook">;
+  webhook: { url: string; events: EvolutionEvent[] };
+  saveQr(id: string, qr: string | null, state: string | null): Promise<void>;
+  /** The flag is cleared when a new QR is issued, before any scan: pairing the right phone is what lifts the block. */
+  clearMismatch(id: string): Promise<void>;
+  /** Called before every refusal throw so /admin/logs can explain why a reconnect did not happen. Best effort by contract. */
+  logRefusal(refusal: { userId: string; accountId: string; reason: ReconnectRefusalReason }): Promise<void> | void;
+}
+
+// Best effort on purpose: a failed refusal log must never change the refusal
+// itself -- the caller still gets the original 404/409.
+async function logRefusalSafely(deps: ReconnectDeps, userId: string, accountId: string, reason: ReconnectRefusalReason): Promise<void> {
+  try {
+    await deps.logRefusal({ userId, accountId, reason });
+  } catch {
+    // The index.ts wiring reports its own insert failures; nothing further here.
+  }
+}
+
+export async function reconnectQr(deps: ReconnectDeps, userId: string, socialAccountId: string) {
+  const account = await deps.findAccount(userId, socialAccountId);
+  if (!account) {
+    await logRefusalSafely(deps, userId, socialAccountId, "not_found");
+    throw new ReconnectError("WhatsApp Direct QR account not found", 404);
+  }
+  // Placeholder ids never finished pairing and retired rows were merged away; neither
+  // has a live session to reconnect, so the user is sent to the new-connection flow.
+  if (account.connection_mode !== "evolution_qr"
+    || account.platform_user_id.startsWith("pending_")
+    || account.platform_user_id.startsWith("retired_")) {
+    await logRefusalSafely(deps, userId, socialAccountId, "not_reconnectable");
+    throw new ReconnectError("This connection can't be reconnected; connect a new one instead", 409);
+  }
+  // An active row has a live session: reconnecting would log the owner out mid-use.
+  // Refused before any Evolution call so no provider state changes.
+  if (account.is_active) {
+    await logRefusalSafely(deps, userId, socialAccountId, "already_connected");
+    throw new ReconnectError("This connection is already connected", 409);
+  }
+  const instance = await deps.findInstance(socialAccountId);
+  // Without the stored jwt_key the recreated instance would be unreachable by our webhook.
+  if (!instance) {
+    await logRefusalSafely(deps, userId, socialAccountId, "not_reconnectable");
+    throw new ReconnectError("reconnect_unavailable", 409);
+  }
+  const name = instance.instance_name;
+  try {
+    // The remote instance may be gone (Evolution restart, manual delete). Both shapes of
+    // "missing" -- an empty list and a 404 -- mean recreate; anything else is a failure.
+    let exists: boolean;
+    try {
+      exists = (await deps.api.fetchInstance(name)) !== null;
+    } catch (error) {
+      if (error instanceof EvolutionApiError && error.status === 404) exists = false;
+      else throw error;
+    }
+    if (!exists) {
+      await deps.api.createInstance({
+        instanceName: name,
+        webhook: { url: deps.webhook.url, headers: { jwt_key: instance.jwt_key }, events: deps.webhook.events },
+      });
+    } else if (extractState(await deps.api.connectionState(name)) === "open") {
+      // A still-linked session must be logged out before connect, or Evolution answers
+      // with the live session instead of a fresh QR.
+      await deps.api.logout(name);
+    }
+    // Re-asserted on every reconnect: the stored credential is the single source of truth
+    // for which webhook receives this instance's events.
+    await deps.api.setWebhook(name, { url: deps.webhook.url, headers: { jwt_key: instance.jwt_key }, events: deps.webhook.events });
+    const connection = await deps.api.connect(name);
+    const qr = extractQr(connection);
+    const state = extractState(connection);
+    await deps.clearMismatch(socialAccountId);
+    await deps.saveQr(socialAccountId, qr, state);
+    return { success: true as const, social_account_id: socialAccountId, qr, state };
+  } catch (error) {
+    if (error instanceof ReconnectError) throw error;
+    // The Evolution error text can carry internal hosts; only the account id goes out.
+    console.error(`[whatsapp-evolution-bridge] reconnect failed for ${socialAccountId}`);
+    throw new ReconnectError("reconnect_failed", 502);
+  }
+}

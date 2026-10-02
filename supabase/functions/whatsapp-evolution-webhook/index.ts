@@ -4,6 +4,7 @@ import { resolveAutomationHandler } from "../_shared/automationHandler.ts";
 import { buildMessagePayload, buildMessagingSender, dispatchMessageEvent } from "../_shared/n8nMessagingDispatch.ts";
 import { verifyEvolutionWebhookToken } from "../_shared/evolutionWebhookAuth.ts";
 import { normalizeEvolutionEvent } from "../_shared/evolutionApi.ts";
+import { handleNumberMismatch } from "../_shared/numberMismatch.ts";
 import { syncEvolutionAccountConnection } from "../_shared/evolutionQrAccount.ts";
 import { buildEvolutionMessageRow, remoteNumberFor } from "../_shared/evolutionMessage.ts";
 import { importEvolutionHistory } from "../_shared/whatsappSyncEngine.ts";
@@ -21,6 +22,7 @@ import {
 import { EvolutionFetcher } from "../_shared/inboundMediaFetchers.ts";
 import { inboundOptOutPlan, optOutDb, optOutPersistDecision, recordOptOut } from "../_shared/optOut.ts";
 import { evolutionOptOutTarget } from "./optOutAddress.ts";
+import { handleConnectionUpdate } from "./connectionUpdate.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -361,36 +363,6 @@ async function handleMessagesUpdate(admin: any, account: EvolutionAccount, body:
   }
 }
 
-async function handleConnectionUpdate(
-  admin: any,
-  account: EvolutionAccount,
-  instance: EvolutionInstance,
-  data: any,
-): Promise<void> {
-  const state = String(data?.state || data?.connection || data?.status || "").toLowerCase();
-  if (!state) return;
-  await admin.from("whatsapp_evolution_instances")
-    .update({ last_connection_state: state })
-    .eq("social_account_id", account.id);
-
-  // Activation resolves the provisional platform_user_id, so the import below has to use the
-  // value that was just stored rather than the one this request loaded.
-  const ownerNumber = await syncEvolutionAccountConnection(admin, account, state, data);
-
-  // Evolution reports "open" more than once while a session settles, and the QR screen stops
-  // polling shortly after the first one. Importing from here too gives the sweep a later
-  // attempt, which matters because Baileys may still be pulling history off the phone when
-  // the connection first opens. The lease and last_sync_at keep it to one real run.
-  if (state === "open" && !instance.last_sync_at) {
-    await runInBackground("whatsapp history sync", () => importEvolutionHistory({
-      admin,
-      api: createEvolutionApi(),
-      account: { ...account, platform_user_id: ownerNumber },
-      instanceName: instance.instance_name,
-    }));
-  }
-}
-
 async function handleQrUpdate(admin: any, socialAccountId: string, data: any): Promise<void> {
   const qr = data?.qrcode?.base64 || data?.qrcode?.code || data?.base64 || data?.code || null;
   await admin.from("whatsapp_evolution_instances")
@@ -440,7 +412,19 @@ Deno.serve(async (req) => {
     } else if (event === "MESSAGES_UPDATE") {
       await handleMessagesUpdate(admin, account, body);
     } else if (event === "CONNECTION_UPDATE") {
-      await handleConnectionUpdate(admin, account, instance, body.data);
+      // The mismatch marker maps to 200 {ok, state} here rather than an error: Evolution
+      // retries 5xx deliveries, and a refused phone is a settled fact, not a transient
+      // failure worth retrying.
+      const mismatch = await handleConnectionUpdate({
+        admin,
+        api: { logout: (instanceName) => createEvolutionApi().logout(instanceName) },
+        handleNumberMismatch,
+        syncEvolutionAccountConnection,
+        importEvolutionHistory: ({ admin, account, instanceName }) =>
+          importEvolutionHistory({ admin, api: createEvolutionApi(), account, instanceName }),
+        runInBackground,
+      }, { account, instance, data: body.data });
+      if (mismatch) return jsonResponse({ ok: true, state: mismatch });
     } else if (event === "QRCODE_UPDATED") {
       await handleQrUpdate(admin, account.id, body.data);
     }

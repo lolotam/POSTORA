@@ -1,7 +1,8 @@
 // Workspace-scoped registration and Direct QR pairing. The browser bridge is
 // deliberately not repointed yet; its extraction/parity test is Task 8b.
 import type { WhatsAppNumberContext } from "./whatsappNumberOps.ts";
-import { normalizeConnectionName, syncEvolutionAccountConnection } from "./evolutionQrAccount.ts";
+import { normalizeConnectionName, syncEvolutionAccountConnection, NumberMismatchError } from "./evolutionQrAccount.ts";
+import { handleNumberMismatch } from "./numberMismatch.ts";
 import { createEvolutionApi, EvolutionApiError, type EvolutionApi } from "./evolutionApi.ts";
 import { WhatsAppOpError } from "./whatsappPartnerOps.ts";
 import { disconnectWhatsAppAccount, type WhatsAppDisconnectDeps } from "./whatsappDisconnect.ts";
@@ -85,6 +86,7 @@ interface PairingAccount {
   platform_user_id: string;
   is_active: boolean;
   connection_mode: string;
+  account_metadata: Record<string, unknown> | null;
 }
 
 // A request-local resolved context lets the HTTP door authorize before replay
@@ -98,7 +100,9 @@ interface PairingInstance {
   last_qr: string | null;
 }
 
-type PairingApi = Pick<EvolutionApi, "createInstance" | "connect" | "connectionState" | "fetchInstance">;
+// logout is part of the pairing contract since the mismatch flow: a refused phone has its
+// remote session killed, and this module owns that call for the partner path.
+type PairingApi = Pick<EvolutionApi, "createInstance" | "connect" | "connectionState" | "fetchInstance" | "logout">;
 interface PairingDependencies { api?: PairingApi; webhookBaseUrl?: string }
 
 function configuredPairingApi(deps: PairingDependencies): PairingApi {
@@ -114,7 +118,7 @@ function configuredPairingApi(deps: PairingDependencies): PairingApi {
 export async function resolveNumberContext(ctx: WhatsAppNumberContext, accountId: string): Promise<ResolvedNumberContext> {
   if (!ctx.accountIds.includes(accountId)) throw new WhatsAppOpError("Number not found", "resource_not_found", 404);
   const { data, error } = await ctx.admin.from("social_accounts")
-    .select("id, platform_user_id, is_active, connection_mode")
+    .select("id, platform_user_id, is_active, connection_mode, account_metadata")
     .eq("workspace_id", ctx.workspaceId).eq("platform", "whatsapp").eq("id", accountId).maybeSingle();
   if (error) throw new WhatsAppOpError("Unable to read number", "internal_error", 500);
   if (!data) throw new WhatsAppOpError("Number not found", "resource_not_found", 404);
@@ -160,7 +164,7 @@ async function savePairing(ctx: WhatsAppNumberContext, accountId: string, patch:
 export async function startPairing(
   ctx: PairingContext, accountId: string, deps: PairingDependencies = {},
 ) {
-  await pairingAccount(ctx, accountId);
+  const account = await pairingAccount(ctx, accountId);
   let instance = await pairingInstance(ctx, accountId);
   const api = configuredPairingApi(deps);
   if (!instance) {
@@ -203,6 +207,19 @@ export async function startPairing(
   const state = extractState(connection);
   if (!qr && !state) throw new WhatsAppOpError("Invalid pairing response", "internal_error", 502, undefined, true);
   await savePairing(ctx, accountId, { last_qr: qr, last_connection_state: state });
+  // A fresh pairing supersedes an earlier refusal: the durable mismatch flag is dropped
+  // so the next status poll reads the live provider state again. A failed start throws
+  // before this point, so the flag survives a refused pairing. The clear runs through
+  // the RPC with the workspace as the tenant scope -- no owner identity crosses this
+  // partner-API boundary, and only the number_mismatch key changes, atomically.
+  if (account.account_metadata?.number_mismatch === true) {
+    const { error } = await ctx.admin.rpc("clear_whatsapp_number_mismatch", {
+      p_account_id: accountId,
+      p_user_id: null,
+      p_workspace_id: ctx.workspaceId,
+    });
+    if (error) throw error;
+  }
   // Evolution does not provide a reliable expiry timestamp; never invent one.
   return { account_id: accountId, qr: qr ? { code: qr, expires_at: null } : null, state };
 }
@@ -243,19 +260,42 @@ export async function pairingStatus(
   const account = await pairingAccount(ctx, accountId);
   const instance = await pairingInstance(ctx, accountId);
   if (!instance) throw new WhatsAppOpError("Pairing not found; start pairing first", "resource_not_found", 404);
+  // A durable mismatch from an earlier refusal is answered from the stored flag alone:
+  // the remote session was already killed, so a provider poll would only see a closed
+  // instance and could never clear the flag the owner must see. The stored state is
+  // left untouched too -- it already says number_mismatch.
+  if (account.account_metadata?.number_mismatch === true) {
+    return { account_id: accountId, state: "number_mismatch", phone_number: null };
+  }
   const api = configuredPairingApi(deps);
   const state = extractState(await api.connectionState(instance.instance_name));
   if (!state) throw new WhatsAppOpError("Invalid pairing status response", "internal_error", 502);
-  await savePairing(ctx, accountId, { last_connection_state: state });
-  const ownerNumber = await reconcileAccountConnection(ctx, api, { account, instanceName: instance.instance_name, state });
-  return { account_id: accountId, state,
-    phone_number: ownerNumber.startsWith("pending_") ? null : ownerNumber };
+  // The reconciler runs before the observed state is persisted, mirroring the bridge's
+  // ordering contract: a refused phone must not have "open" stored over the
+  // number_mismatch state the mismatch handler writes, and a failed reconcile must not
+  // leave behind a state this request could not actually verify.
+  const result = await reconcileAccountConnection(ctx, api, { account, instanceName: instance.instance_name, state });
+  if (!result.mismatch) {
+    await savePairing(ctx, accountId, { last_connection_state: state });
+  }
+  return {
+    account_id: accountId,
+    // A refused phone never reports "open": the pairing is blocked until the right
+    // phone scans, and the status says so instead of a state the UI would celebrate.
+    state: result.mismatch ? "number_mismatch" : state,
+    phone_number: result.mismatch || result.ownerNumber.startsWith("pending_") ? null : result.ownerNumber,
+  };
+}
+
+interface ReconcileResult {
+  ownerNumber: string;
+  mismatch: boolean;
 }
 
 async function reconcileAccountConnection(
   ctx: WhatsAppNumberContext, api: PairingApi,
   input: { account: PairingAccount; instanceName: string; state: string },
-): Promise<string> {
+): Promise<ReconcileResult> {
   const { account, instanceName, state } = input;
   // Keep all reads/metadata merges/writes in the existing reconciler scoped to
   // this workspace too. No user identity crosses this application boundary.
@@ -272,11 +312,27 @@ async function reconcileAccountConnection(
     rpc: (name: string, args: Record<string, unknown>) => ctx.admin.rpc(name, args),
   };
   if (state === "open") {
-    if (account.is_active && !account.platform_user_id.startsWith("pending_")) return account.platform_user_id;
-    return await syncEvolutionAccountConnection(scopedAdmin, account, state, await api.fetchInstance(instanceName));
+    if (account.is_active && !account.platform_user_id.startsWith("pending_")) {
+      return { ownerNumber: account.platform_user_id, mismatch: false };
+    }
+    try {
+      // The partner path has no owner identity; its workspace is the tenant scope the
+      // mismatch flag requires, and no user id crosses this boundary.
+      const ownerNumber = await syncEvolutionAccountConnection(scopedAdmin, account, state, await api.fetchInstance(instanceName), {
+        workspaceId: ctx.workspaceId,
+      });
+      return { ownerNumber, mismatch: false };
+    } catch (error) {
+      if (!(error instanceof NumberMismatchError)) throw error;
+      // The stored number and the linked phone disagree: the flag RPC inside the sync
+      // already recorded the refusal on the account row and its instance state; the
+      // shared handler kills the remote session so it stops answering polls.
+      await handleNumberMismatch(api, { instanceName });
+      return { ownerNumber: account.platform_user_id, mismatch: true };
+    }
   }
   if (state === "close" && account.is_active) await syncEvolutionAccountConnection(scopedAdmin, account, state, null);
-  return account.platform_user_id;
+  return { ownerNumber: account.platform_user_id, mismatch: false };
 }
 
 export async function endSession(

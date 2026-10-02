@@ -140,11 +140,11 @@ for (const [data, error, expected] of [
   });
 }
 
-function fixture(options: { existing?: boolean; active?: boolean; resolved?: boolean; failTable?: string; mode?: string; leaseHeld?: boolean; noWorkspace?: boolean } = {}) {
+function fixture(options: { existing?: boolean; active?: boolean; resolved?: boolean; failTable?: string; mode?: string; leaseHeld?: boolean; noWorkspace?: boolean; metadata?: Record<string, unknown> } = {}) {
   const calls: Array<{ url: URL; method: string; body: Record<string, unknown> }> = [];
   // Advances per read, standing in for Postgres bumping updated_at on write.
   let accountReads = 0;
-  const metadata = { display_name: "Support", risk_consent: CONSENT, arbitrary_marker: "preserve" };
+  let metadata: Record<string, unknown> = { display_name: "Support", risk_consent: CONSENT, arbitrary_marker: "preserve", ...(options.metadata ?? {}) };
   const admin = createClient("https://database.example", "test-key", {
     auth: { persistSession: false, autoRefreshToken: false },
     global: { fetch: (input, init) => {
@@ -156,6 +156,17 @@ function fixture(options: { existing?: boolean; active?: boolean; resolved?: boo
       if (options.failTable === table) return Promise.resolve(Response.json({ code: "57014", message: "private failure" }, { status: 500 }));
       if (table === "activate_evolution_qr_account") return Promise.resolve(Response.json("15550001111"));
       if (table === "claim_whatsapp_history_sync") return Promise.resolve(Response.json(!options.leaseHeld));
+      if (table === "clear_whatsapp_number_mismatch") {
+        if (metadata && typeof metadata === "object") {
+          const copy = { ...metadata };
+          delete copy.number_mismatch;
+          metadata = copy;
+        }
+        return Promise.resolve(Response.json(true));
+      }
+      if (table === "flag_whatsapp_number_mismatch") {
+        return Promise.resolve(Response.json(true));
+      }
       if (table === "partner_webhooks") {
         assertEquals(url.searchParams.get("workspace_id"), "eq.ws-1");
         assertEquals(url.searchParams.get("id"), null);
@@ -165,6 +176,9 @@ function fixture(options: { existing?: boolean; active?: boolean; resolved?: boo
         ]));
       }
       if (table === "partner_webhook_deliveries") return Promise.resolve(Response.json([{ id: "delivery" }]));
+      if (method === "PATCH" && table === "social_accounts" && "account_metadata" in body) {
+        metadata = body.account_metadata as Record<string, unknown>;
+      }
       if (method !== "GET") return Promise.resolve(new Response(null, { status: 204 }));
       if (table === "social_accounts") return Promise.resolve(Response.json([{
         id: ID, connection_mode: options.mode ?? "evolution_qr", is_active: options.active ?? false,
@@ -179,7 +193,7 @@ function fixture(options: { existing?: boolean; active?: boolean; resolved?: boo
       return Promise.resolve(Response.json(options.existing ? [{ instance_name: `postora_${ID}`, jwt_key: "stored-secret", last_qr: "old-qr" }] : []));
     } },
   });
-  return { admin, calls, metadata };
+  return { admin, calls, get metadata() { return metadata; } };
 }
 
 for (const [label, options, expected] of [
@@ -231,6 +245,7 @@ function provider(state = "connecting") {
     connect: (input: string) => { calls.push({ method: "connect", input }); return Promise.resolve({ qrcode: { base64: "qr-image" }, instance: { state } }); },
     connectionState: (input: string) => { calls.push({ method: "state", input }); return Promise.resolve({ instance: { state } }); },
     fetchInstance: (input: string) => { calls.push({ method: "identity", input }); return Promise.resolve({ ownerJid: "15550001111@s.whatsapp.net", profileName: "Provider Name" }); },
+    logout: (input: string) => { calls.push({ method: "logout", input }); return Promise.resolve({}); },
   };
   return { api, calls };
 }
@@ -330,13 +345,99 @@ for (const state of ["open", "close"]) {
   });
 }
 
-Deno.test("reconciliation merges mismatch metadata without erasing consent or the chosen name", async () => {
+Deno.test("pairingStatus on a mismatch returns state number_mismatch and phone_number null, calls logout once, passes workspaceId scope to flag RPC, and does not update social_accounts or whatsapp_evolution_instances directly", async () => {
   const db = fixture({ existing: true, resolved: true });
   const remote = provider("open");
   remote.api.fetchInstance = () => Promise.resolve({ ownerJid: "15550002222@s.whatsapp.net", profileName: "Other Name" });
-  await pairingStatus({ ...CTX, admin: db.admin }, ID, { api: remote.api });
-  assertEquals(db.calls.find((call) => call.method === "PATCH" && call.url.pathname.endsWith("/social_accounts"))!.body,
-    { is_active: true, account_metadata: { ...db.metadata, number_mismatch: true } });
+  const response = await pairingStatus({ ...CTX, admin: db.admin }, ID, { api: remote.api });
+  assertEquals(response.state, "number_mismatch");
+  assertEquals(response.phone_number, null);
+  const logouts = remote.calls.filter((c) => c.method === "logout");
+  assertEquals(logouts.length, 1);
+  assertEquals(logouts[0].input, `postora_${ID}`);
+
+  const flagRpcCalls = db.calls.filter((call) => call.url.pathname.endsWith("/rpc/flag_whatsapp_number_mismatch"));
+  assertEquals(flagRpcCalls.length, 1, "Expected exactly one flag_whatsapp_number_mismatch RPC call");
+  assertEquals(flagRpcCalls[0].body, {
+    p_account_id: ID,
+    p_user_id: null,
+    p_workspace_id: CTX.workspaceId,
+    p_instance_name: null,
+  });
+
+  const metaUpdates = db.calls.filter(
+    (call) => call.method === "PATCH" && call.url.pathname.endsWith("/social_accounts") && "account_metadata" in call.body,
+  );
+  assertEquals(metaUpdates.length, 0, "Must NOT update social_accounts with account_metadata after mismatch (old persistNumberMismatch is gone)");
+
+  const instanceUpdates = db.calls.filter(
+    (call) => call.method === "PATCH" && call.url.pathname.endsWith("/whatsapp_evolution_instances"),
+  );
+  assertEquals(instanceUpdates.length, 0, "Must NOT update whatsapp_evolution_instances directly after mismatch");
+});
+
+Deno.test("pairingStatus on an account with durable number_mismatch returns state number_mismatch without calling provider connectionState", async () => {
+  const db = fixture({ existing: true, resolved: true, metadata: { number_mismatch: true } });
+  const remote = provider("open");
+  const response = await pairingStatus({ ...CTX, admin: db.admin }, ID, { api: remote.api });
+  assertEquals(response, {
+    account_id: ID,
+    state: "number_mismatch",
+    phone_number: null,
+  });
+  const stateCalls = remote.calls.filter((c) => c.method === "state");
+  assertEquals(stateCalls.length, 0);
+});
+
+Deno.test("startPairing clears number_mismatch via clear_whatsapp_number_mismatch RPC on success, scopes write to workspace, does not update account_metadata directly, and subsequent pairingStatus does not return mismatch", async () => {
+  const db = fixture({ existing: true, resolved: true, metadata: { number_mismatch: true } });
+  const remote = provider("connecting");
+  const response = await startPairing({ ...CTX, admin: db.admin }, ID, { api: remote.api });
+  assertEquals(response.state, "connecting");
+
+  // Exactly one rpc("clear_whatsapp_number_mismatch", { p_account_id, p_user_id: null, p_workspace_id: <ctx workspace id> })
+  const rpcCalls = db.calls.filter((call) => call.url.pathname.endsWith("/rpc/clear_whatsapp_number_mismatch"));
+  assertEquals(rpcCalls.length, 1, "Expected exactly one clear_whatsapp_number_mismatch RPC call");
+  assertEquals(rpcCalls[0].method, "POST");
+  assertEquals(rpcCalls[0].body, {
+    p_account_id: ID,
+    p_user_id: null,
+    p_workspace_id: CTX.workspaceId,
+  });
+
+  // NO social_accounts update of account_metadata
+  const metaUpdateCall = db.calls.find(
+    (call) => call.method === "PATCH" && call.url.pathname.endsWith("/social_accounts") && "account_metadata" in call.body,
+  );
+  assertEquals(metaUpdateCall, undefined, "Must NOT update social_accounts with account_metadata directly");
+
+  // Subsequent pairingStatus no longer returns the durable number_mismatch answer
+  const status = await pairingStatus({ ...CTX, admin: db.admin }, ID, { api: remote.api });
+  assertEquals(status.state, "connecting");
+  assert(status.state !== "number_mismatch");
+});
+
+Deno.test("startPairing failure does not clear durable number_mismatch flag and makes no clear_whatsapp_number_mismatch rpc", async () => {
+  const db = fixture({ existing: true, resolved: true, metadata: { number_mismatch: true } });
+  const remote = provider();
+  remote.api.connect = () => Promise.reject(new EvolutionApiError("provider rejected", 400, {}));
+
+  await assertRejects(
+    () => startPairing({ ...CTX, admin: db.admin }, ID, { api: remote.api }),
+    WhatsAppOpError,
+  );
+
+  const rpcCalls = db.calls.filter((call) => call.url.pathname.endsWith("/rpc/clear_whatsapp_number_mismatch"));
+  assertEquals(rpcCalls.length, 0, "Failed start must make no clear_whatsapp_number_mismatch RPC");
+
+  const clearCall = db.calls.find(
+    (call) => call.method === "PATCH" && call.url.pathname.endsWith("/social_accounts") && "account_metadata" in call.body,
+  );
+  assertEquals(clearCall, undefined);
+
+  // Durable mismatch remains active
+  const status = await pairingStatus({ ...CTX, admin: db.admin }, ID, { api: remote.api });
+  assertEquals(status.state, "number_mismatch");
 });
 
 for (const failTable of ["social_accounts", "whatsapp_evolution_instances"]) {
