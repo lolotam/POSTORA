@@ -642,6 +642,94 @@ BEGIN
   ASSERT NOT has_function_privilege('service_role', 'public.get_whatsapp_setup_move_preview(uuid,uuid)', 'EXECUTE'), 'M40 preview is browser-only';
 END $$;
 
+-- M41-M47: final-guard gaps on PR-BC (candidate rules, reverse of M22, linked and
+-- shared-connector bindings).
+DO $$
+DECLARE
+  u uuid := pg_temp.id('u_a');
+  ws uuid := pg_temp.id('ws_a');
+  ws2 uuid := pg_temp.id('ws_a2');
+  live uuid := gen_random_uuid();
+  old1 uuid := gen_random_uuid();
+  old_other_ws uuid := gen_random_uuid();
+  pend_src uuid := gen_random_uuid();
+  src uuid := gen_random_uuid();
+  dst uuid := gen_random_uuid();
+  t_bound uuid := gen_random_uuid();
+  t_linked uuid := gen_random_uuid();
+  t_shared uuid := gen_random_uuid();
+  b_linked uuid := gen_random_uuid();
+  b_shared uuid := gen_random_uuid();
+  ev uuid := gen_random_uuid();
+  v jsonb;
+BEGIN
+  -- Isolate this block: retire every other WhatsApp row of u_a in ws_a so the
+  -- "exactly one live connection" rule is deterministic.
+  UPDATE public.social_accounts SET is_active = false WHERE user_id = u AND platform = 'whatsapp';
+
+  INSERT INTO public.social_accounts (id, user_id, platform, platform_user_id, access_token, workspace_id, is_active, connection_mode, account_metadata, updated_at) VALUES
+    (live, u, 'whatsapp', '96599990001', '', ws, true, 'evolution_qr', '{}', now()),
+    (old1, u, 'whatsapp', '96599990002', '', ws, false, 'evolution_qr', '{}', now() + interval '1 hour'),
+    (old_other_ws, u, 'whatsapp', '96599990001', '', ws2, false, 'evolution_qr', '{}', now() + interval '2 hours'),
+    (pend_src, u, 'whatsapp', '96599990003', '', ws, false, 'evolution_qr', '{}', now() - interval '1 day');
+  INSERT INTO public.ai_agent_configs (user_id, platform, social_account_id) VALUES
+    (u, 'whatsapp', old1), (u, 'whatsapp', old_other_ws), (u, 'whatsapp', pend_src);
+
+  PERFORM set_config('request.jwt.claims', json_build_object('sub', u, 'role', 'authenticated')::text, true);
+  v := public.list_whatsapp_setup_move_candidates(live);
+  -- M41: the same-number row in ANOTHER workspace is never offered.
+  ASSERT NOT (v @> jsonb_build_array(jsonb_build_object('id', old_other_ws::text))), 'M41 workspace filter: ' || v::text;
+  -- M42: the owner has exactly one live connection here, so the most recently deactivated row is offered.
+  ASSERT v @> jsonb_build_array(jsonb_build_object('id', old1::text, 'reason', 'last_deactivated')), 'M42 last_deactivated: ' || v::text;
+  ASSERT NOT (v @> jsonb_build_array(jsonb_build_object('id', pend_src::text))), 'M42 an older different-number row is not offered';
+
+  -- M43: a pending deferral source is always offered, even when dismissed.
+  PERFORM set_config('request.jwt.claims', '', true);
+  UPDATE public.social_accounts
+     SET account_metadata = jsonb_build_object('setup_move_pending', jsonb_build_object('from', pend_src::text),
+                                               'setup_move_dismissed', jsonb_build_array(pend_src::text))
+   WHERE id = live;
+  PERFORM set_config('request.jwt.claims', json_build_object('sub', u, 'role', 'authenticated')::text, true);
+  v := public.list_whatsapp_setup_move_candidates(live);
+  ASSERT v->0->>'id' = pend_src::text AND v->0->>'reason' = 'pending', 'M43 pending source offered first even when dismissed: ' || v::text;
+
+  -- M44: another user's account as p_to is refused.
+  BEGIN
+    PERFORM public.list_whatsapp_setup_move_candidates(pg_temp.id('acc_b'));
+    RAISE EXCEPTION 'M44 failed: another user''s candidates listed' USING ERRCODE = 'assert_failure';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+  PERFORM set_config('request.jwt.claims', '', true);
+
+  -- M45 (reverse of M22): the destination keeps its own agent, so skipping a
+  -- store-bound source connector is allowed (the agent does not move).
+  INSERT INTO public.social_accounts (id, user_id, platform, platform_user_id, access_token, workspace_id, is_active, connection_mode, account_metadata) VALUES
+    (src, u, 'whatsapp', '96599990010', '', ws, false, 'evolution_qr', '{}'),
+    (dst, u, 'whatsapp', '96599990011', '', ws, true, 'evolution_qr', '{}');
+  INSERT INTO public.ai_agent_configs (user_id, platform, social_account_id) VALUES (u, 'whatsapp', src), (u, 'whatsapp', dst);
+  INSERT INTO public.ai_agent_tools (id, user_id, name, description, connector_type, social_account_id, platform, scope) VALUES
+    (t_bound, u, 'woo_m45', 'm45', 'woocommerce', src, 'whatsapp', 'account');
+  INSERT INTO public.store_webhook_bindings (user_id, social_account_id, connector_id, secret_id) VALUES (u, src, t_bound, gen_random_uuid());
+  v := public.move_whatsapp_account_setup(src, dst, 'interactive', '{"agent_config":"destination","connectors":{"woo_m45":"skip"}}');
+  ASSERT (SELECT social_account_id FROM public.ai_agent_tools WHERE id = t_bound) = src, 'M45 the skipped store connector stays with the agent it uses';
+
+  -- M46: a binding on a connector shared to the source by a LINK moves with the setup.
+  -- M47: a pending event on a shared (all-accounts) connector's binding follows it.
+  INSERT INTO public.ai_agent_tools (id, user_id, name, description, connector_type, scope) VALUES
+    (t_linked, u, 'woo_linked_m46', 'm46', 'woocommerce', 'all_accounts'),
+    (t_shared, u, 'woo_shared_m47', 'm47', 'woocommerce', 'all_accounts');
+  INSERT INTO public.ai_agent_tool_accounts (tool_id, social_account_id, user_id) VALUES (t_linked, src, u);
+  INSERT INTO public.store_webhook_bindings (id, user_id, social_account_id, connector_id, secret_id) VALUES
+    (b_linked, u, src, t_linked, gen_random_uuid()),
+    (b_shared, u, src, t_shared, gen_random_uuid());
+  INSERT INTO public.store_events (id, user_id, social_account_id, connector_id, binding_id, flow, external_id, payload, status, due_at)
+  VALUES (ev, u, src, t_shared, b_shared, 'cod_confirm', 'm47', '{}', 'pending', now());
+  v := public.move_whatsapp_account_setup(src, dst, 'interactive', '{"agent_config":"destination","connectors":{"woo_m45":"skip"}}');
+  ASSERT (SELECT social_account_id FROM public.store_webhook_bindings WHERE id = b_linked) = dst, 'M46 a linked connector''s binding moved';
+  ASSERT (SELECT social_account_id FROM public.store_webhook_bindings WHERE id = b_shared) = dst, 'M47 a shared connector''s binding moved';
+  ASSERT (SELECT social_account_id FROM public.store_events WHERE id = ev) = dst, 'M47 its pending order followed';
+END $$;
+
 ROLLBACK;
 
 \echo '=== whatsapp_account_setup_move: ALL CHECKS PASSED ==='

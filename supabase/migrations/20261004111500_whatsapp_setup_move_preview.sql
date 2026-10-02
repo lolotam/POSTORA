@@ -38,6 +38,7 @@ BEGIN
   SELECT count(*) INTO v_live_count
     FROM social_accounts
    WHERE user_id = v_to.user_id AND platform = 'whatsapp' AND is_active
+     AND workspace_id IS NOT DISTINCT FROM v_to.workspace_id
      AND platform_user_id NOT LIKE 'retired\_%' AND platform_user_id NOT LIKE 'pending\_%';
 
   SELECT id INTO v_last_deactivated
