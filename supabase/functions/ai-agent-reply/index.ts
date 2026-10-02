@@ -14,7 +14,7 @@ import { resolveConversationOverride } from "../_shared/conversationModeOverride
 import {
   buildSystemPrompt,
   completionFailure,
-  detectReplyLanguage,
+  customerLanguageSignal,
   formatRelatedFacts,
   formatModelRef,
   type GraphRelationFact,
@@ -38,6 +38,7 @@ import {
   type ReplyLanguage,
   SIMILARITY_FLOOR,
   shouldAiReply,
+  threadReplyLanguage,
   triageSystemHint,
   waRecipient,
 } from "./logic.ts";
@@ -87,6 +88,7 @@ import { runTriage, selectConnectorTools, TRIAGE_SETTING_KEYS, triageChainFromSe
 import { resolveProviderKey } from "../_shared/providerKeys.ts";
 import { enabledProcedures, readProcedureConfig } from "../_shared/procedures/config.ts";
 import { expireIfStale, isLivePendingOpener } from "../_shared/procedures/engine.ts";
+import { openerLanguage } from "../_shared/procedures/openers.ts";
 import {
   boundWaitlistSightings,
   createProcedureTurn,
@@ -807,6 +809,13 @@ Deno.serve(async (req) => {
         },
       ]);
       if (threadWriteError) console.error("[ai-agent-reply] Thread write failed:", threadWriteError.message);
+      const shown = customerLanguageSignal(request.inbound_text, request.language_hint);
+      if (shown && shown !== thread.customer_language) {
+        const { error: languageError } = await admin.from("ai_threads")
+          .update({ customer_language: shown })
+          .eq("id", thread.id);
+        if (languageError) console.error("[ai-agent-reply] Thread language write failed:", languageError.message);
+      }
     };
 
     // The outbox decides what this invocation may do, and it decides BEFORE any billable
@@ -907,7 +916,12 @@ Deno.serve(async (req) => {
         : Promise.resolve({ data: null, error: null }),
     ]);
 
-    const { data: historyRows } = historyResult;
+    const { data: historyRows, error: historyError } = historyResult;
+    if (historyError) {
+      // Same degrade-and-say rule as the link read below: the reply proceeds without the
+      // thread, which also leaves a letterless message ("5", an emoji) to the English default.
+      console.error("[ai-agent-reply] history read failed; replying without the thread:", historyError.message);
+    }
     const { turns: history, staleNote: historyStaleNote } = historyWindow(historyRows || [], Date.now());
 
     let toolLinks: ToolAccountLink[] = [];
@@ -1022,7 +1036,23 @@ Deno.serve(async (req) => {
       ? actAsAdmin
       : request.platform === "whatsapp" && adminNumbers.includes(waRecipient(request.recipient_phone));
 
-    language = detectReplyLanguage(request.inbound_text, config.language_mode, request.language_hint);
+    language = threadReplyLanguage({
+      inboundText: request.inbound_text,
+      languageMode: config.language_mode,
+      hint: request.language_hint,
+      // A flow stored before opener_language existed falls back to the account setting.
+      eventFlow: initialProcedureState?.origin === "event"
+        ? {
+          startedAt: initialProcedureState.started_at,
+          openerLanguage: initialProcedureState.opener_language ?? openerLanguage(config.language_mode),
+        }
+        : null,
+      customerLanguage: thread.customer_language === "ar" || thread.customer_language === "en"
+        ? thread.customer_language
+        : null,
+      storedTurns: historyRows || [],
+      windowTurns: history,
+    });
     // Resolved on first use rather than up front. buildAdminNotifier throws when the user has
     // no connected WhatsApp account, and awaiting it here made that throw abort the entire
     // reply -- so a Facebook, Instagram or Threads user without WhatsApp got no answer at all,
@@ -1252,12 +1282,12 @@ Deno.serve(async (req) => {
       ...history,
       { role: "user", content: request.inbound_text.slice(0, MAX_INBOUND_CHARS) },
     ];
-    const hint = triageSystemHint(triagePlan);
+    const hint = triageSystemHint(triagePlan, language);
     if (hint) messages.splice(1, 0, { role: "system", content: hint });
     if (procedureTurn?.state) {
       const fields = fieldsFor(procedureTurn.state.key, procedureConfig);
       messages.splice(1, 0, { role: "system", content:
-        procedurePromptBlock(procedureTurn.state, stepGuidance(procedureTurn.state, procedureConfig), fields.length) });
+        procedurePromptBlock(procedureTurn.state, stepGuidance(procedureTurn.state, procedureConfig), fields.length, language) });
     }
     let promptTokens = 0;
     let completionTokens = 0;

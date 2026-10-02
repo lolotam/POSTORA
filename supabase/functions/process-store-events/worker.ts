@@ -235,7 +235,7 @@ function addressing(account: AccountContext): WhatsAppAddressing {
   };
 }
 
-function pendingState(event: StoreEventRow, nowMs: number): ProcedureState {
+function pendingState(event: StoreEventRow, nowMs: number, language: OpenerLanguage): ProcedureState {
   const at = iso(nowMs);
   return {
     run_id: event.id,
@@ -246,6 +246,7 @@ function pendingState(event: StoreEventRow, nowMs: number): ProcedureState {
     off_script: 0,
     origin: "event",
     phase: "pending_opener",
+    opener_language: language,
     started_at: at,
     updated_at: at,
   };
@@ -403,13 +404,15 @@ async function completeRecordedSend(ports: WorkerPorts, event: StoreEventRow): P
       const thread = await ports.ensureThread({ userId: event.user_id, conversationId });
       const stored = asProcedure(thread.procedure_state);
       const pending = stored?.phase === "pending_opener" && eventOwns(stored, event) ? stored : null;
+      const language = (eventOwns(stored, event) ? stored?.opener_language : undefined) ??
+        openerLanguage(account.languageMode);
       return await finishAccepted(ports, {
         event,
         account,
         threadId: thread.id,
         conversationId,
         messageId,
-        text: openerText(event.flow, openerLanguage(account.languageMode), event.payload),
+        text: openerText(event.flow, language, event.payload),
       }, thread, pending);
     }
     console.error(
@@ -739,7 +742,7 @@ async function processClaimed(
     if (live?.phase === "pending_opener") {
       openerState = live;
     } else {
-      openerState = pendingState(event, ports.now());
+      openerState = pendingState(event, ports.now(), openerLanguage(loaded.languageMode));
       const started = await ports.persistState(thread.id, thread.procedure_state ?? null, openerState);
       if (!started) {
         if (reserved) await ports.releaseQr(event.social_account_id, event.id, event.claim_token);
@@ -747,7 +750,8 @@ async function processClaimed(
         return "left";
       }
     }
-    const language = openerLanguage(loaded.languageMode);
+    // A resumed opener keeps the language it was first written with.
+    const language = openerState.opener_language ?? openerLanguage(loaded.languageMode);
     let templateName: string | null = null;
     if (loaded.connectionMode !== "evolution_qr") {
       const template = await ports.templateStatus(event, language);

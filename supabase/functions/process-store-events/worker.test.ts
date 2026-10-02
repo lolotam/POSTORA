@@ -322,6 +322,38 @@ Deno.test("own pending_opener resumes into a send", async () => {
   assertEquals((box.persists[0].next as { phase?: string }).phase, "active");
 });
 
+// Event flows live 72 hours and the account's language setting can change meanwhile; the
+// opener's language is fixed on the state when it is first written (#256 review).
+Deno.test("a new opener stores the language it is sent in on the flow state", async () => {
+  const box = harness({ account: account({ languageMode: "auto" }) });
+  await runStoreEventWorker(box.ports);
+  assertEquals((box.persists[0].next as { opener_language?: string }).opener_language, "ar");
+  assertEquals((box.persists.at(-1)?.next as { opener_language?: string }).opener_language, "ar", "kept on activation");
+  assertEquals(box.records, [openerText("cod_confirm", "ar", box.row.payload)]);
+});
+
+Deno.test("a resumed opener keeps its stored language after the account setting changes", async () => {
+  const row = event();
+  const box = harness({
+    account: account({ languageMode: "auto" }),
+    thread: { id: "thread-1", procedure_state: { ...pending(row.id), opener_language: "en" } },
+  });
+  await runStoreEventWorker(box.ports);
+  assertEquals(box.records, [openerText("cod_confirm", "en", row.payload)]);
+});
+
+Deno.test("a reclaimed accepted send records the opener in its stored language", async () => {
+  const row = event({ status: "sending", outbound_message_id: "wamid.kept" });
+  const box = harness({
+    row,
+    account: account({ languageMode: "auto" }),
+    thread: { id: "thread-1", procedure_state: { ...pending(row.id), opener_language: "en" } },
+  });
+  await runStoreEventWorker(box.ports);
+  assertEquals(box.sends.length, 0);
+  assertEquals(box.records, [openerText("cod_confirm", "en", row.payload)]);
+});
+
 Deno.test("a transient store read releases the claim instead of skipping", async () => {
   const box = harness({ read: { outcome: "transient" } });
   const summary = await runStoreEventWorker(box.ports);
