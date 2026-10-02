@@ -1,4 +1,4 @@
-import { assertEquals, assertRejects } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { assert, assertEquals, assertRejects } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { EvolutionApiError, type EvolutionEvent } from "../_shared/evolutionApi.ts";
 import { reconnectQr, ReconnectError, type ReconnectDeps } from "./reconnect.ts";
 
@@ -337,3 +337,172 @@ for (const { step, overrides } of failingSteps) {
     assertEquals(saveCalls.length, 0);
   });
 }
+
+type ClearMismatchForFn = (admin: any, userId: string, accountId: string) => Promise<void>;
+
+async function loadClearMismatchFor(): Promise<ClearMismatchForFn> {
+  try {
+    const mod = await import("./clearMismatch.ts");
+    if (typeof mod.clearMismatchFor === "function") return mod.clearMismatchFor;
+  } catch {
+    // try reconnect.ts fallback
+  }
+  try {
+    const mod2 = await import("./reconnect.ts");
+    if (typeof (mod2 as any).clearMismatchFor === "function") return (mod2 as any).clearMismatchFor;
+  } catch {
+    //
+  }
+  throw new Error("clearMismatchFor not exported from clearMismatch.ts or reconnect.ts");
+}
+
+interface DbCall {
+  operation: "select" | "update";
+  table: string;
+  filters: Record<string, string>;
+  updateBody?: Record<string, unknown>;
+}
+
+function createClearMismatchAdmin(options: {
+  accountData?: { account_metadata: Record<string, unknown>; user_id: string } | null;
+  readError?: Error | null;
+  updateError?: Error | null;
+} = {}) {
+  const calls: DbCall[] = [];
+
+  const admin = {
+    from: (table: string) => {
+      const filters: Record<string, string> = {};
+      let updatePayload: Record<string, unknown> | undefined;
+
+      const builder: any = {
+        select: (_cols?: string) => {
+          return builder;
+        },
+        update: (payload: Record<string, unknown>) => {
+          updatePayload = payload;
+          return builder;
+        },
+        eq: (col: string, val: string) => {
+          filters[col] = String(val);
+          return builder;
+        },
+        maybeSingle: async () => {
+          calls.push({ operation: "select", table, filters: { ...filters } });
+          if (options.readError) return { data: null, error: options.readError };
+          if (!options.accountData) return { data: null, error: null };
+          if (filters.user_id && filters.user_id !== options.accountData.user_id) {
+            return { data: null, error: null };
+          }
+          return { data: { account_metadata: options.accountData.account_metadata }, error: null };
+        },
+        then: (onfulfilled?: (res: any) => any) => {
+          calls.push({ operation: "update", table, filters: { ...filters }, updateBody: updatePayload });
+          const res = options.updateError ? { error: options.updateError } : { error: null };
+          return Promise.resolve(res).then(onfulfilled);
+        },
+      };
+
+      return builder;
+    },
+  };
+
+  return { admin, calls };
+}
+
+Deno.test("clearMismatchFor: the read and the update both filter by user_id = caller AND id = account", async () => {
+  const clearMismatchFor = await loadClearMismatchFor();
+  const { admin, calls } = createClearMismatchAdmin({
+    accountData: {
+      user_id: "user-caller",
+      account_metadata: { number_mismatch: true, custom_flag: "kept" },
+    },
+  });
+
+  await clearMismatchFor(admin, "user-caller", "acc-target");
+
+  const selectCall = calls.find((c) => c.operation === "select");
+  assert(selectCall, "Expected select on social_accounts");
+  assertEquals(selectCall.table, "social_accounts");
+  assertEquals(selectCall.filters.id, "acc-target");
+  assertEquals(selectCall.filters.user_id, "user-caller");
+
+  const updateCall = calls.find((c) => c.operation === "update");
+  assert(updateCall, "Expected update on social_accounts");
+  assertEquals(updateCall.table, "social_accounts");
+  assertEquals(updateCall.filters.id, "acc-target");
+  assertEquals(updateCall.filters.user_id, "user-caller");
+});
+
+Deno.test("clearMismatchFor: a row belonging to another user is not changed", async () => {
+  const clearMismatchFor = await loadClearMismatchFor();
+  const { admin, calls } = createClearMismatchAdmin({
+    accountData: {
+      user_id: "user-different",
+      account_metadata: { number_mismatch: true, foo: "bar" },
+    },
+  });
+
+  await clearMismatchFor(admin, "user-caller", "acc-target");
+
+  const updateCall = calls.find((c) => c.operation === "update");
+  assertEquals(updateCall, undefined, "Row belonging to another user must not be updated");
+});
+
+Deno.test("clearMismatchFor: metadata keys other than number_mismatch are preserved", async () => {
+  const clearMismatchFor = await loadClearMismatchFor();
+  const initialMeta = {
+    number_mismatch: true,
+    display_name: "Desk",
+    consent: { ok: true },
+    retry_count: 3,
+  };
+  const { admin, calls } = createClearMismatchAdmin({
+    accountData: {
+      user_id: "user-1",
+      account_metadata: initialMeta,
+    },
+  });
+
+  await clearMismatchFor(admin, "user-1", "acc-1");
+
+  const updateCall = calls.find((c) => c.operation === "update");
+  assert(updateCall, "Expected update call");
+  assertEquals(updateCall.updateBody, {
+    account_metadata: {
+      display_name: "Desk",
+      consent: { ok: true },
+      retry_count: 3,
+    },
+  });
+});
+
+Deno.test("clearMismatchFor: an error on read throws", async () => {
+  const clearMismatchFor = await loadClearMismatchFor();
+  const { admin } = createClearMismatchAdmin({
+    readError: new Error("select failure"),
+  });
+
+  await assertRejects(
+    () => clearMismatchFor(admin, "user-1", "acc-1"),
+    Error,
+    "select failure",
+  );
+});
+
+Deno.test("clearMismatchFor: an error on update throws", async () => {
+  const clearMismatchFor = await loadClearMismatchFor();
+  const { admin } = createClearMismatchAdmin({
+    accountData: {
+      user_id: "user-1",
+      account_metadata: { number_mismatch: true },
+    },
+    updateError: new Error("update failure"),
+  });
+
+  await assertRejects(
+    () => clearMismatchFor(admin, "user-1", "acc-1"),
+    Error,
+    "update failure",
+  );
+});

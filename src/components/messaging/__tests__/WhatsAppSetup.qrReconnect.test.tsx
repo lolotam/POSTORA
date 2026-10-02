@@ -39,11 +39,17 @@ vi.mock("@/integrations/supabase/client", () => ({
   },
 }));
 
-const mockQrAccounts = vi.hoisted(() => ({ current: [] as any[] }));
+const mockQrAccounts = vi.hoisted(() => ({
+  current: [] as any[],
+  isError: false,
+  refetch: vi.fn(),
+}));
 vi.mock("@/hooks/useReconnectableQrAccounts", () => ({
   useReconnectableQrAccounts: () => ({
-    data: mockQrAccounts.current,
+    data: mockQrAccounts.isError ? undefined : mockQrAccounts.current,
     isLoading: false,
+    isError: mockQrAccounts.isError,
+    refetch: mockQrAccounts.refetch,
   }),
 }));
 
@@ -129,6 +135,8 @@ describe("WhatsAppSetup QR reconnect", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockQrAccounts.current = [sampleQrAccount];
+    mockQrAccounts.isError = false;
+    mockQrAccounts.refetch = vi.fn();
   });
 
   it("shows Reconnect button and QR disconnected copy", () => {
@@ -237,5 +245,23 @@ describe("WhatsAppSetup QR reconnect", () => {
     expect(invalidateQueriesSpy).toHaveBeenCalledWith(
       expect.objectContaining({ queryKey: ["whatsapp-reconnectable-qr"] }),
     );
+  });
+
+  it("when the reconnectable-QR query fails, shows error copy and Retry button that calls refetch", () => {
+    const refetchSpy = vi.fn();
+    mockQrAccounts.isError = true;
+    mockQrAccounts.refetch = refetchSpy;
+
+    renderSetup();
+
+    expect(
+      screen.getByText("Couldn't load your disconnected connections."),
+    ).toBeInTheDocument();
+
+    const retryBtn = screen.getByRole("button", { name: /retry/i });
+    expect(retryBtn).toBeInTheDocument();
+
+    fireEvent.click(retryBtn);
+    expect(refetchSpy).toHaveBeenCalledTimes(1);
   });
 });

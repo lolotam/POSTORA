@@ -144,7 +144,7 @@ function fixture(options: { existing?: boolean; active?: boolean; resolved?: boo
   const calls: Array<{ url: URL; method: string; body: Record<string, unknown> }> = [];
   // Advances per read, standing in for Postgres bumping updated_at on write.
   let accountReads = 0;
-  const metadata = { display_name: "Support", risk_consent: CONSENT, arbitrary_marker: "preserve", ...(options.metadata ?? {}) };
+  let metadata: Record<string, unknown> = { display_name: "Support", risk_consent: CONSENT, arbitrary_marker: "preserve", ...(options.metadata ?? {}) };
   const admin = createClient("https://database.example", "test-key", {
     auth: { persistSession: false, autoRefreshToken: false },
     global: { fetch: (input, init) => {
@@ -165,6 +165,9 @@ function fixture(options: { existing?: boolean; active?: boolean; resolved?: boo
         ]));
       }
       if (table === "partner_webhook_deliveries") return Promise.resolve(Response.json([{ id: "delivery" }]));
+      if (method === "PATCH" && table === "social_accounts" && "account_metadata" in body) {
+        metadata = body.account_metadata as Record<string, unknown>;
+      }
       if (method !== "GET") return Promise.resolve(new Response(null, { status: 204 }));
       if (table === "social_accounts") return Promise.resolve(Response.json([{
         id: ID, connection_mode: options.mode ?? "evolution_qr", is_active: options.active ?? false,
@@ -179,7 +182,7 @@ function fixture(options: { existing?: boolean; active?: boolean; resolved?: boo
       return Promise.resolve(Response.json(options.existing ? [{ instance_name: `postora_${ID}`, jwt_key: "stored-secret", last_qr: "old-qr" }] : []));
     } },
   });
-  return { admin, calls, metadata };
+  return { admin, calls, get metadata() { return metadata; } };
 }
 
 for (const [label, options, expected] of [
@@ -356,6 +359,53 @@ Deno.test("pairingStatus on an account with durable number_mismatch returns stat
   });
   const stateCalls = remote.calls.filter((c) => c.method === "state");
   assertEquals(stateCalls.length, 0);
+});
+
+Deno.test("startPairing clears number_mismatch from account_metadata on success, scopes write to workspace, and subsequent pairingStatus does not return mismatch", async () => {
+  const db = fixture({ existing: true, resolved: true, metadata: { number_mismatch: true } });
+  const remote = provider("connecting");
+  const response = await startPairing({ ...CTX, admin: db.admin }, ID, { api: remote.api });
+  assertEquals(response.state, "connecting");
+
+  // The account metadata update removes number_mismatch while preserving other keys
+  const updateCall = db.calls.find(
+    (call) => call.method === "PATCH" && call.url.pathname.endsWith("/social_accounts") && "account_metadata" in call.body,
+  );
+  assert(updateCall, "Expected PATCH on social_accounts with account_metadata");
+  const updatedMeta = updateCall.body.account_metadata as Record<string, unknown>;
+  assertEquals("number_mismatch" in updatedMeta, false);
+  assertEquals(updatedMeta.display_name, "Support");
+  assertEquals(updatedMeta.arbitrary_marker, "preserve");
+
+  // Write is scoped to the workspace (the existing scoped-admin pattern in that file)
+  assertEquals(updateCall.url.searchParams.get("workspace_id"), `eq.${CTX.workspaceId}`);
+  assertEquals(updateCall.url.searchParams.get("id"), `eq.${ID}`);
+  assert(!updateCall.url.searchParams.has("user_id"));
+
+  // Subsequent pairingStatus no longer returns the durable number_mismatch answer
+  const status = await pairingStatus({ ...CTX, admin: db.admin }, ID, { api: remote.api });
+  assertEquals(status.state, "connecting");
+  assert(status.state !== "number_mismatch");
+});
+
+Deno.test("startPairing failure does not clear durable number_mismatch flag", async () => {
+  const db = fixture({ existing: true, resolved: true, metadata: { number_mismatch: true } });
+  const remote = provider();
+  remote.api.connect = () => Promise.reject(new EvolutionApiError("provider rejected", 400, {}));
+
+  await assertRejects(
+    () => startPairing({ ...CTX, admin: db.admin }, ID, { api: remote.api }),
+    WhatsAppOpError,
+  );
+
+  const clearCall = db.calls.find(
+    (call) => call.method === "PATCH" && call.url.pathname.endsWith("/social_accounts") && "account_metadata" in call.body,
+  );
+  assertEquals(clearCall, undefined);
+
+  // Durable mismatch remains active
+  const status = await pairingStatus({ ...CTX, admin: db.admin }, ID, { api: remote.api });
+  assertEquals(status.state, "number_mismatch");
 });
 
 for (const failTable of ["social_accounts", "whatsapp_evolution_instances"]) {
