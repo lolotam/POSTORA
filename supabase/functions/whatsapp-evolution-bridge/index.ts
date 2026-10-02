@@ -419,7 +419,7 @@ Deno.serve(async (req) => {
           choices: body.choices,
         }));
       } catch (error) {
-        if (error instanceof MoveSetupError) throw new BridgeError(error.message, error.status);
+        if (error instanceof MoveSetupError) throw new BridgeError(error.code, error.status);
         throw error;
       }
     }
@@ -431,7 +431,7 @@ Deno.serve(async (req) => {
           to: body.to,
         }));
       } catch (error) {
-        if (error instanceof MoveSetupError) throw new BridgeError(error.message, error.status);
+        if (error instanceof MoveSetupError) throw new BridgeError(error.code, error.status);
         throw error;
       }
     }

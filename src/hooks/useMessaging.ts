@@ -12,6 +12,10 @@ export interface MessagingAccount {
   avatar_url: string | null;
   connection_mode?: "cloud_api" | "coexistence" | "evolution_qr" | null;
   account_metadata?: Record<string, unknown> | null;
+  // Fetched by useSocialAccounts and needed by pages that pick "the most
+  // recently connected" account; optional so partial shapes keep compiling.
+  connected_at?: string | null;
+  updated_at?: string | null;
 }
 
 export interface Conversation {

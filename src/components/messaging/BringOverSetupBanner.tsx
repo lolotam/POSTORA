@@ -1,5 +1,5 @@
-import { Component, useState, type ReactNode } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useContext, useState } from "react";
+import { QueryClientContext, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { ArrowRightLeft } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -8,145 +8,195 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { useToast } from "@/hooks/use-toast";
-import {
-  useSetupMoveCandidates,
-  type SetupMoveActiveAccount,
-  type SetupMoveCandidate,
-} from "@/hooks/useSetupMoveCandidates";
-import { useWhatsAppSetupSummary } from "@/hooks/useWhatsAppSetupSummary";
+import { useSetupMoveCandidates, type SetupMoveCandidate } from "@/hooks/useSetupMoveCandidates";
+import { useSetupMovePreview } from "@/hooks/useSetupMovePreview";
 import { supabase } from "@/integrations/supabase/client";
 
+interface BannerAccount {
+  id: string;
+  platform_username: string | null;
+}
+
 interface BringOverSetupBannerProps {
-  activeAccount: (SetupMoveActiveAccount & { platform_username?: string | null }) | null;
+  activeAccount: BannerAccount | null;
+}
+
+type AgentChoice = "source" | "destination";
+
+/**
+ * "a, b and c" — Intl.ListFormat so the join follows the active language. The
+ * constructor is typed locally because tsconfig targets ES2020, whose lib
+ * predates it; every supported browser and Node ships the runtime.
+ */
+function formatList(parts: string[], language: string): string {
+  type ListFormatter = { format(parts: string[]): string };
+  const ListFormat = (
+    Intl as unknown as {
+      ListFormat: new (locale: string, options: { type: "conjunction" }) => ListFormatter;
+    }
+  ).ListFormat;
+  return new ListFormat(language || "en-GB", { type: "conjunction" }).format(parts);
 }
 
 /**
- * The banner is mounted on several surfaces and reads auth-backed hooks. A host
- * rendered outside the AuthProvider (unit tests, future compositions) must lose
- * only the banner, not the whole page, so the hook-consuming subtree is contained.
+ * Renders nothing until the query layer exists and an account is chosen. Hosts
+ * mount the banner on several surfaces, some of which can render before (or
+ * without) the app's providers; losing the banner must never take the page
+ * down with it, and there is nothing to offer without those inputs anyway.
  */
-class ContainedBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
-  state = { failed: false };
-  static getDerivedStateFromError() {
-    return { failed: true };
-  }
-  componentDidCatch(error: unknown) {
-    // Contained, not hidden: the page keeps rendering, but the failure stays visible in the
-    // console and in Sentry's console breadcrumbs.
-    console.error("[BringOverSetupBanner] render failed", error);
-  }
-  render() {
-    return this.state.failed ? null : this.props.children;
-  }
+export function BringOverSetupBanner({ activeAccount }: BringOverSetupBannerProps) {
+  const queryClient = useContext(QueryClientContext);
+  if (!queryClient || !activeAccount?.id) return null;
+  return <BringOverSetupBannerInner activeAccount={activeAccount} />;
 }
 
-/** "a, b and c" — the sentence the banner reads as one line. */
-function joinAnd(parts: string[]): string {
-  if (parts.length === 0) return "";
-  if (parts.length === 1) return parts[0];
-  return `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
-}
-
-function accountName(account: { platform_username?: string | null } | null | undefined): string {
-  return account?.platform_username || "WhatsApp";
+function BringOverSetupBannerInner({ activeAccount }: BringOverSetupBannerProps & { activeAccount: BannerAccount }) {
+  const { t } = useTranslation("whatsapp");
+  const { data: candidates } = useSetupMoveCandidates(activeAccount.id);
+  const [handledIds, setHandledIds] = useState<Set<string>>(new Set());
+  const candidate = (candidates ?? []).find((item) => !handledIds.has(item.id));
+  if (!candidate) return null;
+  return (
+    <div className="space-y-3" aria-label={t("bringOver.title", "Bring over your setup")}>
+      <SetupMoveCard
+        candidate={candidate}
+        activeAccount={activeAccount}
+        onHandled={(id) => setHandledIds((prev) => new Set(prev).add(id))}
+      />
+    </div>
+  );
 }
 
 function SetupMoveCard({
   candidate,
-  activeAccountId,
-  activeName,
-  activeHasAgent,
-  onDismissed,
-  onMoved,
+  activeAccount,
+  onHandled,
 }: {
   candidate: SetupMoveCandidate;
-  activeAccountId: string;
-  activeName: string;
-  activeHasAgent: boolean;
-  onDismissed: (id: string) => void;
-  onMoved: (id: string) => void;
+  activeAccount: BannerAccount;
+  onHandled: (id: string) => void;
 }) {
-  const { t } = useTranslation("whatsapp");
+  const { t, i18n } = useTranslation("whatsapp");
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  // agent_config starts on "destination": the account being used right now keeps its
-  // agent unless the owner explicitly asks for the old one.
-  const [moveAgent, setMoveAgent] = useState(false);
-  const [moveConnectors, setMoveConnectors] = useState(true);
-  const [moveStoreWebhook, setMoveStoreWebhook] = useState(true);
+  const fromName = candidate.platform_username || "WhatsApp";
+  const toName = activeAccount.platform_username || "WhatsApp";
+  // agent_config starts on "destination": the account in use keeps its agent
+  // unless the owner explicitly asks for the old one.
+  const [agentChoice, setAgentChoice] = useState<AgentChoice>("destination");
+  const [connectorChecked, setConnectorChecked] = useState<Record<string, boolean>>({});
+  const [clashChoice, setClashChoice] = useState<Record<string, "replace" | "skip">>({});
+  const [movePartner, setMovePartner] = useState(false);
+  const [errorText, setErrorText] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const fromName = accountName(candidate.from);
+  const { data: preview } = useSetupMovePreview(candidate.id, activeAccount.id);
+  if (!preview) return null;
+
   const { summary } = candidate;
+  const agentMoves = preview.source_has_agent
+    && (!preview.destination_has_agent || agentChoice === "source");
 
   const items: string[] = [];
   if (summary.agent_config > 0) items.push(t("bringOver.itemAgent", "an AI agent"));
   if (summary.connectors > 0) {
-    items.push(t("bringOver.itemConnectors", "{{count}} WooCommerce connector", { count: summary.connectors }));
+    items.push(t(
+      "bringOver.itemConnectors",
+      summary.connectors === 1 ? "1 WooCommerce connector" : "{{count}} WooCommerce connectors",
+      { count: summary.connectors },
+    ));
   }
-  if (summary.store_bindings > 0) items.push(t("bringOver.itemStoreWebhook", "a store webhook"));
+  if (summary.store_bindings > 0) {
+    items.push(t(
+      "bringOver.itemStoreWebhook",
+      summary.store_bindings === 1 ? "a store webhook" : "{{count}} store webhooks",
+      { count: summary.store_bindings },
+    ));
+  }
   if (summary.knowledge_sources > 0) {
-    items.push(t("bringOver.itemKnowledge", "{{count}} knowledge sources", { count: summary.knowledge_sources }));
+    items.push(t(
+      "bringOver.itemKnowledge",
+      summary.knowledge_sources === 1 ? "1 knowledge source" : "{{count}} knowledge sources",
+      { count: summary.knowledge_sources },
+    ));
   }
-  if ((summary.automation_handlers?.length ?? 0) > 0) {
-    items.push(t("bringOver.itemAutomation", "automation settings"));
-  }
-  if (summary.test_cases > 0) {
-    items.push(t("bringOver.itemTestCases", "{{count}} test cases", { count: summary.test_cases }));
-  }
-  if (summary.waitlist > 0) {
-    items.push(t("bringOver.itemWaitlist", "{{count}} waitlist entries", { count: summary.waitlist }));
-  }
-  if (summary.templates > 0) {
-    items.push(t("bringOver.itemTemplates", "{{count}} message templates", { count: summary.templates }));
-  }
-  if (summary.partner_keys_primary > 0) {
-    items.push(t("bringOver.itemPartnerKeys", "{{count}} partner API keys", { count: summary.partner_keys_primary }));
-  }
-  if (summary.partner_webhooks > 0) {
-    items.push(t("bringOver.itemPartnerWebhooks", "{{count}} partner webhooks", { count: summary.partner_webhooks }));
-  }
-  if (summary.n8n_subscriptions > 0) {
-    items.push(t("bringOver.itemN8n", "{{count}} n8n automations", { count: summary.n8n_subscriptions }));
-  }
-  if (summary.scheduled_messages > 0) {
-    items.push(t("bringOver.itemScheduled", "{{count}} scheduled messages", { count: summary.scheduled_messages }));
-  }
+  const sentence = t("bringOver.explanation", "{{from}} has {{items}}. Move them to {{to}}?", {
+    from: fromName,
+    items: items.length > 0
+      ? formatList(items, i18n?.language || "en-GB")
+      : t("bringOver.savedSetup", "saved setup"),
+    to: toName,
+  });
 
-  const connectorId = `bring-over-connectors-${candidate.from.id}`;
-  const storeWebhookId = `bring-over-store-webhook-${candidate.from.id}`;
-  const agentSourceId = `bring-over-agent-source-${candidate.from.id}`;
-  const agentDestinationId = `bring-over-agent-destination-${candidate.from.id}`;
+  const refusalCopy: Record<string, string> = {
+    accounts_not_compatible: t(
+      "bringOver.errorAccounts",
+      "These two connections can't share setup (different workspace or not finished connecting)",
+    ),
+    connector_name_clash: t(
+      "bringOver.errorClash",
+      "A connector with the same name already exists here. Choose replace or skip for it.",
+    ),
+    store_connector_left_behind: t(
+      "bringOver.errorStoreLeft",
+      "A store connector with a webhook can't stay behind without the agent. Move them together or keep both here.",
+    ),
+    replaced_connector_has_store_webhook: t(
+      "bringOver.errorReplacedWebhook",
+      "The connector already on this account owns a store webhook and can't be replaced.",
+    ),
+    order_in_flight: t(
+      "bringOver.errorOrderInFlight",
+      "An order message is being sent right now. Try again in a minute.",
+    ),
+  };
 
-  const refreshAfterMove = () => {
-    queryClient.invalidateQueries({ queryKey: ["whatsapp-setup-summary"] });
-    queryClient.invalidateQueries({ queryKey: ["ai-agent-config"] });
-    queryClient.invalidateQueries({ queryKey: ["ai-agent-tools"] });
+  const buildChoices = () => {
+    const connectors: Record<string, "skip" | "replace"> = {};
+    for (const connector of preview.connectors) {
+      if (connector.name_clash) {
+        connectors[connector.name] = clashChoice[connector.name] ?? "replace";
+      } else if (!(connectorChecked[connector.name] ?? true)) {
+        connectors[connector.name] = "skip";
+      }
+      // An unchecked box means skip; anything left checked simply moves and
+      // names nothing in choices.
+    }
+    return {
+      agent_config: agentMoves ? ("source" as const) : ("destination" as const),
+      connectors,
+      partner: movePartner,
+    };
   };
 
   const handleMove = async () => {
     setBusy(true);
+    setErrorText(null);
     try {
       const { data, error } = await supabase.functions.invoke("whatsapp-evolution-bridge", {
         body: {
           action: "move_setup",
-          from: candidate.from.id,
-          to: activeAccountId,
-          choices: {
-            agent_config: moveAgent ? ("source" as const) : ("destination" as const),
-            connectors: {},
-          },
+          from: candidate.id,
+          to: activeAccount.id,
+          choices: buildChoices(),
         },
       });
-      if (error || data?.error) throw new Error("move_setup_failed");
+      const code = typeof data?.error === "string" ? data.error : null;
+      if (error || code) {
+        setErrorText(
+          (code && refusalCopy[code])
+            || t("bringOver.moveFailed", "Couldn't move the setup. Try again in a minute."),
+        );
+        return;
+      }
       toast({ title: t("bringOver.movedToast", "Setup moved") });
-      refreshAfterMove();
-      onMoved(candidate.from.id);
+      queryClient.invalidateQueries({ queryKey: ["whatsapp-setup-move-candidates"] });
+      queryClient.invalidateQueries({ queryKey: ["whatsapp-setup-summary"] });
+      queryClient.invalidateQueries({ queryKey: ["ai-agent-config"] });
+      queryClient.invalidateQueries({ queryKey: ["ai-agent-tools"] });
+      onHandled(candidate.id);
     } catch {
-      toast({
-        title: t("bringOver.moveFailed", "Couldn't move the setup. Try again in a minute."),
-        variant: "destructive",
-      });
+      setErrorText(t("bringOver.moveFailed", "Couldn't move the setup. Try again in a minute."));
     } finally {
       setBusy(false);
     }
@@ -156,14 +206,16 @@ function SetupMoveCard({
     setBusy(true);
     try {
       const { data, error } = await supabase.functions.invoke("whatsapp-evolution-bridge", {
-        body: {
-          action: "dismiss_setup_move",
-          from: candidate.from.id,
-          to: activeAccountId,
-        },
+        body: { action: "dismiss_setup_move", from: candidate.id, to: activeAccount.id },
       });
-      if (error || data?.error) throw new Error("dismiss_setup_move_failed");
-      onDismissed(candidate.from.id);
+      if (error || data?.error) {
+        toast({
+          title: t("bringOver.dismissFailed", "Couldn't save that. Try again in a minute."),
+          variant: "destructive",
+        });
+        return;
+      }
+      onHandled(candidate.id);
     } catch {
       toast({
         title: t("bringOver.dismissFailed", "Couldn't save that. Try again in a minute."),
@@ -177,62 +229,124 @@ function SetupMoveCard({
   return (
     <Alert>
       <ArrowRightLeft className="h-4 w-4" />
-      <AlertTitle>
-        {t("bringOver.explanation", "{{from}} has {{items}}. Move them to {{to}}?", {
-          from: fromName,
-          items: joinAnd(items),
-          to: activeName,
-        })}
-      </AlertTitle>
+      <AlertTitle>{sentence}</AlertTitle>
       <AlertDescription className="space-y-3">
         <div className="space-y-2">
-          <div className="flex items-center space-x-2">
-            <Checkbox
-              id={connectorId}
-              checked={moveConnectors}
-              disabled={busy}
-              onCheckedChange={(checked) => setMoveConnectors(checked === true)}
-            />
-            <Label htmlFor={connectorId}>{t("bringOver.connectorLabel", "WooCommerce connector")}</Label>
-          </div>
-          {summary.store_bindings > 0 && (
-            <>
-              <div className="flex items-center space-x-2">
-                <Checkbox
-                  id={storeWebhookId}
-                  checked={moveStoreWebhook && moveConnectors}
-                  disabled={!moveConnectors || busy}
-                  onCheckedChange={(checked) => setMoveStoreWebhook(checked === true)}
-                />
-                <Label htmlFor={storeWebhookId}>{t("bringOver.storeWebhookLabel", "Store webhook")}</Label>
+          {preview.connectors.map((connector) => {
+            const checkId = `bring-over-connector-${candidate.id}-${connector.name}`;
+            if (connector.name_clash) {
+              return (
+                <div key={connector.name} className="space-y-2 rounded-md border p-2">
+                  <p className="text-sm font-medium">{connector.name}</p>
+                  <RadioGroup
+                    value={clashChoice[connector.name] ?? "replace"}
+                    onValueChange={(value) =>
+                      setClashChoice((prev) => ({ ...prev, [connector.name]: value as "replace" | "skip" }))}
+                    className="space-y-1"
+                  >
+                    <div className="flex items-center space-x-2">
+                      <RadioGroupItem value="replace" id={`${checkId}-replace`} disabled={busy} />
+                      <Label htmlFor={`${checkId}-replace`}>
+                        {t("bringOver.replaceHere", "Replace the one here")}
+                      </Label>
+                    </div>
+                    <div className="flex items-center space-x-2">
+                      <RadioGroupItem value="skip" id={`${checkId}-skip`} disabled={busy} />
+                      <Label htmlFor={`${checkId}-skip`}>
+                        {t("bringOver.keepHere", "Keep the one here (skip)")}
+                      </Label>
+                    </div>
+                  </RadioGroup>
+                </div>
+              );
+            }
+            const disabled = connector.has_store_webhook && agentMoves;
+            return (
+              <div key={connector.name} className="space-y-1">
+                <div className="flex items-center space-x-2">
+                  <Checkbox
+                    id={checkId}
+                    checked={connectorChecked[connector.name] ?? true}
+                    disabled={disabled || busy}
+                    onCheckedChange={(next) =>
+                      setConnectorChecked((prev) => ({ ...prev, [connector.name]: next === true }))}
+                  />
+                  <Label htmlFor={checkId}>{connector.name}</Label>
+                </div>
+                {disabled && (
+                  <p className="text-xs text-muted-foreground">
+                    {t(
+                      "bringOver.storeWebhookHint",
+                      "The agent moves, so its store connector must move too",
+                    )}
+                  </p>
+                )}
               </div>
-              {!moveConnectors && (
-                <p className="text-xs text-muted-foreground">
-                  {t("bringOver.storeWebhookHint", "Moves with its WooCommerce connector")}
-                </p>
-              )}
-            </>
+            );
+          })}
+          {preview.partner_items > 0 && (
+            <div className="flex items-center space-x-2">
+              <Checkbox
+                id={`bring-over-partner-${candidate.id}`}
+                checked={movePartner}
+                disabled={busy}
+                onCheckedChange={(next) => setMovePartner(next === true)}
+              />
+              <Label htmlFor={`bring-over-partner-${candidate.id}`}>
+                {t("bringOver.partnerLabel", "Partner API keys and webhooks ({{count}})", {
+                  count: preview.partner_items,
+                })}
+              </Label>
+            </div>
           )}
         </div>
-        {activeHasAgent && (
+        {preview.source_has_agent && preview.destination_has_agent && (
           <RadioGroup
-            value={moveAgent ? "source" : "destination"}
-            onValueChange={(value) => setMoveAgent(value === "source")}
+            value={agentChoice}
+            onValueChange={(value) => setAgentChoice(value as AgentChoice)}
+            className="space-y-1"
           >
             <div className="flex items-center space-x-2">
-              <RadioGroupItem value="destination" id={agentDestinationId} disabled={busy} />
-              <Label htmlFor={agentDestinationId}>
+              <RadioGroupItem
+                value="destination"
+                id={`bring-over-agent-destination-${candidate.id}`}
+                disabled={busy}
+              />
+              <Label htmlFor={`bring-over-agent-destination-${candidate.id}`}>
                 {t("bringOver.keepActiveAgent", "Keep this account's AI agent")}
               </Label>
             </div>
             <div className="flex items-center space-x-2">
-              <RadioGroupItem value="source" id={agentSourceId} disabled={busy} />
-              <Label htmlFor={agentSourceId}>
+              <RadioGroupItem
+                value="source"
+                id={`bring-over-agent-source-${candidate.id}`}
+                disabled={busy}
+              />
+              <Label htmlFor={`bring-over-agent-source-${candidate.id}`}>
                 {t("bringOver.useSourceAgent", "Use the one from {{from}}", { from: fromName })}
               </Label>
             </div>
           </RadioGroup>
         )}
+        {!preview.waitlist_moves && preview.waitlist_count > 0 && (
+          <p className="text-xs text-muted-foreground">
+            {t(
+              "bringOver.waitlistStays",
+              "{{count}} waitlisted customers stay — they agreed to messages from the old number",
+              { count: preview.waitlist_count },
+            )}
+          </p>
+        )}
+        {!preview.templates_move && preview.template_count > 0 && (
+          <p className="text-xs text-muted-foreground">
+            {t(
+              "bringOver.templatesStay",
+              "{{count}} message templates must be recreated on this account",
+              { count: preview.template_count },
+            )}
+          </p>
+        )}
+        {errorText && <p className="text-sm text-destructive">{errorText}</p>}
         <div className="flex flex-wrap gap-2">
           <Button size="sm" onClick={handleMove} disabled={busy}>
             {t("bringOver.move", "Move")}
@@ -243,46 +357,5 @@ function SetupMoveCard({
         </div>
       </AlertDescription>
     </Alert>
-  );
-}
-
-export function BringOverSetupBanner({ activeAccount }: BringOverSetupBannerProps) {
-  return (
-    <ContainedBoundary>
-      <BringOverSetupBannerInner activeAccount={activeAccount} />
-    </ContainedBoundary>
-  );
-}
-
-function BringOverSetupBannerInner({ activeAccount }: BringOverSetupBannerProps) {
-  const { t } = useTranslation("whatsapp");
-  // The hook normally returns a query result; accept a bare array too, since both
-  // shapes are used by tests and callers.
-  const candidatesResult = useSetupMoveCandidates(activeAccount);
-  const candidates = Array.isArray(candidatesResult) ? candidatesResult : candidatesResult?.data;
-  const { data: activeSummary } = useWhatsAppSetupSummary(activeAccount?.id ?? null);
-  const [hiddenIds, setHiddenIds] = useState<Set<string>>(new Set());
-
-  if (!activeAccount) return null;
-  const visible = (candidates ?? []).filter((candidate) => !hiddenIds.has(candidate.from.id));
-  if (visible.length === 0) return null;
-
-  const activeName = accountName(activeAccount);
-  const activeHasAgent = (activeSummary?.agent_config ?? 0) > 0;
-
-  return (
-    <div className="space-y-3" aria-label={t("bringOver.title", "Bring over your setup")}>
-      {visible.map((candidate) => (
-        <SetupMoveCard
-          key={candidate.from.id}
-          candidate={candidate}
-          activeAccountId={activeAccount.id}
-          activeName={activeName}
-          activeHasAgent={activeHasAgent}
-          onDismissed={(id) => setHiddenIds((prev) => new Set(prev).add(id))}
-          onMoved={(id) => setHiddenIds((prev) => new Set(prev).add(id))}
-        />
-      ))}
-    </div>
   );
 }

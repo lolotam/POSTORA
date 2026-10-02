@@ -8887,6 +8887,14 @@ export type Database = {
         Args: { p_account_id: string }
         Returns: Json
       }
+      get_whatsapp_setup_move_preview: {
+        Args: { p_from: string; p_to: string }
+        Returns: Json
+      }
+      list_whatsapp_setup_move_candidates: {
+        Args: { p_to: string }
+        Returns: Json
+      }
     }
     Enums: {
       app_role: "user" | "admin" | "subscriber" | "support"
