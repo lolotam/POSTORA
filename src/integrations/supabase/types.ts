@@ -4773,6 +4773,42 @@ export type Database = {
         }
         Relationships: []
       }
+      store_webhook_heartbeats: {
+        Row: {
+          connector_id: string
+          last_delivery_at: string
+          social_account_id: string
+          user_id: string
+        }
+        Insert: {
+          connector_id: string
+          last_delivery_at: string
+          social_account_id: string
+          user_id: string
+        }
+        Update: {
+          connector_id?: string
+          last_delivery_at?: string
+          social_account_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "store_webhook_heartbeats_connector_fkey"
+            columns: ["connector_id", "user_id"]
+            isOneToOne: false
+            referencedRelation: "ai_agent_tools"
+            referencedColumns: ["id", "user_id"]
+          },
+          {
+            foreignKeyName: "store_webhook_heartbeats_account_fkey"
+            columns: ["social_account_id", "user_id"]
+            isOneToOne: false
+            referencedRelation: "social_accounts"
+            referencedColumns: ["id", "user_id"]
+          },
+        ]
+      }
       stripe_webhook_events: {
         Row: {
           error: string | null
@@ -7766,6 +7802,14 @@ export type Database = {
     Functions: {
       ai_agent_dashboard: {
         Args: { p_days: number; p_platform?: string | null }
+        Returns: Json
+      }
+      record_store_webhook_delivery: {
+        Args: { p_binding_id: string }
+        Returns: undefined
+      }
+      silent_store_connections: {
+        Args: { p_quiet_minutes: number; p_active_days: number }
         Returns: Json
       }
       create_ai_website_setup_job: {
