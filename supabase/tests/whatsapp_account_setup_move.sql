@@ -670,7 +670,7 @@ BEGIN
   INSERT INTO public.social_accounts (id, user_id, platform, platform_user_id, access_token, workspace_id, is_active, connection_mode, account_metadata, updated_at) VALUES
     (live, u, 'whatsapp', '96599990001', '', ws, true, 'evolution_qr', '{}', now()),
     (old1, u, 'whatsapp', '96599990002', '', ws, false, 'evolution_qr', '{}', now() + interval '1 hour'),
-    (old_other_ws, u, 'whatsapp', '96599990001', '', ws2, false, 'evolution_qr', '{}', now() + interval '2 hours'),
+    (old_other_ws, u, 'whatsapp', 'retired_' || gen_random_uuid()::text, '', ws2, false, 'evolution_qr', '{"retired_number":"96599990001"}', now() + interval '2 hours'),
     (pend_src, u, 'whatsapp', '96599990003', '', ws, false, 'evolution_qr', '{}', now() - interval '1 day');
   INSERT INTO public.ai_agent_configs (user_id, platform, social_account_id) VALUES
     (u, 'whatsapp', old1), (u, 'whatsapp', old_other_ws), (u, 'whatsapp', pend_src);
