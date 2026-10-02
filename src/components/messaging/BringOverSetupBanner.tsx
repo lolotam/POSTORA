@@ -169,6 +169,11 @@ function SetupMoveCard({
       "bringOver.errorAccounts",
       "These two connections can't share setup (different workspace or not finished connecting)",
     ),
+    source_still_connected: t(
+      "bringOver.errorSourceConnected",
+      "{{from}} is connected again, so its setup stays with it.",
+      { from: fromName },
+    ),
     linked_connector_name_clash: t(
       "bringOver.errorLinkedClash",
       "A store connector shared with {{from}} has the same name as one on this account, so its orders wouldn't reach this account. Rename one of them, then try again.",

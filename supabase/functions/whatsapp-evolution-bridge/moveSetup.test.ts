@@ -483,3 +483,48 @@ Deno.test("dismissSetupMove: the SQL ownership check returning false is a 404, a
     { userId: "user-1", action: "dismiss_setup_move", from: "acc-src", to: "acc-dst", code: "account_not_found" },
   ]);
 });
+
+Deno.test("moveSetup: a request missing from or to is refused with 400, logged, and never reaches the rpc", async () => {
+  const { deps, rpcCalls, findAccountCalls, refusals } = createDeps();
+
+  const error = (await assertRejects(
+    () => moveSetup(deps, "user-1", { from: "", to: "acc-dst" }),
+    MoveSetupError,
+  )) as MoveSetupError;
+
+  assertEquals(error.status, 400);
+  assertEquals(error.code, "from_to_required");
+  assertEquals(rpcCalls.length, 0);
+  assertEquals(findAccountCalls.length, 0);
+  assertEquals(refusals, [
+    { userId: "user-1", action: "move_setup", from: "", to: "acc-dst", code: "from_to_required" },
+  ]);
+});
+
+Deno.test("dismissSetupMove: a request missing from or to is refused with 400 and logged", async () => {
+  const { deps, rpcCalls, refusals } = createDeps();
+
+  const error = (await assertRejects(
+    () => dismissSetupMove(deps, "user-1", { from: "acc-src", to: "" }),
+    MoveSetupError,
+  )) as MoveSetupError;
+
+  assertEquals(error.status, 400);
+  assertEquals(rpcCalls.length, 0);
+  assertEquals(refusals.map((r) => r.code), ["from_to_required"]);
+});
+
+Deno.test("moveSetup: source_still_connected maps to 409 with its own code", async () => {
+  const { deps } = createDeps({
+    rpcHandler: () =>
+      Promise.resolve({ data: null, error: { code: "22023", message: "move_owned_whatsapp_account_setup: source_still_connected" } }),
+  });
+
+  const error = (await assertRejects(
+    () => moveSetup(deps, "user-1", { from: "acc-src", to: "acc-dst" }),
+    MoveSetupError,
+  )) as MoveSetupError;
+
+  assertEquals(error.status, 409);
+  assertEquals(error.code, "source_still_connected");
+});

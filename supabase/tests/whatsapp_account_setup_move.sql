@@ -3,7 +3,8 @@
 -- 20261004110500 (move_whatsapp_account_setup, dismiss_whatsapp_setup_move) and
 -- 20261004111000 (activation carries the setup), 20261004112000 (owner-bound wrappers,
 -- store flows in the preview), 20261004112500 (linked/shared connector clashes),
--- 20261004113000 (disabled connectors, pending scheduled messages, shared bindings). One transaction, synthetic fixtures,
+-- 20261004113000 (disabled connectors, pending scheduled messages, shared bindings),
+-- 20261004113500 (live source refused, a moved pair is not re-offered). One transaction, synthetic fixtures,
 -- labelled ASSERTs, expected refusals in nested BEGIN/EXCEPTION blocks, ROLLBACK,
 -- sentinel last. No secrets, no real accounts.
 --
@@ -916,6 +917,43 @@ BEGIN
     'M58 a pending scheduled message is offered: ' || v::text;
   ASSERT NOT (v @> jsonb_build_array(jsonb_build_object('id', old_history::text))),
     'M58 sent history alone is not offered: ' || v::text;
+END $$;
+
+-- M60-M61: Codex review round 4 on PR #263.
+DO $$
+DECLARE
+  u uuid := pg_temp.id('u_a');
+  ws uuid := pg_temp.id('ws_a');
+  f uuid := gen_random_uuid();
+  t uuid := gen_random_uuid();
+  v jsonb;
+BEGIN
+  INSERT INTO public.social_accounts (id, user_id, platform, platform_user_id, access_token, workspace_id, is_active, connection_mode, account_metadata) VALUES
+    (f, u, 'whatsapp', '96599950001', '', ws, true, 'evolution_qr', '{}'),
+    (t, u, 'whatsapp', '96599950002', '', ws, true, 'evolution_qr', '{}');
+  INSERT INTO public.ai_agent_configs (user_id, platform, social_account_id) VALUES
+    (u, 'whatsapp', f), (u, 'whatsapp', t);
+
+  -- M60: a source that is connected (live, not retired) keeps its setup.
+  BEGIN
+    PERFORM public.move_owned_whatsapp_account_setup(u, f, t, '{"agent_config":"source"}');
+    RAISE EXCEPTION 'M60 failed: a live source was stripped' USING ERRCODE = 'assert_failure';
+  EXCEPTION WHEN invalid_parameter_value THEN
+    ASSERT SQLERRM LIKE '%source_still_connected%', 'M60 reason: ' || SQLERRM;
+  END;
+  ASSERT (SELECT count(*) FROM public.ai_agent_configs WHERE social_account_id = f) = 1, 'M60 agent stayed';
+
+  -- M61: after a move that leaves the source's agent behind (this account keeps its own),
+  -- the pair is recorded as handled and is not offered again.
+  UPDATE public.social_accounts SET is_active = false WHERE id = f;
+  v := public.move_owned_whatsapp_account_setup(u, f, t, '{"agent_config":"destination"}');
+  ASSERT (SELECT count(*) FROM public.ai_agent_configs WHERE social_account_id = f) = 1, 'M61 the source agent was left behind: ' || v::text;
+  ASSERT (SELECT account_metadata->'setup_move_dismissed' FROM public.social_accounts WHERE id = t) ? f::text,
+    'M61 the pair is recorded as handled';
+  PERFORM set_config('request.jwt.claims', json_build_object('sub', u, 'role', 'authenticated')::text, true);
+  v := public.list_whatsapp_setup_move_candidates(t);
+  PERFORM set_config('request.jwt.claims', '', true);
+  ASSERT NOT (v @> jsonb_build_array(jsonb_build_object('id', f::text))), 'M61 not offered again: ' || v::text;
 END $$;
 
 ROLLBACK;

@@ -53,6 +53,7 @@ interface DismissSetupMoveParams {
  * the banner owns the human copy for each.
  */
 const MOVER_REFUSAL_CODES = [
+  "source_still_connected",
   // Before connector_name_clash: the message is matched by substring, and this token contains it.
   "linked_connector_name_clash",
   "accounts_not_compatible",
@@ -107,6 +108,13 @@ async function withRefusalLog<T>(
   }
 }
 
+// Inside the logged path, so a malformed request from a stale client is recorded too.
+function requireBothIds(params: { from: string; to: string }): void {
+  if (!params.from || !params.to) {
+    throw new MoveSetupError("from and to are required", 400, "from_to_required");
+  }
+}
+
 async function requireOwned(deps: MoveSetupDeps, userId: string, id: string): Promise<void> {
   const owned = await deps.findOwnedWhatsAppAccount(userId, id);
   if (!owned) throw new MoveSetupError("WhatsApp account not found", 404, "account_not_found");
@@ -118,6 +126,7 @@ export async function moveSetup(
   params: MoveSetupParams,
 ): Promise<unknown> {
   return await withRefusalLog(deps, { userId, action: "move_setup", from: params.from, to: params.to }, async () => {
+    requireBothIds(params);
     await requireOwned(deps, userId, params.from);
     await requireOwned(deps, userId, params.to);
     if (params.from === params.to) {
@@ -140,6 +149,7 @@ export async function dismissSetupMove(
   params: DismissSetupMoveParams,
 ): Promise<{ success: true }> {
   return await withRefusalLog(deps, { userId, action: "dismiss_setup_move", from: params.from, to: params.to }, async () => {
+    requireBothIds(params);
     await requireOwned(deps, userId, params.from);
     await requireOwned(deps, userId, params.to);
     const { data, error } = await deps.rpc("dismiss_owned_whatsapp_setup_move", {

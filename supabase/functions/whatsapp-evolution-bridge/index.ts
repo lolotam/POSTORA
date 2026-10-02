@@ -423,11 +423,10 @@ Deno.serve(async (req) => {
       return restrictedJsonResponse(req, await resubscribeWebhook(context, body));
     }
     if (body.action === "move_setup") {
-      if (!body.from || !body.to) throw new BridgeError("from and to are required", 400);
       try {
         return restrictedJsonResponse(req, await moveSetup(moveSetupDeps(context), context.user.id, {
-          from: body.from,
-          to: body.to,
+          from: body.from ?? "",
+          to: body.to ?? "",
           choices: body.choices,
         }));
       } catch (error) {
@@ -436,11 +435,10 @@ Deno.serve(async (req) => {
       }
     }
     if (body.action === "dismiss_setup_move") {
-      if (!body.from || !body.to) throw new BridgeError("from and to are required", 400);
       try {
         return restrictedJsonResponse(req, await dismissSetupMove(moveSetupDeps(context), context.user.id, {
-          from: body.from,
-          to: body.to,
+          from: body.from ?? "",
+          to: body.to ?? "",
         }));
       } catch (error) {
         if (error instanceof MoveSetupError) throw new BridgeError(error.code, error.status);
