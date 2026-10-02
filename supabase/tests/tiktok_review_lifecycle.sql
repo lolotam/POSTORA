@@ -9,7 +9,8 @@
 -- the 'now' submit snapshot (T5), request_id idempotency (T6), the
 -- 'scheduled' submit + scheduler predicate (T7), dispatch compare-and-set
 -- (T8), the authenticated grant/RLS surface (T9), webhook dedupe (T10)
--- and the exact function surface (T11).
+-- and the exact function surface (T11). T17-T19 cover migration
+-- 20261003120000's reopen predicate, draft release and post lock.
 BEGIN;
 
 -- ---------------------------------------------------------------------------
@@ -536,7 +537,8 @@ DECLARE
     'tiktok_review_save_draft',
     'tiktok_review_transition',
     'tiktok_review_submit',
-    'tiktok_review_set_dispatch_state'];
+    'tiktok_review_set_dispatch_state',
+    'tiktok_review_reopen_allowed'];
   v_name text;
 BEGIN
   FOREACH v_name IN ARRAY v_names LOOP
@@ -569,6 +571,9 @@ BEGIN
       'authenticated', 'public.tiktok_review_set_dispatch_state(uuid,uuid,text[],text)',
       'EXECUTE'),
     'T11 authenticated cannot EXECUTE set_dispatch_state';
+  ASSERT NOT has_function_privilege(
+      'authenticated', 'public.tiktok_review_reopen_allowed(uuid,uuid)', 'EXECUTE'),
+    'T11 authenticated cannot EXECUTE reopen_allowed';
   ASSERT has_function_privilege(
       'service_role', 'public.tiktok_review_submit(uuid,uuid,integer,uuid,text,timestamptz,text)',
       'EXECUTE'),
@@ -872,6 +877,260 @@ BEGIN
   ASSERT (SELECT count(*) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
            WHERE n.nspname = 'public' AND p.proname = 'tiktok_review_set_dispatch_state') = 1,
     'T16 exactly one tiktok_review_set_dispatch_state (no overload)';
+END $$;
+
+-- T17: the reopen predicate agrees with the transition (migration 20261003120000).
+DO $$
+DECLARE
+  u_a uuid := 'a1a1a1a1-1111-4111-8111-aaaaaaaaaaaa';
+  u_b uuid := 'b2b2b2b2-2222-4222-8222-bbbbbbbbbbbb';
+  acct_a_tt uuid := 'a1a1a1a1-aaaa-4111-8111-aaaaaaaaaaaa';
+  media_a uuid := 'aa000001-aaaa-4111-8111-aaaaaaaaaaaa';
+  v_draft public.tiktok_review_drafts%ROWTYPE;
+  v_sub uuid;
+BEGIN
+  v_draft := public.tiktok_review_create_draft(u_a, acct_a_tt);
+  PERFORM public.tiktok_review_save_draft(u_a, v_draft.id, 1, 'predicate', media_a, 9, '{}'::jsonb);
+  ASSERT NOT public.tiktok_review_reopen_allowed(u_a, v_draft.id),
+    'T17 a pending_review draft is not reopenable';
+
+  v_sub := (public.tiktok_review_submit(
+    u_a, v_draft.id, 2, 'c1000019-0000-4000-8000-000000000019', 'now', NULL, 'UTC')
+    ->>'submission_id')::uuid;
+  UPDATE public.tiktok_review_submissions
+  SET dispatch_state = 'dispatched', provider_publish_id = 'v_pub_t17'
+  WHERE id = v_sub;
+  ASSERT NOT public.tiktok_review_reopen_allowed(u_a, v_draft.id),
+    'T17 a publish id without TikTok''s FAILED event is not reopenable';
+  ASSERT NOT public.tiktok_review_reopen_allowed(u_b, v_draft.id),
+    'T17 another user''s draft is never reopenable';
+
+  INSERT INTO public.tiktok_webhook_events (event, user_openid, publish_id, create_time)
+  VALUES ('post.publish.failed', 'tt-user-a', 'v_pub_t17', 1);
+  ASSERT public.tiktok_review_reopen_allowed(u_a, v_draft.id),
+    'T17 TikTok''s FAILED event from this account makes it reopenable';
+END $$;
+
+-- T18: deleting a review post hands its draft back instead of stranding it.
+DO $$
+DECLARE
+  u_a uuid := 'a1a1a1a1-1111-4111-8111-aaaaaaaaaaaa';
+  acct_a_tt uuid := 'a1a1a1a1-aaaa-4111-8111-aaaaaaaaaaaa';
+  media_a uuid := 'aa000001-aaaa-4111-8111-aaaaaaaaaaaa';
+  v_draft public.tiktok_review_drafts%ROWTYPE;
+  v_res jsonb;
+  v_post uuid;
+  v_sub uuid;
+BEGIN
+  -- A scheduled post cancelled before anything was sent: the draft is editable again.
+  v_draft := public.tiktok_review_create_draft(u_a, acct_a_tt);
+  PERFORM public.tiktok_review_save_draft(u_a, v_draft.id, 1, 'cancel me', media_a, 9, '{}'::jsonb);
+  v_res := public.tiktok_review_submit(
+    u_a, v_draft.id, 2, 'c1000020-0000-4000-8000-000000000020', 'scheduled',
+    now() + interval '2 days', 'UTC');
+  DELETE FROM public.posts WHERE id = (v_res->>'post_id')::uuid;
+  SELECT * INTO v_draft FROM public.tiktok_review_drafts WHERE id = v_draft.id;
+  ASSERT v_draft.state = 'pending_review' AND v_draft.revision = 3,
+    'T18 a cancelled scheduled post returns its draft to pending_review at a new revision';
+
+  -- A post whose video reached TikTok: the draft is archived, not offered for re-sending.
+  v_res := public.tiktok_review_submit(
+    u_a, v_draft.id, 3, 'c1000021-0000-4000-8000-000000000021', 'now', NULL, 'UTC');
+  v_post := (v_res->>'post_id')::uuid;
+  UPDATE public.tiktok_review_submissions
+  SET dispatch_state = 'dispatched', provider_publish_id = 'v_pub_t18'
+  WHERE id = (v_res->>'submission_id')::uuid;
+  DELETE FROM public.posts WHERE id = v_post;
+  SELECT * INTO v_draft FROM public.tiktok_review_drafts WHERE id = v_draft.id;
+  ASSERT v_draft.state = 'archived' AND v_draft.revision = 4,
+    'T18 a deleted post that reached TikTok archives its draft';
+
+  -- A submission from an earlier revision leaves a draft that has moved on alone.
+  v_draft := public.tiktok_review_transition(u_a, v_draft.id, 4, 'restore', NULL);
+  v_res := public.tiktok_review_submit(
+    u_a, v_draft.id, 5, 'c1000022-0000-4000-8000-000000000022', 'now', NULL, 'UTC');
+  v_sub := (v_res->>'submission_id')::uuid;
+  UPDATE public.tiktok_review_submissions SET dispatch_state = 'needs_attention' WHERE id = v_sub;
+  v_draft := public.tiktok_review_transition(u_a, v_draft.id, 5, 'reopen', NULL);
+  v_post := (v_res->>'post_id')::uuid;
+  -- Resubmitted at revision 6: the draft is 'submitted' again, but for a newer consent.
+  PERFORM public.tiktok_review_submit(
+    u_a, v_draft.id, 6, 'c1000024-0000-4000-8000-000000000024', 'scheduled',
+    now() + interval '2 days', 'UTC');
+  DELETE FROM public.posts WHERE id = v_post;
+  SELECT * INTO v_draft FROM public.tiktok_review_drafts WHERE id = v_draft.id;
+  ASSERT v_draft.state = 'submitted' AND v_draft.revision = 6,
+    'T18 deleting an old revision''s post leaves the resubmitted draft untouched';
+END $$;
+
+-- T19: once publishing has started, Calendar-style edits are refused and the
+-- publisher's own writes are not.
+DO $$
+DECLARE
+  u_a uuid := 'a1a1a1a1-1111-4111-8111-aaaaaaaaaaaa';
+  acct_a_tt uuid := 'a1a1a1a1-aaaa-4111-8111-aaaaaaaaaaaa';
+  media_a uuid := 'aa000001-aaaa-4111-8111-aaaaaaaaaaaa';
+  v_draft public.tiktok_review_drafts%ROWTYPE;
+  v_res jsonb;
+  v_post uuid;
+  v_sub uuid;
+  v_detail text;
+BEGIN
+  v_draft := public.tiktok_review_create_draft(u_a, acct_a_tt);
+  PERFORM public.tiktok_review_save_draft(u_a, v_draft.id, 1, 'locked', media_a, 9, '{}'::jsonb);
+  v_res := public.tiktok_review_submit(
+    u_a, v_draft.id, 2, 'c1000023-0000-4000-8000-000000000023', 'scheduled',
+    now() + interval '2 days', 'UTC');
+  v_post := (v_res->>'post_id')::uuid;
+  v_sub := (v_res->>'submission_id')::uuid;
+
+  -- Before the claim the post is the user's to move; process-post checks consent later.
+  UPDATE public.posts SET scheduled_at = now() + interval '3 days' WHERE id = v_post;
+
+  UPDATE public.tiktok_review_submissions SET dispatch_state = 'publishing' WHERE id = v_sub;
+
+  BEGIN
+    UPDATE public.posts SET scheduled_at = now() + interval '4 days' WHERE id = v_post;
+    RAISE EXCEPTION 'T19 failed: a reschedule while publishing was accepted' USING ERRCODE = 'assert_failure';
+  EXCEPTION WHEN raise_exception THEN
+    GET STACKED DIAGNOSTICS v_detail = PG_EXCEPTION_DETAIL;
+    ASSERT v_detail = 'TIKTOK_REVIEW_POST_LOCKED', 'T19 reschedule refusal, got: ' || coalesce(v_detail, SQLERRM);
+  END;
+  BEGIN
+    UPDATE public.posts
+    SET metadata = jsonb_set(coalesce(metadata, '{}'), '{selected_account_ids}', '["b1b1b1b1-bbbb-4111-8111-bbbbbbbbbbbb"]')
+    WHERE id = v_post;
+    RAISE EXCEPTION 'T19 failed: an account switch while publishing was accepted' USING ERRCODE = 'assert_failure';
+  EXCEPTION WHEN raise_exception THEN
+    GET STACKED DIAGNOSTICS v_detail = PG_EXCEPTION_DETAIL;
+    ASSERT v_detail = 'TIKTOK_REVIEW_POST_LOCKED', 'T19 account-switch refusal, got: ' || coalesce(v_detail, SQLERRM);
+  END;
+  BEGIN
+    UPDATE public.posts SET caption = 'edited' WHERE id = v_post;
+    RAISE EXCEPTION 'T19 failed: a caption edit while publishing was accepted' USING ERRCODE = 'assert_failure';
+  EXCEPTION WHEN raise_exception THEN
+    GET STACKED DIAGNOSTICS v_detail = PG_EXCEPTION_DETAIL;
+    ASSERT v_detail = 'TIKTOK_REVIEW_POST_LOCKED', 'T19 caption refusal, got: ' || coalesce(v_detail, SQLERRM);
+  END;
+  BEGIN
+    DELETE FROM public.posts WHERE id = v_post;
+    RAISE EXCEPTION 'T19 failed: a delete while publishing was accepted' USING ERRCODE = 'assert_failure';
+  EXCEPTION WHEN raise_exception THEN
+    GET STACKED DIAGNOSTICS v_detail = PG_EXCEPTION_DETAIL;
+    ASSERT v_detail = 'TIKTOK_REVIEW_POST_LOCKED', 'T19 delete refusal, got: ' || coalesce(v_detail, SQLERRM);
+  END;
+  -- History deletes the platform rows first; that half is refused too, and the row survives.
+  INSERT INTO public.platform_posts (post_id, social_account_id, platform, status)
+  VALUES (v_post, acct_a_tt, 'tiktok', 'pending');
+  BEGIN
+    DELETE FROM public.platform_posts WHERE post_id = v_post;
+    RAISE EXCEPTION 'T19 failed: a platform row delete while publishing was accepted' USING ERRCODE = 'assert_failure';
+  EXCEPTION WHEN raise_exception THEN
+    GET STACKED DIAGNOSTICS v_detail = PG_EXCEPTION_DETAIL;
+    ASSERT v_detail = 'TIKTOK_REVIEW_POST_LOCKED', 'T19 platform-row refusal, got: ' || coalesce(v_detail, SQLERRM);
+  END;
+  ASSERT EXISTS (SELECT 1 FROM public.platform_posts WHERE post_id = v_post),
+    'T19 the publishing record survives a refused delete';
+  -- Changing source would switch the lock off.
+  BEGIN
+    UPDATE public.posts SET source = 'manual' WHERE id = v_post;
+    RAISE EXCEPTION 'T19 failed: a source change was accepted' USING ERRCODE = 'assert_failure';
+  EXCEPTION WHEN raise_exception THEN
+    GET STACKED DIAGNOSTICS v_detail = PG_EXCEPTION_DETAIL;
+    ASSERT v_detail = 'TIKTOK_REVIEW_POST_LOCKED', 'T19 source refusal, got: ' || coalesce(v_detail, SQLERRM);
+  END;
+
+  -- The publisher's own writes: status and metadata keys other than the target.
+  UPDATE public.posts
+  SET status = 'processing',
+      metadata = coalesce(metadata, '{}') || '{"tiktok_note": "claimed"}'::jsonb
+  WHERE id = v_post;
+  ASSERT (SELECT status FROM public.posts WHERE id = v_post) = 'processing',
+    'T19 the publisher can still move the post''s status';
+
+  -- After TikTok has it the post stays locked, but History may delete it.
+  UPDATE public.tiktok_review_submissions
+  SET dispatch_state = 'dispatched', provider_publish_id = 'v_pub_t19'
+  WHERE id = v_sub;
+  BEGIN
+    UPDATE public.posts SET scheduled_at = NULL WHERE id = v_post;
+    RAISE EXCEPTION 'T19 failed: "post now" after dispatch was accepted' USING ERRCODE = 'assert_failure';
+  EXCEPTION WHEN raise_exception THEN
+    GET STACKED DIAGNOSTICS v_detail = PG_EXCEPTION_DETAIL;
+    ASSERT v_detail = 'TIKTOK_REVIEW_POST_LOCKED', 'T19 post-now refusal, got: ' || coalesce(v_detail, SQLERRM);
+  END;
+  DELETE FROM public.posts WHERE id = v_post;
+  ASSERT NOT EXISTS (SELECT 1 FROM public.posts WHERE id = v_post),
+    'T19 a dispatched post can be deleted';
+END $$;
+
+-- T20: the lock starts at process-post's claim, while the submission is still
+-- 'scheduled', and the submission marker can never be removed (#260 review).
+DO $$
+DECLARE
+  u_a uuid := 'a1a1a1a1-1111-4111-8111-aaaaaaaaaaaa';
+  acct_a_tt uuid := 'a1a1a1a1-aaaa-4111-8111-aaaaaaaaaaaa';
+  media_a uuid := 'aa000001-aaaa-4111-8111-aaaaaaaaaaaa';
+  v_draft public.tiktok_review_drafts%ROWTYPE;
+  v_res jsonb;
+  v_post uuid;
+  v_sub uuid;
+  v_detail text;
+BEGIN
+  v_draft := public.tiktok_review_create_draft(u_a, acct_a_tt);
+  PERFORM public.tiktok_review_save_draft(u_a, v_draft.id, 1, 'claimed', media_a, 9, '{}'::jsonb);
+  v_res := public.tiktok_review_submit(
+    u_a, v_draft.id, 2, 'c1000025-0000-4000-8000-000000000025', 'scheduled',
+    now() + interval '2 days', 'UTC');
+  v_post := (v_res->>'post_id')::uuid;
+  v_sub := (v_res->>'submission_id')::uuid;
+
+  -- The marker is refused even before any claim: dropped by a whole-metadata rewrite,
+  -- or removed on its own.
+  BEGIN
+    UPDATE public.posts SET metadata = '{"selected_account_ids": ["a1a1a1a1-aaaa-4111-8111-aaaaaaaaaaaa"]}'::jsonb
+    WHERE id = v_post;
+    RAISE EXCEPTION 'T20 failed: a metadata rewrite without the marker was accepted' USING ERRCODE = 'assert_failure';
+  EXCEPTION WHEN raise_exception THEN
+    GET STACKED DIAGNOSTICS v_detail = PG_EXCEPTION_DETAIL;
+    ASSERT v_detail = 'TIKTOK_REVIEW_POST_LOCKED', 'T20 marker rewrite refusal, got: ' || coalesce(v_detail, SQLERRM);
+  END;
+  BEGIN
+    UPDATE public.posts SET metadata = metadata - 'tiktok_review_submission_id' WHERE id = v_post;
+    RAISE EXCEPTION 'T20 failed: removing the marker was accepted' USING ERRCODE = 'assert_failure';
+  EXCEPTION WHEN raise_exception THEN
+    GET STACKED DIAGNOSTICS v_detail = PG_EXCEPTION_DETAIL;
+    ASSERT v_detail = 'TIKTOK_REVIEW_POST_LOCKED', 'T20 marker removal refusal, got: ' || coalesce(v_detail, SQLERRM);
+  END;
+  ASSERT (SELECT metadata->>'tiktok_review_submission_id' FROM public.posts WHERE id = v_post) = v_sub::text,
+    'T20 the marker survives';
+
+  -- process-post's claim; the submission has not left 'scheduled' yet.
+  UPDATE public.posts SET status = 'processing' WHERE id = v_post;
+  ASSERT (SELECT dispatch_state FROM public.tiktok_review_submissions WHERE id = v_sub) = 'scheduled',
+    'T20 fixture: the submission is still scheduled';
+  BEGIN
+    UPDATE public.posts SET scheduled_at = now() + interval '5 days' WHERE id = v_post;
+    RAISE EXCEPTION 'T20 failed: a reschedule after the claim was accepted' USING ERRCODE = 'assert_failure';
+  EXCEPTION WHEN raise_exception THEN
+    GET STACKED DIAGNOSTICS v_detail = PG_EXCEPTION_DETAIL;
+    ASSERT v_detail = 'TIKTOK_REVIEW_POST_LOCKED', 'T20 claimed reschedule refusal, got: ' || coalesce(v_detail, SQLERRM);
+  END;
+  BEGIN
+    UPDATE public.posts SET caption = 'edited after the claim' WHERE id = v_post;
+    RAISE EXCEPTION 'T20 failed: a caption edit after the claim was accepted' USING ERRCODE = 'assert_failure';
+  EXCEPTION WHEN raise_exception THEN
+    GET STACKED DIAGNOSTICS v_detail = PG_EXCEPTION_DETAIL;
+    ASSERT v_detail = 'TIKTOK_REVIEW_POST_LOCKED', 'T20 claimed caption refusal, got: ' || coalesce(v_detail, SQLERRM);
+  END;
+
+  -- The publisher's own writes still pass: other metadata keys, then the failure status.
+  UPDATE public.posts SET metadata = metadata || '{"tiktok_note": "claimed"}'::jsonb WHERE id = v_post;
+  UPDATE public.posts SET status = 'failed' WHERE id = v_post;
+  -- Out of 'processing' and never dispatched, the post is the user's to move again.
+  UPDATE public.posts SET scheduled_at = now() + interval '6 days' WHERE id = v_post;
+  ASSERT (SELECT status FROM public.posts WHERE id = v_post) = 'failed',
+    'T20 the publisher can still set the outcome';
 END $$;
 
 ROLLBACK;

@@ -52,6 +52,8 @@ export interface PublishStatus {
   updatedAt: string;
   reason: string | null;
   postUrl: string | null;
+  /** The database's reopen rule, answered for this draft; never inferred from `state`. */
+  reopenable: boolean;
 }
 
 export interface SubmitReviewCommand {

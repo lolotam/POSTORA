@@ -12,6 +12,7 @@ const testSubmissionId = "sub-2222-2222";
 const testPostId = "post-3333-3333";
 const testAccountId = "acc-4444-4444";
 const testPublishId = "tiktok-pub-9999";
+const testDraftId = "draft-5555-5555";
 const nowMs = 1727700000000;
 
 type Call = { name: string; table?: string; args?: unknown[] };
@@ -26,6 +27,7 @@ function createStatusFixture(options: {
   tiktokStatusResponse?: unknown;
   claimSucceeds?: boolean;
   webhookEventsError?: unknown;
+  reopenAllowed?: unknown;
 } = {}) {
   const calls: Call[] = [];
   const rpcCalls: { name: string; params: Row }[] = [];
@@ -36,6 +38,7 @@ function createStatusFixture(options: {
 
   const submissionRow: Row = {
     id: testSubmissionId,
+    draft_id: testDraftId,
     post_id: testPostId,
     social_account_id: testAccountId,
     dispatch_state: options.submissionState ?? "publishing",
@@ -142,6 +145,9 @@ function createStatusFixture(options: {
     },
     rpc: (name: string, params: Row) => {
       rpcCalls.push({ name, params });
+      if (name === "tiktok_review_reopen_allowed") {
+        return Promise.resolve({ data: "reopenAllowed" in options ? options.reopenAllowed : false, error: null });
+      }
       if (name === "partner_settle_platform_post") {
         currentPlatformPost = {
           id: (params.p_platform_post_id as string) ?? "pp-settled-1",
@@ -453,7 +459,7 @@ Deno.test("15-second throttle: fresh last_status_check_at makes ZERO status fetc
   const res = await readStatus(f.deps, testUserId, testSubmissionId);
   assertEquals(res.status, 200);
   assertEquals(f.fetchCalls.length, 0);
-  assertEquals(f.rpcCalls.length, 0);
+  assertEquals(f.rpcCalls.filter((call) => call.name === "partner_settle_platform_post").length, 0);
 });
 
 Deno.test("orphan gate: dispatch_state dispatching/pending_dispatch or provider_publish_id null makes ZERO fetch calls", async () => {
@@ -474,7 +480,11 @@ Deno.test("orphan gate: dispatch_state dispatching/pending_dispatch or provider_
     const res = await readStatus(f.deps, testUserId, testSubmissionId);
     assertEquals(res.status, 200);
     assertEquals(f.fetchCalls.length, 0, `Expected 0 fetch calls for ${tc.name}`);
-    assertEquals(f.rpcCalls.length, 0, `Expected 0 RPC calls for ${tc.name}`);
+    assertEquals(
+      f.rpcCalls.filter((call) => call.name === "partner_settle_platform_post").length,
+      0,
+      `Expected no settle call for ${tc.name}`,
+    );
   }
 });
 
@@ -508,4 +518,19 @@ Deno.test("orphan reconciliation: when applyPendingWebhookEvents throws after or
   // Ensure no sensitive tokens appear in the logged data
   const logStr = JSON.stringify(replayFailedLog);
   assert(!logStr.includes("tiktok-valid-access-token"), "Access token must not appear in log");
+});
+
+Deno.test("status carries the database's reopen answer for the submission's draft", async () => {
+  for (const allowed of [true, false]) {
+    const f = createStatusFixture({ platformPost: null, submissionState: "needs_attention", reopenAllowed: allowed });
+    const res = await readStatus(f.deps, testUserId, testSubmissionId);
+    assertEquals((res.body.data as Record<string, unknown>).reopenable, allowed);
+    const check = f.rpcCalls.find((call) => call.name === "tiktok_review_reopen_allowed");
+    assertEquals(check?.params, { p_user_id: testUserId, p_draft_id: testDraftId });
+  }
+});
+
+Deno.test("status fails rather than guess when the reopen check gives no answer", async () => {
+  const f = createStatusFixture({ platformPost: null, submissionState: "needs_attention", reopenAllowed: null });
+  await assertRejects(() => readStatus(f.deps, testUserId, testSubmissionId));
 });

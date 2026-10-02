@@ -170,6 +170,8 @@ export function parsePublishStatus(value: unknown): PublishStatus {
     updatedAt: text(value.updatedAt, "updatedAt"),
     reason: nullableText(value.reason, "reason"),
     postUrl: nullableText(value.postUrl, "postUrl"),
+    // Absent until the edge function that sends it is deployed: absent offers no reopen.
+    reopenable: value.reopenable === true,
   };
 }
 
