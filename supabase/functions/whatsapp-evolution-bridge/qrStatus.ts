@@ -110,18 +110,20 @@ export async function getQrStatusResult(deps: QrStatusDeps, input: QrStatusInput
     // run before the observed state is persisted, so a failed reconcile never stores a
     // state this request could not actually verify.
     const result = await deps.reconcile({ api: deps.api, account, instanceName: instance.instance_name, state });
-    await deps.saveConnectionState(account.id, state);
     // Reconciliation may have just replaced the provisional owner id, and conversation
     // ids are built from it, so the sweep uses the value the reconciler returns rather
     // than the one loaded at the top of this request.
     if (result.mismatch) {
-      // This request's account snapshot predates the flag the sync just persisted, so
-      // the flag is merged here only to reuse the mismatch payload shape.
+      // On a mismatch the scoped flag RPC already stored 'number_mismatch' on the
+      // instance, so saving the observed provider state here would overwrite the very
+      // flag that must reach the owner. This request's account snapshot predates that
+      // flag, so the payload shape is rebuilt from it instead.
       return mismatchStatus({
         ...account,
         account_metadata: { ...account.account_metadata, number_mismatch: true },
       });
     }
+    await deps.saveConnectionState(account.id, state);
     if (state.toLowerCase() === "open") {
       await deps.autoImport({ ...account, platform_user_id: result.ownerNumber }, instance);
     }
