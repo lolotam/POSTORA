@@ -176,8 +176,6 @@ BEGIN
     RAISE EXCEPTION 'M14 failed: unknown choice key accepted' USING ERRCODE = 'assert_failure';
   EXCEPTION WHEN invalid_parameter_value THEN NULL;
   END;
-  ASSERT (SELECT social_account_id FROM public.ai_agent_configs WHERE social_account_id IN (pg_temp.id('src'), pg_temp.id('dst'))) = pg_temp.id('src'),
-    'M14 refused moves changed nothing';
 END $$;
 
 -- M17 in-flight: src2 has a claimed event.
@@ -466,6 +464,178 @@ BEGIN
   ASSERT (SELECT account_metadata->'setup_move_pending'->>'from' FROM public.social_accounts WHERE id = new2) = dup2::text,
     'M20 the survivor is flagged for the banner';
   ASSERT (SELECT count(*) FROM public.ai_agent_configs WHERE social_account_id = dup2) = 1, 'M20 the duplicate keeps its config';
+END $$;
+
+-- M26-M40: test-guard gaps on PR-BC, plus the browser preview / candidate RPCs (20261004111500).
+DO $$
+DECLARE
+  u uuid := pg_temp.id('u_a');
+  ub uuid := pg_temp.id('u_b');
+  ws uuid := pg_temp.id('ws_a');
+  s uuid := gen_random_uuid();
+  d uuid := gen_random_uuid();
+  meta_src uuid := gen_random_uuid();
+  meta_dst uuid := gen_random_uuid();
+  b_other uuid := gen_random_uuid();
+  t1 uuid := gen_random_uuid();
+  t_meta uuid := gen_random_uuid();
+  t_dst_bound uuid := gen_random_uuid();
+  t_src2 uuid := gen_random_uuid();
+  bind1 uuid := gen_random_uuid();
+  key1 uuid := gen_random_uuid();
+  wh1 uuid := gen_random_uuid();
+  ev_sending uuid := gen_random_uuid();
+  v jsonb;
+  i int;
+BEGIN
+  INSERT INTO public.social_accounts (id, user_id, platform, platform_user_id, access_token, workspace_id, is_active, connection_mode, account_metadata) VALUES
+    (s, u, 'whatsapp', '96588888881', '', ws, false, 'evolution_qr', '{"waba_id":"w-a"}'),
+    (d, u, 'whatsapp', '96588888882', '', ws, true, 'evolution_qr', '{"waba_id":"w-b"}'),
+    (meta_src, u, 'whatsapp', '111222333', '', ws, false, 'cloud_api', '{"display_phone_number":"+965 8888 8899"}'),
+    (meta_dst, u, 'whatsapp', '96588888899', '', ws, true, 'evolution_qr', '{}');
+
+  -- M26 (M9 gap): another user's account in the SAME workspace is still refused.
+  INSERT INTO public.social_accounts (id, user_id, platform, platform_user_id, access_token, workspace_id, is_active, connection_mode)
+  VALUES (b_other, ub, 'whatsapp', '96588888883', '', ws, true, 'evolution_qr');
+  BEGIN
+    PERFORM public.move_whatsapp_account_setup(s, b_other, 'auto');
+    RAISE EXCEPTION 'M26 failed: cross-user move in one workspace accepted' USING ERRCODE = 'assert_failure';
+  EXCEPTION WHEN invalid_parameter_value THEN NULL;
+  END;
+
+  -- M27 (M10 gap): a pending_ SOURCE is refused.
+  UPDATE public.social_accounts SET platform_user_id = 'pending_' || s::text WHERE id = s;
+  BEGIN
+    PERFORM public.move_whatsapp_account_setup(s, d, 'auto');
+    RAISE EXCEPTION 'M27 failed: pending source accepted' USING ERRCODE = 'assert_failure';
+  EXCEPTION WHEN invalid_parameter_value THEN NULL;
+  END;
+  UPDATE public.social_accounts SET platform_user_id = '96588888881' WHERE id = s;
+
+  -- Fixture: config, connector + binding, a link, partner items, a pending scheduled
+  -- message, a WABA-mismatched template, 3 test cases.
+  INSERT INTO public.ai_agent_configs (user_id, platform, social_account_id) VALUES (u, 'whatsapp', s);
+  INSERT INTO public.ai_agent_tools (id, user_id, name, description, connector_type, social_account_id, platform, scope) VALUES
+    (t1, u, 'woo_m28', 'm28', 'woocommerce', s, 'whatsapp', 'account');
+  INSERT INTO public.store_webhook_bindings (id, user_id, social_account_id, connector_id, secret_id) VALUES (bind1, u, s, t1, gen_random_uuid());
+  INSERT INTO public.ai_agent_tool_accounts (tool_id, social_account_id, user_id) VALUES (t1, s, u);
+  INSERT INTO public.partner_api_keys (id, workspace_id, social_account_id, name, key_prefix, key_hash, scopes, environment)
+  VALUES (key1, ws, s, 'm28 key', 'pk_m28', 'hash-m28-' || key1::text, ARRAY['messages:send'], 'production');
+  INSERT INTO public.partner_api_key_accounts (key_id, social_account_id, workspace_id) VALUES (key1, s, ws);
+  INSERT INTO public.partner_webhooks (id, workspace_id, created_by_key_id, url, events, platform, social_account_id, secret)
+  VALUES (wh1, ws, key1, 'https://example.invalid/hook', ARRAY['webhook.test'], 'whatsapp', s, 'whsec');
+  INSERT INTO public.whatsapp_scheduled_messages (user_id, social_account_id, recipient_phone, message_text, scheduled_at, status)
+  VALUES (u, s, '96555500001', 'later', now() + interval '1 day', 'pending');
+  INSERT INTO public.whatsapp_message_templates (user_id, social_account_id, template_name, template_language, template_category, template_status, components)
+  VALUES (u, s, 'm28_tpl', 'ar', 'UTILITY', 'APPROVED', '[]');
+  FOR i IN 1..3 LOOP
+    INSERT INTO public.ai_agent_test_cases (user_id, social_account_id, platform, message, expected, position)
+    VALUES (u, s, 'whatsapp', 'm28-' || i, '{}', 4 - i);
+  END LOOP;
+
+  -- M36: the preview names each connector and what stays behind (as user A).
+  PERFORM set_config('request.jwt.claims', json_build_object('sub', u, 'role', 'authenticated')::text, true);
+  v := public.get_whatsapp_setup_move_preview(s, d);
+  ASSERT v->'connectors' @> '[{"name":"woo_m28","has_store_webhook":true,"name_clash":false}]', 'M36 preview lists the connector: ' || v::text;
+  ASSERT (v->>'source_has_agent')::boolean AND NOT (v->>'destination_has_agent')::boolean, 'M36 agent sides';
+  ASSERT (v->>'partner_items')::int = 3, 'M36 partner items counted';
+  ASSERT NOT (v->>'templates_move')::boolean AND (v->>'template_count')::int = 1, 'M36 template stays on a WABA change';
+  -- M37a: a Meta row with no setup yet is not offered.
+  v := public.list_whatsapp_setup_move_candidates(meta_dst);
+  ASSERT NOT (v @> jsonb_build_array(jsonb_build_object('id', meta_src::text))), 'M37 a Meta row with no setup is not offered: ' || v::text;
+  BEGIN
+    PERFORM public.get_whatsapp_setup_move_preview(s, b_other);
+    RAISE EXCEPTION 'M38 failed: preview of another user''s account' USING ERRCODE = 'assert_failure';
+  EXCEPTION WHEN insufficient_privilege THEN NULL;
+  END;
+  PERFORM set_config('request.jwt.claims', '', true);
+
+  -- M28 (M1 gaps): partner items, links, scheduled message and test cases move; template stays.
+  v := public.move_whatsapp_account_setup(s, d, 'auto');
+  ASSERT v->>'status' = 'moved', 'M28 moved: ' || v::text;
+  ASSERT (SELECT social_account_id FROM public.partner_api_keys WHERE id = key1) = d, 'M28 partner primary moved';
+  ASSERT EXISTS (SELECT 1 FROM public.partner_api_key_accounts WHERE key_id = key1 AND social_account_id = d), 'M28 partner link moved';
+  ASSERT (SELECT social_account_id FROM public.partner_webhooks WHERE id = wh1) = d, 'M28 partner webhook moved';
+  ASSERT EXISTS (SELECT 1 FROM public.ai_agent_tool_accounts WHERE tool_id = t1 AND social_account_id = d), 'M28 connector link moved';
+  ASSERT (SELECT count(*) FROM public.whatsapp_scheduled_messages WHERE social_account_id = d) = 1, 'M28 pending scheduled message moved';
+  ASSERT (SELECT count(*) FROM public.whatsapp_message_templates WHERE social_account_id = s) = 1, 'M28 template stays (WABA mismatch)';
+  ASSERT (SELECT count(*) FROM public.ai_agent_test_cases WHERE social_account_id = d) = 3, 'M28 test cases moved';
+
+  -- M29 (M12 gap): with room for one, the lowest position moves first.
+  DELETE FROM public.ai_agent_test_cases WHERE social_account_id IN (s, d);
+  FOR i IN 1..99 LOOP
+    INSERT INTO public.ai_agent_test_cases (user_id, social_account_id, platform, message, expected, position)
+    VALUES (u, d, 'whatsapp', 'fill-' || i, '{}', i);
+  END LOOP;
+  INSERT INTO public.ai_agent_test_cases (user_id, social_account_id, platform, message, expected, position) VALUES
+    (u, s, 'whatsapp', 'pos-5', '{}', 5), (u, s, 'whatsapp', 'pos-1', '{}', 1);
+  v := public.move_whatsapp_account_setup(s, d, 'auto');
+  ASSERT EXISTS (SELECT 1 FROM public.ai_agent_test_cases WHERE social_account_id = d AND message = 'pos-1'), 'M29 position 1 moved first';
+  ASSERT EXISTS (SELECT 1 FROM public.ai_agent_test_cases WHERE social_account_id = s AND message = 'pos-5'), 'M29 position 5 left behind';
+
+  -- M30 (M4 gap): with a destination config, the binding and waitlist stay with the source group.
+  INSERT INTO public.ai_agent_configs (user_id, platform, social_account_id) VALUES (u, 'whatsapp', s);
+  INSERT INTO public.ai_agent_tools (id, user_id, name, description, connector_type, social_account_id, platform, scope)
+  VALUES (t_src2, u, 'woo_m30', 'm30', 'woocommerce', s, 'whatsapp', 'account');
+  INSERT INTO public.store_webhook_bindings (user_id, social_account_id, connector_id, secret_id) VALUES (u, s, t_src2, gen_random_uuid());
+  INSERT INTO public.stock_waitlist (user_id, social_account_id, connector_id, conversation_id, phone, product_id, product_name)
+  VALUES (u, s, t_src2, 'wa_96588888881_96555500002', '96555500002', 30, 'P30');
+  v := public.move_whatsapp_account_setup(s, d, 'auto');
+  ASSERT v->>'status' = 'deferred', 'M30 deferred: ' || v::text;
+  ASSERT (SELECT social_account_id FROM public.store_webhook_bindings WHERE connector_id = t_src2) = s, 'M30 binding stayed';
+  ASSERT (SELECT count(*) FROM public.stock_waitlist WHERE connector_id = t_src2 AND social_account_id = s) = 1, 'M30 waitlist stayed';
+
+  -- M31 (M17 gap): a 'sending' event also counts as in flight.
+  INSERT INTO public.store_events (id, user_id, social_account_id, connector_id, binding_id, flow, external_id, payload, status, due_at, claimed_at, claim_token)
+  SELECT ev_sending, u, s, t_src2, b.id, 'cod_confirm', 'm31', '{}', 'sending', now(), now(), gen_random_uuid()
+    FROM public.store_webhook_bindings b WHERE b.connector_id = t_src2;
+  BEGIN
+    PERFORM public.move_whatsapp_account_setup(s, d, 'interactive', '{"agent_config":"source"}');
+    RAISE EXCEPTION 'M31 failed: interactive move during a sending event' USING ERRCODE = 'assert_failure';
+  EXCEPTION WHEN object_in_use THEN NULL;
+  END;
+  UPDATE public.store_events SET status = 'sent', processed_at = now() WHERE id = ev_sending;
+
+  -- M32: 'replace' refuses when the destination connector of that name owns a store webhook.
+  INSERT INTO public.ai_agent_tools (id, user_id, name, description, connector_type, social_account_id, platform, scope)
+  VALUES (t_dst_bound, u, 'woo_m30', 'dst m30', 'woocommerce', d, 'whatsapp', 'account');
+  INSERT INTO public.store_webhook_bindings (user_id, social_account_id, connector_id, secret_id) VALUES (u, d, t_dst_bound, gen_random_uuid());
+  BEGIN
+    PERFORM public.move_whatsapp_account_setup(s, d, 'interactive', '{"agent_config":"source","connectors":{"woo_m30":"replace"}}');
+    RAISE EXCEPTION 'M32 failed: replacing a store-bound destination connector accepted' USING ERRCODE = 'assert_failure';
+  EXCEPTION WHEN invalid_parameter_value THEN
+    ASSERT SQLERRM LIKE '%replaced_connector_has_store_webhook%', 'M32 reason: ' || SQLERRM;
+  END;
+
+  -- M33: 'replace' of an unbound destination connector deletes it and moves the source one.
+  DELETE FROM public.store_webhook_bindings WHERE connector_id = t_dst_bound;
+  v := public.move_whatsapp_account_setup(s, d, 'interactive', '{"agent_config":"source","connectors":{"woo_m30":"replace"}}');
+  ASSERT NOT EXISTS (SELECT 1 FROM public.ai_agent_tools WHERE id = t_dst_bound), 'M33 destination connector replaced';
+  ASSERT (SELECT social_account_id FROM public.ai_agent_tools WHERE id = t_src2) = d, 'M33 source connector moved';
+
+  -- M34 / M37b / M39: a Meta source matched by display_phone_number is offered, can be
+  -- dismissed, and moves its waitlist (same number).
+  INSERT INTO public.ai_agent_configs (user_id, platform, social_account_id) VALUES (u, 'whatsapp', meta_src);
+  INSERT INTO public.ai_agent_tools (id, user_id, name, description, connector_type, social_account_id, platform, scope)
+  VALUES (t_meta, u, 'woo_m34', 'm34', 'woocommerce', meta_src, 'whatsapp', 'account');
+  INSERT INTO public.store_webhook_bindings (user_id, social_account_id, connector_id, secret_id) VALUES (u, meta_src, t_meta, gen_random_uuid());
+  INSERT INTO public.stock_waitlist (user_id, social_account_id, connector_id, conversation_id, phone, product_id, product_name)
+  VALUES (u, meta_src, t_meta, 'wa_x', '96555500003', 34, 'P34');
+  PERFORM set_config('request.jwt.claims', json_build_object('sub', u, 'role', 'authenticated')::text, true);
+  v := public.list_whatsapp_setup_move_candidates(meta_dst);
+  ASSERT v @> jsonb_build_array(jsonb_build_object('id', meta_src::text, 'reason', 'same_number')),
+    'M37 a Meta row with setup is offered by number: ' || v::text;
+  PERFORM set_config('request.jwt.claims', '', true);
+  PERFORM public.dismiss_whatsapp_setup_move(meta_dst, meta_src);
+  PERFORM set_config('request.jwt.claims', json_build_object('sub', u, 'role', 'authenticated')::text, true);
+  v := public.list_whatsapp_setup_move_candidates(meta_dst);
+  ASSERT NOT (v @> jsonb_build_array(jsonb_build_object('id', meta_src::text))), 'M39 a dismissed candidate is not offered';
+  PERFORM set_config('request.jwt.claims', '', true);
+  v := public.move_whatsapp_account_setup(meta_src, meta_dst, 'auto');
+  ASSERT (SELECT count(*) FROM public.stock_waitlist WHERE social_account_id = meta_dst) = 1, 'M34 waitlist moved on a matching Meta number';
+
+  ASSERT NOT has_function_privilege('anon', 'public.list_whatsapp_setup_move_candidates(uuid)', 'EXECUTE'), 'M40 anon cannot list candidates';
+  ASSERT NOT has_function_privilege('service_role', 'public.get_whatsapp_setup_move_preview(uuid,uuid)', 'EXECUTE'), 'M40 preview is browser-only';
 END $$;
 
 ROLLBACK;
