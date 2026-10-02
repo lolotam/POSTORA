@@ -84,6 +84,14 @@ BEGIN
   ASSERT (SELECT last_connection_state FROM public.whatsapp_evolution_instances WHERE social_account_id = acc) = 'close', 'N7 state stored';
   ASSERT NOT has_function_privilege('authenticated', 'public.save_owned_evolution_state(uuid,uuid,text)', 'EXECUTE'), 'N7 not browser-callable';
 
+  -- N8: a QR refresh with a NULL state keeps the stored state (20261004100420).
+  PERFORM public.save_owned_evolution_state(acc, u_a, 'connecting');
+  ASSERT public.save_owned_evolution_qr(acc, u_a, 'qr-refresh', NULL) = true, 'N8 owner refreshes the QR';
+  ASSERT (SELECT last_qr = 'qr-refresh' AND last_connection_state = 'connecting' FROM public.whatsapp_evolution_instances WHERE social_account_id = acc),
+    'N8 the state is kept';
+  ASSERT public.save_owned_evolution_qr(acc, u_b, 'qr-stranger', NULL) = false, 'N8 another user refreshes nothing';
+  ASSERT (SELECT count(*) FROM pg_proc WHERE proname = 'save_owned_evolution_qr') = 1, 'N8 no overload';
+
   -- N4: grants.
   ASSERT NOT has_function_privilege('authenticated', 'public.flag_whatsapp_number_mismatch(uuid,uuid,uuid,text)', 'EXECUTE'), 'N4 flag not browser-callable';
   ASSERT NOT has_function_privilege('authenticated', 'public.clear_whatsapp_number_mismatch(uuid,uuid,uuid)', 'EXECUTE'), 'N4 clear not browser-callable';
