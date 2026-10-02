@@ -485,6 +485,7 @@ DECLARE
   key1 uuid := gen_random_uuid();
   wh1 uuid := gen_random_uuid();
   ev_sending uuid := gen_random_uuid();
+  t1_spare uuid := gen_random_uuid();
   v jsonb;
   i int;
 BEGIN
@@ -608,7 +609,10 @@ BEGIN
   END;
 
   -- M33: 'replace' of an unbound destination connector deletes it and moves the source one.
-  DELETE FROM public.store_webhook_bindings WHERE connector_id = t_dst_bound;
+  -- Re-point (not delete) the binding: deleting fires the Vault-secret reclaim trigger.
+  INSERT INTO public.ai_agent_tools (id, user_id, name, description, connector_type, social_account_id, platform, scope)
+  VALUES (t1_spare, u, 'woo_m33_spare', 'spare', 'woocommerce', d, 'whatsapp', 'account');
+  UPDATE public.store_webhook_bindings SET connector_id = t1_spare WHERE connector_id = t_dst_bound;
   v := public.move_whatsapp_account_setup(s, d, 'interactive', '{"agent_config":"source","connectors":{"woo_m30":"replace"}}');
   ASSERT NOT EXISTS (SELECT 1 FROM public.ai_agent_tools WHERE id = t_dst_bound), 'M33 destination connector replaced';
   ASSERT (SELECT social_account_id FROM public.ai_agent_tools WHERE id = t_src2) = d, 'M33 source connector moved';
