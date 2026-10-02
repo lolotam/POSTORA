@@ -154,7 +154,7 @@ Deno.test("moveSetup: throws MoveSetupError 400 when from === to (no rpc)", asyn
   assertEquals(rpcCalls.length, 0);
 });
 
-Deno.test("moveSetup: success calls rpc once with p_from, p_to, p_mode:'interactive', p_choices and returns its data", async () => {
+Deno.test("moveSetup: success calls rpc once when caller owns both accounts ('user-1' succeeds, 'user-2' throws 404)", async () => {
   const expectedData = {
     status: "moved",
     moved: { agent_config: 1, connectors: 1 },
@@ -162,13 +162,17 @@ Deno.test("moveSetup: success calls rpc once with p_from, p_to, p_mode:'interact
     conflicts: [],
   };
   const { deps, rpcCalls } = createDeps({
+    ownedAccounts: {
+      "user-1:acc-from": { id: "acc-from" },
+      "user-1:acc-to": { id: "acc-to" },
+    },
     rpcHandler: () => Promise.resolve({ data: expectedData, error: null }),
   });
 
   const choices = { agent_config: "source", connectors: { woo: "replace" } };
   const result = await moveSetup(deps, "user-1", {
-    from: "acc-src",
-    to: "acc-dst",
+    from: "acc-from",
+    to: "acc-to",
     choices,
   });
 
@@ -177,12 +181,25 @@ Deno.test("moveSetup: success calls rpc once with p_from, p_to, p_mode:'interact
   assertEquals(rpcCalls[0], {
     name: "move_whatsapp_account_setup",
     args: {
-      p_from: "acc-src",
-      p_to: "acc-dst",
+      p_from: "acc-from",
+      p_to: "acc-to",
       p_mode: "interactive",
       p_choices: choices,
     },
   });
+
+  const user2Error = (await assertRejects(
+    () =>
+      moveSetup(deps, "user-2", {
+        from: "acc-from",
+        to: "acc-to",
+        choices,
+      }),
+    MoveSetupError,
+  )) as MoveSetupError;
+
+  assertEquals(user2Error.status, 404);
+  assertEquals(rpcCalls.length, 1);
 });
 
 Deno.test("moveSetup: choices undefined is treated as {} in rpc call", async () => {
@@ -209,96 +226,36 @@ Deno.test("moveSetup: choices undefined is treated as {} in rpc call", async () 
   });
 });
 
-Deno.test("moveSetup: accounts_not_compatible maps to 409 code 'accounts_not_compatible'", async () => {
-  const { deps } = createDeps({
-    rpcHandler: () =>
-      Promise.resolve({
-        data: null,
-        error: { code: "22023", message: "move_whatsapp_account_setup: accounts_not_compatible" },
-      }),
-  });
+Deno.test("moveSetup: 22023 refusal tokens map to 409 with matching code", async () => {
+  const refusalCases = [
+    "accounts_not_compatible",
+    "connector_name_clash",
+    "store_connector_left_behind",
+    "replaced_connector_has_store_webhook",
+  ] as const;
 
-  const error = (await assertRejects(
-    () =>
-      moveSetup(deps, "user-1", {
-        from: "acc-src",
-        to: "acc-dst",
-        choices: {},
-      }),
-    MoveSetupError,
-  )) as MoveSetupError & { code?: string };
+  for (const token of refusalCases) {
+    const { deps } = createDeps({
+      rpcHandler: () =>
+        Promise.resolve({
+          data: null,
+          error: { code: "22023", message: `move_whatsapp_account_setup: ${token}` },
+        }),
+    });
 
-  assertEquals(error.status, 409);
-  assertEquals(error.code, "accounts_not_compatible");
-});
+    const error = (await assertRejects(
+      () =>
+        moveSetup(deps, "user-1", {
+          from: "acc-src",
+          to: "acc-dst",
+          choices: {},
+        }),
+      MoveSetupError,
+    )) as MoveSetupError & { code?: string };
 
-Deno.test("moveSetup: connector_name_clash maps to 409 code 'connector_name_clash'", async () => {
-  const { deps } = createDeps({
-    rpcHandler: () =>
-      Promise.resolve({
-        data: null,
-        error: { code: "22023", message: "move_whatsapp_account_setup: connector_name_clash" },
-      }),
-  });
-
-  const error = (await assertRejects(
-    () =>
-      moveSetup(deps, "user-1", {
-        from: "acc-src",
-        to: "acc-dst",
-        choices: {},
-      }),
-    MoveSetupError,
-  )) as MoveSetupError & { code?: string };
-
-  assertEquals(error.status, 409);
-  assertEquals(error.code, "connector_name_clash");
-});
-
-Deno.test("moveSetup: store_connector_left_behind maps to 409 code 'store_connector_left_behind'", async () => {
-  const { deps } = createDeps({
-    rpcHandler: () =>
-      Promise.resolve({
-        data: null,
-        error: { code: "22023", message: "move_whatsapp_account_setup: store_connector_left_behind" },
-      }),
-  });
-
-  const error = (await assertRejects(
-    () =>
-      moveSetup(deps, "user-1", {
-        from: "acc-src",
-        to: "acc-dst",
-        choices: {},
-      }),
-    MoveSetupError,
-  )) as MoveSetupError & { code?: string };
-
-  assertEquals(error.status, 409);
-  assertEquals(error.code, "store_connector_left_behind");
-});
-
-Deno.test("moveSetup: replaced_connector_has_store_webhook maps to 409 code 'replaced_connector_has_store_webhook'", async () => {
-  const { deps } = createDeps({
-    rpcHandler: () =>
-      Promise.resolve({
-        data: null,
-        error: { code: "22023", message: "move_whatsapp_account_setup: replaced_connector_has_store_webhook" },
-      }),
-  });
-
-  const error = (await assertRejects(
-    () =>
-      moveSetup(deps, "user-1", {
-        from: "acc-src",
-        to: "acc-dst",
-        choices: {},
-      }),
-    MoveSetupError,
-  )) as MoveSetupError & { code?: string };
-
-  assertEquals(error.status, 409);
-  assertEquals(error.code, "replaced_connector_has_store_webhook");
+    assertEquals(error.status, 409);
+    assertEquals(error.code, token);
+  }
 });
 
 Deno.test("moveSetup: 55006 maps to 409 code 'order_in_flight'", async () => {

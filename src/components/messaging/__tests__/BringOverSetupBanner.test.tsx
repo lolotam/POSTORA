@@ -336,8 +336,11 @@ describe("BringOverSetupBanner", () => {
     mockCandidatesData.current = [candidateWithSetup];
     mockPreviewData.current = createPreview();
     invokeSpy.mockResolvedValueOnce({
-      data: { error: "connector_name_clash" },
-      error: null,
+      data: null,
+      error: {
+        name: "FunctionsHttpError",
+        context: new Response(JSON.stringify({ error: "connector_name_clash" }), { status: 409 }),
+      },
     });
 
     renderBanner(activeAccount);
@@ -362,8 +365,11 @@ describe("BringOverSetupBanner", () => {
     mockCandidatesData.current = [candidateWithSetup];
     mockPreviewData.current = createPreview();
     invokeSpy.mockResolvedValueOnce({
-      data: { error: "order_in_flight" },
-      error: null,
+      data: null,
+      error: {
+        name: "FunctionsHttpError",
+        context: new Response(JSON.stringify({ error: "order_in_flight" }), { status: 409 }),
+      },
     });
 
     renderBanner(activeAccount);
@@ -382,6 +388,140 @@ describe("BringOverSetupBanner", () => {
     expect(
       screen.getByText(/xsellpoint \(old\) has an AI agent/),
     ).toBeInTheDocument();
+  });
+
+  it("l. unchecking a connector with no name clash and no store webhook sends connectors: { <name>: 'skip' } in the exact choices", async () => {
+    mockCandidatesData.current = [candidateWithSetup];
+    mockPreviewData.current = createPreview({
+      connectors: [
+        {
+          name: "woo_plain",
+          connector_type: "woocommerce",
+          has_store_webhook: false,
+          name_clash: false,
+          destination_has_store_webhook: false,
+        },
+      ],
+    });
+
+    renderBanner(activeAccount);
+
+    const checkbox = screen.getByRole("checkbox", { name: /woo_plain/i });
+    expect(checkbox).toBeChecked();
+    fireEvent.click(checkbox);
+    expect(checkbox).not.toBeChecked();
+
+    const moveButton = screen.getByRole("button", { name: /^Move$/i });
+    fireEvent.click(moveButton);
+
+    await waitFor(() => {
+      expect(invokeSpy).toHaveBeenCalledWith("whatsapp-evolution-bridge", {
+        body: {
+          action: "move_setup",
+          from: "cand-1",
+          to: "acc-active-1",
+          choices: {
+            agent_config: "source",
+            connectors: { woo_plain: "skip" },
+            partner: false,
+          },
+        },
+      });
+    }, { timeout: 250 });
+  });
+
+  it("m. a store-webhook connector unchecked BEFORE picking 'Use the one from …' becomes disabled AND re-checked, and sent choices do not contain skip", async () => {
+    mockCandidatesData.current = [candidateWithSetup];
+    mockPreviewData.current = createPreview({
+      source_has_agent: true,
+      destination_has_agent: true,
+      connectors: [
+        {
+          name: "woo_store",
+          connector_type: "woocommerce",
+          has_store_webhook: true,
+          name_clash: false,
+          destination_has_store_webhook: false,
+        },
+      ],
+    });
+
+    renderBanner(activeAccount);
+
+    const checkbox = screen.getByRole("checkbox", { name: /woo_store/i });
+    expect(checkbox).toBeChecked();
+    expect(checkbox).not.toBeDisabled();
+
+    // Owner unchecks BEFORE picking "Use the one from …"
+    fireEvent.click(checkbox);
+    expect(checkbox).not.toBeChecked();
+
+    // Owner picks "Use the one from …"
+    const useSourceRadio = screen.getByLabelText("Use the one from xsellpoint (old)");
+    fireEvent.click(useSourceRadio);
+
+    // Becomes disabled AND re-checked
+    expect(checkbox).toBeDisabled();
+    expect(checkbox).toBeChecked();
+
+    const moveButton = screen.getByRole("button", { name: /^Move$/i });
+    fireEvent.click(moveButton);
+
+    await waitFor(() => {
+      expect(invokeSpy).toHaveBeenCalledWith("whatsapp-evolution-bridge", {
+        body: {
+          action: "move_setup",
+          from: "cand-1",
+          to: "acc-active-1",
+          choices: {
+            agent_config: "source",
+            connectors: {},
+            partner: false,
+          },
+        },
+      });
+    }, { timeout: 250 });
+  });
+
+  it("n. a name-clash connector whose preview has destination_has_store_webhook true defaults to 'skip' with 'Replace the one here' disabled; sent choices contain 'skip' for it", async () => {
+    mockCandidatesData.current = [candidateWithSetup];
+    mockPreviewData.current = createPreview({
+      connectors: [
+        {
+          name: "woo_clash",
+          connector_type: "woocommerce",
+          has_store_webhook: false,
+          name_clash: true,
+          destination_has_store_webhook: true,
+        },
+      ],
+    });
+
+    renderBanner(activeAccount);
+
+    const skipOption = screen.getByLabelText(/Keep the one here \(skip\)/i);
+    const replaceOption = screen.getByLabelText(/Replace the one here/i);
+
+    expect(skipOption).toBeChecked();
+    expect(replaceOption).toBeDisabled();
+
+    const moveButton = screen.getByRole("button", { name: /^Move$/i });
+    fireEvent.click(moveButton);
+
+    await waitFor(() => {
+      expect(invokeSpy).toHaveBeenCalledWith("whatsapp-evolution-bridge", {
+        body: {
+          action: "move_setup",
+          from: "cand-1",
+          to: "acc-active-1",
+          choices: {
+            agent_config: "source",
+            connectors: { woo_clash: "skip" },
+            partner: false,
+          },
+        },
+      });
+    }, { timeout: 250 });
   });
 
   it("j. preview waitlist_moves false with waitlist_count 3 → line '3 waitlisted customers stay — they agreed to messages from the old number'; templates_move false with template_count 2 → '2 message templates must be recreated on this account'", () => {
