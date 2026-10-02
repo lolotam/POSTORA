@@ -1,6 +1,6 @@
 -- supabase/tests/whatsapp_number_mismatch.sql
 -- WhatsApp account continuity, PR-A follow-up: migration 20261004100200 (atomic
--- number_mismatch flag set / clear). One transaction, synthetic fixtures, labelled
+-- number_mismatch flag set / clear) and 20261004100300 (scoped flag). One transaction, synthetic fixtures, labelled
 -- ASSERTs, ROLLBACK, sentinel last.
 BEGIN;
 
@@ -19,8 +19,25 @@ BEGIN
   INSERT INTO public.social_accounts (id, user_id, platform, platform_user_id, access_token, workspace_id, is_active, connection_mode, account_metadata)
   VALUES (acc, u_a, 'whatsapp', '96566600001', '', ws_a, true, 'evolution_qr', '{"automation_handler":"internal"}');
 
+  -- N0: the flag is scoped too: another user, workspace or instance flags nothing; an
+  -- unscoped call is refused; no one-argument overload remains.
+  ASSERT public.flag_whatsapp_number_mismatch(acc, u_b, NULL, NULL) = false, 'N0 another user cannot flag';
+  ASSERT public.flag_whatsapp_number_mismatch(acc, NULL, ws_b, NULL) = false, 'N0 another workspace cannot flag';
+  ASSERT public.flag_whatsapp_number_mismatch(acc, NULL, NULL, 'postora_not_this_one') = false, 'N0 another instance cannot flag';
+  ASSERT (SELECT is_active FROM public.social_accounts WHERE id = acc), 'N0 still active after refused flags';
+  BEGIN
+    PERFORM public.flag_whatsapp_number_mismatch(acc, NULL, NULL, NULL);
+    RAISE EXCEPTION 'N0 failed: unscoped flag accepted' USING ERRCODE = 'assert_failure';
+  EXCEPTION WHEN invalid_parameter_value THEN NULL;
+  END;
+  ASSERT (SELECT count(*) FROM pg_proc WHERE proname = 'flag_whatsapp_number_mismatch') = 1, 'N0 exactly one flag function (no overload)';
+  INSERT INTO public.whatsapp_evolution_instances (social_account_id, instance_name, jwt_key)
+  VALUES (acc, 'postora_' || acc::text, 'jwt-test');
+  ASSERT public.flag_whatsapp_number_mismatch(acc, NULL, NULL, 'postora_' || acc::text) = true, 'N0 the instance scope flags';
+  UPDATE public.social_accounts SET is_active = true, account_metadata = account_metadata - 'number_mismatch' WHERE id = acc;
+
   -- N1: flag sets the key and deactivates, keeping other keys.
-  ASSERT public.flag_whatsapp_number_mismatch(acc) = true, 'N1 flag applied';
+  ASSERT public.flag_whatsapp_number_mismatch(acc, u_a, NULL, NULL) = true, 'N1 flag applied';
   ASSERT (SELECT NOT is_active AND (account_metadata->>'number_mismatch')::boolean
                  AND account_metadata->>'automation_handler' = 'internal'
             FROM public.social_accounts WHERE id = acc), 'N1 inactive, flagged, other keys kept';
@@ -35,7 +52,7 @@ BEGIN
   ASSERT public.clear_whatsapp_number_mismatch(acc, u_a, NULL) = false, 'N2 clearing twice is a no-op';
 
   -- N3: the workspace scope works for the partner path; an unscoped call is refused.
-  PERFORM public.flag_whatsapp_number_mismatch(acc);
+  PERFORM public.flag_whatsapp_number_mismatch(acc, NULL, ws_a, NULL);
   ASSERT public.clear_whatsapp_number_mismatch(acc, NULL, ws_a) = true, 'N3 workspace-scoped clear';
   BEGIN
     PERFORM public.clear_whatsapp_number_mismatch(acc, NULL, NULL);
@@ -44,7 +61,7 @@ BEGIN
   END;
 
   -- N4: grants.
-  ASSERT NOT has_function_privilege('authenticated', 'public.flag_whatsapp_number_mismatch(uuid)', 'EXECUTE'), 'N4 flag not browser-callable';
+  ASSERT NOT has_function_privilege('authenticated', 'public.flag_whatsapp_number_mismatch(uuid,uuid,uuid,text)', 'EXECUTE'), 'N4 flag not browser-callable';
   ASSERT NOT has_function_privilege('authenticated', 'public.clear_whatsapp_number_mismatch(uuid,uuid,uuid)', 'EXECUTE'), 'N4 clear not browser-callable';
   ASSERT NOT has_function_privilege('anon', 'public.clear_whatsapp_number_mismatch(uuid,uuid,uuid)', 'EXECUTE'), 'N4 clear not anon-callable';
 END $$;
