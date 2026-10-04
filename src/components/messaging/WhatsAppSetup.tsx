@@ -235,9 +235,9 @@ export function WhatsAppSetup({ connectedAccounts }: WhatsAppSetupProps) {
       {/* Connection Status Card */}
       <Card>
         <CardHeader>
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex items-center gap-3">
-              <div className="p-2 rounded-lg bg-green-500/10">
+              <div className="p-2 rounded-lg bg-green-500/10 shrink-0">
                 <MessageSquare className="w-6 h-6 text-green-600" />
               </div>
               <div>
@@ -247,7 +247,7 @@ export function WhatsAppSetup({ connectedAccounts }: WhatsAppSetupProps) {
                 </CardDescription>
               </div>
             </div>
-            <Badge variant={hasConnected ? "default" : "secondary"}>
+            <Badge variant={hasConnected ? "default" : "secondary"} className="w-fit">
               {hasConnected ? t("setup.connected", "Connected") : t("setup.notConnected", "Not Connected")}
             </Badge>
           </div>
@@ -262,10 +262,10 @@ export function WhatsAppSetup({ connectedAccounts }: WhatsAppSetupProps) {
                 return (
                   <div
                     key={account.id}
-                    className="flex items-center gap-3 p-3 rounded-lg border bg-muted/30"
+                    className="flex flex-wrap items-center gap-3 p-3 rounded-lg border bg-muted/30"
                   >
                     <Phone className="w-4 h-4 text-green-600 shrink-0" />
-                    <div className="flex-1 min-w-0">
+                    <div className="flex-1 min-w-0 basis-48">
                       <div className="flex items-center gap-2 flex-wrap">
                         <p className="text-sm font-medium truncate">
                           {account.platform_username || account.platform_user_id}
@@ -363,8 +363,8 @@ export function WhatsAppSetup({ connectedAccounts }: WhatsAppSetupProps) {
             <div className="mt-4 space-y-2 border-t pt-4">
               <p className="text-xs font-medium text-muted-foreground">{t("setup.previouslyConnected", "Previously connected")}</p>
               {qrAccountsError && (
-                <div className="flex items-center gap-3 p-3 rounded-lg border border-dashed bg-muted/20">
-                  <p className="flex-1 text-xs text-muted-foreground">
+                <div className="flex flex-wrap items-center gap-3 p-3 rounded-lg border border-dashed bg-muted/20">
+                  <p className="flex-1 basis-48 text-xs text-muted-foreground">
                     {t("setup.qrReconnectListFailed", "Couldn't load your disconnected connections.")}
                   </p>
                   <Button
@@ -381,11 +381,11 @@ export function WhatsAppSetup({ connectedAccounts }: WhatsAppSetupProps) {
               {reconnectable.map((account) => (
                 <div
                   key={account.id}
-                  className="flex items-center gap-3 p-3 rounded-lg border border-dashed bg-muted/20"
+                  className="flex flex-wrap items-center gap-3 p-3 rounded-lg border border-dashed bg-muted/20"
                   data-testid="reconnectable-account"
                 >
                   <Phone className="w-4 h-4 text-muted-foreground shrink-0" />
-                  <div className="flex-1 min-w-0">
+                  <div className="flex-1 min-w-0 basis-48">
                     <p className="text-sm font-medium truncate">
                       {account.platform_username || account.platform_user_id}
                     </p>
@@ -412,11 +412,11 @@ export function WhatsAppSetup({ connectedAccounts }: WhatsAppSetupProps) {
               {reconnectableQr.map((account) => (
                 <div
                   key={account.id}
-                  className="flex items-center gap-3 p-3 rounded-lg border border-dashed bg-muted/20"
+                  className="flex flex-wrap items-center gap-3 p-3 rounded-lg border border-dashed bg-muted/20"
                   data-testid="reconnectable-account"
                 >
                   <Phone className="w-4 h-4 text-muted-foreground shrink-0" />
-                  <div className="flex-1 min-w-0">
+                  <div className="flex-1 min-w-0 basis-48">
                     <p className="text-sm font-medium truncate">
                       {account.platform_username || account.platform_user_id}
                     </p>
@@ -767,23 +767,27 @@ export function WhatsAppSetup({ connectedAccounts }: WhatsAppSetupProps) {
               </li>
               <li className="flex items-start gap-2">
                 <span className="text-primary mt-0.5">•</span>
-                <Trans ns="whatsapp" i18nKey="setup.prereqCoexistence" components={{ strong: <strong /> }}>
-                  For <strong>Coexistence</strong>: the number must currently be active in the
-                  WhatsApp Business mobile app with good messaging quality
-                </Trans>
+                <span>
+                  <Trans ns="whatsapp" i18nKey="setup.prereqCoexistence" components={{ strong: <strong /> }}>
+                    For <strong>Coexistence</strong>: the number must currently be active in the
+                    WhatsApp Business mobile app with good messaging quality
+                  </Trans>
+                </span>
               </li>
               <li className="flex items-start gap-2">
                 <span className="text-primary mt-0.5">•</span>
-                <Trans
-                  ns="whatsapp"
-                  i18nKey="setup.prereqPermissions"
-                  components={{
-                    code: <code className="text-xs bg-muted px-1 rounded" />,
-                  }}
-                >
-                  The <code className="text-xs bg-muted px-1 rounded">whatsapp_business_messaging</code> &{" "}
-                  <code className="text-xs bg-muted px-1 rounded">whatsapp_business_management</code> permissions
-                </Trans>
+                <span>
+                  <Trans
+                    ns="whatsapp"
+                    i18nKey="setup.prereqPermissions"
+                    components={{
+                      code: <code className="text-xs bg-muted px-1 rounded" />,
+                    }}
+                  >
+                    The <code className="text-xs bg-muted px-1 rounded">whatsapp_business_messaging</code> &{" "}
+                    <code className="text-xs bg-muted px-1 rounded">whatsapp_business_management</code> permissions
+                  </Trans>
+                </span>
               </li>
             </ul>
             <a

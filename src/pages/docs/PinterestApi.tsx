@@ -860,7 +860,7 @@ export default function PinterestApi() {
             </CardHeader>
             <CardContent>
               <div className="overflow-x-auto">
-                <table className="w-full text-sm">
+                <table className="w-full min-w-[32rem] text-sm">
                   <thead>
                     <tr className="border-b">
                       <th className="text-start py-2 font-medium">Setting</th>
@@ -905,12 +905,12 @@ export default function PinterestApi() {
         </section>
 
         {/* Footer Navigation */}
-        <div className="flex items-center justify-between pt-8 border-t">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between pt-8 border-t">
           <Link to="/docs" className="inline-flex items-center gap-2 text-muted-foreground hover:text-foreground transition-colors">
             <ArrowLeft className="w-4 h-4" />
             Back to Documentation
           </Link>
-          <div className="flex gap-4">
+          <div className="flex flex-wrap gap-4">
             <Link to="/n8n/instagram">
               <Button variant="outline" size="sm" className="gap-2">
                 <PlatformIcon platform="instagram" size="xs" />

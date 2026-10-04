@@ -1178,8 +1178,8 @@ export function StockMediaPicker({ open, onOpenChange, onSelect, photosOnly = fa
           {/* Main Tabs */}
         <Tabs value={mainTab} onValueChange={(v) => setMainTab(v as MainTab)} className="w-full flex flex-col flex-1 min-h-0">
           <TabsList className={cn(
-            "grid w-full mb-3 bg-muted rounded-lg p-1",
-            photosOnly ? "grid-cols-4" : "grid-cols-8"
+            "flex w-full justify-start overflow-x-auto scrollbar-none md:grid mb-3 bg-muted rounded-lg p-1",
+            photosOnly ? "md:grid-cols-4" : "md:grid-cols-8"
           )}>
             {/* Combined tabs */}
             <TabsTrigger value="all-photos" className="flex items-center gap-1.5 text-xs">

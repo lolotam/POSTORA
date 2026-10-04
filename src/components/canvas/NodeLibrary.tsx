@@ -69,7 +69,7 @@ export function NodeLibrary({ onDragStart }: NodeLibraryProps) {
   }
 
   return (
-    <div className="absolute start-4 top-4 bottom-4 z-10 w-[240px]">
+    <div className="absolute start-4 top-4 bottom-4 z-10 w-[200px] sm:w-[240px]">
       <div className="relative h-full">
         <div className="relative h-full bg-card ring-1 ring-white/10 rounded-2xl shadow-2xl flex flex-col overflow-hidden">
         <div className="p-3 border-b border-white/10 flex items-center justify-between">

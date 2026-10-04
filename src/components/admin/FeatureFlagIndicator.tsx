@@ -84,7 +84,11 @@ export function FeatureFlagIndicator() {
   const { isAdmin } = useUserRole();
   const { flags, isLoading } = useFeatureFlags();
   const [isOpen, setIsOpen] = useState(false);
-  const [isVisible, setIsVisible] = useState(true);
+  // Starts collapsed to its "Show" button on phones, where the open panel would sit on top
+  // of the bottom of every admin table.
+  const [isVisible, setIsVisible] = useState(
+    () => typeof window === "undefined" || window.matchMedia("(min-width: 640px)").matches
+  );
 
   // Only show for admins
   if (!isAdmin || isLoading) return null;
@@ -100,14 +104,14 @@ export function FeatureFlagIndicator() {
         onClick={() => setIsVisible(true)}
         className="fixed bottom-4 end-4 z-50 shadow-lg bg-background border-primary/20"
       >
-        <Eye className="w-4 h-4 me-2" />
-        Show Flags
+        <Eye className="w-4 h-4 sm:me-2" />
+        <span className="sr-only sm:not-sr-only">Show Flags</span>
       </Button>
     );
   }
 
   return (
-    <div className="fixed bottom-4 end-4 z-50 w-72 shadow-xl rounded-lg border bg-background">
+    <div className="fixed bottom-4 end-4 z-50 w-72 max-w-[calc(100vw-2rem)] shadow-xl rounded-lg border bg-background">
       <Collapsible open={isOpen} onOpenChange={setIsOpen}>
         <div className="flex items-center justify-between p-3 border-b">
           <CollapsibleTrigger asChild>

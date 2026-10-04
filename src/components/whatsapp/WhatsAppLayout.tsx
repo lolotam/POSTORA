@@ -128,10 +128,11 @@ function WhatsAppLayoutContent() {
 
           <div className="flex min-h-0 flex-1">
             {/* Scrolls independently: fourteen sections do not fit a short viewport, and the
-                content pane must not be pushed down by the nav. */}
+                content pane must not be pushed down by the nav. Hidden on phones, where it
+                would take most of the width; the header's drawer carries the same nav there. */}
             <aside
               className={cn(
-                "wa-app flex min-h-0 shrink-0 flex-col border-r bg-card transition-[width] duration-200 ease-in-out",
+                "wa-app hidden min-h-0 shrink-0 flex-col border-r bg-card md:flex transition-[width] duration-200 ease-in-out",
                 collapsed ? "w-16" : "w-56 lg:w-60",
               )}
             >

@@ -434,7 +434,7 @@ export default function AdminObservability() {
     <AdminLayout>
       <div className="space-y-6">
         {/* Header */}
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h2 className="text-2xl font-bold flex items-center gap-2">
               <Activity className="w-6 h-6 text-primary" />
@@ -442,7 +442,7 @@ export default function AdminObservability() {
             </h2>
             <p className="text-muted-foreground">Monitor system health, metrics, and configure alerts</p>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             {/* Auto-refresh toggle */}
             <div className="flex items-center gap-2 text-sm">
               <span className="text-muted-foreground">Auto-refresh</span>
@@ -800,7 +800,7 @@ export default function AdminObservability() {
                     <p className="text-sm">Your system is running smoothly</p>
                   </div>
                 ) : (
-                  <ScrollArea className="h-[400px]">
+                  <ScrollArea className="h-[400px] max-md:[&>[data-radix-scroll-area-viewport]>div]:!block">
                     <div className="space-y-3">
                       {alertHistory.map((alert) => (
                         <div
@@ -1053,13 +1053,13 @@ export default function AdminObservability() {
                           }`}
                         >
                           <div className="flex items-start justify-between gap-4">
-                            <div className="flex items-start gap-3">
-                              <div className={`p-2 rounded-lg ${config.is_active ? "bg-primary/10" : "bg-muted"}`}>
+                            <div className="flex items-start gap-3 min-w-0">
+                              <div className={`p-2 rounded-lg shrink-0 ${config.is_active ? "bg-primary/10" : "bg-muted"}`}>
                                 <TriggerIcon className={`w-5 h-5 ${config.is_active ? "text-primary" : "text-muted-foreground"}`} />
                               </div>
-                              <div>
-                                <div className="flex items-center gap-2">
-                                  <span className="font-medium">{config.name}</span>
+                              <div className="min-w-0">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <span className="font-medium break-words min-w-0">{config.name}</span>
                                   {!config.is_active && (
                                     <Badge variant="secondary" className="text-xs">Paused</Badge>
                                   )}
@@ -1092,7 +1092,7 @@ export default function AdminObservability() {
                                 )}
                               </div>
                             </div>
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-2 shrink-0">
                               <Switch
                                 checked={config.is_active}
                                 onCheckedChange={(checked) => toggleAlertMutation.mutate({ id: config.id, is_active: checked })}

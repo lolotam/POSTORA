@@ -83,8 +83,8 @@ const GoogleApiDisclosure = () => {
               <ul className="list-disc list-inside text-muted-foreground space-y-2">
                 <li>
                   <strong>Two narrow YouTube scopes only:</strong> We request exactly{" "}
-                  <code className="bg-muted px-1 rounded">https://www.googleapis.com/auth/youtube.readonly</code> and{" "}
-                  <code className="bg-muted px-1 rounded">https://www.googleapis.com/auth/youtube.upload</code>.
+                  <code className="bg-muted px-1 rounded break-all">https://www.googleapis.com/auth/youtube.readonly</code> and{" "}
+                  <code className="bg-muted px-1 rounded break-all">https://www.googleapis.com/auth/youtube.upload</code>.
                   Together they cover the YouTube operations we perform — uploading videos with your chosen metadata and
                   thumbnail, and reading basic channel info to display your connected account.
                 </li>
@@ -126,7 +126,7 @@ const GoogleApiDisclosure = () => {
                   <div className="space-y-4 mt-4">
                     <div className="border-l-4 border-primary ps-4">
                       <h4 className="font-semibold text-base">
-                        <code className="bg-muted px-2 py-1 rounded text-sm">https://www.googleapis.com/auth/youtube.upload</code>
+                        <code className="bg-muted px-2 py-1 rounded text-sm break-all">https://www.googleapis.com/auth/youtube.upload</code>
                       </h4>
                       <p className="text-muted-foreground text-sm mt-2">
                         <strong>Purpose:</strong> Lets Postora publish the videos you create or schedule to your own
@@ -154,7 +154,7 @@ const GoogleApiDisclosure = () => {
 
                     <div className="border-l-4 border-primary ps-4">
                       <h4 className="font-semibold text-base">
-                        <code className="bg-muted px-2 py-1 rounded text-sm">https://www.googleapis.com/auth/youtube.readonly</code>
+                        <code className="bg-muted px-2 py-1 rounded text-sm break-all">https://www.googleapis.com/auth/youtube.readonly</code>
                       </h4>
                       <p className="text-muted-foreground text-sm mt-2">
                         <strong>Purpose:</strong> Read-only access used to identify and display your connected channel.

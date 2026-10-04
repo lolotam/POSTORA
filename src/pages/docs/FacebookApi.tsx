@@ -950,9 +950,9 @@ export default function FacebookApi() {
       {/* Footer */}
       <footer className="border-t border-border mt-16">
         <div className="container mx-auto px-6 py-8">
-          <div className="flex items-center justify-between text-sm text-muted-foreground">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between text-sm text-muted-foreground">
             <p>© 2026 Postora. A product developed and operated by WALEED PROLIFE LLC. All rights reserved.</p>
-            <div className="flex items-center gap-4">
+            <div className="flex items-center gap-4 shrink-0">
               <Link to="/docs" className="hover:text-foreground">Documentation</Link>
               <Link to="/n8n" className="hover:text-foreground">n8n Integration</Link>
             </div>

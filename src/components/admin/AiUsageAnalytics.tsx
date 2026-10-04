@@ -230,7 +230,7 @@ export function AiUsageAnalytics() {
         ) : (
           <>
             {/* Summary Cards */}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">
               <div className="p-4 rounded-lg border bg-card">
                 <div className="flex items-center gap-2 text-muted-foreground mb-1">
                   <Sparkles className="w-4 h-4" />
@@ -312,37 +312,37 @@ export function AiUsageAnalytics() {
                 </div>
               )}
 
-              <div className="grid grid-cols-3 gap-4">
-                <div className="p-4 rounded-lg border border-green-500/20 bg-green-500/10">
-                  <div className="flex items-center gap-2 text-green-600 dark:text-green-400 mb-1">
+              <div className="grid grid-cols-3 gap-2 sm:gap-4">
+                <div className="p-2.5 sm:p-4 rounded-lg border border-green-500/20 bg-green-500/10">
+                  <div className="flex items-center gap-1.5 sm:gap-2 text-green-600 dark:text-green-400 mb-1">
                     <DollarSign className="w-4 h-4" />
                     <span className="text-xs font-medium">Today</span>
                   </div>
-                  <p className="text-xl font-bold text-green-700 dark:text-green-300">
+                  <p className="text-lg sm:text-xl font-bold text-green-700 dark:text-green-300">
                     ${estimatedCostToday.toFixed(4)}
                   </p>
                   <p className="text-xs text-muted-foreground">
                     ~{estimatedTokensToday.toLocaleString()} tokens
                   </p>
                 </div>
-                <div className="p-4 rounded-lg border border-blue-500/20 bg-blue-500/10">
-                  <div className="flex items-center gap-2 text-blue-600 dark:text-blue-400 mb-1">
+                <div className="p-2.5 sm:p-4 rounded-lg border border-blue-500/20 bg-blue-500/10">
+                  <div className="flex items-center gap-1.5 sm:gap-2 text-blue-600 dark:text-blue-400 mb-1">
                     <DollarSign className="w-4 h-4" />
                     <span className="text-xs font-medium">This Month</span>
                   </div>
-                  <p className="text-xl font-bold text-blue-700 dark:text-blue-300">
+                  <p className="text-lg sm:text-xl font-bold text-blue-700 dark:text-blue-300">
                     ${estimatedCostMonth.toFixed(4)}
                   </p>
                   <p className="text-xs text-muted-foreground">
                     ~{estimatedTokensMonth.toLocaleString()} tokens
                   </p>
                 </div>
-                <div className="p-4 rounded-lg border border-border bg-muted">
-                  <div className="flex items-center gap-2 text-foreground dark:text-foreground mb-1">
+                <div className="p-2.5 sm:p-4 rounded-lg border border-border bg-muted">
+                  <div className="flex items-center gap-1.5 sm:gap-2 text-foreground dark:text-foreground mb-1">
                     <DollarSign className="w-4 h-4" />
                     <span className="text-xs font-medium">Last 30 Days</span>
                   </div>
-                  <p className="text-xl font-bold text-foreground dark:text-neutral-200">
+                  <p className="text-lg sm:text-xl font-bold text-foreground dark:text-neutral-200">
                     ${estimatedCost30Days.toFixed(4)}
                   </p>
                   <p className="text-xs text-muted-foreground">
@@ -395,8 +395,8 @@ export function AiUsageAnalytics() {
 
               <TabsContent value="cost-trends" className="mt-4 space-y-4">
                 {/* Model Comparison Dropdown */}
-                <div className="flex items-center gap-4 p-3 rounded-lg border bg-muted/50">
-                  <div className="flex-1 space-y-1">
+                <div className="flex flex-wrap items-center gap-3 sm:gap-4 p-3 rounded-lg border bg-muted/50">
+                  <div className="flex-1 min-w-[12rem] space-y-1">
                     <Label className="text-xs text-muted-foreground">Compare with another model</Label>
                     <Select
                       value={selectedComparisonModel || "none"}
@@ -472,7 +472,7 @@ export function AiUsageAnalytics() {
                 {/* Cost Savings Summary */}
                 {comparisonModel && (
                   <div className="p-4 rounded-lg border border-blue-500/20 bg-blue-500/10">
-                    <div className="flex items-center justify-between">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
                       <div>
                         <p className="text-sm font-medium">Cost Comparison (30 days)</p>
                         <p className="text-xs text-muted-foreground">
@@ -502,7 +502,7 @@ export function AiUsageAnalytics() {
                 )}
 
                 {/* Weekly Summary */}
-                <div className="mt-4 grid grid-cols-4 gap-3">
+                <div className="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-3">
                   {(() => {
                     const weeks = [
                       { label: "This Week", days: 7 },

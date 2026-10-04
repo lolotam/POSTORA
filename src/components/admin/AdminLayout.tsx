@@ -6,7 +6,9 @@ import { Logo } from "@/components/Logo";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { PanelLeftClose, PanelLeftOpen, PanelLeft, Loader2, LayoutDashboard, Users, CreditCard, Package, Ticket, Settings, MessageSquare, ChevronLeft, Newspaper, Bell, Youtube, ScrollText, HeartPulse, BarChart3, Rocket, Gauge, Trash2, Sliders, Inbox, Activity, ToggleLeft, TrendingUp, KeyRound, Handshake } from "lucide-react";
+import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
+import { useDirection } from "@radix-ui/react-direction";
+import { PanelLeftClose, PanelLeftOpen, PanelLeft, Menu, Loader2, LayoutDashboard, Users, CreditCard, Package, Ticket, Settings, MessageSquare, ChevronLeft, Newspaper, Bell, Youtube, ScrollText, HeartPulse, BarChart3, Rocket, Gauge, Trash2, Sliders, Inbox, Activity, ToggleLeft, TrendingUp, KeyRound, Handshake } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   Tooltip,
@@ -74,6 +76,15 @@ export function AdminLayout({ children }: AdminLayoutProps) {
   const location = useLocation();
 
   const [sidebar, setSidebar] = useState<SidebarState>(readStoredSidebarState);
+  // Below lg the rail would eat most of a phone screen, so the same nav opens
+  // as a drawer instead and the persisted desktop state is left alone.
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  // The drawer slides in from the edge the rail lives on: left in English, right in Arabic.
+  const drawerSide = useDirection() === "rtl" ? "right" : "left";
+
+  useEffect(() => {
+    setMobileNavOpen(false);
+  }, [location.pathname]);
 
   useEffect(() => {
     try {
@@ -105,92 +116,121 @@ export function AdminLayout({ children }: AdminLayoutProps) {
     return null;
   }
 
+  const renderNav = (compact: boolean) => (
+    <nav className={cn("space-y-1", compact ? "px-2" : "px-3")}>
+      {sidebarItems.map((item) => {
+        const isActive = location.pathname === item.href;
+        const link = (
+          <Link
+            to={item.href}
+            aria-current={isActive ? "page" : undefined}
+            className={cn(
+              "flex items-center rounded-lg text-sm font-medium transition-colors",
+              compact ? "justify-center px-2 py-2.5" : "gap-3 px-3 py-2.5",
+              isActive
+                ? "bg-primary text-primary-foreground"
+                : "text-muted-foreground hover:bg-muted hover:text-foreground"
+            )}
+          >
+            <item.icon className="w-5 h-5 shrink-0" />
+            {!compact && item.label}
+          </Link>
+        );
+        // Collapsed to icons the label is the only thing identifying a
+        // destination, so it has to survive as a tooltip.
+        return compact ? (
+          <TooltipProvider key={item.href} delayDuration={0}>
+            <Tooltip>
+              <TooltipTrigger asChild>{link}</TooltipTrigger>
+              <TooltipContent side="right">{item.label}</TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+        ) : (
+          <div key={item.href}>{link}</div>
+        );
+      })}
+    </nav>
+  );
+
+  const renderSidebarBody = (compact: boolean) => (
+    <>
+      {/* Logo */}
+      <div className={cn("h-14 lg:h-16 flex items-center border-b shrink-0", compact ? "justify-center px-2" : "px-6")}>
+        <Link to="/" className="flex items-center">
+          <Logo showText={!compact} />
+        </Link>
+        {!compact && (
+          <span className="ms-2 text-xs font-medium text-primary bg-primary/10 px-2 py-0.5 rounded">
+            Admin
+          </span>
+        )}
+      </div>
+
+      {/* Navigation */}
+      <ScrollArea className="flex-1 py-4">{renderNav(compact)}</ScrollArea>
+
+      {/* Back to App */}
+      <div className={cn("border-t shrink-0", compact ? "p-2" : "p-4")}>
+        <Button
+          variant="ghost"
+          className={cn("w-full gap-2", compact ? "justify-center px-0" : "justify-start")}
+          onClick={() => navigate("/dashboard")}
+          title={compact ? "Back to App" : undefined}
+        >
+          <ChevronLeft className="w-4 h-4 rtl-flip shrink-0" />
+          {!compact && "Back to App"}
+        </Button>
+      </div>
+    </>
+  );
+
   return (
-    <div className="h-screen flex bg-background overflow-hidden">
-      {/* Sidebar — h-screen + shrink-0 so the rail runs the full height of the
-          viewport and the page scrolls inside <main> rather than behind it. */}
+    // h-dvh rather than h-screen: on mobile browsers 100vh includes the area
+    // under the collapsing URL bar, which would hide the bottom of <main>.
+    <div className="h-screen h-dvh flex bg-background overflow-hidden">
+      {/* Sidebar — full height and shrink-0 so the rail runs the full height of
+          the viewport and the page scrolls inside <main> rather than behind it.
+          Desktop only; phones and tablets get the drawer below. */}
       {sidebar !== "hidden" && (
         <aside
           className={cn(
-            "border-e bg-card flex flex-col h-screen shrink-0 transition-[width] duration-200",
+            "hidden lg:flex border-e bg-card flex-col h-full shrink-0 transition-[width] duration-200",
             sidebar === "icons" ? "w-16" : "w-64"
           )}
         >
-          {/* Logo */}
-          <div className={cn("h-16 flex items-center border-b shrink-0", sidebar === "icons" ? "justify-center px-2" : "px-6")}>
-            <Link to="/" className="flex items-center">
-              <Logo showText={sidebar !== "icons"} />
-            </Link>
-            {sidebar !== "icons" && (
-              <span className="ms-2 text-xs font-medium text-primary bg-primary/10 px-2 py-0.5 rounded">
-                Admin
-              </span>
-            )}
-          </div>
-
-          {/* Navigation */}
-          <ScrollArea className="flex-1 py-4">
-            <nav className={cn("space-y-1", sidebar === "icons" ? "px-2" : "px-3")}>
-              {sidebarItems.map((item) => {
-                const isActive = location.pathname === item.href;
-                const link = (
-                  <Link
-                    to={item.href}
-                    className={cn(
-                      "flex items-center rounded-lg text-sm font-medium transition-colors",
-                      sidebar === "icons" ? "justify-center px-2 py-2.5" : "gap-3 px-3 py-2.5",
-                      isActive
-                        ? "bg-primary text-primary-foreground"
-                        : "text-muted-foreground hover:bg-muted hover:text-foreground"
-                    )}
-                  >
-                    <item.icon className="w-5 h-5 shrink-0" />
-                    {sidebar !== "icons" && item.label}
-                  </Link>
-                );
-                // Collapsed to icons the label is the only thing identifying a
-                // destination, so it has to survive as a tooltip.
-                return sidebar === "icons" ? (
-                  <TooltipProvider key={item.href} delayDuration={0}>
-                    <Tooltip>
-                      <TooltipTrigger asChild>{link}</TooltipTrigger>
-                      <TooltipContent side="right">{item.label}</TooltipContent>
-                    </Tooltip>
-                  </TooltipProvider>
-                ) : (
-                  <div key={item.href}>{link}</div>
-                );
-              })}
-            </nav>
-          </ScrollArea>
-
-          {/* Back to App */}
-          <div className={cn("border-t shrink-0", sidebar === "icons" ? "p-2" : "p-4")}>
-            <Button
-              variant="ghost"
-              className={cn("w-full gap-2", sidebar === "icons" ? "justify-center px-0" : "justify-start")}
-              onClick={() => navigate("/dashboard")}
-              title={sidebar === "icons" ? "Back to App" : undefined}
-            >
-              <ChevronLeft className="w-4 h-4 rtl-flip shrink-0" />
-              {sidebar !== "icons" && "Back to App"}
-            </Button>
-          </div>
+          {renderSidebarBody(sidebar === "icons")}
         </aside>
       )}
 
+      <Sheet open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
+        <SheetContent side={drawerSide} className="lg:hidden w-72 max-w-[85vw] p-0 flex flex-col gap-0 bg-card">
+          <SheetTitle className="sr-only">Admin navigation</SheetTitle>
+          {renderSidebarBody(false)}
+        </SheetContent>
+      </Sheet>
+
       {/* Main Content — min-w-0 so a wide admin table scrolls inside <main>
           instead of stretching the flex row and pushing the rail off screen. */}
-      <div className="flex-1 flex flex-col min-w-0 h-screen">
+      <div className="flex-1 flex flex-col min-w-0 h-full">
         {/* Header */}
-        <header className="h-16 border-b flex items-center justify-between px-6 shrink-0">
-          <div className="flex items-center gap-3 min-w-0">
+        <header className="h-14 lg:h-16 border-b flex items-center justify-between gap-2 px-3 sm:px-4 lg:px-6 shrink-0">
+          <div className="flex items-center gap-2 lg:gap-3 min-w-0">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="lg:hidden shrink-0"
+              onClick={() => setMobileNavOpen(true)}
+              aria-label="Open admin navigation"
+              aria-expanded={mobileNavOpen}
+            >
+              <Menu className="w-5 h-5" />
+            </Button>
             {/* The only way back when the rail is hidden, so it lives in the
                 header rather than in the sidebar it controls. */}
             <Button
               variant="ghost"
               size="icon"
-              className="shrink-0"
+              className="hidden lg:inline-flex shrink-0"
               onClick={() =>
                 setSidebar((current) =>
                   current === "expanded" ? "icons" : current === "icons" ? "hidden" : "expanded"
@@ -219,17 +259,17 @@ export function AdminLayout({ children }: AdminLayoutProps) {
                 <PanelLeftOpen className="w-5 h-5 rtl-flip" />
               )}
             </Button>
-            <h1 className="text-lg font-semibold truncate">
+            <h1 className="text-base lg:text-lg font-semibold truncate">
               {sidebarItems.find((item) => item.href === location.pathname)?.label || "Admin"}
             </h1>
           </div>
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2 lg:gap-4 shrink-0">
             <ThemeToggle />
           </div>
         </header>
 
         {/* Content */}
-        <main className="flex-1 p-6 overflow-auto min-h-0">
+        <main className="flex-1 p-3 sm:p-4 lg:p-6 overflow-auto min-h-0 overscroll-contain">
           {children}
         </main>
       </div>

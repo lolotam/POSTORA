@@ -288,7 +288,7 @@ export default function ConnectionHealth() {
                             {t("health.header.subtitle", "Monitor the health and status of your connected social accounts.")}
                         </p>
                     </div>
-                    <div className="flex gap-2">
+                    <div className="flex flex-wrap gap-2">
                         <Button
                             variant="outline"
                             size="sm"
@@ -314,7 +314,7 @@ export default function ConnectionHealth() {
                 </div>
 
                 {/* Health Overview Cards */}
-                <div className="grid md:grid-cols-4 gap-4">
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">
                     <Card>
                         <CardHeader className="pb-2">
                             <CardDescription>{t("health.stats.overall", "Overall Health")}</CardDescription>

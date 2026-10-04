@@ -22,13 +22,13 @@ export function RequestHistoryPanel({
   return (
     <Card className="mb-6">
       <CardHeader className="pb-3">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <CardTitle className="text-lg flex items-center gap-2">
             <History className="w-4 h-4" />
             Request History
             <Badge variant="secondary">{requestHistory.length}/{MAX_HISTORY_ITEMS}</Badge>
           </CardTitle>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <input ref={fileInputRef} type="file" accept=".json" onChange={onImport} className="hidden" />
             <Button variant="outline" size="sm" onClick={() => fileInputRef.current?.click()} className="gap-2">
               <Upload className="w-4 h-4" /> Import

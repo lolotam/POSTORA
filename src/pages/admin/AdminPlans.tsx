@@ -199,14 +199,14 @@ export default function AdminPlans() {
   return (
     <AdminLayout>
       <div className="space-y-6">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h2 className="text-2xl font-bold">Plans Builder</h2>
             <p className="text-muted-foreground">Create and manage subscription plans</p>
           </div>
           <Dialog open={isCreateOpen} onOpenChange={setIsCreateOpen}>
             <DialogTrigger asChild>
-              <Button>
+              <Button className="self-start sm:self-auto">
                 <Plus className="w-4 h-4 me-2" />
                 Create Plan
               </Button>
@@ -316,11 +316,11 @@ export default function AdminPlans() {
           <div className="space-y-4">
             {plans.map((plan) => (
               <Card key={plan.id} className={!plan.is_active ? "opacity-60" : ""}>
-                <CardHeader className="flex flex-row items-center justify-between pb-2">
-                  <div className="flex items-center gap-3">
-                    <GripVertical className="w-5 h-5 text-muted-foreground cursor-grab" />
-                    <div>
-                      <CardTitle className="flex items-center gap-2">
+                <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between pb-2">
+                  <div className="flex min-w-0 items-center gap-3">
+                    <GripVertical className="w-5 h-5 shrink-0 text-muted-foreground cursor-grab" />
+                    <div className="min-w-0">
+                      <CardTitle className="flex flex-wrap items-center gap-2">
                         {plan.name}
                         {plan.is_popular && (
                           <Badge className="bg-primary/10 text-primary border-primary/30">
@@ -340,7 +340,7 @@ export default function AdminPlans() {
                       </CardDescription>
                     </div>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
                     <Button
                       variant="ghost"
                       size="sm"

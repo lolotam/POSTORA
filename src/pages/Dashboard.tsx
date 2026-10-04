@@ -54,7 +54,7 @@ export default function Dashboard() {
               })}
             </p>
           </div>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             {isAdmin && flags.marketeroButton && (
               <a href="https://marketero.postora.cloud" target="_blank" rel="noopener noreferrer">
                 <Button variant="outline">
@@ -75,7 +75,7 @@ export default function Dashboard() {
         {/* Stats Grid */}
         <StatCards stats={statsData} isLoading={statsLoading} />
 
-        <div className="grid lg:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Connected Accounts — first in DOM, so it sits at the inline start:
               left in English, right in Arabic. */}
           <ConnectedAccounts accounts={accounts} isLoading={accountsLoading} />

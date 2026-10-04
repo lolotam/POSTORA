@@ -178,15 +178,15 @@ export default function AdminMessages() {
                   {openMessages.map((message) => (
                     <Card key={message.id} className="cursor-pointer hover:bg-muted/50 transition-colors" onClick={() => setSelectedMessage(message)}>
                       <CardHeader className="pb-2">
-                        <div className="flex items-start justify-between">
-                          <div className="flex items-center gap-3">
-                            <Avatar>
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="flex min-w-0 items-center gap-3">
+                            <Avatar className="shrink-0">
                               <AvatarImage src={message.profile?.avatar_url || undefined} />
                               <AvatarFallback>
                                 {message.profile?.full_name?.charAt(0) || message.profile?.email?.charAt(0) || "U"}
                               </AvatarFallback>
                             </Avatar>
-                            <div>
+                            <div className="min-w-0">
                               <CardTitle className="text-base">{message.subject}</CardTitle>
                               <CardDescription>
                                 {message.profile?.full_name || message.profile?.email} • {format(new Date(message.created_at), "MMM d, yyyy")}
@@ -213,15 +213,15 @@ export default function AdminMessages() {
                   {otherMessages.map((message) => (
                     <Card key={message.id} className="cursor-pointer hover:bg-muted/50 transition-colors opacity-75" onClick={() => setSelectedMessage(message)}>
                       <CardHeader className="pb-2">
-                        <div className="flex items-start justify-between">
-                          <div className="flex items-center gap-3">
-                            <Avatar className="w-8 h-8">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="flex min-w-0 items-center gap-3">
+                            <Avatar className="w-8 h-8 shrink-0">
                               <AvatarImage src={message.profile?.avatar_url || undefined} />
                               <AvatarFallback className="text-xs">
                                 {message.profile?.full_name?.charAt(0) || "U"}
                               </AvatarFallback>
                             </Avatar>
-                            <div>
+                            <div className="min-w-0">
                               <CardTitle className="text-sm">{message.subject}</CardTitle>
                               <CardDescription className="text-xs">
                                 {format(new Date(message.created_at), "MMM d, yyyy")}
@@ -257,7 +257,7 @@ export default function AdminMessages() {
                 {selectedMessage?.email && (
                   <div className="flex items-center gap-2 text-muted-foreground">
                     <Mail className="w-4 h-4" />
-                    <a href={`mailto:${selectedMessage.email}`} className="hover:text-foreground hover:underline">
+                    <a href={`mailto:${selectedMessage.email}`} className="hover:text-foreground hover:underline break-all">
                       {selectedMessage.email}
                     </a>
                   </div>
@@ -299,7 +299,7 @@ export default function AdminMessages() {
             )}
           </div>
           <DialogFooter>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center justify-end gap-2">
               {selectedMessage?.status !== "closed" && (
                 <Button
                   variant="outline"

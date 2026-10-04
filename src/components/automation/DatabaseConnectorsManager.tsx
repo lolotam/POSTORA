@@ -1600,7 +1600,7 @@ function DatabaseConnectorsEditor({
         {/* Header & Description */}
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <h3 className="text-xl font-bold text-foreground">{t("header.directory", "Integrations & Connectors Directory")}</h3>
               <Badge variant="outline" className="border-primary/30 text-primary bg-primary/10 text-xs gap-1">
                 <Sparkles className="w-3 h-3" /> {t("connectors.mcpReadyBadge", "Auto-Approved & MCP Ready")}

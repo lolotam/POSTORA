@@ -349,12 +349,12 @@ export default function AdminFeatureFlags() {
   return (
     <AdminLayout>
       <div className="space-y-6">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h2 className="text-2xl font-bold">Feature Flags</h2>
             <p className="text-muted-foreground">Toggle features on/off for all users</p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {topTab === "feature-flags" && (
               <>
                 <Button variant="outline" size="sm" onClick={handleAddCategory}>

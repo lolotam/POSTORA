@@ -17,7 +17,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { format } from "date-fns";
-import { FileEdit, Trash2, Loader2, Mail, PenLine } from "lucide-react";
+import { ArrowLeft, FileEdit, Trash2, Loader2, Mail, PenLine } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 
@@ -101,10 +101,16 @@ export function DraftsManager({ onEditDraft }: DraftsManagerProps) {
   const selectedDraft = drafts.find(d => d.id === selectedDraftId);
 
   return (
+    // Below md only one pane fits: the list, or the selected draft with Back.
     <div className="flex gap-4 h-[calc(100vh-340px)] min-h-[500px]">
       {/* Drafts List */}
-      <div className="w-1/3 min-w-[300px] border rounded-lg overflow-hidden bg-card">
-        <ScrollArea className="h-full">
+      <div
+        className={cn(
+          "w-full md:w-1/3 md:min-w-[300px] border rounded-lg overflow-hidden bg-card",
+          selectedDraft && "max-md:hidden"
+        )}
+      >
+        <ScrollArea className="h-full max-lg:[&>[data-radix-scroll-area-viewport]>div]:!block">
           <div className="divide-y">
             {drafts.map((draft) => (
               <button
@@ -146,17 +152,21 @@ export function DraftsManager({ onEditDraft }: DraftsManagerProps) {
       </div>
 
       {/* Draft Detail */}
-      <div className="flex-1 border rounded-lg overflow-hidden bg-card">
+      <div className={cn("flex-1 min-w-0 border rounded-lg overflow-hidden bg-card", !selectedDraft && "max-md:hidden")}>
         {selectedDraft ? (
           <div className="flex flex-col h-full">
             {/* Header */}
             <div className="p-4 border-b space-y-3">
+              <Button variant="ghost" size="sm" className="md:hidden -ms-2" onClick={() => setSelectedDraftId(null)}>
+                <ArrowLeft className="w-4 h-4 me-2 rtl-flip" />
+                Back
+              </Button>
               <div className="flex items-start justify-between gap-4">
                 <div className="flex-1 min-w-0">
                   <h2 className="text-lg font-semibold truncate">
                     {selectedDraft.subject || "(No subject)"}
                   </h2>
-                  <div className="flex items-center gap-2 mt-1 text-sm text-muted-foreground">
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-1 text-sm text-muted-foreground">
                     <span className="p-1 rounded-full bg-amber-500/10 text-amber-500">
                       <FileEdit className="w-3 h-3" />
                     </span>
@@ -193,7 +203,7 @@ export function DraftsManager({ onEditDraft }: DraftsManagerProps) {
               </div>
 
               {/* To/From details */}
-              <div className="text-sm text-muted-foreground space-y-1">
+              <div className="text-sm text-muted-foreground space-y-1 break-words">
                 <p>From: {selectedDraft.from_email}</p>
                 <p>To: {selectedDraft.to_emails.length > 0 ? selectedDraft.to_emails.join(", ") : "(no recipient)"}</p>
                 {selectedDraft.cc_emails.length > 0 && (
@@ -206,7 +216,7 @@ export function DraftsManager({ onEditDraft }: DraftsManagerProps) {
             </div>
 
             {/* Body Preview */}
-            <ScrollArea className="flex-1 p-4">
+            <ScrollArea className="flex-1 p-4 max-lg:[&>[data-radix-scroll-area-viewport]>div]:!block">
               {selectedDraft.html_body ? (
                 <div
                   className="prose prose-sm dark:prose-invert max-w-none"

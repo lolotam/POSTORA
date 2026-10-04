@@ -204,7 +204,7 @@ export function RequestBuilder(props: RequestBuilderProps) {
 
           {showAdvanced && (
             <div className="space-y-4 pt-2 border-t border-border">
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <Label>Scheduled Date (Optional)</Label>
                   <Input type="datetime-local" value={scheduledDate} onChange={(e) => setScheduledDate(e.target.value)} className="mt-1.5" />

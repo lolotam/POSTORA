@@ -102,7 +102,7 @@ function SingleMessage({ message, isExpanded, onToggle, isLatest }: SingleMessag
                 <span className="text-sm font-medium truncate">
                   {isInbound ? message.from_email : `To: ${message.to_email}`}
                 </span>
-                <span className="text-xs text-muted-foreground">
+                <span className="text-xs text-muted-foreground shrink-0">
                   {format(new Date(message.created_at), "MMM d, h:mm a")}
                 </span>
               </div>
@@ -183,11 +183,11 @@ function SingleMessage({ message, isExpanded, onToggle, isLatest }: SingleMessag
             {/* Body */}
             {message.html_body ? (
               <div
-                className="prose prose-sm dark:prose-invert max-w-none"
+                className="prose prose-sm dark:prose-invert max-w-none max-md:overflow-x-auto max-md:break-words"
                 dangerouslySetInnerHTML={{ __html: sanitizeEmailHtml(message.html_body) }}
               />
             ) : (
-              <pre className="text-sm whitespace-pre-wrap font-sans">
+              <pre className="text-sm whitespace-pre-wrap font-sans max-md:break-words">
                 {message.body || "No content"}
               </pre>
             )}
@@ -264,8 +264,8 @@ export function ThreadDetail({
         <div className="flex items-start justify-between gap-4">
           <div className="flex-1 min-w-0">
             <h2 className="text-lg font-semibold truncate">{thread.subject}</h2>
-            <div className="flex items-center gap-2 mt-1 text-sm text-muted-foreground">
-              <MessageSquare className="w-4 h-4" />
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-1 text-sm text-muted-foreground">
+              <MessageSquare className="w-4 h-4 shrink-0" />
               <span>{thread.messageCount} message{thread.messageCount > 1 ? "s" : ""}</span>
               <span>•</span>
               <span>
@@ -275,7 +275,7 @@ export function ThreadDetail({
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center justify-end gap-2">
             {thread.messageCount > 1 && (
               <>
                 <Button variant="ghost" size="sm" onClick={expandAll}>
@@ -324,7 +324,7 @@ export function ThreadDetail({
       </div>
 
       {/* Messages */}
-      <ScrollArea className="flex-1 p-4">
+      <ScrollArea className="flex-1 p-4 max-lg:[&>[data-radix-scroll-area-viewport]>div]:!block">
         <div className="space-y-3">
           {thread.messages.map((message) => (
             <SingleMessage

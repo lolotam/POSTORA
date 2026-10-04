@@ -6,7 +6,7 @@ export function ParamTable({ params }: ParamTableProps) {
   return (
     <div className="my-4 overflow-hidden rounded-2xl border border-border/60 bg-card shadow-sm">
       <div className="overflow-x-auto">
-        <table className="w-full text-sm">
+        <table className="w-full min-w-[36rem] text-sm">
           <thead className="bg-emerald-500/15">
             <tr className="border-b border-emerald-400/20">
               <th className="text-start py-3 px-4 font-semibold text-emerald-700 dark:text-emerald-300 uppercase tracking-wider text-xs">

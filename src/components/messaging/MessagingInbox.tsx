@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Facebook, Camera, MessageSquare, Loader2, Plus, AlertTriangle } from "lucide-react";
+import { Facebook, Camera, MessageSquare, Loader2, Plus, AlertTriangle, ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Link, useSearchParams } from "react-router-dom";
 import { AccountSelector } from "./AccountSelector";
@@ -15,6 +15,7 @@ import { useFeatureFlags } from "@/hooks/useFeatureFlags";
 import { useWhatsAppLabels } from "@/hooks/useWhatsAppLabels";
 import type { Conversation } from "@/hooks/useMessaging";
 import { parseInboxRoute, withInboxRoute } from "@/lib/whatsappInboxRoute";
+import { cn } from "@/lib/utils";
 
 export type MessagingInboxPlatform = "facebook" | "instagram";
 
@@ -106,6 +107,15 @@ export function MessagingInbox({ platform }: MessagingInboxProps) {
 
   const whatsappAccounts = accounts.filter(a => a.platform === "whatsapp");
 
+  // Phones show the list or the open chat, never both squeezed side by side; this is the way
+  // back from the chat. md and up keep both panes, so the button is hidden there.
+  const backToList = (
+    <Button variant="ghost" size="sm" className="m-2 w-fit shrink-0 gap-1.5 md:hidden" onClick={() => selectConversation(null)}>
+      <ArrowLeft className="h-4 w-4 rtl:rotate-180" />
+      {t("common:back", "Back")}
+    </Button>
+  );
+
   return (
     <div className="space-y-4">
       <Tabs value={platformTab} onValueChange={handleTabChange}>
@@ -159,7 +169,7 @@ export function MessagingInbox({ platform }: MessagingInboxProps) {
                     onSelectContact={selectConversation}
                   />
                   <div className="border border-border bg-card rounded-2xl shadow-sm overflow-hidden flex h-[620px]">
-                    <div className="w-80 border-r border-border bg-card shrink-0 flex flex-col">
+                    <div className={cn("w-full md:w-80 border-r border-border bg-card shrink-0 flex-col", selectedConversation ? "hidden md:flex" : "flex")}>
                       {platformTab === "whatsapp" && <LabelFilter selectedLabelId={labelFilter} onSelect={setLabelFilter} />}
                       <div className="flex-1 overflow-hidden">
                         <ConversationList
@@ -171,13 +181,16 @@ export function MessagingInbox({ platform }: MessagingInboxProps) {
                         />
                       </div>
                     </div>
-                    <div className="flex-1 bg-background">
-                      <ConversationDetail
-                        conversation={selectedConversation}
-                        socialAccountId={selectedAccountId}
-                        pageId={pageId}
-                        platform="whatsapp"
-                      />
+                    <div className={cn("min-w-0 flex-1 flex-col bg-background md:flex", selectedConversation ? "flex" : "hidden")}>
+                      {backToList}
+                      <div className="min-h-0 flex-1">
+                        <ConversationDetail
+                          conversation={selectedConversation}
+                          socialAccountId={selectedAccountId}
+                          pageId={pageId}
+                          platform="whatsapp"
+                        />
+                      </div>
                     </div>
                   </div>
                 </>
@@ -196,7 +209,7 @@ export function MessagingInbox({ platform }: MessagingInboxProps) {
           />
           {selectedAccountId && (
             <div className="border border-border bg-card rounded-2xl shadow-sm overflow-hidden flex h-[620px]">
-              <div className="w-80 border-r border-border bg-card shrink-0">
+              <div className={cn("w-full md:w-80 border-r border-border bg-card shrink-0 md:block", selectedConversation ? "hidden" : "block")}>
                 <ConversationList
                   conversations={conversations}
                   selectedId={selectedConversation?.id || null}
@@ -204,12 +217,15 @@ export function MessagingInbox({ platform }: MessagingInboxProps) {
                   isLoading={convsLoading}
                 />
               </div>
-              <div className="flex-1 bg-background">
-                <ConversationDetail
-                  conversation={selectedConversation}
-                  socialAccountId={selectedAccountId}
-                  pageId={pageId}
-                />
+              <div className={cn("min-w-0 flex-1 flex-col bg-background md:flex", selectedConversation ? "flex" : "hidden")}>
+                {backToList}
+                <div className="min-h-0 flex-1">
+                  <ConversationDetail
+                    conversation={selectedConversation}
+                    socialAccountId={selectedAccountId}
+                    pageId={pageId}
+                  />
+                </div>
               </div>
             </div>
           )}
@@ -238,7 +254,7 @@ export function MessagingInbox({ platform }: MessagingInboxProps) {
           )}
           {selectedAccountId && (
             <div className="border border-border bg-card rounded-2xl shadow-sm overflow-hidden flex h-[620px]">
-              <div className="w-80 border-r border-border bg-card shrink-0">
+              <div className={cn("w-full md:w-80 border-r border-border bg-card shrink-0 md:block", selectedConversation ? "hidden" : "block")}>
                 <ConversationList
                   conversations={conversations}
                   selectedId={selectedConversation?.id || null}
@@ -246,12 +262,15 @@ export function MessagingInbox({ platform }: MessagingInboxProps) {
                   isLoading={convsLoading}
                 />
               </div>
-              <div className="flex-1 bg-background">
-                <ConversationDetail
-                  conversation={selectedConversation}
-                  socialAccountId={selectedAccountId}
-                  pageId={pageId}
-                />
+              <div className={cn("min-w-0 flex-1 flex-col bg-background md:flex", selectedConversation ? "flex" : "hidden")}>
+                {backToList}
+                <div className="min-h-0 flex-1">
+                  <ConversationDetail
+                    conversation={selectedConversation}
+                    socialAccountId={selectedAccountId}
+                    pageId={pageId}
+                  />
+                </div>
               </div>
             </div>
           )}

@@ -47,7 +47,7 @@ export default function Documentation() {
           />
 
           {/* Content */}
-          <div className="space-y-16 max-w-4xl">
+          <div className="space-y-16 max-w-4xl min-w-0">
             {/* Introduction */}
             <Reveal>
               <section id="introduction">
@@ -59,20 +59,20 @@ export default function Documentation() {
                 <IntroFeatureGrid features={featureCards} />
 
                 <SubSection id="supported-platforms">Supported Platforms</SubSection>
-                <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                <div className="grid grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
                   {supportedPlatforms.map((platform) => (
                     <GradientRingCard
                       key={platform}
                       variant="sky"
                       ringIntensity="subtle"
                       hoverLift={false}
-                      innerClassName="p-4"
+                      innerClassName="p-3 sm:p-4"
                     >
-                      <div className="flex items-center gap-3">
+                      <div className="flex items-center gap-2 sm:gap-3">
                         <div className="w-10 h-10 rounded-xl ring-1 ring-border flex items-center justify-center shrink-0 bg-muted">
                           <PlatformIcon platform={platform} size="md" />
                         </div>
-                        <div>
+                        <div className="min-w-0">
                           <h4 className="font-semibold">{getPlatformName(platform)}</h4>
                           <p className="text-xs text-muted-foreground">{platformDescriptions[platform]}</p>
                         </div>
@@ -123,7 +123,7 @@ export default function Documentation() {
                       <span className="text-white font-bold tabular-nums">4</span>
                     </div>
                   </div>
-                  <div className="flex-1">
+                  <div className="flex-1 min-w-0">
                     <h3 className="font-semibold mb-2">Make Your First API Call</h3>
                     <CodeBlock id="first-call" language="bash" code={`curl -X POST "${API_BASE}/api/v1/post" \\
   -H "Authorization: Apikey YOUR_API_KEY" \\

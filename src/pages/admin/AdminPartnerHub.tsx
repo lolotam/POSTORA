@@ -48,7 +48,7 @@ export default function AdminPartnerHub() {
 
         <Card>
           <CardHeader>
-            <div className="flex items-center justify-between">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
                 <CardTitle>Partner keys</CardTitle>
                 <CardDescription>Click a scope to filter. Quota bars turn amber at 80% and red at 95%.</CardDescription>

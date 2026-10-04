@@ -266,9 +266,9 @@ export function UserAiModelOverrides() {
   return (
     <Card>
       <CardHeader>
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center">
+            <div className="w-10 h-10 shrink-0 rounded-lg bg-primary/10 flex items-center justify-center">
               <Cpu className="w-5 h-5 text-primary" />
             </div>
             <div>
@@ -278,7 +278,7 @@ export function UserAiModelOverrides() {
               </CardDescription>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <Button
               variant="outline"
               size="sm"
@@ -505,9 +505,9 @@ export function UserAiModelOverrides() {
             {overrides.map((override) => (
               <div
                 key={override.id}
-                className={`p-4 rounded-lg border ${isExpired(override.expires_at) ? "opacity-60 bg-muted/50" : "bg-card"}`}
+                className={`p-3 sm:p-4 rounded-lg border ${isExpired(override.expires_at) ? "opacity-60 bg-muted/50" : "bg-card"}`}
               >
-                <div className="flex items-start justify-between gap-4">
+                <div className="flex items-start justify-between gap-3 sm:gap-4">
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="font-medium truncate">
@@ -534,7 +534,7 @@ export function UserAiModelOverrides() {
                         Reason: {override.reason}
                       </p>
                     )}
-                    <div className="flex items-center gap-4 mt-2 text-xs text-muted-foreground">
+                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-2 text-xs text-muted-foreground">
                       <span>Added: {format(new Date(override.created_at), "MMM d, yyyy")}</span>
                       {override.expires_at && (
                         <span>

@@ -152,7 +152,7 @@ export function ChecklistSection({
       {/* Progress Card */}
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center justify-between">
+          <CardTitle className="flex flex-wrap items-center justify-between gap-2">
             <span>Verification Progress</span>
             <div className="flex items-center gap-2">
               <Badge variant={progressPercent === 100 ? "default" : "secondary"}>
@@ -226,23 +226,23 @@ export function ChecklistSection({
                         }`}
                         onClick={() => onToggle(item.id)}
                       >
-                        <div className="mt-0.5">
+                        <div className="mt-0.5 shrink-0">
                           {isCompleted ? (
                             <CheckCircle2 className="h-5 w-5 text-green-500" />
                           ) : (
                             <Circle className="h-5 w-5 text-muted-foreground" />
                           )}
                         </div>
-                        <div className="flex-1">
-                          <div className="flex items-center gap-2">
-                            <span className={`font-medium ${isCompleted ? "line-through text-muted-foreground" : ""}`}>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className={`font-medium break-words min-w-0 ${isCompleted ? "line-through text-muted-foreground" : ""}`}>
                               {item.title}
                             </span>
                             {item.required && (
                               <Badge variant="destructive" className="text-xs">Required</Badge>
                             )}
                           </div>
-                          <p className="text-sm text-muted-foreground mt-1">
+                          <p className="text-sm text-muted-foreground mt-1 break-words">
                             {item.description}
                           </p>
                           {(item.link || item.internalLink) && (

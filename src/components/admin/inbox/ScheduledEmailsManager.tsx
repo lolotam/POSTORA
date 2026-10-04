@@ -269,7 +269,7 @@ export function ScheduledEmailsManager() {
             </CardTitle>
           </CardHeader>
           <CardContent className="p-0">
-            <ScrollArea className="h-[300px]">
+            <ScrollArea className="h-[300px] max-md:[&>[data-radix-scroll-area-viewport]>div]:!block">
               <div className="divide-y">
                 {pendingEmails.map((email) => (
                   <div
@@ -345,7 +345,7 @@ export function ScheduledEmailsManager() {
             </CardTitle>
           </CardHeader>
           <CardContent className="p-0">
-            <ScrollArea className="h-[300px]">
+            <ScrollArea className="h-[300px] max-md:[&>[data-radix-scroll-area-viewport]>div]:!block">
               <div className="divide-y">
                 {processedEmails.map((email) => (
                   <div

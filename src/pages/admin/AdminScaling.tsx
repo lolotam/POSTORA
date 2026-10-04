@@ -90,7 +90,7 @@ function ScalingTable({ items }: { items: ScalingItem[] }) {
                 {statusConfig[item.status].label}
               </Badge>
             </TableCell>
-            <TableCell className="text-muted-foreground text-sm">{item.description}</TableCell>
+            <TableCell className="text-muted-foreground text-sm max-md:whitespace-normal max-md:min-w-[14rem]">{item.description}</TableCell>
           </TableRow>
         ))}
       </TableBody>
@@ -107,21 +107,21 @@ export default function AdminScaling() {
     <AdminLayout>
       <div className="space-y-6">
         {/* Summary */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="grid grid-cols-3 gap-3 md:gap-4">
           <Card>
-            <CardContent className="pt-6">
+            <CardContent className="p-4 sm:p-6 sm:pt-6">
               <div className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">{doneCount}</div>
               <p className="text-sm text-muted-foreground">Implemented</p>
             </CardContent>
           </Card>
           <Card>
-            <CardContent className="pt-6">
+            <CardContent className="p-4 sm:p-6 sm:pt-6">
               <div className="text-2xl font-bold text-blue-600 dark:text-blue-400">{plannedCount}</div>
               <p className="text-sm text-muted-foreground">Planned</p>
             </CardContent>
           </Card>
           <Card>
-            <CardContent className="pt-6">
+            <CardContent className="p-4 sm:p-6 sm:pt-6">
               <div className="text-2xl font-bold">{totalCount}</div>
               <p className="text-sm text-muted-foreground">Total Features</p>
             </CardContent>

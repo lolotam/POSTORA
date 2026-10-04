@@ -109,7 +109,7 @@ export default function AdminDashboard() {
   return (
     <AdminLayout>
       <div className="space-y-6">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h2 className="text-2xl font-bold">Dashboard Overview</h2>
             <p className="text-muted-foreground">Welcome to the admin dashboard</p>
@@ -118,7 +118,7 @@ export default function AdminDashboard() {
             onClick={() => refreshTokensMutation.mutate()}
             disabled={refreshTokensMutation.isPending}
             variant="outline"
-            className="gap-2"
+            className="gap-2 self-start sm:self-auto"
           >
             <RefreshCw className={`w-4 h-4 ${refreshTokensMutation.isPending ? "animate-spin" : ""}`} />
             {refreshTokensMutation.isPending ? "Refreshing..." : "Refresh All Tokens"}
@@ -131,7 +131,7 @@ export default function AdminDashboard() {
             <Loader2 className="w-8 h-8 animate-spin text-muted-foreground" />
           </div>
         ) : (
-          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+          <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
             {statCards.map((stat) => (
               <Card key={stat.title}>
                 <CardHeader className="flex flex-row items-center justify-between pb-2">
@@ -142,7 +142,7 @@ export default function AdminDashboard() {
                 </CardHeader>
                 <CardContent>
                   <div className="text-2xl font-bold">{stat.value}</div>
-                  <div className="flex items-center gap-2 mt-1">
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mt-1">
                     <p className="text-xs text-muted-foreground">{stat.description}</p>
                     {stat.trend && (
                       <Badge variant="secondary" className="text-xs bg-green-500/10 text-green-600 border-green-500/30">
@@ -172,7 +172,7 @@ export default function AdminDashboard() {
             ) : (
               <div className="space-y-4">
                 {recentUsers.map((user) => (
-                  <div key={user.id} className="flex items-center gap-4">
+                  <div key={user.id} className="flex items-center gap-3 sm:gap-4">
                     <Avatar>
                       <AvatarImage src={user.avatar_url || undefined} />
                       <AvatarFallback>
@@ -187,7 +187,7 @@ export default function AdminDashboard() {
                         {user.email}
                       </p>
                     </div>
-                    <div className="text-sm text-muted-foreground">
+                    <div className="text-sm text-muted-foreground shrink-0">
                       {format(new Date(user.created_at), "MMM d, yyyy")}
                     </div>
                   </div>

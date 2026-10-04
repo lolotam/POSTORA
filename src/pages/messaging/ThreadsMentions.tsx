@@ -154,7 +154,7 @@ export default function ThreadsMentions() {
                   ease: "easeInOut",
                 }}
               >
-                <h1 className="text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-black uppercase tracking-[0.35em] sm:tracking-[0.48em] md:tracking-[0.6em] drop-shadow-sm text-center text-foreground">
+                <h1 className="text-lg sm:text-3xl md:text-4xl lg:text-5xl font-black uppercase tracking-[0.2em] sm:tracking-[0.48em] md:tracking-[0.6em] drop-shadow-sm text-center text-foreground">
                   {t("threads.title", "Threads Mentions")}
                 </h1>
               </motion.div>
