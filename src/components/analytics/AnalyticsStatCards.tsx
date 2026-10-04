@@ -24,13 +24,13 @@ export function AnalyticsStatCards({
   ];
 
   return (
-    <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
+    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
       {items.map((item, i) => (
         <Reveal key={item.id} delay={i * 90}>
-          <GradientRingCard variant={item.variant} innerClassName="p-5">
-            <div className="flex items-center gap-4">
+          <GradientRingCard variant={item.variant} innerClassName="p-4 sm:p-5">
+            <div className="flex items-center gap-3 sm:gap-4">
               <Icon3D icon={item.icon} variant={item.variant} size="sm" />
-              <div>
+              <div className="min-w-0">
                 <p className="text-sm text-muted-foreground">{item.label}</p>
                 <p className="text-2xl font-bold tracking-tight">{item.value}</p>
               </div>

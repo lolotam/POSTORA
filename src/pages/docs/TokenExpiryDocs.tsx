@@ -211,7 +211,7 @@ export default function TokenExpiryDocs() {
           </aside>
 
           {/* Content */}
-          <div className="space-y-16 max-w-4xl">
+          <div className="space-y-16 max-w-4xl min-w-0">
             {/* Overview */}
             <section id="overview">
               <SectionTitle id="overview-title">Overview</SectionTitle>

@@ -170,14 +170,14 @@ export default function AdminCoupons() {
   return (
     <AdminLayout>
       <div className="space-y-6">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h2 className="text-2xl font-bold">Coupons</h2>
             <p className="text-muted-foreground">Create and manage discount coupons</p>
           </div>
           <Dialog open={isCreateOpen} onOpenChange={setIsCreateOpen}>
             <DialogTrigger asChild>
-              <Button>
+              <Button className="self-start sm:self-auto">
                 <Plus className="w-4 h-4 me-2" />
                 Create Coupon
               </Button>

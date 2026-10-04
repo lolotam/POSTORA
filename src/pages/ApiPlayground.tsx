@@ -18,12 +18,12 @@ export default function ApiPlayground() {
     <div className="min-h-screen bg-background">
       <PlaygroundHeader isAuthenticated={!!state.user} />
 
-      <main className="w-full px-6 py-8">
+      <main className="w-full px-4 sm:px-6 py-8">
         {/* Hero */}
         <div className="mb-8">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex items-center gap-4">
-              <div className="w-14 h-14 rounded-2xl flex items-center justify-center bg-primary">
+              <div className="w-14 h-14 shrink-0 rounded-2xl flex items-center justify-center bg-primary">
                 <Terminal className="w-7 h-7 text-primary-foreground" />
               </div>
               <div>
@@ -34,7 +34,7 @@ export default function ApiPlayground() {
             <Button
               variant={state.showHistory ? "default" : "outline"}
               onClick={() => state.setShowHistory(!state.showHistory)}
-              className="gap-2"
+              className="gap-2 self-start sm:self-auto"
             >
               <History className="w-4 h-4" />
               History ({state.requestHistory.length})
@@ -72,7 +72,7 @@ export default function ApiPlayground() {
             onTest={state.testWebhook}
           />
         ) : (
-          <div className="grid lg:grid-cols-2 gap-6">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             <RequestBuilder
               apiKey={state.apiKey}
               setApiKey={state.setApiKey}

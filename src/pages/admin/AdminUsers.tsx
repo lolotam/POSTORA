@@ -193,9 +193,9 @@ function AuthStatusDebug() {
   }, []);
 
   return (
-    <div className="p-3 rounded-lg border bg-muted/30 flex items-center gap-4 text-sm">
+    <div className="p-3 rounded-lg border bg-muted/30 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
       <div className="flex items-center gap-2">
-        <span className="font-medium">Auth Status:</span>
+        <span className="font-medium whitespace-nowrap">Auth Status:</span>
         {isChecking ? (
           <Loader2 className="w-4 h-4 animate-spin" />
         ) : authStatus?.hasSession ? (
@@ -211,12 +211,12 @@ function AuthStatusDebug() {
       </div>
       {authStatus?.hasAccessToken && (
         <div className="flex items-center gap-2 text-muted-foreground">
-          <span>Token expires:</span>
+          <span className="whitespace-nowrap">Token expires:</span>
           <span className="font-mono text-xs">{authStatus.expiresAt}</span>
         </div>
       )}
       {authStatus?.userId && (
-        <div className="flex items-center gap-2 text-muted-foreground">
+        <div className="flex min-w-0 items-center gap-2 text-muted-foreground">
           <span>User:</span>
           <span className="font-mono text-xs truncate max-w-[200px]">{authStatus.userId}</span>
         </div>
@@ -1080,14 +1080,14 @@ export default function AdminUsers() {
         {/* Auth Status Debug Row */}
         <AuthStatusDebug />
 
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <div>
             <h2 className="text-2xl font-bold">Users Management</h2>
             <p className="text-muted-foreground">
               Manage all registered users ({users.length} total)
             </p>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-2 lg:flex-nowrap lg:gap-3">
             <SyncQuotasButton />
             <Button 
               variant="outline" 
@@ -1149,7 +1149,7 @@ export default function AdminUsers() {
                 <X className="w-4 h-4" />
               </Button>
             )}
-            <div className="relative w-72">
+            <div className="relative w-full sm:w-72">
               <Search className="absolute start-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
               <Input
                 placeholder="Search users..."
@@ -1163,7 +1163,7 @@ export default function AdminUsers() {
 
         {/* Bulk Actions Bar */}
         {selectedUsers.length > 0 && (
-          <div className="flex items-center gap-4 p-4 bg-muted/50 rounded-lg border">
+          <div className="flex flex-wrap items-center gap-2 sm:gap-4 p-3 sm:p-4 bg-muted/50 rounded-lg border">
             <span className="text-sm font-medium">
               {selectedUsers.length} user{selectedUsers.length > 1 ? 's' : ''} selected
             </span>

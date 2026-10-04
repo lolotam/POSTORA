@@ -180,7 +180,7 @@ export default function AdminBlogPosts() {
   return (
     <AdminLayout>
       <div className="space-y-6">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h1 className="text-2xl font-bold">Blog Posts</h1>
             <p className="text-muted-foreground">
@@ -189,7 +189,7 @@ export default function AdminBlogPosts() {
           </div>
           <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
             <DialogTrigger asChild>
-              <Button onClick={openCreateDialog}>
+              <Button onClick={openCreateDialog} className="self-start sm:self-auto">
                 <Plus className="w-4 h-4 me-2" />
                 New Post
               </Button>
@@ -259,18 +259,18 @@ export default function AdminBlogPosts() {
 
                 {/* Scheduled Date Picker */}
                 {formData.status === "scheduled" && (
-                  <div className="space-y-2 p-4 bg-muted/50 rounded-lg border">
+                  <div className="space-y-2 p-3 sm:p-4 bg-muted/50 rounded-lg border">
                     <Label className="flex items-center gap-2">
                       <CalendarIcon className="w-4 h-4" />
                       Schedule Publication
                     </Label>
-                    <div className="flex gap-3">
+                    <div className="flex flex-wrap gap-3">
                       <Popover>
                         <PopoverTrigger asChild>
                           <Button
                             variant="outline"
                             className={cn(
-                              "flex-1 justify-start text-start font-normal",
+                              "flex-1 min-w-[10rem] justify-start text-start font-normal",
                               !formData.scheduled_at && "text-muted-foreground"
                             )}
                           >
@@ -352,7 +352,7 @@ export default function AdminBlogPosts() {
             </Button>
           </div>
         ) : (
-          <div className="border rounded-xl overflow-hidden">
+          <div className="border rounded-xl overflow-hidden max-md:overflow-x-auto">
             <table className="w-full">
               <thead className="bg-muted/50">
                 <tr>
@@ -366,12 +366,12 @@ export default function AdminBlogPosts() {
                 {posts.map((post) => (
                   <tr key={post.id} className="hover:bg-muted/30">
                     <td className="px-4 py-3">
-                      <div className="flex items-center gap-3">
+                      <div className="flex items-center gap-3 max-md:min-w-[14rem]">
                         {post.cover_image_url && (
                           <img
                             src={post.cover_image_url}
                             alt=""
-                            className="w-10 h-10 rounded object-cover"
+                            className="w-10 h-10 shrink-0 rounded object-cover"
                           />
                         )}
                         <span className="font-medium">{post.title}</span>
@@ -394,13 +394,13 @@ export default function AdminBlogPosts() {
                           {post.status}
                         </Badge>
                         {post.status === "scheduled" && (post as any).scheduled_at && (
-                          <span className="text-xs text-muted-foreground">
+                          <span className="text-xs text-muted-foreground max-md:whitespace-nowrap">
                             {format(new Date((post as any).scheduled_at), "MMM d, h:mm a")}
                           </span>
                         )}
                       </div>
                     </td>
-                    <td className="px-4 py-3 text-sm text-muted-foreground">
+                    <td className="px-4 py-3 text-sm text-muted-foreground max-md:whitespace-nowrap">
                       {format(new Date(post.created_at), "MMM d, yyyy")}
                     </td>
                     <td className="px-4 py-3 text-end">

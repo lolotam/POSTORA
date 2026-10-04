@@ -29,7 +29,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import { PanelLeftClose, PanelLeftOpen, Loader2, RefreshCw, CheckCheck, Mail, Clock, ArrowDownLeft, ArrowUpRight, Inbox, Search, X, FileEdit, RotateCcw, Trash2 } from "lucide-react";
+import { ArrowLeft, PanelLeftClose, PanelLeftOpen, Loader2, RefreshCw, CheckCheck, Mail, Clock, ArrowDownLeft, ArrowUpRight, Inbox, Search, X, FileEdit, RotateCcw, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 type MessageFilter = "all" | "received" | "sent";
@@ -173,7 +173,7 @@ export function AdminInbox() {
 
   return (
     <Tabs value={activeTab} onValueChange={setActiveTab} className="flex flex-col h-full space-y-4">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <TabsList>
           <TabsTrigger value="inbox" className="gap-2">
             <Mail className="w-4 h-4" />
@@ -200,7 +200,7 @@ export function AdminInbox() {
         </TabsList>
         
         {activeTab === "inbox" && (
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {selectedThreadIds.size > 0 && (
               <AlertDialog>
                 <AlertDialogTrigger asChild>
@@ -288,13 +288,15 @@ export function AdminInbox() {
         )}
       </div>
 
-      <TabsContent value="inbox" className="mt-0 flex-1 min-h-0 flex flex-col gap-4">
+      {/* `flex` outranks the [hidden] Radix sets on an inactive tab, so on
+          phones the empty inbox pane would push Drafts/Scheduled down. */}
+      <TabsContent value="inbox" className="mt-0 flex-1 min-h-0 flex flex-col gap-4 max-md:data-[state=inactive]:hidden">
         {/* Search Bar */}
         <div className="flex items-center gap-2 shrink-0">
           <Button
             variant="outline"
             size="icon"
-            className="shrink-0"
+            className="shrink-0 max-md:hidden"
             onClick={() => setThreadsCollapsed((collapsed) => !collapsed)}
             aria-label={threadsCollapsed ? "Show conversation list" : "Hide conversation list"}
             title={threadsCollapsed ? "Show conversation list" : "Hide conversation list"}
@@ -305,7 +307,7 @@ export function AdminInbox() {
               <PanelLeftClose className="h-4 w-4 rtl-flip" />
             )}
           </Button>
-          <div className="relative flex-1">
+          <div className="relative flex-1 min-w-0">
           <Search className="absolute start-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
             placeholder="Search by sender, subject, or content..."
@@ -329,11 +331,14 @@ export function AdminInbox() {
         {/* flex-1 + min-h-0 instead of a viewport calc: the panels now grow to
             the bottom of <main>, and the old h-[calc(100vh-340px)] guessed at a
             chrome height that changes whenever the toolbar above wraps. */}
+        {/* Below md only one pane fits: the list until a thread is picked,
+            then the thread with a Back button that clears the selection. */}
         <div className="flex gap-4 flex-1 min-h-0">
           <div
             className={cn(
               "border rounded-lg overflow-hidden bg-card transition-[width] duration-200 shrink-0",
-              threadsCollapsed ? "w-0 border-0 opacity-0 pointer-events-none" : "w-1/3 min-w-[300px]"
+              threadsCollapsed ? "w-0 border-0 opacity-0 pointer-events-none" : "w-full md:w-1/3 md:min-w-[300px]",
+              selectedThread && "max-md:hidden"
             )}
           >
             <ThreadedMessageList
@@ -346,20 +351,36 @@ export function AdminInbox() {
             />
           </div>
           {/* min-w-0 so a long subject line cannot push the rail off screen. */}
-          <div className="flex-1 min-w-0 border rounded-lg overflow-hidden bg-card">
-            <ThreadDetail
-              thread={selectedThread}
-              onDelete={(id) => {
-                deleteMessage(id);
-                // Check if this was the last message in the thread
-                if (selectedThread && selectedThread.messages.length <= 1) {
-                  handleThreadDeleted();
-                }
-              }}
-              onReply={(data) => composeRef.current?.openReply(data)}
-              onForward={(data) => composeRef.current?.openForward(data)}
-              onMarkAsRead={markAsRead}
-            />
+          <div
+            className={cn(
+              "flex-1 min-w-0 border rounded-lg overflow-hidden bg-card",
+              !selectedThread && "max-md:hidden",
+              selectedThread && "max-md:flex max-md:flex-col"
+            )}
+          >
+            {selectedThread && (
+              <div className="md:hidden shrink-0 border-b p-2">
+                <Button variant="ghost" size="sm" onClick={() => setSelectedThread(null)}>
+                  <ArrowLeft className="w-4 h-4 me-2 rtl-flip" />
+                  Back
+                </Button>
+              </div>
+            )}
+            <div className="h-full max-md:h-auto max-md:flex-1 max-md:min-h-0">
+              <ThreadDetail
+                thread={selectedThread}
+                onDelete={(id) => {
+                  deleteMessage(id);
+                  // Check if this was the last message in the thread
+                  if (selectedThread && selectedThread.messages.length <= 1) {
+                    handleThreadDeleted();
+                  }
+                }}
+                onReply={(data) => composeRef.current?.openReply(data)}
+                onForward={(data) => composeRef.current?.openForward(data)}
+                onMarkAsRead={markAsRead}
+              />
+            </div>
           </div>
         </div>
       </TabsContent>

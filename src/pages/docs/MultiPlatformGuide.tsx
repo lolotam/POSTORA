@@ -213,18 +213,18 @@ export default function MultiPlatformGuide() {
     <div className="min-h-screen bg-background">
       {/* Header */}
       <header className="sticky top-0 z-50 border-b border-border bg-background">
-        <div className="container mx-auto px-6 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <Link to="/"><Logo /></Link>
+        <div className="container mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 sm:gap-4 min-w-0">
+            <Link to="/" className="shrink-0"><Logo /></Link>
+            <span className="text-muted-foreground max-sm:hidden">/</span>
+            <Link to="/docs" className="text-muted-foreground hover:text-foreground max-sm:hidden">Docs</Link>
             <span className="text-muted-foreground">/</span>
-            <Link to="/docs" className="text-muted-foreground hover:text-foreground">Docs</Link>
-            <span className="text-muted-foreground">/</span>
-            <span className="font-medium flex items-center gap-2">
-              <Share2 className="w-4 h-4 text-primary" />
-              Multi-Platform Guide
+            <span className="font-medium flex items-center gap-2 min-w-0">
+              <Share2 className="w-4 h-4 shrink-0 text-primary" />
+              <span className="truncate">Multi-Platform Guide</span>
             </span>
           </div>
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-4 shrink-0">
             {user ? (
               <Link to="/dashboard"><Button variant="gradient">Dashboard</Button></Link>
             ) : (

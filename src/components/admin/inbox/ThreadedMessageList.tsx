@@ -122,7 +122,9 @@ export function ThreadedMessageList({
   }
 
   return (
-    <ScrollArea className="h-full">
+    // Radix wraps content in a display:table div that grows to its widest row,
+    // which defeats `truncate` once the list is full-width on a phone.
+    <ScrollArea className="h-full max-md:[&>[data-radix-scroll-area-viewport]>div]:!block">
       {onToggleAll && threads.length > 0 && (
         <div className="flex items-center gap-2 px-3 py-2 border-b bg-muted/30 sticky top-0 z-10">
           <Checkbox
@@ -169,7 +171,7 @@ export function ThreadedMessageList({
               )}
               <button
                 onClick={() => onSelectThread(thread)}
-                className="flex-1 text-start p-4 hover:bg-muted/50 transition-colors"
+                className="flex-1 min-w-0 text-start p-4 hover:bg-muted/50 transition-colors"
               >
                 <div className="flex items-start gap-3">
                   {/* Direction indicator */}

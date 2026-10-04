@@ -12,16 +12,16 @@ export default function ApiDocumentation() {
   return (
     <div className="min-h-screen bg-background text-foreground">
       <header className="border-b border-border bg-card sticky top-0 z-50">
-        <div className="container mx-auto px-6 py-4 flex items-center gap-4">
+        <div className="container mx-auto px-4 sm:px-6 py-4 flex flex-wrap sm:flex-nowrap items-center gap-4">
           <Button variant="ghost" size="icon" onClick={() => navigate("/docs")}><ArrowLeft className="w-4 h-4" /></Button>
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center"><BookOpen className="w-4 h-4 text-primary" /></div>
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-8 h-8 shrink-0 rounded-lg bg-primary/10 flex items-center justify-center"><BookOpen className="w-4 h-4 text-primary" /></div>
             <div>
               <h1 className="text-lg font-bold">Postora API Reference</h1>
               <p className="text-xs text-muted-foreground">v1 — REST API for automation platforms</p>
             </div>
           </div>
-          <div className="ms-auto flex items-center gap-2">
+          <div className="ms-auto flex flex-wrap items-center gap-2 max-sm:w-full max-sm:ms-0">
             <Badge variant="outline" className="text-xs">Version 1.0</Badge>
             <Button size="sm" variant="outline" asChild>
               <a href="/docs/n8n-integration" className="flex items-center gap-1.5"><Zap className="w-3.5 h-3.5" /> n8n Guide</a>
@@ -33,12 +33,12 @@ export default function ApiDocumentation() {
         </div>
       </header>
 
-      <div className="container mx-auto px-6 py-10 max-w-5xl">
+      <div className="container mx-auto px-4 sm:px-6 py-10 max-w-5xl">
         {/* Authentication */}
         <section className="mb-12">
           <div className="flex items-center gap-3 mb-4"><Key className="w-5 h-5 text-primary" /><h2 className="text-2xl font-bold">Authentication</h2></div>
           <p className="text-muted-foreground mb-4">All API requests require your API key. Get it from <a href="/api-keys" className="text-primary underline">Settings → API Keys</a>.</p>
-          <div className="grid md:grid-cols-2 gap-4 mb-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
             <div><p className="text-sm font-medium mb-2">Header (recommended)</p><CodeBlock lang="bash" code={`curl -H "x-api-key: YOUR_API_KEY" \\\n  ${BASE_URL}/api/v1/accounts`} /></div>
             <div><p className="text-sm font-medium mb-2">Authorization Bearer</p><CodeBlock lang="bash" code={`curl -H "Authorization: Bearer YOUR_API_KEY" \\\n  ${BASE_URL}/api/v1/accounts`} /></div>
           </div>
@@ -57,7 +57,7 @@ export default function ApiDocumentation() {
           <div className="space-y-8">
             {endpoints.map((ep, i) => (
               <div key={i} className="border border-border rounded-xl overflow-hidden">
-                <div className="flex items-center gap-3 px-5 py-3 bg-card border-b border-border"><MethodBadge method={ep.method} /><code className="text-sm font-mono font-medium">{ep.path}</code></div>
+                <div className="flex items-center gap-3 px-4 sm:px-5 py-3 bg-card border-b border-border"><MethodBadge method={ep.method} /><code className="text-sm font-mono font-medium min-w-0 break-all">{ep.path}</code></div>
                 <div className="p-5">
                   <p className="text-muted-foreground mb-4">{ep.description}</p>
                   {ep.notes && <p className="text-xs text-muted-foreground bg-secondary/30 rounded-lg px-3 py-2 mb-4">💡 {ep.notes}</p>}

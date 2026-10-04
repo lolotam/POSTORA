@@ -504,8 +504,8 @@ export const ComposeEmail = forwardRef<ComposeEmailRef, {}>(function ComposeEmai
 
         <div className="grid gap-4 py-4">
           {/* From Address */}
-          <div className="flex items-center gap-4">
-            <Label htmlFor="from" className="w-16 text-end text-muted-foreground">
+          <div className="flex items-center gap-2 sm:gap-4">
+            <Label htmlFor="from" className="w-16 shrink-0 text-end text-muted-foreground max-sm:w-12">
               From
             </Label>
             <Select value={fromAddress} onValueChange={setFromAddress}>
@@ -523,17 +523,17 @@ export const ComposeEmail = forwardRef<ComposeEmailRef, {}>(function ComposeEmai
           </div>
 
           {/* To Emails */}
-          <div className="flex items-center gap-4">
-            <Label htmlFor="to" className="w-16 text-end text-muted-foreground">
+          <div className="flex items-center gap-2 sm:gap-4">
+            <Label htmlFor="to" className="w-16 shrink-0 text-end text-muted-foreground max-sm:w-12">
               To
             </Label>
-            <div className="flex-1 flex items-center gap-2">
+            <div className="flex-1 min-w-0 flex flex-wrap items-center gap-2">
               <EmailAutocomplete
                 id="to"
                 value={toEmails}
                 onChange={setToEmails}
                 placeholder="recipient@example.com"
-                className="flex-1"
+                className="flex-1 max-sm:basis-full"
               />
               <SubscriberSelector
                 selectedEmails={toEmails}
@@ -555,8 +555,8 @@ export const ComposeEmail = forwardRef<ComposeEmailRef, {}>(function ComposeEmai
           {/* CC/BCC */}
           {showCcBcc && (
             <>
-              <div className="flex items-center gap-4">
-                <Label htmlFor="cc" className="w-16 text-end text-muted-foreground">
+              <div className="flex items-center gap-2 sm:gap-4">
+                <Label htmlFor="cc" className="w-16 shrink-0 text-end text-muted-foreground max-sm:w-12">
                   Cc
                 </Label>
                 <EmailAutocomplete
@@ -567,8 +567,8 @@ export const ComposeEmail = forwardRef<ComposeEmailRef, {}>(function ComposeEmai
                   className="flex-1"
                 />
               </div>
-              <div className="flex items-center gap-4">
-                <Label htmlFor="bcc" className="w-16 text-end text-muted-foreground">
+              <div className="flex items-center gap-2 sm:gap-4">
+                <Label htmlFor="bcc" className="w-16 shrink-0 text-end text-muted-foreground max-sm:w-12">
                   Bcc
                 </Label>
                 <EmailAutocomplete
@@ -583,8 +583,8 @@ export const ComposeEmail = forwardRef<ComposeEmailRef, {}>(function ComposeEmai
           )}
 
           {/* Subject */}
-          <div className="flex items-center gap-4">
-            <Label htmlFor="subject" className="w-16 text-end text-muted-foreground">
+          <div className="flex items-center gap-2 sm:gap-4">
+            <Label htmlFor="subject" className="w-16 shrink-0 text-end text-muted-foreground max-sm:w-12">
               Subject
             </Label>
             <Input
@@ -598,8 +598,8 @@ export const ComposeEmail = forwardRef<ComposeEmailRef, {}>(function ComposeEmai
 
           {/* AI Help, Templates, Preview & Signature */}
           <div className="flex items-center gap-4">
-            <div className="w-16" />
-            <div className="flex-1 flex items-center gap-2 flex-wrap">
+            <div className="w-16 max-sm:hidden" />
+            <div className="flex-1 min-w-0 flex items-center gap-2 flex-wrap">
               <EmailTemplateManager
                 onSelectTemplate={({ subject: s, body: b }) => {
                   setSubject(s);
@@ -724,8 +724,8 @@ export const ComposeEmail = forwardRef<ComposeEmailRef, {}>(function ComposeEmai
         </div>
 
         {/* Footer Actions */}
-        <div className="flex items-center justify-between pt-4 border-t">
-          <div className="flex items-center gap-2">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between pt-4 border-t">
+          <div className="flex flex-wrap items-center gap-2">
             {/* Main send/schedule button */}
             <Button
               disabled={!canSend}
@@ -760,7 +760,7 @@ export const ComposeEmail = forwardRef<ComposeEmailRef, {}>(function ComposeEmai
             />
           </div>
 
-          <div className="flex items-center justify-between gap-4">
+          <div className="flex flex-wrap items-center justify-between gap-4">
             {/* Auto-save indicator */}
             <div className="text-xs text-muted-foreground">
               {saveDraftMutation.isPending && saveDraftMutation.variables?.silent ? (

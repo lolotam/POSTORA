@@ -585,17 +585,17 @@ export default function AdminUserDetail() {
         </Button>
 
         {/* Header */}
-        <div className="flex items-center gap-4">
-          <Avatar className="w-16 h-16">
+        <div className="flex items-center gap-3 sm:gap-4">
+          <Avatar className="w-12 h-12 sm:w-16 sm:h-16 shrink-0">
             <AvatarImage src={profile.avatar_url || undefined} />
             <AvatarFallback className="text-xl">
               {profile.full_name?.charAt(0) || profile.email?.charAt(0) || "U"}
             </AvatarFallback>
           </Avatar>
-          <div className="flex-1">
-            <h2 className="text-2xl font-bold">{profile.full_name || "No Name"}</h2>
-            <p className="text-muted-foreground">{profile.email}</p>
-            <div className="flex items-center gap-2 mt-1">
+          <div className="flex-1 min-w-0">
+            <h2 className="text-xl sm:text-2xl font-bold break-words">{profile.full_name || "No Name"}</h2>
+            <p className="text-muted-foreground break-all">{profile.email}</p>
+            <div className="flex flex-wrap items-center gap-2 mt-1">
               <Badge variant={role === "admin" ? "default" : role === "subscriber" ? "secondary" : "outline"}>
                 {role}
               </Badge>
@@ -614,7 +614,7 @@ export default function AdminUserDetail() {
         </div>
 
         {/* Stats Cards */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+        <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 sm:gap-4">
           <Card noAnimation>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
@@ -935,7 +935,7 @@ export default function AdminUserDetail() {
           {/* Publishing History Tab */}
           <TabsContent value="calls" className="space-y-4">
             {/* Summary cards */}
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-3 gap-3 sm:gap-4">
               <Card noAnimation>
                 <CardContent className="pt-4 pb-4">
                   <p className="text-sm text-muted-foreground">Total Posts</p>
@@ -1131,7 +1131,7 @@ export default function AdminUserDetail() {
 
                   return (
                     <details key={log.id} className="group border rounded-lg">
-                      <summary className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-muted/50">
+                      <summary className="flex flex-wrap sm:flex-nowrap items-center gap-x-3 gap-y-1.5 px-3 sm:px-4 py-3 cursor-pointer hover:bg-muted/50">
                         {levelIcon}
                         <Badge variant={levelVariant} className="text-xs uppercase">{log.level}</Badge>
                         {log.category && (
@@ -1140,13 +1140,13 @@ export default function AdminUserDetail() {
                         {log.source && (
                           <Badge variant="outline" className="text-xs font-mono">{log.source}</Badge>
                         )}
-                        <span className="flex-1 text-sm truncate">{log.message}</span>
-                        <span className="text-xs text-muted-foreground flex items-center gap-1">
+                        <span className="flex-1 min-w-0 text-sm truncate max-sm:order-last max-sm:basis-full">{log.message}</span>
+                        <span className="text-xs text-muted-foreground flex items-center gap-1 max-sm:ms-auto">
                           <Clock className="w-3 h-3" />
                           {format(new Date(log.created_at), "MMM d, HH:mm:ss")}
                         </span>
                       </summary>
-                      <div className="px-4 pb-4 pt-2 border-t">
+                      <div className="px-3 sm:px-4 pb-4 pt-2 border-t">
                         {log.metadata && (() => {
                           const meta = typeof log.metadata === "string" ? JSON.parse(log.metadata) : log.metadata;
                           const errorKeys = ["error", "errorMessage", "error_message", "reason"];
@@ -1174,7 +1174,7 @@ export default function AdminUserDetail() {
                                   const strVal = String(val);
                                   const isUrl = strVal.startsWith("http");
                                   return (
-                                    <div key={key} className="flex items-center gap-2 text-sm">
+                                    <div key={key} className="flex min-w-0 items-center gap-2 text-sm">
                                       <span className="text-muted-foreground font-medium min-w-[100px]">{label}:</span>
                                       {isUrl ? (
                                         <a href={strVal} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline flex items-center gap-1 truncate">

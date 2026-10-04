@@ -187,9 +187,9 @@ export default function AdminNotifications() {
                     className="border rounded-xl p-4 hover:bg-muted/30 transition-colors"
                   >
                     <div className="flex items-start justify-between gap-4">
-                      <div className="flex-1">
+                      <div className="flex-1 min-w-0">
                         <h3 className="font-semibold">{notification.title}</h3>
-                        <p className="text-sm text-muted-foreground mt-1">
+                        <p className="text-sm text-muted-foreground mt-1 break-words">
                           {notification.message}
                         </p>
                         <p className="text-xs text-muted-foreground mt-2">

@@ -198,7 +198,7 @@ export default function UnifiedAgentSetupPage() {
                   ease: "easeInOut",
                 }}
               >
-                <h1 className="text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-black uppercase tracking-[0.18em] sm:tracking-[0.25em] md:tracking-[0.3em] drop-shadow-sm text-center text-foreground">
+                <h1 className="text-xl sm:text-3xl md:text-4xl lg:text-5xl font-black uppercase tracking-[0.18em] sm:tracking-[0.25em] md:tracking-[0.3em] drop-shadow-sm text-center text-foreground">
                   {t("header.agentSetup", "Agent Setup Portal")}
                 </h1>
               </motion.div>

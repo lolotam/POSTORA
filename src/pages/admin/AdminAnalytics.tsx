@@ -198,7 +198,7 @@ export default function AdminAnalytics() {
     <AdminLayout>
       <div className="space-y-6">
         {/* Header */}
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h2 className="text-2xl font-bold">Platform Analytics</h2>
             <p className="text-muted-foreground">Monitor user growth, engagement, and resource usage</p>
@@ -228,7 +228,7 @@ export default function AdminAnalytics() {
         ) : (
           <>
             {/* User Stats Cards */}
-            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
+            <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-5">
               <Card>
                 <CardHeader className="flex flex-row items-center justify-between pb-2">
                   <CardTitle className="text-sm font-medium text-muted-foreground">Total Users</CardTitle>
@@ -326,8 +326,8 @@ export default function AdminAnalytics() {
                   <CardTitle>Platform Distribution</CardTitle>
                   <CardDescription>Connected accounts by platform</CardDescription>
                 </CardHeader>
-                <CardContent>
-                  <div className="h-[300px]">
+                <CardContent className="px-3 sm:px-6">
+                  <div className="h-[240px] sm:h-[300px]">
                     <ResponsiveContainer width="100%" height="100%">
                       <PieChart>
                         <Pie
@@ -336,7 +336,7 @@ export default function AdminAnalytics() {
                           nameKey="platform"
                           cx="50%"
                           cy="50%"
-                          outerRadius={100}
+                          outerRadius="66.67%"
                           label={(props: any) => `${props.platform}: ${props.count}`}
                         >
                           {(platformStats || []).map((_, index) => (
@@ -352,7 +352,7 @@ export default function AdminAnalytics() {
             </div>
 
             {/* Resource Usage */}
-            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
+            <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-5">
               <Card>
                 <CardHeader className="flex flex-row items-center justify-between pb-2">
                   <CardTitle className="text-sm font-medium text-muted-foreground">Total Posts</CardTitle>

@@ -504,18 +504,18 @@ export default function ApiKeys() {
                 {/* API Endpoints */}
                 <Card>
                     <CardHeader>
-                        <div className="flex items-center justify-between">
-                            <div>
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                            <div className="min-w-0">
                                 <CardTitle className="text-lg">{t("endpoints.title", "API Endpoints")}</CardTitle>
                                 <CardDescription>{t("endpoints.desc", "Available endpoints for your integrations. Click to expand for details.")}</CardDescription>
                                 <p className="text-sm text-muted-foreground mt-2">
                                     <span className="font-bold text-foreground me-1">{t("endpoints.baseUrl", "Base URL:")} </span>
-                                    <code className="font-mono text-sm bg-muted px-2 py-1 rounded" dir="ltr">https://api.postora.cloud/functions/v1/n8n-api</code>
+                                    <code className="font-mono text-sm bg-muted px-2 py-1 rounded break-all" dir="ltr">https://api.postora.cloud/functions/v1/n8n-api</code>
                                     <span>{" "}{t("endpoints.endpointPath", "+ endpoint path")}</span>
                                 </p>
                             </div>
                             <Button variant="outline" size="sm" asChild>
-                                <a href="/docs" target="_blank" rel="noopener noreferrer" className="gap-2">
+                                <a href="/docs" target="_blank" rel="noopener noreferrer" className="gap-2 self-start sm:self-auto">
                                     <ExternalLink className="w-4 h-4 rtl:rotate-180" />
                                     {t("endpoints.fullDocs", "Full Docs")}
                                 </a>
@@ -537,7 +537,7 @@ export default function ApiKeys() {
                                 <ShieldCheck className="w-5 h-5 text-primary" />
                             </div>
                             <div className="flex-1">
-                                <div className="flex items-center gap-2">
+                                <div className="flex flex-wrap items-center gap-2">
                                     <CardTitle className="text-lg">{t("guide.title", "Direct API & OAuth 2.0 Access (Auto-Approved)")}</CardTitle>
                                     <Badge variant="outline" className="text-[10px] bg-emerald-500/10 text-emerald-400 border-emerald-500/30">{t("guide.badge", "Instant Access")}</Badge>
                                 </div>

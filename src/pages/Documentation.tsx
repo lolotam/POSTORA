@@ -47,7 +47,7 @@ export default function Documentation() {
           />
 
           {/* Content */}
-          <div className="space-y-16 max-w-4xl">
+          <div className="space-y-16 max-w-4xl min-w-0">
             {/* Introduction */}
             <Reveal>
               <section id="introduction">
@@ -123,7 +123,7 @@ export default function Documentation() {
                       <span className="text-white font-bold tabular-nums">4</span>
                     </div>
                   </div>
-                  <div className="flex-1">
+                  <div className="flex-1 min-w-0">
                     <h3 className="font-semibold mb-2">Make Your First API Call</h3>
                     <CodeBlock id="first-call" language="bash" code={`curl -X POST "${API_BASE}/api/v1/post" \\
   -H "Authorization: Apikey YOUR_API_KEY" \\

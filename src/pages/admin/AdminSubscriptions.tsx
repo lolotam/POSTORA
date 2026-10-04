@@ -489,7 +489,7 @@ export default function AdminSubscriptions() {
 
           {/* Subscriptions Tab */}
           <TabsContent value="subscriptions" className="space-y-6">
-            <div className="flex justify-end gap-2">
+            <div className="flex flex-wrap justify-end gap-2">
               <Button variant="outline" onClick={() => setBackfillDialogOpen(true)}>
                 <Download className="w-4 h-4 me-2" />
                 Backfill from Stripe
@@ -501,7 +501,7 @@ export default function AdminSubscriptions() {
             </div>
 
             {/* Revenue Metrics */}
-            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+            <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
               <Card>
                 <CardHeader className="flex flex-row items-center justify-between pb-2">
                   <CardTitle className="text-sm font-medium text-muted-foreground">
@@ -583,13 +583,13 @@ export default function AdminSubscriptions() {
                     </CardDescription>
                   </div>
                   <div className="flex items-center gap-2">
-                    <div className="relative">
+                    <div className="relative min-w-0 flex-1 sm:flex-none">
                       <Search className="absolute start-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                       <Input
                         placeholder="Search by email or name..."
                         value={searchQuery}
                         onChange={(e) => setSearchQuery(e.target.value)}
-                        className="ps-9 w-64"
+                        className="ps-9 w-full sm:w-64"
                       />
                     </div>
                     <Select value={statusFilter} onValueChange={setStatusFilter}>
@@ -708,7 +708,7 @@ export default function AdminSubscriptions() {
 
           {/* AI Credits Tab */}
           <TabsContent value="credits" className="space-y-6">
-            <div className="flex justify-end gap-2">
+            <div className="flex flex-wrap justify-end gap-2">
               <Button variant="outline" onClick={() => setCreditAddDialogOpen(true)}>
                 <Plus className="w-4 h-4 me-2" />
                 Add Credits
@@ -720,7 +720,7 @@ export default function AdminSubscriptions() {
             </div>
 
             {/* Credit Metrics */}
-            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+            <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
               <Card>
                 <CardHeader className="flex flex-row items-center justify-between pb-2">
                   <CardTitle className="text-sm font-medium text-muted-foreground">
@@ -799,7 +799,7 @@ export default function AdminSubscriptions() {
                       placeholder="Search by email or name..."
                       value={creditSearchQuery}
                       onChange={(e) => setCreditSearchQuery(e.target.value)}
-                      className="ps-9 w-64"
+                      className="ps-9 w-full sm:w-64"
                     />
                   </div>
                 </div>
