@@ -392,7 +392,7 @@ export function TikTokPreviewDialog({
                       className="w-10 h-10 rounded-full object-cover"
                     />
                   ) : (
-                    <div className="w-10 h-10 rounded-full flex items-center justify-center text-white text-sm font-bold bg-[#00f2ea]">
+                    <div className="w-10 h-10 rounded-full flex items-center justify-center text-white text-sm font-bold bg-black">
                       TT
                     </div>
                   )}

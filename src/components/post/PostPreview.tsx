@@ -556,7 +556,7 @@ function TikTokPreview({
               {avatarUrl ? (
                 <AvatarImage src={avatarUrl} alt={username} />
               ) : null}
-              <AvatarFallback className="text-white bg-[#00f2ea]">{username[0]?.toUpperCase()}</AvatarFallback>
+              <AvatarFallback className="text-white bg-black">{username[0]?.toUpperCase()}</AvatarFallback>
             </Avatar>
             <p className="font-semibold text-sm mt-2">@{username}</p>
             <div className="flex gap-2 mt-2">

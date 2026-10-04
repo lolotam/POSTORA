@@ -125,7 +125,7 @@ export function TikTokConfirmDialog({
       <AlertDialogContent className="max-w-md">
         <AlertDialogHeader>
           <AlertDialogTitle className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-full flex items-center justify-center bg-[#00f2ea]">
+            <div className="w-8 h-8 rounded-full flex items-center justify-center bg-black">
               <span className="text-white text-xs font-bold">TT</span>
             </div>
             {t("postpreview:tikTokConfirm.title", "Confirm TikTok Post")}
@@ -141,7 +141,7 @@ export function TikTokConfirmDialog({
                     className="w-10 h-10 rounded-full object-cover"
                   />
                 ) : (
-                  <div className="w-10 h-10 rounded-full bg-[#00f2ea]" />
+                  <div className="w-10 h-10 rounded-full bg-black" />
                 )}
                 <div>
                   <p className="font-medium text-foreground">

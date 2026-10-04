@@ -172,7 +172,7 @@ export function TikTokPostPreview({
               className="w-8 h-8 rounded-full border-2 border-white"
             />
           ) : (
-            <div className="w-8 h-8 rounded-full border-2 border-white bg-[#00f2ea]" />
+            <div className="w-8 h-8 rounded-full border-2 border-white bg-black" />
           )}
           
           {/* Interaction Toggles */}

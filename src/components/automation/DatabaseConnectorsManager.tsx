@@ -1741,7 +1741,7 @@ function DatabaseConnectorsEditor({
                       <ConnectorBrandLogo id={preset.id} className="w-8 h-8 sm:w-9 sm:h-9 drop-shadow-sm" />
                     </div>
                     {isConnected && (
-                      <div className="absolute -top-1.5 -end-1.5 w-5 h-5 rounded-full bg-emerald-500 text-white flex items-center justify-center shadow-md ring-2 ring-background animate-in zoom-in-50 duration-200">
+                      <div className="absolute -top-1.5 -end-1.5 w-5 h-5 rounded-full bg-emerald-700 text-white flex items-center justify-center shadow-md ring-2 ring-background animate-in zoom-in-50 duration-200">
                         <Check className="w-3 h-3 stroke-[3]" />
                       </div>
                     )}

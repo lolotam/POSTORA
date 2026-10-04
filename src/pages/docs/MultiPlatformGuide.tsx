@@ -245,7 +245,7 @@ export default function MultiPlatformGuide() {
         <div className="mb-12">
           <div className="flex items-center gap-4 mb-4">
             <div className="w-16 h-16 rounded-2xl flex items-center justify-center bg-primary">
-              <Share2 className="w-8 h-8 text-white" />
+              <Share2 className="w-8 h-8 text-primary-foreground" />
             </div>
             <div>
               <h1 className="text-4xl font-bold">Multi-Platform Posting Guide</h1>

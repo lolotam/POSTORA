@@ -372,7 +372,7 @@ export function TikTokSettings({
                             className="w-12 h-12 rounded-full object-cover border-2 border-muted"
                           />
                         ) : (
-                          <div className="w-12 h-12 rounded-full flex items-center justify-center text-white text-sm font-bold bg-[#00f2ea]">
+                          <div className="w-12 h-12 rounded-full flex items-center justify-center text-white text-sm font-bold bg-black">
                             TT
                           </div>
                         )}

@@ -120,7 +120,7 @@ export function ProfileCard({ profile, isLoading }: ProfileCardProps) {
                 alt={profile.username}
                 referrerPolicy="no-referrer"
               />
-              <AvatarFallback className="text-lg text-primary-foreground bg-neutral-900 dark:bg-neutral-800">
+              <AvatarFallback className="text-lg text-white bg-neutral-900 dark:bg-neutral-800">
                 {initials}
               </AvatarFallback>
             </Avatar>
