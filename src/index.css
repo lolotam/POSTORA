@@ -1,68 +1,78 @@
-@import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800&family=Inter:wght@300;400;500;600;700;800&family=Merriweather:ital,wght@0,300;0,400;0,700;1,300;1,400&family=Noto+Serif:ital,wght@0,400;0,600;0,700;1,400;1,600;1,700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=Newsreader:opsz,wght@6..72,400;6..72,500&display=swap');
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-
-
 @layer base {
+  /*
+   * One design system, two modes. Light follows the "Precision" direction (monochrome,
+   * ink primary, hairline borders); dark follows "Midnight" (layered near-black surfaces,
+   * inverted primary). Only colours change between the modes — radius, spacing and type
+   * stay identical, so switching modes never moves anything on the page.
+   *
+   * Colour discipline: platform brand colours are the only saturated colour in the UI.
+   * --ring (blue) is reserved for focus and links; --destructive for errors. The
+   * --gradient-* and --shadow-glow variables are kept as solid/none aliases only so the
+   * legacy call sites that still read them render flat until they are migrated.
+   */
   :root {
-    /* Light theme - Indigo preset (indigo primary/accent/charts on a neutral base) */
     --background: 0 0% 100%;
-    --foreground: 0 0% 4%;
+    --foreground: 220 5% 12%;
 
     --card: 0 0% 100%;
-    --card-foreground: 0 0% 4%;
+    --card-foreground: 220 5% 12%;
 
     --popover: 0 0% 100%;
-    --popover-foreground: 0 0% 4%;
+    --popover-foreground: 220 5% 12%;
 
-    --primary: 248 68% 51%;
-    --primary-foreground: 226 100% 97%;
+    --primary: 220 5% 12%;
+    --primary-foreground: 0 0% 100%;
 
-    --secondary: 240 5% 96%;
-    --secondary-foreground: 240 6% 10%;
+    --secondary: 220 14% 96%;
+    --secondary-foreground: 220 5% 12%;
 
-    --muted: 0 0% 96%;
-    --muted-foreground: 0 0% 45%;
+    --muted: 220 14% 96%;
+    --muted-foreground: 216 10% 44%;
 
-    --accent: 248 68% 96%;
-    --accent-foreground: 243 47% 30%;
+    --accent: 220 14% 96%;
+    --accent-foreground: 220 5% 12%;
 
-    --destructive: 357 100% 45%;
+    --destructive: 4 77% 40%;
     --destructive-foreground: 0 0% 100%;
 
-    --border: 0 0% 90%;
-    --input: 0 0% 90%;
-    --ring: 0 0% 63%;
+    --border: 217 17% 91%;
+    --input: 215 16% 85%;
+    --ring: 219 87% 60%;
 
-    --chart-1: 239 84% 67%;
-    --chart-2: 243 75% 59%;
-    --chart-3: 245 58% 51%;
-    --chart-4: 244 55% 41%;
-    --chart-5: 242 47% 34%;
+    --chart-1: 219 80% 56%;
+    --chart-2: 173 58% 39%;
+    --chart-3: 38 92% 50%;
+    --chart-4: 262 52% 56%;
+    --chart-5: 346 70% 55%;
 
-    --radius: 0.625rem;
+    --radius: 0.5rem;
 
-    /* Custom gradients */
-    --gradient-primary: linear-gradient(135deg, hsl(248 68% 51%) 0%, hsl(280 80% 60%) 100%);
-    --gradient-subtle: linear-gradient(135deg, hsl(240 5% 96%) 0%, hsl(0 0% 100%) 100%);
-    --gradient-glow: radial-gradient(circle at 50% 0%, hsl(248 68% 51% / 0.15) 0%, transparent 50%);
-    
-    /* Shadows */
-    --shadow-glow: 0 0 60px -15px hsl(248 68% 51% / 0.4);
-    --shadow-card: 0 4px 24px -4px hsl(0 0% 0% / 0.1);
+    --canvas-bg: 220 14% 98%;
+    --node-glow: 219 87% 60%;
+    --connection-line: 219 87% 60%;
 
-    --sidebar: 0 0% 98%;
-    --sidebar-background: 0 0% 98%;
-    --sidebar-foreground: 0 0% 4%;
-    --sidebar-primary: 247 91% 59%;
-    --sidebar-primary-foreground: 226 100% 97%;
-    --sidebar-accent: 0 0% 96%;
-    --sidebar-accent-foreground: 0 0% 9%;
-    --sidebar-border: 0 0% 90%;
-    --sidebar-ring: 0 0% 63%;
+    --gradient-primary: linear-gradient(hsl(var(--primary)), hsl(var(--primary)));
+    --gradient-subtle: linear-gradient(hsl(var(--muted)), hsl(var(--muted)));
+    --gradient-glow: none;
+
+    --shadow-glow: none;
+    --shadow-card: 0 2px 3px -2px hsl(220 40% 18% / 0.1), 0 4px 6px -2px hsl(220 40% 18% / 0.04);
+
+    --sidebar: 0 0% 100%;
+    --sidebar-background: 0 0% 100%;
+    --sidebar-foreground: 220 5% 12%;
+    --sidebar-primary: 220 5% 12%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 220 14% 96%;
+    --sidebar-accent-foreground: 220 5% 12%;
+    --sidebar-border: 217 17% 91%;
+    --sidebar-ring: 219 87% 60%;
 
     /* Platform brand colors (base + darker shade for 3D gradient chips) */
     --facebook: 221 44% 41%;
@@ -89,61 +99,56 @@
     --whatsapp-dark: 142 70% 30%;
   }
 
-  /* Default dark theme - Indigo preset */
   .dark {
-    --background: 0 0% 4%;
-    --foreground: 0 0% 98%;
+    --background: 210 11% 4%;
+    --foreground: 180 7% 97%;
 
-    --card: 0 0% 9%;
-    --card-foreground: 0 0% 98%;
+    --card: 210 6% 6%;
+    --card-foreground: 180 7% 97%;
 
-    --popover: 0 0% 9%;
-    --popover-foreground: 0 0% 98%;
+    --popover: 210 4% 9%;
+    --popover-foreground: 180 7% 97%;
 
-    --primary: 246 61% 42%;
-    --primary-foreground: 226 100% 97%;
+    --primary: 180 7% 97%;
+    --primary-foreground: 210 11% 4%;
 
-    --secondary: 240 4% 16%;
-    --secondary-foreground: 0 0% 98%;
+    --secondary: 225 7% 12%;
+    --secondary-foreground: 180 7% 97%;
 
-    --muted: 0 0% 15%;
-    --muted-foreground: 0 0% 63%;
+    --muted: 210 4% 9%;
+    --muted-foreground: 219 6% 57%;
 
-    --accent: 246 61% 20%;
-    --accent-foreground: 226 100% 97%;
+    --accent: 225 7% 12%;
+    --accent-foreground: 180 7% 97%;
 
-    --destructive: 359 100% 70%;
-    --destructive-foreground: 0 0% 100%;
+    --destructive: 0 79% 63%;
+    --destructive-foreground: 210 11% 4%;
 
-    --border: 0 0% 100% / 0.1;
-    --input: 0 0% 100% / 0.15;
-    --ring: 0 0% 45%;
+    --border: 223 9% 15%;
+    --input: 214 6% 23%;
+    --ring: 220 90% 73%;
 
-    --chart-1: 234 89% 74%;
-    --chart-2: 239 84% 67%;
-    --chart-3: 243 75% 59%;
-    --chart-4: 245 58% 51%;
-    --chart-5: 244 55% 41%;
+    --chart-1: 219 85% 66%;
+    --chart-2: 173 55% 48%;
+    --chart-3: 38 92% 58%;
+    --chart-4: 262 70% 70%;
+    --chart-5: 346 75% 64%;
 
-    --canvas-bg: 0 0% 3%;
-    --node-glow: 241 100% 69%;
-    --connection-line: 248 68% 51%;
+    --canvas-bg: 210 11% 3%;
+    --node-glow: 220 90% 73%;
+    --connection-line: 220 90% 73%;
 
-    --gradient-primary: linear-gradient(135deg, hsl(246 61% 42%) 0%, hsl(280 80% 60%) 50%, hsl(320 90% 55%) 100%);
-    --gradient-subtle: linear-gradient(135deg, hsl(0 0% 12%) 0%, hsl(0 0% 9%) 100%);
-    --gradient-glow: radial-gradient(ellipse at 0% 50%, hsl(246 61% 42% / 0.2) 0%, transparent 50%), radial-gradient(ellipse at 100% 80%, hsl(241 100% 69% / 0.2) 0%, transparent 50%);
-    --shadow-card: 0 4px 32px -4px hsl(246 61% 42% / 0.2), 0 0 0 1px hsl(246 61% 42% / 0.3);
-    --shadow-glow: 0 0 80px -20px hsl(246 61% 42% / 0.5);
+    --shadow-card: 0 0 0 1px hsl(var(--border));
 
-    --sidebar: 0 0% 9%;
-    --sidebar-background: 0 0% 9%;
-    --sidebar-foreground: 0 0% 98%;
-    --sidebar-primary: 241 100% 69%;
-    --sidebar-primary-foreground: 226 100% 97%;
-    --sidebar-accent: 0 0% 15%;
-    --sidebar-accent-foreground: 0 0% 98%;
-    --sidebar-border: 0 0% 100% / 0.1;
-    --sidebar-ring: 0 0% 45%;
+    --sidebar: 210 6% 6%;
+    --sidebar-background: 210 6% 6%;
+    --sidebar-foreground: 180 7% 97%;
+    --sidebar-primary: 180 7% 97%;
+    --sidebar-primary-foreground: 210 11% 4%;
+    --sidebar-accent: 225 7% 12%;
+    --sidebar-accent-foreground: 180 7% 97%;
+    --sidebar-border: 223 9% 15%;
+    --sidebar-ring: 220 90% 73%;
   }
 
   /* Pointer cursor on buttons per preset option */
@@ -166,7 +171,7 @@
   html[lang="ar"] h5,
   html[lang="ar"] h6,
   [dir="rtl"] {
-    font-family: 'Cairo', 'Inter', system-ui, -apple-system, sans-serif;
+    font-family: 'IBM Plex Sans Arabic', 'Inter', system-ui, -apple-system, sans-serif;
   }
 
   [dir="rtl"] input:not([type="password"]):not([type="email"]):not([type="tel"]),
@@ -200,298 +205,6 @@
     --accent: 173 77% 16%;
     --accent-foreground: 94 78% 87%;
   }
-
-  /* Theme Variant 1: Dark Black */
-  .dark[data-dark-theme="dark-black"],
-  [data-dark-theme="dark-black"] .dark {
-    --background: 0 0% 5%;
-    --foreground: 210 40% 98%;
-
-    --card: 0 0% 8%;
-    --card-foreground: 210 40% 98%;
-
-    --popover: 0 0% 8%;
-    --popover-foreground: 210 40% 98%;
-
-    --primary: 220 90% 56%;
-    --primary-foreground: 0 0% 100%;
-
-    --secondary: 0 0% 12%;
-    --secondary-foreground: 210 40% 98%;
-
-    --muted: 0 0% 10%;
-    --muted-foreground: 215 20% 55%;
-
-    --accent: 250 85% 60%;
-    --accent-foreground: 210 40% 98%;
-
-    --destructive: 0 72% 51%;
-    --destructive-foreground: 210 40% 98%;
-
-    --border: 0 0% 14%;
-    --input: 0 0% 14%;
-    --ring: 220 90% 56%;
-
-    --canvas-bg: 0 0% 3%;
-    --node-glow: 220 90% 56%;
-    --connection-line: 250 85% 60%;
-
-    --gradient-primary: linear-gradient(135deg, hsl(220 90% 56%) 0%, hsl(250 85% 60%) 100%);
-    --gradient-subtle: linear-gradient(135deg, hsl(0 0% 10%) 0%, hsl(0 0% 8%) 100%);
-    --gradient-glow: radial-gradient(circle at 50% 0%, hsl(220 90% 56% / 0.15) 0%, transparent 50%);
-    --shadow-card: 0 4px 24px -4px hsl(0 0% 0% / 0.6);
-    --shadow-glow: 0 0 60px -15px hsl(220 90% 56% / 0.4);
-
-    --sidebar-background: 0 0% 6%;
-    --sidebar-foreground: 210 40% 98%;
-    --sidebar-primary: 220 90% 56%;
-    --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 0 0% 12%;
-    --sidebar-accent-foreground: 210 40% 98%;
-    --sidebar-border: 0 0% 12%;
-    --sidebar-ring: 220 90% 56%;
-  }
-
-  /* Theme Variant 2: Futuristic Blue Cyan */
-  .dark[data-dark-theme="dark-blue-cyan"],
-  [data-dark-theme="dark-blue-cyan"] .dark {
-    --background: 210 80% 8%;
-    --foreground: 195 100% 95%;
-
-    --card: 210 70% 12%;
-    --card-foreground: 195 100% 95%;
-
-    --popover: 210 70% 12%;
-    --popover-foreground: 195 100% 95%;
-
-    --primary: 195 100% 50%;
-    --primary-foreground: 210 80% 8%;
-
-    --secondary: 210 60% 18%;
-    --secondary-foreground: 195 100% 90%;
-
-    --muted: 210 50% 15%;
-    --muted-foreground: 195 40% 60%;
-
-    --accent: 190 100% 45%;
-    --accent-foreground: 210 80% 8%;
-
-    --destructive: 0 72% 51%;
-    --destructive-foreground: 195 100% 95%;
-
-    --border: 200 60% 20%;
-    --input: 200 60% 20%;
-    --ring: 195 100% 50%;
-
-    --canvas-bg: 210 85% 5%;
-    --node-glow: 195 100% 50%;
-    --connection-line: 190 100% 45%;
-
-    --gradient-primary: linear-gradient(135deg, hsl(195 100% 50%) 0%, hsl(190 100% 45%) 100%);
-    --gradient-subtle: linear-gradient(135deg, hsl(210 70% 14%) 0%, hsl(210 70% 10%) 100%);
-    --gradient-glow: radial-gradient(circle at 50% 0%, hsl(195 100% 50% / 0.25) 0%, transparent 60%);
-    --shadow-card: 0 4px 32px -4px hsl(195 100% 50% / 0.15), 0 0 0 1px hsl(195 100% 50% / 0.1);
-    --shadow-glow: 0 0 80px -20px hsl(195 100% 50% / 0.5);
-
-    --sidebar-background: 210 75% 10%;
-    --sidebar-foreground: 195 100% 95%;
-    --sidebar-primary: 195 100% 50%;
-    --sidebar-primary-foreground: 210 80% 8%;
-    --sidebar-accent: 210 60% 18%;
-    --sidebar-accent-foreground: 195 100% 90%;
-    --sidebar-border: 200 50% 18%;
-    --sidebar-ring: 195 100% 50%;
-  }
-
-  /* Theme Variant 3: Indigo preset */
-  .dark[data-dark-theme="dark-purple-magenta"],
-  [data-dark-theme="dark-purple-magenta"] .dark,
-  .dark[data-dark-theme="dark-indigo"],
-  [data-dark-theme="dark-indigo"] .dark {
-    --background: 0 0% 4%;
-    --foreground: 0 0% 98%;
-
-    --card: 0 0% 9%;
-    --card-foreground: 0 0% 98%;
-
-    --popover: 0 0% 9%;
-    --popover-foreground: 0 0% 98%;
-
-    --primary: 246 61% 42%;
-    --primary-foreground: 226 100% 97%;
-
-    --secondary: 240 4% 16%;
-    --secondary-foreground: 0 0% 98%;
-
-    --muted: 0 0% 15%;
-    --muted-foreground: 0 0% 63%;
-
-    --accent: 246 61% 20%;
-    --accent-foreground: 226 100% 97%;
-
-    --destructive: 359 100% 70%;
-    --destructive-foreground: 0 0% 100%;
-
-    --border: 0 0% 100% / 0.1;
-    --input: 0 0% 100% / 0.15;
-    --ring: 0 0% 45%;
-
-    --chart-1: 234 89% 74%;
-    --chart-2: 239 84% 67%;
-    --chart-3: 243 75% 59%;
-    --chart-4: 245 58% 51%;
-    --chart-5: 244 55% 41%;
-
-    --radius: 0.625rem;
-
-    --canvas-bg: 0 0% 3%;
-    --node-glow: 241 100% 69%;
-    --connection-line: 248 68% 51%;
-
-    --gradient-primary: linear-gradient(135deg, hsl(246 61% 42%) 0%, hsl(280 80% 60%) 50%, hsl(320 90% 55%) 100%);
-    --gradient-subtle: linear-gradient(135deg, hsl(0 0% 12%) 0%, hsl(0 0% 9%) 100%);
-    --gradient-glow: radial-gradient(ellipse at 0% 50%, hsl(246 61% 42% / 0.2) 0%, transparent 50%), radial-gradient(ellipse at 100% 80%, hsl(241 100% 69% / 0.2) 0%, transparent 50%);
-    --shadow-card: 0 4px 32px -4px hsl(246 61% 42% / 0.2), 0 0 0 1px hsl(246 61% 42% / 0.3);
-    --shadow-glow: 0 0 80px -20px hsl(246 61% 42% / 0.5);
-
-    --sidebar: 0 0% 9%;
-    --sidebar-background: 0 0% 9%;
-    --sidebar-foreground: 0 0% 98%;
-    --sidebar-primary: 241 100% 69%;
-    --sidebar-primary-foreground: 226 100% 97%;
-    --sidebar-accent: 0 0% 15%;
-    --sidebar-accent-foreground: 0 0% 98%;
-    --sidebar-border: 0 0% 100% / 0.1;
-    --sidebar-ring: 0 0% 45%;
-  }
-
-  /* Theme Variant 4: Neon Green */
-  .dark[data-dark-theme="dark-neon-green"],
-  [data-dark-theme="dark-neon-green"] .dark {
-    --background: 120 30% 5%;
-    --foreground: 120 100% 95%;
-
-    --card: 120 25% 10%;
-    --card-foreground: 120 100% 95%;
-
-    --popover: 120 25% 10%;
-    --popover-foreground: 120 100% 95%;
-
-    --primary: 100 80% 50%;
-    --primary-foreground: 120 30% 5%;
-
-    --secondary: 120 20% 15%;
-    --secondary-foreground: 120 100% 90%;
-
-    --muted: 120 15% 12%;
-    --muted-foreground: 100 20% 55%;
-
-    --accent: 85 90% 45%;
-    --accent-foreground: 120 30% 5%;
-
-    --destructive: 0 72% 51%;
-    --destructive-foreground: 120 100% 95%;
-
-    --border: 120 20% 18%;
-    --input: 120 20% 18%;
-    --ring: 100 80% 50%;
-
-    --canvas-bg: 120 35% 3%;
-    --node-glow: 100 80% 50%;
-    --connection-line: 85 90% 45%;
-
-    --gradient-primary: linear-gradient(135deg, hsl(100 80% 50%) 0%, hsl(85 90% 45%) 100%);
-    --gradient-subtle: linear-gradient(135deg, hsl(120 25% 12%) 0%, hsl(120 20% 8%) 100%);
-    --gradient-glow: radial-gradient(ellipse at 30% 0%, hsl(100 80% 50% / 0.3) 0%, transparent 50%), radial-gradient(ellipse at 70% 100%, hsl(85 90% 45% / 0.2) 0%, transparent 50%);
-    --shadow-card: 0 4px 32px -4px hsl(100 80% 50% / 0.2), 0 0 0 1px hsl(100 60% 40% / 0.3);
-    --shadow-glow: 0 0 80px -20px hsl(100 80% 50% / 0.6);
-
-    --sidebar-background: 120 28% 8%;
-    --sidebar-foreground: 120 100% 95%;
-    --sidebar-primary: 100 80% 50%;
-    --sidebar-primary-foreground: 120 30% 5%;
-    --sidebar-accent: 120 20% 15%;
-    --sidebar-accent-foreground: 120 100% 90%;
-    --sidebar-border: 120 18% 16%;
-    --sidebar-ring: 100 80% 50%;
-  }
-
-  /* App Theme: WhatsApp Green (admin-controlled via app_settings key "app_theme").
-     Palette from the /messaging/whatsapp mini-app:
-     #075E54 = 174 86% 20%, #128C7E = 173 77% 31%, #25D366 = 142 70% 49%, #DCF8C6 = 94 78% 87% */
-  html:not(.dark)[data-app-theme="whatsapp-green"] {
-    --primary: 142 70% 49%;
-    --primary-foreground: 174 86% 20%;
-    --ring: 173 77% 31%;
-    --accent: 94 78% 87%;
-    --accent-foreground: 174 86% 20%;
-    --secondary: 94 45% 94%;
-    --secondary-foreground: 174 86% 20%;
-
-    --gradient-primary: linear-gradient(135deg, hsl(173 77% 31%) 0%, hsl(142 70% 49%) 100%);
-    --gradient-subtle: linear-gradient(135deg, hsl(94 78% 95%) 0%, hsl(0 0% 100%) 100%);
-    --gradient-glow: radial-gradient(circle at 50% 0%, hsl(142 70% 49% / 0.15) 0%, transparent 50%);
-    --shadow-glow: 0 0 60px -15px hsl(142 70% 49% / 0.4);
-
-    --sidebar-primary: 173 77% 31%;
-    --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-ring: 142 70% 49%;
-  }
-
-  /* Dark mode keeps the active dark variant's backgrounds; only accents go green,
-     matching how the WhatsApp mini-app composes with dark mode today. */
-  html.dark[data-app-theme="whatsapp-green"] {
-    --primary: 142 70% 49%;
-    --primary-foreground: 174 86% 12%;
-    --ring: 142 70% 49%;
-    --accent: 173 77% 16%;
-    --accent-foreground: 94 78% 87%;
-
-    --gradient-primary: linear-gradient(135deg, hsl(142 70% 49%) 0%, hsl(173 77% 40%) 100%);
-    --gradient-glow: radial-gradient(circle at 50% 0%, hsl(142 70% 49% / 0.2) 0%, transparent 50%);
-    --shadow-glow: 0 0 80px -20px hsl(142 70% 49% / 0.5);
-
-    --sidebar-primary: 142 70% 49%;
-    --sidebar-primary-foreground: 174 86% 12%;
-    --sidebar-ring: 142 70% 49%;
-  }
-
-  /* Solid #075E54 top-nav chrome (same in light and dark, like the WhatsApp header).
-     Token re-map keeps nav items, hover states, mobile menu, and logo readable on teal. */
-  [data-app-theme="whatsapp-green"] .app-topnav {
-    background-color: hsl(174 86% 20%);
-    --background: 174 86% 20%;
-    --foreground: 0 0% 100%;
-    --muted-foreground: 160 25% 82%;
-    --border: 173 60% 28%;
-    --primary: 142 70% 49%;
-    --primary-foreground: 0 0% 100%;
-    --secondary: 173 66% 26%;
-    --secondary-foreground: 0 0% 100%;
-    --accent: 173 77% 31%;
-    --accent-foreground: 0 0% 100%;
-    --gradient-primary: linear-gradient(135deg, hsl(0 0% 100%), hsl(94 78% 87%));
-  }
-
-  /* Page background gradient: from-[#DCF8C6]/25 via-background to-background
-     (dark: from-[#075E54]/25), cloned from the WhatsApp mini-app main area. */
-  [data-app-theme="whatsapp-green"] .app-main {
-    background-image: linear-gradient(
-      to bottom,
-      hsl(94 78% 87% / 0.25),
-      hsl(var(--background)) 50%,
-      hsl(var(--background))
-    );
-  }
-
-  .dark[data-app-theme="whatsapp-green"] .app-main {
-    background-image: linear-gradient(
-      to bottom,
-      hsl(174 86% 20% / 0.25),
-      hsl(var(--background)) 50%,
-      hsl(var(--background))
-    );
-  }
 }
 
 @layer base {
@@ -521,7 +234,7 @@
   }
 
   body {
-    @apply bg-background text-foreground font-serif antialiased;
+    @apply bg-background text-foreground font-sans antialiased;
   }
 
   h1,

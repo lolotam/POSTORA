@@ -5,7 +5,6 @@ import { AdminLayout } from "@/components/admin/AdminLayout";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { UserAiModelOverrides } from "@/components/admin/UserAiModelOverrides";
-import { ThemeSelector } from "@/components/admin/ThemeSelector";
 import { BrandIntelligenceSettings } from "@/components/admin/BrandIntelligenceSettings";
 import { ScrapingServicesSettings } from "@/components/admin/ScrapingServicesSettings";
 import { AppCredentialsSettings } from "@/components/admin/AppCredentialsSettings";
@@ -48,7 +47,6 @@ import {
  */
 const SECTION_COMPONENTS: Record<SettingsSectionId, ComponentType> = {
   "identity": GeneralIdentitySettings,
-  "theme": ThemeSelector,
   "app-credentials": AppCredentialsSettings,
   "tiktok-sandbox": TikTokSandboxToggle,
   "tiktok-analytics-source": TikTokAnalyticsSourceCard,

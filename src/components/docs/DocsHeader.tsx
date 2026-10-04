@@ -2,7 +2,7 @@ import { Link } from "react-router-dom";
 import { Logo } from "@/components/Logo";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/hooks/useAuth";
-import { DocsThemeSelector } from "./DocsThemeSelector";
+import { ThemeToggle } from "@/components/ThemeToggle";
 
 interface DocsHeaderProps {
   breadcrumbs?: { label: string; href?: string }[];
@@ -41,7 +41,7 @@ export function DocsHeader({ breadcrumbs }: DocsHeaderProps) {
             ))}
         </div>
         <div className="flex items-center gap-2">
-          <DocsThemeSelector />
+          <ThemeToggle />
           {user ? (
             <Link to="/dashboard">
               <Button variant="gradient" className="rounded-full">Go to Dashboard</Button>
