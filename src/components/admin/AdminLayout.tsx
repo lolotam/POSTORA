@@ -7,6 +7,7 @@ import { ThemeToggle } from "@/components/ThemeToggle";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
+import { useDirection } from "@radix-ui/react-direction";
 import { PanelLeftClose, PanelLeftOpen, PanelLeft, Menu, Loader2, LayoutDashboard, Users, CreditCard, Package, Ticket, Settings, MessageSquare, ChevronLeft, Newspaper, Bell, Youtube, ScrollText, HeartPulse, BarChart3, Rocket, Gauge, Trash2, Sliders, Inbox, Activity, ToggleLeft, TrendingUp, KeyRound, Handshake } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -78,6 +79,8 @@ export function AdminLayout({ children }: AdminLayoutProps) {
   // Below lg the rail would eat most of a phone screen, so the same nav opens
   // as a drawer instead and the persisted desktop state is left alone.
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  // The drawer slides in from the edge the rail lives on: left in English, right in Arabic.
+  const drawerSide = useDirection() === "rtl" ? "right" : "left";
 
   useEffect(() => {
     setMobileNavOpen(false);
@@ -200,7 +203,7 @@ export function AdminLayout({ children }: AdminLayoutProps) {
       )}
 
       <Sheet open={mobileNavOpen} onOpenChange={setMobileNavOpen}>
-        <SheetContent side="left" className="lg:hidden w-72 max-w-[85vw] p-0 flex flex-col gap-0 bg-card">
+        <SheetContent side={drawerSide} className="lg:hidden w-72 max-w-[85vw] p-0 flex flex-col gap-0 bg-card">
           <SheetTitle className="sr-only">Admin navigation</SheetTitle>
           {renderSidebarBody(false)}
         </SheetContent>
