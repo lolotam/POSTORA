@@ -35,7 +35,7 @@ export function PartnerHubKpiCards({ overview, connectorOverview, connectorError
     { title: "Connector failures (30 d)", icon: AlertTriangle, value: connectorOverview ? String(connectorOverview.failures_30d) : null, hint: connectorError ? `Could not load: ${connectorError.message}` : `${connectorOverview?.refused_30d ?? 0} refused · p95 ${connectorOverview?.p95_latency_30d ?? "—"} ms`, failed: Boolean(connectorError) },
   ];
   return (
-    <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+    <div className="grid grid-cols-2 gap-3 sm:gap-4 xl:grid-cols-4">
       {cards.map((card) => (
         <Card key={card.title}>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">

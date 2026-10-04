@@ -123,8 +123,8 @@ export function ThreadedMessageList({
 
   return (
     // Radix wraps content in a display:table div that grows to its widest row,
-    // which defeats `truncate` once the list is full-width on a phone.
-    <ScrollArea className="h-full max-md:[&>[data-radix-scroll-area-viewport]>div]:!block">
+    // which defeats `truncate` below lg where the list pane is narrow or full-width.
+    <ScrollArea className="h-full max-lg:[&>[data-radix-scroll-area-viewport]>div]:!block">
       {onToggleAll && threads.length > 0 && (
         <div className="flex items-center gap-2 px-3 py-2 border-b bg-muted/30 sticky top-0 z-10">
           <Checkbox

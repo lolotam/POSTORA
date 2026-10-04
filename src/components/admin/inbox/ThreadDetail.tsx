@@ -324,7 +324,7 @@ export function ThreadDetail({
       </div>
 
       {/* Messages */}
-      <ScrollArea className="flex-1 p-4 max-md:[&>[data-radix-scroll-area-viewport]>div]:!block">
+      <ScrollArea className="flex-1 p-4 max-lg:[&>[data-radix-scroll-area-viewport]>div]:!block">
         <div className="space-y-3">
           {thread.messages.map((message) => (
             <SingleMessage

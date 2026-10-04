@@ -77,8 +77,8 @@ export default function AutomationHub() {
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
             <div className="flex items-center gap-4">
               <Icon3D icon={Sparkles} variant="violet" size="lg" />
-              <div>
-                <div className="flex items-center gap-2">
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
                   <GradientHeading preset="violet-sky" size="xl" as="h1">
                     {t("header.hub", "Automation Hub")}
                   </GradientHeading>

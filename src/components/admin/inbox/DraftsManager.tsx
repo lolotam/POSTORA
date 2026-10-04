@@ -110,7 +110,7 @@ export function DraftsManager({ onEditDraft }: DraftsManagerProps) {
           selectedDraft && "max-md:hidden"
         )}
       >
-        <ScrollArea className="h-full max-md:[&>[data-radix-scroll-area-viewport]>div]:!block">
+        <ScrollArea className="h-full max-lg:[&>[data-radix-scroll-area-viewport]>div]:!block">
           <div className="divide-y">
             {drafts.map((draft) => (
               <button
@@ -216,7 +216,7 @@ export function DraftsManager({ onEditDraft }: DraftsManagerProps) {
             </div>
 
             {/* Body Preview */}
-            <ScrollArea className="flex-1 p-4 max-md:[&>[data-radix-scroll-area-viewport]>div]:!block">
+            <ScrollArea className="flex-1 p-4 max-lg:[&>[data-radix-scroll-area-viewport]>div]:!block">
               {selectedDraft.html_body ? (
                 <div
                   className="prose prose-sm dark:prose-invert max-w-none"

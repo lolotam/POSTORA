@@ -173,7 +173,7 @@ export function AdminInbox() {
 
   return (
     <Tabs value={activeTab} onValueChange={setActiveTab} className="flex flex-col h-full space-y-4">
-      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
         <TabsList>
           <TabsTrigger value="inbox" className="gap-2">
             <Mail className="w-4 h-4" />
@@ -200,7 +200,7 @@ export function AdminInbox() {
         </TabsList>
         
         {activeTab === "inbox" && (
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap lg:flex-nowrap items-center gap-2">
             {selectedThreadIds.size > 0 && (
               <AlertDialog>
                 <AlertDialogTrigger asChild>
