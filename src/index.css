@@ -221,6 +221,28 @@
      padding, control heights and gaps together — proportion is preserved instead of a handful
      of font sizes growing out of step with the components around them. Laptops are deliberately
      untouched; the step only applies where the extra width actually appears. */
+  /* The same lever in the other direction for phones: at 16px a desktop layout reflowed into
+     ~390px leaves headings wrapping word by word and tables three rows tall per record. A 14px
+     root keeps the desktop proportions while fitting noticeably more on screen. */
+  @media (max-width: 639px) {
+    html {
+      font-size: 14px;
+    }
+  }
+
+  /* iOS Safari zooms the page in when a focused field's text is under 16px, and the smaller
+     phone root would trigger that on every input. The @supports guard limits this to iOS, the
+     only browser that does it, so Android and desktop keep the design's control sizes. */
+  @supports (-webkit-touch-callout: none) {
+    @media (max-width: 639px) {
+      input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+      select,
+      textarea {
+        font-size: 16px !important;
+      }
+    }
+  }
+
   @media (min-width: 1536px) {
     html {
       font-size: 17px;
@@ -248,6 +270,15 @@
 }
 
 @layer utilities {
+  /* Horizontal strips (tab lists, chip rows) scroll by swipe on touch; a visible bar under a
+     36px-tall strip only adds clutter. */
+  .scrollbar-none {
+    scrollbar-width: none;
+  }
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
+  }
+
   .gradient-text {
     @apply bg-clip-text text-transparent;
     background-image: var(--gradient-primary);

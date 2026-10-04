@@ -12,7 +12,10 @@ const TabsList = React.forwardRef<
   <TabsPrimitive.List
     ref={ref}
     className={cn(
-      "inline-flex h-10 items-center justify-center rounded-md bg-muted p-1 text-muted-foreground",
+      // max-w-full + overflow-x-auto: on a phone a row of tabs wider than the screen scrolls
+      // sideways instead of pushing the whole page wider. "safe center" keeps the first tab
+      // reachable when it overflows; a plain center would clip it off the start edge.
+      "inline-flex h-10 max-w-full items-center justify-center [justify-content:safe_center] overflow-x-auto scrollbar-none rounded-md bg-muted p-1 text-muted-foreground",
       className,
     )}
     {...props}
@@ -27,7 +30,7 @@ const TabsTrigger = React.forwardRef<
   <TabsPrimitive.Trigger
     ref={ref}
     className={cn(
-      "inline-flex items-center justify-center whitespace-nowrap rounded-sm px-3 py-1.5 text-sm font-medium ring-offset-background",
+      "inline-flex shrink-0 items-center justify-center whitespace-nowrap rounded-sm px-3 py-1.5 text-sm font-medium ring-offset-background",
       "transition-colors duration-150",
       "hover:bg-secondary/60 hover:text-foreground",
       "data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm",
