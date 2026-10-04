@@ -101,8 +101,6 @@ export function Logo({ className, size = "md", showText = true, animate = true }
             sizes[size]
           )}
         >
-          {/* Glow effect */}
-          <div className="absolute inset-0 rounded-xl blur-lg opacity-40 animate-pulse bg-primary" />
           <div className="relative h-full w-full rounded-[10px] bg-background flex items-center justify-center">
             <svg
               viewBox="0 24"

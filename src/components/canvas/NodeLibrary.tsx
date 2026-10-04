@@ -24,7 +24,6 @@ export function NodeLibrary({ onDragStart }: NodeLibraryProps) {
     return (
       <div className="absolute start-4 top-1/2 -translate-y-1/2 z-10">
         <div className="relative bg-card ring-1 ring-white/10 rounded-2xl shadow-2xl p-2 space-y-2">
-          <div aria-hidden className="pointer-events-none absolute -inset-0.5 rounded-2xl blur opacity-60 -z-10 bg-violet-500/20" />
           <Tooltip>
             <TooltipTrigger asChild>
               <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-white/10" onClick={() => setIsCollapsed(false)}>
@@ -72,7 +71,6 @@ export function NodeLibrary({ onDragStart }: NodeLibraryProps) {
   return (
     <div className="absolute start-4 top-4 bottom-4 z-10 w-[240px]">
       <div className="relative h-full">
-        <div aria-hidden className="pointer-events-none absolute -inset-0.5 rounded-2xl blur opacity-60 bg-violet-500/30" />
         <div className="relative h-full bg-card ring-1 ring-white/10 rounded-2xl shadow-2xl flex flex-col overflow-hidden">
         <div className="p-3 border-b border-white/10 flex items-center justify-between">
           <div className="flex items-center gap-2">

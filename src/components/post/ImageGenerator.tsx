@@ -656,7 +656,7 @@ export function ImageGenerator({ onImageGenerated, buttonClassName }: ImageGener
                     />
                   </div>
                   <div className="flex gap-3">
-                    <Button onClick={handleUseImage} className="flex-1 text-white shadow-md border-0 bg-emerald-500">
+                    <Button onClick={handleUseImage} className="flex-1 text-primary-foreground bg-primary">
                       <ImagePlus className="w-4 h-4 me-2" />
                       {t("imageGen.useImage", "Use Image")}
                     </Button>

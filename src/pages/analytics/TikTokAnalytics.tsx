@@ -246,7 +246,7 @@ export default function TikTokAnalytics() {
                   <p className="text-sm text-muted-foreground mb-6 max-w-md">
                     {t("empty.connectTikTokHint", "Official TikTok API mode is active. Connect a TikTok account to view its real analytics.")}
                   </p>
-                  <Button onClick={() => navigate("/profiles")} className="text-white hover:opacity-90 bg-rose-500">
+                  <Button onClick={() => navigate("/profiles")} className="text-primary-foreground bg-primary">
                     <Plug className="w-4 h-4 me-2" /> {t("actions.connectTikTok", "Connect TikTok")}
                   </Button>
               </div>

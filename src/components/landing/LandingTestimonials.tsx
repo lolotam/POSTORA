@@ -34,7 +34,6 @@ const testimonials = [
 function TestimonialCard({ testimonial }: { testimonial: typeof testimonials[0] }) {
   return (
     <div className="group relative flex-shrink-0 w-80">
-      <div aria-hidden className="absolute -inset-0.5 rounded-2xl opacity-0 blur transition-opacity duration-500 group-hover:opacity-60 bg-neutral-900 dark:bg-neutral-800" />
       <div className="relative p-6 rounded-2xl border border-border/60 bg-card shadow-md transition-transform duration-500 group-hover:-translate-y-1">
       <Quote className="w-8 h-8 text-foreground mb-4" />
       <p className="text-sm text-muted-foreground mb-4 line-clamp-4">

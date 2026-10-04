@@ -118,7 +118,7 @@ const resp = await openai.responses.create({
         <Reveal className="text-center mb-12">
           <div className="flex items-center justify-center gap-3 mb-4">
             <Icon3D icon={Plug} variant="violet" size="lg" />
-            <Badge variant="outline" className="bg-muted border-input text-neutral-200">MCP Server · Beta</Badge>
+            <Badge variant="outline" className="bg-muted border-input text-foreground">MCP Server · Beta</Badge>
           </div>
           <GradientHeading as="h1" preset="sky-violet-pink" size="xl">
             Connect any LLM to Postora
@@ -129,8 +129,8 @@ const resp = await openai.responses.create({
           </p>
 
           <div className="mt-6 inline-flex items-center gap-2 rounded-2xl bg-white/5 ring-1 ring-white/10 px-4 py-2">
-            <Terminal className="w-4 h-4 text-neutral-200" />
-            <code className="text-sm text-neutral-200">{MCP_URL}</code>
+            <Terminal className="w-4 h-4 text-foreground" />
+            <code className="text-sm text-foreground">{MCP_URL}</code>
             <Button variant="ghost" size="sm" className="h-7 px-2" onClick={() => copy(MCP_URL, "url")}>
               {copied === "url" ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
             </Button>
@@ -219,7 +219,7 @@ const resp = await openai.responses.create({
               <Reveal key={t.name} delay={0.03 * i}>
                 <Card className="bg-white/5 ring-1 ring-white/10 border-0 h-full">
                   <CardHeader className="pb-2">
-                    <CardTitle className="text-base font-mono text-neutral-200">{t.name}</CardTitle>
+                    <CardTitle className="text-base font-mono text-foreground">{t.name}</CardTitle>
                   </CardHeader>
                   <CardContent className="text-sm text-muted-foreground">{t.description}</CardContent>
                 </Card>
@@ -241,7 +241,7 @@ const resp = await openai.responses.create({
               <p><strong className="text-foreground">401 Unauthorized</strong> — missing or invalid API key. Pass it as <code>Authorization: Bearer &lt;key&gt;</code>.</p>
               <p><strong className="text-foreground">406 Not Acceptable</strong> — your client isn't sending <code>Accept: application/json, text/event-stream</code>. Update to a current MCP client.</p>
               <p><strong className="text-foreground">429 Too Many Requests</strong> — you've hit the per-user rate limit. Back off and retry after the <code>X-RateLimit-Reset</code> time.</p>
-              <p><strong className="text-foreground">Tool says account not connected</strong> — visit <Link to="/profiles" className="text-neutral-200 hover:underline">Profiles</Link> and link the platform first.</p>
+              <p><strong className="text-foreground">Tool says account not connected</strong> — visit <Link to="/profiles" className="text-foreground hover:underline">Profiles</Link> and link the platform first.</p>
             </CardContent>
           </GradientRingCard>
         </Reveal>

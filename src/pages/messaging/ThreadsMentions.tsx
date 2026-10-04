@@ -239,7 +239,7 @@ export default function ThreadsMentions() {
                     {t("threads.noAccountHint", "Connect a Threads account from Profiles to start tracking mentions.")}
                   </p>
                 </div>
-                <Button asChild className="text-white hover:opacity-90 bg-neutral-900 dark:bg-neutral-800">
+                <Button asChild className="text-primary-foreground bg-primary">
                   <Link to="/profiles">{t("threads.goProfiles", "Go to Profiles")}</Link>
                 </Button>
               </div>

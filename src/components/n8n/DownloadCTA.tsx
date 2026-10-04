@@ -21,7 +21,7 @@ export function DownloadCTA({ onDownloadComplete }: DownloadCTAProps) {
               Download our pre-built n8n workflow templates and start automating in minutes.
             </p>
             <div className="flex flex-wrap justify-center gap-3">
-              <Button onClick={onDownloadComplete} size="lg" className="text-white shadow-lg hover:opacity-90 bg-neutral-900 dark:bg-neutral-800">
+              <Button onClick={onDownloadComplete} size="lg" className="text-primary-foreground shadow-lg bg-primary">
                 <Download className="w-4 h-4 me-2" />
                 Download Complete Workflow
               </Button>

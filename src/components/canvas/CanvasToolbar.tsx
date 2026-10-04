@@ -198,7 +198,7 @@ export function CanvasToolbar({
               size="sm"
               onClick={onRun}
               disabled={isRunning || nodeCount === 0}
-              className="h-8 gap-1.5 text-white shadow-lg hover:brightness-110 border-0 bg-emerald-500"
+              className="h-8 gap-1.5 text-white shadow-lg hover:brightness-110 border-0 bg-neutral-900 dark:bg-neutral-800"
             >
               <Play className={cn("h-4 w-4", isRunning && "animate-pulse")} />
               <span className="hidden sm:inline">Run</span>

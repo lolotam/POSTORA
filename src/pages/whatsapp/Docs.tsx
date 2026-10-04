@@ -58,7 +58,7 @@ export default function WhatsAppDocs() {
       />
 
       {/* Hero Welcome Banner */}
-      <div className="relative rounded-2xl p-6 text-white shadow-xl md:p-8 overflow-hidden bg-emerald-600">
+      <div className="relative rounded-2xl p-6 text-white shadow-xl md:p-8 overflow-hidden bg-neutral-900 dark:bg-neutral-800">
         <div className="relative z-10 space-y-4 max-w-3xl">
           <Badge className="bg-white/20 hover:bg-white/30 text-white border-none py-1 px-3 text-xs uppercase tracking-wider font-semibold">
             Assistant & Onboarding Guide

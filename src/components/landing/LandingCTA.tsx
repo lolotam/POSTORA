@@ -6,7 +6,6 @@ export default function LandingCTA() {
   return (
     <section className="relative z-10 container mx-auto px-6 pb-20">
       <div className="group relative rounded-3xl overflow-hidden">
-        <div aria-hidden className="absolute -inset-0.5 rounded-3xl opacity-60 blur transition-opacity duration-500 group-hover:opacity-90 bg-neutral-900 dark:bg-neutral-800" />
         <div className="relative rounded-3xl border border-border/60 bg-card overflow-hidden">
           <div className="relative p-12 md:p-20 text-center">
             <Reveal>

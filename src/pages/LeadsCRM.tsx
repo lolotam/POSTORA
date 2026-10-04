@@ -94,7 +94,7 @@ export default function LeadsCRM() {
                 {syncForms.isPending ? <Loader2 className="h-4 w-4 animate-spin me-1" /> : <Download className="h-4 w-4 me-1" />}
                 {t("actions.syncForms", "Sync Forms")}
               </Button>
-              <Button size="sm" className="text-white hover:opacity-90 bg-neutral-900 dark:bg-neutral-800" onClick={handleSyncLeads} disabled={syncLeads.isPending || forms.length === 0}>
+              <Button size="sm" className="text-primary-foreground bg-primary" onClick={handleSyncLeads} disabled={syncLeads.isPending || forms.length === 0}>
                 {syncLeads.isPending ? <Loader2 className="h-4 w-4 animate-spin me-1" /> : <RefreshCw className="h-4 w-4 me-1" />}
                 {t("actions.syncLeads", "Sync Leads")}
               </Button>
@@ -167,7 +167,7 @@ export default function LeadsCRM() {
                 <div className="group"><Icon3D icon={Users} variant="violet" size="lg" /></div>
                 <p className="font-medium mt-1">{t("empty.noFacebookPages", "No Facebook pages connected")}</p>
                 <p className="text-sm text-muted-foreground">{t("empty.syncFormsHint", "Connect a Facebook page to sync lead forms.")}</p>
-                <Button asChild className="text-white hover:opacity-90 bg-neutral-900 dark:bg-neutral-800">
+                <Button asChild className="text-primary-foreground bg-primary">
                   <Link to="/profiles">{t("actions.goToProfiles", "Go to Profiles")}</Link>
                 </Button>
               </div>

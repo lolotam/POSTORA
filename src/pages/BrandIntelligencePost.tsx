@@ -361,7 +361,7 @@ export default function BrandIntelligencePost() {
                   <div className="text-center py-6">
                     <Mic className="w-10 h-10 text-muted-foreground/30 mx-auto mb-2" />
                     <p className="text-sm text-muted-foreground mb-3">{t("transcript.extractText", "Extract text from this video")}</p>
-                    <Button onClick={handleTranscribe} className="gap-2 border-0 text-white bg-neutral-900 dark:bg-neutral-800">
+                    <Button onClick={handleTranscribe} className="gap-2 text-primary-foreground bg-primary">
                       <Mic className="w-4 h-4" /> {t("actions.transcribeVideo", "Transcribe Video")}
                     </Button>
                   </div>

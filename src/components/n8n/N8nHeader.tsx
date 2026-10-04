@@ -22,13 +22,13 @@ export function N8nHeader({ isAuthenticated }: N8nHeaderProps) {
         <div className="flex items-center gap-4">
           {isAuthenticated ? (
             <Link to="/dashboard">
-              <Button className="text-white shadow-md hover:opacity-90 bg-neutral-900 dark:bg-neutral-800">
+              <Button className="text-primary-foreground bg-primary">
                 Dashboard
               </Button>
             </Link>
           ) : (
             <Link to="/auth">
-              <Button className="text-white shadow-md hover:opacity-90 bg-neutral-900 dark:bg-neutral-800">
+              <Button className="text-primary-foreground bg-primary">
                 Get Started
               </Button>
             </Link>

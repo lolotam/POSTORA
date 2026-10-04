@@ -2602,7 +2602,7 @@ function DatabaseConnectorsEditor({
               </div>
 
               <div className="pt-2">
-                <Button onClick={handleMcpInstantActivate} className="w-full gap-2 text-xs bg-neutral-900 dark:bg-neutral-800 hover:bg-neutral-800 dark:hover:bg-neutral-700">
+                <Button onClick={handleMcpInstantActivate} className="w-full gap-2 text-xs bg-primary hover:bg-primary/90">
                   <Zap className="w-4 h-4" />
                   <span>{t("actions.activateMcp", "Activate & Connect with MCP Auto-Auth")}</span>
                 </Button>

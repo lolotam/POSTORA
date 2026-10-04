@@ -27,7 +27,7 @@ const PLATFORMS = [
 
 function getScoreColor(score: number) {
   if (score >= 90) return "bg-emerald-500/10 text-emerald-400 border-emerald-500/30 ring-1 ring-emerald-500/20";
-  if (score >= 80) return "bg-muted text-foreground border-border ring-1 ring-ring";
+  if (score >= 80) return "bg-muted text-foreground border-border ring-1 ring-border";
   if (score >= 70) return "bg-amber-500/10 text-amber-400 border-amber-500/30 ring-1 ring-amber-500/20";
   return "bg-white/5 text-muted-foreground border-white/10";
 }
@@ -101,7 +101,7 @@ export default function SmartScheduling() {
                   </Select>
                 </div>
                 {historyCount > 0 && (
-                  <Badge className="h-7 ring-1 ring-ring text-foreground border-0 bg-muted">
+                  <Badge className="h-7 ring-1 ring-border text-foreground border-0 bg-muted">
                     <Sparkles className="h-3 w-3 me-1 text-foreground" />
                     {t("smart.basedOn", "Based on {{count}} past posts", { count: historyCount })}
                   </Badge>

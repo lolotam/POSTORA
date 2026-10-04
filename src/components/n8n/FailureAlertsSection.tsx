@@ -36,12 +36,12 @@ export function FailureAlertsSection({ onDownloadAlerts, onDownloadSlackOnly }: 
         <Reveal>
           <GradientRingCard variant="amber" ringIntensity="subtle">
             <h3 className="font-semibold mb-4 flex items-center gap-3">
-              <span className="w-9 h-9 rounded-xl text-white flex items-center justify-center text-sm font-bold shadow-md bg-amber-400">1</span>
+              <span className="w-9 h-9 rounded-xl text-white flex items-center justify-center text-sm font-bold shadow-md bg-neutral-900 dark:bg-neutral-800">1</span>
               Download the Alerts Workflow
             </h3>
             <p className="text-muted-foreground mb-4">Choose the workflow that fits your needs:</p>
             <div className="flex flex-wrap gap-3">
-              <Button onClick={onDownloadAlerts} className="text-white shadow-md hover:opacity-90 bg-amber-500">
+              <Button onClick={onDownloadAlerts} className="text-primary-foreground bg-primary">
                 <Download className="w-4 h-4 me-2" />
                 Slack + Email (Recommended)
               </Button>
@@ -56,7 +56,7 @@ export function FailureAlertsSection({ onDownloadAlerts, onDownloadSlackOnly }: 
         <Reveal delay={120}>
           <GradientRingCard variant="amber" ringIntensity="subtle">
             <h3 className="font-semibold mb-4 flex items-center gap-3">
-              <span className="w-9 h-9 rounded-xl text-white flex items-center justify-center text-sm font-bold shadow-md bg-amber-400">2</span>
+              <span className="w-9 h-9 rounded-xl text-white flex items-center justify-center text-sm font-bold shadow-md bg-neutral-900 dark:bg-neutral-800">2</span>
               Register Your Webhook in Postora
             </h3>
             <p className="text-muted-foreground mb-4">Copy the webhook URL from n8n and register it:</p>

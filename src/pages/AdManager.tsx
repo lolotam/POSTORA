@@ -92,7 +92,7 @@ export default function AdManager() {
                 <TooltipTrigger asChild>
                   <span tabIndex={0} className="inline-flex">
                     <DialogTrigger asChild>
-                      <Button size="sm" className="text-white hover:opacity-90 disabled:bg-none disabled:bg-muted disabled:text-muted-foreground bg-rose-500" disabled={!activeAdAccountId || adAccountsLoading}>
+                      <Button size="sm" className="text-primary-foreground disabled:bg-none disabled:bg-muted disabled:text-muted-foreground bg-primary" disabled={!activeAdAccountId || adAccountsLoading}>
                         {adAccountsLoading ? <Loader2 className="h-4 w-4 animate-spin me-1" /> : <Plus className="h-4 w-4 me-1" />}
                         {t("actions.newCampaign", "New Campaign")}
                       </Button>
@@ -144,7 +144,7 @@ export default function AdManager() {
                   <Label>{t("ads.dailyBudget", "Daily Budget ($)")}</Label>
                   <Input type="number" value={newBudget} onChange={(e) => setNewBudget(e.target.value)} placeholder="10" />
                 </div>
-                <Button onClick={handleCreate} disabled={!newName || !newObjective || createCampaign.isPending} className="w-full text-white hover:opacity-90 bg-rose-500">
+                <Button onClick={handleCreate} disabled={!newName || !newObjective || createCampaign.isPending} className="w-full text-primary-foreground bg-primary">
                   {createCampaign.isPending ? <Loader2 className="h-4 w-4 animate-spin me-1" /> : null}
                   {t("ads.createCampaign", "Create Campaign")}
                 </Button>
@@ -246,7 +246,7 @@ export default function AdManager() {
                         <TableCell className="font-medium max-w-[200px] truncate">{c.name}</TableCell>
                         <TableCell>
                           <Badge className={c.status === "ACTIVE"
-                            ? "text-white border-0 bg-emerald-500"
+                            ? "text-white border-0 bg-neutral-900 dark:bg-neutral-800"
                             : "bg-card border border-border/40 text-muted-foreground"}>
                             {c.status}
                           </Badge>

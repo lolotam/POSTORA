@@ -163,7 +163,7 @@ export default function HumanAgentMode() {
               <span className="text-sm text-muted-foreground">{t("human.agentStatus", "Agent Status")}</span>
               <Switch checked={isOnline} onCheckedChange={handleToggleOnline} />
               <Badge className={isOnline
-                ? "text-white border-0 bg-amber-500"
+                ? "text-white border-0 bg-neutral-900 dark:bg-neutral-800"
                 : "bg-card/60 border border-border/40 text-muted-foreground"}>
                 {isOnline ? t("human.online", "Online") : t("human.offline", "Offline")}
               </Badge>

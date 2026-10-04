@@ -94,7 +94,7 @@ export function PostCard({ post, index, onClick, hasContent, canDelete, isDeleti
               <Button size="sm" variant="secondary" className="h-7 text-xs gap-1" onClick={(e) => { e.stopPropagation(); onClick(post); }}>
                 <Eye className="w-3 h-3" /> {t("posts.details", "Details")}
               </Button>
-              <Button size="sm" className="h-7 text-xs gap-1 border-0 text-white bg-neutral-900 dark:bg-neutral-800" onClick={(e) => { e.stopPropagation(); onClick(post); }}>
+              <Button size="sm" className="h-7 text-xs gap-1 text-primary-foreground bg-primary" onClick={(e) => { e.stopPropagation(); onClick(post); }}>
                 <Sparkles className="w-3 h-3" /> {t("actions.generate", "Generate")}
               </Button>
               {canDelete && (

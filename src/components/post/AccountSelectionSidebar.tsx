@@ -163,7 +163,7 @@ export function AccountSelectionSidebar({
               {t("accountSidebar.noAccountsTitle", "No social accounts connected")}
             </h4>
             <p className="text-xs text-muted-foreground max-w-xs">{t("accountSidebar.noAccountsDesc", "Connect your social media accounts to start publishing.")}</p>
-            <Button size="sm" asChild className="text-white border-0 shadow-md hover:shadow-lg hover:opacity-95 transition-all bg-emerald-500">
+            <Button size="sm" asChild className="text-primary-foreground transition-all bg-primary">
               <a href="/profiles">
                 <Plus className="w-4 h-4 me-2" />
                 {t("accountSidebar.connectAccounts", "Connect Accounts")}

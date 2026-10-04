@@ -90,7 +90,7 @@ export default function WhatsAppShop() {
             </div>
           <Dialog open={createOpen} onOpenChange={setCreateOpen}>
             <DialogTrigger asChild>
-              <Button size="sm" className="text-white hover:opacity-90 bg-emerald-500">
+              <Button size="sm" className="text-primary-foreground bg-primary">
                 <Plus className="h-4 w-4 me-1" /> {t("shop.addProduct", "Add Product")}
               </Button>
             </DialogTrigger>
@@ -118,7 +118,7 @@ export default function WhatsAppShop() {
                   <Label>{t("shop.imageUrl", "Image URL")}</Label>
                   <Input value={newProduct.imageUrl} onChange={(e) => setNewProduct({ ...newProduct, imageUrl: e.target.value })} placeholder="https://..." />
                 </div>
-                <Button onClick={handleCreate} disabled={!newProduct.name || !newProduct.price} className="w-full text-white hover:opacity-90 bg-emerald-500">
+                <Button onClick={handleCreate} disabled={!newProduct.name || !newProduct.price} className="w-full text-primary-foreground bg-primary">
                   {t("shop.addProduct", "Add Product")}
                 </Button>
               </div>
@@ -194,7 +194,7 @@ export default function WhatsAppShop() {
                         <Badge
                           variant={p.status === "active" ? "default" : "secondary"}
                           className={p.status === "active"
-                            ? "cursor-pointer text-white border-0 hover:opacity-90 bg-emerald-500"
+                            ? "cursor-pointer text-white border-0 hover:opacity-90 bg-neutral-900 dark:bg-neutral-800"
                             : "cursor-pointer bg-card border border-border/40"}
                           onClick={() => handleToggleStatus(p.id)}
                         >

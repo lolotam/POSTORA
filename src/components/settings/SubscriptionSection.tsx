@@ -175,7 +175,7 @@ export function SubscriptionSection() {
             </div>
           </div>
           <div className="flex items-center gap-3 mb-4">
-            <Badge className="text-white bg-amber-500">
+            <Badge className="text-white bg-neutral-900 dark:bg-neutral-800">
               {t("subscription.admin.badge", "Admin")}
             </Badge>
             <span className="text-sm text-muted-foreground">
@@ -264,7 +264,7 @@ export function SubscriptionSection() {
             <div className="flex items-center gap-3">
               <Badge
                 variant={isSubscribed ? "default" : "secondary"}
-                className={isSubscribed ? "text-white bg-amber-500" : ""}
+                className={isSubscribed ? "text-white bg-neutral-900 dark:bg-neutral-800" : ""}
               >
                 {planName}
               </Badge>

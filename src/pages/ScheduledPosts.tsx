@@ -654,7 +654,7 @@ export default function ScheduledPosts() {
               <Button
                 size="sm"
                 onClick={() => setShowBulkCancelDialog(true)}
-                className="gap-2 rounded-full text-white shadow-md bg-rose-500 hover:bg-rose-600"
+                className="gap-2 rounded-full text-white shadow-md bg-neutral-900 dark:bg-neutral-800 hover:bg-rose-600"
               >
                 <XCircle className="w-4 h-4" />
                 {t("bulk.cancelSelected", "Cancel Selected")}

@@ -31,7 +31,7 @@ const platforms: PlatformConfig[] = [
   {
     name: "TikTok",
     icon: <span className="text-white text-lg">♪</span>,
-    bgClass: "bg-rose-500",
+    bgClass: "bg-neutral-900 dark:bg-neutral-800",
     variant: "rose",
     settings: [
       { code: "tiktok_title", type: "string (100 chars, optional)" },
@@ -45,7 +45,7 @@ const platforms: PlatformConfig[] = [
   {
     name: "Instagram",
     icon: <span className="text-white text-lg">📷</span>,
-    bgClass: "bg-amber-400",
+    bgClass: "bg-neutral-900 dark:bg-neutral-800",
     variant: "rose",
     settings: [
       { code: "instagram_collaborators", type: "string[]" },
@@ -66,7 +66,7 @@ const platforms: PlatformConfig[] = [
   {
     name: "Pinterest",
     icon: <span className="text-white text-lg">📌</span>,
-    bgClass: "bg-rose-500",
+    bgClass: "bg-neutral-900 dark:bg-neutral-800",
     variant: "rose",
     settings: [
       { code: "pinterest_board_id", type: "string" },

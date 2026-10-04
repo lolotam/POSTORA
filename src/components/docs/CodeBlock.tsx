@@ -14,12 +14,7 @@ export function CodeBlock({ code, language, id }: CodeBlockProps) {
 
   return (
     <div className="relative group/code rounded-2xl overflow-hidden my-4 shadow-lg">
-      {/* Gradient halo */}
-      <div
-        aria-hidden
-        className="absolute -inset-px rounded-2xl opacity-30 group-hover/code:opacity-60 transition-opacity blur-sm bg-neutral-900 dark:bg-neutral-800"
-      />
-      <div className="relative rounded-2xl bg-slate-950/95 ring-1 ring-ring overflow-hidden">
+      <div className="relative rounded-2xl bg-slate-950/95 ring-1 ring-border overflow-hidden">
         <div className="flex items-center justify-between px-4 py-2 border-b border-border bg-accent">
           <div className="flex items-center gap-2">
             <Terminal className="w-3.5 h-3.5 text-foreground" />

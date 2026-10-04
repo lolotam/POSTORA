@@ -97,7 +97,7 @@ export function CalendarGrid({
                 "hover:bg-card/80 hover:border-input hover:shadow-md",
                 !isCurrentMonth && "opacity-50 bg-muted/20",
                 isToday &&
-                  "ring-1 ring-ring shadow-[inset_0_0_24px_-8px] bg-accent"
+                  "ring-1 ring-border bg-accent"
               )}
             >
               <div className="flex items-center justify-between mb-1">
@@ -151,7 +151,7 @@ export function CalendarGrid({
       {/* Legend */}
       <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground mt-4 pt-3 border-t border-border/40">
         <div className="flex items-center gap-2 px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-400/30">
-          <div className="w-2 h-2 rounded-full bg-emerald-400" />
+          <div className="w-2 h-2 rounded-full bg-neutral-900 dark:bg-neutral-800" />
           <span className="text-emerald-700 dark:text-emerald-300 font-medium">
             {t("common:status.scheduled", "Scheduled")}
           </span>

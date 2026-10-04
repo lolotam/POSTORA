@@ -26,7 +26,7 @@ export const n8nPlatformCards: PlatformCardConfig[] = [
     bgClass: "bg-muted",
     borderClass: "border-border",
     hoverBorderClass: "hover:border-input",
-    iconBgClass: "bg-amber-400",
+    iconBgClass: "bg-neutral-900 dark:bg-neutral-800",
     variant: "rose",
   },
   {
@@ -50,7 +50,7 @@ export const n8nPlatformCards: PlatformCardConfig[] = [
     bgClass: "bg-muted",
     borderClass: "border-border",
     hoverBorderClass: "hover:border-input",
-    iconBgClass: "bg-rose-500",
+    iconBgClass: "bg-neutral-900 dark:bg-neutral-800",
     variant: "rose",
   },
   {
@@ -62,7 +62,7 @@ export const n8nPlatformCards: PlatformCardConfig[] = [
     bgClass: "bg-red-600/10",
     borderClass: "border-red-500/30",
     hoverBorderClass: "hover:border-red-500/50",
-    iconBgClass: "bg-rose-400",
+    iconBgClass: "bg-neutral-900 dark:bg-neutral-800",
     variant: "rose",
   },
   {
@@ -98,7 +98,7 @@ export const n8nPlatformCards: PlatformCardConfig[] = [
     bgClass: "bg-red-500/10",
     borderClass: "border-red-400/30",
     hoverBorderClass: "hover:border-red-400/50",
-    iconBgClass: "bg-rose-400",
+    iconBgClass: "bg-neutral-900 dark:bg-neutral-800",
     variant: "rose",
   },
   {
@@ -122,7 +122,7 @@ export const n8nPlatformCards: PlatformCardConfig[] = [
     bgClass: "bg-muted",
     borderClass: "border-border",
     hoverBorderClass: "hover:border-input",
-    iconBgClass: "bg-cyan-400",
+    iconBgClass: "bg-neutral-900 dark:bg-neutral-800",
     variant: "cyan",
   },
   {
@@ -134,7 +134,7 @@ export const n8nPlatformCards: PlatformCardConfig[] = [
     bgClass: "bg-orange-500/10",
     borderClass: "border-orange-500/30",
     hoverBorderClass: "hover:border-orange-500/50",
-    iconBgClass: "bg-amber-400",
+    iconBgClass: "bg-neutral-900 dark:bg-neutral-800",
     variant: "amber",
   },
   {
@@ -158,7 +158,7 @@ export const n8nPlatformCards: PlatformCardConfig[] = [
     bgClass: "bg-emerald-500/10",
     borderClass: "border-emerald-500/30",
     hoverBorderClass: "hover:border-emerald-500/50",
-    iconBgClass: "bg-cyan-400",
+    iconBgClass: "bg-neutral-900 dark:bg-neutral-800",
     variant: "cyan",
   },
 ];

@@ -69,7 +69,7 @@ export default function Documentation() {
                       innerClassName="p-4"
                     >
                       <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-xl ring-1 ring-ring flex items-center justify-center shrink-0 bg-muted">
+                        <div className="w-10 h-10 rounded-xl ring-1 ring-border flex items-center justify-center shrink-0 bg-muted">
                           <PlatformIcon platform={platform} size="md" />
                         </div>
                         <div>
@@ -93,7 +93,6 @@ export default function Documentation() {
                 {quickstartSteps.map(s => (
                   <div key={s.step} className="flex gap-4 items-start">
                     <div className="relative shrink-0">
-                      <div className="absolute -inset-1 rounded-full opacity-40 blur bg-neutral-900 dark:bg-neutral-800" />
                       <div className="relative w-10 h-10 rounded-full ring-1 ring-white/30 flex items-center justify-center shadow-lg bg-neutral-900 dark:bg-neutral-800">
                         <span className="text-white font-bold tabular-nums">{s.step}</span>
                       </div>
@@ -120,7 +119,6 @@ export default function Documentation() {
 
                 <div className="flex gap-4 items-start">
                   <div className="relative shrink-0">
-                    <div className="absolute -inset-1 rounded-full opacity-40 blur bg-neutral-900 dark:bg-neutral-800" />
                     <div className="relative w-10 h-10 rounded-full ring-1 ring-white/30 flex items-center justify-center shadow-lg bg-neutral-900 dark:bg-neutral-800">
                       <span className="text-white font-bold tabular-nums">4</span>
                     </div>

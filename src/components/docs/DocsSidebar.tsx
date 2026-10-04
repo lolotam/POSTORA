@@ -20,7 +20,7 @@ export function DocsSidebar({ navItems, activeSection, onSectionClick }: DocsSid
               to={item.href!}
               className="group/nav flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm transition-all duration-300 text-muted-foreground hover:text-foreground hover:bg-muted hover:translate-x-0.5"
             >
-              <span className="inline-flex items-center justify-center h-6 w-6 rounded-lg ring-1 ring-ring text-foreground transition-colors bg-muted group-hover/nav:bg-muted">
+              <span className="inline-flex items-center justify-center h-6 w-6 rounded-lg ring-1 ring-border text-foreground transition-colors bg-muted group-hover/nav:bg-muted">
                 <item.icon className="w-3.5 h-3.5" />
               </span>
               <span className="font-medium">{item.label}</span>
@@ -53,7 +53,7 @@ export function DocsSidebar({ navItems, activeSection, onSectionClick }: DocsSid
             className={cn(
               "group/nav flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm transition-all duration-300",
               activeSection === item.id
-                ? "text-foreground dark:text-neutral-200 ring-1 ring-ring shadow-sm bg-accent"
+                ? "text-foreground dark:text-neutral-200 ring-1 ring-border shadow-sm bg-accent"
                 : "text-muted-foreground hover:text-foreground hover:bg-card/80 hover:translate-x-0.5",
             )}
           >
@@ -62,7 +62,7 @@ export function DocsSidebar({ navItems, activeSection, onSectionClick }: DocsSid
                 "inline-flex items-center justify-center h-6 w-6 rounded-lg ring-1 transition-colors",
                 activeSection === item.id
                   ? "ring-white/30 text-white shadow-md bg-neutral-900 dark:bg-neutral-800"
-                  : "ring-ring text-foreground bg-muted",
+                  : "ring-border text-foreground bg-muted",
               )}
             >
               <item.icon className="w-3.5 h-3.5" />

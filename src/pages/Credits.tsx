@@ -189,7 +189,7 @@ export default function Credits() {
                   <Shield className="w-7 h-7 text-green-500" />
                 </div>
                 <div>
-                  <Badge className="text-white mb-2 bg-green-500">
+                  <Badge className="text-white mb-2 bg-neutral-900 dark:bg-neutral-800">
                     <Crown className="w-3 h-3 me-1" />
                     {t("credits.admin.badge", "Admin")}
                   </Badge>

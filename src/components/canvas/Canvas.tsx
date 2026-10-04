@@ -401,14 +401,6 @@ function CanvasInner() {
       <div className="flex h-full w-full bg-background relative">
         <div ref={reactFlowWrapper} className="flex-1 relative">
           {/* Background halos for depth */}
-          <div
-            aria-hidden
-            className="pointer-events-none absolute -top-32 -start-32 h-[420px] w-[420px] rounded-full blur-3xl z-0"
-          />
-          <div
-            aria-hidden
-            className="pointer-events-none absolute -bottom-32 -end-32 h-[420px] w-[420px] rounded-full blur-3xl z-0"
-          />
           <ReactFlow
             nodes={nodes}
             edges={edges}
@@ -456,10 +448,6 @@ function CanvasInner() {
               <Panel position="top-center" className="mt-32">
                 <Reveal>
                   <div className="group relative max-w-md">
-                    <div
-                      aria-hidden
-                      className="absolute -inset-0.5 rounded-3xl opacity-60 blur transition-opacity duration-500 group-hover:opacity-80 bg-violet-500"
-                    />
                     <div className="relative text-center p-8 rounded-3xl bg-card ring-1 ring-white/10 shadow-2xl">
                       <div className="flex justify-center gap-3 mb-6">
                         <Icon3D icon={Type} variant="sky" size="sm" />

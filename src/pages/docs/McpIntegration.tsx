@@ -133,7 +133,7 @@ Accept: application/json, text/event-stream
         <Reveal className="text-center mb-12">
           <div className="flex items-center justify-center gap-3 mb-4">
             <Icon3D icon={Plug} variant="violet" size="lg" />
-            <Badge variant="outline" className="bg-muted border-input text-neutral-200">MCP Integration · Beta</Badge>
+            <Badge variant="outline" className="bg-muted border-input text-foreground">MCP Integration · Beta</Badge>
           </div>
           <GradientHeading as="h1" preset="sky-violet-pink" size="xl">
             Postora MCP — full endpoint reference
@@ -144,8 +144,8 @@ Accept: application/json, text/event-stream
           </p>
 
           <div className="mt-6 inline-flex items-center gap-2 rounded-2xl bg-white/5 ring-1 ring-white/10 px-4 py-2">
-            <Terminal className="w-4 h-4 text-neutral-200" />
-            <code className="text-sm text-neutral-200">{MCP_URL}</code>
+            <Terminal className="w-4 h-4 text-foreground" />
+            <code className="text-sm text-foreground">{MCP_URL}</code>
             <Button variant="ghost" size="sm" className="h-7 px-2" onClick={() => copy(MCP_URL, "url")}>
               {copied === "url" ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
             </Button>
@@ -203,7 +203,7 @@ Accept: application/json, text/event-stream
               { n: 3, t: "Paste & chat", d: "Drop the config snippet, restart your client, ask it to post.", icon: Sparkles, v: "rose" as const, to: "/docs/mcp-server" },
             ].map((s, i) => (
               <Reveal key={s.n} delay={0.05 * i}>
-                <Card className="bg-white/5 ring-1 ring-white/10 border-0 h-full hover:ring-ring transition-all hover:-translate-y-0.5">
+                <Card className="bg-white/5 ring-1 ring-white/10 border-0 h-full hover:ring-input transition-all hover:-translate-y-0.5">
                   <CardHeader className="pb-3">
                     <div className="flex items-center justify-between">
                       <Icon3D icon={s.icon} variant={s.v} size="md" />
@@ -233,7 +233,7 @@ Accept: application/json, text/event-stream
           <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
             {LIVE.map((e, i) => (
               <Reveal key={e.name} delay={0.03 * i}>
-                <Card className="bg-white/5 ring-1 ring-white/10 border-0 h-full hover:ring-ring hover:-translate-y-0.5 transition-all">
+                <Card className="bg-white/5 ring-1 ring-white/10 border-0 h-full hover:ring-input hover:-translate-y-0.5 transition-all">
                   <CardHeader className="pb-2">
                     <div className="flex items-center justify-between">
                       <Icon3D icon={e.icon} variant={e.variant} size="sm" />
@@ -241,7 +241,7 @@ Accept: application/json, text/event-stream
                         {e.method}
                       </Badge>
                     </div>
-                    <CardTitle className="text-base font-mono text-neutral-200 mt-2">{e.name}</CardTitle>
+                    <CardTitle className="text-base font-mono text-foreground mt-2">{e.name}</CardTitle>
                     <code className="text-[11px] text-muted-foreground/70">{e.rest}</code>
                   </CardHeader>
                   <CardContent className="text-sm text-muted-foreground">{e.desc}</CardContent>
@@ -284,7 +284,7 @@ Accept: application/json, text/event-stream
                 <div className="divide-y divide-white/5">
                   {RATE_LIMITS.map((r) => (
                     <div key={r.tool} className="flex items-center justify-between py-2 text-sm">
-                      <code className="text-neutral-200">{r.tool}</code>
+                      <code className="text-foreground">{r.tool}</code>
                       <span className="text-muted-foreground">{r.limit}</span>
                     </div>
                   ))}
