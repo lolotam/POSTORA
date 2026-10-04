@@ -161,7 +161,7 @@ function WhatsAppLayoutContent() {
                 "wa-app min-h-0 min-w-0 flex-1",
                 immersive
                   ? "overflow-hidden"
-                  : "overflow-y-auto bg-[#DCF8C6]/25 dark:bg-[#075E54]/25",
+                  : "overflow-y-auto bg-gradient-to-b from-[#DCF8C6]/25 via-background to-background dark:from-[#075E54]/25",
               )}
             >
               <div className={cn(immersive ? "flex h-full min-h-0 flex-col" : "space-y-6 px-4 py-6 sm:px-6 lg:px-8")}>

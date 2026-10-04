@@ -41,7 +41,7 @@ export default function WorkspaceInvite() {
 
   const invalidInvitation = !token || failed;
   return (
-    <main className="flex min-h-screen items-center justify-center px-4 py-10 bg-[#DCF8C6]/35 dark:bg-[#075E54]/30">
+    <main className="flex min-h-screen items-center justify-center bg-gradient-to-b from-[#DCF8C6]/35 via-background to-background px-4 py-10 dark:from-[#075E54]/30">
       <Card className="w-full max-w-md shadow-lg">
         <CardHeader className="items-center text-center">
           <div className="mb-2 flex h-12 w-12 items-center justify-center rounded-full bg-[#25D366]/15 text-[#128C7E] dark:text-[#25D366]">
