@@ -15,7 +15,9 @@
     "termsOfService": "شروط الخدمة"
   },
   "header": {
-    "user": "مستخدم"
+    "user": "مستخدم",
+    "openMenu": "فتح القائمة",
+    "closeMenu": "إغلاق القائمة"
   },
   "sidebar": {
     "account": "الحساب",
@@ -46,7 +48,8 @@
     "tiktok": "TikTok",
     "unifiedInboxes": "صندوق الرسائل الموحد",
     "users": "الحسابات",
-    "whatsappShop": "متجر WhatsApp"
+    "whatsappShop": "متجر WhatsApp",
+    "main": "القائمة الرئيسية"
   },
   "userMenu": {
     "adminDashboard": "لوحة تحكم الأدمن",
