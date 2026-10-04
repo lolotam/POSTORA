@@ -96,7 +96,7 @@ export function ConnectorBrandLogo({ id, className = "w-8 h-8" }: { id: Connecto
   switch (id) {
     case "shopify":
       return (
-        <svg viewBox="0 100" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
+        <svg viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
           <path
             d="M83.5 24.8c-.3-.8-1-1.3-1.8-1.4l-14.8-1.5c-.2-.6-.4-1.2-.7-1.8-3.4-6.8-9.4-11.2-16.7-11.2-7.3 0-13.3 4.4-16.7 11.2-.3.6-.5 1.2-.7 1.8l-14.8 1.5c-.8.1-1.5.6-1.8 1.4L.6 94.4c-.2.6 0 1.3.4 1.8.4.5 1 .8 1.6.8h94.8c.6 0 1.2-.3 1.6-.8.4-.5.6-1.2.4-1.8L83.5 24.8z"
             fill="#95BF47"
@@ -114,7 +114,7 @@ export function ConnectorBrandLogo({ id, className = "w-8 h-8" }: { id: Connecto
 
     case "woocommerce":
       return (
-        <svg viewBox="0 100" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
+        <svg viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
           <rect width="100" height="100" rx="24" fill="#7F54B3" />
           <path
             d="M84.2 34.8c-2.4-8.8-11.6-14-20.4-11.6l-37 10c-8.8 2.4-14 11.6-11.6 20.4l4.5 16.6c2.4 8.8 11.6 14 20.4 11.6l37-10c8.8-2.4 14-11.6 11.6-20.4l-4.5-16.6z"
@@ -129,7 +129,7 @@ export function ConnectorBrandLogo({ id, className = "w-8 h-8" }: { id: Connecto
 
     case "salla":
       return (
-        <svg viewBox="0 100" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
+        <svg viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
           <rect width="100" height="100" rx="24" fill="#004D5A" />
           <path
             d="M50 20L76 35V65L50 80L24 65V35L50 20Z"
@@ -143,7 +143,7 @@ export function ConnectorBrandLogo({ id, className = "w-8 h-8" }: { id: Connecto
 
     case "zid":
       return (
-        <svg viewBox="0 100" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
+        <svg viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
           <rect width="100" height="100" rx="24" fill="#7635DC" />
           <path
             d="M28 32H72L42 68H72"
@@ -158,7 +158,7 @@ export function ConnectorBrandLogo({ id, className = "w-8 h-8" }: { id: Connecto
 
     case "myfatoorah":
       return (
-        <svg viewBox="0 100" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
+        <svg viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
           <rect width="100" height="100" rx="24" fill="#1BA3B6" />
           <rect x="22" y="32" width="56" height="36" rx="8" stroke="#FFFFFF" strokeWidth="6" />
           <path d="M22 44H78" stroke="#FFFFFF" strokeWidth="5" />
@@ -169,10 +169,10 @@ export function ConnectorBrandLogo({ id, className = "w-8 h-8" }: { id: Connecto
 
     case "stripe":
       return (
-        <svg viewBox="0 100" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
+        <svg viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
           <rect width="100" height="100" rx="24" fill="#635BFF" />
           <path
-            d="M48.5 35.2c-5.8 0-9.6 3.1-9.6 7.8 0 8.8 12.8 7.4 12.8 11.2 0 1.8-1.6 2.4-3.8 0-8.6-1.6-8.6-1.6l-1.8 8.9s4.2 1.9 10 1.9c6.4 0 10.4-3.1 10.4-8 0-9.2-12.8-7.7-12.8-11.4 0-1.5 1.3-2.2 3.4-2.2 3.2 0 7.4 1.3 7.4 1.3l1.8-8.6s-3.7-1.7-9.2-1.7z"
+            d="M48.5 35.2c-5.8 0-9.6 3.1-9.6 7.8 0 8.8 12.8 7.4 12.8 11.2 0 1.8-1.6 2.4-3.8 2.4-3.8 0-8.6-1.6-8.6-1.6l-1.8 8.9s4.2 1.9 10 1.9c6.4 0 10.4-3.1 10.4-8 0-9.2-12.8-7.7-12.8-11.4 0-1.5 1.3-2.2 3.4-2.2 3.2 0 7.4 1.3 7.4 1.3l1.8-8.6s-3.7-1.7-9.2-1.7z"
             fill="#FFFFFF"
           />
         </svg>
@@ -180,7 +180,7 @@ export function ConnectorBrandLogo({ id, className = "w-8 h-8" }: { id: Connecto
 
     case "higgsfield":
       return (
-        <svg viewBox="0 100" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
+        <svg viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
           <rect width="100" height="100" rx="24" fill="#1A1028" />
           <path
             d="M26 24V76L50 88L74 76V24L50 12L26 24Z"
@@ -201,7 +201,7 @@ export function ConnectorBrandLogo({ id, className = "w-8 h-8" }: { id: Connecto
 
     case "supabase":
       return (
-        <svg viewBox="0 100" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
+        <svg viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
           <rect width="100" height="100" rx="24" fill="#1C1C1C" />
           <path
             d="M54.5 18L26 53.5H48L44.5 82L73 46.5H51L54.5 18Z"
@@ -218,7 +218,7 @@ export function ConnectorBrandLogo({ id, className = "w-8 h-8" }: { id: Connecto
 
     case "mysql_postgres":
       return (
-        <svg viewBox="0 100" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
+        <svg viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
           <rect width="100" height="100" rx="24" fill="#336791" />
           <ellipse cx="50" cy="30" rx="26" ry="10" fill="#FFFFFF" fillOpacity="0.9" />
           <path
@@ -238,7 +238,7 @@ export function ConnectorBrandLogo({ id, className = "w-8 h-8" }: { id: Connecto
 
     case "formula":
       return (
-        <svg viewBox="0 100" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
+        <svg viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
           <rect width="100" height="100" rx="24" fill="#F59E0B" />
           <path
             d="M32 30h36M32 50h36M32 70h36M50 22v56"
@@ -251,7 +251,7 @@ export function ConnectorBrandLogo({ id, className = "w-8 h-8" }: { id: Connecto
 
     case "custom_rest":
       return (
-        <svg viewBox="0 100" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
+        <svg viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
           <rect width="100" height="100" rx="24" fill="#EA4B71" />
           <circle cx="35" cy="50" r="10" stroke="#FFFFFF" strokeWidth="6" />
           <circle cx="65" cy="35" r="10" stroke="#FFFFFF" strokeWidth="6" />
@@ -263,7 +263,7 @@ export function ConnectorBrandLogo({ id, className = "w-8 h-8" }: { id: Connecto
     case "mcp_custom":
     default:
       return (
-        <svg viewBox="0 100" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
+        <svg viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg" className={className}>
           <rect width="100" height="100" rx="24" fill="#8B5CF6" />
           <path
             d="M28 50L50 28L72 50L50 72L28 50Z"
@@ -2072,7 +2072,7 @@ function DatabaseConnectorsEditor({
                             }
                           }}
                         >
-                          <Trash2 className="h-3.5" />
+                          <Trash2 className="h-3.5 h-3.5" />
                         </Button>
                       </div>
                     </div>

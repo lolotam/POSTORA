@@ -420,7 +420,7 @@ export default function WhatsAppDashboard() {
                       <stop offset="95%" stopColor="var(--primary, #3b82f6)" stopOpacity={0.0} />
                     </linearGradient>
                   </defs>
-                  <CartesianGrid strokeDasharray="3" opacity={0.15} vertical={false} />
+                  <CartesianGrid strokeDasharray="3 3" opacity={0.15} vertical={false} />
                   <XAxis dataKey="date" tick={{ fontSize: 11 }} tickLine={false} axisLine={false} />
                   <YAxis tick={{ fontSize: 11 }} tickLine={false} axisLine={false} />
                   <RechartsTooltip
@@ -483,7 +483,7 @@ export default function WhatsAppDashboard() {
                   }
                   margin={{ top: 10, right: 10, left: -25, bottom: 0 }}
                 >
-                  <CartesianGrid strokeDasharray="3" opacity={0.15} vertical={false} />
+                  <CartesianGrid strokeDasharray="3 3" opacity={0.15} vertical={false} />
                   <XAxis dataKey="hour" tick={{ fontSize: 10 }} tickLine={false} axisLine={false} />
                   <YAxis tick={{ fontSize: 10 }} tickLine={false} axisLine={false} />
                   <RechartsTooltip

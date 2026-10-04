@@ -53,7 +53,7 @@ export function PostCard({ post, index, onClick, hasContent, canDelete, isDeleti
                 if (parent && !parent.querySelector('.placeholder-icon')) {
                   const placeholder = document.createElement("div");
                   placeholder.className = "placeholder-icon w-full h-full flex items-center justify-center text-white/80 bg-muted";
-                  placeholder.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 24" fill="currentColor" stroke="none"><path d="M8 5v14l11-7z"/></svg>';
+                  placeholder.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M8 5v14l11-7z"/></svg>';
                   parent.appendChild(placeholder);
                 }
               }}

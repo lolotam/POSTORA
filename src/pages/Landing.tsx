@@ -71,7 +71,7 @@ const FloatingParticles = () => {
             height: particle.size,
             left: `${particle.x}%`,
             top: `${particle.y}%`,
-            boxShadow: `0 ${particle.size * 2}px currentColor`,
+            boxShadow: `0 0 ${particle.size * 2}px currentColor`,
             animationDuration: `${particle.duration}s`,
             animationDelay: `${particle.delay}s`,
           }}

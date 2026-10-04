@@ -926,7 +926,7 @@ export function ImageToolsDialog({
                 {processedUrl && (
                   <div
                     className="absolute inset-0"
-                    style={{ clipPath: `inset(0 0 ${comparePosition}%)` }}
+                    style={{ clipPath: `inset(0 0 0 ${comparePosition}%)` }}
                   >
                     <img
                       src={processedUrl}

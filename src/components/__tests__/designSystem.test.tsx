@@ -113,3 +113,27 @@ describe("flat design guard", () => {
     expect(offenders).toEqual([]);
   });
 });
+
+describe("geometry guard", () => {
+  const files = sourceFiles(resolve(__dirname, "../.."));
+  const matches = (pattern: RegExp) =>
+    files.flatMap((file) => [...readFileSync(file, "utf8").matchAll(pattern)].map((m) => `${file}: ${m[0]}`));
+
+  // A class-deduplication pass once collapsed repeated numbers outside class names too,
+  // turning viewBox="0 0 24 24" into "0 24" and inset(0 0 0 x) into inset(0 0 x).
+  it("gives every SVG viewBox four numbers", () => {
+    const bad = matches(/viewBox="([^"]*)"/g).filter((hit) => {
+      const value = hit.slice(hit.indexOf('"') + 1, -1);
+      return value.trim().split(/[\s,]+/).length !== 4;
+    });
+    expect(bad).toEqual([]);
+  });
+
+  it("gives every clip-path inset() four values", () => {
+    const bad = matches(/inset\(([^()]*(?:\([^()]*\)[^()]*)*)\)/g).filter((hit) => {
+      const inner = hit.slice(hit.indexOf("inset(") + 6, -1).replace(/\$\{[^}]*\}%?/g, "X");
+      return inner.trim().split(/\s+/).length !== 4;
+    });
+    expect(bad).toEqual([]);
+  });
+});

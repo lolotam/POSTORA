@@ -103,7 +103,7 @@ export function Logo({ className, size = "md", showText = true, animate = true }
         >
           <div className="relative h-full w-full rounded-[10px] bg-background flex items-center justify-center">
             <svg
-              viewBox="0 24"
+              viewBox="0 0 24 24"
               className="w-1/2 h-1/2 text-primary"
               fill="none"
               stroke="currentColor"

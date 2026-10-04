@@ -217,7 +217,7 @@ export function WhatsAppAnalyticsContent() {
             {(cacheStats?.chartData?.length || 0) > 0 ? (
               <ResponsiveContainer width="100%" height={300}>
                 <BarChart data={cacheStats?.chartData}>
-                  <CartesianGrid strokeDasharray="3" className="stroke-border" />
+                  <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
                   <XAxis dataKey="date" tick={{ fontSize: 12 }} className="text-muted-foreground" />
                   <YAxis tick={{ fontSize: 12 }} className="text-muted-foreground" />
                   <Tooltip />
@@ -238,7 +238,7 @@ export function WhatsAppAnalyticsContent() {
             {(msgStats?.peakHoursData?.some(d => d.messages > 0)) ? (
               <ResponsiveContainer width="100%" height={300}>
                 <BarChart data={msgStats?.peakHoursData}>
-                  <CartesianGrid strokeDasharray="3" className="stroke-border" />
+                  <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
                   <XAxis dataKey="hour" tick={{ fontSize: 10 }} interval={2} className="text-muted-foreground" />
                   <YAxis tick={{ fontSize: 12 }} className="text-muted-foreground" />
                   <Tooltip />

@@ -364,7 +364,7 @@ export function AiUsageAnalytics() {
                 <div className="h-[300px] w-full">
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={dailyUsage} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
-                      <CartesianGrid strokeDasharray="3" className="stroke-muted" />
+                      <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
                       <XAxis dataKey="displayDate" tick={{ fontSize: 11 }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
                       <YAxis tick={{ fontSize: 11 }} tickLine={false} axisLine={false} allowDecimals={false} />
                       <Tooltip contentStyle={{ backgroundColor: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: "8px" }} labelStyle={{ color: "hsl(var(--foreground))" }} />
@@ -380,14 +380,14 @@ export function AiUsageAnalytics() {
                 <div className="h-[300px] w-full">
                   <ResponsiveContainer width="100%" height="100%">
                     <LineChart data={monthlyUsage} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
-                      <CartesianGrid strokeDasharray="3" className="stroke-muted" />
+                      <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
                       <XAxis dataKey="displayMonth" tick={{ fontSize: 11 }} tickLine={false} axisLine={false} />
                       <YAxis tick={{ fontSize: 11 }} tickLine={false} axisLine={false} allowDecimals={false} />
                       <Tooltip contentStyle={{ backgroundColor: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: "8px" }} labelStyle={{ color: "hsl(var(--foreground))" }} />
                       <Legend />
                       <Line type="monotone" dataKey="captions" name="Captions" stroke="hsl(var(--primary))" strokeWidth={2} dot={{ fill: "hsl(var(--primary))" }} />
                       <Line type="monotone" dataKey="hashtags" name="Hashtags" stroke="hsl(var(--accent))" strokeWidth={2} dot={{ fill: "hsl(var(--accent))" }} />
-                      <Line type="monotone" dataKey="total" name="Total" stroke="hsl(var(--muted-foreground))" strokeWidth={2} strokeDasharray="5" dot={false} />
+                      <Line type="monotone" dataKey="total" name="Total" stroke="hsl(var(--muted-foreground))" strokeWidth={2} strokeDasharray="5 5" dot={false} />
                     </LineChart>
                   </ResponsiveContainer>
                 </div>
@@ -447,7 +447,7 @@ export function AiUsageAnalytics() {
                           <stop offset="95%" stopColor="hsl(217, 91%, 60%)" stopOpacity={0}/>
                         </linearGradient>
                       </defs>
-                      <CartesianGrid strokeDasharray="3" className="stroke-muted" />
+                      <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
                       <XAxis dataKey="displayDate" tick={{ fontSize: 11 }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
                       <YAxis tick={{ fontSize: 11 }} tickLine={false} axisLine={false} tickFormatter={(value) => `$${value.toFixed(4)}`} />
                       <Tooltip

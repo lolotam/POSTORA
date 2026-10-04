@@ -267,7 +267,7 @@ export default function BrandIntelligencePost() {
                           if (parent && !parent.querySelector(".thumb-fallback")) {
                             const fb = document.createElement("div");
                             fb.className = "thumb-fallback w-full aspect-video flex items-center justify-center bg-muted";
-                            fb.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-muted-foreground"><polygon points="6 3 20 12 6 21 6 3"></polygon></svg>';
+                            fb.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-muted-foreground"><polygon points="6 3 20 12 6 21 6 3"></polygon></svg>';
                             parent.appendChild(fb);
                           }
                         }}
