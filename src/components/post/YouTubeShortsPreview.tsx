@@ -60,7 +60,7 @@ export function YouTubeShortsPreview({
         )}
 
         {/* Overlay gradient */}
-        <div className="absolute inset-0 bg-black/20" />
+        <div className="absolute inset-0 bg-gradient-to-b from-black/20 via-transparent to-black/70" />
 
         {/* YouTube Shorts logo */}
         <div className="absolute top-4 start-4 flex items-center gap-1">

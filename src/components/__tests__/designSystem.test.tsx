@@ -137,3 +137,15 @@ describe("geometry guard", () => {
     expect(bad).toEqual([]);
   });
 });
+
+describe("media preview guard", () => {
+  // Flattening a directional scrim (dark at the edges, transparent in the middle) into one
+  // solid overlay dims the whole asset under it, so a preview can no longer be judged.
+  it("keeps platform previews free of full-surface solid dark overlays", () => {
+    const previews = sourceFiles(resolve(__dirname, "../post")).filter((file) => /Preview\.tsx$/.test(file));
+    const offenders = previews.filter((file) =>
+      /className="absolute inset-0 bg-black\/\d+"/.test(readFileSync(file, "utf8")),
+    );
+    expect(offenders).toEqual([]);
+  });
+});

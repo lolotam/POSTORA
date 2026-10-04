@@ -1721,7 +1721,7 @@ function DatabaseConnectorsEditor({
                 className={cn(
                   "relative group flex flex-col justify-between p-5 rounded-2xl border transition-all duration-300 ease-out text-start cursor-pointer overflow-hidden",
                   // 3D Glassmorphism, specular top highlight and multi-layered depth
-                  "before:absolute before:inset-x-0 before:top-0 before:h-1/2 before:rounded-t-2xl before:pointer-events-none before:bg-white/30",
+                  "before:absolute before:inset-x-0 before:top-0 before:h-1/2 before:rounded-t-2xl before:pointer-events-none",
                   isConnected
                     ? "border-primary/50 shadow-[0_16px_36px_-8px_rgba(var(--primary-rgb,59,130,246),0.3),inset_0_1.5px_2px_rgba(255,255,255,0.7),inset_0_-2px_4px_rgba(0,0,0,0.2)] hover:-translate-y-1.5 hover:shadow-[0_22px_48px_-8px_rgba(var(--primary-rgb,59,130,246),0.45)] hover:border-primary bg-primary/15"
                     : "border-border/70 shadow-[0_12px_28px_-6px_rgba(0,0,0,0.3),0_4px_10px_-2px_rgba(0,0,0,0.15),inset_0_1.5px_2px_rgba(255,255,255,0.6),inset_0_-2px_4px_rgba(0,0,0,0.2)] hover:-translate-y-1.5 hover:scale-[1.015] hover:border-primary/50 hover:shadow-[0_20px_42px_-8px_rgba(0,0,0,0.45),inset_0_2px_3px_rgba(255,255,255,0.85)] bg-card/95"
@@ -1733,7 +1733,7 @@ function DatabaseConnectorsEditor({
                   <div
                     className={cn(
                       "relative shrink-0 w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-secondary/80 flex items-center justify-center border border-border/50 shadow-md transition-all duration-300 group-hover:scale-110 group-hover:-translate-y-0.5 group-hover:shadow-lg group-hover:border-primary/40",
-                      "before:absolute before:inset-x-0 before:top-0 before:h-1/2 before:rounded-t-2xl before:pointer-events-none before:bg-white/35",
+                      "before:absolute before:inset-x-0 before:top-0 before:h-1/2 before:rounded-t-2xl before:pointer-events-none",
                       isConnected && "border-primary/40"
                     )}
                   >

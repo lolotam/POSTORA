@@ -465,7 +465,7 @@ function TikTokPreview({
           </div>
 
           {/* Overlay gradient */}
-          <div className="absolute inset-0 bg-black/30" />
+          <div className="absolute inset-0 bg-gradient-to-b from-black/30 via-transparent to-black/80" />
 
           {/* Right side actions */}
           <div className="absolute end-3 bottom-24 flex flex-col items-center gap-4 z-10">
