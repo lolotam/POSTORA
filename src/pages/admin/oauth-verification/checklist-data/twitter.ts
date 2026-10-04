@@ -170,8 +170,8 @@ export const twitterChecklistItems: ChecklistItem[] = [
 ];
 
 export const twitterCategoryInfo: Record<string, CategoryInfo> = {
-  setup: { label: "App Setup", icon: Settings, color: "text-sky-500" },
-  scopes: { label: "Scopes & Permissions", icon: Key, color: "text-purple-500" },
+  setup: { label: "App Setup", icon: Settings, color: "text-foreground" },
+  scopes: { label: "Scopes & Permissions", icon: Key, color: "text-foreground" },
   content: { label: "Content Requirements", icon: FileText, color: "text-blue-500" },
   compliance: { label: "Compliance & Rate Limits", icon: Shield, color: "text-green-500" },
 };

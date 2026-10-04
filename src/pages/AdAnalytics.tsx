@@ -137,8 +137,8 @@ export default function AdAnalytics() {
         </Reveal>
 
         {isLoading ? (
-          <div className="flex items-center justify-center py-16 rounded-2xl border border-border/40 bg-card/60 backdrop-blur-md">
-            <Loader2 className="h-8 w-8 animate-spin text-sky-500" />
+          <div className="flex items-center justify-center py-16 rounded-2xl border border-border/40 bg-card">
+            <Loader2 className="h-8 w-8 animate-spin text-foreground" />
           </div>
         ) : fbAccounts.length === 0 ? (
           <Reveal delay={120}>
@@ -161,7 +161,7 @@ export default function AdAnalytics() {
                 { id: "ctr", label: t("ads.avgCtr", "Avg CTR"), value: totals.impressions > 0 ? `${((totals.clicks / totals.impressions) * 100).toFixed(2)}%` : "0%", icon: TrendingUp, variant: "amber" as GradientKey },
               ]).map((m, i) => (
                 <Reveal key={m.id} delay={i * 60}>
-                  <div className="group rounded-2xl border border-border/40 bg-card/60 backdrop-blur-md p-4 flex items-center gap-3 transition-transform hover:-translate-y-0.5">
+                  <div className="group rounded-2xl border border-border/40 bg-card p-4 flex items-center gap-3 transition-transform hover:-translate-y-0.5">
                     <Icon3D icon={m.icon} variant={m.variant} size="sm" />
                     <div>
                       <p className="text-xs text-muted-foreground">{m.label}</p>
@@ -189,7 +189,7 @@ export default function AdAnalytics() {
             <Reveal delay={200}>
               <GradientRingCard variant="sky" padded={false} hoverLift={false} ringIntensity="subtle" innerClassName="p-4 md:p-5">
                 <div className="flex items-center gap-2 text-base font-semibold mb-3">
-                  <BarChart3 className="h-4 w-4 text-sky-500" />
+                  <BarChart3 className="h-4 w-4 text-foreground" />
                   {t("ads.campaigns", "Campaigns")}
                 </div>
                 <CampaignTable campaigns={campaigns} />

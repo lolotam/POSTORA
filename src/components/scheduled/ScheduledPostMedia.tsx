@@ -215,7 +215,7 @@ export function ScheduledPostMedia({ mediaFileIds, mediaFolders, userId, onOpen 
                         playsInline
                       />
                       <div className="absolute inset-0 flex items-center justify-center bg-background/20">
-                        <span className="rounded-full bg-background/70 p-1.5 backdrop-blur-sm">
+                        <span className="rounded-full bg-background p-1.5">
                           <Play className="w-4 h-4 fill-foreground text-foreground" />
                         </span>
                       </div>

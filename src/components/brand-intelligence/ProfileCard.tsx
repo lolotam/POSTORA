@@ -43,7 +43,7 @@ function PlatformLogoButton({
   const isThreads = kind === "threads";
   const Icon = isThreads ? AtSign : Instagram;
   const gradient = isThreads
-    ? "bg-gradient-to-br from-zinc-800 via-black to-zinc-900"
+    ? "bg-zinc-800"
     : "bg-[radial-gradient(circle_at_30%_110%,#fdf497_0%,#fdf497_5%,#fd5949_45%,#d6249f_60%,#285AEB_90%)]";
   return (
     <Tooltip>
@@ -101,8 +101,8 @@ export function ProfileCard({ profile, isLoading }: ProfileCardProps) {
   const PlatformIcon = config.icon;
 
   return (
-    <Card className="overflow-hidden animate-[fadeSlideDown_0.5s_ease-out] relative border-0 bg-gradient-to-r from-violet-500/10 via-pink-500/10 to-violet-500/10">
-      <div className="absolute inset-0 rounded-lg border border-violet-500/20" />
+    <Card className="overflow-hidden animate-[fadeSlideDown_0.5s_ease-out] relative border-0 bg-muted">
+      <div className="absolute inset-0 rounded-lg border border-border" />
       <CardContent className="p-6 relative">
         <Badge variant="secondary" className="absolute top-4 end-4 gap-1">
           <PlatformIcon className="w-3 h-3" />
@@ -114,13 +114,13 @@ export function ProfileCard({ profile, isLoading }: ProfileCardProps) {
 
         <div className="flex items-center gap-4 mb-4">
           <div className="relative">
-            <Avatar className="w-20 h-20 border-2 border-violet-500/30">
+            <Avatar className="w-20 h-20 border-2 border-border">
               <AvatarImage
                 src={profile.avatarUrl}
                 alt={profile.username}
                 referrerPolicy="no-referrer"
               />
-              <AvatarFallback className="text-lg bg-gradient-to-br from-violet-500 to-pink-500 text-primary-foreground">
+              <AvatarFallback className="text-lg text-white bg-neutral-900 dark:bg-neutral-800">
                 {initials}
               </AvatarFallback>
             </Avatar>

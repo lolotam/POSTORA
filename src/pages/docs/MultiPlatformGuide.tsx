@@ -212,7 +212,7 @@ export default function MultiPlatformGuide() {
   return (
     <div className="min-h-screen bg-background">
       {/* Header */}
-      <header className="sticky top-0 z-50 border-b border-border bg-background/80 backdrop-blur-xl">
+      <header className="sticky top-0 z-50 border-b border-border bg-background">
         <div className="container mx-auto px-6 h-16 flex items-center justify-between">
           <div className="flex items-center gap-4">
             <Link to="/"><Logo /></Link>
@@ -244,8 +244,8 @@ export default function MultiPlatformGuide() {
         {/* Hero */}
         <div className="mb-12">
           <div className="flex items-center gap-4 mb-4">
-            <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-primary via-purple-500 to-pink-500 flex items-center justify-center">
-              <Share2 className="w-8 h-8 text-white" />
+            <div className="w-16 h-16 rounded-2xl flex items-center justify-center bg-primary">
+              <Share2 className="w-8 h-8 text-primary-foreground" />
             </div>
             <div>
               <h1 className="text-4xl font-bold">Multi-Platform Posting Guide</h1>
@@ -420,15 +420,15 @@ export default function MultiPlatformGuide() {
               <Card>
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">
-                    <Target className="w-5 h-5 text-purple-500" />
+                    <Target className="w-5 h-5 text-foreground" />
                     Cross-Post with Platform Settings
                   </CardTitle>
                   <CardDescription>Customize settings for each platform</CardDescription>
                 </CardHeader>
                 <CardContent>
                   <CodeBlock code={curlWithPlatformSettings} language="bash" id="settings-cross" />
-                  <div className="mt-4 p-4 rounded-lg bg-purple-500/10 border border-purple-500/20">
-                    <h4 className="font-medium mb-2 flex items-center gap-2 text-purple-600">
+                  <div className="mt-4 p-4 rounded-lg bg-muted border border-border">
+                    <h4 className="font-medium mb-2 flex items-center gap-2 text-foreground">
                       <Lightbulb className="w-4 h-4" />
                       Platform-Specific Fields:
                     </h4>

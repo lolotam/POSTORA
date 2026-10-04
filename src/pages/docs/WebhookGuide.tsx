@@ -240,7 +240,7 @@ if __name__ == '__main__':
   return (
     <div className="min-h-screen bg-background">
       {/* Header */}
-      <header className="sticky top-0 z-50 border-b border-border bg-background/80 backdrop-blur-xl">
+      <header className="sticky top-0 z-50 border-b border-border bg-background">
         <div className="container mx-auto px-6 h-16 flex items-center justify-between">
           <div className="flex items-center gap-4">
             <Link to="/"><Logo /></Link>
@@ -266,7 +266,7 @@ if __name__ == '__main__':
         {/* Hero */}
         <div className="mb-12">
           <div className="flex items-center gap-4 mb-4">
-            <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-primary to-primary/50 flex items-center justify-center">
+            <div className="w-16 h-16 rounded-2xl flex items-center justify-center bg-primary">
               <Webhook className="w-8 h-8 text-primary-foreground" />
             </div>
             <div>

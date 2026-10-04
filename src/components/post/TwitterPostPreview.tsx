@@ -108,7 +108,7 @@ export function TwitterPostPreview({
               <Repeat2 className="w-4 h-4" />
               <span className="text-xs">0</span>
             </div>
-            <div className="flex items-center gap-1 hover:text-pink-500 cursor-pointer transition-colors">
+            <div className="flex items-center gap-1 hover:text-foreground cursor-pointer transition-colors">
               <Heart className="w-4 h-4" />
               <span className="text-xs">0</span>
             </div>

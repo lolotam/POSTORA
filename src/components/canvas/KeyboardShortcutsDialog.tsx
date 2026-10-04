@@ -25,11 +25,11 @@ interface KeyboardShortcutsDialogProps {
 export function KeyboardShortcutsDialog({ open, onOpenChange }: KeyboardShortcutsDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-sm bg-card/85 backdrop-blur-xl ring-1 ring-white/10 border-0">
+      <DialogContent className="max-w-sm bg-card ring-1 ring-white/10 border-0">
         <DialogHeader>
           <div className="flex items-center gap-3">
             <Icon3D icon={Keyboard} variant="sky" size="sm" />
-            <DialogTitle className="bg-clip-text text-transparent bg-gradient-to-r from-sky-400 via-violet-400 to-pink-400">
+            <DialogTitle className="text-foreground">
               Keyboard Shortcuts
             </DialogTitle>
           </div>

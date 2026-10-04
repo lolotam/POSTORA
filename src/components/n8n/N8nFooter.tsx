@@ -6,7 +6,7 @@ export function N8nFooter() {
   return (
     <footer className="mt-8">
       <GradientDivider tone="violet" />
-      <div className="bg-card/50 backdrop-blur-md">
+      <div className="bg-card">
         <div className="container mx-auto px-6 py-8 flex flex-col md:flex-row items-center justify-between gap-4">
           <Logo size="sm" />
           <div className="flex gap-6">

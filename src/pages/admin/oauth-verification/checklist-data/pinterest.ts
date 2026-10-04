@@ -113,7 +113,7 @@ export const pinterestChecklistItems: ChecklistItem[] = [
 
 export const pinterestCategoryInfo: Record<string, CategoryInfo> = {
   setup: { label: "App Setup", icon: Settings, color: "text-red-500" },
-  scopes: { label: "Scopes & Permissions", icon: Key, color: "text-purple-500" },
-  content: { label: "Content Requirements", icon: Image, color: "text-pink-500" },
+  scopes: { label: "Scopes & Permissions", icon: Key, color: "text-foreground" },
+  content: { label: "Content Requirements", icon: Image, color: "text-foreground" },
   compliance: { label: "Compliance", icon: Shield, color: "text-green-500" },
 };

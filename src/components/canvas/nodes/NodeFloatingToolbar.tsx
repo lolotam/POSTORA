@@ -37,7 +37,7 @@ function NodeFloatingToolbarComponent({
 
   return (
     <div className="absolute -top-12 start-1/2 -translate-x-1/2 z-20">
-      <div className="flex items-center gap-0.5 px-1.5 py-1 bg-card/95 backdrop-blur-md border border-border/50 rounded-xl shadow-lg">
+      <div className="flex items-center gap-0.5 px-1.5 py-1 bg-card border border-border/50 rounded-xl shadow-lg">
         {showRun && (
           <Tooltip>
             <TooltipTrigger asChild>

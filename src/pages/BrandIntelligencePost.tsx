@@ -189,9 +189,9 @@ export default function BrandIntelligencePost() {
     { id: "likes", icon: Heart, label: t("stats.likes", "Likes"), value: post.likesCount, color: "text-red-500" },
     { id: "comments", icon: MessageCircle, label: t("stats.comments", "Comments"), value: post.commentsCount, color: "text-blue-500" },
     { id: "views", icon: Eye, label: t("stats.views", "Views"), value: post.videoViewCount || 0, color: "text-green-500" },
-    { id: "shares", icon: Share2, label: t("stats.shares", "Shares"), value: post.sharesCount || 0, color: "text-violet-500" },
+    { id: "shares", icon: Share2, label: t("stats.shares", "Shares"), value: post.sharesCount || 0, color: "text-foreground" },
     { id: "saves", icon: Bookmark, label: t("stats.saves", "Saves"), value: post.savesCount || 0, color: "text-amber-500" },
-    { id: "score", icon: TrendingUp, label: t("stats.score", "Score"), value: post.engagementScore, color: "text-pink-500" },
+    { id: "score", icon: TrendingUp, label: t("stats.score", "Score"), value: post.engagementScore, color: "text-foreground" },
   ];
 
   return (
@@ -209,7 +209,7 @@ export default function BrandIntelligencePost() {
             </p>
           </div>
           {hasTranscript && (
-            <Badge className="bg-gradient-to-r from-violet-500 to-pink-500 text-white border-0 ms-auto">
+            <Badge className="text-white border-0 ms-auto bg-neutral-900 dark:bg-neutral-800">
               <Sparkles className="w-3 h-3 me-1" /> {t("video.transcribed", "Transcribed")}
             </Badge>
           )}
@@ -266,7 +266,7 @@ export default function BrandIntelligencePost() {
                           const parent = t.parentElement;
                           if (parent && !parent.querySelector(".thumb-fallback")) {
                             const fb = document.createElement("div");
-                            fb.className = "thumb-fallback w-full aspect-video bg-gradient-to-br from-violet-500/20 to-pink-500/20 flex items-center justify-center";
+                            fb.className = "thumb-fallback w-full aspect-video flex items-center justify-center bg-muted";
                             fb.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-muted-foreground"><polygon points="6 3 20 12 6 21 6 3"></polygon></svg>';
                             parent.appendChild(fb);
                           }
@@ -275,7 +275,7 @@ export default function BrandIntelligencePost() {
                     );
                   } else {
                     player = (
-                      <div className="w-full aspect-video bg-gradient-to-br from-violet-500/20 to-pink-500/20 flex items-center justify-center">
+                      <div className="w-full aspect-video flex items-center justify-center bg-muted">
                         <Play className="w-12 h-12 text-muted-foreground" />
                       </div>
                     );
@@ -348,7 +348,7 @@ export default function BrandIntelligencePost() {
               <CardHeader className="pb-3">
                 <div className="flex items-center justify-between">
                   <CardTitle className="text-sm flex items-center gap-2">
-                    <Mic className="w-4 h-4 text-violet-500" />
+                    <Mic className="w-4 h-4 text-foreground" />
                     {t("transcript.title", "Transcription")}
                   </CardTitle>
                   {displayLanguage !== "unknown" && (
@@ -361,7 +361,7 @@ export default function BrandIntelligencePost() {
                   <div className="text-center py-6">
                     <Mic className="w-10 h-10 text-muted-foreground/30 mx-auto mb-2" />
                     <p className="text-sm text-muted-foreground mb-3">{t("transcript.extractText", "Extract text from this video")}</p>
-                    <Button onClick={handleTranscribe} className="gap-2 bg-gradient-to-r from-violet-500 to-pink-500 border-0 text-white">
+                    <Button onClick={handleTranscribe} className="gap-2 text-primary-foreground bg-primary">
                       <Mic className="w-4 h-4" /> {t("actions.transcribeVideo", "Transcribe Video")}
                     </Button>
                   </div>
@@ -369,7 +369,7 @@ export default function BrandIntelligencePost() {
 
                 {isTranscribing && (
                   <div className="text-center py-6">
-                    <Loader2 className="w-8 h-8 animate-spin text-violet-500 mx-auto mb-2" />
+                    <Loader2 className="w-8 h-8 animate-spin text-foreground mx-auto mb-2" />
                     <p className="text-sm text-muted-foreground">{t("transcript.transcribingShort", "Transcribing audio...")}</p>
                   </div>
                 )}
@@ -421,7 +421,7 @@ export default function BrandIntelligencePost() {
             <Card>
               <CardHeader className="pb-3">
                 <CardTitle className="text-sm flex items-center gap-2">
-                  <Sparkles className="w-4 h-4 text-pink-500" />
+                  <Sparkles className="w-4 h-4 text-foreground" />
                   {t("video.aiIdeas", "AI Content Ideas")}
                 </CardTitle>
               </CardHeader>
@@ -468,7 +468,7 @@ export default function BrandIntelligencePost() {
                 <Button
                   onClick={handleGenerate}
                   disabled={isGenerating}
-                  className="w-full gap-2 bg-gradient-to-r from-violet-500 to-pink-500 border-0 text-white"
+                  className="w-full gap-2 border-0 text-white bg-neutral-900 dark:bg-neutral-800"
                 >
                   {isGenerating ? (
                     <><Loader2 className="w-4 h-4 animate-spin" /> {t("content.generating", "Generating...")}</>

@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { supabase } from "@/integrations/supabase/client";
@@ -97,5 +97,32 @@ describe("scheduled nav count", () => {
     await client.refetchQueries({ queryKey: ["posts"] });
     await waitFor(() => expect(screen.getByText("4")).toBeInTheDocument());
     expect(screen.queryByRole("img", { name: WARNING })).not.toBeInTheDocument();
+  });
+});
+
+describe("sidebar navigation", () => {
+  beforeEach(() => {
+    queryMode.error = false;
+    queryMode.count = 2;
+    vi.mocked(supabase.from).mockImplementation(() => countBuilder() as never);
+  });
+
+  it("lists the publishing pages directly, with the count beside Scheduled", async () => {
+    renderLayout();
+    expect(screen.getByRole("link", { name: "Create Post" })).toHaveAttribute("href", "/post");
+    const scheduled = screen.getByRole("link", { name: /Scheduled/ });
+    await waitFor(() => expect(scheduled).toHaveTextContent("4"));
+  });
+
+  it("collapsing Publishing hides its pages and keeps the count on the group header", async () => {
+    renderLayout();
+    const group = screen.getByRole("button", { name: /Publishing/ });
+    expect(group).toHaveAttribute("aria-expanded", "true");
+
+    fireEvent.click(group);
+
+    expect(group).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("link", { name: "Create Post" })).not.toBeInTheDocument();
+    await waitFor(() => expect(group).toHaveTextContent("4"));
   });
 });

@@ -41,7 +41,7 @@ export function SchedulingSection({
           <div className="flex items-center gap-3">
             <Icon3D icon={Clock} variant="amber" size="sm" />
             <div className="text-start">
-              <h3 className="font-semibold leading-tight bg-clip-text text-transparent bg-gradient-to-r from-amber-500 via-orange-500 to-rose-500">
+              <h3 className="font-semibold leading-tight text-foreground">
                 {t("scheduling.title", "Scheduling & auto-poster")}
               </h3>
               <p className="text-xs text-muted-foreground mt-0.5">

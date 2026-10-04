@@ -14,7 +14,6 @@ import { ProcessingJobsProvider } from "@/contexts/ProcessingJobsContext";
 import { VideoProcessingDebugProvider } from "@/contexts/VideoProcessingDebugContext";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { NetworkStatusIndicator } from "@/components/NetworkStatusIndicator";
-import { ThemeApplier } from "@/components/ThemeApplier";
 import { initErrorTracking } from "@/services/errorTracking";
 import { AnimatedRoutes } from "@/components/AnimatedRoutes";
 import { useScopedActivityStore } from "@/stores/notificationHistoryStore";
@@ -57,7 +56,6 @@ const App = () => (
           <VideoProcessingDebugProvider>
           <TooltipProvider>
             <NetworkStatusIndicator />
-            <ThemeApplier />
             <Toaster />
             <Sonner />
             <FeatureFlagIndicator />

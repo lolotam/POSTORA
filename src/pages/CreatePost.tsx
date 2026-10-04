@@ -657,14 +657,14 @@ export default function CreatePost() {
 
         {/* Step 1: Content */}
         {currentStep === 1 && (
-          <div className="rounded-xl border border-border bg-card/80 backdrop-blur-sm overflow-hidden animate-fade-in transition-all duration-300 hover:translate-y-[-2px]" style={{ perspective: '1000px', boxShadow: '0 4px 6px -1px hsl(var(--primary) / 0.06), 0 10px 30px -5px hsl(var(--primary) / 0.1), 0 1px 3px 0 hsl(var(--border) / 0.3)' }}>
+          <div className="rounded-lg border border-border bg-card overflow-hidden animate-fade-in" style={{ boxShadow: "var(--shadow-card)" }}>
             {/* Upload Media Section */}
             <div className="p-5 sm:p-6 space-y-4">
               <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                 <div className="flex items-center gap-3">
                   <Icon3D icon={ImagePlus} variant="violet" size="sm" />
                   <div>
-                    <Label className="text-base font-semibold leading-tight bg-gradient-to-r from-violet-500 via-fuchsia-500 to-pink-500 bg-clip-text text-transparent">
+                    <Label className="text-base font-semibold leading-tight text-foreground">
                       {t("content.uploadMedia", "Upload Media")}
                     </Label>
                     <p className="text-xs text-muted-foreground mt-0.5">
@@ -733,7 +733,7 @@ export default function CreatePost() {
                 <div className="flex items-center gap-3">
                   <Icon3D icon={Type} variant="sky" size="sm" />
                   <div>
-                    <Label className="text-base font-semibold leading-tight bg-gradient-to-r from-sky-500 via-violet-500 to-pink-500 bg-clip-text text-transparent">
+                    <Label className="text-base font-semibold leading-tight text-foreground">
                       {t("content.captionDetails", "Caption & Details")}
                     </Label>
                     <p className="text-xs text-muted-foreground mt-0.5">
@@ -757,7 +757,7 @@ export default function CreatePost() {
             </div>
 
             {/* Card Footer */}
-            <div className="px-5 sm:px-6 py-4 border-t border-border flex justify-end" style={{ background: 'linear-gradient(to top, hsl(var(--muted) / 0.5), hsl(var(--muted) / 0.2))' }}>
+            <div className="px-5 sm:px-6 py-4 border-t border-border flex justify-end bg-muted/40">
               <Button onClick={() => setCurrentStep(2)} className="gap-2 shadow-md hover:shadow-lg transition-shadow">
                 {t("actions.nextSelectPlatforms", "Next: Select Platforms")}
                 <ArrowRight className="w-4 h-4" />
@@ -768,7 +768,7 @@ export default function CreatePost() {
 
         {/* Step 2: Platforms */}
         {currentStep === 2 && (
-          <div className="rounded-xl border border-border bg-card/80 backdrop-blur-sm overflow-hidden animate-fade-in transition-all duration-300 hover:translate-y-[-2px]" style={{ perspective: '1000px', boxShadow: '0 4px 6px -1px hsl(var(--primary) / 0.06), 0 10px 30px -5px hsl(var(--primary) / 0.1), 0 1px 3px 0 hsl(var(--border) / 0.3)' }}>
+          <div className="rounded-lg border border-border bg-card overflow-hidden animate-fade-in" style={{ boxShadow: "var(--shadow-card)" }}>
             <div className="p-5 sm:p-6 space-y-4">
               {files.length > 0 && (
                 <MediaSummaryBanner
@@ -851,7 +851,7 @@ export default function CreatePost() {
             )}
 
             {/* Card Footer */}
-            <div className="px-5 sm:px-6 py-4 border-t border-border flex justify-between" style={{ background: 'linear-gradient(to top, hsl(var(--muted) / 0.5), hsl(var(--muted) / 0.2))' }}>
+            <div className="px-5 sm:px-6 py-4 border-t border-border flex justify-between bg-muted/40">
               <Button variant="outline" onClick={() => setCurrentStep(1)} className="gap-2 shadow-sm hover:shadow-md transition-shadow">
                 {t("common:back", "Back")}
               </Button>
@@ -865,7 +865,7 @@ export default function CreatePost() {
 
         {/* Step 3: Schedule & Publish */}
         {currentStep === 3 && (
-          <div className="rounded-xl border border-border bg-card/80 backdrop-blur-sm overflow-hidden animate-fade-in transition-all duration-300 hover:translate-y-[-2px]" style={{ perspective: '1000px', boxShadow: '0 4px 6px -1px hsl(var(--primary) / 0.06), 0 10px 30px -5px hsl(var(--primary) / 0.1), 0 1px 3px 0 hsl(var(--border) / 0.3)' }}>
+          <div className="rounded-lg border border-border bg-card overflow-hidden animate-fade-in" style={{ boxShadow: "var(--shadow-card)" }}>
             <div className="p-5 sm:p-6">
               <SchedulingSection
                 isOpen={schedulingOpen}

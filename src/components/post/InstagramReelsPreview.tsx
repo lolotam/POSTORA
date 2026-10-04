@@ -22,12 +22,12 @@ export function InstagramReelsPreview({
     <div className="space-y-3">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <div className="w-5 h-5 bg-gradient-to-br from-[#833AB4] via-[#E1306C] to-[#F77737] rounded flex items-center justify-center">
+          <div className="w-5 h-5 rounded flex items-center justify-center bg-[#833AB4]">
             <span className="text-white text-xs font-bold">▶</span>
           </div>
           <span className="text-sm font-medium">{t("instagramReels.previewTitle", "Reels Preview")}</span>
         </div>
-        <Badge variant="secondary" className="text-xs bg-gradient-to-r from-[#833AB4]/10 via-[#E1306C]/10 to-[#F77737]/10 text-[#E1306C]">
+        <Badge variant="secondary" className="text-xs text-[#E1306C] bg-[#833AB4]/10">
           {t("instagramReels.reelBadge", "Reel")}
         </Badge>
       </div>
@@ -53,7 +53,7 @@ export function InstagramReelsPreview({
             />
           )
         ) : (
-          <div className="absolute inset-0 bg-gradient-to-b from-gray-800 to-gray-900" />
+          <div className="absolute inset-0 bg-gray-800" />
         )}
 
         {/* Overlay gradient */}
@@ -61,7 +61,7 @@ export function InstagramReelsPreview({
 
         {/* Instagram Reels logo */}
         <div className="absolute top-4 start-4 flex items-center gap-1">
-          <div className="bg-gradient-to-r from-[#833AB4] via-[#E1306C] to-[#F77737] rounded-sm px-1.5 py-0.5">
+          <div className="rounded-sm px-1.5 py-0.5 bg-[#833AB4]">
             <span className="text-white text-xs font-bold">{t("instagramReels.reelsLabel", "Reels")}</span>
           </div>
         </div>
@@ -86,7 +86,7 @@ export function InstagramReelsPreview({
             <MoreHorizontal className="w-7 h-7" />
           </div>
           {/* Music disc */}
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-[#833AB4] to-[#E1306C] border-2 border-white overflow-hidden animate-spin" style={{ animationDuration: "3s" }}>
+          <div className="w-8 h-8 rounded-lg border-2 border-white overflow-hidden animate-spin bg-[#833AB4]" style={{ animationDuration: "3s" }}>
             {avatarUrl ? (
               <img src={avatarUrl} alt="" className="w-full h-full object-cover" />
             ) : (
@@ -102,7 +102,7 @@ export function InstagramReelsPreview({
           <div className="flex items-center gap-2 mb-2">
             <Avatar className="h-8 w-8 border-2 border-white">
               {avatarUrl ? <AvatarImage src={avatarUrl} alt={username} /> : null}
-              <AvatarFallback className="bg-gradient-to-br from-[#833AB4] to-[#E1306C] text-white text-xs">{username[0]?.toUpperCase()}</AvatarFallback>
+              <AvatarFallback className="text-white text-xs bg-[#833AB4]">{username[0]?.toUpperCase()}</AvatarFallback>
             </Avatar>
             <span className="font-semibold text-sm">{username}</span>
             <button className="px-2 py-0.5 border border-white text-white text-xs font-semibold rounded">

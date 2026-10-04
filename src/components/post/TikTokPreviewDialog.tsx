@@ -276,7 +276,7 @@ export function TikTokPreviewDialog({
                           onClick={togglePlay}
                           className="absolute inset-0 flex items-center justify-center"
                         >
-                          <div className="w-16 h-16 rounded-full bg-white/20 backdrop-blur-sm flex items-center justify-center">
+                          <div className="w-16 h-16 rounded-full bg-white/20 flex items-center justify-center">
                             <Play className="w-8 h-8 text-white ms-1" />
                           </div>
                         </motion.button>
@@ -392,7 +392,7 @@ export function TikTokPreviewDialog({
                       className="w-10 h-10 rounded-full object-cover"
                     />
                   ) : (
-                    <div className="w-10 h-10 rounded-full bg-gradient-to-br from-[#00f2ea] to-[#ff0050] flex items-center justify-center text-white text-sm font-bold">
+                    <div className="w-10 h-10 rounded-full flex items-center justify-center text-white text-sm font-bold bg-black">
                       TT
                     </div>
                   )}

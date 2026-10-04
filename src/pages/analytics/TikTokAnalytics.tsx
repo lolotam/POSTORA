@@ -187,7 +187,7 @@ export default function TikTokAnalytics() {
               <Badge
                 variant="outline"
                 className={cn(
-                  "backdrop-blur-md bg-card/60",
+                  "bg-card",
                   isApi
                     ? "border-cyan-500/40 text-cyan-500"
                     : "border-amber-500/40 text-amber-500",
@@ -246,7 +246,7 @@ export default function TikTokAnalytics() {
                   <p className="text-sm text-muted-foreground mb-6 max-w-md">
                     {t("empty.connectTikTokHint", "Official TikTok API mode is active. Connect a TikTok account to view its real analytics.")}
                   </p>
-                  <Button onClick={() => navigate("/profiles")} className="bg-gradient-to-r from-rose-500 via-pink-500 to-fuchsia-500 text-white hover:opacity-90">
+                  <Button onClick={() => navigate("/profiles")} className="text-primary-foreground bg-primary">
                     <Plug className="w-4 h-4 me-2" /> {t("actions.connectTikTok", "Connect TikTok")}
                   </Button>
               </div>

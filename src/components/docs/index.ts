@@ -4,7 +4,6 @@ export { SectionTitle, SubSection } from './SectionTitle';
 export { DocsHeader } from './DocsHeader';
 export { DocsSidebar } from './DocsSidebar';
 export { DocsHero } from './DocsHero';
-export { DocsThemeSelector } from './DocsThemeSelector';
 export { DocPageHeader } from './DocPageHeader';
 export { 
   docsNavItems, 

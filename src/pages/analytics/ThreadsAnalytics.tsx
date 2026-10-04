@@ -173,7 +173,7 @@ export default function ThreadsAnalytics() {
         <GradientDivider tone="violet" />
 
         <Reveal delay={60}>
-          <div className="inline-flex flex-wrap gap-1 rounded-xl bg-card/50 backdrop-blur-md border border-border/40 p-1">
+          <div className="inline-flex flex-wrap gap-1 rounded-xl bg-card border border-border/40 p-1">
             {([
               { key: "analyze", label: t("header.discovery", "Discovery"), Icon: SearchCheck },
               { key: "discovery", label: t("header.analyze", "Analyze"), Icon: AtSign },
@@ -187,8 +187,8 @@ export default function ThreadsAnalytics() {
                 className={cn(
                   "inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-all",
                   threadsMode === key
-                    ? "bg-gradient-to-r from-indigo-500 via-violet-500 to-purple-500 text-white shadow-md shadow-violet-500/30"
-                    : "text-muted-foreground hover:text-foreground hover:bg-violet-500/10",
+                    ? "text-white shadow-md bg-neutral-900 dark:bg-neutral-800"
+                    : "text-muted-foreground hover:text-foreground hover:bg-muted",
                 )}
               >
                 <Icon className="w-4 h-4" /> {label}
@@ -219,7 +219,7 @@ export default function ThreadsAnalytics() {
                 />
                 {hasMore && (
                   <div className="flex justify-center pt-4">
-                    <Button variant="outline" disabled className="gap-2 border-violet-500/40"><Loader2 className="w-4 h-4" />{t("actions.loadMore", "Load More")}</Button>
+                    <Button variant="outline" disabled className="gap-2 border-input"><Loader2 className="w-4 h-4" />{t("actions.loadMore", "Load More")}</Button>
                   </div>
                 )}
               </div>
@@ -232,7 +232,7 @@ export default function ThreadsAnalytics() {
                   <p className="text-sm text-muted-foreground mb-6 max-w-md">{t("empty.searchHintThreads", "Enter any Threads username to analyze their top performing content")}</p>
                   <div className="flex flex-wrap justify-center gap-2">
                     {EXAMPLE_BRANDS.map((brand) => (
-                      <Button key={brand} variant="outline" size="sm" className="text-xs border-violet-500/40 hover:bg-violet-500/10 transition-transform hover:-translate-y-0.5" onClick={() => handleSearch(brand.replace("@", ""))}>{brand}</Button>
+                      <Button key={brand} variant="outline" size="sm" className="text-xs border-input hover:bg-muted transition-transform hover:-translate-y-0.5" onClick={() => handleSearch(brand.replace("@", ""))}>{brand}</Button>
                     ))}
                   </div>
                 </div>
@@ -263,7 +263,7 @@ export default function ThreadsAnalytics() {
         />
 
         <AlertDialog open={!!pendingDeleteId} onOpenChange={(open) => { if (!open) setPendingDeleteId(null); }}>
-          <AlertDialogContent className="bg-card/85 backdrop-blur-xl border-border/50">
+          <AlertDialogContent className="bg-card border-border/50">
             <AlertDialogHeader>
               <AlertDialogTitle>{t("dialog.deleteThreadsTitle", "Delete this post from Threads?")}</AlertDialogTitle>
               <AlertDialogDescription>

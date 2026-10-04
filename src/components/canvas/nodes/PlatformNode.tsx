@@ -421,7 +421,7 @@ function PlatformNodeComponent({ id, data, selected }: NodeProps) {
   return (
     <div className="relative">
       {/* Floating Label with status */}
-      <div className="absolute -top-8 start-6 flex items-center gap-1.5 px-2.5 py-1 bg-card/90 backdrop-blur-sm rounded-lg text-xs font-medium text-muted-foreground border border-border/50 z-10">
+      <div className="absolute -top-8 start-6 flex items-center gap-1.5 px-2.5 py-1 bg-card rounded-lg text-xs font-medium text-muted-foreground border border-border/50 z-10">
         <Share2 className="h-3.5 w-3.5" />
         <span>Publisher</span>
         {enabledCount > 0 ? (
@@ -434,7 +434,7 @@ function PlatformNodeComponent({ id, data, selected }: NodeProps) {
       {/* Floating Toolbar */}
       {selected && (
         <div className="absolute -top-14 start-1/2 -translate-x-1/2 z-20">
-          <div className="flex items-center gap-0.5 px-1.5 py-1 bg-card/95 backdrop-blur-md border border-border/50 rounded-xl shadow-lg">
+          <div className="flex items-center gap-0.5 px-1.5 py-1 bg-card border border-border/50 rounded-xl shadow-lg">
             <button className="h-7 w-7 rounded-lg flex items-center justify-center hover:bg-primary/20 hover:text-primary transition-colors" onClick={handlePublish}>
               <Send className="h-3.5 w-3.5" />
             </button>
@@ -452,13 +452,13 @@ function PlatformNodeComponent({ id, data, selected }: NodeProps) {
       <div
         className={cn(
           "min-w-[320px] rounded-2xl overflow-hidden transition-all duration-300",
-          "bg-card/80 backdrop-blur-sm",
+          "bg-card",
           selected ? "node-glow-platform" : "border-2 border-green-500/30 hover:border-green-500/50"
         )}
         style={{ minHeight: 200 }}
       >
         {/* Category accent strip */}
-        <div className="h-1 bg-gradient-to-r from-green-500/80 to-green-400/40" />
+        <div className="h-1 bg-green-500/80" />
         <NodeResizer
           color="hsl(150 80% 45%)"
           isVisible={selected}

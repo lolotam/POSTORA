@@ -186,8 +186,8 @@ export const instagramChecklistItems: ChecklistItem[] = [
 ];
 
 export const instagramCategoryInfo: Record<string, CategoryInfo> = {
-  setup: { label: "App Setup", icon: Settings, color: "text-pink-600" },
-  permissions: { label: "Permissions", icon: Key, color: "text-purple-500" },
+  setup: { label: "App Setup", icon: Settings, color: "text-foreground" },
+  permissions: { label: "Permissions", icon: Key, color: "text-foreground" },
   content: { label: "Content Requirements", icon: Image, color: "text-rose-500" },
   compliance: { label: "Compliance & Review", icon: Shield, color: "text-green-500" },
 };

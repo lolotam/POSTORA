@@ -16,8 +16,8 @@ import { Icon3D, GradientHeading, GradientRingCard, GradientDivider, Reveal } fr
 import { cn } from "@/lib/utils";
 
 const STATUS_PILL: Record<string, string> = {
-  new: "bg-sky-500/15 text-sky-500 border-sky-500/30",
-  contacted: "bg-violet-500/15 text-violet-500 border-violet-500/30",
+  new: "bg-muted text-foreground border-border",
+  contacted: "bg-muted text-foreground border-border",
   qualified: "bg-amber-500/15 text-amber-500 border-amber-500/30",
   won: "bg-emerald-500/15 text-emerald-500 border-emerald-500/30",
   lost: "bg-rose-500/15 text-rose-500 border-rose-500/30",
@@ -90,11 +90,11 @@ export default function LeadsCRM() {
               </div>
             </div>
             <div className="flex gap-2">
-              <Button variant="outline" size="sm" className="border-violet-500/40 hover:bg-violet-500/10" onClick={handleSyncForms} disabled={syncForms.isPending || !activeAccountId}>
+              <Button variant="outline" size="sm" className="border-input hover:bg-muted" onClick={handleSyncForms} disabled={syncForms.isPending || !activeAccountId}>
                 {syncForms.isPending ? <Loader2 className="h-4 w-4 animate-spin me-1" /> : <Download className="h-4 w-4 me-1" />}
                 {t("actions.syncForms", "Sync Forms")}
               </Button>
-              <Button size="sm" className="bg-gradient-to-r from-sky-500 via-violet-500 to-pink-500 text-white hover:opacity-90" onClick={handleSyncLeads} disabled={syncLeads.isPending || forms.length === 0}>
+              <Button size="sm" className="text-primary-foreground bg-primary" onClick={handleSyncLeads} disabled={syncLeads.isPending || forms.length === 0}>
                 {syncLeads.isPending ? <Loader2 className="h-4 w-4 animate-spin me-1" /> : <RefreshCw className="h-4 w-4 me-1" />}
                 {t("actions.syncLeads", "Sync Leads")}
               </Button>
@@ -115,7 +115,7 @@ export default function LeadsCRM() {
                 : status === "lost" ? t("leads.lost", "Lost")
                 : status;
               return (
-              <span key={status} className={cn("inline-flex items-center gap-1.5 rounded-full border backdrop-blur-md px-3 py-1 text-xs font-medium capitalize", STATUS_PILL[status] || "bg-card/60 border-border/40")}>
+              <span key={status} className={cn("inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium capitalize", STATUS_PILL[status] || "bg-card/60 border-border/40")}>
                 {statusLabel}: <span className="tabular-nums font-semibold">{count}</span>
               </span>
               );
@@ -157,8 +157,8 @@ export default function LeadsCRM() {
 
         {/* Leads list */}
         {formsLoading || leadsLoading ? (
-          <div className="flex items-center justify-center py-12 rounded-2xl border border-border/40 bg-card/60 backdrop-blur-md">
-            <Loader2 className="h-8 w-8 animate-spin text-violet-500" />
+          <div className="flex items-center justify-center py-12 rounded-2xl border border-border/40 bg-card">
+            <Loader2 className="h-8 w-8 animate-spin text-foreground" />
           </div>
         ) : fbAccounts.length === 0 ? (
           <Reveal delay={160}>
@@ -167,7 +167,7 @@ export default function LeadsCRM() {
                 <div className="group"><Icon3D icon={Users} variant="violet" size="lg" /></div>
                 <p className="font-medium mt-1">{t("empty.noFacebookPages", "No Facebook pages connected")}</p>
                 <p className="text-sm text-muted-foreground">{t("empty.syncFormsHint", "Connect a Facebook page to sync lead forms.")}</p>
-                <Button asChild className="bg-gradient-to-r from-sky-500 via-violet-500 to-pink-500 text-white hover:opacity-90">
+                <Button asChild className="text-primary-foreground bg-primary">
                   <Link to="/profiles">{t("actions.goToProfiles", "Go to Profiles")}</Link>
                 </Button>
               </div>
@@ -175,7 +175,7 @@ export default function LeadsCRM() {
           </Reveal>
         ) : filteredLeads.length === 0 ? (
           <Reveal delay={160}>
-            <div className="rounded-2xl border border-border/40 bg-card/60 backdrop-blur-md text-center py-12">
+            <div className="rounded-2xl border border-border/40 bg-card text-center py-12">
               <div className="group inline-flex mb-3"><Icon3D icon={Users} variant="violet" size="lg" /></div>
               <p className="font-medium mt-2">{t("empty.noLeads", "No leads found")}</p>
               <p className="text-sm text-muted-foreground mt-1">{t("empty.noLeadsHint", "Sync your lead forms to import leads from Facebook.")}</p>

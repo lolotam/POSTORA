@@ -6,7 +6,7 @@ export function WhatsAppStatusTicks({ status }: { status: string | null | undefi
   const icon = kind === "failed"
     ? <AlertCircle className="h-3.5 w-3.5 text-destructive" />
     : kind === "read"
-      ? <CheckCheck className="h-3.5 w-3.5 text-sky-500" />
+      ? <CheckCheck className="h-3.5 w-3.5 text-foreground" />
       : kind === "delivered"
         ? <CheckCheck className="h-3.5 w-3.5 opacity-60" />
         : <Check className="h-3.5 w-3.5 opacity-60" />;

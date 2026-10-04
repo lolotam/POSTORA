@@ -32,12 +32,6 @@ export const SETTINGS_SECTIONS = [
     keywords: ["app name", "application name", "site name", "logo", "favicon", "icon", "default plan", "branding"],
   },
   {
-    id: "theme",
-    tab: "general",
-    title: "Theme",
-    keywords: ["theme", "dark mode", "light mode", "colour", "color", "palette", "appearance", "style"],
-  },
-  {
     id: "app-credentials",
     tab: "integrations",
     title: "App credentials",

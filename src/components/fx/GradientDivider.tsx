@@ -1,26 +1,17 @@
 import { cn } from "@/lib/utils";
 
-/** Soft horizontal gradient hairline for separating sections. */
+/**
+ * Horizontal hairline for separating sections. `tone` predates the flat design system and
+ * no longer affects the output.
+ */
 export function GradientDivider({
   className,
-  tone = "primary",
 }: {
   className?: string;
+  /** @deprecated No visual effect since the flat design system. */
   tone?: "primary" | "sky" | "violet" | "emerald" | "rose";
 }) {
-  const via =
-    tone === "sky"
-      ? "via-sky-500/40"
-      : tone === "violet"
-        ? "via-violet-500/40"
-        : tone === "emerald"
-          ? "via-emerald-500/40"
-          : tone === "rose"
-            ? "via-rose-500/40"
-            : "via-primary/40";
-  return (
-    <div className={cn("h-px w-full bg-gradient-to-r from-transparent to-transparent", via, className)} />
-  );
+  return <div className={cn("h-px w-full bg-border", className)} />;
 }
 
 export default GradientDivider;

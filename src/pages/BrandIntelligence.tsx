@@ -144,7 +144,7 @@ export default function BrandIntelligence() {
         {/* Header */}
         <div>
           <div className="flex items-center gap-3 mb-1">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-violet-500 to-pink-500 flex items-center justify-center">
+            <div className="w-10 h-10 rounded-xl flex items-center justify-center bg-neutral-900 dark:bg-neutral-800">
               <SearchCheck className="w-5 h-5 text-white" />
             </div>
             <div>
@@ -175,7 +175,7 @@ export default function BrandIntelligence() {
           <TabsList>
             <TabsTrigger value="instagram" className="gap-1.5">
               <Camera className="w-4 h-4" />
-              <span className={activeTab === "instagram" ? "bg-gradient-to-r from-orange-400 via-pink-500 to-purple-600 bg-clip-text text-transparent" : ""}>
+              <span className={activeTab === "instagram" ? "text-foreground" : ""}>
                 {t("brand.instagram", "Instagram")}
               </span>
             </TabsTrigger>
@@ -241,8 +241,8 @@ export default function BrandIntelligence() {
 
               {!hasResults && !isLoading && !error && (
                 <div className="flex flex-col items-center justify-center py-20 text-center">
-                  <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-violet-500/20 to-pink-500/20 flex items-center justify-center mb-4">
-                    <SearchCheck className="w-10 h-10 text-violet-500" />
+                  <div className="w-20 h-20 rounded-2xl flex items-center justify-center mb-4 bg-muted">
+                    <SearchCheck className="w-10 h-10 text-foreground" />
                   </div>
                   <h3 className="text-lg font-semibold mb-1">{t("empty.searchBrand", "Start by searching for a brand")}</h3>
                   <p className="text-sm text-muted-foreground mb-6 max-w-md">
@@ -342,8 +342,8 @@ export default function BrandIntelligence() {
 
                 {!hasResults && !isLoading && !error && (
                   <div className="flex flex-col items-center justify-center py-20 text-center">
-                    <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-violet-500/20 to-pink-500/20 flex items-center justify-center mb-4">
-                      <SearchCheck className="w-10 h-10 text-violet-500" />
+                    <div className="w-20 h-20 rounded-2xl flex items-center justify-center mb-4 bg-muted">
+                      <SearchCheck className="w-10 h-10 text-foreground" />
                     </div>
                     <h3 className="text-lg font-semibold mb-1">{t("empty.searchBrand", "Start by searching for a brand")}</h3>
                     <p className="text-sm text-muted-foreground mb-6 max-w-md">

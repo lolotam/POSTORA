@@ -76,7 +76,7 @@ export default function LandingPricing() {
             >
               {plan.popular && (
                 <div className="absolute -top-3 start-1/2 -translate-x-1/2">
-                  <span className="px-3 py-1 rounded-full bg-gradient-to-r from-violet-500 to-pink-500 text-white text-xs font-medium shadow-lg shadow-violet-500/30">
+                  <span className="px-3 py-1 rounded-full text-white text-xs font-medium shadow-lg bg-neutral-900 dark:bg-neutral-800">
                     Most Popular
                   </span>
                 </div>
@@ -91,7 +91,7 @@ export default function LandingPricing() {
               </div>
 
               {plan.promoLabel && (
-                <span className="inline-block mb-3 px-2 py-0.5 rounded-full bg-violet-500/10 text-violet-500 text-xs font-semibold w-fit">
+                <span className="inline-block mb-3 px-2 py-0.5 rounded-full bg-muted text-foreground text-xs font-semibold w-fit">
                   {plan.promoLabel}
                 </span>
               )}

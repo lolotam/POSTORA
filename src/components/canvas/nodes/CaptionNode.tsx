@@ -133,7 +133,7 @@ function CaptionNodeComponent({ id, data, selected }: NodeProps) {
       </Handle>
 
       {/* Floating Label */}
-      <div className="absolute -top-8 start-6 flex items-center gap-1.5 px-2.5 py-1 bg-card/90 backdrop-blur-sm rounded-lg text-xs font-medium text-muted-foreground border border-border/50 z-10">
+      <div className="absolute -top-8 start-6 flex items-center gap-1.5 px-2.5 py-1 bg-card rounded-lg text-xs font-medium text-muted-foreground border border-border/50 z-10">
         <ImageIcon className="h-3.5 w-3.5" />
         <span>Image Generator</span>
       </div>
@@ -141,7 +141,7 @@ function CaptionNodeComponent({ id, data, selected }: NodeProps) {
       {/* Floating Toolbar - only when selected */}
       {selected && (
         <div className="absolute -top-14 start-1/2 -translate-x-1/2 z-20">
-          <div className="flex items-center gap-0.5 px-1.5 py-1 bg-card/95 backdrop-blur-md border border-border/50 rounded-xl shadow-lg">
+          <div className="flex items-center gap-0.5 px-1.5 py-1 bg-card border border-border/50 rounded-xl shadow-lg">
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button 
@@ -183,7 +183,7 @@ function CaptionNodeComponent({ id, data, selected }: NodeProps) {
       <div
         className={cn(
           "min-w-[380px] rounded-2xl overflow-hidden transition-all duration-300",
-          "bg-card/80 backdrop-blur-sm",
+          "bg-card",
           selected 
             ? "node-glow-image-gen" 
             : "border-2 border-amber-500/30 hover:border-amber-500/50"
@@ -191,7 +191,7 @@ function CaptionNodeComponent({ id, data, selected }: NodeProps) {
         style={{ minHeight: 320 }}
       >
         {/* Category accent strip */}
-        <div className="h-1 bg-gradient-to-r from-amber-500/80 to-amber-400/40" />
+        <div className="h-1 bg-amber-500/80" />
         <NodeResizer
           color="hsl(38 92% 50%)"
           isVisible={selected}

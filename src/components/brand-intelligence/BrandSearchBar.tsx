@@ -167,7 +167,7 @@ export function BrandSearchBar({ platform, onSearch, isLoading, scope }: BrandSe
         <Button
           onClick={() => runSearch(input)}
           disabled={isLoading || !input.trim()}
-          className="h-11 px-6 bg-gradient-to-r from-violet-500 to-pink-500 hover:from-violet-600 hover:to-pink-600 text-white border-0"
+          className="h-11 px-6 text-white border-0 bg-neutral-900 dark:bg-neutral-800 hover:bg-neutral-800 dark:hover:bg-neutral-700"
         >
           {isLoading ? (
             <Loader2 className="w-4 h-4 animate-spin me-2" />

@@ -58,7 +58,7 @@ export default function WhatsAppDocs() {
       />
 
       {/* Hero Welcome Banner */}
-      <div className="relative rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-500 p-6 text-white shadow-xl md:p-8 overflow-hidden">
+      <div className="relative rounded-2xl p-6 text-white shadow-xl md:p-8 overflow-hidden bg-neutral-900 dark:bg-neutral-800">
         <div className="relative z-10 space-y-4 max-w-3xl">
           <Badge className="bg-white/20 hover:bg-white/30 text-white border-none py-1 px-3 text-xs uppercase tracking-wider font-semibold">
             Assistant & Onboarding Guide
@@ -254,8 +254,8 @@ export default function WhatsAppDocs() {
                       <p className="font-bold text-teal-600 dark:text-teal-400">Wave 2</p>
                       <p className="text-[10px] text-muted-foreground">Last 90 Days (Minutes)</p>
                     </div>
-                    <div className="p-2 border rounded bg-indigo-500/5 dark:bg-indigo-500/10">
-                      <p className="font-bold text-indigo-600 dark:text-indigo-400">Wave 3</p>
+                    <div className="p-2 border rounded bg-muted dark:bg-muted">
+                      <p className="font-bold text-foreground dark:text-foreground">Wave 3</p>
                       <p className="text-[10px] text-muted-foreground">90–180 Days (Hours)</p>
                     </div>
                   </div>

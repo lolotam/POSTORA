@@ -305,7 +305,7 @@ export function ThreadsDiscoveryPanel() {
                   alt={`@${profile.username}`}
                   referrerPolicy="no-referrer"
                 />
-                <AvatarFallback className="bg-gradient-to-br from-violet-500 to-pink-500 text-white font-bold text-lg">
+                <AvatarFallback className="text-white font-bold text-lg bg-neutral-900 dark:bg-neutral-800">
                   {profile.username[0]?.toUpperCase()}
                 </AvatarFallback>
               </Avatar>

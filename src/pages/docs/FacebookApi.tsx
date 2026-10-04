@@ -649,15 +649,15 @@ export default function FacebookApi() {
               <Card>
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">
-                    <Users className="w-5 h-5 text-purple-500" />
+                    <Users className="w-5 h-5 text-foreground" />
                     Cross-Platform Post
                   </CardTitle>
                   <CardDescription>Post to Facebook and Instagram simultaneously</CardDescription>
                 </CardHeader>
                 <CardContent>
                   <CodeBlock code={curlCrossPost} language="bash" id="cross-post" />
-                  <div className="mt-4 p-4 rounded-lg bg-purple-500/10 border border-purple-500/20">
-                    <h4 className="font-medium mb-2 flex items-center gap-2 text-purple-600">
+                  <div className="mt-4 p-4 rounded-lg bg-muted border border-border">
+                    <h4 className="font-medium mb-2 flex items-center gap-2 text-foreground">
                       <Info className="w-4 h-4" />
                       Cross-Posting Tips:
                     </h4>
@@ -870,7 +870,7 @@ export default function FacebookApi() {
             <Card>
               <CardHeader>
                 <CardTitle className="text-base flex items-center gap-2">
-                  <Film className="w-4 h-4 text-purple-500" />
+                  <Film className="w-4 h-4 text-foreground" />
                   Leverage Reels
                 </CardTitle>
               </CardHeader>
@@ -927,7 +927,7 @@ export default function FacebookApi() {
             </Link>
             <Link to="/n8n/instagram">
               <Button variant="outline" className="gap-2">
-                <span className="text-pink-500">📸</span>
+                <span className="text-foreground">📸</span>
                 Instagram API
               </Button>
             </Link>

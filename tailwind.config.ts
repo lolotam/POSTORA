@@ -15,10 +15,13 @@ export default {
     },
     extend: {
       fontFamily: {
-        sans: ['Inter', 'system-ui', 'sans-serif'],
-        serif: ['Merriweather', 'serif'],
-        heading: ['"Noto Serif"', 'serif'],
-        cairo: ['Cairo', 'sans-serif'],
+        sans: ['Inter', '"IBM Plex Sans Arabic"', 'system-ui', 'sans-serif'],
+        // Headings share the UI face; the serif is opt-in through `font-display`, used
+        // only for large page titles (28px and up), never for card or section headings.
+        heading: ['Inter', '"IBM Plex Sans Arabic"', 'system-ui', 'sans-serif'],
+        display: ['Newsreader', 'Georgia', 'serif'],
+        serif: ['Newsreader', 'Georgia', 'serif'],
+        mono: ['"IBM Plex Mono"', 'ui-monospace', 'SFMono-Regular', 'monospace'],
       },
       colors: {
         chart: {

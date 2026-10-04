@@ -667,7 +667,7 @@ export function TikTokPreCheck({
   if (!previewSrc) return null;
 
   return (
-    <div className={cn("rounded-xl border border-border bg-card/50 backdrop-blur-sm overflow-hidden", className)}>
+    <div className={cn("rounded-xl border border-border bg-card overflow-hidden", className)}>
       {/* Header with timestamp and actions */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-border bg-muted/30">
         <div className="flex items-center gap-2">

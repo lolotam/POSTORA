@@ -117,8 +117,7 @@ export function MediaUploadArea({
         <GradientRingCard variant="violet" hoverLift={false} ringIntensity="subtle" padded={false} innerClassName="p-4">
           <Tabs value={urlMediaType} onValueChange={(v) => setUrlMediaType(v as "images" | "video")}>
             <TabsList className={cn(
-              "mb-4 bg-card/50 backdrop-blur-md border border-border/40 rounded-xl p-1",
-              "[&>[data-state=active]]:bg-gradient-to-r [&>[data-state=active]]:from-violet-500 [&>[data-state=active]]:via-fuchsia-500 [&>[data-state=active]]:to-sky-500 [&>[data-state=active]]:text-white [&>[data-state=active]]:shadow-md [&>[data-state=active]]:shadow-violet-500/30"
+              "mb-4 bg-muted rounded-lg p-1",
             )}>
               <TabsTrigger value="images" className="gap-2">
                 <Image className="w-4 h-4" />
@@ -134,7 +133,7 @@ export function MediaUploadArea({
                 placeholder={t("uploadArea.imageUrlsPlaceholder", "Enter image URLs (one per line, max 10)")}
                 value={imageUrls}
                 onChange={(e) => setImageUrls(e.target.value)}
-                className="min-h-[80px] bg-background/60 backdrop-blur-sm border-violet-400/30 focus-visible:border-violet-400 focus-visible:ring-violet-400/30"
+                className="min-h-[80px] bg-background border-border focus-visible:border-input focus-visible:ring-ring"
               />
               <p className="text-xs text-muted-foreground mt-1">
                 {t("uploadArea.imageUrlsHint", "Enter direct image URLs, one per line")}
@@ -145,7 +144,7 @@ export function MediaUploadArea({
                 placeholder={t("uploadArea.videoUrlPlaceholder", "Enter video URL")}
                 value={videoUrl}
                 onChange={(e) => setVideoUrl(e.target.value)}
-                className="bg-background/60 backdrop-blur-sm border-violet-400/30 focus-visible:border-violet-400 focus-visible:ring-violet-400/30"
+                className="bg-background border-border focus-visible:border-input focus-visible:ring-ring"
               />
               <p className="text-xs text-muted-foreground mt-1">
                 {t("uploadArea.videoUrlHint", "Enter a direct video URL (MP4, MOV)")}
@@ -163,10 +162,10 @@ export function MediaUploadArea({
       <Label className="text-sm">{t("uploadArea.mediaLabel", "Media")}</Label>
       <div
         className={cn(
-          "border-2 border-dashed rounded-2xl p-6 text-center transition-all duration-300 backdrop-blur-sm",
+          "border-2 border-dashed rounded-2xl p-6 text-center transition-all duration-300",
           isDragging
-            ? "border-violet-400 bg-gradient-to-br from-violet-500/10 via-fuchsia-500/5 to-transparent shadow-lg shadow-violet-500/30 scale-[1.01]"
-            : "border-violet-400/40 bg-card/40 hover:border-violet-400/70 hover:bg-card/60 hover:shadow-md hover:shadow-violet-500/20"
+            ? "border-input shadow-lg scale-[1.01] bg-accent"
+            : "border-input bg-card/40 hover:border-input hover:bg-card/60 hover:shadow-md"
         )}
         onDragOver={onDragOver}
         onDragLeave={onDragLeave}
@@ -182,7 +181,7 @@ export function MediaUploadArea({
         />
         <div className="group flex flex-col items-center gap-3">
           <Icon3D icon={Upload} variant="violet" size="md" />
-          <p className="text-base font-semibold bg-clip-text text-transparent bg-gradient-to-r from-violet-500 via-fuchsia-500 to-sky-500">
+          <p className="text-base font-semibold text-foreground">
             {t("uploadArea.dragDropTitle", "Drag and drop your media here")}
           </p>
           <p className="text-xs text-muted-foreground">
@@ -200,7 +199,7 @@ export function MediaUploadArea({
                 "border-0 text-white shadow-md transition-all",
                 isAtLimit
                   ? "bg-muted text-muted-foreground"
-                  : "bg-gradient-to-r from-violet-500 via-fuchsia-500 to-sky-500 shadow-violet-500/30 hover:shadow-lg hover:shadow-violet-500/50 hover:opacity-95"
+                  : "hover:shadow-lg hover:opacity-95 bg-neutral-900 dark:bg-neutral-800"
               )}
             >
               {isUploading ? (
@@ -242,7 +241,7 @@ export function MediaUploadArea({
                 className={cn(
                   "w-2 h-2 rounded-full transition-all duration-300",
                   i < files.length
-                    ? "bg-gradient-to-r from-violet-500 to-fuchsia-500 shadow-sm shadow-violet-500/50"
+                    ? "shadow-sm bg-neutral-900 dark:bg-neutral-800"
                     : "bg-muted-foreground/30"
                 )}
               />

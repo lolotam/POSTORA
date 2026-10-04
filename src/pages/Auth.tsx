@@ -468,8 +468,6 @@ export default function Auth() {
     <div className="min-h-screen bg-background flex relative overflow-hidden">
       {/* Background Effects */}
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute top-1/4 start-0 w-96 h-96 bg-primary/10 rounded-full blur-[128px]" />
-        <div className="absolute bottom-1/4 end-0 w-80 h-80 bg-accent/10 rounded-full blur-[128px]" />
       </div>
 
       {/* Left Panel - Branding */}
@@ -504,7 +502,7 @@ export default function Auth() {
             </Link>
           </div>
 
-          <div className="bg-card/50 backdrop-blur-xl border border-border rounded-2xl p-8">
+          <div className="bg-card border border-border rounded-2xl p-8">
             <div className="text-center mb-8">
               <h2 className="text-2xl font-bold mb-2">
                 {isVerifyEmail

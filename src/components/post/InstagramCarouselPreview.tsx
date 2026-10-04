@@ -39,7 +39,7 @@ export function InstagramCarouselPreview({
     <div className="space-y-3">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <div className="w-5 h-5 bg-gradient-to-br from-[#833AB4] via-[#E1306C] to-[#F77737] rounded flex items-center justify-center">
+          <div className="w-5 h-5 rounded flex items-center justify-center bg-[#833AB4]">
             <span className="text-white text-xs font-bold">◫</span>
           </div>
           <span className="text-sm font-medium">{t("instagramCarousel.previewTitle", "Carousel Preview")}</span>
@@ -101,7 +101,7 @@ export function InstagramCarouselPreview({
           )}
 
           {/* Slide indicator */}
-          <div className="absolute top-3 end-3 bg-background/80 backdrop-blur px-2 py-1 rounded text-xs font-medium">
+          <div className="absolute top-3 end-3 bg-background px-2 py-1 rounded text-xs font-medium">
             {currentIndex + 1}/{mediaFiles.length}
           </div>
         </div>

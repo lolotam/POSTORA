@@ -12,15 +12,15 @@ interface DocsSidebarProps {
 
 export function DocsSidebar({ navItems, activeSection, onSectionClick }: DocsSidebarProps) {
   return (
-    <nav className="hidden lg:block sticky top-24 h-fit space-y-1.5 rounded-2xl border border-border/60 bg-card/50 backdrop-blur-md p-3 shadow-sm">
+    <nav className="hidden lg:block sticky top-24 h-fit space-y-1.5 rounded-2xl border border-border/60 bg-card p-3 shadow-sm">
       {navItems.map((item) =>
         item.isLink ? (
           <div key={item.id}>
             <Link
               to={item.href!}
-              className="group/nav flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm transition-all duration-300 text-muted-foreground hover:text-foreground hover:bg-violet-500/10 hover:translate-x-0.5"
+              className="group/nav flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm transition-all duration-300 text-muted-foreground hover:text-foreground hover:bg-muted hover:translate-x-0.5"
             >
-              <span className="inline-flex items-center justify-center h-6 w-6 rounded-lg bg-gradient-to-br from-violet-500/15 to-sky-500/15 ring-1 ring-violet-400/20 text-violet-500 group-hover/nav:from-violet-500/25 group-hover/nav:to-sky-500/25 transition-colors">
+              <span className="inline-flex items-center justify-center h-6 w-6 rounded-lg ring-1 ring-border text-foreground transition-colors bg-muted group-hover/nav:bg-muted">
                 <item.icon className="w-3.5 h-3.5" />
               </span>
               <span className="font-medium">{item.label}</span>
@@ -30,7 +30,7 @@ export function DocsSidebar({ navItems, activeSection, onSectionClick }: DocsSid
               <div className="ms-7 mt-1 space-y-0.5 border-l border-gradient-violet ps-3 relative">
                 <span
                   aria-hidden
-                  className="absolute start-0 top-0 bottom-0 w-px bg-gradient-to-b from-violet-500/40 via-sky-500/30 to-transparent"
+                  className="absolute start-0 top-0 bottom-0 w-px bg-border"
                 />
                 {item.subItems.map((sub) => (
                   <Link
@@ -53,7 +53,7 @@ export function DocsSidebar({ navItems, activeSection, onSectionClick }: DocsSid
             className={cn(
               "group/nav flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm transition-all duration-300",
               activeSection === item.id
-                ? "bg-gradient-to-r from-violet-500/20 via-fuchsia-500/10 to-transparent text-violet-600 dark:text-violet-300 ring-1 ring-violet-400/40 shadow-sm shadow-violet-500/20"
+                ? "text-foreground dark:text-neutral-200 ring-1 ring-border shadow-sm bg-accent"
                 : "text-muted-foreground hover:text-foreground hover:bg-card/80 hover:translate-x-0.5",
             )}
           >
@@ -61,8 +61,8 @@ export function DocsSidebar({ navItems, activeSection, onSectionClick }: DocsSid
               className={cn(
                 "inline-flex items-center justify-center h-6 w-6 rounded-lg ring-1 transition-colors",
                 activeSection === item.id
-                  ? "bg-gradient-to-br from-violet-500 to-fuchsia-500 ring-white/30 text-white shadow-md shadow-violet-500/30"
-                  : "bg-gradient-to-br from-violet-500/10 to-sky-500/10 ring-violet-400/20 text-violet-500",
+                  ? "ring-white/30 text-white shadow-md bg-neutral-900 dark:bg-neutral-800"
+                  : "ring-border text-foreground bg-muted",
               )}
             >
               <item.icon className="w-3.5 h-3.5" />

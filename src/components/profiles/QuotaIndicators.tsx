@@ -53,7 +53,7 @@ export function QuotaIndicators() {
     return (
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
         {Array.from({ length: 5 }).map((_, idx) => (
-          <div key={idx} className="rounded-3xl border border-border/60 bg-card/85 backdrop-blur-md p-6">
+          <div key={idx} className="rounded-3xl border border-border/60 bg-card p-6">
             <div className="animate-pulse">
               <div className="flex items-center justify-between mb-3">
                 <div className="h-4 w-24 rounded bg-muted" />

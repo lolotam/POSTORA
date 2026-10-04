@@ -137,8 +137,8 @@ function CountdownTimer({ scheduledAt }: { scheduledAt: string }) {
       className={cn(
         "font-mono text-xs px-2.5 py-1 rounded-full inline-flex items-center gap-1 border tabular-nums",
         isOverdue
-          ? "bg-gradient-to-r from-rose-500/15 to-pink-500/10 text-rose-600 dark:text-rose-300 border-rose-400/40"
-          : "bg-gradient-to-r from-emerald-500/15 to-cyan-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-400/40"
+          ? "text-rose-600 dark:text-rose-300 border-rose-400/40 bg-rose-500/15"
+          : "text-emerald-700 dark:text-emerald-300 border-emerald-400/40 bg-emerald-500/15"
       )}
     >
       <Clock className="w-3 h-3" />
@@ -527,24 +527,24 @@ export default function ScheduledPosts() {
                   void whatsAppSchedule.refetch();
                 }}
                 disabled={isFetching || whatsAppSchedule.isFetching}
-                className="gap-2 rounded-full border border-border/60 bg-card/60 backdrop-blur-md hover:bg-amber-500/10 hover:text-amber-600"
+                className="gap-2 rounded-full border border-border/60 bg-card hover:bg-amber-500/10 hover:text-amber-600"
               >
                 <RefreshCw className={cn("w-4 h-4", (isFetching || whatsAppSchedule.isFetching) && "animate-spin")} />
                 {t("common:refresh", "Refresh")}
               </Button>
-              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium border border-amber-400/40 bg-gradient-to-r from-amber-500/15 to-orange-500/10 text-amber-700 dark:text-amber-300 tabular-nums">
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium border border-amber-400/40 text-amber-700 dark:text-amber-300 tabular-nums bg-amber-500/15">
                 <CalendarClock className="w-3.5 h-3.5" />
                 {t("header.scheduledCount", "{{count}} scheduled", { count: board.length })}
               </span>
               {overdueCount > 0 && (
-                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium border border-rose-400/40 bg-gradient-to-r from-rose-500/15 to-pink-500/10 text-rose-600 dark:text-rose-300 tabular-nums">
+                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium border border-rose-400/40 text-rose-600 dark:text-rose-300 tabular-nums bg-rose-500/15">
                   <AlertTriangle className="w-3.5 h-3.5" />
                   {t("header.overdueCount", "{{count}} overdue", { count: overdueCount })}
                 </span>
               )}
               {user?.email && (
                 <span
-                  className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium border border-border/60 bg-card/60 backdrop-blur-md text-muted-foreground"
+                  className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium border border-border/60 bg-card text-muted-foreground"
                   title={t("header.viewingPostsFor", "Currently viewing posts for {{email}}", { email: user.email })}
                 >
                   <User className="w-3.5 h-3.5" />
@@ -570,13 +570,13 @@ export default function ScheduledPosts() {
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                   placeholder={t("filters.searchPlaceholder", "Search scheduled posts and messages...")}
-                  className="ps-10 rounded-full bg-background/60 backdrop-blur border-border/60 focus-visible:ring-cyan-500/40"
+                  className="ps-10 rounded-full bg-background border-border/60 focus-visible:ring-cyan-500/40"
                 />
               </div>
           
           {/* Platform Filter */}
           <Select value={platformFilter} onValueChange={(v) => setPlatformFilter(v as Platform | "all")}>
-            <SelectTrigger className="w-[160px] rounded-full bg-background/60 backdrop-blur border-border/60">
+            <SelectTrigger className="w-[160px] rounded-full bg-background border-border/60">
               <SelectValue placeholder={t("filters.platform", "Platform")} />
             </SelectTrigger>
             <SelectContent>
@@ -600,7 +600,7 @@ export default function ScheduledPosts() {
 
           {/* Profile Filter */}
           <Select value={profileFilter} onValueChange={setProfileFilter}>
-            <SelectTrigger className="w-[160px] rounded-full bg-background/60 backdrop-blur border-border/60">
+            <SelectTrigger className="w-[160px] rounded-full bg-background border-border/60">
               <SelectValue placeholder={t("filters.profile", "Profile")} />
             </SelectTrigger>
             <SelectContent>
@@ -615,7 +615,7 @@ export default function ScheduledPosts() {
 
           {/* Status Filter */}
           <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as "all" | "pending" | "overdue")}>
-            <SelectTrigger className="w-[140px] rounded-full bg-background/60 backdrop-blur border-border/60">
+            <SelectTrigger className="w-[140px] rounded-full bg-background border-border/60">
               <SelectValue placeholder={t("filters.status", "Status")} />
             </SelectTrigger>
             <SelectContent>
@@ -646,7 +646,7 @@ export default function ScheduledPosts() {
               <Button
                 size="sm"
                 onClick={() => setShowBulkRescheduleDialog(true)}
-                className="gap-2 rounded-full bg-gradient-to-r from-violet-500 to-fuchsia-500 hover:from-violet-600 hover:to-fuchsia-600 text-white shadow-md shadow-violet-500/30"
+                className="gap-2 rounded-full text-white shadow-md bg-neutral-900 dark:bg-neutral-800 hover:bg-neutral-800 dark:hover:bg-neutral-700"
               >
                 <CalendarIcon className="w-4 h-4" />
                 {t("bulk.reschedule", "Reschedule")}
@@ -654,7 +654,7 @@ export default function ScheduledPosts() {
               <Button
                 size="sm"
                 onClick={() => setShowBulkCancelDialog(true)}
-                className="gap-2 rounded-full bg-gradient-to-r from-rose-500 to-pink-500 hover:from-rose-600 hover:to-pink-600 text-white shadow-md shadow-rose-500/30"
+                className="gap-2 rounded-full text-white shadow-md bg-neutral-900 dark:bg-neutral-800 hover:bg-rose-600"
               >
                 <XCircle className="w-4 h-4" />
                 {t("bulk.cancelSelected", "Cancel Selected")}
@@ -920,8 +920,8 @@ export default function ScheduledPosts() {
                     <div className={cn(
                       "rounded-xl p-3 space-y-2 border",
                       isOverdue
-                        ? "bg-gradient-to-br from-rose-500/10 to-pink-500/5 border-rose-400/30"
-                        : "bg-gradient-to-br from-emerald-500/10 to-cyan-500/5 border-emerald-400/30"
+                        ? "border-rose-400/30 bg-rose-500/10"
+                        : "border-emerald-400/30 bg-emerald-500/10"
                     )}>
                       <div className="flex items-center justify-between">
                         <div className={cn(

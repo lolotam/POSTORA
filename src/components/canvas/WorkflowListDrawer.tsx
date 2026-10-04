@@ -77,12 +77,12 @@ export function WorkflowListDrawer({ open, onOpenChange, onLoad, onNew, currentW
   return (
     <>
       <Sheet open={open} onOpenChange={onOpenChange}>
-        <SheetContent side="left" className="w-[360px] sm:w-[400px] bg-card/85 backdrop-blur-xl border-r border-white/10">
+        <SheetContent side="left" className="w-[360px] sm:w-[400px] bg-card border-r border-white/10">
           <SheetHeader>
             <div className="flex items-center gap-3">
               <Icon3D icon={FolderOpen} variant="violet" size="sm" />
               <div>
-                <SheetTitle className="bg-clip-text text-transparent bg-gradient-to-r from-sky-400 via-violet-400 to-pink-400">
+                <SheetTitle className="text-foreground">
                   My Workflows
                 </SheetTitle>
                 <SheetDescription>Load or manage your saved workflows</SheetDescription>
@@ -92,7 +92,7 @@ export function WorkflowListDrawer({ open, onOpenChange, onLoad, onNew, currentW
           
           <div className="mt-4">
             <Button
-              className="w-full gap-2 bg-gradient-to-r from-violet-500 via-fuchsia-500 to-pink-500 text-white border-0 shadow-lg shadow-violet-500/30 hover:shadow-violet-500/50 hover:brightness-110"
+              className="w-full gap-2 text-white border-0 shadow-lg hover:brightness-110 bg-violet-500"
               onClick={() => { onNew(); onOpenChange(false); }}
             >
               <Plus className="h-4 w-4" /> New Workflow
@@ -116,7 +116,7 @@ export function WorkflowListDrawer({ open, onOpenChange, onLoad, onNew, currentW
                   <div
                     className={`group p-3 rounded-xl ring-1 cursor-pointer transition-all duration-300 hover:-translate-y-0.5 hover:shadow-lg ${
                       wf.id === currentWorkflowId
-                        ? "ring-violet-400/60 bg-gradient-to-r from-violet-500/10 via-fuchsia-500/10 to-pink-500/10"
+                        ? "ring-violet-400/60 bg-violet-500/10"
                         : "ring-white/10 bg-white/[0.03] hover:bg-white/[0.06] hover:ring-violet-400/40"
                     }`}
                     onClick={() => { onLoad(wf.id); onOpenChange(false); }}

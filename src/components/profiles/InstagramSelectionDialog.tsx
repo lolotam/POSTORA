@@ -99,11 +99,11 @@ export function InstagramSelectionDialog({
                   )}
                 >
                   {isSelecting && (
-                    <div className="absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-background/70 backdrop-blur-sm">
+                    <div className="absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-background">
                       <Loader2 className="h-6 w-6 animate-spin text-primary" />
                     </div>
                   )}
-                  <div className="relative aspect-square w-full overflow-hidden rounded-lg bg-gradient-to-br from-pink-500 to-purple-600">
+                  <div className="relative aspect-square w-full overflow-hidden rounded-lg bg-neutral-900 dark:bg-neutral-800">
                     {acc.ig_profile_picture_url ? (
                       <img
                         src={acc.ig_profile_picture_url}

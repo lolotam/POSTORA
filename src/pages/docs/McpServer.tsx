@@ -107,8 +107,6 @@ const resp = await openai.responses.create({
   return (
     <div className="min-h-screen bg-background relative overflow-hidden">
       <div aria-hidden className="pointer-events-none fixed inset-0 -z-10">
-        <div className="absolute -top-40 start-1/3 h-[480px] w-[480px] rounded-full bg-violet-500/10 blur-3xl" />
-        <div className="absolute top-1/2 -end-40 h-[420px] w-[420px] rounded-full bg-sky-500/10 blur-3xl" />
       </div>
 
       <div className="container mx-auto px-4 py-8 max-w-5xl">
@@ -120,7 +118,7 @@ const resp = await openai.responses.create({
         <Reveal className="text-center mb-12">
           <div className="flex items-center justify-center gap-3 mb-4">
             <Icon3D icon={Plug} variant="violet" size="lg" />
-            <Badge variant="outline" className="bg-violet-500/10 border-violet-400/40 text-violet-200">MCP Server · Beta</Badge>
+            <Badge variant="outline" className="bg-muted border-input text-foreground">MCP Server · Beta</Badge>
           </div>
           <GradientHeading as="h1" preset="sky-violet-pink" size="xl">
             Connect any LLM to Postora
@@ -130,9 +128,9 @@ const resp = await openai.responses.create({
             MCP-compatible agent post, schedule, and manage your social accounts on your behalf.
           </p>
 
-          <div className="mt-6 inline-flex items-center gap-2 rounded-2xl bg-white/5 ring-1 ring-white/10 px-4 py-2 backdrop-blur-xl">
-            <Terminal className="w-4 h-4 text-violet-300" />
-            <code className="text-sm text-violet-100">{MCP_URL}</code>
+          <div className="mt-6 inline-flex items-center gap-2 rounded-2xl bg-white/5 ring-1 ring-white/10 px-4 py-2">
+            <Terminal className="w-4 h-4 text-foreground" />
+            <code className="text-sm text-foreground">{MCP_URL}</code>
             <Button variant="ghost" size="sm" className="h-7 px-2" onClick={() => copy(MCP_URL, "url")}>
               {copied === "url" ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
             </Button>
@@ -185,7 +183,7 @@ const resp = await openai.responses.create({
             <GradientHeading as="h2" preset="amber-rose-violet" size="lg">Connect your client</GradientHeading>
           </div>
           <Tabs defaultValue="claude" className="w-full">
-            <TabsList className="bg-white/5 ring-1 ring-white/10 backdrop-blur-xl">
+            <TabsList className="bg-white/5 ring-1 ring-white/10">
               <TabsTrigger value="claude">Claude Desktop</TabsTrigger>
               <TabsTrigger value="chatgpt">ChatGPT</TabsTrigger>
               <TabsTrigger value="antigravity">Antigravity</TabsTrigger>
@@ -219,9 +217,9 @@ const resp = await openai.responses.create({
           <div className="grid sm:grid-cols-2 gap-3">
             {TOOLS.map((t, i) => (
               <Reveal key={t.name} delay={0.03 * i}>
-                <Card className="bg-white/5 ring-1 ring-white/10 backdrop-blur-xl border-0 h-full">
+                <Card className="bg-white/5 ring-1 ring-white/10 border-0 h-full">
                   <CardHeader className="pb-2">
-                    <CardTitle className="text-base font-mono text-violet-200">{t.name}</CardTitle>
+                    <CardTitle className="text-base font-mono text-foreground">{t.name}</CardTitle>
                   </CardHeader>
                   <CardContent className="text-sm text-muted-foreground">{t.description}</CardContent>
                 </Card>
@@ -243,7 +241,7 @@ const resp = await openai.responses.create({
               <p><strong className="text-foreground">401 Unauthorized</strong> — missing or invalid API key. Pass it as <code>Authorization: Bearer &lt;key&gt;</code>.</p>
               <p><strong className="text-foreground">406 Not Acceptable</strong> — your client isn't sending <code>Accept: application/json, text/event-stream</code>. Update to a current MCP client.</p>
               <p><strong className="text-foreground">429 Too Many Requests</strong> — you've hit the per-user rate limit. Back off and retry after the <code>X-RateLimit-Reset</code> time.</p>
-              <p><strong className="text-foreground">Tool says account not connected</strong> — visit <Link to="/profiles" className="text-violet-300 hover:underline">Profiles</Link> and link the platform first.</p>
+              <p><strong className="text-foreground">Tool says account not connected</strong> — visit <Link to="/profiles" className="text-foreground hover:underline">Profiles</Link> and link the platform first.</p>
             </CardContent>
           </GradientRingCard>
         </Reveal>

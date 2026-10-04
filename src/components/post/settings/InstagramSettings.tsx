@@ -150,7 +150,7 @@ export function InstagramSettings({
                       }}
                     />
                   ) : null}
-                  <div className={cn("w-8 h-8 rounded-full bg-gradient-to-br from-[#833AB4] via-[#FD1D1D] to-[#FCAF45] flex items-center justify-center text-white text-xs font-bold", account.avatar_url && "hidden")}>
+                  <div className={cn("w-8 h-8 rounded-full flex items-center justify-center text-white text-xs font-bold bg-[#833AB4]", account.avatar_url && "hidden")}>
                     IG
                   </div>
                   <div className="flex flex-col">

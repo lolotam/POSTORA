@@ -71,7 +71,7 @@ export function ThreadsPostPreview({
             <div className="flex flex-col items-center">
               <Avatar className="h-10 w-10 ring-2 ring-background">
                 {avatarUrl ? <AvatarImage src={avatarUrl} alt={username} /> : null}
-                <AvatarFallback className="bg-gradient-to-br from-purple-500 to-pink-500 text-white">
+                <AvatarFallback className="text-white bg-neutral-900 dark:bg-neutral-800">
                   {username[0]?.toUpperCase()}
                 </AvatarFallback>
               </Avatar>

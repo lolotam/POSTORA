@@ -23,7 +23,7 @@ export default function ApiPlayground() {
         <div className="mb-8">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-4">
-              <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-primary to-primary/50 flex items-center justify-center">
+              <div className="w-14 h-14 rounded-2xl flex items-center justify-center bg-primary">
                 <Terminal className="w-7 h-7 text-primary-foreground" />
               </div>
               <div>

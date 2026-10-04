@@ -96,13 +96,11 @@ export function Logo({ className, size = "md", showText = true, animate = true }
       ) : (
         <div
           className={cn(
-            "relative rounded-xl bg-gradient-to-br from-primary to-accent p-0.5 transition-transform duration-200 hover:scale-105 active:scale-95",
+            "relative rounded-xl p-0.5 transition-transform duration-200 hover:scale-105 active:scale-95 bg-primary",
             animate && "animate-scale-in",
             sizes[size]
           )}
         >
-          {/* Glow effect */}
-          <div className="absolute inset-0 rounded-xl bg-gradient-to-br from-primary to-accent blur-lg opacity-40 animate-pulse" />
           <div className="relative h-full w-full rounded-[10px] bg-background flex items-center justify-center">
             <svg
               viewBox="0 0 24 24"

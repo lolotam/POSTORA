@@ -82,7 +82,7 @@ export default function AutomationHub() {
                   <GradientHeading preset="violet-sky" size="xl" as="h1">
                     {t("header.hub", "Automation Hub")}
                   </GradientHeading>
-                  <Badge variant="outline" className="border-violet-500/30 text-violet-400 bg-violet-500/10 gap-1">
+                  <Badge variant="outline" className="border-border text-foreground bg-muted gap-1">
                     <Cpu className="w-3.5 h-3.5" /> {t("hub.engineBadge", "All-in-One Engine")}
                   </Badge>
                 </div>

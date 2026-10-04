@@ -38,9 +38,9 @@ export const NODE_CATEGORIES: Record<NodeCategory, {
   },
   media: { 
     label: 'Media', 
-    color: 'text-purple-500', 
-    bgColor: 'bg-purple-500/10', 
-    borderColor: 'border-purple-500/30',
+    color: 'text-foreground', 
+    bgColor: 'bg-muted', 
+    borderColor: 'border-border',
     hex: '#A855F7',
     description: 'Add images or videos'
   },

@@ -28,10 +28,7 @@ export function WorkflowDiagrams({ onDownloadBasic, onDownloadComplete, onDownlo
       </Reveal>
 
       <Tabs defaultValue="basic" className="max-w-5xl mx-auto">
-        <TabsList className="grid w-full grid-cols-3 mb-8 bg-card/50 backdrop-blur-md border border-border/40 rounded-xl p-1 h-auto
-          [&>[data-state=active]]:bg-gradient-to-r [&>[data-state=active]]:from-violet-500
-          [&>[data-state=active]]:via-fuchsia-500 [&>[data-state=active]]:to-pink-500
-          [&>[data-state=active]]:text-white [&>[data-state=active]]:shadow-md">
+        <TabsList className="grid w-full grid-cols-3 mb-8 bg-muted rounded-lg p-1 h-auto">
           <TabsTrigger value="basic">Basic Workflow</TabsTrigger>
           <TabsTrigger value="complete">Complete Workflow</TabsTrigger>
           <TabsTrigger value="alerts">Failure Alerts</TabsTrigger>
@@ -44,14 +41,14 @@ export function WorkflowDiagrams({ onDownloadBasic, onDownloadComplete, onDownlo
             <div className="flex flex-col lg:flex-row items-center justify-center gap-4 lg:gap-6">
               {[
                 { icon: Play, label: "Manual Trigger", desc: "Start workflow", color: "bg-blue-500/20 text-blue-500" },
-                { icon: Settings, label: "Configuration", desc: "Set API Key", color: "bg-purple-500/20 text-purple-500" },
+                { icon: Settings, label: "Configuration", desc: "Set API Key", color: "bg-muted text-foreground" },
                 { icon: Upload, label: "Upload Media", desc: "HTTP Request", color: "bg-emerald-500/20 text-emerald-500" },
                 { icon: MessageSquare, label: "Create Post", desc: "HTTP Request", color: "bg-orange-500/20 text-orange-500" },
                 { icon: Globe, label: "Published!", desc: "All platforms", color: "bg-green-500/20 text-green-500" }
               ].map((node, i) => (
                 <div key={i} className="flex items-center gap-4">
                   <div className="relative group">
-                    <Card className="p-4 bg-background/80 backdrop-blur text-center min-w-[130px] hover:scale-105 transition-transform border-2 hover:border-primary/50">
+                    <Card className="p-4 bg-background text-center min-w-[130px] hover:scale-105 transition-transform border-2 hover:border-primary/50">
                       <div className={cn("w-12 h-12 rounded-xl flex items-center justify-center mx-auto mb-2", node.color)}>
                         <node.icon className="w-6 h-6" />
                       </div>
@@ -65,7 +62,7 @@ export function WorkflowDiagrams({ onDownloadBasic, onDownloadComplete, onDownlo
               ))}
             </div>
             <div className="mt-6 flex justify-center">
-              <Button onClick={onDownloadBasic} variant="outline" size="sm" className="border-sky-500/50 hover:bg-sky-500/10">
+              <Button onClick={onDownloadBasic} variant="outline" size="sm" className="border-input hover:bg-muted">
                 <Download className="w-4 h-4 me-2" />
                 Download This Workflow
               </Button>
@@ -85,15 +82,15 @@ export function WorkflowDiagrams({ onDownloadBasic, onDownloadComplete, onDownlo
                 <p className="text-xs font-semibold">Manual Trigger</p>
               </Card>
               <ArrowRight className="w-5 h-5 text-muted-foreground self-center" />
-              <Card className="p-3 bg-purple-500/10 border-purple-500/30 text-center min-w-[120px]">
-                <Settings className="w-8 h-8 mx-auto mb-1 text-purple-500" />
+              <Card className="p-3 bg-muted border-border text-center min-w-[120px]">
+                <Settings className="w-8 h-8 mx-auto mb-1 text-foreground" />
                 <p className="text-xs font-semibold">Configuration</p>
               </Card>
             </div>
             
             {/* Branch indicator */}
             <div className="flex justify-center mb-4">
-              <div className="w-px h-8 bg-gradient-to-b from-purple-500/50 to-emerald-500/50" />
+              <div className="w-px h-8 bg-neutral-900 dark:bg-neutral-800" />
             </div>
             
             {/* Three Upload Methods */}
@@ -131,7 +128,7 @@ export function WorkflowDiagrams({ onDownloadBasic, onDownloadComplete, onDownlo
             </div>
             
             <div className="mt-6 flex justify-center">
-              <Button onClick={onDownloadComplete} variant="outline" size="sm" className="border-violet-500/50 hover:bg-violet-500/10">
+              <Button onClick={onDownloadComplete} variant="outline" size="sm" className="border-input hover:bg-muted">
                 <Download className="w-4 h-4 me-2" />
                 Download This Workflow
               </Button>

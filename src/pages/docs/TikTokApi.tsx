@@ -625,7 +625,7 @@ export default function TikTokApi() {
                   <p className="text-sm text-muted-foreground">Only mutual followers can view the video</p>
                 </div>
                 <div className="flex items-start gap-3">
-                  <Badge className="bg-purple-500/20 text-purple-500 border-purple-500/30">FOLLOWER_OF_CREATOR</Badge>
+                  <Badge className="bg-muted text-foreground border-border">FOLLOWER_OF_CREATOR</Badge>
                   <p className="text-sm text-muted-foreground">Only your followers can view the video</p>
                 </div>
                 <div className="flex items-start gap-3">

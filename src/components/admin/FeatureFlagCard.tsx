@@ -43,13 +43,13 @@ export function FeatureFlagCard({
   return (
     <Card
       interactive
-      className={`relative cursor-pointer group hover:shadow-lg hover:shadow-primary/10 hover:-translate-y-1 ${
+      className={`relative cursor-pointer group hover:shadow-lg hover:-translate-y-1 ${
         isEnabled ? 'ring-2 ring-primary/50 bg-primary/5' : 'hover:ring-1 hover:ring-primary/20'
       }`}
     >
       <CardContent className="p-3 space-y-3">
         <div className="flex items-start justify-between gap-2">
-          <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center shrink-0 transition-all duration-300 group-hover:scale-110 group-hover:bg-primary/20 group-hover:shadow-md group-hover:shadow-primary/20">
+          <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center shrink-0 transition-all duration-300 group-hover:scale-110 group-hover:bg-primary/20 group-hover:shadow-md">
             <Icon className="w-4 h-4 text-primary transition-transform duration-300 group-hover:scale-110" />
           </div>
           <Switch

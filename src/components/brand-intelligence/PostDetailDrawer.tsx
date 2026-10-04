@@ -39,7 +39,7 @@ interface PostDetailDrawerProps {
 
 function highlightText(text: string) {
   return text.split(/(\s)/).map((word, i) => {
-    if (word.startsWith("#")) return <span key={i} className="text-violet-400 font-medium">{word}</span>;
+    if (word.startsWith("#")) return <span key={i} className="text-foreground font-medium">{word}</span>;
     if (word.startsWith("@")) return <span key={i} className="text-blue-400">{word}</span>;
     return word;
   });
@@ -318,7 +318,7 @@ export function PostDetailDrawer({ post, isOpen, onClose, platformUsername, onDe
             )}
 
             <Button
-              className="w-full gap-2 bg-gradient-to-r from-violet-500 to-pink-500 hover:from-violet-600 hover:to-pink-600 text-white border-0"
+              className="w-full gap-2 text-white border-0 bg-neutral-900 dark:bg-neutral-800 hover:bg-neutral-800 dark:hover:bg-neutral-700"
               onClick={() => setShowGeneration(!showGeneration)}
             >
               <Sparkles className="w-4 h-4" />

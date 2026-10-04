@@ -35,7 +35,7 @@ export default function LandingFAQ() {
             <Reveal key={index} delay={index * 60}>
               <AccordionItem
                 value={`item-${index}`}
-                className="group relative border border-border/60 rounded-2xl px-6 bg-card/80 backdrop-blur-md shadow-sm transition-all duration-300 hover:-translate-y-0.5 hover:shadow-lg hover:border-cyan-400/40"
+                className="group relative border border-border/60 rounded-2xl px-6 bg-card shadow-sm transition-all duration-300 hover:-translate-y-0.5 hover:shadow-lg hover:border-cyan-400/40"
               >
                 <AccordionTrigger className="text-start hover:no-underline py-5">
                   <span className="font-medium">{item.question}</span>

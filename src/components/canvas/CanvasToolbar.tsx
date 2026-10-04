@@ -81,11 +81,11 @@ export function CanvasToolbar({
   const [isEditingName, setIsEditingName] = useState(false);
 
   return (
-    <div className="relative h-14 bg-card/70 backdrop-blur-xl flex items-center px-4 gap-3 ring-1 ring-white/10">
+    <div className="relative h-14 bg-card flex items-center px-4 gap-3 ring-1 ring-white/10">
       {/* Gradient hairline underline */}
       <div
         aria-hidden
-        className="pointer-events-none absolute inset-x-0 -bottom-px h-px bg-gradient-to-r from-transparent via-violet-500/40 to-transparent"
+        className="pointer-events-none absolute inset-x-0 -bottom-px h-px bg-border"
       />
       {/* Back & Workflow Name */}
       <div className="flex items-center gap-3">
@@ -118,7 +118,7 @@ export function CanvasToolbar({
         </Tooltip>
 
         <div className="flex items-center gap-2">
-          <div className="relative h-8 w-8 rounded-xl bg-gradient-to-br from-violet-500 via-fuchsia-500 to-pink-500 ring-1 ring-white/30 shadow-lg shadow-violet-500/30 flex items-center justify-center">
+          <div className="relative h-8 w-8 rounded-xl ring-1 ring-white/30 shadow-lg flex items-center justify-center bg-violet-500">
             <span aria-hidden className="pointer-events-none absolute inset-x-1 top-0.5 h-1/2 rounded-t-xl bg-gradient-to-b from-white/50 to-transparent" />
             <Workflow className="relative h-4 w-4 text-white drop-shadow" strokeWidth={2.4} />
           </div>
@@ -137,7 +137,7 @@ export function CanvasToolbar({
                 type="button"
                 onClick={() => setIsEditingName(true)}
                 title="Click to rename"
-                className="font-semibold text-sm bg-clip-text text-transparent bg-gradient-to-r from-sky-400 via-violet-400 to-pink-400 hover:opacity-80 transition-opacity"
+                className="font-semibold text-sm hover:opacity-80 transition-opacity text-foreground"
               >
                 {workflowName}
               </button>
@@ -198,7 +198,7 @@ export function CanvasToolbar({
               size="sm"
               onClick={onRun}
               disabled={isRunning || nodeCount === 0}
-              className="h-8 gap-1.5 bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500 text-white shadow-lg shadow-emerald-500/30 hover:shadow-emerald-500/50 hover:brightness-110 border-0"
+              className="h-8 gap-1.5 text-white shadow-lg hover:brightness-110 border-0 bg-neutral-900 dark:bg-neutral-800"
             >
               <Play className={cn("h-4 w-4", isRunning && "animate-pulse")} />
               <span className="hidden sm:inline">Run</span>
@@ -211,7 +211,7 @@ export function CanvasToolbar({
       <Separator orientation="vertical" className="h-6 bg-white/10" />
 
       {/* History Controls */}
-      <div className="flex items-center gap-0.5 bg-white/5 ring-1 ring-white/10 rounded-xl p-0.5 backdrop-blur">
+      <div className="flex items-center gap-0.5 bg-white/5 ring-1 ring-white/10 rounded-xl p-0.5">
         <Tooltip>
           <TooltipTrigger asChild>
             <Button variant="ghost" size="icon" onClick={onUndo} disabled={!canUndo} className="h-7 w-7 hover:bg-white/10">
@@ -233,7 +233,7 @@ export function CanvasToolbar({
       <div className="flex-1" />
 
       {/* Zoom Controls */}
-      <div className="flex items-center gap-0.5 bg-white/5 ring-1 ring-white/10 rounded-xl p-0.5 backdrop-blur">
+      <div className="flex items-center gap-0.5 bg-white/5 ring-1 ring-white/10 rounded-xl p-0.5">
         <Tooltip>
           <TooltipTrigger asChild>
             <Button variant="ghost" size="icon" onClick={onZoomOut} className="h-7 w-7 hover:bg-white/10">
@@ -242,7 +242,7 @@ export function CanvasToolbar({
           </TooltipTrigger>
           <TooltipContent>Zoom out</TooltipContent>
         </Tooltip>
-        <span className="text-xs w-12 text-center font-semibold bg-clip-text text-transparent bg-gradient-to-r from-sky-400 to-violet-400">
+        <span className="text-xs w-12 text-center font-semibold text-foreground">
           {Math.round(zoom * 100)}%
         </span>
         <Tooltip>

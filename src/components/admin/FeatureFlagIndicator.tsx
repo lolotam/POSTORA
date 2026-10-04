@@ -107,7 +107,7 @@ export function FeatureFlagIndicator() {
   }
 
   return (
-    <div className="fixed bottom-4 end-4 z-50 w-72 shadow-xl rounded-lg border bg-background/95 backdrop-blur-sm">
+    <div className="fixed bottom-4 end-4 z-50 w-72 shadow-xl rounded-lg border bg-background">
       <Collapsible open={isOpen} onOpenChange={setIsOpen}>
         <div className="flex items-center justify-between p-3 border-b">
           <CollapsibleTrigger asChild>

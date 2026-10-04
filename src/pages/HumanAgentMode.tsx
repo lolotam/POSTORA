@@ -159,11 +159,11 @@ export default function HumanAgentMode() {
                 <p className="text-sm text-muted-foreground mt-1">{t("human.subtitle", "Take over conversations from auto-reply bots")}</p>
               </div>
             </div>
-            <div className="flex items-center gap-3 rounded-full border border-border/40 bg-card/60 backdrop-blur-md px-3 py-1.5">
+            <div className="flex items-center gap-3 rounded-full border border-border/40 bg-card px-3 py-1.5">
               <span className="text-sm text-muted-foreground">{t("human.agentStatus", "Agent Status")}</span>
               <Switch checked={isOnline} onCheckedChange={handleToggleOnline} />
               <Badge className={isOnline
-                ? "bg-gradient-to-r from-amber-500 via-orange-500 to-rose-500 text-white border-0"
+                ? "text-white border-0 bg-neutral-900 dark:bg-neutral-800"
                 : "bg-card/60 border border-border/40 text-muted-foreground"}>
                 {isOnline ? t("human.online", "Online") : t("human.offline", "Offline")}
               </Badge>
@@ -175,7 +175,7 @@ export default function HumanAgentMode() {
         {/* Account selectors: which connected Page/IG/WhatsApp account feeds the queue below */}
         {accounts.length > 0 && (
           <Reveal delay={40}>
-            <div className="flex flex-wrap items-center gap-4 rounded-2xl border border-border/40 bg-card/60 backdrop-blur-md p-4">
+            <div className="flex flex-wrap items-center gap-4 rounded-2xl border border-border/40 bg-card p-4">
               {(["facebook", "instagram", "whatsapp"] as Platform[]).map((platform) => {
                 if (!accounts.some((a) => a.platform === platform)) return null;
                 return (
@@ -203,7 +203,7 @@ export default function HumanAgentMode() {
             { id: "avg", label: t("human.stat.avgResponse", "Avg Response"), value: "—", icon: Clock, variant: "sky" as GradientKey },
           ]).map((stat, i) => (
             <Reveal key={stat.id} delay={i * 60}>
-              <div className="group rounded-2xl border border-border/40 bg-card/60 backdrop-blur-md p-4 flex items-center gap-3 transition-transform hover:-translate-y-0.5">
+              <div className="group rounded-2xl border border-border/40 bg-card p-4 flex items-center gap-3 transition-transform hover:-translate-y-0.5">
                 <Icon3D icon={stat.icon} variant={stat.variant} size="sm" />
                 <div>
                   <p className="text-xs text-muted-foreground">{stat.label}</p>
@@ -313,7 +313,7 @@ export default function HumanAgentMode() {
 
         {/* Settings */}
         <Reveal delay={200}>
-          <div className="rounded-2xl border border-border/40 bg-card/60 backdrop-blur-md p-6">
+          <div className="rounded-2xl border border-border/40 bg-card p-6">
             <div className="flex items-center gap-2 text-base font-semibold mb-4">
               <Settings className="h-5 w-5 text-amber-500" />
               {t("human.settingsTitle", "Agent Settings")}

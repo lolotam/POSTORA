@@ -24,7 +24,7 @@ export function CreatePostTabs({ activeTab, onTabChange, accountCount = 0, media
   ];
 
   return (
-    <div className="flex flex-wrap items-center gap-2 p-1.5 rounded-2xl border border-white/15 bg-white/5 backdrop-blur-xl">
+    <div className="flex flex-wrap items-center gap-2 p-1.5 rounded-2xl border border-white/15 bg-white/5">
       {tabs.map((tab) => {
         const isActive = activeTab === tab.id;
         const Icon = tab.icon;
@@ -40,7 +40,7 @@ export function CreatePostTabs({ activeTab, onTabChange, accountCount = 0, media
               "relative flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all duration-200",
               "border outline-none focus-visible:ring-2 focus-visible:ring-ring",
               isActive
-                ? "border-primary/40 bg-primary/15 text-primary shadow-[0_0_20px_-5px] shadow-primary/30 backdrop-blur-md"
+                ? "border-primary/40 bg-primary/15 text-primary"
                 : "border-white/10 bg-transparent text-muted-foreground hover:bg-white/10 hover:border-white/25 hover:text-foreground"
             )}
           >

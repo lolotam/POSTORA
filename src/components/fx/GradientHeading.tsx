@@ -1,15 +1,21 @@
 import { cn } from "@/lib/utils";
-import { HEADING_PRESETS, type HeadingPreset } from "./gradients";
+import type { HeadingPreset } from "./gradients";
 
-/** Big section heading with bg-clipped gradient text. */
+/**
+ * Big section heading.
+ *
+ * Historically rendered bg-clipped gradient text; the flat design system dropped that, so it
+ * now renders solid foreground text in the display serif, which is reserved for large titles.
+ * `preset` is still accepted so existing call sites compile unchanged, but has no effect.
+ */
 export function GradientHeading({
   children,
-  preset = "sky-violet-pink",
   as: Tag = "h2",
   className,
   size = "xl",
 }: {
   children: React.ReactNode;
+  /** @deprecated No visual effect since the flat design system. */
   preset?: HeadingPreset;
   as?: "h1" | "h2" | "h3";
   className?: string;
@@ -21,14 +27,7 @@ export function GradientHeading({
       : size === "xl"
         ? "text-3xl md:text-5xl"
         : "text-2xl md:text-4xl";
-  const Comp = Tag as any;
-  return (
-    <Comp className={cn("font-bold tracking-tight", sizeCls, className)}>
-      <span className={cn("bg-clip-text text-transparent bg-gradient-to-r", HEADING_PRESETS[preset] || HEADING_PRESETS["sky-violet-pink"] || "from-sky-500 via-violet-500 to-pink-500")}>
-        {children}
-      </span>
-    </Comp>
-  );
+  return <Tag className={cn("font-display font-medium tracking-tight text-foreground", sizeCls, className)}>{children}</Tag>;
 }
 
 export default GradientHeading;

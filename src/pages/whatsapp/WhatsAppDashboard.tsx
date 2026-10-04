@@ -207,7 +207,7 @@ export default function WhatsAppDashboard() {
 
       {/* Connection & Status Banner */}
       <Card className="overflow-hidden border-[#25D366]/30 bg-card shadow-sm">
-        <CardHeader className="bg-gradient-to-r from-[#DCF8C6]/40 via-card to-card dark:from-[#075E54]/25 dark:via-card border-b py-4">
+        <CardHeader className="border-b py-4 bg-[#DCF8C6]/40 dark:bg-[#075E54]/25">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex items-center gap-3">
               <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#25D366]/15 text-[#128C7E] dark:text-[#25D366] ring-1 ring-[#25D366]/30">
@@ -280,7 +280,7 @@ export default function WhatsAppDashboard() {
           <CardContent className="p-4 sm:p-5">
             <div className="flex items-center justify-between">
               <span className="text-xs font-semibold text-muted-foreground">Active Conversations</span>
-              <div className="h-8 w-8 rounded-lg bg-indigo-500/10 text-indigo-500 flex items-center justify-center">
+              <div className="h-8 w-8 rounded-lg bg-muted text-foreground flex items-center justify-center">
                 <MessageSquare className="h-4 w-4" />
               </div>
             </div>

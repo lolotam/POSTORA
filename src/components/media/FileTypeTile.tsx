@@ -26,8 +26,8 @@ const ICONS: Record<MediaIcon, typeof FileText> = {
 };
 
 const KIND_CLASS: Record<MediaKind, string> = {
-  image: "bg-sky-500/15 text-sky-700",
-  video: "bg-violet-500/15 text-violet-700",
+  image: "bg-muted text-foreground",
+  video: "bg-muted text-foreground",
   audio: "bg-amber-500/15 text-amber-800",
   document: "bg-emerald-500/15 text-emerald-800",
   archive: "bg-orange-500/15 text-orange-800",

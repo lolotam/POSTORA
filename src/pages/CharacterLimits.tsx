@@ -79,7 +79,7 @@ export default function CharacterLimits() {
   return (
     <div className="min-h-screen bg-background">
       {/* Header */}
-      <header className="sticky top-0 z-50 border-b border-border bg-background/80 backdrop-blur-xl">
+      <header className="sticky top-0 z-50 border-b border-border bg-background">
         <div className="container mx-auto px-6 h-16 flex items-center justify-between">
           <Link to="/"><Logo /></Link>
           <div className="flex items-center gap-4">
@@ -96,7 +96,7 @@ export default function CharacterLimits() {
       </header>
 
       {/* Hero */}
-      <section className="border-b border-border bg-gradient-to-b from-primary/5 to-transparent">
+      <section className="border-b border-border bg-accent">
         <div className="container mx-auto px-6 py-12">
           <Link to="/docs" className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground mb-6">
             <ArrowLeft className="w-4 h-4" />

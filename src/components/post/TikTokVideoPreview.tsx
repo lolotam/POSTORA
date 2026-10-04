@@ -63,7 +63,7 @@ export function TikTokVideoPreview({
                 className="w-full h-full object-cover"
               />
             ) : (
-              <div className="w-full h-full bg-gradient-to-br from-pink-500 via-purple-500 to-cyan-500" />
+              <div className="w-full h-full bg-neutral-900 dark:bg-neutral-800" />
             )}
             
             {/* Dark overlay for text visibility */}
@@ -83,7 +83,7 @@ export function TikTokVideoPreview({
             <div className="relative">
               <Avatar className="h-11 w-11 border-2 border-white">
                 {avatarUrl ? <AvatarImage src={avatarUrl} alt={username} /> : null}
-                <AvatarFallback className="bg-gradient-to-br from-pink-500 to-purple-500 text-white text-sm">
+                <AvatarFallback className="text-white text-sm bg-neutral-900 dark:bg-neutral-800">
                   {username[0]?.toUpperCase()}
                 </AvatarFallback>
               </Avatar>
@@ -125,7 +125,7 @@ export function TikTokVideoPreview({
             </div>
 
             {/* Spinning Disc */}
-            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-gray-800 to-gray-900 border-4 border-gray-700 flex items-center justify-center animate-spin-slow">
+            <div className="w-10 h-10 rounded-full border-4 border-gray-700 flex items-center justify-center animate-spin-slow bg-gray-800">
               <div className="w-3 h-3 rounded-full bg-gray-600" />
             </div>
           </div>

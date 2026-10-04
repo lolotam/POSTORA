@@ -554,7 +554,7 @@ export default function ApiKeys() {
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
                             <div className="p-3 rounded-xl bg-card border border-border/60">
                                 <h4 className="font-semibold text-foreground text-sm flex items-center gap-1.5 mb-1">
-                                    <Plug className="w-4 h-4 text-sky-400 me-1.5" /> {t("guide.mcpTitle", "MCP Connection (Instant)")}
+                                    <Plug className="w-4 h-4 text-foreground me-1.5" /> {t("guide.mcpTitle", "MCP Connection (Instant)")}
                                 </h4>
                                 <p className="text-xs">
                                     {t("guide.mcpDesc", "Plug Postora MCP tools directly into Claude, Cursor, Windsurf, or Antigravity agents. All operations are billed against your active subscription limits.")}

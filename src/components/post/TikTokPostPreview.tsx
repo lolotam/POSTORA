@@ -130,13 +130,13 @@ export function TikTokPostPreview({
         {/* Content Labels */}
         <div className="absolute top-3 start-3 end-3 flex flex-wrap gap-1.5">
           {aiGenerated && (
-            <Badge variant="secondary" className="text-[10px] bg-black/50 backdrop-blur-sm">
+            <Badge variant="secondary" className="text-[10px] bg-black/50">
               <Sparkles className="w-2.5 h-2.5 me-1" />
               {t("tikTokPost.aiGenerated", "AI-generated")}
             </Badge>
           )}
           {getContentLabel() && (
-            <Badge variant="secondary" className="text-[10px] bg-black/50 backdrop-blur-sm">
+            <Badge variant="secondary" className="text-[10px] bg-black/50">
               <Tag className="w-2.5 h-2.5 me-1" />
               {getContentLabel()}
             </Badge>
@@ -172,7 +172,7 @@ export function TikTokPostPreview({
               className="w-8 h-8 rounded-full border-2 border-white"
             />
           ) : (
-            <div className="w-8 h-8 rounded-full bg-gradient-to-br from-[#00f2ea] to-[#ff0050] border-2 border-white" />
+            <div className="w-8 h-8 rounded-full border-2 border-white bg-black" />
           )}
           
           {/* Interaction Toggles */}

@@ -26,11 +26,11 @@ export function DeleteNodeDialog({
 }: DeleteNodeDialogProps) {
   return (
     <AlertDialog open={open} onOpenChange={(isOpen) => !isOpen && onCancel()}>
-      <AlertDialogContent className="bg-card/85 backdrop-blur-xl ring-1 ring-rose-400/30 border-0">
+      <AlertDialogContent className="bg-card ring-1 ring-rose-400/30 border-0">
         <AlertDialogHeader>
           <div className="flex items-center gap-3">
             <Icon3D icon={Trash2} variant="rose" size="sm" />
-            <AlertDialogTitle className="bg-clip-text text-transparent bg-gradient-to-r from-rose-400 via-pink-400 to-fuchsia-400">
+            <AlertDialogTitle className="text-foreground">
               Delete {nodeCount > 1 ? `${nodeCount} nodes` : 'node'}?
             </AlertDialogTitle>
           </div>

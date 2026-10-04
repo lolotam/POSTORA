@@ -320,8 +320,8 @@ export const CONNECTOR_DIRECTORY: ConnectorDirectoryItem[] = [
     description: "Official WooCommerce REST API connector to query products, variations, live prices, stock levels, and order history directly in customer chats.",
     defaultUrl: "https://your-store.com/wp-json/wc/v3/products",
     suggestedPrompt: "Search WooCommerce catalog for products, check prices, verify stock availability, and check order statuses.",
-    brandColor: "text-purple-500",
-    iconBg: "bg-purple-500/10 border-purple-500/20 text-purple-400",
+    brandColor: "text-foreground",
+    iconBg: "bg-muted border-border text-foreground",
     supportsMcp: true,
     mcpServerName: "woocommerce-mcp-server",
     defaultPermissions: { searchProducts: true, checkStock: true, lookupOrders: true },
@@ -347,8 +347,8 @@ export const CONNECTOR_DIRECTORY: ConnectorDirectoryItem[] = [
     description: "Direct integration with Zid Store Manager API for product catalog inquiries, inventory levels, and customer order management.",
     defaultUrl: "https://api.zid.sa/v1/managers/store/products",
     suggestedPrompt: "Search Zid store products, stock levels, and customer order updates.",
-    brandColor: "text-violet-500",
-    iconBg: "bg-violet-500/10 border-violet-500/20 text-violet-400",
+    brandColor: "text-foreground",
+    iconBg: "bg-muted border-border text-foreground",
     supportsMcp: false,
     defaultPermissions: { searchProducts: true, checkStock: true, lookupOrders: true },
   },
@@ -360,8 +360,8 @@ export const CONNECTOR_DIRECTORY: ConnectorDirectoryItem[] = [
     description: "MyFatoorah payment gateway integration to check payment status, lookup customer invoices, and generate instant checkout payment links.",
     defaultUrl: "https://api.myfatoorah.com/v2/GetPaymentStatus",
     suggestedPrompt: "Check payment invoice status, query transaction reference numbers, and generate payment links.",
-    brandColor: "text-sky-500",
-    iconBg: "bg-sky-500/10 border-sky-500/20 text-sky-400",
+    brandColor: "text-foreground",
+    iconBg: "bg-muted border-border text-foreground",
     supportsMcp: true,
     mcpServerName: "myfatoorah-mcp-server",
     defaultPermissions: { searchProducts: false, checkStock: false, lookupOrders: true },
@@ -374,8 +374,8 @@ export const CONNECTOR_DIRECTORY: ConnectorDirectoryItem[] = [
     description: "Connect to Stripe API to look up customer payment status, invoice details, and active subscriptions in customer support chats.",
     defaultUrl: "https://api.stripe.com/v1/payment_intents",
     suggestedPrompt: "Check Stripe payment intent status and customer subscription records.",
-    brandColor: "text-indigo-500",
-    iconBg: "bg-indigo-500/10 border-indigo-500/20 text-indigo-400",
+    brandColor: "text-foreground",
+    iconBg: "bg-muted border-border text-foreground",
     supportsMcp: false,
     defaultPermissions: { searchProducts: false, checkStock: false, lookupOrders: true },
   },
@@ -455,8 +455,8 @@ export const CONNECTOR_DIRECTORY: ConnectorDirectoryItem[] = [
     description: "Connect any external Model Context Protocol (MCP) server directly into the Postora AI runtime with zero admin approval.",
     defaultUrl: "https://mcp.yourdomain.com/sse",
     suggestedPrompt: "Call Model Context Protocol tools to query real-time enterprise tools and context.",
-    brandColor: "text-violet-400",
-    iconBg: "bg-violet-500/10 border-violet-500/20 text-violet-400",
+    brandColor: "text-foreground",
+    iconBg: "bg-muted border-border text-foreground",
     supportsMcp: true,
     mcpServerName: "custom-mcp-server",
     defaultPermissions: { searchProducts: true, checkStock: true, lookupOrders: true },
@@ -1719,12 +1719,12 @@ function DatabaseConnectorsEditor({
                   }
                 }}
                 className={cn(
-                  "relative group flex flex-col justify-between p-5 rounded-2xl border transition-all duration-300 ease-out text-start cursor-pointer backdrop-blur-xl overflow-hidden",
+                  "relative group flex flex-col justify-between p-5 rounded-2xl border transition-all duration-300 ease-out text-start cursor-pointer overflow-hidden",
                   // 3D Glassmorphism, specular top highlight and multi-layered depth
-                  "before:absolute before:inset-x-0 before:top-0 before:h-1/2 before:rounded-t-2xl before:bg-gradient-to-b before:from-white/30 before:via-white/5 before:to-transparent before:pointer-events-none",
+                  "before:absolute before:inset-x-0 before:top-0 before:h-1/2 before:rounded-t-2xl before:pointer-events-none",
                   isConnected
-                    ? "bg-gradient-to-b from-primary/15 via-card/90 to-card/60 border-primary/50 shadow-[0_16px_36px_-8px_rgba(var(--primary-rgb,59,130,246),0.3),inset_0_1.5px_2px_rgba(255,255,255,0.7),inset_0_-2px_4px_rgba(0,0,0,0.2)] hover:-translate-y-1.5 hover:shadow-[0_22px_48px_-8px_rgba(var(--primary-rgb,59,130,246),0.45)] hover:border-primary"
-                    : "bg-gradient-to-b from-card/95 via-card/80 to-card/60 border-border/70 shadow-[0_12px_28px_-6px_rgba(0,0,0,0.3),0_4px_10px_-2px_rgba(0,0,0,0.15),inset_0_1.5px_2px_rgba(255,255,255,0.6),inset_0_-2px_4px_rgba(0,0,0,0.2)] hover:-translate-y-1.5 hover:scale-[1.015] hover:border-primary/50 hover:shadow-[0_20px_42px_-8px_rgba(0,0,0,0.45),inset_0_2px_3px_rgba(255,255,255,0.85)]"
+                    ? "border-primary/50 shadow-[0_16px_36px_-8px_rgba(var(--primary-rgb,59,130,246),0.3),inset_0_1.5px_2px_rgba(255,255,255,0.7),inset_0_-2px_4px_rgba(0,0,0,0.2)] hover:-translate-y-1.5 hover:shadow-[0_22px_48px_-8px_rgba(var(--primary-rgb,59,130,246),0.45)] hover:border-primary bg-primary/15"
+                    : "border-border/70 shadow-[0_12px_28px_-6px_rgba(0,0,0,0.3),0_4px_10px_-2px_rgba(0,0,0,0.15),inset_0_1.5px_2px_rgba(255,255,255,0.6),inset_0_-2px_4px_rgba(0,0,0,0.2)] hover:-translate-y-1.5 hover:scale-[1.015] hover:border-primary/50 hover:shadow-[0_20px_42px_-8px_rgba(0,0,0,0.45),inset_0_2px_3px_rgba(255,255,255,0.85)] bg-card/95"
                 )}
               >
                 {/* Top Row: Logo on Left + Text & Badges on Right */}
@@ -1732,16 +1732,16 @@ function DatabaseConnectorsEditor({
                   {/* 3D Brand Logo Container on Left */}
                   <div
                     className={cn(
-                      "relative shrink-0 w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-secondary/80 backdrop-blur-sm flex items-center justify-center border border-border/50 shadow-md transition-all duration-300 group-hover:scale-110 group-hover:-translate-y-0.5 group-hover:shadow-lg group-hover:border-primary/40",
-                      "before:absolute before:inset-x-0 before:top-0 before:h-1/2 before:rounded-t-2xl before:bg-gradient-to-b before:from-white/35 before:via-white/10 before:to-transparent before:pointer-events-none",
-                      isConnected && "border-primary/40 shadow-primary/20"
+                      "relative shrink-0 w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-secondary/80 flex items-center justify-center border border-border/50 shadow-md transition-all duration-300 group-hover:scale-110 group-hover:-translate-y-0.5 group-hover:shadow-lg group-hover:border-primary/40",
+                      "before:absolute before:inset-x-0 before:top-0 before:h-1/2 before:rounded-t-2xl before:pointer-events-none",
+                      isConnected && "border-primary/40"
                     )}
                   >
                     <div className="transition-transform duration-300 group-hover:scale-105 group-hover:rotate-1">
                       <ConnectorBrandLogo id={preset.id} className="w-8 h-8 sm:w-9 sm:h-9 drop-shadow-sm" />
                     </div>
                     {isConnected && (
-                      <div className="absolute -top-1.5 -end-1.5 w-5 h-5 rounded-full bg-emerald-500 text-white flex items-center justify-center shadow-md shadow-emerald-500/40 ring-2 ring-background animate-in zoom-in-50 duration-200">
+                      <div className="absolute -top-1.5 -end-1.5 w-5 h-5 rounded-full bg-emerald-700 text-white flex items-center justify-center shadow-md ring-2 ring-background animate-in zoom-in-50 duration-200">
                         <Check className="w-3 h-3 stroke-[3]" />
                       </div>
                     )}
@@ -1755,7 +1755,7 @@ function DatabaseConnectorsEditor({
                       </h4>
 
                       {preset.supportsMcp && (
-                        <Badge variant="outline" className="bg-violet-500/10 text-violet-400 border-violet-500/30 text-[9px] py-0 h-4.5 shrink-0">
+                        <Badge variant="outline" className="bg-muted text-foreground border-border text-[9px] py-0 h-4.5 shrink-0">
                           ⚡ MCP
                         </Badge>
                       )}
@@ -1786,7 +1786,7 @@ function DatabaseConnectorsEditor({
                       className={cn(
                         "w-2 h-2 rounded-full",
                         isConnected && (!tool || tool.is_enabled)
-                          ? "bg-emerald-400 animate-pulse shadow-sm shadow-emerald-400/50"
+                          ? "bg-emerald-400 animate-pulse shadow-sm"
                           : isConnected
                           ? "bg-amber-400"
                           : "bg-muted-foreground/30"
@@ -1808,7 +1808,7 @@ function DatabaseConnectorsEditor({
                     variant={isConnected ? "outline" : "default"}
                     className={cn(
                       "h-10 px-5 text-xs sm:text-sm font-bold rounded-xl shadow-sm transition-all duration-200 pointer-events-none group-hover:shadow-md group-hover:scale-[1.02]",
-                      !isConnected && "bg-primary text-primary-foreground hover:bg-primary/90 shadow-primary/25"
+                      !isConnected && "bg-primary text-primary-foreground hover:bg-primary/90"
                     )}
                   >
                     {isConnected ? (
@@ -1889,7 +1889,7 @@ function DatabaseConnectorsEditor({
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {/* Higgsfield Connected Card */}
             {higgsfieldConnected && (
-              <Card className="border-emerald-500/30 bg-gradient-to-b from-emerald-500/10 via-card/85 to-card/60 backdrop-blur-xl shadow-sm">
+              <Card className="border-emerald-500/30 shadow-sm bg-emerald-500/10">
                 <CardHeader className="p-4 pb-3">
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex items-center gap-3">
@@ -1962,7 +1962,7 @@ function DatabaseConnectorsEditor({
                 <Card
                   key={tool.id}
                   data-testid={`tool-card-${tool.id}`}
-                  className="border-emerald-500/30 bg-gradient-to-b from-emerald-500/10 via-card/85 to-card/60 backdrop-blur-xl shadow-sm"
+                  className="border-emerald-500/30 shadow-sm bg-emerald-500/10"
                 >
                   <CardHeader className="p-4 pb-3">
                     <div className="flex items-start justify-between gap-3">
@@ -2147,7 +2147,7 @@ function DatabaseConnectorsEditor({
 
             {/* Inbound Authorized OAuth Applications (e.g. n8n, Zapier) */}
             {oauthClients.map((client) => (
-              <Card key={client.id} className="border-emerald-500/30 bg-gradient-to-b from-emerald-500/10 via-card/85 to-card/60 backdrop-blur-xl shadow-sm">
+              <Card key={client.id} className="border-emerald-500/30 shadow-sm bg-emerald-500/10">
                 <CardHeader className="p-4 pb-3">
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex items-center gap-3">
@@ -2217,7 +2217,7 @@ function DatabaseConnectorsEditor({
           <DialogHeader className="shrink-0">
             <div className="flex items-center gap-3.5">
               {selectedPreset && (
-                <div className="relative shrink-0 w-14 h-14 rounded-2xl bg-secondary/80 backdrop-blur-sm flex items-center justify-center border border-border/50 shadow-md">
+                <div className="relative shrink-0 w-14 h-14 rounded-2xl bg-secondary/80 flex items-center justify-center border border-border/50 shadow-md">
                   <ConnectorBrandLogo id={selectedPreset.id} className="w-8 h-8 drop-shadow-sm" />
                 </div>
               )}
@@ -2230,7 +2230,7 @@ function DatabaseConnectorsEditor({
                     </Badge>
                   )}
                   {selectedPreset?.supportsMcp && (
-                    <Badge variant="outline" className="bg-violet-500/10 text-violet-400 border-violet-500/30 text-[10px]">
+                    <Badge variant="outline" className="bg-muted text-foreground border-border text-[10px]">
                       {t("connectors.mcpEnabled", "⚡ MCP Enabled")}
                     </Badge>
                   )}
@@ -2578,9 +2578,9 @@ function DatabaseConnectorsEditor({
 
                 {/* TAB 2: Model Context Protocol (MCP) */}
                 <TabsContent value="mcp" className="space-y-4 pt-3">
-                  <div className="p-3.5 rounded-xl bg-violet-500/10 border border-violet-500/30 space-y-2">
+                  <div className="p-3.5 rounded-xl bg-muted border border-border space-y-2">
                     <div className="flex items-center gap-2">
-                  <Zap className="w-4 h-4 text-violet-400" />
+                  <Zap className="w-4 h-4 text-foreground" />
                   <h4 className="font-semibold text-xs text-foreground">{t("form.mcpAutoApproved", "Auto-Approved MCP Connection")}</h4>
                 </div>
                 <p className="text-xs text-muted-foreground leading-relaxed">
@@ -2602,7 +2602,7 @@ function DatabaseConnectorsEditor({
               </div>
 
               <div className="pt-2">
-                <Button onClick={handleMcpInstantActivate} className="w-full gap-2 text-xs bg-violet-600 hover:bg-violet-700">
+                <Button onClick={handleMcpInstantActivate} className="w-full gap-2 text-xs bg-primary hover:bg-primary/90">
                   <Zap className="w-4 h-4" />
                   <span>{t("actions.activateMcp", "Activate & Connect with MCP Auto-Auth")}</span>
                 </Button>
@@ -2623,7 +2623,7 @@ function DatabaseConnectorsEditor({
                 </div>
 
                 <div className="flex items-start gap-2.5">
-                  <Lock className="w-4 h-4 text-sky-400 shrink-0 mt-0.5" />
+                  <Lock className="w-4 h-4 text-foreground shrink-0 mt-0.5" />
                   <div>
                     <h5 className="font-semibold text-foreground">{t("form.guardrailsTitle", "Read-Only Guardrails")}</h5>
                     <p className="text-muted-foreground mt-0.5">

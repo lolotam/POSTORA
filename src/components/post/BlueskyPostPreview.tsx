@@ -197,7 +197,7 @@ export function BlueskyPostPreview({
               {getReplyLabel()}
             </Badge>
           )}
-          <Badge variant="secondary" className="text-xs bg-sky-500/10 text-sky-600 dark:bg-sky-500/20 dark:text-sky-400">
+          <Badge variant="secondary" className="text-xs bg-muted text-foreground dark:bg-muted dark:text-foreground">
             {t("bluesky.postBadge", "Post")}
           </Badge>
         </div>
@@ -230,7 +230,7 @@ export function BlueskyPostPreview({
           <div className="flex items-start gap-3">
             <Avatar className="h-11 w-11">
               {avatarUrl ? <AvatarImage src={avatarUrl} alt={username} /> : null}
-              <AvatarFallback className="bg-gradient-to-br from-sky-400 to-blue-600 text-white font-medium">
+              <AvatarFallback className="text-white font-medium bg-neutral-900 dark:bg-neutral-800">
                 {(displayName || username)[0]?.toUpperCase()}
               </AvatarFallback>
             </Avatar>
@@ -253,7 +253,7 @@ export function BlueskyPostPreview({
               <p className="text-[15px] whitespace-pre-wrap break-words leading-relaxed">
                 {truncatedCaption}
                 {caption.length > 300 && (
-                  <span className="text-sky-500 hover:underline cursor-pointer ms-1">
+                  <span className="text-foreground hover:underline cursor-pointer ms-1">
                     {t("bluesky.showMore", "Show more")}
                   </span>
                 )}
@@ -298,7 +298,7 @@ export function BlueskyPostPreview({
             <div className="flex items-center gap-2 mt-4 text-sm text-muted-foreground">
               <span>{timeString} · {dateString}</span>
               <span>·</span>
-              <span className="text-sky-500 flex items-center gap-1">
+              <span className="text-foreground flex items-center gap-1">
                 ⊙ {getReplyLabel()}
                 <span className="text-muted-foreground">▾</span>
               </span>
@@ -306,7 +306,7 @@ export function BlueskyPostPreview({
 
             {/* Engagement Actions */}
             <div className="flex items-center justify-between mt-4 pt-3 border-t text-muted-foreground">
-              <button className="flex items-center gap-1.5 hover:text-sky-500 transition-colors group">
+              <button className="flex items-center gap-1.5 hover:text-foreground transition-colors group">
                 <MessageCircle className="w-5 h-5" />
               </button>
               
@@ -314,11 +314,11 @@ export function BlueskyPostPreview({
                 <Repeat2 className="w-5 h-5" />
               </button>
               
-              <button className="flex items-center gap-1.5 hover:text-pink-500 transition-colors group">
+              <button className="flex items-center gap-1.5 hover:text-foreground transition-colors group">
                 <Heart className="w-5 h-5" />
               </button>
               
-              <button className="flex items-center gap-1.5 hover:text-sky-500 transition-colors group">
+              <button className="flex items-center gap-1.5 hover:text-foreground transition-colors group">
                 <Share className="w-5 h-5" />
               </button>
             </div>

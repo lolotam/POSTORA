@@ -426,7 +426,7 @@ export function ImageGenerator({ onImageGenerated, buttonClassName }: ImageGener
             {t("imageGen.generateWithAi", "Generate with AI")}
           </Button>
         </DialogTrigger>
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto bg-card/80 backdrop-blur-xl border-border/50 shadow-2xl shadow-violet-500/10">
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto bg-card border-border/50 shadow-2xl">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-3 group">
               <Icon3D icon={Sparkles} variant="violet" size="sm" />
@@ -625,7 +625,7 @@ export function ImageGenerator({ onImageGenerated, buttonClassName }: ImageGener
             <Button
               onClick={handleGenerate}
               disabled={isGenerating || !prompt.trim() || isRateLimited}
-              className="w-full bg-gradient-to-r from-violet-500 via-fuchsia-500 to-sky-500 text-white shadow-lg shadow-violet-500/30 hover:shadow-violet-500/50 hover:opacity-95 transition-all border-0"
+              className="w-full text-white shadow-lg hover:opacity-95 transition-all border-0 bg-neutral-900 dark:bg-neutral-800"
             >
               {isGenerating ? (
                 <>
@@ -648,7 +648,7 @@ export function ImageGenerator({ onImageGenerated, buttonClassName }: ImageGener
             {generatedImage && (
               <Reveal>
                 <GradientRingCard variant="emerald" hoverLift={false} ringIntensity="subtle" innerClassName="p-3 space-y-4">
-                  <div className="rounded-xl overflow-hidden border border-emerald-400/30 shadow-lg shadow-emerald-500/20">
+                  <div className="rounded-xl overflow-hidden border border-emerald-400/30 shadow-lg">
                     <img
                       src={generatedImage}
                       alt={t("imageGen.generatedAlt", "Generated")}
@@ -656,11 +656,11 @@ export function ImageGenerator({ onImageGenerated, buttonClassName }: ImageGener
                     />
                   </div>
                   <div className="flex gap-3">
-                    <Button onClick={handleUseImage} className="flex-1 bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500 text-white shadow-md shadow-emerald-500/30 hover:shadow-emerald-500/50 border-0">
+                    <Button onClick={handleUseImage} className="flex-1 text-primary-foreground bg-primary">
                       <ImagePlus className="w-4 h-4 me-2" />
                       {t("imageGen.useImage", "Use Image")}
                     </Button>
-                    <Button variant="outline" onClick={handleDownload} className="bg-card/50 backdrop-blur-sm border-border/50 hover:border-emerald-400/60">
+                    <Button variant="outline" onClick={handleDownload} className="bg-card border-border/50 hover:border-emerald-400/60">
                       <Download className="w-4 h-4 me-2" />
                       {t("imageGen.download", "Download")}
                     </Button>

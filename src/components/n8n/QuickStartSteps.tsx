@@ -36,7 +36,7 @@ export function QuickStartSteps({ steps }: QuickStartStepsProps) {
           return (
             <Reveal key={s.step} delay={idx * 80}>
               <GradientRingCard variant={v} ringIntensity="subtle">
-                <div className={`mb-4 inline-flex h-10 w-10 items-center justify-center rounded-xl text-white font-bold shadow-md bg-gradient-to-br ${v === "sky" ? "from-sky-400 via-blue-500 to-indigo-500" : v === "violet" ? "from-violet-500 via-fuchsia-500 to-pink-500" : v === "emerald" ? "from-emerald-400 via-teal-400 to-cyan-500" : "from-rose-400 via-pink-500 to-fuchsia-500"}`}>
+                <div className="mb-4 inline-flex h-10 w-10 items-center justify-center rounded-lg border border-border bg-secondary text-foreground font-semibold">
                   {s.step}
                 </div>
                 <h3 className="font-semibold mb-2">{s.title}</h3>

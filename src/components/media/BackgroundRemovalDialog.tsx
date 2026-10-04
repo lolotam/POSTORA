@@ -498,7 +498,7 @@ export function BackgroundRemovalDialog({
                     className="w-full h-full object-contain"
                     draggable={false}
                   />
-                  <div className="absolute top-2 start-2 px-2 py-1 bg-background/80 backdrop-blur rounded text-xs font-medium">
+                  <div className="absolute top-2 start-2 px-2 py-1 bg-background rounded text-xs font-medium">
                     {t("bgRemoval.original", "Original")}
                   </div>
                 </div>
@@ -515,7 +515,7 @@ export function BackgroundRemovalDialog({
                       className="w-full h-full object-contain"
                       draggable={false}
                     />
-                    <div className="absolute top-2 end-2 px-2 py-1 bg-background/80 backdrop-blur rounded text-xs font-medium">
+                    <div className="absolute top-2 end-2 px-2 py-1 bg-background rounded text-xs font-medium">
                       {t("bgRemoval.removed", "Removed")}
                     </div>
                   </div>
@@ -538,7 +538,7 @@ export function BackgroundRemovalDialog({
 
                 {/* Processing/Uploading Overlay */}
                 {(processing || uploading) && (
-                  <div className="absolute inset-0 bg-background/80 backdrop-blur flex items-center justify-center">
+                  <div className="absolute inset-0 bg-background flex items-center justify-center">
                     <div className="text-center space-y-2">
                       <Loader2 className="w-8 h-8 animate-spin mx-auto text-primary" />
                       <p className="text-sm font-medium">

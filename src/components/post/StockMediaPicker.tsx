@@ -1155,7 +1155,7 @@ export function StockMediaPicker({ open, onOpenChange, onSelect, photosOnly = fa
   const SourceBadge = ({ source }: { source: string }) => (
     <Badge 
       variant="secondary" 
-      className="absolute top-1 start-1 text-[8px] px-1 py-0 h-4 bg-black/50 text-white border-0 backdrop-blur-sm"
+      className="absolute top-1 start-1 text-[8px] px-1 py-0 h-4 bg-black/50 text-white border-0"
     >
       {source}
     </Badge>
@@ -1165,7 +1165,7 @@ export function StockMediaPicker({ open, onOpenChange, onSelect, photosOnly = fa
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl max-h-[85vh] flex flex-col bg-card/80 backdrop-blur-xl border-border/50 shadow-2xl shadow-emerald-500/10">
+      <DialogContent className="max-w-3xl max-h-[85vh] flex flex-col bg-card border-border/50 shadow-2xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-3 group">
             <Icon3D icon={Image} variant="emerald" size="sm" />
@@ -1178,8 +1178,7 @@ export function StockMediaPicker({ open, onOpenChange, onSelect, photosOnly = fa
           {/* Main Tabs */}
         <Tabs value={mainTab} onValueChange={(v) => setMainTab(v as MainTab)} className="w-full flex flex-col flex-1 min-h-0">
           <TabsList className={cn(
-            "grid w-full mb-3 bg-card/50 backdrop-blur-md border border-border/40 rounded-xl p-1",
-            "[&>[data-state=active]]:bg-gradient-to-r [&>[data-state=active]]:from-emerald-500 [&>[data-state=active]]:via-teal-500 [&>[data-state=active]]:to-cyan-500 [&>[data-state=active]]:text-white [&>[data-state=active]]:shadow-md [&>[data-state=active]]:shadow-emerald-500/30",
+            "grid w-full mb-3 bg-muted rounded-lg p-1",
             photosOnly ? "grid-cols-4" : "grid-cols-8"
           )}>
             {/* Combined tabs */}

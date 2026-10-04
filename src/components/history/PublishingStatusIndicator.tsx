@@ -37,7 +37,7 @@ export function PublishingStatusIndicator({ publishingPosts }: PublishingStatusI
         exit={{ opacity: 0, y: -20 }}
         className="mb-6"
       >
-        <div className="rounded-xl border border-primary/30 bg-primary/5 backdrop-blur-sm overflow-hidden">
+        <div className="rounded-xl border border-primary/30 bg-primary/5 overflow-hidden">
           {/* Header */}
           <button
             onClick={() => setIsExpanded(!isExpanded)}
@@ -151,7 +151,7 @@ function PublishingPostItem({ post }: { post: PublishingPost }) {
       {/* Progress bar */}
       <div className="h-1.5 bg-muted rounded-full overflow-hidden">
         <motion.div
-          className="h-full bg-gradient-to-r from-primary to-primary/70"
+          className="h-full bg-primary"
           initial={{ width: 0 }}
           animate={{ width: `${progress}%` }}
           transition={{ duration: 0.3 }}

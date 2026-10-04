@@ -82,8 +82,8 @@ export function BrandIntelligenceSettings() {
       <CardContent className="p-4 space-y-5">
         {/* Brand Intelligence Header */}
         <div className="flex items-center gap-2 mb-1">
-          <div className="w-7 h-7 rounded-md bg-gradient-to-br from-violet-500/20 to-pink-500/20 flex items-center justify-center">
-            <SearchCheck className="w-3.5 h-3.5 text-violet-500" />
+          <div className="w-7 h-7 rounded-md flex items-center justify-center bg-muted">
+            <SearchCheck className="w-3.5 h-3.5 text-foreground" />
           </div>
           <span className="text-sm font-semibold">Brand Intelligence</span>
         </div>
@@ -91,7 +91,7 @@ export function BrandIntelligenceSettings() {
         {/* ─── Transcription Models Section ─── */}
         <div className="space-y-3 p-3 rounded-lg border border-border/50 bg-muted/20">
           <div className="flex items-center gap-2">
-            <Mic className="w-4 h-4 text-violet-500" />
+            <Mic className="w-4 h-4 text-foreground" />
             <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Audio-to-Text Models</span>
           </div>
 

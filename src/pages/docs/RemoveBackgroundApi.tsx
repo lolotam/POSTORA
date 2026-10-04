@@ -132,10 +132,10 @@ export default function RemoveBackgroundApi() {
       <main className="container mx-auto px-6 py-12 max-w-5xl">
 
         {/* Features */}
-        <Card className="mb-8 border-purple-500/20 bg-purple-500/5">
+        <Card className="mb-8 border-border bg-muted">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
-              <Shield className="w-5 h-5 text-purple-500" />
+              <Shield className="w-5 h-5 text-foreground" />
               Features & Limits
             </CardTitle>
           </CardHeader>

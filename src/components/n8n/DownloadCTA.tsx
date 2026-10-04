@@ -21,12 +21,12 @@ export function DownloadCTA({ onDownloadComplete }: DownloadCTAProps) {
               Download our pre-built n8n workflow templates and start automating in minutes.
             </p>
             <div className="flex flex-wrap justify-center gap-3">
-              <Button onClick={onDownloadComplete} size="lg" className="bg-gradient-to-r from-violet-500 via-fuchsia-500 to-pink-500 text-white shadow-lg shadow-violet-500/30 hover:opacity-90">
+              <Button onClick={onDownloadComplete} size="lg" className="text-primary-foreground shadow-lg bg-primary">
                 <Download className="w-4 h-4 me-2" />
                 Download Complete Workflow
               </Button>
               <Link to="/api-keys">
-                <Button variant="outline" size="lg" className="border-violet-500/50 hover:bg-violet-500/10">
+                <Button variant="outline" size="lg" className="border-input hover:bg-muted">
                   <Key className="w-4 h-4 me-2" />
                   Get Your API Key
                 </Button>

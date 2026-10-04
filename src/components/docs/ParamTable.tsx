@@ -4,10 +4,10 @@ interface ParamTableProps {
 
 export function ParamTable({ params }: ParamTableProps) {
   return (
-    <div className="my-4 overflow-hidden rounded-2xl border border-border/60 bg-card/40 backdrop-blur-md shadow-sm">
+    <div className="my-4 overflow-hidden rounded-2xl border border-border/60 bg-card shadow-sm">
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
-          <thead className="bg-gradient-to-r from-emerald-500/15 via-cyan-500/10 to-sky-500/10">
+          <thead className="bg-emerald-500/15">
             <tr className="border-b border-emerald-400/20">
               <th className="text-start py-3 px-4 font-semibold text-emerald-700 dark:text-emerald-300 uppercase tracking-wider text-xs">
                 Parameter
@@ -30,14 +30,14 @@ export function ParamTable({ params }: ParamTableProps) {
                 className="border-t border-border/40 transition-colors hover:bg-emerald-500/5"
               >
                 <td className="py-3 px-4">
-                  <code className="font-mono text-xs px-2 py-1 rounded-md bg-gradient-to-br from-emerald-500/15 to-cyan-500/10 border border-emerald-400/30 text-emerald-700 dark:text-emerald-300">
+                  <code className="font-mono text-xs px-2 py-1 rounded-md border border-emerald-400/30 text-emerald-700 dark:text-emerald-300 bg-emerald-500/15">
                     {p.name}
                   </code>
                 </td>
                 <td className="py-3 px-4 text-muted-foreground font-mono text-xs">{p.type}</td>
                 <td className="py-3 px-4">
                   {p.required ? (
-                    <span className="inline-flex items-center gap-1 text-[10px] uppercase tracking-wider font-semibold px-2 py-0.5 rounded-full bg-gradient-to-r from-rose-500/15 to-pink-500/10 text-rose-600 dark:text-rose-300 border border-rose-400/40">
+                    <span className="inline-flex items-center gap-1 text-[10px] uppercase tracking-wider font-semibold px-2 py-0.5 rounded-full text-rose-600 dark:text-rose-300 border border-rose-400/40 bg-rose-500/15">
                       Required
                     </span>
                   ) : (

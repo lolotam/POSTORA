@@ -29,7 +29,7 @@ export function PromotionBanner({ remainingSlots = 100, isActive = true }: Promo
         initial={{ opacity: 0, y: -20 }}
         animate={{ opacity: 1, y: 0 }}
         exit={{ opacity: 0, y: -20 }}
-        className="relative overflow-hidden rounded-2xl border border-primary/30 bg-gradient-to-r from-primary/10 via-primary/5 to-accent/10 p-6 mb-8"
+        className="relative overflow-hidden rounded-2xl border border-primary/30 p-6 mb-8 bg-primary/10"
       >
         <button
           onClick={handleDismiss}

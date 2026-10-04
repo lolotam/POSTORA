@@ -49,7 +49,7 @@ export const CookieConsent = () => {
   return (
     <div className="fixed bottom-0 start-0 end-0 z-50 p-4 animate-fade-in">
       <div className="container mx-auto max-w-4xl">
-        <div className="relative bg-card border border-border rounded-2xl shadow-2xl p-6 backdrop-blur-xl">
+        <div className="relative bg-card border border-border rounded-2xl shadow-2xl p-6">
           {/* Close button */}
           <button
             onClick={handleDismiss}

@@ -56,7 +56,7 @@ export function YouTubeShortsPreview({
             />
           )
         ) : (
-          <div className="absolute inset-0 bg-gradient-to-b from-gray-800 to-gray-900" />
+          <div className="absolute inset-0 bg-gray-800" />
         )}
 
         {/* Overlay gradient */}

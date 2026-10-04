@@ -145,7 +145,7 @@ export default function FacebookAnalytics() {
               <PostsGrid posts={filteredPosts} isLoading={isLoading} onPostClick={handlePostClick} contentPostIds={contentPostIds} />
               {hasMore && (
                 <div className="flex justify-center pt-4">
-                  <Button variant="outline" onClick={loadMore} className="gap-2 border-sky-500/40 hover:bg-sky-500/10">
+                  <Button variant="outline" onClick={loadMore} className="gap-2 border-input hover:bg-muted">
                     <Loader2 className="w-4 h-4" />{t("actions.loadMore", "Load More")}
                   </Button>
                 </div>
@@ -163,7 +163,7 @@ export default function FacebookAnalytics() {
                 <p className="text-sm text-muted-foreground mb-6 max-w-md">{t("empty.searchHintFacebook", "Enter any Facebook page username to analyze their top performing content")}</p>
                 <div className="flex flex-wrap justify-center gap-2">
                   {EXAMPLE_BRANDS.map((brand) => (
-                    <Button key={brand} variant="outline" size="sm" className="text-xs border-sky-500/40 hover:bg-sky-500/10 transition-transform hover:-translate-y-0.5" onClick={() => handleSearch(brand.replace("@", ""))}>{brand}</Button>
+                    <Button key={brand} variant="outline" size="sm" className="text-xs border-input hover:bg-muted transition-transform hover:-translate-y-0.5" onClick={() => handleSearch(brand.replace("@", ""))}>{brand}</Button>
                   ))}
                 </div>
               </div>

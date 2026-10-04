@@ -1,59 +1,39 @@
 import { cn } from "@/lib/utils";
-import { GRADIENTS, type GradientKey } from "./gradients";
+import type { GradientKey } from "./gradients";
 
 /**
- * Glass card with an animated gradient "halo" that lights up on hover.
- * Wrap any content. Pair with <Icon3D variant={variant} /> inside for
- * the full Cure Med /about look.
+ * Content card. Historically a glass card with a coloured gradient halo; the flat design
+ * system renders it as a bordered surface whose border darkens on hover or when `active`.
+ * `variant`, `hoverLift` and `ringIntensity` are still accepted so existing call sites
+ * compile unchanged, but no longer affect the output.
  */
 export function GradientRingCard({
-  variant,
   children,
   className,
   innerClassName,
-  hoverLift = true,
-  ringIntensity = "normal",
   active = false,
   padded = true,
 }: {
+  /** @deprecated No visual effect since the flat design system. */
   variant: GradientKey;
   children: React.ReactNode;
   className?: string;
   innerClassName?: string;
+  /** @deprecated No visual effect since the flat design system. */
   hoverLift?: boolean;
-  /** opacity of the gradient halo on hover */
+  /** @deprecated No visual effect since the flat design system. */
   ringIntensity?: "subtle" | "normal" | "strong";
-  /** Force the gradient halo permanently visible (for selected state). */
+  /** Selected state: the border switches to the foreground colour. */
   active?: boolean;
   /** When false, do not apply default p-6 md:p-8 padding (caller controls). */
   padded?: boolean;
 }) {
-  const g = GRADIENTS[variant];
-  const opacityHover =
-    ringIntensity === "strong"
-      ? "group-hover:opacity-90"
-      : ringIntensity === "subtle"
-        ? "group-hover:opacity-50"
-        : "group-hover:opacity-70";
-
   return (
     <div className={cn("group relative h-full", className)}>
       <div
-        aria-hidden
         className={cn(
-          "absolute -inset-0.5 rounded-3xl opacity-0 blur transition-opacity duration-500 bg-gradient-to-br",
-          g.from,
-          g.via,
-          g.to,
-          opacityHover,
-          active && "opacity-80",
-        )}
-      />
-      <div
-        className={cn(
-          "relative h-full rounded-3xl border border-border/60 bg-card/85 backdrop-blur-md shadow-md",
-          "transition-all duration-500",
-          hoverLift && "group-hover:-translate-y-2 group-hover:shadow-2xl",
+          "relative h-full rounded-lg border bg-card text-card-foreground transition-colors",
+          active ? "border-foreground" : "border-border group-hover:border-input",
           padded && "p-6 md:p-8",
           innerClassName,
         )}

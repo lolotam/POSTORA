@@ -313,7 +313,7 @@ export function AiUsageAnalytics() {
               )}
 
               <div className="grid grid-cols-3 gap-4">
-                <div className="p-4 rounded-lg border bg-gradient-to-br from-green-500/10 to-emerald-500/10 border-green-500/20">
+                <div className="p-4 rounded-lg border border-green-500/20 bg-green-500/10">
                   <div className="flex items-center gap-2 text-green-600 dark:text-green-400 mb-1">
                     <DollarSign className="w-4 h-4" />
                     <span className="text-xs font-medium">Today</span>
@@ -325,7 +325,7 @@ export function AiUsageAnalytics() {
                     ~{estimatedTokensToday.toLocaleString()} tokens
                   </p>
                 </div>
-                <div className="p-4 rounded-lg border bg-gradient-to-br from-blue-500/10 to-indigo-500/10 border-blue-500/20">
+                <div className="p-4 rounded-lg border border-blue-500/20 bg-blue-500/10">
                   <div className="flex items-center gap-2 text-blue-600 dark:text-blue-400 mb-1">
                     <DollarSign className="w-4 h-4" />
                     <span className="text-xs font-medium">This Month</span>
@@ -337,12 +337,12 @@ export function AiUsageAnalytics() {
                     ~{estimatedTokensMonth.toLocaleString()} tokens
                   </p>
                 </div>
-                <div className="p-4 rounded-lg border bg-gradient-to-br from-purple-500/10 to-pink-500/10 border-purple-500/20">
-                  <div className="flex items-center gap-2 text-purple-600 dark:text-purple-400 mb-1">
+                <div className="p-4 rounded-lg border border-border bg-muted">
+                  <div className="flex items-center gap-2 text-foreground dark:text-foreground mb-1">
                     <DollarSign className="w-4 h-4" />
                     <span className="text-xs font-medium">Last 30 Days</span>
                   </div>
-                  <p className="text-xl font-bold text-purple-700 dark:text-purple-300">
+                  <p className="text-xl font-bold text-foreground dark:text-neutral-200">
                     ${estimatedCost30Days.toFixed(4)}
                   </p>
                   <p className="text-xs text-muted-foreground">
@@ -471,7 +471,7 @@ export function AiUsageAnalytics() {
 
                 {/* Cost Savings Summary */}
                 {comparisonModel && (
-                  <div className="p-4 rounded-lg border bg-gradient-to-r from-blue-500/10 to-purple-500/10 border-blue-500/20">
+                  <div className="p-4 rounded-lg border border-blue-500/20 bg-blue-500/10">
                     <div className="flex items-center justify-between">
                       <div>
                         <p className="text-sm font-medium">Cost Comparison (30 days)</p>

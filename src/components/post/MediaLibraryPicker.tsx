@@ -435,7 +435,7 @@ export function MediaLibraryPicker({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-5xl max-h-[85vh] flex flex-col bg-card/80 backdrop-blur-xl border-border/50 shadow-2xl shadow-sky-500/10">
+      <DialogContent className="max-w-5xl max-h-[85vh] flex flex-col bg-card border-border/50 shadow-2xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-3 group">
             <Icon3D icon={FolderOpen} variant="sky" size="sm" />
@@ -443,7 +443,7 @@ export function MediaLibraryPicker({
               {t("mediaLibrary.title", "Select from Media Library")}
             </GradientHeading>
             {imagesOnly && (
-              <Badge className="text-xs bg-sky-500/15 text-sky-700 dark:text-sky-300 border border-sky-400/40">
+              <Badge className="text-xs bg-muted text-foreground dark:text-neutral-200 border border-input">
                 {t("mediaLibrary.imagesOnly", "Images Only")}
               </Badge>
             )}

@@ -34,9 +34,8 @@ const testimonials = [
 function TestimonialCard({ testimonial }: { testimonial: typeof testimonials[0] }) {
   return (
     <div className="group relative flex-shrink-0 w-80">
-      <div aria-hidden className="absolute -inset-0.5 rounded-2xl bg-gradient-to-br from-violet-500 via-fuchsia-500 to-pink-500 opacity-0 blur transition-opacity duration-500 group-hover:opacity-60" />
-      <div className="relative p-6 rounded-2xl border border-border/60 bg-card/85 backdrop-blur-md shadow-md transition-transform duration-500 group-hover:-translate-y-1">
-      <Quote className="w-8 h-8 text-violet-500/50 mb-4" />
+      <div className="relative p-6 rounded-2xl border border-border/60 bg-card shadow-md transition-transform duration-500 group-hover:-translate-y-1">
+      <Quote className="w-8 h-8 text-foreground mb-4" />
       <p className="text-sm text-muted-foreground mb-4 line-clamp-4">
         "{testimonial.text}"
       </p>
@@ -48,7 +47,7 @@ function TestimonialCard({ testimonial }: { testimonial: typeof testimonials[0] 
       <div>
         <p className="font-semibold text-sm">{testimonial.name}</p>
         <p className="text-xs text-muted-foreground">{testimonial.role}</p>
-        <p className="text-xs bg-clip-text text-transparent bg-gradient-to-r from-sky-500 to-violet-500 font-medium">{testimonial.company}</p>
+        <p className="text-xs font-medium text-foreground">{testimonial.company}</p>
       </div>
       </div>
     </div>
@@ -93,8 +92,8 @@ export default function LandingTestimonials() {
           <CarouselContent className="-ms-4">
             {testimonials.map((testimonial, index) => (
               <CarouselItem key={index} className="ps-4 basis-[85%]">
-                <div className="p-6 rounded-2xl border border-border/60 bg-card/85 backdrop-blur-md shadow-md">
-                  <Quote className="w-8 h-8 text-violet-500/50 mb-4" />
+                <div className="p-6 rounded-2xl border border-border/60 bg-card shadow-md">
+                  <Quote className="w-8 h-8 text-foreground mb-4" />
                   <p className="text-sm text-muted-foreground mb-4 line-clamp-4">
                     "{testimonial.text}"
                   </p>
@@ -106,7 +105,7 @@ export default function LandingTestimonials() {
                   <div>
                     <p className="font-semibold text-sm">{testimonial.name}</p>
                     <p className="text-xs text-muted-foreground">{testimonial.role}</p>
-                    <p className="text-xs bg-clip-text text-transparent bg-gradient-to-r from-sky-500 to-violet-500 font-medium">{testimonial.company}</p>
+                    <p className="text-xs font-medium text-foreground">{testimonial.company}</p>
                   </div>
                 </div>
               </CarouselItem>

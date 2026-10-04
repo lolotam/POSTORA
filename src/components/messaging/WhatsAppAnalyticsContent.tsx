@@ -172,8 +172,8 @@ export function WhatsAppAnalyticsContent() {
         <Card>
           <CardContent className="pt-6">
             <div className="flex items-center gap-3">
-              <div className="h-10 w-10 rounded-lg bg-purple-500/10 flex items-center justify-center">
-                <Clock className="h-5 w-5 text-purple-500" />
+              <div className="h-10 w-10 rounded-lg bg-muted flex items-center justify-center">
+                <Clock className="h-5 w-5 text-foreground" />
               </div>
               <div>
                 <p className="text-2xl font-bold">{msgStats?.avgResponseStr || "—"}</p>
@@ -198,8 +198,8 @@ export function WhatsAppAnalyticsContent() {
         <Card>
           <CardContent className="pt-6">
             <div className="flex items-center gap-3">
-              <div className="h-10 w-10 rounded-lg bg-sky-500/10 flex items-center justify-center">
-                <ArrowUpRight className="h-5 w-5 text-sky-500" />
+              <div className="h-10 w-10 rounded-lg bg-muted flex items-center justify-center">
+                <ArrowUpRight className="h-5 w-5 text-foreground" />
               </div>
               <div>
                 <p className="text-2xl font-bold">{msgStats?.outboundCount || 0}</p>

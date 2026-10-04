@@ -69,7 +69,7 @@ export default function Documentation() {
                       innerClassName="p-4"
                     >
                       <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-sky-500/15 to-violet-500/10 ring-1 ring-sky-400/30 flex items-center justify-center shrink-0">
+                        <div className="w-10 h-10 rounded-xl ring-1 ring-border flex items-center justify-center shrink-0 bg-muted">
                           <PlatformIcon platform={platform} size="md" />
                         </div>
                         <div>
@@ -93,12 +93,11 @@ export default function Documentation() {
                 {quickstartSteps.map(s => (
                   <div key={s.step} className="flex gap-4 items-start">
                     <div className="relative shrink-0">
-                      <div className="absolute -inset-1 rounded-full bg-gradient-to-br from-indigo-500 via-violet-500 to-fuchsia-500 opacity-40 blur" />
-                      <div className="relative w-10 h-10 rounded-full bg-gradient-to-br from-indigo-500 to-fuchsia-500 ring-1 ring-white/30 flex items-center justify-center shadow-lg shadow-indigo-500/30">
+                      <div className="relative w-10 h-10 rounded-full ring-1 ring-white/30 flex items-center justify-center shadow-lg bg-neutral-900 dark:bg-neutral-800">
                         <span className="text-white font-bold tabular-nums">{s.step}</span>
                       </div>
                     </div>
-                    <div className="flex-1 rounded-2xl border border-border/60 bg-card/60 backdrop-blur-md p-4">
+                    <div className="flex-1 rounded-2xl border border-border/60 bg-card p-4">
                       <h3 className="font-semibold mb-1">{s.title}</h3>
                       <p className="text-sm text-muted-foreground mb-3">{s.desc}</p>
                       {s.link.startsWith('http') ? (
@@ -120,8 +119,7 @@ export default function Documentation() {
 
                 <div className="flex gap-4 items-start">
                   <div className="relative shrink-0">
-                    <div className="absolute -inset-1 rounded-full bg-gradient-to-br from-indigo-500 via-violet-500 to-fuchsia-500 opacity-40 blur" />
-                    <div className="relative w-10 h-10 rounded-full bg-gradient-to-br from-indigo-500 to-fuchsia-500 ring-1 ring-white/30 flex items-center justify-center shadow-lg shadow-indigo-500/30">
+                    <div className="relative w-10 h-10 rounded-full ring-1 ring-white/30 flex items-center justify-center shadow-lg bg-neutral-900 dark:bg-neutral-800">
                       <span className="text-white font-bold tabular-nums">4</span>
                     </div>
                   </div>
@@ -509,15 +507,15 @@ print(response.json())`} />
                     code >= 500 ? "rose" : code >= 400 ? "amber" : "emerald";
                   const cls =
                     tone === "emerald"
-                      ? "from-emerald-500/15 to-cyan-500/10 border-emerald-400/40 text-emerald-700 dark:text-emerald-300"
+                      ? "bg-emerald-500/10 border-emerald-400/40 text-emerald-700 dark:text-emerald-300"
                       : tone === "amber"
-                        ? "from-amber-500/15 to-orange-500/10 border-amber-400/40 text-amber-700 dark:text-amber-300"
-                        : "from-rose-500/15 to-pink-500/10 border-rose-400/40 text-rose-700 dark:text-rose-300";
+                        ? "bg-amber-500/10 border-amber-400/40 text-amber-700 dark:text-amber-300"
+                        : "bg-rose-500/10 border-rose-400/40 text-rose-700 dark:text-rose-300";
                   return (
                     <div
                       key={i}
                       className={cn(
-                        "flex items-center gap-3 px-3 py-2 rounded-xl border bg-gradient-to-br",
+                        "flex items-center gap-3 px-3 py-2 rounded-lg border",
                         cls,
                       )}
                     >
@@ -534,12 +532,12 @@ print(response.json())`} />
             <Reveal delay={60}>
             <section id="faq">
               <SectionTitle id="faq-title">Frequently Asked Questions</SectionTitle>
-              <Accordion type="single" collapsible className="w-full rounded-2xl border border-border/60 bg-card/40 backdrop-blur-md px-4">
+              <Accordion type="single" collapsible className="w-full rounded-2xl border border-border/60 bg-card px-4">
                 {faqItems.map((item, i) => (
                   <AccordionItem key={i} value={`faq-${i}`} className="border-border/40">
-                    <AccordionTrigger className="text-start hover:text-violet-600 dark:hover:text-violet-300">
+                    <AccordionTrigger className="text-start hover:text-foreground dark:hover:text-neutral-200">
                       <span className="flex items-center gap-2">
-                        <HelpCircle className="w-4 h-4 text-violet-500" />
+                        <HelpCircle className="w-4 h-4 text-foreground" />
                         {item.q}
                       </span>
                     </AccordionTrigger>

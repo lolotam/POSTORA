@@ -8,27 +8,27 @@ interface N8nHeaderProps {
 
 export function N8nHeader({ isAuthenticated }: N8nHeaderProps) {
   return (
-    <header className="sticky top-0 z-50 border-b border-border/60 bg-background/70 backdrop-blur-xl">
+    <header className="sticky top-0 z-50 border-b border-border/60 bg-background">
       <div className="container mx-auto px-6 h-16 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <Link to="/"><Logo /></Link>
           <span className="text-muted-foreground/60">/</span>
           <Link to="/docs" className="text-sm text-muted-foreground hover:text-foreground transition-colors">Docs</Link>
           <span className="text-muted-foreground/60">/</span>
-          <span className="text-sm font-medium bg-clip-text text-transparent bg-gradient-to-r from-violet-500 via-fuchsia-500 to-pink-500">
+          <span className="text-sm font-medium text-foreground">
             n8n Integration
           </span>
         </div>
         <div className="flex items-center gap-4">
           {isAuthenticated ? (
             <Link to="/dashboard">
-              <Button className="bg-gradient-to-r from-violet-500 via-fuchsia-500 to-pink-500 text-white shadow-md hover:opacity-90">
+              <Button className="text-primary-foreground bg-primary">
                 Dashboard
               </Button>
             </Link>
           ) : (
             <Link to="/auth">
-              <Button className="bg-gradient-to-r from-violet-500 via-fuchsia-500 to-pink-500 text-white shadow-md hover:opacity-90">
+              <Button className="text-primary-foreground bg-primary">
                 Get Started
               </Button>
             </Link>

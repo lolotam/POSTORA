@@ -99,7 +99,7 @@ export function DayDetailDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-3 group">
             <Icon3D icon={CalendarIcon} variant="violet" size="sm" />
-            <span className="bg-clip-text text-transparent bg-gradient-to-r from-sky-500 via-violet-500 to-pink-500">
+            <span className="text-foreground">
               {selectedDate && format(selectedDate, "EEEE, MMMM d, yyyy")}
             </span>
           </DialogTitle>

@@ -111,14 +111,14 @@ export function AccountSelectionSidebar({
       <div className="flex items-center justify-between mb-4 group">
         <div className="flex items-center gap-3">
           <Icon3D icon={Users} variant="emerald" size="sm" />
-          <Label className="text-base font-semibold leading-tight bg-gradient-to-r from-emerald-500 via-cyan-500 to-sky-500 bg-clip-text text-transparent">
+          <Label className="text-base font-semibold leading-tight text-foreground">
             {t("accountSidebar.visibility", "Post visibility")}
           </Label>
         </div>
         {allPlatforms.length > 1 && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="sm" className="h-8 gap-2 bg-card/40 backdrop-blur-sm border-border/40 hover:border-emerald-400/60 hover:bg-card/60 transition-all">
+              <Button variant="outline" size="sm" className="h-8 gap-2 bg-card border-border/40 hover:border-emerald-400/60 hover:bg-card transition-all">
                 <Filter className="w-3.5 h-3.5" />
                 {platformFilter.length === 0
                   ? t("accountSidebar.allPlatforms", "All platforms")
@@ -159,11 +159,11 @@ export function AccountSelectionSidebar({
         <div className="text-center py-8 px-4 group">
           <div className="inline-flex flex-col items-center gap-3">
             <Icon3D icon={Users} variant="emerald" size="md" />
-            <h4 className="font-semibold text-sm bg-clip-text text-transparent bg-gradient-to-r from-emerald-500 via-cyan-500 to-sky-500">
+            <h4 className="font-semibold text-sm text-foreground">
               {t("accountSidebar.noAccountsTitle", "No social accounts connected")}
             </h4>
             <p className="text-xs text-muted-foreground max-w-xs">{t("accountSidebar.noAccountsDesc", "Connect your social media accounts to start publishing.")}</p>
-            <Button size="sm" asChild className="bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500 text-white border-0 shadow-md shadow-emerald-500/30 hover:shadow-lg hover:shadow-emerald-500/50 hover:opacity-95 transition-all">
+            <Button size="sm" asChild className="text-primary-foreground transition-all bg-primary">
               <a href="/profiles">
                 <Plus className="w-4 h-4 me-2" />
                 {t("accountSidebar.connectAccounts", "Connect Accounts")}
@@ -179,7 +179,7 @@ export function AccountSelectionSidebar({
             const warningInfo = platformsWithWarnings.find(p => p.platform === platform);
 
             return (
-              <div key={platform} className="space-y-2 rounded-xl border border-border/40 bg-card/30 backdrop-blur-sm p-3 transition-all hover:border-emerald-400/40 hover:bg-card/50">
+              <div key={platform} className="space-y-2 rounded-xl border border-border/40 bg-card p-3 transition-all hover:border-emerald-400/40 hover:bg-card">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <PlatformIcon platform={platform as Platform} size="sm" />
@@ -235,7 +235,7 @@ export function AccountSelectionSidebar({
             <div className="pt-3 border-t border-border/50">
               <div className="flex items-center gap-2 mb-2">
                 <Icon3D icon={Ban} variant="amber" size="sm" className="!h-7 !w-7" />
-                <p className="text-xs font-medium bg-clip-text text-transparent bg-gradient-to-r from-amber-500 via-orange-500 to-rose-500">
+                <p className="text-xs font-medium text-foreground">
                   {t("accountSidebar.unavailableMedia", "Unavailable for current media")}
                 </p>
               </div>
@@ -244,7 +244,7 @@ export function AccountSelectionSidebar({
                   const accounts = accountsByPlatform[platform] || [];
                   if (accounts.length === 0) return null;
                   return (
-                    <div key={platform} className="flex items-center gap-2 py-1.5 px-2 rounded-lg bg-muted/30 backdrop-blur-sm opacity-70">
+                    <div key={platform} className="flex items-center gap-2 py-1.5 px-2 rounded-lg bg-muted/30 opacity-70">
                       <PlatformIcon platform={platform} size="sm" />
                       <span className="text-xs">{getPlatformName(platform)}</span>
                       <Badge variant="outline" className="text-xs ms-auto">
@@ -280,7 +280,7 @@ export function AccountSelectionSidebar({
               <div className="flex items-start gap-2 text-sm">
                 <AlertCircle className="w-4 h-4 shrink-0 text-amber-500 mt-0.5" />
                 <div>
-                  <p className="font-semibold bg-clip-text text-transparent bg-gradient-to-r from-amber-500 via-orange-500 to-rose-500">{warning.title}</p>
+                  <p className="font-semibold text-foreground">{warning.title}</p>
                   <p className="text-muted-foreground text-xs mt-1">{warning.message}</p>
                 </div>
               </div>

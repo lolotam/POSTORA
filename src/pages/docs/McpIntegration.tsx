@@ -122,9 +122,6 @@ Accept: application/json, text/event-stream
   return (
     <div className="min-h-screen bg-background relative overflow-hidden">
       <div aria-hidden className="pointer-events-none fixed inset-0 -z-10">
-        <div className="absolute -top-40 start-1/3 h-[480px] w-[480px] rounded-full bg-violet-500/10 blur-3xl" />
-        <div className="absolute top-1/2 -end-40 h-[420px] w-[420px] rounded-full bg-sky-500/10 blur-3xl" />
-        <div className="absolute bottom-0 start-0 h-[360px] w-[360px] rounded-full bg-rose-500/10 blur-3xl" />
       </div>
 
       <div className="container mx-auto px-4 py-8 max-w-6xl">
@@ -136,7 +133,7 @@ Accept: application/json, text/event-stream
         <Reveal className="text-center mb-12">
           <div className="flex items-center justify-center gap-3 mb-4">
             <Icon3D icon={Plug} variant="violet" size="lg" />
-            <Badge variant="outline" className="bg-violet-500/10 border-violet-400/40 text-violet-200">MCP Integration · Beta</Badge>
+            <Badge variant="outline" className="bg-muted border-input text-foreground">MCP Integration · Beta</Badge>
           </div>
           <GradientHeading as="h1" preset="sky-violet-pink" size="xl">
             Postora MCP — full endpoint reference
@@ -146,9 +143,9 @@ Accept: application/json, text/event-stream
             One auth, one endpoint, ten platforms.
           </p>
 
-          <div className="mt-6 inline-flex items-center gap-2 rounded-2xl bg-white/5 ring-1 ring-white/10 px-4 py-2 backdrop-blur-xl">
-            <Terminal className="w-4 h-4 text-violet-300" />
-            <code className="text-sm text-violet-100">{MCP_URL}</code>
+          <div className="mt-6 inline-flex items-center gap-2 rounded-2xl bg-white/5 ring-1 ring-white/10 px-4 py-2">
+            <Terminal className="w-4 h-4 text-foreground" />
+            <code className="text-sm text-foreground">{MCP_URL}</code>
             <Button variant="ghost" size="sm" className="h-7 px-2" onClick={() => copy(MCP_URL, "url")}>
               {copied === "url" ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
             </Button>
@@ -206,7 +203,7 @@ Accept: application/json, text/event-stream
               { n: 3, t: "Paste & chat", d: "Drop the config snippet, restart your client, ask it to post.", icon: Sparkles, v: "rose" as const, to: "/docs/mcp-server" },
             ].map((s, i) => (
               <Reveal key={s.n} delay={0.05 * i}>
-                <Card className="bg-white/5 ring-1 ring-white/10 backdrop-blur-xl border-0 h-full hover:ring-violet-400/40 transition-all hover:-translate-y-0.5">
+                <Card className="bg-white/5 ring-1 ring-white/10 border-0 h-full hover:ring-input transition-all hover:-translate-y-0.5">
                   <CardHeader className="pb-3">
                     <div className="flex items-center justify-between">
                       <Icon3D icon={s.icon} variant={s.v} size="md" />
@@ -236,7 +233,7 @@ Accept: application/json, text/event-stream
           <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
             {LIVE.map((e, i) => (
               <Reveal key={e.name} delay={0.03 * i}>
-                <Card className="bg-white/5 ring-1 ring-white/10 backdrop-blur-xl border-0 h-full hover:ring-violet-400/40 hover:-translate-y-0.5 transition-all">
+                <Card className="bg-white/5 ring-1 ring-white/10 border-0 h-full hover:ring-input hover:-translate-y-0.5 transition-all">
                   <CardHeader className="pb-2">
                     <div className="flex items-center justify-between">
                       <Icon3D icon={e.icon} variant={e.variant} size="sm" />
@@ -244,7 +241,7 @@ Accept: application/json, text/event-stream
                         {e.method}
                       </Badge>
                     </div>
-                    <CardTitle className="text-base font-mono text-violet-200 mt-2">{e.name}</CardTitle>
+                    <CardTitle className="text-base font-mono text-foreground mt-2">{e.name}</CardTitle>
                     <code className="text-[11px] text-muted-foreground/70">{e.rest}</code>
                   </CardHeader>
                   <CardContent className="text-sm text-muted-foreground">{e.desc}</CardContent>
@@ -261,7 +258,7 @@ Accept: application/json, text/event-stream
             <GradientHeading as="h2" preset="amber-rose-violet" size="lg">Live request examples</GradientHeading>
           </div>
           <Tabs defaultValue="rpc" className="w-full">
-            <TabsList className="bg-white/5 ring-1 ring-white/10 backdrop-blur-xl">
+            <TabsList className="bg-white/5 ring-1 ring-white/10">
               <TabsTrigger value="rpc">JSON-RPC</TabsTrigger>
               <TabsTrigger value="curl">cURL</TabsTrigger>
               <TabsTrigger value="prompt">Natural prompt</TabsTrigger>
@@ -287,7 +284,7 @@ Accept: application/json, text/event-stream
                 <div className="divide-y divide-white/5">
                   {RATE_LIMITS.map((r) => (
                     <div key={r.tool} className="flex items-center justify-between py-2 text-sm">
-                      <code className="text-violet-200">{r.tool}</code>
+                      <code className="text-foreground">{r.tool}</code>
                       <span className="text-muted-foreground">{r.limit}</span>
                     </div>
                   ))}
@@ -327,7 +324,7 @@ Accept: application/json, text/event-stream
           <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
             {ROADMAP.map((e, i) => (
               <Reveal key={e.name} delay={0.025 * i}>
-                <Card className="relative bg-white/[0.03] ring-1 ring-white/10 backdrop-blur-xl border-0 h-full hover:ring-amber-400/40 transition-all">
+                <Card className="relative bg-white/[0.03] ring-1 ring-white/10 border-0 h-full hover:ring-amber-400/40 transition-all">
                   <div className="absolute top-2 end-2">
                     <Badge className="bg-amber-500/15 text-amber-300 border border-amber-400/30 text-[10px]">soon</Badge>
                   </div>

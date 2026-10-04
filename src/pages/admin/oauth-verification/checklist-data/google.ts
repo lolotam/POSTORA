@@ -137,7 +137,7 @@ export const googleChecklistItems: ChecklistItem[] = [
 
 export const googleCategoryInfo: Record<string, CategoryInfo> = {
   privacy: { label: "Privacy & Policy", icon: Shield, color: "text-blue-500" },
-  scopes: { label: "Scope Justification", icon: Key, color: "text-purple-500" },
+  scopes: { label: "Scope Justification", icon: Key, color: "text-foreground" },
   testing: { label: "In-App Testing", icon: TestTube, color: "text-orange-500" },
   documentation: { label: "Cloud Console Setup", icon: FileText, color: "text-green-500" },
 };

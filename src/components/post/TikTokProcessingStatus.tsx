@@ -128,7 +128,7 @@ export function TikTokProcessingStatus({
         <div className="flex items-center gap-3">
           <div className={cn(
             "w-10 h-10 rounded-full flex items-center justify-center",
-            "bg-gradient-to-br from-[#00f2ea] to-[#ff0050]"
+            "bg-black"
           )}>
             <span className="text-white text-xs font-bold">TT</span>
           </div>

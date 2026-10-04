@@ -63,7 +63,7 @@ export function CompleteExampleSection() {
         <Reveal>
           <GradientRingCard variant="emerald" ringIntensity="subtle" hoverLift={false}>
             <h3 className="font-semibold mb-4 flex items-center gap-3">
-              <span className="w-9 h-9 rounded-xl bg-gradient-to-br from-emerald-400 via-teal-400 to-cyan-500 text-white flex items-center justify-center text-sm font-bold shadow-md">1</span>
+              <span className="w-9 h-9 rounded-xl text-white flex items-center justify-center text-sm font-bold shadow-md bg-neutral-900 dark:bg-neutral-800">1</span>
               Upload Media (cURL)
             </h3>
             <CodeBlock id="example-upload" language="bash" code={uploadExample} />
@@ -73,7 +73,7 @@ export function CompleteExampleSection() {
         <Reveal delay={120}>
           <GradientRingCard variant="emerald" ringIntensity="subtle" hoverLift={false}>
             <h3 className="font-semibold mb-4 flex items-center gap-3">
-              <span className="w-9 h-9 rounded-xl bg-gradient-to-br from-emerald-400 via-teal-400 to-cyan-500 text-white flex items-center justify-center text-sm font-bold shadow-md">2</span>
+              <span className="w-9 h-9 rounded-xl text-white flex items-center justify-center text-sm font-bold shadow-md bg-neutral-900 dark:bg-neutral-800">2</span>
               Create Post (cURL)
             </h3>
             <CodeBlock id="example-post" language="bash" code={postExample} />

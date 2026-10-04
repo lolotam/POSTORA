@@ -58,8 +58,6 @@ export default function N8nIntegration() {
     <div className="min-h-screen bg-background relative overflow-hidden">
       {/* Page-wide subtle violet halo */}
       <div aria-hidden className="pointer-events-none fixed inset-0 -z-10">
-        <div className="absolute top-1/4 -start-32 h-96 w-96 rounded-full bg-violet-500/5 blur-3xl" />
-        <div className="absolute bottom-1/4 -end-32 h-96 w-96 rounded-full bg-fuchsia-500/5 blur-3xl" />
       </div>
       <N8nHeader isAuthenticated={!!user} />
 
