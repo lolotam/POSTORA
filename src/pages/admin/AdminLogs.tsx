@@ -1138,7 +1138,7 @@ export default function AdminLogs() {
                                 </Badge>
                                 <span className="text-xs text-muted-foreground font-mono">{log.source}</span>
                               </div>
-                              <p className="text-sm break-all">{log.message}</p>
+                              <p className="text-sm [overflow-wrap:anywhere]">{log.message}</p>
                               {log.metadata && Object.keys(log.metadata).length > 0 && renderMetadataDetails(log.metadata)}
                               
                               {analysisResults.has(log.id) && (

@@ -134,6 +134,7 @@ import {
   DeleteFolderDialog,
 } from "./media-library";
 import { RetentionBadge, RetentionKeepItem } from "./media-library/components/RetentionBadge";
+import { useIsMobile } from "@/hooks/use-mobile";
 
 /**
  * Thumbnail for one media row in the grid, the list, and the drag overlay.
@@ -215,6 +216,10 @@ export default function MediaLibrary() {
     const saved = localStorage.getItem("mediaLibraryColumnsPerRow");
     return saved ? parseInt(saved, 10) : 5;
   });
+  // The saved per-row choice is a desktop preference; on a phone 5+ columns leaves ~60px tiles,
+  // so the grid caps at 3 there without overwriting what the user saved.
+  const isMobile = useIsMobile();
+  const gridColumns = isMobile ? Math.min(columnsPerRow, 3) : columnsPerRow;
 
   // Filters
   const [selectedDate, setSelectedDate] = useState<Date | undefined>(undefined);
@@ -1270,7 +1275,7 @@ export default function MediaLibrary() {
 
               {/* Files Grid/List - simplified for brevity, uses DraggableMediaCard */}
               {viewMode === "grid" ? (
-                <div className="grid gap-3" style={{ gridTemplateColumns: `repeat(${columnsPerRow}, minmax(0, 1fr))` }}>
+                <div className="grid gap-3" style={{ gridTemplateColumns: `repeat(${gridColumns}, minmax(0, 1fr))` }}>
                   {displayedFiles.map((file) => (
                     <DraggableMediaCard key={file.id} file={file}>
                       <div className={cn("relative rounded-xl overflow-hidden border-2 transition-all cursor-pointer aspect-square", selectedFiles.has(file.id) ? "border-primary bg-primary/5" : "border-border hover:border-primary/50")} onClick={() => toggleFileSelection(file.id)}>
@@ -1284,11 +1289,11 @@ export default function MediaLibrary() {
                             onKeep={viewingAnotherUser || file.keep_forever ? undefined : () => handleSetKeep([file.id], true)}
                           />
                         </div>
-                        <Button size="icon" variant="secondary" className={cn("absolute top-1/2 start-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full opacity-0 group-hover:opacity-100 transition-opacity shadow-lg", columnsPerRow >= 10 ? "h-5 w-5" : columnsPerRow >= 8 ? "h-7 w-7" : "h-10 w-10")} onClick={(e) => { e.stopPropagation(); setPreviewFile(file); }}><Eye className={columnsPerRow >= 10 ? "w-2.5 h-2.5" : columnsPerRow >= 8 ? "w-3.5 h-3.5" : "w-5 h-5"} /></Button>
-                        <div className={cn("absolute rounded-full flex items-center justify-center transition-all", columnsPerRow >= 10 ? "top-0.5 start-0.5 w-3 h-3" : columnsPerRow >= 8 ? "top-1 start-1 w-4 h-4" : "top-1 start-1 w-6 h-6", selectedFiles.has(file.id) ? "bg-primary text-primary-foreground" : "bg-background opacity-0 group-hover:opacity-100")}>{selectedFiles.has(file.id) ? <CheckCircle2 className={columnsPerRow >= 10 ? "w-2 h-2" : columnsPerRow >= 8 ? "w-3 h-3" : "w-4 h-4"} /> : <div className={cn("rounded-full border-2 border-muted-foreground", columnsPerRow >= 10 ? "w-1.5 h-1.5" : columnsPerRow >= 8 ? "w-2 h-2" : "w-3 h-3")} />}</div>
-                        <div className={cn("absolute flex items-center opacity-0 group-hover:opacity-100 transition-opacity", columnsPerRow >= 10 ? "top-0.5 end-0.5 gap-0" : columnsPerRow >= 8 ? "top-1 end-1 gap-0.5" : "top-1 end-1 gap-1")}>
+                        <Button size="icon" variant="secondary" className={cn("absolute top-1/2 start-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full opacity-0 group-hover:opacity-100 [@media(hover:none)]:opacity-100 transition-opacity shadow-lg", gridColumns >= 10 ? "h-5 w-5" : gridColumns >= 8 ? "h-7 w-7" : "h-10 w-10")} onClick={(e) => { e.stopPropagation(); setPreviewFile(file); }}><Eye className={gridColumns >= 10 ? "w-2.5 h-2.5" : gridColumns >= 8 ? "w-3.5 h-3.5" : "w-5 h-5"} /></Button>
+                        <div className={cn("absolute rounded-full flex items-center justify-center transition-all", gridColumns >= 10 ? "top-0.5 start-0.5 w-3 h-3" : gridColumns >= 8 ? "top-1 start-1 w-4 h-4" : "top-1 start-1 w-6 h-6", selectedFiles.has(file.id) ? "bg-primary text-primary-foreground" : "bg-background opacity-0 group-hover:opacity-100 [@media(hover:none)]:opacity-100")}>{selectedFiles.has(file.id) ? <CheckCircle2 className={gridColumns >= 10 ? "w-2 h-2" : gridColumns >= 8 ? "w-3 h-3" : "w-4 h-4"} /> : <div className={cn("rounded-full border-2 border-muted-foreground", gridColumns >= 10 ? "w-1.5 h-1.5" : gridColumns >= 8 ? "w-2 h-2" : "w-3 h-3")} />}</div>
+                        <div className={cn("absolute flex items-center opacity-0 group-hover:opacity-100 [@media(hover:none)]:opacity-100 transition-opacity", gridColumns >= 10 ? "top-0.5 end-0.5 gap-0" : gridColumns >= 8 ? "top-1 end-1 gap-0.5" : "top-1 end-1 gap-1")}>
                           <DropdownMenu>
-                            <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}><Button size="icon" variant="secondary" aria-label={t("actions.moreOptions", "View more options")} className={columnsPerRow >= 10 ? "h-4 w-4" : columnsPerRow >= 8 ? "h-5 w-5" : "h-7 w-7"}><MoreVertical className={columnsPerRow >= 10 ? "w-2 h-2" : columnsPerRow >= 8 ? "w-2.5 h-2.5" : "w-3 h-3"} /></Button></DropdownMenuTrigger>
+                            <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}><Button size="icon" variant="secondary" aria-label={t("actions.moreOptions", "View more options")} className={gridColumns >= 10 ? "h-4 w-4" : gridColumns >= 8 ? "h-5 w-5" : "h-7 w-7"}><MoreVertical className={gridColumns >= 10 ? "w-2 h-2" : gridColumns >= 8 ? "w-2.5 h-2.5" : "w-3 h-3"} /></Button></DropdownMenuTrigger>
                             <DropdownMenuContent align="end" className="bg-background">
                               <DropdownMenuItem onClick={(e) => { e.stopPropagation(); setPreviewFile(file); }}><Eye className="w-4 h-4 me-2" />{t("common:open", "Open")}</DropdownMenuItem>
                               <DropdownMenuSeparator />
