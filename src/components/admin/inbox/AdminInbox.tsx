@@ -337,7 +337,12 @@ export function AdminInbox() {
           <div
             className={cn(
               "border rounded-lg overflow-hidden bg-card transition-[width] duration-200 shrink-0",
-              threadsCollapsed ? "w-0 border-0 opacity-0 pointer-events-none" : "w-full md:w-1/3 md:min-w-[300px]",
+              // Collapsing is a desktop control (its toggle is hidden below md), so it only
+              // applies from md up; otherwise shrinking the viewport with the list collapsed
+              // would leave the phone layout with no list and no way to bring it back.
+              threadsCollapsed
+                ? "w-full md:w-0 md:border-0 md:opacity-0 md:pointer-events-none"
+                : "w-full md:w-1/3 md:min-w-[300px]",
               selectedThread && "max-md:hidden"
             )}
           >
