@@ -17,8 +17,8 @@ export interface DepthStyle {
 
 const DEPTH_STYLES: DepthStyle[] = [
   { rail: "bg-primary", tint: "bg-primary/[0.04]", name: "text-foreground" },
-  { rail: "bg-sky-500", tint: "bg-sky-500/[0.06]", name: "text-sky-700 dark:text-sky-300" },
-  { rail: "bg-violet-500", tint: "bg-violet-500/[0.06]", name: "text-violet-700 dark:text-violet-300" },
+  { rail: "bg-neutral-900 dark:bg-neutral-800", tint: "bg-sky-500/[0.06]", name: "text-foreground dark:text-neutral-200" },
+  { rail: "bg-neutral-900 dark:bg-neutral-800", tint: "bg-violet-500/[0.06]", name: "text-foreground dark:text-neutral-200" },
   { rail: "bg-amber-500", tint: "bg-amber-500/[0.07]", name: "text-amber-700 dark:text-amber-300" },
   { rail: "bg-emerald-500", tint: "bg-emerald-500/[0.06]", name: "text-emerald-700 dark:text-emerald-300" },
 ];

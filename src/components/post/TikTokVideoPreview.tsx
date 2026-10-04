@@ -28,8 +28,8 @@ export function TikTokVideoPreview({
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <div className="w-5 h-5 bg-black rounded flex items-center justify-center">
-            <svg viewBox="0 0 24 24" className="w-3.5 h-3.5 text-white" fill="currentColor">
-              <path d="M19.59 6.69a4.83 4.83 0 01-3.77-4.25V2h-3.45v13.67a2.89 2.89 0 01-5.2 1.74 2.89 2.89 0 012.31-4.64 2.93 2.93 0 01.88.13V9.4a6.84 6.84 0 00-1-.05A6.33 6.33 0 005 20.1a6.34 6.34 0 0010.86-4.43v-7a8.16 8.16 0 004.77 1.52v-3.4a4.85 4.85 0 01-1-.1z"/>
+            <svg viewBox="0 24" className="w-3.5 h-3.5 text-white" fill="currentColor">
+              <path d="M19.59 6.69a4.83 4.83 0 01-3.77-4.25V2h-3.45v13.67a2.89 2.89 0 01-5.2 1.74 2.89 0 012.31-4.64 2.93 0 01.88.13V9.4a6.84 6.84 0 00-1-.05A6.33 6.33 0 005 20.1a6.34 6.34 0 0010.86-4.43v-7a8.16 8.16 0 004.77 1.52v-3.4a4.85 4.85 0 01-1-.1z"/>
             </svg>
           </div>
           <span className="text-sm font-medium">{t("tiktokVideo.previewTitle", "For You Preview")}</span>
@@ -63,11 +63,11 @@ export function TikTokVideoPreview({
                 className="w-full h-full object-cover"
               />
             ) : (
-              <div className="w-full h-full bg-gradient-to-br from-pink-500 via-purple-500 to-cyan-500" />
+              <div className="w-full h-full bg-neutral-900 dark:bg-neutral-800" />
             )}
             
             {/* Dark overlay for text visibility */}
-            <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-black/30" />
+            <div className="absolute inset-0 bg-black/80" />
           </div>
 
           {/* Top Navigation */}
@@ -83,7 +83,7 @@ export function TikTokVideoPreview({
             <div className="relative">
               <Avatar className="h-11 w-11 border-2 border-white">
                 {avatarUrl ? <AvatarImage src={avatarUrl} alt={username} /> : null}
-                <AvatarFallback className="bg-gradient-to-br from-pink-500 to-purple-500 text-white text-sm">
+                <AvatarFallback className="text-white text-sm bg-neutral-900 dark:bg-neutral-800">
                   {username[0]?.toUpperCase()}
                 </AvatarFallback>
               </Avatar>
@@ -125,7 +125,7 @@ export function TikTokVideoPreview({
             </div>
 
             {/* Spinning Disc */}
-            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-gray-800 to-gray-900 border-4 border-gray-700 flex items-center justify-center animate-spin-slow">
+            <div className="w-10 h-10 rounded-full border-4 border-gray-700 flex items-center justify-center animate-spin-slow bg-gray-800">
               <div className="w-3 h-3 rounded-full bg-gray-600" />
             </div>
           </div>

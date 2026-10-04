@@ -340,7 +340,7 @@ export function PlatformAccountsTab({
               </TableBody>
             </Table>
           </GradientRingCard>
-          <div className="flex items-center gap-2 rounded-2xl border border-border/60 bg-card/60 backdrop-blur-md p-3">
+          <div className="flex items-center gap-2 rounded-2xl border border-border/60 bg-card p-3">
             <Button onClick={onConnect} disabled={isConnecting} variant="outline" className="gap-2">
               {isConnecting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
               Connect Another {getPlatformName(platform)} Account

@@ -17,7 +17,7 @@ import { PlanComparison } from "@/components/pricing/PlanComparison";
 import { AiCreditsSection } from "@/components/pricing/AiCreditsSection";
 import { CouponInput } from "@/components/pricing/CouponInput";
 import { PromotionBanner } from "@/components/pricing/PromotionBanner";
-import { BlobHero, GradientHeading, Reveal, GradientDivider } from "@/components/fx";
+import { GradientHeading, Reveal, GradientDivider } from "@/components/fx";
 
 interface TierRateLimit {
   plan_slug: string;
@@ -110,7 +110,6 @@ export default function Pricing() {
       <div className="max-w-6xl mx-auto space-y-12">
         {/* Hero Section */}
         <section className="relative overflow-hidden rounded-3xl py-12 md:py-16 px-6 text-center">
-          <BlobHero preset="sky-violet-pink" />
           <Reveal>
             <Badge variant="secondary" className="mb-4">{t("pricing.header.badge", "Pricing")}</Badge>
             <GradientHeading as="h1" preset="sky-violet-pink" size="2xl">

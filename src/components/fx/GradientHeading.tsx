@@ -4,9 +4,9 @@ import type { HeadingPreset } from "./gradients";
 /**
  * Big section heading.
  *
- * Historically rendered bg-clipped gradient text; the flat design system dropped that, so
- * it now renders solid foreground text. `preset` is still accepted so existing call sites
- * compile unchanged while they are migrated, but it no longer affects the output.
+ * Historically rendered bg-clipped gradient text; the flat design system dropped that, so it
+ * now renders solid foreground text in the display serif, which is reserved for large titles.
+ * `preset` is still accepted so existing call sites compile unchanged, but has no effect.
  */
 export function GradientHeading({
   children,
@@ -27,7 +27,7 @@ export function GradientHeading({
       : size === "xl"
         ? "text-3xl md:text-5xl"
         : "text-2xl md:text-4xl";
-  return <Tag className={cn("font-semibold tracking-tight text-foreground", sizeCls, className)}>{children}</Tag>;
+  return <Tag className={cn("font-display font-medium tracking-tight text-foreground", sizeCls, className)}>{children}</Tag>;
 }
 
 export default GradientHeading;

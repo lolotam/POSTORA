@@ -596,7 +596,7 @@ export function ThreadsKeywordSearchPanel() {
       {/* Recent searches — Meta + Local */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         {/* Meta recent searches card */}
-        <div className="rounded-xl border border-border bg-gradient-to-br from-card to-muted/30 p-3 shadow-sm hover:shadow-md transition-shadow">
+        <div className="rounded-xl border border-border p-3 shadow-sm hover:shadow-md transition-shadow bg-card">
           <div className="flex items-center justify-between mb-2.5">
             <div className="flex items-center gap-2">
               <div className="w-6 h-6 rounded-md bg-primary/10 flex items-center justify-center">
@@ -635,7 +635,7 @@ export function ThreadsKeywordSearchPanel() {
         </div>
 
         {/* Local recent searches card */}
-        <div className="rounded-xl border border-border bg-gradient-to-br from-card to-muted/30 p-3 shadow-sm hover:shadow-md transition-shadow">
+        <div className="rounded-xl border border-border p-3 shadow-sm hover:shadow-md transition-shadow bg-card">
           <div className="flex items-center justify-between mb-2.5">
             <div className="flex items-center gap-2">
               <div className="w-6 h-6 rounded-md bg-primary/10 flex items-center justify-center">

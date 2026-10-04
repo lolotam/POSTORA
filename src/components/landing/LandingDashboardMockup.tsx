@@ -13,9 +13,7 @@ export default function LandingDashboardMockup() {
         transition={{ duration: 0.8 }}
         className="relative max-w-6xl mx-auto"
       >
-        <div className="absolute inset-0 bg-gradient-to-r from-primary/20 via-accent/20 to-primary/20 blur-3xl opacity-50 -z-10" />
-
-        <div className="rounded-2xl border border-border bg-card/80 backdrop-blur-xl shadow-2xl overflow-hidden">
+        <div className="rounded-2xl border border-border bg-card shadow-2xl overflow-hidden">
           <div className="flex items-center gap-2 px-4 py-3 border-b border-border bg-muted/50">
             <div className="flex gap-1.5">
               <div className="w-3 h-3 rounded-full bg-red-500/80" />
@@ -30,7 +28,7 @@ export default function LandingDashboardMockup() {
             </div>
           </div>
 
-          <div className="p-6 bg-gradient-to-br from-background to-secondary/20">
+          <div className="p-6 bg-background">
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
               {[
                 { label: "Total Posts", value: "1,234", change: "+12%" },
@@ -72,7 +70,7 @@ export default function LandingDashboardMockup() {
                       whileInView={{ height: `${height}%` }}
                       viewport={{ once: true }}
                       transition={{ delay: 0.5 + i * 0.05, duration: 0.5 }}
-                      className="flex-1 bg-gradient-to-t from-primary to-primary/50 rounded-t-sm"
+                      className="flex-1 rounded-t-sm bg-primary"
                     />
                   ))}
                 </div>

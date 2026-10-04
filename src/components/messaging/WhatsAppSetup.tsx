@@ -276,7 +276,7 @@ export function WhatsAppSetup({ connectedAccounts }: WhatsAppSetupProps) {
                             isCoexistence
                               ? "border-green-600/40 text-green-700 dark:text-green-400 bg-green-500/10"
                               : isEvolutionQr
-                                ? "border-purple-600/40 text-purple-700 dark:text-purple-400 bg-purple-500/10"
+                                ? "border-input text-foreground dark:text-foreground bg-muted"
                                 : "border-blue-600/40 text-blue-700 dark:text-blue-400 bg-blue-500/10"
                           }
                         >
@@ -567,10 +567,10 @@ export function WhatsAppSetup({ connectedAccounts }: WhatsAppSetupProps) {
           )}
 
           {evolutionQrEnabled && (
-            <Card className="border-purple-600/40">
+            <Card className="border-input">
               <CardHeader>
                 <div className="flex items-center gap-2">
-                  <QrCode className="w-5 h-5 text-purple-600" />
+                  <QrCode className="w-5 h-5 text-foreground" />
                   <CardTitle className="text-base">{t("setup.directQr", "Direct QR Mode")}</CardTitle>
                 </div>
                 <CardDescription>
@@ -580,7 +580,7 @@ export function WhatsAppSetup({ connectedAccounts }: WhatsAppSetupProps) {
               <CardContent className="space-y-3">
                 <ul className="space-y-1.5 text-sm">
                   <li className="flex items-start gap-2"><Check className="w-4 h-4 text-purple-600 mt-0.5 shrink-0" />{t("setup.directQrExisting", "Use your existing WhatsApp account")}</li>
-                  <li className="flex items-start gap-2"><Check className="w-4 h-4 text-purple-600 mt-0.5 shrink-0" />{t("setup.directQrReplies", "Text and media replies in Postora")}</li>
+                  <li className="flex items-start gap-2"><Check className="w-4 h-4 text-foreground mt-0.5 shrink-0" />{t("setup.directQrReplies", "Text and media replies in Postora")}</li>
                   <li className="flex items-start gap-2"><X className="w-4 h-4 text-destructive mt-0.5 shrink-0" />{t("setup.directQrNoTemplates", "Templates and interactive catalog sends unavailable")}</li>
                 </ul>
                 <Button
@@ -590,7 +590,7 @@ export function WhatsAppSetup({ connectedAccounts }: WhatsAppSetupProps) {
                   }}
                   disabled={qrConnecting}
                   variant="outline"
-                  className="w-full gap-2 border-purple-600/40"
+                  className="w-full gap-2 border-input"
                 >
                   {qrConnecting ? <Loader2 className="w-4 h-4 animate-spin" /> : <QrCode className="w-4 h-4" />}
                   {t("setup.connectQr", "Connect with QR code")}

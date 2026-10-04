@@ -125,6 +125,6 @@ export const blueskyChecklistItems: ChecklistItem[] = [
 export const blueskyCategoryInfo: Record<string, CategoryInfo> = {
   setup: { label: "App Setup", icon: Settings, color: "text-blue-500" },
   api: { label: "API Integration", icon: Key, color: "text-cyan-500" },
-  content: { label: "Content Requirements", icon: FileText, color: "text-sky-500" },
+  content: { label: "Content Requirements", icon: FileText, color: "text-foreground" },
   compliance: { label: "Compliance", icon: Shield, color: "text-green-500" },
 };

@@ -1,9 +1,13 @@
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { readFileSync, readdirSync, statSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { Button } from "@/components/ui/button";
 import { GradientHeading } from "@/components/fx/GradientHeading";
+import { GradientRingCard } from "@/components/fx/GradientRingCard";
+import { Icon3D } from "@/components/fx/Icon3D";
+import { GradientDivider } from "@/components/fx/GradientDivider";
+import { Send } from "lucide-react";
 
 const css = readFileSync(resolve(__dirname, "../../index.css"), "utf8");
 
@@ -60,5 +64,52 @@ describe("GradientHeading", () => {
     const heading = screen.getByRole("heading", { level: 1, name: "Dashboard" });
     expect(heading.className).toContain("text-foreground");
     expect(heading.innerHTML).not.toMatch(/bg-clip-text|text-transparent/);
+  });
+});
+
+describe("flat fx primitives", () => {
+  it("renders Icon3D as a neutral tile with no gradient", () => {
+    const { container } = render(<Icon3D icon={Send} variant="violet" />);
+    const tile = container.firstElementChild as HTMLElement;
+    expect(tile.className).toContain("bg-secondary");
+    expect(container.innerHTML).not.toMatch(/bg-gradient|text-white/);
+  });
+
+  it("marks the active GradientRingCard with a foreground border instead of a halo", () => {
+    const { container } = render(
+      <GradientRingCard variant="sky" active>
+        x
+      </GradientRingCard>,
+    );
+    expect(container.innerHTML).toContain("border-foreground");
+    expect(container.innerHTML).not.toMatch(/bg-gradient|blur/);
+  });
+
+  it("renders GradientDivider as a plain hairline", () => {
+    const { container } = render(<GradientDivider tone="rose" />);
+    expect((container.firstElementChild as HTMLElement).className).toContain("bg-border");
+  });
+});
+
+/** Every production .tsx file under src, skipping tests. */
+function sourceFiles(dir: string): string[] {
+  return readdirSync(dir).flatMap((name) => {
+    const full = join(dir, name);
+    if (statSync(full).isDirectory()) return name === "__tests__" ? [] : sourceFiles(full);
+    return full.endsWith(".tsx") && !full.includes(".test.") ? [full] : [];
+  });
+}
+
+describe("flat design guard", () => {
+  const files = sourceFiles(resolve(__dirname, "../.."));
+
+  // Gradient text and frosted glass were the two signatures of the old look; they crept in
+  // one component at a time, so the guard scans the whole tree rather than a few pages.
+  it.each([
+    ["gradient text", /bg-clip-text/],
+    ["frosted glass", /backdrop-blur/],
+  ])("has no %s left in any component", (_label, pattern) => {
+    const offenders = files.filter((file) => pattern.test(readFileSync(file, "utf8")));
+    expect(offenders).toEqual([]);
   });
 });

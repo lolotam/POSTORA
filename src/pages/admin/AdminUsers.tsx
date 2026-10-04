@@ -1044,7 +1044,7 @@ export default function AdminUsers() {
   const getPlanBadge = (planSlug: PlanSlug, role?: AppRole) => {
     if (role === "admin") {
       return (
-        <Badge className="bg-gradient-to-r from-primary/20 to-purple-500/20 text-foreground border-primary/30">
+        <Badge className="text-foreground border-primary/30 bg-primary/20">
           <Shield className="w-3 h-3 me-1" />
           Admin
         </Badge>
@@ -1053,14 +1053,14 @@ export default function AdminUsers() {
     switch (planSlug) {
       case "business":
         return (
-          <Badge className="bg-gradient-to-r from-purple-500/20 to-pink-500/20 text-purple-600 border-purple-500/30">
+          <Badge className="text-foreground border-border bg-muted">
             <Crown className="w-3 h-3 me-1" />
             Business
           </Badge>
         );
       case "pro":
         return (
-          <Badge className="bg-gradient-to-r from-blue-500/20 to-cyan-500/20 text-blue-600 border-blue-500/30">
+          <Badge className="text-blue-600 border-blue-500/30 bg-blue-500/20">
             <Zap className="w-3 h-3 me-1" />
             Pro
           </Badge>

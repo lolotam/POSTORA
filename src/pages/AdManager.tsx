@@ -92,7 +92,7 @@ export default function AdManager() {
                 <TooltipTrigger asChild>
                   <span tabIndex={0} className="inline-flex">
                     <DialogTrigger asChild>
-                      <Button size="sm" className="bg-gradient-to-r from-rose-500 via-pink-500 to-fuchsia-500 text-white hover:opacity-90 disabled:bg-none disabled:bg-muted disabled:text-muted-foreground" disabled={!activeAdAccountId || adAccountsLoading}>
+                      <Button size="sm" className="text-white hover:opacity-90 disabled:bg-none disabled:bg-muted disabled:text-muted-foreground bg-rose-500" disabled={!activeAdAccountId || adAccountsLoading}>
                         {adAccountsLoading ? <Loader2 className="h-4 w-4 animate-spin me-1" /> : <Plus className="h-4 w-4 me-1" />}
                         {t("actions.newCampaign", "New Campaign")}
                       </Button>
@@ -110,7 +110,7 @@ export default function AdManager() {
                 )}
               </Tooltip>
             </TooltipProvider>
-            <DialogContent className="bg-card/85 backdrop-blur-xl border-border/50">
+            <DialogContent className="bg-card border-border/50">
               <DialogHeader>
                 <DialogTitle className="flex items-center gap-3">
                   <span className="group inline-flex"><Icon3D icon={Megaphone} variant="rose" size="sm" /></span>
@@ -144,7 +144,7 @@ export default function AdManager() {
                   <Label>{t("ads.dailyBudget", "Daily Budget ($)")}</Label>
                   <Input type="number" value={newBudget} onChange={(e) => setNewBudget(e.target.value)} placeholder="10" />
                 </div>
-                <Button onClick={handleCreate} disabled={!newName || !newObjective || createCampaign.isPending} className="w-full bg-gradient-to-r from-rose-500 via-pink-500 to-fuchsia-500 text-white hover:opacity-90">
+                <Button onClick={handleCreate} disabled={!newName || !newObjective || createCampaign.isPending} className="w-full text-white hover:opacity-90 bg-rose-500">
                   {createCampaign.isPending ? <Loader2 className="h-4 w-4 animate-spin me-1" /> : null}
                   {t("ads.createCampaign", "Create Campaign")}
                 </Button>
@@ -201,7 +201,7 @@ export default function AdManager() {
 
         {/* Campaigns table */}
         {isLoading ? (
-          <div className="flex items-center justify-center py-16 rounded-2xl border border-border/40 bg-card/60 backdrop-blur-md">
+          <div className="flex items-center justify-center py-16 rounded-2xl border border-border/40 bg-card">
             <Loader2 className="h-8 w-8 animate-spin text-rose-500" />
           </div>
         ) : fbAccounts.length === 0 ? (
@@ -246,8 +246,8 @@ export default function AdManager() {
                         <TableCell className="font-medium max-w-[200px] truncate">{c.name}</TableCell>
                         <TableCell>
                           <Badge className={c.status === "ACTIVE"
-                            ? "bg-gradient-to-r from-emerald-500 to-teal-500 text-white border-0"
-                            : "bg-card/60 backdrop-blur border border-border/40 text-muted-foreground"}>
+                            ? "text-white border-0 bg-emerald-500"
+                            : "bg-card border border-border/40 text-muted-foreground"}>
                             {c.status}
                           </Badge>
                         </TableCell>

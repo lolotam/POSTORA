@@ -54,11 +54,11 @@ export function FacebookReelsPreview({
             />
           )
         ) : (
-          <div className="absolute inset-0 bg-gradient-to-b from-gray-800 to-gray-900" />
+          <div className="absolute inset-0 bg-gray-800" />
         )}
 
         {/* Overlay gradient */}
-        <div className="absolute inset-0 bg-gradient-to-b from-black/20 via-transparent to-black/70" />
+        <div className="absolute inset-0 bg-black/20" />
 
         {/* Facebook Reels logo */}
         <div className="absolute top-4 start-4 flex items-center gap-1">

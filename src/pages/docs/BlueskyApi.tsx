@@ -274,10 +274,10 @@ export default function BlueskyApi() {
       <main className="container mx-auto px-6 py-12 max-w-5xl">
 
         {/* Media Support Matrix */}
-        <Card className="mb-8 border-sky-500/20 bg-sky-500/5">
+        <Card className="mb-8 border-border bg-muted">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
-              <Shield className="w-5 h-5 text-sky-500" />
+              <Shield className="w-5 h-5 text-foreground" />
               Media Support
             </CardTitle>
             <CardDescription>Bluesky supported media formats and limits</CardDescription>

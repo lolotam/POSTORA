@@ -19,7 +19,7 @@ const platforms: PlatformConfig[] = [
   {
     name: "YouTube",
     icon: <Youtube className="w-5 h-5 text-red-500" />,
-    bgClass: "bg-gradient-to-br from-rose-400/20 to-pink-500/20",
+    bgClass: "bg-rose-400/20",
     variant: "rose",
     settings: [
       { code: "youtube_privacy", type: "private | unlisted | public" },
@@ -31,7 +31,7 @@ const platforms: PlatformConfig[] = [
   {
     name: "TikTok",
     icon: <span className="text-white text-lg">♪</span>,
-    bgClass: "bg-gradient-to-br from-rose-500 via-fuchsia-500 to-cyan-500",
+    bgClass: "bg-rose-500",
     variant: "rose",
     settings: [
       { code: "tiktok_title", type: "string (100 chars, optional)" },
@@ -45,7 +45,7 @@ const platforms: PlatformConfig[] = [
   {
     name: "Instagram",
     icon: <span className="text-white text-lg">📷</span>,
-    bgClass: "bg-gradient-to-br from-amber-400 via-rose-500 to-fuchsia-500",
+    bgClass: "bg-amber-400",
     variant: "rose",
     settings: [
       { code: "instagram_collaborators", type: "string[]" },
@@ -56,7 +56,7 @@ const platforms: PlatformConfig[] = [
   {
     name: "Facebook",
     icon: <span className="text-white text-lg">f</span>,
-    bgClass: "bg-gradient-to-br from-sky-400 via-blue-500 to-indigo-500",
+    bgClass: "bg-neutral-900 dark:bg-neutral-800",
     variant: "sky",
     settings: [
       { code: "facebook_page_id", type: "string" },
@@ -66,7 +66,7 @@ const platforms: PlatformConfig[] = [
   {
     name: "Pinterest",
     icon: <span className="text-white text-lg">📌</span>,
-    bgClass: "bg-gradient-to-br from-rose-500 to-red-600",
+    bgClass: "bg-rose-500",
     variant: "rose",
     settings: [
       { code: "pinterest_board_id", type: "string" },
@@ -77,7 +77,7 @@ const platforms: PlatformConfig[] = [
   {
     name: "LinkedIn",
     icon: <span className="text-white text-lg">in</span>,
-    bgClass: "bg-gradient-to-br from-sky-500 via-blue-600 to-indigo-600",
+    bgClass: "bg-neutral-900 dark:bg-neutral-800",
     variant: "sky",
     settings: [
       { code: "linkedin_destination_ids", type: "string[]" },

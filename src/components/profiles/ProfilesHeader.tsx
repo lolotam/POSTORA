@@ -6,7 +6,7 @@ import { useSubscription } from "@/hooks/useSubscription";
 import { useUserRole } from "@/hooks/useUserRole";
 import { useFeatureFlags } from "@/hooks/useFeatureFlags";
 import { Badge } from "@/components/ui/badge";
-import { GradientHeading, GradientRingCard, Icon3D, Reveal, GRADIENTS } from "@/components/fx";
+import { GradientHeading, GradientRingCard, Icon3D, Reveal } from "@/components/fx";
 import { platformVariant } from "./platformVariant";
 import { cn } from "@/lib/utils";
 import type { Platform } from "@/lib/types";
@@ -101,18 +101,11 @@ function PremiumPlatformCard({ platform, name, hasAccess }: { platform: string; 
 // Glassmorphism platform card for standard/free platforms
 function StandardPlatformCard({ platform, name, isBeta }: { platform: string; name: string; isBeta?: boolean }) {
   const variant = platformVariant(platform as Platform);
-  const g = GRADIENTS[variant];
   return (
     <GradientRingCard variant={variant} padded={false} innerClassName="p-3" hoverLift={false}>
       <div className="flex items-center gap-3">
-        <span
-          className={cn(
-            "relative inline-flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br ring-1 ring-white/30 shadow-lg",
-            g.from, g.via, g.to, g.shadow,
-          )}
-        >
-          <span aria-hidden className="pointer-events-none absolute inset-x-1 top-1 h-1/2 rounded-t-xl bg-gradient-to-b from-white/50 to-transparent" />
-          <PlatformIcon platform={platform as any} size="sm" className="relative text-white drop-shadow-md" />
+        <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-border bg-secondary">
+          <PlatformIcon platform={platform as any} size="sm" />
         </span>
         <div className="flex-1 min-w-0">
           <span className="font-medium text-sm truncate block">{name}</span>
@@ -183,9 +176,6 @@ export function ProfilesHeader({ profileCount, isAdmin }: ProfilesHeaderProps) {
         {/* Platform Access Overview — Glassmorphism */}
         {flags.platformAccess && (
           <GradientRingCard variant="violet" innerClassName="p-6 space-y-6 overflow-hidden">
-            <div className="absolute -top-24 -end-24 w-48 h-48 bg-violet-500/10 rounded-full blur-3xl pointer-events-none" />
-            <div className="absolute -bottom-16 -start-16 w-40 h-40 bg-emerald-500/10 rounded-full blur-3xl pointer-events-none" />
-
             <div className="relative flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <Icon3D icon={Crown} variant="violet" size="md" />
@@ -232,7 +222,7 @@ export function ProfilesHeader({ profileCount, isAdmin }: ProfilesHeaderProps) {
               <div className="relative space-y-3">
                 <button
                   onClick={() => setShowStandardPlatforms(!showStandardPlatforms)}
-                  className="w-full flex items-center justify-between rounded-xl border border-border/60 bg-card/60 backdrop-blur-md px-4 py-3 hover:bg-card hover:-translate-y-0.5 transition-all duration-300 group"
+                  className="w-full flex items-center justify-between rounded-xl border border-border/60 bg-card px-4 py-3 hover:bg-card hover:-translate-y-0.5 transition-all duration-300 group"
                 >
                   <div className="flex items-center gap-2">
                     <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Standard Platforms</p>

@@ -1,15 +1,15 @@
 import { cn } from "@/lib/utils";
-import { HEADING_PRESETS, type HeadingPreset } from "@/components/fx/gradients";
+import type { HeadingPreset } from "@/components/fx/gradients";
 
 interface SectionTitleProps {
   children: React.ReactNode;
   id: string;
-  /** Gradient preset for the title text. Defaults to violet→sky. */
+  /** @deprecated No visual effect since the flat design system. */
   preset?: HeadingPreset;
   className?: string;
 }
 
-export function SectionTitle({ children, id, preset = "violet-sky", className }: SectionTitleProps) {
+export function SectionTitle({ children, id, className }: SectionTitleProps) {
   return (
     <h2
       id={id}
@@ -18,16 +18,8 @@ export function SectionTitle({ children, id, preset = "violet-sky", className }:
         className,
       )}
     >
-      <span
-        aria-hidden
-        className={cn(
-          "absolute start-0 top-1.5 bottom-1.5 w-1 rounded-full bg-gradient-to-b",
-          HEADING_PRESETS[preset],
-        )}
-      />
-      <span className={cn("bg-clip-text text-transparent bg-gradient-to-r", HEADING_PRESETS[preset])}>
-        {children}
-      </span>
+      <span aria-hidden className="absolute start-0 top-1.5 bottom-1.5 w-0.5 rounded-full bg-border" />
+      {children}
     </h2>
   );
 }
@@ -35,11 +27,12 @@ export function SectionTitle({ children, id, preset = "violet-sky", className }:
 interface SubSectionProps {
   children: React.ReactNode;
   id: string;
+  /** @deprecated No visual effect since the flat design system. */
   preset?: HeadingPreset;
   className?: string;
 }
 
-export function SubSection({ children, id, preset = "violet-sky", className }: SubSectionProps) {
+export function SubSection({ children, id, className }: SubSectionProps) {
   return (
     <h3
       id={id}
@@ -50,11 +43,7 @@ export function SubSection({ children, id, preset = "violet-sky", className }: S
     >
       <span
         aria-hidden
-        className={cn(
-          "h-2 w-2 rounded-full bg-gradient-to-br shadow-[0_0_8px]",
-          HEADING_PRESETS[preset],
-          "shadow-violet-500/40",
-        )}
+        className="h-1.5 w-1.5 rounded-full bg-muted-foreground"
       />
       <span>{children}</span>
     </h3>

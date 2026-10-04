@@ -136,7 +136,7 @@ function TextCaptionNodeComponent({ id, data, selected }: NodeProps) {
       </Handle>
 
       {/* Floating Label with status */}
-      <div className="absolute -top-8 start-6 flex items-center gap-1.5 px-2.5 py-1 bg-card/90 backdrop-blur-sm rounded-lg text-xs font-medium text-muted-foreground border border-border/50 z-10">
+      <div className="absolute -top-8 start-6 flex items-center gap-1.5 px-2.5 py-1 bg-card rounded-lg text-xs font-medium text-muted-foreground border border-border/50 z-10">
         <Type className="h-3.5 w-3.5" />
         <span>Caption</span>
         {isValid ? (
@@ -149,7 +149,7 @@ function TextCaptionNodeComponent({ id, data, selected }: NodeProps) {
       {/* Floating Toolbar */}
       {selected && (
         <div className="absolute -top-14 start-1/2 -translate-x-1/2 z-20">
-          <div className="flex items-center gap-0.5 px-1.5 py-1 bg-card/95 backdrop-blur-md border border-border/50 rounded-xl shadow-lg">
+          <div className="flex items-center gap-0.5 px-1.5 py-1 bg-card border border-border/50 rounded-xl shadow-lg">
             <Tooltip>
               <TooltipTrigger asChild>
                 <Button
@@ -212,7 +212,7 @@ function TextCaptionNodeComponent({ id, data, selected }: NodeProps) {
       <div
         className={cn(
           "min-w-[360px] rounded-2xl overflow-hidden transition-all duration-300",
-          "bg-card/80 backdrop-blur-sm",
+          "bg-card",
           selected
             ? "node-glow-caption"
             : "border-2 border-blue-500/30 hover:border-blue-500/50"
@@ -220,7 +220,7 @@ function TextCaptionNodeComponent({ id, data, selected }: NodeProps) {
         style={{ minHeight: 220 }}
       >
         {/* Category accent strip */}
-        <div className="h-1 bg-gradient-to-r from-blue-500/80 to-blue-400/40" />
+        <div className="h-1 bg-blue-500/80" />
         <NodeResizer
           color="hsl(220 90% 56%)"
           isVisible={selected}

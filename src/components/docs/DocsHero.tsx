@@ -2,7 +2,6 @@ import { BookOpen, type LucideIcon } from "lucide-react";
 import { PlatformIcon, ExtendedPlatform } from "@/components/PlatformIcon";
 import { GradientHeading, Icon3D, Reveal, GradientDivider } from "@/components/fx";
 import type { GradientKey, HeadingPreset } from "@/components/fx/gradients";
-import { GRADIENTS } from "@/components/fx/gradients";
 import { cn } from "@/lib/utils";
 
 interface DocsHeroProps {
@@ -39,26 +38,10 @@ export function DocsHero({
   headingPreset,
   icon: HeroIcon = BookOpen,
 }: DocsHeroProps) {
-  const g = GRADIENTS[variant];
   const preset = headingPreset ?? PRESET_FOR_VARIANT[variant];
 
   return (
     <section className="relative border-b border-border/60 overflow-hidden">
-      {/* Animated gradient backdrop */}
-      <div
-        aria-hidden
-        className={cn(
-          "pointer-events-none absolute inset-0 -z-10 opacity-40 blur-3xl",
-          "bg-gradient-to-br",
-          g.from,
-          g.via,
-          g.to,
-        )}
-      />
-      <div
-        aria-hidden
-        className="pointer-events-none absolute inset-0 -z-10 bg-gradient-to-b from-background/40 via-background/70 to-background"
-      />
 
       <Reveal>
         <div className="container mx-auto px-6 py-14 md:py-16 text-center">
@@ -67,8 +50,8 @@ export function DocsHero({
           </div>
 
           {badge && (
-            <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full border border-border/60 bg-card/60 backdrop-blur-md shadow-sm mb-6">
-              {badgeIcon || <BookOpen className={cn("w-4 h-4", g.ringText)} />}
+            <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full border border-border/60 bg-card shadow-sm mb-6">
+              {badgeIcon || <BookOpen className="w-4 h-4 text-muted-foreground" />}
               <span className="text-sm font-medium">{badge}</span>
             </div>
           )}
@@ -82,7 +65,7 @@ export function DocsHero({
           </p>
 
           {platforms && platforms.length > 0 && (
-            <div className="inline-flex flex-wrap items-center justify-center gap-3 px-5 py-3 rounded-full border border-border/60 bg-card/60 backdrop-blur-md shadow-sm">
+            <div className="inline-flex flex-wrap items-center justify-center gap-3 px-5 py-3 rounded-full border border-border/60 bg-card shadow-sm">
               {platforms.map((p) => (
                 <PlatformIcon key={p} platform={p} size="md" />
               ))}

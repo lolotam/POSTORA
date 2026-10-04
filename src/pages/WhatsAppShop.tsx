@@ -90,11 +90,11 @@ export default function WhatsAppShop() {
             </div>
           <Dialog open={createOpen} onOpenChange={setCreateOpen}>
             <DialogTrigger asChild>
-              <Button size="sm" className="bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500 text-white hover:opacity-90">
+              <Button size="sm" className="text-white hover:opacity-90 bg-emerald-500">
                 <Plus className="h-4 w-4 me-1" /> {t("shop.addProduct", "Add Product")}
               </Button>
             </DialogTrigger>
-            <DialogContent className="bg-card/85 backdrop-blur-xl border-border/50">
+            <DialogContent className="bg-card border-border/50">
               <DialogHeader>
                 <DialogTitle className="flex items-center gap-3">
                   <span className="group inline-flex"><Icon3D icon={Package} variant="emerald" size="sm" /></span>
@@ -118,7 +118,7 @@ export default function WhatsAppShop() {
                   <Label>{t("shop.imageUrl", "Image URL")}</Label>
                   <Input value={newProduct.imageUrl} onChange={(e) => setNewProduct({ ...newProduct, imageUrl: e.target.value })} placeholder="https://..." />
                 </div>
-                <Button onClick={handleCreate} disabled={!newProduct.name || !newProduct.price} className="w-full bg-gradient-to-r from-emerald-500 via-teal-500 to-cyan-500 text-white hover:opacity-90">
+                <Button onClick={handleCreate} disabled={!newProduct.name || !newProduct.price} className="w-full text-white hover:opacity-90 bg-emerald-500">
                   {t("shop.addProduct", "Add Product")}
                 </Button>
               </div>
@@ -136,7 +136,7 @@ export default function WhatsAppShop() {
             { id: "draft", label: t("shop.draft", "Draft"), value: stats.draft, icon: Edit, variant: "amber" as GradientKey },
           ]).map((s, i) => (
             <Reveal key={s.id} delay={i * 60}>
-              <div className="group rounded-2xl border border-border/40 bg-card/60 backdrop-blur-md p-4 flex items-center gap-3 transition-transform hover:-translate-y-0.5">
+              <div className="group rounded-2xl border border-border/40 bg-card p-4 flex items-center gap-3 transition-transform hover:-translate-y-0.5">
                 <Icon3D icon={s.icon} variant={s.variant} size="sm" />
                 <div>
                   <p className="text-xs text-muted-foreground">{s.label}</p>
@@ -194,8 +194,8 @@ export default function WhatsAppShop() {
                         <Badge
                           variant={p.status === "active" ? "default" : "secondary"}
                           className={p.status === "active"
-                            ? "cursor-pointer bg-gradient-to-r from-emerald-500 to-teal-500 text-white border-0 hover:opacity-90"
-                            : "cursor-pointer bg-card/60 backdrop-blur border border-border/40"}
+                            ? "cursor-pointer text-white border-0 hover:opacity-90 bg-emerald-500"
+                            : "cursor-pointer bg-card border border-border/40"}
                           onClick={() => handleToggleStatus(p.id)}
                         >
                           {p.status === "active" ? t("shop.statusActive", "active") : t("shop.statusDraft", "draft")}

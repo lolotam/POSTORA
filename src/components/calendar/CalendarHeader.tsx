@@ -33,17 +33,17 @@ export function CalendarHeader({
         </div>
       </div>
 
-      <div className="flex items-center gap-2 rounded-2xl border border-border/60 bg-card/60 backdrop-blur-md p-1.5 shadow-sm">
+      <div className="flex items-center gap-2 rounded-2xl border border-border/60 bg-card p-1.5 shadow-sm">
         <Button
           variant="ghost"
           size="icon"
           onClick={onPreviousMonth}
-          className="rounded-xl hover:bg-violet-500/10 hover:text-violet-500"
+          className="rounded-xl hover:bg-muted hover:text-foreground"
         >
           <ChevronLeft className="w-4 h-4" />
         </Button>
         <div className="min-w-[160px] text-center px-2">
-          <span className="font-semibold tabular-nums bg-clip-text text-transparent bg-gradient-to-r from-violet-500 to-pink-500">
+          <span className="font-semibold tabular-nums text-foreground">
             {format(currentMonth, "MMMM yyyy")}
           </span>
         </div>
@@ -51,14 +51,14 @@ export function CalendarHeader({
           variant="ghost"
           size="icon"
           onClick={onNextMonth}
-          className="rounded-xl hover:bg-violet-500/10 hover:text-violet-500"
+          className="rounded-xl hover:bg-muted hover:text-foreground"
         >
           <ChevronRight className="w-4 h-4" />
         </Button>
         <Button
           variant="ghost"
           onClick={onToday}
-          className="rounded-xl bg-gradient-to-br from-violet-500/15 to-pink-500/10 hover:from-violet-500/25 hover:to-pink-500/20 text-violet-600 dark:text-violet-300 font-medium"
+          className="rounded-xl text-foreground dark:text-neutral-200 font-medium bg-muted hover:bg-muted"
         >
           {t("header.today", "Today")}
         </Button>

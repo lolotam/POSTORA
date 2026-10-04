@@ -34,7 +34,7 @@ export function DraggableMediaCard({ file, children }: DraggableMediaCardProps) 
       {...listeners}
     >
       <div className="absolute top-2 start-8 z-10 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
-        <div className="w-6 h-6 bg-background/80 backdrop-blur rounded flex items-center justify-center cursor-grab">
+        <div className="w-6 h-6 bg-background rounded flex items-center justify-center cursor-grab">
           <GripVertical className="w-4 h-4 text-muted-foreground" />
         </div>
       </div>

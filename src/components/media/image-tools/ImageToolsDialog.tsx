@@ -904,18 +904,18 @@ export function ImageToolsDialog({
                     onLoad={handleImageLoad}
                   />
                   {processedUrl && (
-                    <div className="absolute top-2 start-2 px-2 py-1 bg-background/80 backdrop-blur rounded text-xs font-medium">
+                    <div className="absolute top-2 start-2 px-2 py-1 bg-background rounded text-xs font-medium">
                       {t("imageTools.original", "Original")}
                     </div>
                   )}
                   {!processedUrl && livePreviewUrl && (
-                    <div className="absolute top-2 start-2 px-2 py-1 bg-primary/80 backdrop-blur rounded text-xs font-medium text-primary-foreground flex items-center gap-1">
+                    <div className="absolute top-2 start-2 px-2 py-1 bg-primary/80 rounded text-xs font-medium text-primary-foreground flex items-center gap-1">
                       <Palette className="w-3 h-3" />
                       {t("imageTools.livePreview", "Live Preview")}
                     </div>
                   )}
                   {previewLoading && (
-                    <div className="absolute top-2 end-2 px-2 py-1 bg-background/80 backdrop-blur rounded text-xs font-medium flex items-center gap-1">
+                    <div className="absolute top-2 end-2 px-2 py-1 bg-background rounded text-xs font-medium flex items-center gap-1">
                       <Loader2 className="w-3 h-3 animate-spin" />
                       {t("common:loading", "Loading...")}
                     </div>
@@ -926,7 +926,7 @@ export function ImageToolsDialog({
                 {processedUrl && (
                   <div
                     className="absolute inset-0"
-                    style={{ clipPath: `inset(0 0 0 ${comparePosition}%)` }}
+                    style={{ clipPath: `inset(0 0 ${comparePosition}%)` }}
                   >
                     <img
                       src={processedUrl}
@@ -934,7 +934,7 @@ export function ImageToolsDialog({
                       className="w-full h-full object-contain"
                       draggable={false}
                     />
-                    <div className="absolute top-2 end-2 px-2 py-1 bg-background/80 backdrop-blur rounded text-xs font-medium">
+                    <div className="absolute top-2 end-2 px-2 py-1 bg-background rounded text-xs font-medium">
                       {t("imageTools.processed", "Processed")}
                     </div>
                   </div>
@@ -1026,7 +1026,7 @@ export function ImageToolsDialog({
                       
                       <div className={cn(
                         "absolute -bottom-9 start-1/2 -translate-x-1/2 px-3 py-1 rounded text-xs font-medium whitespace-nowrap",
-                        "bg-background/95 backdrop-blur text-foreground shadow-md"
+                        "bg-background text-foreground shadow-md"
                       )}>
                         {cropOverlayInfo.isCropMode ? (
                           <span className="text-destructive">✂ {cropLabels[cropMode]}</span>
@@ -1043,7 +1043,7 @@ export function ImageToolsDialog({
 
                 {/* Processing Overlay */}
                 {(processing || uploading) && (
-                  <div className="absolute inset-0 bg-background/80 backdrop-blur flex items-center justify-center">
+                  <div className="absolute inset-0 bg-background flex items-center justify-center">
                     <div className="text-center space-y-2">
                       <Loader2 className="w-8 h-8 animate-spin mx-auto text-primary" />
                       <p className="text-sm font-medium">

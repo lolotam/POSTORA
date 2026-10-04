@@ -154,7 +154,7 @@ export default function ThreadsMentions() {
                   ease: "easeInOut",
                 }}
               >
-                <h1 className="text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-black uppercase tracking-[0.35em] sm:tracking-[0.48em] md:tracking-[0.6em] bg-gradient-to-r from-violet-500 via-indigo-500 to-purple-500 dark:from-violet-400 dark:via-indigo-400 dark:to-fuchsia-400 bg-clip-text text-transparent drop-shadow-sm text-center">
+                <h1 className="text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-black uppercase tracking-[0.35em] sm:tracking-[0.48em] md:tracking-[0.6em] drop-shadow-sm text-center text-foreground">
                   {t("threads.title", "Threads Mentions")}
                 </h1>
               </motion.div>
@@ -182,10 +182,10 @@ export default function ThreadsMentions() {
                       className={cn(
                         "relative w-20 h-20 sm:w-24 sm:h-24 md:w-28 md:h-28 rounded-2xl sm:rounded-3xl flex items-center justify-center border transition-all duration-300 overflow-visible",
                         // 3D glass specular highlight
-                        "before:absolute before:inset-x-0 before:top-0 before:h-1/2 before:rounded-t-2xl sm:before:rounded-t-3xl before:bg-gradient-to-b before:from-white/40 before:via-white/15 before:to-transparent before:pointer-events-none",
+                        "before:absolute before:inset-x-0 before:top-0 before:h-1/2 before:rounded-t-2xl sm:before:rounded-t-3xl before:pointer-events-none before:bg-white/40",
                         isSelected
-                          ? "bg-gradient-to-b from-primary/25 via-card/85 to-card/60 border-primary ring-4 ring-primary/40 shadow-[0_20px_40px_-8px_rgba(var(--primary-rgb,59,130,246),0.5),0_8px_16px_-4px_rgba(0,0,0,0.35),inset_0_2px_3px_rgba(255,255,255,0.9),inset_0_-3px_6px_rgba(0,0,0,0.25)] -translate-y-1.5 scale-105"
-                          : "bg-card/40 backdrop-blur-md border-border/70 shadow-[0_12px_28px_-6px_rgba(0,0,0,0.35),0_4px_10px_-2px_rgba(0,0,0,0.2),inset_0_1.5px_2px_rgba(255,255,255,0.7),inset_0_-2px_4px_rgba(0,0,0,0.2)] hover:border-primary/60 hover:shadow-[0_18px_36px_-8px_rgba(0,0,0,0.5),inset_0_2px_3px_rgba(255,255,255,0.9)] hover:-translate-y-1.5 hover:scale-105"
+                          ? "border-primary ring-4 ring-primary/40 shadow-[0_20px_40px_-8px_rgba(var(--primary-rgb,59,130,246),0.5),0_8px_16px_-4px_rgba(0,0,0,0.35),inset_0_2px_3px_rgba(255,255,255,0.9),inset_0_-3px_6px_rgba(0,0,0,0.25)] -translate-y-1.5 scale-105 bg-primary/25"
+                          : "bg-card border-border/70 shadow-[0_12px_28px_-6px_rgba(0,0,0,0.35),0_4px_10px_-2px_rgba(0,0,0,0.2),inset_0_1.5px_2px_rgba(255,255,255,0.7),inset_0_-2px_4px_rgba(0,0,0,0.2)] hover:border-primary/60 hover:shadow-[0_18px_36px_-8px_rgba(0,0,0,0.5),inset_0_2px_3px_rgba(255,255,255,0.9)] hover:-translate-y-1.5 hover:scale-105"
                       )}
                     >
                       <PlatformIcon
@@ -200,7 +200,7 @@ export default function ThreadsMentions() {
                         </div>
                       )}
                       {isSelected && (
-                        <div className="absolute -top-2 -end-2 w-6 h-6 sm:w-7 sm:h-7 rounded-full bg-primary text-primary-foreground flex items-center justify-center shadow-lg shadow-primary/50 ring-2 ring-background animate-in zoom-in-50 duration-200">
+                        <div className="absolute -top-2 -end-2 w-6 h-6 sm:w-7 sm:h-7 rounded-full bg-primary text-primary-foreground flex items-center justify-center shadow-lg ring-2 ring-background animate-in zoom-in-50 duration-200">
                           <CheckCircle2 className="w-4 h-4 sm:w-4.5 sm:h-4.5" />
                         </div>
                       )}
@@ -239,7 +239,7 @@ export default function ThreadsMentions() {
                     {t("threads.noAccountHint", "Connect a Threads account from Profiles to start tracking mentions.")}
                   </p>
                 </div>
-                <Button asChild className="bg-gradient-to-r from-indigo-500 via-violet-500 to-purple-500 text-white hover:opacity-90">
+                <Button asChild className="text-white hover:opacity-90 bg-neutral-900 dark:bg-neutral-800">
                   <Link to="/profiles">{t("threads.goProfiles", "Go to Profiles")}</Link>
                 </Button>
               </div>
@@ -265,7 +265,7 @@ export default function ThreadsMentions() {
                 />
                 <Tabs value={tab} onValueChange={(nextTab) => setSearchParams({ tab: nextTab })} className="w-full">
                   {/* Unified one-line banner: account selector + Mentions/Replies toggle + Refresh + AI settings */}
-                  <div className="rounded-2xl border border-border/40 bg-card/60 backdrop-blur-md p-3 sm:p-4 flex flex-wrap items-center gap-3">
+                  <div className="rounded-2xl border border-border/40 bg-card p-3 sm:p-4 flex flex-wrap items-center gap-3">
                     <div className="flex items-center gap-2 min-w-0">
                       <Select
                         value={selectedAccountId || ""}
@@ -305,13 +305,13 @@ export default function ThreadsMentions() {
                       </Select>
 
                       {selectedAccountId && unreadCount > 0 && (
-                        <Badge variant="default" className="shrink-0 bg-gradient-to-r from-indigo-500 via-violet-500 to-purple-500 text-white border-0">
+                        <Badge variant="default" className="shrink-0 text-white border-0 bg-neutral-900 dark:bg-neutral-800">
                           {t("threads.unreadCount", "{{count}} unread", { count: unreadCount })}
                         </Badge>
                       )}
                     </div>
 
-                    <TabsList className="bg-card/50 backdrop-blur-md border border-border/40 rounded-xl p-1 h-auto [&>[data-state=active]]:bg-gradient-to-r [&>[data-state=active]]:from-indigo-500 [&>[data-state=active]]:via-violet-500 [&>[data-state=active]]:to-purple-500 [&>[data-state=active]]:text-white [&>[data-state=active]]:shadow-md">
+                    <TabsList className="bg-muted rounded-lg p-1 h-auto">
                       <TabsTrigger value="mentions" className="rounded-lg">
                         <AtSign className="h-4 w-4 me-1.5" />
                         {t("threads.mentions", "Mentions")}
@@ -327,7 +327,7 @@ export default function ThreadsMentions() {
                         onClick={handleRefresh}
                         disabled={!selectedAccountId || refresh.isPending}
                         size="sm"
-                        className="bg-gradient-to-r from-indigo-500 via-violet-500 to-purple-500 text-white hover:opacity-90"
+                        className="text-white hover:opacity-90 bg-neutral-900 dark:bg-neutral-800"
                       >
                         {refresh.isPending ? (
                           <Loader2 className="h-4 w-4 me-2 animate-spin" />
@@ -341,9 +341,9 @@ export default function ThreadsMentions() {
                           {t("threads.lastSynced", "Last synced {{time}}", { time: formatDistanceToNow(new Date(lastSyncedAt), { addSuffix: true }) })}
                         </span>
                       )}
-                      <Button asChild variant="outline" size="sm" className="gap-2 border-indigo-500/30 hover:bg-indigo-500/10">
+                      <Button asChild variant="outline" size="sm" className="gap-2 border-border hover:bg-muted">
                         <Link to="/automation/agents?platform=threads&surface=dms">
-                          <Sparkles className="w-4 h-4 text-indigo-400" />
+                          <Sparkles className="w-4 h-4 text-foreground" />
                           <span className="hidden sm:inline">{t("threads.aiSettings", "AI & Automation Settings")}</span>
                           <span className="sm:hidden">AI</span>
                         </Link>
@@ -429,12 +429,12 @@ export default function ThreadsMentions() {
                           )}
 
                           {!isLoading && !error && mentions.length > 0 && filteredMentions.length === 0 && (
-                            <div className="rounded-2xl border border-border/40 bg-card/60 backdrop-blur-md p-6 text-center space-y-3">
+                            <div className="rounded-2xl border border-border/40 bg-card p-6 text-center space-y-3">
                               <Inbox className="h-6 w-6 text-muted-foreground mx-auto" />
                               <p className="text-sm text-muted-foreground">
                                 {t("threads.noMatch", "No mentions match your current filters.")}
                               </p>
-                              <Button variant="outline" size="sm" className="border-violet-500/40 hover:bg-violet-500/10" onClick={reset}>
+                              <Button variant="outline" size="sm" className="border-input hover:bg-muted" onClick={reset}>
                                 {t("threads.resetFilters", "Reset filters")}
                               </Button>
                             </div>

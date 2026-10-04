@@ -108,12 +108,10 @@ export default function PublicProfile() {
     <div className="min-h-screen bg-background">
       {/* Background Effects */}
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute top-0 start-1/4 w-96 h-96 bg-primary/10 rounded-full blur-[128px]" />
-        <div className="absolute bottom-0 end-1/4 w-80 h-80 bg-accent/10 rounded-full blur-[128px]" />
       </div>
 
       {/* Header */}
-      <header className="relative z-10 border-b border-border/50 bg-background/50 backdrop-blur-xl">
+      <header className="relative z-10 border-b border-border/50 bg-background">
         <div className="container mx-auto px-6 h-16 flex items-center justify-between">
           <Link to="/">
             <Logo />
@@ -129,7 +127,7 @@ export default function PublicProfile() {
       {/* Content */}
       <main className="relative z-10 container max-w-2xl mx-auto px-4 py-12">
         <div className="text-center mb-12">
-          <div className="w-20 h-20 rounded-full bg-gradient-to-br from-primary/20 to-accent/20 flex items-center justify-center mx-auto mb-6">
+          <div className="w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-6 bg-primary/20">
             <User className="w-10 h-10 text-primary" />
           </div>
           <h1 className="text-3xl font-bold mb-2">{profile.name}</h1>

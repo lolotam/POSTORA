@@ -112,7 +112,7 @@ export function BusinessProfileManager() {
     return (
       <Card>
         <CardContent className="flex flex-col items-center gap-3 py-10 text-center">
-          <QrCode className="h-8 w-8 text-purple-600" />
+          <QrCode className="h-8 w-8 text-foreground" />
           <div className="space-y-1">
             <p className="font-medium">{t("profile.cloudOnly", "Business profile needs a Cloud API connection")}</p>
             <p className="mx-auto max-w-md text-sm text-muted-foreground">

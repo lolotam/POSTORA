@@ -40,7 +40,7 @@ export function DocPageHeader({
   return (
     <>
       {/* Sticky header */}
-      <header className="sticky top-0 z-50 border-b border-border/60 bg-background/70 backdrop-blur-xl">
+      <header className="sticky top-0 z-50 border-b border-border/60 bg-background">
         <div className="container mx-auto px-6 h-16 flex items-center justify-between">
           <div className="flex items-center gap-3 min-w-0">
             <Link to="/"><Logo /></Link>
@@ -49,18 +49,18 @@ export function DocPageHeader({
             <span className="text-muted-foreground/60 hidden sm:inline">/</span>
             <Link to="/n8n" className="text-sm text-muted-foreground hover:text-foreground transition-colors">n8n</Link>
             <span className="text-muted-foreground/60">/</span>
-            <span className={`text-sm font-medium bg-clip-text text-transparent bg-gradient-to-r ${crumbAccentClass || ctaGradient} truncate`}>
+            <span className="text-sm font-medium text-foreground truncate">
               {title}
             </span>
           </div>
           <div className="flex items-center gap-4 shrink-0">
             {isAuthenticated ? (
               <Link to="/dashboard">
-                <Button className={`bg-gradient-to-r ${ctaGradient} text-white shadow-md hover:opacity-90`}>Dashboard</Button>
+                <Button>Dashboard</Button>
               </Link>
             ) : (
               <Link to="/auth">
-                <Button className={`bg-gradient-to-r ${ctaGradient} text-white shadow-md hover:opacity-90`}>Get Started</Button>
+                <Button>Get Started</Button>
               </Link>
             )}
           </div>
@@ -69,10 +69,6 @@ export function DocPageHeader({
 
       {/* Hero */}
       <section className="relative overflow-hidden border-b border-border/40">
-        <div aria-hidden className="pointer-events-none absolute inset-0">
-          <div className={`absolute -top-24 -start-24 h-72 w-72 rounded-full bg-gradient-to-br ${ctaGradient} opacity-10 blur-3xl`} />
-          <div className={`absolute -bottom-24 -end-24 h-72 w-72 rounded-full bg-gradient-to-br ${ctaGradient} opacity-10 blur-3xl`} />
-        </div>
         <div className="container relative mx-auto px-6 py-12 max-w-5xl">
           <Link to="/n8n" className="inline-flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground mb-6 transition-colors">
             <ArrowLeft className="w-4 h-4" />
@@ -96,7 +92,7 @@ export function DocPageHeader({
                   <Badge
                     key={label}
                     variant="secondary"
-                    className="gap-1 bg-card/70 backdrop-blur border border-border/60"
+                    className="gap-1 bg-card border border-border/60"
                   >
                     {BIcon && <BIcon className="w-3 h-3" />}
                     {label}

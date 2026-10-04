@@ -182,7 +182,7 @@ export function DeliveryStatusBadge({
           <Tooltip delayDuration={300}>
             <TooltipTrigger asChild>
               <span
-                className="inline-flex items-center gap-0.5 text-xs rounded-full px-1.5 py-0.5 bg-purple-500/10 text-purple-500"
+                className="inline-flex items-center gap-0.5 text-xs rounded-full px-1.5 py-0.5 bg-muted text-foreground"
               >
                 <Eye className="w-3 h-3" />
                 <span>{openCount}</span>

@@ -13,17 +13,17 @@ export function CodeBlock({ code, language, id }: CodeBlockProps) {
   const isCopied = copiedId === id;
 
   return (
-    <div className="relative group/code rounded-2xl overflow-hidden my-4 shadow-lg shadow-violet-500/10">
+    <div className="relative group/code rounded-2xl overflow-hidden my-4 shadow-lg">
       {/* Gradient halo */}
       <div
         aria-hidden
-        className="absolute -inset-px rounded-2xl bg-gradient-to-br from-violet-500/40 via-fuchsia-500/20 to-sky-500/30 opacity-30 group-hover/code:opacity-60 transition-opacity blur-sm"
+        className="absolute -inset-px rounded-2xl opacity-30 group-hover/code:opacity-60 transition-opacity blur-sm bg-neutral-900 dark:bg-neutral-800"
       />
-      <div className="relative rounded-2xl bg-slate-950/95 ring-1 ring-violet-500/20 overflow-hidden backdrop-blur">
-        <div className="flex items-center justify-between px-4 py-2 border-b border-violet-500/15 bg-gradient-to-r from-violet-500/10 via-fuchsia-500/5 to-transparent">
+      <div className="relative rounded-2xl bg-slate-950/95 ring-1 ring-ring overflow-hidden">
+        <div className="flex items-center justify-between px-4 py-2 border-b border-border bg-accent">
           <div className="flex items-center gap-2">
-            <Terminal className="w-3.5 h-3.5 text-violet-400" />
-            <span className="text-xs font-mono font-medium bg-clip-text text-transparent bg-gradient-to-r from-violet-300 to-sky-300">
+            <Terminal className="w-3.5 h-3.5 text-foreground" />
+            <span className="text-xs font-mono font-medium text-foreground">
               {language}
             </span>
           </div>

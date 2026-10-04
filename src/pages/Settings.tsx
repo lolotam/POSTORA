@@ -163,31 +163,31 @@ export default function Settings() {
         {/* Tabs Navigation */}
         <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full">
           <TabsList className="w-full flex flex-wrap justify-start gap-1 h-auto p-1 bg-muted/50 rounded-lg">
-            <TabsTrigger value="profile" className="flex items-center gap-2 data-[state=active]:bg-blue-100 dark:data-[state=active]:bg-blue-900/30 data-[state=active]:text-blue-700 dark:data-[state=active]:text-blue-300">
+            <TabsTrigger value="profile" className="flex items-center gap-2 data-[state=active]:bg-accent  data-[state=active]:text-foreground ">
               <User className="w-4 h-4" />
               <span className="hidden sm:inline">{t("settings.tabs.profile", "Profile")}</span>
             </TabsTrigger>
-            <TabsTrigger value="integrations" className="flex items-center gap-2 data-[state=active]:bg-blue-100 dark:data-[state=active]:bg-blue-900/30 data-[state=active]:text-blue-700 dark:data-[state=active]:text-blue-300">
+            <TabsTrigger value="integrations" className="flex items-center gap-2 data-[state=active]:bg-accent  data-[state=active]:text-foreground ">
               <Plug className="w-4 h-4" />
               <span className="hidden sm:inline">{t("settings.tabs.integrations", "Integrations & Connectors")}</span>
             </TabsTrigger>
-            <TabsTrigger value="appearance" className="flex items-center gap-2 data-[state=active]:bg-blue-100 dark:data-[state=active]:bg-blue-900/30 data-[state=active]:text-blue-700 dark:data-[state=active]:text-blue-300">
+            <TabsTrigger value="appearance" className="flex items-center gap-2 data-[state=active]:bg-accent  data-[state=active]:text-foreground ">
               <Palette className="w-4 h-4" />
               <span className="hidden sm:inline">{t("settings.tabs.appearance", "Appearance")}</span>
             </TabsTrigger>
-            <TabsTrigger value="subscription" className="flex items-center gap-2 data-[state=active]:bg-blue-100 dark:data-[state=active]:bg-blue-900/30 data-[state=active]:text-blue-700 dark:data-[state=active]:text-blue-300">
+            <TabsTrigger value="subscription" className="flex items-center gap-2 data-[state=active]:bg-accent  data-[state=active]:text-foreground ">
               <CreditCard className="w-4 h-4" />
               <span className="hidden sm:inline">{t("settings.tabs.subscription", "Subscription")}</span>
             </TabsTrigger>
-            <TabsTrigger value="notifications" className="flex items-center gap-2 data-[state=active]:bg-blue-100 dark:data-[state=active]:bg-blue-900/30 data-[state=active]:text-blue-700 dark:data-[state=active]:text-blue-300">
+            <TabsTrigger value="notifications" className="flex items-center gap-2 data-[state=active]:bg-accent  data-[state=active]:text-foreground ">
               <Bell className="w-4 h-4" />
               <span className="hidden sm:inline">{t("settings.tabs.notifications", "Notifications")}</span>
             </TabsTrigger>
-            <TabsTrigger value="security" className="flex items-center gap-2 data-[state=active]:bg-blue-100 dark:data-[state=active]:bg-blue-900/30 data-[state=active]:text-blue-700 dark:data-[state=active]:text-blue-300">
+            <TabsTrigger value="security" className="flex items-center gap-2 data-[state=active]:bg-accent  data-[state=active]:text-foreground ">
               <Shield className="w-4 h-4" />
               <span className="hidden sm:inline">{t("settings.tabs.security", "Security")}</span>
             </TabsTrigger>
-            <TabsTrigger value="privacy" className="flex items-center gap-2 data-[state=active]:bg-blue-100 dark:data-[state=active]:bg-blue-900/30 data-[state=active]:text-blue-700 dark:data-[state=active]:text-blue-300">
+            <TabsTrigger value="privacy" className="flex items-center gap-2 data-[state=active]:bg-accent  data-[state=active]:text-foreground ">
               <Cookie className="w-4 h-4" />
               <span className="hidden sm:inline">{t("settings.tabs.privacy", "Privacy")}</span>
             </TabsTrigger>

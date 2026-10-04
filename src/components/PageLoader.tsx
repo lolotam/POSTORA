@@ -7,7 +7,6 @@ export function PageLoader() {
         {/* Logo with pulsing glow */}
         <div className="relative animate-scale-in">
           {/* Pulsing glow behind logo */}
-          <div className="absolute inset-0 rounded-xl bg-gradient-to-br from-primary to-accent blur-2xl animate-pulse opacity-30" />
           {/* Actual Logo component */}
           <div className="relative">
             <Logo size="lg" showText={true} animate={false} />

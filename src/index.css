@@ -271,7 +271,7 @@
   }
 
   .glass {
-    @apply bg-card/80 backdrop-blur-xl;
+    @apply bg-card;
   }
 
   .glow {

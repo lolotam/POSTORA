@@ -172,8 +172,8 @@ export function WhatsAppAnalyticsContent() {
         <Card>
           <CardContent className="pt-6">
             <div className="flex items-center gap-3">
-              <div className="h-10 w-10 rounded-lg bg-purple-500/10 flex items-center justify-center">
-                <Clock className="h-5 w-5 text-purple-500" />
+              <div className="h-10 w-10 rounded-lg bg-muted flex items-center justify-center">
+                <Clock className="h-5 w-5 text-foreground" />
               </div>
               <div>
                 <p className="text-2xl font-bold">{msgStats?.avgResponseStr || "—"}</p>
@@ -198,8 +198,8 @@ export function WhatsAppAnalyticsContent() {
         <Card>
           <CardContent className="pt-6">
             <div className="flex items-center gap-3">
-              <div className="h-10 w-10 rounded-lg bg-sky-500/10 flex items-center justify-center">
-                <ArrowUpRight className="h-5 w-5 text-sky-500" />
+              <div className="h-10 w-10 rounded-lg bg-muted flex items-center justify-center">
+                <ArrowUpRight className="h-5 w-5 text-foreground" />
               </div>
               <div>
                 <p className="text-2xl font-bold">{msgStats?.outboundCount || 0}</p>
@@ -217,7 +217,7 @@ export function WhatsAppAnalyticsContent() {
             {(cacheStats?.chartData?.length || 0) > 0 ? (
               <ResponsiveContainer width="100%" height={300}>
                 <BarChart data={cacheStats?.chartData}>
-                  <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
+                  <CartesianGrid strokeDasharray="3" className="stroke-border" />
                   <XAxis dataKey="date" tick={{ fontSize: 12 }} className="text-muted-foreground" />
                   <YAxis tick={{ fontSize: 12 }} className="text-muted-foreground" />
                   <Tooltip />
@@ -238,7 +238,7 @@ export function WhatsAppAnalyticsContent() {
             {(msgStats?.peakHoursData?.some(d => d.messages > 0)) ? (
               <ResponsiveContainer width="100%" height={300}>
                 <BarChart data={msgStats?.peakHoursData}>
-                  <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
+                  <CartesianGrid strokeDasharray="3" className="stroke-border" />
                   <XAxis dataKey="hour" tick={{ fontSize: 10 }} interval={2} className="text-muted-foreground" />
                   <YAxis tick={{ fontSize: 12 }} className="text-muted-foreground" />
                   <Tooltip />

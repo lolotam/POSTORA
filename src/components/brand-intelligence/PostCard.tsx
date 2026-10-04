@@ -20,10 +20,10 @@ interface PostCardProps {
 }
 
 const MEDIA_BADGES: Record<string, { label: string; className: string }> = {
-  REEL: { label: "REEL", className: "bg-purple-500/20 text-purple-400 border-purple-500/30" },
+  REEL: { label: "REEL", className: "bg-muted text-foreground border-border" },
   IMAGE: { label: "IMAGE", className: "bg-blue-500/20 text-blue-400 border-blue-500/30" },
   CAROUSEL: { label: "CAROUSEL", className: "bg-orange-500/20 text-orange-400 border-orange-500/30" },
-  VIDEO: { label: "VIDEO", className: "bg-purple-500/20 text-purple-400 border-purple-500/30" },
+  VIDEO: { label: "VIDEO", className: "bg-muted text-foreground border-border" },
 };
 
 export function PostCard({ post, index, onClick, hasContent, canDelete, isDeleting, onDelete }: PostCardProps) {
@@ -52,8 +52,8 @@ export function PostCard({ post, index, onClick, hasContent, canDelete, isDeleti
                 const parent = img.parentElement;
                 if (parent && !parent.querySelector('.placeholder-icon')) {
                   const placeholder = document.createElement("div");
-                  placeholder.className = "placeholder-icon w-full h-full bg-gradient-to-br from-violet-500/30 via-pink-500/20 to-violet-500/30 flex items-center justify-center text-white/80";
-                  placeholder.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M8 5v14l11-7z"/></svg>';
+                  placeholder.className = "placeholder-icon w-full h-full flex items-center justify-center text-white/80 bg-muted";
+                  placeholder.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 24" fill="currentColor" stroke="none"><path d="M8 5v14l11-7z"/></svg>';
                   parent.appendChild(placeholder);
                 }
               }}
@@ -72,7 +72,7 @@ export function PostCard({ post, index, onClick, hasContent, canDelete, isDeleti
                 : t("posts.image", "IMAGE")}
             </Badge>
             {hasContent && (
-              <Badge className="text-[10px] px-1.5 py-0 bg-gradient-to-r from-violet-500 to-pink-500 text-white border-0">
+              <Badge className="text-[10px] px-1.5 py-0 text-white border-0 bg-neutral-900 dark:bg-neutral-800">
                 {t("posts.aiReady", "AI ✓")}
               </Badge>
             )}
@@ -94,7 +94,7 @@ export function PostCard({ post, index, onClick, hasContent, canDelete, isDeleti
               <Button size="sm" variant="secondary" className="h-7 text-xs gap-1" onClick={(e) => { e.stopPropagation(); onClick(post); }}>
                 <Eye className="w-3 h-3" /> {t("posts.details", "Details")}
               </Button>
-              <Button size="sm" className="h-7 text-xs gap-1 bg-gradient-to-r from-violet-500 to-pink-500 border-0 text-white" onClick={(e) => { e.stopPropagation(); onClick(post); }}>
+              <Button size="sm" className="h-7 text-xs gap-1 border-0 text-white bg-neutral-900 dark:bg-neutral-800" onClick={(e) => { e.stopPropagation(); onClick(post); }}>
                 <Sparkles className="w-3 h-3" /> {t("actions.generate", "Generate")}
               </Button>
               {canDelete && (

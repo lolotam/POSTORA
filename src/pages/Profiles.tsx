@@ -298,8 +298,8 @@ export default function Profiles() {
                           value={config.platform}
                           aria-label={getPlatformName(config.platform)}
                           className={cn(
-                            "group relative gap-2 rounded-xl border border-border/60 bg-card/60 backdrop-blur-md px-3 py-2.5 transition-all duration-300 hover:-translate-y-0.5 hover:bg-card",
-                            "data-[state=active]:bg-gradient-to-br data-[state=active]:text-white data-[state=active]:border-transparent data-[state=active]:shadow-lg data-[state=active]:ring-1 data-[state=active]:ring-white/20",
+                            "group relative gap-2 rounded-xl border border-border/60 bg-card px-3 py-2.5 transition-all duration-300 hover:-translate-y-0.5 hover:bg-card",
+                            "data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:border-transparent",
                             PLATFORM_TAB_ACTIVE[v],
                           )}
                         >

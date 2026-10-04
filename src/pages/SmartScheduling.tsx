@@ -27,7 +27,7 @@ const PLATFORMS = [
 
 function getScoreColor(score: number) {
   if (score >= 90) return "bg-emerald-500/10 text-emerald-400 border-emerald-500/30 ring-1 ring-emerald-500/20";
-  if (score >= 80) return "bg-sky-500/10 text-sky-400 border-sky-500/30 ring-1 ring-sky-500/20";
+  if (score >= 80) return "bg-muted text-foreground border-border ring-1 ring-ring";
   if (score >= 70) return "bg-amber-500/10 text-amber-400 border-amber-500/30 ring-1 ring-amber-500/20";
   return "bg-white/5 text-muted-foreground border-white/10";
 }
@@ -63,16 +63,6 @@ export default function SmartScheduling() {
   return (
     <DashboardLayout>
       <div className="relative">
-        {/* Background halos */}
-        <div
-          aria-hidden
-          className="pointer-events-none absolute -top-32 -start-32 h-[420px] w-[420px] rounded-full bg-gradient-to-br from-violet-500/20 via-fuchsia-500/10 to-transparent blur-3xl -z-10"
-        />
-        <div
-          aria-hidden
-          className="pointer-events-none absolute -top-24 -end-32 h-[420px] w-[420px] rounded-full bg-gradient-to-br from-sky-500/20 via-cyan-500/10 to-transparent blur-3xl -z-10"
-        />
-
         <div className="max-w-5xl mx-auto space-y-8">
           {/* Header */}
           <Reveal>
@@ -93,10 +83,10 @@ export default function SmartScheduling() {
 
           {/* Platform selector toolbar */}
           <Reveal delay={80}>
-            <div className="relative rounded-2xl bg-card/70 backdrop-blur-xl ring-1 ring-white/10 shadow-lg p-4">
+            <div className="relative rounded-2xl bg-card ring-1 ring-white/10 shadow-lg p-4">
               <div className="flex items-end gap-4 flex-wrap">
                 <div className="space-y-1.5">
-                  <span className="text-[10px] font-semibold uppercase tracking-wider bg-clip-text text-transparent bg-gradient-to-r from-sky-400 via-violet-400 to-pink-400">
+                  <span className="text-[10px] font-semibold uppercase tracking-wider text-foreground">
                     {t("smart.form.platform", "Platform")}
                   </span>
                   <Select value={platform} onValueChange={setPlatform}>
@@ -111,8 +101,8 @@ export default function SmartScheduling() {
                   </Select>
                 </div>
                 {historyCount > 0 && (
-                  <Badge className="h-7 bg-gradient-to-r from-violet-500/20 via-fuchsia-500/20 to-pink-500/20 ring-1 ring-violet-400/30 text-foreground border-0">
-                    <Sparkles className="h-3 w-3 me-1 text-violet-400" />
+                  <Badge className="h-7 ring-1 ring-ring text-foreground border-0 bg-muted">
+                    <Sparkles className="h-3 w-3 me-1 text-foreground" />
                     {t("smart.basedOn", "Based on {{count}} past posts", { count: historyCount })}
                   </Badge>
                 )}
@@ -148,14 +138,14 @@ export default function SmartScheduling() {
                         </div>
                         <div className="flex items-center gap-2 mb-2">
                           <Clock className="h-4 w-4 text-muted-foreground" />
-                          <span className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-sky-400 via-violet-400 to-pink-400">
+                          <span className="text-2xl font-bold text-foreground">
                             {slot.label}
                           </span>
                         </div>
                         <p className="text-xs text-muted-foreground min-h-[2rem]">{slot.reason}</p>
                         <Button
                           size="sm"
-                          className="w-full mt-4 bg-gradient-to-r from-violet-500 via-fuchsia-500 to-pink-500 text-white border-0 shadow-lg shadow-violet-500/30 hover:shadow-violet-500/50 hover:brightness-110"
+                          className="w-full mt-4 text-white border-0 shadow-lg hover:brightness-110 bg-neutral-900 dark:bg-neutral-800"
                           onClick={() => window.location.href = `/post?schedule=${slot.day}&time=${slot.hour}`}
                         >
                           <Sparkles className="h-3.5 w-3.5 me-1.5" />
@@ -175,7 +165,7 @@ export default function SmartScheduling() {
               <div className="p-6 flex items-start gap-4">
                 <Icon3D icon={Info} variant="sky" size="sm" />
                 <div className="flex-1 min-w-0">
-                  <h3 className="text-sm font-semibold bg-clip-text text-transparent bg-gradient-to-r from-sky-400 to-violet-400 mb-1">
+                  <h3 className="text-sm font-semibold mb-1 text-foreground">
                     {t("smart.info.title", "How it works")}
                   </h3>
                   <p className="text-xs text-muted-foreground leading-relaxed">

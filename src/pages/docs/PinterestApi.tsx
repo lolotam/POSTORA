@@ -533,7 +533,7 @@ export default function PinterestApi() {
               <Card>
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">
-                    <Video className="w-5 h-5 text-purple-500" />
+                    <Video className="w-5 h-5 text-foreground" />
                     Video Pin
                   </CardTitle>
                   <CardDescription>Create a video pin with a link</CardDescription>
@@ -699,7 +699,7 @@ export default function PinterestApi() {
               <Card>
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">
-                    <Video className="w-5 h-5 text-purple-500" />
+                    <Video className="w-5 h-5 text-foreground" />
                     Video File Upload
                   </CardTitle>
                   <CardDescription>Upload a video file directly</CardDescription>

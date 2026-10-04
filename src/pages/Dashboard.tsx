@@ -8,10 +8,8 @@ import { useFeatureFlags } from "@/hooks/useFeatureFlags";
 import { useUserRole } from "@/hooks/useUserRole";
 import { usePostsWithResults, usePostStats } from "@/hooks/usePosts";
 import { StatCards, RecentPosts, ConnectedAccounts } from "@/components/dashboard";
-import { TypingTagline } from "@/components/dashboard/TypingTagline";
 import { TokenReauthBanner } from "@/components/dashboard/TokenReauthBanner";
 import { UndeliveredStoreOrdersBanner } from "@/components/dashboard/UndeliveredStoreOrdersBanner";
-import { GradientHeading } from "@/components/fx";
 import {
   Send,
   Link2,
@@ -45,29 +43,28 @@ export default function Dashboard() {
         <UndeliveredStoreOrdersBanner />
 
         {/* Header */}
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
           <div>
-            <GradientHeading as="h1" preset="sky-violet-pink" size="lg">
+            <h1 className="font-display text-4xl md:text-[2.5rem] font-medium leading-tight tracking-tight">
               {t("header.title", "Dashboard")}
-            </GradientHeading>
+            </h1>
             <p className="text-muted-foreground mt-1">
               {t("header.welcome", "Welcome back{{name}}! Here's your posting overview.", {
                 name: profile?.full_name ? `, ${profile.full_name}` : "",
               })}
             </p>
-            <TypingTagline />
           </div>
           <div className="flex gap-2">
             {isAdmin && flags.marketeroButton && (
               <a href="https://marketero.postora.cloud" target="_blank" rel="noopener noreferrer">
-                <Button variant="outline" size="lg">
+                <Button variant="outline">
                   <ExternalLink className="w-4 h-4 me-2" />
                   Marketero
                 </Button>
               </a>
             )}
             <Link to="/post">
-              <Button variant="gradient" size="lg">
+              <Button>
                 <Plus className="w-4 h-4 me-2" />
                 {t("common:createPost", "Create Post")}
               </Button>

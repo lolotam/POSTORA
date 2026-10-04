@@ -403,11 +403,11 @@ function CanvasInner() {
           {/* Background halos for depth */}
           <div
             aria-hidden
-            className="pointer-events-none absolute -top-32 -start-32 h-[420px] w-[420px] rounded-full bg-gradient-to-br from-violet-500/20 via-fuchsia-500/10 to-transparent blur-3xl z-0"
+            className="pointer-events-none absolute -top-32 -start-32 h-[420px] w-[420px] rounded-full blur-3xl z-0"
           />
           <div
             aria-hidden
-            className="pointer-events-none absolute -bottom-32 -end-32 h-[420px] w-[420px] rounded-full bg-gradient-to-br from-sky-500/20 via-cyan-500/10 to-transparent blur-3xl z-0"
+            className="pointer-events-none absolute -bottom-32 -end-32 h-[420px] w-[420px] rounded-full blur-3xl z-0"
           />
           <ReactFlow
             nodes={nodes}
@@ -436,11 +436,11 @@ function CanvasInner() {
               color="hsl(var(--muted-foreground) / 0.12)"
             />
             <Controls 
-              className="!bg-card/70 !backdrop-blur-xl !border-0 !ring-1 !ring-white/10 !rounded-2xl !shadow-2xl" 
+              className="!bg-card !border !border-border !rounded-lg !shadow-md" 
               showInteractive={false} 
             />
             <MiniMap 
-              className="!bg-card/70 !backdrop-blur-xl !border-0 !ring-1 !ring-white/10 !rounded-2xl !shadow-2xl" 
+              className="!bg-card !border !border-border !rounded-lg !shadow-md" 
               maskColor="hsl(var(--canvas-bg, 225 30% 4%) / 0.85)"
               nodeColor={(node) => {
                 if (node.type === 'text_caption') return 'hsl(220 90% 56%)';
@@ -458,9 +458,9 @@ function CanvasInner() {
                   <div className="group relative max-w-md">
                     <div
                       aria-hidden
-                      className="absolute -inset-0.5 rounded-3xl bg-gradient-to-br from-violet-500 via-fuchsia-500 to-pink-500 opacity-60 blur transition-opacity duration-500 group-hover:opacity-80"
+                      className="absolute -inset-0.5 rounded-3xl opacity-60 blur transition-opacity duration-500 group-hover:opacity-80 bg-violet-500"
                     />
-                    <div className="relative text-center p-8 rounded-3xl bg-card/85 backdrop-blur-xl ring-1 ring-white/10 shadow-2xl">
+                    <div className="relative text-center p-8 rounded-3xl bg-card ring-1 ring-white/10 shadow-2xl">
                       <div className="flex justify-center gap-3 mb-6">
                         <Icon3D icon={Type} variant="sky" size="sm" />
                         <Icon3D icon={ImageIcon} variant="violet" size="sm" />
@@ -468,11 +468,11 @@ function CanvasInner() {
                       </div>
                       <div className="inline-flex items-center gap-2 mb-3 px-3 py-1 rounded-full bg-white/5 ring-1 ring-white/10">
                         <Sparkles className="h-3 w-3 text-violet-400" />
-                        <span className="text-[10px] font-semibold uppercase tracking-wider bg-clip-text text-transparent bg-gradient-to-r from-sky-400 via-violet-400 to-pink-400">
+                        <span className="text-[10px] font-semibold uppercase tracking-wider text-foreground">
                           Visual Builder
                         </span>
                       </div>
-                      <h3 className="text-2xl font-bold mb-2 bg-clip-text text-transparent bg-gradient-to-r from-sky-400 via-violet-400 to-pink-400">
+                      <h3 className="text-2xl font-bold mb-2 text-foreground">
                         Build Your Post Workflow
                       </h3>
                       <p className="text-sm text-muted-foreground mb-5">

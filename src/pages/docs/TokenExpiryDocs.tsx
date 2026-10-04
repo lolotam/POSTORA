@@ -161,7 +161,7 @@ export default function TokenExpiryDocs() {
       <DocsHeader breadcrumbs={[{ label: "Docs", href: "/docs" }, { label: "Token Expiry" }]} />
 
       {/* Hero */}
-      <div className="border-b bg-gradient-to-br from-background via-background to-primary/5">
+      <div className="border-b bg-background">
         <div className="container mx-auto px-6 py-16">
           <div className="max-w-3xl">
             <Badge className="mb-4 bg-primary/10 text-primary border-primary/30">

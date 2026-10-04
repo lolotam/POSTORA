@@ -293,9 +293,8 @@ export default function History() {
               <TabsTrigger
                 value="posts"
                 className={cn(
-                  "group relative gap-2 rounded-xl border border-border/60 bg-card/60 backdrop-blur-md px-4 py-2 transition-all duration-300 hover:-translate-y-0.5 hover:bg-card",
-                  "data-[state=active]:bg-gradient-to-br data-[state=active]:text-white data-[state=active]:border-transparent data-[state=active]:shadow-lg data-[state=active]:ring-1 data-[state=active]:ring-white/20",
-                  "data-[state=active]:from-emerald-400 data-[state=active]:via-teal-400 data-[state=active]:to-cyan-500 data-[state=active]:shadow-emerald-500/40",
+                  "group relative gap-2 rounded-xl border border-border/60 bg-card px-4 py-2 transition-all duration-300 hover:-translate-y-0.5 hover:bg-card",
+                  "data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:border-transparent",
                 )}
               >
                 <Send className="w-4 h-4" />
@@ -304,9 +303,8 @@ export default function History() {
               <TabsTrigger
                 value="media"
                 className={cn(
-                  "group relative gap-2 rounded-xl border border-border/60 bg-card/60 backdrop-blur-md px-4 py-2 transition-all duration-300 hover:-translate-y-0.5 hover:bg-card",
-                  "data-[state=active]:bg-gradient-to-br data-[state=active]:text-white data-[state=active]:border-transparent data-[state=active]:shadow-lg data-[state=active]:ring-1 data-[state=active]:ring-white/20",
-                  "data-[state=active]:from-violet-500 data-[state=active]:via-fuchsia-500 data-[state=active]:to-pink-500 data-[state=active]:shadow-violet-500/40",
+                  "group relative gap-2 rounded-xl border border-border/60 bg-card px-4 py-2 transition-all duration-300 hover:-translate-y-0.5 hover:bg-card",
+                  "data-[state=active]:bg-primary data-[state=active]:text-primary-foreground data-[state=active]:border-transparent",
                 )}
               >
                 <Image className="w-4 h-4" />
@@ -385,7 +383,7 @@ export default function History() {
                 </Reveal>
               ) : (
                 <>
-                  <div className="inline-flex items-center gap-2 text-xs text-muted-foreground rounded-full border border-border/60 bg-card/60 backdrop-blur-md px-3 py-1">
+                  <div className="inline-flex items-center gap-2 text-xs text-muted-foreground rounded-full border border-border/60 bg-card px-3 py-1">
                     {t("pagination.showing", "Showing {{start}}-{{end}} of {{total}} posts", {
                       start: startIndex + 1,
                       end: Math.min(endIndex, totalItems),

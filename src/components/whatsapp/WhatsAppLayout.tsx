@@ -131,7 +131,7 @@ function WhatsAppLayoutContent() {
                 content pane must not be pushed down by the nav. */}
             <aside
               className={cn(
-                "wa-app flex min-h-0 shrink-0 flex-col border-r bg-card/95 backdrop-blur-md transition-[width] duration-200 ease-in-out",
+                "wa-app flex min-h-0 shrink-0 flex-col border-r bg-card transition-[width] duration-200 ease-in-out",
                 collapsed ? "w-16" : "w-56 lg:w-60",
               )}
             >
@@ -161,7 +161,7 @@ function WhatsAppLayoutContent() {
                 "wa-app min-h-0 min-w-0 flex-1",
                 immersive
                   ? "overflow-hidden"
-                  : "overflow-y-auto bg-gradient-to-b from-[#DCF8C6]/25 via-background to-background dark:from-[#075E54]/25",
+                  : "overflow-y-auto bg-[#DCF8C6]/25 dark:bg-[#075E54]/25",
               )}
             >
               <div className={cn(immersive ? "flex h-full min-h-0 flex-col" : "space-y-6 px-4 py-6 sm:px-6 lg:px-8")}>

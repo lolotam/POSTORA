@@ -9,7 +9,7 @@ interface PlaygroundHeaderProps {
 
 export function PlaygroundHeader({ isAuthenticated }: PlaygroundHeaderProps) {
   return (
-    <header className="sticky top-0 z-50 border-b border-border bg-background/80 backdrop-blur-xl">
+    <header className="sticky top-0 z-50 border-b border-border bg-background">
       <div className="container mx-auto px-6 h-16 flex items-center justify-between">
         <div className="flex items-center gap-4">
           <Link to="/"><Logo /></Link>

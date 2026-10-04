@@ -12,7 +12,7 @@ export function DocsHeader({ breadcrumbs }: DocsHeaderProps) {
   const { user } = useAuth();
 
   return (
-    <header className="sticky top-0 z-50 border-b border-border/40 bg-background/70 backdrop-blur-xl">
+    <header className="sticky top-0 z-50 border-b border-border/40 bg-background">
       <div className="container mx-auto px-6 h-16 flex items-center justify-between">
         <div className="flex items-center gap-3 group/header">
           <Link to="/" className="inline-flex transition-transform duration-300 group-hover/header:-translate-y-0.5">
@@ -23,7 +23,7 @@ export function DocsHeader({ breadcrumbs }: DocsHeaderProps) {
               <span key={i} className="flex items-center gap-3">
                 <span
                   aria-hidden
-                  className="h-1.5 w-1.5 rounded-full bg-gradient-to-br from-violet-500 to-pink-500 shadow-[0_0_6px] shadow-violet-500/40"
+                  className="h-1.5 w-1.5 rounded-full bg-neutral-900 dark:bg-neutral-800"
                 />
                 {crumb.href ? (
                   <Link
@@ -33,7 +33,7 @@ export function DocsHeader({ breadcrumbs }: DocsHeaderProps) {
                     {crumb.label}
                   </Link>
                 ) : (
-                  <span className="text-sm font-semibold bg-clip-text text-transparent bg-gradient-to-r from-violet-500 to-sky-500">
+                  <span className="text-sm font-semibold text-foreground">
                     {crumb.label}
                   </span>
                 )}
@@ -61,7 +61,7 @@ export function DocsHeader({ breadcrumbs }: DocsHeaderProps) {
       {/* Bottom gradient hairline */}
       <div
         aria-hidden
-        className="h-px w-full bg-gradient-to-r from-transparent via-violet-500/40 to-transparent"
+        className="h-px w-full bg-border"
       />
     </header>
   );

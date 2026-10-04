@@ -9,30 +9,30 @@ const TONE_MAP: Record<Tone, { variant: GradientKey; icon: LucideIcon; ring: str
   info: {
     variant: "sky",
     icon: Info,
-    ring: "ring-sky-400/40",
-    bg: "from-sky-500/10 via-blue-500/5 to-transparent",
-    text: "text-sky-700 dark:text-sky-300",
+    ring: "ring-border",
+    bg: "bg-muted/50",
+    text: "text-foreground dark:text-neutral-200",
   },
   warning: {
     variant: "amber",
     icon: AlertTriangle,
     ring: "ring-amber-400/40",
-    bg: "from-amber-500/10 via-orange-500/5 to-transparent",
+    bg: "bg-amber-500/10",
     text: "text-amber-700 dark:text-amber-300",
   },
   success: {
     variant: "emerald",
     icon: CheckCircle2,
     ring: "ring-emerald-400/40",
-    bg: "from-emerald-500/10 via-teal-500/5 to-transparent",
+    bg: "bg-emerald-500/10",
     text: "text-emerald-700 dark:text-emerald-300",
   },
   tip: {
     variant: "violet",
     icon: Sparkles,
-    ring: "ring-violet-400/40",
-    bg: "from-violet-500/10 via-fuchsia-500/5 to-transparent",
-    text: "text-violet-700 dark:text-violet-300",
+    ring: "ring-border",
+    bg: "bg-muted/50",
+    text: "text-foreground dark:text-neutral-200",
   },
 };
 
@@ -48,7 +48,7 @@ export function Callout({ tone = "info", title, children, className }: CalloutPr
   return (
     <div
       className={cn(
-        "group/callout relative rounded-2xl border bg-gradient-to-br backdrop-blur-md p-4 ring-1",
+        "group/callout relative rounded-lg border p-4 ring-1",
         t.bg,
         t.ring,
         "border-transparent",

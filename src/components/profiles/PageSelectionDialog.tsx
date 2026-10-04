@@ -42,7 +42,7 @@ function PageLogo({ page }: { page: FacebookPage }) {
     page.picture_url || `https://graph.facebook.com/${page.id}/picture?type=large`;
   const [errored, setErrored] = useState(false);
   return (
-    <div className="relative aspect-square w-full overflow-hidden rounded-lg bg-gradient-to-br from-blue-500 to-blue-700">
+    <div className="relative aspect-square w-full overflow-hidden rounded-lg bg-blue-500">
       {!errored ? (
         <img
           src={src}
@@ -142,12 +142,12 @@ export function PageSelectionDialog({
                       <div className="relative w-full">
                         <PageLogo page={page} />
                         {isSelecting && (
-                          <div className="absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-background/70 backdrop-blur-sm">
+                          <div className="absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-background">
                             <Loader2 className="h-6 w-6 animate-spin text-primary" />
                           </div>
                         )}
                         {page.has_instagram && (
-                          <span className="absolute -end-1 -top-1 rounded-full border border-pink-500/40 bg-gradient-to-r from-purple-500/30 to-pink-500/30 px-2 py-0.5 text-[10px] font-medium text-pink-500 backdrop-blur-sm">
+                          <span className="absolute -end-1 -top-1 rounded-full border border-input px-2 py-0.5 text-[10px] font-medium text-foreground bg-muted">
                             IG
                           </span>
                         )}
@@ -186,7 +186,7 @@ export function PageSelectionDialog({
                         )}
                       >
                         <div className="relative w-full">
-                          <div className="relative aspect-square w-full overflow-hidden rounded-lg bg-gradient-to-br from-pink-500 to-purple-600">
+                          <div className="relative aspect-square w-full overflow-hidden rounded-lg bg-neutral-900 dark:bg-neutral-800">
                             {ig.profile_picture_url ? (
                               <img
                                 src={ig.profile_picture_url}
@@ -199,11 +199,11 @@ export function PageSelectionDialog({
                             )}
                           </div>
                           {isSelecting && (
-                            <div className="absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-background/70 backdrop-blur-sm">
+                            <div className="absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-background">
                               <Loader2 className="h-6 w-6 animate-spin text-primary" />
                             </div>
                           )}
-                          <span className="absolute -end-1 -top-1 rounded-full border border-pink-500/40 bg-gradient-to-r from-purple-500/30 to-pink-500/30 px-2 py-0.5 text-[10px] font-medium text-pink-500 backdrop-blur-sm">
+                          <span className="absolute -end-1 -top-1 rounded-full border border-input px-2 py-0.5 text-[10px] font-medium text-foreground bg-muted">
                             IG
                           </span>
                         </div>

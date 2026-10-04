@@ -15,7 +15,7 @@ interface FeatureFlagCategoryDropdownProps {
 
 const CATEGORY_COLORS: Record<string, string> = {
   Media: "bg-blue-500/15 text-blue-700 dark:text-blue-300 border-blue-500/30",
-  AI: "bg-purple-500/15 text-purple-700 dark:text-purple-300 border-purple-500/30",
+  AI: "bg-muted text-foreground dark:text-neutral-200 border-border",
   Social: "bg-green-500/15 text-green-700 dark:text-green-300 border-green-500/30",
   UI: "bg-orange-500/15 text-orange-700 dark:text-orange-300 border-orange-500/30",
   Notifications: "bg-yellow-500/15 text-yellow-700 dark:text-yellow-300 border-yellow-500/30",

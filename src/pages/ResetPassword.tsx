@@ -117,8 +117,6 @@ export default function ResetPassword() {
   return (
     <div className="min-h-screen bg-background flex relative overflow-hidden">
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute top-1/4 start-0 w-96 h-96 bg-primary/10 rounded-full blur-[128px]" />
-        <div className="absolute bottom-1/4 end-0 w-80 h-80 bg-accent/10 rounded-full blur-[128px]" />
       </div>
 
       <div className="hidden lg:flex flex-1 flex-col justify-between p-12 relative">
@@ -146,7 +144,7 @@ export default function ResetPassword() {
             </Link>
           </div>
 
-          <div className="bg-card/50 backdrop-blur-xl border border-border rounded-2xl p-8">
+          <div className="bg-card border border-border rounded-2xl p-8">
             {view === "email" && (
               <>
                 <div className="text-center mb-8">

@@ -97,7 +97,7 @@ function getRequestType(source?: string, t?: (key: string, fallback: string) => 
     case "api":
       return { icon: Zap, label: "API", className: "text-blue-500" };
     case "upload-media":
-      return { icon: FileUp, label: t ? t("source.upload", "Upload") : "Upload", className: "text-purple-500" };
+      return { icon: FileUp, label: t ? t("source.upload", "Upload") : "Upload", className: "text-foreground" };
     case "webhook":
       return { icon: Webhook, label: "Webhook", className: "text-orange-500" };
     default:
@@ -162,17 +162,17 @@ function getPostTypes(post: PostData): string[] {
 function postTypeBadgeClass(type: string): string {
   switch (type) {
     case "feed": return "bg-emerald-400/10 text-emerald-500 border-emerald-500/20";
-    case "reel": return "bg-purple-400/10 text-purple-500 border-purple-500/20";
+    case "reel": return "bg-muted text-foreground border-border";
     case "story": return "bg-amber-400/10 text-amber-500 border-amber-500/20";
     case "image pin": return "bg-rose-400/10 text-rose-500 border-rose-500/20";
     case "video pin": return "bg-red-400/10 text-red-500 border-red-500/20";
     case "link pin": return "bg-blue-400/10 text-blue-500 border-blue-500/20";
-    case "multi pin": return "bg-indigo-400/10 text-indigo-500 border-indigo-500/20";
+    case "multi pin": return "bg-muted text-foreground border-border";
     case "text": return "bg-muted text-muted-foreground border-border";
     case "image": return "bg-emerald-400/10 text-emerald-500 border-emerald-500/20";
-    case "video": return "bg-purple-400/10 text-purple-500 border-purple-500/20";
-    case "carousel": return "bg-indigo-400/10 text-indigo-500 border-indigo-500/20";
-    case "gif": return "bg-pink-400/10 text-pink-500 border-pink-500/20";
+    case "video": return "bg-muted text-foreground border-border";
+    case "carousel": return "bg-muted text-foreground border-border";
+    case "gif": return "bg-muted text-foreground border-border";
     default: return "bg-muted text-muted-foreground";
   }
 }
@@ -211,7 +211,7 @@ export function HistoryTable({
     <div className="relative rounded-lg border border-border overflow-hidden">
       {/* Subtle refetching overlay */}
       {isRefetching && (
-        <div className="absolute inset-0 bg-background/50 backdrop-blur-[1px] z-10 flex items-center justify-center pointer-events-none">
+        <div className="absolute inset-0 bg-background z-10 flex items-center justify-center pointer-events-none">
           <div className="flex items-center gap-2 px-3 py-1.5 bg-background/90 rounded-full border border-border shadow-sm">
             <Loader2 className="w-4 h-4 animate-spin text-primary" />
             <span className="text-xs text-muted-foreground">{t("table.updating", "Updating...")}</span>

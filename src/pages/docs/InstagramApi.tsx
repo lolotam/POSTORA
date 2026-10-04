@@ -519,15 +519,15 @@ export default function InstagramApi() {
               <Card>
                 <CardHeader>
                   <CardTitle className="flex items-center gap-2">
-                    <Clock className="w-5 h-5 text-pink-500" />
+                    <Clock className="w-5 h-5 text-foreground" />
                     Instagram Stories
                   </CardTitle>
                   <CardDescription>Post to Instagram Stories instead of Feed</CardDescription>
                 </CardHeader>
                 <CardContent>
                   <CodeBlock code={curlStories} language="bash" id="stories-post" />
-                  <div className="mt-4 p-4 rounded-lg bg-pink-500/10 border border-pink-500/20">
-                    <h4 className="font-medium mb-2 flex items-center gap-2 text-pink-600">
+                  <div className="mt-4 p-4 rounded-lg bg-muted border border-border">
+                    <h4 className="font-medium mb-2 flex items-center gap-2 text-foreground">
                       <Info className="w-4 h-4" />
                       Stories Notes:
                     </h4>
@@ -838,7 +838,7 @@ export default function InstagramApi() {
             <Card>
               <CardHeader>
                 <CardTitle className="text-base flex items-center gap-2">
-                  <Clock className="w-4 h-4 text-purple-500" />
+                  <Clock className="w-4 h-4 text-foreground" />
                   Schedule for Optimal Times
                 </CardTitle>
               </CardHeader>

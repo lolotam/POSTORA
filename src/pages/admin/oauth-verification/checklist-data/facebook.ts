@@ -180,7 +180,7 @@ export const facebookChecklistItems: ChecklistItem[] = [
 
 export const facebookCategoryInfo: Record<string, CategoryInfo> = {
   setup: { label: "App Setup", icon: Settings, color: "text-blue-500" },
-  permissions: { label: "Permissions", icon: Key, color: "text-purple-500" },
-  content: { label: "Content Requirements", icon: Video, color: "text-pink-500" },
+  permissions: { label: "Permissions", icon: Key, color: "text-foreground" },
+  content: { label: "Content Requirements", icon: Video, color: "text-foreground" },
   compliance: { label: "Compliance & Review", icon: Shield, color: "text-green-500" },
 };

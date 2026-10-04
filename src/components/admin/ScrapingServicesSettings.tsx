@@ -28,7 +28,7 @@ const APIFY_ACTOR_KEYS = [
     label: "Instagram",
     icon: Instagram,
     color: "from-pink-500/20 to-orange-500/20",
-    iconColor: "text-pink-500",
+    iconColor: "text-foreground",
     defaultActor: "apify/instagram-scraper",
   },
   {
@@ -186,7 +186,7 @@ export function ScrapingServicesSettings() {
       <CardContent className="p-4 space-y-5">
         {/* Header */}
         <div className="flex items-center gap-2 mb-1">
-          <div className="w-7 h-7 rounded-md bg-gradient-to-br from-emerald-500/20 to-blue-500/20 flex items-center justify-center">
+          <div className="w-7 h-7 rounded-md flex items-center justify-center bg-emerald-500/20">
             <Globe className="w-3.5 h-3.5 text-emerald-500" />
           </div>
           <span className="text-sm font-semibold">External Scraping Services</span>
@@ -257,7 +257,7 @@ export function ScrapingServicesSettings() {
                   >
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
-                        <div className={`w-6 h-6 rounded-md bg-gradient-to-br ${actor.color} flex items-center justify-center`}>
+                        <div className="w-6 h-6 rounded-md bg-secondary flex items-center justify-center">
                           <Icon className={`w-3 h-3 ${actor.iconColor}`} />
                         </div>
                         <span className="text-xs font-medium">{actor.label}</span>

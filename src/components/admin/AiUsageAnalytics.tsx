@@ -313,7 +313,7 @@ export function AiUsageAnalytics() {
               )}
 
               <div className="grid grid-cols-3 gap-4">
-                <div className="p-4 rounded-lg border bg-gradient-to-br from-green-500/10 to-emerald-500/10 border-green-500/20">
+                <div className="p-4 rounded-lg border border-green-500/20 bg-green-500/10">
                   <div className="flex items-center gap-2 text-green-600 dark:text-green-400 mb-1">
                     <DollarSign className="w-4 h-4" />
                     <span className="text-xs font-medium">Today</span>
@@ -325,7 +325,7 @@ export function AiUsageAnalytics() {
                     ~{estimatedTokensToday.toLocaleString()} tokens
                   </p>
                 </div>
-                <div className="p-4 rounded-lg border bg-gradient-to-br from-blue-500/10 to-indigo-500/10 border-blue-500/20">
+                <div className="p-4 rounded-lg border border-blue-500/20 bg-blue-500/10">
                   <div className="flex items-center gap-2 text-blue-600 dark:text-blue-400 mb-1">
                     <DollarSign className="w-4 h-4" />
                     <span className="text-xs font-medium">This Month</span>
@@ -337,12 +337,12 @@ export function AiUsageAnalytics() {
                     ~{estimatedTokensMonth.toLocaleString()} tokens
                   </p>
                 </div>
-                <div className="p-4 rounded-lg border bg-gradient-to-br from-purple-500/10 to-pink-500/10 border-purple-500/20">
-                  <div className="flex items-center gap-2 text-purple-600 dark:text-purple-400 mb-1">
+                <div className="p-4 rounded-lg border border-border bg-muted">
+                  <div className="flex items-center gap-2 text-foreground dark:text-foreground mb-1">
                     <DollarSign className="w-4 h-4" />
                     <span className="text-xs font-medium">Last 30 Days</span>
                   </div>
-                  <p className="text-xl font-bold text-purple-700 dark:text-purple-300">
+                  <p className="text-xl font-bold text-foreground dark:text-neutral-200">
                     ${estimatedCost30Days.toFixed(4)}
                   </p>
                   <p className="text-xs text-muted-foreground">
@@ -364,7 +364,7 @@ export function AiUsageAnalytics() {
                 <div className="h-[300px] w-full">
                   <ResponsiveContainer width="100%" height="100%">
                     <BarChart data={dailyUsage} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
-                      <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+                      <CartesianGrid strokeDasharray="3" className="stroke-muted" />
                       <XAxis dataKey="displayDate" tick={{ fontSize: 11 }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
                       <YAxis tick={{ fontSize: 11 }} tickLine={false} axisLine={false} allowDecimals={false} />
                       <Tooltip contentStyle={{ backgroundColor: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: "8px" }} labelStyle={{ color: "hsl(var(--foreground))" }} />
@@ -380,14 +380,14 @@ export function AiUsageAnalytics() {
                 <div className="h-[300px] w-full">
                   <ResponsiveContainer width="100%" height="100%">
                     <LineChart data={monthlyUsage} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
-                      <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+                      <CartesianGrid strokeDasharray="3" className="stroke-muted" />
                       <XAxis dataKey="displayMonth" tick={{ fontSize: 11 }} tickLine={false} axisLine={false} />
                       <YAxis tick={{ fontSize: 11 }} tickLine={false} axisLine={false} allowDecimals={false} />
                       <Tooltip contentStyle={{ backgroundColor: "hsl(var(--card))", border: "1px solid hsl(var(--border))", borderRadius: "8px" }} labelStyle={{ color: "hsl(var(--foreground))" }} />
                       <Legend />
                       <Line type="monotone" dataKey="captions" name="Captions" stroke="hsl(var(--primary))" strokeWidth={2} dot={{ fill: "hsl(var(--primary))" }} />
                       <Line type="monotone" dataKey="hashtags" name="Hashtags" stroke="hsl(var(--accent))" strokeWidth={2} dot={{ fill: "hsl(var(--accent))" }} />
-                      <Line type="monotone" dataKey="total" name="Total" stroke="hsl(var(--muted-foreground))" strokeWidth={2} strokeDasharray="5 5" dot={false} />
+                      <Line type="monotone" dataKey="total" name="Total" stroke="hsl(var(--muted-foreground))" strokeWidth={2} strokeDasharray="5" dot={false} />
                     </LineChart>
                   </ResponsiveContainer>
                 </div>
@@ -447,7 +447,7 @@ export function AiUsageAnalytics() {
                           <stop offset="95%" stopColor="hsl(217, 91%, 60%)" stopOpacity={0}/>
                         </linearGradient>
                       </defs>
-                      <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
+                      <CartesianGrid strokeDasharray="3" className="stroke-muted" />
                       <XAxis dataKey="displayDate" tick={{ fontSize: 11 }} tickLine={false} axisLine={false} interval="preserveStartEnd" />
                       <YAxis tick={{ fontSize: 11 }} tickLine={false} axisLine={false} tickFormatter={(value) => `$${value.toFixed(4)}`} />
                       <Tooltip
@@ -471,7 +471,7 @@ export function AiUsageAnalytics() {
 
                 {/* Cost Savings Summary */}
                 {comparisonModel && (
-                  <div className="p-4 rounded-lg border bg-gradient-to-r from-blue-500/10 to-purple-500/10 border-blue-500/20">
+                  <div className="p-4 rounded-lg border border-blue-500/20 bg-blue-500/10">
                     <div className="flex items-center justify-between">
                       <div>
                         <p className="text-sm font-medium">Cost Comparison (30 days)</p>

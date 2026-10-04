@@ -94,7 +94,7 @@ export function PostFilters({
       </div>
 
       {/* Unified filter toolbar */}
-      <div className="flex flex-wrap items-center gap-2 p-2 rounded-xl border border-border/60 bg-card/40 backdrop-blur-sm">
+      <div className="flex flex-wrap items-center gap-2 p-2 rounded-xl border border-border/60 bg-card">
         {/* Status filter (consolidated) */}
         <Select value={selectedFilter} onValueChange={(v) => onFilterChange(v as typeof selectedFilter)}>
           <SelectTrigger

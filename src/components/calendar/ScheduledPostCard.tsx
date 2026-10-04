@@ -40,10 +40,10 @@ export function ScheduledPostCard({
       }
       className={cn(
         "group/chip flex items-center gap-1 px-1.5 py-1 rounded-md text-xs",
-        "bg-gradient-to-br from-emerald-500/15 via-teal-500/10 to-cyan-500/10",
+        "bg-emerald-500/15",
         "border border-emerald-400/30 text-emerald-700 dark:text-emerald-300",
         "cursor-grab active:cursor-grabbing transition-all duration-300",
-        "hover:from-emerald-500/25 hover:to-cyan-500/20 hover:-translate-y-0.5 hover:shadow-md hover:shadow-emerald-500/20",
+        "hover:from-emerald-500/25 hover:to-cyan-500/20 hover:-translate-y-0.5 hover:shadow-md",
         isDragging && "opacity-50 scale-95"
       )}
     >

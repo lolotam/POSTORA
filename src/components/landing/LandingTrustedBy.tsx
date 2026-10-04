@@ -37,7 +37,7 @@ export default function LandingTrustedBy() {
                 key={`row1-${company}-${index}`}
                 className="flex-shrink-0 flex items-center justify-center w-48 h-20"
               >
-                <div className="w-full h-full px-6 py-3 rounded-xl bg-card/30 border border-border/50 backdrop-blur-sm hover:bg-card/50 hover:border-primary/20 transition-all duration-300 flex items-center justify-center relative group/logo">
+                <div className="w-full h-full px-6 py-3 rounded-xl bg-card border border-border/50 hover:bg-card hover:border-primary/20 transition-all duration-300 flex items-center justify-center relative group/logo">
                   <img
                     src={`/brands/${company.toLowerCase().replace(/[^a-z0-9]/g, '')}.png`}
                     alt={`${company} logo`}
@@ -53,7 +53,7 @@ export default function LandingTrustedBy() {
                       }
                     }}
                   />
-                  <div className="absolute inset-0 flex items-center justify-center bg-background/80 backdrop-blur-sm opacity-0 group-hover/logo:opacity-100 transition-opacity duration-300 rounded-xl">
+                  <div className="absolute inset-0 flex items-center justify-center bg-background opacity-0 group-hover/logo:opacity-100 transition-opacity duration-300 rounded-xl">
                     <span className="font-bold text-sm text-foreground">{company}</span>
                   </div>
                 </div>
@@ -70,7 +70,7 @@ export default function LandingTrustedBy() {
                 key={`row2-${company}-${index}`}
                 className="flex-shrink-0 flex items-center justify-center w-48 h-20"
               >
-                <div className="w-full h-full px-6 py-3 rounded-xl bg-card/30 border border-border/50 backdrop-blur-sm hover:bg-card/50 hover:border-primary/20 transition-all duration-300 flex items-center justify-center relative group/logo">
+                <div className="w-full h-full px-6 py-3 rounded-xl bg-card border border-border/50 hover:bg-card hover:border-primary/20 transition-all duration-300 flex items-center justify-center relative group/logo">
                   <img
                     src={`/brands/${company.toLowerCase().replace(/[^a-z0-9]/g, '')}.png`}
                     alt={`${company} logo`}
@@ -86,7 +86,7 @@ export default function LandingTrustedBy() {
                       }
                     }}
                   />
-                  <div className="absolute inset-0 flex items-center justify-center bg-background/80 backdrop-blur-sm opacity-0 group-hover/logo:opacity-100 transition-opacity duration-300 rounded-xl">
+                  <div className="absolute inset-0 flex items-center justify-center bg-background opacity-0 group-hover/logo:opacity-100 transition-opacity duration-300 rounded-xl">
                     <span className="font-bold text-sm text-foreground">{company}</span>
                   </div>
                 </div>

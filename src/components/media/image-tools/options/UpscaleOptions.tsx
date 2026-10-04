@@ -55,7 +55,7 @@ export function UpscaleOptions({
               </SelectItem>
               <SelectItem value="atlascloud">
                 <div className="flex items-center gap-2">
-                  <Sparkles className="w-4 h-4 text-purple-500" />
+                  <Sparkles className="w-4 h-4 text-foreground" />
                   <div>
                     <span>AtlasCloud 4K</span>
                     <p className="text-xs text-muted-foreground">{t("imageTools.atlasDesc", "Premium 4K upscaling with AI restoration")}</p>

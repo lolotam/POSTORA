@@ -66,7 +66,7 @@ export function SchedulePicker({ scheduledAt, onScheduleChange }: SchedulePicker
       <div className="flex items-center justify-between group">
         <div className="flex items-center gap-3">
           <Icon3D icon={Clock} variant="amber" size="sm" />
-          <Label htmlFor="schedule-toggle" className="font-semibold bg-clip-text text-transparent bg-gradient-to-r from-amber-500 via-orange-500 to-rose-500">
+          <Label htmlFor="schedule-toggle" className="font-semibold text-foreground">
             {t("schedulePicker.label", "Schedule Post")}
           </Label>
         </div>
@@ -84,7 +84,7 @@ export function SchedulePicker({ scheduledAt, onScheduleChange }: SchedulePicker
               <Button
                 variant="outline"
                 className={cn(
-                  "w-full justify-start text-start font-normal bg-card/40 backdrop-blur-sm border-amber-400/30 hover:border-amber-400/60 hover:bg-card/60 transition-all",
+                  "w-full justify-start text-start font-normal bg-card border-amber-400/30 hover:border-amber-400/60 hover:bg-card transition-all",
                   !selectedDate && "text-muted-foreground"
                 )}
               >
@@ -110,7 +110,7 @@ export function SchedulePicker({ scheduledAt, onScheduleChange }: SchedulePicker
               type="time"
               value={selectedTime}
               onChange={(e) => handleTimeChange(e.target.value)}
-              className="w-full bg-background/60 backdrop-blur-sm border-amber-400/30 focus-visible:border-amber-400 focus-visible:ring-amber-400/30"
+              className="w-full bg-background border-amber-400/30 focus-visible:border-amber-400 focus-visible:ring-amber-400/30"
             />
           </div>
 

@@ -13,18 +13,18 @@ import { cn } from "@/lib/utils";
  * the IG identity (purple → pink → orange).
  */
 const brandGradients: Record<Platform, string> = {
-  facebook: "bg-gradient-to-br from-brand-facebook to-brand-facebook-dark",
+  facebook: "bg-brand-facebook",
   instagram:
     "bg-[linear-gradient(135deg,#f9ce34_0%,#ee2a7b_45%,#6228d7_100%)]",
-  tiktok: "bg-gradient-to-br from-brand-tiktok to-brand-tiktok-dark",
-  twitter: "bg-gradient-to-br from-brand-twitter to-brand-twitter-dark",
-  linkedin: "bg-gradient-to-br from-brand-linkedin to-brand-linkedin-dark",
-  youtube: "bg-gradient-to-br from-brand-youtube to-brand-youtube-dark",
-  pinterest: "bg-gradient-to-br from-brand-pinterest to-brand-pinterest-dark",
-  threads: "bg-gradient-to-br from-brand-threads to-brand-threads-dark",
-  bluesky: "bg-gradient-to-br from-brand-bluesky to-brand-bluesky-dark",
-  reddit: "bg-gradient-to-br from-brand-reddit to-brand-reddit-dark",
-  whatsapp: "bg-gradient-to-br from-brand-whatsapp to-brand-whatsapp-dark",
+  tiktok: "bg-brand-tiktok",
+  twitter: "bg-brand-twitter",
+  linkedin: "bg-brand-linkedin",
+  youtube: "bg-brand-youtube",
+  pinterest: "bg-brand-pinterest",
+  threads: "bg-brand-threads",
+  bluesky: "bg-brand-bluesky",
+  reddit: "bg-brand-reddit",
+  whatsapp: "bg-brand-whatsapp",
 };
 
 interface PlatformChipProps {

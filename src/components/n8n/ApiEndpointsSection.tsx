@@ -279,14 +279,14 @@ export function ApiEndpointsSection() {
         {/* AI Image Processing Section */}
         <div className="col-span-full mt-8 mb-4">
           <h3 className="text-xl font-bold flex items-center gap-2">
-            <Wand2 className="w-5 h-5 text-violet-500" />
+            <Wand2 className="w-5 h-5 text-foreground" />
             AI Image Processing Endpoints
           </h3>
           <p className="text-muted-foreground mt-1">Process images with AI-powered background removal and upscaling</p>
         </div>
 
         {/* Remove Background */}
-        <Card className="p-6 bg-card/50 border-violet-500/20">
+        <Card className="p-6 bg-card/50 border-border">
           <div className="flex items-center gap-3 mb-4">
             <span className="px-3 py-1 rounded text-sm font-mono bg-emerald-500/20 text-emerald-500">POST</span>
             <code className="font-mono">/remove-background</code>
@@ -420,8 +420,8 @@ export function ApiEndpointsSection() {
                   <td className="py-2 px-4 text-muted-foreground">number</td>
                   <td className="py-2 px-4">Upscale factor: 1-4 (default: 2)</td>
                 </tr>
-                <tr className="border-t border-border bg-purple-500/5">
-                  <td className="py-2 px-4 font-mono text-purple-500 text-xs">platform</td>
+                <tr className="border-t border-border bg-muted">
+                  <td className="py-2 px-4 font-mono text-foreground text-xs">platform</td>
                   <td className="py-2 px-4 text-muted-foreground">string</td>
                   <td className="py-2 px-4">"cloudinary" (default) or "atlascloud" for 4K premium</td>
                 </tr>

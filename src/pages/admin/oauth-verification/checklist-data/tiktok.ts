@@ -129,6 +129,6 @@ export const tiktokChecklistItems: ChecklistItem[] = [
 export const tiktokCategoryInfo: Record<string, CategoryInfo> = {
   api: { label: "API Integration", icon: Key, color: "text-cyan-500" },
   privacy: { label: "Privacy & Settings", icon: Shield, color: "text-blue-500" },
-  content: { label: "Content Requirements", icon: Video, color: "text-pink-500" },
+  content: { label: "Content Requirements", icon: Video, color: "text-foreground" },
   documentation: { label: "App Configuration", icon: FileText, color: "text-green-500" },
 };

@@ -204,7 +204,7 @@ export function CaptionSection({
         <GradientRingCard variant="sky" hoverLift={false} ringIntensity="subtle" padded={false} innerClassName="p-3 space-y-2">
           <div className="flex items-center gap-2">
             <Icon3D icon={Sparkles} variant="sky" size="sm" />
-            <Label className="text-sm font-semibold bg-clip-text text-transparent bg-gradient-to-r from-sky-500 via-violet-500 to-pink-500">
+            <Label className="text-sm font-semibold text-foreground">
               {t("caption.hashtagGenTitle", "Tags / Hashtag Generator")}
             </Label>
           </div>
@@ -233,13 +233,13 @@ export function CaptionSection({
                 <Button
                   variant="ghost"
                   size="sm"
-                  className="h-7 text-xs gap-1.5 bg-gradient-to-r from-sky-500/15 to-violet-500/15 text-sky-700 dark:text-sky-300 border border-sky-400/40 hover:from-sky-500 hover:to-violet-500 hover:text-white hover:shadow-md hover:shadow-sky-500/30 transition-all"
+                  className="h-7 text-xs gap-1.5 text-foreground dark:text-neutral-200 border border-input hover:text-white hover:shadow-md transition-all bg-muted hover:bg-neutral-800 dark:hover:bg-neutral-700"
                 >
                   <Sparkles className="w-3 h-3 me-1" />
                   {t("caption.generateAi", "Generate with AI")}
                 </Button>
               </DialogTrigger>
-              <DialogContent className="bg-card/80 backdrop-blur-xl border-border/50 shadow-2xl shadow-sky-500/10">
+              <DialogContent className="bg-card border-border/50 shadow-2xl">
                 <DialogHeader>
                   <DialogTitle className="flex items-center gap-3 group">
                     <Icon3D icon={Sparkles} variant="sky" size="sm" />
@@ -274,8 +274,8 @@ export function CaptionSection({
                         className={cn(
                           "flex-1 transition-all",
                           language === "english"
-                            ? "bg-gradient-to-r from-sky-500 via-violet-500 to-pink-500 text-white border-0 shadow-md shadow-sky-500/30"
-                            : "bg-card/50 backdrop-blur-sm border-border/50 hover:border-sky-400/60"
+                            ? "text-white border-0 shadow-md bg-neutral-900 dark:bg-neutral-800"
+                            : "bg-card border-border/50 hover:border-input"
                         )}
                       >
                         {t("caption.english", "English")}
@@ -288,8 +288,8 @@ export function CaptionSection({
                         className={cn(
                           "flex-1 transition-all",
                           language === "arabic"
-                            ? "bg-gradient-to-r from-sky-500 via-violet-500 to-pink-500 text-white border-0 shadow-md shadow-sky-500/30"
-                            : "bg-card/50 backdrop-blur-sm border-border/50 hover:border-sky-400/60"
+                            ? "text-white border-0 shadow-md bg-neutral-900 dark:bg-neutral-800"
+                            : "bg-card border-border/50 hover:border-input"
                         )}
                       >
                         {t("caption.arabic", "العربية")}
@@ -305,7 +305,7 @@ export function CaptionSection({
                       placeholder={language === "arabic" 
                         ? t("caption.promptPlaceholder", "مثال: إطلاق منتج جديد لخط الأزياء المستدامة...")
                         : "e.g., New product launch for our sustainable fashion line..."}
-                      className="min-h-[100px] bg-background/60 backdrop-blur-sm border-border/50 focus-visible:border-sky-400 focus-visible:ring-sky-400/30"
+                      className="min-h-[100px] bg-background border-border/50 focus-visible:border-input focus-visible:ring-ring"
                       dir={language === "arabic" ? "rtl" : "ltr"}
                       disabled={isRateLimited}
                     />
@@ -325,8 +325,8 @@ export function CaptionSection({
                           className={cn(
                             "transition-all",
                             selectedTone === tone.id
-                              ? "bg-gradient-to-r from-sky-500 via-violet-500 to-pink-500 text-white border-0 shadow-md shadow-sky-500/30"
-                              : "bg-card/50 backdrop-blur-sm border-border/50 hover:border-sky-400/60"
+                              ? "text-white border-0 shadow-md bg-neutral-900 dark:bg-neutral-800"
+                              : "bg-card border-border/50 hover:border-input"
                           )}
                         >
                           {tone.label}
@@ -338,7 +338,7 @@ export function CaptionSection({
                   <Button 
                     onClick={handleGenerateCaption} 
                     disabled={isGeneratingCaption || !aiPrompt.trim() || isRateLimited} 
-                    className="w-full bg-gradient-to-r from-sky-500 via-violet-500 to-pink-500 text-white border-0 shadow-lg shadow-sky-500/30 hover:shadow-sky-500/50 hover:opacity-95 transition-all"
+                    className="w-full text-white border-0 shadow-lg hover:opacity-95 transition-all bg-neutral-900 dark:bg-neutral-800"
                   >
                     {isGeneratingCaption ? (
                       <>
@@ -373,7 +373,7 @@ export function CaptionSection({
                           return (
                             <div
                               key={index}
-                              className="p-3 rounded-xl border border-border/40 bg-card/40 backdrop-blur-sm space-y-2 hover:border-sky-400/60 hover:shadow-md hover:shadow-sky-500/20 transition-all"
+                              className="p-3 rounded-xl border border-border/40 bg-card space-y-2 hover:border-input hover:shadow-md transition-all"
                             >
                               <div className="flex items-center justify-between">
                                 <span className="text-xs font-medium text-muted-foreground">
@@ -396,7 +396,7 @@ export function CaptionSection({
                                     variant="ghost"
                                     className={cn(
                                       "h-7 px-2 text-xs",
-                                      isSaved && "text-sky-500"
+                                      isSaved && "text-foreground"
                                     )}
                                     onClick={() => handleSaveOption(index, opt)}
                                     disabled={isSaved}
@@ -412,7 +412,7 @@ export function CaptionSection({
                                     type="button"
                                     size="sm"
                                     variant="default"
-                                    className="h-7 px-2 text-xs bg-gradient-to-r from-sky-500 to-violet-500 text-white border-0 shadow-sm shadow-sky-500/30 hover:shadow-md hover:shadow-sky-500/50"
+                                    className="h-7 px-2 text-xs text-white border-0 shadow-sm hover:shadow-md bg-neutral-900 dark:bg-neutral-800"
                                     onClick={() => handleSelectCaption(opt)}
                                   >
                                     {t("caption.use", "Use")}
@@ -458,7 +458,7 @@ export function CaptionSection({
           onChange={(e) => setCaption(e.target.value)}
           placeholder={t("caption.placeholder", "Enter title for your post")}
           className={cn(
-            "min-h-[120px] resize-none transition-all duration-200 bg-background/60 backdrop-blur-sm border-border/50 focus-visible:border-sky-400 focus-visible:ring-sky-400/30",
+            "min-h-[120px] resize-none transition-all duration-200 bg-background border-border/50 focus-visible:border-input focus-visible:ring-ring",
             isOverLimit && "border-rose-400 ring-rose-400/30 ring-2 bg-rose-500/5 focus-visible:border-rose-400 focus-visible:ring-rose-400/40",
             isNearLimit && !isOverLimit && "border-amber-400 ring-amber-400/20 ring-1 bg-amber-500/5"
           )}

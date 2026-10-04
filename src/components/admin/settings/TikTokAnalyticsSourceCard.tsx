@@ -64,8 +64,8 @@ export function TikTokAnalyticsSourceCard() {
     <Card>
       <CardContent className="p-4 space-y-4">
         <div className="flex items-center gap-2">
-          <div className="w-7 h-7 rounded-md bg-gradient-to-br from-pink-500/20 via-red-500/20 to-cyan-400/20 flex items-center justify-center">
-            <Video className="w-3.5 h-3.5 text-pink-500" />
+          <div className="w-7 h-7 rounded-md flex items-center justify-center bg-muted">
+            <Video className="w-3.5 h-3.5 text-foreground" />
           </div>
           <div>
             <span className="text-sm font-semibold">TikTok Analytics Source</span>

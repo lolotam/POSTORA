@@ -58,7 +58,7 @@ export function PlanCard({ plan, isYearly, isAdmin, planSlug, isSubscribed, load
       innerClassName="flex flex-col p-6 md:p-7"
     >
       {plan.is_popular && (
-        <Badge className="absolute -top-3 start-1/2 -translate-x-1/2 bg-gradient-to-r from-violet-500 to-pink-500 text-white border-0 shadow-lg shadow-violet-500/30">
+        <Badge className="absolute -top-3 start-1/2 -translate-x-1/2 text-white border-0 shadow-lg bg-neutral-900 dark:bg-neutral-800">
           Most Popular
         </Badge>
       )}

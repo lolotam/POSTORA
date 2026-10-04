@@ -159,7 +159,7 @@ export default function PlatformMediaMatrix() {
       ]} />
 
       {/* Hero */}
-      <div className="bg-gradient-to-b from-primary/5 to-background border-b border-border">
+      <div className="border-b border-border bg-primary/5">
         <div className="container mx-auto px-6 py-12">
           <Badge variant="secondary" className="mb-4">
             <Layers className="w-3 h-3 me-1" />

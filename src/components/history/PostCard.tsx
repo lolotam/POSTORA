@@ -154,7 +154,7 @@ export function PostCard({
       data-post-id={post.id}
       data-post-status={post.status}
       className={cn(
-        "rounded-xl border-2 bg-card/50 backdrop-blur-sm overflow-hidden hover:bg-card transition-colors cursor-pointer",
+        "rounded-xl border-2 bg-card overflow-hidden hover:bg-card transition-colors cursor-pointer",
         isSelected
           ? "border-primary ring-2 ring-primary/20"
           : "border-border hover:border-primary/50"
@@ -200,17 +200,17 @@ export function PostCard({
                   className={cn(
                     "text-xs font-medium px-1.5 py-0.5 rounded border capitalize",
                     type === "feed" ? "bg-emerald-400/10 text-emerald-500 border-emerald-500/20" :
-                    type === "reel" ? "bg-purple-400/10 text-purple-500 border-purple-500/20" :
+                    type === "reel" ? "bg-muted text-foreground border-border" :
                     type === "story" ? "bg-amber-400/10 text-amber-500 border-amber-500/20" :
                     type === "image pin" ? "bg-rose-400/10 text-rose-500 border-rose-500/20" :
                     type === "video pin" ? "bg-red-400/10 text-red-500 border-red-500/20" :
                     type === "link pin" ? "bg-blue-400/10 text-blue-500 border-blue-500/20" :
-                    type === "multi pin" ? "bg-indigo-400/10 text-indigo-500 border-indigo-500/20" :
+                    type === "multi pin" ? "bg-muted text-foreground border-border" :
                     type === "text" ? "bg-muted text-muted-foreground border-border" :
                     type === "image" ? "bg-emerald-400/10 text-emerald-500 border-emerald-500/20" :
-                    type === "video" ? "bg-purple-400/10 text-purple-500 border-purple-500/20" :
-                    type === "carousel" ? "bg-indigo-400/10 text-indigo-500 border-indigo-500/20" :
-                    type === "gif" ? "bg-pink-400/10 text-pink-500 border-pink-500/20" :
+                    type === "video" ? "bg-muted text-foreground border-border" :
+                    type === "carousel" ? "bg-muted text-foreground border-border" :
+                    type === "gif" ? "bg-muted text-foreground border-border" :
                     "bg-muted text-muted-foreground"
                   )}
                 >

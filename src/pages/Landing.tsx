@@ -44,8 +44,8 @@ const platforms: Platform[] = ["instagram", "facebook", "tiktok", "twitter", "li
 
 // Vibrant particle colors for hero background
 const particleColors = [
-  "bg-pink-500", "bg-purple-500", "bg-blue-500", "bg-cyan-500", "bg-emerald-500",
-  "bg-yellow-500", "bg-orange-500", "bg-rose-500", "bg-indigo-500", "bg-teal-500",
+  "bg-neutral-900 dark:bg-neutral-800", "bg-neutral-900 dark:bg-neutral-800", "bg-blue-500", "bg-cyan-500", "bg-emerald-500",
+  "bg-yellow-500", "bg-orange-500", "bg-rose-500", "bg-neutral-900 dark:bg-neutral-800", "bg-teal-500",
 ];
 
 // Floating particles for hero background — CSS-only
@@ -71,7 +71,7 @@ const FloatingParticles = () => {
             height: particle.size,
             left: `${particle.x}%`,
             top: `${particle.y}%`,
-            boxShadow: `0 0 ${particle.size * 2}px currentColor`,
+            boxShadow: `0 ${particle.size * 2}px currentColor`,
             animationDuration: `${particle.duration}s`,
             animationDelay: `${particle.delay}s`,
           }}
@@ -100,17 +100,15 @@ export default function Landing() {
     <div className="min-h-screen bg-background relative overflow-hidden scroll-smooth">
       {/* Background Effects */}
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
-        <div className="absolute top-0 start-1/4 w-96 h-96 bg-primary/20 rounded-full blur-[128px]" />
-        <div className="absolute top-1/3 end-1/4 w-80 h-80 bg-accent/20 rounded-full blur-[128px]" />
-        <div className="absolute bottom-0 start-1/2 -translate-x-1/2 w-full h-1/2 bg-gradient-to-t from-primary/5 to-transparent" />
+        <div className="absolute bottom-0 start-1/2 -translate-x-1/2 w-full h-1/2 bg-accent" />
         <FloatingParticles />
       </div>
 
       {/* Sticky Header */}
       <header
         className={`fixed top-0 start-0 end-0 z-50 border-b transition-all duration-300 ${isScrolled
-          ? "border-border bg-background/95 backdrop-blur-xl shadow-lg h-14"
-          : "border-border/50 bg-background/50 backdrop-blur-xl h-16"
+          ? "border-border bg-background h-14"
+          : "border-border/50 bg-background h-16"
           }`}
       >
         <div className="container mx-auto px-6 h-full flex items-center justify-between transition-all duration-300">
@@ -254,7 +252,7 @@ export default function Landing() {
                     key={`${platform}-${index}`}
                     className="flex flex-col items-center gap-3 flex-shrink-0 transition-transform duration-300 hover:scale-110 hover:-translate-y-1"
                   >
-                    <div className="w-16 h-16 md:w-20 md:h-20 rounded-2xl bg-secondary/80 backdrop-blur-sm flex items-center justify-center border border-border/50 shadow-lg hover:shadow-xl hover:border-primary/30 transition-all duration-300">
+                    <div className="w-16 h-16 md:w-20 md:h-20 rounded-2xl bg-secondary/80 flex items-center justify-center border border-border/50 shadow-lg hover:shadow-xl hover:border-primary/30 transition-all duration-300">
                       <PlatformIcon platform={platform} size="xl" />
                     </div>
                     <span className="text-sm font-medium text-muted-foreground">

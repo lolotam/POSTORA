@@ -27,7 +27,7 @@ export function TranscriptPanel({ transcript, language, duration, onUseTranscrip
     <Card className="animate-[fadeSlideUp_0.3s_ease-out]">
       <CardContent className="p-4 space-y-3">
         <div className="flex items-center gap-2">
-          <Mic className="w-4 h-4 text-violet-500" />
+          <Mic className="w-4 h-4 text-foreground" />
           <span className="text-sm font-medium">{t("transcript.title", "Transcript")}</span>
           <Badge variant="secondary" className="text-[10px]">🌐 {language || t("transcript.auto", "Auto")}</Badge>
           {duration > 0 && (

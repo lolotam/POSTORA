@@ -58,7 +58,7 @@ export function HistoryHeader({
           <Icon3D icon={Send} variant="emerald" size="md" />
           <div>
             <h1 className="text-3xl md:text-4xl font-bold tracking-tight" data-testid="history-title">
-              <span className="bg-clip-text text-transparent bg-gradient-to-r from-emerald-500 via-cyan-500 to-sky-500">
+              <span className="text-foreground">
                 {t("header.title", "Post History")}
               </span>
             </h1>
@@ -67,7 +67,7 @@ export function HistoryHeader({
             </p>
           </div>
         </div>
-        <div className="flex gap-2 flex-wrap items-center rounded-2xl border border-border/60 bg-card/60 backdrop-blur-md p-2" data-testid="bulk-actions">
+        <div className="flex gap-2 flex-wrap items-center rounded-2xl border border-border/60 bg-card p-2" data-testid="bulk-actions">
           {onRefresh && (
             <Button variant="outline" size="sm" onClick={onRefresh} disabled={isRefreshing} className="gap-2">
               <RotateCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />

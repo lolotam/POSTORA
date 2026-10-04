@@ -184,7 +184,7 @@ export function BlueskyPostPreview({
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <div className="w-5 h-5 rounded flex items-center justify-center overflow-hidden">
-            <svg viewBox="0 0 568 501" className="w-4 h-4" fill="currentColor">
+            <svg viewBox="0 568 501" className="w-4 h-4" fill="currentColor">
               <path d="M123.121 33.6637C188.241 82.5526 258.281 181.681 284 234.873C309.719 181.681 379.759 82.5526 444.879 33.6637C491.866 -1.61183 568 -28.9064 568 57.9464C568 75.2916 558.055 203.659 552.222 224.501C531.947 296.954 458.067 315.434 392.347 304.249C507.222 323.8 536.444 388.56 473.333 453.32C353.473 576.312 301.061 422.461 287.631 383.039C285.169 373.514 284.017 369.044 284 368.769C283.983 369.044 282.831 373.514 280.369 383.039C266.939 422.461 214.527 576.312 94.6667 453.32C31.5556 388.56 60.7778 323.8 175.653 304.249C109.933 315.434 36.0533 296.954 15.7778 224.501C9.94533 203.659 0 75.2916 0 57.9464C0 -28.9064 76.1333 -1.61183 123.121 33.6637Z" />
             </svg>
           </div>
@@ -197,7 +197,7 @@ export function BlueskyPostPreview({
               {getReplyLabel()}
             </Badge>
           )}
-          <Badge variant="secondary" className="text-xs bg-sky-500/10 text-sky-600 dark:bg-sky-500/20 dark:text-sky-400">
+          <Badge variant="secondary" className="text-xs bg-muted text-foreground dark:bg-muted dark:text-foreground">
             {t("bluesky.postBadge", "Post")}
           </Badge>
         </div>
@@ -230,7 +230,7 @@ export function BlueskyPostPreview({
           <div className="flex items-start gap-3">
             <Avatar className="h-11 w-11">
               {avatarUrl ? <AvatarImage src={avatarUrl} alt={username} /> : null}
-              <AvatarFallback className="bg-gradient-to-br from-sky-400 to-blue-600 text-white font-medium">
+              <AvatarFallback className="text-white font-medium bg-neutral-900 dark:bg-neutral-800">
                 {(displayName || username)[0]?.toUpperCase()}
               </AvatarFallback>
             </Avatar>
@@ -253,7 +253,7 @@ export function BlueskyPostPreview({
               <p className="text-[15px] whitespace-pre-wrap break-words leading-relaxed">
                 {truncatedCaption}
                 {caption.length > 300 && (
-                  <span className="text-sky-500 hover:underline cursor-pointer ms-1">
+                  <span className="text-foreground hover:underline cursor-pointer ms-1">
                     {t("bluesky.showMore", "Show more")}
                   </span>
                 )}
@@ -298,7 +298,7 @@ export function BlueskyPostPreview({
             <div className="flex items-center gap-2 mt-4 text-sm text-muted-foreground">
               <span>{timeString} · {dateString}</span>
               <span>·</span>
-              <span className="text-sky-500 flex items-center gap-1">
+              <span className="text-foreground flex items-center gap-1">
                 ⊙ {getReplyLabel()}
                 <span className="text-muted-foreground">▾</span>
               </span>
@@ -306,7 +306,7 @@ export function BlueskyPostPreview({
 
             {/* Engagement Actions */}
             <div className="flex items-center justify-between mt-4 pt-3 border-t text-muted-foreground">
-              <button className="flex items-center gap-1.5 hover:text-sky-500 transition-colors group">
+              <button className="flex items-center gap-1.5 hover:text-foreground transition-colors group">
                 <MessageCircle className="w-5 h-5" />
               </button>
               
@@ -314,11 +314,11 @@ export function BlueskyPostPreview({
                 <Repeat2 className="w-5 h-5" />
               </button>
               
-              <button className="flex items-center gap-1.5 hover:text-pink-500 transition-colors group">
+              <button className="flex items-center gap-1.5 hover:text-foreground transition-colors group">
                 <Heart className="w-5 h-5" />
               </button>
               
-              <button className="flex items-center gap-1.5 hover:text-sky-500 transition-colors group">
+              <button className="flex items-center gap-1.5 hover:text-foreground transition-colors group">
                 <Share className="w-5 h-5" />
               </button>
             </div>

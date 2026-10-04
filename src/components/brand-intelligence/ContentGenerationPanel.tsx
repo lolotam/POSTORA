@@ -50,7 +50,7 @@ function PromptCard({ text, index, onUse, showGenerateImage }: { text: string; i
           <p className={`text-sm flex-1 ${!expanded && isLong ? "line-clamp-3" : ""}`}>{text}</p>
         </div>
         {isLong && (
-          <button className="text-xs text-violet-500 hover:underline" onClick={() => setExpanded(!expanded)}>
+          <button className="text-xs text-foreground hover:underline" onClick={() => setExpanded(!expanded)}>
             {expanded ? t("actions.showLess", "Show less") : t("actions.showMore", "Show more")}
           </button>
         )}
@@ -135,7 +135,7 @@ export function ContentGenerationPanel({ sourceText, sourcePost }: ContentGenera
       </div>
 
       <Button
-        className="w-full gap-2 bg-gradient-to-r from-violet-500 to-pink-500 hover:from-violet-600 hover:to-pink-600 text-white border-0"
+        className="w-full gap-2 text-white border-0 bg-neutral-900 dark:bg-neutral-800 hover:bg-neutral-800 dark:hover:bg-neutral-700"
         onClick={handleGenerate}
         disabled={isGenerating}
       >

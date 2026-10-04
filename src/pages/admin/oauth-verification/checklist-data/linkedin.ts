@@ -146,7 +146,7 @@ export const linkedinChecklistItems: ChecklistItem[] = [
 
 export const linkedinCategoryInfo: Record<string, CategoryInfo> = {
   setup: { label: "App Setup", icon: Settings, color: "text-blue-600" },
-  scopes: { label: "Scopes & Permissions", icon: Key, color: "text-purple-500" },
+  scopes: { label: "Scopes & Permissions", icon: Key, color: "text-foreground" },
   content: { label: "Content Requirements", icon: FileText, color: "text-cyan-500" },
   compliance: { label: "Compliance & Documentation", icon: Shield, color: "text-green-500" },
 };

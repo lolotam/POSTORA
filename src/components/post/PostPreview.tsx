@@ -224,7 +224,7 @@ function InstagramPreview({
             />
           )}
           {mediaFiles.length > 1 && (
-            <div className="absolute top-3 end-3 bg-background/80 backdrop-blur px-2 py-1 rounded text-xs font-medium">
+            <div className="absolute top-3 end-3 bg-background px-2 py-1 rounded text-xs font-medium">
               1/{mediaFiles.length}
             </div>
           )}
@@ -455,7 +455,7 @@ function TikTokPreview({
               />
             )
           ) : (
-            <div className="absolute inset-0 bg-gradient-to-b from-gray-800 to-gray-900" />
+            <div className="absolute inset-0 bg-gray-800" />
           )}
 
           {/* Top navigation */}
@@ -465,7 +465,7 @@ function TikTokPreview({
           </div>
 
           {/* Overlay gradient */}
-          <div className="absolute inset-0 bg-gradient-to-b from-black/30 via-transparent to-black/80" />
+          <div className="absolute inset-0 bg-black/30" />
 
           {/* Right side actions */}
           <div className="absolute end-3 bottom-24 flex flex-col items-center gap-4 z-10">
@@ -556,7 +556,7 @@ function TikTokPreview({
               {avatarUrl ? (
                 <AvatarImage src={avatarUrl} alt={username} />
               ) : null}
-              <AvatarFallback className="bg-gradient-to-br from-[#00f2ea] to-[#ff0050] text-white">{username[0]?.toUpperCase()}</AvatarFallback>
+              <AvatarFallback className="text-white bg-[#00f2ea]">{username[0]?.toUpperCase()}</AvatarFallback>
             </Avatar>
             <p className="font-semibold text-sm mt-2">@{username}</p>
             <div className="flex gap-2 mt-2">
@@ -597,7 +597,7 @@ function TikTokPreview({
                   />
                 )
               ) : (
-                <div className="w-full h-full bg-gradient-to-br from-gray-200 to-gray-300 dark:from-gray-700 dark:to-gray-600" />
+                <div className="w-full h-full bg-gray-200 dark:bg-gray-700" />
               )}
               <div className="absolute bottom-1 start-1 text-white text-[8px] flex items-center gap-0.5">
                 <span>▶</span>
@@ -634,7 +634,7 @@ function TikTokPreview({
                 />
               )
             ) : (
-              <div className="w-full h-full bg-gradient-to-b from-gray-800 to-gray-900" />
+              <div className="w-full h-full bg-gray-800" />
             )}
 
             {/* Overlay */}

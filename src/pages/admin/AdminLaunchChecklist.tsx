@@ -252,7 +252,7 @@ const CHECKLIST_ITEMS: ChecklistItem[] = [
 const CATEGORIES = [
   { id: "security", label: "Security", icon: Shield, color: "text-red-500" },
   { id: "database", label: "Database", icon: Database, color: "text-blue-500" },
-  { id: "infrastructure", label: "Infrastructure", icon: Server, color: "text-purple-500" },
+  { id: "infrastructure", label: "Infrastructure", icon: Server, color: "text-foreground" },
   { id: "monitoring", label: "Monitoring", icon: Bell, color: "text-yellow-500" },
   { id: "payments", label: "Payments", icon: CreditCard, color: "text-green-500" },
   { id: "legal", label: "Legal", icon: FileText, color: "text-orange-500" },

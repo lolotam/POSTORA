@@ -175,7 +175,7 @@ export function SubscriptionSection() {
             </div>
           </div>
           <div className="flex items-center gap-3 mb-4">
-            <Badge className="bg-gradient-to-r from-amber-500 to-orange-500 text-white">
+            <Badge className="text-white bg-amber-500">
               {t("subscription.admin.badge", "Admin")}
             </Badge>
             <span className="text-sm text-muted-foreground">
@@ -264,7 +264,7 @@ export function SubscriptionSection() {
             <div className="flex items-center gap-3">
               <Badge
                 variant={isSubscribed ? "default" : "secondary"}
-                className={isSubscribed ? "bg-gradient-to-r from-amber-500 to-orange-500 text-white" : ""}
+                className={isSubscribed ? "text-white bg-amber-500" : ""}
               >
                 {planName}
               </Badge>
@@ -424,7 +424,7 @@ export function SubscriptionSection() {
 
       {/* Upgrade CTA for Free Users */}
       {!isSubscribed && (
-        <Card className="border-primary/20 bg-gradient-to-br from-primary/5 to-transparent">
+        <Card className="border-primary/20 bg-accent">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <Sparkles className="w-5 h-5 text-primary" />

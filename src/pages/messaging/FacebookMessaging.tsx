@@ -28,9 +28,9 @@ export default function FacebookMessaging() {
               </div>
             </div>
 
-            <Button asChild variant="outline" size="sm" className="gap-2 border-sky-500/30 hover:bg-sky-500/10">
+            <Button asChild variant="outline" size="sm" className="gap-2 border-border hover:bg-muted">
               <Link to="/automation/agents?platform=facebook&surface=dms">
-                <Sparkles className="w-4 h-4 text-sky-400" />
+                <Sparkles className="w-4 h-4 text-foreground" />
                 <span>{t("facebook.aiSettings", "AI & Automation Settings")}</span>
                 <ArrowRight className="w-4 h-4" />
               </Link>
