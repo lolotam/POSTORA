@@ -366,7 +366,7 @@ export default function AdminBlogPosts() {
                 {posts.map((post) => (
                   <tr key={post.id} className="hover:bg-muted/30">
                     <td className="px-4 py-3">
-                      <div className="flex items-center gap-3 max-md:min-w-[14rem]">
+                      <div className="flex items-center gap-3 max-md:min-w-[16rem]">
                         {post.cover_image_url && (
                           <img
                             src={post.cover_image_url}

@@ -1120,7 +1120,7 @@ export default function AdminLogs() {
                     <div className="divide-y">
                       {logs.map((log, index) => (
                         <div key={log.id} className={`p-4 hover:bg-muted/50 transition-colors ${selectedLogIds.has(log.id) ? "bg-primary/5" : ""}`}>
-                          <div className="flex items-start gap-3">
+                          <div className="flex flex-wrap md:flex-nowrap items-start gap-3">
                             <span className="text-xs text-muted-foreground font-mono mt-1 min-w-[2rem] text-end">{index + 1}</span>
                             <Checkbox
                               checked={selectedLogIds.has(log.id)}
@@ -1190,8 +1190,10 @@ export default function AdminLogs() {
                                 </div>
                               )}
                             </div>
-                            <div className="flex flex-col items-end gap-1 text-xs text-muted-foreground whitespace-nowrap">
-                              <Button variant="ghost" size="sm" className="h-7 text-xs gap-1 mb-1" disabled={analyzingLogId === log.id} onClick={() => handleAnalyzeLog(log)}>
+                            {/* On phones the time/Analyze column drops under the message
+                                so the message keeps the full row width. */}
+                            <div className="flex flex-col items-end gap-1 text-xs text-muted-foreground whitespace-nowrap max-md:w-full max-md:flex-row max-md:flex-wrap max-md:items-center max-md:justify-end max-md:gap-x-3">
+                              <Button variant="ghost" size="sm" className="h-7 text-xs gap-1 mb-1 max-md:mb-0 max-md:order-last" disabled={analyzingLogId === log.id} onClick={() => handleAnalyzeLog(log)}>
                                 {analyzingLogId === log.id ? (
                                   <><Loader2 className="w-3 h-3 animate-spin" /> Analyzing...</>
                                 ) : analysisResults.has(log.id) ? (

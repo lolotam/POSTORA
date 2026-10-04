@@ -807,12 +807,12 @@ export default function AdminTokenHealth() {
         {/* Accounts Table */}
         <Card>
           <CardHeader className="pb-3">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
                 <CardTitle>Connected Accounts</CardTitle>
                 <CardDescription>All OAuth tokens with expiry status</CardDescription>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 {selectedAccounts.size > 0 && (
                   <Button
                     onClick={() => bulkForceRefreshMutation.mutate(Array.from(selectedAccounts))}
@@ -829,7 +829,9 @@ export default function AdminTokenHealth() {
             </div>
           </CardHeader>
           <CardContent className="p-0">
-            <ScrollArea className="h-[500px]">
+            {/* The rows are fixed-width columns; on phones let the viewport
+                scroll sideways instead of clipping them (Radix forces overflow-x hidden). */}
+            <ScrollArea className="h-[500px] max-md:[&>[data-radix-scroll-area-viewport]]:!overflow-x-auto">
               {isLoading ? (
                 <div className="flex items-center justify-center py-12">
                   <RefreshCw className="w-6 h-6 animate-spin text-muted-foreground" />
@@ -849,7 +851,7 @@ export default function AdminTokenHealth() {
                       className="ms-1"
                     />
                     <span className="w-10">Avatar</span>
-                    <span className="flex-1">Account</span>
+                    <span className="flex-1 max-md:min-w-[10rem]">Account</span>
                     <span className="w-32 text-end">Status</span>
                     <span className="w-32 text-end">Failures</span>
                     <span className="w-28 text-end">Last Attempt</span>
@@ -873,7 +875,7 @@ export default function AdminTokenHealth() {
                             <PlatformIcon platform={account.platform as ExtendedPlatform} size="sm" />
                           </AvatarFallback>
                         </Avatar>
-                        <div className="flex-1 min-w-0">
+                        <div className="flex-1 min-w-0 max-md:min-w-[10rem]">
                           <div className="flex items-center gap-2 mb-1">
                             <span className="font-medium truncate">
                               {account.platform_username || "Unknown"}
@@ -1012,7 +1014,7 @@ export default function AdminTokenHealth() {
         {/* Refresh History */}
         <Card>
           <CardHeader className="pb-3">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <CardTitle className="text-lg flex items-center gap-2">
                   <History className="w-5 h-5" />
@@ -1020,7 +1022,7 @@ export default function AdminTokenHealth() {
                 </CardTitle>
                 <CardDescription>Recent token refresh attempts and results</CardDescription>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <Button 
                   variant="outline" 
                   size="sm" 
@@ -1212,7 +1214,7 @@ export default function AdminTokenHealth() {
               </Badge>
             </div>
 
-            <ScrollArea className="h-[350px]">
+            <ScrollArea className="h-[350px] max-md:[&>[data-radix-scroll-area-viewport]]:!overflow-x-auto">
               {historyLoading ? (
                 <div className="flex items-center justify-center py-12">
                   <RefreshCw className="w-6 h-6 animate-spin text-muted-foreground" />
@@ -1228,11 +1230,11 @@ export default function AdminTokenHealth() {
                   <div className="p-3 bg-muted/30 flex items-center gap-4 text-xs font-medium text-muted-foreground">
                     <span className="w-32">Time</span>
                     <span className="w-24">Platform</span>
-                    <span className="flex-1">Account</span>
+                    <span className="flex-1 max-md:min-w-[10rem]">Account</span>
                     <span className="w-24">Status</span>
                     <span className="w-20">Trigger</span>
                     <span className="w-20">Category</span>
-                    <span className="flex-1">Error</span>
+                    <span className="flex-1 max-md:min-w-[10rem]">Error</span>
                   </div>
                   
                   {refreshHistory
@@ -1258,7 +1260,7 @@ export default function AdminTokenHealth() {
                         </div>
 
                         {/* Account */}
-                        <div className="flex-1 truncate text-xs">
+                        <div className="flex-1 truncate text-xs max-md:min-w-[10rem]">
                           {entry.platform_username || entry.account_id.slice(0, 8)}
                         </div>
 
@@ -1326,7 +1328,7 @@ export default function AdminTokenHealth() {
                         </div>
 
                         {/* Error */}
-                        <div className="flex-1 text-xs text-red-500 truncate" title={entry.error_message || undefined}>
+                        <div className="flex-1 text-xs text-red-500 truncate max-md:min-w-[10rem]" title={entry.error_message || undefined}>
                           {entry.error_message || '-'}
                         </div>
                       </div>

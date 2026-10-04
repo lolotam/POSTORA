@@ -57,7 +57,7 @@ export function PostActions({
   const isDisabled = isPosting || isUploading || selectedAccountIds.length === 0 || hasCharacterError || isScheduleIncomplete || hasAttributionError;
 
   return (
-    <div className="flex items-center justify-between gap-3 pt-4 border-t border-border">
+    <div className="flex flex-wrap items-center justify-between gap-3 pt-4 border-t border-border">
       <div className="flex items-center gap-2">
         {onBack && (
           <Button
@@ -97,7 +97,7 @@ export function PostActions({
       <Button
         size="lg"
         className={cn(
-          "min-w-[180px] transition-all duration-200",
+          "w-full sm:w-auto sm:min-w-[180px] transition-all duration-200",
           isDisabled && "opacity-50"
         )}
         onClick={onPost}

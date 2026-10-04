@@ -767,23 +767,27 @@ export function WhatsAppSetup({ connectedAccounts }: WhatsAppSetupProps) {
               </li>
               <li className="flex items-start gap-2">
                 <span className="text-primary mt-0.5">•</span>
-                <Trans ns="whatsapp" i18nKey="setup.prereqCoexistence" components={{ strong: <strong /> }}>
-                  For <strong>Coexistence</strong>: the number must currently be active in the
-                  WhatsApp Business mobile app with good messaging quality
-                </Trans>
+                <span>
+                  <Trans ns="whatsapp" i18nKey="setup.prereqCoexistence" components={{ strong: <strong /> }}>
+                    For <strong>Coexistence</strong>: the number must currently be active in the
+                    WhatsApp Business mobile app with good messaging quality
+                  </Trans>
+                </span>
               </li>
               <li className="flex items-start gap-2">
                 <span className="text-primary mt-0.5">•</span>
-                <Trans
-                  ns="whatsapp"
-                  i18nKey="setup.prereqPermissions"
-                  components={{
-                    code: <code className="text-xs bg-muted px-1 rounded" />,
-                  }}
-                >
-                  The <code className="text-xs bg-muted px-1 rounded">whatsapp_business_messaging</code> &{" "}
-                  <code className="text-xs bg-muted px-1 rounded">whatsapp_business_management</code> permissions
-                </Trans>
+                <span>
+                  <Trans
+                    ns="whatsapp"
+                    i18nKey="setup.prereqPermissions"
+                    components={{
+                      code: <code className="text-xs bg-muted px-1 rounded" />,
+                    }}
+                  >
+                    The <code className="text-xs bg-muted px-1 rounded">whatsapp_business_messaging</code> &{" "}
+                    <code className="text-xs bg-muted px-1 rounded">whatsapp_business_management</code> permissions
+                  </Trans>
+                </span>
               </li>
             </ul>
             <a

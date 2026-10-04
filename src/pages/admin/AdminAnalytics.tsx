@@ -336,7 +336,10 @@ export default function AdminAnalytics() {
                           nameKey="platform"
                           cx="50%"
                           cy="50%"
-                          outerRadius="66.67%"
+                          // Relative so the outside labels fit a phone-width card; in the
+                          // 300px-tall desktop box 69% of recharts' 145px max radius is the
+                          // original fixed 100px.
+                          outerRadius="69%"
                           label={(props: any) => `${props.platform}: ${props.count}`}
                         >
                           {(platformStats || []).map((_, index) => (

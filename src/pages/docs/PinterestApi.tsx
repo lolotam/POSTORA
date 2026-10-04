@@ -860,7 +860,7 @@ export default function PinterestApi() {
             </CardHeader>
             <CardContent>
               <div className="overflow-x-auto">
-                <table className="w-full text-sm">
+                <table className="w-full min-w-[32rem] text-sm">
                   <thead>
                     <tr className="border-b">
                       <th className="text-start py-2 font-medium">Setting</th>

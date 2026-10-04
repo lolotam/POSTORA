@@ -16,7 +16,7 @@ interface IntroFeatureGridProps {
 
 export function IntroFeatureGrid({ features }: IntroFeatureGridProps) {
   return (
-    <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-8">
       {features.map((f, i) => {
         const variant = VARIANTS[i % VARIANTS.length];
         return (

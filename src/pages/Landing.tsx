@@ -111,7 +111,7 @@ export default function Landing() {
           : "border-border/50 bg-background h-16"
           }`}
       >
-        <div className="container mx-auto px-6 h-full flex items-center justify-between transition-all duration-300">
+        <div className="container mx-auto px-4 sm:px-6 h-full flex items-center justify-between gap-2 transition-all duration-300">
           <div className={`transition-transform duration-200 ${isScrolled ? "scale-90" : "scale-100"}`}>
             <Logo />
           </div>
@@ -133,7 +133,7 @@ export default function Landing() {
             </a>
           </nav>
 
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-1 sm:gap-4 shrink-0">
             <ThemeToggle />
             <Link to="/auth">
               <Button variant="ghost" size={isScrolled ? "sm" : "default"}>Sign In</Button>
