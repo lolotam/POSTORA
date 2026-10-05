@@ -1,7 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.7.1";
 import { corsHeaders, handleCorsOptions, jsonResponse, errorResponse, unauthorizedResponse } from "../_shared/cors.ts";
-import { resolveUserAiRoute, composeAiTiers, markUserKeyInvalid } from "../_shared/ai-user-routing.ts";
+import { resolveUserAiRoute, composeAiTiers, markUserKeyInvalid, type AiRoutingAdmin } from "../_shared/ai-user-routing.ts";
 import { AI_CONNECTION_REQUIRED, AI_USER_KEY_INVALID } from "../_shared/ai-routing-errors.ts";
 import { createLogger } from "../_shared/logging.ts";
 import { callAiChain, logAiCall, resolveChatModelConfig, platformChatTiers } from "../_shared/ai-fallback.ts";
@@ -341,6 +341,9 @@ serve(async (req) => {
       Deno.env.get('SUPABASE_URL') ?? '',
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
     );
+    // The routing helpers take a narrow structural client; passing the full
+    // generated client makes tsc recurse past its depth limit (TS2589).
+    const routingAdmin = supabaseAdmin as unknown as AiRoutingAdmin;
 
     const { data: { user }, error: userError } = await supabaseClient.auth.getUser(token);
 
@@ -432,7 +435,7 @@ Generate exactly this JSON structure:
       };
 
       // Resolve chat-model config: user override → admin /admin/settings Chat → hardcoded last-resort
-      const route = await resolveUserAiRoute(supabaseAdmin, user.id, 'chat');
+      const route = await resolveUserAiRoute(routingAdmin, user.id, 'chat');
       if (route.mode === 'user_only' && !route.userTier) {
         await logAiCall(supabaseAdmin, 'brand_intelligence', 'generate-caption', user.id, false, {
           response: new Response(null, { status: 409 }), tierUsed: 'primary', modelUsed: '', providerUsed: '', tiers: [],
@@ -444,11 +447,11 @@ Generate exactly this JSON structure:
 
       const biLogger = createLogger(supabaseAdmin, 'generate-caption', 'edge');
       try {
-        const biAiResult = await callAiChain(supabaseAdmin, biRequestBody, composeAiTiers(route, platformChatTiers(biCfg)));
+        const biAiResult = await callAiChain(routingAdmin, biRequestBody, composeAiTiers(route, platformChatTiers(biCfg)));
         if (route.reason === 'user_key_missing') biAiResult.fallbackReason = route.reason;
         for (const tier of biAiResult.tiers) {
           if (tier.credentialSource === 'user' && tier.error === AI_USER_KEY_INVALID && route.fetchedAt) {
-            await markUserKeyInvalid(supabaseAdmin, user.id, tier.provider, route.fetchedAt);
+            await markUserKeyInvalid(routingAdmin, user.id, tier.provider, route.fetchedAt);
           }
         }
         const biAiSuccess = biAiResult.response.ok;
@@ -555,7 +558,7 @@ Return JSON: {"suggestions": ["tag1, tag2, tag3, tag4, tag5", "tagA, tagB, tagC,
       };
 
       // Resolve chat-model config: user override → admin /admin/settings Chat → hardcoded last-resort
-      const route = await resolveUserAiRoute(supabaseAdmin, user.id, 'chat');
+      const route = await resolveUserAiRoute(routingAdmin, user.id, 'chat');
       if (route.mode === 'user_only' && !route.userTier) {
         await logAiCall(supabaseAdmin, requestType, 'generate-caption', user.id, false, {
           response: new Response(null, { status: 409 }), tierUsed: 'primary', modelUsed: '', providerUsed: '', tiers: [],
@@ -567,11 +570,11 @@ Return JSON: {"suggestions": ["tag1, tag2, tag3, tag4, tag5", "tagA, tagB, tagC,
 
       const ytLogger = createLogger(supabaseAdmin, 'generate-caption', 'edge');
       try {
-        const ytAiResult = await callAiChain(supabaseAdmin, ytRequestBody, composeAiTiers(route, platformChatTiers(ytCfg)));
+        const ytAiResult = await callAiChain(routingAdmin, ytRequestBody, composeAiTiers(route, platformChatTiers(ytCfg)));
         if (route.reason === 'user_key_missing') ytAiResult.fallbackReason = route.reason;
         for (const tier of ytAiResult.tiers) {
           if (tier.credentialSource === 'user' && tier.error === AI_USER_KEY_INVALID && route.fetchedAt) {
-            await markUserKeyInvalid(supabaseAdmin, user.id, tier.provider, route.fetchedAt);
+            await markUserKeyInvalid(routingAdmin, user.id, tier.provider, route.fetchedAt);
           }
         }
         const ytAiSuccess = ytAiResult.response.ok;
@@ -641,7 +644,7 @@ Return JSON: {"suggestions": ["tag1, tag2, tag3, tag4, tag5", "tagA, tagB, tagC,
     }
 
     // Resolve chat-model config: user override → admin /admin/settings Chat → hardcoded last-resort
-    const route = await resolveUserAiRoute(supabaseAdmin, user.id, 'chat');
+    const route = await resolveUserAiRoute(routingAdmin, user.id, 'chat');
     if (route.mode === 'user_only' && !route.userTier) {
       await logAiCall(supabaseAdmin, 'caption_generation', 'generate-caption', user.id, false, {
         response: new Response(null, { status: 409 }), tierUsed: 'primary', modelUsed: '', providerUsed: '', tiers: [],
@@ -713,11 +716,11 @@ Return exactly 5 captions separated by --- on its own line. No numbering, no lab
     };
 
     // 3-tier AI call with fallback chain
-    const aiResult = await callAiChain(supabaseAdmin, requestBody, composeAiTiers(route, platformChatTiers(chatCfg)));
+    const aiResult = await callAiChain(routingAdmin, requestBody, composeAiTiers(route, platformChatTiers(chatCfg)));
     if (route.reason === 'user_key_missing') aiResult.fallbackReason = route.reason;
     for (const tier of aiResult.tiers) {
       if (tier.credentialSource === 'user' && tier.error === AI_USER_KEY_INVALID && route.fetchedAt) {
-        await markUserKeyInvalid(supabaseAdmin, user.id, tier.provider, route.fetchedAt);
+        await markUserKeyInvalid(routingAdmin, user.id, tier.provider, route.fetchedAt);
       }
     }
 
