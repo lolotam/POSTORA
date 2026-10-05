@@ -12,6 +12,8 @@ import {
   embedKnowledgeDual,
   embedWithOpenAiCompatible,
   embedWithVercel,
+  embedKnowledge,
+  embeddingProviderKey,
   EmbeddingColumnOwnershipError,
   resolveAdminEmbeddingLadder,
   resolveDualEmbeddingConfig,
@@ -769,4 +771,66 @@ Deno.test("a Vercel embedding uses the admin-saved key when AI_GATEWAY_API_KEY i
     globalThis.fetch = realFetch;
     if (prior !== undefined) Deno.env.set("AI_GATEWAY_API_KEY", prior);
   }
+});
+
+async function withEnv(name: string, value: string | undefined, run: () => Promise<void>) {
+  const prior = Deno.env.get(name);
+  if (value === undefined) Deno.env.delete(name);
+  else Deno.env.set(name, value);
+  try {
+    await run();
+  } finally {
+    if (prior === undefined) Deno.env.delete(name);
+    else Deno.env.set(name, prior);
+  }
+}
+
+function captureAuthorization(): { restore: () => void; seen: () => string | null; body: () => Record<string, unknown> } {
+  const realFetch = globalThis.fetch;
+  let authorization: string | null = null;
+  let sent: Record<string, unknown> = {};
+  globalThis.fetch = ((_url: string | URL | Request, init?: RequestInit) => {
+    authorization = new Headers(init?.headers).get("authorization");
+    sent = JSON.parse(String(init?.body ?? "{}"));
+    return Promise.resolve(new Response(JSON.stringify({ data: [{ embedding: [0.1, 0.2] }] }), { status: 200 }));
+  }) as typeof fetch;
+  return { restore: () => { globalThis.fetch = realFetch; }, seen: () => authorization, body: () => sent };
+}
+
+Deno.test("a Jina embedding uses the admin-saved key when JINA_API_KEY is unset", async () => {
+  await withEnv("JINA_API_KEY", undefined, async () => {
+    const capture = captureAuthorization();
+    try {
+      const vectors = await embedKnowledge(["hello"], stubbedConfig, "query", (code) =>
+        Promise.resolve(code === "jina" ? "db-jina" : null));
+      assertEquals(vectors, [[0.1, 0.2]]);
+      assertEquals(capture.seen(), "Bearer db-jina");
+      assertEquals(capture.body().task, "retrieval.query");
+    } finally {
+      capture.restore();
+    }
+  });
+});
+
+Deno.test("an unreadable key table falls back to the provider's env var", async () => {
+  await withEnv("OPENROUTER_API_KEY", "env-or", async () => {
+    const key = await embeddingProviderKey("openrouter", "OPENROUTER_API_KEY", () => Promise.reject(new Error("read failed")));
+    assertEquals(key, "env-or");
+  });
+});
+
+Deno.test("a missing key fails naming the env var and sends no request", async () => {
+  await withEnv("GOOGLE_AI_STUDIO_KEY", undefined, async () => {
+    const capture = captureAuthorization();
+    try {
+      await assertRejects(
+        () => embedKnowledge(["hello"], { ...stubbedConfig, provider: "gemini" }, "passage", () => Promise.resolve(null)),
+        Error,
+        "GOOGLE_AI_STUDIO_KEY is not configured",
+      );
+      assertEquals(capture.seen(), null);
+    } finally {
+      capture.restore();
+    }
+  });
 });
