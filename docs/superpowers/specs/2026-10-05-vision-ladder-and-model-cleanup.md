@@ -97,9 +97,10 @@ Triage calls provider-specific yes/no endpoints (`openrouter …/systemone`,
   ministral-8b 0.90–1.28 s, gemini-3.1-flash-lite (OpenRouter) 0.81–0.95 s,
   gpt-5.4-nano 1.30–1.45 s, deepseek-flash direct 1.36–1.44 s. Rejected: qwen3.5-flash
   (non-JSON), llama-4-scout (404), deepseek-v4-flash via OpenRouter (2.7–4.8 s).
-- Migration `20261005150000_triage_chat_models.sql` tags them and moves the last slot
-  from a second Jev to ministral-8b. Applied **after** the code deploys: the old code
-  would send that model to the decision API.
+- Migration `20261005150000_triage_chat_models.sql` only tags them (safe before the code
+  deploys; the old runtime and picker ignore `triage_chat`). Moving the last slot off its
+  second Jev is an admin action in /admin/settings once the new runtime is live: done
+  before it, the old code would send a chat model to the decision API.
 
 ## Phase D — Video and Search ladders (designed, later PR)
 

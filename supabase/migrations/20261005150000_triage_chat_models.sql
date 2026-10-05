@@ -1,8 +1,8 @@
 -- ============================================================================
 -- Fast chat models selectable as AI-agent triage tiers (`triage_chat`)
 -- ============================================================================
--- Type: data. Idempotent: capability merge is a set union, the slot update only
--- fires while the slot still holds the Jev model it replaces.
+-- Type: data. Idempotent: the capability merge is a set union. Safe to apply
+-- before the code that uses it (see the note at the end).
 --
 -- Triage used to accept only decision models (TypeSafe Jev on the OpenRouter /
 -- Vercel decision APIs), so all three slots held Jev and one Jev outage left
@@ -40,15 +40,11 @@ SET capabilities = ARRAY(SELECT DISTINCT unnest(public.ai_models.capabilities ||
     updated_at = now()
 WHERE NOT ('triage_chat' = ANY (public.ai_models.capabilities));
 
--- The last slot held Jev again (openrouter typesafe/jev-1.13), so primary and both
--- fallbacks were one model family. Give the last resort a different one: the
--- fastest chat model above. Only while the slot still holds that Jev model, so an
--- admin's own choice is never overwritten.
-UPDATE public.system_settings
-SET value = '{"provider_code": "openrouter", "model_id": "mistralai/ministral-8b-2512"}'::jsonb,
-    updated_at = now()
-WHERE key = 'default_ai_model_agent_triage_fallback_2'
-  AND value->>'provider_code' = 'openrouter'
-  AND value->>'model_id' = 'typesafe/jev-1.13';
+-- The live slots are deliberately NOT changed here. A migration runs before the
+-- functions deploy, and the runtime before this change sends every OpenRouter
+-- slot to the decision API, where a chat model cannot answer. This file only
+-- makes the models selectable, which the old runtime and picker ignore. Moving
+-- default_ai_model_agent_triage_fallback_2 off its second Jev is done in
+-- /admin/settings once the new triage runtime is live.
 
 COMMIT;
