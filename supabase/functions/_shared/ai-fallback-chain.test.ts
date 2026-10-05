@@ -5,6 +5,7 @@ import {
 import {
   type AiTier,
   callAiChain,
+  callChatCompletion,
   callAiWithFallback,
   fetchWithTimeout,
   resolvePlatformApiKey,
@@ -494,6 +495,43 @@ Deno.test("a data-driven vercel tier reaches its ai_providers endpoint with the 
       "https://ai-gateway.vercel.sh/v1/chat/completions",
     );
     assertEquals(result.providerUsed, "vercel");
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+Deno.test("callChatCompletion sends one shaped request to one tier, with the platform key", async () => {
+  const original = globalThis.fetch;
+  const fake = platformAdmin("or-secret");
+  try {
+    globalThis.fetch = (url, init) => {
+      assertEquals(url, "https://openrouter.ai/api/v1/chat/completions");
+      assertEquals(new Headers(init?.headers).get("authorization"), "Bearer or-secret");
+      assertEquals(JSON.parse(String(init?.body)).model, "mistralai/ministral-8b-2512");
+      return Promise.resolve(new Response("{}", { status: 200 }));
+    };
+    const response = await callChatCompletion(
+      fake.admin as unknown as AiRoutingAdmin,
+      { provider: "openrouter", model: "mistralai/ministral-8b-2512" },
+      { messages: [], response_format: { type: "json_object" } },
+      1000,
+    );
+    assertEquals(response.status, 200);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+Deno.test("callChatCompletion refuses Claude and a missing key without calling out", async () => {
+  const original = globalThis.fetch;
+  try {
+    globalThis.fetch = () => {
+      throw new Error("must not be called");
+    };
+    const claude = await callChatCompletion(platformAdmin().admin as unknown as AiRoutingAdmin, { provider: "claude", model: "x" }, {}, 1000);
+    assertEquals(claude.status, 400);
+    const noKey = await callChatCompletion(platformAdmin(null).admin as unknown as AiRoutingAdmin, { provider: "openai", model: "gpt-5.4-nano" }, {}, 1000);
+    assertEquals(noKey.status, 401);
   } finally {
     globalThis.fetch = original;
   }

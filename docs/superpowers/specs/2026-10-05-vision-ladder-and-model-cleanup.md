@@ -1,6 +1,6 @@
 # Vision ladder, dead-model cleanup, triage and search/video wiring
 
-Date: 2026-10-05 · Status: Phase A + B in progress, C + D designed only
+Date: 2026-10-05 · Status: A + B shipped (PR #267), C implemented, D designed only
 
 ## Why
 
@@ -77,17 +77,29 @@ Frontend
 Tests: provider routing per kind, OpenRouter request shape + parsing, ladder order, a
 retired/failed first rung falling through, category resolution by kind.
 
-## Phase C — Triage with chat models (designed, next PR)
+## Phase C — Triage with chat models (implemented)
 
-Triage today calls provider-specific yes/no endpoints (`openrouter …/systemone`,
-`vercel …/evaluate`) that only Jev-family models answer, so the picker lists only `triage`
-models. Plan: add a `chat` triage adapter that sends the same questions to any
-chat-completions model and parses a strict JSON yes/no object; allow providers
-`deepseek`, `gemini`, `openrouter` (chat) in triage slots; tag the chosen fast models with
-`triage`. Candidate fast models (all verified present on OpenRouter 2026-10-05):
-`deepseek/deepseek-v4-flash`, `google/gemini-3.1-flash-lite`, `openai/gpt-5.4-nano`,
-`mistralai/ministral-8b-2512`, `qwen/qwen3.5-flash-02-23`, `meta-llama/llama-4-scout`,
-plus direct `deepseek/deepseek-flash`.
+Triage calls provider-specific yes/no endpoints (`openrouter …/systemone`,
+`vercel …/evaluate`) that only Jev answers, so all three slots held Jev.
+
+- `agentTriage.ts`: each tier has a `kind`. A slot is `decision` only when its model has
+  catalogue capability `triage` on a decision provider; every other slot (DeepSeek,
+  Gemini, any OpenRouter chat model) is `chat` and gets the same questions as strict JSON
+  (`chatTriageRequestBody` / `parseChatTriageAnswers`). Malformed answers are "unsure",
+  never guessed. Claude slots stay ignored (no JSON mode on its API).
+- Budget: 1.5 s for decision-only chains (unchanged), 3 s when a chat tier is present;
+  first-tier cap 0.9 s (decision) / 1.8 s (chat). Knowledge retrieval runs concurrently.
+- `ai-fallback.callChatCompletion` reaches a chat tier with the agent's own key and
+  endpoint resolution; `ai-agent-reply` reads which slot models are decision models.
+- Admin picker: triage lists `triage` and `triage_chat` models. `triage_chat` is a
+  separate tag because the catalogue sync manages `triage` on OpenRouter.
+- Measured on the real triage prompt, 2026-10-05 (3 messages × 4 models, all 12 correct):
+  ministral-8b 0.90–1.28 s, gemini-3.1-flash-lite (OpenRouter) 0.81–0.95 s,
+  gpt-5.4-nano 1.30–1.45 s, deepseek-flash direct 1.36–1.44 s. Rejected: qwen3.5-flash
+  (non-JSON), llama-4-scout (404), deepseek-v4-flash via OpenRouter (2.7–4.8 s).
+- Migration `20261005150000_triage_chat_models.sql` tags them and moves the last slot
+  from a second Jev to ministral-8b. Applied **after** the code deploys: the old code
+  would send that model to the decision API.
 
 ## Phase D — Video and Search ladders (designed, later PR)
 

@@ -34,6 +34,19 @@ const CATEGORY_INPUT_MODALITY: Record<string, string> = {
   vision: 'image',
 };
 
+// Capabilities a category also accepts. Triage slots take decision models (`triage`, Jev)
+// and fast chat models an admin approved for triage (`triage_chat`), which the agent asks
+// for the same answers as JSON. A separate tag, because the catalogue sync manages
+// `triage` on OpenRouter and would strip it from a chat model.
+const CAPABILITY_ALSO: Record<string, string[]> = {
+  triage: ['triage_chat'],
+};
+
+export function servesCapability(capabilities: string[] | null | undefined, capability: string): boolean {
+  if (!capabilities) return false;
+  return capabilities.includes(capability) || (CAPABILITY_ALSO[capability] ?? []).some((c) => capabilities.includes(c));
+}
+
 /** The live OpenRouter catalogue narrowed to models that can serve this category. */
 export function openRouterModelsFor<T extends { name: string; architecture: { output_modalities?: string[]; input_modalities?: string[] } }>(
   catalogue: T[],
@@ -125,7 +138,7 @@ export function DefaultModelSelector({
   );
 
   const filteredModels = useMemo(
-    () => models.filter(m => m.is_active && m.capabilities?.includes(capability)),
+    () => models.filter(m => m.is_active && servesCapability(m.capabilities, capability)),
     [models, capability]
   );
 

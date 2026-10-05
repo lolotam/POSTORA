@@ -105,7 +105,7 @@ export function AdminAiAgentSection() {
             category="agent_triage"
             capability="triage"
             title="Triage model"
-            description="TypeSafe Jev via OpenRouter or Vercel. Sync those providers to list it."
+            description="TypeSafe Jev (decision API, ~0.4s) or a fast chat model such as DeepSeek, Gemini Flash Lite or Ministral (~1s, strict JSON). Mix them across the three slots."
             icon={Bot}
             providers={triageProviders}
             models={aiConfig?.models || []}

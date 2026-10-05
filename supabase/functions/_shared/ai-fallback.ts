@@ -357,6 +357,32 @@ export function platformChatTiers(config: {
   return tiers;
 }
 
+/**
+ * One chat-completions call to one platform tier, under the caller's own deadline. The
+ * agent's triage step uses it for chat-model tiers: same key resolution, endpoint and
+ * per-model request shaping as callAiChain, but no ladder (triage owns its own) and no
+ * Anthropic (its Messages API has no JSON-mode equivalent here).
+ */
+export async function callChatCompletion(
+  admin: AiRoutingAdmin | undefined,
+  tier: { provider: string; model: string },
+  requestBody: Record<string, unknown>,
+  timeoutMs: number,
+): Promise<Response> {
+  if (tier.provider === 'claude') return new Response(null, { status: 400 });
+  const apiKey = await resolvePlatformApiKey(admin, tier.provider);
+  if (!apiKey) return new Response(null, { status: 401 });
+  let baseUrl: string | undefined;
+  if (!BUILTIN_CHAT_PROVIDERS.has(tier.provider)) {
+    const base = await loadOpenAiCompatibleBase(admin, tier.provider);
+    if (!base) return new Response(null, { status: 424 });
+    baseUrl = base;
+  }
+  const endpoint = getAiEndpoint(tier.provider, apiKey, baseUrl);
+  const body = chatRequestForTier(requestBody, { ...tier, credentialSource: 'platform' });
+  return await fetchWithTimeout(endpoint.apiUrl, { method: 'POST', headers: endpoint.headers, body: JSON.stringify(body) }, timeoutMs);
+}
+
 export async function callAiChain(admin: AiRoutingAdmin | undefined, requestBody: Record<string, unknown>, candidates: AiTier[]): Promise<AiCallResult> {
   if (candidates.some((tier) => tier.credentialSource === 'user' && !tier.apiKey?.trim())) throw new Error('User AI tier requires an API key');
   const labels = ['primary', 'fallback', 'last_resort'] as const;
