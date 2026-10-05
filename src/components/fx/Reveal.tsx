@@ -30,7 +30,10 @@ export function Reveal({
           io.disconnect();
         }
       },
-      { threshold: 0.15 },
+      // A ratio threshold can never be met by a block taller than viewport/ratio
+      // (0.15 → ~6.7 viewports), which left long pages such as Agent Setup
+      // invisible forever. Trigger on any overlap, inset from the bottom instead.
+      { threshold: 0, rootMargin: "0px 0px -10% 0px" },
     );
     io.observe(el);
     return () => io.disconnect();
