@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { Bot } from 'lucide-react';
-import { DefaultModelSelector } from '../DefaultModelSelector';
+import { DefaultModelSelector, openRouterModelsFor } from '../DefaultModelSelector';
 
 // The live OpenRouter catalogue (openrouter-models) never returns "decisions"
 // output_modalities, so it stands in here for what a chat-only catalogue looks
@@ -84,5 +84,21 @@ describe('DefaultModelSelector — agent_triage category', () => {
 
     expect(await screen.findByRole('option', { name: 'Jev 1.13' })).toBeInTheDocument();
     expect(screen.queryByRole('option', { name: 'GPT-5 mini' })).not.toBeInTheDocument();
+  });
+});
+
+describe('openRouterModelsFor — Image & Document Understanding', () => {
+  const catalogue = [
+    { id: 'text/only', name: 'Text only', architecture: { input_modalities: ['text'], output_modalities: ['text'] } },
+    { id: 'google/gemini-3.1-flash-lite', name: 'Gemini Flash Lite', architecture: { input_modalities: ['text', 'image', 'file'], output_modalities: ['text'] } },
+    { id: 'image/maker', name: 'Image maker', architecture: { input_modalities: ['text', 'image'], output_modalities: ['image'] } },
+  ];
+
+  it('offers only models that accept an image and answer in text', () => {
+    expect(openRouterModelsFor(catalogue, 'vision').map((m) => m.id)).toEqual(['google/gemini-3.1-flash-lite']);
+  });
+
+  it('leaves the chat category unchanged, text-only models included', () => {
+    expect(openRouterModelsFor(catalogue, 'chat').map((m) => m.id)).toEqual(['google/gemini-3.1-flash-lite', 'text/only']);
   });
 });

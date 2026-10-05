@@ -23,11 +23,16 @@
 BEGIN;
 
 -- 1. Settings slots that name a retired Gemini model -> gemini-3.1-flash-lite
---    (verified 200 for text and image input on 2026-10-05).
+--    (verified 200 for text and image input on 2026-10-05). The provider and its
+--    namespace are kept: an OpenRouter rung stays on OpenRouter (and its key),
+--    only the model id changes. (Production had no OpenRouter rung on a retired
+--    model when this ran; narrowing it here changed nothing that was applied.)
 UPDATE public.system_settings
-SET value = jsonb_build_object('provider_code', 'gemini', 'model_id', 'gemini-3.1-flash-lite'),
+SET value = jsonb_set(value, '{model_id}', to_jsonb(
+      regexp_replace(value->>'model_id', 'gemini-2\.5-(flash-lite|flash|pro)$', 'gemini-3.1-flash-lite'))),
     updated_at = now()
 WHERE (key = 'default_ai_model' OR key LIKE 'default_ai_model\_%')
+  AND value->>'provider_code' IN ('gemini', 'google', 'openrouter', 'vercel')
   AND value->>'model_id' ~ '^(google/|gemini/)?gemini-2\.5-(flash|flash-lite|pro)$';
 
 -- 2. Settings slots that name a :batch model -> the same model without the suffix.

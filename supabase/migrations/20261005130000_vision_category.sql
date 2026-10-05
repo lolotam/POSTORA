@@ -21,21 +21,27 @@
 
 BEGIN;
 
-UPDATE public.ai_models m
-SET capabilities = ARRAY(SELECT DISTINCT unnest(m.capabilities || ARRAY['vision']::text[]) ORDER BY 1),
-    updated_at = now()
+-- Upsert, not a bare UPDATE: on a database the catalogue sync has not filled yet
+-- these rows do not exist, and the card would list nothing while the seeded
+-- Gemini third rung failed the last-resort "active model" check. An existing row
+-- keeps every admin edit; it only gains `vision` (a set union, so re-runs are
+-- no-ops). In production all six rows already existed, so this applied as the
+-- capability merge alone.
+INSERT INTO public.ai_models (provider_id, model_id, name, capabilities, is_active)
+SELECT p.id, v.model_id, v.name, ARRAY['chat', 'vision']::text[], true
 FROM public.ai_providers p
-WHERE p.id = m.provider_id
-  AND NOT ('vision' = ANY (m.capabilities))
-  AND (
-    (p.provider_code = 'gemini' AND m.model_id IN ('gemini-3.1-flash-lite', 'gemini-3.5-flash'))
-    OR (p.provider_code = 'openrouter' AND m.model_id IN (
-      'google/gemini-3.1-flash-lite',
-      'google/gemini-3.5-flash',
-      'openai/gpt-5.4-mini',
-      'google/gemma-4-31b-it:free'
-    ))
-  );
+JOIN (VALUES
+  ('gemini', 'gemini-3.1-flash-lite', 'Gemini 3.1 Flash Lite'),
+  ('gemini', 'gemini-3.5-flash', 'Gemini 3.5 Flash'),
+  ('openrouter', 'google/gemini-3.1-flash-lite', 'Google: Gemini 3.1 Flash Lite'),
+  ('openrouter', 'google/gemini-3.5-flash', 'Google: Gemini 3.5 Flash'),
+  ('openrouter', 'openai/gpt-5.4-mini', 'OpenAI: GPT-5.4 Mini'),
+  ('openrouter', 'google/gemma-4-31b-it:free', 'Google: Gemma 4 31B (free)')
+) AS v(provider_code, model_id, name) ON v.provider_code = p.provider_code
+ON CONFLICT (provider_id, model_id) DO UPDATE
+SET capabilities = ARRAY(SELECT DISTINCT unnest(public.ai_models.capabilities || ARRAY['vision']::text[]) ORDER BY 1),
+    updated_at = now()
+WHERE NOT ('vision' = ANY (public.ai_models.capabilities));
 
 INSERT INTO public.system_settings (key, value, description)
 VALUES
