@@ -24,16 +24,38 @@ function primarySpecFor(row: AIModel | null, capability: string) {
 }
 
 const CATEGORY_MODALITY: Record<string, string> = {
-  chat: 'text', search: 'text', image: 'image', tts: 'audio', video: 'video', agent: 'text',
+  chat: 'text', search: 'text', image: 'image', tts: 'audio', video: 'video', agent: 'text', vision: 'text',
 };
+
+// What a category's model must ACCEPT, on top of what it produces. Image & Document
+// Understanding sends the image itself, so a text-only model is not a valid rung: the
+// backend would hand it an image_url and the rung would fail on every message.
+const CATEGORY_INPUT_MODALITY: Record<string, string> = {
+  vision: 'image',
+};
+
+/** The live OpenRouter catalogue narrowed to models that can serve this category. */
+export function openRouterModelsFor<T extends { name: string; architecture: { output_modalities?: string[]; input_modalities?: string[] } }>(
+  catalogue: T[],
+  category: string,
+): T[] {
+  const output = CATEGORY_MODALITY[category] || 'text';
+  const input = CATEGORY_INPUT_MODALITY[category];
+  return catalogue
+    .filter(m => m.architecture.output_modalities?.includes(output))
+    .filter(m => !input || m.architecture.input_modalities?.includes(input))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
 
 const CATEGORY_LAST_RESORT: Record<string, { provider: string; model: string } | null> = {
   chat: { provider: 'google', model: 'gemini-3-flash-preview' },
   image: { provider: 'google', model: 'gemini-2.5-flash-image' },
-  tts: { provider: 'google', model: 'gemini-2.5-flash' },
+  tts: { provider: 'google', model: 'gemini-3.8-flash-tts' },
   video: null,
   search: null,
   stt: null,
+  // Mirrors CATEGORY_LAST_RESORT.vision in supabase/functions/_shared/ai-fallback.ts.
+  vision: { provider: 'openrouter', model: 'google/gemini-3.1-flash-lite' },
   // No last resort. ai-agent-reply's hardcoded gpt-4o-mini default is removed in
   // the same change; an unconfigured chain escalates to a human instead of
   // silently calling a model no admin chose.
@@ -260,14 +282,10 @@ function TierSelector({ label, icon, providers, allProviders, filteredModels, cu
   const isOpenRouter = selectedProvider?.provider_code === 'openrouter';
 
   const { data: openRouterModels, isLoading: orLoading } = useOpenRouterModels();
-  const requiredModality = CATEGORY_MODALITY[category] || 'text';
-
   const filteredORModels = useMemo(() => {
     if (!isOpenRouter || !openRouterModels) return [];
-    return openRouterModels
-      .filter(m => m.architecture.output_modalities?.includes(requiredModality))
-      .sort((a, b) => a.name.localeCompare(b.name));
-  }, [isOpenRouter, openRouterModels, requiredModality]);
+    return openRouterModelsFor(openRouterModels, category);
+  }, [isOpenRouter, openRouterModels, category]);
 
   const [orOpen, setOrOpen] = useState(false);
   const [orSearch, setOrSearch] = useState('');

@@ -48,7 +48,7 @@ export function HashtagSuggestions({ caption, platform, onAddHashtags }: Hashtag
         body: {
           caption,
           platform,
-          model: profile?.ai_model || "google/gemini-2.5-flash",
+          model: profile?.ai_model || "google/gemini-3.1-flash-lite",
         },
       });
 

@@ -99,6 +99,13 @@ export const SETTINGS_SECTIONS = [
     keywords: [...MODEL_CARD_KEYWORDS, "speech to text", "stt", "transcription", "transcribe", "voice note", "whisper", "audio"],
   },
   {
+    id: "ai-vision-models",
+    tab: "ai",
+    title: "Image & Document Understanding",
+    subTab: "Image & Document Understanding",
+    keywords: [...MODEL_CARD_KEYWORDS, "vision", "image", "photo", "pdf", "document", "ocr", "receipt", "read image", "openrouter"],
+  },
+  {
     id: "ai-tts-models",
     tab: "ai",
     title: "Text to Speech",

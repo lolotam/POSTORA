@@ -28,7 +28,7 @@ export interface CaptionNodeData extends Record<string, unknown> {
 }
 
 const MODEL_OPTIONS = [
-  { value: "google/gemini-2.5-flash", label: "Google Nano Banana" },
+  { value: "google/gemini-3.1-flash-lite", label: "Google Nano Banana" },
   { value: "openai/gpt-4o", label: "GPT-4o" },
   { value: "anthropic/claude-3", label: "Claude 3" },
 ];
@@ -47,7 +47,7 @@ function CaptionNodeComponent({ id, data, selected }: NodeProps) {
   const [prompt, setPrompt] = useState(nodeData.caption || "");
   const [isGenerating, setIsGenerating] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-  const [model, setModel] = useState("google/gemini-2.5-flash");
+  const [model, setModel] = useState("google/gemini-3.1-flash-lite");
   const [aspectRatio, setAspectRatio] = useState("9:16");
   const [imageCount, setImageCount] = useState(1);
   const [generatedImage, setGeneratedImage] = useState<string | null>(nodeData.generatedImage as string || null);

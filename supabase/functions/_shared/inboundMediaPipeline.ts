@@ -107,6 +107,7 @@ const PROVIDER_KEY_ENV: Record<string, string[]> = {
   gemini: ["GOOGLE_AI_STUDIO_KEY", "GEMINI_API_KEY"],
   google: ["GOOGLE_AI_STUDIO_KEY", "GEMINI_API_KEY"],
   openai: ["OPENAI_API_KEY"],
+  openrouter: ["OPENROUTER_API_KEY"],
 };
 
 async function resolveProviderKey(
@@ -136,18 +137,29 @@ async function resolveProviderKey(
 }
 
 /**
- * The Speech-to-Text ladder an operator configured at /admin/settings, in order:
- * primary -> fallback -> last resort. Reads the same `default_ai_model_stt` keys the
- * media-library transcriber uses, so both paths obey one setting instead of drifting.
+ * Which /admin/settings ladder reads which kind. Voice notes follow Speech to Text (the
+ * same `default_ai_model_stt` keys the media-library transcriber uses, so both obey one
+ * setting); images and PDFs follow Image & Document Understanding. They used to share the
+ * STT ladder, where only the Gemini rung could see, so one retired or overloaded Gemini
+ * model left the agent unable to read any image (2026-10-05).
+ */
+export function ladderCategoryFor(kind: MediaKind): "stt" | "vision" {
+  return kind === "audio" ? "stt" : "vision";
+}
+
+/**
+ * The ladder an operator configured at /admin/settings for one category, in order:
+ * primary -> fallback -> last resort.
  *
  * A tier whose key is missing is dropped here rather than failed later, so a provider
  * that was never configured does not consume a rung of the ladder.
  */
-export async function resolveSttTiers(
+export async function resolveCategoryTiers(
   // deno-lint-ignore no-explicit-any
   admin: any,
+  category: "stt" | "vision",
 ): Promise<ProviderTier[]> {
-  const settings = await fetchCategoryAiSettings(admin, "stt");
+  const settings = await fetchCategoryAiSettings(admin, category);
   const ordered = [
     { provider: settings.primaryProvider, model: settings.primaryModel },
     { provider: settings.fallbackProvider, model: settings.fallbackModel },
@@ -486,7 +498,7 @@ export async function runInboundMediaUnderstanding(
         promptContext: deps.promptContext ?? undefined,
         limits,
         fetcher: deps.fetcher,
-        tiers: deps.tiers ?? await resolveSttTiers(admin),
+        tiers: deps.tiers ?? await resolveCategoryTiers(admin, ladderCategoryFor(kind)),
         // Kept as a floor: if /admin/settings yields no usable tier at all, the feature
         // still works rather than silently going dark.
         geminiKey: deps.geminiKey ?? Deno.env.get("GOOGLE_AI_STUDIO_KEY") ?? null,

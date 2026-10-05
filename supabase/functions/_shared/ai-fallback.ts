@@ -41,10 +41,13 @@ export interface AiCallResult {
 const CATEGORY_LAST_RESORT: Record<string, { provider: string; model: string } | null> = {
   chat: { provider: 'google', model: 'gemini-3-flash-preview' },
   image: { provider: 'google', model: 'gemini-2.5-flash-image' },
-  tts: { provider: 'google', model: 'gemini-2.5-flash' },
+  tts: { provider: 'google', model: 'gemini-3.8-flash-tts' },
   video: null,
   search: null,
   stt: { provider: 'openai', model: 'whisper-1' },
+  // Image & Document Understanding. OpenRouter, so the floor sits on a different vendor
+  // account from the Gemini key the configured rungs usually start with.
+  vision: { provider: 'openrouter', model: 'google/gemini-3.1-flash-lite' },
 };
 
 export function getAiEndpoint(provider: string, suppliedKey?: string, baseUrl?: string): AiEndpoint {
@@ -156,7 +159,7 @@ export async function fetchAiSettings(supabaseAdmin: any): Promise<{
   if (settingsError) throw new Error('AI settings read failed');
 
   let primaryProvider = 'google';
-  let primaryModel = 'google/gemini-2.5-flash';
+  let primaryModel = 'google/gemini-3.1-flash-lite';
   let fallbackProvider = '';
   let fallbackModel = '';
 
@@ -199,7 +202,7 @@ export async function fetchCategoryAiSettings(supabaseAdmin: any, category: stri
   if (settingsError) throw new Error('AI settings read failed');
 
   let primaryProvider = 'google';
-  let primaryModel = 'google/gemini-2.5-flash';
+  let primaryModel = 'google/gemini-3.1-flash-lite';
   let fallbackProvider = '';
   let fallbackModel = '';
   let configuredLastResortProvider = '';
@@ -265,7 +268,7 @@ export async function fetchCategoryAiSettings(supabaseAdmin: any, category: stri
  * Resolve the chat-model 3-tier configuration following the canonical pathway:
  *   1. User-specific override (user_ai_model_overrides) — highest precedence
  *   2. Admin "Chat" primary + fallback (system_settings.default_ai_model_chat[_fallback])
- *   3. Hard-coded last resort (google/gemini-2.5-flash via Lovable AI Gateway)
+ *   3. Hard-coded last resort (google/gemini-3-flash-preview)
  *
  * If a user override is active, it becomes the primary tier and admin settings
  * become fallback + last-resort, so the override never leaves the user without recovery.

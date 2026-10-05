@@ -87,6 +87,15 @@ Deno.test("mapOpenRouterCatalog adds embedding models with their measured width 
   assertEquals(mapped.managedCapabilities.sort(), ["chat", "embedding", "image", "triage"]);
 });
 
+Deno.test("mapOpenRouterCatalog skips a chat :batch route, which 404s on /chat/completions", () => {
+  const mapped = mapOpenRouterCatalog([
+    { id: "google/gemini-3.5-flash-lite", name: "L", architecture: { output_modalities: ["text"] } },
+    { id: "google/gemini-3.5-flash-lite:batch", name: "LB", architecture: { output_modalities: ["text"] } },
+  ]);
+  assertEquals(mapped.models.map((m) => m.model_id), ["google/gemini-3.5-flash-lite"]);
+  assertEquals(mapped.skippedByType, { batch: 1 });
+});
+
 Deno.test("mapOpenRouterCatalog leaves variable (-1) pricing unset instead of overflowing the column", () => {
   const [router] = mapOpenRouterCatalog([
     { id: "openrouter/auto", name: "Auto", pricing: { prompt: "-1", completion: "-1" },

@@ -37,10 +37,9 @@ const GOOGLE_MODELS = [
   // Gemini 3 Series
   { id: "google/gemini-3-pro-preview", name: "Gemini 3 Pro Preview", description: "Next-generation advanced reasoning model" },
   { id: "google/gemini-3-flash-preview", name: "Gemini 3 Flash Preview", description: "Fast preview of next-generation model" },
-  // Gemini 2.5 Series
-  { id: "google/gemini-2.5-pro", name: "Gemini 2.5 Pro", description: "Top-tier Gemini for complex reasoning & multimodal" },
-  { id: "google/gemini-2.5-flash", name: "Gemini 2.5 Flash", description: "Balanced speed, quality, and cost" },
-  { id: "google/gemini-2.5-flash-lite", name: "Gemini 2.5 Flash Lite", description: "Fastest & cheapest, good for simple tasks" },
+  // Gemini 3.x Flash (2.5 text models are retired for new Google projects)
+  { id: "google/gemini-3.5-flash", name: "Gemini 3.5 Flash", description: "Balanced speed, quality, and cost" },
+  { id: "google/gemini-3.1-flash-lite", name: "Gemini 3.1 Flash Lite", description: "Fastest & cheapest, good for simple tasks" },
   // Gemini 2.0 Series
   { id: "google/gemini-2.0-flash", name: "Gemini 2.0 Flash", description: "Previous-gen fast model, stable" },
   { id: "google/gemini-2.0-flash-lite", name: "Gemini 2.0 Flash Lite", description: "Previous-gen lightweight model" },
@@ -94,7 +93,7 @@ export function AdminAiSettings() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [selectedProvider, setSelectedProvider] = useState<AIProvider>("google");
-  const [selectedModel, setSelectedModel] = useState("google/gemini-2.5-flash");
+  const [selectedModel, setSelectedModel] = useState("google/gemini-3.1-flash-lite");
   const [fallbackProvider, setFallbackProvider] = useState<AIProvider | "">(""); 
   const [fallbackModel, setFallbackModel] = useState("");
   const [modelSearch, setModelSearch] = useState("");
@@ -188,7 +187,7 @@ export function AdminAiSettings() {
             : modelSetting.value;
           setSelectedModel(parsed);
         } catch {
-          setSelectedModel("google/gemini-2.5-flash");
+          setSelectedModel("google/gemini-3.1-flash-lite");
         }
       }
 
@@ -293,7 +292,7 @@ export function AdminAiSettings() {
     setModelSearch("");
     
     if (provider === "google") {
-      setSelectedModel("google/gemini-2.5-flash");
+      setSelectedModel("google/gemini-3.1-flash-lite");
     } else if (provider === "openrouter" && openRouterModels?.length) {
       setSelectedModel(openRouterModels[0].id);
     } else {
@@ -654,7 +653,7 @@ export function AdminAiSettings() {
                     setFallbackProvider(val as AIProvider | "");
                     setFallbackModel("");
                     setFallbackModelSearch("");
-                    if (val === "google") setFallbackModel("google/gemini-2.5-flash");
+                    if (val === "google") setFallbackModel("google/gemini-3.1-flash-lite");
                   }}
                 >
                   <SelectTrigger className="w-full">

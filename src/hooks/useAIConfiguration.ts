@@ -21,13 +21,13 @@ function parseDefault(val: unknown): DefaultModel | null {
   return null;
 }
 
-const emptyCategoryDefaults: CategoryDefaults = { chat: null, image: null, tts: null, video: null, search: null, stt: null, agent: null, agent_triage: null, embedding: null };
-const emptyCategoryFallbacks: CategoryFallbacks = { chat: null, image: null, tts: null, video: null, search: null, stt: null, agent: null, agent_triage: null, embedding: null };
+const emptyCategoryDefaults: CategoryDefaults = { chat: null, image: null, tts: null, video: null, search: null, stt: null, vision: null, agent: null, agent_triage: null, embedding: null };
+const emptyCategoryFallbacks: CategoryFallbacks = { chat: null, image: null, tts: null, video: null, search: null, stt: null, vision: null, agent: null, agent_triage: null, embedding: null };
 
 // "agent_triage" must precede "agent": the loop below breaks on the first exact
 // match, and exact matching makes the order safe either way, but keeping the
 // longer key first mirrors this file's suffix-order rule (see parseSettingsRows).
-const MODEL_CATEGORIES: ModelCategory[] = ['chat', 'image', 'tts', 'video', 'search', 'stt', 'agent_triage', 'agent', 'embedding'];
+const MODEL_CATEGORIES: ModelCategory[] = ['chat', 'image', 'tts', 'video', 'search', 'stt', 'vision', 'agent_triage', 'agent', 'embedding'];
 
 export interface ParsedModelSettings {
   defaultModel: DefaultModel | null;

@@ -114,13 +114,14 @@ describe("the settings catalog", () => {
     }
   });
 
-  it("renders the AI sub-tab strip as these twelve labels, in catalog order", () => {
+  it("renders the AI sub-tab strip as these thirteen labels, in catalog order", () => {
     const aiSections = SETTINGS_SECTIONS.filter((section) => section.tab === "ai");
     expect(groupSectionsBySubTab(aiSections).subTabs.map((group) => group.label)).toEqual([
       "Search Models",
       "Embedding",
       "AI Agent",
       "Speech to Text",
+      "Image & Document Understanding",
       "Text to Speech",
       "Video Generation",
       "Chat Models",
@@ -140,7 +141,7 @@ describe("the settings catalog", () => {
   });
 
   // The search placeholder suggests "model", and every card carries a temperature knob,
-  // so both queries have to reach all eight category cards. Splitting the categories into
+  // so both queries have to reach all nine category cards. Splitting the categories into
   // separate keyword lists is what nearly cost that: each generic term survived only
   // wherever it happened to be retyped.
   it.each<[string]>([["model"], ["temperature"], ["fallback"]])(
@@ -151,7 +152,7 @@ describe("the settings catalog", () => {
         (section) => section.tab === "ai" && section.id.startsWith("ai-") && section.id !== "ai-providers",
       ).map((section) => section.id);
 
-      expect(categoryIds).toHaveLength(8);
+      expect(categoryIds).toHaveLength(9);
       for (const id of categoryIds) expect(hits).toContain(id);
     },
   );
@@ -163,6 +164,8 @@ describe("the settings catalog", () => {
   it.each<[string, string]>([
     ["embedding", "ai-embedding-models"],
     ["transcription", "ai-stt-models"],
+    ["receipt", "ai-vision-models"],
+    ["pdf", "ai-vision-models"],
     ["video generation", "ai-video-models"],
     ["hashtags", "ai-chat-models"],
   ])("search for %j reaches %j", (query, expectedId) => {

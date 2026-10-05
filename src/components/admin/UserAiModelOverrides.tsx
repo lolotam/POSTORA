@@ -58,9 +58,9 @@ interface OpenRouterModel {
 // Google AI Studio models
 const GOOGLE_MODELS = [
   { id: "google/gemini-3-pro-preview", name: "Gemini 3 Pro Preview" },
-  { id: "google/gemini-2.5-pro", name: "Gemini 2.5 Pro" },
+  { id: "google/gemini-3.5-flash", name: "Gemini 3.5 Flash" },
   { id: "google/gemini-3-flash-preview", name: "Gemini 3 Flash Preview" },
-  { id: "google/gemini-2.5-flash", name: "Gemini 2.5 Flash" },
+  { id: "google/gemini-3.1-flash-lite", name: "Gemini 3.1 Flash Lite" },
 ];
 
 export function UserAiModelOverrides() {

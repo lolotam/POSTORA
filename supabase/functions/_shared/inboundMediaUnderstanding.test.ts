@@ -443,3 +443,116 @@ Deno.test("looksLikePdf reads the bytes, not a label", () => {
   ]);
   assert(!looksLikePdf(zipCarryingTheMagic));
 });
+
+// ---------------------------------------------------------------------------
+// Image & Document Understanding ladder: OpenRouter rungs (2026-10-05)
+// ---------------------------------------------------------------------------
+
+function openRouterResponse(content: unknown): Response {
+  return new Response(
+    JSON.stringify({ choices: [{ message: { content } }] }),
+    { status: 200, headers: { "Content-Type": "application/json" } },
+  );
+}
+
+Deno.test("an image reaches an OpenRouter rung as a data URI, with the key in the header", async () => {
+  const captured: { url?: string; init?: RequestInit } = {};
+  const outcome = await understandInboundMedia(new Uint8Array([9, 8]), "image", "image/jpeg", {
+    limits: LIMITS,
+    tiers: [{ provider: "openrouter", model: "google/gemini-3.1-flash-lite", apiKey: "or-key" }],
+    fetcher: (url, init) => {
+      captured.url = String(url);
+      captured.init = init;
+      return Promise.resolve(openRouterResponse('{"description":"a receipt","text":"TOTAL 45.500 KWD","fields":{"amount":"45.500"}}'));
+    },
+  });
+
+  assertEquals(captured.url, "https://openrouter.ai/api/v1/chat/completions");
+  assertEquals((captured.init?.headers as Record<string, string>).Authorization, "Bearer or-key");
+  const body = JSON.parse(captured.init?.body as string);
+  assertEquals(body.model, "google/gemini-3.1-flash-lite", "the namespaced OpenRouter id is sent as configured");
+  assertEquals(body.messages[0].content[1], { type: "image_url", image_url: { url: "data:image/jpeg;base64,CQg=" } });
+  assert(outcome.ok);
+  if (outcome.ok) {
+    assertEquals(outcome.result.provider, "openrouter");
+    assertEquals(outcome.result.text, "a receipt\nText in image: TOTAL 45.500 KWD");
+    assertEquals(outcome.result.extracted_data, { amount: "45.500" });
+  }
+});
+
+Deno.test("a PDF reaches an OpenRouter rung as a file part", async () => {
+  const captured: { body?: string } = {};
+  await understandInboundMedia(new TextEncoder().encode("%PDF-1.7"), "document", "application/pdf", {
+    limits: LIMITS,
+    tiers: [{ provider: "openrouter", model: "google/gemini-3.5-flash", apiKey: "k" }],
+    fetcher: (_url, init) => {
+      captured.body = init?.body as string;
+      return Promise.resolve(openRouterResponse("an invoice"));
+    },
+  });
+  const part = JSON.parse(captured.body!).messages[0].content[1];
+  assertEquals(part.type, "file");
+  assertEquals(part.file.filename, "document.pdf");
+  assert(String(part.file.file_data).startsWith("data:application/pdf;base64,"));
+});
+
+Deno.test("OpenRouter content returned as an array of parts is joined", async () => {
+  const outcome = await understandInboundMedia(new Uint8Array([9]), "image", "image/png", {
+    limits: LIMITS,
+    tiers: [{ provider: "openrouter", model: "openai/gpt-5.4-mini", apiKey: "k" }],
+    fetcher: () => Promise.resolve(openRouterResponse([{ type: "text", text: "a red " }, { type: "text", text: "door" }])),
+  });
+  assert(outcome.ok);
+  if (outcome.ok) assertEquals(outcome.result.text, "a red door");
+});
+
+Deno.test("a failing Gemini rung falls through to OpenRouter — the 2026-10-05 outage", async () => {
+  const urls: string[] = [];
+  const outcome = await understandInboundMedia(new Uint8Array([9]), "image", "image/jpeg", {
+    limits: LIMITS,
+    tiers: [
+      { provider: "gemini", model: "gemini-3.1-flash-lite", apiKey: "g" },
+      { provider: "openrouter", model: "google/gemini-3.1-flash-lite", apiKey: "o" },
+    ],
+    fetcher: (url) => {
+      urls.push(String(url));
+      return Promise.resolve(
+        String(url).includes("googleapis")
+          ? new Response("denied", { status: 403 })
+          : openRouterResponse("a door"),
+      );
+    },
+  });
+  assertEquals(urls.length, 2, "both rungs were tried, in order");
+  assert(urls[0].includes("generativelanguage.googleapis.com"));
+  assert(outcome.ok);
+  if (outcome.ok) assertEquals(outcome.result.provider, "openrouter");
+});
+
+Deno.test("an OpenRouter error reports its status only, never the body", async () => {
+  const outcome = await understandInboundMedia(new Uint8Array([9]), "image", "image/jpeg", {
+    limits: LIMITS,
+    tiers: [{ provider: "openrouter", model: "google/gemma-4-31b-it:free", apiKey: "k" }],
+    fetcher: () => Promise.resolve(new Response("rate limited: secret-ish detail", { status: 429 })),
+  });
+  assert(!outcome.ok);
+  if (!outcome.ok) {
+    assertEquals(outcome.reason, "provider_failed");
+    assertEquals(outcome.detail, "openrouter/google/gemma-4-31b-it:free: openrouter 429");
+  }
+});
+
+Deno.test("voice notes never go to OpenRouter, even when it heads the ladder", async () => {
+  const urls: string[] = [];
+  const outcome = await understandInboundMedia(AUDIO, "audio", "audio/ogg; codecs=opus", {
+    limits: LIMITS,
+    tiers: [{ provider: "openrouter", model: "google/gemini-3.1-flash-lite", apiKey: "k" }],
+    geminiKey: "g",
+    fetcher: (url) => {
+      urls.push(String(url));
+      return Promise.resolve(geminiResponse("transcript"));
+    },
+  });
+  assert(urls.every((u) => !u.includes("openrouter.ai")), "the openrouter rung is skipped for audio");
+  assert(outcome.ok, "and the Gemini floor still transcribes");
+});

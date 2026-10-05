@@ -101,12 +101,12 @@ export function AiUsageAnalytics() {
       try {
         return typeof data?.value === "string" ? JSON.parse(data.value) : data?.value;
       } catch {
-        return "google/gemini-2.5-flash";
+        return "google/gemini-3.1-flash-lite";
       }
     },
   });
 
-  const currentModel = aiModelSetting || "google/gemini-2.5-flash";
+  const currentModel = aiModelSetting || "google/gemini-3.1-flash-lite";
   const pricePerK = modelPricingMap[currentModel]?.pricePerK || defaultPricePerK;
   const comparisonModel = selectedComparisonModel;
   const comparisonPricePerK = comparisonModel ? (modelPricingMap[comparisonModel]?.pricePerK || defaultPricePerK) : null;

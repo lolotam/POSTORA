@@ -21,6 +21,7 @@ import {
   ImageGenerationCard,
   SearchModelsCard,
   SpeechToTextCard,
+  VisionModelsCard,
   TextToSpeechCard,
   VideoGenerationCard,
 } from "@/components/admin/settings/ai/AiCategoryCards";
@@ -56,6 +57,7 @@ const SECTION_COMPONENTS: Record<SettingsSectionId, ComponentType> = {
   "ai-embedding-models": EmbeddingModelsCard,
   "ai-agent-models": AdminAiAgentSection,
   "ai-stt-models": SpeechToTextCard,
+  "ai-vision-models": VisionModelsCard,
   "ai-tts-models": TextToSpeechCard,
   "ai-video-models": VideoGenerationCard,
   "ai-chat-models": ChatModelsCard,

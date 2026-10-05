@@ -81,7 +81,7 @@ function getWhatsAppToken(account: Record<string, unknown>) {
 }
 const GRAPH_ENDPOINT =
   "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
-const GRAPH_MODEL = "gemini-2.5-flash";
+const GRAPH_MODEL = "gemini-3.1-flash-lite";
 const GRAPH_TIMEOUT_MS = 25_000;
 
 interface StoredChunk {

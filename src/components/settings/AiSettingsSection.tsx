@@ -52,7 +52,7 @@ export function AiSettingsSection({
                 <SelectValue placeholder={t("ai.model.placeholder", "Select AI model")} />
               </SelectTrigger>
               <SelectContent className="bg-background border border-border z-50">
-                <SelectItem value="google/gemini-2.5-flash">
+                <SelectItem value="google/gemini-3.1-flash-lite">
                   <div className="flex flex-col">
                     <span className="font-medium">{t("ai.model.geminiFlash", "Gemini Flash")}</span>
                     <span className="text-xs text-muted-foreground">{t("ai.model.geminiFlashDesc", "Fast & balanced - recommended for most tasks")}</span>

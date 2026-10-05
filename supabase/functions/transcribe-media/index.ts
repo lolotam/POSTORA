@@ -159,7 +159,7 @@ async function transcribeWithDeepgram(audioBlob: Blob): Promise<TranscriptionRes
   };
 }
 
-async function transcribeWithGoogle(audioBlob: Blob, model = "gemini-2.5-flash"): Promise<TranscriptionResult> {
+async function transcribeWithGoogle(audioBlob: Blob, model = "gemini-3.1-flash-lite"): Promise<TranscriptionResult> {
   const googleKey = Deno.env.get("GOOGLE_AI_STUDIO_KEY");
   if (!googleKey) {
     throw new TranscriptionApiError(
