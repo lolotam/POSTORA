@@ -139,7 +139,7 @@ interface ProviderCall {
 export const DEFAULT_MODELS: UnderstandingModels = {
   // Flash rather than Pro: this runs on every inbound media message, and the task
   // (transcribe / describe) does not need the stronger model.
-  gemini: "gemini-2.5-flash",
+  gemini: "gemini-3.1-flash-lite",
   whisper: "whisper-1",
 };
 
@@ -154,6 +154,7 @@ export const DEFAULT_LIMITS: UnderstandingLimits = {
 
 const GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models";
 const WHISPER_ENDPOINT = "https://api.openai.com/v1/audio/transcriptions";
+const OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions";
 /**
  * ElevenLabs publishes regional bases for data residency: api.eu.residency,
  * api.in.residency, api.sg.residency, api.us. Configurable because where a customer's
@@ -406,6 +407,76 @@ async function callGemini(call: ProviderCall, prompt: string, kind: MediaKind): 
   }
 }
 
+/**
+ * The bytes as one OpenAI-style content part. Images go as a data URI, which every
+ * vision model on OpenRouter accepts; a PDF goes as a `file` part, which OpenRouter
+ * reads natively where the model can and parses for it where it cannot.
+ */
+function openRouterMediaPart(bytes: Uint8Array, mimeType: string, kind: MediaKind): Record<string, unknown> {
+  const dataUri = `data:${bareMime(mimeType)};base64,${toBase64(bytes)}`;
+  return kind === "document"
+    ? { type: "file", file: { filename: "document.pdf", file_data: dataUri } }
+    : { type: "image_url", image_url: { url: dataUri } };
+}
+
+/** OpenAI-compatible content is a string, or an array of parts on some models. */
+function openRouterText(content: unknown): string {
+  if (typeof content === "string") return content.trim();
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((part) => (typeof (part as { text?: unknown })?.text === "string" ? (part as { text: string }).text : ""))
+    .join("")
+    .trim();
+}
+
+/**
+ * OpenRouter carries the image/document rungs on a different vendor account from the
+ * Gemini key, so one provider denying the project (2026-10-05) no longer blinds the agent.
+ */
+async function callOpenRouter(call: ProviderCall, prompt: string, kind: MediaKind): Promise<string> {
+  const { bytes, mimeType, key, model, timeoutMs, fetcher } = call;
+  const deadline = new ProviderDeadline(timeoutMs);
+  let response: Response | null = null;
+  try {
+    response = await deadline.race(
+      fetcher(OPENROUTER_ENDPOINT, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
+        signal: deadline.controller.signal,
+        body: JSON.stringify({
+          model,
+          temperature: 0,
+          max_tokens: 2048,
+          messages: [{
+            role: "user",
+            content: [{ type: "text", text: prompt }, openRouterMediaPart(bytes, mimeType, kind)],
+          }],
+        }),
+      }),
+    );
+
+    const settled = response;
+    const data = await deadline.race((async () => {
+      if (!settled.ok) {
+        // Status only. A provider body can echo request content or diagnostics, and this
+        // string ends up in durable application logs.
+        await settled.body?.cancel().catch(() => {});
+        throw new Error(`openrouter ${settled.status}`);
+      }
+      return await settled.json();
+    })());
+
+    const text = openRouterText(data?.choices?.[0]?.message?.content);
+    if (!text) throw new Error("openrouter returned no text");
+    return text;
+  } catch (error) {
+    await discardBody(response);
+    throw error;
+  } finally {
+    deadline.release();
+  }
+}
+
 async function callWhisper(call: ProviderCall, languageHint?: string): Promise<string> {
   const { bytes, mimeType, key, model, timeoutMs, fetcher } = call;
   const form = new FormData();
@@ -573,19 +644,20 @@ function rejectUnusableMedia(
   return null;
 }
 
-function geminiPrompt(kind: MediaKind, promptContext?: string): string {
+function mediaPrompt(kind: MediaKind, promptContext?: string): string {
   if (kind === "audio") return AUDIO_PROMPT;
   const base = kind === "document" ? DOCUMENT_PROMPT : IMAGE_PROMPT;
   return promptContext ? `${base}\nBusiness context: ${promptContext}` : base;
 }
 
-function geminiResult(raw: string, kind: MediaKind, model: string): MediaUnderstandingResult {
-  if (kind === "audio") return { text: raw, kind, provider: "gemini", model };
+/** Gemini and OpenRouter answer the same prompt, so their answers parse the same way. */
+function modelResult(raw: string, kind: MediaKind, provider: string, model: string): MediaUnderstandingResult {
+  if (kind === "audio") return { text: raw, kind, provider, model };
   const { text, extracted } = parseVisualPayload(raw, kind);
   return {
     text,
     kind,
-    provider: "gemini",
+    provider,
     model,
     ...(extracted ? { extracted_data: extracted } : {}),
   };
@@ -607,9 +679,9 @@ async function attemptGemini(
   promptContext?: string,
 ): Promise<ProviderAttempt> {
   try {
-    const prompt = geminiPrompt(kind, promptContext);
+    const prompt = mediaPrompt(kind, promptContext);
     const raw = await callGemini(call, prompt, kind);
-    return { ok: true, result: geminiResult(raw, kind, call.model) };
+    return { ok: true, result: modelResult(raw, kind, "gemini", call.model) };
   } catch (error) {
     const timedOut = isAbort(error);
     const why = timedOut ? `timed out after ${call.timeoutMs}ms` : (error as Error)?.message ?? "unknown";
@@ -631,9 +703,10 @@ async function attemptWhisper(call: ProviderCall, languageHint?: string): Promis
 /** Which providers can do which kind. A speech model cannot look at a receipt. */
 function tierSupports(provider: string, kind: MediaKind): boolean {
   const isGemini = provider === "gemini" || provider === "google";
-  // Images and documents are both "look at these bytes" tasks, and Gemini is the only
-  // configured provider that can. ElevenLabs and Whisper are transcribers.
-  if (kind === "image" || kind === "document") return isGemini;
+  // Images and documents are both "look at these bytes" tasks: Gemini directly, or any
+  // vision model through OpenRouter. ElevenLabs and Whisper are transcribers, and audio
+  // is not routed through OpenRouter.
+  if (kind === "image" || kind === "document") return isGemini || provider === "openrouter";
   return provider === "elevenlabs" || isGemini || provider === "openai";
 }
 
@@ -668,10 +741,14 @@ async function attemptTier(
       const text = await callWhisper(providerCall, config.languageHint);
       return { ok: true, result: { text, kind, provider: "openai", model: tier.model } };
     }
+    const prompt = mediaPrompt(kind, config.promptContext);
+    if (tier.provider === "openrouter") {
+      const raw = await callOpenRouter(providerCall, prompt, kind);
+      return { ok: true, result: modelResult(raw, kind, "openrouter", tier.model) };
+    }
     // gemini / google
-    const prompt = geminiPrompt(kind, config.promptContext);
     const raw = await callGemini(providerCall, prompt, kind);
-    return { ok: true, result: geminiResult(raw, kind, tier.model) };
+    return { ok: true, result: modelResult(raw, kind, "gemini", tier.model) };
   } catch (error) {
     const timedOut = isAbort(error);
     const why = timedOut ? `timed out after ${call.timeoutMs}ms` : (error as Error)?.message ?? "unknown";
@@ -680,8 +757,9 @@ async function attemptTier(
 }
 
 /**
- * Bytes in, text out. Audio uses Gemini with a Whisper fallback; images and PDFs use
- * Gemini only, since Whisper cannot see.
+ * Bytes in, text out. The caller's ladder decides the providers (Speech-to-Text for audio,
+ * Image & Document Understanding for images and PDFs). Without one, audio uses Gemini
+ * with a Whisper fallback and images and PDFs use Gemini only, since Whisper cannot see.
  */
 export async function understandInboundMedia(
   input: Uint8Array | ArrayBuffer,

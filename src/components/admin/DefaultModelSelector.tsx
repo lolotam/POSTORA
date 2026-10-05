@@ -30,10 +30,12 @@ const CATEGORY_MODALITY: Record<string, string> = {
 const CATEGORY_LAST_RESORT: Record<string, { provider: string; model: string } | null> = {
   chat: { provider: 'google', model: 'gemini-3-flash-preview' },
   image: { provider: 'google', model: 'gemini-2.5-flash-image' },
-  tts: { provider: 'google', model: 'gemini-2.5-flash' },
+  tts: { provider: 'google', model: 'gemini-3.8-flash-tts' },
   video: null,
   search: null,
   stt: null,
+  // Mirrors CATEGORY_LAST_RESORT.vision in supabase/functions/_shared/ai-fallback.ts.
+  vision: { provider: 'openrouter', model: 'google/gemini-3.1-flash-lite' },
   // No last resort. ai-agent-reply's hardcoded gpt-4o-mini default is removed in
   // the same change; an unconfigured chain escalates to a human instead of
   // silently calling a model no admin chose.

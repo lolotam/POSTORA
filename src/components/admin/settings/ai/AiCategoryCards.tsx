@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { AudioLines, ImageIcon, Layers, Loader2, MessageSquare, Mic, Search, Video } from 'lucide-react';
+import { AudioLines, ImageIcon, Layers, Loader2, MessageSquare, Mic, ScanEye, Search, Video } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { toast } from 'sonner';
 import { Card, CardContent } from '@/components/ui/card';
@@ -166,8 +166,25 @@ export function SpeechToTextCard() {
       category="stt"
       capability="stt"
       title="Speech to Text"
-      description="Default model for voice-to-text transcription"
+      description="Voice notes and audio transcription. Images and PDFs use Image & Document Understanding."
       icon={Mic}
+    />
+  );
+}
+
+/**
+ * Images and PDFs customers send to the messaging agents. Its own ladder because only a
+ * vision model can read them: sharing the Speech-to-Text ladder left a single Gemini rung
+ * for every image, and one retired model blinded the agent (2026-10-05).
+ */
+export function VisionModelsCard() {
+  return (
+    <AiCategoryCard
+      category="vision"
+      capability="vision"
+      title="Image & Document Understanding"
+      description="Reads images and PDFs customers send to the messaging agents (Gemini or OpenRouter)"
+      icon={ScanEye}
     />
   );
 }

@@ -39,7 +39,7 @@ const IMAGE_MIME_BY_EXTENSION: Record<string, string> = {
 // OpenAI-compatible chat endpoint as ai-agent-reply, with a multimodal model.
 const VISION_ENDPOINT =
   "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
-const VISION_MODEL = "gemini-2.5-flash";
+const VISION_MODEL = "gemini-3.1-flash-lite";
 
 export async function extractImageText(bytes: Uint8Array, fileName: string): Promise<string> {
   const key = Deno.env.get("GOOGLE_AI_STUDIO_KEY");

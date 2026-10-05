@@ -125,7 +125,7 @@ export function BrandIntelligenceSettings() {
                 </SelectItem>
                 <SelectItem value="whisper-1">Whisper-1 (OpenAI)</SelectItem>
                 <SelectItem value="nova-3">Nova-3 (Deepgram) — requires DEEPGRAM_API_KEY</SelectItem>
-                <SelectItem value="gemini-2.5-flash">Gemini 2.5 Flash (Google) — uses audio input</SelectItem>
+                <SelectItem value="gemini-3.1-flash-lite">Gemini 3.1 Flash Lite (Google) — uses audio input</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -147,7 +147,7 @@ export function BrandIntelligenceSettings() {
                 <SelectItem value="whisper-1">Whisper-1 (OpenAI)</SelectItem>
                 <SelectItem value="nova-3">Nova-3 (Deepgram)</SelectItem>
                 <SelectItem value="gpt-4o-mini-transcribe">GPT-4o Mini Transcribe</SelectItem>
-                <SelectItem value="gemini-2.5-flash">Gemini 2.5 Flash (Google)</SelectItem>
+                <SelectItem value="gemini-3.1-flash-lite">Gemini 3.1 Flash Lite (Google)</SelectItem>
               </SelectContent>
             </Select>
           </div>

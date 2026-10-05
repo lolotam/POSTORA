@@ -115,7 +115,7 @@ export function CaptionSection({
           platform: selectedPlatforms[0] || "instagram",
           tone: selectedTone.toLowerCase(),
           language,
-          model: aiModel || "google/gemini-2.5-flash",
+          model: aiModel || "google/gemini-3.1-flash-lite",
         },
       });
 

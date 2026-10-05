@@ -30,7 +30,7 @@ function stubAdmin(
       return Promise.resolve({ data: verdict, error: null });
     },
     from(table: string) {
-      // resolveSttTiers reads system_settings; empty means "no admin ladder configured",
+      // resolveCategoryTiers reads system_settings; empty means "no admin ladder configured",
       // which is the path these tests exercise.
       if (table === "system_settings") {
         return { select: () => ({ in: () => Promise.resolve({ data: [], error: null }) }) };
@@ -518,7 +518,7 @@ function providerKeysStub() {
 Deno.test("the same model configured bare and namespaced runs once, not twice", async () => {
   // Dedupe must happen after normalisation. "google/gemini-2.5-flash" and
   // "gemini-2.5-flash" are one model; treating them as two burns a rung and bills twice.
-  const { resolveSttTiers } = await import("./inboundMediaPipeline.ts");
+  const { resolveCategoryTiers } = await import("./inboundMediaPipeline.ts");
   const rows = [
     { key: "default_ai_model_stt", value: { provider_code: "gemini", model_id: "gemini/gemini-2.5-flash" } },
     { key: "default_ai_model_stt_fallback", value: { provider_code: "gemini", model_id: "gemini-2.5-flash" } },
@@ -530,14 +530,14 @@ Deno.test("the same model configured bare and namespaced runs once, not twice", 
         : providerKeysStub(),
   } as any;
   Deno.env.set("GOOGLE_AI_STUDIO_KEY", "k");
-  const tiers = await resolveSttTiers(admin);
+  const tiers = await resolveCategoryTiers(admin, "stt");
   const gemini = tiers.filter((t) => t.provider === "gemini");
   assertEquals(gemini.length, 1, "the duplicate must collapse");
   assertEquals(gemini[0].model, "gemini-2.5-flash", "and be stored bare");
 });
 
 Deno.test("google and gemini are one provider, so the same model collapses", async () => {
-  const { resolveSttTiers } = await import("./inboundMediaPipeline.ts");
+  const { resolveCategoryTiers } = await import("./inboundMediaPipeline.ts");
   const rows = [
     { key: "default_ai_model_stt", value: { provider_code: "google", model_id: "gemini-2.5-flash" } },
     { key: "default_ai_model_stt_fallback", value: { provider_code: "gemini", model_id: "gemini-2.5-flash" } },
@@ -549,7 +549,7 @@ Deno.test("google and gemini are one provider, so the same model collapses", asy
         : providerKeysStub(),
   } as any;
   Deno.env.set("GOOGLE_AI_STUDIO_KEY", "k");
-  const tiers = await resolveSttTiers(admin);
+  const tiers = await resolveCategoryTiers(admin, "stt");
   // The hardcoded last resort (openai/whisper-1) also resolves when its key is present,
   // so assert on the gemini entries rather than the total.
   const gemini = tiers.filter((t) => t.provider === "gemini" || t.provider === "google");
@@ -873,4 +873,40 @@ Deno.test("hitting a cap is logged as a warning; a real failure stays an error",
     console.error = error;
   }
   assertEquals(seen, ["warn", "warn", "error", "error"]);
+});
+
+Deno.test("voice notes follow Speech to Text; images and PDFs follow Image & Document Understanding", async () => {
+  const { ladderCategoryFor } = await import("./inboundMediaPipeline.ts");
+  assertEquals(ladderCategoryFor("audio"), "stt");
+  assertEquals(ladderCategoryFor("image"), "vision");
+  assertEquals(ladderCategoryFor("document"), "vision");
+});
+
+Deno.test("the vision ladder reads its own keys, in order, and resolves the OpenRouter key", async () => {
+  const { resolveCategoryTiers } = await import("./inboundMediaPipeline.ts");
+  const requestedKeys: string[][] = [];
+  const rows = [
+    { key: "default_ai_model_vision", value: { provider_code: "openrouter", model_id: "google/gemini-3.1-flash-lite" } },
+    { key: "default_ai_model_vision_fallback", value: { provider_code: "openrouter", model_id: "openai/gpt-5.4-mini" } },
+  ];
+  const admin = {
+    from: (t: string) =>
+      t === "system_settings"
+        ? {
+          select: () => ({
+            in: (_col: string, keys: string[]) => {
+              requestedKeys.push(keys);
+              return Promise.resolve({ data: rows, error: null });
+            },
+          }),
+        }
+        : providerKeysStub(),
+  } as any;
+  Deno.env.set("OPENROUTER_API_KEY", "or");
+  const tiers = await resolveCategoryTiers(admin, "vision");
+  assertEquals(requestedKeys[0], ["default_ai_model_vision", "default_ai_model_vision_fallback", "default_ai_model_vision_fallback_2"]);
+  assertEquals(tiers.slice(0, 2), [
+    { provider: "openrouter", model: "google/gemini-3.1-flash-lite", apiKey: "or" },
+    { provider: "openrouter", model: "openai/gpt-5.4-mini", apiKey: "or" },
+  ]);
 });

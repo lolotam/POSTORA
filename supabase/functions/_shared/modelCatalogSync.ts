@@ -159,8 +159,8 @@ export const OPENROUTER_EMBEDDING_WIDTHS: Record<string, { native: number; reque
 };
 
 // Fetched with ?output_modalities=all. Image-only, video, speech, transcription,
-// and rerank models have no OpenRouter runtime in Postora yet; the `:batch`
-// embedding ids are asynchronous duplicates. Decision models map to `triage`,
+// and rerank models have no OpenRouter runtime in Postora yet; `:batch` ids of
+// any type are asynchronous duplicates. Decision models map to `triage`,
 // used by the AI agent's triage step.
 export function mapOpenRouterCatalog(data: unknown[]): MappedCatalog {
   const models: CatalogModel[] = [];
@@ -169,16 +169,19 @@ export function mapOpenRouterCatalog(data: unknown[]): MappedCatalog {
   for (const raw of data) {
     const row = raw as Row;
     if (!str(row.id)) continue;
+    // `:batch` ids are asynchronous batch routes for every output type, not only
+    // embeddings: a chat one answers 404 on /chat/completions, so a rung that names
+    // it fails every time (default_ai_model_agent_fallback_2 held one, 2026-10-05).
+    if (String(row.id).endsWith(":batch")) {
+      skip("batch");
+      continue;
+    }
     const outputs = ((row.architecture as Row | undefined)?.output_modalities ?? []) as string[];
     const capabilities: Capability[] = [];
     if (outputs.includes("text")) {
       if (outputs.includes("image")) capabilities.push("image");
       capabilities.push("chat");
     } else if (outputs.includes("embeddings")) {
-      if (String(row.id).endsWith(":batch")) {
-        skip("batch");
-        continue;
-      }
       capabilities.push("embedding");
     } else if (outputs.includes("decisions")) {
       capabilities.push("triage");

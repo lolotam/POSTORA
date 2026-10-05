@@ -68,4 +68,17 @@ describe("parseSettingsRows", () => {
     expect(out.categoryFallbacks2.embedding?.model_id).toBe("text-embedding-3-small");
     expect(out.categoryFallbacks.stt?.model_id).toBe("whisper-1");
   });
+
+  it("reads the Image & Document Understanding ladder separately from Speech to Text", () => {
+    const out = parseSettingsRows([
+      { key: "default_ai_model_stt", value: { provider_code: "elevenlabs", model_id: "scribe_v2" } },
+      { key: "default_ai_model_vision", value: { provider_code: "openrouter", model_id: "google/gemini-3.1-flash-lite" } },
+      { key: "default_ai_model_vision_fallback", value: { provider_code: "openrouter", model_id: "openai/gpt-5.4-mini" } },
+      { key: "default_ai_model_vision_fallback_2", value: { provider_code: "gemini", model_id: "gemini-3.5-flash" } },
+    ]);
+    expect(out.categoryDefaults.vision).toEqual({ provider_code: "openrouter", model_id: "google/gemini-3.1-flash-lite" });
+    expect(out.categoryFallbacks.vision).toEqual({ provider_code: "openrouter", model_id: "openai/gpt-5.4-mini" });
+    expect(out.categoryFallbacks2.vision).toEqual({ provider_code: "gemini", model_id: "gemini-3.5-flash" });
+    expect(out.categoryDefaults.stt).toEqual({ provider_code: "elevenlabs", model_id: "scribe_v2" });
+  });
 });
