@@ -8,9 +8,10 @@ vi.mock("@/components/layout/DashboardLayout", () => ({
 }));
 
 const managerProps = vi.fn();
-vi.mock("@/components/messaging/AiAgentManager", () => ({
-  AI_AGENT_TABS: ["settings", "knowledge", "tools", "test", "logs"] as const,
-  AiAgentManager: (props: { platform: string; surface: string }) => {
+vi.mock("@/components/messaging/AiAgentManager", async (importOriginal) => ({
+  // The real list: a hand-copied one hid that "dashboard" was missing from it.
+  AI_AGENT_TABS: (await importOriginal<typeof import("@/components/messaging/AiAgentManager")>()).AI_AGENT_TABS,
+  AiAgentManager: (props: { platform: string; surface: string; activeTab?: string }) => {
     managerProps(props);
     return <div data-testid="agent-manager" />;
   },
@@ -66,5 +67,17 @@ describe("UnifiedAgentSetupPage for YouTube", () => {
     renderAt("?platform=youtube");
     expect(screen.getByTestId("dashboard")).toBeInTheDocument();
     flags.youtubeComments = true;
+  });
+});
+
+describe("UnifiedAgentSetupPage tab from the URL", () => {
+  it.each(["settings", "knowledge", "tools", "test", "dashboard", "logs"])("opens ?tab=%s on that tab", (tab) => {
+    renderAt(`?platform=youtube&tab=${tab}`);
+    expect(managerProps).toHaveBeenLastCalledWith(expect.objectContaining({ activeTab: tab }));
+  });
+
+  it("falls back to settings for an unknown tab", () => {
+    renderAt("?platform=youtube&tab=nope");
+    expect(managerProps).toHaveBeenLastCalledWith(expect.objectContaining({ activeTab: "settings" }));
   });
 });
