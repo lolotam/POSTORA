@@ -48,6 +48,7 @@ import {
   type EscalationTarget,
   executeTool,
   agentToolDefinitions,
+  webSearchToolDefinition,
   type CustomTool,
   type ToolContext,
   type ToolResult,
@@ -1339,6 +1340,8 @@ Deno.serve(async (req) => {
     }
     const toolDefinitions = triagePlan?.smalltalk && !procedureActive ? [] : [
       ...agentToolDefinitions(handoff),
+      // Opt-in per account: a web search costs seconds, so it is never offered by default.
+      ...(config.web_search_enabled === true ? [webSearchToolDefinition] : []),
       ...(isAdmin ? adminToolDefinitions : []),
       ...customToolDefinitions(offeredTools),
       ...procedureToolDefinitions(

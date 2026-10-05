@@ -12,7 +12,8 @@ import {
 } from "../_shared/higgsfield-model-spec.ts";
 import { checkByoGenerationLimits } from "../_shared/higgsfield-rate-limit.ts";
 import { resolveVercelKey, vercelStartVideo } from "../_shared/vercelGateway.ts";
-import { pickVideoProvider, VercelVideoInput, type VideoModelRow } from "./videoProvider.ts";
+import { pickVideoProvider, VercelVideoInput, videoModelFromLadder, type VideoModelRow } from "./videoProvider.ts";
+import { fetchCategoryAiSettings } from "../_shared/ai-fallback.ts";
 import { insertWithOneRetry, shouldReleaseReservation } from "./jobRecording.ts";
 import { createLogger } from "../_shared/logging.ts";
 
@@ -44,7 +45,10 @@ serve(async (req) => {
     const body = await req.json();
     const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
     if (!prompt) return json({ error: "Prompt is required" }, 400);
-    const modelId = String(body.model_id || "cinematic_studio_3_0");
+    // No model named: follow the admin's Video ladder (first rung this function can run).
+    const modelId = typeof body.model_id === "string" && body.model_id
+      ? body.model_id
+      : videoModelFromLadder(await fetchCategoryAiSettings(supabase, "video"));
     // The provider comes from the model row, never the client: non-admins cannot read
     // ai_providers, and an old client's provider_code is ignored.
     const { data: modelRows, error: modelError } = await supabase

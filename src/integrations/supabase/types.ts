@@ -316,6 +316,7 @@ export type Database = {
           temperature: number | null
           updated_at: string | null
           user_id: string
+          web_search_enabled: boolean
         }
         Insert: {
           admin_phone_numbers?: string[]
@@ -339,6 +340,7 @@ export type Database = {
           temperature?: number | null
           updated_at?: string | null
           user_id: string
+          web_search_enabled?: boolean
         }
         Update: {
           admin_phone_numbers?: string[]
@@ -362,6 +364,7 @@ export type Database = {
           temperature?: number | null
           updated_at?: string | null
           user_id?: string
+          web_search_enabled?: boolean
         }
         Relationships: []
       }

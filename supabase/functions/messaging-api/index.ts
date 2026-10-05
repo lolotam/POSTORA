@@ -506,6 +506,7 @@ function isAiAgentPlatform(value: unknown): value is string {
         "daily_message_cap", "reply_cooldown_seconds", "max_tool_iterations",
         "handoff_on_request", "handoff_on_low_confidence",
         "business_profile", "agent_behavior", "escalation_timeout_minutes",
+        "web_search_enabled",
       ];
       const updates: Record<string, unknown> = {};
       for (const field of allowedFields) {
@@ -522,6 +523,10 @@ function isAiAgentPlatform(value: unknown): value is string {
           return jsonResponse({ error: `Invalid admin phone numbers: ${invalid.join(", ")}` }, 400);
         }
         updates.admin_phone_numbers = normalized as string[];
+      }
+
+      if ("web_search_enabled" in updates && typeof updates.web_search_enabled !== "boolean") {
+        return jsonResponse({ error: "web_search_enabled must be a boolean" }, 400);
       }
 
       // The escalation window is bounded to 1 minute..7 days; anything else

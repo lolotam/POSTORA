@@ -1,6 +1,7 @@
 // Tool definitions and executors for the AI agent chat loop.
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { pickEscalationAgent, SIMILARITY_FLOOR, waRecipient } from "./logic.ts";
+import { formatSearchResult, resolveSearchTiers, searchWeb } from "../_shared/webSearch.ts";
 import { escalationOverride, isOverrideExpired } from "../_shared/conversationModeOverride.ts";
 import type { KnowledgeChunkMatch } from "../_shared/knowledgeEmbeddings.ts";
 import { composeToolDescription } from "../_shared/composeToolDescription.ts";
@@ -111,6 +112,27 @@ export const toolDefinitions = [
     },
   },
 ];
+
+/**
+ * Offered only when the account switched "Use web search" on (ai_agent_configs.
+ * web_search_enabled). It runs the admin's Search ladder, which costs seconds, so the
+ * description steers the model to the knowledge base first.
+ */
+export const webSearchToolDefinition = {
+  type: "function",
+  function: {
+    name: "web_search",
+    description:
+      "Search the public web for current information this business's knowledge base cannot know (today's prices, news, public events, opening hours of other places). Slower than search_knowledge: use only when the answer depends on fresh public facts, never for this business's own products or policies.",
+    parameters: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "A short web search query, in the customer's language" },
+      },
+      required: ["query"],
+    },
+  },
+};
 
 /**
  * The base tools for this account, honouring the stored handoff switches.
@@ -612,6 +634,22 @@ async function notifyAdmin(context: ToolContext, messageText: string): Promise<T
   };
 }
 
+// The whole search, all rungs included, stays well under the reply's own deadline.
+const WEB_SEARCH_TIER_TIMEOUT_MS = 6000;
+const WEB_SEARCH_BUDGET_MS = 10000;
+
+async function webSearch(context: ToolContext, query: string): Promise<ToolResult> {
+  if (!query.trim()) return { output: "No search query was given." };
+  const tiers = await resolveSearchTiers(context.admin);
+  if (!tiers.length) return { output: "Web search is not available right now. Answer from what you know, or say you cannot check." };
+  const run = await searchWeb(query, tiers, { tierTimeoutMs: WEB_SEARCH_TIER_TIMEOUT_MS, budgetMs: WEB_SEARCH_BUDGET_MS });
+  if (!run.result) {
+    console.warn("[ai-agent-reply] web_search found nothing:", JSON.stringify(run.errors));
+    return { output: "The web search returned nothing usable. Do not guess current facts; say you could not check." };
+  }
+  return { output: `Web search results (public web, may be incomplete):\n${formatSearchResult(run.result)}` };
+}
+
 export async function executeTool(
   context: ToolContext,
   name: string,
@@ -626,6 +664,7 @@ export async function executeTool(
     );
   }
   if (name === "notify_admin") return notifyAdmin(context, String(args.message || ""));
+  if (name === "web_search") return webSearch(context, String(args.query || ""));
   return { output: `Unknown tool: ${name}` };
 }
 

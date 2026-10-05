@@ -1,6 +1,7 @@
 import { useState, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Sparkles, Loader2, AlertTriangle, Check, Save, Copy } from "lucide-react";
@@ -66,6 +67,8 @@ export function CaptionSection({
   const [isGeneratingCaption, setIsGeneratingCaption] = useState(false);
   const [language, setLanguage] = useState<"english" | "arabic">("english");
   const [selectedTone, setSelectedTone] = useState<string>("Engaging");
+  // Opt-in: searching the web first makes generation a few seconds slower.
+  const [useWebSearch, setUseWebSearch] = useState(false);
   const [captionOptions, setCaptionOptions] = useState<string[]>([]);
   const [savedIndices, setSavedIndices] = useState<Set<number>>(new Set());
 
@@ -116,6 +119,7 @@ export function CaptionSection({
           tone: selectedTone.toLowerCase(),
           language,
           model: aiModel || "google/gemini-3.1-flash-lite",
+          webSearch: useWebSearch,
         },
       });
 
@@ -333,6 +337,24 @@ export function CaptionSection({
                         </Button>
                       ))}
                     </div>
+                  </div>
+
+                  <div className="flex items-start justify-between gap-4 rounded-md border p-3">
+                    <div className="space-y-1">
+                      <Label htmlFor="caption-web-search" className="font-normal">
+                        {t("caption.webSearch", "Use web search")}
+                      </Label>
+                      <p className="text-xs text-muted-foreground">
+                        {t("caption.webSearchHint", "Looks up current information about your topic first. Takes a few seconds longer.")}
+                      </p>
+                    </div>
+                    <Switch
+                      id="caption-web-search"
+                      aria-label={t("caption.webSearch", "Use web search")}
+                      checked={useWebSearch}
+                      onCheckedChange={setUseWebSearch}
+                      disabled={isGeneratingCaption}
+                    />
                   </div>
 
                   <Button 

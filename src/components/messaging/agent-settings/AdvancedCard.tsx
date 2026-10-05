@@ -3,6 +3,7 @@ import "@/i18n";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import type { AgentCardProps } from "./types";
 
 export function AdvancedCard({ form, update }: AgentCardProps) {
@@ -42,6 +43,27 @@ export function AdvancedCard({ form, update }: AgentCardProps) {
               {t("advanced.cooldownHint", "Wait time between consecutive AI replies (0 for instant).")}
             </p>
           </div>
+        </div>
+        {/* Opt-in: the tool is offered to the model only while this is on, and each
+            search adds one to several seconds to the reply. */}
+        <div className="flex items-start justify-between gap-4 rounded-md border p-3">
+          <div className="space-y-1">
+            <Label htmlFor="web-search-enabled" className="font-normal">
+              {t("advanced.webSearch", "Use web search")}
+            </Label>
+            <p className="text-xs text-muted-foreground">
+              {t(
+                "advanced.webSearchHint",
+                "Lets the agent look up current public information (prices, news, events) when your knowledge base cannot answer. Replies that search take a few seconds longer.",
+              )}
+            </p>
+          </div>
+          <Switch
+            id="web-search-enabled"
+            aria-label={t("advanced.webSearch", "Use web search")}
+            checked={form.web_search_enabled ?? false}
+            onCheckedChange={(checked) => update("web_search_enabled", checked)}
+          />
         </div>
       </CardContent>
     </Card>

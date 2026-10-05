@@ -6,6 +6,7 @@ import { AI_CONNECTION_REQUIRED, AI_USER_KEY_INVALID } from "../_shared/ai-routi
 import { createLogger } from "../_shared/logging.ts";
 import { callAiChain, logAiCall, resolveChatModelConfig, platformChatTiers } from "../_shared/ai-fallback.ts";
 import { validateRequestBody, validationErrorResponse } from "../_shared/validate.ts";
+import { formatSearchResult, resolveSearchTiers, searchWeb } from "../_shared/webSearch.ts";
 import { z } from "npm:zod@3.23.8";
 
 const GenerateCaptionSchema = z.object({
@@ -15,6 +16,8 @@ const GenerateCaptionSchema = z.object({
   model: z.string().max(100).optional(),
   language: z.string().max(20).optional(),
   requestType: z.string().max(50).optional(),
+  /** Opt-in: look the topic up on the web first (admin Search ladder). Adds seconds. */
+  webSearch: z.boolean().optional(),
 }).passthrough();
 
 interface TierRateLimitConfig {
@@ -403,7 +406,7 @@ serve(async (req) => {
     if (!validation.success) {
       return validationErrorResponse(validation, corsHeaders);
     }
-    const { context, platform, tone, model, language, requestType } = validation.data;
+    const { context, platform, tone, model, language, requestType, webSearch } = validation.data;
 
     // Handle brand_intelligence request type
     if (requestType === "brand_intelligence") {
@@ -684,10 +687,22 @@ You must generate exactly 5 distinct caption variations. Each variation should u
 
 Separate each caption with exactly "---" on its own line. Do NOT number them. Do NOT add any explanations or labels. Return ONLY the 5 captions separated by ---.`;
 
+    // Opt-in only: the user switched "Use web search" on. A failed or empty search
+    // never blocks the captions; they are written from the topic alone, as without it.
+    let webFindings = '';
+    if (webSearch === true && context?.trim()) {
+      const tiers = await resolveSearchTiers(supabaseAdmin);
+      const run = tiers.length
+        ? await searchWeb(context, tiers, { tierTimeoutMs: 6000, budgetMs: 10000 })
+        : { result: null, errors: [{ tier: '-', error: 'no search provider' }] };
+      if (run.result) webFindings = formatSearchResult(run.result);
+      else console.warn('Caption web search found nothing:', JSON.stringify(run.errors));
+    }
+
     const userPrompt = `Generate 5 ${tone || 'engaging'} captions for ${platform || 'social media'} in ${outputLanguage}.
 
 ${context ? `Context/Topic: ${context}` : 'Create a general engaging post.'}
-
+${webFindings ? `\nFresh web findings about this topic (use only what is relevant and accurate; do not paste URLs into the captions):\n${webFindings}\n` : ''}
 Return exactly 5 captions separated by --- on its own line. No numbering, no labels, no explanations.`;
 
     const requestBody = {

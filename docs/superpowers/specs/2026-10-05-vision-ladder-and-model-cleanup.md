@@ -1,6 +1,6 @@
 # Vision ladder, dead-model cleanup, triage and search/video wiring
 
-Date: 2026-10-05 · Status: A + B shipped (PR #267), C implemented, D designed only
+Date: 2026-10-05 · Status: A + B shipped (PR #267), C + D implemented (PR #268)
 
 ## Why
 
@@ -102,15 +102,25 @@ Triage calls provider-specific yes/no endpoints (`openrouter …/systemone`,
   second Jev is an admin action in /admin/settings once the new runtime is live: done
   before it, the old code would send a chat model to the decision API.
 
-## Phase D — Video and Search ladders (designed, later PR)
+## Phase D — Search and Video ladders (implemented)
 
-Verified: neither `default_ai_model_video*` nor `default_ai_model_search*` is read at
-runtime; no web-search feature or toggle exists; `VideoGenerator.tsx` is not mounted.
-- Fix first: `CATEGORY_LAST_RESORT[category] || chat` falls back to a chat model for
-  `video`/`search`.
-- Search: new `_shared/webSearch.ts` running the search ladder (perplexity/sonar,
-  brave, exa adapters). Opt-in only: a per-agent "Use web search" switch (new column on
-  the agent config, `web_search` tool registered only when on) and a `webSearch` flag on
-  `generate-caption`. Off by default because it adds latency.
-- Video: `generate-video` builds the ladder when the client sends no `model_id`, and
-  advances a tier when start fails.
+Verified first: neither `default_ai_model_video*` nor `default_ai_model_search*` was read at
+runtime, no web-search feature or toggle existed, and `VideoGenerator.tsx` is not mounted.
+
+- `ai-fallback`: a category listed with a `null` floor (video, search) no longer falls
+  through to the chat model; only unknown categories get chat's floor.
+- `_shared/webSearch.ts`: runs the Search ladder with adapters for Perplexity (`sonar*`),
+  Brave and Exa; status-only errors; one overall budget; never throws. Perplexity
+  deep-research models are skipped (over 40 s on 2026-10-05; sonar 1.8 s, Brave 0.9 s,
+  Exa 2.3 s with the production keys).
+- Opt-in only, because a search costs seconds:
+  - AI agent: `ai_agent_configs.web_search_enabled` (default false, migration
+    `20261005160000_agent_web_search.sql`). When on, the model is offered a `web_search`
+    tool. Switch: agent Settings → Advanced → "Use web search". Partner API and
+    messaging-api accept the field.
+  - Captions: "Use web search" switch in the AI caption dialog sends `webSearch: true`;
+    `generate-caption` adds the findings to the prompt. A failed search never blocks
+    the captions.
+- Video: when a request names no model, `generate-video` takes the first ladder rung it
+  can run (Higgsfield or Vercel), else the previous default. The current ladder holds
+  xAI and MiniMax, which `generate-video` has no runtime for.

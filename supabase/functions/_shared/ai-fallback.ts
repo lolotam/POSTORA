@@ -253,13 +253,17 @@ export async function fetchCategoryAiSettings(supabaseAdmin: any, category: stri
     }
   }
 
-  const lastResort = CATEGORY_LAST_RESORT[category] || CATEGORY_LAST_RESORT['chat']!;
+  // A category listed with `null` (video, search) has NO hardcoded floor. `||` used to
+  // treat that null like an unknown category and hand back the chat model, so a search
+  // or video ladder would silently end on a text model that cannot do either job.
+  // Only categories missing from the map fall back to chat's floor.
+  const lastResort = category in CATEGORY_LAST_RESORT ? CATEGORY_LAST_RESORT[category] : CATEGORY_LAST_RESORT['chat']!;
   const lastResortProvider = useConfiguredLastResort
     ? configuredLastResortProvider
-    : (lastResort?.provider || 'google');
+    : (lastResort ? lastResort.provider : '');
   const lastResortModel = useConfiguredLastResort
     ? configuredLastResortModel
-    : (lastResort?.model || 'gemini-3-flash-preview');
+    : (lastResort ? lastResort.model : '');
 
   return { primaryProvider, primaryModel, fallbackProvider, fallbackModel, lastResortProvider, lastResortModel };
 }
