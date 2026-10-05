@@ -36,3 +36,28 @@ export const VercelVideoInput = z.object({
   aspect_ratio: z.string().regex(/^\d+:\d+$/).optional(),
   image_url: z.string().url().refine((u) => u.startsWith("https://"), "image_url must be https").optional(),
 });
+
+/** The model generate-video falls back to when neither the request nor the admin ladder names one it can run. */
+export const DEFAULT_VIDEO_MODEL_ID = "cinematic_studio_3_0";
+
+/**
+ * The model to use when the request names none: the first rung of the admin's Video
+ * ladder (/admin/settings → Video Generation) on a provider this function can run.
+ * Rungs on other providers (xAI, MiniMax, ...) have no runtime here and are skipped
+ * rather than failing the request.
+ */
+export function videoModelFromLadder(settings: {
+  primaryProvider: string; primaryModel: string;
+  fallbackProvider: string; fallbackModel: string;
+  lastResortProvider: string; lastResortModel: string;
+}): string {
+  const rungs = [
+    [settings.primaryProvider, settings.primaryModel],
+    [settings.fallbackProvider, settings.fallbackModel],
+    [settings.lastResortProvider, settings.lastResortModel],
+  ];
+  for (const [provider, model] of rungs) {
+    if ((PRIORITY as readonly string[]).includes(provider) && model) return model;
+  }
+  return DEFAULT_VIDEO_MODEL_ID;
+}

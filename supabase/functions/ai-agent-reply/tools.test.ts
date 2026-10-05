@@ -1266,3 +1266,58 @@ Deno.test("a manual override created during the retry window also wins", async (
   assertEquals(outcome.mode, "human_then_ai");
   assertEquals(outcome.expiresAt, null);
 });
+
+// ---------------------------------------------------------------------------
+// web_search (opt-in per account, runs the admin Search ladder) — 2026-10-05
+// ---------------------------------------------------------------------------
+import { webSearchToolDefinition } from "./tools.ts";
+
+function searchContext(searchRows: Array<{ key: string; value: unknown }>): ToolContext {
+  // deno-lint-ignore no-explicit-any
+  const chain: any = { select: () => chain, eq: () => chain, maybeSingle: () => Promise.resolve({ data: { api_key: "bk" }, error: null }) };
+  return {
+    admin: {
+      from: (table: string) =>
+        table === "system_settings"
+          ? { select: () => ({ in: () => Promise.resolve({ data: searchRows, error: null }) }) }
+          : chain,
+    },
+    userId: "u", platform: "whatsapp", conversationId: "c", customerName: "Sara", adminPhoneNumbers: [],
+    dryRun: false, socialAccountId: "acc", requestId: "r", isAdmin: false,
+  } as unknown as ToolContext;
+}
+
+Deno.test("web_search is described as slower and never for the business's own facts", () => {
+  assertEquals(webSearchToolDefinition.function.name, "web_search");
+  assertStringIncludes(webSearchToolDefinition.function.description, "Slower than search_knowledge");
+});
+
+Deno.test("web_search runs the admin's Search ladder and returns results with sources", async () => {
+  const original = globalThis.fetch;
+  try {
+    globalThis.fetch = ((url: string | URL | Request) => {
+      assertStringIncludes(String(url), "api.search.brave.com");
+      return Promise.resolve(new Response(JSON.stringify({
+        web: { results: [{ title: "Kuwait gold", url: "https://g.example", description: "41.4 KWD" }] },
+      }), { status: 200 }));
+    }) as typeof fetch;
+    const result = await executeTool(
+      searchContext([{ key: "default_ai_model_search", value: { provider_code: "brave_search", model_id: "brave-web-search" } }]),
+      "web_search",
+      { query: "gold price kuwait" },
+    );
+    assertStringIncludes(result.output, "Web search results");
+    assertStringIncludes(result.output, "https://g.example");
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+Deno.test("web_search with no usable search provider says so instead of guessing", async () => {
+  const result = await executeTool(
+    searchContext([{ key: "default_ai_model_search", value: { provider_code: "gemini", model_id: "x" } }]),
+    "web_search",
+    { query: "anything" },
+  );
+  assertStringIncludes(result.output, "not available");
+});

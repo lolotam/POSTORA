@@ -48,6 +48,7 @@ import {
   type EscalationTarget,
   executeTool,
   agentToolDefinitions,
+  webSearchToolDefinition,
   type CustomTool,
   type ToolContext,
   type ToolResult,
@@ -79,12 +80,12 @@ import {
   retrieveKnowledgeChunks,
 } from "../_shared/knowledgeEmbeddings.ts";
 
-import { type AiTier, fetchWithTimeout, resolvePlatformApiKey } from "../_shared/ai-fallback.ts";
+import { type AiTier, callChatCompletion, fetchWithTimeout, resolvePlatformApiKey } from "../_shared/ai-fallback.ts";
 import { callAnthropicJson } from "../_shared/anthropic-adapter.ts";
 import { composeAiTiers, invalidateRejectedUserTier, resolveUserAiRoute, type AiRoutingAdmin } from "../_shared/ai-user-routing.ts";
 import { AI_CONNECTION_REQUIRED, AI_USER_KEY_INVALID, ProviderHttpError, redactProviderError } from "../_shared/ai-routing-errors.ts";
 import { loadOpenAiCompatibleBase, type RowReader } from "../_shared/providerEndpoint.ts";
-import { runTriage, selectConnectorTools, TRIAGE_SETTING_KEYS, triageChainFromSettings, type TriageRun } from "../_shared/agentTriage.ts";
+import { runTriage, selectConnectorTools, TRIAGE_SETTING_KEYS, triageChainFromSettings, triageSlotsFromSettings, type TriageRun } from "../_shared/agentTriage.ts";
 import { resolveProviderKey } from "../_shared/providerKeys.ts";
 import { enabledProcedures, readProcedureConfig } from "../_shared/procedures/config.ts";
 import { expireIfStale, isLivePendingOpener } from "../_shared/procedures/engine.ts";
@@ -1026,6 +1027,27 @@ Deno.serve(async (req) => {
       .select("key, value")
       .in("key", TRIAGE_SETTING_KEYS)
       .then((res) => res);
+    // Which configured triage models are decision models (catalogue capability
+    // `triage`); every other slot is a chat-model tier. Chained on the settings read so
+    // it overlaps with the setup below. null on a failed read: the chain then keeps the
+    // pre-chat rule (decision providers use the decision API).
+    const triageDecisionModelsPromise: Promise<Set<string> | null> = Promise.resolve(triageRowsPromise)
+      .then(async ({ data }) => {
+        const slots = triageSlotsFromSettings(data ?? []);
+        if (!slots.length) return new Set<string>();
+        const { data: rows, error } = await admin
+          .from("ai_models")
+          .select("model_id, ai_providers!inner(provider_code)")
+          .contains("capabilities", ["triage"])
+          .in("model_id", slots.map((slot) => slot.model));
+        if (error) return null;
+        // A to-one embed arrives as an object at runtime but is typed as an array.
+        return new Set((rows ?? []).flatMap((row) => {
+          const providers = Array.isArray(row.ai_providers) ? row.ai_providers : [row.ai_providers];
+          return providers.map((provider: { provider_code: string }) => `${provider.provider_code}/${row.model_id}`);
+        }));
+      })
+      .catch(() => null);
 
     // Operational tools unlock only for verified admin senders (or the
     // sandbox's explicit act-as-admin switch). Numbers are compared as bare
@@ -1189,7 +1211,7 @@ Deno.serve(async (req) => {
 
     timings.mark("setup");
     const { data: triageRows } = await triageRowsPromise;
-    const triageChain = triageChainFromSettings(triageRows ?? []);
+    const triageChain = triageChainFromSettings(triageRows ?? [], await triageDecisionModelsPromise);
     if (triageChain.length) {
       triage = await runTriage(triageChain, {
         message: request.inbound_text.slice(0, MAX_INBOUND_CHARS),
@@ -1200,7 +1222,8 @@ Deno.serve(async (req) => {
         // answer" is not something a fast, separate decision call can see -- only the
         // chat model can know that once it has tried to answer.
         askHandoff: handoff.onRequest,
-      }, (code) => resolveProviderKey(admin as unknown as RowReader, code));
+      }, (code) => resolveProviderKey(admin as unknown as RowReader, code), undefined, fetch, Date.now,
+      (tier, body, timeoutMs) => callChatCompletion(admin as unknown as AiRoutingAdmin, tier, body, timeoutMs));
     }
     timings.mark("triage");
     const triagePlan = triage?.outcome?.plan ?? null;
@@ -1317,6 +1340,8 @@ Deno.serve(async (req) => {
     }
     const toolDefinitions = triagePlan?.smalltalk && !procedureActive ? [] : [
       ...agentToolDefinitions(handoff),
+      // Opt-in per account: a web search costs seconds, so it is never offered by default.
+      ...(config.web_search_enabled === true ? [webSearchToolDefinition] : []),
       ...(isAdmin ? adminToolDefinitions : []),
       ...customToolDefinitions(offeredTools),
       ...procedureToolDefinitions(

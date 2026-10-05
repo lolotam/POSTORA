@@ -76,3 +76,13 @@ Deno.test("a third tier naming a model that is not in the catalog is ignored", a
   assertEquals(s.lastResortProvider, "google", "must fall back to the hardcoded floor");
   assertEquals(s.lastResortModel, "gemini-3-flash-preview");
 });
+
+Deno.test("search and video have no floor: an unset last resort stays empty, never the chat model", async () => {
+  for (const category of ["search", "video"]) {
+    const s = await fetchCategoryAiSettings(adminWith([]), category);
+    assertEquals([s.lastResortProvider, s.lastResortModel], ["", ""], category);
+  }
+  // A category missing from the map still gets chat's floor, as before.
+  const unknown = await fetchCategoryAiSettings(adminWith([]), "something_new");
+  assertEquals([unknown.lastResortProvider, unknown.lastResortModel], ["google", "gemini-3-flash-preview"]);
+});

@@ -14,9 +14,11 @@ import {
 } from "@/hooks/useAIConfiguration";
 import { useAgentTriageEnabled } from "@/hooks/ai-config/useAgentTriageEnabled";
 
-// Jev ships on OpenRouter and Vercel only; other providers never carry the
-// "triage" capability, so listing them here would just show an empty picker.
-const TRIAGE_PROVIDER_CODES = ["openrouter", "vercel"];
+// Any provider can hold a triage slot: decision models (Jev) on OpenRouter/Vercel, and
+// fast chat models tagged triage_chat on any OpenAI-compatible provider. The selector
+// already narrows this to providers that have such a model. Claude is excluded -- the
+// triage runtime ignores it (no JSON mode on its API).
+const TRIAGE_EXCLUDED_PROVIDERS = ["claude"];
 
 // The reply engine can only call providers it holds an endpoint and API key for.
 // Must stay in sync with PROVIDER_ENDPOINTS and KNOWN_MODEL_PROVIDERS in
@@ -39,7 +41,7 @@ export function AdminAiAgentSection() {
   );
 
   const triageProviders = useMemo(
-    () => (aiConfig?.providers || []).filter((p) => TRIAGE_PROVIDER_CODES.includes(p.provider_code)),
+    () => (aiConfig?.providers || []).filter((p) => !TRIAGE_EXCLUDED_PROVIDERS.includes(p.provider_code)),
     [aiConfig?.providers],
   );
 
@@ -105,7 +107,7 @@ export function AdminAiAgentSection() {
             category="agent_triage"
             capability="triage"
             title="Triage model"
-            description="TypeSafe Jev via OpenRouter or Vercel. Sync those providers to list it."
+            description="TypeSafe Jev (decision API, ~0.4s) or a fast chat model such as DeepSeek, Gemini Flash Lite or Ministral (~1s, strict JSON). Mix them across the three slots."
             icon={Bot}
             providers={triageProviders}
             models={aiConfig?.models || []}

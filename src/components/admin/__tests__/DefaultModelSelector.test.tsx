@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { Bot } from 'lucide-react';
-import { DefaultModelSelector, openRouterModelsFor } from '../DefaultModelSelector';
+import { DefaultModelSelector, openRouterModelsFor, servesCapability } from '../DefaultModelSelector';
 
 // The live OpenRouter catalogue (openrouter-models) never returns "decisions"
 // output_modalities, so it stands in here for what a chat-only catalogue looks
@@ -100,5 +100,18 @@ describe('openRouterModelsFor — Image & Document Understanding', () => {
 
   it('leaves the chat category unchanged, text-only models included', () => {
     expect(openRouterModelsFor(catalogue, 'chat').map((m) => m.id)).toEqual(['google/gemini-3.1-flash-lite', 'text/only']);
+  });
+});
+
+describe('servesCapability — triage slots', () => {
+  it('accepts Jev decision models and chat models approved for triage', () => {
+    expect(servesCapability(['triage'], 'triage')).toBe(true);
+    expect(servesCapability(['chat', 'triage_chat'], 'triage')).toBe(true);
+  });
+
+  it('keeps an unapproved chat model out of triage, and triage_chat out of other categories', () => {
+    expect(servesCapability(['chat'], 'triage')).toBe(false);
+    expect(servesCapability(['triage_chat'], 'chat')).toBe(false);
+    expect(servesCapability(null, 'triage')).toBe(false);
   });
 });

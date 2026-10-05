@@ -253,13 +253,17 @@ export async function fetchCategoryAiSettings(supabaseAdmin: any, category: stri
     }
   }
 
-  const lastResort = CATEGORY_LAST_RESORT[category] || CATEGORY_LAST_RESORT['chat']!;
+  // A category listed with `null` (video, search) has NO hardcoded floor. `||` used to
+  // treat that null like an unknown category and hand back the chat model, so a search
+  // or video ladder would silently end on a text model that cannot do either job.
+  // Only categories missing from the map fall back to chat's floor.
+  const lastResort = category in CATEGORY_LAST_RESORT ? CATEGORY_LAST_RESORT[category] : CATEGORY_LAST_RESORT['chat']!;
   const lastResortProvider = useConfiguredLastResort
     ? configuredLastResortProvider
-    : (lastResort?.provider || 'google');
+    : (lastResort ? lastResort.provider : '');
   const lastResortModel = useConfiguredLastResort
     ? configuredLastResortModel
-    : (lastResort?.model || 'gemini-3-flash-preview');
+    : (lastResort ? lastResort.model : '');
 
   return { primaryProvider, primaryModel, fallbackProvider, fallbackModel, lastResortProvider, lastResortModel };
 }
@@ -355,6 +359,32 @@ export function platformChatTiers(config: {
   // ── Tier 3: Last Resort ──
   tiers.push({ provider: config.lastResortProvider || 'google', model: config.lastResortModel || 'gemini-3-flash-preview', credentialSource: 'platform' });
   return tiers;
+}
+
+/**
+ * One chat-completions call to one platform tier, under the caller's own deadline. The
+ * agent's triage step uses it for chat-model tiers: same key resolution, endpoint and
+ * per-model request shaping as callAiChain, but no ladder (triage owns its own) and no
+ * Anthropic (its Messages API has no JSON-mode equivalent here).
+ */
+export async function callChatCompletion(
+  admin: AiRoutingAdmin | undefined,
+  tier: { provider: string; model: string },
+  requestBody: Record<string, unknown>,
+  timeoutMs: number,
+): Promise<Response> {
+  if (tier.provider === 'claude') return new Response(null, { status: 400 });
+  const apiKey = await resolvePlatformApiKey(admin, tier.provider);
+  if (!apiKey) return new Response(null, { status: 401 });
+  let baseUrl: string | undefined;
+  if (!BUILTIN_CHAT_PROVIDERS.has(tier.provider)) {
+    const base = await loadOpenAiCompatibleBase(admin, tier.provider);
+    if (!base) return new Response(null, { status: 424 });
+    baseUrl = base;
+  }
+  const endpoint = getAiEndpoint(tier.provider, apiKey, baseUrl);
+  const body = chatRequestForTier(requestBody, { ...tier, credentialSource: 'platform' });
+  return await fetchWithTimeout(endpoint.apiUrl, { method: 'POST', headers: endpoint.headers, body: JSON.stringify(body) }, timeoutMs);
 }
 
 export async function callAiChain(admin: AiRoutingAdmin | undefined, requestBody: Record<string, unknown>, candidates: AiTier[]): Promise<AiCallResult> {

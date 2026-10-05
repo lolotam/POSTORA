@@ -35,3 +35,29 @@ Deno.test("Vercel video inputs accept sane values and reject the rest", () => {
     ]
   ) assertEquals(VercelVideoInput.safeParse(bad).success, false, JSON.stringify(bad));
 });
+
+// ---------------------------------------------------------------------------
+// Admin Video ladder (2026-10-05): used only when the request names no model.
+// ---------------------------------------------------------------------------
+import { DEFAULT_VIDEO_MODEL_ID, videoModelFromLadder } from "./videoProvider.ts";
+
+const ladder = (rungs: Array<[string, string]>) => ({
+  primaryProvider: rungs[0]?.[0] ?? "", primaryModel: rungs[0]?.[1] ?? "",
+  fallbackProvider: rungs[1]?.[0] ?? "", fallbackModel: rungs[1]?.[1] ?? "",
+  lastResortProvider: rungs[2]?.[0] ?? "", lastResortModel: rungs[2]?.[1] ?? "",
+});
+
+Deno.test("the first ladder rung this function can run wins; xAI and MiniMax rungs are skipped", () => {
+  assertEquals(
+    videoModelFromLadder(ladder([["xai", "grok-imagine-video"], ["higgsfield", "kling_3_0"], ["vercel", "v"]])),
+    "kling_3_0",
+  );
+});
+
+Deno.test("with no runnable rung the previous default stays", () => {
+  assertEquals(
+    videoModelFromLadder(ladder([["xai", "grok-imagine-video"], ["minimax", "hailuo-2.3-fast"]])),
+    DEFAULT_VIDEO_MODEL_ID,
+  );
+  assertEquals(videoModelFromLadder(ladder([])), DEFAULT_VIDEO_MODEL_ID);
+});

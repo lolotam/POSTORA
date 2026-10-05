@@ -62,6 +62,7 @@ function toFormValues(config: NonNullable<ReturnType<typeof useAiAgentConfig>["c
     max_tool_iterations: config.max_tool_iterations,
     handoff_on_request: config.handoff_on_request,
     handoff_on_low_confidence: config.handoff_on_low_confidence,
+    web_search_enabled: config.web_search_enabled ?? false,
   };
 }
 

@@ -32,6 +32,8 @@ export interface AiAgentConfig {
   max_tool_iterations: number;
   handoff_on_request: boolean;
   handoff_on_low_confidence: boolean;
+  /** Offer the agent a web_search tool (admin Search ladder). Off by default: it adds latency. */
+  web_search_enabled: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -57,6 +59,7 @@ const CONFIG_FIELDS = [
   "max_tool_iterations",
   "handoff_on_request",
   "handoff_on_low_confidence",
+  "web_search_enabled",
 ] as const;
 
 export function buildAiAgentConfigPayload(input: Record<string, unknown>): AiAgentConfigInput {

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { CaptionSection } from "../CaptionSection";
+import { supabase } from "@/integrations/supabase/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 // Mock supabase
@@ -40,6 +41,11 @@ vi.mock("@/hooks/useFeatureFlags", () => ({
     isLoading: false,
     broadcastRefresh: vi.fn(),
   }),
+}));
+
+// The real hook reads usage through supabase.from, which this file does not mock.
+vi.mock("@/hooks/useAIRateLimit", () => ({
+  useAIRateLimit: () => ({ captionLimit: { remainingHour: 10, limitPerHour: 10 }, refreshLimits: vi.fn() }),
 }));
 
 // Mock the child components
@@ -156,5 +162,28 @@ describe("CaptionSection", () => {
     fireEvent.click(addButton);
     
     expect(setCaption).toHaveBeenCalledWith("My post\n\n#test #vitest");
+  });
+
+  it("sends webSearch only when the user switches it on", async () => {
+    const invoke = vi.mocked(supabase.functions.invoke);
+    render(<CaptionSection {...defaultProps} />, { wrapper: createWrapper() });
+    fireEvent.click(screen.getByText("Generate with AI"));
+    const prompt = await screen.findByPlaceholderText(/New product launch/);
+    fireEvent.change(prompt, { target: { value: "gold prices this week" } });
+
+    const toggle = screen.getByRole("switch", { name: "Use web search" });
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    // The label comes from the translation files, so match the button by its "5".
+    const generate = () => screen.getByRole("button", { name: /5/ });
+    fireEvent.click(generate());
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalled());
+    expect((invoke.mock.calls.at(-1)![1] as { body: Record<string, unknown> }).body.webSearch).toBe(false);
+
+    await vi.waitFor(() => expect(generate()).not.toBeDisabled());
+    fireEvent.click(toggle);
+    fireEvent.click(generate());
+    await vi.waitFor(() =>
+      expect((invoke.mock.calls.at(-1)![1] as { body: Record<string, unknown> }).body.webSearch).toBe(true)
+    );
   });
 });
