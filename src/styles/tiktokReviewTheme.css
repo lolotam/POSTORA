@@ -1,0 +1,63 @@
+/*
+ * TikTok review build only: re-skins the whole app with the cream palette of the
+ * TikTok publish page (src/features/tiktok-publishing/ui/tiktokReview.css).
+ * Unlayered on purpose so it wins over the @layer base tokens in index.css.
+ * Light mode is forced in review mode, so only the light tokens are set.
+ */
+:root {
+  --background: 43 47% 93%;        /* #f5f0e3 page */
+  --foreground: 40 13% 9%;         /* #1a1814 ink */
+
+  --card: 45 60% 96%;              /* #fbf8ef */
+  --card-foreground: 40 13% 9%;
+  --popover: 45 60% 96%;
+  --popover-foreground: 40 13% 9%;
+
+  --primary: 40 13% 9%;            /* ink buttons, like the publish page */
+  --primary-foreground: 45 60% 96%;
+
+  --secondary: 44 45% 87%;         /* #ede5cf */
+  --secondary-foreground: 40 13% 9%;
+
+  --muted: 44 45% 87%;
+  --muted-foreground: 43 7% 45%;   /* #8a8578, darkened for AA contrast on cream */
+
+  --accent: 44 45% 87%;            /* hover/selected fill, like the publish page */
+  --accent-foreground: 40 13% 9%;
+
+  --destructive: 355 78% 56%;      /* #e63946 */
+  --destructive-foreground: 0 0% 100%;
+
+  --border: 42 21% 84%;            /* ink at 10% over the page */
+  --input: 42 21% 80%;
+  --ring: 40 13% 9%;
+
+  --radius: 0.75rem;               /* 12px cards */
+
+  --gradient-primary: linear-gradient(135deg, hsl(40 13% 9%) 0%, hsl(40 9% 27%) 100%);
+  --gradient-subtle: linear-gradient(135deg, hsl(44 45% 87%) 0%, hsl(45 60% 96%) 100%);
+  --gradient-glow: radial-gradient(circle at 50% 0%, hsl(55 93% 58% / 0.18) 0%, transparent 50%);
+  --shadow-glow: 0 0 60px -15px hsl(40 13% 9% / 0.25);
+  --shadow-card: 0 1px 0 hsl(40 13% 9% / 0.06);
+
+  --sidebar: 45 60% 96%;
+  --sidebar-background: 45 60% 96%;
+  --sidebar-foreground: 40 13% 9%;
+  --sidebar-primary: 40 13% 9%;
+  --sidebar-primary-foreground: 45 60% 96%;
+  --sidebar-accent: 44 45% 87%;
+  --sidebar-accent-foreground: 40 13% 9%;
+  --sidebar-border: 42 21% 84%;
+  --sidebar-ring: 40 13% 9%;
+}
+
+body {
+  background: hsl(var(--background));
+}
+
+/* The publish page uses solid ink buttons; flatten the primary-to-accent
+   gradient used by the "gradient" button variant and similar CTAs. */
+.from-primary.to-accent {
+  background-image: none;
+  background-color: hsl(var(--primary));
+}

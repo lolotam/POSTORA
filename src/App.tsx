@@ -7,6 +7,7 @@ import { BrowserRouter } from "react-router-dom";
 import { AuthProvider } from "@/hooks/useAuth";
 import { OAuthReturnHandler } from "@/components/OAuthReturnHandler";
 import { ThemeProvider } from "next-themes";
+import { TIKTOK_REVIEW_MODE } from "@/config/tiktokReviewMode";
 import { DocumentTitle } from "@/components/DocumentTitle";
 import { FeatureFlagIndicator } from "@/components/admin/FeatureFlagIndicator";
 import { PublishingProvider } from "@/contexts/PublishingContext";
@@ -47,7 +48,7 @@ const QueryCacheAuthScope = () => {
 
 const App = () => (
   <DirectionProvider>
-  <ThemeProvider attribute="class" defaultTheme="dark" enableSystem>
+  <ThemeProvider attribute="class" defaultTheme="dark" enableSystem forcedTheme={TIKTOK_REVIEW_MODE ? "light" : undefined}>
     <QueryClientProvider client={queryClient}>
       <AuthProvider>
         <ActivityStoreScope />

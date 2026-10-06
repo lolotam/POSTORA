@@ -9,6 +9,7 @@ import App from "./App.tsx";
 // styling in the UI primitives keys off.
 import "./i18n";
 import "./index.css";
+import "./styles/tiktokReviewTheme.css";
 
 // Initialize Sentry as early as possible
 initSentry();

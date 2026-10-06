@@ -1,6 +1,7 @@
 import { Moon, Sun } from "lucide-react";
 import { useTheme } from "next-themes";
 import { Button } from "@/components/ui/button";
+import { TIKTOK_REVIEW_MODE } from "@/config/tiktokReviewMode";
 import {
   Tooltip,
   TooltipContent,
@@ -10,6 +11,9 @@ import {
 
 export function ThemeToggle() {
   const { setTheme, theme } = useTheme();
+
+  // The review build is light-only (cream theme), so there is nothing to toggle.
+  if (TIKTOK_REVIEW_MODE) return null;
 
   const toggleTheme = () => {
     setTheme(theme === "dark" ? "light" : "dark");
