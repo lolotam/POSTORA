@@ -8,6 +8,9 @@ import { DashboardLayout } from "@/components/layout/DashboardLayout";
 
 const queryMode = vi.hoisted(() => ({ error: false, count: 0 }));
 
+// The review branch hides the Scheduled link; this test covers the normal nav.
+vi.mock("@/config/tiktokReviewMode", () => ({ TIKTOK_REVIEW_MODE: false }));
+
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({
     t: (key: string, fallback?: string) => (typeof fallback === "string" ? fallback : key),

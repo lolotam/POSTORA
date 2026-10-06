@@ -1,4 +1,5 @@
 import { Routes, Route, Navigate, useLocation } from "react-router-dom";
+import { TIKTOK_REVIEW_MODE } from "@/config/tiktokReviewMode";
 import { whatsappRetiredRoutes } from "@/components/whatsapp/waNav";
 import { Suspense } from "react";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
@@ -173,17 +174,21 @@ export function AnimatedRoutes() {
         <Route
           path="/dashboard"
           element={
+            TIKTOK_REVIEW_MODE ? <Navigate to="/tiktok-auth" replace /> : (
             <ProtectedRoute>
               <AnimatedPage><Dashboard /></AnimatedPage>
             </ProtectedRoute>
+            )
           }
         />
         <Route
           path="/profiles"
           element={
+            TIKTOK_REVIEW_MODE ? <Navigate to="/tiktok-auth" replace /> : (
             <ProtectedRoute>
               <AnimatedPage><Profiles /></AnimatedPage>
             </ProtectedRoute>
+            )
           }
         />
         <Route
@@ -205,9 +210,11 @@ export function AnimatedRoutes() {
         <Route
           path="/post"
           element={
+            TIKTOK_REVIEW_MODE ? <Navigate to="/tiktok-publish" replace /> : (
             <ProtectedRoute>
               <AnimatedPage><CreatePost /></AnimatedPage>
             </ProtectedRoute>
+            )
           }
         />
         <Route

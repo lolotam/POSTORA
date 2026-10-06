@@ -136,13 +136,13 @@ export default function TikTokAuth() {
               to="/tiktok-auth"
               className="text-sm font-medium text-zinc-900 dark:text-white border-b-2 border-zinc-900 dark:border-white pb-1"
             >
-              Authentication
+              Connect to TikTok
             </Link>
             <Link
               to="/tiktok-publish"
               className="text-sm font-medium text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white transition-colors"
             >
-              Publish
+              Post to TikTok
             </Link>
           </nav>
         </div>

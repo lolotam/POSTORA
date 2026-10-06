@@ -10,6 +10,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { useUserRole } from "@/hooks/useUserRole";
 import { useSubscription } from "@/hooks/useSubscription";
 import { usePublishing } from "@/contexts/PublishingContext";
+import { TIKTOK_REVIEW_MODE } from "@/config/tiktokReviewMode";
 import { cn } from "@/lib/utils";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { LanguageToggle } from "@/components/LanguageToggle";
@@ -161,7 +162,7 @@ export function DashboardLayout({ children, contentClassName, noPadding = false,
   const showCanvas = isAdmin || (!flagsLoading && flags.canvas);
 
   // User dropdown menu items
-  const userMenuItems = useMemo(() => [
+  const userMenuItems = useMemo(() => TIKTOK_REVIEW_MODE ? [] : [
     ...(!isAdmin ? [{ icon: Zap, label: t("userMenu.aiCredits", "AI Credits"), path: "/credits" }] : []),
     { icon: BarChart3, label: t("userMenu.postAnalytics", "Post Analytics"), path: "/analytics" },
     { icon: FileText, label: t("userMenu.templates", "Templates"), path: "/templates" },
@@ -174,6 +175,14 @@ export function DashboardLayout({ children, contentClassName, noPadding = false,
 
   // Build nav entries
   const navEntries = useMemo(() => {
+    if (TIKTOK_REVIEW_MODE) {
+      const reviewEntries: NavEntry[] = [
+        { type: "link", icon: Video, label: "Connect to TikTok", path: "/tiktok-auth" },
+        { type: "link", icon: Send, label: "Post to TikTok", path: "/tiktok-publish" },
+      ];
+      return reviewEntries;
+    }
+
     const entries: NavEntry[] = [
       { type: "link", icon: LayoutDashboard, label: t("sidebar.dashboard", "Dashboard"), path: "/dashboard" },
       {
@@ -350,12 +359,14 @@ export function DashboardLayout({ children, contentClassName, noPadding = false,
                     </DropdownMenuItem>
                 ))}
                 <DropdownMenuSeparator />
+                {!TIKTOK_REVIEW_MODE && (
                 <DropdownMenuItem asChild>
                   <Link to="/settings" className="flex items-center gap-2 cursor-pointer">
                     <Settings className="h-4 w-4" />
                     {t("userMenu.settings", "Settings")}
                   </Link>
                 </DropdownMenuItem>
+                )}
                 <DropdownMenuSeparator />
                 {isAdmin && (
                   <DropdownMenuItem asChild>
@@ -709,6 +720,7 @@ export function DashboardLayout({ children, contentClassName, noPadding = false,
                       </Link>
                     </motion.div>
                   ))}
+                  {!TIKTOK_REVIEW_MODE && (
                   <motion.div
                     initial={{ opacity: 0, x: -20 }}
                     animate={{ opacity: 1, x: 0 }}
@@ -723,6 +735,7 @@ export function DashboardLayout({ children, contentClassName, noPadding = false,
                       <span className="font-medium">{t("userMenu.settings", "Settings")}</span>
                     </Link>
                   </motion.div>
+                  )}
                 </motion.div>
               </nav>
             </motion.div>
