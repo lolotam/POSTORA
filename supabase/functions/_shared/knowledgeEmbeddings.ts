@@ -631,82 +631,86 @@ export async function embedWithOpenAiCompatible(
   return embeddings;
 }
 
-function embedWithOpenAI(texts: string[], config: EmbeddingConfig): Promise<number[][]> {
-  return embedWithOpenAiCompatible(texts, config, {
-    endpoint: OPENAI_ENDPOINT,
-    keyEnvVar: "OPENAI_API_KEY",
-    label: "OpenAI",
-  });
+export type EmbeddingKeyResolver = (providerCode: string) => Promise<string | null>;
+
+const resolvePlatformKey: EmbeddingKeyResolver = (code) => resolveProviderKey(undefined, code);
+
+/**
+ * The key for an embedding provider: the admin-saved one (/admin/settings), then the
+ * env var its ai_providers row names, then `envVar` itself. The last step keeps an
+ * env-only deployment working when the key table cannot be read. Exported for tests.
+ */
+export async function embeddingProviderKey(
+  providerCode: string,
+  envVar: string,
+  resolveKey: EmbeddingKeyResolver = resolvePlatformKey,
+): Promise<string | null> {
+  try {
+    const key = await resolveKey(providerCode);
+    if (key) return key;
+  } catch (error) {
+    console.warn(
+      `[knowledge-embeddings] ${providerCode} key lookup failed; trying ${envVar}:`,
+      error instanceof Error ? error.message : "error",
+    );
+  }
+  return Deno.env.get(envVar) || null;
 }
 
-function embedWithOpenRouter(texts: string[], config: EmbeddingConfig): Promise<number[][]> {
-  return embedWithOpenAiCompatible(texts, config, {
-    endpoint: OPENROUTER_ENDPOINT,
-    keyEnvVar: "OPENROUTER_API_KEY",
-    label: "OpenRouter",
-  });
-}
+type ProviderApi = Omit<OpenAiCompatibleApi, "apiKey"> & { providerCode: string };
 
-/** Exported for tests only. The key is the admin-saved one first, then AI_GATEWAY_API_KEY via the provider row. */
-export async function embedWithVercel(
+async function embedWithProvider(
   texts: string[],
   config: EmbeddingConfig,
-  resolveKey: (providerCode: string) => Promise<string | null> = (code) => resolveProviderKey(undefined, code),
+  api: ProviderApi,
+  resolveKey: EmbeddingKeyResolver,
 ): Promise<number[][]> {
-  return embedWithOpenAiCompatible(texts, config, {
-    endpoint: VERCEL_ENDPOINT,
-    keyEnvVar: "AI_GATEWAY_API_KEY",
-    apiKey: await resolveKey("vercel") ?? "",
-    label: "Vercel AI Gateway",
-  });
+  const { providerCode, ...rest } = api;
+  // "" rather than null: a missing key must fail here, naming envVar, not fall back
+  // to an env read inside embedWithOpenAiCompatible a second time.
+  const apiKey = await embeddingProviderKey(providerCode, api.keyEnvVar, resolveKey) ?? "";
+  return embedWithOpenAiCompatible(texts, config, { ...rest, apiKey });
 }
 
 // GEMINI_ENDPOINT is Google's OpenAI-compatible route, so Bearer auth is
 // correct here. The native generativelanguage route rejects Bearer and wants an
 // x-goog-api-key header instead — do not "fix" one into the other.
-function embedWithGemini(texts: string[], config: EmbeddingConfig): Promise<number[][]> {
-  return embedWithOpenAiCompatible(texts, config, {
-    endpoint: GEMINI_ENDPOINT,
-    keyEnvVar: "GOOGLE_AI_STUDIO_KEY",
-    label: "Gemini",
-  });
-}
+const PROVIDER_APIS: Record<Exclude<EmbeddingProvider, "ollama">, ProviderApi> = {
+  gemini: { providerCode: "gemini", endpoint: GEMINI_ENDPOINT, keyEnvVar: "GOOGLE_AI_STUDIO_KEY", label: "Gemini" },
+  openai: { providerCode: "openai", endpoint: OPENAI_ENDPOINT, keyEnvVar: "OPENAI_API_KEY", label: "OpenAI" },
+  openrouter: { providerCode: "openrouter", endpoint: OPENROUTER_ENDPOINT, keyEnvVar: "OPENROUTER_API_KEY", label: "OpenRouter" },
+  jina: { providerCode: "jina", endpoint: JINA_ENDPOINT, keyEnvVar: "JINA_API_KEY", label: "Jina" },
+  vercel: { providerCode: "vercel", endpoint: VERCEL_ENDPOINT, keyEnvVar: "AI_GATEWAY_API_KEY", label: "Vercel AI Gateway" },
+};
 
-function embedWithJina(
+/** Exported for tests only; production goes through embedKnowledge. */
+export function embedWithVercel(
   texts: string[],
   config: EmbeddingConfig,
-  purpose: EmbeddingPurpose,
+  resolveKey: EmbeddingKeyResolver = resolvePlatformKey,
 ): Promise<number[][]> {
-  return embedWithOpenAiCompatible(texts, config, {
-    endpoint: JINA_ENDPOINT,
-    keyEnvVar: "JINA_API_KEY",
-    label: "Jina",
-    extraBody: {
-      task: purpose === "query" ? "retrieval.query" : "retrieval.passage",
-      normalized: true,
-      truncate: true,
-    },
-  });
+  return embedWithProvider(texts, config, PROVIDER_APIS.vercel, resolveKey);
 }
 
 export async function embedKnowledge(
   texts: string[],
   config: EmbeddingConfig = resolveEmbeddingConfig(),
   purpose: EmbeddingPurpose = "passage",
+  resolveKey: EmbeddingKeyResolver = resolvePlatformKey,
 ): Promise<number[][]> {
   if (!texts.length) return [];
-  if (config.provider === "gemini") return embedWithGemini(texts, config);
-  if (config.provider === "openai") return embedWithOpenAI(texts, config);
-  if (config.provider === "openrouter") return embedWithOpenRouter(texts, config);
-  if (config.provider === "jina") return embedWithJina(texts, config, purpose);
-  if (config.provider === "vercel") return embedWithVercel(texts, config);
   if (config.provider === "ollama") {
     return embedWithOllama(texts, { baseUrl: config.ollamaBaseUrl, model: config.model });
   }
+  const api = PROVIDER_APIS[config.provider];
   // Reached only by a config built outside selectionConfig; sending an unknown
   // provider's model id to Ollama would fail one call later with a misleading
   // "fallback embed failed" instead of naming the real gap.
-  throw new Error(`No embedding caller for provider ${config.provider}`);
+  if (!api) throw new Error(`No embedding caller for provider ${config.provider}`);
+  const extraBody = config.provider === "jina"
+    ? { task: purpose === "query" ? "retrieval.query" : "retrieval.passage", normalized: true, truncate: true }
+    : undefined;
+  return embedWithProvider(texts, config, extraBody ? { ...api, extraBody } : api, resolveKey);
 }
 
 export type DualEmbeddings = {
