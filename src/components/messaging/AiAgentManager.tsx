@@ -95,7 +95,7 @@ function mergeUntouchedFields(
   return merged as AiAgentConfigInput;
 }
 
-export const AI_AGENT_TABS = ["settings", "knowledge", "tools", "test", "logs"] as const;
+export const AI_AGENT_TABS = ["settings", "knowledge", "tools", "test", "dashboard", "logs"] as const;
 export type AiAgentTab = (typeof AI_AGENT_TABS)[number];
 
 interface AiAgentManagerProps {
