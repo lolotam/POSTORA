@@ -142,8 +142,9 @@ function ScheduledCountBadge({
   );
 }
 
-// TikTok review build: Posting keeps Create Post and History, Users becomes
-// TikTok Management, and the Analytics / Automation / Ad Manager menus are dropped.
+// TikTok review build (non-admins only): Posting keeps Create Post and History,
+// Users becomes TikTok Management, and the Analytics / Automation / Ad Manager
+// menus are dropped.
 const REVIEW_POSTING_PATHS = new Set(["/post", "/history"]);
 
 function reviewNavEntries(entries: NavEntry[]): NavEntry[] {
@@ -278,8 +279,9 @@ export function DashboardLayout({ children, contentClassName, noPadding = false,
       console.debug("[sidebar] ad children", adManagerChildren.map((c) => c.label));
     }
 
-    return TIKTOK_REVIEW_MODE ? reviewNavEntries(entries) : entries;
-  }, [showCanvas, flags.msgFacebook, flags.msgInstagram, flags.msgWhatsapp, flags.msgThreads, flags.commentManager, flags.commentWorkflow, flags.audienceHub, flags.leadsCrm, flags.adAnalytics, flags.smartScheduling, flags.humanAgent, flags.whatsappShop, flags.adManager, flags.analyticsFacebook, flags.analyticsInstagram, flags.analyticsThreads, flags.analyticsTiktok, t]);
+    // Admins keep the full nav during the review; everyone else sees the TikTok scope.
+    return TIKTOK_REVIEW_MODE && !isAdmin ? reviewNavEntries(entries) : entries;
+  }, [isAdmin, showCanvas, flags.msgFacebook, flags.msgInstagram, flags.msgWhatsapp, flags.msgThreads, flags.commentManager, flags.commentWorkflow, flags.audienceHub, flags.leadsCrm, flags.adAnalytics, flags.smartScheduling, flags.humanAgent, flags.whatsappShop, flags.adManager, flags.analyticsFacebook, flags.analyticsInstagram, flags.analyticsThreads, flags.analyticsTiktok, t]);
 
   const handleLogout = async () => {
     setIsLoggingOut(true);
