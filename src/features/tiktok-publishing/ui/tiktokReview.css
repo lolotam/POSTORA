@@ -16,7 +16,12 @@
   --tr-radius-pill: 9999px;
   --tr-radius-input: 10px;
   box-sizing: border-box;
-  min-height: 100%;
+  /* The route wrapper has no fixed height, so 100% collapsed to the content and
+     the page ended mid-screen. Fill the viewport and let the panes stretch. */
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  min-height: 100dvh;
   max-width: 100%;
   overflow-x: hidden;
   background: var(--tr-page);
@@ -51,8 +56,9 @@
 .tiktok-review-layout {
   display: grid;
   grid-template-columns: minmax(16rem, 22rem) minmax(0, 1fr);
+  flex: 1;
   gap: 1rem;
-  align-items: start;
+  align-items: stretch;
 }
 
 .tiktok-review-queue,
