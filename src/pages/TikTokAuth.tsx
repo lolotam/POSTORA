@@ -142,7 +142,7 @@ export default function TikTokAuth() {
               to="/tiktok-publish"
               className="text-sm font-medium text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-white transition-colors"
             >
-              Post to TikTok
+              TikTok Management
             </Link>
           </nav>
         </div>

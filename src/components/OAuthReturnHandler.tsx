@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
+import { SIGNED_IN_HOME_PATH } from "@/config/tiktokReviewMode";
 import {
   higgsfieldCallbackRescuePath,
   shouldForwardSocialOAuthToProfiles,
@@ -48,7 +49,7 @@ export function OAuthReturnHandler() {
     // Redirect logged-in users from landing page or auth page to dashboard
     const publicPaths = ["/", "/auth"];
     if (publicPaths.includes(location.pathname)) {
-      navigate("/dashboard", { replace: true });
+      navigate(SIGNED_IN_HOME_PATH, { replace: true });
     }
   }, [isLoading, user, location.pathname, location.search, navigate]);
 

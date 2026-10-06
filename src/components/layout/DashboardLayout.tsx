@@ -142,6 +142,23 @@ function ScheduledCountBadge({
   );
 }
 
+// TikTok review build: Posting keeps Create Post and History, Users becomes
+// TikTok Management, and the Analytics / Automation / Ad Manager menus are dropped.
+const REVIEW_POSTING_PATHS = new Set(["/post", "/history"]);
+
+function reviewNavEntries(entries: NavEntry[]): NavEntry[] {
+  return entries.flatMap((entry): NavEntry[] => {
+    if (entry.type === "dropdown") {
+      if (entry.basePath !== "/post") return [];
+      return [{ ...entry, children: entry.children.filter((c) => REVIEW_POSTING_PATHS.has(c.path)) }];
+    }
+    if (entry.type === "link" && entry.path === "/profiles") {
+      return [{ ...entry, icon: Video, label: "TikTok Management", path: "/tiktok-publish" }];
+    }
+    return [entry];
+  });
+}
+
 export function DashboardLayout({ children, contentClassName, noPadding = false, hideFooter = false }: DashboardLayoutProps) {
   const { t } = useTranslation("nav");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
@@ -162,7 +179,7 @@ export function DashboardLayout({ children, contentClassName, noPadding = false,
   const showCanvas = isAdmin || (!flagsLoading && flags.canvas);
 
   // User dropdown menu items
-  const userMenuItems = useMemo(() => TIKTOK_REVIEW_MODE ? [] : [
+  const userMenuItems = useMemo(() => [
     ...(!isAdmin ? [{ icon: Zap, label: t("userMenu.aiCredits", "AI Credits"), path: "/credits" }] : []),
     { icon: BarChart3, label: t("userMenu.postAnalytics", "Post Analytics"), path: "/analytics" },
     { icon: FileText, label: t("userMenu.templates", "Templates"), path: "/templates" },
@@ -175,14 +192,6 @@ export function DashboardLayout({ children, contentClassName, noPadding = false,
 
   // Build nav entries
   const navEntries = useMemo(() => {
-    if (TIKTOK_REVIEW_MODE) {
-      const reviewEntries: NavEntry[] = [
-        { type: "link", icon: Video, label: "Connect to TikTok", path: "/tiktok-auth" },
-        { type: "link", icon: Send, label: "Post to TikTok", path: "/tiktok-publish" },
-      ];
-      return reviewEntries;
-    }
-
     const entries: NavEntry[] = [
       { type: "link", icon: LayoutDashboard, label: t("sidebar.dashboard", "Dashboard"), path: "/dashboard" },
       {
@@ -269,7 +278,7 @@ export function DashboardLayout({ children, contentClassName, noPadding = false,
       console.debug("[sidebar] ad children", adManagerChildren.map((c) => c.label));
     }
 
-    return entries;
+    return TIKTOK_REVIEW_MODE ? reviewNavEntries(entries) : entries;
   }, [showCanvas, flags.msgFacebook, flags.msgInstagram, flags.msgWhatsapp, flags.msgThreads, flags.commentManager, flags.commentWorkflow, flags.audienceHub, flags.leadsCrm, flags.adAnalytics, flags.smartScheduling, flags.humanAgent, flags.whatsappShop, flags.adManager, flags.analyticsFacebook, flags.analyticsInstagram, flags.analyticsThreads, flags.analyticsTiktok, t]);
 
   const handleLogout = async () => {
@@ -359,14 +368,12 @@ export function DashboardLayout({ children, contentClassName, noPadding = false,
                     </DropdownMenuItem>
                 ))}
                 <DropdownMenuSeparator />
-                {!TIKTOK_REVIEW_MODE && (
                 <DropdownMenuItem asChild>
                   <Link to="/settings" className="flex items-center gap-2 cursor-pointer">
                     <Settings className="h-4 w-4" />
                     {t("userMenu.settings", "Settings")}
                   </Link>
                 </DropdownMenuItem>
-                )}
                 <DropdownMenuSeparator />
                 {isAdmin && (
                   <DropdownMenuItem asChild>
@@ -720,7 +727,6 @@ export function DashboardLayout({ children, contentClassName, noPadding = false,
                       </Link>
                     </motion.div>
                   ))}
-                  {!TIKTOK_REVIEW_MODE && (
                   <motion.div
                     initial={{ opacity: 0, x: -20 }}
                     animate={{ opacity: 1, x: 0 }}
@@ -735,7 +741,6 @@ export function DashboardLayout({ children, contentClassName, noPadding = false,
                       <span className="font-medium">{t("userMenu.settings", "Settings")}</span>
                     </Link>
                   </motion.div>
-                  )}
                 </motion.div>
               </nav>
             </motion.div>

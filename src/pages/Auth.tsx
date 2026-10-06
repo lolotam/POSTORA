@@ -16,6 +16,7 @@ import {
   isHiggsfieldOAuthCallback,
 } from "@/lib/higgsfieldOAuthReturn";
 import { ENTITLED_SUBSCRIPTION_STATUSES } from "@/lib/subscriptionStatus";
+import { SIGNED_IN_HOME_PATH } from "@/config/tiktokReviewMode";
 
 const authSchema = z.object({
   email: z.string().email("Invalid email address"),
@@ -131,12 +132,12 @@ export default function Auth() {
               .maybeSingle();
 
             if (sub) {
-              navigate("/dashboard", { replace: true });
+              navigate(SIGNED_IN_HOME_PATH, { replace: true });
             } else {
               navigate("/pricing", { replace: true });
             }
           } catch {
-            navigate("/dashboard", { replace: true });
+            navigate(SIGNED_IN_HOME_PATH, { replace: true });
           } finally {
             setIsRedirecting(false);
           }
@@ -266,7 +267,7 @@ export default function Auth() {
               title: "Welcome back!",
               description: "Redirecting to dashboard...",
             });
-            navigate("/dashboard");
+            navigate(SIGNED_IN_HOME_PATH);
           }
         }
       }
@@ -336,7 +337,7 @@ export default function Auth() {
         title: "Welcome back!",
         description: "Redirecting to dashboard...",
       });
-      navigate("/dashboard");
+      navigate(SIGNED_IN_HOME_PATH);
     } catch (error) {
       toast({
         title: "Verification failed",
