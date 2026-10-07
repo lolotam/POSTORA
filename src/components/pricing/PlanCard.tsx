@@ -12,9 +12,9 @@ const planIcons: Record<string, typeof Zap> = {
 };
 
 const planVariants: Record<string, GradientKey> = {
-  free: "sky",
-  pro: "violet",
-  business: "amber",
+  free: "tiktok",
+  pro: "tiktok",
+  business: "tiktok",
 };
 
 interface PlanCardProps {
@@ -58,7 +58,7 @@ export function PlanCard({ plan, isYearly, isAdmin, planSlug, isSubscribed, load
       innerClassName="flex flex-col p-6 md:p-7"
     >
       {plan.is_popular && (
-        <Badge className="absolute -top-3 start-1/2 -translate-x-1/2 bg-gradient-to-r from-violet-500 to-pink-500 text-white border-0 shadow-lg shadow-violet-500/30">
+        <Badge className="absolute -top-3 start-1/2 -translate-x-1/2 bg-tiktok-red text-white border-0 shadow-lg shadow-tiktok-red/30">
           Most Popular
         </Badge>
       )}
@@ -85,7 +85,7 @@ export function PlanCard({ plan, isYearly, isAdmin, planSlug, isSubscribed, load
             <span className="text-muted-foreground">{getPriceLabel()}</span>
           </div>
           {isYearly && getYearlySavings() && (
-            <Badge variant="secondary" className="bg-green-500/10 text-green-600 border-green-500/30">
+            <Badge variant="secondary" className="bg-tiktok-cyan/25 text-foreground border-tiktok-cyan">
               {getYearlySavings()}
             </Badge>
           )}
@@ -95,7 +95,7 @@ export function PlanCard({ plan, isYearly, isAdmin, planSlug, isSubscribed, load
       <ul className="mt-6 space-y-3 flex-1">
         {plan.features.map((feature, index) => (
           <li key={index} className="flex items-start gap-2">
-            <Check className="w-5 h-5 text-emerald-500 shrink-0 mt-0.5" />
+            <Check className="w-5 h-5 text-tiktok-red shrink-0 mt-0.5" />
             <span className="text-sm">{feature}</span>
           </li>
         ))}
@@ -103,8 +103,8 @@ export function PlanCard({ plan, isYearly, isAdmin, planSlug, isSubscribed, load
 
       {isAdmin && plan.slug !== "free" && plan.slug !== planSlug ? (
         <div className="mt-6 space-y-2">
-          <div className="w-full rounded-md border border-emerald-500/30 bg-emerald-500/5 px-3 py-2 text-center">
-            <Badge variant="secondary" className="bg-emerald-500/10 text-emerald-600 border-emerald-500/30">
+          <div className="w-full rounded-md border border-tiktok-cyan bg-tiktok-cyan/10 px-3 py-2 text-center">
+            <Badge variant="secondary" className="bg-tiktok-cyan/25 text-foreground border-tiktok-cyan">
               Admin — full access
             </Badge>
           </div>

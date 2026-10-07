@@ -37,8 +37,8 @@ export function PlanComparison({ plans, tierLimits }: PlanComparisonProps) {
     { label: "AI Caption Generation", icon: <Sparkles className="w-4 h-4" />, render: (plan: SubscriptionPlan) => formatRateLimit(getRateLimit(plan.slug, "generate-caption")) },
     { label: "AI Image Generation", icon: <ImagePlus className="w-4 h-4" />, render: (plan: SubscriptionPlan) => formatRateLimit(getRateLimit(plan.slug, "generate-image")) },
     { label: "AI Hashtag Generation", icon: <Hash className="w-4 h-4" />, render: (plan: SubscriptionPlan) => formatRateLimit(getRateLimit(plan.slug, "generate-hashtags")) },
-    { label: "Analytics", render: (plan: SubscriptionPlan) => plan.slug === "free" ? <span className="text-muted-foreground">—</span> : <Check className="w-5 h-5 text-green-500 mx-auto" /> },
-    { label: "API Access", render: (plan: SubscriptionPlan) => plan.slug === "business" ? <Check className="w-5 h-5 text-green-500 mx-auto" /> : <span className="text-muted-foreground">—</span> },
+    { label: "Analytics", render: (plan: SubscriptionPlan) => plan.slug === "free" ? <span className="text-muted-foreground">—</span> : <Check className="w-5 h-5 text-tiktok-red mx-auto" /> },
+    { label: "API Access", render: (plan: SubscriptionPlan) => plan.slug === "business" ? <Check className="w-5 h-5 text-tiktok-red mx-auto" /> : <span className="text-muted-foreground">—</span> },
     { label: "Support", render: (plan: SubscriptionPlan) => plan.slug === "free" ? "Standard" : plan.slug === "pro" ? "Priority" : "Dedicated" },
   ];
 

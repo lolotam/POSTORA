@@ -142,16 +142,14 @@ function ScheduledCountBadge({
   );
 }
 
-// TikTok review build (non-admins only): Posting keeps Create Post and History,
-// Users becomes TikTok Management, and the Analytics / Automation / Ad Manager
-// menus are dropped.
-const REVIEW_POSTING_PATHS = new Set(["/post", "/history"]);
-
+// TikTok review build (non-admins only): the Publishing menu collapses to a
+// top-level History link, Users becomes TikTok Management, and the Analytics /
+// Automation / Ad Manager menus are dropped.
 function reviewNavEntries(entries: NavEntry[]): NavEntry[] {
   return entries.flatMap((entry): NavEntry[] => {
     if (entry.type === "dropdown") {
-      if (entry.basePath !== "/post") return [];
-      return [{ ...entry, children: entry.children.filter((c) => REVIEW_POSTING_PATHS.has(c.path)) }];
+      const history = entry.basePath === "/post" && entry.children.find((c) => c.path === "/history");
+      return history ? [{ type: "link", ...history }] : [];
     }
     if (entry.type === "link" && entry.path === "/profiles") {
       return [{ ...entry, icon: Video, label: "TikTok Management", path: "/tiktok-publish" }];

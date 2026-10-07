@@ -9,12 +9,14 @@ export function BlobHero({
   className,
   withDots = true,
 }: {
-  preset?: "sky-violet-pink" | "emerald-cyan-sky" | "amber-rose-violet" | "violet-sky";
+  preset?: "sky-violet-pink" | "emerald-cyan-sky" | "amber-rose-violet" | "violet-sky" | "tiktok";
   className?: string;
   withDots?: boolean;
 }) {
   const blobs =
-    preset === "emerald-cyan-sky"
+    preset === "tiktok"
+      ? { a: "bg-tiktok-cyan/20", b: "bg-tiktok-red/15", c: "bg-tiktok-cyan/15", wash: "from-tiktok-cyan/5 via-transparent to-tiktok-red/5" }
+      : preset === "emerald-cyan-sky"
       ? { a: "bg-emerald-400/30", b: "bg-cyan-400/25", c: "bg-sky-400/25", wash: "from-emerald-500/10 via-cyan-500/10 to-sky-500/10" }
       : preset === "amber-rose-violet"
         ? { a: "bg-amber-400/30", b: "bg-rose-400/25", c: "bg-violet-400/25", wash: "from-amber-500/10 via-rose-500/10 to-violet-500/10" }

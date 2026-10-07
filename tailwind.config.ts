@@ -75,6 +75,9 @@ export default {
         facebook: "hsl(var(--facebook))",
         instagram: "hsl(var(--instagram))",
         tiktok: "hsl(var(--tiktok))",
+        // Official TikTok brand colors (red, turquoise), used by the review theme
+        "tiktok-red": "#FE2C55",
+        "tiktok-cyan": "#25F4EE",
         twitter: "hsl(var(--twitter))",
         linkedin: "hsl(var(--linkedin))",
         // Brand gradient pairs for 3D platform chips

@@ -1,6 +1,8 @@
 /*
  * TikTok review build only: re-skins the whole app with the cream palette of the
- * TikTok publish page (src/features/tiktok-publishing/ui/tiktokReview.css).
+ * TikTok publish page (src/features/tiktok-publishing/ui/tiktokReview.css), and
+ * TikTok's official brand colors for the header and actions: black #000000,
+ * red #FE2C55 (primary actions) and turquoise #25F4EE (focus and accents).
  * Unlayered on purpose so it wins over the @layer base tokens in index.css.
  * Light mode is forced in review mode, so only the light tokens are set.
  */
@@ -13,8 +15,8 @@
   --popover: 45 60% 96%;
   --popover-foreground: 40 13% 9%;
 
-  --primary: 40 13% 9%;            /* ink buttons, like the publish page */
-  --primary-foreground: 45 60% 96%;
+  --primary: 348 99% 58%;          /* TikTok red #FE2C55 */
+  --primary-foreground: 0 0% 100%;
 
   --secondary: 44 45% 87%;         /* #ede5cf */
   --secondary-foreground: 40 13% 9%;
@@ -30,34 +32,55 @@
 
   --border: 42 21% 84%;            /* ink at 10% over the page */
   --input: 42 21% 80%;
-  --ring: 40 13% 9%;
+  --ring: 178 90% 40%;             /* TikTok turquoise, darkened to show on cream */
 
   --radius: 0.75rem;               /* 12px cards */
 
-  --gradient-primary: linear-gradient(135deg, hsl(40 13% 9%) 0%, hsl(40 9% 27%) 100%);
+  --gradient-primary: linear-gradient(135deg, #000000 0%, #FE2C55 100%);
   --gradient-subtle: linear-gradient(135deg, hsl(44 45% 87%) 0%, hsl(45 60% 96%) 100%);
-  --gradient-glow: radial-gradient(circle at 50% 0%, hsl(55 93% 58% / 0.18) 0%, transparent 50%);
-  --shadow-glow: 0 0 60px -15px hsl(40 13% 9% / 0.25);
+  --gradient-glow: radial-gradient(circle at 50% 0%, rgb(37 244 238 / 0.15) 0%, transparent 50%);
+  --shadow-glow: 0 0 60px -15px rgb(254 44 85 / 0.35);
   --shadow-card: 0 1px 0 hsl(40 13% 9% / 0.06);
 
   --sidebar: 45 60% 96%;
   --sidebar-background: 45 60% 96%;
   --sidebar-foreground: 40 13% 9%;
-  --sidebar-primary: 40 13% 9%;
-  --sidebar-primary-foreground: 45 60% 96%;
+  --sidebar-primary: 348 99% 58%;
+  --sidebar-primary-foreground: 0 0% 100%;
   --sidebar-accent: 44 45% 87%;
   --sidebar-accent-foreground: 40 13% 9%;
   --sidebar-border: 42 21% 84%;
-  --sidebar-ring: 40 13% 9%;
+  --sidebar-ring: 178 90% 40%;
 }
 
 body {
   background: hsl(var(--background));
 }
 
-/* The publish page uses solid ink buttons; flatten the primary-to-accent
-   gradient used by the "gradient" button variant and similar CTAs. */
+/* Solid TikTok-red CTAs: flatten the primary-to-accent gradient used by the
+   "gradient" button variant and similar calls to action. */
 .from-primary.to-accent {
   background-image: none;
   background-color: hsl(var(--primary));
+}
+
+/* TikTok-black app header. Tokens are re-scoped so every control inside it
+   (nav, badges, credit and notification buttons) reads light on black.
+   Dropdown menus render in portals outside the header and keep the page tokens. */
+.app-topnav {
+  --background: 0 0% 0%;
+  --foreground: 0 0% 100%;
+  --muted: 0 0% 12%;
+  --muted-foreground: 0 0% 72%;
+  --secondary: 0 0% 12%;
+  --secondary-foreground: 0 0% 100%;
+  --accent: 0 0% 14%;
+  --accent-foreground: 0 0% 100%;
+  --border: 0 0% 18%;
+  --input: 0 0% 22%;
+  --ring: 178 90% 55%;             /* full TikTok turquoise on black */
+  --gradient-primary: linear-gradient(135deg, #25F4EE 0%, #FE2C55 100%);
+  /* Solid black: the default bg-background/80 lets the cream page tint it grey. */
+  background-color: #000000;
+  color: hsl(var(--foreground));
 }

@@ -215,7 +215,7 @@ export default function TikTokAuth() {
                     <button
                       onClick={handleConnect}
                       disabled={isConnecting}
-                      className="flex items-center justify-center gap-3 w-full max-w-sm h-12 rounded-md bg-primary text-primary-foreground font-medium text-base hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      className="flex items-center justify-center gap-3 w-full max-w-sm h-12 rounded-md bg-black text-white font-medium text-base hover:bg-black/85 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                       {isConnecting ? (
                         <Loader2 className="w-5 h-5 animate-spin" />

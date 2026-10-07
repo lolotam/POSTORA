@@ -110,10 +110,10 @@ export default function Pricing() {
       <div className="max-w-6xl mx-auto space-y-12">
         {/* Hero Section */}
         <section className="relative overflow-hidden rounded-3xl py-12 md:py-16 px-6 text-center">
-          <BlobHero preset="sky-violet-pink" />
+          <BlobHero preset="tiktok" />
           <Reveal>
             <Badge variant="secondary" className="mb-4">{t("pricing.header.badge", "Pricing")}</Badge>
-            <GradientHeading as="h1" preset="sky-violet-pink" size="2xl">
+            <GradientHeading as="h1" preset="tiktok" size="2xl">
               {t("pricing.header.title", "Choose Your Plan")}
             </GradientHeading>
             <p className="mt-4 text-lg text-muted-foreground max-w-2xl mx-auto">
@@ -126,7 +126,7 @@ export default function Pricing() {
             <Switch id="billing-toggle" checked={isYearly} onCheckedChange={setIsYearly} />
             <div className="flex items-center gap-2">
               <Label htmlFor="billing-toggle" className={isYearly ? "font-semibold" : "text-muted-foreground"}>{t("pricing.billing.yearly", "Yearly")}</Label>
-              <Badge variant="default" className="bg-green-500/10 text-green-600 border-green-500/30">{t("pricing.billing.saveUpTo", "Save up to 17%")}</Badge>
+              <Badge variant="default" className="bg-tiktok-cyan/25 text-foreground border-tiktok-cyan">{t("pricing.billing.saveUpTo", "Save up to 17%")}</Badge>
             </div>
           </div>
 
@@ -138,7 +138,7 @@ export default function Pricing() {
         {/* Promotion Banner */}
         <PromotionBanner />
 
-        <GradientDivider tone="violet" />
+        <GradientDivider tone="primary" />
 
         {/* Pricing Cards */}
         <div className="grid md:grid-cols-3 gap-6">

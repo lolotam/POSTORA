@@ -53,11 +53,11 @@ describe("DashboardLayout in TikTok review mode", () => {
     role.isAdmin = false;
   });
 
-  it("shows a non-admin only Posting and TikTok Management", () => {
+  it("shows a non-admin only History and TikTok Management", () => {
     renderLayout();
     expect(screen.getByRole("link", { name: /TikTok Management/ })).toHaveAttribute("href", "/tiktok-publish");
-    expect(screen.getByText("Publishing")).toBeInTheDocument();
-    for (const hidden of ["Users", "Analytics", "Automation", "Ad Manager"]) {
+    expect(screen.getByRole("link", { name: /History/ })).toHaveAttribute("href", "/history");
+    for (const hidden of ["Publishing", "Create Post", "Users", "Analytics", "Automation", "Ad Manager"]) {
       expect(screen.queryByText(hidden)).not.toBeInTheDocument();
     }
   });
@@ -65,7 +65,7 @@ describe("DashboardLayout in TikTok review mode", () => {
   it("keeps the full nav for an admin", () => {
     role.isAdmin = true;
     renderLayout();
-    for (const shown of ["Users", "Analytics", "Automation", "Ad Manager"]) {
+    for (const shown of ["Publishing", "Users", "Analytics", "Automation", "Ad Manager"]) {
       expect(screen.getAllByText(shown).length).toBeGreaterThan(0);
     }
     expect(screen.queryByText("TikTok Management")).not.toBeInTheDocument();

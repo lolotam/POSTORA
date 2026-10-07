@@ -59,7 +59,7 @@ export function AiCreditsSection() {
               <div className="text-2xl font-bold">${pack.price}</div>
               <div className="text-xs text-muted-foreground">${pack.perCredit.toFixed(3)} per credit</div>
               {pack.savings && (
-                <Badge variant="secondary" className="mt-2 bg-green-500/10 text-green-600 border-green-500/30">
+                <Badge variant="secondary" className="mt-2 bg-tiktok-cyan/25 text-foreground border-tiktok-cyan">
                   Save {pack.savings}%
                 </Badge>
               )}

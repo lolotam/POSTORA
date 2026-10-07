@@ -53,5 +53,6 @@ export const PLATFORM_TAB_ACTIVE: Record<GradientKey, string> = {
   rose:    "data-[state=active]:from-rose-400 data-[state=active]:via-pink-500 data-[state=active]:to-fuchsia-500 data-[state=active]:shadow-rose-500/40",
   indigo:  "data-[state=active]:from-indigo-500 data-[state=active]:via-violet-500 data-[state=active]:to-purple-500 data-[state=active]:shadow-indigo-500/40",
   cyan:    "data-[state=active]:from-cyan-400 data-[state=active]:via-sky-500 data-[state=active]:to-blue-500 data-[state=active]:shadow-cyan-500/40",
+  tiktok:  "data-[state=active]:from-tiktok-cyan data-[state=active]:via-black data-[state=active]:to-tiktok-red data-[state=active]:shadow-tiktok-red/40",
 };
 

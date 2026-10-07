@@ -7,7 +7,8 @@ export type GradientKey =
   | "amber"
   | "rose"
   | "indigo"
-  | "cyan";
+  | "cyan"
+  | "tiktok";
 
 export const GRADIENTS: Record<
   GradientKey,
@@ -20,6 +21,7 @@ export const GRADIENTS: Record<
   rose:    { from: "from-rose-400",    via: "via-pink-500",    to: "to-fuchsia-500", shadow: "shadow-rose-500/40",    ringText: "text-rose-500" },
   indigo:  { from: "from-indigo-500",  via: "via-violet-500",  to: "to-purple-500",  shadow: "shadow-indigo-500/40",  ringText: "text-indigo-500" },
   cyan:    { from: "from-cyan-400",    via: "via-sky-500",     to: "to-blue-500",    shadow: "shadow-cyan-500/40",    ringText: "text-cyan-500" },
+  tiktok:  { from: "from-tiktok-cyan", via: "via-black",       to: "to-tiktok-red",  shadow: "shadow-tiktok-red/40",  ringText: "text-tiktok-red" },
 };
 
 export type HeadingPreset =
@@ -27,7 +29,8 @@ export type HeadingPreset =
   | "sky-violet"
   | "emerald-cyan-sky"
   | "amber-rose-violet"
-  | "violet-sky";
+  | "violet-sky"
+  | "tiktok";
 
 export const HEADING_PRESETS: Record<HeadingPreset, string> = {
   "sky-violet-pink":   "from-sky-500 via-violet-500 to-pink-500",
@@ -35,6 +38,8 @@ export const HEADING_PRESETS: Record<HeadingPreset, string> = {
   "emerald-cyan-sky":  "from-emerald-500 via-cyan-500 to-sky-500",
   "amber-rose-violet": "from-amber-500 via-rose-500 to-violet-500",
   "violet-sky":        "from-violet-500 to-sky-500",
+  // Turquoise is too light for text on a light page, so the heading runs black to red.
+  "tiktok":            "from-black via-black to-tiktok-red",
 };
 
 export type IconLike = LucideIcon;

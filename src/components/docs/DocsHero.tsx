@@ -27,6 +27,7 @@ const PRESET_FOR_VARIANT: Record<GradientKey, HeadingPreset> = {
   rose: "amber-rose-violet",
   indigo: "violet-sky",
   cyan: "emerald-cyan-sky",
+  tiktok: "tiktok",
 };
 
 export function DocsHero({

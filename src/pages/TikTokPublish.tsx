@@ -1,6 +1,8 @@
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { DashboardLayout } from "@/components/layout/DashboardLayout";
+import { Button } from "@/components/ui/button";
+import { Plus } from "lucide-react";
 import { TikTokReviewScreen } from "@/features/tiktok-publishing";
 
 export default function TikTokPublish() {
@@ -9,9 +11,12 @@ export default function TikTokPublish() {
     <DashboardLayout noPadding hideFooter>
       <TikTokReviewScreen
         headerLink={(
-          <Link className="tiktok-review-auth-link" to="/tiktok-auth">
-            {t("tiktokReview.connectAccount", "Connect a TikTok account")}
-          </Link>
+          <Button asChild className="w-full">
+            <Link to="/tiktok-auth">
+              <Plus className="h-4 w-4" />
+              {t("tiktokReview.connectAccount", "Connect a TikTok account")}
+            </Link>
+          </Button>
         )}
       />
     </DashboardLayout>
