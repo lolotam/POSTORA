@@ -178,14 +178,14 @@ describe("pipeline items", () => {
 });
 
 describe("review shell routes", () => {
-  it("allows the pipeline pages and OAuth returns", () => {
-    for (const path of ["/approvals", "/calendar", "/activity", "/settings", "/integrations", "/pricing", "/tiktok-callback", "/profiles", "/approvals/"]) {
+  it("allows the pipeline pages and the TikTok OAuth return", () => {
+    for (const path of ["/approvals", "/calendar", "/activity", "/settings", "/integrations", "/pricing", "/tiktok-callback", "/approvals/"]) {
       expect(isReviewPathAllowed(path)).toBe(true);
     }
   });
 
   it("keeps everything else out", () => {
-    for (const path of ["/dashboard", "/post", "/history", "/tiktok-publish", "/admin", "/approvals/x"]) {
+    for (const path of ["/dashboard", "/post", "/history", "/tiktok-publish", "/tiktok-auth", "/profiles", "/admin", "/approvals/x"]) {
       expect(isReviewPathAllowed(path)).toBe(false);
     }
   });

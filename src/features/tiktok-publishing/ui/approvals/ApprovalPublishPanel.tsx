@@ -41,7 +41,7 @@ export function PublishPanel({
     <>
       <section className="ap-publish">
         <p className="ap-helper">
-          Choose a TikTok account when you’re ready to publish. You can keep preparing this post.
+          This post publishes to the TikTok account below. Confirm its TikTok settings, then approve or schedule it.
         </p>
         <div className="ap-publish-grid">
           <div>

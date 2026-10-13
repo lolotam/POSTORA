@@ -14,8 +14,8 @@ export const REVIEW_PATHS = {
   pricing: "/pricing",
 } as const;
 
-// TikTok OAuth lands on /tiktok-callback; /profiles is the Facebook OAuth return path.
-const OAUTH_RETURN_PATHS = ["/tiktok-callback", "/tiktok-auth", "/profiles"];
+// TikTok OAuth lands on /tiktok-callback, which sends review users back to Integrations.
+const OAUTH_RETURN_PATHS = ["/tiktok-callback"];
 
 const ALLOWED_PATHS = new Set<string>([...Object.values(REVIEW_PATHS), ...OAUTH_RETURN_PATHS]);
 
