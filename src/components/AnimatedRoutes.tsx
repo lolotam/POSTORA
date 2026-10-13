@@ -24,7 +24,6 @@ const PinterestCallback = lazyWithRetry(() => import("@/pages/PinterestCallback"
 const TikTokCallback = lazyWithRetry(() => import("@/pages/TikTokCallback"), "TikTokCallback");
 const MediaLibrary = lazyWithRetry(() => import("@/pages/MediaLibrary"), "MediaLibrary");
 const Analytics = lazyWithRetry(() => import("@/pages/Analytics"), "Analytics");
-const Calendar = lazyWithRetry(() => import("@/pages/Calendar"), "Calendar");
 const Templates = lazyWithRetry(() => import("@/pages/Templates"), "Templates");
 const Documentation = lazyWithRetry(() => import("@/pages/Documentation"), "Documentation");
 const ApiPlayground = lazyWithRetry(() => import("@/pages/ApiPlayground"), "ApiPlayground");
@@ -142,6 +141,11 @@ const TokenExpiryDocs = lazyWithRetry(() => import("@/pages/docs/TokenExpiryDocs
 const AdminUserDetail = lazyWithRetry(() => import("@/pages/admin/AdminUserDetail"), "AdminUserDetail");
 const TikTokAuthPage = lazyWithRetry(() => import("@/pages/TikTokAuth"), "TikTokAuth");
 const TikTokPublishPage = lazyWithRetry(() => import("@/pages/TikTokPublish"), "TikTokPublish");
+const ApprovalsPage = lazyWithRetry(() => import("@/pages/Approvals"), "Approvals");
+const ReviewActivityPage = lazyWithRetry(() => import("@/pages/ReviewPipeline").then((m) => ({ default: m.ActivityPage })), "ReviewActivity");
+const ReviewIntegrationsPage = lazyWithRetry(() => import("@/pages/ReviewPipeline").then((m) => ({ default: m.IntegrationsPage })), "ReviewIntegrations");
+const ReviewWorkspacePage = lazyWithRetry(() => import("@/pages/ReviewPipeline").then((m) => ({ default: m.WorkspacePage })), "ReviewWorkspace");
+const ReviewCalendarPage = lazyWithRetry(() => import("@/pages/ReviewPipeline").then((m) => ({ default: m.CalendarPage })), "ReviewCalendar");
 
 // Helper component to wrap pages with transitions
 //
@@ -222,7 +226,7 @@ export function AnimatedRoutes() {
           path="/settings"
           element={
             <ProtectedRoute>
-              <AnimatedPage><Settings /></AnimatedPage>
+              <AnimatedPage><ReviewWorkspacePage /></AnimatedPage>
             </ProtectedRoute>
           }
         />
@@ -327,7 +331,7 @@ export function AnimatedRoutes() {
           path="/calendar"
           element={
             <ProtectedRoute>
-              <AnimatedPage><Calendar /></AnimatedPage>
+              <AnimatedPage><ReviewCalendarPage /></AnimatedPage>
             </ProtectedRoute>
           }
         />
@@ -508,6 +512,32 @@ export function AnimatedRoutes() {
           }
         />
         
+        {/* TikTok review build: pipeline pages (non-admins get the review shell) */}
+        <Route
+          path="/approvals"
+          element={
+            <ProtectedRoute>
+              <AnimatedPage><ApprovalsPage /></AnimatedPage>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/activity"
+          element={
+            <ProtectedRoute>
+              <AnimatedPage><ReviewActivityPage /></AnimatedPage>
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/integrations"
+          element={
+            <ProtectedRoute>
+              <AnimatedPage><ReviewIntegrationsPage /></AnimatedPage>
+            </ProtectedRoute>
+          }
+        />
+
         {/* Admin Routes */}
         <Route path="/admin" element={<AnimatedPage><AdminDashboard /></AnimatedPage>} />
         <Route path="/admin/users/:userId" element={<AnimatedPage><AdminUserDetail /></AnimatedPage>} />

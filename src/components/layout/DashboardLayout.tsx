@@ -10,7 +10,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { useUserRole } from "@/hooks/useUserRole";
 import { useSubscription } from "@/hooks/useSubscription";
 import { usePublishing } from "@/contexts/PublishingContext";
-import { TIKTOK_REVIEW_MODE } from "@/config/tiktokReviewMode";
+import { ShellGate } from "@/features/tiktok-publishing";
 import { cn } from "@/lib/utils";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { LanguageToggle } from "@/components/LanguageToggle";
@@ -142,23 +142,17 @@ function ScheduledCountBadge({
   );
 }
 
-// TikTok review build (non-admins only): the Publishing menu collapses to a
-// top-level History link, Users becomes TikTok Management, and the Analytics /
-// Automation / Ad Manager menus are dropped.
-function reviewNavEntries(entries: NavEntry[]): NavEntry[] {
-  return entries.flatMap((entry): NavEntry[] => {
-    if (entry.type === "dropdown") {
-      const history = entry.basePath === "/post" && entry.children.find((c) => c.path === "/history");
-      return history ? [{ type: "link", ...history }] : [];
-    }
-    if (entry.type === "link" && entry.path === "/profiles") {
-      return [{ ...entry, icon: Video, label: "TikTok Management", path: "/tiktok-publish" }];
-    }
-    return [entry];
-  });
+// TikTok review build: non-admins get the review shell (sidebar, pipeline pages);
+// admins keep this layout unchanged.
+export function DashboardLayout(props: DashboardLayoutProps) {
+  return (
+    <ShellGate legacy={<LegacyDashboardLayout {...props} />} fill={props.noPadding}>
+      {props.children}
+    </ShellGate>
+  );
 }
 
-export function DashboardLayout({ children, contentClassName, noPadding = false, hideFooter = false }: DashboardLayoutProps) {
+function LegacyDashboardLayout({ children, contentClassName, noPadding = false, hideFooter = false }: DashboardLayoutProps) {
   const { t } = useTranslation("nav");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
@@ -277,9 +271,8 @@ export function DashboardLayout({ children, contentClassName, noPadding = false,
       console.debug("[sidebar] ad children", adManagerChildren.map((c) => c.label));
     }
 
-    // Admins keep the full nav during the review; everyone else sees the TikTok scope.
-    return TIKTOK_REVIEW_MODE && !isAdmin ? reviewNavEntries(entries) : entries;
-  }, [isAdmin, showCanvas, flags.msgFacebook, flags.msgInstagram, flags.msgWhatsapp, flags.msgThreads, flags.commentManager, flags.commentWorkflow, flags.audienceHub, flags.leadsCrm, flags.adAnalytics, flags.smartScheduling, flags.humanAgent, flags.whatsappShop, flags.adManager, flags.analyticsFacebook, flags.analyticsInstagram, flags.analyticsThreads, flags.analyticsTiktok, t]);
+    return entries;
+  }, [showCanvas, flags.msgFacebook, flags.msgInstagram, flags.msgWhatsapp, flags.msgThreads, flags.commentManager, flags.commentWorkflow, flags.audienceHub, flags.leadsCrm, flags.adAnalytics, flags.smartScheduling, flags.humanAgent, flags.whatsappShop, flags.adManager, flags.analyticsFacebook, flags.analyticsInstagram, flags.analyticsThreads, flags.analyticsTiktok, t]);
 
   const handleLogout = async () => {
     setIsLoggingOut(true);

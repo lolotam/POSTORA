@@ -1,0 +1,42 @@
+/* Activity page (review shell). */
+.ac-group {
+  display: flex;
+  justify-content: space-between;
+  padding: 8px 16px;
+  background: var(--rs-paper-warm);
+  color: var(--rs-ink-mute);
+  font-size: 10.4px;
+  font-weight: 700;
+  letter-spacing: 1.56px;
+  text-transform: uppercase;
+}
+
+.ac-row-wrap {
+  border-bottom: 1px solid var(--rs-rule);
+}
+
+.ac-row-wrap:last-child {
+  border-bottom: 0;
+}
+
+.ac-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 66px;
+  padding: 12px 16px;
+  border: 0;
+  background: transparent;
+  color: var(--rs-ink);
+  cursor: pointer;
+}
+
+.ac-row:hover,
+.ac-row[aria-expanded="true"] {
+  background: rgba(237, 229, 207, 0.4);
+}
+
+.ac-expand {
+  padding: 4px 16px 18px 60px;
+}

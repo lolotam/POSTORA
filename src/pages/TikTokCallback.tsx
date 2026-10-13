@@ -5,6 +5,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { Loader2, CheckCircle, XCircle, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { TIKTOK_RETURN_KEY } from "@/features/tiktok-publishing";
 
 export default function TikTokCallback() {
   const [searchParams] = useSearchParams();
@@ -14,6 +15,9 @@ export default function TikTokCallback() {
   const [status, setStatus] = useState<"loading" | "success" | "error" | "expired">("loading");
   const [message, setMessage] = useState("Connecting your TikTok account...");
   const [isRetrying, setIsRetrying] = useState(false);
+  // Connections started from the review shell's Integrations page return there, not to /profiles.
+  const [fromReviewShell] = useState(() => sessionStorage.getItem(TIKTOK_RETURN_KEY) === "integrations");
+  const home = fromReviewShell ? "/integrations" : "/profiles";
 
   const handleRetry = async () => {
     setIsRetrying(true);
@@ -73,7 +77,7 @@ export default function TikTokCallback() {
           description: errorDescription || "TikTok authorization was cancelled",
           variant: "destructive",
         });
-        setTimeout(() => navigate("/profiles"), 2000);
+        setTimeout(() => navigate(home), 2000);
         return;
       }
 
@@ -86,7 +90,7 @@ export default function TikTokCallback() {
           description: "No authorization code received from TikTok",
           variant: "destructive",
         });
-        setTimeout(() => navigate("/profiles"), 2000);
+        setTimeout(() => navigate(home), 2000);
         return;
       }
 
@@ -138,7 +142,11 @@ export default function TikTokCallback() {
           // Redirect to /tiktok-auth if demo flow, otherwise /profiles
           const isDemoReturn = sessionStorage.getItem("tiktok_demo_return") === "true";
           sessionStorage.removeItem("tiktok_demo_return");
-          setTimeout(() => navigate(isDemoReturn ? "/tiktok-auth" : "/profiles"), 1500);
+          sessionStorage.removeItem(TIKTOK_RETURN_KEY);
+          const successPath = fromReviewShell
+            ? "/integrations?connected=tiktok"
+            : isDemoReturn ? "/tiktok-auth" : "/profiles";
+          setTimeout(() => navigate(successPath), 1500);
         } else {
           console.error("[TikTok Callback] Connection failed:", data?.error);
           
@@ -189,13 +197,13 @@ export default function TikTokCallback() {
             description: errorMsg,
             variant: "destructive",
           });
-          setTimeout(() => navigate("/profiles"), 2000);
+          setTimeout(() => navigate(home), 2000);
         }
       }
     };
 
     handleCallback();
-  }, [searchParams, user, navigate, toast]);
+  }, [searchParams, user, navigate, toast, fromReviewShell, home]);
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-background">
@@ -242,7 +250,7 @@ export default function TikTokCallback() {
               </Button>
               <Button 
                 variant="outline" 
-                onClick={() => navigate("/profiles")}
+                onClick={() => navigate(home)}
                 className="w-full"
               >
                 Back to Profiles

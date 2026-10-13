@@ -1,0 +1,91 @@
+/* Integrations page (review shell). Tokens come from ../shell/reviewShell.css. */
+.in-account-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--rs-rule);
+}
+
+.in-account-row:last-child {
+  border-bottom: 0;
+}
+
+.in-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 448px;
+  height: 40px;
+  padding: 0 14px;
+  border: 1px solid var(--rs-rule-strong);
+  border-radius: 9999px;
+  background: var(--rs-paper-card);
+}
+
+.in-search input {
+  flex: 1;
+  border: 0;
+  background: transparent;
+  color: var(--rs-ink);
+  font-size: 14px;
+  outline: none;
+}
+
+.in-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.in-card {
+  display: flex;
+  flex-direction: column;
+  min-height: 240px;
+  padding: 20px;
+  animation: in-fade 0.3s ease both;
+}
+
+.in-card-soon {
+  background-image: repeating-linear-gradient(135deg, transparent 0 10px, rgba(26, 24, 20, 0.025) 10px 20px);
+}
+
+.in-tile {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  color: #fff;
+}
+
+.in-card-title {
+  margin: 16px 0 4px;
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: -0.6px;
+}
+
+.in-card-text {
+  margin: 0 0 16px;
+  color: var(--rs-ink-soft);
+  font-size: 13px;
+}
+
+.in-soon {
+  padding: 2px 8px;
+  border: 2px dashed var(--rs-ink-mute);
+  border-radius: 8px;
+  color: var(--rs-ink-mute);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 1.4px;
+  text-transform: uppercase;
+  transform: rotate(4deg);
+}
+
+@keyframes in-fade {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}

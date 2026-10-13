@@ -1,0 +1,117 @@
+/* Calendar page (review shell). */
+.ca-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 1px;
+  overflow: hidden;
+  border: 1px solid var(--rs-rule);
+  border-radius: 12px;
+  background: var(--rs-rule);
+}
+
+.ca-weekday {
+  padding: 8px 10px;
+  background: var(--rs-paper-warm);
+  color: var(--rs-ink-mute);
+  font-size: 9.6px;
+  font-weight: 700;
+  letter-spacing: 1.4px;
+  text-transform: uppercase;
+}
+
+.ca-cell {
+  min-height: 96px;
+  padding: 6px;
+  background: var(--rs-paper-card);
+}
+
+.ca-cell[data-view="week"] {
+  min-height: 320px;
+}
+
+.ca-cell[data-outside="true"] {
+  background: rgba(237, 229, 207, 0.4);
+}
+
+.ca-daynum {
+  display: inline-grid;
+  place-items: center;
+  min-width: 18px;
+  height: 18px;
+  margin-bottom: 4px;
+  color: var(--rs-ink-mute);
+  font-size: 9.6px;
+}
+
+.ca-daynum[data-today="true"] {
+  border-radius: 9999px;
+  background: var(--rs-tomato);
+  color: var(--rs-paper);
+  font-weight: 700;
+}
+
+.ca-chip {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 5px 6px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  font-size: 9.92px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ca-chip[data-tone="published"] {
+  background: var(--rs-ink);
+  color: var(--rs-paper);
+}
+
+.ca-chip[data-tone="failed"] {
+  border-color: rgba(230, 57, 70, 0.4);
+  background: var(--rs-tomato-soft);
+  color: var(--rs-tomato);
+}
+
+.ca-chip[data-tone="scheduled"] {
+  border-color: rgba(45, 122, 76, 0.4);
+  background: var(--rs-mint-soft);
+  color: var(--rs-mint-deep);
+}
+
+.ca-chip-tile {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  border-radius: 6px;
+  background: var(--rs-ink);
+  color: #fff;
+}
+
+.ca-chip-status {
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+}
+
+.ca-day {
+  padding: 8px;
+}
+
+.ca-failed {
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid rgba(230, 57, 70, 0.4);
+  border-radius: 10px;
+  background: var(--rs-tomato-soft);
+  color: var(--rs-tomato);
+}
+
+@media (max-width: 700px) {
+  .ca-chip span:not(.ca-chip-tile) {
+    display: none;
+  }
+}

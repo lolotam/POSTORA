@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import type { ReviewBlocker } from "../domain/reviewRules";
 import { ReviewGatewayError } from "../application/ports";
 
@@ -18,4 +19,10 @@ export function describeBlocker(t: Translate, blocker: ReviewBlocker): string {
 export function captionTitle(caption: string, fallback: string): string {
   const line = caption.split(/\r?\n/).find((part) => part.trim().length > 0);
   return line?.trim() || fallback;
+}
+
+/** describeError bound to the post namespace, for views that only need error copy. */
+export function useDescribeError(): (error: unknown) => string {
+  const { t } = useTranslation("post");
+  return (error) => describeError((key, fallback) => t(key, fallback), error);
 }
