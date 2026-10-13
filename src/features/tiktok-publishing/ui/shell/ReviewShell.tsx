@@ -22,6 +22,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { Logo } from "@/components/Logo";
 import { useAuth } from "@/hooks/useAuth";
 import { useSubscription } from "@/hooks/useSubscription";
 import { REVIEW_PATHS } from "../../domain/shellRoutes";
@@ -83,8 +84,7 @@ export function ReviewShell({ children, fill = false }: ReviewShellProps) {
         if ((event.target as HTMLElement).closest("a")) setMobileOpen(false);
       }}>
         <Link to={REVIEW_PATHS.approvals} className="rs-brand" aria-label="Postora home">
-          <span className="rs-brand-mark" aria-hidden="true">p</span>
-          <span className="rs-brand-word rs-hide-collapsed">postora</span>
+          <Logo size="sm" showText={!collapsed} animate={false} />
         </Link>
         <button
           type="button"
@@ -112,8 +112,7 @@ export function ReviewShell({ children, fill = false }: ReviewShellProps) {
           <button type="button" className="rs-btn rs-btn-ghost rs-btn-round" aria-label="Open navigation menu" onClick={() => setMobileOpen(true)}>
             <Menu />
           </button>
-          <span className="rs-brand-mark" aria-hidden="true">p</span>
-          <span className="rs-brand-word">postora</span>
+          <Logo size="sm" animate={false} />
         </div>
         <main className="rs-main" data-fill={fill}>{children}</main>
       </div>

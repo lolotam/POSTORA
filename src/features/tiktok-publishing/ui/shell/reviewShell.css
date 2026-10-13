@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Nunito+Sans:wght@400;500;600;700&family=Shrikhand&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Nunito+Sans:wght@400;500;600;700&display=swap');
 
 /*
  * Review shell (non-admin users in the TikTok review build). Tokens hang off <html data-shell="review">
@@ -24,7 +24,6 @@ html[data-shell="review"] {
   --rs-highlighter: #f7e733;
   --rs-highlighter-soft: #fdf7bf;
   --rs-font: "Nunito Sans", system-ui, sans-serif;
-  --rs-display: "Shrikhand", "Nunito Sans", system-ui, sans-serif;
 
   /* shadcn tokens, so reused primitives (Select, Popover, Dialog, Input) match the shell. */
   --background: 43 47% 93%;
@@ -102,26 +101,7 @@ html[data-shell="review"] [role="dialog"] {
   text-decoration: none;
 }
 
-.rs-brand-mark {
-  display: grid;
-  place-items: center;
-  width: 32px;
-  height: 32px;
-  flex-shrink: 0;
-  border-radius: 10px;
-  background: var(--rs-tomato);
-  color: var(--rs-paper);
-  font-family: var(--rs-display);
-  font-size: 16px;
-  line-height: 1;
-}
 
-.rs-brand-word {
-  font-family: var(--rs-display);
-  font-size: 20px;
-  letter-spacing: -0.5px;
-  line-height: 1;
-}
 
 .rs-collapse {
   position: absolute;
