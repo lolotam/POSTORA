@@ -182,13 +182,18 @@ function ChipDetail({ item, timeZone }: { item: PipelineItem; timeZone: string }
           <p className="ap-notice !mt-1 !text-[11px]">After publishing, TikTok may take a few minutes to process your post and show it on your profile.</p>
         </>
       ) : null}
+      {failed && !item.reopenable ? (
+        <p className="ap-notice !text-[11px]">
+          TikTok hasn't confirmed this attempt failed, so the video may still go live. Check TikTok. To post it again, start a new draft.
+        </p>
+      ) : null}
       {error ? <p className="ap-alert" role="alert">{error}</p> : null}
       <div className="mt-3 flex flex-wrap gap-2">
         <Link to={`${REVIEW_PATHS.approvals}?tab=all&item=${item.draft.id}`} className="rs-btn rs-btn-ink rs-btn-sm">Open</Link>
         {item.postUrl ? (
           <a href={item.postUrl} target="_blank" rel="noreferrer" className="rs-btn rs-btn-outline rs-btn-sm"><ExternalLink /> View on TikTok</a>
         ) : null}
-        {failed ? (
+        {item.reopenable ? (
           <button
             type="button"
             className="rs-btn rs-btn-outline rs-btn-sm"

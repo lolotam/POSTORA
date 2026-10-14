@@ -12,6 +12,8 @@ export interface PipelineItem {
   scheduledAt: string | null;
   failureReason: string | null;
   postUrl: string | null;
+  /** The database's reopen rule for this attempt ("Back to pending"). */
+  reopenable: boolean;
 }
 
 export function toPipelineItem(draft: ReviewDraft, publish: PublishStatus | null): PipelineItem {
@@ -25,6 +27,7 @@ export function toPipelineItem(draft: ReviewDraft, publish: PublishStatus | null
     scheduledAt,
     failureReason: publish && (publish.state === "failed" || publish.state === "needs_attention") ? publish.reason : null,
     postUrl: publish?.state === "published" ? publish.postUrl : null,
+    reopenable: draft.state === "submitted" && publish?.reopenable === true,
   };
 }
 

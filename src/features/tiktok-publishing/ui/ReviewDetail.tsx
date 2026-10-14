@@ -274,9 +274,14 @@ function PublishOutcome({
     <div className="tiktok-review-status" role="status">
       <p className="tiktok-review-eyebrow">{t("tiktokReview.outcome", "Outcome")}</p>
       <p>{body}</p>
-      {state === "needs_attention" ? (
+      {state === "needs_attention" && publish.reopen ? (
         <p className="tiktok-review-notice">
           {t("tiktokReview.resubmitGuidance", "Check TikTok before trying again. Edit and resubmit returns this post to review; sending it again needs a new confirmation.")}
+        </p>
+      ) : null}
+      {(state === "failed" || state === "needs_attention") && !publish.reopen ? (
+        <p className="tiktok-review-notice">
+          {t("tiktokReview.awaitingTikTokFailure", "TikTok hasn't confirmed this attempt failed, so the video may still go live. Check TikTok. To post it again, start a new draft.")}
         </p>
       ) : null}
       {publish.status?.state === "published" && publish.status.postUrl ? (

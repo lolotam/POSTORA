@@ -358,6 +358,9 @@ function PublishOutcome({ review }: { review: DraftReview }) {
       <span>
         {body}
         {publish.timedOut ? " Status updates paused after 10 minutes." : ""}
+        {failed && !review.canReopen
+          ? " TikTok hasn't confirmed this attempt failed, so the video may still go live. Check TikTok. To post it again, start a new draft."
+          : ""}
         {publish.error ? ` ${describeError(review.translate, publish.error)}` : ""}
       </span>
       <span className="flex flex-wrap gap-2">

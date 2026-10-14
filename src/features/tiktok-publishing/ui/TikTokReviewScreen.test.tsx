@@ -181,6 +181,7 @@ function renderReviewFixture(options: FixtureOptions = {}) {
       updatedAt: "2026-09-30T12:00:00Z",
       reason: null,
       postUrl: null,
+      reopenable: false,
     }),
     resolveMediaPreview: vi.fn().mockResolvedValue({
       previewUrl: "https://example.com/video.mp4",
@@ -681,6 +682,7 @@ describe("TikTokReviewWorkspace Screen", () => {
           updatedAt: "2026-10-01T12:00:00Z",
           reason: publishState === "failed" ? "Upload failed" : "Needs attention reason",
           postUrl: null,
+          reopenable: true,
         });
 
         // Switch status filter to 'submitted' in queue
@@ -738,6 +740,7 @@ describe("TikTokReviewWorkspace Screen", () => {
         updatedAt: "2026-10-01T12:00:00Z",
         reason: "Upload failed",
         postUrl: null,
+        reopenable: true,
       });
 
       (gateway.reopen as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
@@ -792,6 +795,7 @@ describe("TikTokReviewWorkspace Screen", () => {
           updatedAt: "2026-10-01T12:00:00Z",
           reason: null,
           postUrl: publishState === "published" ? "https://tiktok.com/@creator/video/1" : null,
+          reopenable: false,
         });
 
         const statusSelect = screen.getByRole("combobox", { name: "Status" });
@@ -813,6 +817,42 @@ describe("TikTokReviewWorkspace Screen", () => {
         }[publishState];
         expect(await screen.findByText(statusText)).toBeInTheDocument();
         expect(screen.queryByRole("button", { name: "Edit and resubmit" })).not.toBeInTheDocument();
+      },
+    );
+
+    // A failure seen only by process-post's poll, with no post.publish.failed event from
+    // TikTok, is not reopenable; the button used to show anyway and end in a refusal (#246).
+    it.each(["failed", "needs_attention"] as const)(
+      "a '%s' attempt the server will not reopen shows no 'Edit and resubmit' and says why",
+      async (publishState) => {
+        const submittedDraft = createDefaultDraft({
+          id: `draft-unconfirmed-${publishState}`,
+          accountId: "acc-1",
+          revision: 2,
+          state: "submitted",
+          caption: `Unconfirmed ${publishState}`,
+          submission: {
+            id: `sub-unconfirmed-${publishState}`,
+            postId: `post-unconfirmed-${publishState}`,
+            mode: "now",
+            scheduledAt: null,
+          },
+        });
+        const { gateway } = renderReviewFixture({ drafts: [submittedDraft] });
+        (gateway.status as ReturnType<typeof vi.fn>).mockResolvedValue({
+          state: publishState,
+          updatedAt: "2026-10-01T12:00:00Z",
+          reason: "Upload failed",
+          postUrl: null,
+          reopenable: false,
+        });
+
+        fireEvent.change(screen.getByRole("combobox", { name: "Status" }), { target: { value: "submitted" } });
+        fireEvent.click(await screen.findByRole("button", { name: new RegExp(`Unconfirmed ${publishState}`, "i") }));
+
+        expect(await screen.findByText(/TikTok hasn't confirmed this attempt failed/)).toBeInTheDocument();
+        expect(screen.queryByRole("button", { name: "Edit and resubmit" })).not.toBeInTheDocument();
+        expect(gateway.reopen).not.toHaveBeenCalled();
       },
     );
 

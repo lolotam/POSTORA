@@ -40,8 +40,14 @@ function draft(overrides: Partial<ReviewDraft> = {}): ReviewDraft {
   };
 }
 
-function status(state: PublishStatus["state"], reason: string | null = null): PublishStatus {
-  return { state, updatedAt: "2026-10-14T10:00:00.000Z", reason, postUrl: state === "published" ? "https://tiktok.com/v/1" : null };
+function status(state: PublishStatus["state"], reason: string | null = null, reopenable = false): PublishStatus {
+  return {
+    state,
+    updatedAt: "2026-10-14T10:00:00.000Z",
+    reason,
+    postUrl: state === "published" ? "https://tiktok.com/v/1" : null,
+    reopenable,
+  };
 }
 
 describe("approvals tabs", () => {
@@ -154,6 +160,12 @@ describe("pipeline items", () => {
     expect(item.filter).toBe("failed");
     expect(item.failureReason).toBe("tiktok_init_http_403");
     expect(item.postUrl).toBeNull();
+  });
+
+  it("offers Back to pending only when the database says the attempt may be reopened", () => {
+    expect(toPipelineItem(sent, status("failed", null, false)).reopenable).toBe(false);
+    expect(toPipelineItem(sent, status("failed", null, true)).reopenable).toBe(true);
+    expect(toPipelineItem(draft(), status("failed", null, true)).reopenable).toBe(false);
   });
 
   it("counts drafts per Activity filter", () => {

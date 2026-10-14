@@ -159,8 +159,8 @@ export function useDraftReview(input: {
     }
   }
 
-  const canReopen = draft?.state === "submitted" &&
-    (publish.status?.state === "failed" || publish.status?.state === "needs_attention");
+  // The database answers whether this attempt may be reopened; never inferred from the publish state.
+  const canReopen = draft?.state === "submitted" && publish.status?.reopenable === true;
 
   async function reopen() {
     if (!draft || !canReopen || commands.reopenDraft.isPending) return;

@@ -78,7 +78,7 @@ function setup(options: { drafts: ReviewDraft[]; accounts?: TikTokAccount[]; sta
     reopen: vi.fn((draftId) => update(draftId, { state: "pending_review", submission: null })),
     submit: vi.fn(() => Promise.resolve({ submissionId: "s1", postId: "p1", state: "queued" as const })),
     status: vi.fn((submissionId: string) => Promise.resolve(options.statuses?.[submissionId] ?? {
-      state: "queued" as const, updatedAt: "2026-10-14T10:00:00.000Z", reason: null, postUrl: null,
+      state: "queued" as const, updatedAt: "2026-10-14T10:00:00.000Z", reason: null, postUrl: null, reopenable: false,
     })),
     resolveMediaPreview: vi.fn(() => Promise.resolve(null)),
   };
@@ -158,7 +158,7 @@ describe("ApprovalsView", () => {
     const gateway = setup({
       drafts: [failed],
       path: "/approvals?tab=approved",
-      statuses: { s9: { state: "failed", updatedAt: "2026-10-14T10:00:00.000Z", reason: "tiktok_init_http_403", postUrl: null } },
+      statuses: { s9: { state: "failed", updatedAt: "2026-10-14T10:00:00.000Z", reason: "tiktok_init_http_403", postUrl: null, reopenable: true } },
     });
 
     const row = await screen.findByRole("option", { name: /Failed upload/ });
@@ -167,6 +167,24 @@ describe("ApprovalsView", () => {
     expect(screen.getByText("tiktok_init_http_403")).toBeInTheDocument();
     fireEvent.click(back);
     await waitFor(() => expect(gateway.reopen).toHaveBeenCalledWith("d9", 4));
+  });
+
+  it("does not offer Back to pending when TikTok has not confirmed the failure", async () => {
+    const failed = makeDraft({
+      id: "d8",
+      caption: "Maybe live",
+      state: "submitted",
+      submission: { id: "s8", postId: "p8", mode: "now", scheduledAt: null },
+    });
+    const gateway = setup({
+      drafts: [failed],
+      path: "/approvals?tab=approved",
+      statuses: { s8: { state: "needs_attention", updatedAt: "2026-10-14T10:00:00.000Z", reason: null, postUrl: null, reopenable: false } },
+    });
+
+    expect(await screen.findByText(/TikTok hasn't confirmed this attempt failed/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Back to pending/ })).not.toBeInTheDocument();
+    expect(gateway.reopen).not.toHaveBeenCalled();
   });
 
   it("creates a post for the chosen account", async () => {
