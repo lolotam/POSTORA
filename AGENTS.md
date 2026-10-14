@@ -569,7 +569,7 @@ Rules:
 
 ## Cursor Cloud specific instructions
 
-- Install from the repo root with `npm install`. `npm ci` fails on the committed lockfile under npm 10.9 (`Missing: esbuild@0.28.2 from lock file`, an optional peer of a nested Vite). Do not rewrite `package-lock.json` only to make `npm ci` pass.
+- Install from the repo root with `npm install`. In this multi-repo workspace that root is `/agent/repos/POSTORA`, not `/agent` (`npm install` in `/agent` fails with `EACCES` on `/agent/package-lock.json`). `npm ci` fails on the committed lockfile under npm 10.9 (`Missing: esbuild@0.28.2 from lock file`, an optional peer of a nested Vite). Do not rewrite `package-lock.json` only to make `npm ci` pass.
 - The dev server is `npm run dev` on port **8080** (`host: "::"` in `vite.config.ts`). The Supabase client throws on startup unless `.env` sets `VITE_SUPABASE_URL` and `VITE_SUPABASE_PUBLISHABLE_KEY`. Copy `.env.example` to `.env`. The publishable key is the public anon key (the same value as `VITE_SUPABASE_ANON_KEY`). Point the URL at `https://api.postora.cloud`. This environment does not run a local Supabase stack.
 - Cloud agents must not sign up, create posts, deploy edge functions, or otherwise mutate production. A read-only check is enough: landing page, `/pricing` (plan names come from `subscription_plans`), and the `/auth` form left unsubmitted.
 - These commands pass without secrets: `npm test` (Vitest injects placeholder Supabase env), `npm run typecheck`, and `npm run build`.
