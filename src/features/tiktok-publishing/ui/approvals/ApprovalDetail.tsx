@@ -218,6 +218,30 @@ interface VideoActions {
   uploading: boolean;
 }
 
+/** The attached video, shared by the post preview and the editor. */
+function VideoPreview({ review }: { review: DraftReview }) {
+  const preview = review.preview;
+  if (preview.kind === "loading") {
+    return <div className="rs-skeleton h-64 w-full" role="status" aria-label="Loading video preview" />;
+  }
+  if (preview.kind === "ready" && preview.media.fileType === "video") {
+    return (
+      <div className="ap-media">
+        <video src={preview.media.previewUrl} controls playsInline aria-label="Post video" />
+        <a className="ap-media-download" href={preview.media.previewUrl} download aria-label="Download Post video" target="_blank" rel="noreferrer">
+          <Download className="h-4 w-4" />
+        </a>
+      </div>
+    );
+  }
+  return (
+    <div role="alert" className="ap-media-empty">
+      <span>{preview.kind === "error" ? preview.message : "That video could not be loaded."}</span>
+      <button type="button" className="rs-btn rs-btn-cream rs-btn-sm" onClick={review.retryPreview}>Retry</button>
+    </div>
+  );
+}
+
 function MediaBlock({ review, draft, video }: { review: DraftReview; draft: ReviewDraft; video: VideoActions }) {
   const editable = review.can.edit;
   if (video.uploading) {
@@ -246,24 +270,9 @@ function MediaBlock({ review, draft, video }: { review: DraftReview; draft: Revi
       </>
     );
   }
-  const preview = review.preview;
   return (
     <>
-      {preview.kind === "loading" ? (
-        <div className="rs-skeleton h-64 w-full" role="status" aria-label="Loading video preview" />
-      ) : preview.kind === "ready" && preview.media.fileType === "video" ? (
-        <div className="ap-media">
-          <video src={preview.media.previewUrl} controls playsInline aria-label="Post video" />
-          <a className="ap-media-download" href={preview.media.previewUrl} download aria-label="Download Post video" target="_blank" rel="noreferrer">
-            <Download className="h-4 w-4" />
-          </a>
-        </div>
-      ) : (
-        <div role="alert" className="ap-media-empty">
-          <span>{preview.kind === "error" ? preview.message : "That video could not be loaded."}</span>
-          <button type="button" className="rs-btn rs-btn-cream rs-btn-sm" onClick={review.retryPreview}>Retry</button>
-        </div>
-      )}
+      <VideoPreview review={review} />
       {editable ? (
         <div className="ap-media-actions">
           <button type="button" className="rs-btn rs-btn-ghost rs-btn-sm" onClick={() => { void review.removeMedia(); }}>
@@ -328,6 +337,7 @@ function EditContent({ review, draft, video }: { review: DraftReview; draft: Rev
       </div>
 
       <div className="rs-label mt-4 !text-[color:var(--rs-ink)]">Video</div>
+      {draft.mediaFileId && !video.uploading ? <div className="mt-2"><VideoPreview review={review} /></div> : null}
       <div className="mt-2 flex flex-wrap items-center gap-2">
         <button type="button" className="rs-btn rs-btn-outline rs-btn-sm" disabled={video.uploading} onClick={video.upload}>
           {video.uploading ? <Loader2 className="animate-spin" /> : <Upload />}

@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import "@/i18n";
 import { TikTokReviewGatewayProvider, type TikTokReviewGateway } from "../../application/ports";
 import { TikTokMediaUploaderProvider, type TikTokMediaUploader } from "../../application/mediaUploadPort";
-import type { CreatorInfo, PublishStatus, ReviewDraft, ReviewState, TikTokAccount } from "../../domain/types";
+import type { CreatorInfo, MediaPreview, PublishStatus, ReviewDraft, ReviewState, TikTokAccount } from "../../domain/types";
 import { ApprovalsView } from "./ApprovalsView";
 
 vi.mock("@/components/post/MediaLibraryPicker", () => ({ MediaLibraryPicker: () => null }));
@@ -55,6 +55,7 @@ function setup(options: {
   statuses?: Record<string, PublishStatus>;
   path?: string;
   uploader?: TikTokMediaUploader;
+  preview?: MediaPreview;
 }) {
   const accounts = options.accounts ?? [
     { id: "acc-1", username: "creator_one", avatarUrl: null },
@@ -87,7 +88,7 @@ function setup(options: {
     status: vi.fn((submissionId: string) => Promise.resolve(options.statuses?.[submissionId] ?? {
       state: "queued" as const, updatedAt: "2026-10-14T10:00:00.000Z", reason: null, postUrl: null, reopenable: false,
     })),
-    resolveMediaPreview: vi.fn(() => Promise.resolve(null)),
+    resolveMediaPreview: vi.fn(() => Promise.resolve(options.preview ?? null)),
   };
   const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   render(
@@ -245,6 +246,18 @@ describe("ApprovalsView", () => {
       expect(await screen.findByText(message)).toBeInTheDocument();
       expect(uploader.uploadVideo).not.toHaveBeenCalled();
       expect(gateway.save).not.toHaveBeenCalled();
+    });
+
+    it("shows the attached video while the post is being edited", async () => {
+      setup({
+        drafts: [makeDraft({ id: "d1", caption: "Has video", mediaFileId: "media-1" })],
+        preview: { previewUrl: "https://cdn.test/v.mp4", fileType: "video", durationSec: 12 },
+      });
+      fireEvent.click(await screen.findByRole("button", { name: /Edit caption/ }));
+
+      const video = await screen.findByLabelText("Post video");
+      expect(video).toHaveAttribute("src", "https://cdn.test/v.mp4");
+      expect(screen.getByRole("button", { name: /Remove video/ })).toBeInTheDocument();
     });
   });
 });
