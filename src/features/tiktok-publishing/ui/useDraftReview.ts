@@ -189,10 +189,16 @@ export function useDraftReview(input: {
     }
     setMediaNotice(null);
     const measured = readLibraryDuration(file) ?? await measureVideoDuration(file.previewUrl);
+    await attachVideo(file.storagePath, measured);
+  }
+
+  /** Puts an already-stored video (a media_files id) on the draft. */
+  async function attachVideo(mediaFileId: string, durationSec: number | null) {
+    if (!draft) return;
     await runSave({
       caption: draft.caption,
-      mediaFileId: file.storagePath,
-      mediaDurationSec: measured,
+      mediaFileId,
+      mediaDurationSec: durationSec,
       settings: draft.settings,
     });
   }
@@ -320,8 +326,10 @@ export function useDraftReview(input: {
     saveCaption,
     saveSettings,
     pickMedia,
+    attachVideo,
     removeMedia,
     mediaNotice,
+    setMediaNotice,
     actionError,
     setActionError,
     report,

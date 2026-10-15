@@ -4,6 +4,7 @@ import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 import "@/i18n";
 import { TikTokReviewGatewayProvider, type TikTokReviewGateway } from "../../application/ports";
+import { TikTokMediaUploaderProvider, type TikTokMediaUploader } from "../../application/mediaUploadPort";
 import type { CreatorInfo, PublishStatus, ReviewDraft, ReviewState, TikTokAccount } from "../../domain/types";
 import { ApprovalsView } from "./ApprovalsView";
 
@@ -48,7 +49,13 @@ function makeDraft(overrides: Partial<ReviewDraft>): ReviewDraft {
   };
 }
 
-function setup(options: { drafts: ReviewDraft[]; accounts?: TikTokAccount[]; statuses?: Record<string, PublishStatus>; path?: string }) {
+function setup(options: {
+  drafts: ReviewDraft[];
+  accounts?: TikTokAccount[];
+  statuses?: Record<string, PublishStatus>;
+  path?: string;
+  uploader?: TikTokMediaUploader;
+}) {
   const accounts = options.accounts ?? [
     { id: "acc-1", username: "creator_one", avatarUrl: null },
     { id: "acc-2", username: "creator_two", avatarUrl: null },
@@ -86,9 +93,11 @@ function setup(options: { drafts: ReviewDraft[]; accounts?: TikTokAccount[]; sta
   render(
     <QueryClientProvider client={client}>
       <TikTokReviewGatewayProvider gateway={gateway}>
-        <MemoryRouter initialEntries={[options.path ?? "/approvals"]}>
-          <ApprovalsView />
-        </MemoryRouter>
+        <TikTokMediaUploaderProvider uploader={options.uploader ?? { uploadVideo: vi.fn() }}>
+          <MemoryRouter initialEntries={[options.path ?? "/approvals"]}>
+            <ApprovalsView />
+          </MemoryRouter>
+        </TikTokMediaUploaderProvider>
       </TikTokReviewGatewayProvider>
     </QueryClientProvider>,
   );
@@ -192,5 +201,50 @@ describe("ApprovalsView", () => {
     expect(await screen.findByText("Nothing in this filter")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /New post/ }));
     await waitFor(() => expect(gateway.create).toHaveBeenCalledWith("acc-1"));
+  });
+
+  describe("Add video", () => {
+    function videoFile(name: string, bytes: number, type = "video/mp4") {
+      return new File([new Uint8Array(bytes)], name, { type });
+    }
+
+    it("opens the computer's file picker instead of the media library", async () => {
+      const click = vi.spyOn(HTMLInputElement.prototype, "click").mockImplementation(() => {});
+      setup({ drafts: [makeDraft({ id: "d1", caption: "No video yet" })] });
+      fireEvent.click(await screen.findByRole("button", { name: /Add video/ }));
+      expect(click).toHaveBeenCalledTimes(1);
+      expect(click.mock.instances[0]).toBe(screen.getByLabelText("Upload a video from your computer"));
+      click.mockRestore();
+    });
+
+    it("uploads the chosen video and attaches it to the draft with its length", async () => {
+      const uploader: TikTokMediaUploader = {
+        uploadVideo: vi.fn(() => Promise.resolve({ mediaFileId: "media-9", url: "https://cdn.test/v.mp4", durationSec: 12 })),
+      };
+      const gateway = setup({ drafts: [makeDraft({ id: "d1", caption: "No video yet", revision: 2 })], uploader });
+      const input = await screen.findByLabelText("Upload a video from your computer");
+      const file = videoFile("clip.mp4", 1024);
+      fireEvent.change(input, { target: { files: [file] } });
+
+      await waitFor(() => expect(gateway.save).toHaveBeenCalledWith(
+        "d1",
+        2,
+        expect.objectContaining({ mediaFileId: "media-9", mediaDurationSec: 12, caption: "No video yet" }),
+      ));
+      expect(uploader.uploadVideo).toHaveBeenCalledWith(file);
+    });
+
+    it.each([
+      ["a file that is not a video", videoFile("notes.pdf", 1024, "application/pdf"), "Choose an MP4, MOV or WebM video."],
+      ["a video over the upload limit", videoFile("big.mp4", 10 * 1024 * 1024 + 1), /over the 10 MB upload limit/],
+    ])("refuses %s before uploading", async (_label, file, message) => {
+      const uploader: TikTokMediaUploader = { uploadVideo: vi.fn() };
+      const gateway = setup({ drafts: [makeDraft({ id: "d1", caption: "No video yet" })], uploader });
+      fireEvent.change(await screen.findByLabelText("Upload a video from your computer"), { target: { files: [file] } });
+
+      expect(await screen.findByText(message)).toBeInTheDocument();
+      expect(uploader.uploadVideo).not.toHaveBeenCalled();
+      expect(gateway.save).not.toHaveBeenCalled();
+    });
   });
 });

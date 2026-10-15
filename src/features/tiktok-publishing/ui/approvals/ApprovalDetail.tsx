@@ -4,11 +4,13 @@ import {
   ArchiveRestore,
   Download,
   ExternalLink,
+  FolderOpen,
+  Loader2,
   Pencil,
-  Plus,
   RefreshCw,
   RotateCcw,
   Trash2,
+  Upload,
   X,
 } from "lucide-react";
 import { MediaLibraryPicker } from "@/components/post/MediaLibraryPicker";
@@ -20,6 +22,7 @@ import { captionTitle, describeError } from "../reviewCopy";
 import type { DraftReview } from "../useDraftReview";
 import { TikTokGlyph } from "../shell/TikTokGlyph";
 import { ConfirmDialog, PublishPanel } from "./ApprovalPublishPanel";
+import { useLocalVideoUpload, VIDEO_ACCEPT } from "./useLocalVideoUpload";
 
 interface ApprovalDetailProps {
   review: DraftReview;
@@ -62,6 +65,12 @@ export function ApprovalDetail({ review, account, onBack }: ApprovalDetailProps)
 function ReadyDetail({ review, draft, account, onBack }: ApprovalDetailProps & { draft: ReviewDraft }) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [rejecting, setRejecting] = useState(false);
+  const upload = useLocalVideoUpload(review);
+  const video: VideoActions = {
+    upload: upload.open,
+    library: () => setPickerOpen(true),
+    uploading: upload.uploading,
+  };
   const publishState = review.publish.status?.state ?? review.liveSubmission?.state ?? null;
   const status = draftStatus(draft.state, draft.state === "submitted" ? publishState : null);
   const title = captionTitle(draft.caption, "Untitled post");
@@ -98,7 +107,7 @@ function ReadyDetail({ review, draft, account, onBack }: ApprovalDetailProps & {
       {review.showPublish ? <PublishOutcome review={review} /> : null}
 
       {review.editing ? (
-        <EditContent review={review} draft={draft} onChangeVideo={() => setPickerOpen(true)} />
+        <EditContent review={review} draft={draft} video={video} />
       ) : (
         <section className="ap-section">
           <div className="ap-section-head">
@@ -122,7 +131,7 @@ function ReadyDetail({ review, draft, account, onBack }: ApprovalDetailProps & {
               </div>
             </div>
             {draft.caption ? <p className="ap-caption">{draft.caption}</p> : <p className="ap-caption text-[color:var(--rs-ink-mute)]">No caption yet.</p>}
-            <MediaBlock review={review} draft={draft} onChange={() => setPickerOpen(true)} />
+            <MediaBlock review={review} draft={draft} video={video} />
           </div>
           {review.mediaNotice ? <p className="ap-alert text-center" role="alert">{review.mediaNotice}</p> : null}
         </section>
@@ -169,6 +178,14 @@ function ReadyDetail({ review, draft, account, onBack }: ApprovalDetailProps & {
       ) : null}
 
       <ConfirmDialog review={review} draft={draft} username={username} />
+      <input
+        ref={upload.inputRef}
+        type="file"
+        accept={VIDEO_ACCEPT}
+        className="hidden"
+        aria-label="Upload a video from your computer"
+        onChange={(event) => { void upload.onFileChosen(event); }}
+      />
       <MediaLibraryPicker
         open={pickerOpen}
         onOpenChange={setPickerOpen}
@@ -193,14 +210,40 @@ function Fact({ label, value }: { label: string; value: string }) {
   );
 }
 
-function MediaBlock({ review, draft, onChange }: { review: DraftReview; draft: ReviewDraft; onChange: () => void }) {
+interface VideoActions {
+  /** Opens the computer's file picker. */
+  upload: () => void;
+  /** Opens the media library. */
+  library: () => void;
+  uploading: boolean;
+}
+
+function MediaBlock({ review, draft, video }: { review: DraftReview; draft: ReviewDraft; video: VideoActions }) {
   const editable = review.can.edit;
+  if (video.uploading) {
+    return (
+      <div className="ap-media-empty" role="status">
+        <Loader2 className="h-5 w-5 animate-spin" />
+        Uploading video…
+      </div>
+    );
+  }
   if (!draft.mediaFileId) {
     return (
-      <button type="button" className="ap-media-empty w-full" onClick={onChange} disabled={!editable}>
-        <Plus className="h-5 w-5" />
-        Add video
-      </button>
+      <>
+        <button type="button" className="ap-media-empty w-full" onClick={video.upload} disabled={!editable}>
+          <Upload className="h-5 w-5" />
+          <span>Add video</span>
+          <span className="text-[10.4px]">Upload from your computer · MP4, MOV or WebM, up to 10 MB</span>
+        </button>
+        {editable ? (
+          <div className="ap-media-actions">
+            <button type="button" className="rs-btn rs-btn-ghost rs-btn-sm" onClick={video.library}>
+              <FolderOpen /> Choose from library
+            </button>
+          </div>
+        ) : null}
+      </>
     );
   }
   const preview = review.preview;
@@ -226,14 +269,19 @@ function MediaBlock({ review, draft, onChange }: { review: DraftReview; draft: R
           <button type="button" className="rs-btn rs-btn-ghost rs-btn-sm" onClick={() => { void review.removeMedia(); }}>
             <Trash2 /> Remove video
           </button>
-          <button type="button" className="rs-btn rs-btn-outline rs-btn-sm" onClick={onChange}>Change</button>
+          <button type="button" className="rs-btn rs-btn-ghost rs-btn-sm" onClick={video.library}>
+            <FolderOpen /> From library
+          </button>
+          <button type="button" className="rs-btn rs-btn-outline rs-btn-sm" onClick={video.upload}>
+            <Upload /> Change
+          </button>
         </div>
       ) : null}
     </>
   );
 }
 
-function EditContent({ review, draft, onChangeVideo }: { review: DraftReview; draft: ReviewDraft; onChangeVideo: () => void }) {
+function EditContent({ review, draft, video }: { review: DraftReview; draft: ReviewDraft; video: VideoActions }) {
   const [hashtags, setHashtags] = useState("");
   const textId = useId();
   const tagsId = useId();
@@ -281,8 +329,12 @@ function EditContent({ review, draft, onChangeVideo }: { review: DraftReview; dr
 
       <div className="rs-label mt-4 !text-[color:var(--rs-ink)]">Video</div>
       <div className="mt-2 flex flex-wrap items-center gap-2">
-        <button type="button" className="rs-btn rs-btn-outline rs-btn-sm" onClick={onChangeVideo}>
-          {draft.mediaFileId ? "Change video" : "Choose video"}
+        <button type="button" className="rs-btn rs-btn-outline rs-btn-sm" disabled={video.uploading} onClick={video.upload}>
+          {video.uploading ? <Loader2 className="animate-spin" /> : <Upload />}
+          {video.uploading ? "Uploading…" : draft.mediaFileId ? "Upload a new video" : "Upload video"}
+        </button>
+        <button type="button" className="rs-btn rs-btn-ghost rs-btn-sm" disabled={video.uploading} onClick={video.library}>
+          <FolderOpen /> Choose from library
         </button>
         {draft.mediaFileId ? (
           <button type="button" className="rs-btn rs-btn-ghost rs-btn-sm" onClick={() => { void review.removeMedia(); }}>
@@ -290,8 +342,9 @@ function EditContent({ review, draft, onChangeVideo }: { review: DraftReview; dr
           </button>
         ) : null}
       </div>
+      {review.mediaNotice ? <p className="ap-alert" role="alert">{review.mediaNotice}</p> : null}
       <p className="ap-hint">
-        Up to 200 MB. MP4, MOV or WebM. TikTok: 23–60 fps, 360–4096 px on each side, up to 10 minutes.
+        Up to 10 MB. MP4, MOV or WebM. TikTok: 23–60 fps, 360–4096 px on each side.
       </p>
 
       <div className="mt-5 flex justify-end gap-2">
