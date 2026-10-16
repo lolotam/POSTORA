@@ -179,32 +179,34 @@ describe("reviewRules - consentKey", () => {
     aiGenerated: false,
   };
 
-  const baseKey = consentKey("draft-1", "acc-1", 1, "media-1", baseSettings, "now", null);
+  const baseKey = consentKey("draft-1", "acc-1", 1, "media-1", baseSettings);
 
   it("is stable across multiple calls with identical arguments", () => {
-    const k1 = consentKey("draft-1", "acc-1", 1, "media-1", baseSettings, "now", null);
-    const k2 = consentKey("draft-1", "acc-1", 1, "media-1", { ...baseSettings }, "now", null);
+    const k1 = consentKey("draft-1", "acc-1", 1, "media-1", baseSettings);
+    const k2 = consentKey("draft-1", "acc-1", 1, "media-1", { ...baseSettings });
     expect(k1).toBe(k2);
   });
 
   test.each([
-    ["draftId", consentKey("draft-2", "acc-1", 1, "media-1", baseSettings, "now", null)],
-    ["accountId", consentKey("draft-1", "acc-2", 1, "media-1", baseSettings, "now", null)],
-    ["revision", consentKey("draft-1", "acc-1", 2, "media-1", baseSettings, "now", null)],
-    ["mediaFileId", consentKey("draft-1", "acc-1", 1, "media-2", baseSettings, "now", null)],
-    ["mediaFileId null", consentKey("draft-1", "acc-1", 1, null, baseSettings, "now", null)],
-    ["settings privacy", consentKey("draft-1", "acc-1", 1, "media-1", { ...baseSettings, privacy: "SELF_ONLY" }, "now", null)],
-    ["settings allowComment", consentKey("draft-1", "acc-1", 1, "media-1", { ...baseSettings, allowComment: true }, "now", null)],
-    ["settings allowDuet", consentKey("draft-1", "acc-1", 1, "media-1", { ...baseSettings, allowDuet: true }, "now", null)],
-    ["settings allowStitch", consentKey("draft-1", "acc-1", 1, "media-1", { ...baseSettings, allowStitch: true }, "now", null)],
-    ["settings disclose", consentKey("draft-1", "acc-1", 1, "media-1", { ...baseSettings, disclose: true }, "now", null)],
-    ["settings yourBrand", consentKey("draft-1", "acc-1", 1, "media-1", { ...baseSettings, yourBrand: true }, "now", null)],
-    ["settings brandedContent", consentKey("draft-1", "acc-1", 1, "media-1", { ...baseSettings, brandedContent: true }, "now", null)],
-    ["settings aiGenerated", consentKey("draft-1", "acc-1", 1, "media-1", { ...baseSettings, aiGenerated: true }, "now", null)],
-    ["mode", consentKey("draft-1", "acc-1", 1, "media-1", baseSettings, "scheduled", null)],
-    ["scheduledAt", consentKey("draft-1", "acc-1", 1, "media-1", baseSettings, "scheduled", "2026-10-01T09:00:00Z")],
+    ["draftId", consentKey("draft-2", "acc-1", 1, "media-1", baseSettings)],
+    ["accountId", consentKey("draft-1", "acc-2", 1, "media-1", baseSettings)],
+    ["revision", consentKey("draft-1", "acc-1", 2, "media-1", baseSettings)],
+    ["mediaFileId", consentKey("draft-1", "acc-1", 1, "media-2", baseSettings)],
+    ["mediaFileId null", consentKey("draft-1", "acc-1", 1, null, baseSettings)],
+    ["settings privacy", consentKey("draft-1", "acc-1", 1, "media-1", { ...baseSettings, privacy: "SELF_ONLY" })],
+    ["settings allowComment", consentKey("draft-1", "acc-1", 1, "media-1", { ...baseSettings, allowComment: true })],
+    ["settings allowDuet", consentKey("draft-1", "acc-1", 1, "media-1", { ...baseSettings, allowDuet: true })],
+    ["settings allowStitch", consentKey("draft-1", "acc-1", 1, "media-1", { ...baseSettings, allowStitch: true })],
+    ["settings disclose", consentKey("draft-1", "acc-1", 1, "media-1", { ...baseSettings, disclose: true })],
+    ["settings yourBrand", consentKey("draft-1", "acc-1", 1, "media-1", { ...baseSettings, yourBrand: true })],
+    ["settings brandedContent", consentKey("draft-1", "acc-1", 1, "media-1", { ...baseSettings, brandedContent: true })],
+    ["settings aiGenerated", consentKey("draft-1", "acc-1", 1, "media-1", { ...baseSettings, aiGenerated: true })],
   ])("changes when %s changes", (_param, changedKey) => {
     expect(changedKey).not.toBe(baseKey);
+  });
+
+  it("takes no publish mode or time, so choosing Now or a schedule cannot invalidate it", () => {
+    expect(consentKey.length).toBe(5);
   });
 });
 

@@ -47,16 +47,8 @@ function validDraft(overrides: Partial<ReviewDraft> = {}): ReviewDraft {
 describe("evaluateSubmission", () => {
   const now = new Date("2026-10-01T12:00:00.000Z");
 
-  function validConfirmation(draft: ReviewDraft, mode: "now" | "scheduled" = "now", scheduledAt: string | null = null): Confirmation {
-    const key = consentKey(
-      draft.id,
-      draft.accountId,
-      draft.revision,
-      draft.mediaFileId,
-      draft.settings,
-      mode,
-      mode === "scheduled" ? scheduledAt : null,
-    );
+  function validConfirmation(draft: ReviewDraft): Confirmation {
+    const key = consentKey(draft.id, draft.accountId, draft.revision, draft.mediaFileId, draft.settings);
     return {
       key,
       caption: draft.caption,
@@ -94,7 +86,7 @@ describe("evaluateSubmission", () => {
   it("returns SCHEDULE_TIME_PAST when mode is scheduled and scheduledAt is in the past", () => {
     const draft = validDraft();
     const pastTime = "2026-10-01T11:00:00.000Z";
-    const confirmation = validConfirmation(draft, "scheduled", pastTime);
+    const confirmation = validConfirmation(draft);
     const blockers = evaluateSubmission(draft, validCreator(), confirmation, "scheduled", pastTime, now, false);
     expect(blockers).toContainEqual({
       code: "SCHEDULE_TIME_PAST",
@@ -105,7 +97,7 @@ describe("evaluateSubmission", () => {
   it("returns SCHEDULE_TIME_INVALID when mode is scheduled and scheduledAt is invalid", () => {
     const draft = validDraft();
     const invalidTime = "invalid-date";
-    const confirmation = validConfirmation(draft, "scheduled", invalidTime);
+    const confirmation = validConfirmation(draft);
     const blockers = evaluateSubmission(draft, validCreator(), confirmation, "scheduled", invalidTime, now, false);
     expect(blockers).toContainEqual({
       code: "SCHEDULE_TIME_INVALID",
@@ -117,7 +109,7 @@ describe("evaluateSubmission", () => {
     ["null confirmation", () => null],
     ["stale key", (draft: ReviewDraft) => ({ key: "stale-key", caption: draft.caption, consent: true })],
     ["caption mismatch", (draft: ReviewDraft) => ({
-      key: consentKey(draft.id, draft.accountId, draft.revision, draft.mediaFileId, draft.settings, "now", null),
+      key: consentKey(draft.id, draft.accountId, draft.revision, draft.mediaFileId, draft.settings),
       caption: "Mismatched caption that does not equal draft.caption",
       consent: true,
     })],
@@ -130,29 +122,43 @@ describe("evaluateSubmission", () => {
     );
   });
 
-  it("refuses a confirmation granted in 'now' mode when evaluating in 'scheduled' mode", () => {
+  it("keeps a confirmation granted before the publish time was chosen valid for a schedule", () => {
     const draft = validDraft();
-    const nowConfirmation = validConfirmation(draft, "now", null);
-    const futureSchedule = "2026-10-02T14:00:00.000Z";
+    const confirmation = validConfirmation(draft);
 
     const blockers = evaluateSubmission(
       draft,
       validCreator(),
-      nowConfirmation,
+      confirmation,
       "scheduled",
-      futureSchedule,
+      "2026-10-02T14:00:00.000Z",
       now,
       false,
     );
 
-    expect(blockers).toContainEqual(
-      expect.objectContaining({ code: "SETTINGS_NOT_CONFIRMED" }),
+    expect(blockers).toEqual([]);
+  });
+
+  it("still refuses a confirmation once the draft revision moves on", () => {
+    const draft = validDraft();
+    const confirmation = validConfirmation(draft);
+
+    const blockers = evaluateSubmission(
+      { ...draft, revision: draft.revision + 1 },
+      validCreator(),
+      confirmation,
+      "now",
+      null,
+      now,
+      false,
     );
+
+    expect(blockers).toContainEqual(expect.objectContaining({ code: "SETTINGS_NOT_CONFIRMED" }));
   });
 
   it("returns CONSENT_REQUIRED when confirmation has consent: false", () => {
     const draft = validDraft();
-    const key = consentKey(draft.id, draft.accountId, draft.revision, draft.mediaFileId, draft.settings, "now", null);
+    const key = consentKey(draft.id, draft.accountId, draft.revision, draft.mediaFileId, draft.settings);
     const noConsentConfirmation: Confirmation = {
       key,
       caption: draft.caption,

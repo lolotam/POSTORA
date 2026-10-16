@@ -27,8 +27,7 @@ export function evaluateSubmission(
       }];
     }
   }
-  const key = consentKey(draft.id, draft.accountId, draft.revision, draft.mediaFileId,
-    draft.settings, mode, mode === "scheduled" ? scheduledAt : null);
+  const key = consentKey(draft.id, draft.accountId, draft.revision, draft.mediaFileId, draft.settings);
   const confirmed = confirmation?.key === key && confirmation.caption === draft.caption;
   return reviewBlockers({
     caption: draft.caption,

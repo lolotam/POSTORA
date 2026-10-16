@@ -158,15 +158,18 @@ export function reviewBlockers(input: ReviewBlockerInput): ReviewBlocker[] {
   return blockers;
 }
 
-/** Stable across browsers. Consent is valid only while this equals the key it was granted for. */
+/**
+ * Stable across browsers. Consent is valid only while this equals the key it was granted for.
+ * Deliberately excludes the publish mode and time: picking Now / a schedule after confirming the
+ * settings must not undo the confirmation. The confirm dialog shows "When: ..." and nothing is sent
+ * to TikTok until the user confirms it there.
+ */
 export function consentKey(
   draftId: string,
   accountId: string,
   revision: number,
   mediaFileId: string | null,
   settings: TikTokSettings,
-  mode: "now" | "scheduled",
-  scheduledAt: string | null,
 ): string {
   const settingsToken = [
     settings.privacy ?? "",
@@ -184,8 +187,6 @@ export function consentKey(
     String(revision),
     mediaFileId ?? "",
     settingsToken,
-    mode,
-    scheduledAt ?? "",
   ].join("|");
 }
 

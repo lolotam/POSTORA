@@ -234,15 +234,7 @@ export function useDraftReview(input: {
       settings,
     });
     if (!saved) return;
-    const key = consentKey(
-      saved.id,
-      saved.accountId,
-      saved.revision,
-      saved.mediaFileId,
-      saved.settings,
-      mode,
-      mode === "scheduled" ? scheduledAt : null,
-    );
+    const key = consentKey(saved.id, saved.accountId, saved.revision, saved.mediaFileId, saved.settings);
     setConfirmation({ key, caption: saved.caption, consent: consentChecked });
     setOverlay({ kind: "closed" });
   }
