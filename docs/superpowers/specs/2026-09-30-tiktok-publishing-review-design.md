@@ -66,7 +66,7 @@ The review queue belongs to the authenticated user's active TikTok account. The 
 - Keep POSTORA identity; use Brandora's observed review structure as the visual reference.
 - English review copy is the baseline; all layout must remain compatible with Arabic and RTL.
 - No provider upload or publication before explicit user consent.
-- Consent is bound to user, account, draft revision, media, settings, and requested publish time.
+- Consent is bound to user, account, draft revision, media, and settings. The publish time is not part of the settings confirmation (changed 2026-10-16: confirming the settings and then choosing Now or a time must not undo the confirmation); it is shown as "When: …" in the final confirm dialog and sent with the submit, and nothing is sent to TikTok before that confirm.
 - Every ownership check must be enforced server-side, including service-role paths.
 - Failed reads must remain errors; they must not become empty drafts or unrestricted publishing.
 - New schema must be applied before dependent functions or frontend are released.

@@ -40,7 +40,7 @@ The plan was written by Codex. The user waived a separate debate round and asked
 - Keep POSTORA identity; use Brandora's observed review structure as the visual reference.
 - English review copy is the baseline; all layout must remain compatible with Arabic and RTL.
 - No provider upload or publication before explicit user consent.
-- Consent is bound to user, account, draft revision, media, settings, and requested publish time.
+- Consent is bound to user, account, draft revision, media, and settings. The publish time is confirmed in the final confirm dialog ("When: …") and sent with the submit, not in the settings confirmation (changed 2026-10-16).
 - Every ownership check must be enforced server-side, including service-role paths.
 - Failed reads must remain errors; they must not become empty drafts or unrestricted publishing.
 - New schema must be applied before dependent functions or frontend are released.
@@ -252,7 +252,7 @@ assertEquals(actual.is_aigc, true);
 - [ ] Build the settings panel with fresh creator state, privacy, greyed interaction controls, independent disclosure choices, AI label, current consent wording, and confirmation invalidation.
 - [ ] Build schedule controls and destination summary, using Task 5 rules. Show visible reasons for disabled submission.
 - [ ] Connect Reject, Archive, Next, and Approve & publish to the same domain transitions used by keyboard controls. Archive of an active scheduled/submitted item must not silently cancel it.
-- [ ] Connect final explicit consent to submission. Ensure changing caption/media/account/settings/time invalidates the previous confirmation and never restores consent from local storage.
+- [ ] Connect final explicit consent to submission. Ensure changing caption/media/account/settings invalidates the previous confirmation (changing the publish time does not; the confirm dialog shows it) and never restores consent from local storage.
 - [ ] Render processing, scheduled, terminal failure, success link, and manual refresh from Task 4. Remove the need for manual Publish ID entry in ordinary usage.
 - [ ] Apply measured reference tokens in scoped CSS, preserve POSTORA branding, and document deviations caused by unavailable reference evidence or accessibility needs.
 - [ ] Test with mocked gateway and creator responses: no submit before consent, correct destination, edit cancellation, restored draft with consent off, account switch, read error, duplicate click, rejected draft resubmission, and reversible archive.
