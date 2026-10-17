@@ -4,7 +4,7 @@ import { createContext, createElement, useContext, type ReactNode } from "react"
 export interface TikTokConnectionGateway {
   /** TikTok's authorization URL; the browser is sent there to connect an account. */
   authorizeUrl(): Promise<string>;
-  /** Marks the account inactive. Posts already sent to TikTok are not affected. */
+  /** Revokes Postora in TikTok and marks the account inactive. Posts already sent to TikTok are not affected. */
   disconnect(accountId: string): Promise<void>;
 }
 

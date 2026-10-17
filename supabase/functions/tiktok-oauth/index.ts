@@ -2,6 +2,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { cacheAvatarToCdn } from "../_shared/avatar-cache.ts";
 import { authenticateCaller } from "../_shared/auth-helper.ts";
 import { createOAuthState, verifyOAuthState } from "../_shared/oauthState.ts";
+import { revokeTikTokAccess } from "../_shared/tiktokRevoke.ts";
 
 import { restrictedCorsHeaders } from "../_shared/cors.ts";
 
@@ -410,7 +411,9 @@ Deno.serve(async (req) => {
         `&scope=${TIKTOK_SCOPES}` +
         `&response_type=code` +
         `&redirect_uri=${encodeURIComponent(effectiveRedirect)}` +
-        `&state=${encodeURIComponent(state)}`;
+        `&state=${encodeURIComponent(state)}` +
+        // Always show TikTok's permission screen, even when the user already approved this app before.
+        `&disable_auto_auth=1`;
 
       return new Response(
         JSON.stringify({
@@ -624,6 +627,50 @@ Deno.serve(async (req) => {
 
       return new Response(
         JSON.stringify({ success: true, expires_at: newExpiresAt }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
+
+    // ---------- disconnect: revoke the app in TikTok, then deactivate the account ----------
+    if (action === "disconnect") {
+      if (!TIKTOK_CLIENT_KEY || !TIKTOK_CLIENT_SECRET) {
+        throw new Error("TikTok credentials not configured");
+      }
+      if (!account_id) throw new Error("Missing account_id for disconnect");
+
+      const caller = await authenticateCaller(req, body.user_id);
+      const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+      let accountQuery = supabase
+        .from("social_accounts")
+        .select("access_token")
+        .eq("id", account_id)
+        .eq("platform", "tiktok");
+      if (!caller.isServiceRole) accountQuery = accountQuery.eq("user_id", caller.userId);
+      const { data: account, error: fetchError } = await accountQuery.maybeSingle();
+      if (fetchError) throw new Error("Account lookup failed");
+      if (!account) {
+        return new Response(JSON.stringify({ error: "Account not found" }), {
+          status: 404,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      // Best effort: the account is disconnected in Postora even if TikTok cannot be reached.
+      const revoked = account.access_token
+        ? await revokeTikTokAccess(fetch, TIKTOK_CLIENT_KEY, TIKTOK_CLIENT_SECRET, account.access_token)
+        : false;
+      if (!revoked) console.warn(`[${timestamp}] TikTok revoke did not succeed for account ${account_id}`);
+
+      let deactivate = supabase
+        .from("social_accounts")
+        .update({ is_active: false, updated_at: new Date().toISOString() })
+        .eq("id", account_id);
+      if (!caller.isServiceRole) deactivate = deactivate.eq("user_id", caller.userId);
+      const { error: updateError } = await deactivate;
+      if (updateError) throw new Error("Failed to disconnect account");
+
+      return new Response(
+        JSON.stringify({ success: true, revoked }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }

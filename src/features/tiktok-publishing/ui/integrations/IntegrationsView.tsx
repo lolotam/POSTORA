@@ -182,7 +182,7 @@ export function IntegrationsView() {
           <AlertDialogHeader>
             <AlertDialogTitle>Disconnect @{toDisconnect?.username}?</AlertDialogTitle>
             <AlertDialogDescription>
-              Postora will stop publishing to this TikTok account. Posts already on TikTok stay there.
+              Postora will stop publishing to this TikTok account and remove its access in TikTok. Posts already on TikTok stay there. Connecting again will ask for your permission in TikTok.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

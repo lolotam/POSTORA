@@ -23,12 +23,11 @@ export function createSupabaseConnectionGateway(): TikTokConnectionGateway {
     },
 
     async disconnect(accountId) {
-      const { error } = await supabase
-        .from("social_accounts")
-        .update({ is_active: false })
-        .eq("id", accountId)
-        .eq("platform", "tiktok");
-      if (error) throw new ReviewGatewayError(error.code || "INTERNAL", error.message, 500);
+      // The function also revokes Postora in TikTok, so reconnecting shows TikTok's permission screen again.
+      const { error } = await supabase.functions.invoke("tiktok-oauth", {
+        body: { action: "disconnect", social_account_id: accountId },
+      });
+      if (error) throw new ReviewGatewayError("INTERNAL", error.message || "Could not disconnect the TikTok account.", 502);
     },
   };
 }
