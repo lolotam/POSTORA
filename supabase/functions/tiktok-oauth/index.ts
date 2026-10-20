@@ -473,12 +473,14 @@ Deno.serve(async (req) => {
       if (!account_id) throw new Error("Missing account_id for creator_info");
       const caller = await authenticateCaller(req, body.user_id);
       const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-      let accountQuery = supabase
+      // Scoped to the caller even for service-role calls: those bypass RLS, so ownership must stay in the query.
+      const { data: account, error: fetchError } = await supabase
         .from("social_accounts")
         .select("access_token, platform_username, avatar_url")
-        .eq("id", account_id);
-      if (!caller.isServiceRole) accountQuery = accountQuery.eq("user_id", caller.userId);
-      const { data: account, error: fetchError } = await accountQuery.maybeSingle();
+        .eq("id", account_id)
+        .eq("platform", "tiktok")
+        .eq("user_id", caller.userId)
+        .maybeSingle();
       if (fetchError) throw new Error("Account lookup failed");
       if (!account) {
         return new Response(JSON.stringify({ error: "Account not found" }), {
@@ -562,12 +564,14 @@ Deno.serve(async (req) => {
 
       const caller = await authenticateCaller(req, body.user_id);
       const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-      let accountQuery = supabase
+      // Scoped to the caller even for service-role calls: those bypass RLS, so ownership must stay in the query.
+      const { data: account, error: fetchError } = await supabase
         .from("social_accounts")
         .select("refresh_token, platform_username")
-        .eq("id", account_id);
-      if (!caller.isServiceRole) accountQuery = accountQuery.eq("user_id", caller.userId);
-      const { data: account, error: fetchError } = await accountQuery.maybeSingle();
+        .eq("id", account_id)
+        .eq("platform", "tiktok")
+        .eq("user_id", caller.userId)
+        .maybeSingle();
       if (fetchError) throw new Error("Account lookup failed");
       if (!account) {
         return new Response(JSON.stringify({ error: "Account not found" }), {
@@ -604,7 +608,7 @@ Deno.serve(async (req) => {
       const newExpiresAt = new Date(
         Date.now() + tokenData.expires_in * 1000,
       ).toISOString();
-      let tokenUpdate = supabase
+      const { error: updateError } = await supabase
         .from("social_accounts")
         .update({
           access_token: tokenData.access_token,
@@ -617,9 +621,8 @@ Deno.serve(async (req) => {
           last_refresh_error: null,
           updated_at: new Date().toISOString(),
         })
-        .eq("id", account_id);
-      if (!caller.isServiceRole) tokenUpdate = tokenUpdate.eq("user_id", caller.userId);
-      const { error: updateError } = await tokenUpdate;
+        .eq("id", account_id)
+        .eq("user_id", caller.userId);
       if (updateError) throw new Error("Failed to save refreshed token");
 
       return new Response(
