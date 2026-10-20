@@ -7,6 +7,7 @@ import { Hono } from "npm:hono@4.6.14";
 import { McpServer, StreamableHttpTransport } from "npm:mcp-lite@^0.10.0";
 import { z } from "npm:zod@3.23.8";
 import { createClient } from "npm:@supabase/supabase-js@2.45.0";
+import { normalizeListFields } from "./stringList.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -174,6 +175,10 @@ function buildServer(apiKey: string) {
   });
 
   // ---- Create / publish post ----
+  // MCP clients may send list fields as a real array, as JSON-array text
+  // ("[\"uuid\"]") or as comma-separated text ("facebook, instagram").
+  const stringList = z.union([z.array(z.string()), z.string()]);
+
   server.tool("create_post", {
     description:
       "Create a post and publish (or schedule) it across one or more connected social accounts. " +
@@ -182,21 +187,21 @@ function buildServer(apiKey: string) {
       "If scheduled_at is omitted, the post is published immediately.",
     inputSchema: z.object({
       caption: z.string().optional().describe("The post caption or text content"),
-      platforms: z.array(z.string()).describe("e.g. ['facebook','instagram','tiktok','pinterest','youtube','linkedin','twitter']"),
-      account_ids: z.array(z.string()).optional().describe("Optional list of specific Postora social account IDs to publish to"),
-      media_file_ids: z.array(z.string()).optional().describe("List of media IDs from upload_media. Pass multiple for a Carousel post."),
-      media_urls: z.array(z.string()).optional().describe("List of public media URLs. Pass multiple for a Carousel post."),
+      platforms: stringList.describe("e.g. ['facebook','instagram','tiktok','pinterest','youtube','linkedin','twitter'] Accepts an array, JSON-array text or comma-separated text."),
+      account_ids: stringList.optional().describe("Optional list of specific Postora social account IDs to publish to"),
+      media_file_ids: stringList.optional().describe("List of media IDs from upload_media. Pass multiple for a Carousel post."),
+      media_urls: stringList.optional().describe("List of public media URLs. Pass multiple for a Carousel post."),
       media_base64: z.array(z.string()).optional().describe("List of base64 encoded media strings"),
       scheduled_at: z.string().optional().describe("ISO 8601 timestamp (e.g. 2026-06-05T14:30:00Z) to schedule the post. Omit to publish now."),
       timezone: z.string().optional().describe("Target timezone for scheduling (e.g., 'America/New_York')"),
       first_comment: z.string().optional().describe("Optional comment to automatically post immediately after publishing"),
       instagram_media_type: z.enum(["feed", "stories"]).optional().describe("Set to 'stories' to publish as an Instagram Story instead of a feed post"),
       instagram_share_to_feed: z.boolean().optional().describe("For Instagram videos, whether to also share to the main profile feed"),
-      instagram_collaborators: z.array(z.string()).max(3).optional().describe("Instagram usernames to invite as Collab co-authors on a feed image, carousel or reel (not stories). Only the first username is invited today. If Instagram rejects it, the post is published without it and get_post shows a warning in platform_results[].warnings."),
+      instagram_collaborators: stringList.optional().describe("Instagram usernames to invite as Collab co-authors on a feed image, carousel or reel (not stories). Only the first username is invited today. If Instagram rejects it, the post is published without it and get_post shows a warning in platform_results[].warnings."),
       facebook_post_type: z.enum(["feed", "story", "reel"]).optional().describe("Set to 'story' to publish as a Facebook Story, or 'reel' to publish as a Reel"),
       youtube_title: z.string().optional(),
       youtube_privacy: z.enum(["public", "unlisted", "private"]).optional(),
-      youtube_tags: z.array(z.string()).optional(),
+      youtube_tags: stringList.optional(),
       youtube_video_type: z.enum(["video", "short"]).optional().describe("Set to 'short' to publish as a YouTube Short"),
       tiktok_privacy: z.enum(["PUBLIC_TO_EVERYONE", "MUTUAL_FOLLOW_FRIENDS", "FOLLOWER_OF_CREATOR", "SELF_ONLY"]).optional(),
       tiktok_allow_comments: z.boolean().optional(),
@@ -207,7 +212,7 @@ function buildServer(apiKey: string) {
       pinterest_link: z.string().optional(),
     }).passthrough(),
     handler: async (args) => {
-      const r = await callN8n(apiKey, "POST", "/api/v1/post", args);
+      const r = await callN8n(apiKey, "POST", "/api/v1/post", normalizeListFields(args as Record<string, unknown>));
       return r.status >= 400 ? fail(r.status, r.data) : ok(r.data);
     },
   });
