@@ -1299,6 +1299,11 @@ async function handleCreatePost(req: Request, supabase: any, userId: string, bod
   // with the correct social_account_id assignment. Creating them here without
   // social_account_id causes duplicate records.
 
+  // Per-platform results (e.g. a dropped Instagram collaborator) only exist once
+  // process-post has written its platform_posts rows, so they are read back
+  // after the publish attempt rather than assumed.
+  let platformResults: ReturnType<typeof toPlatformResult>[] | undefined;
+
   // Only invoke process-post for immediate (non-scheduled) posts
   if (!finalScheduledAt) {
     try {
@@ -1319,6 +1324,20 @@ async function handleCreatePost(req: Request, supabase: any, userId: string, bod
     } catch (error) {
       console.error('Error invoking process-post:', error);
     }
+
+    const { data: platformRows, error: platformRowsError } = await supabase
+      .from('platform_posts')
+      .select('id, platform, status, platform_post_id, platform_post_url, error_message, posted_at, social_account_id, response_data')
+      .eq('post_id', post.id);
+
+    if (platformRowsError) {
+      // A failed read must not look like an empty result set, so the error is
+      // logged and `platform_results` is left out of the response entirely
+      // instead of being reported as an empty list.
+      console.error('Error reading platform results after publish:', platformRowsError);
+    } else {
+      platformResults = (platformRows || []).map(toPlatformResult);
+    }
   } else {
     console.log(`Post ${post.id} scheduled for ${finalScheduledAt} — skipping immediate processing`);
   }
@@ -1328,6 +1347,7 @@ async function handleCreatePost(req: Request, supabase: any, userId: string, bod
       success: true,
       post,
       scheduled: !!finalScheduledAt,
+      ...(platformResults ? { platform_results: platformResults } : {}),
       message: finalScheduledAt ? 'Post scheduled successfully' : 'Post created and processing started',
       metadata_applied: metadata,
       account_ids_used: validatedAccountIds || 'auto-selected first account per platform'
@@ -1873,6 +1893,23 @@ async function handleTestWebhook(req: Request, supabase: any, userId: string, bo
   }
 }
 
+// Maps a `platform_posts` row to the public per-platform result shape. Shared by
+// GET /api/v1/post/:id and the create_post response so both report the same
+// fields for the same row.
+function toPlatformResult(pp: any) {
+  return {
+    platform: pp.platform,
+    status: pp.status,
+    post_id: pp.platform_post_id,
+    post_url: pp.platform_post_url,
+    error_message: pp.error_message,
+    posted_at: pp.posted_at,
+    social_account_id: pp.social_account_id,
+    // Only the warnings are exposed — response_data itself stays internal.
+    warnings: Array.isArray(pp.response_data?.warnings) ? pp.response_data.warnings : [],
+  };
+}
+
 // Handle GET /api/v1/post/:id - Get single post status with platform results
 async function handleGetPostById(req: Request, supabase: any, userId: string, postId: string) {
   const corsHeaders = restrictedCorsHeaders(req);
@@ -1909,17 +1946,7 @@ async function handleGetPostById(req: Request, supabase: any, userId: string, po
         posted_at: post.posted_at,
         created_at: post.created_at,
         source: post.source,
-        platform_results: (post.platform_posts || []).map((pp: any) => ({
-          platform: pp.platform,
-          status: pp.status,
-          post_id: pp.platform_post_id,
-          post_url: pp.platform_post_url,
-          error_message: pp.error_message,
-          posted_at: pp.posted_at,
-          social_account_id: pp.social_account_id,
-          // Only the warnings are exposed — response_data itself stays internal.
-          warnings: Array.isArray(pp.response_data?.warnings) ? pp.response_data.warnings : [],
-        }))
+        platform_results: (post.platform_posts || []).map(toPlatformResult)
       }
     }),
     { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
