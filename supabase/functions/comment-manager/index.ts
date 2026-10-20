@@ -11,12 +11,18 @@ import {
   errorTypeFor,
   groupThreadsByVideo,
 } from "./youtubeCommentsView.ts";
+import { serviceRoleCallerUserId } from "../_shared/auth-helper.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers":
     "authorization, x-client-info, apikey, content-type",
 };
+
+// n8n-api reads comments for an API-key user with the service role. Only these
+// read actions accept that caller; replying, hiding and deleting stay on the
+// user-JWT path (n8n-api has its own comment write routes).
+const SERVICE_ROLE_ACTIONS = new Set(["get_page_comments", "get_ig_comments", "get_youtube_comments"]);
 
 const GRAPH_API_VERSION = "v22.0";
 const GRAPH_API_BASE = `https://graph.facebook.com/${GRAPH_API_VERSION}`;
@@ -131,16 +137,38 @@ Deno.serve(async (req) => {
     }
 
     const token = authHeader.replace("Bearer ", "");
-    const { data: { user }, error: authError } = await supabase.auth.getUser(token);
-    if (authError || !user) {
+    let serviceUserId: string | null;
+    try {
+      serviceUserId = await serviceRoleCallerUserId(req);
+    } catch {
       return new Response(JSON.stringify({ error: "Unauthorized" }), {
         status: 401,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
+    let user: { id: string };
+    if (serviceUserId) {
+      user = { id: serviceUserId };
+    } else {
+      const { data: { user: authUser }, error: authError } = await supabase.auth.getUser(token);
+      if (authError || !authUser) {
+        return new Response(JSON.stringify({ error: "Unauthorized" }), {
+          status: 401,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      user = authUser;
+    }
 
     const body = await req.json();
     const { action, social_account_id, comment_id, message, page_id, ig_user_id } = body;
+
+    if (serviceUserId && !SERVICE_ROLE_ACTIONS.has(action)) {
+      return new Response(JSON.stringify({ error: "This action is not available to service-role callers" }), {
+        status: 403,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
 
     // Get access token for the social account
     let accessToken: string | null = null;

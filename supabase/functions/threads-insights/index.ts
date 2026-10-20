@@ -6,6 +6,7 @@ import {
   debugThreadsToken,
   classifyMetaError,
 } from "../_shared/threads-debug.ts";
+import { serviceRoleCallerUserId } from "../_shared/auth-helper.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -71,13 +72,18 @@ Deno.serve(async (req) => {
     if (!authHeader) throw new Error("Missing authorization header");
     const token = authHeader.replace("Bearer ", "");
 
-    const supabaseAuth = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
-      global: { headers: { Authorization: authHeader } },
-      auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
-    });
-    const { data: claimsData, error: claimsError } = await supabaseAuth.auth.getClaims(token);
-    if (claimsError || !claimsData?.claims) throw new Error("Unauthorized");
-    userId = claimsData.claims.sub as string;
+    const serviceUserId = await serviceRoleCallerUserId(req);
+    if (serviceUserId) {
+      userId = serviceUserId;
+    } else {
+      const supabaseAuth = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+        global: { headers: { Authorization: authHeader } },
+        auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+      });
+      const { data: claimsData, error: claimsError } = await supabaseAuth.auth.getClaims(token);
+      if (claimsError || !claimsData?.claims) throw new Error("Unauthorized");
+      userId = claimsData.claims.sub as string;
+    }
 
     // Parse body
     let accountId: string | undefined;

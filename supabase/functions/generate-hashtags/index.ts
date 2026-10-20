@@ -5,6 +5,7 @@ import { resolveUserAiRoute, composeAiTiers, markUserKeyInvalid } from "../_shar
 import { AI_CONNECTION_REQUIRED, AI_USER_KEY_INVALID } from "../_shared/ai-routing-errors.ts";
 import { createLogger } from "../_shared/logging.ts";
 import { callAiChain, logAiCall, resolveChatModelConfig, platformChatTiers } from "../_shared/ai-fallback.ts";
+import { serviceRoleCallerUserId } from "../_shared/auth-helper.ts";
 
 interface SubscriptionCheck {
   allowed: boolean;
@@ -111,11 +112,23 @@ serve(async (req) => {
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
     );
 
-    const { data: { user }, error: userError } = await supabaseClient.auth.getUser(token);
-
-    if (userError || !user) {
-      console.error('Auth User Error:', userError);
+    let serviceUserId: string | null;
+    try {
+      serviceUserId = await serviceRoleCallerUserId(req);
+    } catch {
       return unauthorizedResponse();
+    }
+    let user: { id: string };
+    if (serviceUserId) {
+      user = { id: serviceUserId };
+    } else {
+      const { data: { user: authUser }, error: userError } = await supabaseClient.auth.getUser(token);
+
+      if (userError || !authUser) {
+        console.error('Auth User Error:', userError);
+        return unauthorizedResponse();
+      }
+      user = authUser;
     }
 
     console.log('User authenticated:', user.id);
