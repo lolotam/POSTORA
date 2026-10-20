@@ -350,10 +350,27 @@ function buildServer(apiKey: string) {
       platform: z.enum(["whatsapp", "instagram", "facebook"]).optional().describe("Optional; must match the account's platform"),
     }),
     handler: async (args) => {
-      if (!args.recipient_id && !args.recipient_phone) {
+      // A recipient that is only whitespace is no recipient: the API would
+      // answer with a provider error about an empty address, so the refusal
+      // happens here instead. What is sent is the trimmed value, and a
+      // recipient that is absent is left out of the body entirely.
+      const recipientId = args.recipient_id?.trim();
+      const recipientPhone = args.recipient_phone?.trim();
+      if (!recipientId && !recipientPhone) {
         return fail(400, { code: "INVALID_MESSAGE", message: "Pass recipient_id or recipient_phone." });
       }
-      const r = await callN8n(apiKey, "POST", "/api/v1/messages/reply", args);
+      const body: Record<string, unknown> = { ...args };
+      if (recipientId) {
+        body.recipient_id = recipientId;
+      } else {
+        delete body.recipient_id;
+      }
+      if (recipientPhone) {
+        body.recipient_phone = recipientPhone;
+      } else {
+        delete body.recipient_phone;
+      }
+      const r = await callN8n(apiKey, "POST", "/api/v1/messages/reply", body);
       return r.status >= 400 ? fail(r.status, r.data) : ok(r.data);
     },
   });
@@ -389,11 +406,10 @@ function buildServer(apiKey: string) {
 
   server.tool("reschedule_post", {
     description:
-      "Move a scheduled post that has not been published yet to a new time. scheduled_at must be a future ISO 8601 timestamp WITH a UTC offset (e.g. 2026-06-05T14:30:00Z or 2026-06-05T17:30:00+03:00). timezone is only stored as a label; it does not shift the time.",
+      "Move a scheduled post that has not been published yet to a new time. scheduled_at must be a future ISO 8601 timestamp WITH a UTC offset (e.g. 2026-06-05T14:30:00Z or 2026-06-05T17:30:00+03:00).",
     inputSchema: z.object({
       post_id: z.string().describe("Postora post UUID"),
       scheduled_at: z.string().describe("Future ISO 8601 timestamp with offset"),
-      timezone: z.string().optional().describe("IANA zone such as America/New_York, stored as a label"),
     }),
     handler: async (args) => {
       const r = await callN8n(apiKey, "POST", "/api/v1/posts/reschedule", args);

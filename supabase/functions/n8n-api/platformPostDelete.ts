@@ -290,7 +290,7 @@ async function deleteLinkedin(
   }
   return {
     outcome: "failed",
-    reason: `Deleted ${deleted} of ${urns.length} LinkedIn destinations. ${failures.join("; ")}`,
+    reason: `Deleted ${deleted + alreadyGone} of ${urns.length} LinkedIn destinations. ${failures.join("; ")}`,
   };
 }
 

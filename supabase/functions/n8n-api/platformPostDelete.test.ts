@@ -420,6 +420,30 @@ Deno.test("a linkedin post that only deleted one destination is a failure", asyn
   );
 });
 
+Deno.test("a linkedin destination that is gone counts as deleted in the failure report", async () => {
+  // The destination that answered 404 is gone, so it is one of the deleted
+  // ones: the caller asked for it to be gone and it is.
+  const { fetcher } = fakeFetcher([{ status: 404 }, { status: 500 }]);
+  const outcome = await deletePublishedPost(
+    row({
+      platform: "linkedin",
+      response_data: {
+        destinations: [
+          { post_id: "urn:li:share:111", status: "success" },
+          { post_id: "urn:li:share:222", status: "success" },
+        ],
+      },
+    }),
+    account({ platform: "linkedin" }),
+    deps(fetcher),
+  );
+  if (outcome.outcome !== "failed") throw new Error("expected a failure");
+  assertEquals(
+    outcome.reason.includes("Deleted 1 of 2 LinkedIn destinations"),
+    true,
+  );
+});
+
 Deno.test("a linkedin destination that is not there any more is a delete that already happened", async () => {
   const { fetcher } = fakeFetcher([{ status: 404 }]);
   const outcome = await deletePublishedPost(

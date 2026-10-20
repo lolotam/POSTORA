@@ -283,6 +283,17 @@ function hasInFilter(
   );
 }
 
+// The values of an `in` filter, so a test can assert exactly which ids a
+// delete carries and not only that one of them is there.
+function inFilterValues(
+  call: RecordedCall | undefined,
+  column: string,
+): unknown[] | null {
+  if (!call) return null;
+  const entry = call.filters.find((filter) => filter[0] === "in" && filter[1] === column);
+  return entry ? (entry[2] as unknown[]) : null;
+}
+
 // The position of the first recorded call that matches, so a test can assert that
 // one query came before another.
 function indexOfCall(
@@ -416,9 +427,16 @@ Deno.test("a reschedule refuses a body that does not name a usable time", async 
       code: "SCHEDULED_AT_IN_PAST",
     },
     {
-      name: "a timezone that is not an IANA zone",
-      body: { post_id: POST, scheduled_at: "2026-12-01T10:00:00Z", timezone: "Mars/Olympus" },
-      code: "INVALID_TIMEZONE",
+      // Date.parse reads the thirtieth of February as the second of March, so
+      // the post would be published on a day nobody asked for.
+      name: "a scheduled_at on a day the calendar does not have",
+      body: { post_id: POST, scheduled_at: "2026-02-30T10:00:00Z" },
+      code: "INVALID_SCHEDULED_AT",
+    },
+    {
+      name: "a scheduled_at on a day the calendar does not have, with an offset",
+      body: { post_id: POST, scheduled_at: "2026-04-31T10:00:00+03:00" },
+      code: "INVALID_SCHEDULED_AT",
     },
   ];
 
@@ -431,7 +449,34 @@ Deno.test("a reschedule refuses a body that does not name a usable time", async 
   }
 });
 
-Deno.test("a reschedule moves the instant and records the timezone as metadata", async () => {
+Deno.test("a reschedule accepts an instant that has a real calendar date and an offset", async () => {
+  const db = new FakeSupabase();
+  db.queue("posts", {
+    data: {
+      id: POST,
+      status: "scheduled",
+      scheduled_at: "2026-10-22T12:00:00.000Z",
+      metadata: null,
+    },
+    error: null,
+  });
+  db.queue("posts", {
+    data: [{ id: POST, status: "scheduled", scheduled_at: "2027-01-01T04:30:00.000Z" }],
+    error: null,
+  });
+
+  // The written date is the one that is published: the offset only says which
+  // instant it is.
+  const result = await reschedulePost(depsFor(db, noNetwork()), USER, {
+    post_id: POST,
+    scheduled_at: "2026-12-31T23:30:00-05:00",
+  });
+  assertEquals(result.status, 200);
+  const update = callsFor(db, "posts", "update")[0];
+  assertEquals(update.payload, { scheduled_at: "2027-01-01T04:30:00.000Z" });
+});
+
+Deno.test("a reschedule moves the instant and writes nothing else", async () => {
   const db = new FakeSupabase();
   db.queue("posts", {
     data: {
@@ -446,6 +491,8 @@ Deno.test("a reschedule moves the instant and records the timezone as metadata",
     data: [{ id: POST, status: "scheduled", scheduled_at: "2026-12-01T10:00:00.000Z" }],
     error: null,
   });
+  // A caller that still sends a timezone is accepted: the timezone is a label
+  // and the instant is what publishes, so nothing is stored for it.
   const result = await reschedulePost(depsFor(db, noNetwork()), USER, {
     post_id: POST,
     scheduled_at: "2026-12-01T10:00:00Z",
@@ -453,10 +500,10 @@ Deno.test("a reschedule moves the instant and records the timezone as metadata",
   });
   assertEquals(result.status, 200);
   const update = callsFor(db, "posts", "update")[0];
-  assertEquals(update.payload, {
-    scheduled_at: "2026-12-01T10:00:00.000Z",
-    metadata: { source: "api", timezone: "America/New_York" },
-  });
+  // The metadata is not rebuilt from the earlier read: that would overwrite a
+  // dashboard edit that landed in the meantime.
+  assertEquals(update.payload, { scheduled_at: "2026-12-01T10:00:00.000Z" });
+  assertEquals("metadata" in (update.payload as Record<string, unknown>), false);
   assertEquals(hasFilter(update, "eq", "user_id", USER), true);
   assertEquals(hasInFilter(update, "status", SCHEDULED_STATUSES), true);
   assertEquals(hasFilter(update, "gt", "scheduled_at", NOW_ISO), true);
@@ -581,6 +628,15 @@ Deno.test("a retry publishes only the failed platforms and never the ones that w
   // failed row is only cleared when a new result for the same account exists.
   db.queue("platform_posts", {
     data: [
+      { id: "pp3", platform: "facebook", status: "success", social_account_id: ACCOUNT },
+    ],
+    error: null,
+  });
+  // The rows are read once more, scoped to the owner of the post, before
+  // anything is deleted: only a row that read returns may go.
+  db.queue("platform_posts", {
+    data: [
+      { id: "pp1", platform: "facebook", status: "failed", social_account_id: ACCOUNT },
       { id: "pp3", platform: "facebook", status: "success", social_account_id: ACCOUNT },
     ],
     error: null,
@@ -766,6 +822,15 @@ Deno.test("a timed-out retry clears the old failed row once the replacement was 
     ],
     error: null,
   });
+  // The rows are read once more, scoped to the owner of the post, before
+  // anything is deleted: only a row that read returns may go.
+  db.queue("platform_posts", {
+    data: [
+      { id: "pp1", platform: "facebook", status: "failed", social_account_id: ACCOUNT },
+      { id: "pp2", platform: "facebook", status: "success", social_account_id: ACCOUNT },
+    ],
+    error: null,
+  });
   db.queue("platform_posts", { data: [], error: null });
 
   const { fetcher } = fakeFetcher([{ reject: new Error("Request timed out") }]);
@@ -901,6 +966,15 @@ Deno.test("a retry that is accepted clears the old failed rows after the call", 
     ],
     error: null,
   });
+  // The rows are read once more, scoped to the owner of the post, before
+  // anything is deleted: only a row that read returns may go.
+  db.queue("platform_posts", {
+    data: [
+      { id: "pp1", platform: "facebook", status: "failed", social_account_id: ACCOUNT },
+      { id: "pp2", platform: "facebook", status: "success", social_account_id: ACCOUNT },
+    ],
+    error: null,
+  });
   db.queue("platform_posts", { data: [], error: null });
 
   let callsBeforeFetch = 0;
@@ -968,6 +1042,15 @@ Deno.test("an accepted retry clears the old failed row once the new result is re
   // The new result for the same account was stored.
   db.queue("platform_posts", {
     data: [
+      { id: "pp2", platform: "facebook", status: "success", social_account_id: ACCOUNT },
+    ],
+    error: null,
+  });
+  // The rows are read once more, scoped to the owner of the post, before
+  // anything is deleted: only a row that read returns may go.
+  db.queue("platform_posts", {
+    data: [
+      { id: "pp1", platform: "facebook", status: "failed", social_account_id: ACCOUNT },
       { id: "pp2", platform: "facebook", status: "success", social_account_id: ACCOUNT },
     ],
     error: null,
@@ -1069,6 +1152,16 @@ Deno.test("one new result replaces both old failures for the account", async () 
     ],
     error: null,
   });
+  // The rows are read once more, scoped to the owner of the post, before
+  // anything is deleted: only a row that read returns may go.
+  db.queue("platform_posts", {
+    data: [
+      { id: "pp1", platform: "facebook", status: "failed", social_account_id: ACCOUNT },
+      { id: "pp2", platform: "facebook", status: "failed", social_account_id: ACCOUNT },
+      { id: "pp3", platform: "facebook", status: "success", social_account_id: ACCOUNT },
+    ],
+    error: null,
+  });
   db.queue("platform_posts", { data: [], error: null });
 
   const { fetcher } = fakeFetcher([{ status: 200, body: { status: "completed" } }]);
@@ -1079,6 +1172,94 @@ Deno.test("one new result replaces both old failures for the account", async () 
   assertEquals(hasInFilter(removal, "id", ["pp1", "pp2"]), true);
   assertEquals(hasFilter(removal, "eq", "post_id", POST), true);
   assertEquals(result.body.warning, undefined);
+});
+
+Deno.test("a requested result the owner-scoped read does not return is never deleted", async () => {
+  const db = new FakeSupabase();
+  db.queue("posts", {
+    data: { id: POST, status: "failed", scheduled_at: null },
+    error: null,
+  });
+  db.queue("posts", { data: [{ id: POST }], error: null });
+  db.queue("platform_posts", {
+    data: [
+      { id: "pp1", platform: "facebook", status: "failed", social_account_id: ACCOUNT },
+    ],
+    error: null,
+  });
+  // The new result for the same account was stored.
+  db.queue("platform_posts", {
+    data: [
+      { id: "pp2", platform: "facebook", status: "success", social_account_id: ACCOUNT },
+    ],
+    error: null,
+  });
+  // The owner-scoped read does not return the old row, so it is not this
+  // user's to delete.
+  db.queue("platform_posts", {
+    data: [
+      { id: "pp2", platform: "facebook", status: "success", social_account_id: ACCOUNT },
+    ],
+    error: null,
+  });
+
+  const { fetcher } = fakeFetcher([{ status: 200, body: { status: "completed" } }]);
+  const result = await retryFailedPost(depsFor(db, fetcher), USER, { post_id: POST });
+  assertEquals(result.status, 200);
+
+  // The read that decides what may be deleted is scoped to the owner of the
+  // post, so the ownership is part of the query and not a check the caller
+  // has to do first.
+  const reads = callsFor(db, "platform_posts", "select");
+  const ownershipRead = reads[reads.length - 1];
+  assertEquals(hasFilter(ownershipRead, "eq", "post_id", POST), true);
+  assertEquals(hasFilter(ownershipRead, "eq", "posts.user_id", USER), true);
+
+  // Nothing was deleted: the row the retry wanted to clear is not one the
+  // owner-scoped read returned.
+  assertEquals(callsFor(db, "platform_posts", "delete").length, 0);
+});
+
+Deno.test("only the result ids the owner-scoped read returns are deleted", async () => {
+  const db = new FakeSupabase();
+  db.queue("posts", {
+    data: { id: POST, status: "failed", scheduled_at: null },
+    error: null,
+  });
+  db.queue("posts", { data: [{ id: POST }], error: null });
+  db.queue("platform_posts", {
+    data: [
+      { id: "pp1", platform: "facebook", status: "failed", social_account_id: ACCOUNT },
+      { id: "pp2", platform: "facebook", status: "failed", social_account_id: ACCOUNT },
+    ],
+    error: null,
+  });
+  // One new result for the account was stored while the retry was running.
+  db.queue("platform_posts", {
+    data: [
+      { id: "pp1", platform: "facebook", status: "failed", social_account_id: ACCOUNT },
+      { id: "pp2", platform: "facebook", status: "failed", social_account_id: ACCOUNT },
+      { id: "pp3", platform: "facebook", status: "success", social_account_id: ACCOUNT },
+    ],
+    error: null,
+  });
+  // The owner-scoped read returns one of the two old rows only.
+  db.queue("platform_posts", {
+    data: [
+      { id: "pp1", platform: "facebook", status: "failed", social_account_id: ACCOUNT },
+    ],
+    error: null,
+  });
+  db.queue("platform_posts", { data: [], error: null });
+
+  const { fetcher } = fakeFetcher([{ status: 200, body: { status: "completed" } }]);
+  const result = await retryFailedPost(depsFor(db, fetcher), USER, { post_id: POST });
+  assertEquals(result.status, 200);
+
+  // Only the row the read returned is deleted: the other old row is left alone.
+  const removal = callsFor(db, "platform_posts", "delete")[0];
+  assertEquals(inFilterValues(removal, "id"), ["pp1"]);
+  assertEquals(hasFilter(removal, "eq", "post_id", POST), true);
 });
 
 Deno.test("a refused retry restores the status of a post that process-post had failed", async () => {
@@ -1206,6 +1387,55 @@ Deno.test("a 500 refusal restores the status from a failed post only", async () 
     updates.some((call) => hasFilter(call, "eq", "status", "processing")),
     false,
   );
+  // The restore changed a row, so the post is not `processing` any more and
+  // there is nothing to report about it.
+  assertEquals(
+    (errorDetails(result) as { still_processing?: unknown } | undefined)?.still_processing,
+    undefined,
+  );
+});
+
+Deno.test("a 500 refusal that left the post processing says so", async () => {
+  const db = new FakeSupabase();
+  db.queue("posts", {
+    data: { id: POST, status: "completed", scheduled_at: null },
+    error: null,
+  });
+  db.queue("posts", { data: [{ id: POST }], error: null });
+  db.queue("platform_posts", {
+    data: [
+      { id: "pp1", platform: "facebook", status: "failed", social_account_id: ACCOUNT },
+    ],
+    error: null,
+  });
+  // The restore matched no row: process-post did not fail the post itself, it
+  // threw after it had claimed it, so the post is still `processing`.
+  db.queue("posts", { data: [], error: null });
+  db.queue("posts", {
+    data: { id: POST, status: "processing" },
+    error: null,
+  });
+
+  const { fetcher } = fakeFetcher([{ status: 500, body: { error: "boom" } }]);
+  const result = await retryFailedPost(depsFor(db, fetcher), USER, { post_id: POST });
+  assertEquals(result.status, 502);
+  assertEquals(errorCode(result), "RETRY_FAILED");
+
+  // The caller has to know that the post is not theirs to touch: it is
+  // `processing`, so a later retry and a later delete are refused.
+  const details = errorDetails(result) as { still_processing?: boolean };
+  assertEquals(details.still_processing, true);
+  assertEquals(
+    (result.body.error as { message: string }).message,
+    "Retry failed: boom The post still shows processing; it is released when the publish settles, " +
+      "or delete it from the dashboard.",
+  );
+
+  // The status was read through the owner of the post.
+  const statusRead = callsFor(db, "posts", "select")[1];
+  assertEquals(statusRead.payload, "status");
+  assertEquals(hasFilter(statusRead, "eq", "id", POST), true);
+  assertEquals(hasFilter(statusRead, "eq", "user_id", USER), true);
 });
 
 // ── posts/delete ───────────────────────────────────────────────────────────────
@@ -1480,6 +1710,21 @@ Deno.test("a record delete that fails clears the rows that are already gone", as
     error: null,
   });
   db.queue("posts", { data: null, error: { message: "boom" } });
+  // The rows are read once more, scoped to the owner of the post, before
+  // anything is deleted: only a row that read returns may go.
+  db.queue("platform_posts", {
+    data: [
+      {
+        id: "pp1",
+        platform: "facebook",
+        status: "success",
+        platform_post_id: "fb-1",
+        social_account_id: ACCOUNT,
+        response_data: null,
+      },
+    ],
+    error: null,
+  });
   db.queue("platform_posts", { data: [], error: null });
   db.queue("posts", { data: [{ id: POST }], error: null });
 

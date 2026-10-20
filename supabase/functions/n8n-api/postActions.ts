@@ -99,7 +99,6 @@ const DeletePostSchema = z.object({
 const RescheduleSchema = z.object({
   post_id: z.string(),
   scheduled_at: z.string(),
-  timezone: z.string().max(64).optional(),
 });
 
 const BestTimesSchema = z.object({
@@ -330,24 +329,54 @@ async function releaseLock(
 // another caller may have claimed it in the meantime, and that row belongs to
 // that caller now. Never throws: a failure here must not replace the answer
 // the caller is about to receive.
+// It says whether a row changed: when no row changed, the post was not
+// `failed`, so it may still be `processing` and the caller has to be told.
 async function restoreAfterProcessPostFailed(
   deps: PostActionDeps,
   postId: string,
   userId: string,
   previousStatus: string,
-): Promise<void> {
-  const { error: readError } = await deps.supabase
+): Promise<boolean> {
+  const { data, error: readError } = await deps.supabase
     .from("posts")
     .update({ status: previousStatus })
     .eq("id", postId)
     .eq("user_id", userId)
-    .eq("status", "failed");
+    .eq("status", "failed")
+    .select("id");
 
   if (readError) {
     console.error(
       `[n8n-api] posts: restoring the status of post ${postId} failed: ${readError.message}`,
     );
+    return false;
   }
+  return Array.isArray(data) && data.length > 0;
+}
+
+// The status of the post, read through its owner: a post of somebody else is
+// never read here. A read that fails is logged and the answer stays what it
+// is, so the sentence below is only added when the post really is
+// `processing`.
+async function postIsStillProcessing(
+  deps: PostActionDeps,
+  postId: string,
+  userId: string,
+): Promise<boolean> {
+  const { data, error: readError } = await deps.supabase
+    .from("posts")
+    .select("status")
+    .eq("id", postId)
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (readError) {
+    console.error(
+      `[n8n-api] posts: reading the status of post ${postId} failed: ${readError.message}`,
+    );
+    return false;
+  }
+  return (data as { status?: unknown } | null)?.status === "processing";
 }
 
 // The per-platform results of one post. The read joins the parent post and
@@ -377,23 +406,44 @@ export async function readPlatformResults(
     .map(({ posts: _joined, ...row }) => row as PlatformResultRow);
 }
 
-// Removes the platform_posts rows of a post by id. Returns the warning the caller
+// Removes the platform_posts rows of a post by id. The ids are checked against an
+// owner-scoped read first, so the ownership is part of the delete itself and not
+// something the caller has to have checked before: a row that is not this user's
+// is never deleted, whatever the caller asked for. Returns the warning the caller
 // has to show when the rows could not be cleared.
 async function clearDeletedResults(
   deps: PostActionDeps,
   route: string,
-  request: { postId: string; rowIds: string[]; warning: string },
+  request: { postId: string; userId: string; rowIds: string[]; warning: string },
 ): Promise<string | null> {
   if (request.rowIds.length === 0) return null;
-  const { error: readError } = await deps.supabase
+
+  const owned = await readPlatformResults(deps, route, {
+    postId: request.postId,
+    userId: request.userId,
+    columns: "id",
+  });
+  if (isActionResult(owned)) {
+    console.error(
+      `[n8n-api] ${route}: the results of post ${request.postId} could not be read, so none of them were cleared`,
+    );
+    return request.warning;
+  }
+
+  const ownedIds = new Set(owned.map((row) => row.id));
+  const rowIds = request.rowIds.filter((rowId) => ownedIds.has(rowId));
+  // None of the requested rows belongs to this user: there is nothing to delete.
+  if (rowIds.length === 0) return null;
+
+  const { error: deleteError } = await deps.supabase
     .from("platform_posts")
     .delete()
     .eq("post_id", request.postId)
-    .in("id", request.rowIds);
+    .in("id", rowIds);
 
-  if (!readError) return null;
+  if (!deleteError) return null;
   console.error(
-    `[n8n-api] ${route}: clearing the results of post ${request.postId} failed: ${readError.message}`,
+    `[n8n-api] ${route}: clearing the results of post ${request.postId} failed: ${deleteError.message}`,
   );
   return request.warning;
 }
@@ -498,7 +548,7 @@ export async function reschedulePost(
   if (!parsed.success) {
     return refuse(route, `post unknown, user ${userId}`, invalidBody(parsed));
   }
-  const { post_id: postId, scheduled_at: scheduledAt, timezone } = parsed.data;
+  const { post_id: postId, scheduled_at: scheduledAt } = parsed.data;
   if (!isValidUuid(postId)) {
     return refuse(route, `post unknown, user ${userId}`, invalidPostId());
   }
@@ -509,7 +559,6 @@ export async function reschedulePost(
     route,
     subject,
     scheduledAt,
-    timezone,
     now,
   });
   if (invalid) return invalid;
@@ -536,17 +585,44 @@ export async function reschedulePost(
     );
   }
 
+  // Only the instant is written. The timezone is a label for the UI, and
+  // rebuilding the whole metadata object from an earlier read would overwrite a
+  // dashboard edit that landed in the meantime.
   const payload: Record<string, unknown> = {
     scheduled_at: new Date(scheduledAt).toISOString(),
   };
-  if (timezone !== undefined) {
-    payload.metadata = { ...(post.metadata ?? {}), timezone };
-  }
 
   const updated = await rescheduleRow(deps, route, { postId, userId, payload, now });
   if (isActionResult(updated)) return refuseOrFail(route, subject, updated);
 
   return ok({ post: updated.post, previous_scheduled_at: post.scheduled_at });
+}
+
+// The offset of an ISO 8601 instant in minutes, or null when the string does
+// not end in one. A Z offset is zero minutes.
+function offsetMinutesOf(value: string): number | null {
+  if (/z$/i.test(value)) return 0;
+  const match = /([+-])(\d{2}):(\d{2})$/.exec(value);
+  if (!match) return null;
+  const minutes = Number(match[2]) * 60 + Number(match[3]);
+  return match[1] === "-" ? -minutes : minutes;
+}
+
+// Date.parse accepts a day the calendar does not have: "2026-02-30" is read
+// as the second of March, so the post would be published on a day nobody asked
+// for. The written date is checked against the calendar instead: the parsed
+// instant, shifted by the offset that was written (nothing for a Z), has to
+// land on the same year, month and day.
+function hasRealCalendarDate(value: string): boolean {
+  const written = /^(\d{4})-(\d{2})-(\d{2})/.exec(value);
+  const offsetMinutes = offsetMinutesOf(value);
+  if (!written || offsetMinutes === null) return false;
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed)) return false;
+  const local = new Date(parsed + offsetMinutes * 60_000);
+  return local.getUTCFullYear() === Number(written[1]) &&
+    local.getUTCMonth() + 1 === Number(written[2]) &&
+    local.getUTCDate() === Number(written[3]);
 }
 
 // The body of a reschedule is checked before the post is even read: a time that
@@ -555,11 +631,14 @@ function rescheduleRefusal(request: {
   route: string;
   subject: string;
   scheduledAt: string;
-  timezone: string | undefined;
   now: Date;
 }): ActionResult | null {
-  const { route, subject, scheduledAt, timezone, now } = request;
-  if (!EXPLICIT_OFFSET_RE.test(scheduledAt) || !Number.isFinite(Date.parse(scheduledAt))) {
+  const { route, subject, scheduledAt, now } = request;
+  if (
+    !EXPLICIT_OFFSET_RE.test(scheduledAt) ||
+    !Number.isFinite(Date.parse(scheduledAt)) ||
+    !hasRealCalendarDate(scheduledAt)
+  ) {
     return refuse(
       route,
       subject,
@@ -575,18 +654,6 @@ function rescheduleRefusal(request: {
       route,
       subject,
       error(400, "SCHEDULED_AT_IN_PAST", "scheduled_at must be in the future."),
-    );
-  }
-  // The timezone is a label for the UI, not a conversion: the instant is what publishes.
-  if (timezone !== undefined && !isValidTimeZone(timezone)) {
-    return refuse(
-      route,
-      subject,
-      error(
-        400,
-        "INVALID_TIMEZONE",
-        `'${timezone}' is not an IANA time zone such as America/New_York.`,
-      ),
     );
   }
   return null;
@@ -639,6 +706,11 @@ const NO_ACCOUNT_REASON =
   "No account is recorded for this result; retry it from the Postora dashboard.";
 const ALREADY_PUBLISHED_REASON = "This account already published this post.";
 const STILL_PUBLISHING_REASON = "A publish for this account is still in progress.";
+// The post is still `processing` after a refusal past process-post's own
+// claim, so the claim was never given back. The caller has to know that the
+// post is not stuck because of them.
+const STILL_PROCESSING_SENTENCE =
+  " The post still shows processing; it is released when the publish settles, or delete it from the dashboard.";
 const OLD_RESULTS_WARNING =
   "Old failed results could not be cleared; get_post may show them next to the new ones.";
 const KEPT_RESULTS_WARNING =
@@ -922,18 +994,32 @@ async function reportRetry(
     //    ambiguous dispatch above.
     if (REFUSALS_BEFORE_THE_CLAIM.includes(outcome.status)) {
       await releaseLock(deps, request.postId, request.userId, request.previousStatus);
-    } else {
-      await restoreAfterProcessPostFailed(
-        deps,
-        request.postId,
-        request.userId,
-        request.previousStatus,
+      return error(
+        502,
+        "RETRY_FAILED",
+        `Retry failed: ${safeProcessPostReason(outcome.body?.error)}`,
       );
     }
+    const restored = await restoreAfterProcessPostFailed(
+      deps,
+      request.postId,
+      request.userId,
+      request.previousStatus,
+    );
+    // A refusal past the claim may leave the post `processing`: process-post
+    // can throw after it claimed the post, and then nothing gave the claim
+    // back. The caller has to be told, because a `processing` post refuses a
+    // later retry and a later delete through the API.
+    const stillProcessing = restored
+      ? false
+      : await postIsStillProcessing(deps, request.postId, request.userId);
+    const message = `Retry failed: ${safeProcessPostReason(outcome.body?.error)}` +
+      (stillProcessing ? STILL_PROCESSING_SENTENCE : "");
     return error(
       502,
       "RETRY_FAILED",
-      `Retry failed: ${safeProcessPostReason(outcome.body?.error)}`,
+      message,
+      stillProcessing ? { still_processing: true } : undefined,
     );
   }
 
@@ -947,6 +1033,7 @@ async function reportRetry(
   });
   const warning = await clearDeletedResults(deps, route, {
     postId: request.postId,
+    userId: request.userId,
     rowIds: replaced.rowIds,
     warning: OLD_RESULTS_WARNING,
   });
@@ -1058,6 +1145,7 @@ async function pendingRetryBody(
   // kept are what the caller has to know about.
   const warning = await clearDeletedResults(deps, route, {
     postId: request.postId,
+    userId: request.userId,
     rowIds: replaced.rowIds,
     warning: OLD_RESULTS_WARNING,
   }) ?? replaced.warning;
@@ -1387,6 +1475,7 @@ async function keepRecord(
 ): Promise<ActionResult> {
   const warning = await clearDeletedResults(deps, route, {
     postId: request.postId,
+    userId: request.userId,
     rowIds: request.deletedRowIds,
     warning: CLEARED_ROWS_WARNING,
   });
