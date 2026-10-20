@@ -1006,6 +1006,17 @@ async function handleCreatePost(req: Request, supabase: any, userId: string, bod
     };
     metadata.instagram_post_type = normalizedInstagramPostType;
     metadata.instagram_first_comment = instagram_first_comment || first_comment || null;
+
+    // The publisher (process-post) reads only the singular top-level key
+    // `instagram_collaborator` and strips "@" itself, so mirror the first
+    // invited username there. Left unset when nothing usable was requested,
+    // which keeps the stored metadata backward compatible.
+    const primaryCollaborator = Array.isArray(instagram_collaborators)
+      ? instagram_collaborators[0]
+      : undefined;
+    if (typeof primaryCollaborator === 'string' && primaryCollaborator.trim() !== '') {
+      metadata.instagram_collaborator = primaryCollaborator;
+    }
   }
 
   // Facebook metadata (including Reels support)
@@ -1871,7 +1882,7 @@ async function handleGetPostById(req: Request, supabase: any, userId: string, po
     .from('posts')
     .select(`
       id, caption, platforms, status, scheduled_at, posted_at, created_at, metadata, source,
-      platform_posts (id, platform, status, platform_post_id, platform_post_url, error_message, posted_at, social_account_id)
+      platform_posts (id, platform, status, platform_post_id, platform_post_url, error_message, posted_at, social_account_id, response_data)
     `)
     .eq('id', postId)
     .eq('user_id', userId)
@@ -1906,6 +1917,8 @@ async function handleGetPostById(req: Request, supabase: any, userId: string, po
           error_message: pp.error_message,
           posted_at: pp.posted_at,
           social_account_id: pp.social_account_id,
+          // Only the warnings are exposed — response_data itself stays internal.
+          warnings: Array.isArray(pp.response_data?.warnings) ? pp.response_data.warnings : [],
         }))
       }
     }),
