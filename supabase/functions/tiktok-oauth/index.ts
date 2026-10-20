@@ -633,11 +633,6 @@ Deno.serve(async (req) => {
 
     // ---------- disconnect: revoke the app in TikTok, then deactivate the account ----------
     if (action === "disconnect") {
-      if (!TIKTOK_CLIENT_KEY || !TIKTOK_CLIENT_SECRET) {
-        throw new Error("TikTok credentials not configured");
-      }
-      if (!account_id) throw new Error("Missing account_id for disconnect");
-
       const caller = await authenticateCaller(req, body.user_id);
       const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
       // Every refusal and every failed revoke leaves a durable row for support (AGENTS.md).
@@ -653,6 +648,20 @@ Deno.serve(async (req) => {
         if (logError) console.error("[tiktok-oauth] Disconnect log rejected:", logError.message);
       };
 
+      if (!TIKTOK_CLIENT_KEY || !TIKTOK_CLIENT_SECRET) {
+        await logDisconnectEvent("TikTok disconnect refused: TikTok credentials not configured", { reason: "credentials_missing" });
+        return new Response(JSON.stringify({ error: "TikTok is not configured" }), {
+          status: 500,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      if (!account_id) {
+        await logDisconnectEvent("TikTok disconnect refused: account_id missing", { reason: "missing_account_id" });
+        return new Response(JSON.stringify({ error: "Missing account_id" }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
       // The raw value is not stored: only a well-formed UUID is ever written to the log.
       if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(account_id)) {
         await logDisconnectEvent("TikTok disconnect refused: account_id is not a UUID", { reason: "invalid_account_id" });

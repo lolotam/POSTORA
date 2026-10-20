@@ -23,13 +23,11 @@ export async function revokeTikTokAccess(
     if (!response.ok) return false;
     const text = (await response.text()).trim();
     if (text === "") return true;
+    // Only the documented success shapes count: an empty body (above) or {"error":{"code":"ok"}}.
+    // Anything else (a flat {"error":"invalid_client"}, {}, null, an unexpected object) is not a confirmed revoke.
     const payload: unknown = JSON.parse(text);
     const error = (payload as { error?: unknown } | null)?.error;
-    if (error === undefined) return true;
-    // TikTok's flat OAuth error shape ({"error":"invalid_client"}) means the revoke failed.
-    if (typeof error === "string") return false;
-    const code = (error as { code?: unknown } | null)?.code;
-    return code === undefined || code === "ok";
+    return typeof error === "object" && error !== null && (error as { code?: unknown }).code === "ok";
   } catch {
     return false;
   }

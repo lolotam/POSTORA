@@ -29,6 +29,12 @@ Deno.test("never throws when TikTok is unreachable or answers garbage", async ()
   assertEquals(await revokeTikTokAccess(fetcherReturning(200, "<html>"), "k", "s", "t"), false);
 });
 
+Deno.test("does not count an unrecognised 200 body as a revoke", async () => {
+  for (const body of ["{}", "null", '{"data":{}}', '{"error":{}}', '{"error":{"message":"x"}}']) {
+    assertEquals(await revokeTikTokAccess(fetcherReturning(200, body), "k", "s", "t"), false, body);
+  }
+});
+
 Deno.test("treats TikTok's flat OAuth error body as a failed revoke", async () => {
   const flat = fetcherReturning(200, '{"error":"invalid_client","error_description":"x"}');
   assertEquals(await revokeTikTokAccess(flat, "k", "s", "t"), false);
