@@ -10,12 +10,14 @@
 
 import { isValidUuid } from "./requestGuards.ts";
 import { containsSensitiveInfo } from "../_shared/errorSanitizer.ts";
+import { MEDIA_QUOTA_CODE, isMediaQuotaMessage } from "../_shared/mediaQuotaError.ts";
 
 export interface ProxyAccount {
   id: string;
   user_id: string;
   platform: string;
   platform_user_id: string | null;
+  is_active: boolean;
 }
 
 export interface InvokeResult {
@@ -42,12 +44,16 @@ export interface ProxyResult {
 
 const READ_TIMEOUT_MS = 45_000;
 const AI_TEXT_TIMEOUT_MS = 60_000;
-// Image models routinely take a minute; no retry anywhere here, because every
+// Image models routinely take a minute; 90 s leaves room for the upload inside the 150 s edge request limit. No retry anywhere here, because every
 // AI call is billed and a comment/message read is cheap to repeat by the client.
-const AI_IMAGE_TIMEOUT_MS = 120_000;
+const AI_IMAGE_TIMEOUT_MS = 90_000;
 const MAX_COMMENT_POSTS = 50;
 const DEFAULT_COMMENT_POSTS = 25;
 const THREADS_PERIODS = [7, 14, 30, 90];
+
+// Meta conversation ids are short opaque tokens (t_123..., aWdfZG...); anything
+// with a slash, query or fragment character never reaches the Graph URL path.
+const CONVERSATION_ID_RE = /^[A-Za-z0-9_.:=-]{1,200}$/;
 
 // Same envelope as apiError() in index.ts.
 function proxyError(status: number, code: string, message: string): ProxyResult {
@@ -77,6 +83,11 @@ async function loadOwnedAccount(deps: ServiceProxyDeps, userId: string, rawAccou
     console.warn(`[n8n-api] service proxy: account ${accountId} not found for caller ${userId}`);
     return { error: proxyError(404, "ACCOUNT_NOT_FOUND", "Social account not found or not owned by the authenticated user.") };
   }
+  // An inactive (disconnected) account would make threads-insights fall back to
+  // a different Threads account, so the proxy never forwards one.
+  if (account.is_active === false) {
+    return { error: proxyError(409, "ACCOUNT_INACTIVE", "This social account is disconnected. Reconnect it in Postora first.") };
+  }
   return { account };
 }
 
@@ -91,7 +102,7 @@ function fromUpstream(functionName: string, result: InvokeResult): ProxyResult {
     console.error(`[n8n-api] service proxy: ${functionName} answered ${result.status}`);
     return proxyError(502, "UPSTREAM_ERROR", "The Postora service behind this endpoint failed. Please retry shortly.");
   }
-  return { status: result.status, body: redactErrorText(result.data) };
+  return { status: result.status, body: redactErrorText(stripCredentialUrls(result.data)) };
 }
 
 // Several functions report platform failures as a 200 body with `error` /
@@ -105,6 +116,25 @@ function redactErrorText(data: unknown): unknown {
     if (typeof value === "string" && containsSensitiveInfo(value)) record[key] = "the platform rejected the request";
   }
   return record;
+}
+
+// Graph pagination URLs (paging.next / paging.previous) embed the connected
+// account's access_token, so they never leave the proxy; the opaque cursors
+// stay. Any other string that still carries an access_token is dropped too.
+export function stripCredentialUrls(value: unknown): unknown {
+  if (typeof value === "string") return /access_token=/i.test(value) ? null : value;
+  if (Array.isArray(value)) return value.map(stripCredentialUrls);
+  if (!value || typeof value !== "object") return value;
+  const out: Record<string, unknown> = {};
+  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    if (key === "paging" && child && typeof child === "object" && !Array.isArray(child)) {
+      const { next: _next, previous: _previous, ...rest } = child as Record<string, unknown>;
+      out[key] = stripCredentialUrls(rest);
+    } else {
+      out[key] = stripCredentialUrls(child);
+    }
+  }
+  return out;
 }
 
 function unsupported(feature: string, platform: string, supported: string): ProxyResult {
@@ -174,6 +204,9 @@ export async function handleListMessages(deps: ServiceProxyDeps, userId: string,
     return unsupported("Listing messages", account.platform, "facebook, instagram");
   }
   const conversationId = textField(params.get("conversation_id"));
+  if (conversationId && !CONVERSATION_ID_RE.test(conversationId)) {
+    return proxyError(400, "INVALID_CONVERSATION_ID", "conversation_id must be a conversation id from a previous list_messages call");
+  }
   const body: Record<string, unknown> = conversationId
     ? { action: "get_messages", conversation_id: conversationId }
     : { action: "list_conversations" };
@@ -254,6 +287,32 @@ function isHttpUrl(value: string): boolean {
   return value.startsWith("https://") || value.startsWith("http://");
 }
 
+// An inline image (a data: URL) must not reach an MCP client, so it is saved
+// to the user's media library and only the media_file_id comes back. A daily
+// media-quota refusal is not a retryable outage: every retry would pay for
+// another generation.
+async function storeGeneratedImage(
+  deps: ServiceProxyDeps,
+  userId: string,
+  dataUrl: string,
+  description: string | null,
+): Promise<ProxyResult> {
+  let stored: StoredImage;
+  try {
+    stored = await deps.storeImage(userId, dataUrl);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : "";
+    console.error("[n8n-api] service proxy: generated image could not be stored:", detail);
+    if (isMediaQuotaMessage(detail)) {
+      return proxyError(429, MEDIA_QUOTA_CODE, `The image was generated but your media library is full for today: ${detail}`);
+    }
+    const safe = detail && !containsSensitiveInfo(detail) ? `: ${detail}` : "";
+    return proxyError(502, "IMAGE_STORE_FAILED", `The image was generated but could not be saved to your media library${safe}`);
+  }
+  const url = typeof stored.file_path === "string" && isHttpUrl(stored.file_path) ? stored.file_path : null;
+  return { status: 201, body: { success: true, media_file_id: stored.id, url, description } };
+}
+
 // generate-image answers with { imageUrl, description }. Most providers return
 // the image inline as a data: URL of several megabytes, which must never reach
 // an MCP client, so it is saved to the user's media library and only the
@@ -287,17 +346,7 @@ export async function handleGenerateImage(deps: ServiceProxyDeps, userId: string
   if (!imageUrl.startsWith("data:")) {
     return proxyError(502, "UPSTREAM_ERROR", "Image generation returned no image. Please retry shortly.");
   }
-  let stored: StoredImage;
-  try {
-    stored = await deps.storeImage(userId, imageUrl);
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : "";
-    console.error("[n8n-api] service proxy: generated image could not be stored:", detail);
-    const safe = detail && !containsSensitiveInfo(detail) ? `: ${detail}` : "";
-    return proxyError(502, "IMAGE_STORE_FAILED", `The image was generated but could not be saved to your media library${safe}`);
-  }
-  const url = typeof stored.file_path === "string" && isHttpUrl(stored.file_path) ? stored.file_path : null;
-  return { status: 201, body: { success: true, media_file_id: stored.id, url, description } };
+  return await storeGeneratedImage(deps, userId, imageUrl, description);
 }
 
 /** Production `invoke`: POSTs to /functions/v1/<name> with the service role and an explicit timeout. */
@@ -318,8 +367,9 @@ export function createFunctionInvoker(
         body: JSON.stringify(body),
         signal: AbortSignal.timeout(timeoutMs),
       });
-      const data = await res.json().catch(() => null);
-      return { status: res.status, data };
+      // Reading the body is inside the same try, so a body that times out
+      // becomes 504 and one that is not JSON becomes 502, never a 200 with null.
+      return { status: res.status, data: await res.json() };
     } catch (error) {
       const timedOut = error instanceof DOMException && (error.name === "TimeoutError" || error.name === "AbortError");
       console.error(`[n8n-api] service proxy: ${functionName} ${timedOut ? "timed out" : "unreachable"}`);
@@ -343,7 +393,7 @@ export function supabaseAccountLoader(supabase: AccountQueryClient): ServiceProx
   return async (accountId) => {
     const { data, error } = await supabase
       .from("social_accounts")
-      .select("id, user_id, platform, platform_user_id")
+      .select("id, user_id, platform, platform_user_id, is_active")
       .eq("id", accountId)
       .maybeSingle();
     if (error) {

@@ -48,6 +48,7 @@ const DEFAULT_ACCOUNT: ProxyAccount = {
   user_id: OWNER,
   platform: "facebook",
   platform_user_id: "page-1",
+  is_active: true,
 };
 
 const DEFAULT_STORED: StoredImage = { id: "media-1", file_path: "https://cdn.example/x.png" };
@@ -86,19 +87,9 @@ function errorOf(result: { body: unknown }): { code: string; message: string } {
   return (result.body as { error: { code: string; message: string } }).error;
 }
 
-Deno.test("list_comments refuses an account that belongs to another user", async () => {
-  const { deps, calls } = fakeDeps({
-    account: { id: ACCOUNT_ID, user_id: OTHER, platform: "facebook", platform_user_id: "page-1" },
-  });
-  const result = await handleListComments(deps, OWNER, params({ social_account_id: ACCOUNT_ID }));
-  assertEquals(result.status, 404);
-  assertEquals(errorOf(result).code, "ACCOUNT_NOT_FOUND");
-  assertEquals(calls.invokes.length, 0);
-});
-
 Deno.test("a missing account answers exactly like an account owned by someone else", async () => {
   const owned = fakeDeps({
-    account: { id: ACCOUNT_ID, user_id: OTHER, platform: "facebook", platform_user_id: "page-1" },
+    account: { id: ACCOUNT_ID, user_id: OTHER, platform: "facebook", platform_user_id: "page-1", is_active: true },
   });
   const missing = fakeDeps({ account: null });
   const ownedResult = await handleListComments(owned.deps, OWNER, params({ social_account_id: ACCOUNT_ID }));
@@ -106,6 +97,8 @@ Deno.test("a missing account answers exactly like an account owned by someone el
   assertEquals(missingResult.status, 404);
   assertEquals(errorOf(missingResult).code, "ACCOUNT_NOT_FOUND");
   assertEquals(missingResult.body, ownedResult.body);
+  assertEquals(ownedResult.status, 404);
+  assertEquals(owned.calls.invokes.length, 0);
   assertEquals(missing.calls.invokes.length, 0);
 });
 
@@ -143,7 +136,7 @@ Deno.test("facebook comments are read through comment-manager with the caller's 
 
 Deno.test("instagram and youtube ask the comment manager for their own listing", async () => {
   const instagram = fakeDeps({
-    account: { id: ACCOUNT_ID, user_id: OWNER, platform: "instagram", platform_user_id: "ig-1" },
+    account: { id: ACCOUNT_ID, user_id: OWNER, platform: "instagram", platform_user_id: "ig-1", is_active: true },
   });
   const instagramResult = await handleListComments(instagram.deps, OWNER, params({ social_account_id: ACCOUNT_ID }));
   assertEquals(instagramResult.status, 200);
@@ -155,7 +148,7 @@ Deno.test("instagram and youtube ask the comment manager for their own listing",
   });
 
   const youtube = fakeDeps({
-    account: { id: ACCOUNT_ID, user_id: OWNER, platform: "youtube", platform_user_id: null },
+    account: { id: ACCOUNT_ID, user_id: OWNER, platform: "youtube", platform_user_id: null, is_active: true },
   });
   const youtubeResult = await handleListComments(youtube.deps, OWNER, params({ social_account_id: ACCOUNT_ID }));
   assertEquals(youtubeResult.status, 200);
@@ -179,7 +172,7 @@ Deno.test("a caller-supplied action parameter is ignored", async () => {
 
 Deno.test("listing comments on a threads account is refused without a call", async () => {
   const { deps, calls } = fakeDeps({
-    account: { id: ACCOUNT_ID, user_id: OWNER, platform: "threads", platform_user_id: "t-1" },
+    account: { id: ACCOUNT_ID, user_id: OWNER, platform: "threads", platform_user_id: "t-1", is_active: true },
   });
   const result = await handleListComments(deps, OWNER, params({ social_account_id: ACCOUNT_ID }));
   assertEquals(result.status, 400);
@@ -210,7 +203,7 @@ Deno.test("post_id and limit trim the listing the upstream returned", async () =
   assertEquals(bodyOf(singleResult).data, [{ id: "b" }]);
 
   const youtube = fakeDeps({
-    account: { id: ACCOUNT_ID, user_id: OWNER, platform: "youtube", platform_user_id: null },
+    account: { id: ACCOUNT_ID, user_id: OWNER, platform: "youtube", platform_user_id: null, is_active: true },
     upstream: { status: 200, data: { videos: [{ id: "a" }, { id: "b" }, { id: "c" }] } },
   });
   const youtubeResult = await handleListComments(
@@ -220,6 +213,50 @@ Deno.test("post_id and limit trim the listing the upstream returned", async () =
   );
   assertEquals(youtubeResult.status, 200);
   assertEquals(bodyOf(youtubeResult).videos, [{ id: "a" }, { id: "b" }]);
+});
+
+Deno.test("graph pagination URLs never reach the caller", async () => {
+  const comments = fakeDeps({
+    upstream: {
+      status: 200,
+      data: {
+        data: [{
+          id: "p1",
+          comments: {
+            data: [{ id: "c1" }],
+            paging: {
+              cursors: { after: "A" },
+              next: "https://graph.facebook.com/v22.0/x?access_token=SECRET&after=A",
+            },
+          },
+        }],
+        paging: {
+          cursors: { before: "B" },
+          previous: "https://graph.facebook.com/v22.0/y?access_token=SECRET",
+        },
+      },
+    },
+  });
+  const commentsResult = await handleListComments(comments.deps, OWNER, params({ social_account_id: ACCOUNT_ID }));
+  assertEquals(commentsResult.status, 200);
+  const commentsJson = JSON.stringify(commentsResult.body);
+  assertEquals(commentsJson.includes("SECRET"), false);
+  assertEquals(commentsJson.includes("access_token"), false);
+  const commentsBody = bodyOf(commentsResult);
+  const posts = commentsBody.data as { comments: { paging: { cursors: { after: string } } } }[];
+  assertEquals(posts[0].comments.paging.cursors.after, "A");
+  const topPaging = commentsBody.paging as { cursors: { before: string } };
+  assertEquals(topPaging.cursors.before, "B");
+
+  const messages = fakeDeps({
+    upstream: {
+      status: 200,
+      data: { messages: [{ id: "m1" }], paging: { next: "https://graph.facebook.com/z?access_token=SECRET" } },
+    },
+  });
+  const messagesResult = await handleListMessages(messages.deps, OWNER, params({ social_account_id: ACCOUNT_ID }));
+  assertEquals(messagesResult.status, 200);
+  assertEquals(JSON.stringify(messagesResult.body).includes("SECRET"), false);
 });
 
 Deno.test("a limit outside 1..50 is refused before anything is called", async () => {
@@ -232,7 +269,7 @@ Deno.test("a limit outside 1..50 is refused before anything is called", async ()
   }
 });
 
-Deno.test("list_messages picks the conversation action and refuses platforms without messages", async () => {
+Deno.test("list_messages without conversation_id lists the conversations", async () => {
   const conversations = fakeDeps();
   const conversationsResult = await handleListMessages(conversations.deps, OWNER, params({ social_account_id: ACCOUNT_ID }));
   assertEquals(conversationsResult.status, 200);
@@ -242,7 +279,9 @@ Deno.test("list_messages picks the conversation action and refuses platforms wit
     user_id: OWNER,
     social_account_id: ACCOUNT_ID,
   });
+});
 
+Deno.test("list_messages with conversation_id reads that conversation", async () => {
   const messages = fakeDeps();
   const messagesResult = await handleListMessages(
     messages.deps,
@@ -256,9 +295,11 @@ Deno.test("list_messages picks the conversation action and refuses platforms wit
     user_id: OWNER,
     social_account_id: ACCOUNT_ID,
   });
+});
 
+Deno.test("list_messages refuses a whatsapp account without a call", async () => {
   const whatsapp = fakeDeps({
-    account: { id: ACCOUNT_ID, user_id: OWNER, platform: "whatsapp", platform_user_id: "wa-1" },
+    account: { id: ACCOUNT_ID, user_id: OWNER, platform: "whatsapp", platform_user_id: "wa-1", is_active: true },
   });
   const whatsappResult = await handleListMessages(whatsapp.deps, OWNER, params({ social_account_id: ACCOUNT_ID }));
   assertEquals(whatsappResult.status, 400);
@@ -266,36 +307,45 @@ Deno.test("list_messages picks the conversation action and refuses platforms wit
   assertEquals(whatsapp.calls.invokes.length, 0);
 });
 
-Deno.test("post analytics answers for threads and tiktok only", async () => {
-  const threads = fakeDeps({
-    account: { id: ACCOUNT_ID, user_id: OWNER, platform: "threads", platform_user_id: "t-1" },
-  });
-  const threadsResult = await handleGetPostAnalytics(
-    threads.deps,
-    OWNER,
-    params({ social_account_id: ACCOUNT_ID, period_days: "30" }),
-  );
-  assertEquals(threadsResult.status, 200);
-  assertEquals(threads.calls.invokes[0].functionName, "threads-insights");
-  assertEquals(threads.calls.invokes[0].body, {
-    user_id: OWNER,
-    accountId: ACCOUNT_ID,
-    periodDays: 30,
-  });
+Deno.test("a conversation_id with URL characters is refused before any call", async () => {
+  for (const bad of ["c1/../me", "c1?fields=access_token", "c1#x", "a".repeat(201)]) {
+    const { deps, calls } = fakeDeps();
+    const result = await handleListMessages(
+      deps,
+      OWNER,
+      params({ social_account_id: ACCOUNT_ID, conversation_id: bad }),
+    );
+    assertEquals(result.status, 400);
+    assertEquals(errorOf(result).code, "INVALID_CONVERSATION_ID");
+    assertEquals(calls.invokes.length, 0);
+  }
+});
 
-  const defaulted = fakeDeps({
-    account: { id: ACCOUNT_ID, user_id: OWNER, platform: "threads", platform_user_id: "t-1" },
-  });
-  const defaultedResult = await handleGetPostAnalytics(defaulted.deps, OWNER, params({ social_account_id: ACCOUNT_ID }));
-  assertEquals(defaultedResult.status, 200);
-  assertEquals(defaulted.calls.invokes[0].body, {
-    user_id: OWNER,
-    accountId: ACCOUNT_ID,
-    periodDays: 7,
-  });
+Deno.test("threads analytics sends the requested or default period", async () => {
+  const cases: { period: string | undefined; expected: number }[] = [
+    { period: "30", expected: 30 },
+    { period: undefined, expected: 7 },
+  ];
+  for (const { period, expected } of cases) {
+    const threads = fakeDeps({
+      account: { id: ACCOUNT_ID, user_id: OWNER, platform: "threads", platform_user_id: "t-1", is_active: true },
+    });
+    const query: Record<string, string> = { social_account_id: ACCOUNT_ID };
+    if (period) query.period_days = period;
+    const threadsResult = await handleGetPostAnalytics(threads.deps, OWNER, params(query));
+    assertEquals(threadsResult.status, 200);
+    assertEquals(threads.calls.invokes[0].functionName, "threads-insights");
+    assertEquals(threads.calls.invokes[0].body, {
+      user_id: OWNER,
+      accountId: ACCOUNT_ID,
+      periodDays: expected,
+    });
+  }
+});
 
+Deno.test("a period outside 7, 14, 30, 90 is refused before any call", async () => {
   const badPeriod = fakeDeps({
-    account: { id: ACCOUNT_ID, user_id: OWNER, platform: "threads", platform_user_id: "t-1" },
+    account: { id: ACCOUNT_ID, user_id: OWNER, platform: "threads", platform_user_id: "t-1", is_active: true },
   });
   const badPeriodResult = await handleGetPostAnalytics(
     badPeriod.deps,
@@ -305,9 +355,11 @@ Deno.test("post analytics answers for threads and tiktok only", async () => {
   assertEquals(badPeriodResult.status, 400);
   assertEquals(errorOf(badPeriodResult).code, "INVALID_PERIOD");
   assertEquals(badPeriod.calls.invokes.length, 0);
+});
 
+Deno.test("tiktok analytics reads the account's videos", async () => {
   const tiktok = fakeDeps({
-    account: { id: ACCOUNT_ID, user_id: OWNER, platform: "tiktok", platform_user_id: "tt-1" },
+    account: { id: ACCOUNT_ID, user_id: OWNER, platform: "tiktok", platform_user_id: "tt-1", is_active: true },
   });
   const tiktokResult = await handleGetPostAnalytics(tiktok.deps, OWNER, params({ social_account_id: ACCOUNT_ID }));
   assertEquals(tiktokResult.status, 200);
@@ -316,7 +368,9 @@ Deno.test("post analytics answers for threads and tiktok only", async () => {
     user_id: OWNER,
     social_account_id: ACCOUNT_ID,
   });
+});
 
+Deno.test("analytics on any other platform says it is not supported yet", async () => {
   const facebook = fakeDeps();
   const facebookResult = await handleGetPostAnalytics(facebook.deps, OWNER, params({ social_account_id: ACCOUNT_ID }));
   assertEquals(facebookResult.status, 400);
@@ -325,18 +379,22 @@ Deno.test("post analytics answers for threads and tiktok only", async () => {
   assertEquals(facebook.calls.invokes.length, 0);
 });
 
-Deno.test("an upstream failure becomes a generic answer while a 429 passes through", async () => {
+Deno.test("an upstream 500 becomes a generic 502 without the upstream text", async () => {
   const broken = fakeDeps({ upstream: { status: 500, data: { error: "relation social_accounts does not exist" } } });
   const brokenResult = await handleListComments(broken.deps, OWNER, params({ social_account_id: ACCOUNT_ID }));
   assertEquals(brokenResult.status, 502);
   assertEquals(errorOf(brokenResult).code, "UPSTREAM_ERROR");
   assertEquals(JSON.stringify(brokenResult.body).includes("social_accounts"), false);
+});
 
+Deno.test("an upstream timeout becomes 504", async () => {
   const slow = fakeDeps({ upstream: { status: 504, data: null } });
   const slowResult = await handleListComments(slow.deps, OWNER, params({ social_account_id: ACCOUNT_ID }));
   assertEquals(slowResult.status, 504);
   assertEquals(errorOf(slowResult).code, "UPSTREAM_TIMEOUT");
+});
 
+Deno.test("a function's own 429 passes through to the caller", async () => {
   const limited = fakeDeps({ upstream: { status: 429, data: { error: "Rate limit exceeded" } } });
   const limitedResult = await handleListComments(limited.deps, OWNER, params({ social_account_id: ACCOUNT_ID }));
   assertEquals(limitedResult.status, 429);
@@ -406,7 +464,7 @@ Deno.test("a hosted image is returned as a URL and never written to the media li
   assertEquals(calls.stores.length, 0);
   assertEquals(calls.invokes[0].functionName, "generate-image");
   assertEquals(calls.invokes[0].body, { user_id: OWNER, prompt: "a cat", aspectRatio: "1:1" });
-  assertEquals(calls.invokes[0].timeoutMs, 120000);
+  assertEquals(calls.invokes[0].timeoutMs, 90000);
 });
 
 Deno.test("an inline image is stored in the media library and only its id comes back", async () => {
@@ -436,6 +494,36 @@ Deno.test("a generated image that cannot be stored is reported without the image
   assertEquals(result.status, 502);
   assertEquals(errorOf(result).code, "IMAGE_STORE_FAILED");
   assertEquals(JSON.stringify(result.body).includes("base64"), false);
+});
+
+Deno.test("a full media library answers 429 with the quota code, not a retryable 502", async () => {
+  const dataUrl = "data:image/png;base64,iVBORw0KGgo=";
+  const { deps } = fakeDeps({
+    upstream: { status: 200, data: { imageUrl: dataUrl } },
+    storeError: new Error("Daily upload limit of 50 reached. Upgrade your plan or try again tomorrow."),
+  });
+  const result = await handleGenerateImage(deps, OWNER, { prompt: "a cat" });
+  assertEquals(result.status, 429);
+  assertEquals(errorOf(result).code, "MEDIA_QUOTA_DAILY_EXCEEDED");
+  assertEquals(JSON.stringify(result.body).includes("base64"), false);
+});
+
+Deno.test("an inactive account is refused before any call", async () => {
+  const comments = fakeDeps({
+    account: { ...DEFAULT_ACCOUNT, is_active: false },
+  });
+  const commentsResult = await handleListComments(comments.deps, OWNER, params({ social_account_id: ACCOUNT_ID }));
+  assertEquals(commentsResult.status, 409);
+  assertEquals(errorOf(commentsResult).code, "ACCOUNT_INACTIVE");
+  assertEquals(comments.calls.invokes.length, 0);
+
+  const analytics = fakeDeps({
+    account: { id: ACCOUNT_ID, user_id: OWNER, platform: "threads", platform_user_id: "t-1", is_active: false },
+  });
+  const analyticsResult = await handleGetPostAnalytics(analytics.deps, OWNER, params({ social_account_id: ACCOUNT_ID }));
+  assertEquals(analyticsResult.status, 409);
+  assertEquals(errorOf(analyticsResult).code, "ACCOUNT_INACTIVE");
+  assertEquals(analytics.calls.invokes.length, 0);
 });
 
 Deno.test("an image the provider refused is reported as a failed generation", async () => {
@@ -484,6 +572,13 @@ Deno.test("the production invoker posts to the function with the service role an
   assertEquals(broken, { status: 502, data: null });
 });
 
+Deno.test("a body that is not JSON is a 502, not an empty success", async () => {
+  const fakeFetch = () => Promise.resolve(new Response("<html>oops</html>", { status: 200 }));
+  const invoke = createFunctionInvoker("https://fn.test/functions/v1", "svc-key", fakeFetch);
+  const result = await invoke("comment-manager", { user_id: OWNER }, 1000);
+  assertEquals(result, { status: 502, data: null });
+});
+
 Deno.test("the account loader reads one account and tells a failed read from a missing row", async () => {
   const seen: { table: string; column: string; value: string }[] = [];
   const fakeSupabase = (result: { data: unknown; error: unknown }) => ({
@@ -509,6 +604,7 @@ Deno.test("the account loader reads one account and tells a failed read from a m
     user_id: OWNER,
     platform: "facebook",
     platform_user_id: "page-1",
+    is_active: true,
   };
   const found = supabaseAccountLoader(fakeSupabase({ data: account, error: null }));
   assertEquals(await found(ACCOUNT_ID), { account, failed: false });
