@@ -415,15 +415,19 @@ function buildServer(apiKey: string) {
 
   server.tool("delete_post", {
     description:
-      "Delete a post from Postora AND, where the platform allows it, from the platform itself: Facebook, Threads, YouTube (native connection), Pinterest and LinkedIn posts are deleted on the platform. Instagram and TikTok have no delete API, so those posts stay on the platform (reported as kept_on_platform). If any platform delete fails, the Postora record is kept so you can retry. Media files stay in the library. Cannot be undone. Requires confirm: true.",
+      "Delete a post from Postora AND, where the platform allows it, from the platform itself: Facebook, Threads, YouTube (native connection), Pinterest and LinkedIn posts are deleted on the platform. Instagram and TikTok have no delete API, so those posts stay on the platform (reported as kept_on_platform). If any platform delete fails, the Postora record is kept so you can retry. Media files stay in the library. Cannot be undone. Requires confirm: true. Set delete_record_if_platform_fails: true to remove the Postora record even when a platform delete fails.",
     inputSchema: z.object({
       post_id: z.string().describe("Postora post UUID"),
+      delete_record_if_platform_fails: z.boolean().optional().describe("Default false. If a platform delete keeps failing (for example the post was already removed there), set true to delete the Postora record anyway; failures are still reported."),
       confirm: confirmTrue,
     }),
     handler: async (args) => {
       const refusal = needsConfirm(args.confirm);
       if (refusal) return refusal;
-      const r = await callN8n(apiKey, "POST", "/api/v1/posts/delete", { post_id: args.post_id });
+      const r = await callN8n(apiKey, "POST", "/api/v1/posts/delete", {
+        post_id: args.post_id,
+        delete_record_if_platform_fails: args.delete_record_if_platform_fails ?? false,
+      });
       return r.status >= 400 ? fail(r.status, r.data) : ok(r.data);
     },
   });

@@ -4,7 +4,7 @@
 //
 // This function runs with the service role, so RLS is not the boundary: every query and
 // every write on `posts` carries .eq("user_id", userId), and `platform_posts` is only
-// ever touched through row ids that came out of a read scoped the same way.
+// ever reached through a post_id that came out of such a read.
 import { z } from "npm:zod@3.23.8";
 import { validateRequestBody } from "../_shared/validate.ts";
 import { containsSensitiveInfo } from "../_shared/errorSanitizer.ts";
@@ -89,6 +89,13 @@ const SCHEDULED_STATUSES = ["scheduled", "pending"];
 
 const PostIdSchema = z.object({ post_id: z.string() });
 
+const DeletePostSchema = z.object({
+  post_id: z.string(),
+  // A form-encoded body carries every value as a string, so the flag arrives as
+  // "true" instead of true.
+  delete_record_if_platform_fails: z.union([z.boolean(), z.enum(["true", "false"])]).optional(),
+});
+
 const RescheduleSchema = z.object({
   post_id: z.string(),
   scheduled_at: z.string(),
@@ -126,6 +133,17 @@ function refuse(
   return result;
 }
 
+// A refusal is logged; a server fault is not, because the fault was already logged
+// where it happened.
+function refuseOrFail(
+  route: string,
+  subject: string,
+  result: ActionResult,
+): ActionResult {
+  if (result.status >= 500) return result;
+  return refuse(route, subject, result);
+}
+
 // One answer for every caller that hands over something that is not a post id,
 // so the wording of the refusal cannot drift between routes.
 function invalidPostId(): ActionResult {
@@ -145,12 +163,31 @@ function requirePostId(body: unknown): string | ActionResult {
   return parsed.data.post_id;
 }
 
+interface DeleteOptions {
+  post_id: string;
+  delete_record_if_platform_fails: boolean;
+}
+
+// The delete route takes one more field than the other post routes: the caller may
+// say that the Postora record may go even when a platform copy cannot be deleted.
+function requireDeleteOptions(body: unknown): DeleteOptions | ActionResult {
+  const parsed = validateRequestBody(DeletePostSchema, body);
+  if (!parsed.success) return invalidBody(parsed);
+  if (!isValidUuid(parsed.data.post_id)) {
+    return invalidPostId();
+  }
+  return {
+    post_id: parsed.data.post_id,
+    delete_record_if_platform_fails: parsed.data.delete_record_if_platform_fails === true ||
+      parsed.data.delete_record_if_platform_fails === "true",
+  };
+}
+
 interface PostRow {
   id: string;
   status: string;
-  scheduled_at: string | null;
+  scheduled_at?: string | null;
   metadata?: Record<string, unknown> | null;
-  platform_posts?: PlatformResultRow[] | null;
 }
 
 interface PlatformResultRow {
@@ -160,6 +197,37 @@ interface PlatformResultRow {
   social_account_id: string | null;
   platform_post_id?: string | null;
   response_data?: unknown;
+}
+
+// Every post use case needs the same owned read, and every one of them has to
+// refuse the same way when the row is missing or unreadable.
+async function readOwnedPost(
+  deps: PostActionDeps,
+  route: string,
+  postId: string,
+  userId: string,
+  columns: string,
+): Promise<PostRow | ActionResult> {
+  const { data, error: readError } = await deps.supabase
+    .from("posts")
+    .select(columns)
+    .eq("id", postId)
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (readError) {
+    console.error(`[n8n-api] ${route}: reading post ${postId} failed: ${readError.message}`);
+    return error(500, "INTERNAL_ERROR", "Reading the post failed. Please try again.");
+  }
+  if (!data) return refuse(route, `post ${postId}, user ${userId}`, NOT_FOUND);
+  return data as PostRow;
+}
+
+// The helpers below answer with either a row or an ActionResult, so the caller has
+// to tell them apart before it goes on.
+function isActionResult(value: unknown): value is ActionResult {
+  return typeof value === "object" && value !== null &&
+    "status" in value && "body" in value;
 }
 
 function isFutureScheduled(
@@ -193,6 +261,107 @@ function distinct(values: Array<string | null | undefined>): string[] {
   return out;
 }
 
+// ── shared: claiming a post ───────────────────────────────────────────────────
+//
+// A retry and a delete both take the post away from everybody else while they
+// work. The claim is a compare-and-set on the status that was read first, so two
+// callers can never hold the same post at the same time, and a post that changed
+// underneath them is refused instead of overwritten.
+
+interface LockOutcome {
+  /** The claim landed: this caller owns the post until it releases it. */
+  locked: boolean;
+  /** The claim could not be written at all. */
+  failed: boolean;
+}
+
+async function lockPost(
+  deps: PostActionDeps,
+  route: string,
+  request: { postId: string; userId: string; status: string },
+): Promise<LockOutcome> {
+  const { data, error: readError } = await deps.supabase
+    .from("posts")
+    .update({ status: "processing" })
+    .eq("id", request.postId)
+    .eq("user_id", request.userId)
+    .eq("status", request.status)
+    .select("id");
+
+  if (readError) {
+    console.error(
+      `[n8n-api] ${route}: locking post ${request.postId} failed: ${readError.message}`,
+    );
+    return { locked: false, failed: true };
+  }
+  return { locked: Array.isArray(data) && data.length > 0, failed: false };
+}
+
+// Gives the post back to the status it had before the claim. Never throws: a
+// failure here must not replace the answer the caller is about to receive.
+async function releaseLock(
+  deps: PostActionDeps,
+  postId: string,
+  userId: string,
+  previousStatus: string,
+): Promise<void> {
+  const { error: readError } = await deps.supabase
+    .from("posts")
+    .update({ status: previousStatus })
+    .eq("id", postId)
+    .eq("user_id", userId)
+    .eq("status", "processing");
+
+  if (readError) {
+    console.error(
+      `[n8n-api] posts: restoring the status of post ${postId} failed: ${readError.message}`,
+    );
+  }
+}
+
+// The per-platform results of one post. The post_id comes from a read that was
+// scoped to the caller, and that is the only thing that links these rows to them.
+async function readPlatformResults(
+  deps: PostActionDeps,
+  route: string,
+  postId: string,
+  columns: string,
+): Promise<PlatformResultRow[] | ActionResult> {
+  const { data, error: readError } = await deps.supabase
+    .from("platform_posts")
+    .select(columns)
+    .eq("post_id", postId);
+
+  if (readError) {
+    console.error(
+      `[n8n-api] ${route}: reading the platform results of post ${postId} failed: ${readError.message}`,
+    );
+    return error(500, "INTERNAL_ERROR", "Reading the publish results failed. Please try again.");
+  }
+  return Array.isArray(data) ? (data as PlatformResultRow[]) : [];
+}
+
+// Removes the platform_posts rows of a post by id. Returns the warning the caller
+// has to show when the rows could not be cleared.
+async function clearDeletedResults(
+  deps: PostActionDeps,
+  route: string,
+  request: { postId: string; rowIds: string[]; warning: string },
+): Promise<string | null> {
+  if (request.rowIds.length === 0) return null;
+  const { error: readError } = await deps.supabase
+    .from("platform_posts")
+    .delete()
+    .eq("post_id", request.postId)
+    .in("id", request.rowIds);
+
+  if (!readError) return null;
+  console.error(
+    `[n8n-api] ${route}: clearing the results of post ${request.postId} failed: ${readError.message}`,
+  );
+  return request.warning;
+}
+
 // ── 1. posts/cancel ────────────────────────────────────────────────────────────
 
 export async function cancelScheduledPost(
@@ -208,20 +377,10 @@ export async function cancelScheduledPost(
   const subject = `post ${postId}, user ${userId}`;
   const now = deps.now();
 
-  const { data, error: readError } = await deps.supabase
-    .from("posts")
-    .select("id, status, scheduled_at")
-    .eq("id", postId)
-    .eq("user_id", userId)
-    .maybeSingle();
+  const read = await readOwnedPost(deps, route, postId, userId, "id, status, scheduled_at");
+  if (isActionResult(read)) return read;
+  const post = read;
 
-  if (readError) {
-    console.error(`[n8n-api] ${route}: reading post ${postId} failed: ${readError.message}`);
-    return error(500, "INTERNAL_ERROR", "Reading the post failed. Please try again.");
-  }
-  if (!data) return refuse(route, subject, NOT_FOUND);
-
-  const post = data as PostRow;
   if (!isFutureScheduled(post, now)) {
     return refuse(
       route,
@@ -230,40 +389,48 @@ export async function cancelScheduledPost(
         409,
         "POST_NOT_SCHEDULED",
         "Only a scheduled post whose time has not come yet can be cancelled.",
-        { status: post.status, scheduled_at: post.scheduled_at },
+        { status: post.status, scheduled_at: post.scheduled_at ?? null },
       ),
     );
   }
 
-  // Compare-and-set: the scheduler claims the same row by flipping it to `processing`,
-  // so the delete only lands while the post is still scheduled for the future. The
-  // platform_posts rows go with it through the existing ON DELETE CASCADE.
+  const refusal = await cancelScheduledRow(deps, route, { postId, userId, now });
+  if (refusal) return refuseOrFail(route, subject, refusal);
+
+  return ok({ post_id: postId, cancelled: true });
+}
+
+// Compare-and-set: the scheduler claims the same row by flipping it to `processing`,
+// so the delete only lands while the post is still scheduled for the future. The
+// platform_posts rows go with it through the existing ON DELETE CASCADE.
+async function cancelScheduledRow(
+  deps: PostActionDeps,
+  route: string,
+  request: { postId: string; userId: string; now: Date },
+): Promise<ActionResult | null> {
   const { data: deleted, error: deleteError } = await deps.supabase
     .from("posts")
     .delete()
-    .eq("id", postId)
-    .eq("user_id", userId)
+    .eq("id", request.postId)
+    .eq("user_id", request.userId)
     .in("status", SCHEDULED_STATUSES)
-    .gt("scheduled_at", now.toISOString())
+    .gt("scheduled_at", request.now.toISOString())
     .select("id");
 
   if (deleteError) {
-    console.error(`[n8n-api] ${route}: deleting post ${postId} failed: ${deleteError.message}`);
+    console.error(
+      `[n8n-api] ${route}: deleting post ${request.postId} failed: ${deleteError.message}`,
+    );
     return error(500, "INTERNAL_ERROR", "Cancelling the post failed. Please try again.");
   }
   if (!deleted || deleted.length === 0) {
-    return refuse(
-      route,
-      subject,
-      error(
-        409,
-        "POST_STATE_CHANGED",
-        "The post changed while it was being cancelled (it may already be publishing). Check get_post.",
-      ),
+    return error(
+      409,
+      "POST_STATE_CHANGED",
+      "The post changed while it was being cancelled (it may already be publishing). Check get_post.",
     );
   }
-
-  return ok({ post_id: postId, cancelled: true });
+  return null;
 }
 
 // ── 2. posts/reschedule ────────────────────────────────────────────────────────
@@ -285,6 +452,54 @@ export async function reschedulePost(
   const subject = `post ${postId}, user ${userId}`;
   const now = deps.now();
 
+  const invalid = rescheduleRefusal({
+    route,
+    subject,
+    scheduledAt,
+    timezone,
+    now,
+  });
+  if (invalid) return invalid;
+
+  const read = await readOwnedPost(deps, route, postId, userId, "id, status, scheduled_at, metadata");
+  if (isActionResult(read)) return read;
+  const post = read;
+
+  if (!isFutureScheduled(post, now)) {
+    return refuse(
+      route,
+      subject,
+      error(
+        409,
+        "POST_NOT_SCHEDULED",
+        "Only a scheduled post whose time has not come yet can be rescheduled.",
+      ),
+    );
+  }
+
+  const payload: Record<string, unknown> = {
+    scheduled_at: new Date(scheduledAt).toISOString(),
+  };
+  if (timezone !== undefined) {
+    payload.metadata = { ...(post.metadata ?? {}), timezone };
+  }
+
+  const updated = await rescheduleRow(deps, route, { postId, userId, payload, now });
+  if (isActionResult(updated)) return refuseOrFail(route, subject, updated);
+
+  return ok({ post: updated.post, previous_scheduled_at: post.scheduled_at });
+}
+
+// The body of a reschedule is checked before the post is even read: a time that
+// cannot be published is the caller's mistake, not the post's state.
+function rescheduleRefusal(request: {
+  route: string;
+  subject: string;
+  scheduledAt: string;
+  timezone: string | undefined;
+  now: Date;
+}): ActionResult | null {
+  const { route, subject, scheduledAt, timezone, now } = request;
   if (!EXPLICIT_OFFSET_RE.test(scheduledAt) || !Number.isFinite(Date.parse(scheduledAt))) {
     return refuse(
       route,
@@ -315,69 +530,111 @@ export async function reschedulePost(
       ),
     );
   }
+  return null;
+}
 
-  const { data, error: readError } = await deps.supabase
-    .from("posts")
-    .select("id, status, scheduled_at, metadata")
-    .eq("id", postId)
-    .eq("user_id", userId)
-    .maybeSingle();
-
-  if (readError) {
-    console.error(`[n8n-api] ${route}: reading post ${postId} failed: ${readError.message}`);
-    return error(500, "INTERNAL_ERROR", "Reading the post failed. Please try again.");
-  }
-  if (!data) return refuse(route, subject, NOT_FOUND);
-
-  const post = data as PostRow;
-  if (!isFutureScheduled(post, now)) {
-    return refuse(
-      route,
-      subject,
-      error(
-        409,
-        "POST_NOT_SCHEDULED",
-        "Only a scheduled post whose time has not come yet can be rescheduled.",
-      ),
-    );
-  }
-
-  const payload: Record<string, unknown> = {
-    scheduled_at: new Date(scheduledAt).toISOString(),
-  };
-  if (timezone !== undefined) {
-    payload.metadata = { ...(post.metadata ?? {}), timezone };
-  }
-
+async function rescheduleRow(
+  deps: PostActionDeps,
+  route: string,
+  request: {
+    postId: string;
+    userId: string;
+    payload: Record<string, unknown>;
+    now: Date;
+  },
+): Promise<{ post: Record<string, unknown> } | ActionResult> {
   const { data: rows, error: updateError } = await deps.supabase
     .from("posts")
-    .update(payload)
-    .eq("id", postId)
-    .eq("user_id", userId)
+    .update(request.payload)
+    .eq("id", request.postId)
+    .eq("user_id", request.userId)
     .in("status", SCHEDULED_STATUSES)
-    .gt("scheduled_at", now.toISOString())
+    .gt("scheduled_at", request.now.toISOString())
     .select("id, status, scheduled_at");
 
   if (updateError) {
-    console.error(`[n8n-api] ${route}: updating post ${postId} failed: ${updateError.message}`);
+    console.error(
+      `[n8n-api] ${route}: updating post ${request.postId} failed: ${updateError.message}`,
+    );
     return error(500, "INTERNAL_ERROR", "Rescheduling the post failed. Please try again.");
   }
   if (!rows || rows.length === 0) {
-    return refuse(
-      route,
-      subject,
-      error(
-        409,
-        "POST_STATE_CHANGED",
-        "The post changed while it was being rescheduled (it may already be publishing). Check get_post.",
-      ),
+    return error(
+      409,
+      "POST_STATE_CHANGED",
+      "The post changed while it was being rescheduled (it may already be publishing). Check get_post.",
     );
   }
-
-  return ok({ post: rows[0], previous_scheduled_at: post.scheduled_at });
+  return { post: rows[0] };
 }
 
 // ── 3. posts/retry ─────────────────────────────────────────────────────────────
+
+const POST_PROCESSING = error(
+  409,
+  "POST_PROCESSING",
+  "The post is publishing right now. Try again when it has finished.",
+);
+
+const NO_ACCOUNT_REASON =
+  "No account is recorded for this result; retry it from the Postora dashboard.";
+const ALREADY_PUBLISHED_REASON = "This account already published this post.";
+const STILL_PUBLISHING_REASON = "A publish for this account is still in progress.";
+const OLD_RESULTS_WARNING =
+  "Old failed results could not be cleared; get_post may show them next to the new ones.";
+
+interface NotRetried {
+  platform: string;
+  reason: string;
+}
+
+interface RetryTarget {
+  platform: string;
+  social_account_id: string | null;
+}
+
+interface RetryRequest {
+  postId: string;
+  userId: string;
+  previousStatus: string;
+  targets: PlatformResultRow[];
+  notRetried: NotRetried[];
+}
+
+// The failed rows of one post, split into the ones that may be published again and
+// the ones that must not be. A row is a target only when its account has neither a
+// success row nor a pending row on the same post: an account that already published
+// must never be posted twice, and one that is still in flight must be left alone.
+function pickRetryTargets(rows: PlatformResultRow[]): {
+  targets: PlatformResultRow[];
+  notRetried: NotRetried[];
+} {
+  const published = new Set<string>();
+  const inFlight = new Set<string>();
+  for (const row of rows) {
+    const account = row.social_account_id;
+    if (!account) continue;
+    if (row.status === "success") published.add(account);
+    if (row.status === "pending") inFlight.add(account);
+  }
+
+  const targets: PlatformResultRow[] = [];
+  const notRetried: NotRetried[] = [];
+  for (const row of rows) {
+    if (row.status !== "failed") continue;
+    const account = row.social_account_id;
+    if (!account) {
+      notRetried.push({ platform: row.platform, reason: NO_ACCOUNT_REASON });
+    } else if (published.has(account)) {
+      notRetried.push({ platform: row.platform, reason: ALREADY_PUBLISHED_REASON });
+    } else if (inFlight.has(account)) {
+      notRetried.push({ platform: row.platform, reason: STILL_PUBLISHING_REASON });
+    } else {
+      targets.push(row);
+    }
+  }
+  return { targets, notRetried };
+}
 
 export async function retryFailedPost(
   deps: PostActionDeps,
@@ -390,33 +647,89 @@ export async function retryFailedPost(
     return refuse(route, `post unknown, user ${userId}`, postId);
   }
   const subject = `post ${postId}, user ${userId}`;
-  const now = deps.now();
 
-  const { data, error: readError } = await deps.supabase
-    .from("posts")
-    .select("id, status, scheduled_at, platform_posts(id, platform, status, social_account_id)")
-    .eq("id", postId)
-    .eq("user_id", userId)
-    .maybeSingle();
+  const read = await readOwnedPost(deps, route, postId, userId, "id, status, scheduled_at");
+  if (isActionResult(read)) return read;
+  const post = read;
 
-  if (readError) {
-    console.error(`[n8n-api] ${route}: reading post ${postId} failed: ${readError.message}`);
-    return error(500, "INTERNAL_ERROR", "Reading the post failed. Please try again.");
+  const guard = retryGuard(route, subject, post, deps.now());
+  if (guard) return guard;
+
+  // The lock comes before the results are read: two retries that read the same
+  // failed rows before either locked would publish them twice, and the second one
+  // would do it from a snapshot that is already stale.
+  const lock = await lockPost(deps, route, { postId, userId, status: post.status });
+  if (lock.failed) {
+    return error(500, "INTERNAL_ERROR", "Starting the retry failed. Please try again.");
   }
-  if (!data) return refuse(route, subject, NOT_FOUND);
+  if (!lock.locked) return refuse(route, subject, POST_PROCESSING);
 
-  const post = data as PostRow;
-  if (post.status === "processing") {
+  const picked = await pickTargetsUnderLock(deps, route, {
+    postId,
+    userId,
+    previousStatus: post.status,
+    subject,
+  });
+  if (isActionResult(picked)) return picked;
+
+  return reportRetry(deps, route, {
+    postId,
+    userId,
+    previousStatus: post.status,
+    targets: picked.targets,
+    notRetried: picked.notRetried,
+  });
+}
+
+// Reads the results of the post while the claim is held and splits them into the
+// rows that may be published again and the rows that must not be.
+async function pickTargetsUnderLock(
+  deps: PostActionDeps,
+  route: string,
+  request: {
+    postId: string;
+    userId: string;
+    previousStatus: string;
+    subject: string;
+  },
+): Promise<{ targets: PlatformResultRow[]; notRetried: NotRetried[] } | ActionResult> {
+  const results = await readPlatformResults(
+    deps,
+    route,
+    request.postId,
+    "id, platform, status, social_account_id",
+  );
+  if (isActionResult(results)) {
+    await releaseLock(deps, request.postId, request.userId, request.previousStatus);
+    return results;
+  }
+
+  const picked = pickRetryTargets(results);
+  if (picked.targets.length === 0) {
+    await releaseLock(deps, request.postId, request.userId, request.previousStatus);
     return refuse(
       route,
-      subject,
+      request.subject,
       error(
         409,
-        "POST_PROCESSING",
-        "The post is publishing right now. Try again when it has finished.",
+        "NO_FAILED_PLATFORMS",
+        "This post has no failed platforms to retry.",
+        picked.notRetried.length > 0 ? { not_retried: picked.notRetried } : undefined,
       ),
     );
   }
+  return picked;
+}
+
+// A retry is only allowed on a post that is neither publishing right now nor
+// waiting for its scheduled time.
+function retryGuard(
+  route: string,
+  subject: string,
+  post: PostRow,
+  now: Date,
+): ActionResult | null {
+  if (post.status === "processing") return refuse(route, subject, POST_PROCESSING);
   if (isFutureScheduled(post, now)) {
     return refuse(
       route,
@@ -428,90 +741,19 @@ export async function retryFailedPost(
       ),
     );
   }
+  return null;
+}
 
-  const results: PlatformResultRow[] = Array.isArray(post.platform_posts)
-    ? post.platform_posts
-    : [];
-  const failedRows = results.filter((row) => row.status === "failed");
-  const hasAccount = (row: PlatformResultRow) =>
-    typeof row.social_account_id === "string" && row.social_account_id.length > 0;
-  // Only the failed rows go: a platform that already succeeded must never be posted
-  // twice, so the retry asks process-post for exactly these platforms and accounts.
-  const retryable = failedRows.filter(hasAccount);
-  const notRetried = failedRows
-    .filter((row) => !hasAccount(row))
-    .map((row) => ({
-      platform: row.platform,
-      reason: "No account is recorded for this result; retry it from the Postora dashboard.",
-    }));
+type RetryDispatch =
+  | { kind: "accepted"; body: Record<string, unknown> | null }
+  | { kind: "timeout" }
+  | { kind: "unknown" }
+  | { kind: "refused"; body: Record<string, unknown> | null };
 
-  if (retryable.length === 0) {
-    return refuse(
-      route,
-      subject,
-      error(
-        409,
-        "NO_FAILED_PLATFORMS",
-        "This post has no failed platforms to retry.",
-        notRetried.length > 0 ? { not_retried: notRetried } : undefined,
-      ),
-    );
-  }
-
-  // Lock the post first: two retries landing together must not publish twice.
-  const { data: locked, error: lockError } = await deps.supabase
-    .from("posts")
-    .update({ status: "processing" })
-    .eq("id", postId)
-    .eq("user_id", userId)
-    .neq("status", "processing")
-    .select("id");
-
-  if (lockError) {
-    console.error(`[n8n-api] ${route}: locking post ${postId} failed: ${lockError.message}`);
-    return error(500, "INTERNAL_ERROR", "Starting the retry failed. Please try again.");
-  }
-  if (!locked || locked.length === 0) {
-    return refuse(
-      route,
-      subject,
-      error(
-        409,
-        "POST_PROCESSING",
-        "The post is publishing right now. Try again when it has finished.",
-      ),
-    );
-  }
-
-  const retryableIds = retryable.map((row) => row.id);
-  const { error: cleanupError } = await deps.supabase
-    .from("platform_posts")
-    .delete()
-    .eq("post_id", postId)
-    .in("id", retryableIds)
-    .select("id");
-
-  if (cleanupError) {
-    console.error(`[n8n-api] ${route}: clearing failed results for post ${postId} failed: ${cleanupError.message}`);
-    // The lock is released again, otherwise the post would sit in `processing` forever.
-    const { error: restoreError } = await deps.supabase
-      .from("posts")
-      .update({ status: post.status })
-      .eq("id", postId)
-      .eq("user_id", userId);
-    if (restoreError) {
-      console.error(`[n8n-api] posts/retry: restoring the status of post ${postId} failed: ${restoreError.message}`);
-    }
-    return error(500, "INTERNAL_ERROR", "Preparing the retry failed. Please try again.");
-  }
-
-  const retried = retryable.map((row) => ({
-    platform: row.platform,
-    social_account_id: row.social_account_id,
-  }));
-
-  // The retry starts from a post that already published, so there is no scheduled_at
-  // expectation to carry: process-post must claim the row unconditionally.
+async function dispatchRetry(
+  deps: PostActionDeps,
+  request: { postId: string; targets: PlatformResultRow[] },
+): Promise<RetryDispatch> {
   let response: Response;
   try {
     response = await fetchWithTimeout(
@@ -522,10 +764,13 @@ export async function retryFailedPost(
           "Content-Type": "application/json",
           Authorization: `Bearer ${deps.serviceRoleKey}`,
         },
+        // The retry starts from a post that already published, so there is no
+        // scheduled_at expectation to carry: process-post must claim the row
+        // unconditionally.
         body: JSON.stringify({
-          post_id: postId,
-          platforms: distinct(retryable.map((row) => row.platform)),
-          account_ids: distinct(retryable.map((row) => row.social_account_id)),
+          post_id: request.postId,
+          platforms: distinct(request.targets.map((row) => row.platform)),
+          account_ids: distinct(request.targets.map((row) => row.social_account_id)),
         }),
       },
       RETRY_TIMEOUT_MS,
@@ -533,76 +778,166 @@ export async function retryFailedPost(
     );
   } catch (thrown) {
     const message = thrown instanceof Error ? thrown.message : String(thrown);
-    if (message === "Request timed out") {
-      // The publish is still running; only this answer was slow.
-      return ok(
-        {
-          post_id: postId,
-          dispatched: true,
-          results_pending: true,
-          retried,
-          message: "Retry started but publishing is still running. Check get_post for the results.",
-        },
-        202,
-      );
-    }
-    console.error(`[n8n-api] ${route}: dispatching the retry for post ${postId} failed`);
-    await markFailedIfProcessing(deps, postId, userId);
-    return error(502, "RETRY_DISPATCH_FAILED", "Could not start the retry. Try again.");
+    // A timeout means the publish is still running; any other transport error
+    // leaves it unknown whether the request ever reached process-post.
+    return message === "Request timed out" ? { kind: "timeout" } : { kind: "unknown" };
   }
-
   const json = await response.json().catch(() => null) as Record<string, unknown> | null;
-
-  if (!response.ok) {
-    await markFailedIfProcessing(deps, postId, userId);
-    const reason = json?.error;
-    const safe = typeof reason === "string" && !containsSensitiveInfo(reason)
-      ? reason
-      : "process-post rejected the retry";
-    return error(502, "RETRY_FAILED", `Retry failed: ${safe}`);
-  }
-
-  const platformResults = Array.isArray(json?.platform_results) ? json.platform_results : [];
-  return ok({
-    post_id: postId,
-    status: json?.status ?? null,
-    retried,
-    not_retried: notRetried,
-    platform_results: platformResults.map((entry) => {
-      const result = (entry ?? {}) as Record<string, unknown>;
-      const failure = result.error_message;
-      return {
-        platform: result.platform,
-        status: result.status,
-        post_url: result.platform_post_url ?? null,
-        error_message: typeof failure === "string" && !containsSensitiveInfo(failure)
-          ? failure
-          : (failure ? "redacted" : null),
-      };
-    }),
-  });
+  return response.ok ? { kind: "accepted", body: json } : { kind: "refused", body: json };
 }
 
-// Puts the post back to `failed` when the retry never started. Never throws: a failure
-// here must not replace the error the caller is about to receive.
-async function markFailedIfProcessing(
+async function reportRetry(
   deps: PostActionDeps,
-  postId: string,
-  userId: string,
-): Promise<void> {
-  const { error: markError } = await deps.supabase
-    .from("posts")
-    .update({ status: "failed" })
-    .eq("id", postId)
-    .eq("user_id", userId)
-    .eq("status", "processing");
+  route: string,
+  request: RetryRequest,
+): Promise<ActionResult> {
+  const retried = request.targets.map((row) => ({
+    platform: row.platform,
+    social_account_id: row.social_account_id,
+  }));
+  const rowIds = request.targets.map((row) => row.id);
+  const outcome = await dispatchRetry(deps, {
+    postId: request.postId,
+    targets: request.targets,
+  });
 
-  if (markError) {
-    console.error(`[n8n-api] posts/retry: could not mark post ${postId} as failed: ${markError.message}`);
+  if (outcome.kind === "unknown") {
+    // The request may never have reached process-post. The claim is released, or
+    // the post would stay `processing` and refuse every later retry and delete.
+    await releaseLock(deps, request.postId, request.userId, request.previousStatus);
+    return ok(unknownRetryBody(request.postId, retried), 202);
   }
+  if (outcome.kind === "timeout") {
+    return ok(
+      await pendingRetryBody(deps, route, { postId: request.postId, rowIds, retried }),
+      202,
+    );
+  }
+  if (outcome.kind === "refused") {
+    // process-post refused before it published anything, so the old failed rows
+    // stay and the post goes back to the status it had.
+    await releaseLock(deps, request.postId, request.userId, request.previousStatus);
+    return error(
+      502,
+      "RETRY_FAILED",
+      `Retry failed: ${safeProcessPostReason(outcome.body?.error)}`,
+    );
+  }
+
+  const warning = await clearDeletedResults(deps, route, {
+    postId: request.postId,
+    rowIds,
+    warning: OLD_RESULTS_WARNING,
+  });
+  return ok(acceptedRetryBody({
+    postId: request.postId,
+    retried,
+    notRetried: request.notRetried,
+    body: outcome.body,
+    warning,
+  }));
+}
+
+// The request may or may not have reached process-post. The claim is released
+// before this answer goes out, because a post that stays `processing` refuses
+// every later retry and delete; that release is safe because it only flips a row
+// that is still `processing`, so a publish that did start settles the status
+// itself. The old failed rows stay: an account that did publish is skipped by
+// pickRetryTargets, so a later retry cannot publish it twice.
+function unknownRetryBody(postId: string, retried: RetryTarget[]): Record<string, unknown> {
+  return {
+    post_id: postId,
+    dispatched: "unknown",
+    results_pending: true,
+    retried,
+    message: "The retry may or may not have started. Check get_post before retrying again.",
+  };
+}
+
+async function pendingRetryBody(
+  deps: PostActionDeps,
+  route: string,
+  request: { postId: string; rowIds: string[]; retried: RetryTarget[] },
+): Promise<Record<string, unknown>> {
+  // The publish is still running; only this answer was slow. The old rows go now
+  // that process-post has the request and writes fresh ones for them.
+  const warning = await clearDeletedResults(deps, route, {
+    postId: request.postId,
+    rowIds: request.rowIds,
+    warning: OLD_RESULTS_WARNING,
+  });
+  return {
+    post_id: request.postId,
+    dispatched: true,
+    results_pending: true,
+    retried: request.retried,
+    message: "Retry started but publishing is still running. Check get_post for the results.",
+    ...(warning ? { warning } : {}),
+  };
+}
+
+function acceptedRetryBody(request: {
+  postId: string;
+  retried: RetryTarget[];
+  notRetried: NotRetried[];
+  body: Record<string, unknown> | null;
+  warning: string | null;
+}): Record<string, unknown> {
+  const bodyResults = request.body?.platform_results;
+  const platformResults = Array.isArray(bodyResults) ? bodyResults : [];
+  return {
+    post_id: request.postId,
+    status: request.body?.status ?? null,
+    retried: request.retried,
+    not_retried: request.notRetried,
+    platform_results: platformResults.map(toPublicPlatformResult),
+    ...(request.warning ? { warning: request.warning } : {}),
+  };
+}
+
+function safeProcessPostReason(reason: unknown): string {
+  return typeof reason === "string" && !containsSensitiveInfo(reason)
+    ? reason
+    : "process-post rejected the retry";
+}
+
+function toPublicPlatformResult(entry: unknown): Record<string, unknown> {
+  const result = (entry ?? {}) as Record<string, unknown>;
+  const failure = result.error_message;
+  return {
+    platform: result.platform,
+    status: result.status,
+    post_url: result.platform_post_url ?? null,
+    error_message: typeof failure === "string" && !containsSensitiveInfo(failure)
+      ? failure
+      : (failure ? "redacted" : null),
+  };
 }
 
 // ── 4. posts/delete ────────────────────────────────────────────────────────────
+
+const POST_PROCESSING_DELETE = error(
+  409,
+  "POST_PROCESSING",
+  "The post is publishing right now. Delete it when it has finished.",
+);
+
+const POST_STATE_CHANGED_DELETE = error(
+  409,
+  "POST_STATE_CHANGED",
+  "The post changed while it was being deleted. Check get_post.",
+);
+
+const CLEARED_ROWS_WARNING =
+  "Some deleted platform results could not be cleared; a retry may report them as failed.";
+
+// A platform copy that cannot be deleted keeps the Postora record alive, unless the
+// caller says the record may go anyway. The hint is part of the message because the
+// caller has to know the way out exists.
+const PLATFORM_DELETE_FAILED_MESSAGE =
+  "The post could not be deleted on every platform. The Postora record was kept so you can retry." +
+  " Pass delete_record_if_platform_fails: true to delete the Postora record anyway" +
+  " (for example when the post was already removed on the platform).";
 
 export async function deletePost(
   deps: PostActionDeps,
@@ -610,61 +945,127 @@ export async function deletePost(
   body: unknown,
 ): Promise<ActionResult> {
   const route = "posts/delete";
-  const postId = requirePostId(body);
-  if (typeof postId !== "string") {
-    return refuse(route, `post unknown, user ${userId}`, postId);
+  const options = requireDeleteOptions(body);
+  if (isActionResult(options)) {
+    return refuse(route, `post unknown, user ${userId}`, options);
   }
+  const postId = options.post_id;
   const subject = `post ${postId}, user ${userId}`;
 
+  const read = await readOwnedPost(deps, route, postId, userId, "id, status");
+  if (isActionResult(read)) return read;
+  const post = read;
+  if (post.status === "processing") return refuse(route, subject, POST_PROCESSING_DELETE);
+
+  // The claim comes before anything is deleted: a retry that lands in the middle of
+  // a delete would publish a fresh result that the record delete would orphan.
+  const claim = await lockPost(deps, route, {
+    postId,
+    userId,
+    status: post.status,
+  });
+  if (claim.failed) {
+    return error(500, "INTERNAL_ERROR", "Starting the delete failed. Please try again.");
+  }
+  if (!claim.locked) return refuse(route, subject, POST_STATE_CHANGED_DELETE);
+
+  const state = await deletePublishedResults(deps, route, {
+    postId,
+    userId,
+    previousStatus: post.status,
+  });
+  if (isActionResult(state)) return state;
+
+  if (state.failed && !options.delete_record_if_platform_fails) {
+    return keepRecord(deps, route, {
+      ...state,
+      status: 422,
+      code: "PLATFORM_DELETE_FAILED",
+      message: PLATFORM_DELETE_FAILED_MESSAGE,
+    });
+  }
+
+  return deleteOrKeepRecord(deps, route, state);
+}
+
+interface DeleteState {
+  postId: string;
+  userId: string;
+  previousStatus: string;
+  report: Array<Record<string, unknown>>;
+  deletedRowIds: string[];
+  failed: boolean;
+}
+
+// Deletes the published copies of the post on their platforms and reports what
+// happened to each of them. The claim is held while this runs.
+async function deletePublishedResults(
+  deps: PostActionDeps,
+  route: string,
+  state: { postId: string; userId: string; previousStatus: string },
+): Promise<DeleteState | ActionResult> {
+  const results = await readPlatformResults(
+    deps,
+    route,
+    state.postId,
+    "id, platform, status, platform_post_id, social_account_id, response_data",
+  );
+  if (isActionResult(results)) {
+    await releaseLock(deps, state.postId, state.userId, state.previousStatus);
+    return results;
+  }
+
+  const published = results.filter((row) => row.status === "success");
+  const accountById = await loadPublishingAccounts(deps, route, {
+    postId: state.postId,
+    userId: state.userId,
+    accountIds: distinct(published.map((row) => row.social_account_id)),
+  });
+  if (isActionResult(accountById)) {
+    await releaseLock(deps, state.postId, state.userId, state.previousStatus);
+    return accountById;
+  }
+
+  const { report, deletedRowIds } = await deleteOnPlatforms(deps, published, accountById);
+  return {
+    ...state,
+    report,
+    deletedRowIds,
+    failed: report.some((item) => item.outcome === "failed"),
+  };
+}
+
+async function loadPublishingAccounts(
+  deps: PostActionDeps,
+  route: string,
+  request: { postId: string; userId: string; accountIds: string[] },
+): Promise<Map<string, DeleteAccount> | ActionResult> {
+  const accountById = new Map<string, DeleteAccount>();
+  if (request.accountIds.length === 0) return accountById;
+
   const { data, error: readError } = await deps.supabase
-    .from("posts")
-    .select("id, status, platform_posts(id, platform, status, platform_post_id, social_account_id, response_data)")
-    .eq("id", postId)
-    .eq("user_id", userId)
-    .maybeSingle();
+    .from("social_accounts")
+    .select("id, user_id, platform, access_token, refresh_token, token_expires_at, auth_provider, connection_id, workspace_id, platform_user_id, account_metadata")
+    .eq("user_id", request.userId)
+    .in("id", request.accountIds);
 
   if (readError) {
-    console.error(`[n8n-api] ${route}: reading post ${postId} failed: ${readError.message}`);
-    return error(500, "INTERNAL_ERROR", "Reading the post failed. Please try again.");
-  }
-  if (!data) return refuse(route, subject, NOT_FOUND);
-
-  const post = data as PostRow;
-  if (post.status === "processing") {
-    return refuse(
-      route,
-      subject,
-      error(
-        409,
-        "POST_PROCESSING",
-        "The post is publishing right now. Delete it when it has finished.",
-      ),
+    console.error(
+      `[n8n-api] ${route}: reading the social accounts for post ${request.postId} failed: ${readError.message}`,
     );
+    return error(500, "INTERNAL_ERROR", "Reading the social account failed. Please try again.");
   }
-
-  const results: PlatformResultRow[] = Array.isArray(post.platform_posts)
-    ? post.platform_posts
-    : [];
-  const published = results.filter((row) => row.status === "success");
-  const accountIds = distinct(published.map((row) => row.social_account_id));
-
-  const accountById = new Map<string, DeleteAccount>();
-  if (accountIds.length > 0) {
-    const { data: accounts, error: accountsError } = await deps.supabase
-      .from("social_accounts")
-      .select("id, user_id, platform, access_token, refresh_token, token_expires_at, auth_provider, connection_id, workspace_id, platform_user_id, account_metadata")
-      .eq("user_id", userId)
-      .in("id", accountIds);
-
-    if (accountsError) {
-      console.error(`[n8n-api] ${route}: reading the social accounts for post ${postId} failed: ${accountsError.message}`);
-      return error(500, "INTERNAL_ERROR", "Reading the social account failed. Please try again.");
-    }
-    for (const account of (accounts ?? []) as DeleteAccount[]) {
-      accountById.set(account.id, account);
-    }
+  for (const account of (data ?? []) as DeleteAccount[]) {
+    accountById.set(account.id, account);
   }
+  return accountById;
+}
 
+async function deleteOnPlatforms(
+  deps: PostActionDeps,
+  published: PlatformResultRow[],
+  accountById: Map<string, DeleteAccount>,
+): Promise<{ report: Array<Record<string, unknown>>; deletedRowIds: string[] }> {
   const report: Array<Record<string, unknown>> = [];
   // The platform_posts row ids that were deleted on the platform, so a retry does not
   // try them again. Kept beside the report instead of inside it: the report is the
@@ -686,82 +1087,109 @@ export async function deletePost(
       { fetcher: deps.fetcher, youtubeDeps: deps.youtubeDeps },
     );
     if (outcome.outcome === "deleted") deletedRowIds.push(row.id);
-    report.push({
+    const item: Record<string, unknown> = {
       platform: row.platform,
       platform_post_id: row.platform_post_id ?? null,
       social_account_id: row.social_account_id ?? null,
       outcome: outcome.outcome,
       deleted_on_platform: outcome.outcome === "deleted",
-      ...(outcome.outcome !== "deleted" ? { reason: outcome.reason } : {}),
-    });
-  }
-
-  const failed = report.filter((item) => item.outcome === "failed");
-  if (failed.length > 0) {
-    // The Postora record is kept so the caller can retry. The rows that DID delete are
-    // cleared, so a retry does not try them again.
-    const details: Record<string, unknown> = { record_deleted: false, platforms: report };
-    if (deletedRowIds.length > 0) {
-      const { error: clearError } = await deps.supabase
-        .from("platform_posts")
-        .delete()
-        .eq("post_id", postId)
-        .in("id", deletedRowIds);
-      if (clearError) {
-        console.error(`[n8n-api] ${route}: clearing the deleted results of post ${postId} failed: ${clearError.message}`);
-        details.warning = "Some deleted platform results could not be cleared; a retry may report them as failed.";
-      }
+    };
+    if (outcome.outcome === "deleted") {
+      if (outcome.note) item.note = outcome.note;
+    } else {
+      item.reason = outcome.reason;
     }
-    return refuse(
-      route,
-      subject,
-      error(
-        422,
-        "PLATFORM_DELETE_FAILED",
-        "The post could not be deleted on every platform. The Postora record was kept so you can retry.",
-        details,
-      ),
-    );
+    report.push(item);
   }
+  return { report, deletedRowIds };
+}
 
-  const { data: deleted, error: deleteError } = await deps.supabase
+type RecordDeletion =
+  | { kind: "deleted" }
+  | { kind: "error" }
+  | { kind: "missing" };
+
+async function deleteRecord(
+  deps: PostActionDeps,
+  route: string,
+  request: { postId: string; userId: string },
+): Promise<RecordDeletion> {
+  // The claim is the condition: the row can only go while this delete holds it.
+  const { data, error: readError } = await deps.supabase
     .from("posts")
     .delete()
-    .eq("id", postId)
-    .eq("user_id", userId)
-    .neq("status", "processing")
+    .eq("id", request.postId)
+    .eq("user_id", request.userId)
+    .eq("status", "processing")
     .select("id");
 
-  if (deleteError) {
-    console.error(`[n8n-api] ${route}: deleting post ${postId} failed: ${deleteError.message}`);
-    return error(
-      500,
-      "INTERNAL_ERROR",
-      "Deleting the Postora record failed. Please try again.",
-      { record_deleted: false, platforms: report },
+  if (readError) {
+    console.error(
+      `[n8n-api] ${route}: deleting post ${request.postId} failed: ${readError.message}`,
     );
+    return { kind: "error" };
   }
-  if (!deleted || deleted.length === 0) {
-    return refuse(
-      route,
-      subject,
-      error(
-        409,
-        "POST_STATE_CHANGED",
-        "The post started publishing while it was being deleted. Check get_post.",
-        { record_deleted: false, platforms: report },
-      ),
-    );
-  }
+  if (!Array.isArray(data) || data.length === 0) return { kind: "missing" };
+  return { kind: "deleted" };
+}
 
-  // The media files stay in the library: they may be attached to another post, and a
-  // library entry is not part of "this post".
-  return ok({
-    post_id: postId,
-    record_deleted: true,
-    media_kept_in_library: true,
-    platforms: report,
+// Removes the Postora record now that its platform copies are gone, or keeps it
+// (and gives the claim back) when that cannot be done.
+async function deleteOrKeepRecord(
+  deps: PostActionDeps,
+  route: string,
+  state: DeleteState,
+): Promise<ActionResult> {
+  const deletion = await deleteRecord(deps, route, {
+    postId: state.postId,
+    userId: state.userId,
   });
+  if (deletion.kind === "deleted") {
+    // The media files stay in the library: they may be attached to another post, and
+    // a library entry is not part of "this post".
+    return ok({
+      post_id: state.postId,
+      record_deleted: true,
+      media_kept_in_library: true,
+      platforms: state.report,
+      ...(state.failed ? { kept_despite_failures: true } : {}),
+    });
+  }
+  return keepRecord(deps, route, {
+    ...state,
+    status: deletion.kind === "error" ? 500 : 409,
+    code: deletion.kind === "error" ? "INTERNAL_ERROR" : "POST_STATE_CHANGED",
+    message: deletion.kind === "error"
+      ? "Deleting the Postora record failed. Please try again."
+      : "The post changed while it was being deleted. Check get_post.",
+  });
+}
+
+// The Postora record is kept, so the caller can try again. The rows that DID delete
+// on the platform are cleared (a retry must not call the platform again), and the
+// claim is given back so the post is not stuck in `processing`.
+async function keepRecord(
+  deps: PostActionDeps,
+  route: string,
+  request: DeleteState & { status: number; code: string; message: string },
+): Promise<ActionResult> {
+  const warning = await clearDeletedResults(deps, route, {
+    postId: request.postId,
+    rowIds: request.deletedRowIds,
+    warning: CLEARED_ROWS_WARNING,
+  });
+  await releaseLock(deps, request.postId, request.userId, request.previousStatus);
+
+  const details: Record<string, unknown> = {
+    record_deleted: false,
+    platforms: request.report,
+  };
+  if (warning) details.warning = warning;
+  return refuseOrFail(
+    route,
+    `post ${request.postId}, user ${request.userId}`,
+    error(request.status, request.code, request.message, details),
+  );
 }
 
 // ── 5. accounts/health ─────────────────────────────────────────────────────────

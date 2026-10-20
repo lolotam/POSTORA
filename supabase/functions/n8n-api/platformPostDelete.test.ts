@@ -12,6 +12,9 @@ const USER = "11111111-1111-4111-8111-111111111111";
 const ACCOUNT = "33333333-3333-4333-8333-333333333333";
 const ROW = "44444444-4444-4444-8444-444444444444";
 const PLATFORM_POST_ID = "1234567890";
+// One token for the whole suite: a token-looking literal in a test file is a
+// secret-shaped string, and a scanner would have to guess whether it is one.
+const TEST_TOKEN = "test-token";
 
 interface RecordedCall {
   url: string;
@@ -106,7 +109,7 @@ function account(overrides: Partial<DeleteAccount> = {}): DeleteAccount {
     id: ACCOUNT,
     user_id: USER,
     platform: "facebook",
-    access_token: "tok-123",
+    access_token: TEST_TOKEN,
     ...overrides,
   };
 }
@@ -119,8 +122,22 @@ Deno.test("a facebook delete asks Graph to delete the post and reports it delete
   assertEquals(calls[0].method, "DELETE");
   assertEquals(
     calls[0].url,
-    `${FACEBOOK_GRAPH}/${PLATFORM_POST_ID}?access_token=tok-123`,
+    `${FACEBOOK_GRAPH}/${PLATFORM_POST_ID}?access_token=${TEST_TOKEN}`,
   );
+});
+
+Deno.test("a transport error never puts the token in the reason", async () => {
+  const { fetcher } = fakeFetcher([
+    {
+      reject: new Error(
+        `connection reset: ${FACEBOOK_GRAPH}/${PLATFORM_POST_ID}?access_token=SECRET`,
+      ),
+    },
+  ]);
+  const outcome = await deletePublishedPost(row(), account(), deps(fetcher));
+  if (outcome.outcome !== "failed") throw new Error("expected a failure");
+  assertEquals(outcome.reason.includes("SECRET"), false);
+  assertEquals(outcome.reason, "Could not reach Facebook. Try again.");
 });
 
 Deno.test("a Graph error is reported with Meta's own message", async () => {
@@ -149,7 +166,7 @@ Deno.test("threads deletes through the Threads graph", async () => {
   assertEquals(outcome, { outcome: "deleted" });
   assertEquals(
     calls[0].url,
-    `${THREADS_GRAPH}/${PLATFORM_POST_ID}?access_token=tok-123`,
+    `${THREADS_GRAPH}/${PLATFORM_POST_ID}?access_token=${TEST_TOKEN}`,
   );
 });
 
@@ -245,7 +262,20 @@ Deno.test("a pinterest 204 is a delete", async () => {
     `https://api.pinterest.com/v5/pins/${PLATFORM_POST_ID}`,
   );
   assertEquals(calls[0].method, "DELETE");
-  assertEquals(calls[0].headers.Authorization, "Bearer tok-123");
+  assertEquals(calls[0].headers.Authorization, `Bearer ${TEST_TOKEN}`);
+});
+
+Deno.test("a pinterest pin that is not there any more is a delete that already happened", async () => {
+  const { fetcher } = fakeFetcher([{ status: 404, body: { message: "Pin not found" } }]);
+  const outcome = await deletePublishedPost(
+    row({ platform: "pinterest" }),
+    account({ platform: "pinterest" }),
+    deps(fetcher),
+  );
+  assertEquals(outcome, {
+    outcome: "deleted",
+    note: "Already removed on the platform.",
+  });
 });
 
 Deno.test("a pinterest refusal names the status", async () => {
@@ -322,6 +352,19 @@ Deno.test("a linkedin post that only deleted one destination is a failure", asyn
   );
 });
 
+Deno.test("a linkedin destination that is not there any more is a delete that already happened", async () => {
+  const { fetcher } = fakeFetcher([{ status: 404 }]);
+  const outcome = await deletePublishedPost(
+    row({ platform: "linkedin" }),
+    account({ platform: "linkedin" }),
+    deps(fetcher),
+  );
+  assertEquals(outcome, {
+    outcome: "deleted",
+    note: "Already removed on the platform.",
+  });
+});
+
 Deno.test("a composio youtube channel is kept on the platform", async () => {
   const { calls, fetcher } = fakeFetcher();
   const outcome = await deletePublishedPost(
@@ -344,7 +387,7 @@ Deno.test("a native youtube channel deletes the video through the data api", asy
     account({
       platform: "youtube",
       auth_provider: "native",
-      access_token: "yt-token",
+      access_token: TEST_TOKEN,
       // Far enough in the future that the token is never refreshed.
       token_expires_at: "2099-01-01T00:00:00.000Z",
     }),
@@ -357,6 +400,27 @@ Deno.test("a native youtube channel deletes the video through the data api", asy
     calls[0].url,
     `https://www.googleapis.com/youtube/v3/videos?id=${PLATFORM_POST_ID}`,
   );
+});
+
+Deno.test("a youtube video that is not there any more is a delete that already happened", async () => {
+  const { fetcher } = fakeFetcher([
+    { status: 404, body: { error: { message: "Video not found." } } },
+  ]);
+  const outcome = await deletePublishedPost(
+    row({ platform: "youtube" }),
+    account({
+      platform: "youtube",
+      auth_provider: "native",
+      access_token: TEST_TOKEN,
+      // Far enough in the future that the token is never refreshed.
+      token_expires_at: "2099-01-01T00:00:00.000Z",
+    }),
+    deps(fetcher),
+  );
+  assertEquals(outcome, {
+    outcome: "deleted",
+    note: "Already removed on the platform.",
+  });
 });
 
 Deno.test("a platform name that is an inherited object key has no deleter", async () => {

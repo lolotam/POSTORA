@@ -15,7 +15,7 @@ import {
 import { fetchWithTimeout } from "../_shared/request-timeout.ts";
 
 export type PlatformDeleteOutcome =
-  | { outcome: "deleted" }
+  | { outcome: "deleted"; note?: string }
   | { outcome: "kept_on_platform"; reason: string }
   | { outcome: "failed"; reason: string };
 
@@ -64,6 +64,21 @@ function missingToken(): PlatformDeleteOutcome {
   };
 }
 
+// A platform copy that is already gone is not a failure: the caller asked for it to
+// be gone, and it is.
+const ALREADY_GONE: PlatformDeleteOutcome = {
+  outcome: "deleted",
+  note: "Already removed on the platform.",
+};
+
+// A provider message can carry the request URL, and the Graph URL carries the access
+// token. Nothing that reaches the log or the caller may contain one.
+export function redactTokens(text: string): string {
+  return text
+    .replace(/access_token=[^\s&]*/gi, "access_token=[redacted]")
+    .replace(/Bearer\s+[^\s]+/gi, "Bearer [redacted]");
+}
+
 // Facebook and Threads are the same Graph call against a different host, so the shape
 // lives here once and each platform keeps its own name in the message it reports.
 async function deleteViaGraph(
@@ -81,6 +96,11 @@ async function deleteViaGraph(
     `${platformName} rejected the delete request.`,
   );
   if (!outcome.ok) {
+    // An unreachable platform has no message of its own: the transport error is the
+    // only text there is, and it can carry the token.
+    if (outcome.failure.upstreamUnavailable) {
+      return { outcome: "failed", reason: `Could not reach ${platformName}. Try again.` };
+    }
     return {
       outcome: "failed",
       reason: outcome.failure.error ?? `${platformName} rejected the delete request.`,
@@ -129,6 +149,8 @@ async function deleteYoutube(
     { ...deps.youtubeDeps(), fetcher: deps.fetcher },
     platformPostId,
   );
+  // A video that is not there any more is already what the caller wanted.
+  if (!result.ok && result.kind === "not_found") return ALREADY_GONE;
   if (!result.ok) return { outcome: "failed", reason: result.message };
   return { outcome: "deleted" };
 }
@@ -151,11 +173,14 @@ async function deletePinterest(
       PROVIDER_TIMEOUT_MS,
       deps.fetcher,
     );
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "network error";
-    return { outcome: "failed", reason: `Could not reach Pinterest: ${message}` };
+  } catch {
+    // No provider message: a transport error can carry the request URL, and the
+    // Pinterest URL carries the token in its header.
+    return { outcome: "failed", reason: "Could not reach Pinterest. Try again." };
   }
   if (response.status >= 200 && response.status < 300) return { outcome: "deleted" };
+  // A pin that is not there any more is already what the caller wanted.
+  if (response.status === 404) return ALREADY_GONE;
   const body = await response.json().catch(() => null) as { message?: unknown } | null;
   const detail = typeof body?.message === "string" ? body.message : "no message";
   return {
@@ -195,6 +220,7 @@ async function deleteLinkedin(
   const urns = linkedinDestinationUrns(row, platformPostId);
   const failures: string[] = [];
   let deleted = 0;
+  let alreadyGone = 0;
   for (const urn of urns) {
     let response: Response;
     try {
@@ -218,9 +244,16 @@ async function deleteLinkedin(
       deleted += 1;
       continue;
     }
+    // A destination that is not there any more is already what the caller wanted.
+    if (response.status === 404) {
+      alreadyGone += 1;
+      continue;
+    }
     failures.push(`${urn}: LinkedIn returned ${response.status}`);
   }
-  if (failures.length === 0) return { outcome: "deleted" };
+  if (failures.length === 0) {
+    return alreadyGone === urns.length ? ALREADY_GONE : { outcome: "deleted" };
+  }
   return {
     outcome: "failed",
     reason: `Deleted ${deleted} of ${urns.length} LinkedIn destinations. ${failures.join("; ")}`,
@@ -279,10 +312,14 @@ export async function deletePublishedPost(
   try {
     const outcome = await deleter(row.platform_post_id, row, account, deps);
     if (outcome.outcome === "failed") {
+      // The reason is the one text a provider controls, so it is redacted once here:
+      // everything that leaves this function goes through this block.
+      const reason = redactTokens(outcome.reason);
       // Ids and the reason only: a token must never reach the log.
       console.warn(
-        `[n8n-api] posts/delete: ${row.platform} delete failed for platform_posts ${row.id}: ${outcome.reason}`,
+        `[n8n-api] posts/delete: ${row.platform} delete failed for platform_posts ${row.id}: ${reason}`,
       );
+      return { outcome: "failed", reason };
     }
     return outcome;
   } catch (thrown) {

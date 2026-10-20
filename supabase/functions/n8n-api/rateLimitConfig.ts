@@ -57,8 +57,8 @@ export const FALLBACK_RATE_LIMITS: Record<string, { requests: number; windowMs: 
   '/api/v1/comments/hide': { requests: 600, windowMs: 60 * 60 * 1000 },
   '/api/v1/comments/delete': { requests: 300, windowMs: 60 * 60 * 1000 },
   '/api/v1/media': { requests: 300, windowMs: 60 * 60 * 1000 },
-  // Added with the MCP post-management tools. No database row seeds these yet,
-  // so this map is the limit until an admin adds one on the Rate Limits page.
+  // Added with the MCP post-management tools. No rate_limit_settings row seeds
+  // these yet, so this map is their limit until a migration adds one.
   // The destructive ones are kept low on purpose.
   '/api/v1/posts/cancel': { requests: 60, windowMs: 60 * 60 * 1000 },
   '/api/v1/posts/reschedule': { requests: 120, windowMs: 60 * 60 * 1000 },
