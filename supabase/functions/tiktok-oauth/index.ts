@@ -2,6 +2,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { cacheAvatarToCdn } from "../_shared/avatar-cache.ts";
 import { authenticateCaller } from "../_shared/auth-helper.ts";
 import { createOAuthState, verifyOAuthState } from "../_shared/oauthState.ts";
+import { revokeTikTokAccess } from "./revoke.ts";
 
 import { restrictedCorsHeaders } from "../_shared/cors.ts";
 
@@ -410,7 +411,9 @@ Deno.serve(async (req) => {
         `&scope=${TIKTOK_SCOPES}` +
         `&response_type=code` +
         `&redirect_uri=${encodeURIComponent(effectiveRedirect)}` +
-        `&state=${encodeURIComponent(state)}`;
+        `&state=${encodeURIComponent(state)}` +
+        // Always show TikTok's permission screen, even when the user already approved this app before.
+        `&disable_auto_auth=1`;
 
       return new Response(
         JSON.stringify({
@@ -473,12 +476,14 @@ Deno.serve(async (req) => {
       if (!account_id) throw new Error("Missing account_id for creator_info");
       const caller = await authenticateCaller(req, body.user_id);
       const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-      let accountQuery = supabase
+      // Scoped to the caller even for service-role calls: those bypass RLS, so ownership must stay in the query.
+      const { data: account, error: fetchError } = await supabase
         .from("social_accounts")
         .select("access_token, platform_username, avatar_url")
-        .eq("id", account_id);
-      if (!caller.isServiceRole) accountQuery = accountQuery.eq("user_id", caller.userId);
-      const { data: account, error: fetchError } = await accountQuery.maybeSingle();
+        .eq("id", account_id)
+        .eq("platform", "tiktok")
+        .eq("user_id", caller.userId)
+        .maybeSingle();
       if (fetchError) throw new Error("Account lookup failed");
       if (!account) {
         return new Response(JSON.stringify({ error: "Account not found" }), {
@@ -562,12 +567,14 @@ Deno.serve(async (req) => {
 
       const caller = await authenticateCaller(req, body.user_id);
       const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-      let accountQuery = supabase
+      // Scoped to the caller even for service-role calls: those bypass RLS, so ownership must stay in the query.
+      const { data: account, error: fetchError } = await supabase
         .from("social_accounts")
         .select("refresh_token, platform_username")
-        .eq("id", account_id);
-      if (!caller.isServiceRole) accountQuery = accountQuery.eq("user_id", caller.userId);
-      const { data: account, error: fetchError } = await accountQuery.maybeSingle();
+        .eq("id", account_id)
+        .eq("platform", "tiktok")
+        .eq("user_id", caller.userId)
+        .maybeSingle();
       if (fetchError) throw new Error("Account lookup failed");
       if (!account) {
         return new Response(JSON.stringify({ error: "Account not found" }), {
@@ -604,7 +611,7 @@ Deno.serve(async (req) => {
       const newExpiresAt = new Date(
         Date.now() + tokenData.expires_in * 1000,
       ).toISOString();
-      let tokenUpdate = supabase
+      const { error: updateError } = await supabase
         .from("social_accounts")
         .update({
           access_token: tokenData.access_token,
@@ -617,13 +624,92 @@ Deno.serve(async (req) => {
           last_refresh_error: null,
           updated_at: new Date().toISOString(),
         })
-        .eq("id", account_id);
-      if (!caller.isServiceRole) tokenUpdate = tokenUpdate.eq("user_id", caller.userId);
-      const { error: updateError } = await tokenUpdate;
+        .eq("id", account_id)
+        .eq("user_id", caller.userId);
       if (updateError) throw new Error("Failed to save refreshed token");
 
       return new Response(
         JSON.stringify({ success: true, expires_at: newExpiresAt }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
+    }
+
+    // ---------- disconnect: revoke the app in TikTok, then deactivate the account ----------
+    if (action === "disconnect") {
+      const caller = await authenticateCaller(req, body.user_id);
+      const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+      // Every refusal and every failed revoke leaves a durable row for support (AGENTS.md).
+      const logDisconnectEvent = async (message: string, metadata: Record<string, unknown>) => {
+        const { error: logError } = await supabase.from("system_logs").insert({
+          source: "tiktok-oauth",
+          category: "auth",
+          level: "warn",
+          message,
+          user_id: caller.userId,
+          metadata: { action: "disconnect", ...metadata },
+        });
+        if (logError) console.error("[tiktok-oauth] Disconnect log rejected:", logError.message);
+      };
+
+      if (!TIKTOK_CLIENT_KEY || !TIKTOK_CLIENT_SECRET) {
+        await logDisconnectEvent("TikTok disconnect refused: TikTok credentials not configured", { reason: "credentials_missing" });
+        return new Response(JSON.stringify({ error: "TikTok is not configured" }), {
+          status: 500,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      if (!account_id) {
+        await logDisconnectEvent("TikTok disconnect refused: account_id missing", { reason: "missing_account_id" });
+        return new Response(JSON.stringify({ error: "Missing account_id" }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      // The raw value is not stored: only a well-formed UUID is ever written to the log.
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(account_id)) {
+        await logDisconnectEvent("TikTok disconnect refused: account_id is not a UUID", { reason: "invalid_account_id" });
+        return new Response(JSON.stringify({ error: "Invalid account id" }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      // Scoped to the caller even for service-role calls: those bypass RLS, so ownership must stay in the query.
+      const { data: account, error: fetchError } = await supabase
+        .from("social_accounts")
+        .select("access_token")
+        .eq("id", account_id)
+        .eq("platform", "tiktok")
+        .eq("user_id", caller.userId)
+        .maybeSingle();
+      if (fetchError) throw new Error("Account lookup failed");
+      if (!account) {
+        await logDisconnectEvent("TikTok disconnect refused: account not found for this caller", { account_id });
+        return new Response(JSON.stringify({ error: "Account not found" }), {
+          status: 404,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      // Best effort: the account is disconnected in Postora even if TikTok cannot be reached.
+      const revoked = account.access_token
+        ? await revokeTikTokAccess(fetch, TIKTOK_CLIENT_KEY, TIKTOK_CLIENT_SECRET, account.access_token)
+        : false;
+      if (!revoked) {
+        await logDisconnectEvent("TikTok revoke did not succeed; account deactivated in Postora only", {
+          account_id,
+          reason: account.access_token ? "revoke_failed" : "no_access_token",
+        });
+      }
+
+      const { error: updateError } = await supabase
+        .from("social_accounts")
+        .update({ is_active: false, updated_at: new Date().toISOString() })
+        .eq("id", account_id)
+        .eq("user_id", caller.userId);
+      if (updateError) throw new Error("Failed to disconnect account");
+
+      return new Response(
+        JSON.stringify({ success: true, revoked }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
