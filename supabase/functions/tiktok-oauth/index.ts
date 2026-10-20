@@ -637,6 +637,14 @@ Deno.serve(async (req) => {
         throw new Error("TikTok credentials not configured");
       }
       if (!account_id) throw new Error("Missing account_id for disconnect");
+      // Only a well-formed UUID reaches the lookup and the refusal log, so junk ids cannot bloat system_logs.
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(account_id)) {
+        console.warn(`[${timestamp}] TikTok disconnect refused: account_id is not a UUID`);
+        return new Response(JSON.stringify({ error: "Invalid account id" }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
 
       const caller = await authenticateCaller(req, body.user_id);
       const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);

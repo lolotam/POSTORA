@@ -103,11 +103,15 @@ export default function TikTokAuth() {
       if (revokeError) {
         // The revoke is best effort: when the function is unavailable, still disconnect in Postora.
         console.warn("TikTok revoke on disconnect failed, deactivating directly:", revokeError);
-        const { error } = await supabase
+        const { data: deactivated, error } = await supabase
           .from("social_accounts")
           .update({ is_active: false })
-          .eq("id", accountId);
+          .eq("id", accountId)
+          .select("id")
+          .maybeSingle();
         if (error) throw error;
+        // A zero-row update (stale id, or a row RLS hides) is not a disconnect.
+        if (!deactivated) throw new Error("TikTok account not found");
       }
       toast({ title: "Disconnected", description: "TikTok account has been disconnected." });
       queryClient.invalidateQueries({ queryKey: ["tiktok-demo-accounts"] });
