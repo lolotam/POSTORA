@@ -192,6 +192,7 @@ function buildServer(apiKey: string) {
       first_comment: z.string().optional().describe("Optional comment to automatically post immediately after publishing"),
       instagram_media_type: z.enum(["feed", "stories"]).optional().describe("Set to 'stories' to publish as an Instagram Story instead of a feed post"),
       instagram_share_to_feed: z.boolean().optional().describe("For Instagram videos, whether to also share to the main profile feed"),
+      instagram_collaborators: z.array(z.string()).max(3).optional().describe("Instagram usernames to invite as Collab co-authors on a feed image, carousel or reel (not stories). Only the first username is invited today. If Instagram rejects it, the post is published without it and get_post shows a warning in platform_results[].warnings."),
       facebook_post_type: z.enum(["feed", "story", "reel"]).optional().describe("Set to 'story' to publish as a Facebook Story, or 'reel' to publish as a Reel"),
       youtube_title: z.string().optional(),
       youtube_privacy: z.enum(["public", "unlisted", "private"]).optional(),
