@@ -637,17 +637,30 @@ Deno.serve(async (req) => {
         throw new Error("TikTok credentials not configured");
       }
       if (!account_id) throw new Error("Missing account_id for disconnect");
-      // Only a well-formed UUID reaches the lookup and the refusal log, so junk ids cannot bloat system_logs.
+
+      const caller = await authenticateCaller(req, body.user_id);
+      const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+      // Every refusal and every failed revoke leaves a durable row for support (AGENTS.md).
+      const logDisconnectEvent = async (message: string, metadata: Record<string, unknown>) => {
+        const { error: logError } = await supabase.from("system_logs").insert({
+          source: "tiktok-oauth",
+          category: "auth",
+          level: "warn",
+          message,
+          user_id: caller.userId,
+          metadata: { action: "disconnect", ...metadata },
+        });
+        if (logError) console.error("[tiktok-oauth] Disconnect log rejected:", logError.message);
+      };
+
+      // The raw value is not stored: only a well-formed UUID is ever written to the log.
       if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(account_id)) {
-        console.warn(`[${timestamp}] TikTok disconnect refused: account_id is not a UUID`);
+        await logDisconnectEvent("TikTok disconnect refused: account_id is not a UUID", { reason: "invalid_account_id" });
         return new Response(JSON.stringify({ error: "Invalid account id" }), {
           status: 400,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
-
-      const caller = await authenticateCaller(req, body.user_id);
-      const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
       // Scoped to the caller even for service-role calls: those bypass RLS, so ownership must stay in the query.
       const { data: account, error: fetchError } = await supabase
         .from("social_accounts")
@@ -658,16 +671,7 @@ Deno.serve(async (req) => {
         .maybeSingle();
       if (fetchError) throw new Error("Account lookup failed");
       if (!account) {
-        // A refused disconnect leaves a row, so a stale or foreign account id is visible in support.
-        const { error: refusalLogError } = await supabase.from("system_logs").insert({
-          source: "tiktok-oauth",
-          category: "auth",
-          level: "warn",
-          message: "TikTok disconnect refused: account not found for this caller",
-          user_id: caller.userId,
-          metadata: { action: "disconnect", account_id },
-        });
-        if (refusalLogError) console.error("[tiktok-oauth] Disconnect refusal log rejected:", refusalLogError.message);
+        await logDisconnectEvent("TikTok disconnect refused: account not found for this caller", { account_id });
         return new Response(JSON.stringify({ error: "Account not found" }), {
           status: 404,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -678,7 +682,12 @@ Deno.serve(async (req) => {
       const revoked = account.access_token
         ? await revokeTikTokAccess(fetch, TIKTOK_CLIENT_KEY, TIKTOK_CLIENT_SECRET, account.access_token)
         : false;
-      if (!revoked) console.warn(`[${timestamp}] TikTok revoke did not succeed for account ${account_id}`);
+      if (!revoked) {
+        await logDisconnectEvent("TikTok revoke did not succeed; account deactivated in Postora only", {
+          account_id,
+          reason: account.access_token ? "revoke_failed" : "no_access_token",
+        });
+      }
 
       const { error: updateError } = await supabase
         .from("social_accounts")
