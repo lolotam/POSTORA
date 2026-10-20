@@ -4,7 +4,7 @@
 //
 // This function runs with the service role, so RLS is not the boundary: every query and
 // every write on `posts` carries .eq("user_id", userId), and `platform_posts` is only
-// ever reached through a post_id that came out of such a read.
+// ever reached through a read that joins the parent post and filters on its owner.
 import { z } from "npm:zod@3.23.8";
 import { validateRequestBody } from "../_shared/validate.ts";
 import { containsSensitiveInfo } from "../_shared/errorSanitizer.ts";
@@ -280,10 +280,18 @@ interface LockOutcome {
   failed: boolean;
 }
 
+// The claim refuses a post that an earlier ambiguous retry left on hold. The hold
+// is part of the compare-and-set itself: a request that read the post before that
+// hold was recorded must not be able to claim it afterwards. ISO 8601 instants in
+// the Z form compare correctly as text.
+function holdFilter(now: Date): string {
+  return `metadata->>retry_hold_until.is.null,metadata->>retry_hold_until.lt.${now.toISOString()}`;
+}
+
 async function lockPost(
   deps: PostActionDeps,
   route: string,
-  request: { postId: string; userId: string; status: string },
+  request: { postId: string; userId: string; status: string; now: Date },
 ): Promise<LockOutcome> {
   const { data, error: readError } = await deps.supabase
     .from("posts")
@@ -291,6 +299,7 @@ async function lockPost(
     .eq("id", request.postId)
     .eq("user_id", request.userId)
     .eq("status", request.status)
+    .or(holdFilter(request.now))
     .select("id");
 
   if (readError) {
@@ -302,8 +311,9 @@ async function lockPost(
   return { locked: Array.isArray(data) && data.length > 0, failed: false };
 }
 
-// Gives the post back to the status it had before the claim. Never throws: a
-// failure here must not replace the answer the caller is about to receive.
+// Gives the post back to the status it had before the claim, but only when the
+// claim is still held: a publish that did start settles the status itself, and a
+// post that is no longer `processing` must not be overwritten.
 async function releaseLock(
   deps: PostActionDeps,
   postId: string,
@@ -324,6 +334,38 @@ async function releaseLock(
   }
 }
 
+// process-post may have written the status of the post itself before it refused
+// (an inactive account leaves the post `failed`), so a refusal restores the
+// status the post had before the claim from both of the statuses it may have
+// written. Never throws: a failure here must not replace the answer the caller
+// is about to receive.
+async function releaseAfterRefusal(
+  deps: PostActionDeps,
+  postId: string,
+  userId: string,
+  previousStatus: string,
+): Promise<void> {
+  const { error: readError } = await deps.supabase
+    .from("posts")
+    .update({ status: previousStatus })
+    .eq("id", postId)
+    .eq("user_id", userId)
+    .in("status", ["processing", "failed"]);
+
+  if (readError) {
+    console.error(
+      `[n8n-api] posts: restoring the status of post ${postId} failed: ${readError.message}`,
+    );
+  }
+}
+
+// What the hold did: it was recorded, the post was already settled by
+// process-post, or the write failed.
+type HoldOutcome =
+  | { kind: "held"; holdUntil: string }
+  | { kind: "settled" }
+  | { kind: "failed" };
+
 // Gives the post back to the status it had before the claim and records a hold on
 // it: the retry that is being given up may still be publishing, and a hold is what
 // keeps a second retry or a delete away from that post until the earlier publish
@@ -337,55 +379,106 @@ async function releaseLockWithHold(
     previousStatus: string;
     metadata: Record<string, unknown> | null | undefined;
   },
-): Promise<string> {
+): Promise<HoldOutcome> {
   const holdUntil = new Date(deps.now().getTime() + RETRY_HOLD_MS).toISOString();
   try {
-    const { error: holdError } = await deps.supabase
+    // The metadata the request carried was read at the start of the retry, so it
+    // can be up to two minutes old and the publish that is still running may have
+    // written to it since. The fresh copy is read again, and the hold is merged
+    // into it, so a hold cannot wipe what the publish recorded.
+    const fresh = await readPostMetadata(deps, request.postId, request.userId);
+    const metadata = {
+      ...(fresh ?? request.metadata ?? {}),
+      retry_hold_until: holdUntil,
+    };
+    const { data, error: holdError } = await deps.supabase
       .from("posts")
       .update({
         status: request.previousStatus,
-        metadata: {
-          ...(request.metadata ?? {}),
-          retry_hold_until: holdUntil,
-        },
+        metadata,
       })
       .eq("id", request.postId)
       .eq("user_id", request.userId)
-      .eq("status", "processing");
+      .eq("status", "processing")
+      .select("id");
 
     if (holdError) {
       console.error(
         `[n8n-api] posts: recording the retry hold on post ${request.postId} failed: ${holdError.message}`,
       );
+      return { kind: "failed" };
     }
+    // No row changed: process-post settled the post itself, so there is nothing
+    // left to hold.
+    if (!Array.isArray(data) || data.length === 0) return { kind: "settled" };
+    return { kind: "held", holdUntil };
   } catch (thrown) {
     console.error(
       `[n8n-api] posts: recording the retry hold on post ${request.postId} failed: ${thrown instanceof Error ? thrown.name : "unknown"}`,
     );
+    return { kind: "failed" };
   }
-  return holdUntil;
 }
 
-// The per-platform results of one post. The post_id comes from a read that was
-// scoped to the caller, and that is the only thing that links these rows to them.
-async function readPlatformResults(
+// The metadata the post carries right now. `null` when it cannot be read, so the
+// caller falls back to the copy the request carried. Never throws: a read that
+// fails must not cost the caller the write it needs to do.
+async function readPostMetadata(
+  deps: PostActionDeps,
+  postId: string,
+  userId: string,
+): Promise<Record<string, unknown> | null> {
+  try {
+    const { data, error: readError } = await deps.supabase
+      .from("posts")
+      .select("metadata")
+      .eq("id", postId)
+      .eq("user_id", userId)
+      .maybeSingle();
+
+    if (readError) {
+      console.error(
+        `[n8n-api] posts: reading the metadata of post ${postId} failed: ${readError.message}`,
+      );
+      return null;
+    }
+    if (!data) return null;
+    const metadata = (data as { metadata?: unknown }).metadata;
+    if (!metadata || typeof metadata !== "object") return {};
+    return metadata as Record<string, unknown>;
+  } catch (thrown) {
+    console.error(
+      `[n8n-api] posts: reading the metadata of post ${postId} failed: ${thrown instanceof Error ? thrown.name : "unknown"}`,
+    );
+    return null;
+  }
+}
+
+// The per-platform results of one post. The read joins the parent post and
+// filters on its owner, so the ownership is part of the query itself and not
+// something the caller has to have checked first.
+export async function readPlatformResults(
   deps: PostActionDeps,
   route: string,
-  postId: string,
-  columns: string,
+  request: { postId: string; userId: string; columns: string },
 ): Promise<PlatformResultRow[] | ActionResult> {
   const { data, error: readError } = await deps.supabase
     .from("platform_posts")
-    .select(columns)
-    .eq("post_id", postId);
+    .select(`${request.columns}, posts!inner(user_id)`)
+    .eq("post_id", request.postId)
+    .eq("posts.user_id", request.userId);
 
   if (readError) {
     console.error(
-      `[n8n-api] ${route}: reading the platform results of post ${postId} failed: ${readError.message}`,
+      `[n8n-api] ${route}: reading the platform results of post ${request.postId} failed: ${readError.message}`,
     );
     return error(500, "INTERNAL_ERROR", "Reading the publish results failed. Please try again.");
   }
-  return Array.isArray(data) ? (data as PlatformResultRow[]) : [];
+  if (!Array.isArray(data)) return [];
+  // The join adds the parent post to every row; the rows keep the shape they had
+  // before it.
+  return (data as Array<PlatformResultRow & { posts?: unknown }>)
+    .map(({ posts: _joined, ...row }) => row as PlatformResultRow);
 }
 
 // Removes the platform_posts rows of a post by id. Returns the warning the caller
@@ -629,6 +722,8 @@ const ALREADY_PUBLISHED_REASON = "This account already published this post.";
 const STILL_PUBLISHING_REASON = "A publish for this account is still in progress.";
 const OLD_RESULTS_WARNING =
   "Old failed results could not be cleared; get_post may show them next to the new ones.";
+const KEPT_RESULTS_WARNING =
+  "Some failed results were kept because no new result was recorded for them; retry them again later.";
 
 interface NotRetried {
   platform: string;
@@ -644,7 +739,11 @@ interface RetryRequest {
   postId: string;
   userId: string;
   previousStatus: string;
-  /** The metadata the post carried, so a hold can be written without losing it. */
+  /**
+   * The metadata the post carried when the retry started. It is the fallback for
+   * the hold: the copy the post carries now is read again before the hold is
+   * written, and this one is used when that read fails.
+   */
   metadata: Record<string, unknown> | null | undefined;
   targets: PlatformResultRow[];
   notRetried: NotRetried[];
@@ -696,18 +795,24 @@ export async function retryFailedPost(
     return refuse(route, `post unknown, user ${userId}`, postId);
   }
   const subject = `post ${postId}, user ${userId}`;
+  const now = deps.now();
 
   const read = await readOwnedPost(deps, route, postId, userId, "id, status, scheduled_at, metadata");
   if (isActionResult(read)) return read;
   const post = read;
 
-  const guard = retryGuard(route, subject, post, deps.now());
+  const guard = retryGuard(route, subject, post, now);
   if (guard) return guard;
 
   // The lock comes before the results are read: two retries that read the same
   // failed rows before either locked would publish them twice, and the second one
   // would do it from a snapshot that is already stale.
-  const lock = await lockPost(deps, route, { postId, userId, status: post.status });
+  const lock = await lockPost(deps, route, {
+    postId,
+    userId,
+    status: post.status,
+    now,
+  });
   if (lock.failed) {
     return error(500, "INTERNAL_ERROR", "Starting the retry failed. Please try again.");
   }
@@ -743,12 +848,11 @@ async function pickTargetsUnderLock(
     subject: string;
   },
 ): Promise<{ targets: PlatformResultRow[]; notRetried: NotRetried[] } | ActionResult> {
-  const results = await readPlatformResults(
-    deps,
-    route,
-    request.postId,
-    "id, platform, status, social_account_id",
-  );
+  const results = await readPlatformResults(deps, route, {
+    postId: request.postId,
+    userId: request.userId,
+    columns: "id, platform, status, social_account_id",
+  });
   if (isActionResult(results)) {
     await releaseLock(deps, request.postId, request.userId, request.previousStatus);
     return results;
@@ -892,13 +996,13 @@ async function reportRetry(
     // right now. The claim is released, or the post would stay `processing` and
     // refuse every later retry and delete, but a hold on the row keeps a second
     // retry and a delete away until the earlier publish cannot still be running.
-    const holdUntil = await releaseLockWithHold(deps, {
+    const hold = await releaseLockWithHold(deps, {
       postId: request.postId,
       userId: request.userId,
       previousStatus: request.previousStatus,
       metadata: request.metadata,
     });
-    return ok(unknownRetryBody(request.postId, retried, holdUntil), 202);
+    return ok(unknownRetryBody(request.postId, retried, hold), 202);
   }
   if (outcome.kind === "timeout") {
     return ok(
@@ -908,8 +1012,10 @@ async function reportRetry(
   }
   if (outcome.kind === "refused") {
     // process-post refused before it published anything, so the old failed rows
-    // stay and the post goes back to the status it had.
-    await releaseLock(deps, request.postId, request.userId, request.previousStatus);
+    // stay and the post goes back to the status it had. process-post may have
+    // written the status itself before it refused, so both of the statuses it may
+    // have written are restored from.
+    await releaseAfterRefusal(deps, request.postId, request.userId, request.previousStatus);
     return error(
       502,
       "RETRY_FAILED",
@@ -917,9 +1023,16 @@ async function reportRetry(
     );
   }
 
+  // A 2xx does not prove that the replacement rows were stored, so the old failed
+  // rows are only cleared for the accounts a new result exists for.
+  const replaced = await replacedTargetRowIds(deps, route, {
+    postId: request.postId,
+    userId: request.userId,
+    targets: request.targets,
+  });
   const warning = await clearDeletedResults(deps, route, {
     postId: request.postId,
-    rowIds,
+    rowIds: replaced.rowIds,
     warning: OLD_RESULTS_WARNING,
   });
   return ok(acceptedRetryBody({
@@ -927,8 +1040,42 @@ async function reportRetry(
     retried,
     notRetried: request.notRetried,
     body: outcome.body,
-    warning,
+    // A delete that failed is the more urgent fact; otherwise the rows that were
+    // kept are what the caller has to know about.
+    warning: warning ?? replaced.warning,
   }));
+}
+
+// The old failed rows that a new result exists for. A 2xx from process-post does
+// not prove that the replacement rows were stored, so the results are read again
+// and an old row is only cleared when another row for the same account exists.
+// The rows without a replacement stay, so a later retry can pick them up again.
+async function replacedTargetRowIds(
+  deps: PostActionDeps,
+  route: string,
+  request: { postId: string; userId: string; targets: PlatformResultRow[] },
+): Promise<{ rowIds: string[]; warning: string | null }> {
+  const results = await readPlatformResults(deps, route, {
+    postId: request.postId,
+    userId: request.userId,
+    columns: "id, platform, status, social_account_id",
+  });
+  // The replacements could not be read: nothing is cleared.
+  if (isActionResult(results)) return { rowIds: [], warning: KEPT_RESULTS_WARNING };
+
+  const rowIds = request.targets
+    .filter((target) => hasReplacement(results, target))
+    .map((target) => target.id);
+  const kept = rowIds.length < request.targets.length;
+  return { rowIds, warning: kept ? KEPT_RESULTS_WARNING : null };
+}
+
+// A new result for the same account exists, so the old failed row may go.
+function hasReplacement(results: PlatformResultRow[], target: PlatformResultRow): boolean {
+  if (!target.social_account_id) return false;
+  return results.some((row) =>
+    row.id !== target.id && row.social_account_id === target.social_account_id
+  );
 }
 
 // The request may or may not have reached process-post. The claim is released
@@ -939,21 +1086,48 @@ async function reportRetry(
 // running right now writes its platform_posts rows only after the provider call,
 // so nothing on the post says that it is still going. The hold is what keeps a
 // second retry and a delete away from that publish until it cannot still be
-// running. The old failed rows stay: an account that did publish is skipped by
-// pickRetryTargets, so a later retry cannot publish it twice.
+// running. When the hold could not be recorded the answer says so instead of
+// pretending the post is closed. The old failed rows stay: an account that did
+// publish is skipped by pickRetryTargets, so a later retry cannot publish it twice.
 function unknownRetryBody(
   postId: string,
   retried: RetryTarget[],
-  holdUntil: string,
+  hold: HoldOutcome,
 ): Record<string, unknown> {
+  if (hold.kind === "settled") {
+    // process-post settled the post itself: there is nothing left to hold, and
+    // the post is not showing `processing` any more.
+    return {
+      post_id: postId,
+      dispatched: "unknown",
+      results_pending: true,
+      retried,
+      retry_hold_until: null,
+      message:
+        "The retry may or may not have started, and the post has already been settled. Check get_post before retrying.",
+    };
+  }
+  if (hold.kind === "failed") {
+    // The post may still be showing `processing`, because the claim could not be
+    // given back.
+    return {
+      post_id: postId,
+      dispatched: "unknown",
+      results_pending: true,
+      retried,
+      retry_hold_until: null,
+      message:
+        "The retry may or may not have started, and the post could not be released; it may show as processing. Check get_post.",
+    };
+  }
   return {
     post_id: postId,
     dispatched: "unknown",
     results_pending: true,
     retried,
-    retry_hold_until: holdUntil,
+    retry_hold_until: hold.holdUntil,
     message:
-      `The retry may or may not have started. Further retries and deletes are paused until ${holdUntil}; check get_post.`,
+      `The retry may or may not have started. Further retries and deletes are paused until ${hold.holdUntil}; check get_post.`,
   };
 }
 
@@ -1054,6 +1228,7 @@ export async function deletePost(
   }
   const postId = options.post_id;
   const subject = `post ${postId}, user ${userId}`;
+  const now = deps.now();
 
   const read = await readOwnedPost(deps, route, postId, userId, "id, status, metadata");
   if (isActionResult(read)) return read;
@@ -1063,7 +1238,7 @@ export async function deletePost(
   // The hold of an earlier ambiguous retry: the retry may still be publishing, and
   // its result row does not exist yet, so deleting the record now would orphan
   // the result it is about to write.
-  const inDoubt = retryInDoubt(route, subject, post, deps.now(), "delete");
+  const inDoubt = retryInDoubt(route, subject, post, now, "delete");
   if (inDoubt) return inDoubt;
 
   // The claim comes before anything is deleted: a retry that lands in the middle of
@@ -1072,6 +1247,7 @@ export async function deletePost(
     postId,
     userId,
     status: post.status,
+    now,
   });
   if (claim.failed) {
     return error(500, "INTERNAL_ERROR", "Starting the delete failed. Please try again.");
@@ -1113,15 +1289,32 @@ async function deletePublishedResults(
   route: string,
   state: { postId: string; userId: string; previousStatus: string },
 ): Promise<DeleteState | ActionResult> {
-  const results = await readPlatformResults(
-    deps,
-    route,
-    state.postId,
-    "id, platform, status, platform_post_id, social_account_id, response_data",
-  );
+  const results = await readPlatformResults(deps, route, {
+    postId: state.postId,
+    userId: state.userId,
+    columns: "id, platform, status, platform_post_id, social_account_id, response_data",
+  });
   if (isActionResult(results)) {
     await releaseLock(deps, state.postId, state.userId, state.previousStatus);
     return results;
+  }
+
+  // A platform that is still publishing (an async publish records a pending row
+  // while the parent post is already `completed`) is left alone: the delete would
+  // orphan the result it is about to write.
+  const pending = results.filter((row) => row.status === "pending");
+  if (pending.length > 0) {
+    await releaseLock(deps, state.postId, state.userId, state.previousStatus);
+    return refuse(
+      route,
+      `post ${state.postId}, user ${state.userId}`,
+      error(
+        409,
+        "RESULTS_PENDING",
+        "A platform is still publishing this post. Delete it when every result has finished.",
+        { pending_platforms: distinct(pending.map((row) => row.platform)) },
+      ),
+    );
   }
 
   const published = results.filter((row) => row.status === "success");
