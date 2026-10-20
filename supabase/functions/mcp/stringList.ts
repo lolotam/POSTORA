@@ -23,10 +23,13 @@ function splitOnCommas(text: string): string[] {
 /**
  * Splitter for URL lists: only a comma that is followed by the start of the
  * next URL separates two items, because a comma is legal inside a URL path
- * (e.g. a Cloudinary transform like "/c_fill,w_300/").
+ * (e.g. a Cloudinary transform like "/c_fill,w_300/"). Leading and trailing
+ * commas are stripped, so empty entries never survive as stray separators.
  */
 function splitBeforeUrls(text: string): string[] {
-  return text.split(/,\s*(?=https?:\/\/)/i);
+  return text
+    .replace(/^[\s,]+|[\s,]+$/g, "")
+    .split(/\s*,(?:\s*,)*\s*(?=https?:\/\/)/i);
 }
 
 /**

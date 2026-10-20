@@ -92,6 +92,28 @@ Deno.test("normalizeListFields splits media URLs only before the next URL", () =
   ]);
 });
 
+Deno.test("normalizeListFields drops empty entries between media URLs", () => {
+  const normalized = normalizeListFields({
+    media_urls: "https://a.com/a.png,,https://b.com/b.png",
+  });
+
+  assertEquals(normalized.media_urls, [
+    "https://a.com/a.png",
+    "https://b.com/b.png",
+  ]);
+});
+
+Deno.test("normalizeListFields drops empty entries and trailing commas", () => {
+  const normalized = normalizeListFields({
+    media_urls: "https://a.com/a.png, , https://b.com/b.png,,",
+  });
+
+  assertEquals(normalized.media_urls, [
+    "https://a.com/a.png",
+    "https://b.com/b.png",
+  ]);
+});
+
 Deno.test("normalizeListFields splits media URLs regardless of scheme case", () => {
   const normalized = normalizeListFields({
     media_urls: "https://a.com/1.jpg,HTTPS://b.com/2.jpg",
