@@ -103,14 +103,34 @@ Deno.test("normalizeListFields drops empty entries between media URLs", () => {
   ]);
 });
 
-Deno.test("normalizeListFields drops empty entries and trailing commas", () => {
+Deno.test("normalizeListFields drops empty entries between media URLs with spaces", () => {
   const normalized = normalizeListFields({
-    media_urls: "https://a.com/a.png, , https://b.com/b.png,,",
+    media_urls: "https://a.com/a.png, , https://b.com/b.png",
   });
 
   assertEquals(normalized.media_urls, [
     "https://a.com/a.png",
     "https://b.com/b.png",
+  ]);
+});
+
+Deno.test("normalizeListFields keeps a trailing comma in a media URL", () => {
+  const normalized = normalizeListFields({
+    media_urls: "https://host/image?filter=red,",
+  });
+
+  assertEquals(normalized.media_urls, [
+    "https://host/image?filter=red,",
+  ]);
+});
+
+Deno.test("normalizeListFields drops a leading separator before a media URL", () => {
+  const normalized = normalizeListFields({
+    media_urls: ", https://a.com/a.png",
+  });
+
+  assertEquals(normalized.media_urls, [
+    "https://a.com/a.png",
   ]);
 });
 
