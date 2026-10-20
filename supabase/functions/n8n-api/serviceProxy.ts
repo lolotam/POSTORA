@@ -328,7 +328,7 @@ export function createFunctionInvoker(
   };
 }
 
-interface AccountQueryClient {
+export interface AccountQueryClient {
   from(table: string): {
     select(columns: string): {
       eq(column: string, value: string): {
