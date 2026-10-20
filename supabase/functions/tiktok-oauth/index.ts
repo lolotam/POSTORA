@@ -640,13 +640,14 @@ Deno.serve(async (req) => {
 
       const caller = await authenticateCaller(req, body.user_id);
       const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-      let accountQuery = supabase
+      // Scoped to the caller even for service-role calls: those bypass RLS, so ownership must stay in the query.
+      const { data: account, error: fetchError } = await supabase
         .from("social_accounts")
         .select("access_token")
         .eq("id", account_id)
-        .eq("platform", "tiktok");
-      if (!caller.isServiceRole) accountQuery = accountQuery.eq("user_id", caller.userId);
-      const { data: account, error: fetchError } = await accountQuery.maybeSingle();
+        .eq("platform", "tiktok")
+        .eq("user_id", caller.userId)
+        .maybeSingle();
       if (fetchError) throw new Error("Account lookup failed");
       if (!account) {
         // A refused disconnect leaves a row, so a stale or foreign account id is visible in support.
@@ -655,7 +656,7 @@ Deno.serve(async (req) => {
           category: "auth",
           level: "warn",
           message: "TikTok disconnect refused: account not found for this caller",
-          user_id: caller.isServiceRole ? null : caller.userId,
+          user_id: caller.userId,
           metadata: { action: "disconnect", account_id },
         });
         if (refusalLogError) console.error("[tiktok-oauth] Disconnect refusal log rejected:", refusalLogError.message);
@@ -671,12 +672,11 @@ Deno.serve(async (req) => {
         : false;
       if (!revoked) console.warn(`[${timestamp}] TikTok revoke did not succeed for account ${account_id}`);
 
-      let deactivate = supabase
+      const { error: updateError } = await supabase
         .from("social_accounts")
         .update({ is_active: false, updated_at: new Date().toISOString() })
-        .eq("id", account_id);
-      if (!caller.isServiceRole) deactivate = deactivate.eq("user_id", caller.userId);
-      const { error: updateError } = await deactivate;
+        .eq("id", account_id)
+        .eq("user_id", caller.userId);
       if (updateError) throw new Error("Failed to disconnect account");
 
       return new Response(
