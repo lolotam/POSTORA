@@ -2,7 +2,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { cacheAvatarToCdn } from "../_shared/avatar-cache.ts";
 import { authenticateCaller } from "../_shared/auth-helper.ts";
 import { createOAuthState, verifyOAuthState } from "../_shared/oauthState.ts";
-import { revokeTikTokAccess } from "../_shared/tiktokRevoke.ts";
+import { revokeTikTokAccess } from "./revoke.ts";
 
 import { restrictedCorsHeaders } from "../_shared/cors.ts";
 

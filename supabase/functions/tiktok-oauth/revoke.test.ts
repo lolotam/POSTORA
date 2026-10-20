@@ -1,5 +1,5 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { revokeTikTokAccess } from "./tiktokRevoke.ts";
+import { revokeTikTokAccess } from "./revoke.ts";
 
 function fetcherReturning(status: number, body: string, seen: Request[] = []): typeof fetch {
   return ((input: RequestInfo | URL, init?: RequestInit) => {
