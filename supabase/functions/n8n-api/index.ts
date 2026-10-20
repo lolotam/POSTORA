@@ -9,7 +9,7 @@ import { parseSubscriptionFilters } from "./webhookFilters.ts";
 import { describeBase64Failure, normalizeBase64Media } from "../_shared/base64Media.ts";
 import { clientIpFromHeaders, isValidUuid } from "./requestGuards.ts";
 import { relayUploadTarget } from "./mediaRelay.ts";
-import { MEDIA_QUOTA_CODE, invokeErrorText, isMediaQuotaMessage, mediaQuotaHumanMessage, quotaOnlyMessage } from "../_shared/mediaQuotaError.ts";
+import { MEDIA_QUOTA_CODE, invokeErrorText, isMediaQuotaMessage, mediaQuotaHumanMessage, mediaQuotaPreflight, quotaOnlyMessage, type QuotaRpc } from "../_shared/mediaQuotaError.ts";
 import {
   fetchGlobalSetting,
   fetchPlanSlug,
@@ -2477,6 +2477,7 @@ export async function handleRequest(req: Request): Promise<Response> {
         Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
       ),
       storeImage: (ownerId, dataUrl) => uploadFileFromBase64(supabaseAdmin, ownerId, dataUrl, 'ai-image'),
+      mediaQuotaBlocked: (ownerId) => mediaQuotaPreflight(supabaseAdmin as unknown as QuotaRpc, ownerId),
     });
 
     if (path === '/api/v1/post' && req.method === 'POST') {

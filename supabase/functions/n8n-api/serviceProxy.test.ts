@@ -33,6 +33,7 @@ interface FakeCalls {
   invokes: InvokeCall[];
   stores: StoreCall[];
   loads: string[];
+  quotaChecks: string[];
 }
 
 interface FakeDepsOptions {
@@ -41,6 +42,7 @@ interface FakeDepsOptions {
   upstream?: InvokeResult;
   stored?: StoredImage;
   storeError?: Error;
+  quotaBlocked?: { limit: number } | null;
 }
 
 const DEFAULT_ACCOUNT: ProxyAccount = {
@@ -55,7 +57,7 @@ const DEFAULT_STORED: StoredImage = { id: "media-1", file_path: "https://cdn.exa
 
 /** Fakes for every dependency the proxy takes: no env, no network, no Supabase. */
 function fakeDeps(options: FakeDepsOptions = {}): { deps: ServiceProxyDeps; calls: FakeCalls } {
-  const calls: FakeCalls = { invokes: [], stores: [], loads: [] };
+  const calls: FakeCalls = { invokes: [], stores: [], loads: [], quotaChecks: [] };
   const account = options.account === undefined ? DEFAULT_ACCOUNT : options.account;
   const upstream = options.upstream ?? { status: 200, data: {} };
   const stored = options.stored ?? DEFAULT_STORED;
@@ -72,6 +74,10 @@ function fakeDeps(options: FakeDepsOptions = {}): { deps: ServiceProxyDeps; call
       calls.stores.push({ userId, dataUrl });
       if (options.storeError) throw options.storeError;
       return stored;
+    },
+    mediaQuotaBlocked: async (userId) => {
+      calls.quotaChecks.push(userId);
+      return options.quotaBlocked ?? null;
     },
   };
   return { deps, calls };
@@ -462,6 +468,7 @@ Deno.test("a hosted image is returned as a URL and never written to the media li
     description: "a cat",
   });
   assertEquals(calls.stores.length, 0);
+  assertEquals(calls.quotaChecks, [OWNER]);
   assertEquals(calls.invokes[0].functionName, "generate-image");
   assertEquals(calls.invokes[0].body, { user_id: OWNER, prompt: "a cat", aspectRatio: "1:1" });
   assertEquals(calls.invokes[0].timeoutMs, 90000);
@@ -506,6 +513,30 @@ Deno.test("a full media library answers 429 with the quota code, not a retryable
   assertEquals(result.status, 429);
   assertEquals(errorOf(result).code, "MEDIA_QUOTA_DAILY_EXCEEDED");
   assertEquals(JSON.stringify(result.body).includes("base64"), false);
+});
+
+Deno.test("a full media library refuses image generation before the billed call", async () => {
+  const { deps, calls } = fakeDeps({ quotaBlocked: { limit: 50 } });
+  const result = await handleGenerateImage(deps, OWNER, { prompt: "a cat" });
+  assertEquals(result.status, 429);
+  assertEquals(errorOf(result).code, "MEDIA_QUOTA_DAILY_EXCEEDED");
+  assertEquals(errorOf(result).message.includes("50"), true);
+  assertEquals(calls.invokes.length, 0);
+});
+
+Deno.test("a timed-out AI generation says not to retry, unlike a read", async () => {
+  const timedOut: InvokeResult = { status: 504, data: null };
+  const generations: ((deps: ServiceProxyDeps) => Promise<{ status: number; body: unknown }>)[] = [
+    (deps) => handleGenerateCaption(deps, OWNER, { context: "launch", platform: "instagram" }),
+    (deps) => handleGenerateHashtags(deps, OWNER, { caption: "hello", platform: "instagram" }),
+    (deps) => handleGenerateImage(deps, OWNER, { prompt: "a cat" }),
+  ];
+  for (const generate of generations) {
+    const { deps } = fakeDeps({ upstream: timedOut });
+    const result = await generate(deps);
+    assertEquals(result.status, 504);
+    assertEquals(errorOf(result).code, "GENERATION_TIMEOUT");
+  }
 });
 
 Deno.test("an inactive account is refused before any call", async () => {

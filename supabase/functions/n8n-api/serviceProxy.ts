@@ -10,7 +10,7 @@
 
 import { isValidUuid } from "./requestGuards.ts";
 import { containsSensitiveInfo } from "../_shared/errorSanitizer.ts";
-import { MEDIA_QUOTA_CODE, isMediaQuotaMessage } from "../_shared/mediaQuotaError.ts";
+import { MEDIA_QUOTA_CODE, isMediaQuotaMessage, mediaQuotaBody } from "../_shared/mediaQuotaError.ts";
 
 export interface ProxyAccount {
   id: string;
@@ -35,6 +35,8 @@ export interface ServiceProxyDeps {
   loadAccount(accountId: string): Promise<{ account: ProxyAccount | null; failed: boolean }>;
   invoke(functionName: string, body: Record<string, unknown>, timeoutMs: number): Promise<InvokeResult>;
   storeImage(userId: string, dataUrl: string): Promise<StoredImage>;
+  /** Non-null when the user's daily media uploads are used up; checked before a billed image generation. */
+  mediaQuotaBlocked(userId: string): Promise<{ limit: number } | null>;
 }
 
 export interface ProxyResult {
@@ -103,6 +105,20 @@ function fromUpstream(functionName: string, result: InvokeResult): ProxyResult {
     return proxyError(502, "UPSTREAM_ERROR", "The Postora service behind this endpoint failed. Please retry shortly.");
   }
   return { status: result.status, body: redactErrorText(stripCredentialUrls(result.data)) };
+}
+
+// AI generations are billed per call and have no idempotency key, so a timeout
+// is indeterminate: the provider may already have charged for it. Unlike a
+// read, the caller is told not to retry straight away.
+function fromAiUpstream(functionName: string, result: InvokeResult): ProxyResult {
+  if (result.status === 504) {
+    return proxyError(
+      504,
+      "GENERATION_TIMEOUT",
+      "The AI generation did not finish in time and may already have counted against your AI usage. Wait a few minutes before trying again.",
+    );
+  }
+  return fromUpstream(functionName, result);
 }
 
 // Several functions report platform failures as a 200 body with `error` /
@@ -270,7 +286,7 @@ export async function handleGenerateCaption(deps: ServiceProxyDeps, userId: stri
     ...(tone ? { tone } : {}),
     ...(language ? { language } : {}),
   }, AI_TEXT_TIMEOUT_MS);
-  return fromUpstream("generate-caption", upstream);
+  return fromAiUpstream("generate-caption", upstream);
 }
 
 export async function handleGenerateHashtags(deps: ServiceProxyDeps, userId: string, rawBody: unknown): Promise<ProxyResult> {
@@ -280,7 +296,7 @@ export async function handleGenerateHashtags(deps: ServiceProxyDeps, userId: str
   const platform = requireText(input, "platform", 50);
   if (isResult(platform)) return platform;
   const upstream = await deps.invoke("generate-hashtags", { user_id: userId, caption, platform }, AI_TEXT_TIMEOUT_MS);
-  return fromUpstream("generate-hashtags", upstream);
+  return fromAiUpstream("generate-hashtags", upstream);
 }
 
 function isHttpUrl(value: string): boolean {
@@ -326,13 +342,17 @@ export async function handleGenerateImage(deps: ServiceProxyDeps, userId: string
   if (isResult(aspectRatio)) return aspectRatio;
   const quality = optionalText(input, "quality", 20);
   if (isResult(quality)) return quality;
+  // Checked before the billed generation: an image that cannot be stored is
+  // paid for and then thrown away.
+  const blocked = await deps.mediaQuotaBlocked(userId);
+  if (blocked) return proxyError(429, MEDIA_QUOTA_CODE, mediaQuotaBody(blocked.limit).error);
   const upstream = await deps.invoke("generate-image", {
     user_id: userId,
     prompt,
     ...(aspectRatio ? { aspectRatio } : {}),
     ...(quality ? { quality } : {}),
   }, AI_IMAGE_TIMEOUT_MS);
-  const result = fromUpstream("generate-image", upstream);
+  const result = fromAiUpstream("generate-image", upstream);
   if (result.status !== 200) return result;
   const body = asRecord(result.body);
   // generate-image reports its own failures as a 200 with success: false.
