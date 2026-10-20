@@ -649,6 +649,16 @@ Deno.serve(async (req) => {
       const { data: account, error: fetchError } = await accountQuery.maybeSingle();
       if (fetchError) throw new Error("Account lookup failed");
       if (!account) {
+        // A refused disconnect leaves a row, so a stale or foreign account id is visible in support.
+        const { error: refusalLogError } = await supabase.from("system_logs").insert({
+          source: "tiktok-oauth",
+          category: "auth",
+          level: "warn",
+          message: "TikTok disconnect refused: account not found for this caller",
+          user_id: caller.isServiceRole ? null : caller.userId,
+          metadata: { action: "disconnect", account_id },
+        });
+        if (refusalLogError) console.error("[tiktok-oauth] Disconnect refusal log rejected:", refusalLogError.message);
         return new Response(JSON.stringify({ error: "Account not found" }), {
           status: 404,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
