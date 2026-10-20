@@ -183,7 +183,8 @@ export function useDisconnectAccountFromProfile() {
       if (account?.platform === "tiktok") {
         // Withdraw Postora's TikTok authorization first, so reconnecting shows TikTok's permission screen.
         const { error: revokeError } = await supabase.functions.invoke("tiktok-oauth", { body: { action: "disconnect", social_account_id: accountId } });
-        if (revokeError) throw revokeError;
+        // Best effort, like the revoke itself: removing the account must not depend on TikTok being reachable.
+        if (revokeError) console.warn("TikTok revoke before account removal failed:", revokeError);
       }
 
       const { error } = await supabase
