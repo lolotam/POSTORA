@@ -70,3 +70,43 @@ Deno.test("normalizeListFields converts only the known list fields", () => {
   assertEquals(Object.keys(normalized).sort(), Object.keys(args).sort());
   assertEquals(args.platforms, "facebook, instagram");
 });
+
+Deno.test("normalizeListFields keeps a comma inside a media URL", () => {
+  const normalized = normalizeListFields({
+    media_urls: "https://host/image/c_fill,w_300/a.jpg",
+  });
+
+  assertEquals(normalized.media_urls, [
+    "https://host/image/c_fill,w_300/a.jpg",
+  ]);
+});
+
+Deno.test("normalizeListFields splits media URLs only before the next URL", () => {
+  const normalized = normalizeListFields({
+    media_urls: "https://a.com/x,y.jpg, https://b.com/z.png",
+  });
+
+  assertEquals(normalized.media_urls, [
+    "https://a.com/x,y.jpg",
+    "https://b.com/z.png",
+  ]);
+});
+
+Deno.test("normalizeListFields splits media URLs regardless of scheme case", () => {
+  const normalized = normalizeListFields({
+    media_urls: "https://a.com/1.jpg,HTTPS://b.com/2.jpg",
+  });
+
+  assertEquals(normalized.media_urls, [
+    "https://a.com/1.jpg",
+    "HTTPS://b.com/2.jpg",
+  ]);
+});
+
+Deno.test("normalizeListFields still splits comma-separated platforms", () => {
+  const normalized = normalizeListFields({
+    platforms: "facebook, instagram",
+  });
+
+  assertEquals(normalized.platforms, ["facebook", "instagram"]);
+});
