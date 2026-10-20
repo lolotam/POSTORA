@@ -10,9 +10,9 @@ import {
 } from "./youtubeComments.ts";
 
 const GRAPH_API_VERSION = "v22.0";
-const FACEBOOK_GRAPH = `https://graph.facebook.com/${GRAPH_API_VERSION}`;
+export const FACEBOOK_GRAPH = `https://graph.facebook.com/${GRAPH_API_VERSION}`;
 const INSTAGRAM_GRAPH = `https://graph.instagram.com/${GRAPH_API_VERSION}`;
-const THREADS_GRAPH = "https://graph.threads.net/v1.0";
+export const THREADS_GRAPH = "https://graph.threads.net/v1.0";
 
 export interface CommentActionAccount {
   id?: string;

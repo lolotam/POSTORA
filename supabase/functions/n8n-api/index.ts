@@ -9,6 +9,7 @@ import { parseSubscriptionFilters } from "./webhookFilters.ts";
 import { describeBase64Failure, normalizeBase64Media } from "../_shared/base64Media.ts";
 import { clientIpFromHeaders, isValidUuid } from "./requestGuards.ts";
 import { relayUploadTarget } from "./mediaRelay.ts";
+import { handleCancelScheduledPost, handleCheckAccountHealth, handleDeletePost, handleReschedulePost, handleRetryFailedPost, handleSuggestBestTimes } from "./postActions.ts";
 import { MEDIA_QUOTA_CODE, invokeErrorText, isMediaQuotaMessage, mediaQuotaHumanMessage, quotaOnlyMessage } from "../_shared/mediaQuotaError.ts";
 import {
   fetchGlobalSetting,
@@ -2491,6 +2492,18 @@ export async function handleRequest(req: Request): Promise<Response> {
       response = await handleCommentHide(req, supabaseAdmin, userId, await parseRequestBody(req));
     } else if (path === '/api/v1/comments/delete' && req.method === 'POST') {
       response = await handleCommentDelete(req, supabaseAdmin, userId, await parseRequestBody(req));
+    } else if (path === '/api/v1/posts/cancel' && req.method === 'POST') {
+      response = await handleCancelScheduledPost(req, supabaseAdmin, userId, await parseRequestBody(req));
+    } else if (path === '/api/v1/posts/reschedule' && req.method === 'POST') {
+      response = await handleReschedulePost(req, supabaseAdmin, userId, await parseRequestBody(req));
+    } else if (path === '/api/v1/posts/retry' && req.method === 'POST') {
+      response = await handleRetryFailedPost(req, supabaseAdmin, userId, await parseRequestBody(req));
+    } else if (path === '/api/v1/posts/delete' && req.method === 'POST') {
+      response = await handleDeletePost(req, supabaseAdmin, userId, await parseRequestBody(req));
+    } else if (path === '/api/v1/accounts/health' && req.method === 'GET') {
+      response = await handleCheckAccountHealth(req, supabaseAdmin, userId, url);
+    } else if (path === '/api/v1/best-times' && req.method === 'POST') {
+      response = await handleSuggestBestTimes(req, supabaseAdmin, userId, await parseRequestBody(req), userPreferredTimezone);
     } else {
       // 404 for unknown routes
       response = apiError(req, 'Not Found', 404, 'NOT_FOUND', {
@@ -2508,7 +2521,13 @@ export async function handleRequest(req: Request): Promise<Response> {
           'POST /api/v1/messages/reply',
           'POST /api/v1/comments/reply',
           'POST /api/v1/comments/hide',
-          'POST /api/v1/comments/delete'
+          'POST /api/v1/comments/delete',
+          'POST /api/v1/posts/cancel',
+          'POST /api/v1/posts/reschedule',
+          'POST /api/v1/posts/retry',
+          'POST /api/v1/posts/delete',
+          'GET /api/v1/accounts/health',
+          'POST /api/v1/best-times'
         ]
       });
     }

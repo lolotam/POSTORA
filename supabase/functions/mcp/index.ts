@@ -130,6 +130,13 @@ function fail(status: number, data: unknown) {
   };
 }
 
+// Destructive tools take `confirm: true` so a model has to state the intent
+// explicitly; the schema rejects anything else and the handler re-checks.
+const confirmTrue = z.literal(true).describe("Must be true. Confirms you intend this irreversible action.");
+function needsConfirm(confirm: unknown) {
+  return confirm === true ? null : fail(400, { code: "CONFIRMATION_REQUIRED", message: "Set confirm: true to run this action." });
+}
+
 // Build a fresh MCP server bound to a specific user's API key.
 function buildServer(apiKey: string) {
   const server = new McpServer({
@@ -262,6 +269,187 @@ function buildServer(apiKey: string) {
     inputSchema: z.object({ webhook_id: z.string() }),
     handler: async ({ webhook_id }) => {
       const r = await callN8n(apiKey, "DELETE", `/api/v1/webhooks/${encodeURIComponent(webhook_id)}`);
+      return r.status >= 400 ? fail(r.status, r.data) : ok(r.data);
+    },
+  });
+
+  // ---- Comments ----
+  server.tool("reply_to_comment", {
+    description:
+      "Publicly reply to a comment on a Facebook, Instagram or Threads post, as the connected account. The reply is visible to everyone.",
+    inputSchema: z.object({
+      social_account_id: z.string().describe("Postora social account UUID (from list_accounts)"),
+      comment_id: z.string().describe("Platform comment id"),
+      message: z.string().min(1).describe("Reply text"),
+      platform: z.enum(["facebook", "instagram", "threads"]).optional().describe("Optional; must match the account's platform"),
+    }),
+    handler: async (args) => {
+      const r = await callN8n(apiKey, "POST", "/api/v1/comments/reply", {
+        social_account_id: args.social_account_id,
+        comment_id: args.comment_id,
+        message: args.message,
+        platform: args.platform,
+      });
+      return r.status >= 400 ? fail(r.status, r.data) : ok(r.data);
+    },
+  });
+
+  server.tool("hide_comment", {
+    description:
+      "Hide (or unhide with hide=false) a comment on a Facebook, Instagram or Threads post. Hidden comments stay visible to their author and friends only. Requires confirm: true.",
+    inputSchema: z.object({
+      social_account_id: z.string().describe("Postora social account UUID (from list_accounts)"),
+      comment_id: z.string().describe("Platform comment id"),
+      hide: z.boolean().optional().describe("Default true; false unhides"),
+      confirm: confirmTrue,
+    }),
+    handler: async (args) => {
+      const refusal = needsConfirm(args.confirm);
+      if (refusal) return refusal;
+      const r = await callN8n(apiKey, "POST", "/api/v1/comments/hide", {
+        social_account_id: args.social_account_id,
+        comment_id: args.comment_id,
+        hide: args.hide ?? true,
+      });
+      return r.status >= 400 ? fail(r.status, r.data) : ok(r.data);
+    },
+  });
+
+  server.tool("delete_comment", {
+    description:
+      "Permanently delete a comment on a Facebook or Instagram post (Threads replies cannot be deleted; hide them instead). Cannot be undone. Requires confirm: true.",
+    inputSchema: z.object({
+      social_account_id: z.string().describe("Postora social account UUID (from list_accounts)"),
+      comment_id: z.string().describe("Platform comment id"),
+      confirm: confirmTrue,
+    }),
+    handler: async (args) => {
+      const refusal = needsConfirm(args.confirm);
+      if (refusal) return refusal;
+      const r = await callN8n(apiKey, "POST", "/api/v1/comments/delete", {
+        social_account_id: args.social_account_id,
+        comment_id: args.comment_id,
+      });
+      return r.status >= 400 ? fail(r.status, r.data) : ok(r.data);
+    },
+  });
+
+  // ---- Messages ----
+  server.tool("reply_to_message", {
+    description:
+      "Send a direct message reply from a connected WhatsApp, Instagram or Facebook (Messenger) account. Pass recipient_id (Instagram/Messenger user id or WhatsApp number) or recipient_phone. The message is delivered to a real person.",
+    inputSchema: z.object({
+      social_account_id: z.string().describe("Postora social account UUID (from list_accounts)"),
+      recipient_id: z.string().optional().describe("Recipient user id on the platform (Instagram/Messenger) or the WhatsApp number"),
+      recipient_phone: z.string().optional().describe("Recipient phone number (WhatsApp)"),
+      message: z.string().min(1).describe("Message text"),
+      message_type: z.enum(["text", "media"]).optional().describe("Defaults to text"),
+      media_url: z.string().optional().describe("Required when message_type is media"),
+      media_type: z.string().optional().describe("For WhatsApp media: image, video, audio or document"),
+      conversation_id: z.string().optional().describe("Existing conversation to reply in, when the platform needs one"),
+      platform: z.enum(["whatsapp", "instagram", "facebook"]).optional().describe("Optional; must match the account's platform"),
+    }),
+    handler: async (args) => {
+      if (!args.recipient_id && !args.recipient_phone) {
+        return fail(400, { code: "INVALID_MESSAGE", message: "Pass recipient_id or recipient_phone." });
+      }
+      const r = await callN8n(apiKey, "POST", "/api/v1/messages/reply", args);
+      return r.status >= 400 ? fail(r.status, r.data) : ok(r.data);
+    },
+  });
+
+  // ---- Media ----
+  server.tool("get_media", {
+    description:
+      "Get a media file from the user's Postora media library by id (type, size, mime type, storage path).",
+    inputSchema: z.object({
+      media_id: z.string().describe("Postora media file UUID"),
+    }),
+    handler: async ({ media_id }) => {
+      const r = await callN8n(apiKey, "GET", `/api/v1/media/${encodeURIComponent(media_id)}`);
+      return r.status >= 400 ? fail(r.status, r.data) : ok(r.data);
+    },
+  });
+
+  // ---- Post management ----
+  server.tool("cancel_scheduled_post", {
+    description:
+      "Cancel a scheduled post that has not been published yet and remove it from Postora. Only works while the post is scheduled and its time has not come. Cannot be undone. Requires confirm: true.",
+    inputSchema: z.object({
+      post_id: z.string().describe("Postora post UUID"),
+      confirm: confirmTrue,
+    }),
+    handler: async (args) => {
+      const refusal = needsConfirm(args.confirm);
+      if (refusal) return refusal;
+      const r = await callN8n(apiKey, "POST", "/api/v1/posts/cancel", { post_id: args.post_id });
+      return r.status >= 400 ? fail(r.status, r.data) : ok(r.data);
+    },
+  });
+
+  server.tool("reschedule_post", {
+    description:
+      "Move a scheduled post that has not been published yet to a new time. scheduled_at must be a future ISO 8601 timestamp WITH a UTC offset (e.g. 2026-06-05T14:30:00Z or 2026-06-05T17:30:00+03:00). timezone is only stored as a label; it does not shift the time.",
+    inputSchema: z.object({
+      post_id: z.string().describe("Postora post UUID"),
+      scheduled_at: z.string().describe("Future ISO 8601 timestamp with offset"),
+      timezone: z.string().optional().describe("IANA zone such as America/New_York, stored as a label"),
+    }),
+    handler: async (args) => {
+      const r = await callN8n(apiKey, "POST", "/api/v1/posts/reschedule", args);
+      return r.status >= 400 ? fail(r.status, r.data) : ok(r.data);
+    },
+  });
+
+  server.tool("retry_failed_post", {
+    description:
+      "Retry only the platforms where a post failed. Platforms that already published are not posted again. Returns the new per-platform results, or results_pending if publishing is still running (check get_post later).",
+    inputSchema: z.object({
+      post_id: z.string().describe("Postora post UUID"),
+    }),
+    handler: async ({ post_id }) => {
+      const r = await callN8n(apiKey, "POST", "/api/v1/posts/retry", { post_id });
+      return r.status >= 400 ? fail(r.status, r.data) : ok(r.data);
+    },
+  });
+
+  server.tool("delete_post", {
+    description:
+      "Delete a post from Postora AND, where the platform allows it, from the platform itself: Facebook, Threads, YouTube (native connection), Pinterest and LinkedIn posts are deleted on the platform. Instagram and TikTok have no delete API, so those posts stay on the platform (reported as kept_on_platform). If any platform delete fails, the Postora record is kept so you can retry. Media files stay in the library. Cannot be undone. Requires confirm: true.",
+    inputSchema: z.object({
+      post_id: z.string().describe("Postora post UUID"),
+      confirm: confirmTrue,
+    }),
+    handler: async (args) => {
+      const refusal = needsConfirm(args.confirm);
+      if (refusal) return refusal;
+      const r = await callN8n(apiKey, "POST", "/api/v1/posts/delete", { post_id: args.post_id });
+      return r.status >= 400 ? fail(r.status, r.data) : ok(r.data);
+    },
+  });
+
+  // ---- Account health ----
+  server.tool("check_account_health", {
+    description:
+      "Check whether a connected social account can still publish: active flag, whether it needs to be reconnected, refresh failures, last refresh error and days until its token expires.",
+    inputSchema: z.object({
+      social_account_id: z.string().describe("Postora social account UUID (from list_accounts)"),
+    }),
+    handler: async ({ social_account_id }) => {
+      const r = await callN8n(apiKey, "GET", "/api/v1/accounts/health", undefined, { social_account_id });
+      return r.status >= 400 ? fail(r.status, r.data) : ok(r.data);
+    },
+  });
+
+  // ---- Planning ----
+  server.tool("suggest_best_times", {
+    description:
+      "Suggest the best days and times to post on the given platforms, combining platform best practices with the user's own publishing history (in the user's preferred time zone).",
+    inputSchema: z.object({
+      platforms: stringList.describe("e.g. ['instagram','facebook']. Accepts an array, JSON-array text or comma-separated text."),
+    }),
+    handler: async (args) => {
+      const r = await callN8n(apiKey, "POST", "/api/v1/best-times", normalizeListFields({ platforms: args.platforms }));
       return r.status >= 400 ? fail(r.status, r.data) : ok(r.data);
     },
   });
