@@ -99,10 +99,7 @@ export default function TikTokAuth() {
   const handleDisconnect = async (accountId: string) => {
     setIsDisconnecting(true);
     try {
-      const { error } = await supabase
-        .from("social_accounts")
-        .update({ is_active: false })
-        .eq("id", accountId);
+      const { error } = await supabase.functions.invoke("tiktok-oauth", { body: { action: "disconnect", social_account_id: accountId } });
       if (error) throw error;
       toast({ title: "Disconnected", description: "TikTok account has been disconnected." });
       queryClient.invalidateQueries({ queryKey: ["tiktok-demo-accounts"] });

@@ -28,3 +28,34 @@ Deno.test("never throws when TikTok is unreachable or answers garbage", async ()
   assertEquals(await revokeTikTokAccess(failing, "k", "s", "t"), false);
   assertEquals(await revokeTikTokAccess(fetcherReturning(200, "<html>"), "k", "s", "t"), false);
 });
+
+Deno.test("treats TikTok's flat OAuth error body as a failed revoke", async () => {
+  const flat = fetcherReturning(200, '{"error":"invalid_client","error_description":"x"}');
+  assertEquals(await revokeTikTokAccess(flat, "k", "s", "t"), false);
+});
+
+Deno.test("bounds the revoke request with an abort signal and reports failure when it is aborted", async () => {
+  const seen: RequestInit[] = [];
+  const hanging = ((_input: RequestInfo | URL, init?: RequestInit) => {
+    seen.push(init ?? {});
+    return new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () =>
+        reject(new DOMException("The operation was aborted.", "AbortError"))
+      );
+    });
+  }) as typeof fetch;
+
+  const pending = revokeTikTokAccess(hanging, "k", "s", "t");
+  assertEquals(seen[0]?.signal instanceof AbortSignal, true);
+  // The real timeout fires after 5s; fire the same event here so the test stays fast.
+  seen[0]?.signal?.dispatchEvent(new Event("abort"));
+  assertEquals(await pending, false);
+});
+
+Deno.test("reports a failed revoke when the request times out", async () => {
+  const timingOut = (() =>
+    Promise.reject(
+      new DOMException("The operation was aborted due to timeout", "TimeoutError"),
+    )) as typeof fetch;
+  assertEquals(await revokeTikTokAccess(timingOut, "k", "s", "t"), false);
+});

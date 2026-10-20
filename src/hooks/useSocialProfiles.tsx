@@ -178,6 +178,14 @@ export function useDisconnectAccountFromProfile() {
 
   return useMutation({
     mutationFn: async (accountId: string) => {
+      const { data: account, error: lookupError } = await supabase.from("social_accounts").select("platform").eq("id", accountId).maybeSingle();
+      if (lookupError) throw lookupError;
+      if (account?.platform === "tiktok") {
+        // Withdraw Postora's TikTok authorization first, so reconnecting shows TikTok's permission screen.
+        const { error: revokeError } = await supabase.functions.invoke("tiktok-oauth", { body: { action: "disconnect", social_account_id: accountId } });
+        if (revokeError) throw revokeError;
+      }
+
       const { error } = await supabase
         .from("social_accounts")
         .delete()
