@@ -403,7 +403,7 @@ function buildServer(apiKey: string) {
 
   server.tool("retry_failed_post", {
     description:
-      "Retry only the platforms where a post failed. Platforms that already published are not posted again. Returns the new per-platform results, or results_pending if publishing is still running (check get_post later).",
+      "Retry only the platforms where a post failed. Platforms that already published are not posted again. Returns the new per-platform results, or results_pending if publishing is still running (check get_post later). If the dispatch outcome is unknown, the post stays processing until the publish settles; retry and delete are refused until then.",
     inputSchema: z.object({
       post_id: z.string().describe("Postora post UUID"),
     }),
