@@ -64,6 +64,9 @@ function missingToken(): PlatformDeleteOutcome {
   };
 }
 
+const NO_PLATFORM_POST_ID =
+  "Postora has no platform post id for this result, so it cannot be deleted on the platform.";
+
 // A platform copy that is already gone is not a failure: the caller asked for it to
 // be gone, and it is.
 const ALREADY_GONE: PlatformDeleteOutcome = {
@@ -155,6 +158,18 @@ async function deleteYoutube(
   return { outcome: "deleted" };
 }
 
+// A Pinterest post with several images becomes one pin per image, and the publish
+// keeps every pin id in platform_post_id joined by commas. Each of them is its own
+// pin on Pinterest, so each one is deleted on its own: sending the whole string as
+// one id makes Pinterest answer 404, and that 404 says nothing about the pins that
+// are really there.
+function pinterestPinIds(platformPostId: string): string[] {
+  return platformPostId
+    .split(",")
+    .map((id) => id.trim())
+    .filter((id) => id.length > 0);
+}
+
 async function deletePinterest(
   platformPostId: string,
   _row: PublishedPlatformPost,
@@ -162,30 +177,49 @@ async function deletePinterest(
   deps: PlatformDeleteDeps,
 ): Promise<PlatformDeleteOutcome> {
   if (!account.access_token) return missingToken();
-  let response: Response;
-  try {
-    response = await fetchWithTimeout(
-      `https://api.pinterest.com/v5/pins/${encodeURIComponent(platformPostId)}`,
-      {
-        method: "DELETE",
-        headers: { Authorization: `Bearer ${account.access_token}` },
-      },
-      PROVIDER_TIMEOUT_MS,
-      deps.fetcher,
-    );
-  } catch {
-    // No provider message: a transport error can carry the request URL, and the
-    // Pinterest URL carries the token in its header.
-    return { outcome: "failed", reason: "Could not reach Pinterest. Try again." };
+  const pinIds = pinterestPinIds(platformPostId);
+  if (pinIds.length === 0) {
+    return { outcome: "kept_on_platform", reason: NO_PLATFORM_POST_ID };
   }
-  if (response.status >= 200 && response.status < 300) return { outcome: "deleted" };
-  // A pin that is not there any more is already what the caller wanted.
-  if (response.status === 404) return ALREADY_GONE;
-  const body = await response.json().catch(() => null) as { message?: unknown } | null;
-  const detail = typeof body?.message === "string" ? body.message : "no message";
+  const failures: string[] = [];
+  let deleted = 0;
+  let alreadyGone = 0;
+  for (const pinId of pinIds) {
+    let response: Response;
+    try {
+      response = await fetchWithTimeout(
+        `https://api.pinterest.com/v5/pins/${encodeURIComponent(pinId)}`,
+        {
+          method: "DELETE",
+          headers: { Authorization: `Bearer ${account.access_token}` },
+        },
+        PROVIDER_TIMEOUT_MS,
+        deps.fetcher,
+      );
+    } catch {
+      // No provider message: a transport error can carry the request URL, and the
+      // Pinterest URL carries the token in its header.
+      failures.push(`${pinId}: could not reach Pinterest`);
+      continue;
+    }
+    if (response.status >= 200 && response.status < 300) {
+      deleted += 1;
+      continue;
+    }
+    // A pin that is not there any more is already what the caller wanted.
+    if (response.status === 404) {
+      alreadyGone += 1;
+      continue;
+    }
+    failures.push(`${pinId}: Pinterest returned ${response.status}`);
+  }
+  if (failures.length === 0) {
+    return alreadyGone === pinIds.length ? ALREADY_GONE : { outcome: "deleted" };
+  }
   return {
     outcome: "failed",
-    reason: `Pinterest returned ${response.status}: ${detail}`,
+    reason:
+      `Deleted ${deleted + alreadyGone} of ${pinIds.length} Pinterest pins. ${failures.join("; ")}`,
   };
 }
 
@@ -298,7 +332,7 @@ export async function deletePublishedPost(
   if (!row.platform_post_id) {
     return {
       outcome: "kept_on_platform",
-      reason: "Postora has no platform post id for this result, so it cannot be deleted on the platform.",
+      reason: NO_PLATFORM_POST_ID,
     };
   }
 

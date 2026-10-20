@@ -13,6 +13,8 @@ import {
 
 const NOW = new Date("2026-10-21T12:00:00.000Z");
 const NOW_ISO = NOW.toISOString();
+// The hold an ambiguous retry records: fifteen minutes after the moment it gave up.
+const HOLD_UNTIL = new Date(NOW.getTime() + 15 * 60_000).toISOString();
 const USER = "11111111-1111-4111-8111-111111111111";
 const POST = "22222222-2222-4222-8222-222222222222";
 const ACCOUNT = "33333333-3333-4333-8333-333333333333";
@@ -723,7 +725,12 @@ Deno.test("a retry whose results cannot be read is a 500 and gives the post its 
 Deno.test("a retry that cannot reach process-post says so instead of guessing", async () => {
   const db = new FakeSupabase();
   db.queue("posts", {
-    data: { id: POST, status: "failed", scheduled_at: null },
+    data: {
+      id: POST,
+      status: "failed",
+      scheduled_at: null,
+      metadata: { source: "api" },
+    },
     error: null,
   });
   db.queue("posts", { data: [{ id: POST }], error: null });
@@ -740,6 +747,12 @@ Deno.test("a retry that cannot reach process-post says so instead of guessing", 
   assertEquals(result.status, 202);
   assertEquals(result.body.dispatched, "unknown");
   assertEquals(result.body.results_pending, true);
+  assertEquals(result.body.retry_hold_until, HOLD_UNTIL);
+  assertEquals(
+    result.body.message,
+    "The retry may or may not have started. Further retries and deletes are paused until " +
+      `${HOLD_UNTIL}; check get_post.`,
+  );
 
   // The request may or may not have arrived: the old rows stay, and the claim is
   // given back so the post is not stuck in `processing`.
@@ -747,8 +760,78 @@ Deno.test("a retry that cannot reach process-post says so instead of guessing", 
   const updates = callsFor(db, "posts", "update");
   assertEquals(updates.length, 2);
   const release = updates[updates.length - 1];
-  assertEquals(release.payload, { status: "failed" });
+  // The claim is given back and a hold is recorded: the retry that was given up
+  // may still be publishing, and nothing else on the post says so.
+  assertEquals(release.payload, {
+    status: "failed",
+    metadata: { source: "api", retry_hold_until: HOLD_UNTIL },
+  });
   assertEquals(hasFilter(release, "eq", "status", "processing"), true);
+  assertEquals(hasFilter(release, "eq", "user_id", USER), true);
+});
+
+Deno.test("a retry on a post under a hold is refused before the post is claimed", async () => {
+  const db = new FakeSupabase();
+  db.queue("posts", {
+    data: {
+      id: POST,
+      status: "failed",
+      scheduled_at: null,
+      metadata: { retry_hold_until: HOLD_UNTIL },
+    },
+    error: null,
+  });
+  const result = await retryFailedPost(depsFor(db, noNetwork()), USER, { post_id: POST });
+  assertEquals(result.status, 409);
+  assertEquals(errorCode(result), "RETRY_IN_DOUBT");
+  assertEquals(errorDetails(result), { retry_hold_until: HOLD_UNTIL });
+  // The post is never claimed: a claim would only be given back again.
+  assertEquals(callsFor(db, "posts", "update").length, 0);
+  assertEquals(db.calls.length, 1);
+});
+
+Deno.test("a hold that has expired does not refuse a retry", async () => {
+  const db = new FakeSupabase();
+  db.queue("posts", {
+    data: {
+      id: POST,
+      status: "failed",
+      scheduled_at: null,
+      metadata: { retry_hold_until: "2026-10-21T11:45:00.000Z" },
+    },
+    error: null,
+  });
+  db.queue("posts", { data: [{ id: POST }], error: null });
+  db.queue("platform_posts", {
+    data: [
+      { id: "pp1", platform: "facebook", status: "failed", social_account_id: ACCOUNT },
+    ],
+    error: null,
+  });
+  db.queue("platform_posts", { data: [], error: null });
+
+  const { fetcher } = fakeFetcher([{ status: 200, body: { status: "completed" } }]);
+  const result = await retryFailedPost(depsFor(db, fetcher), USER, { post_id: POST });
+  assertEquals(result.status, 200);
+});
+
+Deno.test("a delete on a post under a hold is refused before the post is claimed", async () => {
+  const db = new FakeSupabase();
+  db.queue("posts", {
+    data: {
+      id: POST,
+      status: "failed",
+      metadata: { retry_hold_until: HOLD_UNTIL },
+    },
+    error: null,
+  });
+  const result = await deletePost(depsFor(db, noNetwork()), USER, { post_id: POST });
+  assertEquals(result.status, 409);
+  assertEquals(errorCode(result), "RETRY_IN_DOUBT");
+  assertEquals(errorDetails(result), { retry_hold_until: HOLD_UNTIL });
+  // The post is never claimed: the earlier retry is about to write a result for it.
+  assertEquals(callsFor(db, "posts", "update").length, 0);
+  assertEquals(db.calls.length, 1);
 });
 
 Deno.test("a retry that is accepted clears the old failed rows after the call", async () => {

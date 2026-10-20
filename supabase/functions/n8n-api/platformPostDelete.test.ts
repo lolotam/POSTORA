@@ -14,7 +14,7 @@ const ROW = "44444444-4444-4444-8444-444444444444";
 const PLATFORM_POST_ID = "1234567890";
 // One token for the whole suite: a token-looking literal in a test file is a
 // secret-shaped string, and a scanner would have to guess whether it is one.
-const TEST_TOKEN = "test-token";
+const PLACEHOLDER_CREDENTIAL = "placeholder";
 
 interface RecordedCall {
   url: string;
@@ -109,7 +109,7 @@ function account(overrides: Partial<DeleteAccount> = {}): DeleteAccount {
     id: ACCOUNT,
     user_id: USER,
     platform: "facebook",
-    access_token: TEST_TOKEN,
+    access_token: PLACEHOLDER_CREDENTIAL,
     ...overrides,
   };
 }
@@ -122,7 +122,7 @@ Deno.test("a facebook delete asks Graph to delete the post and reports it delete
   assertEquals(calls[0].method, "DELETE");
   assertEquals(
     calls[0].url,
-    `${FACEBOOK_GRAPH}/${PLATFORM_POST_ID}?access_token=${TEST_TOKEN}`,
+    `${FACEBOOK_GRAPH}/${PLATFORM_POST_ID}?access_token=${encodeURIComponent(PLACEHOLDER_CREDENTIAL)}`,
   );
 });
 
@@ -166,7 +166,7 @@ Deno.test("threads deletes through the Threads graph", async () => {
   assertEquals(outcome, { outcome: "deleted" });
   assertEquals(
     calls[0].url,
-    `${THREADS_GRAPH}/${PLATFORM_POST_ID}?access_token=${TEST_TOKEN}`,
+    `${THREADS_GRAPH}/${PLATFORM_POST_ID}?access_token=${encodeURIComponent(PLACEHOLDER_CREDENTIAL)}`,
   );
 });
 
@@ -262,7 +262,7 @@ Deno.test("a pinterest 204 is a delete", async () => {
     `https://api.pinterest.com/v5/pins/${PLATFORM_POST_ID}`,
   );
   assertEquals(calls[0].method, "DELETE");
-  assertEquals(calls[0].headers.Authorization, `Bearer ${TEST_TOKEN}`);
+  assertEquals(calls[0].headers.Authorization, `Bearer ${PLACEHOLDER_CREDENTIAL}`);
 });
 
 Deno.test("a pinterest pin that is not there any more is a delete that already happened", async () => {
@@ -289,6 +289,74 @@ Deno.test("a pinterest refusal names the status", async () => {
   );
   if (outcome.outcome !== "failed") throw new Error("expected a failure");
   assertEquals(outcome.reason.includes("403"), true);
+});
+
+Deno.test("a pinterest post with one pin makes one call", async () => {
+  const { calls, fetcher } = fakeFetcher([{ status: 204 }]);
+  const outcome = await deletePublishedPost(
+    row({ platform: "pinterest", platform_post_id: "111" }),
+    account({ platform: "pinterest" }),
+    deps(fetcher),
+  );
+  assertEquals(outcome, { outcome: "deleted" });
+  assertEquals(calls.length, 1);
+  assertEquals(calls[0].url, "https://api.pinterest.com/v5/pins/111");
+  assertEquals(calls[0].method, "DELETE");
+  assertEquals(calls[0].headers.Authorization, `Bearer ${PLACEHOLDER_CREDENTIAL}`);
+});
+
+Deno.test("a pinterest post with several pins deletes every pin on its own", async () => {
+  // One pin per image: the publish keeps every pin id in one comma-joined string.
+  const { calls, fetcher } = fakeFetcher([{ status: 204 }, { status: 204 }]);
+  const outcome = await deletePublishedPost(
+    row({ platform: "pinterest", platform_post_id: "111,222" }),
+    account({ platform: "pinterest" }),
+    deps(fetcher),
+  );
+  assertEquals(outcome, { outcome: "deleted" });
+  assertEquals(calls.length, 2);
+  assertEquals(calls[0].url, "https://api.pinterest.com/v5/pins/111");
+  assertEquals(calls[1].url, "https://api.pinterest.com/v5/pins/222");
+  assertEquals(calls[0].method, "DELETE");
+  assertEquals(calls[1].method, "DELETE");
+});
+
+Deno.test("a pinterest post that only deleted one of its pins is a failure", async () => {
+  const { fetcher } = fakeFetcher([{ status: 204 }, { status: 500 }]);
+  const outcome = await deletePublishedPost(
+    row({ platform: "pinterest", platform_post_id: "111,222" }),
+    account({ platform: "pinterest" }),
+    deps(fetcher),
+  );
+  if (outcome.outcome !== "failed") throw new Error("expected a failure");
+  assertEquals(outcome.reason.includes("Deleted 1 of 2 Pinterest pins"), true);
+  assertEquals(outcome.reason.includes("222: Pinterest returned 500"), true);
+});
+
+Deno.test("a pinterest post whose pins are all gone is a delete that already happened", async () => {
+  const { calls, fetcher } = fakeFetcher([{ status: 404 }, { status: 404 }]);
+  const outcome = await deletePublishedPost(
+    row({ platform: "pinterest", platform_post_id: "111,222" }),
+    account({ platform: "pinterest" }),
+    deps(fetcher),
+  );
+  assertEquals(outcome, {
+    outcome: "deleted",
+    note: "Already removed on the platform.",
+  });
+  assertEquals(calls.length, 2);
+});
+
+Deno.test("a pinterest pin that cannot be reached is a failure that names the pin", async () => {
+  const { fetcher } = fakeFetcher([{ reject: new Error("connection reset") }]);
+  const outcome = await deletePublishedPost(
+    row({ platform: "pinterest", platform_post_id: "111,222" }),
+    account({ platform: "pinterest" }),
+    deps(fetcher),
+  );
+  if (outcome.outcome !== "failed") throw new Error("expected a failure");
+  assertEquals(outcome.reason.includes("Deleted 0 of 2 Pinterest pins"), true);
+  assertEquals(outcome.reason.includes("111: could not reach Pinterest"), true);
 });
 
 Deno.test("a linkedin post with two destinations deletes both ugcPosts", async () => {
@@ -387,7 +455,7 @@ Deno.test("a native youtube channel deletes the video through the data api", asy
     account({
       platform: "youtube",
       auth_provider: "native",
-      access_token: TEST_TOKEN,
+      access_token: PLACEHOLDER_CREDENTIAL,
       // Far enough in the future that the token is never refreshed.
       token_expires_at: "2099-01-01T00:00:00.000Z",
     }),
@@ -411,7 +479,7 @@ Deno.test("a youtube video that is not there any more is a delete that already h
     account({
       platform: "youtube",
       auth_provider: "native",
-      access_token: TEST_TOKEN,
+      access_token: PLACEHOLDER_CREDENTIAL,
       // Far enough in the future that the token is never refreshed.
       token_expires_at: "2099-01-01T00:00:00.000Z",
     }),

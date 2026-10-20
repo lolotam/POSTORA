@@ -109,6 +109,11 @@ const BestTimesSchema = z.object({
 const RETRY_TIMEOUT_MS = 120_000;
 const BEST_TIMES_TIMEOUT_MS = 60_000;
 
+// How long an ambiguous retry keeps the post closed. It is longer than
+// process-post can run, so when the hold expires the earlier publish cannot still
+// be in flight.
+const RETRY_HOLD_MS = 15 * 60_000;
+
 // An ISO 8601 instant without an offset is ambiguous: two machines read it as two
 // different instants, and the post would publish at the wrong hour. A trailing Z or a
 // +HH:MM offset is required.
@@ -317,6 +322,48 @@ async function releaseLock(
       `[n8n-api] posts: restoring the status of post ${postId} failed: ${readError.message}`,
     );
   }
+}
+
+// Gives the post back to the status it had before the claim and records a hold on
+// it: the retry that is being given up may still be publishing, and a hold is what
+// keeps a second retry or a delete away from that post until the earlier publish
+// cannot still be running. Never throws: a failure here must not replace the
+// answer the caller is about to receive.
+async function releaseLockWithHold(
+  deps: PostActionDeps,
+  request: {
+    postId: string;
+    userId: string;
+    previousStatus: string;
+    metadata: Record<string, unknown> | null | undefined;
+  },
+): Promise<string> {
+  const holdUntil = new Date(deps.now().getTime() + RETRY_HOLD_MS).toISOString();
+  try {
+    const { error: holdError } = await deps.supabase
+      .from("posts")
+      .update({
+        status: request.previousStatus,
+        metadata: {
+          ...(request.metadata ?? {}),
+          retry_hold_until: holdUntil,
+        },
+      })
+      .eq("id", request.postId)
+      .eq("user_id", request.userId)
+      .eq("status", "processing");
+
+    if (holdError) {
+      console.error(
+        `[n8n-api] posts: recording the retry hold on post ${request.postId} failed: ${holdError.message}`,
+      );
+    }
+  } catch (thrown) {
+    console.error(
+      `[n8n-api] posts: recording the retry hold on post ${request.postId} failed: ${thrown instanceof Error ? thrown.name : "unknown"}`,
+    );
+  }
+  return holdUntil;
 }
 
 // The per-platform results of one post. The post_id comes from a read that was
@@ -597,6 +644,8 @@ interface RetryRequest {
   postId: string;
   userId: string;
   previousStatus: string;
+  /** The metadata the post carried, so a hold can be written without losing it. */
+  metadata: Record<string, unknown> | null | undefined;
   targets: PlatformResultRow[];
   notRetried: NotRetried[];
 }
@@ -648,7 +697,7 @@ export async function retryFailedPost(
   }
   const subject = `post ${postId}, user ${userId}`;
 
-  const read = await readOwnedPost(deps, route, postId, userId, "id, status, scheduled_at");
+  const read = await readOwnedPost(deps, route, postId, userId, "id, status, scheduled_at, metadata");
   if (isActionResult(read)) return read;
   const post = read;
 
@@ -676,6 +725,7 @@ export async function retryFailedPost(
     postId,
     userId,
     previousStatus: post.status,
+    metadata: post.metadata,
     targets: picked.targets,
     notRetried: picked.notRetried,
   });
@@ -730,6 +780,8 @@ function retryGuard(
   now: Date,
 ): ActionResult | null {
   if (post.status === "processing") return refuse(route, subject, POST_PROCESSING);
+  const inDoubt = retryInDoubt(route, subject, post, now, "try again");
+  if (inDoubt) return inDoubt;
   if (isFutureScheduled(post, now)) {
     return refuse(
       route,
@@ -742,6 +794,40 @@ function retryGuard(
     );
   }
   return null;
+}
+
+// The hold an earlier ambiguous retry left on the post: the instant until which
+// that retry may still be publishing. It lives on the post's metadata, so it
+// outlives the claim that was taken for the retry.
+function retryHoldUntil(post: PostRow): string | null {
+  const value = post.metadata?.retry_hold_until;
+  if (typeof value !== "string") return null;
+  return Number.isFinite(Date.parse(value)) ? value : null;
+}
+
+// A post under a hold is not free to be published or deleted: the earlier retry
+// may still be running, and process-post writes its platform_posts rows only after
+// the provider call, so a second publish or a delete would either publish the same
+// account twice or orphan the result that the earlier retry is about to write.
+function retryInDoubt(
+  route: string,
+  subject: string,
+  post: PostRow,
+  now: Date,
+  action: "try again" | "delete",
+): ActionResult | null {
+  const holdUntil = retryHoldUntil(post);
+  if (!holdUntil || !(Date.parse(holdUntil) > now.getTime())) return null;
+  return refuse(
+    route,
+    subject,
+    error(
+      409,
+      "RETRY_IN_DOUBT",
+      `An earlier retry may still be publishing. Check get_post, and ${action} after ${holdUntil}.`,
+      { retry_hold_until: holdUntil },
+    ),
+  );
 }
 
 type RetryDispatch =
@@ -802,10 +888,17 @@ async function reportRetry(
   });
 
   if (outcome.kind === "unknown") {
-    // The request may never have reached process-post. The claim is released, or
-    // the post would stay `processing` and refuse every later retry and delete.
-    await releaseLock(deps, request.postId, request.userId, request.previousStatus);
-    return ok(unknownRetryBody(request.postId, retried), 202);
+    // The request may never have reached process-post, and it may be publishing
+    // right now. The claim is released, or the post would stay `processing` and
+    // refuse every later retry and delete, but a hold on the row keeps a second
+    // retry and a delete away until the earlier publish cannot still be running.
+    const holdUntil = await releaseLockWithHold(deps, {
+      postId: request.postId,
+      userId: request.userId,
+      previousStatus: request.previousStatus,
+      metadata: request.metadata,
+    });
+    return ok(unknownRetryBody(request.postId, retried, holdUntil), 202);
   }
   if (outcome.kind === "timeout") {
     return ok(
@@ -842,15 +935,25 @@ async function reportRetry(
 // before this answer goes out, because a post that stays `processing` refuses
 // every later retry and delete; that release is safe because it only flips a row
 // that is still `processing`, so a publish that did start settles the status
-// itself. The old failed rows stay: an account that did publish is skipped by
+// itself. The release also records a hold on the row: the publish that may be
+// running right now writes its platform_posts rows only after the provider call,
+// so nothing on the post says that it is still going. The hold is what keeps a
+// second retry and a delete away from that publish until it cannot still be
+// running. The old failed rows stay: an account that did publish is skipped by
 // pickRetryTargets, so a later retry cannot publish it twice.
-function unknownRetryBody(postId: string, retried: RetryTarget[]): Record<string, unknown> {
+function unknownRetryBody(
+  postId: string,
+  retried: RetryTarget[],
+  holdUntil: string,
+): Record<string, unknown> {
   return {
     post_id: postId,
     dispatched: "unknown",
     results_pending: true,
     retried,
-    message: "The retry may or may not have started. Check get_post before retrying again.",
+    retry_hold_until: holdUntil,
+    message:
+      `The retry may or may not have started. Further retries and deletes are paused until ${holdUntil}; check get_post.`,
   };
 }
 
@@ -952,10 +1055,16 @@ export async function deletePost(
   const postId = options.post_id;
   const subject = `post ${postId}, user ${userId}`;
 
-  const read = await readOwnedPost(deps, route, postId, userId, "id, status");
+  const read = await readOwnedPost(deps, route, postId, userId, "id, status, metadata");
   if (isActionResult(read)) return read;
   const post = read;
   if (post.status === "processing") return refuse(route, subject, POST_PROCESSING_DELETE);
+
+  // The hold of an earlier ambiguous retry: the retry may still be publishing, and
+  // its result row does not exist yet, so deleting the record now would orphan
+  // the result it is about to write.
+  const inDoubt = retryInDoubt(route, subject, post, deps.now(), "delete");
+  if (inDoubt) return inDoubt;
 
   // The claim comes before anything is deleted: a retry that lands in the middle of
   // a delete would publish a fresh result that the record delete would orphan.
