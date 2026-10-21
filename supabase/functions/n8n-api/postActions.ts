@@ -2200,7 +2200,12 @@ export async function deletePost(
 
   // The post's own media is read under the claim: the claim proved the post is
   // the caller's, and the read is scoped to the owner besides.
-  const post = await readOwnedPost(deps, route, postId, userId, "id, media_file_ids");
+  //
+  // The metadata is read with it because it says what the post went out as: a
+  // Facebook post can be a feed post and a story at once, and a LinkedIn post
+  // can go to several destinations. platform_posts keeps one id for all of it,
+  // so the deleter needs the metadata to know what it cannot delete.
+  const post = await readOwnedPost(deps, route, postId, userId, "id, media_file_ids, metadata");
   if (isActionResult(post)) {
     // The claim is given back: the next call is not told the post is busy for
     // the rest of the lease over a read that never happened.
@@ -2258,6 +2263,7 @@ export async function deletePost(
         platform_post_id: copy.platform_post_id,
         social_account_id: copy.social_account_id,
         response_data: copy.response_data,
+        post_metadata: post.metadata ?? null,
       },
       account,
       platformDeps,

@@ -25,6 +25,12 @@ export interface PublishedPlatformPost {
   platform_post_id: string | null;
   social_account_id: string | null;
   response_data: unknown;
+  /**
+   * The posts.metadata of the post this row belongs to. It says what the post
+   * went out as -- a Facebook feed post and a story, two LinkedIn
+   * destinations -- and platform_posts keeps one id for the lot of them.
+   */
+  post_metadata: Record<string, unknown> | null;
 }
 
 export interface DeleteAccount {
@@ -191,16 +197,57 @@ async function graphDelete(
   };
 }
 
+// The Facebook items a post went out as.
+//
+// The metadata carries one type for a post that is one thing, and a list for a
+// post that is more than one thing: a feed post, a story and a reel are three
+// objects on Facebook, and Postora keeps one id for the lot of them.
+function facebookPostTypes(postMetadata: Record<string, unknown> | null): string[] {
+  const raw = postMetadata?.facebook_post_type;
+  if (!Array.isArray(raw)) return [];
+  const types: string[] = [];
+  for (const value of raw) {
+    if (typeof value !== "string") continue;
+    const trimmed = value.trim();
+    if (trimmed.length === 0) continue;
+    // The same type twice is one item, not two.
+    if (!types.includes(trimmed)) types.push(trimmed);
+  }
+  return types;
+}
+
+// The Facebook items Postora never recorded, when the post went out as more
+// than one thing. Null when there is nothing left over, because then the
+// delete of the recorded id is the whole delete.
+//
+// A delete that says "deleted" for a post that is a feed post AND a story
+// would hide the story: the caller would believe the post is gone from
+// Facebook while one of its copies is still there.
+function facebookLeftover(
+  row: PublishedPlatformPost,
+  deletedNote: string,
+): PlatformDeleteOutcome | null {
+  const types = facebookPostTypes(row.post_metadata);
+  if (types.length <= 1) return null;
+  return {
+    outcome: "not_supported",
+    reason:
+      `This post created ${types.length} Facebook items (${types.join(", ")}); Postora recorded only one of them${deletedNote}. Delete the others in Facebook.`,
+  };
+}
+
 async function deleteFacebook(
   platformPostId: string,
-  _row: PublishedPlatformPost,
+  row: PublishedPlatformPost,
   account: DeleteAccount,
   deps: PlatformDeleteDeps,
 ): Promise<PlatformDeleteOutcome> {
   if (!account.access_token) return missingToken();
   const answer = await graphDelete(FACEBOOK_GRAPH, platformPostId, account.access_token, deps);
   // A post that is not there any more is already what the caller wanted.
-  if (answer.notFound) return ALREADY_GONE;
+  if (answer.notFound) {
+    return facebookLeftover(row, " and it was already gone") ?? ALREADY_GONE;
+  }
   if (!answer.ok) {
     if (answer.upstreamUnavailable) {
       return { outcome: "failed", reason: "Could not reach Facebook. Try again." };
@@ -214,7 +261,10 @@ async function deleteFacebook(
   if (answer.data?.success === false) {
     return { outcome: "failed", reason: "Facebook did not confirm the delete." };
   }
-  return { outcome: "deleted" };
+  // The recorded id is gone. A post that went out as more than one Facebook
+  // item is not: the other items are still on Facebook, and the caller is told
+  // about them instead of being told that the post is deleted.
+  return facebookLeftover(row, " and deleted it") ?? { outcome: "deleted" };
 }
 
 // Threads answers a connection that may not delete with an OAuthException:
@@ -349,14 +399,18 @@ async function deletePinterest(
 // One LinkedIn publish can land on several destinations (a personal feed and one or more
 // organization pages), and every destination is its own ugcPost. The publish result
 // keeps them all, so the delete has to walk them too.
+//
+// A publish result does not always keep them: the stored answer of a publish
+// carries the primary URN and nothing else. The flag says which of the two
+// this row is, because only the first case knows every copy it deleted.
 function linkedinDestinationUrns(
   row: PublishedPlatformPost,
   platformPostId: string,
-): string[] {
+): { urns: string[]; destinationsRecorded: boolean } {
   const data = row.response_data as { destinations?: unknown } | null | undefined;
-  const destinations = Array.isArray(data?.destinations) ? data.destinations : [];
+  const destinations = Array.isArray(data?.destinations) ? data.destinations : null;
   const urns: string[] = [];
-  for (const entry of destinations) {
+  for (const entry of destinations ?? []) {
     if (!entry || typeof entry !== "object") continue;
     const candidate = entry as { status?: unknown; post_id?: unknown };
     if (candidate.status !== "success") continue;
@@ -364,7 +418,45 @@ function linkedinDestinationUrns(
     if (!postId) continue;
     urns.push(postId);
   }
-  return urns.length > 0 ? urns : [platformPostId];
+  if (urns.length > 0) return { urns, destinationsRecorded: true };
+  return { urns: [platformPostId], destinationsRecorded: destinations !== null };
+}
+
+// How many LinkedIn destinations this account was asked to publish to.
+//
+// The stored answer of a publish does not always keep the list of
+// destinations, so the post's metadata is what says how many copies of the
+// post are on LinkedIn. The metadata holds the destinations of every account
+// of the post, so only the ones of this account are counted.
+function linkedinDestinationCount(row: PublishedPlatformPost): number {
+  const metadata = row.post_metadata;
+  if (!metadata) return 0;
+  const selections = metadata.linkedin_destinations;
+  if (Array.isArray(selections)) {
+    if (typeof row.social_account_id !== "string") return 0;
+    const selectedIds = new Set<string>();
+    for (const selection of selections) {
+      if (!selection || typeof selection !== "object") continue;
+      const candidate = selection as { account_id?: unknown; destination_id?: unknown };
+      if (candidate.account_id !== row.social_account_id) continue;
+      if (typeof candidate.destination_id !== "string") continue;
+      const destinationId = candidate.destination_id.trim();
+      if (destinationId.length === 0) continue;
+      // The same destination twice is one copy, not two.
+      selectedIds.add(destinationId);
+    }
+    return selectedIds.size;
+  }
+  const ids = metadata.linkedin_destination_ids;
+  if (!Array.isArray(ids)) return 0;
+  const askedIds = new Set<string>();
+  for (const value of ids) {
+    if (typeof value !== "string") continue;
+    const destinationId = value.trim();
+    if (destinationId.length === 0) continue;
+    askedIds.add(destinationId);
+  }
+  return askedIds.size;
 }
 
 async function deleteLinkedin(
@@ -374,7 +466,7 @@ async function deleteLinkedin(
   deps: PlatformDeleteDeps,
 ): Promise<PlatformDeleteOutcome> {
   if (!account.access_token) return missingToken();
-  const urns = linkedinDestinationUrns(row, platformPostId);
+  const { urns, destinationsRecorded } = linkedinDestinationUrns(row, platformPostId);
   const failures: string[] = [];
   let deleted = 0;
   let alreadyGone = 0;
@@ -408,13 +500,29 @@ async function deleteLinkedin(
     }
     failures.push(`${urn}: LinkedIn returned ${response.status}`);
   }
-  if (failures.length === 0) {
+  if (failures.length > 0) {
+    return {
+      outcome: "failed",
+      reason: `Deleted ${deleted + alreadyGone} of ${urns.length} LinkedIn destinations. ${failures.join("; ")}`,
+    };
+  }
+  // The stored answer kept the list of destinations, so every copy Postora
+  // knows about is gone.
+  if (destinationsRecorded) {
     return alreadyGone === urns.length ? ALREADY_GONE : { outcome: "deleted" };
   }
-  return {
-    outcome: "failed",
-    reason: `Deleted ${deleted + alreadyGone} of ${urns.length} LinkedIn destinations. ${failures.join("; ")}`,
-  };
+  // The stored answer does not say how many copies are out there, so the
+  // metadata does. A post that went to several destinations has copies Postora
+  // never recorded, and a delete that says "deleted" would hide them.
+  const count = linkedinDestinationCount(row);
+  if (count > 1) {
+    const deletedNote = deleted > 0 ? " and deleted it" : " and it was already gone";
+    return {
+      outcome: "not_supported",
+      reason: `This post went to ${count} LinkedIn destinations but Postora recorded only one${deletedNote}. Delete the others on LinkedIn.`,
+    };
+  }
+  return alreadyGone === urns.length ? ALREADY_GONE : { outcome: "deleted" };
 }
 
 const DELETERS: Record<string, Deleter> = {

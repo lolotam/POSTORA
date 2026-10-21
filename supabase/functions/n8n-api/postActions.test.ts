@@ -2864,6 +2864,7 @@ function queueDeleteReads(
   db: FakeSupabase,
   options: {
     mediaFileIds?: string[];
+    metadata?: Record<string, unknown> | null;
     copies?: Array<Record<string, unknown>>;
     accounts?: Array<Record<string, unknown>>;
   } = {},
@@ -2873,6 +2874,7 @@ function queueDeleteReads(
       id: POST,
       status: "completed",
       media_file_ids: options.mediaFileIds ?? [],
+      metadata: options.metadata ?? null,
     },
     error: null,
   });
@@ -3097,6 +3099,41 @@ Deno.test("a delete whose platforms are gone removes the post and then its media
 
   // The Facebook copy is the one request that went out: the Instagram copy
   // has no delete endpoint, so nothing was asked of it.
+  assertEquals(calls.length, 1);
+  assertEquals(calls[0].method, "DELETE");
+});
+
+Deno.test("the delete reads the post metadata and hands it to the deleter", async () => {
+  const db = new FakeSupabase();
+  claimQueued(db, "completed");
+  queueDeleteReads(db, {
+    mediaFileIds: [],
+    // The post went out as a feed post and a story: Postora recorded one id.
+    metadata: { facebook_post_type: ["feed", "story"] },
+    copies: [publishedCopy("row-facebook", "facebook", ACCOUNT, "1234567890")],
+    accounts: [deleteAccount()],
+  });
+  db.queueRpc(DELETE_CLAIMED_RPC, { data: true, error: null });
+
+  const { calls, fetcher } = fakeFetcher([{ status: 200, body: { success: true } }]);
+  const result = await deletePost(depsFor(db, fetcher), USER, {
+    post_id: POST,
+  });
+
+  // The metadata is read with the post, because it is what says what the post
+  // went out as.
+  const read = callsFor(db, "posts", "select")[0];
+  assertEquals(String(read.payload).includes("metadata"), true);
+  // The deleter saw it: the copy is reported as more than the one id Postora
+  // recorded, and the delete of the recorded id still went out.
+  const platforms = result.body.platforms as Array<{
+    platform: string;
+    outcome: string;
+    reason?: string;
+  }>;
+  assertEquals(platforms.length, 1);
+  assertEquals(platforms[0].outcome, "not_supported");
+  assertEquals((platforms[0].reason ?? "").includes("2 Facebook items"), true);
   assertEquals(calls.length, 1);
   assertEquals(calls[0].method, "DELETE");
 });

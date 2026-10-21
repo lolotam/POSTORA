@@ -100,6 +100,7 @@ function row(overrides: Partial<PublishedPlatformPost> = {}): PublishedPlatformP
     platform_post_id: PLATFORM_POST_ID,
     social_account_id: ACCOUNT,
     response_data: null,
+    post_metadata: null,
     ...overrides,
   };
 }
@@ -165,6 +166,68 @@ Deno.test("a facebook post that is not there any more is a delete that already h
     outcome: "deleted",
     note: "Already removed on the platform.",
   });
+});
+
+Deno.test("a facebook post that went out as more than one item says what is left on Facebook", async () => {
+  // A feed post and a story are two objects on Facebook, and Postora keeps
+  // one id for the lot of them. Deleting the recorded id does not delete the
+  // story, so the caller has to be told that it is still there.
+  const { calls, fetcher } = fakeFetcher([{ status: 200, body: { success: true } }]);
+  const outcome = await deletePublishedPost(
+    row({ post_metadata: { facebook_post_type: ["feed", "story"] } }),
+    account(),
+    deps(fetcher),
+  );
+  if (outcome.outcome !== "not_supported") throw new Error("expected a refusal");
+  assertEquals(outcome.reason.includes("2 Facebook items"), true);
+  assertEquals(outcome.reason.includes("feed, story"), true);
+  assertEquals(outcome.reason.includes("Delete the others in Facebook."), true);
+  // The recorded id was still deleted: what is left over is the other item.
+  assertEquals(calls.length, 1);
+  assertEquals(calls[0].method, "DELETE");
+  assertEquals(
+    calls[0].url,
+    `${FACEBOOK_GRAPH}/${PLATFORM_POST_ID}?access_token=${encodeURIComponent(PLACEHOLDER_CREDENTIAL)}`,
+  );
+});
+
+Deno.test("a facebook post that went out as one item is deleted as before", async () => {
+  // The metadata of an older post carries one type and not a list: there is
+  // only one item, so the delete is a delete.
+  const { calls, fetcher } = fakeFetcher([{ status: 200, body: { success: true } }]);
+  const outcome = await deletePublishedPost(
+    row({ post_metadata: { facebook_post_type: "feed" } }),
+    account(),
+    deps(fetcher),
+  );
+  assertEquals(outcome, { outcome: "deleted" });
+  assertEquals(calls.length, 1);
+});
+
+Deno.test("a facebook post that lists the same item twice is one item", async () => {
+  const { calls, fetcher } = fakeFetcher([{ status: 200, body: { success: true } }]);
+  const outcome = await deletePublishedPost(
+    row({ post_metadata: { facebook_post_type: ["feed", "feed"] } }),
+    account(),
+    deps(fetcher),
+  );
+  assertEquals(outcome, { outcome: "deleted" });
+  assertEquals(calls.length, 1);
+});
+
+Deno.test("a facebook post that went out as more than one item and whose delete failed is a failure", async () => {
+  // The delete of the recorded id did not land: that is a failure, and the
+  // items that are left over are not what the caller is told about first.
+  const { fetcher } = fakeFetcher([
+    { status: 400, body: { error: { message: "Unsupported delete request." } } },
+  ]);
+  const outcome = await deletePublishedPost(
+    row({ post_metadata: { facebook_post_type: ["feed", "story"] } }),
+    account(),
+    deps(fetcher),
+  );
+  if (outcome.outcome !== "failed") throw new Error("expected a failure");
+  assertEquals(outcome.reason, "Unsupported delete request.");
 });
 
 Deno.test("threads deletes through the Threads graph", async () => {
@@ -534,6 +597,123 @@ Deno.test("a linkedin destination that is not there any more is a delete that al
     outcome: "deleted",
     note: "Already removed on the platform.",
   });
+});
+
+Deno.test("a linkedin post that went to several destinations says what is left on LinkedIn", async () => {
+  // The stored answer of the publish does not keep the list of destinations,
+  // so the metadata is what says how many copies are on LinkedIn. The primary
+  // URN is the only one Postora recorded.
+  const { calls, fetcher } = fakeFetcher([{ status: 204 }]);
+  const outcome = await deletePublishedPost(
+    row({
+      platform: "linkedin",
+      post_metadata: {
+        linkedin_destinations: [
+          { account_id: ACCOUNT, destination_id: "personal" },
+          { account_id: ACCOUNT, destination_id: "77777777-7777-4777-8777-777777777777" },
+        ],
+      },
+    }),
+    account({ platform: "linkedin" }),
+    deps(fetcher),
+  );
+  if (outcome.outcome !== "not_supported") throw new Error("expected a refusal");
+  assertEquals(outcome.reason.includes("2 LinkedIn destinations"), true);
+  assertEquals(outcome.reason.includes("Delete the others on LinkedIn."), true);
+  // The primary URN was still deleted: what is left over is the other one.
+  assertEquals(calls.length, 1);
+  assertEquals(
+    calls[0].url,
+    `https://api.linkedin.com/v2/ugcPosts/${encodeURIComponent(PLATFORM_POST_ID)}`,
+  );
+  assertEquals(calls[0].method, "DELETE");
+});
+
+Deno.test("a linkedin post that went to one destination is deleted as before", async () => {
+  const { calls, fetcher } = fakeFetcher([{ status: 204 }]);
+  const outcome = await deletePublishedPost(
+    row({
+      platform: "linkedin",
+      post_metadata: {
+        linkedin_destinations: [
+          { account_id: ACCOUNT, destination_id: "personal" },
+        ],
+      },
+    }),
+    account({ platform: "linkedin" }),
+    deps(fetcher),
+  );
+  assertEquals(outcome, { outcome: "deleted" });
+  assertEquals(calls.length, 1);
+});
+
+Deno.test("a linkedin post whose destinations belong to another account is deleted as before", async () => {
+  // The metadata holds the destinations of every account of the post, so only
+  // the ones of this account are counted.
+  const { calls, fetcher } = fakeFetcher([{ status: 204 }]);
+  const outcome = await deletePublishedPost(
+    row({
+      platform: "linkedin",
+      post_metadata: {
+        linkedin_destinations: [
+          { account_id: "99999999-9999-4999-8999-999999999999", destination_id: "personal" },
+          { account_id: "99999999-9999-4999-8999-999999999999", destination_id: "org" },
+        ],
+      },
+    }),
+    account({ platform: "linkedin" }),
+    deps(fetcher),
+  );
+  assertEquals(outcome, { outcome: "deleted" });
+  assertEquals(calls.length, 1);
+});
+
+Deno.test("a linkedin post that went to several destinations and whose delete failed is a failure", async () => {
+  const { fetcher } = fakeFetcher([{ status: 500 }]);
+  const outcome = await deletePublishedPost(
+    row({
+      platform: "linkedin",
+      post_metadata: {
+        linkedin_destinations: [
+          { account_id: ACCOUNT, destination_id: "personal" },
+          { account_id: ACCOUNT, destination_id: "77777777-7777-4777-8777-777777777777" },
+        ],
+      },
+    }),
+    account({ platform: "linkedin" }),
+    deps(fetcher),
+  );
+  if (outcome.outcome !== "failed") throw new Error("expected a failure");
+  assertEquals(outcome.reason.includes("Deleted 0 of 1 LinkedIn destinations"), true);
+});
+
+Deno.test("a linkedin post whose stored answer kept its destinations is deleted as before", async () => {
+  // The publish kept the list of destinations, so the delete walks all of them
+  // and there is nothing left over to report.
+  const { calls, fetcher } = fakeFetcher([{ status: 204 }, { status: 204 }]);
+  const outcome = await deletePublishedPost(
+    row({
+      platform: "linkedin",
+      response_data: {
+        destinations: [
+          { post_id: "urn:li:share:111", status: "success" },
+          { post_id: "urn:li:share:222", status: "success" },
+        ],
+      },
+      // The metadata says the same thing, and it changes nothing: the stored
+      // answer is the one that knows every copy.
+      post_metadata: {
+        linkedin_destinations: [
+          { account_id: ACCOUNT, destination_id: "personal" },
+          { account_id: ACCOUNT, destination_id: "77777777-7777-4777-8777-777777777777" },
+        ],
+      },
+    }),
+    account({ platform: "linkedin" }),
+    deps(fetcher),
+  );
+  assertEquals(outcome, { outcome: "deleted" });
+  assertEquals(calls.length, 2);
 });
 
 Deno.test("a composio youtube channel cannot be deleted through Postora", async () => {
