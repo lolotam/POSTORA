@@ -18,7 +18,14 @@ import {
 } from "./confirmGate.ts";
 import { resolveKeyOwner } from "./keyOwner.ts";
 import type { ScopeGrant } from "./toolScopes.ts";
+import {
+  modeFromPath,
+  toolAllowed,
+  toolAnnotations,
+  type ConnectionMode,
+} from "./connectionMode.ts";
 import { sha256Hex } from "../_shared/crypto.ts";
+import { metadataPathFor } from "../_shared/mcpEndpoints.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -36,6 +43,16 @@ const PROTECTED_RESOURCE_METADATA_URL =
   `${APP_ORIGIN}/.well-known/oauth-protected-resource`;
 const WWW_AUTHENTICATE =
   `Bearer realm="postora-mcp", resource_metadata="${PROTECTED_RESOURCE_METADATA_URL}"`;
+
+// The read and inbox endpoints each have their own protected-resource
+// metadata, served by mcp-oauth, so the resource a client discovers matches
+// the URL it was configured with. The full endpoint keeps the static document
+// on the app origin it always had.
+function wwwAuthenticateFor(mode: ConnectionMode): string {
+  if (mode === "full") return WWW_AUTHENTICATE;
+  const metadataUrl = `${API_ORIGIN}/functions/v1/mcp-oauth${metadataPathFor(mode)}`;
+  return `Bearer realm="postora-mcp", resource_metadata="${metadataUrl}"`;
+}
 
 const N8N_API_BASE = `${SUPABASE_URL}/functions/v1/n8n-api`;
 
@@ -212,13 +229,35 @@ function okUntrusted(data: unknown) {
 // their own refusals are not recorded twice, and neither is a 429: the API's
 // central rate limiter records every 429 itself, before the route runs.
 
+// The tool set this server offers depends on the path the connection was
+// configured with: a connection that may read other people's comments is
+// never the connection that may publish, delete or spend AI quota. The mode
+// is resolved from the request path before the caller is authenticated, and
+// the model cannot change it, so it cannot widen its own tool set.
+// See ./connectionMode.ts.
+
 // Build a fresh MCP server bound to a specific user's API key, owner and grant.
-function buildServer(apiKey: string, ownerId: string, grant: ScopeGrant) {
+function buildServer(
+  apiKey: string,
+  ownerId: string,
+  grant: ScopeGrant,
+  mode: ConnectionMode,
+) {
   const server = new McpServer({
     name: "postora",
     version: "1.0.0",
     schemaAdapter: (schema) => z.toJSONSchema(schema as z.ZodType),
   });
+
+  // Every tool goes through register: it is offered only when the
+  // connection's mode allows it (see ./connectionMode.ts) and it carries the
+  // tool's annotations, so hosts can tell reads from writes. It is typed as
+  // server.tool itself, so each definition below keeps the handler argument
+  // types the framework infers from its input schema.
+  const register = ((name: string, def: Record<string, unknown>) => {
+    if (!toolAllowed(mode, name)) return server;
+    return server.tool(name, { ...def, annotations: toolAnnotations(name) } as never);
+  }) as typeof server.tool;
 
   // The framework validates the arguments against the tool's input schema
   // before the handler runs, and answers a call that does not fit with an
@@ -233,7 +272,7 @@ function buildServer(apiKey: string, ownerId: string, grant: ScopeGrant) {
   });
 
   // ---- Accounts ----
-  server.tool("list_accounts", {
+  register("list_accounts", {
     description:
       "List the user's connected social media accounts (Facebook Pages, Instagram, TikTok, YouTube, Pinterest, X, LinkedIn, Threads, Bluesky, Reddit).",
     inputSchema: z.object({
@@ -246,7 +285,7 @@ function buildServer(apiKey: string, ownerId: string, grant: ScopeGrant) {
   });
 
   // ---- Posts ----
-  server.tool("list_posts", {
+  register("list_posts", {
     description: "List the user's recent posts. Supports pagination and status filtering.",
     inputSchema: z.object({
       status: z.enum(["pending", "processing", "completed", "failed", "scheduled"]).optional(),
@@ -259,7 +298,7 @@ function buildServer(apiKey: string, ownerId: string, grant: ScopeGrant) {
     },
   });
 
-  server.tool("get_post", {
+  register("get_post", {
     description: "Get a single post (and its per-platform results) by Postora post id.",
     inputSchema: z.object({ post_id: z.string().describe("Postora post UUID") }),
     handler: async ({ post_id }) => {
@@ -273,7 +312,7 @@ function buildServer(apiKey: string, ownerId: string, grant: ScopeGrant) {
   // ("[\"uuid\"]") or as comma-separated text ("facebook, instagram").
   const stringList = z.union([z.array(z.string()), z.string()]);
 
-  server.tool("create_post", {
+  register("create_post", {
     description:
       "Create a post and publish (or schedule) it across one or more connected social accounts. " +
       "To schedule, pass a future ISO 8601 timestamp to 'scheduled_at'. " +
@@ -312,7 +351,7 @@ function buildServer(apiKey: string, ownerId: string, grant: ScopeGrant) {
   });
 
   // ---- Media upload ----
-  server.tool("upload_media", {
+  register("upload_media", {
     description:
       "Upload a media file (image or video) to the Postora media library. " +
       "Provide either media_url (public URL) or media_base64 (data URL or raw base64). " +
@@ -330,7 +369,7 @@ function buildServer(apiKey: string, ownerId: string, grant: ScopeGrant) {
   });
 
   // ---- Webhooks ----
-  server.tool("list_webhooks", {
+  register("list_webhooks", {
     description: "List the user's registered webhook subscriptions for post status updates.",
     inputSchema: z.object({}),
     handler: async () => {
@@ -339,7 +378,7 @@ function buildServer(apiKey: string, ownerId: string, grant: ScopeGrant) {
     },
   });
 
-  server.tool("register_webhook", {
+  register("register_webhook", {
     description: "Register a webhook URL to receive post status notifications.",
     inputSchema: z.object({
       url: z.string().describe("HTTPS URL to receive webhook events"),
@@ -351,7 +390,7 @@ function buildServer(apiKey: string, ownerId: string, grant: ScopeGrant) {
     },
   });
 
-  server.tool("delete_webhook", {
+  register("delete_webhook", {
     description: "Delete a registered webhook by id.",
     inputSchema: z.object({ webhook_id: z.string() }),
     handler: async ({ webhook_id }) => {
@@ -361,7 +400,7 @@ function buildServer(apiKey: string, ownerId: string, grant: ScopeGrant) {
   });
 
   // ---- Comments, messages, analytics ----
-  server.tool("list_comments", {
+  register("list_comments", {
     description:
       "List recent comments on a connected Facebook Page, Instagram or YouTube account. " +
       "Returns posts (YouTube: videos) with their comments and replies. " +
@@ -373,12 +412,14 @@ function buildServer(apiKey: string, ownerId: string, grant: ScopeGrant) {
       limit: z.number().int().min(1).max(50).optional().describe("Maximum number of posts to return (1-50, default 25)"),
     }),
     handler: async (args) => {
+      const scopeRefusal = await refuseUngranted({ admin }, { userId: ownerId, tool: "list_comments", grant });
+      if (scopeRefusal) return fail(403, scopeRefusal);
       const r = await callN8n(apiKey, "GET", "/api/v1/comments", undefined, args);
       return r.status >= 400 ? fail(r.status, r.data) : okUntrusted(r.data);
     },
   });
 
-  server.tool("list_messages", {
+  register("list_messages", {
     description:
       "Read direct messages of a connected Facebook Page or Instagram account. " +
       "Without conversation_id it lists the conversations; with conversation_id it returns that conversation's latest messages. " +
@@ -388,12 +429,14 @@ function buildServer(apiKey: string, ownerId: string, grant: ScopeGrant) {
       conversation_id: z.string().optional().describe("Conversation id from a previous list_messages call"),
     }),
     handler: async (args) => {
+      const scopeRefusal = await refuseUngranted({ admin }, { userId: ownerId, tool: "list_messages", grant });
+      if (scopeRefusal) return fail(403, scopeRefusal);
       const r = await callN8n(apiKey, "GET", "/api/v1/messages", undefined, args);
       return r.status >= 400 ? fail(r.status, r.data) : okUntrusted(r.data);
     },
   });
 
-  server.tool("get_post_analytics", {
+  register("get_post_analytics", {
     description:
       "Get analytics for a connected account's recent posts. Supported today: Threads (insights over period_days) " +
       "and TikTok (profile stats and recent videos). Other platforms return a 'not supported yet' error.",
@@ -409,7 +452,7 @@ function buildServer(apiKey: string, ownerId: string, grant: ScopeGrant) {
   });
 
   // ---- AI generation (uses the user's Postora AI plan and limits) ----
-  server.tool("generate_caption", {
+  register("generate_caption", {
     description:
       "Generate social media caption suggestions with Postora AI for a topic or product description. " +
       "Requires a Postora plan with AI features; counts against the user's AI limits.",
@@ -425,7 +468,7 @@ function buildServer(apiKey: string, ownerId: string, grant: ScopeGrant) {
     },
   });
 
-  server.tool("generate_hashtags", {
+  register("generate_hashtags", {
     description:
       "Suggest hashtags for a caption with Postora AI. Requires a Postora plan with AI features.",
     inputSchema: z.object({
@@ -438,7 +481,7 @@ function buildServer(apiKey: string, ownerId: string, grant: ScopeGrant) {
     },
   });
 
-  server.tool("generate_image", {
+  register("generate_image", {
     description:
       "Generate an image from a text prompt with Postora AI. The image is saved to the user's media library and the reply " +
       "carries media_file_id, which you can pass to create_post in media_file_ids. When the provider hosts the image, " +
@@ -455,7 +498,7 @@ function buildServer(apiKey: string, ownerId: string, grant: ScopeGrant) {
   });
 
   // ---- Comments ----
-  server.tool("reply_to_comment", {
+  register("reply_to_comment", {
     description:
       "Publicly reply to a comment on a Facebook, Instagram or Threads post, as the connected account. The reply is visible to everyone.",
     inputSchema: z.object({
@@ -484,7 +527,7 @@ function buildServer(apiKey: string, ownerId: string, grant: ScopeGrant) {
     },
   });
 
-  server.tool("hide_comment", {
+  register("hide_comment", {
     description:
       "Hide (or unhide with hide=false) a comment on a Facebook, Instagram or Threads post. Hidden comments stay visible to their author and friends only. Requires confirm: true.",
     inputSchema: z.object({
@@ -514,7 +557,7 @@ function buildServer(apiKey: string, ownerId: string, grant: ScopeGrant) {
     },
   });
 
-  server.tool("delete_comment", {
+  register("delete_comment", {
     description:
       "Permanently delete a comment on a Facebook or Instagram post (Threads replies cannot be deleted; hide them instead). Cannot be undone. Requires confirm: true.",
     inputSchema: z.object({
@@ -543,7 +586,7 @@ function buildServer(apiKey: string, ownerId: string, grant: ScopeGrant) {
   });
 
   // ---- Messages ----
-  server.tool("reply_to_message", {
+  register("reply_to_message", {
     description:
       "Send a direct message reply from a connected WhatsApp, Instagram or Facebook (Messenger) account. Pass recipient_id (Instagram/Messenger user id or WhatsApp number) or recipient_phone. The message is delivered to a real person.",
     inputSchema: z.object({
@@ -597,7 +640,7 @@ function buildServer(apiKey: string, ownerId: string, grant: ScopeGrant) {
   });
 
   // ---- Media ----
-  server.tool("get_media", {
+  register("get_media", {
     description:
       "Get a media file from the user's Postora media library by id (type, size, mime type, storage path).",
     inputSchema: z.object({
@@ -619,7 +662,7 @@ function buildServer(apiKey: string, ownerId: string, grant: ScopeGrant) {
   });
 
   // ---- Post management ----
-  server.tool("cancel_scheduled_post", {
+  register("cancel_scheduled_post", {
     description:
       "Cancel a scheduled post that has not been published yet and remove it from Postora. Only works while the post is scheduled and its time has not come. Cannot be undone. Requires confirm: true.",
     inputSchema: z.object({
@@ -636,7 +679,7 @@ function buildServer(apiKey: string, ownerId: string, grant: ScopeGrant) {
     },
   });
 
-  server.tool("reschedule_post", {
+  register("reschedule_post", {
     description:
       "Move a scheduled post that has not been published yet to a new time. scheduled_at must be a future ISO 8601 timestamp WITH a UTC offset (e.g. 2026-06-05T14:30:00Z or 2026-06-05T17:30:00+03:00).",
     inputSchema: z.object({
@@ -692,7 +735,7 @@ function buildServer(apiKey: string, ownerId: string, grant: ScopeGrant) {
   });
 
   // ---- Account health ----
-  server.tool("check_account_health", {
+  register("check_account_health", {
     description:
       "Check whether a connected social account can still publish: active flag, whether it needs to be reconnected, refresh failures, last refresh error and days until its token expires. " +
       "'healthy' is false when the account is inactive, needs a reconnect or its token has expired, true when the token is known to be still valid, and null when the token's expiry is unknown.",
@@ -708,7 +751,7 @@ function buildServer(apiKey: string, ownerId: string, grant: ScopeGrant) {
   });
 
   // ---- Planning ----
-  server.tool("suggest_best_times", {
+  register("suggest_best_times", {
     description:
       "Suggest the best days and times to post on the given platforms, combining platform best practices with the user's own publishing history (in the user's preferred time zone). Up to 6 platforms per call; each platform is analysed on its own publishing history.",
     inputSchema: z.object({
@@ -738,6 +781,11 @@ app.get("/mcp", (c) =>
       transport: "streamable-http",
       auth: "Bearer <Postora API key> (or x-api-key header)",
       docs: "https://postora.cloud/docs/mcp-server",
+      endpoints: {
+        full: "/functions/v1/mcp",
+        read: "/functions/v1/mcp/read",
+        inbox: "/functions/v1/mcp/inbox",
+      },
     }),
     { headers: { ...corsHeaders, "Content-Type": "application/json" } },
   ),
@@ -745,6 +793,27 @@ app.get("/mcp", (c) =>
 
 app.all("/*", async (c) => {
   const req = c.req.raw;
+  const pathname = new URL(req.url).pathname;
+  // Which tool set this connection gets is decided by the path, and the
+  // path is read before the caller is authenticated: a request to a path
+  // that names no mode costs no database lookup.
+  const mode = modeFromPath(pathname);
+  if (!mode) {
+    // Refused before authentication, so it is logged to the edge logs and
+    // not to system_logs: an unauthenticated caller must never be able to
+    // write rows (see ./keyOwner.ts). The path is cut short so a long one
+    // cannot flood the log.
+    console.warn(JSON.stringify({
+      event: "mcp_unknown_endpoint",
+      method: req.method,
+      path: pathname.slice(0, 200),
+    }));
+    return jsonRpcError(
+      404,
+      -32601,
+      "Unknown MCP endpoint. Use /mcp, /mcp/read or /mcp/inbox.",
+    );
+  }
   const presented = extractApiKey(req);
   let apiKey: string | null = presented;
   // What the caller may do. A Postora API key is the owner's own key and
@@ -769,7 +838,7 @@ app.all("/*", async (c) => {
       presented
         ? "Invalid or expired access token."
         : "Missing access token. Authorize via OAuth or pass a Postora API key.",
-      { "WWW-Authenticate": WWW_AUTHENTICATE },
+      { "WWW-Authenticate": wwwAuthenticateFor(mode) },
     );
   }
 
@@ -782,7 +851,7 @@ app.all("/*", async (c) => {
   const owner = await resolveKeyOwner({ admin, sha256Hex }, apiKey);
   if (owner.kind === "unknown") {
     return jsonRpcError(401, -32001, "Invalid or expired access token.", {
-      "WWW-Authenticate": WWW_AUTHENTICATE,
+      "WWW-Authenticate": wwwAuthenticateFor(mode),
     });
   }
   if (owner.kind === "error") {
@@ -791,7 +860,7 @@ app.all("/*", async (c) => {
     return jsonRpcError(503, -32603, "Authentication is temporarily unavailable. Try again.");
   }
 
-  const server = buildServer(apiKey, owner.userId, grant);
+  const server = buildServer(apiKey, owner.userId, grant, mode);
   const transport = new StreamableHttpTransport();
   const handler = transport.bind(server);
   const res = await handler(req);

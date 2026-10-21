@@ -4,6 +4,12 @@
 // Postora user account.
 
 import { createClient } from "npm:@supabase/supabase-js@2.45.0";
+import {
+  endpointForMetadataPath,
+  MCP_ENDPOINTS,
+  type McpEndpoint,
+} from "../_shared/mcpEndpoints.ts";
+import { NOT_YET_GRANTABLE_SCOPES } from "../_shared/mcpScopes.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SERVICE_ROLE = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
@@ -67,9 +73,13 @@ const admin = createClient(SUPABASE_URL, SERVICE_ROLE, {
 });
 
 // ---------- discovery ----------
-function protectedResourceMetadata() {
+// One document per MCP endpoint: the document of an endpoint advertises that
+// endpoint as the resource, so a client configured with /mcp/read discovers
+// /mcp/read and not /mcp. The full endpoint's document is the one this
+// function always served, unchanged.
+function protectedResourceMetadata(endpoint: McpEndpoint) {
   return {
-    resource: MCP_RESOURCE,
+    resource: `${API_ORIGIN}/functions/v1${MCP_ENDPOINTS[endpoint]}`,
     authorization_servers: [ISSUER],
     bearer_methods_supported: ["header"],
     resource_documentation: `${APP_ORIGIN}/docs/mcp-server`,
@@ -96,6 +106,8 @@ function authorizationServerMetadata() {
       "webhooks:manage",
       "comments:write",
       "messages:write",
+      "comments:read",
+      "messages:read",
     ],
     service_documentation: `${APP_ORIGIN}/docs/mcp-server`,
   };
@@ -187,15 +199,14 @@ async function handleAuthorize(req: Request): Promise<Response> {
   const state = p.get("state") ?? "";
   const scope = p.get("scope") ?? "accounts:read posts:read posts:write media:write webhooks:manage";
 
-  // comments:write and messages:write are advertised in the server metadata
-  // above, but they are not grantable yet: the consent screen that could show
-  // them ships after the frontend freeze. They are therefore dropped from the
-  // requested list before it is stored, and no token is ever issued with
-  // them. The tools that need them answer 403 over OAuth until then.
+  // The scopes that cannot be granted yet (see ../_shared/mcpScopes.ts) are
+  // dropped from the requested list before it is stored, so no token is ever
+  // issued with them. The tools that need them answer 403 over OAuth until
+  // the consent screen ships.
   const grantableScope = scope
     .split(/\s+/)
     .filter(Boolean)
-    .filter((requested) => requested !== "comments:write" && requested !== "messages:write")
+    .filter((requested) => !NOT_YET_GRANTABLE_SCOPES.has(requested))
     .join(" ");
 
   if (response_type !== "code") {
@@ -568,8 +579,12 @@ Deno.serve(async (req) => {
     .replace(/^\/mcp-oauth/, "") || "/";
 
   try {
-    if (req.method === "GET" && path === "/.well-known/oauth-protected-resource") {
-      return json(protectedResourceMetadata());
+    // One protected-resource document per MCP endpoint (see
+    // ../_shared/mcpEndpoints.ts), so a client configured with /mcp/read or
+    // /mcp/inbox discovers a resource that matches its URL.
+    const metadataEndpoint = req.method === "GET" ? endpointForMetadataPath(path) : null;
+    if (metadataEndpoint) {
+      return json(protectedResourceMetadata(metadataEndpoint));
     }
     if (req.method === "GET" && path === "/.well-known/oauth-authorization-server") {
       return json(authorizationServerMetadata());
