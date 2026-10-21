@@ -301,6 +301,7 @@ Return a JSON array of suggestions.`;
     return jsonResponse({
       suggestions,
       ...(parseFailed ? { parse_failed: true } : {}),
+      ...(emptyResult ? { empty_result: true } : {}),
       ...(droppedInvalid > 0 ? { dropped_invalid: droppedInvalid } : {}),
     });
 

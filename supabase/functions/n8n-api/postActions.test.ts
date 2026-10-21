@@ -1549,28 +1549,74 @@ Deno.test("a day and a time written in another spelling are still a suggestion",
   assertEquals(isBestTimeSuggestion({ ...suggestion(), time: "9:05 PM" }), true);
 });
 
-Deno.test("an empty suggestion list from the service is a 200", async () => {
+Deno.test("an empty suggestion list from the service is a 502", async () => {
   const db = new FakeSupabase();
   queueConnectedAccounts(db, ["instagram"]);
   db.queue("platform_posts", { data: [], error: null });
-  // Without the parse_failed flag the empty list is the service's real answer:
-  // it read the model and the model had nothing to say.
+  // The service answered with an empty list: it read the model and the model
+  // had nothing to say. That is a failed call, and a 200 with no suggestions
+  // would tell the caller the service had nothing to say.
   const { fetcher } = fakeFetcher([{ status: 200, body: { suggestions: [] } }]);
-  const result = await suggestBestTimes(
-    depsFor(db, fetcher),
-    USER,
-    { platforms: ["instagram"] },
-    null,
-  );
-  assertEquals(result.status, 200);
-  assertEquals(result.body.suggestions, []);
+  const logged: string[] = [];
+  const originalError = console.error;
+  console.error = (...args: unknown[]) => {
+    logged.push(args.map(String).join(" "));
+  };
+  try {
+    const result = await suggestBestTimes(
+      depsFor(db, fetcher),
+      USER,
+      { platforms: ["instagram"] },
+      null,
+    );
+    assertEquals(result.status, 502);
+    assertEquals(errorCode(result), "BEST_TIMES_FAILED");
+    // The failed read leaves a line behind, so it is visible in the logs and
+    // not only in the answer the caller got.
+    assertEquals(logged.length, 1);
+    assertEquals(logged[0].includes("no suggestions"), true);
+  } finally {
+    console.error = originalError;
+  }
+});
+
+Deno.test("a suggestion service that flags an empty result is a 502", async () => {
+  const db = new FakeSupabase();
+  queueConnectedAccounts(db, ["instagram"]);
+  db.queue("platform_posts", { data: [], error: null });
+  // The service read the model's answer and it held nothing to schedule: the
+  // service flags it as an empty result, and the flag is a failed read too.
+  const { fetcher } = fakeFetcher([
+    { status: 200, body: { suggestions: [], empty_result: true } },
+  ]);
+  const logged: string[] = [];
+  const originalError = console.error;
+  console.error = (...args: unknown[]) => {
+    logged.push(args.map(String).join(" "));
+  };
+  try {
+    const result = await suggestBestTimes(
+      depsFor(db, fetcher),
+      USER,
+      { platforms: ["instagram"] },
+      null,
+    );
+    assertEquals(result.status, 502);
+    assertEquals(errorCode(result), "BEST_TIMES_FAILED");
+    assertEquals(logged.length, 1);
+    assertEquals(logged[0].includes("empty result"), true);
+  } finally {
+    console.error = originalError;
+  }
 });
 
 Deno.test("a timezone the runtime does not know falls back to UTC", async () => {
   const db = new FakeSupabase();
   queueConnectedAccounts(db, ["instagram"]);
   db.queue("platform_posts", { data: [], error: null });
-  const { fetcher } = fakeFetcher([{ status: 200, body: { suggestions: [] } }]);
+  const { fetcher } = fakeFetcher([
+    { status: 200, body: { suggestions: [suggestion()] } },
+  ]);
   const result = await suggestBestTimes(
     depsFor(db, fetcher),
     USER,

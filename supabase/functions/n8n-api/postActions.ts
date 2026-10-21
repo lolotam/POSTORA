@@ -922,8 +922,9 @@ async function requestSuggestions(
 
   // A 2xx with a body that carries no suggestion list is a failed read, not an
   // empty result: answering 200 with no suggestions would tell the caller the
-  // service had nothing to say, when in fact it never answered. An empty array
-  // from the service is a real answer and stays a 200.
+  // service had nothing to say, when in fact it never answered. An empty list
+  // from the service is a failed read too: the service answered, and the
+  // answer held nothing the caller can schedule.
   const json = parseJsonObject(bodyText);
   if (json === null || !Array.isArray(json.suggestions)) {
     console.error(`[n8n-api] ${route}: the suggestion service answered without a suggestions list for ${platform} (user ${userId})`);
@@ -939,6 +940,15 @@ async function requestSuggestions(
     return error(502, "BEST_TIMES_FAILED", "Could not get suggestions right now. Try again.");
   }
 
+  // The service flags an answer that held nothing to schedule: the model
+  // answered with an empty list, which the service recorded as a failed call.
+  // It is a failed read here as well, so it is a 502 and never a 200 that
+  // carries no suggestions.
+  if (json.empty_result === true) {
+    console.error(`[n8n-api] best-times: the suggestion service answered with an empty result (user ${userId})`);
+    return error(502, "BEST_TIMES_FAILED", "Could not get suggestions right now. Try again.");
+  }
+
   // The service was asked about one platform, so every suggestion it answers
   // with has to be for that platform: a suggestion for another platform is not
   // an answer to this question. The platform the service answered with is
@@ -947,6 +957,17 @@ async function requestSuggestions(
   // that does not carry every field the caller schedules from is dropped for
   // the same reason.
   const returned = (json.suggestions as unknown[]) ?? [];
+
+  // An empty list is a failed read, not an empty result: the service answered
+  // with nothing at all, and answering 200 with no suggestions would tell the
+  // caller the service had nothing to say, when in fact the call failed.
+  if (returned.length === 0) {
+    console.error(
+      `[n8n-api] ${route}: the suggestion service answered with no suggestions for ${platform} (user ${userId})`,
+    );
+    return error(502, "BEST_TIMES_FAILED", "Could not get suggestions right now. Try again.");
+  }
+
   const suggestions = returned.filter((value) => {
     if (!isBestTimeSuggestion(value)) return false;
     const item = value as { platform: string };
@@ -957,7 +978,7 @@ async function requestSuggestions(
   // failed read, not an empty result: answering 200 with no suggestions would
   // tell the caller the service had nothing to say, when in fact it answered
   // with something that is not a suggestion.
-  if (returned.length > 0 && suggestions.length === 0) {
+  if (suggestions.length === 0) {
     console.error(
       `[n8n-api] ${route}: the suggestion service answered with no usable suggestion for ${platform} (user ${userId})`,
     );

@@ -85,7 +85,28 @@ class HangingSupabase {
   }
 }
 
-function capturedError(run: () => Promise<void>): Promise<string[]> {
+// A client that fails the first write and works after that: the refusal row
+// has to be written on the next attempt, because a throttle entry that stands
+// for a row nobody can see would suppress every identical refusal of the next
+// minute with no row at all.
+class FlakySupabase {
+  attempts = 0;
+
+  constructor(private readonly failures: number) {}
+
+  from(_table: string) {
+    const db = this;
+    return {
+      insert(_payload: unknown): Promise<{ data: null; error: { message: string } | null }> {
+        db.attempts += 1;
+        const error = db.attempts <= db.failures ? { message: "insert failed" } : null;
+        return Promise.resolve({ data: null, error });
+      },
+    };
+  }
+}
+
+function capturedError(run: () => Promise<unknown>): Promise<string[]> {
   const logged: string[] = [];
   const originalError = console.error;
   console.error = (...args: unknown[]) => {
@@ -98,7 +119,7 @@ function capturedError(run: () => Promise<void>): Promise<string[]> {
     });
 }
 
-function capturedWarn(run: () => Promise<void>): Promise<string[]> {
+function capturedWarn(run: () => Promise<unknown>): Promise<string[]> {
   const logged: string[] = [];
   const originalWarn = console.warn;
   console.warn = (...args: unknown[]) => {
@@ -267,6 +288,54 @@ Deno.test("a client that throws never takes the refusal down with it", async () 
   assertEquals(logged[0].includes("INVALID_MEDIA"), true);
 });
 
+// The writer answers whether the row landed. A caller that only wants the
+// refusal recorded can ignore the answer, but the throttled writer cannot: a
+// refusal row that was never written may not be throttled away.
+
+Deno.test("a refusal that was written says so", async () => {
+  const db = new FakeSupabase();
+  const landed = await recordApiRefusal(db, {
+    userId: USER,
+    route: ROUTE,
+    code: "INVALID_MESSAGE",
+    status: 400,
+  });
+
+  assertEquals(landed, true);
+});
+
+Deno.test("a refusal that could not be written says so", async () => {
+  const db = new FakeSupabase({ message: "insert failed" });
+  let failed = true;
+  const logged = await capturedError(async () => {
+    failed = await recordApiRefusal(db, {
+      userId: USER,
+      route: ROUTE,
+      code: "INVALID_MESSAGE",
+      status: 400,
+    });
+  });
+
+  // The insert was refused: there is no row, and the edge log says so.
+  assertEquals(logged.length, 1);
+  assertEquals(failed, false);
+});
+
+Deno.test("a refusal whose client threw says so", async () => {
+  let failed = true;
+  const logged = await capturedError(async () => {
+    failed = await recordApiRefusal(new ThrowingSupabase(), {
+      userId: USER,
+      route: ROUTE,
+      code: "INVALID_MEDIA",
+      status: 400,
+    });
+  });
+
+  assertEquals(logged.length, 1);
+  assertEquals(failed, false);
+});
+
 // The central limiter answers before any route runs, so the throttled refusal
 // is recorded by the limiter itself. A client that exhausts its quota is
 // hammering the API by definition, so the row is throttled: one row per user
@@ -307,6 +376,62 @@ Deno.test("a throttled refusal is recorded again once the window has passed", as
   await recordRateLimitRefusal(db, { userId: USER, route: ROUTE, now: 1_061_000 });
 
   assertEquals(db.inserts.length, 2);
+});
+
+// The throttle stands for a row that is really there. A row that was not
+// written is not a row, and an entry that stands for one suppresses every
+// identical refusal of the next minute with no trace at all.
+
+Deno.test("a refusal row that landed is not written again inside the window", async () => {
+  resetRateLimitRefusalThrottleForTests();
+  const db = new FakeSupabase();
+
+  await recordRateLimitRefusal(db, { userId: USER, route: ROUTE, now: 1_000_000 });
+  await recordRateLimitRefusal(db, { userId: USER, route: ROUTE, now: 1_030_000 });
+
+  // The row landed, so the window holds: the second refusal inside it is
+  // suppressed instead of written again.
+  assertEquals(db.inserts.length, 1);
+});
+
+Deno.test("a refusal row that did not land is written again inside the window", async () => {
+  resetRateLimitRefusalThrottleForTests();
+  const db = new FlakySupabase(1);
+
+  const logged = await capturedError(() =>
+    recordRateLimitRefusal(db, { userId: USER, route: ROUTE, now: 1_000_000 })
+  );
+
+  // The first write failed, so there is no row behind the first refusal.
+  assertEquals(db.attempts, 1);
+  assertEquals(logged.length, 1);
+  assertEquals(logged[0].includes(ROUTE), true);
+
+  // The throttle entry that stood for the missing row is released, so the next
+  // identical refusal inside the window writes its own row instead of being
+  // suppressed with no trace at all.
+  await recordRateLimitRefusal(db, { userId: USER, route: ROUTE, now: 1_030_000 });
+  assertEquals(db.attempts, 2);
+});
+
+Deno.test("a refusal row that never landed keeps the entry, so a hanging database is not hammered", async () => {
+  resetRateLimitRefusalThrottleForTests();
+  const db = new HangingSupabase();
+
+  // The deadline wins: the write has not finished, so whether it lands is not
+  // known yet.
+  await capturedWarn(() =>
+    recordRateLimitRefusal(db, { userId: USER, route: ROUTE, now: 1_000_000, deadlineMs: 20 })
+  );
+  await capturedWarn(() =>
+    recordRateLimitRefusal(db, { userId: USER, route: ROUTE, now: 1_030_000, deadlineMs: 20 })
+  );
+
+  // The second refusal inside the window did not insert again: a database that
+  // hangs must not turn every 429 into a new insert.
+  assertEquals(db.attempts, 1);
+  db.releaseInsert();
+  await new Promise<void>((resolve) => setTimeout(() => resolve(), 0));
 });
 
 Deno.test("a different route gets its own row inside the same window", async () => {

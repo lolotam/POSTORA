@@ -41,12 +41,17 @@ export function resetRateLimitRefusalThrottleForTests(): void {
  * Writes the row one refusal leaves behind. It never throws: a refusal that
  * cannot be recorded is still a refusal, the caller gets the same answer, and
  * the edge log is the only sink left when the database refuses the row.
+ *
+ * It answers whether the row landed: true when the insert succeeded, false
+ * when the insert failed or the client threw. A caller that only wants the
+ * refusal recorded can ignore the answer; the throttled writer needs it,
+ * because a refusal row that was never written may not be throttled away.
  */
 export async function recordApiRefusal(
   // deno-lint-ignore no-explicit-any
   supabase: any,
   request: { userId: string; route: string; code: string; status: number; postId?: string; accountId?: string },
-): Promise<void> {
+): Promise<boolean> {
   const { userId, route, code, status, postId, accountId } = request;
   try {
     const { error: insertError } = await supabase
@@ -73,7 +78,9 @@ export async function recordApiRefusal(
       console.error(
         `[n8n-api] system_logs insert failed while refusing ${route} (${code}, no durable refusal row): ${insertError?.message ?? String(insertError)}`,
       );
+      return false;
     }
+    return true;
   } catch (thrown) {
     // The refusal is still a refusal: the caller gets the same answer, and the
     // edge log is the only sink still reachable.
@@ -81,6 +88,7 @@ export async function recordApiRefusal(
     console.error(
       `[n8n-api] system_logs insert failed while refusing ${route} (${code}, no durable refusal row): ${message}`,
     );
+    return false;
   }
 }
 
@@ -99,6 +107,10 @@ export async function recordApiRefusal(
  * throttling must not turn the caller's 429 into an edge timeout. When the
  * deadline wins, the insert is left to finish on its own and one line says
  * so.
+ *
+ * The throttle entry is released again when the row did not land: an entry
+ * that stands for a row nobody can see would suppress every identical
+ * refusal of the next minute with no row at all.
  *
  * It never throws: the caller still gets its 429, whether the row was
  * written or not.
@@ -138,9 +150,10 @@ export async function recordRateLimitRefusal(
   }
 
   // The entry is taken before the row is written, so two refusals in the same
-  // window cannot both write one. The row itself may fail to be written; the
-  // entry stays either way, because a missing row is not worth a second write
-  // attempt per window.
+  // window cannot both write one. The entry is released again below when the
+  // row did not land: a throttle entry that stands for a row nobody can see
+  // would suppress every identical refusal of the next minute with no row at
+  // all.
   rateLimitRefusalThrottle.delete(key);
   rateLimitRefusalThrottle.set(key, now);
 
@@ -160,7 +173,10 @@ export async function recordRateLimitRefusal(
     });
     // recordApiRefusal swallows its own errors, but a rejection that arrives
     // after the deadline has already won must not become an unhandled one.
-    const written = insert.then(() => "written" as const, () => "written" as const);
+    const written = insert.then(
+      (landed) => (landed ? "written" as const : "failed" as const),
+      () => "failed" as const,
+    );
     const expired = new Promise<"expired">((resolve) => {
       timer = setTimeout(() => resolve("expired"), deadlineMs);
     });
@@ -170,6 +186,18 @@ export async function recordRateLimitRefusal(
       console.warn(
         `[n8n-api] rate limit refusal row for ${route} did not finish within ${deadlineMs}ms; answering 429 anyway`,
       );
+      // The entry stays: the write has not finished, so whether it lands is
+      // not known yet. Releasing it here would turn every 429 into a new
+      // insert while the database is hanging, which is the very pressure
+      // that caused the throttling.
+    } else if (outcome === "failed") {
+      // The row did not land, so there is no trace to throttle: the entry
+      // this call set is released, and the next identical refusal writes its
+      // own row. Only this call's own entry is released: a newer entry (a
+      // later refusal that already wrote its row) is never removed.
+      if (rateLimitRefusalThrottle.get(key) === now) {
+        rateLimitRefusalThrottle.delete(key);
+      }
     }
   } finally {
     // A finished insert must not keep the isolate awake for the rest of the
