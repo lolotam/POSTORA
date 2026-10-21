@@ -654,7 +654,8 @@ function buildServer(apiKey: string, ownerId: string, grant: ScopeGrant) {
   server.tool("retry_failed_post", {
     description:
       "Retry a post that failed to publish on some of its platforms. Only the failed platforms are published again: a platform that already published is never posted a second time. " +
-      "The answer may say 'results_pending', which means the publish was started and the results are not in yet — read them with get_post. Requires confirm: true.",
+      "The answer may say 'results_pending', which means the publish was started and the results are not in yet — read them with get_post. " +
+      "Do not retry a post that is being retried from the Postora dashboard at the same time: the two retries are not coordinated yet and could publish the same account twice. Requires confirm: true.",
     inputSchema: z.object({
       post_id: z.string().describe("Postora post UUID"),
       confirm: confirmField,
