@@ -436,6 +436,26 @@ function tiktokLockMessage(err: { message?: unknown } | null): string {
   return message;
 }
 
+// ── the two writes, on the database clock ─────────────────────────────────────
+
+// The cancel and the reschedule are one RPC each, so the deadline is compared
+// with now() inside the database: the clock that decides whether a post is
+// still in the future is the clock the scheduler publishes on, not the clock of
+// the edge worker that answered the request (issue #281). The compare-and-set
+// against the scheduler lives in the same place, so the two can never disagree.
+//
+// PostgREST answers PGRST202 when the function is not in the schema cache: the
+// migration that creates it has not been applied to this database yet. The
+// migrations are applied by the owner separately from the deploys of this
+// function, so the two can be apart for a while. The fallback below keeps the
+// route working on the old app-clock path until the migration lands, and it
+// disappears with it.
+const RPC_MISSING_CODE = "PGRST202";
+
+function isMissingRpc(err: { code?: unknown } | null): boolean {
+  return err !== null && err !== undefined && err.code === RPC_MISSING_CODE;
+}
+
 // ── 1. posts/cancel ────────────────────────────────────────────────────────────
 
 export async function cancelScheduledPost(
@@ -478,6 +498,55 @@ export async function cancelScheduledPost(
 // so the delete only lands while the post is still scheduled for the future. The
 // platform_posts rows go with it through the existing ON DELETE CASCADE.
 async function cancelScheduledRow(
+  deps: PostActionDeps,
+  route: string,
+  request: { postId: string; userId: string },
+): Promise<ActionResult | null> {
+  const { data: cancelled, error: cancelError } = await deps.supabase.rpc(
+    "mcp_cancel_scheduled_post",
+    { p_user_id: request.userId, p_post_id: request.postId },
+  );
+
+  if (cancelError) {
+    if (isMissingRpc(cancelError)) {
+      console.warn(
+        `[n8n-api] ${route}: mcp_cancel_scheduled_post is not in the database yet, falling back to the app-clock delete`,
+      );
+      return await cancelScheduledRowOnAppClock(deps, route, request);
+    }
+    // The database refused the delete on purpose, so the caller is told what
+    // the database said instead of being handed a fault.
+    if (isTikTokPublishLock(cancelError)) {
+      console.warn(
+        `[n8n-api] ${route}: post ${request.postId} is locked by a TikTok publish and cannot be changed`,
+      );
+      return error(
+        409,
+        "POST_LOCKED",
+        tiktokLockMessage(cancelError),
+      );
+    }
+    console.error(
+      `[n8n-api] ${route}: deleting post ${request.postId} failed: ${cancelError.message}`,
+    );
+    return error(500, "INTERNAL_ERROR", "Cancelling the post failed. Please try again.");
+  }
+  // The row was not deleted: the post is no longer a scheduled post in the
+  // future, so the scheduler has it (or its time has come).
+  if (cancelled !== true) {
+    return error(
+      409,
+      "POST_STATE_CHANGED",
+      "The post changed while it was being cancelled (it may already be publishing). Check get_post.",
+    );
+  }
+  return null;
+}
+
+// The path the route used before the RPC existed: the deadline is read on the
+// edge clock. It runs only while the migration that creates the RPC has not
+// been applied to this database.
+async function cancelScheduledRowOnAppClock(
   deps: PostActionDeps,
   route: string,
   request: { postId: string; userId: string },
@@ -675,6 +744,81 @@ async function rescheduleRefusal(
 }
 
 async function rescheduleRow(
+  deps: PostActionDeps,
+  route: string,
+  request: {
+    postId: string;
+    userId: string;
+    payload: Record<string, unknown>;
+  },
+): Promise<{ post: Record<string, unknown> } | ActionResult> {
+  const requestedAt = String(request.payload.scheduled_at);
+  const { data: outcome, error: rescheduleError } = await deps.supabase.rpc(
+    "mcp_reschedule_post",
+    {
+      p_user_id: request.userId,
+      p_post_id: request.postId,
+      p_scheduled_at: requestedAt,
+    },
+  );
+
+  if (rescheduleError) {
+    if (isMissingRpc(rescheduleError)) {
+      console.warn(
+        `[n8n-api] ${route}: mcp_reschedule_post is not in the database yet, falling back to the app-clock update`,
+      );
+      return await rescheduleRowOnAppClock(deps, route, request);
+    }
+    // The database refused the update on purpose, so the caller is told what
+    // the database said instead of being handed a fault.
+    if (isTikTokPublishLock(rescheduleError)) {
+      console.warn(
+        `[n8n-api] ${route}: post ${request.postId} is locked by a TikTok publish and cannot be changed`,
+      );
+      return error(
+        409,
+        "POST_LOCKED",
+        tiktokLockMessage(rescheduleError),
+      );
+    }
+    console.error(
+      `[n8n-api] ${route}: updating post ${request.postId} failed: ${rescheduleError.message}`,
+    );
+    return error(500, "INTERNAL_ERROR", "Rescheduling the post failed. Please try again.");
+  }
+
+  const result = (outcome ?? {}) as { outcome?: unknown; post?: unknown };
+  if (result.outcome === "updated") {
+    if (typeof result.post !== "object" || result.post === null) {
+      // The database moved the post but did not say where it went to: that is
+      // a failed read, not a reschedule the caller may trust.
+      console.error(
+        `[n8n-api] ${route}: the database updated post ${request.postId} without returning it`,
+      );
+      return error(500, "INTERNAL_ERROR", "Rescheduling the post failed. Please try again.");
+    }
+    return { post: result.post as Record<string, unknown> };
+  }
+  if (result.outcome === "in_past") {
+    return error(400, "SCHEDULED_AT_IN_PAST", "scheduled_at must be in the future.");
+  }
+  if (result.outcome === "unchanged") {
+    return error(
+      409,
+      "POST_STATE_CHANGED",
+      "The post changed while it was being rescheduled (it may already be publishing). Check get_post.",
+    );
+  }
+  console.error(
+    `[n8n-api] ${route}: the database answered an unknown reschedule outcome for post ${request.postId}`,
+  );
+  return error(500, "INTERNAL_ERROR", "Rescheduling the post failed. Please try again.");
+}
+
+// The path the route used before the RPC existed: the deadline is read on the
+// edge clock. It runs only while the migration that creates the RPC has not
+// been applied to this database.
+async function rescheduleRowOnAppClock(
   deps: PostActionDeps,
   route: string,
   request: {
