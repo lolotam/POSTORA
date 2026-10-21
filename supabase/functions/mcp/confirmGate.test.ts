@@ -527,6 +527,59 @@ Deno.test("a refusal that waited for a failed write writes its own row", async (
   });
 });
 
+Deno.test("only one waiter retries a write that failed", async () => {
+  resetRefusalThrottleForTests();
+  const { admin, calls, inserts, releaseDeferredInsert } = createFakeAdmin({
+    deferFirstInsert: true,
+  });
+  const clock = createClock(1_000_000);
+
+  const request = {
+    userId: OWNER_ID,
+    tool: "delete_comment",
+    code: "CONFIRMATION_REQUIRED",
+  };
+
+  // The first refusal starts the write and waits for the database.
+  const first = recordMcpRefusal({ admin, now: clock.now }, request);
+
+  // Two more refusals of the same kind arrive while that write is still in
+  // flight. They find the key of the first one and wait for the write it
+  // is throttled by.
+  const second = recordMcpRefusal({ admin, now: clock.now }, request);
+  const third = recordMcpRefusal({ admin, now: clock.now }, request);
+
+  // The write of the first refusal fails, so no row was written for it.
+  releaseDeferredInsert();
+
+  let thrown: unknown = null;
+  try {
+    await first;
+    await second;
+    await third;
+  } catch (error) {
+    thrown = error;
+  }
+  assertEquals(thrown, null);
+
+  // Two insert calls in total: the failed one and ONE retry. The waiters
+  // re-read the map after every await, so the first one to get there claims
+  // the key and the others wait for that write. They do not write over each
+  // other, so the minute holds a single row.
+  const insertCalls = calls.filter((call) => call.method === "insert");
+  assertEquals(insertCalls.length, 2);
+  assertEquals(inserts.length, 1);
+  assertEquals(inserts[0].table, "system_logs");
+  assertEquals(inserts[0].row.user_id, OWNER_ID);
+  assertEquals(inserts[0].row.metadata as Record<string, unknown>, {
+    tool: "delete_comment",
+    code: "CONFIRMATION_REQUIRED",
+  });
+
+  // The map holds the row that landed, and only that one.
+  assertEquals(refusalThrottleSizeForTests(), 1);
+});
+
 Deno.test("a refused insert does not throttle the next identical refusal", async () => {
   resetRefusalThrottleForTests();
   const { admin, calls } = createFakeAdmin({ failInserts: 1 });

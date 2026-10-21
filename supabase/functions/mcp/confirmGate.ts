@@ -31,8 +31,9 @@
 // Refusal rows are throttled. An authenticated client can repeat an invalid
 // call forever, and every refusal used to insert a row, so the log grew with
 // the client's patience. At most one row per (owner, tool, code) per minute
-// is written now. The first refusal of each kind is always recorded: the
-// throttle bounds the growth of the log, it never hides the first refusal.
+// is written now. The first refusal of each kind is recorded, unless the
+// throttle is saturated: the throttle bounds the growth of the log, and a
+// saturated throttle hides the first refusal of a new kind as well.
 // A row that failed to be written is not throttled either: the throttle
 // remembers what was logged, so a row that never landed is tried again.
 //
@@ -40,7 +41,11 @@
 // entries whose window is still running, a NEW kind of refusal is not
 // written down at all: the log is saturated, and losing that row is better
 // than evicting a live entry, which would let the same refusal write a
-// second row inside the minute.
+// second row inside the minute. Saturation is 10,000 distinct
+// (owner, tool, code) keys inside one minute, and the refusal is then
+// reported on the edge only. The throttle lives in the isolate, so one that
+// outlives it would have to live in the database, and that needs a
+// migration: it is out of scope here.
 
 import { z } from "npm:zod@4.1.12";
 import { missingScope, NOT_YET_GRANTABLE_SCOPES, type ScopeGrant } from "./toolScopes.ts";
@@ -89,6 +94,10 @@ export const REFUSAL_THROTTLE_MAX_ENTRIES = 10_000;
 // It is what a refusal that finds a live entry waits for. A refusal must
 // not skip a row that was never written, so the waiter needs to know
 // whether the write it is throttled by landed before it can decide.
+//
+// The entry is also the claim on the key: the refusal that installs it owns
+// the write, and every other refusal of that kind waits for it instead of
+// writing a row of its own.
 interface RefusalThrottleEntry {
   at: number;
   landed: Promise<boolean>;
@@ -178,11 +187,16 @@ async function writeRefusalRow(
  * The row is throttled per owner, tool and code: a client that repeats the
  * same refused call gets one row per minute, not one row per call. The
  * skipped row is reported on the edge in one line, without the arguments.
+ * The first refusal of each kind is recorded, unless the throttle of this
+ * isolate is saturated: 10,000 distinct (owner, tool, code) keys inside one
+ * minute, and the refusal is then reported on the edge only.
  *
  * A refusal that arrives while the row of its kind is still being written
  * waits for that write. If the row landed, the refusal is skipped, and if
- * it did not, the refusal writes its own row: a refusal is never lost
- * because the write it was throttled by failed.
+ * it did not, ONE of the waiters writes the row and the others wait for
+ * that write: the waiters re-read the map after every await, so the first
+ * one to get there claims the key and the rest do not write a second row
+ * inside the minute.
  *
  * The throttle map is bounded. A key that is not in the map needs room in
  * it, and an entry whose window has passed is evicted to make it: the map
@@ -190,17 +204,33 @@ async function writeRefusalRow(
  * eviction costs one delete per new key. When the map is full of entries
  * whose window is still running, a NEW kind of refusal is not written down
  * at all: it is better to lose that row than to evict a live entry and let
- * the same refusal write a second row inside the minute.
+ * the same refusal write a second row inside the minute. The throttle
+ * lives in the isolate, so a durable one would have to live in the
+ * database, and that needs a migration: it is out of scope here.
  */
 export async function recordMcpRefusal(
   deps: ConfirmGateDeps,
   request: { userId: string; tool: string; code: string },
 ): Promise<void> {
-  const nowMs = (deps.now ?? Date.now)();
   const throttleKey = `${request.userId}:${request.tool}:${request.code}`;
 
-  const existing = refusalThrottle.get(throttleKey);
-  if (existing !== undefined && nowMs - existing.at < REFUSAL_THROTTLE_WINDOW_MS) {
+  // The throttle check is a loop, because every await inside it hands the
+  // map over to another waiter. The map is read again after every await,
+  // and the clock is read with it, so the decision is always made against
+  // the state of the map at that moment and only one waiter can claim the
+  // key.
+  let nowMs = (deps.now ?? Date.now)();
+  let existing: RefusalThrottleEntry | undefined = undefined;
+
+  for (;;) {
+    nowMs = (deps.now ?? Date.now)();
+    existing = refusalThrottle.get(throttleKey);
+
+    // No entry, or an entry whose window has passed: this refusal may
+    // write its own row.
+    if (existing === undefined) break;
+    if (nowMs - existing.at >= REFUSAL_THROTTLE_WINDOW_MS) break;
+
     // The window of this kind of refusal is still running, so no second
     // row may be written for it. Whether the row of the write it is
     // throttled by landed is not known yet, so wait for it: a refusal
@@ -212,9 +242,19 @@ export async function recordMcpRefusal(
       );
       return;
     }
-    // The row never landed, so this refusal writes its own row below. The
-    // key is already in the map, so the map does not grow and the bound is
-    // not in the way.
+
+    // The row never landed, so the throttle must not remember it. The
+    // entry is dropped, but only when the map still holds this very
+    // entry: another waiter may have claimed the retry already and
+    // replaced it, and that one must not be dropped with it.
+    if (refusalThrottle.get(throttleKey) === existing) {
+      refusalThrottle.delete(throttleKey);
+    }
+
+    // The map is read again: another waiter may have claimed the retry
+    // already, and this one waits for that write instead of writing a
+    // second row inside the minute.
+    continue;
   }
 
   if (existing === undefined) {
@@ -244,6 +284,11 @@ export async function recordMcpRefusal(
   // The map holds one entry per refused (owner, tool, code) and is bounded.
   // A write moves its key to the end of the map, so the map stays ordered
   // by write time and the oldest entry is the first one it hands out.
+  //
+  // There is no await between the last read of the map and this set: the
+  // entry is installed synchronously, so the first refusal to get here
+  // claims the key and every later one finds its live entry and waits for
+  // that write instead of writing a second row.
   refusalThrottle.delete(throttleKey);
   const landed = writeRefusalRow(deps, request);
   const entry: RefusalThrottleEntry = { at: nowMs, landed };
