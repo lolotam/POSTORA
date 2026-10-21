@@ -178,6 +178,36 @@ function answerWithUnreadBodyFetcher(status: number): {
   return { fetcher, wasCancelled: () => state.cancelled };
 }
 
+// A fetcher that answers every request with the answer of the route its URL
+// matches, after the delay that route asks for, and records how many requests
+// were in flight at the same time.
+//
+// The deletes of the copies of one post have to run together: one after the
+// other, every copy takes a deadline of its own, and a post of four copies
+// would take four of them, which is longer than the edge worker lives.
+function routedFetcher(
+  routes: { url: string; status: number; delayMs: number }[],
+): { fetcher: typeof fetch; maxConcurrent: () => number } {
+  const state = { inFlight: 0, maxConcurrent: 0 };
+  const fetcher = (async (input: RequestInfo | URL) => {
+    const url = typeof input === "string"
+      ? input
+      : input instanceof URL
+      ? input.toString()
+      : String((input as Request).url);
+    state.inFlight += 1;
+    state.maxConcurrent = Math.max(state.maxConcurrent, state.inFlight);
+    try {
+      const route = routes.find((entry) => url.includes(entry.url));
+      await new Promise<void>((resolve) => setTimeout(resolve, route?.delayMs ?? 0));
+      return new Response(null, { status: route?.status ?? 500 });
+    } finally {
+      state.inFlight -= 1;
+    }
+  }) as unknown as typeof fetch;
+  return { fetcher, maxConcurrent: () => state.maxConcurrent };
+}
+
 // The Graph answer of a delete of an object that Graph cannot confirm: a 400
 // with the code 100 and the subcode 33, and not a 404. Meta uses the code for
 // an object that does not exist, for one that cannot be loaded with the
@@ -722,6 +752,47 @@ Deno.test("a pinterest post with several pins deletes every pin on its own", asy
   assertEquals(calls[1].method, "DELETE");
 });
 
+Deno.test("a pinterest post with four pins deletes every pin at the same time", async () => {
+  // Every pin has a deadline of its own, so deleting the pins one after the
+  // other would take four deadlines: longer than the edge worker lives. They
+  // are deleted together instead, and the fetcher sees all four requests at
+  // once.
+  const { fetcher, maxConcurrent } = routedFetcher([
+    { url: "https://api.pinterest.com/v5/pins/111", status: 204, delayMs: 20 },
+    { url: "https://api.pinterest.com/v5/pins/222", status: 204, delayMs: 20 },
+    { url: "https://api.pinterest.com/v5/pins/333", status: 204, delayMs: 20 },
+    { url: "https://api.pinterest.com/v5/pins/444", status: 204, delayMs: 20 },
+  ]);
+  const outcome = await deletePublishedPost(
+    row({ platform: "pinterest", platform_post_id: "111,222,333,444" }),
+    account({ platform: "pinterest" }),
+    deps(fetcher),
+  );
+  assertEquals(outcome, { outcome: "deleted" });
+  assertEquals(maxConcurrent(), 4);
+});
+
+Deno.test("a pinterest post that failed on two pins names them in the order of the pins", async () => {
+  // The pins are deleted at the same time, so their answers can come back in
+  // any order. The failures are still reported in the order of the pins.
+  const { fetcher } = routedFetcher([
+    { url: "https://api.pinterest.com/v5/pins/111", status: 500, delayMs: 40 },
+    { url: "https://api.pinterest.com/v5/pins/222", status: 204, delayMs: 5 },
+    { url: "https://api.pinterest.com/v5/pins/333", status: 500, delayMs: 10 },
+  ]);
+  const outcome = await deletePublishedPost(
+    row({ platform: "pinterest", platform_post_id: "111,222,333" }),
+    account({ platform: "pinterest" }),
+    deps(fetcher),
+  );
+  if (outcome.outcome !== "failed") throw new Error("expected a failure");
+  assertEquals(outcome.reason.includes("Deleted 1 of 3 Pinterest pins"), true);
+  assertEquals(
+    outcome.reason.includes("111: Pinterest returned 500; 333: Pinterest returned 500"),
+    true,
+  );
+});
+
 Deno.test("a pinterest post that only deleted one of its pins is a failure", async () => {
   const { fetcher } = fakeFetcher([{ status: 204 }, { status: 500 }]);
   const outcome = await deletePublishedPost(
@@ -813,6 +884,46 @@ Deno.test("a linkedin post with two destinations deletes both ugcPosts", async (
   );
   assertEquals(calls[0].headers["X-Restli-Protocol-Version"], "2.0.0");
   assertEquals(calls[1].headers["X-Restli-Protocol-Version"], "2.0.0");
+});
+
+Deno.test("a linkedin post with three destinations deletes every destination at the same time", async () => {
+  // Every destination has a deadline of its own, so deleting them one after
+  // the other would take three deadlines: longer than the edge worker lives.
+  // They are deleted together instead, and the fetcher sees all three
+  // requests at once.
+  const { fetcher, maxConcurrent } = routedFetcher([
+    {
+      url: "https://api.linkedin.com/v2/ugcPosts/urn%3Ali%3Ashare%3A111",
+      status: 204,
+      delayMs: 20,
+    },
+    {
+      url: "https://api.linkedin.com/v2/ugcPosts/urn%3Ali%3Ashare%3A222",
+      status: 204,
+      delayMs: 20,
+    },
+    {
+      url: "https://api.linkedin.com/v2/ugcPosts/urn%3Ali%3Ashare%3A333",
+      status: 204,
+      delayMs: 20,
+    },
+  ]);
+  const outcome = await deletePublishedPost(
+    row({
+      platform: "linkedin",
+      response_data: {
+        destinations: [
+          { post_id: "urn:li:share:111", status: "success" },
+          { post_id: "urn:li:share:222", status: "success" },
+          { post_id: "urn:li:share:333", status: "success" },
+        ],
+      },
+    }),
+    account({ platform: "linkedin" }),
+    deps(fetcher),
+  );
+  assertEquals(outcome, { outcome: "deleted" });
+  assertEquals(maxConcurrent(), 3);
 });
 
 Deno.test("a linkedin post that only deleted one destination is a failure", async () => {

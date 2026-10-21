@@ -585,11 +585,97 @@ async function deleteYoutube(
   return { outcome: "deleted" };
 }
 
+// The answer of the delete of one copy of a post on a platform whose delete
+// carries no confirmation body: a 2xx is the delete, a 404 says the copy is
+// already gone, and anything else is a failure.
+type CopyDeleteResult =
+  | { kind: "deleted" }
+  | { kind: "gone" }
+  | { kind: "failed"; message: string };
+
+// The delete of one copy of a post.
+//
+// The deadline of the call is the one of the adapter, and it covers the
+// headers and the body of the answer together: a provider that stalls must
+// not hold the connection for longer than one deadline.
+async function deleteOneCopy(
+  platform: "Pinterest" | "LinkedIn",
+  copy: string,
+  url: string,
+  headers: Record<string, string>,
+  deps: PlatformDeleteDeps,
+): Promise<CopyDeleteResult> {
+  let response: Response;
+  try {
+    response = await fetchWithTimeout(
+      url,
+      { method: "DELETE", headers },
+      providerTimeout(deps),
+      deps.fetcher,
+    );
+  } catch {
+    // No provider message: a transport error can carry the request URL, and
+    // the URL carries the token in its header.
+    return { kind: "failed", message: `${copy}: could not reach ${platform}` };
+  }
+  // A copy that is not there any more is already what the caller wanted.
+  if (response.status === 404) {
+    await releaseBody(response);
+    return { kind: "gone" };
+  }
+  if (response.status < 200 || response.status >= 300) {
+    const message = `${copy}: ${platform} returned ${response.status}`;
+    await releaseBody(response);
+    return { kind: "failed", message };
+  }
+  // A 2xx is the delete: the platform says nothing else about it, and the body
+  // of the answer is not read and not needed. The body is released, so the
+  // connection does not stay open behind the answer, and a confirmed delete
+  // is never turned into a "could not reach" because a body did not arrive.
+  await releaseBody(response);
+  return { kind: "deleted" };
+}
+
+// The deletes of the copies of one post run at the same time, not one after
+// the other.
+//
+// Every copy has a deadline of its own, and one after the other a post of
+// four copies would take four deadlines in a row: longer than the edge
+// worker lives. The copies are therefore deleted together, and each of them
+// keeps the deadline it had on its own.
+//
+// The answers are read in the order of the copies: Promise.all keeps the
+// order of the list it was given, so the failures are reported in the order
+// the copies were listed in, whatever order the platforms answered in.
+async function deleteCopies(
+  copies: string[],
+  deleteCopy: (copy: string) => Promise<CopyDeleteResult>,
+): Promise<{ deleted: number; alreadyGone: number; failures: string[] }> {
+  const results = await Promise.all(copies.map((copy) => deleteCopy(copy)));
+  let deleted = 0;
+  let alreadyGone = 0;
+  const failures: string[] = [];
+  for (const result of results) {
+    if (result.kind === "deleted") {
+      deleted += 1;
+    } else if (result.kind === "gone") {
+      alreadyGone += 1;
+    } else {
+      failures.push(result.message);
+    }
+  }
+  return { deleted, alreadyGone, failures };
+}
+
 // A Pinterest post with several images becomes one pin per image, and the publish
 // keeps every pin id in platform_post_id joined by commas. Each of them is its own
 // pin on Pinterest, so each one is deleted on its own: sending the whole string as
 // one id makes Pinterest answer 404, and that 404 says nothing about the pins that
 // are really there.
+//
+// The pins are deleted at the same time: each of them has a deadline of its own,
+// and one after the other a post of four pins would take four deadlines, which is
+// longer than the edge worker lives.
 function pinterestPinIds(platformPostId: string): string[] {
   return platformPostId
     .split(",")
@@ -603,50 +689,22 @@ async function deletePinterest(
   account: DeleteAccount,
   deps: PlatformDeleteDeps,
 ): Promise<PlatformDeleteOutcome> {
-  if (!account.access_token) return missingToken();
+  const token = account.access_token;
+  if (!token) return missingToken();
   const pinIds = pinterestPinIds(platformPostId);
   if (pinIds.length === 0) {
     return { outcome: "not_supported", reason: NO_PLATFORM_POST_ID };
   }
-  const failures: string[] = [];
-  let deleted = 0;
-  let alreadyGone = 0;
-  for (const pinId of pinIds) {
-    let response: Response;
-    try {
-      response = await fetchWithTimeout(
-        `https://api.pinterest.com/v5/pins/${encodeURIComponent(pinId)}`,
-        {
-          method: "DELETE",
-          headers: { Authorization: `Bearer ${account.access_token}` },
-        },
-        providerTimeout(deps),
-        deps.fetcher,
-      );
-    } catch {
-      // No provider message: a transport error can carry the request URL, and the
-      // Pinterest URL carries the token in its header.
-      failures.push(`${pinId}: could not reach Pinterest`);
-      continue;
-    }
-    // A pin that is not there any more is already what the caller wanted.
-    if (response.status === 404) {
-      alreadyGone += 1;
-      await releaseBody(response);
-      continue;
-    }
-    if (response.status < 200 || response.status >= 300) {
-      failures.push(`${pinId}: Pinterest returned ${response.status}`);
-      await releaseBody(response);
-      continue;
-    }
-    // A 2xx is the delete: Pinterest says nothing else about it, and the body
-    // of the answer is not read and not needed. The body is released, so the
-    // connection does not stay open behind the answer, and a confirmed delete
-    // is never turned into a "could not reach" because a body did not arrive.
-    await releaseBody(response);
-    deleted += 1;
-  }
+  // Every pin is deleted at the same time, and each of them keeps its own
+  // deadline: a post of four pins must not take four deadlines in a row.
+  const { deleted, alreadyGone, failures } = await deleteCopies(pinIds, (pinId) =>
+    deleteOneCopy(
+      "Pinterest",
+      pinId,
+      `https://api.pinterest.com/v5/pins/${encodeURIComponent(pinId)}`,
+      { Authorization: `Bearer ${token}` },
+      deps,
+    ));
   if (failures.length === 0) {
     return alreadyGone === pinIds.length ? ALREADY_GONE : { outcome: "deleted" };
   }
@@ -659,7 +717,11 @@ async function deletePinterest(
 
 // One LinkedIn publish can land on several destinations (a personal feed and one or more
 // organization pages), and every destination is its own ugcPost. The publish result
-// keeps them all, so the delete has to walk them too.
+// keeps them all, so the delete has to delete them too.
+//
+// The destinations are deleted at the same time: each of them has a deadline of its
+// own, and one after the other a post of three destinations would take three
+// deadlines, which is longer than the edge worker lives.
 //
 // A publish result does not always keep them: the stored answer of a publish
 // carries the primary URN and nothing else. The flag says which of the two
@@ -726,48 +788,23 @@ async function deleteLinkedin(
   account: DeleteAccount,
   deps: PlatformDeleteDeps,
 ): Promise<PlatformDeleteOutcome> {
-  if (!account.access_token) return missingToken();
+  const token = account.access_token;
+  if (!token) return missingToken();
   const { urns, destinationsRecorded } = linkedinDestinationUrns(row, platformPostId);
-  const failures: string[] = [];
-  let deleted = 0;
-  let alreadyGone = 0;
-  for (const urn of urns) {
-    let response: Response;
-    try {
-      response = await fetchWithTimeout(
-        `https://api.linkedin.com/v2/ugcPosts/${encodeURIComponent(urn)}`,
-        {
-          method: "DELETE",
-          headers: {
-            Authorization: `Bearer ${account.access_token}`,
-            "X-Restli-Protocol-Version": "2.0.0",
-          },
-        },
-        providerTimeout(deps),
-        deps.fetcher,
-      );
-    } catch {
-      failures.push(`${urn}: could not reach LinkedIn`);
-      continue;
-    }
-    // A destination that is not there any more is already what the caller wanted.
-    if (response.status === 404) {
-      alreadyGone += 1;
-      await releaseBody(response);
-      continue;
-    }
-    if (response.status < 200 || response.status >= 300) {
-      failures.push(`${urn}: LinkedIn returned ${response.status}`);
-      await releaseBody(response);
-      continue;
-    }
-    // A 2xx is the delete: LinkedIn says nothing else about it, and the body
-    // of the answer is not read and not needed. The body is released, so the
-    // connection does not stay open behind the answer, and a confirmed delete
-    // is never turned into a "could not reach" because a body did not arrive.
-    await releaseBody(response);
-    deleted += 1;
-  }
+  // Every destination is deleted at the same time, and each of them keeps its
+  // own deadline: a post of three destinations must not take three deadlines
+  // in a row.
+  const { deleted, alreadyGone, failures } = await deleteCopies(urns, (urn) =>
+    deleteOneCopy(
+      "LinkedIn",
+      urn,
+      `https://api.linkedin.com/v2/ugcPosts/${encodeURIComponent(urn)}`,
+      {
+        Authorization: `Bearer ${token}`,
+        "X-Restli-Protocol-Version": "2.0.0",
+      },
+      deps,
+    ));
   if (failures.length > 0) {
     return {
       outcome: "failed",
