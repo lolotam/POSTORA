@@ -81,7 +81,10 @@ function createFakeAdmin(options: FakeAdminOptions = {}) {
                 releaseDeferred = resolve;
               },
             );
-            return await deferredInsert;
+            const result = await deferredInsert;
+            // A released write that reports no error landed a row.
+            if (result.error === null) inserts.push({ table, row });
+            return result;
           }
           if (failingInserts > 0) {
             failingInserts -= 1;
@@ -102,6 +105,10 @@ function createFakeAdmin(options: FakeAdminOptions = {}) {
     // Releases the deferred insert with a write that failed.
     releaseDeferredInsert() {
       releaseDeferred?.({ error: { message: "insert failed" } });
+    },
+    // Releases the deferred insert with a write that landed.
+    releaseDeferredInsertSuccess() {
+      releaseDeferred?.({ error: null });
     },
   };
 }
@@ -578,6 +585,73 @@ Deno.test("only one waiter retries a write that failed", async () => {
 
   // The map holds the row that landed, and only that one.
   assertEquals(refusalThrottleSizeForTests(), 1);
+});
+
+Deno.test("an expired entry whose write is still in flight does not write a second row", async () => {
+  resetRefusalThrottleForTests();
+  const { admin, calls, inserts, releaseDeferredInsertSuccess } = createFakeAdmin({
+    deferFirstInsert: true,
+  });
+  const clock = createClock(1_000_000);
+
+  const request = {
+    userId: OWNER_ID,
+    tool: "delete_comment",
+    code: "CONFIRMATION_REQUIRED",
+  };
+
+  // The edge report of a skipped refusal is captured: the gate reports it
+  // in one line.
+  const warnings: string[] = [];
+  const originalWarn = console.warn;
+  console.warn = (...args: unknown[]) => {
+    warnings.push(args.map((arg) => String(arg)).join(" "));
+  };
+
+  try {
+    // The first refusal starts the write and waits for the database.
+    const first = recordMcpRefusal({ admin, now: clock.now }, request);
+
+    // The second refusal of the same kind arrives after the window of the
+    // first one has passed, while the write of the first one is still in
+    // flight: the database stalled for longer than the window.
+    clock.advance(61_000);
+    const second = recordMcpRefusal({ admin, now: clock.now }, request);
+
+    // The write of the first refusal lands.
+    releaseDeferredInsertSuccess();
+
+    let thrown: unknown = null;
+    try {
+      await first;
+      await second;
+    } catch (error) {
+      thrown = error;
+    }
+    assertEquals(thrown, null);
+
+    // One insert call in total: the row of the first refusal is the row
+    // of this kind of refusal. The second one waited for that write and
+    // wrote none of its own.
+    const insertCalls = calls.filter((call) => call.method === "insert");
+    assertEquals(insertCalls.length, 1);
+    assertEquals(inserts.length, 1);
+    assertEquals(inserts[0].table, "system_logs");
+    assertEquals(inserts[0].row.user_id, OWNER_ID);
+    assertEquals(inserts[0].row.metadata as Record<string, unknown>, {
+      tool: "delete_comment",
+      code: "CONFIRMATION_REQUIRED",
+    });
+
+    // The second refusal is reported on the edge, in one line, and names
+    // the row that is still being written.
+    assertEquals(warnings, [
+      "[mcp] delete_comment refused: CONFIRMATION_REQUIRED " +
+        "(an earlier row is still being written, not logged again)",
+    ]);
+  } finally {
+    console.warn = originalWarn;
+  }
 });
 
 Deno.test("a refused insert does not throttle the next identical refusal", async () => {

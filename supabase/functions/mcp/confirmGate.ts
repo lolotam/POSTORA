@@ -98,9 +98,17 @@ export const REFUSAL_THROTTLE_MAX_ENTRIES = 10_000;
 // The entry is also the claim on the key: the refusal that installs it owns
 // the write, and every other refusal of that kind waits for it instead of
 // writing a row of its own.
+//
+// `settled` says whether that write is over: it is false while the insert
+// is still in flight, and true once the promise has resolved, either way.
+// The window alone does not say that the row exists. A database that
+// stalls for longer than the window leaves a write that is still running,
+// and replacing that entry then would let the same refusal write a second
+// row.
 interface RefusalThrottleEntry {
   at: number;
   landed: Promise<boolean>;
+  settled: boolean;
 }
 
 // The throttle state per (owner, tool, code). It lives in the isolate, so
@@ -198,6 +206,11 @@ async function writeRefusalRow(
  * one to get there claims the key and the rest do not write a second row
  * inside the minute.
  *
+ * A write that is still in flight is waited for even when the window of
+ * its entry has passed: the window says when a row MAY be written, not
+ * that one has been, and a database that stalls for longer than the
+ * window would otherwise let the same refusal write a second row.
+ *
  * The throttle map is bounded. A key that is not in the map needs room in
  * it, and an entry whose window has passed is evicted to make it: the map
  * is ordered by write time, so the expired entries come first and the
@@ -226,19 +239,27 @@ export async function recordMcpRefusal(
     nowMs = (deps.now ?? Date.now)();
     existing = refusalThrottle.get(throttleKey);
 
-    // No entry, or an entry whose window has passed: this refusal may
-    // write its own row.
+    // No entry: this refusal may write its own row.
     if (existing === undefined) break;
-    if (nowMs - existing.at >= REFUSAL_THROTTLE_WINDOW_MS) break;
 
-    // The window of this kind of refusal is still running, so no second
-    // row may be written for it. Whether the row of the write it is
-    // throttled by landed is not known yet, so wait for it: a refusal
-    // must not skip a row that was never written.
+    // An entry whose window has passed may be replaced only when its write
+    // is over. A write that is still in flight holds a row that may not
+    // exist yet, so an expired entry whose write is still running is
+    // treated like a live one: replacing it would let a second row be
+    // written for the same refusal.
+    const windowPassed = nowMs - existing.at >= REFUSAL_THROTTLE_WINDOW_MS;
+    if (windowPassed && existing.settled) break;
+
+    // The window of this kind of refusal is still running, or the row of
+    // the write it is throttled by is still being written. Whether that
+    // row landed is not known yet, so wait for it: a refusal must not
+    // skip a row that was never written.
     const rowLanded = await existing.landed;
     if (rowLanded) {
       console.warn(
-        `[mcp] ${request.tool} refused: ${request.code} (repeat within 60s, not logged again)`,
+        windowPassed
+          ? `[mcp] ${request.tool} refused: ${request.code} (an earlier row is still being written, not logged again)`
+          : `[mcp] ${request.tool} refused: ${request.code} (repeat within 60s, not logged again)`,
       );
       return;
     }
@@ -291,7 +312,13 @@ export async function recordMcpRefusal(
   // that write instead of writing a second row.
   refusalThrottle.delete(throttleKey);
   const landed = writeRefusalRow(deps, request);
-  const entry: RefusalThrottleEntry = { at: nowMs, landed };
+  const entry: RefusalThrottleEntry = { at: nowMs, landed, settled: false };
+  // The entry is settled once its write resolves, either way: a write that
+  // is still in flight must not be read as a finished one. The promise
+  // never rejects, so this cannot leave an unhandled rejection behind.
+  void landed.then(() => {
+    entry.settled = true;
+  });
   refusalThrottle.set(throttleKey, entry);
 
   const written = await landed;
