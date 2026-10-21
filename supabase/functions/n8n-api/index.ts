@@ -9,7 +9,7 @@ import { parseSubscriptionFilters } from "./webhookFilters.ts";
 import { describeBase64Failure, normalizeBase64Media } from "../_shared/base64Media.ts";
 import { clientIpFromHeaders, isValidUuid } from "./requestGuards.ts";
 import { relayUploadTarget } from "./mediaRelay.ts";
-import { handleCancelScheduledPost, handleCheckAccountHealth, handleDeletePost, handleReschedulePost, handleSuggestBestTimes } from "./postActions.ts";
+import { handleCancelScheduledPost, handleCheckAccountHealth, handleReschedulePost, handleSuggestBestTimes } from "./postActions.ts";
 import { MEDIA_QUOTA_CODE, invokeErrorText, isMediaQuotaMessage, mediaQuotaHumanMessage, quotaOnlyMessage } from "../_shared/mediaQuotaError.ts";
 import {
   fetchGlobalSetting,
@@ -2496,8 +2496,6 @@ export async function handleRequest(req: Request): Promise<Response> {
       response = await handleCancelScheduledPost(req, supabaseAdmin, userId, await parseRequestBody(req));
     } else if (path === '/api/v1/posts/reschedule' && req.method === 'POST') {
       response = await handleReschedulePost(req, supabaseAdmin, userId, await parseRequestBody(req));
-    } else if (path === '/api/v1/posts/delete' && req.method === 'POST') {
-      response = await handleDeletePost(req, supabaseAdmin, userId, await parseRequestBody(req));
     } else if (path === '/api/v1/accounts/health' && req.method === 'GET') {
       response = await handleCheckAccountHealth(req, supabaseAdmin, userId, url);
     } else if (path === '/api/v1/best-times' && req.method === 'POST') {
@@ -2522,7 +2520,6 @@ export async function handleRequest(req: Request): Promise<Response> {
           'POST /api/v1/comments/delete',
           'POST /api/v1/posts/cancel',
           'POST /api/v1/posts/reschedule',
-          'POST /api/v1/posts/delete',
           'GET /api/v1/accounts/health',
           'POST /api/v1/best-times'
         ]

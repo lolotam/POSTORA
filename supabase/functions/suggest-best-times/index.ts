@@ -3,6 +3,11 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.7.1";
 import { handleCorsOptions, jsonResponse, errorResponse } from "../_shared/cors.ts";
 import { callAiWithFallback, fetchAiSettings, logAiCall } from "../_shared/ai-fallback.ts";
 
+// A user id that reaches the database has to be a uuid: an id that is not one
+// makes the write of the log row fail with 22P02, and the AI call is then
+// logged against nobody.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return handleCorsOptions();
@@ -12,7 +17,7 @@ serve(async (req) => {
     // Parse + validate body before touching any field. Previously this
     // function crashed with "Cannot read properties of undefined (reading
     // 'join')" when `platforms` or `historicalData` was missing.
-    let body: { platforms?: unknown; historicalData?: unknown } = {};
+    let body: { platforms?: unknown; historicalData?: unknown; user_id?: unknown } = {};
     try {
       const text = await req.text();
       body = text ? JSON.parse(text) : {};
@@ -42,7 +47,21 @@ serve(async (req) => {
     // Get user from auth header if available
     let userId: string | null = null;
     const authHeader = req.headers.get('Authorization');
-    if (authHeader) {
+    const bearerToken = authHeader ? authHeader.replace('Bearer ', '').trim() : '';
+    const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
+    const bodyUserId = typeof body.user_id === 'string' ? body.user_id.trim() : '';
+
+    // A service-role call carries no user JWT, so the owner of the API key is
+    // named in the body instead. The bearer token is the service-role key, so
+    // the caller is authenticated as the service role and the id may be used;
+    // a user_id from any other caller is ignored.
+    if (
+      serviceRoleKey.length > 0 &&
+      bearerToken === serviceRoleKey &&
+      UUID_RE.test(bodyUserId)
+    ) {
+      userId = bodyUserId;
+    } else if (authHeader) {
       const token = authHeader.replace('Bearer ', '');
       const supabaseClient = createClient(
         Deno.env.get('SUPABASE_URL') ?? '',

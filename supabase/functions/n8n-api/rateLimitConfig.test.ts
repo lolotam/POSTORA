@@ -447,7 +447,7 @@ Deno.test("fetchTierLimit queries tier_rate_limits with the plan_slug and endpoi
 });
 
 Deno.test("the MCP post-management routes have their own budgets, destructive ones capped at 60/h", () => {
-  for (const key of ["/api/v1/posts/cancel", "/api/v1/posts/delete"]) {
+  for (const key of ["/api/v1/posts/cancel"]) {
     assertEquals(FALLBACK_RATE_LIMITS[key].requests, 60);
     assertEquals(rateLimitKeyForPath(key, "POST"), key);
   }

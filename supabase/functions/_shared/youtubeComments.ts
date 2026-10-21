@@ -559,23 +559,6 @@ export async function replyToThread(
     : fail("upstream", "YouTube did not return the reply id.");
 }
 
-/** Deletes an uploaded video. Native (Google OAuth) connections only: callers must not pass a Composio row. */
-export async function deleteYouTubeVideo(
-  account: YouTubeCommentAccount,
-  deps: YouTubeCommentsDeps,
-  videoId: string,
-): Promise<YouTubeResult<{ id: string }>> {
-  const result = await callNative(account, deps, {
-    method: "DELETE",
-    path: "videos",
-    query: { id: videoId },
-    // Never sent: callNative ignores the Composio half of a Call.
-    composio: { slug: "", arguments: {} },
-  });
-  if (!result.ok) return result;
-  return { ok: true, value: { id: videoId } };
-}
-
 export async function setModerationStatus(
   account: YouTubeCommentAccount,
   deps: YouTubeCommentsDeps,
