@@ -5,12 +5,13 @@
 // was granted at the consent screen, and a tool the token was not granted is
 // refused before it runs.
 //
-// comments:write and messages:write are advertised in the authorization
-// server metadata, but no token can be granted them yet: the consent screen
-// that could show them ships after the frontend freeze. Over OAuth those four
-// tools therefore answer 403 until then. NOT_YET_GRANTABLE_SCOPES names them,
-// so a refusal can tell the caller what to do instead of sending it to a
-// reconnect that cannot produce the scope.
+// comments:write, messages:write, comments:read and messages:read are
+// advertised in the authorization server metadata, but no token can be granted
+// them yet: the consent screen that could show them ships after the frontend
+// freeze. Over OAuth the comment and DM reads answer 403 until then, like the
+// comment and DM writes.
+// NOT_YET_GRANTABLE_SCOPES names them, so a refusal can tell the caller what
+// to do instead of sending it to a reconnect that cannot produce the scope.
 //
 // Enforcing scopes on every MCP tool is a separate follow-up. Only the tools
 // listed in NEW_TOOL_SCOPES are gated here; the older tools are not gated in
@@ -40,6 +41,8 @@ export const NEW_TOOL_SCOPES: Readonly<Record<string, string>> = {
   hide_comment: "comments:write",
   delete_comment: "comments:write",
   reply_to_message: "messages:write",
+  list_comments: "comments:read",
+  list_messages: "messages:read",
 };
 
 /**
@@ -53,6 +56,8 @@ export const NEW_TOOL_SCOPES: Readonly<Record<string, string>> = {
 export const NOT_YET_GRANTABLE_SCOPES: ReadonlySet<string> = new Set([
   "comments:write",
   "messages:write",
+  "comments:read",
+  "messages:read",
 ]);
 
 /**

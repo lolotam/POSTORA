@@ -91,31 +91,30 @@ Deno.test("the read connection offers no interaction, write or AI tool", () => {
   }
 });
 
-Deno.test("the inbox connection offers the tools that answer or hide a comment or a message", () => {
-  const offered = toolsForMode("inbox");
+Deno.test("the inbox connection offers public comment tools only", () => {
+  const offered = toolsForMode("inbox").sort();
 
-  assertEquals(offered.includes("reply_to_comment"), true);
-  assertEquals(offered.includes("hide_comment"), true);
-  assertEquals(offered.includes("reply_to_message"), true);
-  assertEquals(offered.includes("list_comments"), true);
+  assertEquals(offered, [
+    "hide_comment",
+    "list_accounts",
+    "list_comments",
+    "reply_to_comment",
+  ]);
 });
 
-Deno.test("the inbox connection offers no delete, no publish and no AI tool", () => {
-  const offered = toolsForMode("inbox");
+Deno.test("no connection offers DM reads together with any tool that sends or writes", () => {
+  for (const mode of MODES) {
+    const offered = toolsForMode(mode);
+    if (!offered.includes("list_messages")) continue;
 
-  for (const tool of [
-    "delete_comment",
-    "create_post",
-    "upload_media",
-    "register_webhook",
-    "delete_webhook",
-    "cancel_scheduled_post",
-    "reschedule_post",
-    "generate_caption",
-    "generate_hashtags",
-    "generate_image",
-  ]) {
-    assertEquals(offered.includes(tool), false, tool);
+    for (const tool of offered) {
+      const kind = kindOf(tool);
+      assertEquals(
+        kind === "interaction" || kind === "write" || kind === "ai",
+        false,
+        `${mode} offers ${tool}`,
+      );
+    }
   }
 });
 

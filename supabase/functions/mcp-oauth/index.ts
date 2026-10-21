@@ -105,6 +105,8 @@ function authorizationServerMetadata() {
       "webhooks:manage",
       "comments:write",
       "messages:write",
+      "comments:read",
+      "messages:read",
     ],
     service_documentation: `${APP_ORIGIN}/docs/mcp-server`,
   };
@@ -196,15 +198,22 @@ async function handleAuthorize(req: Request): Promise<Response> {
   const state = p.get("state") ?? "";
   const scope = p.get("scope") ?? "accounts:read posts:read posts:write media:write webhooks:manage";
 
-  // comments:write and messages:write are advertised in the server metadata
-  // above, but they are not grantable yet: the consent screen that could show
-  // them ships after the frontend freeze. They are therefore dropped from the
-  // requested list before it is stored, and no token is ever issued with
-  // them. The tools that need them answer 403 over OAuth until then.
+  // comments:write, messages:write, comments:read and messages:read are
+  // advertised in the server metadata above, but they are not grantable yet:
+  // the consent screen that could show them ships after the frontend freeze.
+  // They are therefore dropped from the requested list before it is stored,
+  // and no token is ever issued with them. The tools that need them answer
+  // 403 over OAuth until then.
+  const NOT_YET_GRANTABLE_SCOPES = new Set([
+    "comments:write",
+    "messages:write",
+    "comments:read",
+    "messages:read",
+  ]);
   const grantableScope = scope
     .split(/\s+/)
     .filter(Boolean)
-    .filter((requested) => requested !== "comments:write" && requested !== "messages:write")
+    .filter((requested) => !NOT_YET_GRANTABLE_SCOPES.has(requested))
     .join(" ");
 
   if (response_type !== "code") {

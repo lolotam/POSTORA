@@ -412,6 +412,8 @@ function buildServer(
       limit: z.number().int().min(1).max(50).optional().describe("Maximum number of posts to return (1-50, default 25)"),
     }),
     handler: async (args) => {
+      const scopeRefusal = await refuseUngranted({ admin }, { userId: ownerId, tool: "list_comments", grant });
+      if (scopeRefusal) return fail(403, scopeRefusal);
       const r = await callN8n(apiKey, "GET", "/api/v1/comments", undefined, args);
       return r.status >= 400 ? fail(r.status, r.data) : okUntrusted(r.data);
     },
@@ -427,6 +429,8 @@ function buildServer(
       conversation_id: z.string().optional().describe("Conversation id from a previous list_messages call"),
     }),
     handler: async (args) => {
+      const scopeRefusal = await refuseUngranted({ admin }, { userId: ownerId, tool: "list_messages", grant });
+      if (scopeRefusal) return fail(403, scopeRefusal);
       const r = await callN8n(apiKey, "GET", "/api/v1/messages", undefined, args);
       return r.status >= 400 ? fail(r.status, r.data) : okUntrusted(r.data);
     },

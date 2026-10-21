@@ -43,6 +43,16 @@ Deno.test("a grant of the five old scopes still misses the comment and message s
   assertEquals(missingScope(grant, "reply_to_message"), "messages:write");
 });
 
+Deno.test("a token without the read scopes may not read comments or messages", () => {
+  const grant = granted(...OLD_SCOPES);
+
+  assertEquals(missingScope(grant, "list_comments"), "comments:read");
+  assertEquals(missingScope(grant, "list_messages"), "messages:read");
+
+  assertEquals(missingScope(ALL, "list_comments"), null);
+  assertEquals(missingScope(ALL, "list_messages"), null);
+});
+
 Deno.test("an older tool is not gated, so even an empty grant may run it", () => {
   assertEquals(missingScope(granted(), "create_post"), null);
   assertEquals(missingScope(granted(), "list_accounts"), null);
@@ -64,6 +74,8 @@ Deno.test("a tool that does not exist is not gated", () => {
 Deno.test("the comment and message scopes are advertised but cannot be granted yet", () => {
   assertEquals(NOT_YET_GRANTABLE_SCOPES.has("comments:write"), true);
   assertEquals(NOT_YET_GRANTABLE_SCOPES.has("messages:write"), true);
+  assertEquals(NOT_YET_GRANTABLE_SCOPES.has("comments:read"), true);
+  assertEquals(NOT_YET_GRANTABLE_SCOPES.has("messages:read"), true);
 });
 
 Deno.test("a scope that can be granted is not in the not-yet-grantable set", () => {

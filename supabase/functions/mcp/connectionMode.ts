@@ -14,8 +14,8 @@
 //   /mcp       -> "full":  every tool except list_comments and list_messages
 //   /mcp/read  -> "read":  the owner's own reads plus list_comments and
 //                          list_messages
-//   /mcp/inbox -> "inbox": "read" plus the tools that answer or hide a
-//                          comment or a message
+//   /mcp/inbox -> "inbox": list_accounts, list_comments, reply_to_comment and
+//                          hide_comment: public material only
 //
 // The model cannot change the path, so it cannot widen its own tool set.
 //
@@ -41,8 +41,8 @@ import {
  *   text.
  * - `"read"`: the owner's own data, plus the tools that return other people's
  *   text.
- * - `"inbox"`: `"read"` plus the tools that answer or hide a comment or a
- *   message.
+ * - `"inbox"`: the public comment tools only: the tools that read public
+ *   comments and the ones that answer or hide them.
  */
 export type ConnectionMode = McpEndpoint;
 
@@ -178,13 +178,26 @@ export const TOOL_POLICIES: Readonly<Record<string, ToolPolicy>> = {
 //
 // "full" carries no untrusted_read tool, so a connection that can read other
 // people's comments is never the same connection that can publish, delete or
-// spend AI quota. "read" and "inbox" carry the untrusted tools and no write
-// and no AI tool at all.
-const MODE_KINDS: Record<ConnectionMode, ReadonlySet<ToolKind>> = {
+// spend AI quota. "read" carries the untrusted tools and no write and no AI
+// tool at all.
+const MODE_KINDS: Record<"full" | "read", ReadonlySet<ToolKind>> = {
   full: new Set<ToolKind>(["read", "interaction", "write", "ai"]),
   read: new Set<ToolKind>(["read", "untrusted_read"]),
-  inbox: new Set<ToolKind>(["read", "untrusted_read", "interaction"]),
 };
+
+// The tools the inbox connection is offered.
+//
+// Decision 1: the inbox holds only public material. Everything the model
+// sees there is already public, so a reply steered by a planted comment
+// cannot leak a secret; the DM reads and the owner's own private reads are
+// left out on purpose. Answering the sender only would not help, because the
+// attacker IS the sender.
+const INBOX_TOOLS: ReadonlySet<string> = new Set([
+  "list_accounts",
+  "list_comments",
+  "reply_to_comment",
+  "hide_comment",
+]);
 
 /**
  * The mode a request path names, or null when it names no mode.
@@ -233,9 +246,14 @@ function policyFor(tool: string): ToolPolicy {
  * A tool that is not in TOOL_POLICIES throws: a new tool cannot be added
  * without classifying it, and a tool nobody classified is not offered to
  * anyone (fail closed).
+ *
+ * The inbox mode is not decided by the kind of the tool but by the tool
+ * itself: it is the one mode that holds public material only.
  */
 export function toolAllowed(mode: ConnectionMode, tool: string): boolean {
-  return MODE_KINDS[mode].has(policyFor(tool).kind);
+  const policy = policyFor(tool);
+  if (mode === "inbox") return INBOX_TOOLS.has(tool);
+  return MODE_KINDS[mode].has(policy.kind);
 }
 
 /**
