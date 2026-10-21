@@ -94,6 +94,8 @@ function authorizationServerMetadata() {
       "posts:write",
       "media:write",
       "webhooks:manage",
+      "comments:write",
+      "messages:write",
     ],
     service_documentation: `${APP_ORIGIN}/docs/mcp-server`,
   };
@@ -185,6 +187,17 @@ async function handleAuthorize(req: Request): Promise<Response> {
   const state = p.get("state") ?? "";
   const scope = p.get("scope") ?? "accounts:read posts:read posts:write media:write webhooks:manage";
 
+  // comments:write and messages:write are advertised in the server metadata
+  // above, but they are not grantable yet: the consent screen that could show
+  // them ships after the frontend freeze. They are therefore dropped from the
+  // requested list before it is stored, and no token is ever issued with
+  // them. The tools that need them answer 403 over OAuth until then.
+  const grantableScope = scope
+    .split(/\s+/)
+    .filter(Boolean)
+    .filter((requested) => requested !== "comments:write" && requested !== "messages:write")
+    .join(" ");
+
   if (response_type !== "code") {
     return oauthError("unsupported_response_type", "Only response_type=code is supported");
   }
@@ -211,7 +224,7 @@ async function handleAuthorize(req: Request): Promise<Response> {
     .insert({
       client_id,
       redirect_uri,
-      scope,
+      scope: grantableScope,
       state,
       code_challenge,
       code_challenge_method,

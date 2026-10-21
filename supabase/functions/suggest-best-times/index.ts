@@ -2,6 +2,63 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.7.1";
 import { handleCorsOptions, jsonResponse, errorResponse } from "../_shared/cors.ts";
 import { callAiWithFallback, fetchAiSettings, logAiCall } from "../_shared/ai-fallback.ts";
+import { timingSafeTokenEqual } from "../_shared/auth-helper.ts";
+
+// A user id that reaches the database has to be a uuid: an id that is not one
+// makes the write of the log row fail with 22P02, and the AI call is then
+// logged against nobody.
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+// The day a suggestion names is a weekday: "Funday" is not a day the caller
+// can schedule on, and an empty one is not a day either. The model's spelling
+// is not trusted, so the day is checked against the seven real ones instead of
+// against a pattern that would accept any word.
+const BEST_TIME_DAYS = [
+  'monday',
+  'tuesday',
+  'wednesday',
+  'thursday',
+  'friday',
+  'saturday',
+  'sunday',
+];
+
+// The time is a wall-clock time in one of the two formats a caller writes: the
+// 12-hour format the model is asked for ("11:00 AM") and the 24-hour format
+// ("18:30"). "25:90" is not a time, and neither is "13:00 PM": the hour of a
+// 12-hour clock never goes past twelve, and the minutes never past fifty-nine.
+const BEST_TIME_12_HOUR_RE = /^(0?[1-9]|1[0-2]):[0-5]\d\s?(AM|PM)$/i;
+const BEST_TIME_24_HOUR_RE = /^([01]?\d|2[0-3]):[0-5]\d$/;
+
+function isBestTimeDay(value: string): boolean {
+  return BEST_TIME_DAYS.includes(value.trim().toLowerCase());
+}
+
+function isBestTimeClock(value: string): boolean {
+  const trimmed = value.trim();
+  return BEST_TIME_12_HOUR_RE.test(trimmed) || BEST_TIME_24_HOUR_RE.test(trimmed);
+}
+
+// A suggestion is only usable when every field the caller schedules from is
+// there and carries a value: the platform, the day, the time, a score between
+// 0 and 100, and the reason. The model is asked for that shape, but the answer
+// is whatever came back, so the shape is checked rather than assumed.
+// The check mirrors isBestTimeSuggestion in ../n8n-api/postActions.ts, which
+// the API applies to the answers this service sends.
+function isWellFormedSuggestion(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null) return false;
+  const item = value as Record<string, unknown>;
+  // A field of the right type is not enough: an empty platform, day, time or
+  // reason carries nothing the caller can schedule from, so it is refused the
+  // same way a missing field is.
+  if (typeof item.platform !== 'string' || item.platform.trim().length === 0) return false;
+  if (typeof item.day !== 'string' || !isBestTimeDay(item.day)) return false;
+  if (typeof item.time !== 'string' || !isBestTimeClock(item.time)) return false;
+  if (typeof item.reason !== 'string' || item.reason.trim().length === 0) return false;
+  return typeof item.score === 'number' &&
+    Number.isFinite(item.score) &&
+    item.score >= 0 && item.score <= 100;
+}
 
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
@@ -12,7 +69,7 @@ serve(async (req) => {
     // Parse + validate body before touching any field. Previously this
     // function crashed with "Cannot read properties of undefined (reading
     // 'join')" when `platforms` or `historicalData` was missing.
-    let body: { platforms?: unknown; historicalData?: unknown } = {};
+    let body: { platforms?: unknown; historicalData?: unknown; user_id?: unknown } = {};
     try {
       const text = await req.text();
       body = text ? JSON.parse(text) : {};
@@ -42,7 +99,21 @@ serve(async (req) => {
     // Get user from auth header if available
     let userId: string | null = null;
     const authHeader = req.headers.get('Authorization');
-    if (authHeader) {
+    const bearerToken = authHeader ? authHeader.replace('Bearer ', '').trim() : '';
+    const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
+    const bodyUserId = typeof body.user_id === 'string' ? body.user_id.trim() : '';
+
+    // A service-role call carries no user JWT, so the owner of the API key is
+    // named in the body instead. The bearer token is the service-role key, so
+    // the caller is authenticated as the service role and the id may be used;
+    // a user_id from any other caller is ignored.
+    if (
+      serviceRoleKey.length > 0 &&
+      timingSafeTokenEqual(bearerToken, serviceRoleKey) &&
+      UUID_RE.test(bodyUserId)
+    ) {
+      userId = bodyUserId;
+    } else if (authHeader) {
       const token = authHeader.replace('Bearer ', '');
       const supabaseClient = createClient(
         Deno.env.get('SUPABASE_URL') ?? '',
@@ -109,34 +180,130 @@ Return a JSON array of suggestions.`;
 
     const aiSuccess = aiResult.response.ok;
 
-    // Log AI call
-    await logAiCall(supabaseAdmin, 'best_times_suggestion', 'suggest-best-times', userId, aiSuccess, aiResult, {
-      platforms,
-    });
-
     if (!aiSuccess) {
+      // The provider answered with an error, so the call failed. It is logged
+      // on this path because nothing after it runs: the body is read for the
+      // error message and the request ends.
+      await logAiCall(supabaseAdmin, 'best_times_suggestion', 'suggest-best-times', userId, false, aiResult, {
+        platforms,
+      });
       const errorText = await aiResult.response.text();
       console.error('All AI tiers failed for best times:', errorText);
       return errorResponse('AI suggestion failed after all fallbacks. Please try again later.');
     }
 
-    const data = await aiResult.response.json();
-    const content = data.choices?.[0]?.message?.content || '[]';
+    // The call is deliberately not logged yet: the log is written after the
+    // answer has been validated, because an answer that cannot be used is a
+    // failed call and not a successful one. A 2xx only says the provider
+    // answered, not that the caller received a suggestion it can schedule.
+    let rawContent: unknown;
+    try {
+      const data = await aiResult.response.json();
+      rawContent = data.choices?.[0]?.message?.content;
+    } catch (error) {
+      // The body could not be read, or is not a shape that can be read: there
+      // is nothing to validate, so the call is recorded as failed and the
+      // error is re-thrown to the handler's catch, which answers the caller
+      // exactly as it did before.
+      await logAiCall(supabaseAdmin, 'best_times_suggestion', 'suggest-best-times', userId, false, aiResult, {
+        platforms,
+        parse_failed: true,
+      }, {
+        // The provider answered, so the answer itself is what was unusable.
+        failureMessage: 'AI best_times_suggestion answered but the answer was not usable',
+        failureLevel: 'warn',
+      });
+      throw error;
+    }
     console.log(`Best times generated using ${aiResult.tierUsed} tier (${aiResult.modelUsed})`);
 
     // Parse JSON from response
     let suggestions = [];
-    try {
-      const jsonStr = content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-      suggestions = JSON.parse(jsonStr);
-    } catch (parseError) {
-      console.error('JSON parse error:', parseError, 'Content:', content);
+    // The number of items in the answer that were not suggestions. The count is
+    // reported, so a caller can tell a thin answer from a broken one.
+    let droppedInvalid = 0;
+    // An answer that cannot be read is not an empty answer: the flag tells the
+    // caller that the list is missing because the model's answer failed to
+    // parse, not because the model had nothing to say.
+    let parseFailed = false;
+    // Only an explicitly returned answer counts. A missing, null, empty or
+    // non-string answer (a refusal, for instance) is a failed answer, not an
+    // empty list of suggestions.
+    const content = typeof rawContent === 'string' ? rawContent.trim() : '';
+    if (content.length === 0) {
+      console.error('Best times: the model returned no content');
+      parseFailed = true;
       suggestions = [];
+    } else {
+      try {
+        const jsonStr = content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+        const parsed = JSON.parse(jsonStr);
+        if (Array.isArray(parsed)) {
+          // The model is asked for a fixed shape, but the answer is whatever
+          // came back: an item without a day, a time or a score cannot be
+          // scheduled, so it is dropped instead of being handed to the caller.
+          const wellFormed = parsed.filter((value: unknown) => isWellFormedSuggestion(value));
+          // A suggestion for a platform nobody asked for cannot be scheduled
+          // for the caller, so it is not a usable suggestion either: it is
+          // dropped the same way a malformed one is, and the platforms are
+          // compared the way they were asked for, trimmed and lowercased.
+          const requestedPlatforms = new Set(
+            platforms.map((platform) => String(platform).trim().toLowerCase()),
+          );
+          const usable = wellFormed.filter((value: unknown) => {
+            const item = value as { platform: string };
+            return requestedPlatforms.has(String(item.platform).trim().toLowerCase());
+          });
+          droppedInvalid = parsed.length - usable.length;
+          if (parsed.length > 0 && usable.length === 0) {
+            // A list of items that are not suggestions is an answer that failed
+            // to parse, not an answer that had nothing to say.
+            parseFailed = true;
+            suggestions = [];
+            droppedInvalid = 0;
+          } else {
+            suggestions = usable;
+          }
+        } else {
+          parseFailed = true;
+        }
+      } catch (parseError) {
+        console.error('JSON parse error:', parseError, 'Content:', content);
+        parseFailed = true;
+        suggestions = [];
+      }
     }
+
+    // The answer has been read and checked, so the outcome of the call is
+    // known: it succeeded only when a usable suggestion came back. This is
+    // the one place the successful path logs, so every request that made an
+    // AI call records it exactly once.
+    //
+    // An answer that parsed but carries no suggestion is not a successful
+    // call: the provider answered, and the answer held nothing the caller can
+    // schedule. It is told apart from a parse failure, which is a different
+    // fault with a different fix.
+    const emptyResult = !parseFailed && suggestions.length === 0;
+    await logAiCall(supabaseAdmin, 'best_times_suggestion', 'suggest-best-times', userId, !parseFailed && suggestions.length > 0, aiResult, {
+      platforms,
+      ...(parseFailed ? { parse_failed: true } : {}),
+      ...(emptyResult ? { empty_result: true } : {}),
+      ...(droppedInvalid > 0 ? { dropped_invalid: droppedInvalid } : {}),
+    }, {
+      // The provider answered, so this is not an outage: the answer itself was
+      // unusable. These options apply to the failed rows only.
+      failureMessage: 'AI best_times_suggestion answered but the answer was not usable',
+      failureLevel: 'warn',
+    });
 
     console.log('Generated suggestions:', suggestions.length);
 
-    return jsonResponse({ suggestions });
+    return jsonResponse({
+      suggestions,
+      ...(parseFailed ? { parse_failed: true } : {}),
+      ...(emptyResult ? { empty_result: true } : {}),
+      ...(droppedInvalid > 0 ? { dropped_invalid: droppedInvalid } : {}),
+    });
 
   } catch (error: unknown) {
     console.error('Error suggesting best times:', error);

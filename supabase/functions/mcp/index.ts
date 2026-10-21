@@ -8,6 +8,17 @@ import { McpServer, StreamableHttpTransport } from "npm:mcp-lite@^0.10.0";
 import { z } from "npm:zod@4.1.12";
 import { createClient } from "npm:@supabase/supabase-js@2.45.0";
 import { normalizeListFields } from "./stringList.ts";
+import {
+  auditSchemaRejection,
+  confirmField,
+  recordForwardedRefusal,
+  recordMcpRefusal,
+  refuseUnconfirmed,
+  refuseUngranted,
+} from "./confirmGate.ts";
+import { resolveKeyOwner } from "./keyOwner.ts";
+import type { ScopeGrant } from "./toolScopes.ts";
+import { sha256Hex } from "../_shared/crypto.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -44,13 +55,21 @@ async function sha256(text: string): Promise<string> {
 }
 
 // Resolve an OAuth Bearer token (issued by mcp-oauth) to the user's Postora
-// API key. Returns null if the token is unknown / expired / revoked.
-async function resolveOAuthToken(token: string, userAgent?: string): Promise<string | null> {
+// API key and the scopes the token was granted. Returns null if the token is
+// unknown / expired / revoked.
+//
+// The scopes are the token's own (mcp_oauth_tokens.scopes). They are carried
+// along instead of being dropped, because a token may only run the tools its
+// scopes cover: the API key alone would let it reach every tool.
+async function resolveOAuthToken(
+  token: string,
+  userAgent?: string,
+): Promise<{ apiKey: string; scopes: string[] } | null> {
   if (!token || token.length < 16) return null;
   const hash = await sha256(token);
   const { data: row } = await admin
     .from("mcp_oauth_tokens")
-    .select("id, user_id, expires_at, revoked_at")
+    .select("id, user_id, expires_at, revoked_at, scopes")
     .eq("token_hash", hash)
     .maybeSingle();
   if (!row) return null;
@@ -70,7 +89,10 @@ async function resolveOAuthToken(token: string, userAgent?: string): Promise<str
     .eq("id", row.id)
     .then(() => {}, () => {});
 
-  return profile.api_key as string;
+  return {
+    apiKey: profile.api_key as string,
+    scopes: Array.isArray(row.scopes) ? row.scopes : [],
+  };
 }
 
 function extractApiKey(req: Request): string | null {
@@ -130,6 +152,30 @@ function fail(status: number, data: unknown) {
   };
 }
 
+// A JSON-RPC error answer, with the CORS headers every answer carries.
+function jsonRpcError(
+  status: number,
+  code: number,
+  message: string,
+  extraHeaders: Record<string, string> = {},
+): Response {
+  return new Response(
+    JSON.stringify({
+      jsonrpc: "2.0",
+      error: { code, message },
+      id: null,
+    }),
+    {
+      status,
+      headers: {
+        ...corsHeaders,
+        "Content-Type": "application/json",
+        ...extraHeaders,
+      },
+    },
+  );
+}
+
 // Comments and DMs are written by outside people. They reach the model as
 // data, so the result is wrapped with a notice telling the model not to treat
 // anything inside it as an instruction (indirect prompt injection), above all
@@ -143,12 +189,47 @@ function okUntrusted(data: unknown) {
   return ok({ notice: UNTRUSTED_NOTICE, content: data });
 }
 
-// Build a fresh MCP server bound to a specific user's API key.
-function buildServer(apiKey: string) {
+// Destructive tools take `confirm: true` so a model has to state the intent
+// explicitly. The refusal is made in the handler, in ./confirmGate.ts, so it
+// can be recorded in system_logs instead of vanishing at the schema.
+//
+// A refusal is only ever recorded for an authenticated owner. The owner is
+// resolved before the server is built (see ./keyOwner.ts and app.all below):
+// an unauthenticated request is refused with 401 before any tool runs, so no
+// refusal can ever be recorded for a caller nobody authenticated.
+//
+// The grant is what the caller may do: an API-key caller holds every scope,
+// an OAuth token holds only the scopes it was granted. A tool the grant does
+// not cover is refused before it runs (see ./toolScopes.ts and refuseUngranted
+// in ./confirmGate.ts), before the confirmation check and before any argument
+// is read.
+//
+// Some API routes refuse a call with a 4xx and write no row of their own, so
+// the refusal would only exist as the answer this edge forwards. The tools
+// behind those routes record the forwarded refusal (see recordForwardedRefusal
+// in ./confirmGate.ts), so a refusal that happened behind the API leaves the
+// same trace a refusal made here would have left. The routes that record
+// their own refusals are not recorded twice, and neither is a 429: the API's
+// central rate limiter records every 429 itself, before the route runs.
+
+// Build a fresh MCP server bound to a specific user's API key, owner and grant.
+function buildServer(apiKey: string, ownerId: string, grant: ScopeGrant) {
   const server = new McpServer({
     name: "postora",
     version: "1.0.0",
     schemaAdapter: (schema) => z.toJSONSchema(schema as z.ZodType),
+  });
+
+  // The framework validates the arguments against the tool's input schema
+  // before the handler runs, and answers a call that does not fit with an
+  // INVALID_PARAMS error. The handler never sees such a call, so it cannot
+  // record it, and the rejection would leave no trace at all. The error hook
+  // is the only place where the refusal is still visible, so it records it as
+  // a refusal: the schema rejection leaves a row too. The framework's own
+  // error response is kept: the hook answers nothing of its own.
+  server.onError(async (error, ctx) => {
+    await auditSchemaRejection({ admin }, { userId: ownerId, error, rpcRequest: ctx.request });
+    return undefined;
   });
 
   // ---- Accounts ----
@@ -373,6 +454,234 @@ function buildServer(apiKey: string) {
     },
   });
 
+  // ---- Comments ----
+  server.tool("reply_to_comment", {
+    description:
+      "Publicly reply to a comment on a Facebook, Instagram or Threads post, as the connected account. The reply is visible to everyone.",
+    inputSchema: z.object({
+      social_account_id: z.string().describe("Postora social account UUID (from list_accounts)"),
+      comment_id: z.string().describe("Platform comment id"),
+      message: z.string().min(1).describe("Reply text"),
+      platform: z.enum(["facebook", "instagram", "threads"]).optional().describe("Optional; must match the account's platform"),
+    }),
+    handler: async (args) => {
+      const scopeRefusal = await refuseUngranted({ admin }, { userId: ownerId, tool: "reply_to_comment", grant });
+      if (scopeRefusal) return fail(403, scopeRefusal);
+      const r = await callN8n(apiKey, "POST", "/api/v1/comments/reply", {
+        social_account_id: args.social_account_id,
+        comment_id: args.comment_id,
+        message: args.message,
+        platform: args.platform,
+      });
+      // The API route behind this tool answers a refused call with a 4xx and
+      // writes no row of its own, so the refusal is recorded here. The other
+      // tools record their own refusals and must not double them.
+      await recordForwardedRefusal(
+        { admin },
+        { userId: ownerId, tool: "reply_to_comment", status: r.status, data: r.data },
+      );
+      return r.status >= 400 ? fail(r.status, r.data) : ok(r.data);
+    },
+  });
+
+  server.tool("hide_comment", {
+    description:
+      "Hide (or unhide with hide=false) a comment on a Facebook, Instagram or Threads post. Hidden comments stay visible to their author and friends only. Requires confirm: true.",
+    inputSchema: z.object({
+      social_account_id: z.string().describe("Postora social account UUID (from list_accounts)"),
+      comment_id: z.string().describe("Platform comment id"),
+      hide: z.boolean().optional().describe("Default true; false unhides"),
+      confirm: confirmField,
+    }),
+    handler: async (args) => {
+      const scopeRefusal = await refuseUngranted({ admin }, { userId: ownerId, tool: "hide_comment", grant });
+      if (scopeRefusal) return fail(403, scopeRefusal);
+      const refusal = await refuseUnconfirmed({ admin }, { userId: ownerId, tool: "hide_comment", confirm: args.confirm });
+      if (refusal) return fail(400, refusal);
+      const r = await callN8n(apiKey, "POST", "/api/v1/comments/hide", {
+        social_account_id: args.social_account_id,
+        comment_id: args.comment_id,
+        hide: args.hide ?? true,
+      });
+      // The API route behind this tool answers a refused call with a 4xx and
+      // writes no row of its own, so the refusal is recorded here. The other
+      // tools record their own refusals and must not double them.
+      await recordForwardedRefusal(
+        { admin },
+        { userId: ownerId, tool: "hide_comment", status: r.status, data: r.data },
+      );
+      return r.status >= 400 ? fail(r.status, r.data) : ok(r.data);
+    },
+  });
+
+  server.tool("delete_comment", {
+    description:
+      "Permanently delete a comment on a Facebook or Instagram post (Threads replies cannot be deleted; hide them instead). Cannot be undone. Requires confirm: true.",
+    inputSchema: z.object({
+      social_account_id: z.string().describe("Postora social account UUID (from list_accounts)"),
+      comment_id: z.string().describe("Platform comment id"),
+      confirm: confirmField,
+    }),
+    handler: async (args) => {
+      const scopeRefusal = await refuseUngranted({ admin }, { userId: ownerId, tool: "delete_comment", grant });
+      if (scopeRefusal) return fail(403, scopeRefusal);
+      const refusal = await refuseUnconfirmed({ admin }, { userId: ownerId, tool: "delete_comment", confirm: args.confirm });
+      if (refusal) return fail(400, refusal);
+      const r = await callN8n(apiKey, "POST", "/api/v1/comments/delete", {
+        social_account_id: args.social_account_id,
+        comment_id: args.comment_id,
+      });
+      // The API route behind this tool answers a refused call with a 4xx and
+      // writes no row of its own, so the refusal is recorded here. The other
+      // tools record their own refusals and must not double them.
+      await recordForwardedRefusal(
+        { admin },
+        { userId: ownerId, tool: "delete_comment", status: r.status, data: r.data },
+      );
+      return r.status >= 400 ? fail(r.status, r.data) : ok(r.data);
+    },
+  });
+
+  // ---- Messages ----
+  server.tool("reply_to_message", {
+    description:
+      "Send a direct message reply from a connected WhatsApp, Instagram or Facebook (Messenger) account. Pass recipient_id (Instagram/Messenger user id or WhatsApp number) or recipient_phone. The message is delivered to a real person.",
+    inputSchema: z.object({
+      social_account_id: z.string().describe("Postora social account UUID (from list_accounts)"),
+      recipient_id: z.string().optional().describe("Recipient user id on the platform (Instagram/Messenger) or the WhatsApp number"),
+      recipient_phone: z.string().optional().describe("Recipient phone number (WhatsApp)"),
+      message: z.string().min(1).describe("Message text"),
+      message_type: z.enum(["text", "media"]).optional().describe("Defaults to text"),
+      media_url: z.string().optional().describe("Required when message_type is media"),
+      media_type: z.string().optional().describe("For WhatsApp media: image, video, audio or document"),
+      conversation_id: z.string().optional().describe("Existing conversation to reply in, when the platform needs one"),
+      platform: z.enum(["whatsapp", "instagram", "facebook"]).optional().describe("Optional; must match the account's platform"),
+    }),
+    handler: async (args) => {
+      // The scope comes first: a connection that was not granted the scope
+      // may not send anything at all, so the call is refused before the
+      // arguments are read.
+      const scopeRefusal = await refuseUngranted({ admin }, { userId: ownerId, tool: "reply_to_message", grant });
+      if (scopeRefusal) return fail(403, scopeRefusal);
+      // What is sent is the trimmed recipient, and a recipient that is absent
+      // or only whitespace is left out of the body entirely. A request with no
+      // recipient at all is refused here, before the API is called, and the
+      // refusal is recorded in system_logs (AGENTS.md rule 4): every refusal
+      // has to leave a trace, and this one never reaches the API.
+      const recipientId = args.recipient_id?.trim();
+      const recipientPhone = args.recipient_phone?.trim();
+      if (!recipientId && !recipientPhone) {
+        await recordMcpRefusal(
+          { admin },
+          { userId: ownerId, tool: "reply_to_message", code: "INVALID_MESSAGE" },
+        );
+        return fail(400, {
+          code: "INVALID_MESSAGE",
+          message: "Pass recipient_id or recipient_phone.",
+        });
+      }
+      const body: Record<string, unknown> = { ...args };
+      if (recipientId) {
+        body.recipient_id = recipientId;
+      } else {
+        delete body.recipient_id;
+      }
+      if (recipientPhone) {
+        body.recipient_phone = recipientPhone;
+      } else {
+        delete body.recipient_phone;
+      }
+      const r = await callN8n(apiKey, "POST", "/api/v1/messages/reply", body);
+      return r.status >= 400 ? fail(r.status, r.data) : ok(r.data);
+    },
+  });
+
+  // ---- Media ----
+  server.tool("get_media", {
+    description:
+      "Get a media file from the user's Postora media library by id (type, size, mime type, storage path).",
+    inputSchema: z.object({
+      media_id: z.string().describe("Postora media file UUID"),
+    }),
+    handler: async ({ media_id }) => {
+      const scopeRefusal = await refuseUngranted({ admin }, { userId: ownerId, tool: "get_media", grant });
+      if (scopeRefusal) return fail(403, scopeRefusal);
+      const r = await callN8n(apiKey, "GET", `/api/v1/media/${encodeURIComponent(media_id)}`);
+      // The API route behind this tool answers a refused call with a 4xx and
+      // writes no row of its own, so the refusal is recorded here. The other
+      // tools record their own refusals and must not double them.
+      await recordForwardedRefusal(
+        { admin },
+        { userId: ownerId, tool: "get_media", status: r.status, data: r.data },
+      );
+      return r.status >= 400 ? fail(r.status, r.data) : ok(r.data);
+    },
+  });
+
+  // ---- Post management ----
+  server.tool("cancel_scheduled_post", {
+    description:
+      "Cancel a scheduled post that has not been published yet and remove it from Postora. Only works while the post is scheduled and its time has not come. Cannot be undone. Requires confirm: true.",
+    inputSchema: z.object({
+      post_id: z.string().describe("Postora post UUID"),
+      confirm: confirmField,
+    }),
+    handler: async (args) => {
+      const scopeRefusal = await refuseUngranted({ admin }, { userId: ownerId, tool: "cancel_scheduled_post", grant });
+      if (scopeRefusal) return fail(403, scopeRefusal);
+      const refusal = await refuseUnconfirmed({ admin }, { userId: ownerId, tool: "cancel_scheduled_post", confirm: args.confirm });
+      if (refusal) return fail(400, refusal);
+      const r = await callN8n(apiKey, "POST", "/api/v1/posts/cancel", { post_id: args.post_id });
+      return r.status >= 400 ? fail(r.status, r.data) : ok(r.data);
+    },
+  });
+
+  server.tool("reschedule_post", {
+    description:
+      "Move a scheduled post that has not been published yet to a new time. scheduled_at must be a future ISO 8601 timestamp WITH a UTC offset (e.g. 2026-06-05T14:30:00Z or 2026-06-05T17:30:00+03:00).",
+    inputSchema: z.object({
+      post_id: z.string().describe("Postora post UUID"),
+      scheduled_at: z.string().describe("Future ISO 8601 timestamp with offset"),
+    }),
+    handler: async (args) => {
+      const scopeRefusal = await refuseUngranted({ admin }, { userId: ownerId, tool: "reschedule_post", grant });
+      if (scopeRefusal) return fail(403, scopeRefusal);
+      const r = await callN8n(apiKey, "POST", "/api/v1/posts/reschedule", args);
+      return r.status >= 400 ? fail(r.status, r.data) : ok(r.data);
+    },
+  });
+
+  // ---- Account health ----
+  server.tool("check_account_health", {
+    description:
+      "Check whether a connected social account can still publish: active flag, whether it needs to be reconnected, refresh failures, last refresh error and days until its token expires. " +
+      "'healthy' is false when the account is inactive, needs a reconnect or its token has expired, true when the token is known to be still valid, and null when the token's expiry is unknown.",
+    inputSchema: z.object({
+      social_account_id: z.string().describe("Postora social account UUID (from list_accounts)"),
+    }),
+    handler: async ({ social_account_id }) => {
+      const scopeRefusal = await refuseUngranted({ admin }, { userId: ownerId, tool: "check_account_health", grant });
+      if (scopeRefusal) return fail(403, scopeRefusal);
+      const r = await callN8n(apiKey, "GET", "/api/v1/accounts/health", undefined, { social_account_id });
+      return r.status >= 400 ? fail(r.status, r.data) : ok(r.data);
+    },
+  });
+
+  // ---- Planning ----
+  server.tool("suggest_best_times", {
+    description:
+      "Suggest the best days and times to post on the given platforms, combining platform best practices with the user's own publishing history (in the user's preferred time zone). Up to 6 platforms per call; each platform is analysed on its own publishing history.",
+    inputSchema: z.object({
+      platforms: stringList.describe("e.g. ['instagram','facebook']. Accepts an array, JSON-array text or comma-separated text."),
+    }),
+    handler: async (args) => {
+      const scopeRefusal = await refuseUngranted({ admin }, { userId: ownerId, tool: "suggest_best_times", grant });
+      if (scopeRefusal) return fail(403, scopeRefusal);
+      const r = await callN8n(apiKey, "POST", "/api/v1/best-times", normalizeListFields({ platforms: args.platforms }));
+      return r.status >= 400 ? fail(r.status, r.data) : ok(r.data);
+    },
+  });
+
   return server;
 }
 
@@ -398,35 +707,51 @@ app.all("/*", async (c) => {
   const req = c.req.raw;
   const presented = extractApiKey(req);
   let apiKey: string | null = presented;
+  // What the caller may do. A Postora API key is the owner's own key and
+  // holds every scope. An MCP OAuth access token holds only the scopes it
+  // was granted, and the tools it may run are decided by those.
+  let grant: ScopeGrant = { kind: "all" };
   // Postora-issued API keys start with "postora-". Anything else is treated as
   // an MCP OAuth access token and resolved via mcp_oauth_tokens.
   if (presented && !presented.startsWith("postora-")) {
-    apiKey = await resolveOAuthToken(presented, req.headers.get("user-agent") ?? undefined);
+    const resolved = await resolveOAuthToken(presented, req.headers.get("user-agent") ?? undefined);
+    if (resolved) {
+      apiKey = resolved.apiKey;
+      grant = { kind: "granted", scopes: new Set(resolved.scopes) };
+    } else {
+      apiKey = null;
+    }
   }
   if (!apiKey) {
-    return new Response(
-      JSON.stringify({
-        jsonrpc: "2.0",
-        error: {
-          code: -32001,
-          message: presented
-            ? "Invalid or expired access token."
-            : "Missing access token. Authorize via OAuth or pass a Postora API key.",
-        },
-        id: null,
-      }),
-      {
-        status: 401,
-        headers: {
-          ...corsHeaders,
-          "Content-Type": "application/json",
-          "WWW-Authenticate": WWW_AUTHENTICATE,
-        },
-      },
+    return jsonRpcError(
+      401,
+      -32001,
+      presented
+        ? "Invalid or expired access token."
+        : "Missing access token. Authorize via OAuth or pass a Postora API key.",
+      { "WWW-Authenticate": WWW_AUTHENTICATE },
     );
   }
 
-  const server = buildServer(apiKey);
+  // Authenticate the caller before anything else happens. A key that belongs
+  // to no profile is not a valid key: the request is refused here, before a
+  // server is built and before any tool can run, so an unauthenticated
+  // caller can never reach a refusal path that writes a system_logs row.
+  // The owner is resolved once and passed to the server, so every refusal is
+  // recorded under a real user.
+  const owner = await resolveKeyOwner({ admin, sha256Hex }, apiKey);
+  if (owner.kind === "unknown") {
+    return jsonRpcError(401, -32001, "Invalid or expired access token.", {
+      "WWW-Authenticate": WWW_AUTHENTICATE,
+    });
+  }
+  if (owner.kind === "error") {
+    // The lookup failed, so the edge cannot tell whether the caller is
+    // allowed in. That is an outage, not an invalid key.
+    return jsonRpcError(503, -32603, "Authentication is temporarily unavailable. Try again.");
+  }
+
+  const server = buildServer(apiKey, owner.userId, grant);
   const transport = new StreamableHttpTransport();
   const handler = transport.bind(server);
   const res = await handler(req);
