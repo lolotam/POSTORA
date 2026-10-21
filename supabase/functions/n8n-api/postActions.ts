@@ -1636,6 +1636,22 @@ type RetryDispatch =
   | { kind: "pending" }
   | { kind: "failed"; message: string; details?: Record<string, unknown> };
 
+// A publish the publishing service refused for good.
+//
+// Only a 4xx is a refusal: the service answered, it did not accept the work,
+// and the next call will be refused the same way. The two 4xx that mean "not
+// now" are the exception -- a 408 says the service ran out of time and a 429
+// says it is busy -- and they are not refusals, because the work may have
+// been taken in behind them.
+//
+// Everything else is not a refusal either: a 5xx can come from a gateway in
+// front of the publishing service that lost the answer while the publish was
+// still going on.
+function isFinalPublishRefusal(status: number): boolean {
+  if (status < 400 || status > 499) return false;
+  return status !== 408 && status !== 429;
+}
+
 // The retry is published by the publishing service, not here: this route
 // decides WHICH results are published again and hands exactly those accounts
 // over. The service role is used because the publishing service is an
@@ -1695,6 +1711,15 @@ async function dispatchRetry(
     console.error(
       `[n8n-api] ${route}: the publishing service answered ${response.status} for post ${request.postId}`,
     );
+    // Everything that is not a refusal keeps the claim. A 5xx, a 408 and a
+    // 429 can all come from a gateway that lost the answer while the publish
+    // was still going on behind it, so the publish may still be running: the
+    // claim is KEPT to the end of its lease and the caller is told the
+    // results are pending. A released claim would let a second retry take
+    // the post and publish the same accounts a second time.
+    if (!isFinalPublishRefusal(response.status)) {
+      return { kind: "pending" };
+    }
     // The service refused the publish: it did not accept the work, so
     // nothing was published and the claim is given back.
     if (
@@ -1950,11 +1975,13 @@ export async function retryFailedPost(
 
   const dispatch = await dispatchRetry(deps, route, { postId, targets });
   if (dispatch.kind === "pending") {
-    // The publish was sent and its answer did not come back in time. The
-    // claim is KEPT on purpose: releasing it would let a second retry take
-    // the post and publish the same accounts again while the first publish
-    // may still be running. The claim is a lease, so it runs out on its own
-    // and the post is free again after it.
+    // The publish may still be running: its answer did not come back in time,
+    // or it came back as a fault that says nothing about whether the publish
+    // was accepted (a 5xx, a 408 or a 429 from a gateway in front of the
+    // publishing service). The claim is KEPT on purpose: releasing it would
+    // let a second retry take the post and publish the same accounts again
+    // while the first publish may still be running. The claim is a lease, so
+    // it runs out on its own and the post is free again after it.
     return ok({ post_id: postId, status: "results_pending", retried }, 202);
   }
   if (dispatch.kind === "failed") {

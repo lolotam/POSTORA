@@ -204,6 +204,12 @@ COMMENT ON FUNCTION public.mcp_release_post_action(uuid, uuid, uuid) IS
 -- The delete only lands while the caller still holds the claim, so a delete
 -- that arrives after the lease ran out (and somebody else took the post)
 -- finds no row and answers false instead of deleting somebody else's work.
+-- The status is part of the predicate as well: the claim says who is working
+-- on the post, not that the post is still the finished post the claim was
+-- taken on. Another path (the dashboard retry) can put the post back into
+-- publishing between the claim and this delete, and a post that is publishing
+-- again is NOT deleted -- the caller is told the post changed and can look at
+-- it again.
 -- The tiktok_review_guard_post trigger still applies: a review post that is
 -- mid-publish raises P0001 with the DETAIL TIKTOK_REVIEW_POST_LOCKED, and
 -- that refusal is let through to the caller.
@@ -225,7 +231,8 @@ BEGIN
   DELETE FROM public.posts p
   WHERE p.id = p_post_id
     AND p.user_id = p_user_id
-    AND p.action_claim_id = p_claim_id;
+    AND p.action_claim_id = p_claim_id
+    AND p.status IN ('failed', 'completed');
 
   RETURN FOUND;
 END;
@@ -237,7 +244,7 @@ GRANT EXECUTE ON FUNCTION public.mcp_delete_claimed_post(uuid, uuid, uuid)
   TO service_role;
 
 COMMENT ON FUNCTION public.mcp_delete_claimed_post(uuid, uuid, uuid) IS
-  'Deletes one of the caller''s own posts while the caller still holds the claim. Returns true when the row was deleted, false when the claim was not the one on the row.';
+  'Deletes one of the caller''s own posts while the caller still holds the claim and the post is still a finished post (completed or failed). Returns true when the row was deleted, false when the claim was not the one on the row or the post went back to publishing.';
 
 -- ---------------------------------------------------------------------------
 -- 5. The cancel, on the database clock.

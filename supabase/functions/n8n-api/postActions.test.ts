@@ -2667,7 +2667,115 @@ Deno.test("a publishing service that refuses the publish is a 502 and the claim 
   }
 });
 
-Deno.test("a publishing service that fails is a 502 with a reason that carries no credential", async () => {
+Deno.test("a publishing service that answers 503 keeps the claim and answers 202", async () => {
+  const db = new FakeSupabase();
+  claimQueued(db);
+  db.queue("platform_posts", {
+    data: [platformResult("row-target", "instagram", ACCOUNT, "failed")],
+    error: null,
+  });
+  const { fetcher } = fakeFetcher([
+    { status: 503, body: { error: "the publishing service is unavailable" } },
+  ]);
+  const logged: string[] = [];
+  const originalError = console.error;
+  console.error = (...args: unknown[]) => {
+    logged.push(args.map(String).join(" "));
+  };
+  try {
+    const result = await retryFailedPost(depsFor(db, fetcher), USER, {
+      post_id: POST,
+    });
+    // A 503 says nothing about whether the publish was accepted: the gateway
+    // in front of the publishing service may have lost the answer while the
+    // publish was still going on.
+    assertEquals(result.status, 202);
+    assertEquals(result.body.status, "results_pending");
+    assertEquals(result.body.retried, [{
+      account_id: ACCOUNT,
+      platform: "instagram",
+    }]);
+    // The claim is KEPT: releasing it would let a second retry take the post
+    // and publish the same account again while the first publish may still be
+    // running. The lease runs out on its own.
+    assertEquals(rpcCallFor(db, RELEASE_RPC), undefined);
+    assertEquals(logged.length, 1);
+    assertEquals(logged[0].includes("answered 503"), true);
+  } finally {
+    console.error = originalError;
+  }
+});
+
+Deno.test("a publishing service that answers 429 keeps the claim and answers 202", async () => {
+  const db = new FakeSupabase();
+  claimQueued(db);
+  db.queue("platform_posts", {
+    data: [platformResult("row-target", "instagram", ACCOUNT, "failed")],
+    error: null,
+  });
+  const { fetcher } = fakeFetcher([
+    { status: 429, body: { error: "too many requests" } },
+  ]);
+  const logged: string[] = [];
+  const originalError = console.error;
+  console.error = (...args: unknown[]) => {
+    logged.push(args.map(String).join(" "));
+  };
+  try {
+    const result = await retryFailedPost(depsFor(db, fetcher), USER, {
+      post_id: POST,
+    });
+    // A 429 means "not now", not "not at all": the publish may have been
+    // taken in, so the claim stays on the post.
+    assertEquals(result.status, 202);
+    assertEquals(result.body.status, "results_pending");
+    // The claim is KEPT for the same reason as on a timeout.
+    assertEquals(rpcCallFor(db, RELEASE_RPC), undefined);
+    assertEquals(logged.length, 1);
+    assertEquals(logged[0].includes("answered 429"), true);
+  } finally {
+    console.error = originalError;
+  }
+});
+
+Deno.test("a publishing service that answers 400 is a 502 and the claim is given back", async () => {
+  const db = new FakeSupabase();
+  claimQueued(db);
+  db.queue("platform_posts", {
+    data: [platformResult("row-target", "instagram", ACCOUNT, "failed")],
+    error: null,
+  });
+  db.queueRpc(RELEASE_RPC, { data: true, error: null });
+  const { fetcher } = fakeFetcher([
+    { status: 400, body: { error: "the post cannot be published" } },
+  ]);
+  const logged: string[] = [];
+  const originalError = console.error;
+  console.error = (...args: unknown[]) => {
+    logged.push(args.map(String).join(" "));
+  };
+  try {
+    const result = await retryFailedPost(depsFor(db, fetcher), USER, {
+      post_id: POST,
+    });
+    // A 4xx is a refusal: the service answered and it did not accept the
+    // publish, so nothing was published.
+    assertEquals(result.status, 502);
+    assertEquals(errorCode(result), "RETRY_FAILED");
+    // The post is free again right away.
+    assertEquals(rpcCallFor(db, RELEASE_RPC)?.args, {
+      p_user_id: USER,
+      p_post_id: POST,
+      p_claim_id: CLAIM,
+    });
+    assertEquals(logged.length, 1);
+    assertEquals(logged[0].includes("answered 400"), true);
+  } finally {
+    console.error = originalError;
+  }
+});
+
+Deno.test("a publishing service that refuses with a reason that carries no credential is a 502", async () => {
   const db = new FakeSupabase();
   claimQueued(db);
   db.queue("platform_posts", {
@@ -2677,7 +2785,9 @@ Deno.test("a publishing service that fails is a 502 with a reason that carries n
   db.queueRpc(RELEASE_RPC, { data: true, error: null });
   const { fetcher } = fakeFetcher([
     {
-      status: 500,
+      // A 4xx is a refusal: the service answered and it did not accept the
+      // publish, so the reason it gave is the one the caller is told.
+      status: 422,
       body: { error: "Instagram refused the media (Bearer secret-token-value)" },
     },
   ]);
