@@ -651,6 +651,46 @@ function buildServer(apiKey: string, ownerId: string, grant: ScopeGrant) {
     },
   });
 
+  server.tool("retry_failed_post", {
+    description:
+      "Retry a post that failed to publish on some of its platforms. Only the failed platforms are published again: a platform that already published is never posted a second time. " +
+      "The answer may say 'results_pending', which means the publish was started and the results are not in yet — read them with get_post. " +
+      "Do not retry a post that is being retried from the Postora dashboard at the same time: the two retries are not coordinated yet and could publish the same account twice. Requires confirm: true.",
+    inputSchema: z.object({
+      post_id: z.string().describe("Postora post UUID"),
+      confirm: confirmField,
+    }),
+    handler: async (args) => {
+      const scopeRefusal = await refuseUngranted({ admin }, { userId: ownerId, tool: "retry_failed_post", grant });
+      if (scopeRefusal) return fail(403, scopeRefusal);
+      const refusal = await refuseUnconfirmed({ admin }, { userId: ownerId, tool: "retry_failed_post", confirm: args.confirm });
+      if (refusal) return fail(400, refusal);
+      const r = await callN8n(apiKey, "POST", "/api/v1/posts/retry", { post_id: args.post_id });
+      return r.status >= 400 ? fail(r.status, r.data) : ok(r.data);
+    },
+  });
+
+  server.tool("delete_post", {
+    description:
+      "Delete a published post: it deletes the post from Postora and, where the platform allows it, from the platform (Facebook, Threads, YouTube native, Pinterest, LinkedIn). " +
+      "Instagram, TikTok and other platforms are reported not_supported and stay on the platform. " +
+      "If any platform delete fails, the post and its media stay in Postora; copies already deleted on other platforms stay deleted, and the per-platform results say which. " +
+      "Also permanently deletes the post's media files from the library, including files other posts use. " +
+      "Cannot be undone. Requires confirm: true.",
+    inputSchema: z.object({
+      post_id: z.string().describe("Postora post UUID"),
+      confirm: confirmField,
+    }),
+    handler: async (args) => {
+      const scopeRefusal = await refuseUngranted({ admin }, { userId: ownerId, tool: "delete_post", grant });
+      if (scopeRefusal) return fail(403, scopeRefusal);
+      const refusal = await refuseUnconfirmed({ admin }, { userId: ownerId, tool: "delete_post", confirm: args.confirm });
+      if (refusal) return fail(400, refusal);
+      const r = await callN8n(apiKey, "POST", "/api/v1/posts/delete", { post_id: args.post_id });
+      return r.status >= 400 ? fail(r.status, r.data) : ok(r.data);
+    },
+  });
+
   // ---- Account health ----
   server.tool("check_account_health", {
     description:

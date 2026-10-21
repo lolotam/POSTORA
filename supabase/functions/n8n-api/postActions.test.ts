@@ -3,11 +3,15 @@ import {
   cancelScheduledPost,
   checkAccountHealth,
   computePostingHistogram,
+  deletePost,
   handleCancelScheduledPost,
+  handleDeletePost,
   handleReschedulePost,
+  handleRetryFailedPost,
   handleSuggestBestTimes,
   isBestTimeSuggestion,
   reschedulePost,
+  retryFailedPost,
   suggestBestTimes,
   type PostActionDeps,
 } from "./postActions.ts";
@@ -17,9 +21,27 @@ const NOW_ISO = NOW.toISOString();
 const USER = "11111111-1111-4111-8111-111111111111";
 const POST = "22222222-2222-4222-8222-222222222222";
 const ACCOUNT = "33333333-3333-4333-8333-333333333333";
+const ACCOUNT_TWO = "44444444-4444-4444-8444-444444444444";
+const CLAIM = "55555555-5555-4555-8555-555555555555";
+const MEDIA = "66666666-6666-4666-8666-666666666666";
 const SERVICE_KEY = "service-role-key";
 const SUPABASE_URL = "https://api.postora.cloud";
+// The access token of the test accounts: a fixture value that is not a
+// credential and does not look like one, so a scanner has nothing to guess
+// about.
+const FAKE_ACCESS = "fixture-access";
+// The marker of a leak check: a body that carries it must never reach the
+// answer the caller reads.
+const LEAK_MARKER = "leak-check-marker";
 const SCHEDULED_STATUSES = ["scheduled", "pending"];
+// The two database functions the cancel and the reschedule write through.
+const CANCEL_RPC = "mcp_cancel_scheduled_post";
+const RESCHEDULE_RPC = "mcp_reschedule_post";
+// The two database functions the retry takes and gives back its lease through.
+const CLAIM_RPC = "mcp_claim_post_action";
+const RELEASE_RPC = "mcp_release_post_action";
+// The database function that deletes the post row while the claim is held.
+const DELETE_CLAIMED_RPC = "mcp_delete_claimed_post";
 
 // ── fake Supabase ──────────────────────────────────────────────────────────────
 
@@ -41,6 +63,21 @@ interface RecordedCall {
   filters: Array<[string, ...unknown[]]>;
   /** The select columns for a select, the data object for an insert/update. */
   payload: unknown;
+  /**
+   * The order in which the call was made, counted over every table call and
+   * every RPC. Two calls can therefore be compared: the delete of the post
+   * row and the delete of the media that follows it.
+   */
+  order: number;
+}
+
+// One call to a database function: the name and the arguments it was called
+// with. The writes of the cancel and the reschedule go through one RPC each,
+// so the recorded calls are how a test sees which write actually happened.
+interface RecordedRpc {
+  name: string;
+  args: Record<string, unknown>;
+  order: number;
 }
 
 class FakeBuilder {
@@ -135,7 +172,12 @@ class FakeBuilder {
 
 class FakeSupabase {
   readonly calls: RecordedCall[] = [];
+  readonly rpcCalls: RecordedRpc[] = [];
+  /** The files that were removed from the storage, and when. */
+  readonly storageRemovals: Array<{ bucket: string; paths: string[]; order: number }> = [];
   private readonly queues = new Map<string, FakeResult[]>();
+  private readonly rpcQueues = new Map<string, FakeResult[]>();
+  private counter = 0;
 
   queue(table: string, result: FakeResult): this {
     const list = this.queues.get(table) ?? [];
@@ -144,8 +186,29 @@ class FakeSupabase {
     return this;
   }
 
+  /**
+   * Queues the answer of one database function call. The queue is per
+   * function name, so a test can say what each of the RPCs answers without
+   * caring in which order they are called.
+   */
+  queueRpc(name: string, result: FakeResult): this {
+    const list = this.rpcQueues.get(name) ?? [];
+    list.push(result);
+    this.rpcQueues.set(name, list);
+    return this;
+  }
+
   from(table: string): FakeBuilder {
     return new FakeBuilder(this, table);
+  }
+
+  rpc(name: string, args: Record<string, unknown>): Promise<FakeResult> {
+    this.rpcCalls.push({ name, args, order: this.counter++ });
+    const list = this.rpcQueues.get(name);
+    if (!list || list.length === 0) {
+      throw new Error(`no queued rpc result for ${name}`);
+    }
+    return Promise.resolve(list.shift() as FakeResult);
   }
 
   take(table: string): FakeResult {
@@ -160,9 +223,19 @@ class FakeSupabase {
     return list.shift() as FakeResult;
   }
 
-  record(call: RecordedCall): void {
-    this.calls.push(call);
+  record(call: Omit<RecordedCall, "order">): void {
+    this.calls.push({ ...call, order: this.counter++ });
   }
+
+  /** The storage the media delete removes the files from. */
+  readonly storage = {
+    from: (bucket: string) => ({
+      remove: (paths: string[]) => {
+        this.storageRemovals.push({ bucket, paths, order: this.counter++ });
+        return Promise.resolve({ error: null });
+      },
+    }),
+  };
 }
 
 // ── fake fetcher ───────────────────────────────────────────────────────────────
@@ -246,7 +319,7 @@ function noNetwork(): typeof fetch {
 // opened and nothing is ever enqueued into it, so reading the body waits for
 // an answer that never comes. The stream records that it was cancelled, so a
 // test can tell whether the connection was released after the deadline.
-function stalledBodyFetcher(): {
+function stalledBodyFetcher(status = 200): {
   fetcher: typeof fetch;
   wasCancelled: () => boolean;
 } {
@@ -264,7 +337,7 @@ function stalledBodyFetcher(): {
             state.cancelled = true;
           },
         }),
-        { status: 200, headers: { "Content-Type": "application/json" } },
+        { status, headers: { "Content-Type": "application/json" } },
       ),
     )) as unknown as typeof fetch;
   return { fetcher, wasCancelled: () => state.cancelled };
@@ -337,6 +410,20 @@ function hasFilter(
   );
 }
 
+// The call to one database function, if it was called.
+function rpcCallFor(db: FakeSupabase, name: string): RecordedRpc | undefined {
+  return db.rpcCalls.find((call) => call.name === name);
+}
+
+// PostgREST answers PGRST202 when the function is not in the schema cache: the
+// migration that creates it has not been applied to this database yet.
+function missingRpcError(name: string): NonNullable<FakeResult["error"]> {
+  return {
+    message: `Could not find the function public.${name} in the schema cache`,
+    code: "PGRST202",
+  };
+}
+
 function hasInFilter(
   call: RecordedCall | undefined,
   column: string,
@@ -404,7 +491,7 @@ Deno.test("the cancel read is scoped to the authenticated user", async () => {
     data: { id: POST, status: "scheduled", scheduled_at: "2026-10-22T12:00:00.000Z" },
     error: null,
   });
-  db.queue("posts", { data: [{ id: POST }], error: null });
+  db.queueRpc(CANCEL_RPC, { data: true, error: null });
   const result = await cancelScheduledPost(depsFor(db, noNetwork()), USER, {
     post_id: POST,
   });
@@ -414,36 +501,96 @@ Deno.test("the cancel read is scoped to the authenticated user", async () => {
   assertEquals(hasFilter(read, "eq", "id", POST), true);
 });
 
-Deno.test("a post whose time has come cannot be cancelled", async () => {
+Deno.test("a cancel of a post whose time has come on the edge clock is the database's answer", async () => {
   const db = new FakeSupabase();
+  // The post is overdue on the clock of the edge, but the clock that decides
+  // is the one of the database: it compares the deadline with now() inside
+  // the database, so the edge may not refuse what the database allows.
   db.queue("posts", {
     data: { id: POST, status: "scheduled", scheduled_at: "2026-10-20T12:00:00.000Z" },
     error: null,
   });
+  db.queueRpc(CANCEL_RPC, { data: true, error: null });
+  const result = await cancelScheduledPost(depsFor(db, noNetwork()), USER, {
+    post_id: POST,
+  });
+  assertEquals(result.status, 200);
+  assertEquals(result.body, {
+    success: true,
+    post_id: POST,
+    cancelled: true,
+  });
+  // The write went through the database, where the deadline is compared.
+  assertEquals(rpcCallFor(db, CANCEL_RPC)?.args, { p_user_id: USER, p_post_id: POST });
+  // The function does not delete the row itself.
+  assertEquals(callsFor(db, "posts", "delete").length, 0);
+});
+
+Deno.test("a cancel of a post the database no longer holds as a scheduled post is the not-scheduled refusal", async () => {
+  const db = new FakeSupabase();
+  db.queue("posts", {
+    data: { id: POST, status: "completed", scheduled_at: "2026-10-22T12:00:00.000Z" },
+    error: null,
+  });
+  // The database deleted no row: the post is not a scheduled post any more.
+  db.queueRpc(CANCEL_RPC, { data: false, error: null });
   const result = await cancelScheduledPost(depsFor(db, noNetwork()), USER, {
     post_id: POST,
   });
   assertEquals(result.status, 409);
   assertEquals(errorCode(result), "POST_NOT_SCHEDULED");
+  assertEquals(
+    (result.body.error as { message: string }).message,
+    "Only a scheduled post whose time has not come yet can be cancelled.",
+  );
+  assertEquals(
+    (result.body.error as { details: { status: string } }).details.status,
+    "completed",
+  );
+  // Nothing is deleted: the post is not cancelled either.
   assertEquals(callsFor(db, "posts", "delete").length, 0);
+  // The refusal leaves a durable row behind.
+  assertEquals(callsFor(db, "system_logs", "insert").length, 1);
 });
 
-Deno.test("the cancel delete is a compare-and-set against the scheduler", async () => {
+Deno.test("a cancel falls back to the app-clock refusal while the function is missing", async () => {
+  const db = new FakeSupabase();
+  // The function is not in the database yet: the deadline is read on the
+  // clock of the edge, and the post is overdue there.
+  db.queue("posts", {
+    data: { id: POST, status: "scheduled", scheduled_at: "2026-10-20T12:00:00.000Z" },
+    error: null,
+  });
+  db.queueRpc(CANCEL_RPC, { data: null, error: missingRpcError(CANCEL_RPC) });
+  const result = await cancelScheduledPost(depsFor(db, noNetwork()), USER, {
+    post_id: POST,
+  });
+  assertEquals(result.status, 409);
+  assertEquals(errorCode(result), "POST_NOT_SCHEDULED");
+  // Nothing is deleted: the app clock says the time has come.
+  assertEquals(callsFor(db, "posts", "delete").length, 0);
+  // The refusal leaves a durable row behind.
+  assertEquals(callsFor(db, "system_logs", "insert").length, 1);
+});
+
+Deno.test("the cancel write is one call to the database", async () => {
   const db = new FakeSupabase();
   db.queue("posts", {
     data: { id: POST, status: "scheduled", scheduled_at: "2026-10-22T12:00:00.000Z" },
     error: null,
   });
-  db.queue("posts", { data: [{ id: POST }], error: null });
+  db.queueRpc(CANCEL_RPC, { data: true, error: null });
   const result = await cancelScheduledPost(depsFor(db, noNetwork()), USER, {
     post_id: POST,
   });
   assertEquals(result.status, 200);
-  const removal = callsFor(db, "posts", "delete")[0];
-  assertEquals(hasFilter(removal, "eq", "id", POST), true);
-  assertEquals(hasFilter(removal, "eq", "user_id", USER), true);
-  assertEquals(hasInFilter(removal, "status", SCHEDULED_STATUSES), true);
-  assertEquals(hasFilter(removal, "gt", "scheduled_at", NOW_ISO), true);
+  // The compare-and-set against the scheduler and the deadline live in the
+  // database now: one call, carrying the owner and the post.
+  assertEquals(db.rpcCalls.length, 1);
+  assertEquals(db.rpcCalls[0].name, CANCEL_RPC);
+  assertEquals(db.rpcCalls[0].args, { p_user_id: USER, p_post_id: POST });
+  // The function does not delete the row itself any more.
+  assertEquals(callsFor(db, "posts", "delete").length, 0);
   assertEquals(result.body, {
     success: true,
     post_id: POST,
@@ -451,7 +598,7 @@ Deno.test("the cancel delete is a compare-and-set against the scheduler", async 
   });
 });
 
-Deno.test("the cancel delete is checked against the clock at the moment of the write", async () => {
+Deno.test("a cancel falls back to the app-clock delete while the function is missing", async () => {
   const db = new FakeSupabase();
   // The post is due in an hour, but the request takes two: by the time the
   // delete goes out the post is overdue, and a deadline taken when the request
@@ -461,6 +608,9 @@ Deno.test("the cancel delete is checked against the clock at the moment of the w
     data: { id: POST, status: "scheduled", scheduled_at: "2026-10-21T13:00:00.000Z" },
     error: null,
   });
+  // The function is not in the database yet: the route falls back to the path
+  // it used before, on the clock of the edge.
+  db.queueRpc(CANCEL_RPC, { data: null, error: missingRpcError(CANCEL_RPC) });
   db.queue("posts", { data: [{ id: POST }], error: null });
   const result = await cancelScheduledPost(
     depsFor(db, noNetwork(), advancingClock(NOW, writeTime)),
@@ -480,12 +630,19 @@ Deno.test("a post that changed while it was being cancelled is a 409", async () 
     data: { id: POST, status: "scheduled", scheduled_at: "2026-10-22T12:00:00.000Z" },
     error: null,
   });
-  db.queue("posts", { data: [], error: null });
+  // The database deleted no row: the post is no longer scheduled for the
+  // future, so the scheduler has it.
+  db.queueRpc(CANCEL_RPC, { data: false, error: null });
   const result = await cancelScheduledPost(depsFor(db, noNetwork()), USER, {
     post_id: POST,
   });
   assertEquals(result.status, 409);
   assertEquals(errorCode(result), "POST_STATE_CHANGED");
+  // The refusal leaves a durable row behind.
+  const rows = callsFor(db, "system_logs", "insert");
+  assertEquals(rows.length, 1);
+  const row = rows[0].payload as Record<string, unknown>;
+  assertEquals((row.metadata as { code: string }).code, "POST_STATE_CHANGED");
 });
 
 Deno.test("a cancel of a post that is being published to TikTok is a 409, not a 500", async () => {
@@ -498,7 +655,7 @@ Deno.test("a cancel of a post that is being published to TikTok is a 409, not a 
   // the DETAIL 'TIKTOK_REVIEW_POST_LOCKED' while the post is mid-publish.
   const triggerMessage =
     "This TikTok post is being published right now and can't be deleted. Try again in a few minutes.";
-  db.queue("posts", {
+  db.queueRpc(CANCEL_RPC, {
     data: null,
     error: {
       message: triggerMessage,
@@ -542,7 +699,7 @@ Deno.test("a lock that carries no message of its own is answered with a fallback
   // The lock marker is there, but the database sent no message of its own: the
   // answer still says something, and it does not claim that the refusal is
   // transient.
-  db.queue("posts", {
+  db.queueRpc(CANCEL_RPC, {
     data: null,
     error: {
       message: "",
@@ -569,7 +726,7 @@ Deno.test("a lock whose message is the lock marker itself is answered with a fal
   });
   // The marker arrived in the message instead of the DETAIL: it is an internal
   // token, so it is a lock all the same, but it never reaches the caller.
-  db.queue("posts", {
+  db.queueRpc(CANCEL_RPC, {
     data: null,
     error: {
       message: "TIKTOK_REVIEW_POST_LOCKED",
@@ -598,7 +755,7 @@ Deno.test("a cancel with a padded post id queries the trimmed id", async () => {
     data: { id: POST, status: "scheduled", scheduled_at: "2026-10-22T12:00:00.000Z" },
     error: null,
   });
-  db.queue("posts", { data: [{ id: POST }], error: null });
+  db.queueRpc(CANCEL_RPC, { data: true, error: null });
   const result = await cancelScheduledPost(depsFor(db, noNetwork()), USER, {
     post_id: ` ${POST}\n`,
   });
@@ -607,8 +764,8 @@ Deno.test("a cancel with a padded post id queries the trimmed id", async () => {
   // reaches the query: an untrimmed id is not the uuid the row is stored under.
   const read = callsFor(db, "posts", "select")[0];
   assertEquals(hasFilter(read, "eq", "id", POST), true);
-  const removal = callsFor(db, "posts", "delete")[0];
-  assertEquals(hasFilter(removal, "eq", "id", POST), true);
+  // The write carries the trimmed id too.
+  assertEquals(rpcCallFor(db, CANCEL_RPC)?.args.p_post_id, POST);
   assertEquals(result.body.post_id, POST);
 });
 
@@ -620,11 +777,6 @@ Deno.test("a reschedule refuses a body that does not name a usable time", async 
       name: "a scheduled_at without an explicit offset",
       body: { post_id: POST, scheduled_at: "2026-12-01 10:00" },
       code: "INVALID_SCHEDULED_AT",
-    },
-    {
-      name: "a scheduled_at in the past",
-      body: { post_id: POST, scheduled_at: "2020-01-01T00:00:00Z" },
-      code: "SCHEDULED_AT_IN_PAST",
     },
     {
       // Date.parse reads the thirtieth of February as the second of March, so
@@ -665,6 +817,40 @@ Deno.test("a reschedule refuses a body that does not name a usable time", async 
   }
 });
 
+Deno.test("a reschedule of a post whose time has come on the edge clock is the database's answer", async () => {
+  const db = new FakeSupabase();
+  // The post is overdue on the clock of the edge, but the clock that decides
+  // is the one of the database: it compares the deadline with now() inside
+  // the database, so the edge may not refuse what the database allows.
+  db.queue("posts", {
+    data: {
+      id: POST,
+      status: "scheduled",
+      scheduled_at: "2026-10-20T12:00:00.000Z",
+      metadata: null,
+    },
+    error: null,
+  });
+  db.queueRpc(RESCHEDULE_RPC, {
+    data: {
+      outcome: "updated",
+      post: { id: POST, status: "scheduled", scheduled_at: "2026-12-01T10:00:00.000Z" },
+    },
+    error: null,
+  });
+  const result = await reschedulePost(depsFor(db, noNetwork()), USER, {
+    post_id: POST,
+    scheduled_at: "2026-12-01T10:00:00Z",
+  });
+  assertEquals(result.status, 200);
+  const body = result.body as { post: { scheduled_at: string } };
+  assertEquals(body.post.scheduled_at, "2026-12-01T10:00:00.000Z");
+  // The move went through the database, where the deadline is compared.
+  assertEquals(rpcCallFor(db, RESCHEDULE_RPC)?.args.p_scheduled_at, "2026-12-01T10:00:00.000Z");
+  // The function does not update the row itself any more.
+  assertEquals(callsFor(db, "posts", "update").length, 0);
+});
+
 Deno.test("a reschedule accepts an instant that has a real calendar date and an offset", async () => {
   const db = new FakeSupabase();
   db.queue("posts", {
@@ -676,8 +862,11 @@ Deno.test("a reschedule accepts an instant that has a real calendar date and an 
     },
     error: null,
   });
-  db.queue("posts", {
-    data: [{ id: POST, status: "scheduled", scheduled_at: "2027-01-01T04:30:00.000Z" }],
+  db.queueRpc(RESCHEDULE_RPC, {
+    data: {
+      outcome: "updated",
+      post: { id: POST, status: "scheduled", scheduled_at: "2027-01-01T04:30:00.000Z" },
+    },
     error: null,
   });
 
@@ -688,8 +877,10 @@ Deno.test("a reschedule accepts an instant that has a real calendar date and an 
     scheduled_at: "2026-12-31T23:30:00-05:00",
   });
   assertEquals(result.status, 200);
-  const update = callsFor(db, "posts", "update")[0];
-  assertEquals(update.payload, { scheduled_at: "2027-01-01T04:30:00.000Z" });
+  const args = rpcCallFor(db, RESCHEDULE_RPC)?.args ?? {};
+  assertEquals(args.p_scheduled_at, "2027-01-01T04:30:00.000Z");
+  assertEquals(args.p_user_id, USER);
+  assertEquals(args.p_post_id, POST);
 });
 
 Deno.test("a reschedule moves the instant and writes nothing else", async () => {
@@ -703,8 +894,11 @@ Deno.test("a reschedule moves the instant and writes nothing else", async () => 
     },
     error: null,
   });
-  db.queue("posts", {
-    data: [{ id: POST, status: "scheduled", scheduled_at: "2026-12-01T10:00:00.000Z" }],
+  db.queueRpc(RESCHEDULE_RPC, {
+    data: {
+      outcome: "updated",
+      post: { id: POST, status: "scheduled", scheduled_at: "2026-12-01T10:00:00.000Z" },
+    },
     error: null,
   });
   // A caller that still sends a timezone is accepted: the timezone is a label
@@ -715,20 +909,134 @@ Deno.test("a reschedule moves the instant and writes nothing else", async () => 
     timezone: "America/New_York",
   });
   assertEquals(result.status, 200);
-  const update = callsFor(db, "posts", "update")[0];
-  // The metadata is not rebuilt from the earlier read: that would overwrite a
-  // dashboard edit that landed in the meantime.
-  assertEquals(update.payload, { scheduled_at: "2026-12-01T10:00:00.000Z" });
-  assertEquals("metadata" in (update.payload as Record<string, unknown>), false);
-  assertEquals(hasFilter(update, "eq", "user_id", USER), true);
-  assertEquals(hasInFilter(update, "status", SCHEDULED_STATUSES), true);
-  assertEquals(hasFilter(update, "gt", "scheduled_at", NOW_ISO), true);
+  const args = rpcCallFor(db, RESCHEDULE_RPC)?.args ?? {};
+  // Only the instant is written: the metadata is not rebuilt from the earlier
+  // read, which would overwrite a dashboard edit that landed in the meantime.
+  assertEquals(args.p_scheduled_at, "2026-12-01T10:00:00.000Z");
+  assertEquals("metadata" in args, false);
+  // The function does not update the row itself any more.
+  assertEquals(callsFor(db, "posts", "update").length, 0);
   const body = result.body as { post: { scheduled_at: string }; previous_scheduled_at: string };
   assertEquals(body.post.scheduled_at, "2026-12-01T10:00:00.000Z");
   assertEquals(body.previous_scheduled_at, "2026-10-22T12:00:00.000Z");
 });
 
-Deno.test("a reschedule whose new time has come while the post was read is refused", async () => {
+Deno.test("a reschedule whose new time has come by the time the database writes is refused", async () => {
+  const db = new FakeSupabase();
+  // The new time was five minutes away when the request started, and the
+  // database clock says it is in the past now: the post may not be moved to an
+  // instant that has already come.
+  db.queue("posts", {
+    data: {
+      id: POST,
+      status: "scheduled",
+      scheduled_at: "2026-10-22T12:00:00.000Z",
+      metadata: null,
+    },
+    error: null,
+  });
+  db.queueRpc(RESCHEDULE_RPC, { data: { outcome: "in_past" }, error: null });
+  const result = await reschedulePost(depsFor(db, noNetwork()), USER, {
+    post_id: POST,
+    scheduled_at: "2026-10-21T12:05:00.000Z",
+  });
+  assertEquals(result.status, 400);
+  assertEquals(errorCode(result), "SCHEDULED_AT_IN_PAST");
+  // The post was not moved: an instant that has already come cannot be
+  // scheduled.
+  assertEquals(callsFor(db, "posts", "update").length, 0);
+  // The refusal leaves a durable row behind.
+  assertEquals(callsFor(db, "system_logs", "insert").length, 1);
+});
+
+Deno.test("a reschedule of a post that is no longer scheduled for the future is a 409", async () => {
+  const db = new FakeSupabase();
+  db.queue("posts", {
+    data: {
+      id: POST,
+      status: "scheduled",
+      scheduled_at: "2026-10-22T12:00:00.000Z",
+      metadata: null,
+    },
+    error: null,
+  });
+  // The database moved no row: the post is not a scheduled post in the future
+  // any more, so the scheduler has it.
+  db.queueRpc(RESCHEDULE_RPC, { data: { outcome: "unchanged" }, error: null });
+  const result = await reschedulePost(depsFor(db, noNetwork()), USER, {
+    post_id: POST,
+    scheduled_at: "2026-12-01T10:00:00Z",
+  });
+  assertEquals(result.status, 409);
+  assertEquals(errorCode(result), "POST_STATE_CHANGED");
+  assertEquals(callsFor(db, "posts", "update").length, 0);
+});
+
+Deno.test("a reschedule of a post that is not a scheduled post any more is the not-scheduled refusal", async () => {
+  const db = new FakeSupabase();
+  db.queue("posts", {
+    data: {
+      id: POST,
+      status: "completed",
+      scheduled_at: "2026-10-22T12:00:00.000Z",
+      metadata: null,
+    },
+    error: null,
+  });
+  // The database moved no row: the post is not a scheduled post any more, so
+  // the answer comes from the post that was read.
+  db.queueRpc(RESCHEDULE_RPC, { data: { outcome: "unchanged" }, error: null });
+  const result = await reschedulePost(depsFor(db, noNetwork()), USER, {
+    post_id: POST,
+    scheduled_at: "2026-12-01T10:00:00Z",
+  });
+  assertEquals(result.status, 409);
+  assertEquals(errorCode(result), "POST_NOT_SCHEDULED");
+  assertEquals(
+    (result.body.error as { message: string }).message,
+    "Only a scheduled post whose time has not come yet can be rescheduled.",
+  );
+  // The post was not moved.
+  assertEquals(callsFor(db, "posts", "update").length, 0);
+  // The refusal leaves a durable row behind.
+  assertEquals(callsFor(db, "system_logs", "insert").length, 1);
+});
+
+Deno.test("a reschedule falls back to the app-clock update while the function is missing", async () => {
+  const db = new FakeSupabase();
+  const writeTime = new Date("2026-10-21T12:10:00.000Z");
+  db.queue("posts", {
+    data: {
+      id: POST,
+      status: "scheduled",
+      scheduled_at: "2026-10-22T12:00:00.000Z",
+      metadata: null,
+    },
+    error: null,
+  });
+  // The function is not in the database yet: the route falls back to the path
+  // it used before, on the clock of the edge.
+  db.queueRpc(RESCHEDULE_RPC, { data: null, error: missingRpcError(RESCHEDULE_RPC) });
+  db.queue("posts", {
+    data: [{ id: POST, status: "scheduled", scheduled_at: "2026-12-01T10:00:00.000Z" }],
+    error: null,
+  });
+  const result = await reschedulePost(
+    depsFor(db, noNetwork(), advancingClock(NOW, writeTime)),
+    USER,
+    { post_id: POST, scheduled_at: "2026-12-01T10:00:00Z" },
+  );
+  assertEquals(result.status, 200);
+  // The old path is used: the update is still compared with the clock of the
+  // write, and it is still scoped to the owner and to a scheduled post.
+  const update = callsFor(db, "posts", "update")[0];
+  assertEquals(update.payload, { scheduled_at: "2026-12-01T10:00:00.000Z" });
+  assertEquals(hasFilter(update, "eq", "user_id", USER), true);
+  assertEquals(hasInFilter(update, "status", SCHEDULED_STATUSES), true);
+  assertEquals(hasFilter(update, "gt", "scheduled_at", writeTime.toISOString()), true);
+});
+
+Deno.test("a reschedule falls back to the app clock and refuses a time that has come", async () => {
   const db = new FakeSupabase();
   // The new time is five minutes away when the request starts and the write
   // goes out ten minutes later: by then the instant asked for is already past,
@@ -743,6 +1051,7 @@ Deno.test("a reschedule whose new time has come while the post was read is refus
     },
     error: null,
   });
+  db.queueRpc(RESCHEDULE_RPC, { data: null, error: missingRpcError(RESCHEDULE_RPC) });
   const result = await reschedulePost(
     depsFor(db, noNetwork(), advancingClock(NOW, writeTime)),
     USER,
@@ -750,8 +1059,31 @@ Deno.test("a reschedule whose new time has come while the post was read is refus
   );
   assertEquals(result.status, 400);
   assertEquals(errorCode(result), "SCHEDULED_AT_IN_PAST");
-  // The post was not moved: an instant that has already come cannot be
-  // scheduled.
+  // The post was not moved.
+  assertEquals(callsFor(db, "posts", "update").length, 0);
+});
+
+Deno.test("a reschedule falls back to the app-clock refusal while the function is missing", async () => {
+  const db = new FakeSupabase();
+  // The function is not in the database yet: the deadline is read on the
+  // clock of the edge, and the post is overdue there.
+  db.queue("posts", {
+    data: {
+      id: POST,
+      status: "scheduled",
+      scheduled_at: "2026-10-20T12:00:00.000Z",
+      metadata: null,
+    },
+    error: null,
+  });
+  db.queueRpc(RESCHEDULE_RPC, { data: null, error: missingRpcError(RESCHEDULE_RPC) });
+  const result = await reschedulePost(depsFor(db, noNetwork()), USER, {
+    post_id: POST,
+    scheduled_at: "2026-12-01T10:00:00Z",
+  });
+  assertEquals(result.status, 409);
+  assertEquals(errorCode(result), "POST_NOT_SCHEDULED");
+  // The post was not moved.
   assertEquals(callsFor(db, "posts", "update").length, 0);
   // The refusal leaves a durable row behind.
   assertEquals(callsFor(db, "system_logs", "insert").length, 1);
@@ -782,6 +1114,7 @@ Deno.test("a post that carries a TikTok review consent cannot be rescheduled", a
   // The post was not moved: process-post would refuse to publish it at an
   // instant the consent does not cover.
   assertEquals(callsFor(db, "posts", "update").length, 0);
+  assertEquals(db.rpcCalls.length, 0);
 });
 
 Deno.test("a reschedule of a post that is being published to TikTok is a 409, not a 500", async () => {
@@ -800,7 +1133,7 @@ Deno.test("a reschedule of a post that is being published to TikTok is a 409, no
   // TikTok, so this refusal is permanent and not a retry in a few minutes.
   const triggerMessage =
     "This TikTok post has already gone to TikTok, so its time, account and content can't change. To post again, start a new draft in TikTok review.";
-  db.queue("posts", {
+  db.queueRpc(RESCHEDULE_RPC, {
     data: null,
     error: {
       message: triggerMessage,
@@ -848,8 +1181,11 @@ Deno.test("a reschedule with a padded post id queries the trimmed id", async () 
     },
     error: null,
   });
-  db.queue("posts", {
-    data: [{ id: POST, status: "scheduled", scheduled_at: "2026-12-01T10:00:00.000Z" }],
+  db.queueRpc(RESCHEDULE_RPC, {
+    data: {
+      outcome: "updated",
+      post: { id: POST, status: "scheduled", scheduled_at: "2026-12-01T10:00:00.000Z" },
+    },
     error: null,
   });
   const result = await reschedulePost(depsFor(db, noNetwork()), USER, {
@@ -861,8 +1197,8 @@ Deno.test("a reschedule with a padded post id queries the trimmed id", async () 
   // reaches the query: an untrimmed id is not the uuid the row is stored under.
   const read = callsFor(db, "posts", "select")[0];
   assertEquals(hasFilter(read, "eq", "id", POST), true);
-  const update = callsFor(db, "posts", "update")[0];
-  assertEquals(hasFilter(update, "eq", "id", POST), true);
+  // The write carries the trimmed id too.
+  assertEquals(rpcCallFor(db, RESCHEDULE_RPC)?.args.p_post_id, POST);
 });
 
 // ── accounts/health ────────────────────────────────────────────────────────────
@@ -2101,4 +2437,1190 @@ Deno.test("a body that cannot be parsed leaves a durable refusal row", async () 
     code: "INVALID_REQUEST",
     status: 400,
   });
+});
+
+// ── posts/retry ───────────────────────────────────────────────────────────────
+
+// A fetcher whose request never comes back: the headers and the body are both
+// late, so only the deadline can end the call. The pending promise is never
+// settled, so the request is still running when the deadline fires.
+function hangingFetcher(): typeof fetch {
+  return (() => new Promise<Response>(() => {})) as unknown as typeof fetch;
+}
+
+// The rows of a post, as they are read: one failed result per account, and
+// the results of the accounts that already went out.
+function platformResult(
+  id: string,
+  platform: string | null,
+  accountId: string | null,
+  status: string,
+): Record<string, unknown> {
+  return {
+    id,
+    platform,
+    social_account_id: accountId,
+    status,
+    error_message: status === "failed" ? "the provider refused the post" : null,
+  };
+}
+
+// The claim that says the post may be retried.
+function claimQueued(db: FakeSupabase, status = "failed"): void {
+  db.queueRpc(CLAIM_RPC, {
+    data: { outcome: "claimed", claim_id: CLAIM, status },
+    error: null,
+  });
+}
+
+Deno.test("a retry with a non-uuid post id is refused before anything is claimed", async () => {
+  const db = new FakeSupabase();
+  const result = await retryFailedPost(depsFor(db, noNetwork()), USER, {
+    post_id: "not-a-uuid",
+  });
+  assertEquals(result.status, 400);
+  assertEquals(errorCode(result), "INVALID_POST_ID");
+  // Nothing is claimed and nothing is published: the refusal only writes its
+  // own row.
+  assertEquals(db.rpcCalls.length, 0);
+  assertEquals(callsFor(db, "system_logs", "insert").length, 1);
+});
+
+Deno.test("a retry whose claim function is not in the database yet is a 503 and publishes nothing", async () => {
+  const db = new FakeSupabase();
+  // The migration that creates the claim has not been applied to this
+  // database yet: PostgREST answers PGRST202.
+  db.queueRpc(CLAIM_RPC, { data: null, error: missingRpcError(CLAIM_RPC) });
+  const { calls, fetcher } = fakeFetcher([]);
+  const logged: string[] = [];
+  const originalError = console.error;
+  console.error = (...args: unknown[]) => {
+    logged.push(args.map(String).join(" "));
+  };
+  try {
+    const result = await retryFailedPost(depsFor(db, fetcher), USER, {
+      post_id: POST,
+    });
+    // An outage is not a refusal: the caller's request is fine, the database
+    // is not ready for it.
+    assertEquals(result.status, 503);
+    assertEquals(errorCode(result), "FEATURE_NOT_READY");
+    assertEquals(
+      (result.body.error as { message: string }).message,
+      "Retrying a post needs a database update that has not been applied yet.",
+    );
+    // Nothing is published: the claim never came, so the publish never goes.
+    assertEquals(calls.length, 0);
+    // The outage leaves a line behind, and not a refusal row: it is not a
+    // decision about the caller's request.
+    assertEquals(logged.length, 1);
+    assertEquals(logged[0].includes("is not in the database yet"), true);
+    assertEquals(callsFor(db, "system_logs", "insert").length, 0);
+  } finally {
+    console.error = originalError;
+  }
+});
+
+Deno.test("a retry of a post that does not exist is a 404 and leaves a durable row", async () => {
+  const db = new FakeSupabase();
+  db.queueRpc(CLAIM_RPC, { data: { outcome: "not_found" }, error: null });
+  const { calls, fetcher } = fakeFetcher([]);
+  const result = await retryFailedPost(depsFor(db, fetcher), USER, {
+    post_id: POST,
+  });
+  assertEquals(result.status, 404);
+  assertEquals(errorCode(result), "POST_NOT_FOUND");
+  // Nothing is published and no claim is given back: there was no claim.
+  assertEquals(calls.length, 0);
+  assertEquals(rpcCallFor(db, RELEASE_RPC), undefined);
+  const rows = callsFor(db, "system_logs", "insert");
+  assertEquals(rows.length, 1);
+  const row = rows[0].payload as Record<string, unknown>;
+  assertEquals(row.message, "posts/retry refused: POST_NOT_FOUND");
+});
+
+Deno.test("a retry of a post another action is working on is a 409", async () => {
+  const db = new FakeSupabase();
+  db.queueRpc(CLAIM_RPC, { data: { outcome: "busy" }, error: null });
+  const { calls, fetcher } = fakeFetcher([]);
+  const result = await retryFailedPost(depsFor(db, fetcher), USER, {
+    post_id: POST,
+  });
+  assertEquals(result.status, 409);
+  assertEquals(errorCode(result), "POST_BUSY");
+  assertEquals(
+    (result.body.error as { message: string }).message,
+    "Another action is running on this post. Try again in a few minutes.",
+  );
+  // Nothing is published and no claim is given back: there was no claim.
+  assertEquals(calls.length, 0);
+  assertEquals(rpcCallFor(db, RELEASE_RPC), undefined);
+  // The refusal leaves a durable row behind.
+  assertEquals(callsFor(db, "system_logs", "insert").length, 1);
+});
+
+Deno.test("a retry of a post that did not finish publishing is a 409 and names its status", async () => {
+  const db = new FakeSupabase();
+  db.queueRpc(CLAIM_RPC, {
+    data: { outcome: "bad_status", status: "scheduled" },
+    error: null,
+  });
+  const { calls, fetcher } = fakeFetcher([]);
+  const result = await retryFailedPost(depsFor(db, fetcher), USER, {
+    post_id: POST,
+  });
+  assertEquals(result.status, 409);
+  assertEquals(errorCode(result), "POST_NOT_RETRYABLE");
+  assertEquals(
+    (result.body.error as { message: string }).message,
+    "Only a post that finished publishing (completed or failed) can be retried.",
+  );
+  assertEquals(
+    (result.body.error as { details: { status: string } }).details.status,
+    "scheduled",
+  );
+  // Nothing is published and no claim is given back: there was no claim.
+  assertEquals(calls.length, 0);
+  assertEquals(rpcCallFor(db, RELEASE_RPC), undefined);
+  // The refusal leaves a durable row behind.
+  assertEquals(callsFor(db, "system_logs", "insert").length, 1);
+});
+
+Deno.test("a post with no failed result left is refused and the claim is given back", async () => {
+  const db = new FakeSupabase();
+  claimQueued(db, "completed");
+  db.queue("platform_posts", {
+    data: [platformResult("row-success", "instagram", ACCOUNT, "success")],
+    error: null,
+  });
+  db.queueRpc(RELEASE_RPC, { data: true, error: null });
+  const { calls, fetcher } = fakeFetcher([]);
+  const result = await retryFailedPost(depsFor(db, fetcher), USER, {
+    post_id: POST,
+  });
+  assertEquals(result.status, 409);
+  assertEquals(errorCode(result), "NO_FAILED_PLATFORMS");
+  // Nothing is published: there is no failed result to publish again.
+  assertEquals(calls.length, 0);
+  // The claim is given back, so the next call is not told the post is busy.
+  assertEquals(rpcCallFor(db, RELEASE_RPC)?.args, {
+    p_user_id: USER,
+    p_post_id: POST,
+    p_claim_id: CLAIM,
+  });
+  // The refusal leaves a durable row behind.
+  assertEquals(callsFor(db, "system_logs", "insert").length, 1);
+});
+
+Deno.test("a failed result of an account that already published is not published again", async () => {
+  const db = new FakeSupabase();
+  claimQueued(db);
+  db.queue("platform_posts", {
+    data: [
+      platformResult("row-failed", "tiktok", ACCOUNT_TWO, "failed"),
+      platformResult("row-published", "tiktok", ACCOUNT_TWO, "success"),
+    ],
+    error: null,
+  });
+  db.queueRpc(RELEASE_RPC, { data: true, error: null });
+  const { calls, fetcher } = fakeFetcher([]);
+  const result = await retryFailedPost(depsFor(db, fetcher), USER, {
+    post_id: POST,
+  });
+  assertEquals(result.status, 409);
+  assertEquals(errorCode(result), "NO_FAILED_PLATFORMS");
+  // The account went out already, so the post is not published a second time.
+  assertEquals(calls.length, 0);
+});
+
+Deno.test("a retry publishes only the failed accounts and clears the rows it replaced", async () => {
+  const db = new FakeSupabase();
+  claimQueued(db);
+  db.queue("platform_posts", {
+    data: [
+      platformResult("row-target", "instagram", ACCOUNT, "failed"),
+      // The account of this failed result already published: it is skipped.
+      platformResult("row-published", "tiktok", ACCOUNT_TWO, "failed"),
+      platformResult("row-published-ok", "tiktok", ACCOUNT_TWO, "success"),
+      // A failed result without an account: there is nothing to publish to.
+      platformResult("row-no-account", "facebook", null, "failed"),
+    ],
+    error: null,
+  });
+  // The rows after the publish: a new row for the retried account.
+  db.queue("platform_posts", {
+    data: [
+      platformResult("row-target", "instagram", ACCOUNT, "failed"),
+      platformResult("row-new", "instagram", ACCOUNT, "success"),
+    ],
+    error: null,
+  });
+  // The delete of the row the publish replaced.
+  db.queue("platform_posts", { data: null, error: null });
+  db.queueRpc(RELEASE_RPC, { data: true, error: null });
+
+  const { calls, fetcher } = fakeFetcher([{ status: 200, body: { success: true } }]);
+  const result = await retryFailedPost(depsFor(db, fetcher), USER, {
+    post_id: POST,
+  });
+
+  assertEquals(result.status, 200);
+  // The publish went to the publishing service with the service role.
+  assertEquals(calls.length, 1);
+  assertEquals(calls[0].url, `${SUPABASE_URL}/functions/v1/process-post`);
+  assertEquals(calls[0].method, "POST");
+  assertEquals(calls[0].headers.Authorization, `Bearer ${SERVICE_KEY}`);
+  const sent = JSON.parse(String(calls[0].body)) as Record<string, unknown>;
+  assertEquals(sent.post_id, POST);
+  // Only the failed account is published again, and only on its platform.
+  assertEquals(sent.platforms, ["instagram"]);
+  assertEquals(sent.account_ids, [ACCOUNT]);
+  // The post finished, it is not scheduled: the publishing service must not
+  // be asked to match a scheduled instant it does not have.
+  assertEquals("expected_scheduled_at" in sent, false);
+
+  // The failed row the publish replaced is removed.
+  const removals = callsFor(db, "platform_posts", "delete");
+  assertEquals(removals.length, 1);
+  assertEquals(hasFilter(removals[0], "eq", "post_id", POST), true);
+  assertEquals(hasInFilter(removals[0], "id", ["row-target"]), true);
+  // The row of the account that already published is left alone.
+  assertEquals(hasInFilter(removals[0], "id", ["row-published"]), false);
+
+  // The claim is given back now that the retry is over.
+  assertEquals(rpcCallFor(db, RELEASE_RPC)?.args, {
+    p_user_id: USER,
+    p_post_id: POST,
+    p_claim_id: CLAIM,
+  });
+
+  // The answer names what was published again and what was left alone.
+  assertEquals(result.body.retried, [{ account_id: ACCOUNT, platform: "instagram" }]);
+  const skipped = result.body.skipped as Array<{
+    account_id: string | null;
+    platform: string | null;
+    reason: string;
+  }>;
+  assertEquals(skipped.length, 2);
+  const publishedSkip = skipped.find((skip) => skip.account_id === ACCOUNT_TWO);
+  assertEquals(publishedSkip !== undefined, true);
+  assertEquals((publishedSkip?.reason ?? "").includes("already published"), true);
+  const noAccountSkip = skipped.find((skip) => skip.account_id === null);
+  assertEquals(noAccountSkip !== undefined, true);
+  assertEquals((noAccountSkip?.reason ?? "").includes("no social account"), true);
+
+  // The new row is the result of the retry.
+  const results = result.body.results as Array<{ id: string; status: string }>;
+  assertEquals(results.length, 1);
+  assertEquals(results[0].id, "row-new");
+  assertEquals(results[0].status, "success");
+});
+
+Deno.test("a publish that does not answer in time is answered 202 and keeps the claim", async () => {
+  const db = new FakeSupabase();
+  claimQueued(db);
+  db.queue("platform_posts", {
+    data: [platformResult("row-target", "instagram", ACCOUNT, "failed")],
+    error: null,
+  });
+  const logged: string[] = [];
+  const originalError = console.error;
+  console.error = (...args: unknown[]) => {
+    logged.push(args.map(String).join(" "));
+  };
+  try {
+    const result = await retryFailedPost(
+      { ...depsFor(db, hangingFetcher()), retryDispatchTimeoutMs: 20 },
+      USER,
+      { post_id: POST },
+    );
+    // The publish was sent; its answer did not come back in time.
+    assertEquals(result.status, 202);
+    assertEquals(result.body.status, "results_pending");
+    assertEquals(result.body.retried, [{
+      account_id: ACCOUNT,
+      platform: "instagram",
+    }]);
+    // The claim is KEPT: releasing it would let a second retry take the post
+    // and publish the same account again while the first publish may still be
+    // running. The lease runs out on its own.
+    assertEquals(rpcCallFor(db, RELEASE_RPC), undefined);
+    assertEquals(logged.length, 1);
+    assertEquals(logged[0].includes("did not answer"), true);
+  } finally {
+    console.error = originalError;
+  }
+});
+
+Deno.test("a publishing service that cannot be reached is answered 202 and keeps the claim", async () => {
+  const db = new FakeSupabase();
+  claimQueued(db);
+  db.queue("platform_posts", {
+    data: [platformResult("row-target", "instagram", ACCOUNT, "failed")],
+    error: null,
+  });
+  const { fetcher } = fakeFetcher([{ reject: new Error("connection refused") }]);
+  const logged: string[] = [];
+  const originalError = console.error;
+  console.error = (...args: unknown[]) => {
+    logged.push(args.map(String).join(" "));
+  };
+  try {
+    const result = await retryFailedPost(depsFor(db, fetcher), USER, {
+      post_id: POST,
+    });
+    assertEquals(result.status, 202);
+    assertEquals(result.body.status, "results_pending");
+    // The claim is kept for the same reason as on a timeout.
+    assertEquals(rpcCallFor(db, RELEASE_RPC), undefined);
+    assertEquals(logged.length, 1);
+    assertEquals(logged[0].includes("could not be reached"), true);
+  } finally {
+    console.error = originalError;
+  }
+});
+
+Deno.test("a publishing service that refuses the publish is a 502 and the claim is given back", async () => {
+  const db = new FakeSupabase();
+  claimQueued(db);
+  db.queue("platform_posts", {
+    data: [platformResult("row-target", "instagram", ACCOUNT, "failed")],
+    error: null,
+  });
+  db.queueRpc(RELEASE_RPC, { data: true, error: null });
+  const { fetcher } = fakeFetcher([
+    { status: 403, body: { error: "Forbidden" } },
+  ]);
+  const logged: string[] = [];
+  const originalError = console.error;
+  console.error = (...args: unknown[]) => {
+    logged.push(args.map(String).join(" "));
+  };
+  try {
+    const { result, logged: warned } = await withCapturedWarn(() =>
+      retryFailedPost(depsFor(db, fetcher), USER, {
+        post_id: POST,
+      })
+    );
+    assertEquals(result.status, 502);
+    assertEquals(errorCode(result), "RETRY_FAILED");
+    // Nothing was published, so the post is free again right away.
+    assertEquals(rpcCallFor(db, RELEASE_RPC)?.args, {
+      p_user_id: USER,
+      p_post_id: POST,
+      p_claim_id: CLAIM,
+    });
+    assertEquals(logged.length, 1);
+    assertEquals(logged[0].includes("answered 403"), true);
+    // The refusal leaves a durable row behind, like every other refusal.
+    const rows = callsFor(db, "system_logs", "insert");
+    assertEquals(rows.length, 1);
+    const row = rows[0].payload as Record<string, unknown>;
+    assertEquals((row.metadata as { code: string }).code, "RETRY_FAILED");
+    // The refusal leaves a line behind that names the route and the post.
+    assertEquals(
+      warned.some((line) => line.includes("posts/retry") && line.includes(POST)),
+      true,
+    );
+  } finally {
+    console.error = originalError;
+  }
+});
+
+Deno.test("a publishing service that answers 503 keeps the claim and answers 202", async () => {
+  const db = new FakeSupabase();
+  claimQueued(db);
+  db.queue("platform_posts", {
+    data: [platformResult("row-target", "instagram", ACCOUNT, "failed")],
+    error: null,
+  });
+  const { fetcher } = fakeFetcher([
+    { status: 503, body: { error: "the publishing service is unavailable" } },
+  ]);
+  const logged: string[] = [];
+  const originalError = console.error;
+  console.error = (...args: unknown[]) => {
+    logged.push(args.map(String).join(" "));
+  };
+  try {
+    const result = await retryFailedPost(depsFor(db, fetcher), USER, {
+      post_id: POST,
+    });
+    // A 503 says nothing about whether the publish was accepted: the gateway
+    // in front of the publishing service may have lost the answer while the
+    // publish was still going on.
+    assertEquals(result.status, 202);
+    assertEquals(result.body.status, "results_pending");
+    assertEquals(result.body.retried, [{
+      account_id: ACCOUNT,
+      platform: "instagram",
+    }]);
+    // The claim is KEPT: releasing it would let a second retry take the post
+    // and publish the same account again while the first publish may still be
+    // running. The lease runs out on its own.
+    assertEquals(rpcCallFor(db, RELEASE_RPC), undefined);
+    assertEquals(logged.length, 1);
+    assertEquals(logged[0].includes("answered 503"), true);
+  } finally {
+    console.error = originalError;
+  }
+});
+
+Deno.test("a publishing service that answers 429 keeps the claim and answers 202", async () => {
+  const db = new FakeSupabase();
+  claimQueued(db);
+  db.queue("platform_posts", {
+    data: [platformResult("row-target", "instagram", ACCOUNT, "failed")],
+    error: null,
+  });
+  const { fetcher } = fakeFetcher([
+    { status: 429, body: { error: "too many requests" } },
+  ]);
+  const logged: string[] = [];
+  const originalError = console.error;
+  console.error = (...args: unknown[]) => {
+    logged.push(args.map(String).join(" "));
+  };
+  try {
+    const result = await retryFailedPost(depsFor(db, fetcher), USER, {
+      post_id: POST,
+    });
+    // A 429 means "not now", not "not at all": the publish may have been
+    // taken in, so the claim stays on the post.
+    assertEquals(result.status, 202);
+    assertEquals(result.body.status, "results_pending");
+    // The claim is KEPT for the same reason as on a timeout.
+    assertEquals(rpcCallFor(db, RELEASE_RPC), undefined);
+    assertEquals(logged.length, 1);
+    assertEquals(logged[0].includes("answered 429"), true);
+  } finally {
+    console.error = originalError;
+  }
+});
+
+Deno.test("a publishing service that answers 400 is a 502 and the claim is given back", async () => {
+  const db = new FakeSupabase();
+  claimQueued(db);
+  db.queue("platform_posts", {
+    data: [platformResult("row-target", "instagram", ACCOUNT, "failed")],
+    error: null,
+  });
+  db.queueRpc(RELEASE_RPC, { data: true, error: null });
+  const { fetcher } = fakeFetcher([
+    { status: 400, body: { error: "the post cannot be published" } },
+  ]);
+  const logged: string[] = [];
+  const originalError = console.error;
+  console.error = (...args: unknown[]) => {
+    logged.push(args.map(String).join(" "));
+  };
+  try {
+    const { result, logged: warned } = await withCapturedWarn(() =>
+      retryFailedPost(depsFor(db, fetcher), USER, {
+        post_id: POST,
+      })
+    );
+    // A 4xx is a refusal: the service answered and it did not accept the
+    // publish, so nothing was published.
+    assertEquals(result.status, 502);
+    assertEquals(errorCode(result), "RETRY_FAILED");
+    // The post is free again right away.
+    assertEquals(rpcCallFor(db, RELEASE_RPC)?.args, {
+      p_user_id: USER,
+      p_post_id: POST,
+      p_claim_id: CLAIM,
+    });
+    assertEquals(logged.length, 1);
+    assertEquals(logged[0].includes("answered 400"), true);
+    // The refusal leaves a durable row behind, like every other refusal: the
+    // publishing service refused the publish for good, and a refusal nobody
+    // watched is a refusal nobody can explain later. The row carries the
+    // route, the code, the status and the post id, and nothing else.
+    const rows = callsFor(db, "system_logs", "insert");
+    assertEquals(rows.length, 1);
+    const row = rows[0].payload as Record<string, unknown>;
+    assertEquals(row.message, "posts/retry refused: RETRY_FAILED");
+    assertEquals(row.metadata, {
+      route: "posts/retry",
+      code: "RETRY_FAILED",
+      status: 502,
+      post_id: POST,
+    });
+    // The refusal leaves a line behind that names the route and the post.
+    assertEquals(
+      warned.some((line) => line.includes("posts/retry") && line.includes(POST)),
+      true,
+    );
+  } finally {
+    console.error = originalError;
+  }
+});
+
+Deno.test("a publishing service that refuses with a reason that carries no credential is a 502", async () => {
+  const db = new FakeSupabase();
+  claimQueued(db);
+  db.queue("platform_posts", {
+    data: [platformResult("row-target", "instagram", ACCOUNT, "failed")],
+    error: null,
+  });
+  db.queueRpc(RELEASE_RPC, { data: true, error: null });
+  const { fetcher } = fakeFetcher([
+    {
+      // A 4xx is a refusal: the service answered and it did not accept the
+      // publish, so the reason it gave is the one the caller is told.
+      status: 422,
+      body: { error: `Instagram refused the media (Bearer ${LEAK_MARKER})` },
+    },
+  ]);
+  const result = await retryFailedPost(depsFor(db, fetcher), USER, {
+    post_id: POST,
+  });
+  assertEquals(result.status, 502);
+  assertEquals(errorCode(result), "RETRY_FAILED");
+  // The reason is not echoed: it carries the shape of a credential.
+  const details = (result.body.error as { details?: { reason?: string } }).details;
+  assertEquals(details === undefined || details.reason === undefined, true);
+  assertEquals(JSON.stringify(result.body).includes(LEAK_MARKER), false);
+});
+
+Deno.test("a publishing service whose refusal body never arrives is a 502 without a reason", async () => {
+  const db = new FakeSupabase();
+  claimQueued(db);
+  db.queue("platform_posts", {
+    data: [platformResult("row-target", "instagram", ACCOUNT, "failed")],
+    error: null,
+  });
+  db.queueRpc(RELEASE_RPC, { data: true, error: null });
+  // The service refused the publish and then said nothing: the body never
+  // arrives, so there is no reason to show.
+  const { fetcher, wasCancelled } = stalledBodyFetcher(422);
+  const result = await retryFailedPost(
+    { ...depsFor(db, fetcher), retryDispatchTimeoutMs: 20 },
+    USER,
+    { post_id: POST },
+  );
+  assertEquals(result.status, 502);
+  assertEquals(errorCode(result), "RETRY_FAILED");
+  // The fixed wording is the answer: there is no reason to add to it.
+  const details = (result.body.error as { details?: { reason?: string } }).details;
+  assertEquals(details === undefined || details.reason === undefined, true);
+  // The body is cancelled, so the connection to the service is released.
+  assertEquals(wasCancelled(), true);
+});
+
+Deno.test("a retry whose body cannot be parsed is a 400 and never reaches the posts table", async () => {
+  const db = new FakeSupabase();
+  const { result: response, logged } = await withCapturedWarn(() =>
+    handleRetryFailedPost(
+      minimalRequest("/api/v1/posts/retry"),
+      db,
+      USER,
+      MALFORMED_BODY,
+    )
+  );
+  assertEquals(response.status, 400);
+  const body = await response.json() as { error: { code: string; message: string } };
+  assertEquals(body.error.code, "INVALID_REQUEST");
+  assertEquals(body.error.message, "The request body is not valid JSON.");
+  // Nothing is claimed and nothing is published: the refusal only writes its
+  // own row.
+  assertEquals(db.rpcCalls.length, 0);
+  assertEquals(callsFor(db, "system_logs", "insert").length, 1);
+  assertEquals(
+    logged[0],
+    `[n8n-api] posts/retry: INVALID_REQUEST (post unknown, user ${USER})`,
+  );
+});
+
+// ── posts/delete ───────────────────────────────────────────────────────────────
+
+// One published copy of a post: the per-platform result that went out.
+function publishedCopy(
+  id: string,
+  platform: string | null,
+  accountId: string | null,
+  platformPostId: string | null,
+): Record<string, unknown> {
+  return {
+    id,
+    platform,
+    platform_post_id: platformPostId,
+    social_account_id: accountId,
+    status: "success",
+    response_data: null,
+  };
+}
+
+// One copy of a post that is still going out: the publish is in flight, so
+// the copy may still go public after the delete was asked for.
+function pendingCopy(
+  id: string,
+  platform: string | null,
+  accountId: string | null,
+): Record<string, unknown> {
+  return {
+    id,
+    platform,
+    platform_post_id: null,
+    social_account_id: accountId,
+    status: "pending",
+    response_data: null,
+  };
+}
+
+// The account a published copy went out on.
+function deleteAccount(
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    id: ACCOUNT,
+    user_id: USER,
+    platform: "facebook",
+    access_token: FAKE_ACCESS,
+    ...overrides,
+  };
+}
+
+// The reads a delete makes, in the order it makes them: the post itself, the
+// published copies and the accounts they went out on.
+function queueDeleteReads(
+  db: FakeSupabase,
+  options: {
+    mediaFileIds?: string[];
+    metadata?: Record<string, unknown> | null;
+    copies?: Array<Record<string, unknown>>;
+    accounts?: Array<Record<string, unknown>>;
+  } = {},
+): void {
+  db.queue("posts", {
+    data: {
+      id: POST,
+      status: "completed",
+      media_file_ids: options.mediaFileIds ?? [],
+      metadata: options.metadata ?? null,
+    },
+    error: null,
+  });
+  db.queue("platform_posts", { data: options.copies ?? [], error: null });
+  db.queue("social_accounts", { data: options.accounts ?? [], error: null });
+}
+
+Deno.test("a delete with a non-uuid post id is refused before anything is claimed", async () => {
+  const db = new FakeSupabase();
+  const result = await deletePost(depsFor(db, noNetwork()), USER, {
+    post_id: "not-a-uuid",
+  });
+  assertEquals(result.status, 400);
+  assertEquals(errorCode(result), "INVALID_POST_ID");
+  // Nothing is claimed and nothing is deleted: the refusal only writes its
+  // own row.
+  assertEquals(db.rpcCalls.length, 0);
+  assertEquals(callsFor(db, "system_logs", "insert").length, 1);
+});
+
+Deno.test("a delete whose claim function is not in the database yet is a 503 and deletes nothing", async () => {
+  const db = new FakeSupabase();
+  // The migration that creates the claim has not been applied to this
+  // database yet: PostgREST answers PGRST202.
+  db.queueRpc(CLAIM_RPC, { data: null, error: missingRpcError(CLAIM_RPC) });
+  const { calls, fetcher } = fakeFetcher([]);
+  const logged: string[] = [];
+  const originalError = console.error;
+  console.error = (...args: unknown[]) => {
+    logged.push(args.map(String).join(" "));
+  };
+  try {
+    const result = await deletePost(depsFor(db, fetcher), USER, {
+      post_id: POST,
+    });
+    // An outage is not a refusal: the caller's request is fine, the database
+    // is not ready for it.
+    assertEquals(result.status, 503);
+    assertEquals(errorCode(result), "FEATURE_NOT_READY");
+    assertEquals(
+      (result.body.error as { message: string }).message,
+      "Deleting a post needs a database update that has not been applied yet.",
+    );
+    // Nothing is deleted: the claim never came, so the delete never goes.
+    assertEquals(calls.length, 0);
+    assertEquals(rpcCallFor(db, DELETE_CLAIMED_RPC), undefined);
+    // The outage leaves a line behind, and not a refusal row.
+    assertEquals(logged.length, 1);
+    assertEquals(logged[0].includes("is not in the database yet"), true);
+    assertEquals(callsFor(db, "system_logs", "insert").length, 0);
+  } finally {
+    console.error = originalError;
+  }
+});
+
+Deno.test("a delete of a post that is being published to TikTok is a 409, not a 500", async () => {
+  const db = new FakeSupabase();
+  // The database refused the claim on purpose: the trigger raises P0001 with
+  // the DETAIL 'TIKTOK_REVIEW_POST_LOCKED' while the post is mid-publish.
+  const triggerMessage =
+    "This TikTok post is being published right now and can't be deleted. Try again in a few minutes.";
+  db.queueRpc(CLAIM_RPC, {
+    data: null,
+    error: {
+      message: triggerMessage,
+      code: "P0001",
+      details: "TIKTOK_REVIEW_POST_LOCKED",
+    },
+  });
+  const { result, logged } = await withCapturedWarn(() =>
+    deletePost(depsFor(db, noNetwork()), USER, { post_id: POST })
+  );
+  // A lock is a decision, not a fault: the caller is told what the database
+  // said about it.
+  assertEquals(result.status, 409);
+  assertEquals(errorCode(result), "POST_LOCKED");
+  assertEquals(
+    (result.body.error as { message: string }).message,
+    triggerMessage,
+  );
+  // Nothing is deleted and no claim is given back: there was no claim.
+  assertEquals(rpcCallFor(db, DELETE_CLAIMED_RPC), undefined);
+  assertEquals(rpcCallFor(db, RELEASE_RPC), undefined);
+  // The refusal leaves a durable row behind.
+  assertEquals(callsFor(db, "system_logs", "insert").length, 1);
+  assertEquals(
+    logged.some((line) => line.includes("posts/delete") && line.includes(POST)),
+    true,
+  );
+});
+
+Deno.test("a delete of a post that did not finish publishing is a 409 and names its status", async () => {
+  const db = new FakeSupabase();
+  db.queueRpc(CLAIM_RPC, {
+    data: { outcome: "bad_status", status: "scheduled" },
+    error: null,
+  });
+  const { calls, fetcher } = fakeFetcher([]);
+  const result = await deletePost(depsFor(db, fetcher), USER, {
+    post_id: POST,
+  });
+  assertEquals(result.status, 409);
+  assertEquals(errorCode(result), "POST_NOT_DELETABLE");
+  assertEquals(
+    (result.body.error as { message: string }).message,
+    "Only a post that finished publishing (completed or failed) can be deleted here; use cancel_scheduled_post for a scheduled post.",
+  );
+  assertEquals(
+    (result.body.error as { details: { status: string } }).details.status,
+    "scheduled",
+  );
+  // Nothing is deleted: a scheduled post is the cancel path's business.
+  assertEquals(calls.length, 0);
+  assertEquals(rpcCallFor(db, DELETE_CLAIMED_RPC), undefined);
+  // The refusal leaves a durable row behind.
+  assertEquals(callsFor(db, "system_logs", "insert").length, 1);
+});
+
+Deno.test("a delete whose platform refused deletes nothing in Postora and gives the claim back", async () => {
+  const db = new FakeSupabase();
+  claimQueued(db, "completed");
+  queueDeleteReads(db, {
+    mediaFileIds: [MEDIA],
+    copies: [publishedCopy("row-facebook", "facebook", ACCOUNT, "1234567890")],
+    // The account has no token, so the platform copy cannot be deleted.
+    accounts: [deleteAccount({ access_token: null })],
+  });
+  db.queueRpc(RELEASE_RPC, { data: true, error: null });
+
+  const { calls, fetcher } = fakeFetcher([]);
+  const result = await deletePost(depsFor(db, fetcher), USER, {
+    post_id: POST,
+  });
+
+  assertEquals(result.status, 409);
+  assertEquals(errorCode(result), "PLATFORM_DELETE_FAILED");
+  const details = (result.body.error as {
+    details: { post_id: string; results: Array<{ outcome: string }> };
+  }).details;
+  assertEquals(details.post_id, POST);
+  assertEquals(details.results[0].outcome, "failed");
+
+  // The Postora record and its media stay: the caller can retry the delete.
+  assertEquals(rpcCallFor(db, DELETE_CLAIMED_RPC), undefined);
+  assertEquals(callsFor(db, "media_files").length, 0);
+  assertEquals(db.storageRemovals.length, 0);
+  // The claim is given back, so the next call is not told the post is busy.
+  assertEquals(rpcCallFor(db, RELEASE_RPC)?.args, {
+    p_user_id: USER,
+    p_post_id: POST,
+    p_claim_id: CLAIM,
+  });
+  // The refusal leaves a durable row behind.
+  assertEquals(callsFor(db, "system_logs", "insert").length, 1);
+});
+
+Deno.test("a delete of a post that is still being published is a 409 and deletes nothing", async () => {
+  const db = new FakeSupabase();
+  claimQueued(db, "completed");
+  queueDeleteReads(db, {
+    mediaFileIds: [MEDIA],
+    // The publish is still in flight: the copy may still go public, so the
+    // Postora row and the media may not go.
+    copies: [pendingCopy("row-tiktok", "tiktok", ACCOUNT)],
+    accounts: [],
+  });
+  db.queueRpc(RELEASE_RPC, { data: true, error: null });
+
+  const { calls, fetcher } = fakeFetcher([]);
+  const result = await deletePost(depsFor(db, fetcher), USER, {
+    post_id: POST,
+  });
+
+  assertEquals(result.status, 409);
+  assertEquals(errorCode(result), "POST_PUBLISHING");
+  assertEquals(
+    (result.body.error as { message: string }).message,
+    "This post is still being published on tiktok. Try again once publishing has finished.",
+  );
+  const details = (result.body.error as {
+    details: { post_id: string; pending_platforms: string[] };
+  }).details;
+  assertEquals(details.post_id, POST);
+  assertEquals(details.pending_platforms, ["tiktok"]);
+
+  // The pending rows are read as well: a delete that ignored them would
+  // remove the Postora row while the publish is still running.
+  const read = callsFor(db, "platform_posts", "select")[0];
+  assertEquals(hasInFilter(read, "status", ["success", "pending"]), true);
+
+  // The claim is given back, so the next call is not told the post is busy.
+  assertEquals(rpcCallFor(db, RELEASE_RPC)?.args, {
+    p_user_id: USER,
+    p_post_id: POST,
+    p_claim_id: CLAIM,
+  });
+
+  // Nothing is deleted: not on the platform, not in Postora, and not the media.
+  assertEquals(calls.length, 0);
+  assertEquals(rpcCallFor(db, DELETE_CLAIMED_RPC), undefined);
+  assertEquals(callsFor(db, "media_files").length, 0);
+  assertEquals(db.storageRemovals.length, 0);
+  // The refusal leaves a durable row behind.
+  assertEquals(callsFor(db, "system_logs", "insert").length, 1);
+});
+
+Deno.test("a delete whose platforms are gone removes the post and then its media", async () => {
+  const db = new FakeSupabase();
+  claimQueued(db, "completed");
+  queueDeleteReads(db, {
+    mediaFileIds: [MEDIA],
+    copies: [
+      publishedCopy("row-facebook", "facebook", ACCOUNT, "1234567890"),
+      publishedCopy("row-instagram", "instagram", ACCOUNT_TWO, "9876543210"),
+    ],
+    accounts: [
+      deleteAccount(),
+      deleteAccount({ id: ACCOUNT_TWO, platform: "instagram" }),
+    ],
+  });
+  // The media of the post: the read and the delete of its row. The path is
+  // the one the upload convention gives it: `${userId}/${fileName}`.
+  db.queue("media_files", {
+    data: [{ id: MEDIA, file_path: `${USER}/${MEDIA}.png`, storage_bucket: "media" }],
+    error: null,
+  });
+  db.queue("media_files", { data: null, error: null });
+  db.queueRpc(DELETE_CLAIMED_RPC, { data: true, error: null });
+
+  const { calls, fetcher } = fakeFetcher([{ status: 200, body: { success: true } }]);
+  const result = await deletePost(depsFor(db, fetcher), USER, {
+    post_id: POST,
+  });
+
+  assertEquals(result.status, 200);
+  assertEquals(result.body.post_id, POST);
+  assertEquals(result.body.deleted, true);
+
+  // The Facebook copy is deleted on the platform; the Instagram one stays.
+  const platforms = result.body.platforms as Array<{
+    platform: string;
+    outcome: string;
+    platform_post_id: string | null;
+  }>;
+  assertEquals(platforms.length, 2);
+  assertEquals(platforms[0].platform, "facebook");
+  assertEquals(platforms[0].platform_post_id, "1234567890");
+  assertEquals(platforms[0].outcome, "deleted");
+  assertEquals(platforms[1].platform, "instagram");
+  assertEquals(platforms[1].outcome, "not_supported");
+
+  // The Postora row is deleted while the claim is held.
+  const deleteRpc = rpcCallFor(db, DELETE_CLAIMED_RPC);
+  assertEquals(deleteRpc?.args, {
+    p_user_id: USER,
+    p_post_id: POST,
+    p_claim_id: CLAIM,
+  });
+
+  // The media goes AFTER the post row, and not before: a file that is gone
+  // while the post is still there is a file nobody can reach any more.
+  const mediaRead = callsFor(db, "media_files", "select")[0];
+  assertEquals(mediaRead !== undefined, true);
+  assertEquals(
+    deleteRpc !== undefined && mediaRead !== undefined && mediaRead.order > deleteRpc.order,
+    true,
+  );
+  // The file lives in the storage, so it is removed there and its row goes.
+  assertEquals(db.storageRemovals.length, 1);
+  assertEquals(db.storageRemovals[0].bucket, "media");
+  assertEquals(db.storageRemovals[0].paths, [`${USER}/${MEDIA}.png`]);
+  assertEquals(result.body.media, { removed: 1, failed: [] });
+
+  // The Facebook copy is the one request that went out: the Instagram copy
+  // has no delete endpoint, so nothing was asked of it.
+  assertEquals(calls.length, 1);
+  assertEquals(calls[0].method, "DELETE");
+});
+
+Deno.test("the copies of a post are deleted at the same time and the results keep their order", async () => {
+  const db = new FakeSupabase();
+  claimQueued(db, "completed");
+  queueDeleteReads(db, {
+    mediaFileIds: [],
+    copies: [
+      publishedCopy("row-facebook", "facebook", ACCOUNT, "1234567890"),
+      publishedCopy("row-threads", "threads", ACCOUNT_TWO, "9876543210"),
+    ],
+    accounts: [
+      deleteAccount(),
+      deleteAccount({ id: ACCOUNT_TWO, platform: "threads" }),
+    ],
+  });
+  db.queueRpc(DELETE_CLAIMED_RPC, { data: true, error: null });
+
+  // The Facebook delete is slow and the Threads one is not: a delete that
+  // waited for the other one could not be answered before it.
+  const events: string[] = [];
+  const fetcher = (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    const platform = url.includes("facebook") ? "facebook" : "threads";
+    events.push(`request ${platform}`);
+    await new Promise((resolve) =>
+      setTimeout(resolve, platform === "facebook" ? 40 : 0)
+    );
+    events.push(`answer ${platform}`);
+    return new Response(JSON.stringify({ success: true }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }) as unknown as typeof fetch;
+
+  const result = await deletePost(depsFor(db, fetcher), USER, {
+    post_id: POST,
+  });
+
+  assertEquals(result.status, 200);
+  // Both requests went out before either answer came back, and the second one
+  // was answered first: the two deletes ran at the same time, so one slow
+  // platform cannot spend the budget of the others.
+  assertEquals(events[0], "request facebook");
+  assertEquals(events[1], "request threads");
+  assertEquals(
+    events.indexOf("answer threads") < events.indexOf("answer facebook"),
+    true,
+  );
+  // The results keep the order of the copies.
+  const platforms = result.body.platforms as Array<{
+    platform: string;
+    outcome: string;
+  }>;
+  assertEquals(platforms.length, 2);
+  assertEquals(platforms[0].platform, "facebook");
+  assertEquals(platforms[0].outcome, "deleted");
+  assertEquals(platforms[1].platform, "threads");
+  assertEquals(platforms[1].outcome, "deleted");
+});
+
+Deno.test("the delete reads the post metadata and hands it to the deleter", async () => {
+  const db = new FakeSupabase();
+  claimQueued(db, "completed");
+  queueDeleteReads(db, {
+    mediaFileIds: [],
+    // The post went out as a feed post and a story: Postora recorded one id.
+    metadata: { facebook_post_type: ["feed", "story"] },
+    copies: [publishedCopy("row-facebook", "facebook", ACCOUNT, "1234567890")],
+    accounts: [deleteAccount()],
+  });
+  db.queueRpc(DELETE_CLAIMED_RPC, { data: true, error: null });
+
+  const { calls, fetcher } = fakeFetcher([{ status: 200, body: { success: true } }]);
+  const result = await deletePost(depsFor(db, fetcher), USER, {
+    post_id: POST,
+  });
+
+  // The metadata is read with the post, because it is what says what the post
+  // went out as.
+  const read = callsFor(db, "posts", "select")[0];
+  assertEquals(String(read.payload).includes("metadata"), true);
+  // The deleter saw it: the copy is reported as more than the one id Postora
+  // recorded, and the delete of the recorded id still went out.
+  const platforms = result.body.platforms as Array<{
+    platform: string;
+    outcome: string;
+    reason?: string;
+  }>;
+  assertEquals(platforms.length, 1);
+  assertEquals(platforms[0].outcome, "not_supported");
+  assertEquals((platforms[0].reason ?? "").includes("2 Facebook items"), true);
+  assertEquals(calls.length, 1);
+  assertEquals(calls[0].method, "DELETE");
+});
+
+Deno.test("a delete whose claim is not the one on the row is a 409 and the media stays", async () => {
+  const db = new FakeSupabase();
+  claimQueued(db, "completed");
+  queueDeleteReads(db, {
+    mediaFileIds: [MEDIA],
+    copies: [publishedCopy("row-facebook", "facebook", ACCOUNT, "1234567890")],
+    accounts: [deleteAccount()],
+  });
+  // The row was not deleted: the claim is not the one on the row any more, so
+  // somebody else holds the post.
+  db.queueRpc(DELETE_CLAIMED_RPC, { data: false, error: null });
+  db.queueRpc(RELEASE_RPC, { data: true, error: null });
+
+  const { fetcher } = fakeFetcher([{ status: 200, body: { success: true } }]);
+  const result = await deletePost(depsFor(db, fetcher), USER, {
+    post_id: POST,
+  });
+
+  assertEquals(result.status, 409);
+  assertEquals(errorCode(result), "POST_STATE_CHANGED");
+  // The media is not deleted: the post is still there.
+  assertEquals(callsFor(db, "media_files").length, 0);
+  assertEquals(db.storageRemovals.length, 0);
+  // The claim is given back, so the next call is not told the post is busy for
+  // the rest of the lease.
+  assertEquals(rpcCallFor(db, RELEASE_RPC)?.args, {
+    p_user_id: USER,
+    p_post_id: POST,
+    p_claim_id: CLAIM,
+  });
+  // The refusal leaves a durable row behind.
+  assertEquals(callsFor(db, "system_logs", "insert").length, 1);
+});
+
+Deno.test("a delete of a post that is locked by a TikTok publish gives the claim back", async () => {
+  const db = new FakeSupabase();
+  claimQueued(db, "completed");
+  queueDeleteReads(db, {
+    mediaFileIds: [MEDIA],
+    // The post is being published right now, so it has no published copy yet.
+    copies: [],
+    accounts: [],
+  });
+  // The database refused the delete on purpose: the trigger raises P0001 with
+  // the DETAIL 'TIKTOK_REVIEW_POST_LOCKED' while the post is mid-publish.
+  const triggerMessage =
+    "This TikTok post is being published right now and can't be deleted. Try again in a few minutes.";
+  db.queueRpc(DELETE_CLAIMED_RPC, {
+    data: null,
+    error: {
+      message: triggerMessage,
+      code: "P0001",
+      details: "TIKTOK_REVIEW_POST_LOCKED",
+    },
+  });
+  db.queueRpc(RELEASE_RPC, { data: true, error: null });
+
+  const { fetcher } = fakeFetcher([]);
+  const { result, logged } = await withCapturedWarn(() =>
+    deletePost(depsFor(db, fetcher), USER, { post_id: POST })
+  );
+
+  // A lock is a decision, not a fault: the caller is told what the database
+  // said about it.
+  assertEquals(result.status, 409);
+  assertEquals(errorCode(result), "POST_LOCKED");
+  assertEquals(
+    (result.body.error as { message: string }).message,
+    triggerMessage,
+  );
+  // The claim is given back, so the next call is not told the post is busy for
+  // the rest of the lease.
+  assertEquals(rpcCallFor(db, RELEASE_RPC)?.args, {
+    p_user_id: USER,
+    p_post_id: POST,
+    p_claim_id: CLAIM,
+  });
+  // The media is not deleted: the post is still there.
+  assertEquals(callsFor(db, "media_files").length, 0);
+  assertEquals(db.storageRemovals.length, 0);
+  // The refusal leaves a durable row behind.
+  assertEquals(callsFor(db, "system_logs", "insert").length, 1);
+  // The lock leaves a line behind that names the route and the post.
+  assertEquals(
+    logged.some((line) => line.includes("posts/delete") && line.includes(POST)),
+    true,
+  );
+});
+
+Deno.test("a delete whose database write fails is a 500 and keeps the claim", async () => {
+  const db = new FakeSupabase();
+  claimQueued(db, "completed");
+  queueDeleteReads(db, {
+    mediaFileIds: [MEDIA],
+    copies: [],
+    accounts: [],
+  });
+  // The database refused the write for a reason of its own, not on purpose.
+  db.queueRpc(DELETE_CLAIMED_RPC, {
+    data: null,
+    error: { message: "deadlock detected" },
+  });
+
+  const { fetcher } = fakeFetcher([]);
+  const logged: string[] = [];
+  const originalError = console.error;
+  console.error = (...args: unknown[]) => {
+    logged.push(args.map(String).join(" "));
+  };
+  try {
+    const result = await deletePost(depsFor(db, fetcher), USER, {
+      post_id: POST,
+    });
+    assertEquals(result.status, 500);
+    assertEquals(errorCode(result), "INTERNAL_ERROR");
+    // The claim is KEPT: it is a lease, so it runs out on its own and the
+    // caller can try again in the meantime.
+    assertEquals(rpcCallFor(db, RELEASE_RPC), undefined);
+    // The media is not deleted: the post is still there.
+    assertEquals(callsFor(db, "media_files").length, 0);
+    assertEquals(db.storageRemovals.length, 0);
+    // The fault is logged where it happened, and it is not a refusal.
+    assertEquals(logged.length, 1);
+    assertEquals(logged[0].includes("deleting post"), true);
+    assertEquals(callsFor(db, "system_logs", "insert").length, 0);
+  } finally {
+    console.error = originalError;
+  }
+});
+
+Deno.test("a delete whose body cannot be parsed is a 400 and never reaches the posts table", async () => {
+  const db = new FakeSupabase();
+  const { result: response, logged } = await withCapturedWarn(() =>
+    handleDeletePost(
+      minimalRequest("/api/v1/posts/delete"),
+      db,
+      USER,
+      MALFORMED_BODY,
+    )
+  );
+  assertEquals(response.status, 400);
+  const body = await response.json() as { error: { code: string; message: string } };
+  assertEquals(body.error.code, "INVALID_REQUEST");
+  assertEquals(body.error.message, "The request body is not valid JSON.");
+  // Nothing is claimed and nothing is deleted: the refusal only writes its
+  // own row.
+  assertEquals(db.rpcCalls.length, 0);
+  assertEquals(callsFor(db, "system_logs", "insert").length, 1);
+  assertEquals(
+    logged[0],
+    `[n8n-api] posts/delete: INVALID_REQUEST (post unknown, user ${USER})`,
+  );
 });

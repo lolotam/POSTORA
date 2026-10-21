@@ -15,6 +15,13 @@ import { restrictedCorsHeaders } from "../_shared/cors.ts";
 import { fetchWithTimeout } from "../_shared/request-timeout.ts";
 import { isValidUuid } from "./requestGuards.ts";
 import { recordApiRefusal } from "./refusalLog.ts";
+import {
+  deletePublishedPost,
+  readJsonWithin,
+  type DeleteAccount,
+  type PlatformDeleteDeps,
+} from "./platformPostDelete.ts";
+import { deletePostMedia } from "./postMediaDelete.ts";
 
 export interface ActionResult {
   status: number;
@@ -33,6 +40,11 @@ export interface PostActionDeps {
    * the production default unless a test asks for a shorter wait.
    */
   bestTimesTimeoutMs?: number;
+  /**
+   * The deadline for one dispatch to the publishing service. It is the
+   * production default unless a test asks for a shorter wait.
+   */
+  retryDispatchTimeoutMs?: number;
 }
 
 export function defaultPostActionDeps(
@@ -351,6 +363,7 @@ interface PostRow {
   status: string;
   scheduled_at?: string | null;
   metadata?: Record<string, unknown> | null;
+  media_file_ids?: string[] | null;
 }
 
 // Every post use case needs the same owned read, and every one of them has to
@@ -436,7 +449,38 @@ function tiktokLockMessage(err: { message?: unknown } | null): string {
   return message;
 }
 
+// ── the two writes, on the database clock ─────────────────────────────────────
+
+// The cancel and the reschedule are one RPC each, so the deadline is compared
+// with now() inside the database: the clock that decides whether a post is
+// still in the future is the clock the scheduler publishes on, not the clock of
+// the edge worker that answered the request (issue #281). The compare-and-set
+// against the scheduler lives in the same place, so the two can never disagree.
+//
+// PostgREST answers PGRST202 when the function is not in the schema cache: the
+// migration that creates it has not been applied to this database yet. The
+// migrations are applied by the owner separately from the deploys of this
+// function, so the two can be apart for a while. The fallback below keeps the
+// route working on the old app-clock path until the migration lands, and it
+// disappears with it.
+const RPC_MISSING_CODE = "PGRST202";
+
+function isMissingRpc(err: { code?: unknown } | null): boolean {
+  return err !== null && err !== undefined && err.code === RPC_MISSING_CODE;
+}
+
 // ── 1. posts/cancel ────────────────────────────────────────────────────────────
+
+// The refusal the cancel made before the RPC existed: the post is not a
+// scheduled post in the future, so it may not be cancelled.
+function notScheduledCancelRefusal(post: PostRow): ActionResult {
+  return error(
+    409,
+    "POST_NOT_SCHEDULED",
+    "Only a scheduled post whose time has not come yet can be cancelled.",
+    { status: post.status, scheduled_at: post.scheduled_at ?? null },
+  );
+}
 
 export async function cancelScheduledPost(
   deps: PostActionDeps,
@@ -448,36 +492,110 @@ export async function cancelScheduledPost(
   if (typeof postId !== "string") {
     return await refuse(deps, route, { userId }, postId);
   }
-  const now = deps.now();
 
   const read = await readOwnedPost(deps, route, postId, userId, "id, status, scheduled_at");
   if (isActionResult(read)) return read;
   const post = read;
 
-  if (!isFutureScheduled(post, now)) {
+  // The write goes first and the database decides: the RPC compares the
+  // deadline with now() inside the database, so the clock of the edge worker
+  // that answered the request cannot refuse a cancel the database allows.
+  const outcome = await cancelScheduledRow(deps, route, { postId, userId });
+
+  if (outcome.kind === "missing") {
+    // The migration that creates the RPC has not been applied to this
+    // database yet: the deadline is read on the edge clock, as it was before
+    // the RPC existed.
+    if (!isFutureScheduled(post, deps.now())) {
+      return await refuse(deps, route, { userId, postId }, notScheduledCancelRefusal(post));
+    }
+    const refusal = await cancelScheduledRowOnAppClock(deps, route, { postId, userId });
+    if (refusal) return await refuseOrFail(deps, route, { userId, postId }, refusal);
+    return ok({ post_id: postId, cancelled: true });
+  }
+
+  if (outcome.kind === "not_deleted") {
+    // The database deleted no row: the post is no longer a scheduled post in
+    // the future, so its time has come or the scheduler took it.
+    if (!SCHEDULED_STATUSES.includes(post.status)) {
+      return await refuse(deps, route, { userId, postId }, notScheduledCancelRefusal(post));
+    }
     return await refuse(
       deps,
       route,
       { userId, postId },
       error(
         409,
-        "POST_NOT_SCHEDULED",
-        "Only a scheduled post whose time has not come yet can be cancelled.",
-        { status: post.status, scheduled_at: post.scheduled_at ?? null },
+        "POST_STATE_CHANGED",
+        "The post changed while it was being cancelled (it may already be publishing). Check get_post.",
       ),
     );
   }
 
-  const refusal = await cancelScheduledRow(deps, route, { postId, userId });
-  if (refusal) return await refuseOrFail(deps, route, { userId, postId }, refusal);
+  if (outcome.kind === "refused") {
+    return await refuseOrFail(deps, route, { userId, postId }, outcome.result);
+  }
 
   return ok({ post_id: postId, cancelled: true });
 }
+
+// The answer of the cancel: the row is gone, the row is still there, the
+// function is not in the database yet, or the database refused.
+type CancelOutcome =
+  | { kind: "cancelled" }
+  | { kind: "not_deleted" }
+  | { kind: "missing" }
+  | { kind: "refused"; result: ActionResult };
 
 // Compare-and-set: the scheduler claims the same row by flipping it to `processing`,
 // so the delete only lands while the post is still scheduled for the future. The
 // platform_posts rows go with it through the existing ON DELETE CASCADE.
 async function cancelScheduledRow(
+  deps: PostActionDeps,
+  route: string,
+  request: { postId: string; userId: string },
+): Promise<CancelOutcome> {
+  const { data: cancelled, error: cancelError } = await deps.supabase.rpc(
+    "mcp_cancel_scheduled_post",
+    { p_user_id: request.userId, p_post_id: request.postId },
+  );
+
+  if (cancelError) {
+    if (isMissingRpc(cancelError)) {
+      console.warn(
+        `[n8n-api] ${route}: mcp_cancel_scheduled_post is not in the database yet, falling back to the app-clock delete`,
+      );
+      return { kind: "missing" };
+    }
+    // The database refused the delete on purpose, so the caller is told what
+    // the database said instead of being handed a fault.
+    if (isTikTokPublishLock(cancelError)) {
+      console.warn(
+        `[n8n-api] ${route}: post ${request.postId} is locked by a TikTok publish and cannot be changed`,
+      );
+      return {
+        kind: "refused",
+        result: error(409, "POST_LOCKED", tiktokLockMessage(cancelError)),
+      };
+    }
+    console.error(
+      `[n8n-api] ${route}: deleting post ${request.postId} failed: ${cancelError.message}`,
+    );
+    return {
+      kind: "refused",
+      result: error(500, "INTERNAL_ERROR", "Cancelling the post failed. Please try again."),
+    };
+  }
+  // The row was not deleted: the post is no longer a scheduled post in the
+  // future, so the scheduler has it (or its time has come).
+  if (cancelled !== true) return { kind: "not_deleted" };
+  return { kind: "cancelled" };
+}
+
+// The path the route used before the RPC existed: the deadline is read on the
+// edge clock. It runs only while the migration that creates the RPC has not
+// been applied to this database.
+async function cancelScheduledRowOnAppClock(
   deps: PostActionDeps,
   route: string,
   request: { postId: string; userId: string },
@@ -541,6 +659,16 @@ function isConsentBoundPost(post: PostRow): boolean {
   return typeof submissionId === "string" && submissionId.length > 0;
 }
 
+// The refusal a reschedule made before the RPC existed: the post is not a
+// scheduled post in the future, so it may not be moved.
+function notScheduledRescheduleRefusal(): ActionResult {
+  return error(
+    409,
+    "POST_NOT_SCHEDULED",
+    "Only a scheduled post whose time has not come yet can be rescheduled.",
+  );
+}
+
 export async function reschedulePost(
   deps: PostActionDeps,
   userId: string,
@@ -558,16 +686,15 @@ export async function reschedulePost(
   // The trimmed id is the one that is used: the guard validates a trimmed
   // value, so the trimmed value is what reaches the query and the log.
   const postId = rawPostId.trim();
-  const now = deps.now();
 
-  const invalid = await rescheduleRefusal(deps, {
-    route,
-    userId,
-    postId,
-    scheduledAt,
-    now,
-  });
-  if (invalid) return invalid;
+  // Only the shape of the instant is checked here, before the post is even
+  // read: a time that cannot be published at all is the caller's mistake, not
+  // the post's state. Whether it is still in the future is the database's
+  // answer, not the edge clock's.
+  const malformed = scheduledAtRefusal(scheduledAt);
+  if (malformed) {
+    return await refuse(deps, route, { userId, postId }, malformed);
+  }
 
   const read = await readOwnedPost(deps, route, postId, userId, "id, status, scheduled_at, metadata");
   if (isActionResult(read)) return read;
@@ -579,19 +706,6 @@ export async function reschedulePost(
     return await refuse(deps, route, { userId, postId }, CONSENT_BOUND_POST);
   }
 
-  if (!isFutureScheduled(post, now)) {
-    return await refuse(
-      deps,
-      route,
-      { userId, postId },
-      error(
-        409,
-        "POST_NOT_SCHEDULED",
-        "Only a scheduled post whose time has not come yet can be rescheduled.",
-      ),
-    );
-  }
-
   // Only the instant is written. The timezone is a label for the UI, and
   // rebuilding the whole metadata object from an earlier read would overwrite a
   // dashboard edit that landed in the meantime.
@@ -599,12 +713,61 @@ export async function reschedulePost(
     scheduled_at: new Date(scheduledAt).toISOString(),
   };
 
-  const updated = await rescheduleRow(deps, route, { postId, userId, payload });
-  if (isActionResult(updated)) {
-    return await refuseOrFail(deps, route, { userId, postId }, updated);
-  }
+  // The move goes first and the database decides: the RPC compares the
+  // deadline with now() inside the database, so the clock of the edge worker
+  // that answered the request cannot refuse a reschedule the database allows.
+  const outcome = await rescheduleRow(deps, route, { postId, userId, payload });
 
-  return ok({ post: updated.post, previous_scheduled_at: post.scheduled_at });
+  if (outcome.kind === "updated") {
+    return ok({ post: outcome.post, previous_scheduled_at: post.scheduled_at });
+  }
+  if (outcome.kind === "in_past") {
+    return await refuse(
+      deps,
+      route,
+      { userId, postId },
+      error(400, "SCHEDULED_AT_IN_PAST", "scheduled_at must be in the future."),
+    );
+  }
+  if (outcome.kind === "unchanged") {
+    // The database moved no row: the post is not a scheduled post any more.
+    if (!SCHEDULED_STATUSES.includes(post.status)) {
+      return await refuse(deps, route, { userId, postId }, notScheduledRescheduleRefusal());
+    }
+    return await refuse(
+      deps,
+      route,
+      { userId, postId },
+      error(
+        409,
+        "POST_STATE_CHANGED",
+        "The post changed while it was being rescheduled (it may already be publishing). Check get_post.",
+      ),
+    );
+  }
+  if (outcome.kind === "missing") {
+    // The migration that creates the RPC has not been applied to this database
+    // yet: the deadline is read on the edge clock, as it was before the RPC
+    // existed.
+    const now = deps.now();
+    if (Date.parse(scheduledAt) <= now.getTime()) {
+      return await refuse(
+        deps,
+        route,
+        { userId, postId },
+        error(400, "SCHEDULED_AT_IN_PAST", "scheduled_at must be in the future."),
+      );
+    }
+    if (!isFutureScheduled(post, now)) {
+      return await refuse(deps, route, { userId, postId }, notScheduledRescheduleRefusal());
+    }
+    const fallback = await rescheduleRowOnAppClock(deps, route, { postId, userId, payload });
+    if (isActionResult(fallback)) {
+      return await refuseOrFail(deps, route, { userId, postId }, fallback);
+    }
+    return ok({ post: fallback.post, previous_scheduled_at: post.scheduled_at });
+  }
+  return await refuseOrFail(deps, route, { userId, postId }, outcome.result);
 }
 
 // The offset of an ISO 8601 instant in minutes, or null when the string does
@@ -634,47 +797,114 @@ function hasRealCalendarDate(value: string): boolean {
     local.getUTCDate() === Number(written[3]);
 }
 
-// The body of a reschedule is checked before the post is even read: a time that
-// cannot be published is the caller's mistake, not the post's state.
-async function rescheduleRefusal(
-  deps: PostActionDeps,
-  request: {
-    route: string;
-    userId: string;
-    postId: string;
-    scheduledAt: string;
-    now: Date;
-  },
-): Promise<ActionResult | null> {
-  const { route, userId, postId, scheduledAt, now } = request;
+// The shape of the requested instant is checked before the post is even read:
+// a time that cannot be published at all is the caller's mistake, not the
+// post's state.
+//
+// Only the shape is checked here. Whether the instant is still in the future
+// is the database's answer, not the edge clock's: the clock that decides is
+// the clock the scheduler publishes on.
+function scheduledAtRefusal(scheduledAt: string): ActionResult | null {
   if (
     !ISO_DATE_TIME_RE.test(scheduledAt) ||
     !Number.isFinite(Date.parse(scheduledAt)) ||
     !hasRealCalendarDate(scheduledAt)
   ) {
-    return await refuse(
-      deps,
-      route,
-      { userId, postId },
-      error(
-        400,
-        "INVALID_SCHEDULED_AT",
-        "scheduled_at must be an ISO 8601 timestamp with a UTC offset, e.g. 2026-06-05T14:30:00Z or 2026-06-05T17:30:00+03:00.",
-      ),
-    );
-  }
-  if (Date.parse(scheduledAt) <= now.getTime()) {
-    return await refuse(
-      deps,
-      route,
-      { userId, postId },
-      error(400, "SCHEDULED_AT_IN_PAST", "scheduled_at must be in the future."),
+    return error(
+      400,
+      "INVALID_SCHEDULED_AT",
+      "scheduled_at must be an ISO 8601 timestamp with a UTC offset, e.g. 2026-06-05T14:30:00Z or 2026-06-05T17:30:00+03:00.",
     );
   }
   return null;
 }
 
+// The answer of the reschedule: the post was moved, the requested instant has
+// come, the database moved no row, the function is not in the database yet, or
+// the database refused.
+type RescheduleOutcome =
+  | { kind: "updated"; post: Record<string, unknown> }
+  | { kind: "in_past" }
+  | { kind: "unchanged" }
+  | { kind: "missing" }
+  | { kind: "refused"; result: ActionResult };
+
 async function rescheduleRow(
+  deps: PostActionDeps,
+  route: string,
+  request: {
+    postId: string;
+    userId: string;
+    payload: Record<string, unknown>;
+  },
+): Promise<RescheduleOutcome> {
+  const requestedAt = String(request.payload.scheduled_at);
+  const { data: outcome, error: rescheduleError } = await deps.supabase.rpc(
+    "mcp_reschedule_post",
+    {
+      p_user_id: request.userId,
+      p_post_id: request.postId,
+      p_scheduled_at: requestedAt,
+    },
+  );
+
+  if (rescheduleError) {
+    if (isMissingRpc(rescheduleError)) {
+      console.warn(
+        `[n8n-api] ${route}: mcp_reschedule_post is not in the database yet, falling back to the app-clock update`,
+      );
+      return { kind: "missing" };
+    }
+    // The database refused the update on purpose, so the caller is told what
+    // the database said instead of being handed a fault.
+    if (isTikTokPublishLock(rescheduleError)) {
+      console.warn(
+        `[n8n-api] ${route}: post ${request.postId} is locked by a TikTok publish and cannot be changed`,
+      );
+      return {
+        kind: "refused",
+        result: error(409, "POST_LOCKED", tiktokLockMessage(rescheduleError)),
+      };
+    }
+    console.error(
+      `[n8n-api] ${route}: updating post ${request.postId} failed: ${rescheduleError.message}`,
+    );
+    return {
+      kind: "refused",
+      result: error(500, "INTERNAL_ERROR", "Rescheduling the post failed. Please try again."),
+    };
+  }
+
+  const result = (outcome ?? {}) as { outcome?: unknown; post?: unknown };
+  if (result.outcome === "updated") {
+    if (typeof result.post !== "object" || result.post === null) {
+      // The database moved the post but did not say where it went to: that is
+      // a failed read, not a reschedule the caller may trust.
+      console.error(
+        `[n8n-api] ${route}: the database updated post ${request.postId} without returning it`,
+      );
+      return {
+        kind: "refused",
+        result: error(500, "INTERNAL_ERROR", "Rescheduling the post failed. Please try again."),
+      };
+    }
+    return { kind: "updated", post: result.post as Record<string, unknown> };
+  }
+  if (result.outcome === "in_past") return { kind: "in_past" };
+  if (result.outcome === "unchanged") return { kind: "unchanged" };
+  console.error(
+    `[n8n-api] ${route}: the database answered an unknown reschedule outcome for post ${request.postId}`,
+  );
+  return {
+    kind: "refused",
+    result: error(500, "INTERNAL_ERROR", "Rescheduling the post failed. Please try again."),
+  };
+}
+
+// The path the route used before the RPC existed: the deadline is read on the
+// edge clock. It runs only while the migration that creates the RPC has not
+// been applied to this database.
+async function rescheduleRowOnAppClock(
   deps: PostActionDeps,
   route: string,
   request: {
@@ -1310,6 +1540,987 @@ export async function suggestBestTimes(
   });
 }
 
+// ── 5. posts/retry ────────────────────────────────────────────────────────────
+
+// The lease on the post. Two retries of the same post, or a retry and a
+// delete of the same post, must never both run: two edge invocations share
+// no process and no lock, so a check followed by a write is a check and a
+// write, not one decision. The claim therefore lives in the posts row and is
+// taken by Postgres under a row lock, so the two callers serialize on the row
+// itself. It is a lease and not a lock: a caller that dies leaves a claim
+// that runs out, so a crashed retry cannot block its post forever.
+//
+// PostgREST answers PGRST202 when a function is not in the schema cache: the
+// migration that creates the RPC has not been applied to this database yet.
+// The migrations are applied by the owner separately from the deploys of this
+// function, so the two can be apart for a while. A retry has no path of its
+// own to fall back to -- the whole point of the retry is that the same
+// account is not published twice -- so the answer is a 503 that says the
+// database is not ready for it yet.
+const CLAIM_RPC = "mcp_claim_post_action";
+const RELEASE_RPC = "mcp_release_post_action";
+
+// The deadline for one dispatch to the publishing service. The edge worker
+// that runs this function is killed at roughly 60 s, and this clock only
+// starts once the claim, the reads and the refusals are done, so the budget
+// stays well below that limit: the route has to still be alive to answer its
+// own timeout and to log it.
+const RETRY_DISPATCH_TIMEOUT_MS = 40_000;
+
+// One row of the per-platform result of a post.
+interface PlatformPostResult {
+  id: string;
+  platform: string | null;
+  social_account_id: string | null;
+  status: string | null;
+  error_message: string | null;
+}
+
+// A failed result that is published again.
+interface RetryTarget {
+  accountId: string;
+  platform: string;
+}
+
+// A failed result that is NOT published again, and why.
+interface RetrySkip {
+  account_id: string | null;
+  platform: string | null;
+  reason: string;
+}
+
+// Which failed results are published again.
+//
+// Only a failed result is a candidate: a result that succeeded went out, and
+// a result that is pending is going out now. A failed result of an account
+// that already carries a success or a pending result is not published again
+// either: the post went out on that account, and publishing it a second time
+// is the one thing a retry must never do.
+//
+// Every candidate that is left alone is reported with its reason, so the
+// caller learns what was not touched instead of reading a short list and
+// guessing.
+function pickRetryTargets(
+  rows: PlatformPostResult[],
+): { targets: RetryTarget[]; skipped: RetrySkip[] } {
+  // The accounts that already carry a live result for this post.
+  const published = new Set<string>();
+  for (const row of rows) {
+    if (!row.social_account_id) continue;
+    if (row.status === "success" || row.status === "pending") {
+      published.add(row.social_account_id);
+    }
+  }
+
+  const targets: RetryTarget[] = [];
+  const skipped: RetrySkip[] = [];
+  const claimed = new Set<string>();
+  for (const row of rows) {
+    // Only a failed result is a candidate for a retry.
+    if (row.status !== "failed") continue;
+    const accountId = row.social_account_id;
+    if (!accountId) {
+      skipped.push({
+        account_id: null,
+        platform: row.platform,
+        reason:
+          "The failed result names no social account, so there is nothing to publish to.",
+      });
+      continue;
+    }
+    if (published.has(accountId)) {
+      skipped.push({
+        account_id: accountId,
+        platform: row.platform,
+        reason:
+          "This account already published this post (or is publishing it now), so it is not published again.",
+      });
+      continue;
+    }
+    if (!row.platform) {
+      // A result without a platform cannot be published to: the publishing
+      // service picks the accounts by platform, so it would publish to the
+      // other platforms of the post instead.
+      skipped.push({
+        account_id: accountId,
+        platform: null,
+        reason:
+          "The failed result names no platform, so it cannot be published again.",
+      });
+      continue;
+    }
+    // One account is published once, however many failed rows it carries.
+    if (claimed.has(accountId)) continue;
+    claimed.add(accountId);
+    targets.push({ accountId, platform: row.platform });
+  }
+  return { targets, skipped };
+}
+
+// The per-platform results of one post, read through the owner of the post.
+// The service role is not the boundary, so the ownership is part of the query
+// and not of the caller's trust: the rows of another user's post are not read
+// at all.
+async function readPlatformPostResults(
+  deps: PostActionDeps,
+  route: string,
+  request: { postId: string; userId: string },
+): Promise<PlatformPostResult[] | ActionResult> {
+  const { data, error: readError } = await deps.supabase
+    .from("platform_posts")
+    .select("id, platform, social_account_id, status, error_message, posts!inner(user_id)")
+    .eq("post_id", request.postId)
+    .eq("posts.user_id", request.userId);
+
+  if (readError) {
+    console.error(
+      `[n8n-api] ${route}: reading the results of post ${request.postId} failed: ${readError.message}`,
+    );
+    return error(500, "INTERNAL_ERROR", "Reading the post results failed. Please try again.");
+  }
+  return (data ?? []) as PlatformPostResult[];
+}
+
+// The claim is given back when the action is over, so the next call is not
+// told the post is busy for the rest of the lease.
+//
+// A release that does not land is logged and changes nothing: the claim is a
+// lease, so it runs out on its own, and a failed release costs the caller a
+// wait and never a wrong publish.
+async function releasePostActionClaim(
+  deps: PostActionDeps,
+  route: string,
+  request: { userId: string; postId: string; claimId: string },
+): Promise<void> {
+  const { error: releaseError } = await deps.supabase.rpc(RELEASE_RPC, {
+    p_user_id: request.userId,
+    p_post_id: request.postId,
+    p_claim_id: request.claimId,
+  });
+  if (releaseError) {
+    console.error(
+      `[n8n-api] ${route}: releasing the claim on post ${request.postId} failed: ${releaseError.message}`,
+    );
+  }
+}
+
+// What the publishing service answered.
+type RetryDispatch =
+  | { kind: "published" }
+  | { kind: "pending" }
+  | { kind: "failed"; message: string; details?: Record<string, unknown> };
+
+// A publish the publishing service refused for good.
+//
+// Only a 4xx is a refusal: the service answered, it did not accept the work,
+// and the next call will be refused the same way. The two 4xx that mean "not
+// now" are the exception -- a 408 says the service ran out of time and a 429
+// says it is busy -- and they are not refusals, because the work may have
+// been taken in behind them.
+//
+// Everything else is not a refusal either: a 5xx can come from a gateway in
+// front of the publishing service that lost the answer while the publish was
+// still going on.
+function isFinalPublishRefusal(status: number): boolean {
+  if (status < 400 || status > 499) return false;
+  return status !== 408 && status !== 429;
+}
+
+// The retry is published by the publishing service, not here: this route
+// decides WHICH results are published again and hands exactly those accounts
+// over. The service role is used because the publishing service is an
+// internal call, and it is the same call the create route makes.
+async function dispatchRetry(
+  deps: PostActionDeps,
+  route: string,
+  request: { postId: string; targets: RetryTarget[] },
+): Promise<RetryDispatch> {
+  const platforms = [
+    ...new Set(request.targets.map((target) => target.platform)),
+  ];
+  const accountIds = [
+    ...new Set(request.targets.map((target) => target.accountId)),
+  ];
+  const timeoutMs = deps.retryDispatchTimeoutMs ?? RETRY_DISPATCH_TIMEOUT_MS;
+  // The deadline is one deadline for the whole call: the headers and the body
+  // together. The clock starts before the request goes out, because a body
+  // that stalls after the headers arrived would otherwise be read for as long
+  // as the service keeps the connection open.
+  const startedAt = deps.now().getTime();
+
+  let response: Response;
+  try {
+    response = await fetchWithTimeout(
+      `${deps.supabaseUrl}/functions/v1/process-post`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${deps.serviceRoleKey}`,
+        },
+        body: JSON.stringify({
+          post_id: request.postId,
+          platforms,
+          account_ids: accountIds,
+          // expected_scheduled_at is deliberately not sent: it makes the
+          // publishing service compare the row's scheduled_at with the one
+          // the caller saw, and a finished post has no scheduled instant to
+          // compare. Leaving it out keeps the unconditional transition the
+          // service has always had for a retry.
+        }),
+      },
+      timeoutMs,
+      deps.fetcher,
+    );
+  } catch (thrown) {
+    const message = thrown instanceof Error ? thrown.message : String(thrown);
+    if (message === "Request timed out") {
+      console.error(
+        `[n8n-api] ${route}: the publishing service did not answer within ${timeoutMs / 1000}s for post ${request.postId}`,
+      );
+      return { kind: "pending" };
+    }
+    console.error(
+      `[n8n-api] ${route}: the publishing service could not be reached for post ${request.postId}`,
+    );
+    return { kind: "pending" };
+  }
+
+  if (!response.ok) {
+    console.error(
+      `[n8n-api] ${route}: the publishing service answered ${response.status} for post ${request.postId}`,
+    );
+    // Everything that is not a refusal keeps the claim. A 5xx, a 408 and a
+    // 429 can all come from a gateway that lost the answer while the publish
+    // was still going on behind it, so the publish may still be running: the
+    // claim is KEPT to the end of its lease and the caller is told the
+    // results are pending. A released claim would let a second retry take
+    // the post and publish the same accounts a second time.
+    if (!isFinalPublishRefusal(response.status)) {
+      return { kind: "pending" };
+    }
+    // The service refused the publish: it did not accept the work, so
+    // nothing was published and the claim is given back.
+    if (
+      response.status === 401 ||
+      response.status === 403 ||
+      response.status === 404
+    ) {
+      return {
+        kind: "failed",
+        message: "The publishing service refused the retry. Try again later.",
+      };
+    }
+    const remainingMs = Math.max(
+      0,
+      timeoutMs - (deps.now().getTime() - startedAt),
+    );
+    const reason = await readUpstreamReason(response, remainingMs);
+    return {
+      kind: "failed",
+      message: "Retrying the post failed. Try again later.",
+      ...(reason ? { details: { reason } } : {}),
+    };
+  }
+
+  return { kind: "published" };
+}
+
+// A credential never reaches the caller. The reason the publishing service
+// gave is only shown when it is safe to show it: a body that carries the
+// shape of a token or an internal database detail is dropped and the fixed
+// wording is used instead.
+const BEARER_RE = /bearer\s+[A-Za-z0-9._-]+/i;
+const JWT_RE = /eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/;
+
+// The reason the publishing service gave, read inside the deadline of the
+// dispatch.
+//
+// The body is read through the shared helper: the timer of the fetch stops
+// when the headers arrive, so a body that stalls after them would be waited
+// for without a bound. A body that never arrives, or that cannot be read as
+// JSON, is no reason at all: the caller is told the fixed wording.
+async function readUpstreamReason(
+  response: Response,
+  deadlineMs: number,
+): Promise<string | null> {
+  const read = await readJsonWithin(response, deadlineMs);
+  if (read.kind !== "ok") return null;
+
+  // The body of a failure is usually an envelope with a message in it: the
+  // message is what the caller can act on, and the envelope around it is not.
+  let reason: string;
+  if (typeof read.value === "string") {
+    reason = read.value;
+  } else if (read.value === null || read.value === undefined) {
+    // The body said nothing: there is no reason to show.
+    return null;
+  } else if (typeof read.value === "object") {
+    const envelope = read.value as { error?: unknown; message?: unknown };
+    const candidate = typeof envelope.error === "string"
+      ? envelope.error
+      : typeof envelope.message === "string"
+      ? envelope.message
+      : null;
+    reason = candidate ?? JSON.stringify(read.value);
+  } else {
+    reason = String(read.value);
+  }
+
+  const safe = reason.trim();
+  if (safe.length === 0) return null;
+  if (containsSensitiveInfo(safe)) return null;
+  if (BEARER_RE.test(safe) || JWT_RE.test(safe)) return null;
+  return safe.slice(0, 200);
+}
+
+// The failed rows the retry replaced are removed, and the rows the publish
+// wrote are read back.
+//
+// The rows are read through the owner join, so the new row of a retried
+// account can be told apart from the failed row it replaces: a row that was
+// not there before the publish is new.
+//
+// The delete is scoped to the post and to the ids that were read. Every one of
+// those ids belongs to the caller's own post -- the claim proved the post is
+// the caller's and the read joined the owner -- so a row of another post can
+// never be in the list and the delete cannot reach one.
+async function clearReplacedResults(
+  deps: PostActionDeps,
+  route: string,
+  request: {
+    postId: string;
+    userId: string;
+    oldRows: PlatformPostResult[];
+    targets: RetryTarget[];
+  },
+): Promise<PlatformPostResult[] | null> {
+  const after = await readPlatformPostResults(deps, route, {
+    postId: request.postId,
+    userId: request.userId,
+  });
+  // A failed read is not an empty result: the caller is told that the results
+  // are not known, and the rows that were replaced are left in place.
+  if (isActionResult(after)) return null;
+
+  const oldIds = new Set(request.oldRows.map((row) => row.id));
+  const targetAccounts = new Set(request.targets.map((target) => target.accountId));
+
+  // The rows the publish wrote: a new row for one of the retried accounts.
+  const newRows = after.filter((row) =>
+    row.social_account_id !== null &&
+    targetAccounts.has(row.social_account_id) &&
+    !oldIds.has(row.id)
+  );
+
+  // The failed rows of an account that has a new row are replaced by it: they
+  // are the failure the retry just fixed, and leaving them behind would show
+  // the post as failed and published at the same time.
+  const replacedIds: string[] = [];
+  for (const target of request.targets) {
+    const republished = newRows.some((row) =>
+      row.social_account_id === target.accountId
+    );
+    if (!republished) continue;
+    for (const row of request.oldRows) {
+      if (row.social_account_id !== target.accountId) continue;
+      if (row.status !== "failed") continue;
+      if (replacedIds.includes(row.id)) continue;
+      replacedIds.push(row.id);
+    }
+  }
+
+  if (replacedIds.length > 0) {
+    const { error: deleteError } = await deps.supabase
+      .from("platform_posts")
+      .delete()
+      .eq("post_id", request.postId)
+      .in("id", replacedIds);
+    if (deleteError) {
+      console.error(
+        `[n8n-api] ${route}: deleting the replaced results of post ${request.postId} failed: ${deleteError.message}`,
+      );
+    }
+  }
+
+  return newRows;
+}
+
+export async function retryFailedPost(
+  deps: PostActionDeps,
+  userId: string,
+  body: unknown,
+): Promise<ActionResult> {
+  const route = "posts/retry";
+  const postId = requirePostId(body);
+  if (typeof postId !== "string") {
+    return await refuse(deps, route, { userId }, postId);
+  }
+
+  // The claim comes before every read and every write: the post is worked on
+  // under a lease, so two retries of the same post cannot both run.
+  const { data: claim, error: claimError } = await deps.supabase.rpc(CLAIM_RPC, {
+    p_user_id: userId,
+    p_post_id: postId,
+    p_action: "retry",
+  });
+
+  if (claimError) {
+    if (isMissingRpc(claimError)) {
+      // The function is not in the schema cache: the migration that creates
+      // it has not been applied to this database yet. That is an outage and
+      // not a refusal -- the caller's request is fine, the database is not
+      // ready for it -- so it is not recorded as a refusal.
+      console.error(
+        `[n8n-api] ${route}: ${CLAIM_RPC} is not in the database yet, so a post cannot be retried`,
+      );
+      return error(
+        503,
+        "FEATURE_NOT_READY",
+        "Retrying a post needs a database update that has not been applied yet.",
+      );
+    }
+    console.error(
+      `[n8n-api] ${route}: claiming post ${postId} failed: ${claimError.message}`,
+    );
+    return error(500, "INTERNAL_ERROR", "Retrying the post failed. Please try again.");
+  }
+
+  const outcome = (claim ?? {}) as {
+    outcome?: unknown;
+    claim_id?: unknown;
+    status?: unknown;
+  };
+  const claimId = outcome.claim_id;
+
+  if (outcome.outcome === "not_found") {
+    return await refuse(deps, route, { userId, postId }, NOT_FOUND);
+  }
+  if (outcome.outcome === "busy") {
+    return await refuse(
+      deps,
+      route,
+      { userId, postId },
+      error(
+        409,
+        "POST_BUSY",
+        "Another action is running on this post. Try again in a few minutes.",
+      ),
+    );
+  }
+  if (outcome.outcome === "bad_status") {
+    return await refuse(
+      deps,
+      route,
+      { userId, postId },
+      error(
+        409,
+        "POST_NOT_RETRYABLE",
+        "Only a post that finished publishing (completed or failed) can be retried.",
+        { status: typeof outcome.status === "string" ? outcome.status : null },
+      ),
+    );
+  }
+  if (
+    outcome.outcome !== "claimed" ||
+    typeof claimId !== "string" ||
+    claimId.length === 0
+  ) {
+    // The database answered something this route does not know: a failed read
+    // and not a claim, so nothing was claimed and nothing is released.
+    console.error(
+      `[n8n-api] ${route}: the database answered an unknown claim outcome for post ${postId}`,
+    );
+    return error(500, "INTERNAL_ERROR", "Retrying the post failed. Please try again.");
+  }
+
+  const rows = await readPlatformPostResults(deps, route, { postId, userId });
+  if (isActionResult(rows)) {
+    // The claim is given back: the next call is not told the post is busy for
+    // the rest of the lease over a read that never happened.
+    await releasePostActionClaim(deps, route, { userId, postId, claimId });
+    return rows;
+  }
+
+  const { targets, skipped } = pickRetryTargets(rows);
+  if (targets.length === 0) {
+    await releasePostActionClaim(deps, route, { userId, postId, claimId });
+    return await refuse(
+      deps,
+      route,
+      { userId, postId },
+      error(
+        409,
+        "NO_FAILED_PLATFORMS",
+        "This post has no failed platform result left to retry.",
+      ),
+    );
+  }
+
+  const retried = targets.map((target) => ({
+    account_id: target.accountId,
+    platform: target.platform,
+  }));
+
+  const dispatch = await dispatchRetry(deps, route, { postId, targets });
+  if (dispatch.kind === "pending") {
+    // The publish may still be running: its answer did not come back in time,
+    // or it came back as a fault that says nothing about whether the publish
+    // was accepted (a 5xx, a 408 or a 429 from a gateway in front of the
+    // publishing service). The claim is KEPT on purpose: releasing it would
+    // let a second retry take the post and publish the same accounts again
+    // while the first publish may still be running. The claim is a lease, so
+    // it runs out on its own and the post is free again after it.
+    return ok({ post_id: postId, status: "results_pending", retried }, 202);
+  }
+  if (dispatch.kind === "failed") {
+    // Nothing was published, so the post is free again right away.
+    await releasePostActionClaim(deps, route, { userId, postId, claimId });
+    // The refusal leaves a durable row behind, like every other refusal: the
+    // publishing service refused the publish for good, and a refusal nobody
+    // watched is a refusal nobody can explain later. The row carries the
+    // route, the code, the status and the post id, and nothing else.
+    return await refuse(
+      deps,
+      route,
+      { userId, postId },
+      error(502, "RETRY_FAILED", dispatch.message, dispatch.details),
+    );
+  }
+
+  // The publish was accepted. The failed rows it replaced are removed, and
+  // the rows that came back are the answer.
+  const results = await clearReplacedResults(deps, route, {
+    postId,
+    userId,
+    oldRows: rows,
+    targets,
+  });
+
+  await releasePostActionClaim(deps, route, { userId, postId, claimId });
+
+  return ok({
+    post_id: postId,
+    retried,
+    skipped,
+    // The results are left out when the read behind them failed: an empty
+    // list would read as "the publish produced nothing", and a failed read is
+    // not an empty result.
+    ...(results ? { results } : {}),
+  });
+}
+
+// ── 6. posts/delete ────────────────────────────────────────────────────────────
+
+// The delete of a post is destructive in two places at once: the Postora row
+// and the copy on the platform. The order is fixed, and it is the order that
+// can be undone:
+//
+// 1. the platform copy goes first, and the Postora row only when every
+//    platform confirmed it. A post that is gone from Postora and still on the
+//    platform cannot be unpublished any more, and a post that is still in
+//    Postora can be deleted again;
+// 2. the media goes last, and a media failure never undoes the delete of the
+//    post: the files that could not be removed are reported.
+//
+// Nothing is deleted locally while a platform refused: the caller gets the
+// per-platform results and can retry the whole delete.
+const DELETE_CLAIMED_RPC = "mcp_delete_claimed_post";
+
+// One published copy of a post on one platform, and what happened to it.
+interface PublishedCopyResult {
+  platform: string;
+  platform_post_id: string | null;
+  outcome: "deleted" | "not_supported" | "failed";
+  reason?: string;
+  note?: string;
+}
+
+// One row of the per-platform results of a post: the copy that went out, or
+// the copy that is still going out.
+interface PostCopyRow {
+  id: string;
+  platform: string | null;
+  platform_post_id: string | null;
+  social_account_id: string | null;
+  response_data: unknown;
+  status: string | null;
+}
+
+// The per-platform results of one post: the copies that went out and the ones
+// that are still going out.
+//
+// The pending rows are read as well, because a publish that is still in flight
+// is a publish that may still go public: a delete that ignored it would remove
+// the Postora row and the media while the copy goes out behind it. The read is
+// owner-joined, so the service role does not widen it.
+async function readPostCopies(
+  deps: PostActionDeps,
+  route: string,
+  request: { postId: string; userId: string },
+): Promise<PostCopyRow[] | ActionResult> {
+  const { data, error: readError } = await deps.supabase
+    .from("platform_posts")
+    .select("id, platform, platform_post_id, social_account_id, response_data, status, posts!inner(user_id)")
+    .eq("post_id", request.postId)
+    .eq("posts.user_id", request.userId)
+    .in("status", ["success", "pending"]);
+
+  if (readError) {
+    console.error(
+      `[n8n-api] ${route}: reading the published copies of post ${request.postId} failed: ${readError.message}`,
+    );
+    return error(500, "INTERNAL_ERROR", "Reading the post results failed. Please try again.");
+  }
+  return (data ?? []) as PostCopyRow[];
+}
+
+// The accounts the published copies went out on. The read carries the owner,
+// so a row of another account is never read. The tokens are read because the
+// deleters need them, and they are never written down.
+async function readPublishedAccounts(
+  deps: PostActionDeps,
+  route: string,
+  request: { accountIds: string[]; userId: string },
+): Promise<DeleteAccount[] | ActionResult> {
+  if (request.accountIds.length === 0) return [];
+  const { data, error: readError } = await deps.supabase
+    .from("social_accounts")
+    .select(
+      "id, user_id, platform, access_token, refresh_token, token_expires_at, auth_provider, connection_id, workspace_id, platform_user_id, account_metadata",
+    )
+    .in("id", request.accountIds)
+    .eq("user_id", request.userId);
+
+  if (readError) {
+    console.error(
+      `[n8n-api] ${route}: reading the social accounts of the post failed: ${readError.message}`,
+    );
+    return error(500, "INTERNAL_ERROR", "Reading the post results failed. Please try again.");
+  }
+  return (data ?? []) as DeleteAccount[];
+}
+
+// The delete of one published copy of a post.
+//
+// The copies of a post are deleted at the same time: one slow platform must
+// not spend the budget of the others. The edge worker that runs this function
+// is killed at roughly 60 s, and every delete keeps its own deadline, so the
+// copies run in parallel and the results come back in the order of the copies.
+async function deletePublishedCopy(
+  copy: PostCopyRow,
+  accountById: Map<string, DeleteAccount>,
+  post: PostRow,
+  platformDeps: PlatformDeleteDeps,
+): Promise<PublishedCopyResult> {
+  if (!copy.platform) {
+    return {
+      platform: "",
+      platform_post_id: copy.platform_post_id,
+      outcome: "not_supported",
+      reason: "The result names no platform, so there is nothing to delete on the platform.",
+    };
+  }
+  const account = copy.social_account_id
+    ? accountById.get(copy.social_account_id) ?? null
+    : null;
+  const outcome = await deletePublishedPost(
+    {
+      id: copy.id,
+      platform: copy.platform,
+      platform_post_id: copy.platform_post_id,
+      social_account_id: copy.social_account_id,
+      response_data: copy.response_data,
+      post_metadata: post.metadata ?? null,
+    },
+    account,
+    platformDeps,
+  );
+  const result: PublishedCopyResult = {
+    platform: copy.platform,
+    platform_post_id: copy.platform_post_id,
+    outcome: outcome.outcome,
+  };
+  if (outcome.outcome === "deleted") {
+    // A delete that already happened says so: the copy is gone either way.
+    if (outcome.note) result.note = outcome.note;
+  } else {
+    result.reason = outcome.reason;
+  }
+  return result;
+}
+
+export async function deletePost(
+  deps: PostActionDeps,
+  userId: string,
+  body: unknown,
+): Promise<ActionResult> {
+  const route = "posts/delete";
+  const postId = requirePostId(body);
+  if (typeof postId !== "string") {
+    return await refuse(deps, route, { userId }, postId);
+  }
+
+  // The claim comes before every read and every write: the post is worked on
+  // under a lease, so two deletes of the same post cannot both run, and a
+  // delete cannot run while a retry is publishing the post.
+  const { data: claim, error: claimError } = await deps.supabase.rpc(CLAIM_RPC, {
+    p_user_id: userId,
+    p_post_id: postId,
+    p_action: "delete",
+  });
+
+  if (claimError) {
+    if (isMissingRpc(claimError)) {
+      // The function is not in the schema cache: the migration that creates
+      // it has not been applied to this database yet. That is an outage and
+      // not a refusal -- the caller's request is fine, the database is not
+      // ready for it -- so it is not recorded as a refusal.
+      console.error(
+        `[n8n-api] ${route}: ${CLAIM_RPC} is not in the database yet, so a post cannot be deleted`,
+      );
+      return error(
+        503,
+        "FEATURE_NOT_READY",
+        "Deleting a post needs a database update that has not been applied yet.",
+      );
+    }
+    // The database refused the delete on purpose: a TikTok review post that
+    // is being published right now may not be deleted.
+    if (isTikTokPublishLock(claimError)) {
+      console.warn(
+        `[n8n-api] ${route}: post ${postId} is locked by a TikTok publish and cannot be deleted`,
+      );
+      return await refuse(
+        deps,
+        route,
+        { userId, postId },
+        error(409, "POST_LOCKED", tiktokLockMessage(claimError)),
+      );
+    }
+    console.error(
+      `[n8n-api] ${route}: claiming post ${postId} failed: ${claimError.message}`,
+    );
+    return error(500, "INTERNAL_ERROR", "Deleting the post failed. Please try again.");
+  }
+
+  const outcome = (claim ?? {}) as {
+    outcome?: unknown;
+    claim_id?: unknown;
+    status?: unknown;
+  };
+  const claimId = outcome.claim_id;
+
+  if (outcome.outcome === "not_found") {
+    return await refuse(deps, route, { userId, postId }, NOT_FOUND);
+  }
+  if (outcome.outcome === "busy") {
+    return await refuse(
+      deps,
+      route,
+      { userId, postId },
+      error(
+        409,
+        "POST_BUSY",
+        "Another action is running on this post. Try again in a few minutes.",
+      ),
+    );
+  }
+  if (outcome.outcome === "bad_status") {
+    return await refuse(
+      deps,
+      route,
+      { userId, postId },
+      error(
+        409,
+        "POST_NOT_DELETABLE",
+        "Only a post that finished publishing (completed or failed) can be deleted here; use cancel_scheduled_post for a scheduled post.",
+        { status: typeof outcome.status === "string" ? outcome.status : null },
+      ),
+    );
+  }
+  if (
+    outcome.outcome !== "claimed" ||
+    typeof claimId !== "string" ||
+    claimId.length === 0
+  ) {
+    // The database answered something this route does not know: a failed read
+    // and not a claim, so nothing was claimed and nothing is released.
+    console.error(
+      `[n8n-api] ${route}: the database answered an unknown claim outcome for post ${postId}`,
+    );
+    return error(500, "INTERNAL_ERROR", "Deleting the post failed. Please try again.");
+  }
+
+  // The post's own media is read under the claim: the claim proved the post is
+  // the caller's, and the read is scoped to the owner besides.
+  //
+  // The metadata is read with it because it says what the post went out as: a
+  // Facebook post can be a feed post and a story at once, and a LinkedIn post
+  // can go to several destinations. platform_posts keeps one id for all of it,
+  // so the deleter needs the metadata to know what it cannot delete.
+  const post = await readOwnedPost(deps, route, postId, userId, "id, media_file_ids, metadata");
+  if (isActionResult(post)) {
+    // The claim is given back: the next call is not told the post is busy for
+    // the rest of the lease over a read that never happened.
+    await releasePostActionClaim(deps, route, { userId, postId, claimId });
+    return post;
+  }
+
+  const copies = await readPostCopies(deps, route, { postId, userId });
+  if (isActionResult(copies)) {
+    await releasePostActionClaim(deps, route, { userId, postId, claimId });
+    return copies;
+  }
+
+  // A copy that is still going out is a publish that may still go public. The
+  // Postora row and the media may not go while that is true: a post that is
+  // gone from Postora and still on the platform cannot be unpublished any
+  // more, and the media is needed by the publish that is still running.
+  const pending = copies.filter((copy) => copy.status === "pending");
+  if (pending.length > 0) {
+    const pendingPlatforms = [
+      ...new Set(
+        pending
+          .map((copy) => copy.platform)
+          .filter((platform): platform is string =>
+            typeof platform === "string" && platform.length > 0
+          ),
+      ),
+    ];
+    // The claim is given back: the post is not busy for the rest of the lease
+    // over a delete that did not happen.
+    await releasePostActionClaim(deps, route, { userId, postId, claimId });
+    return await refuse(
+      deps,
+      route,
+      { userId, postId },
+      error(
+        409,
+        "POST_PUBLISHING",
+        pendingPlatforms.length > 0
+          ? `This post is still being published on ${pendingPlatforms.join(", ")}. Try again once publishing has finished.`
+          : "This post is still being published. Try again once publishing has finished.",
+        { post_id: postId, pending_platforms: pendingPlatforms },
+      ),
+    );
+  }
+
+  // Only the copies that went out are deleted on their platform.
+  const published = copies.filter((copy) => copy.status === "success");
+
+  const accountIds = [
+    ...new Set(
+      published
+        .map((copy) => copy.social_account_id)
+        .filter((id): id is string => typeof id === "string" && id.length > 0),
+    ),
+  ];
+  const accounts = await readPublishedAccounts(deps, route, { accountIds, userId });
+  if (isActionResult(accounts)) {
+    await releasePostActionClaim(deps, route, { userId, postId, claimId });
+    return accounts;
+  }
+  const accountById = new Map<string, DeleteAccount>();
+  for (const account of accounts) accountById.set(account.id, account);
+
+  // The YouTube adapter writes to social_accounts when it has to refresh a
+  // token, so it needs the service-role client. It is built here and not in
+  // the deps, so a delete that has no YouTube copy never builds one.
+  const platformDeps: PlatformDeleteDeps = {
+    fetcher: deps.fetcher,
+    youtubeDeps: () => ({ admin: deps.supabase }),
+  };
+
+  // The copies go out at the same time: one slow platform must not spend the
+  // budget of the others. Every delete keeps its own deadline, and the
+  // results come back in the order of the copies.
+  const results = await Promise.all(
+    published.map((copy) => deletePublishedCopy(copy, accountById, post, platformDeps)),
+  );
+
+  // One platform refused: nothing is deleted in Postora and the media stays in
+  // the library, so the caller can retry the whole delete.
+  if (results.some((result) => result.outcome === "failed")) {
+    await releasePostActionClaim(deps, route, { userId, postId, claimId });
+    return await refuse(
+      deps,
+      route,
+      { userId, postId },
+      error(
+        409,
+        "PLATFORM_DELETE_FAILED",
+        "The post could not be deleted on every platform, so nothing was deleted in Postora.",
+        { post_id: postId, results },
+      ),
+    );
+  }
+
+  // The Postora row goes now that every platform confirmed its copy.
+  const { data: deleted, error: deleteError } = await deps.supabase.rpc(
+    DELETE_CLAIMED_RPC,
+    {
+      p_user_id: userId,
+      p_post_id: postId,
+      p_claim_id: claimId,
+    },
+  );
+
+  if (deleteError) {
+    // The database refused the delete on purpose: the TikTok review guard
+    // refuses a post that is being published right now.
+    if (isTikTokPublishLock(deleteError)) {
+      console.warn(
+        `[n8n-api] ${route}: post ${postId} is locked by a TikTok publish and cannot be deleted`,
+      );
+      // The claim is given back: the post is not busy for the rest of the lease.
+      await releasePostActionClaim(deps, route, { userId, postId, claimId });
+      return await refuse(
+        deps,
+        route,
+        { userId, postId },
+        error(409, "POST_LOCKED", tiktokLockMessage(deleteError)),
+      );
+    }
+    console.error(
+      `[n8n-api] ${route}: deleting post ${postId} failed: ${deleteError.message}`,
+    );
+    // The claim is KEPT on purpose: it is a lease, so it runs out on its own
+    // and the caller can try again in the meantime.
+    return error(500, "INTERNAL_ERROR", "Deleting the post failed. Please try again.");
+  }
+  if (deleted !== true) {
+    // The row was not deleted: the claim is not the one on the row any more,
+    // so somebody else holds the post.
+    // The claim is given back: the post is not busy for the rest of the lease.
+    await releasePostActionClaim(deps, route, { userId, postId, claimId });
+    return await refuse(
+      deps,
+      route,
+      { userId, postId },
+      error(
+        409,
+        "POST_STATE_CHANGED",
+        "The post changed while it was being deleted. Check get_post.",
+      ),
+    );
+  }
+
+  // The media goes last, and only now that the post is gone. A media delete
+  // that fails is reported and never undoes the delete of the post.
+  const media = await deletePostMedia(deps, {
+    userId,
+    mediaFileIds: Array.isArray(post.media_file_ids) ? post.media_file_ids : [],
+  });
+
+  return ok({
+    post_id: postId,
+    deleted: true,
+    platforms: results,
+    media: { removed: media.removedIds.length, failed: media.failedIds },
+  });
+}
+
 // ── route adapters ─────────────────────────────────────────────────────────────
 
 export const handleCancelScheduledPost = async (
@@ -1341,6 +2552,38 @@ export const handleReschedulePost = async (
     return toResponse(req, await refuse(deps, "posts/reschedule", { userId }, parsed));
   }
   return toResponse(req, await reschedulePost(deps, userId, parsed.body));
+};
+
+export const handleRetryFailedPost = async (
+  req: Request,
+  // deno-lint-ignore no-explicit-any
+  supabase: any,
+  userId: string,
+  readBody: () => Promise<unknown>,
+): Promise<Response> => {
+  const deps = defaultPostActionDeps(supabase);
+  const parsed = await parseBody(readBody);
+  if (isActionResult(parsed)) {
+    // A body that cannot be read is a refusal, so it leaves a durable row too.
+    return toResponse(req, await refuse(deps, "posts/retry", { userId }, parsed));
+  }
+  return toResponse(req, await retryFailedPost(deps, userId, parsed.body));
+};
+
+export const handleDeletePost = async (
+  req: Request,
+  // deno-lint-ignore no-explicit-any
+  supabase: any,
+  userId: string,
+  readBody: () => Promise<unknown>,
+): Promise<Response> => {
+  const deps = defaultPostActionDeps(supabase);
+  const parsed = await parseBody(readBody);
+  if (isActionResult(parsed)) {
+    // A body that cannot be read is a refusal, so it leaves a durable row too.
+    return toResponse(req, await refuse(deps, "posts/delete", { userId }, parsed));
+  }
+  return toResponse(req, await deletePost(deps, userId, parsed.body));
 };
 
 export const handleSuggestBestTimes = async (

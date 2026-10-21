@@ -10,9 +10,12 @@ import {
 } from "./youtubeComments.ts";
 
 const GRAPH_API_VERSION = "v22.0";
-const FACEBOOK_GRAPH = `https://graph.facebook.com/${GRAPH_API_VERSION}`;
+// The two Graph hosts are exported because the post-delete adapter deletes
+// through the same API: the Graph version and the host live here, so the
+// delete cannot drift onto another version of the API than the comments use.
+export const FACEBOOK_GRAPH = `https://graph.facebook.com/${GRAPH_API_VERSION}`;
 const INSTAGRAM_GRAPH = `https://graph.instagram.com/${GRAPH_API_VERSION}`;
-const THREADS_GRAPH = "https://graph.threads.net/v1.0";
+export const THREADS_GRAPH = "https://graph.threads.net/v1.0";
 
 export interface CommentActionAccount {
   id?: string;
