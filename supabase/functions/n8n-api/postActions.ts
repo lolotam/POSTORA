@@ -639,11 +639,20 @@ export async function suggestBestTimes(
     return error(502, "BEST_TIMES_FAILED", "Could not get suggestions right now. Try again.");
   }
 
+  // A 2xx with a body that carries no suggestion list is a failed read, not an
+  // empty result: answering 200 with no suggestions would tell the caller the
+  // service had nothing to say, when in fact it never answered. An empty array
+  // from the service is a real answer and stays a 200.
   const json = await response.json().catch(() => null) as Record<string, unknown> | null;
+  if (json === null || !Array.isArray(json.suggestions)) {
+    console.error(`[n8n-api] ${route}: the suggestion service answered without a suggestions list (user ${userId})`);
+    return error(502, "BEST_TIMES_FAILED", "Could not get suggestions right now. Try again.");
+  }
+
   return ok({
     timezone: timeZone,
     based_on_posts: historicalData.totalPosts,
-    suggestions: Array.isArray(json?.suggestions) ? json.suggestions : [],
+    suggestions: json.suggestions,
   });
 }
 

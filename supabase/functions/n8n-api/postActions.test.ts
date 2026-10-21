@@ -211,6 +211,16 @@ function fakeFetcher(responses: QueuedResponse[] = [], onRequest?: () => void) {
   return { calls, fetcher };
 }
 
+// A fetcher that answers with a body that is not JSON at all, so the caller
+// has to cope with a 2xx whose body cannot be parsed.
+function rawBodyFetcher(status: number, rawBody: string): typeof fetch {
+  return (() =>
+    Promise.resolve(new Response(rawBody, {
+      status,
+      headers: { "Content-Type": "application/json" },
+    }))) as unknown as typeof fetch;
+}
+
 // A fetcher that fails loudly if a test that expects no network call makes one.
 function noNetwork(): typeof fetch {
   return (() =>
@@ -658,6 +668,71 @@ Deno.test("a suggestion service that does not answer in time is a 504 and leaves
   } finally {
     console.error = originalError;
   }
+});
+
+Deno.test("a suggestion service that answers 2xx with a body that is not JSON is a 502", async () => {
+  const db = new FakeSupabase();
+  db.queue("posts", { data: [], error: null });
+  const logged: string[] = [];
+  const originalError = console.error;
+  console.error = (...args: unknown[]) => {
+    logged.push(args.map(String).join(" "));
+  };
+  try {
+    const result = await suggestBestTimes(
+      depsFor(db, rawBodyFetcher(200, "not json")),
+      USER,
+      { platforms: ["instagram"] },
+      null,
+    );
+    assertEquals(result.status, 502);
+    assertEquals(errorCode(result), "BEST_TIMES_FAILED");
+    // A body that could not be read is not an empty result: the caller is told
+    // the answer failed, and the refusal leaves a line behind.
+    assertEquals(logged.length, 1);
+    assertEquals(logged[0].includes("without a suggestions list"), true);
+  } finally {
+    console.error = originalError;
+  }
+});
+
+Deno.test("a suggestion service that answers 2xx without a suggestions list is a 502", async () => {
+  const db = new FakeSupabase();
+  db.queue("posts", { data: [], error: null });
+  const { fetcher } = fakeFetcher([{ status: 200, body: {} }]);
+  const logged: string[] = [];
+  const originalError = console.error;
+  console.error = (...args: unknown[]) => {
+    logged.push(args.map(String).join(" "));
+  };
+  try {
+    const result = await suggestBestTimes(
+      depsFor(db, fetcher),
+      USER,
+      { platforms: ["instagram"] },
+      null,
+    );
+    assertEquals(result.status, 502);
+    assertEquals(errorCode(result), "BEST_TIMES_FAILED");
+    assertEquals(logged.length, 1);
+    assertEquals(logged[0].includes("without a suggestions list"), true);
+  } finally {
+    console.error = originalError;
+  }
+});
+
+Deno.test("an empty suggestion list from the service is a 200", async () => {
+  const db = new FakeSupabase();
+  db.queue("posts", { data: [], error: null });
+  const { fetcher } = fakeFetcher([{ status: 200, body: { suggestions: [] } }]);
+  const result = await suggestBestTimes(
+    depsFor(db, fetcher),
+    USER,
+    { platforms: ["instagram"] },
+    null,
+  );
+  assertEquals(result.status, 200);
+  assertEquals(result.body.suggestions, []);
 });
 
 Deno.test("a timezone the runtime does not know falls back to UTC", async () => {
