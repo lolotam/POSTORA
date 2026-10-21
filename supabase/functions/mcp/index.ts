@@ -8,7 +8,12 @@ import { McpServer, StreamableHttpTransport } from "npm:mcp-lite@^0.10.0";
 import { z } from "npm:zod@4.1.12";
 import { createClient } from "npm:@supabase/supabase-js@2.45.0";
 import { normalizeListFields } from "./stringList.ts";
-import { confirmField, recordMcpRefusal, refuseUnconfirmed } from "./confirmGate.ts";
+import {
+  auditSchemaRejection,
+  confirmField,
+  recordMcpRefusal,
+  refuseUnconfirmed,
+} from "./confirmGate.ts";
 import { sha256Hex } from "../_shared/crypto.ts";
 
 const corsHeaders = {
@@ -155,6 +160,18 @@ function buildServer(apiKey: string) {
     name: "postora",
     version: "1.0.0",
     schemaAdapter: (schema) => z.toJSONSchema(schema as z.ZodType),
+  });
+
+  // The framework validates the arguments against the tool's input schema
+  // before the handler runs, and answers a call that does not fit with an
+  // INVALID_PARAMS error. The handler never sees such a call, so it cannot
+  // record it, and the rejection would leave no trace at all. The error hook
+  // is the only place where the refusal is still visible, so it records it as
+  // a refusal: the schema rejection leaves a row too. The framework's own
+  // error response is kept: the hook answers nothing of its own.
+  server.onError(async (error, ctx) => {
+    await auditSchemaRejection({ admin, sha256Hex }, { apiKey, error, rpcRequest: ctx.request });
+    return undefined;
   });
 
   // ---- Accounts ----

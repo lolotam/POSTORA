@@ -1,5 +1,6 @@
 import { assertEquals } from "jsr:@std/assert@1";
 import {
+  auditSchemaRejection,
   confirmField,
   recordMcpRefusal,
   refuseUnconfirmed,
@@ -386,4 +387,208 @@ Deno.test("a failed insert in recordMcpRefusal does not throw", async () => {
 
   assertEquals(thrown, null);
   assertEquals(inserts.length, 1);
+});
+
+// ── the schema rejection ───────────────────────────────────────────────────────
+
+// The framework validates the arguments against the tool's input schema before
+// the handler runs, so a call that does not fit the schema never reaches the
+// handler and never reaches the confirmation gate either. The refusal it
+// answers with is the only trace of such a call, and it has to leave a row.
+
+const INVALID_PARAMS = -32602;
+
+Deno.test("a schema rejection of a tool call is recorded as a refusal", async () => {
+  const { admin, inserts } = createFakeAdmin({ profile: { id: "user-42" } });
+
+  await auditSchemaRejection(
+    { admin, sha256Hex },
+    {
+      apiKey: CALLER_PLACEHOLDER,
+      error: { code: INVALID_PARAMS, message: "Invalid params" },
+      rpcRequest: {
+        method: "tools/call",
+        params: {
+          name: "reply_to_message",
+          arguments: { social_account_id: "account-1", message: "hello there" },
+        },
+      },
+    },
+  );
+
+  // One row, naming the tool and the code and nothing else.
+  assertEquals(inserts.length, 1);
+  assertEquals(inserts[0].table, "system_logs");
+  assertEquals(inserts[0].row.user_id, "user-42");
+  assertEquals(inserts[0].row.metadata as Record<string, unknown>, {
+    tool: "reply_to_message",
+    code: "INVALID_PARAMS",
+    owner_resolved: true,
+  });
+
+  const metadata = inserts[0].row.metadata as Record<string, unknown>;
+  assertEquals(Object.keys(metadata).sort(), ["code", "owner_resolved", "tool"]);
+
+  // The arguments are not in the row, and neither are the key and its hash.
+  const serialized = JSON.stringify(inserts[0].row);
+  assertEquals(serialized.includes("arguments"), false);
+  assertEquals(serialized.includes("hello there"), false);
+  assertEquals(serialized.includes("account-1"), false);
+  assertEquals(serialized.includes(CALLER_PLACEHOLDER), false);
+  assertEquals(serialized.includes("hashed-placeholder"), false);
+});
+
+Deno.test("a schema rejection of a method that is not a tool call is not recorded", async () => {
+  const { admin, calls, inserts } = createFakeAdmin({ profile: { id: "user-42" } });
+
+  await auditSchemaRejection(
+    { admin, sha256Hex },
+    {
+      apiKey: CALLER_PLACEHOLDER,
+      error: { code: INVALID_PARAMS, message: "Invalid params" },
+      rpcRequest: { method: "tools/list", params: { name: "reply_to_message" } },
+    },
+  );
+
+  // Nothing is recorded and nothing is read: this is not a rejected tool call.
+  assertEquals(inserts.length, 0);
+  assertEquals(calls.length, 0);
+});
+
+Deno.test("an error that is not a schema rejection is not recorded", async () => {
+  const { admin, calls, inserts } = createFakeAdmin({ profile: { id: "user-42" } });
+
+  await auditSchemaRejection(
+    { admin, sha256Hex },
+    {
+      apiKey: CALLER_PLACEHOLDER,
+      error: { code: -32601, message: "Method not found" },
+      rpcRequest: {
+        method: "tools/call",
+        params: { name: "reply_to_message", arguments: {} },
+      },
+    },
+  );
+
+  assertEquals(inserts.length, 0);
+  assertEquals(calls.length, 0);
+});
+
+Deno.test("an error that is not an error object is not recorded", async () => {
+  const { admin, calls, inserts } = createFakeAdmin({ profile: { id: "user-42" } });
+
+  await auditSchemaRejection(
+    { admin, sha256Hex },
+    {
+      apiKey: CALLER_PLACEHOLDER,
+      error: "invalid params",
+      rpcRequest: {
+        method: "tools/call",
+        params: { name: "reply_to_message", arguments: {} },
+      },
+    },
+  );
+
+  assertEquals(inserts.length, 0);
+  assertEquals(calls.length, 0);
+});
+
+Deno.test("a tool name that is not a tool name is recorded as unknown", async () => {
+  const cases: { name: string; label: string }[] = [
+    { name: "Reply_To_Message", label: "a name that is not lowercase" },
+    { name: "reply-to-message", label: "a name that is not a word" },
+    { name: "", label: "an empty name" },
+    { name: "a".repeat(65), label: "a name that is too long" },
+  ];
+
+  for (const testCase of cases) {
+    const { admin, inserts } = createFakeAdmin({ profile: { id: "user-42" } });
+
+    await auditSchemaRejection(
+      { admin, sha256Hex },
+      {
+        apiKey: CALLER_PLACEHOLDER,
+        error: { code: INVALID_PARAMS, message: "Invalid params" },
+        rpcRequest: {
+          method: "tools/call",
+          params: { name: testCase.name, arguments: {} },
+        },
+      },
+    );
+
+    // The row names no tool rather than a tool that does not exist.
+    assertEquals(inserts.length, 1, testCase.label);
+    assertEquals(inserts[0].row.metadata as Record<string, unknown>, {
+      tool: "unknown",
+      code: "INVALID_PARAMS",
+      owner_resolved: true,
+    }, testCase.label);
+  }
+});
+
+Deno.test("a rejected tool call that names no tool is recorded as unknown", async () => {
+  const { admin, inserts } = createFakeAdmin({ profile: { id: "user-42" } });
+
+  await auditSchemaRejection(
+    { admin, sha256Hex },
+    {
+      apiKey: CALLER_PLACEHOLDER,
+      error: { code: INVALID_PARAMS, message: "Invalid params" },
+      rpcRequest: { method: "tools/call", params: { arguments: {} } },
+    },
+  );
+
+  assertEquals(inserts.length, 1);
+  assertEquals(inserts[0].row.metadata as Record<string, unknown>, {
+    tool: "unknown",
+    code: "INVALID_PARAMS",
+    owner_resolved: true,
+  });
+});
+
+Deno.test("a schema rejection whose owner cannot be resolved still writes a row", async () => {
+  const { admin, inserts } = createFakeAdmin({ profile: null });
+
+  await auditSchemaRejection(
+    { admin, sha256Hex },
+    {
+      apiKey: CALLER_PLACEHOLDER,
+      error: { code: INVALID_PARAMS, message: "Invalid params" },
+      rpcRequest: {
+        method: "tools/call",
+        params: { name: "reply_to_message", arguments: {} },
+      },
+    },
+  );
+
+  assertEquals(inserts.length, 1);
+  assertEquals(inserts[0].row.user_id, null);
+  assertEquals(inserts[0].row.metadata as Record<string, unknown>, {
+    tool: "reply_to_message",
+    code: "INVALID_PARAMS",
+    owner_resolved: false,
+  });
+});
+
+Deno.test("the auditor never throws, whatever the database does", async () => {
+  const { admin } = createFakeAdmin({ throwOn: "maybeSingle" });
+
+  let thrown: unknown = null;
+  try {
+    await auditSchemaRejection(
+      { admin, sha256Hex },
+      {
+        apiKey: CALLER_PLACEHOLDER,
+        error: { code: INVALID_PARAMS, message: "Invalid params" },
+        rpcRequest: {
+          method: "tools/call",
+          params: { name: "reply_to_message", arguments: {} },
+        },
+      },
+    );
+  } catch (error) {
+    thrown = error;
+  }
+
+  assertEquals(thrown, null);
 });

@@ -98,6 +98,83 @@ export async function recordMcpRefusal(
   }
 }
 
+// The JSON-RPC error code the framework answers a schema rejection with. The
+// arguments are validated against the tool's input schema before the handler
+// runs, so a call that does not fit the schema never reaches the handler and
+// never reaches the confirmation gate either: it leaves no trace at all.
+const INVALID_PARAMS_CODE = -32602;
+
+// The name of the tool a rejected call was for, when the request names one.
+// A name that is not a tool name is not written down as if it were one: the
+// row would name a tool that does not exist. The name is bounded as well, so
+// a long string in the request cannot become a long string in the log.
+const TOOL_NAME_RE = /^[a-z_]+$/;
+const TOOL_NAME_MAX_LENGTH = 64;
+const UNKNOWN_TOOL = "unknown";
+
+function isInvalidParams(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const code = (error as { code?: unknown }).code;
+  return typeof code === "number" && code === INVALID_PARAMS_CODE;
+}
+
+// The tool a rejected call was for, or null when the request was not a tool
+// call at all. The arguments are never read: only the name of the tool is
+// taken out of the request, and only when it is a tool name.
+function rejectedToolName(rpcRequest: unknown): string | null {
+  if (typeof rpcRequest !== "object" || rpcRequest === null) return null;
+  const request = rpcRequest as { method?: unknown; params?: unknown };
+  if (request.method !== "tools/call") return null;
+
+  if (typeof request.params !== "object" || request.params === null) {
+    return UNKNOWN_TOOL;
+  }
+  const name = (request.params as { name?: unknown }).name;
+  if (typeof name !== "string") return UNKNOWN_TOOL;
+  if (name.length === 0 || name.length > TOOL_NAME_MAX_LENGTH) return UNKNOWN_TOOL;
+  if (!TOOL_NAME_RE.test(name)) return UNKNOWN_TOOL;
+  return name;
+}
+
+/**
+ * Record a call the framework refused before the handler ran.
+ *
+ * The input schema is validated before the handler is called, so a call whose
+ * arguments do not fit the schema (a reply_to_message without a message, for
+ * one) never reaches the handler and never reaches the confirmation gate
+ * either: it leaves no trace at all. The framework answers it with an
+ * INVALID_PARAMS error, and this is where that error still becomes a durable
+ * row.
+ *
+ * Only that one case is recorded. Every other error is the framework's
+ * business, and a row for it would be noise.
+ *
+ * The row names the tool and the code only. The arguments, the API key and
+ * its hash stay out of it, and the arguments are never logged either.
+ *
+ * The auditor never throws: a broken log must not turn a schema rejection
+ * into a broken answer.
+ */
+export async function auditSchemaRejection(
+  deps: ConfirmGateDeps,
+  request: { apiKey: string; error: unknown; rpcRequest: unknown },
+): Promise<void> {
+  try {
+    if (!isInvalidParams(request.error)) return;
+    const tool = rejectedToolName(request.rpcRequest);
+    if (tool === null) return;
+
+    await recordMcpRefusal(deps, {
+      apiKey: request.apiKey,
+      tool,
+      code: "INVALID_PARAMS",
+    });
+  } catch {
+    // The recorder does not throw, but nothing here may escape either: the
+    // auditor answers no one, so a fault in it can only cost the row.
+  }
+}
+
 /**
  * Refuse a destructive call that did not carry `confirm: true`.
  *

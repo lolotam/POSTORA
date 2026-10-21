@@ -27,6 +27,11 @@ export interface PostActionDeps {
   now: () => Date;
   supabaseUrl: string;
   serviceRoleKey: string;
+  /**
+   * The deadline for one suggestion call, headers and body together. It is
+   * the production default unless a test asks for a shorter wait.
+   */
+  bestTimesTimeoutMs?: number;
 }
 
 export function defaultPostActionDeps(
@@ -101,6 +106,62 @@ const BestTimesSchema = z.object({
 });
 
 const BEST_TIMES_TIMEOUT_MS = 60_000;
+
+// The body of the answer did not arrive in time. It is an error of its own so
+// that a body that never comes is not mistaken for a body that could not be
+// read: the first is a service that did not answer, the second is a service
+// that answered with something broken.
+class SuggestionTimeout extends Error {
+  constructor() {
+    super("Request timed out");
+    this.name = "SuggestionTimeout";
+  }
+}
+
+// The body of the answer, when it is a JSON object, and null when it is not
+// one. A body that is not JSON at all is a failed read, not an empty result.
+function parseJsonObject(text: string): Record<string, unknown> | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== "object" || parsed === null) return null;
+  return parsed as Record<string, unknown>;
+}
+
+// The body of the answer, before the deadline runs out. A body that never
+// arrives is a timeout, and a body that could not be read is a failure: the
+// two are told apart, because a service that did not answer and a service that
+// answered with something broken are not the same fault.
+type BodyRead =
+  | { kind: "ok"; text: string }
+  | { kind: "timeout" }
+  | { kind: "failed" };
+
+async function readBodyBeforeDeadline(
+  response: Response,
+  remainingMs: number,
+): Promise<BodyRead> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const text = await Promise.race([
+      response.text(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new SuggestionTimeout()), remainingMs);
+      }),
+    ]);
+    return { kind: "ok", text };
+  } catch (thrown) {
+    if (thrown instanceof SuggestionTimeout) return { kind: "timeout" };
+    return { kind: "failed" };
+  } finally {
+    // The timer is cleared either way: a deadline nobody waits for any more
+    // must not keep the edge awake.
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
 
 // A scheduled time has to be a whole instant. A date with nothing else
 // ("2027-01-01Z") is read by Date.parse as midnight, and an hour with no
@@ -768,6 +829,13 @@ async function requestSuggestions(
 ): Promise<{ suggestions: unknown[] } | ActionResult> {
   const { platform, historicalData, userId } = request;
 
+  // The deadline is one deadline for the whole call: the headers and the body
+  // together. The clock starts before the request goes out, because a body
+  // that stalls after the headers arrived would otherwise be read for as long
+  // as the service keeps the connection open.
+  const timeoutMs = deps.bestTimesTimeoutMs ?? BEST_TIMES_TIMEOUT_MS;
+  const startedAt = deps.now().getTime();
+
   // The suggestion service is called with the service role, so it has no user JWT
   // to read the caller from. The id of the API-key owner travels in the body
   // instead, so the AI call is logged against that user and not against nobody.
@@ -787,13 +855,13 @@ async function requestSuggestions(
           user_id: userId,
         }),
       },
-      BEST_TIMES_TIMEOUT_MS,
+      timeoutMs,
       deps.fetcher,
     );
   } catch (thrown) {
     const message = thrown instanceof Error ? thrown.message : String(thrown);
     if (message === "Request timed out") {
-      console.error(`[n8n-api] ${route}: the suggestion service did not answer within ${BEST_TIMES_TIMEOUT_MS / 1000}s for ${platform} (user ${userId})`);
+      console.error(`[n8n-api] ${route}: the suggestion service did not answer within ${timeoutMs / 1000}s for ${platform} (user ${userId})`);
       return error(
         504,
         "BEST_TIMES_TIMEOUT",
@@ -809,11 +877,30 @@ async function requestSuggestions(
     return error(502, "BEST_TIMES_FAILED", "Could not get suggestions right now. Try again.");
   }
 
+  // The body gets the rest of the same deadline. A body that never arrives is
+  // a service that did not answer in time, not a service that had nothing to
+  // say, so it is the same 504 the fetch timeout answers with.
+  const remainingMs = Math.max(0, timeoutMs - (deps.now().getTime() - startedAt));
+  const bodyRead = await readBodyBeforeDeadline(response, remainingMs);
+  if (bodyRead.kind === "timeout") {
+    console.error(`[n8n-api] ${route}: the suggestion service did not answer within ${timeoutMs / 1000}s for ${platform} (user ${userId})`);
+    return error(
+      504,
+      "BEST_TIMES_TIMEOUT",
+      "The suggestion service did not answer in time. Try again.",
+    );
+  }
+  if (bodyRead.kind === "failed") {
+    console.error(`[n8n-api] ${route}: the suggestion service's answer could not be read for ${platform} (user ${userId})`);
+    return error(502, "BEST_TIMES_FAILED", "Could not get suggestions right now. Try again.");
+  }
+  const bodyText = bodyRead.text;
+
   // A 2xx with a body that carries no suggestion list is a failed read, not an
   // empty result: answering 200 with no suggestions would tell the caller the
   // service had nothing to say, when in fact it never answered. An empty array
   // from the service is a real answer and stays a 200.
-  const json = await response.json().catch(() => null) as Record<string, unknown> | null;
+  const json = parseJsonObject(bodyText);
   if (json === null || !Array.isArray(json.suggestions)) {
     console.error(`[n8n-api] ${route}: the suggestion service answered without a suggestions list for ${platform} (user ${userId})`);
     return error(502, "BEST_TIMES_FAILED", "Could not get suggestions right now. Try again.");
@@ -830,13 +917,16 @@ async function requestSuggestions(
 
   // The service was asked about one platform, so every suggestion it answers
   // with has to be for that platform: a suggestion for another platform is not
-  // an answer to this question. A suggestion that does not carry every field
-  // the caller schedules from is dropped for the same reason.
+  // an answer to this question. The platform the service answered with is
+  // compared the way the request was written: trimmed and lowercased, so a
+  // suggestion for " Instagram " is an answer about Instagram. A suggestion
+  // that does not carry every field the caller schedules from is dropped for
+  // the same reason.
   const returned = (json.suggestions as unknown[]) ?? [];
   const suggestions = returned.filter((value) => {
     if (!isBestTimeSuggestion(value)) return false;
     const item = value as { platform: string };
-    return item.platform.toLowerCase() === platform.toLowerCase();
+    return String(item.platform).trim().toLowerCase() === platform.toLowerCase();
   });
 
   // A list the service answered with and that carries nothing usable is a
@@ -904,6 +994,11 @@ const PLATFORM_IDENTIFIER_RE = /^[a-z]+$/;
 // A platform that is not a lowercase word is not a platform at all, so the
 // request is refused rather than answered with a history that is empty by
 // construction and an AI call that is billed for it.
+//
+// A lowercase word is not a platform either: "facebok" is one. Whether a name
+// is a platform the caller can post to is decided by the caller's own
+// connected accounts and not by a list of names written down here, so that is
+// where the second check lives (see readConnectedPlatforms).
 function normalizePlatforms(platforms: string[]): string[] | null {
   const names: string[] = [];
   for (const platform of platforms) {
@@ -912,6 +1007,41 @@ function normalizePlatforms(platforms: string[]): string[] | null {
     names.push(name);
   }
   return [...new Set(names)];
+}
+
+// The platforms the caller can actually post to: their own active accounts.
+// This is not a list of platform names: the platform contract owns those, and
+// a second copy of it here would go stale without anybody noticing. It is the
+// caller's own accounts, which is the only list that answers the question that
+// actually matters: can this caller post to this platform? A name that passes
+// the lowercase-word check but names no account ("facebok") would otherwise
+// cost a history read and a paid AI call, and answer with a history that is
+// empty by construction.
+//
+// The read is scoped to the owner, because this function runs with the service
+// role and RLS is not the boundary: the rows are the caller's own accounts.
+async function readConnectedPlatforms(
+  deps: PostActionDeps,
+  route: string,
+  request: { userId: string; platforms: string[] },
+): Promise<Set<string> | ActionResult> {
+  const { data, error: readError } = await deps.supabase
+    .from("social_accounts")
+    .select("platform")
+    .eq("user_id", request.userId)
+    .eq("is_active", true)
+    .in("platform", request.platforms);
+
+  if (readError) {
+    console.error(`[n8n-api] ${route}: reading the connected accounts failed: ${readError.message}`);
+    return error(500, "INTERNAL_ERROR", "Reading the connected accounts failed. Please try again.");
+  }
+
+  const connected = new Set<string>();
+  for (const row of ((data ?? []) as Array<{ platform?: unknown }>)) {
+    if (typeof row.platform === "string") connected.add(row.platform);
+  }
+  return connected;
 }
 
 export async function suggestBestTimes(
@@ -946,7 +1076,9 @@ export async function suggestBestTimes(
   }
   // The limit is on the platforms that are read and asked about, so it is
   // checked on the list that is actually used. The schema caps the raw list
-  // at the same number, and deduplication can only shorten it.
+  // at the same number, and deduplication can only shorten it. The shape of
+  // the request is checked before anything is read, so a request that is
+  // refused for its shape costs no database read at all.
   if (platforms.length > BEST_TIMES_MAX_PLATFORMS) {
     return await refuse(
       deps,
@@ -960,6 +1092,32 @@ export async function suggestBestTimes(
           },
         ],
       }),
+    );
+  }
+
+  // A platform the caller cannot post to is refused here: before the history
+  // is read and before the AI is called. A name that is a lowercase word but
+  // names no account of the caller ("facebok") would otherwise cost a history
+  // read and a paid AI call, and answer with a history that is empty by
+  // construction. The caller's own connected accounts are what makes the
+  // difference between a platform and a typo, because they are the only
+  // platforms the caller can post to.
+  const connected = await readConnectedPlatforms(deps, route, { userId, platforms });
+  if (isActionResult(connected)) return connected;
+  const missing = platforms.filter((platform) => !connected.has(platform));
+  if (missing.length > 0) {
+    // The names echoed back are the normalized lowercase words the caller
+    // sent, so the refusal carries nothing the caller did not already know.
+    return await refuse(
+      deps,
+      route,
+      { userId },
+      error(
+        400,
+        "UNKNOWN_PLATFORM",
+        `No connected account for: ${missing.join(", ")}. Use list_accounts to see your platforms.`,
+        { platforms: missing },
+      ),
     );
   }
 

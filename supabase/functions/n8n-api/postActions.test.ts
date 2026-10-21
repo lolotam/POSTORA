@@ -235,6 +235,25 @@ function noNetwork(): typeof fetch {
     Promise.reject(new Error("this test must not reach the network"))) as unknown as typeof fetch;
 }
 
+// A fetcher whose headers arrive and whose body never does: the stream is
+// opened and nothing is ever enqueued into it, so reading the body waits for
+// an answer that never comes.
+function stalledBodyFetcher(): typeof fetch {
+  return (() =>
+    Promise.resolve(
+      new Response(
+        new ReadableStream({
+          pull() {
+            // Nothing is enqueued and the pull never finishes, so the body
+            // never arrives.
+            return new Promise<void>(() => {});
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    )) as unknown as typeof fetch;
+}
+
 function depsFor(db: FakeSupabase, fetcher: typeof fetch): PostActionDeps {
   return {
     supabase: db,
@@ -679,6 +698,17 @@ Deno.test("an inactive account is not healthy even when its token expiry is unkn
 
 // ── best-times ─────────────────────────────────────────────────────────────────
 
+// The connected accounts of the caller: one row per platform the caller can
+// post to. The best-times route reads the caller's own active accounts before
+// it reads any history, so a test that gets that far has to say which
+// platforms the caller is connected to.
+function queueConnectedAccounts(db: FakeSupabase, platforms: string[]): void {
+  db.queue("social_accounts", {
+    data: platforms.map((platform) => ({ platform })),
+    error: null,
+  });
+}
+
 // The suggestion service answers with the shape the model was asked for: the
 // platform, the day, the time, the score and the reason. A suggestion that
 // does not carry every field is not usable, so the fixtures below are
@@ -714,6 +744,7 @@ interface SentSuggestionBody {
 
 Deno.test("the best-times request carries the platforms and the history", async () => {
   const db = new FakeSupabase();
+  queueConnectedAccounts(db, ["instagram"]);
   db.queue("platform_posts", {
     data: [{ posted_at: "2026-10-04T21:30:00Z" }],
     error: null,
@@ -758,6 +789,7 @@ Deno.test("the best-times request carries the platforms and the history", async 
 Deno.test("each platform is analysed on its own publishing history", async () => {
   const db = new FakeSupabase();
   // One read per platform, in the order the platforms were asked for.
+  queueConnectedAccounts(db, ["instagram", "tiktok"]);
   db.queue("platform_posts", {
     data: [
       { posted_at: "2026-10-04T21:30:00Z" },
@@ -805,6 +837,7 @@ Deno.test("each platform is analysed on its own publishing history", async () =>
 
 Deno.test("every platform's history is read on its own, under its own limit", async () => {
   const db = new FakeSupabase();
+  queueConnectedAccounts(db, ["instagram", "tiktok"]);
   db.queue("platform_posts", {
     data: [{ posted_at: "2026-10-04T21:30:00Z" }],
     error: null,
@@ -845,6 +878,7 @@ Deno.test("every platform's history is read on its own, under its own limit", as
 
 Deno.test("a history read that fails is a 500 and no suggestion is asked for", async () => {
   const db = new FakeSupabase();
+  queueConnectedAccounts(db, ["instagram", "tiktok"]);
   db.queue("platform_posts", {
     data: [{ posted_at: "2026-10-04T21:30:00Z" }],
     error: null,
@@ -882,6 +916,7 @@ Deno.test("a history read that fails is a 500 and no suggestion is asked for", a
 
 Deno.test("a platform asked for twice is one platform", async () => {
   const db = new FakeSupabase();
+  queueConnectedAccounts(db, ["instagram"]);
   db.queue("platform_posts", {
     data: [{ posted_at: "2026-10-04T21:30:00Z" }],
     error: null,
@@ -903,6 +938,7 @@ Deno.test("a platform asked for twice is one platform", async () => {
 
 Deno.test("the same platform spelled three ways is one platform", async () => {
   const db = new FakeSupabase();
+  queueConnectedAccounts(db, ["instagram"]);
   db.queue("platform_posts", {
     data: [{ posted_at: "2026-10-04T21:30:00Z" }],
     error: null,
@@ -954,6 +990,101 @@ Deno.test("a platform that is not a platform name is refused before the history 
   assertEquals(callsFor(db, "system_logs", "insert").length, 1);
 });
 
+Deno.test("a platform with no connected account is refused before the history is read", async () => {
+  const db = new FakeSupabase();
+  // The caller has an Instagram account and no Facebook one. "facebok" is a
+  // lowercase word, so the shape check lets it through: only the caller's own
+  // connected accounts can tell a typo from a platform.
+  queueConnectedAccounts(db, ["instagram"]);
+  const { calls, fetcher } = fakeFetcher([]);
+  const result = await suggestBestTimes(
+    depsFor(db, fetcher),
+    USER,
+    { platforms: ["instagram", "facebok"] },
+    null,
+  );
+  assertEquals(result.status, 400);
+  assertEquals(errorCode(result), "UNKNOWN_PLATFORM");
+  assertEquals(
+    (result.body.error as { message: string }).message,
+    "No connected account for: facebok. Use list_accounts to see your platforms.",
+  );
+  // The names echoed back are the normalized names the caller sent.
+  assertEquals(
+    (result.body.error as { details: { platforms: string[] } }).details.platforms,
+    ["facebok"],
+  );
+  // The history is never read and the AI is never called: a platform the
+  // caller cannot post to costs neither.
+  assertEquals(callsFor(db, "platform_posts").length, 0);
+  assertEquals(calls.length, 0);
+  // The refusal leaves a durable row behind.
+  assertEquals(callsFor(db, "system_logs", "insert").length, 1);
+});
+
+Deno.test("the connected accounts are read once, for the caller's own active accounts", async () => {
+  const db = new FakeSupabase();
+  queueConnectedAccounts(db, ["instagram", "tiktok"]);
+  db.queue("platform_posts", { data: [], error: null });
+  db.queue("platform_posts", { data: [], error: null });
+  const { fetcher } = fakeFetcher([
+    { status: 200, body: { suggestions: [suggestion()] } },
+    { status: 200, body: { suggestions: [suggestion({ platform: "tiktok" })] } },
+  ]);
+  const result = await suggestBestTimes(
+    depsFor(db, fetcher),
+    USER,
+    { platforms: ["instagram", "tiktok"] },
+    null,
+  );
+  assertEquals(result.status, 200);
+
+  // One read of the caller's own accounts, for the platforms that were asked
+  // about. The service role is not the boundary, so the ownership and the
+  // active flag are part of the query and not of the caller's trust.
+  const reads = callsFor(db, "social_accounts", "select");
+  assertEquals(reads.length, 1);
+  assertEquals(hasFilter(reads[0], "eq", "user_id", USER), true);
+  assertEquals(hasFilter(reads[0], "eq", "is_active", true), true);
+  assertEquals(hasInFilter(reads[0], "platform", ["instagram", "tiktok"]), true);
+});
+
+Deno.test("a connected accounts read that fails is a 500 and nothing is read or asked for", async () => {
+  const db = new FakeSupabase();
+  db.queue("social_accounts", { data: null, error: { message: "statement timeout" } });
+  const { calls, fetcher } = fakeFetcher([]);
+  const logged: string[] = [];
+  const originalError = console.error;
+  console.error = (...args: unknown[]) => {
+    logged.push(args.map(String).join(" "));
+  };
+  try {
+    const result = await suggestBestTimes(
+      depsFor(db, fetcher),
+      USER,
+      { platforms: ["instagram"] },
+      null,
+    );
+    // A failed read is not an empty result: the platform is not refused as
+    // unknown on the strength of a read that never happened.
+    assertEquals(result.status, 500);
+    assertEquals(errorCode(result), "INTERNAL_ERROR");
+    assertEquals(
+      (result.body.error as { message: string }).message,
+      "Reading the connected accounts failed. Please try again.",
+    );
+    // Nothing is read and no AI is called on a platform nobody could be
+    // checked against.
+    assertEquals(callsFor(db, "platform_posts").length, 0);
+    assertEquals(calls.length, 0);
+    // The fault is logged where it happened.
+    assertEquals(logged.length, 1);
+    assertEquals(logged[0].includes("reading the connected accounts failed"), true);
+  } finally {
+    console.error = originalError;
+  }
+});
+
 Deno.test("a best-times request for more than six platforms is refused before the history is read", async () => {
   const db = new FakeSupabase();
   const result = await suggestBestTimes(
@@ -971,6 +1102,7 @@ Deno.test("a best-times request for more than six platforms is refused before th
 
 Deno.test("a platform whose suggestion call fails is the failure that is reported", async () => {
   const db = new FakeSupabase();
+  queueConnectedAccounts(db, ["instagram", "tiktok"]);
   db.queue("platform_posts", {
     data: [{ posted_at: "2026-10-04T21:30:00Z" }],
     error: null,
@@ -995,6 +1127,7 @@ Deno.test("a platform whose suggestion call fails is the failure that is reporte
 
 Deno.test("the first failure in request order is the one that is reported", async () => {
   const db = new FakeSupabase();
+  queueConnectedAccounts(db, ["instagram", "tiktok"]);
   db.queue("platform_posts", {
     data: [{ posted_at: "2026-10-04T21:30:00Z" }],
     error: null,
@@ -1021,6 +1154,7 @@ Deno.test("the first failure in request order is the one that is reported", asyn
 
 Deno.test("a best-times service that refuses is a 502", async () => {
   const db = new FakeSupabase();
+  queueConnectedAccounts(db, ["instagram"]);
   db.queue("platform_posts", { data: [], error: null });
   const { fetcher } = fakeFetcher([{ status: 503, body: { error: "down" } }]);
   const result = await suggestBestTimes(
@@ -1035,6 +1169,7 @@ Deno.test("a best-times service that refuses is a 502", async () => {
 
 Deno.test("a suggestion service that does not answer in time is a 504 and leaves a log line", async () => {
   const db = new FakeSupabase();
+  queueConnectedAccounts(db, ["instagram"]);
   db.queue("platform_posts", { data: [], error: null });
   const { fetcher } = fakeFetcher([{ reject: new Error("Request timed out") }]);
   const logged: string[] = [];
@@ -1060,8 +1195,38 @@ Deno.test("a suggestion service that does not answer in time is a 504 and leaves
   }
 });
 
+Deno.test("a suggestion service whose body never arrives is a 504 and leaves a log line", async () => {
+  const db = new FakeSupabase();
+  queueConnectedAccounts(db, ["instagram"]);
+  db.queue("platform_posts", { data: [], error: null });
+  const logged: string[] = [];
+  const originalError = console.error;
+  console.error = (...args: unknown[]) => {
+    logged.push(args.map(String).join(" "));
+  };
+  try {
+    const result = await suggestBestTimes(
+      // The deadline covers the body and not only the headers, so a body that
+      // stalls is a service that did not answer in time.
+      { ...depsFor(db, stalledBodyFetcher()), bestTimesTimeoutMs: 20 },
+      USER,
+      { platforms: ["instagram"] },
+      null,
+    );
+    assertEquals(result.status, 504);
+    assertEquals(errorCode(result), "BEST_TIMES_TIMEOUT");
+    // Every refusal leaves a line behind, so a timeout is visible in the logs
+    // and not only in the answer the caller got.
+    assertEquals(logged.length, 1);
+    assertEquals(logged[0].includes("did not answer"), true);
+  } finally {
+    console.error = originalError;
+  }
+});
+
 Deno.test("a suggestion service that answers 2xx with a body that is not JSON is a 502", async () => {
   const db = new FakeSupabase();
+  queueConnectedAccounts(db, ["instagram"]);
   db.queue("platform_posts", { data: [], error: null });
   const logged: string[] = [];
   const originalError = console.error;
@@ -1088,6 +1253,7 @@ Deno.test("a suggestion service that answers 2xx with a body that is not JSON is
 
 Deno.test("a suggestion service that answers 2xx without a suggestions list is a 502", async () => {
   const db = new FakeSupabase();
+  queueConnectedAccounts(db, ["instagram"]);
   db.queue("platform_posts", { data: [], error: null });
   const { fetcher } = fakeFetcher([{ status: 200, body: {} }]);
   const logged: string[] = [];
@@ -1113,6 +1279,7 @@ Deno.test("a suggestion service that answers 2xx without a suggestions list is a
 
 Deno.test("a suggestion service that could not read the model's answer is a 502", async () => {
   const db = new FakeSupabase();
+  queueConnectedAccounts(db, ["instagram"]);
   db.queue("platform_posts", { data: [], error: null });
   // The service flags the answer it could not parse: the list is empty because
   // the model's answer failed to parse, not because there was nothing to say.
@@ -1147,6 +1314,7 @@ Deno.test("a suggestion service that could not read the model's answer is a 502"
 
 Deno.test("a suggestion that does not carry every field is dropped", async () => {
   const db = new FakeSupabase();
+  queueConnectedAccounts(db, ["instagram"]);
   db.queue("platform_posts", { data: [], error: null });
   // The service answered with an item that has no time: it cannot be
   // scheduled, so it is dropped and the usable suggestion is kept.
@@ -1171,6 +1339,7 @@ Deno.test("a suggestion that does not carry every field is dropped", async () =>
 
 Deno.test("a suggestion nobody can schedule from is dropped", async () => {
   const db = new FakeSupabase();
+  queueConnectedAccounts(db, ["instagram"]);
   db.queue("platform_posts", { data: [], error: null });
   // A day nobody can schedule on and a time that is not a clock time are not
   // suggestions, so they are dropped the same way a missing field is.
@@ -1199,6 +1368,7 @@ Deno.test("a suggestion nobody can schedule from is dropped", async () => {
 
 Deno.test("a suggestion for another platform is dropped", async () => {
   const db = new FakeSupabase();
+  queueConnectedAccounts(db, ["instagram"]);
   db.queue("platform_posts", { data: [], error: null });
   // The service was asked about Instagram, so a TikTok suggestion is not an
   // answer to this question.
@@ -1215,8 +1385,30 @@ Deno.test("a suggestion for another platform is dropped", async () => {
   assertEquals(result.body.suggestions, [suggestion()]);
 });
 
+Deno.test("a suggestion whose platform carries spaces is kept", async () => {
+  const db = new FakeSupabase();
+  queueConnectedAccounts(db, ["instagram"]);
+  db.queue("platform_posts", { data: [], error: null });
+  // The service answered with the platform spelled with spaces around it: it
+  // is still an answer about Instagram, and dropping it would tell the caller
+  // the service had nothing to say.
+  const padded = suggestion({ platform: " Instagram " });
+  const { fetcher } = fakeFetcher([
+    { status: 200, body: { suggestions: [padded] } },
+  ]);
+  const result = await suggestBestTimes(
+    depsFor(db, fetcher),
+    USER,
+    { platforms: ["instagram"] },
+    null,
+  );
+  assertEquals(result.status, 200);
+  assertEquals(result.body.suggestions, [padded]);
+});
+
 Deno.test("a list with nothing usable in it is a 502 and leaves a log line", async () => {
   const db = new FakeSupabase();
+  queueConnectedAccounts(db, ["instagram"]);
   db.queue("platform_posts", { data: [], error: null });
   // The service answered with a list, but nothing in it is a suggestion: a
   // 200 with no suggestions would tell the caller the service had nothing to
@@ -1308,6 +1500,7 @@ Deno.test("a day and a time written in another spelling are still a suggestion",
 
 Deno.test("an empty suggestion list from the service is a 200", async () => {
   const db = new FakeSupabase();
+  queueConnectedAccounts(db, ["instagram"]);
   db.queue("platform_posts", { data: [], error: null });
   // Without the parse_failed flag the empty list is the service's real answer:
   // it read the model and the model had nothing to say.
@@ -1324,6 +1517,7 @@ Deno.test("an empty suggestion list from the service is a 200", async () => {
 
 Deno.test("a timezone the runtime does not know falls back to UTC", async () => {
   const db = new FakeSupabase();
+  queueConnectedAccounts(db, ["instagram"]);
   db.queue("platform_posts", { data: [], error: null });
   const { fetcher } = fakeFetcher([{ status: 200, body: { suggestions: [] } }]);
   const result = await suggestBestTimes(
