@@ -633,6 +633,33 @@ Deno.test("a best-times service that refuses is a 502", async () => {
   assertEquals(errorCode(result), "BEST_TIMES_FAILED");
 });
 
+Deno.test("a suggestion service that does not answer in time is a 504 and leaves a log line", async () => {
+  const db = new FakeSupabase();
+  db.queue("posts", { data: [], error: null });
+  const { fetcher } = fakeFetcher([{ reject: new Error("Request timed out") }]);
+  const logged: string[] = [];
+  const originalError = console.error;
+  console.error = (...args: unknown[]) => {
+    logged.push(args.map(String).join(" "));
+  };
+  try {
+    const result = await suggestBestTimes(
+      depsFor(db, fetcher),
+      USER,
+      { platforms: ["instagram"] },
+      null,
+    );
+    assertEquals(result.status, 504);
+    assertEquals(errorCode(result), "BEST_TIMES_TIMEOUT");
+    // Every refusal leaves a line behind, so a timeout is visible in the logs
+    // and not only in the answer the caller got.
+    assertEquals(logged.length, 1);
+    assertEquals(logged[0].includes("did not answer"), true);
+  } finally {
+    console.error = originalError;
+  }
+});
+
 Deno.test("a timezone the runtime does not know falls back to UTC", async () => {
   const db = new FakeSupabase();
   db.queue("posts", { data: [], error: null });

@@ -623,6 +623,7 @@ export async function suggestBestTimes(
   } catch (thrown) {
     const message = thrown instanceof Error ? thrown.message : String(thrown);
     if (message === "Request timed out") {
+      console.error(`[n8n-api] ${route}: the suggestion service did not answer within ${BEST_TIMES_TIMEOUT_MS / 1000}s (user ${userId})`);
       return error(
         504,
         "BEST_TIMES_TIMEOUT",
