@@ -1,6 +1,5 @@
 import { assertEquals } from "jsr:@std/assert@1";
 import {
-  RATE_LIMIT_REFUSAL_DEADLINE_MS,
   recordApiRefusal,
   recordRateLimitRefusal,
   resetRateLimitRefusalThrottleForTests,
@@ -48,47 +47,11 @@ class ThrowingSupabase {
   }
 }
 
-// A client that never answers: the database is the thing that is slow, which
-// is exactly the pressure that caused the throttling in the first place. The
-// insert is attempted and then left hanging, the way a hung query behaves,
-// until the test releases it.
-class HangingSupabase {
-  attempts = 0;
-  landed = false;
-  private release: (() => void) | null = null;
-
-  from(_table: string) {
-    const db = this;
-    return {
-      insert(_payload: unknown): Promise<{ data: null; error: null }> {
-        db.attempts += 1;
-        const hung = new Promise<{ data: null; error: null }>((resolve) => {
-          db.release = () => resolve({ data: null, error: null });
-        });
-        hung.then(
-          () => {
-            db.landed = true;
-          },
-          () => {
-            db.landed = true;
-          },
-        );
-        return hung;
-      },
-    };
-  }
-
-  // Lets the hung insert land, the way a slow row eventually does.
-  releaseInsert(): void {
-    this.release?.();
-    this.release = null;
-  }
-}
-
 // A client that fails the first write and works after that: the refusal row
-// has to be written on the next attempt, because a throttle entry that stands
-// for a row nobody can see would suppress every identical refusal of the next
-// minute with no row at all.
+// has to be written on the next attempt, because a write that did not land is
+// not remembered. The throttle entry is only set after a row is really there,
+// so a failed write leaves nothing behind and the next identical refusal
+// tries again.
 class FlakySupabase {
   attempts = 0;
 
@@ -378,9 +341,9 @@ Deno.test("a throttled refusal is recorded again once the window has passed", as
   assertEquals(db.inserts.length, 2);
 });
 
-// The throttle stands for a row that is really there. A row that was not
-// written is not a row, and an entry that stands for one suppresses every
-// identical refusal of the next minute with no trace at all.
+// The throttle entry stands for a row that is really there: it is set only
+// after the write landed. A row that was not written is not a row, and it
+// leaves no entry behind, so the next identical refusal tries again.
 
 Deno.test("a refusal row that landed is not written again inside the window", async () => {
   resetRateLimitRefusalThrottleForTests();
@@ -388,13 +351,14 @@ Deno.test("a refusal row that landed is not written again inside the window", as
 
   await recordRateLimitRefusal(db, { userId: USER, route: ROUTE, now: 1_000_000 });
   await recordRateLimitRefusal(db, { userId: USER, route: ROUTE, now: 1_030_000 });
+  await recordRateLimitRefusal(db, { userId: USER, route: ROUTE, now: 1_059_000 });
 
-  // The row landed, so the window holds: the second refusal inside it is
+  // The row landed, so the window holds: the refusals inside it are
   // suppressed instead of written again.
   assertEquals(db.inserts.length, 1);
 });
 
-Deno.test("a refusal row that did not land is written again inside the window", async () => {
+Deno.test("a refusal row that did not land leaves no entry, so the next refusal writes again", async () => {
   resetRateLimitRefusalThrottleForTests();
   const db = new FlakySupabase(1);
 
@@ -407,31 +371,11 @@ Deno.test("a refusal row that did not land is written again inside the window", 
   assertEquals(logged.length, 1);
   assertEquals(logged[0].includes(ROUTE), true);
 
-  // The throttle entry that stood for the missing row is released, so the next
-  // identical refusal inside the window writes its own row instead of being
-  // suppressed with no trace at all.
-  await recordRateLimitRefusal(db, { userId: USER, route: ROUTE, now: 1_030_000 });
+  // The failure left no throttle entry behind, so the identical refusal
+  // writes its row again right away instead of being suppressed by an entry
+  // that stands for a row nobody can see.
+  await recordRateLimitRefusal(db, { userId: USER, route: ROUTE, now: 1_001_000 });
   assertEquals(db.attempts, 2);
-});
-
-Deno.test("a refusal row that never landed keeps the entry, so a hanging database is not hammered", async () => {
-  resetRateLimitRefusalThrottleForTests();
-  const db = new HangingSupabase();
-
-  // The deadline wins: the write has not finished, so whether it lands is not
-  // known yet.
-  await capturedWarn(() =>
-    recordRateLimitRefusal(db, { userId: USER, route: ROUTE, now: 1_000_000, deadlineMs: 20 })
-  );
-  await capturedWarn(() =>
-    recordRateLimitRefusal(db, { userId: USER, route: ROUTE, now: 1_030_000, deadlineMs: 20 })
-  );
-
-  // The second refusal inside the window did not insert again: a database that
-  // hangs must not turn every 429 into a new insert.
-  assertEquals(db.attempts, 1);
-  db.releaseInsert();
-  await new Promise<void>((resolve) => setTimeout(() => resolve(), 0));
 });
 
 Deno.test("a different route gets its own row inside the same window", async () => {
@@ -451,36 +395,49 @@ Deno.test("a different route gets its own row inside the same window", async () 
   assertEquals(metadata.status, 429);
 });
 
+// The map is bounded, so one isolate cannot be filled by a client that
+// throttles on many routes. When every entry is still inside its window, the
+// refusal that finds the map full is not written at all.
+
+Deno.test("the throttle map is bounded: a refusal that finds only live entries is not written", async () => {
+  resetRateLimitRefusalThrottleForTests();
+  const db = new FakeSupabase();
+
+  // One live entry per route: the map is full and every entry is inside its
+  // own window.
+  for (let i = 0; i < 10_000; i += 1) {
+    await recordRateLimitRefusal(db, { userId: USER, route: `${ROUTE}/${i}`, now: 1_000_000 });
+  }
+  assertEquals(db.inserts.length, 10_000);
+
+  // The map holds only live entries, so this refusal is not written: the
+  // bound holds and the writes are not amplified beyond it.
+  const warned = await capturedWarn(() =>
+    recordRateLimitRefusal(db, { userId: USER, route: `${ROUTE}/new`, now: 1_000_000 })
+  );
+  assertEquals(db.inserts.length, 10_000);
+  assertEquals(warned.length, 1);
+  assertEquals(warned[0].includes(ROUTE), true);
+
+  // The map is left as the test found it.
+  resetRateLimitRefusalThrottleForTests();
+});
+
 // The refusal row is the trace; the 429 is the answer. The two cannot be
 // allowed to wait on each other: the database that hangs under the pressure
 // that caused the throttling would otherwise cost the caller its 429, and a
 // caller that gets an edge timeout instead of its refusal cannot tell a
-// throttled request from a broken one.
+// throttled request from a broken one. The row is therefore written off the
+// response path, through runInBackground, and not against a deadline of its
+// own.
 
-Deno.test("a refusal row that never lands does not hold the 429 past its deadline", async () => {
-  resetRateLimitRefusalThrottleForTests();
-  const db = new HangingSupabase();
+Deno.test("tripwire: the refusal row is written off the response path, not against a deadline", () => {
+  const source = recordRateLimitRefusal.toString();
 
-  // The deadline is the documented one: two seconds.
-  assertEquals(RATE_LIMIT_REFUSAL_DEADLINE_MS, 2_000);
-
-  const started = Date.now();
-  const warned = await capturedWarn(() =>
-    recordRateLimitRefusal(db, { userId: USER, route: ROUTE, now: 1_000_000, deadlineMs: 20 })
-  );
-  const elapsed = Date.now() - started;
-
-  // The refusal was answered: the call resolved on its own, well inside the
-  // deadline the caller would otherwise have waited for.
-  assertEquals(elapsed < RATE_LIMIT_REFUSAL_DEADLINE_MS, true);
-  // The insert was attempted once, and it was left to finish on its own
-  // rather than cancelled: a slow row still lands.
-  assertEquals(db.attempts, 1);
-  db.releaseInsert();
-  await new Promise<void>((resolve) => setTimeout(() => resolve(), 0));
-  assertEquals(db.landed, true);
-  // The wait is not silent: one line names the route and the deadline.
-  assertEquals(warned.length, 1);
-  assertEquals(warned[0].includes(ROUTE), true);
-  assertEquals(warned[0].includes("20ms"), true);
+  // The write is detached through the shared background helper: waitUntil on
+  // the normal runtime, a 2s cap on the degraded path.
+  assertEquals(source.includes("runInBackground("), true);
+  // The own deadline race is gone: there is no deadline left to win, and no
+  // option to shorten one.
+  assertEquals(source.includes("deadlineMs"), false);
 });
