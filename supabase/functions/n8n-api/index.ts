@@ -8,6 +8,7 @@ import { type CommentActionResult, deleteComment, hideComment, replyToComment } 
 import { parseSubscriptionFilters } from "./webhookFilters.ts";
 import { describeBase64Failure, normalizeBase64Media } from "../_shared/base64Media.ts";
 import { clientIpFromHeaders, isValidUuid } from "./requestGuards.ts";
+import { INVALID_JSON_MESSAGE, InvalidRequestBodyError, looksLikeJson, parseJsonText, readJsonBody } from "./requestBody.ts";
 import { recordApiRefusal, recordRateLimitRefusal } from "./refusalLog.ts";
 import { relayUploadTarget } from "./mediaRelay.ts";
 import { handleCancelScheduledPost, handleCheckAccountHealth, handleReschedulePost, handleSuggestBestTimes } from "./postActions.ts";
@@ -1380,7 +1381,7 @@ async function handleUploadMedia(supabase: any, userId: string, request: Request
 
   // Handle JSON body (URLs or base64 data)
   if (contentType.includes('application/json')) {
-    const body = await request.json();
+    const body = await readJsonBody(request);
     // `media_base64` / `filename` are what POST /api/v1/post and the MCP `upload_media`
     // tool have always sent. Only `file_data` / `file_name` were read here, so every
     // base64 upload through those clients fell through to the "no media" branch below and
@@ -2240,6 +2241,17 @@ export function withRateLimitHeaders(response: Response, rateLimit: { remaining:
   });
 }
 
+// A body that is not valid JSON is the caller's mistake, so it answers with the
+// same typed code every other client error uses — but the request was metered
+// like any other, so the response still carries the rate-limit headers.
+export function invalidRequestBodyResponse(req: Request, rateLimit: { remaining: number; resetAt: Date }, config: ResolvedRateLimit): Response {
+  return withRateLimitHeaders(
+    apiError(req, INVALID_JSON_MESSAGE, 400, 'INVALID_REQUEST'),
+    rateLimit,
+    config,
+  );
+}
+
 // Helper function to send webhook notifications (can be imported by process-post)
 async function sendWebhookNotification(
   supabase: any,
@@ -2300,6 +2312,14 @@ export async function handleRequest(req: Request): Promise<Response> {
     return new Response(null, { headers: corsHeaders });
   }
 
+  // The rate-limit result is hoisted above the try because the catch below
+  // needs it: a body that fails to parse is still a metered request, so its
+  // 400 carries the same headers every other response does. The refusal row
+  // is written from the catch too, through a recorder hoisted the same way.
+  let rateLimit: Awaited<ReturnType<typeof checkRateLimit>> | undefined;
+  let rateLimitConfig: ResolvedRateLimit | undefined;
+  let recordInvalidBody: (() => Promise<boolean>) | undefined;
+
   try {
     const url = new URL(req.url);
     // Remove /n8n-api prefix from the path
@@ -2358,13 +2378,14 @@ export async function handleRequest(req: Request): Promise<Response> {
     // X-RateLimit-* headers.
     const ipAddress = clientIpFromHeaders(req.headers);
     const rateLimitKey = rateLimitKeyForPath(path, req.method);
-    const rateLimitConfig = await resolveRateLimit(rateLimitKey, {
+    rateLimitConfig = await resolveRateLimit(rateLimitKey, {
       fetchUserOverride: (endpointKey) => fetchUserOverride(supabaseAdmin, userId, endpointKey),
       fetchPlanSlug: () => fetchPlanSlug(supabaseAdmin, userId),
       fetchTierLimit: (planSlug, endpointKey) => fetchTierLimit(supabaseAdmin, planSlug, endpointKey),
       fetchGlobalSetting: (endpointKey) => fetchGlobalSetting(supabaseAdmin, endpointKey),
     });
-    const rateLimit = await checkRateLimit(supabaseAdmin, userId, rateLimitKey, req.method, ipAddress, rateLimitConfig);
+    rateLimit = await checkRateLimit(supabaseAdmin, userId, rateLimitKey, req.method, ipAddress, rateLimitConfig);
+    recordInvalidBody = () => recordApiRefusal(supabaseAdmin, { userId, route: rateLimitKey, code: 'INVALID_REQUEST', status: 400 });
 
     if (rateLimit.failClosed) {
       return apiError(req,
@@ -2398,7 +2419,7 @@ export async function handleRequest(req: Request): Promise<Response> {
       const contentType = request.headers.get('content-type') || '';
 
       if (contentType.includes('application/json')) {
-        return await request.json();
+        return await readJsonBody(request);
       } else if (contentType.includes('application/x-www-form-urlencoded')) {
         const text = await request.text();
         const params = new URLSearchParams(text);
@@ -2462,29 +2483,31 @@ export async function handleRequest(req: Request): Promise<Response> {
 
         return body;
       } else {
-        // Try JSON as fallback
-        try {
-          return await request.json();
-        } catch {
-          // Try form-urlencoded as last resort
-          const text = await request.text();
-          const params = new URLSearchParams(text);
-          const body: Record<string, any> = {};
-
-          for (const [key, value] of params.entries()) {
-            if (key === 'platforms' || key === 'media_file_ids' || key === 'account_ids') {
-              try {
-                body[key] = JSON.parse(value);
-              } catch {
-                body[key] = value.split(',').map(s => s.trim()).filter(Boolean);
-              }
-            } else {
-              body[key] = value;
-            }
-          }
-
-          return body;
+        // No recognised content-type: read the body once and decide from the
+        // text. A failed JSON read consumes the body, so trying JSON first and
+        // then form-urlencoded threw "body already used" for every form body.
+        const text = await request.text();
+        if (looksLikeJson(text)) {
+          return parseJsonText(text);
         }
+
+        // Try form-urlencoded as last resort
+        const params = new URLSearchParams(text);
+        const body: Record<string, any> = {};
+
+        for (const [key, value] of params.entries()) {
+          if (key === 'platforms' || key === 'media_file_ids' || key === 'account_ids') {
+            try {
+              body[key] = JSON.parse(value);
+            } catch {
+              body[key] = value.split(',').map(s => s.trim()).filter(Boolean);
+            }
+          } else {
+            body[key] = value;
+          }
+        }
+
+        return body;
       }
     }
 
@@ -2517,12 +2540,12 @@ export async function handleRequest(req: Request): Promise<Response> {
       const postId = path.replace('/api/v1/post/', '');
       response = await handleGetPostById(req, supabaseAdmin, userId, postId);
     } else if (path === '/api/v1/webhooks' && req.method === 'POST') {
-      const body = await req.json();
+      const body = await readJsonBody(req);
       response = await handleRegisterWebhook(req, supabaseAdmin, userId, body);
     } else if (path === '/api/v1/webhooks' && req.method === 'GET') {
       response = await handleGetWebhooks(req, supabaseAdmin, userId);
     } else if (path === '/api/v1/webhooks/test' && req.method === 'POST') {
-      const body = await req.json();
+      const body = await readJsonBody(req);
       response = await handleTestWebhook(req, supabaseAdmin, userId, body);
     } else if (path.startsWith('/api/v1/webhooks/') && req.method === 'DELETE') {
       const webhookId = path.replace('/api/v1/webhooks/', '');
@@ -2594,6 +2617,13 @@ export async function handleRequest(req: Request): Promise<Response> {
     return withRateLimitHeaders(response, rateLimit, rateLimitConfig);
 
   } catch (error: unknown) {
+    // A body that is not valid JSON is the caller's mistake, not a server
+    // fault, so it answers 400 INVALID_REQUEST with the rate-limit headers
+    // instead of the generic 500 below.
+    if (error instanceof InvalidRequestBodyError && rateLimit && rateLimitConfig && recordInvalidBody) {
+      await recordInvalidBody();
+      return invalidRequestBodyResponse(req, rateLimit, rateLimitConfig);
+    }
     console.error('n8n API error:', error);
     return getSafeErrorResponse(error, 'Internal server error. Please try again.');
   }
