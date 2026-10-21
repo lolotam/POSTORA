@@ -1,5 +1,10 @@
 import { assertEquals } from "jsr:@std/assert@1";
-import { confirmField, refuseUnconfirmed, type ConfirmRefusal } from "./confirmGate.ts";
+import {
+  confirmField,
+  recordMcpRefusal,
+  refuseUnconfirmed,
+  type ConfirmRefusal,
+} from "./confirmGate.ts";
 
 interface FakeCall {
   method: string;
@@ -69,11 +74,12 @@ const EXPECTED_REFUSAL: ConfirmRefusal = {
   message: "Set confirm: true to run this action.",
 };
 
-Deno.test("the confirm field takes any boolean, so the handler refuses and records it", () => {
+Deno.test("the confirm field takes any value, so the handler refuses and records it", () => {
   assertEquals(confirmField.safeParse(true).success, true);
   assertEquals(confirmField.safeParse(false).success, true);
   assertEquals(confirmField.safeParse(undefined).success, true);
-  assertEquals(confirmField.safeParse("true").success, false);
+  assertEquals(confirmField.safeParse("true").success, true);
+  assertEquals(confirmField.safeParse(null).success, true);
 });
 
 Deno.test("a confirmed call is allowed and touches no database", async () => {
@@ -120,11 +126,15 @@ Deno.test("a missing confirm is refused and the refusal is recorded", async () =
     level: "warn",
     message: "delete_comment refused: CONFIRMATION_REQUIRED",
     user_id: "user-42",
-    metadata: { tool: "delete_comment", code: "CONFIRMATION_REQUIRED" },
+    metadata: {
+      tool: "delete_comment",
+      code: "CONFIRMATION_REQUIRED",
+      owner_resolved: true,
+    },
   });
 
   const metadata = inserts[0].row.metadata as Record<string, unknown>;
-  assertEquals(Object.keys(metadata).sort(), ["code", "tool"]);
+  assertEquals(Object.keys(metadata).sort(), ["code", "owner_resolved", "tool"]);
 
   // The arguments, the key and its hash are not in the row.
   const serialized = JSON.stringify(inserts[0].row);
@@ -150,10 +160,49 @@ Deno.test("confirm: false is refused and recorded like a missing confirm", async
   assertEquals(inserts[0].row.metadata as Record<string, unknown>, {
     tool: "cancel_scheduled_post",
     code: "CONFIRMATION_REQUIRED",
+    owner_resolved: true,
   });
 });
 
-Deno.test("an unknown owner is refused and writes no row", async () => {
+Deno.test('confirm: "true" (a string) is refused and recorded', async () => {
+  const { admin, inserts } = createFakeAdmin({ profile: { id: "user-42" } });
+
+  const refusal = await refuseUnconfirmed(
+    { admin, sha256Hex },
+    { apiKey: CALLER_PLACEHOLDER, tool: "delete_comment", confirm: "true" },
+  );
+
+  assertEquals(refusal, EXPECTED_REFUSAL);
+  assertEquals(inserts.length, 1);
+  assertEquals(inserts[0].table, "system_logs");
+  assertEquals(inserts[0].row.user_id, "user-42");
+  assertEquals(inserts[0].row.metadata as Record<string, unknown>, {
+    tool: "delete_comment",
+    code: "CONFIRMATION_REQUIRED",
+    owner_resolved: true,
+  });
+});
+
+Deno.test("confirm: null is refused and recorded", async () => {
+  const { admin, inserts } = createFakeAdmin({ profile: { id: "user-42" } });
+
+  const refusal = await refuseUnconfirmed(
+    { admin, sha256Hex },
+    { apiKey: CALLER_PLACEHOLDER, tool: "delete_comment", confirm: null },
+  );
+
+  assertEquals(refusal, EXPECTED_REFUSAL);
+  assertEquals(inserts.length, 1);
+  assertEquals(inserts[0].table, "system_logs");
+  assertEquals(inserts[0].row.user_id, "user-42");
+  assertEquals(inserts[0].row.metadata as Record<string, unknown>, {
+    tool: "delete_comment",
+    code: "CONFIRMATION_REQUIRED",
+    owner_resolved: true,
+  });
+});
+
+Deno.test("an unknown owner is refused and still writes a row without an owner", async () => {
   const { admin, calls, inserts } = createFakeAdmin({ profile: null });
 
   const refusal = await refuseUnconfirmed(
@@ -162,11 +211,27 @@ Deno.test("an unknown owner is refused and writes no row", async () => {
   );
 
   assertEquals(refusal, EXPECTED_REFUSAL);
-  assertEquals(inserts.length, 0);
-  assertEquals(calls.map((call) => call.method), ["from", "select", "eq", "maybeSingle"]);
+
+  // The refusal leaves a trace even without an owner.
+  assertEquals(inserts.length, 1);
+  assertEquals(inserts[0].table, "system_logs");
+  assertEquals(inserts[0].row.user_id, null);
+  assertEquals(inserts[0].row.metadata as Record<string, unknown>, {
+    tool: "hide_comment",
+    code: "CONFIRMATION_REQUIRED",
+    owner_resolved: false,
+  });
+  assertEquals(calls.map((call) => call.method), [
+    "from",
+    "select",
+    "eq",
+    "maybeSingle",
+    "from",
+    "insert",
+  ]);
 });
 
-Deno.test("a failed owner lookup is refused and writes no row", async () => {
+Deno.test("a failed owner lookup is refused and still writes a row without an owner", async () => {
   const { admin, inserts } = createFakeAdmin({ lookupError: { message: "database is down" } });
 
   const refusal = await refuseUnconfirmed(
@@ -175,7 +240,16 @@ Deno.test("a failed owner lookup is refused and writes no row", async () => {
   );
 
   assertEquals(refusal, EXPECTED_REFUSAL);
-  assertEquals(inserts.length, 0);
+
+  // The refusal leaves a trace even without an owner.
+  assertEquals(inserts.length, 1);
+  assertEquals(inserts[0].table, "system_logs");
+  assertEquals(inserts[0].row.user_id, null);
+  assertEquals(inserts[0].row.metadata as Record<string, unknown>, {
+    tool: "delete_comment",
+    code: "CONFIRMATION_REQUIRED",
+    owner_resolved: false,
+  });
 });
 
 Deno.test("a failed log insert still refuses and never throws", async () => {
@@ -193,6 +267,17 @@ Deno.test("a failed log insert still refuses and never throws", async () => {
   assertEquals(inserts.length, 1);
 });
 
+Deno.test("a throwing log insert still refuses and never throws", async () => {
+  const { admin } = createFakeAdmin({ profile: { id: "user-42" }, throwOn: "insert" });
+
+  const refusal = await refuseUnconfirmed(
+    { admin, sha256Hex },
+    { apiKey: CALLER_PLACEHOLDER, tool: "delete_comment", confirm: undefined },
+  );
+
+  assertEquals(refusal, EXPECTED_REFUSAL);
+});
+
 Deno.test("a throwing database client refuses instead of throwing", async () => {
   const { admin, inserts } = createFakeAdmin({ throwOn: "maybeSingle" });
 
@@ -202,5 +287,103 @@ Deno.test("a throwing database client refuses instead of throwing", async () => 
   );
 
   assertEquals(refusal, EXPECTED_REFUSAL);
-  assertEquals(inserts.length, 0);
+
+  // The thrown lookup costs the row its owner, not the row itself.
+  assertEquals(inserts.length, 1);
+  assertEquals(inserts[0].table, "system_logs");
+  assertEquals(inserts[0].row.user_id, null);
+  assertEquals(inserts[0].row.metadata as Record<string, unknown>, {
+    tool: "delete_comment",
+    code: "CONFIRMATION_REQUIRED",
+    owner_resolved: false,
+  });
+});
+
+Deno.test("a throwing hash refuses instead of throwing and still writes a row", async () => {
+  const { admin, inserts } = createFakeAdmin({ profile: { id: "user-42" } });
+  const throwingHash = async (_text: string): Promise<string> => {
+    throw new Error("hashing is unavailable");
+  };
+
+  const refusal = await refuseUnconfirmed(
+    { admin, sha256Hex: throwingHash },
+    { apiKey: CALLER_PLACEHOLDER, tool: "delete_comment", confirm: undefined },
+  );
+
+  assertEquals(refusal, EXPECTED_REFUSAL);
+
+  // The owner was never resolved, so the row is written without one.
+  assertEquals(inserts.length, 1);
+  assertEquals(inserts[0].table, "system_logs");
+  assertEquals(inserts[0].row.user_id, null);
+  assertEquals(inserts[0].row.metadata as Record<string, unknown>, {
+    tool: "delete_comment",
+    code: "CONFIRMATION_REQUIRED",
+    owner_resolved: false,
+  });
+});
+
+Deno.test("recordMcpRefusal writes one row naming the tool and the code, and nothing else", async () => {
+  const { admin, calls, inserts } = createFakeAdmin({ profile: { id: "user-42" } });
+
+  await recordMcpRefusal(
+    { admin, sha256Hex },
+    { apiKey: CALLER_PLACEHOLDER, tool: "reply_to_message", code: "INVALID_MESSAGE" },
+  );
+
+  // The owner is resolved the way the API resolves an API key.
+  assertEquals(calls.map((call) => call.method), [
+    "from",
+    "select",
+    "eq",
+    "maybeSingle",
+    "from",
+    "insert",
+  ]);
+  assertEquals(calls[0].args, ["profiles"]);
+  assertEquals(calls[2].args, ["api_key_hash", "hashed-placeholder"]);
+
+  // One row, naming the tool and the code and nothing else.
+  assertEquals(inserts.length, 1);
+  assertEquals(inserts[0].table, "system_logs");
+  assertEquals(inserts[0].row, {
+    source: "mcp",
+    category: "edge",
+    level: "warn",
+    message: "reply_to_message refused: INVALID_MESSAGE",
+    user_id: "user-42",
+    metadata: {
+      tool: "reply_to_message",
+      code: "INVALID_MESSAGE",
+      owner_resolved: true,
+    },
+  });
+
+  const metadata = inserts[0].row.metadata as Record<string, unknown>;
+  assertEquals(Object.keys(metadata).sort(), ["code", "owner_resolved", "tool"]);
+
+  // The arguments, the key and its hash are not in the row.
+  const serialized = JSON.stringify(inserts[0].row);
+  assertEquals(serialized.includes(CALLER_PLACEHOLDER), false);
+  assertEquals(serialized.includes("hashed-placeholder"), false);
+});
+
+Deno.test("a failed insert in recordMcpRefusal does not throw", async () => {
+  const { admin, inserts } = createFakeAdmin({
+    profile: { id: "user-42" },
+    insertError: { message: "insert failed" },
+  });
+
+  let thrown: unknown = null;
+  try {
+    await recordMcpRefusal(
+      { admin, sha256Hex },
+      { apiKey: CALLER_PLACEHOLDER, tool: "reply_to_message", code: "INVALID_MESSAGE" },
+    );
+  } catch (error) {
+    thrown = error;
+  }
+
+  assertEquals(thrown, null);
+  assertEquals(inserts.length, 1);
 });

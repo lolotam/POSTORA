@@ -6,7 +6,7 @@
 // row (AGENTS.md rule 4), which means the decision has to happen in code we
 // own and can record.
 //
-// The schema therefore accepts an optional boolean and the handler decides:
+// The schema therefore accepts any value and the handler decides:
 // `confirm: true` runs the tool, anything else is refused and recorded.
 //
 // The database client and the hashing function are injected so the gate owns
@@ -14,8 +14,8 @@
 
 import { z } from "npm:zod@4.1.12";
 
-export const confirmField = z.boolean().optional().describe(
-  "Must be true to run. Confirms you intend this irreversible action.",
+export const confirmField = z.unknown().optional().describe(
+  "Must be the boolean true to run. Confirms you intend this irreversible action.",
 );
 
 export interface ConfirmGateDeps {
@@ -35,24 +35,31 @@ function refusal(): ConfirmRefusal {
 }
 
 /**
- * Refuse a destructive call that did not carry `confirm: true`.
+ * Record a refusal in system_logs.
  *
- * - `confirm === true` -> null: the call may run, and nothing is read or
- *   written. A confirmed call must not pay for a log lookup.
- * - anything else -> the refusal, after a best-effort durable log.
+ * Every refusal has to leave a durable trace (AGENTS.md rule 4), so the owner
+ * is resolved from the caller's key and the refusal is written under it.
  *
- * The log names the tool and the code only. The arguments, the API key and
+ * The row is written either way. A failed lookup, a missing owner or a thrown
+ * error only means the owner could not be resolved: the refusal is then
+ * recorded with `user_id: null` and `metadata.owner_resolved: false`, so the
+ * refusal still leaves a trace instead of vanishing with the lookup.
+ *
+ * The row names the tool and the code only. The arguments, the API key and
  * its hash stay out of it.
  *
  * A failed lookup, a missing owner, a failed insert or a thrown error are
- * all logged on the edge and then answered with the same refusal: the gate
- * never throws, and it never lets a broken log turn into a broken answer.
+ * all reported on the edge and then swallowed: the recorder never throws,
+ * and it never lets a broken log turn into a broken answer.
  */
-export async function refuseUnconfirmed(
+export async function recordMcpRefusal(
   deps: ConfirmGateDeps,
-  request: { apiKey: string; tool: string; confirm: unknown },
-): Promise<ConfirmRefusal | null> {
-  if (request.confirm === true) return null;
+  request: { apiKey: string; tool: string; code: string },
+): Promise<void> {
+  // The owner, when it can be resolved. The row is written either way, so a
+  // failure here costs the row its owner, not the row itself.
+  let userId: string | null = null;
+  let ownerResolved = false;
 
   try {
     const apiKeyHash = await deps.sha256Hex(request.apiKey);
@@ -64,27 +71,58 @@ export async function refuseUnconfirmed(
 
     if (error) {
       console.error(`[mcp] ${request.tool} refused: owner lookup failed`);
-      return refusal();
-    }
-    if (!profile) {
+    } else if (!profile) {
       console.error(`[mcp] ${request.tool} refused: owner not found`);
-      return refusal();
+    } else {
+      userId = profile.id;
+      ownerResolved = true;
     }
+  } catch {
+    console.error(`[mcp] ${request.tool} refused: owner lookup failed`);
+  }
 
+  try {
     const { error: insertError } = await deps.admin.from("system_logs").insert({
       source: "mcp",
       category: "edge",
       level: "warn",
-      message: `${request.tool} refused: CONFIRMATION_REQUIRED`,
-      user_id: profile.id,
-      metadata: { tool: request.tool, code: "CONFIRMATION_REQUIRED" },
+      message: `${request.tool} refused: ${request.code}`,
+      user_id: userId,
+      metadata: { tool: request.tool, code: request.code, owner_resolved: ownerResolved },
     });
     if (insertError) {
       console.error(`[mcp] ${request.tool} refused: log insert failed`);
     }
   } catch {
-    console.error(`[mcp] ${request.tool} refused: unexpected error`);
+    console.error(`[mcp] ${request.tool} refused: log insert failed`);
   }
+}
+
+/**
+ * Refuse a destructive call that did not carry `confirm: true`.
+ *
+ * - `confirm === true` -> null: the call may run, and nothing is read or
+ *   written. A confirmed call must not pay for a log lookup.
+ * - anything else -> the refusal, after a best-effort durable log.
+ *
+ * The log names the tool and the code only. The arguments, the API key and
+ * its hash stay out of it.
+ *
+ * A failed lookup, a missing owner, a failed insert or a thrown error are
+ * all reported on the edge and then answered with the same refusal: the gate
+ * never throws, and it never lets a broken log turn into a broken answer.
+ */
+export async function refuseUnconfirmed(
+  deps: ConfirmGateDeps,
+  request: { apiKey: string; tool: string; confirm: unknown },
+): Promise<ConfirmRefusal | null> {
+  if (request.confirm === true) return null;
+
+  await recordMcpRefusal(deps, {
+    apiKey: request.apiKey,
+    tool: request.tool,
+    code: "CONFIRMATION_REQUIRED",
+  });
 
   return refusal();
 }

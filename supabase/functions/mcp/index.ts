@@ -8,7 +8,7 @@ import { McpServer, StreamableHttpTransport } from "npm:mcp-lite@^0.10.0";
 import { z } from "npm:zod@4.1.12";
 import { createClient } from "npm:@supabase/supabase-js@2.45.0";
 import { normalizeListFields } from "./stringList.ts";
-import { confirmField, refuseUnconfirmed } from "./confirmGate.ts";
+import { confirmField, recordMcpRefusal, refuseUnconfirmed } from "./confirmGate.ts";
 import { sha256Hex } from "../_shared/crypto.ts";
 
 const corsHeaders = {
@@ -458,11 +458,21 @@ function buildServer(apiKey: string) {
     handler: async (args) => {
       // What is sent is the trimmed recipient, and a recipient that is absent
       // or only whitespace is left out of the body entirely. A request with no
-      // recipient at all is not refused here: the API validates it and refuses
-      // it there, so the refusal is answered and recorded in one place
-      // instead of vanishing into a local answer nobody can trace.
+      // recipient at all is refused here, before the API is called, and the
+      // refusal is recorded in system_logs (AGENTS.md rule 4): every refusal
+      // has to leave a trace, and this one never reaches the API.
       const recipientId = args.recipient_id?.trim();
       const recipientPhone = args.recipient_phone?.trim();
+      if (!recipientId && !recipientPhone) {
+        await recordMcpRefusal(
+          { admin, sha256Hex },
+          { apiKey, tool: "reply_to_message", code: "INVALID_MESSAGE" },
+        );
+        return fail(400, {
+          code: "INVALID_MESSAGE",
+          message: "Pass recipient_id or recipient_phone.",
+        });
+      }
       const body: Record<string, unknown> = { ...args };
       if (recipientId) {
         body.recipient_id = recipientId;
