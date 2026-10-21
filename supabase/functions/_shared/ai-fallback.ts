@@ -427,6 +427,12 @@ export async function callAiWithFallback(
 
 /**
  * Log an AI call to system_logs.
+ *
+ * `options` is optional and only affects a failed call: `failureMessage`
+ * replaces the default failure text and `failureLevel` replaces the default
+ * 'error' level. It exists for the case where the provider answered and only
+ * the answer was unusable, which is not a provider outage. A caller that
+ * passes neither keeps the previous behaviour exactly.
  */
 export async function logAiCall(
   supabaseAdmin: any,
@@ -436,6 +442,7 @@ export async function logAiCall(
   success: boolean,
   result: AiCallResult,
   extraMeta?: Record<string, any>,
+  options?: { failureMessage?: string; failureLevel?: 'warn' | 'error' },
 ): Promise<void> {
   try {
     const tierDetails: Record<string, any> = {};
@@ -451,12 +458,12 @@ export async function logAiCall(
     }
 
     const { error } = await supabaseAdmin.from('system_logs').insert({
-      level: success ? 'info' : 'error',
+      level: success ? 'info' : (options?.failureLevel ?? 'error'),
       category: 'ai',
       source,
       message: success
         ? `AI ${feature} succeeded using ${result.modelUsed} (${result.tierUsed})`
-        : `AI ${feature} failed after all fallback tiers`,
+        : (options?.failureMessage ?? `AI ${feature} failed after all fallback tiers`),
       user_id: userId,
       metadata: {
         feature,

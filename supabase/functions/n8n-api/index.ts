@@ -8,7 +8,9 @@ import { type CommentActionResult, deleteComment, hideComment, replyToComment } 
 import { parseSubscriptionFilters } from "./webhookFilters.ts";
 import { describeBase64Failure, normalizeBase64Media } from "../_shared/base64Media.ts";
 import { clientIpFromHeaders, isValidUuid } from "./requestGuards.ts";
+import { recordApiRefusal, recordRateLimitRefusal } from "./refusalLog.ts";
 import { relayUploadTarget } from "./mediaRelay.ts";
+import { handleCancelScheduledPost, handleCheckAccountHealth, handleReschedulePost, handleSuggestBestTimes } from "./postActions.ts";
 import { MEDIA_QUOTA_CODE, invokeErrorText, isMediaQuotaMessage, mediaQuotaHumanMessage, mediaQuotaPreflight, quotaOnlyMessage, type QuotaRpc } from "../_shared/mediaQuotaError.ts";
 import {
   fetchGlobalSetting,
@@ -2043,26 +2045,40 @@ function logAccountAccessDenied(scope: string, accountId: string, callerId: stri
 
 async function handleMessageReply(req: Request, supabase: any, userId: string, body: any) {
   const accountId = typeof body?.social_account_id === 'string' ? body.social_account_id : '';
-  const recipientId = typeof body?.recipient_id === 'string'
-    ? body.recipient_id
-    : typeof body?.recipient_phone === 'string' ? body.recipient_phone : '';
+  // A blank recipient is a client error, not a failed send; the phone is used when the id is blank.
+  const rawRecipientId = typeof body?.recipient_id === 'string' ? body.recipient_id.trim() : '';
+  const rawRecipientPhone = typeof body?.recipient_phone === 'string' ? body.recipient_phone.trim() : '';
+  const recipientId = rawRecipientId || rawRecipientPhone;
   const message = typeof body?.message === 'string' ? body.message : '';
   const messageType = body?.message_type || 'text';
 
-  if (!accountId || !recipientId || !message) {
+  // A blank message is a client error, not something to deliver: the text is checked after trimming, so whitespace-only text is refused like a missing one.
+  if (!accountId || !recipientId || !message.trim()) {
+    await recordApiRefusal(supabase, { userId, route: 'messages/reply', code: 'INVALID_MESSAGE', status: 400, accountId });
     return apiError(req, 'social_account_id, recipient_id, and message are required', 400, 'INVALID_MESSAGE');
   }
   if (!['text', 'media'].includes(messageType)) {
+    await recordApiRefusal(supabase, { userId, route: 'messages/reply', code: 'INVALID_MESSAGE_TYPE', status: 400, accountId });
     return apiError(req, 'Only text and media messages are supported', 400, 'INVALID_MESSAGE_TYPE');
   }
-  if (messageType === 'media' && typeof body?.media_url !== 'string') {
+  // A blank media_url is a client error, not a failed send: refusing it here
+  // answers 400 INVALID_MEDIA and leaves a refusal row, instead of letting
+  // sendMessage throw and the caller see a retryable 502 MESSAGE_SEND_FAILED.
+  if (messageType === 'media' && (typeof body?.media_url !== 'string' || body.media_url.trim() === '')) {
+    await recordApiRefusal(supabase, { userId, route: 'messages/reply', code: 'INVALID_MEDIA', status: 400, accountId });
     return apiError(req, 'media_url is required for media messages', 400, 'INVALID_MEDIA');
   }
   if (messageType === 'media' && body?.media_type !== undefined && !EVOLUTION_MEDIA_TYPES.includes(body.media_type)) {
+    await recordApiRefusal(supabase, { userId, route: 'messages/reply', code: 'INVALID_MEDIA_TYPE', status: 400, accountId });
     return apiError(req, `media_type must be one of ${EVOLUTION_MEDIA_TYPES.join(', ')}`, 400, 'INVALID_MEDIA_TYPE');
   }
 
-  if (!isValidUuid(accountId)) return invalidAccountIdError(req, accountId);
+  if (!isValidUuid(accountId)) {
+    // The id the caller sent is not a uuid, so it is not written down: only a
+    // real account uuid is written down.
+    await recordApiRefusal(supabase, { userId, route: 'messages/reply', code: 'INVALID_ACCOUNT_ID', status: 400 });
+    return invalidAccountIdError(req, accountId);
+  }
 
   const { data: account, error } = await supabase
     .from('social_accounts')
@@ -2072,11 +2088,13 @@ async function handleMessageReply(req: Request, supabase: any, userId: string, b
   if (error) return apiError(req, 'Failed to fetch social account', 500, 'INTERNAL_ERROR');
   if (!account || account.user_id !== userId) {
     logAccountAccessDenied('messages/reply', accountId, userId, account?.user_id ?? null);
+    await recordApiRefusal(supabase, { userId, route: 'messages/reply', code: 'ACCOUNT_NOT_FOUND', status: 404, accountId });
     return apiError(req, 'Social account not found or not owned by the authenticated user.', 404, 'ACCOUNT_NOT_FOUND');
   }
 
   const platform = body?.platform || account.platform;
   if (!['whatsapp', 'instagram', 'facebook'].includes(platform) || platform !== account.platform) {
+    await recordApiRefusal(supabase, { userId, route: 'messages/reply', code: 'INVALID_PLATFORM', status: 400, accountId });
     return apiError(req, 'platform does not match the selected social account', 400, 'INVALID_PLATFORM');
   }
 
@@ -2088,7 +2106,10 @@ async function handleMessageReply(req: Request, supabase: any, userId: string, b
       route: 'messages/reply',
       now: new Date(),
     });
-    if (refusal) return apiError(req, refusal.message, refusal.status, refusal.code);
+    if (refusal) {
+      // The gate records this refusal itself (logSendRefused), so no second row is written here.
+      return apiError(req, refusal.message, refusal.status, refusal.code);
+    }
   }
 
   try {
@@ -2355,6 +2376,8 @@ export async function handleRequest(req: Request): Promise<Response> {
 
     if (!rateLimit.allowed) {
       console.log('Rate limit exceeded for user:', userId, 'on endpoint:', path);
+      // The limiter answers before any route can record the refusal, so it is recorded here, throttled.
+      await recordRateLimitRefusal(supabaseAdmin, { userId, route: rateLimitKey });
       // The throttled client is the one that most needs these headers — it has to
       // know when to retry — so the 429 carries them too, not just the responses
       // that reach a route handler.
@@ -2516,6 +2539,14 @@ export async function handleRequest(req: Request): Promise<Response> {
       response = await handleCommentHide(req, supabaseAdmin, userId, await parseRequestBody(req));
     } else if (path === '/api/v1/comments/delete' && req.method === 'POST') {
       response = await handleCommentDelete(req, supabaseAdmin, userId, await parseRequestBody(req));
+    } else if (path === '/api/v1/posts/cancel' && req.method === 'POST') {
+      response = await handleCancelScheduledPost(req, supabaseAdmin, userId, () => parseRequestBody(req));
+    } else if (path === '/api/v1/posts/reschedule' && req.method === 'POST') {
+      response = await handleReschedulePost(req, supabaseAdmin, userId, () => parseRequestBody(req));
+    } else if (path === '/api/v1/accounts/health' && req.method === 'GET') {
+      response = await handleCheckAccountHealth(req, supabaseAdmin, userId, url);
+    } else if (path === '/api/v1/best-times' && req.method === 'POST') {
+      response = await handleSuggestBestTimes(req, supabaseAdmin, userId, () => parseRequestBody(req), userPreferredTimezone);
     } else if (path === '/api/v1/comments' && req.method === 'GET') {
       response = toProxyResponse(await handleListComments(serviceProxyDeps(), userId, url.searchParams), corsHeaders);
     } else if (path === '/api/v1/messages' && req.method === 'GET') {
@@ -2546,6 +2577,10 @@ export async function handleRequest(req: Request): Promise<Response> {
           'POST /api/v1/comments/reply',
           'POST /api/v1/comments/hide',
           'POST /api/v1/comments/delete',
+          'POST /api/v1/posts/cancel',
+          'POST /api/v1/posts/reschedule',
+          'GET /api/v1/accounts/health',
+          'POST /api/v1/best-times',
           'GET /api/v1/comments',
           'GET /api/v1/messages',
           'GET /api/v1/analytics',

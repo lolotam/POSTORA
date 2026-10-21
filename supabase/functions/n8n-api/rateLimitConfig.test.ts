@@ -445,3 +445,12 @@ Deno.test("fetchTierLimit queries tier_rate_limits with the plan_slug and endpoi
   ]);
   assertEquals(getSelect().includes("max_requests_per_hour"), true);
 });
+
+Deno.test("the MCP post-management routes have their own budgets, destructive ones capped at 60/h", () => {
+  for (const key of ["/api/v1/posts/cancel"]) {
+    assertEquals(FALLBACK_RATE_LIMITS[key].requests, 60);
+    assertEquals(rateLimitKeyForPath(key, "POST"), key);
+  }
+  assertEquals(rateLimitKeyForPath("/api/v1/accounts/health", "GET"), "/api/v1/accounts/health");
+  assertEquals(FALLBACK_RATE_LIMITS["/api/v1/best-times"].requests, 5);
+});
