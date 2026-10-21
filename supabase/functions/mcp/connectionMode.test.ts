@@ -91,6 +91,11 @@ Deno.test("the read connection offers no interaction, write or AI tool", () => {
   }
 });
 
+Deno.test("the read connection does not offer suggest_best_times, which spends AI quota", () => {
+  assertEquals(toolsForMode("read").includes("suggest_best_times"), false);
+  assertEquals(toolsForMode("full").includes("suggest_best_times"), true);
+});
+
 Deno.test("the inbox connection offers public comment tools only", () => {
   const offered = toolsForMode("inbox").sort();
 

@@ -108,9 +108,10 @@ export const TOOL_POLICIES: Readonly<Record<string, ToolPolicy>> = {
     kind: "read",
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
   },
+  // Spends up to six paid AI calls per request, so it is "ai", not a read.
   suggest_best_times: {
-    kind: "read",
-    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+    kind: "ai",
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
   },
   list_comments: {
     kind: "untrusted_read",

@@ -9,6 +9,7 @@ import {
   MCP_ENDPOINTS,
   type McpEndpoint,
 } from "../_shared/mcpEndpoints.ts";
+import { NOT_YET_GRANTABLE_SCOPES } from "../_shared/mcpScopes.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SERVICE_ROLE = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
@@ -198,18 +199,10 @@ async function handleAuthorize(req: Request): Promise<Response> {
   const state = p.get("state") ?? "";
   const scope = p.get("scope") ?? "accounts:read posts:read posts:write media:write webhooks:manage";
 
-  // comments:write, messages:write, comments:read and messages:read are
-  // advertised in the server metadata above, but they are not grantable yet:
-  // the consent screen that could show them ships after the frontend freeze.
-  // They are therefore dropped from the requested list before it is stored,
-  // and no token is ever issued with them. The tools that need them answer
-  // 403 over OAuth until then.
-  const NOT_YET_GRANTABLE_SCOPES = new Set([
-    "comments:write",
-    "messages:write",
-    "comments:read",
-    "messages:read",
-  ]);
+  // The scopes that cannot be granted yet (see ../_shared/mcpScopes.ts) are
+  // dropped from the requested list before it is stored, so no token is ever
+  // issued with them. The tools that need them answer 403 over OAuth until
+  // the consent screen ships.
   const grantableScope = scope
     .split(/\s+/)
     .filter(Boolean)
