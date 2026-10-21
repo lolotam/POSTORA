@@ -8,8 +8,8 @@
 //                          people's text
 //   /mcp/read  -> "read":  the owner's own reads plus the tools that return
 //                          other people's text
-//   /mcp/inbox -> "inbox": list_accounts, list_comments, reply_to_comment
-//                          and hide_comment: public material only
+//   /mcp/inbox -> "inbox": list_comments, reply_to_comment and hide_comment:
+//                          public material only
 //
 // Every endpoint therefore needs its own protected-resource metadata
 // document: a client that was configured with /mcp/read must discover a

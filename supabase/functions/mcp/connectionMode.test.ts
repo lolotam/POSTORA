@@ -101,10 +101,14 @@ Deno.test("the inbox connection offers public comment tools only", () => {
 
   assertEquals(offered, [
     "hide_comment",
-    "list_accounts",
     "list_comments",
     "reply_to_comment",
   ]);
+});
+
+Deno.test("the inbox connection does not offer list_accounts, which returns private account metadata", () => {
+  assertEquals(toolsForMode("inbox").includes("list_accounts"), false);
+  assertEquals(toolsForMode("read").includes("list_accounts"), true);
 });
 
 Deno.test("no connection offers DM reads together with any tool that sends or writes", () => {

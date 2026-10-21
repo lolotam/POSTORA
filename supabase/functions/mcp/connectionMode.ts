@@ -14,8 +14,8 @@
 //   /mcp       -> "full":  every tool except list_comments and list_messages
 //   /mcp/read  -> "read":  the owner's own reads plus list_comments and
 //                          list_messages
-//   /mcp/inbox -> "inbox": list_accounts, list_comments, reply_to_comment and
-//                          hide_comment: public material only
+//   /mcp/inbox -> "inbox": list_comments, reply_to_comment and hide_comment:
+//                          public material only
 //
 // The model cannot change the path, so it cannot widen its own tool set.
 //
@@ -193,8 +193,11 @@ const MODE_KINDS: Record<"full" | "read", ReadonlySet<ToolKind>> = {
 // cannot leak a secret; the DM reads and the owner's own private reads are
 // left out on purpose. Answering the sender only would not help, because the
 // attacker IS the sender.
+//
+// list_accounts is left out too, because it returns private account metadata
+// (internal ids, profile names, LinkedIn destinations); the caller passes
+// social_account_id itself.
 const INBOX_TOOLS: ReadonlySet<string> = new Set([
-  "list_accounts",
   "list_comments",
   "reply_to_comment",
   "hide_comment",
