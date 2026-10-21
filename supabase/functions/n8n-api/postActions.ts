@@ -135,26 +135,79 @@ function parseJsonObject(text: string): Record<string, unknown> | null {
 // arrives is a timeout, and a body that could not be read is a failure: the
 // two are told apart, because a service that did not answer and a service that
 // answered with something broken are not the same fault.
+//
+// The deadline also cancels the body it did not get. A service that stalls
+// after its headers arrived would otherwise keep the connection open long
+// after the caller was answered 504.
 type BodyRead =
   | { kind: "ok"; text: string }
   | { kind: "timeout" }
   | { kind: "failed" };
 
+// The whole body, read chunk by chunk. The body is read through an explicit
+// reader and not through response.text(): a read that runs into the deadline
+// has to be cancellable, and a body that response.text() has locked cannot be
+// cancelled any more.
+async function readWholeBody(
+  reader: ReadableStreamDefaultReader<Uint8Array> | undefined,
+): Promise<string> {
+  if (!reader) return "";
+  const decoder = new TextDecoder();
+  let text = "";
+  let chunk = await reader.read();
+  while (!chunk.done) {
+    // A chunk can end in the middle of a character, so the decoder keeps what
+    // is left of it until a later chunk says more.
+    text += decoder.decode(chunk.value, { stream: true });
+    chunk = await reader.read();
+  }
+  // The last characters of the body are flushed here: the decoder was still
+  // holding them.
+  return text + decoder.decode();
+}
+
+// The body is given up, so the connection to the service is released: a
+// service that never answers must not keep it open behind the answer the
+// caller already got. The cancel goes through the reader, because the reader
+// is what holds the body, and a body that is locked cannot be cancelled any
+// other way. A cancel that fails is not a new failure: the caller is
+// answered 504 either way.
+async function cancelBody(
+  reader: ReadableStreamDefaultReader<Uint8Array> | undefined,
+): Promise<void> {
+  if (!reader) return;
+  try {
+    await reader.cancel();
+  } catch {
+    // Swallowed on purpose: cancelling must never turn the timeout into
+    // another error.
+  }
+}
+
 async function readBodyBeforeDeadline(
   response: Response,
   remainingMs: number,
 ): Promise<BodyRead> {
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
+    // The reader is taken inside the try: a body that was read already throws
+    // here, and that is a failed read like any other.
+    reader = response.body?.getReader();
     const text = await Promise.race([
-      response.text(),
+      readWholeBody(reader),
       new Promise<never>((_, reject) => {
         timer = setTimeout(() => reject(new SuggestionTimeout()), remainingMs);
       }),
     ]);
     return { kind: "ok", text };
   } catch (thrown) {
-    if (thrown instanceof SuggestionTimeout) return { kind: "timeout" };
+    if (thrown instanceof SuggestionTimeout) {
+      // The body is cancelled before the 504 goes out, so a stalled service
+      // does not keep the connection open behind the answer.
+      await cancelBody(reader);
+      return { kind: "timeout" };
+    }
     return { kind: "failed" };
   } finally {
     // The timer is cleared either way: a deadline nobody waits for any more

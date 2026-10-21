@@ -237,9 +237,14 @@ function noNetwork(): typeof fetch {
 
 // A fetcher whose headers arrive and whose body never does: the stream is
 // opened and nothing is ever enqueued into it, so reading the body waits for
-// an answer that never comes.
-function stalledBodyFetcher(): typeof fetch {
-  return (() =>
+// an answer that never comes. The stream records that it was cancelled, so a
+// test can tell whether the connection was released after the deadline.
+function stalledBodyFetcher(): {
+  fetcher: typeof fetch;
+  wasCancelled: () => boolean;
+} {
+  const state = { cancelled: false };
+  const fetcher = (() =>
     Promise.resolve(
       new Response(
         new ReadableStream({
@@ -247,6 +252,29 @@ function stalledBodyFetcher(): typeof fetch {
             // Nothing is enqueued and the pull never finishes, so the body
             // never arrives.
             return new Promise<void>(() => {});
+          },
+          cancel() {
+            state.cancelled = true;
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    )) as unknown as typeof fetch;
+  return { fetcher, wasCancelled: () => state.cancelled };
+}
+
+// A fetcher that answers with a body that arrives in more than one chunk, so
+// the body has to be read in full and not only up to the end of the first
+// chunk.
+function chunkedBodyFetcher(chunks: string[]): typeof fetch {
+  const encoder = new TextEncoder();
+  return (() =>
+    Promise.resolve(
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
+            controller.close();
           },
         }),
         { status: 200, headers: { "Content-Type": "application/json" } },
@@ -1199,6 +1227,7 @@ Deno.test("a suggestion service whose body never arrives is a 504 and leaves a l
   const db = new FakeSupabase();
   queueConnectedAccounts(db, ["instagram"]);
   db.queue("platform_posts", { data: [], error: null });
+  const { fetcher, wasCancelled } = stalledBodyFetcher();
   const logged: string[] = [];
   const originalError = console.error;
   console.error = (...args: unknown[]) => {
@@ -1208,7 +1237,7 @@ Deno.test("a suggestion service whose body never arrives is a 504 and leaves a l
     const result = await suggestBestTimes(
       // The deadline covers the body and not only the headers, so a body that
       // stalls is a service that did not answer in time.
-      { ...depsFor(db, stalledBodyFetcher()), bestTimesTimeoutMs: 20 },
+      { ...depsFor(db, fetcher), bestTimesTimeoutMs: 20 },
       USER,
       { platforms: ["instagram"] },
       null,
@@ -1219,9 +1248,31 @@ Deno.test("a suggestion service whose body never arrives is a 504 and leaves a l
     // and not only in the answer the caller got.
     assertEquals(logged.length, 1);
     assertEquals(logged[0].includes("did not answer"), true);
+    // The body is cancelled, so the connection to the service is released: a
+    // service that stalls must not keep it open behind the 504.
+    assertEquals(wasCancelled(), true);
   } finally {
     console.error = originalError;
   }
+});
+
+Deno.test("a body that arrives in two chunks is read in full", async () => {
+  const db = new FakeSupabase();
+  queueConnectedAccounts(db, ["instagram"]);
+  db.queue("platform_posts", { data: [], error: null });
+  // The body arrives in two pieces, so a reader that stopped at the end of the
+  // first one would answer with a body that is not JSON.
+  const json = JSON.stringify({ suggestions: [suggestion()] });
+  const splitAt = Math.floor(json.length / 2);
+  const fetcher = chunkedBodyFetcher([json.slice(0, splitAt), json.slice(splitAt)]);
+  const result = await suggestBestTimes(
+    depsFor(db, fetcher),
+    USER,
+    { platforms: ["instagram"] },
+    null,
+  );
+  assertEquals(result.status, 200);
+  assertEquals(result.body.suggestions, [suggestion()]);
 });
 
 Deno.test("a suggestion service that answers 2xx with a body that is not JSON is a 502", async () => {
