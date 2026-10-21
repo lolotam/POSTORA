@@ -139,12 +139,30 @@ Deno.test("a post id is written down as metadata.post_id", async () => {
   });
 
   const row = db.inserts[0].payload;
+  // The post id is written down, because it is a real uuid.
   assertEquals(row.metadata, {
     route: ROUTE,
     code: "POST_NOT_FOUND",
     status: 404,
     post_id: POST,
   });
+});
+
+Deno.test("a post id that is not a uuid is not written down", async () => {
+  const db = new FakeSupabase();
+  await recordApiRefusal(db, {
+    userId: USER,
+    route: ROUTE,
+    code: "INVALID_POST_ID",
+    status: 400,
+    postId: "not-a-uuid",
+  });
+
+  const row = db.inserts[0].payload;
+  const metadata = row.metadata as Record<string, unknown>;
+  assertEquals("post_id" in metadata, false);
+  // The id the caller made up never reaches the log, in any form.
+  assertEquals(JSON.stringify(row).includes("not-a-uuid"), false);
 });
 
 Deno.test("a refusal without a post id writes no post_id key", async () => {

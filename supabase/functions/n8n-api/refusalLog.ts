@@ -4,8 +4,8 @@
 //
 // The row carries the route, the code, the status and the ids only: never the
 // request body, never the recipient, never the message text, never a token.
-// An account id is written down only when it is a real uuid, because the id
-// the caller made up must not reach the log.
+// An account id or a post id is written down only when it is a real uuid,
+// because an id the caller made up must not reach the log.
 import { isValidUuid } from "./requestGuards.ts";
 
 /**
@@ -36,7 +36,7 @@ export async function recordApiRefusal(
           route,
           code,
           status,
-          ...(postId ? { post_id: postId } : {}),
+          ...(postId && isValidUuid(postId) ? { post_id: postId } : {}),
           ...(accountId && isValidUuid(accountId) ? { account_id: accountId } : {}),
         },
       });
