@@ -106,7 +106,12 @@ const BestTimesSchema = z.object({
   platforms: z.array(z.string().min(1).max(50)).min(1).max(BEST_TIMES_MAX_PLATFORMS),
 });
 
-const BEST_TIMES_TIMEOUT_MS = 60_000;
+// The deadline for one suggestion call, headers and body together. The edge
+// worker that runs this function is killed at roughly 60 s, and this clock
+// only starts once the authentication, the rate limit and the account and
+// history reads are done, so the budget stays well below that limit: the
+// route has to still be alive to answer its own 504 and to log it.
+const BEST_TIMES_TIMEOUT_MS = 45_000;
 
 // The body of the answer did not arrive in time. It is an error of its own so
 // that a body that never comes is not mistaken for a body that could not be
