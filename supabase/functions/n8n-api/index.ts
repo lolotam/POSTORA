@@ -2059,7 +2059,10 @@ async function handleMessageReply(req: Request, supabase: any, userId: string, b
     await recordApiRefusal(supabase, { userId, route: 'messages/reply', code: 'INVALID_MESSAGE_TYPE', status: 400, accountId });
     return apiError(req, 'Only text and media messages are supported', 400, 'INVALID_MESSAGE_TYPE');
   }
-  if (messageType === 'media' && typeof body?.media_url !== 'string') {
+  // A blank media_url is a client error, not a failed send: refusing it here
+  // answers 400 INVALID_MEDIA and leaves a refusal row, instead of letting
+  // sendMessage throw and the caller see a retryable 502 MESSAGE_SEND_FAILED.
+  if (messageType === 'media' && (typeof body?.media_url !== 'string' || body.media_url.trim() === '')) {
     await recordApiRefusal(supabase, { userId, route: 'messages/reply', code: 'INVALID_MEDIA', status: 400, accountId });
     return apiError(req, 'media_url is required for media messages', 400, 'INVALID_MEDIA');
   }
