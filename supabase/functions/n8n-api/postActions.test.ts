@@ -3,6 +3,9 @@ import {
   cancelScheduledPost,
   checkAccountHealth,
   computePostingHistogram,
+  handleCancelScheduledPost,
+  handleReschedulePost,
+  handleSuggestBestTimes,
   reschedulePost,
   suggestBestTimes,
   type PostActionDeps,
@@ -1003,4 +1006,103 @@ Deno.test("a timezone the runtime does not know falls back to UTC", async () => 
   );
   assertEquals(result.status, 200);
   assertEquals(result.body.timezone, "UTC");
+});
+
+// ── a body that cannot be parsed ───────────────────────────────────────────────
+
+// The router used to parse the body before the handler ran, so a malformed or
+// truncated body threw out of the route and was answered with a generic 500
+// that carried no rate-limit headers. The handler reads the body itself now,
+// and a body that cannot be parsed is a stable 400 that never touches the
+// database.
+const MALFORMED_BODY = () => Promise.reject(new SyntaxError("Unexpected end of JSON input"));
+
+function minimalRequest(path: string): Request {
+  return new Request(`https://api.postora.cloud${path}`, { method: "POST" });
+}
+
+// Every refusal leaves a line behind, so the warning is captured while the
+// call runs.
+async function withCapturedWarn<T>(
+  run: () => Promise<T>,
+): Promise<{ result: T; logged: string[] }> {
+  const logged: string[] = [];
+  const originalWarn = console.warn;
+  console.warn = (...args: unknown[]) => {
+    logged.push(args.map(String).join(" "));
+  };
+  try {
+    const result = await run();
+    return { result, logged };
+  } finally {
+    console.warn = originalWarn;
+  }
+}
+
+Deno.test("a cancel whose body cannot be parsed is a 400 and never reaches the database", async () => {
+  const db = new FakeSupabase();
+  const { result: response, logged } = await withCapturedWarn(() =>
+    handleCancelScheduledPost(
+      minimalRequest("/api/v1/posts/cancel"),
+      db,
+      USER,
+      MALFORMED_BODY,
+    )
+  );
+  assertEquals(response.status, 400);
+  const body = await response.json() as { error: { code: string; message: string } };
+  assertEquals(body.error.code, "INVALID_REQUEST");
+  assertEquals(body.error.message, "The request body is not valid JSON.");
+  assertEquals(db.calls.length, 0);
+  // The refusal leaves a line behind, ids only: never the body itself.
+  assertEquals(logged.length, 1);
+  assertEquals(
+    logged[0],
+    `[n8n-api] posts/cancel: request body could not be parsed (user ${USER})`,
+  );
+});
+
+Deno.test("a reschedule whose body cannot be parsed is a 400 and never reaches the database", async () => {
+  const db = new FakeSupabase();
+  const { result: response, logged } = await withCapturedWarn(() =>
+    handleReschedulePost(
+      minimalRequest("/api/v1/posts/reschedule"),
+      db,
+      USER,
+      MALFORMED_BODY,
+    )
+  );
+  assertEquals(response.status, 400);
+  const body = await response.json() as { error: { code: string; message: string } };
+  assertEquals(body.error.code, "INVALID_REQUEST");
+  assertEquals(body.error.message, "The request body is not valid JSON.");
+  assertEquals(db.calls.length, 0);
+  assertEquals(logged.length, 1);
+  assertEquals(
+    logged[0],
+    `[n8n-api] posts/reschedule: request body could not be parsed (user ${USER})`,
+  );
+});
+
+Deno.test("a best-times whose body cannot be parsed is a 400 and never reaches the database", async () => {
+  const db = new FakeSupabase();
+  const { result: response, logged } = await withCapturedWarn(() =>
+    handleSuggestBestTimes(
+      minimalRequest("/api/v1/best-times"),
+      db,
+      USER,
+      MALFORMED_BODY,
+      "Asia/Kuwait",
+    )
+  );
+  assertEquals(response.status, 400);
+  const body = await response.json() as { error: { code: string; message: string } };
+  assertEquals(body.error.code, "INVALID_REQUEST");
+  assertEquals(body.error.message, "The request body is not valid JSON.");
+  assertEquals(db.calls.length, 0);
+  assertEquals(logged.length, 1);
+  assertEquals(
+    logged[0],
+    `[n8n-api] best-times: request body could not be parsed (user ${USER})`,
+  );
 });

@@ -2493,13 +2493,13 @@ export async function handleRequest(req: Request): Promise<Response> {
     } else if (path === '/api/v1/comments/delete' && req.method === 'POST') {
       response = await handleCommentDelete(req, supabaseAdmin, userId, await parseRequestBody(req));
     } else if (path === '/api/v1/posts/cancel' && req.method === 'POST') {
-      response = await handleCancelScheduledPost(req, supabaseAdmin, userId, await parseRequestBody(req));
+      response = await handleCancelScheduledPost(req, supabaseAdmin, userId, () => parseRequestBody(req));
     } else if (path === '/api/v1/posts/reschedule' && req.method === 'POST') {
-      response = await handleReschedulePost(req, supabaseAdmin, userId, await parseRequestBody(req));
+      response = await handleReschedulePost(req, supabaseAdmin, userId, () => parseRequestBody(req));
     } else if (path === '/api/v1/accounts/health' && req.method === 'GET') {
       response = await handleCheckAccountHealth(req, supabaseAdmin, userId, url);
     } else if (path === '/api/v1/best-times' && req.method === 'POST') {
-      response = await handleSuggestBestTimes(req, supabaseAdmin, userId, await parseRequestBody(req), userPreferredTimezone);
+      response = await handleSuggestBestTimes(req, supabaseAdmin, userId, () => parseRequestBody(req), userPreferredTimezone);
     } else {
       // 404 for unknown routes
       response = apiError(req, 'Not Found', 404, 'NOT_FOUND', {

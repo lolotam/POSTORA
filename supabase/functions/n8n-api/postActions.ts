@@ -147,6 +147,21 @@ function requirePostId(body: unknown): string | ActionResult {
   return parsed.data.post_id;
 }
 
+// The body is read by the handler, not by the router. When the router parsed
+// it first, a malformed or truncated body threw out of the route, the router's
+// outer catch answered with a generic 500, and the rate-limit headers were
+// dropped on the way out. A body that cannot be parsed is the caller's
+// mistake, so it gets the same stable 400 every other refusal gets.
+async function parseBody(
+  readBody: () => Promise<unknown>,
+): Promise<{ body: unknown } | ActionResult> {
+  try {
+    return { body: await readBody() };
+  } catch {
+    return error(400, "INVALID_REQUEST", "The request body is not valid JSON.");
+  }
+}
+
 interface PostRow {
   id: string;
   status: string;
@@ -769,31 +784,60 @@ export const handleCancelScheduledPost = async (
   // deno-lint-ignore no-explicit-any
   supabase: any,
   userId: string,
-  body: unknown,
-): Promise<Response> =>
-  toResponse(req, await cancelScheduledPost(defaultPostActionDeps(supabase), userId, body));
+  readBody: () => Promise<unknown>,
+): Promise<Response> => {
+  const parsed = await parseBody(readBody);
+  if (isActionResult(parsed)) {
+    console.warn(`[n8n-api] posts/cancel: request body could not be parsed (user ${userId})`);
+    return toResponse(req, parsed);
+  }
+  return toResponse(
+    req,
+    await cancelScheduledPost(defaultPostActionDeps(supabase), userId, parsed.body),
+  );
+};
 
 export const handleReschedulePost = async (
   req: Request,
   // deno-lint-ignore no-explicit-any
   supabase: any,
   userId: string,
-  body: unknown,
-): Promise<Response> =>
-  toResponse(req, await reschedulePost(defaultPostActionDeps(supabase), userId, body));
+  readBody: () => Promise<unknown>,
+): Promise<Response> => {
+  const parsed = await parseBody(readBody);
+  if (isActionResult(parsed)) {
+    console.warn(`[n8n-api] posts/reschedule: request body could not be parsed (user ${userId})`);
+    return toResponse(req, parsed);
+  }
+  return toResponse(
+    req,
+    await reschedulePost(defaultPostActionDeps(supabase), userId, parsed.body),
+  );
+};
 
 export const handleSuggestBestTimes = async (
   req: Request,
   // deno-lint-ignore no-explicit-any
   supabase: any,
   userId: string,
-  body: unknown,
+  readBody: () => Promise<unknown>,
   preferredTimezone: string | null,
-): Promise<Response> =>
-  toResponse(
+): Promise<Response> => {
+  const parsed = await parseBody(readBody);
+  if (isActionResult(parsed)) {
+    console.warn(`[n8n-api] best-times: request body could not be parsed (user ${userId})`);
+    return toResponse(req, parsed);
+  }
+  return toResponse(
     req,
-    await suggestBestTimes(defaultPostActionDeps(supabase), userId, body, preferredTimezone),
+    await suggestBestTimes(
+      defaultPostActionDeps(supabase),
+      userId,
+      parsed.body,
+      preferredTimezone,
+    ),
   );
+};
 
 export const handleCheckAccountHealth = async (
   req: Request,
