@@ -119,11 +119,17 @@ BEGIN
   -- scheduled or pending post is the cancel path's business, and a processing
   -- post is publishing right now.
   IF v_status IS NULL OR v_status NOT IN ('failed', 'completed') THEN
-    -- The one exception: a processing post whose own claim has expired. The
-    -- agent that took that claim died mid-publish, so the post is not being
-    -- published any more and may be claimed again.
+    -- The one exception, and only for a retry: a processing post whose own
+    -- claim has expired. The agent that took that claim died mid-publish, so
+    -- the post is not being published any more and may be claimed again.
+    --
+    -- A delete has no such exception: for p_action = 'delete' a processing
+    -- post is always a bad_status. The copy may still go public behind a
+    -- dead publish, and a delete that ran on it would remove the Postora row
+    -- while the copy is still on its way out.
     IF NOT (
-      v_status = 'processing'
+      p_action = 'retry'
+      AND v_status = 'processing'
       AND v_claim_id IS NOT NULL
       AND (v_claimed_at IS NULL OR v_claimed_at <= now() - make_interval(mins => v_lease))
     ) THEN

@@ -2790,9 +2790,11 @@ Deno.test("a publishing service that refuses the publish is a 502 and the claim 
     logged.push(args.map(String).join(" "));
   };
   try {
-    const result = await retryFailedPost(depsFor(db, fetcher), USER, {
-      post_id: POST,
-    });
+    const { result, logged: warned } = await withCapturedWarn(() =>
+      retryFailedPost(depsFor(db, fetcher), USER, {
+        post_id: POST,
+      })
+    );
     assertEquals(result.status, 502);
     assertEquals(errorCode(result), "RETRY_FAILED");
     // Nothing was published, so the post is free again right away.
@@ -2803,6 +2805,16 @@ Deno.test("a publishing service that refuses the publish is a 502 and the claim 
     });
     assertEquals(logged.length, 1);
     assertEquals(logged[0].includes("answered 403"), true);
+    // The refusal leaves a durable row behind, like every other refusal.
+    const rows = callsFor(db, "system_logs", "insert");
+    assertEquals(rows.length, 1);
+    const row = rows[0].payload as Record<string, unknown>;
+    assertEquals((row.metadata as { code: string }).code, "RETRY_FAILED");
+    // The refusal leaves a line behind that names the route and the post.
+    assertEquals(
+      warned.some((line) => line.includes("posts/retry") && line.includes(POST)),
+      true,
+    );
   } finally {
     console.error = originalError;
   }
@@ -2896,9 +2908,11 @@ Deno.test("a publishing service that answers 400 is a 502 and the claim is given
     logged.push(args.map(String).join(" "));
   };
   try {
-    const result = await retryFailedPost(depsFor(db, fetcher), USER, {
-      post_id: POST,
-    });
+    const { result, logged: warned } = await withCapturedWarn(() =>
+      retryFailedPost(depsFor(db, fetcher), USER, {
+        post_id: POST,
+      })
+    );
     // A 4xx is a refusal: the service answered and it did not accept the
     // publish, so nothing was published.
     assertEquals(result.status, 502);
@@ -2911,6 +2925,25 @@ Deno.test("a publishing service that answers 400 is a 502 and the claim is given
     });
     assertEquals(logged.length, 1);
     assertEquals(logged[0].includes("answered 400"), true);
+    // The refusal leaves a durable row behind, like every other refusal: the
+    // publishing service refused the publish for good, and a refusal nobody
+    // watched is a refusal nobody can explain later. The row carries the
+    // route, the code, the status and the post id, and nothing else.
+    const rows = callsFor(db, "system_logs", "insert");
+    assertEquals(rows.length, 1);
+    const row = rows[0].payload as Record<string, unknown>;
+    assertEquals(row.message, "posts/retry refused: RETRY_FAILED");
+    assertEquals(row.metadata, {
+      route: "posts/retry",
+      code: "RETRY_FAILED",
+      status: 502,
+      post_id: POST,
+    });
+    // The refusal leaves a line behind that names the route and the post.
+    assertEquals(
+      warned.some((line) => line.includes("posts/retry") && line.includes(POST)),
+      true,
+    );
   } finally {
     console.error = originalError;
   }

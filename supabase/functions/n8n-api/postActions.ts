@@ -2060,7 +2060,16 @@ export async function retryFailedPost(
   if (dispatch.kind === "failed") {
     // Nothing was published, so the post is free again right away.
     await releasePostActionClaim(deps, route, { userId, postId, claimId });
-    return error(502, "RETRY_FAILED", dispatch.message, dispatch.details);
+    // The refusal leaves a durable row behind, like every other refusal: the
+    // publishing service refused the publish for good, and a refusal nobody
+    // watched is a refusal nobody can explain later. The row carries the
+    // route, the code, the status and the post id, and nothing else.
+    return await refuse(
+      deps,
+      route,
+      { userId, postId },
+      error(502, "RETRY_FAILED", dispatch.message, dispatch.details),
+    );
   }
 
   // The publish was accepted. The failed rows it replaced are removed, and
