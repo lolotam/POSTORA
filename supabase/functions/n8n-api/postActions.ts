@@ -470,6 +470,17 @@ function isMissingRpc(err: { code?: unknown } | null): boolean {
 
 // ── 1. posts/cancel ────────────────────────────────────────────────────────────
 
+// The refusal the cancel made before the RPC existed: the post is not a
+// scheduled post in the future, so it may not be cancelled.
+function notScheduledCancelRefusal(post: PostRow): ActionResult {
+  return error(
+    409,
+    "POST_NOT_SCHEDULED",
+    "Only a scheduled post whose time has not come yet can be cancelled.",
+    { status: post.status, scheduled_at: post.scheduled_at ?? null },
+  );
+}
+
 export async function cancelScheduledPost(
   deps: PostActionDeps,
   userId: string,
@@ -480,31 +491,60 @@ export async function cancelScheduledPost(
   if (typeof postId !== "string") {
     return await refuse(deps, route, { userId }, postId);
   }
-  const now = deps.now();
 
   const read = await readOwnedPost(deps, route, postId, userId, "id, status, scheduled_at");
   if (isActionResult(read)) return read;
   const post = read;
 
-  if (!isFutureScheduled(post, now)) {
+  // The write goes first and the database decides: the RPC compares the
+  // deadline with now() inside the database, so the clock of the edge worker
+  // that answered the request cannot refuse a cancel the database allows.
+  const outcome = await cancelScheduledRow(deps, route, { postId, userId });
+
+  if (outcome.kind === "missing") {
+    // The migration that creates the RPC has not been applied to this
+    // database yet: the deadline is read on the edge clock, as it was before
+    // the RPC existed.
+    if (!isFutureScheduled(post, deps.now())) {
+      return await refuse(deps, route, { userId, postId }, notScheduledCancelRefusal(post));
+    }
+    const refusal = await cancelScheduledRowOnAppClock(deps, route, { postId, userId });
+    if (refusal) return await refuseOrFail(deps, route, { userId, postId }, refusal);
+    return ok({ post_id: postId, cancelled: true });
+  }
+
+  if (outcome.kind === "not_deleted") {
+    // The database deleted no row: the post is no longer a scheduled post in
+    // the future, so its time has come or the scheduler took it.
+    if (!SCHEDULED_STATUSES.includes(post.status)) {
+      return await refuse(deps, route, { userId, postId }, notScheduledCancelRefusal(post));
+    }
     return await refuse(
       deps,
       route,
       { userId, postId },
       error(
         409,
-        "POST_NOT_SCHEDULED",
-        "Only a scheduled post whose time has not come yet can be cancelled.",
-        { status: post.status, scheduled_at: post.scheduled_at ?? null },
+        "POST_STATE_CHANGED",
+        "The post changed while it was being cancelled (it may already be publishing). Check get_post.",
       ),
     );
   }
 
-  const refusal = await cancelScheduledRow(deps, route, { postId, userId });
-  if (refusal) return await refuseOrFail(deps, route, { userId, postId }, refusal);
+  if (outcome.kind === "refused") {
+    return await refuseOrFail(deps, route, { userId, postId }, outcome.result);
+  }
 
   return ok({ post_id: postId, cancelled: true });
 }
+
+// The answer of the cancel: the row is gone, the row is still there, the
+// function is not in the database yet, or the database refused.
+type CancelOutcome =
+  | { kind: "cancelled" }
+  | { kind: "not_deleted" }
+  | { kind: "missing" }
+  | { kind: "refused"; result: ActionResult };
 
 // Compare-and-set: the scheduler claims the same row by flipping it to `processing`,
 // so the delete only lands while the post is still scheduled for the future. The
@@ -513,7 +553,7 @@ async function cancelScheduledRow(
   deps: PostActionDeps,
   route: string,
   request: { postId: string; userId: string },
-): Promise<ActionResult | null> {
+): Promise<CancelOutcome> {
   const { data: cancelled, error: cancelError } = await deps.supabase.rpc(
     "mcp_cancel_scheduled_post",
     { p_user_id: request.userId, p_post_id: request.postId },
@@ -524,7 +564,7 @@ async function cancelScheduledRow(
       console.warn(
         `[n8n-api] ${route}: mcp_cancel_scheduled_post is not in the database yet, falling back to the app-clock delete`,
       );
-      return await cancelScheduledRowOnAppClock(deps, route, request);
+      return { kind: "missing" };
     }
     // The database refused the delete on purpose, so the caller is told what
     // the database said instead of being handed a fault.
@@ -532,27 +572,23 @@ async function cancelScheduledRow(
       console.warn(
         `[n8n-api] ${route}: post ${request.postId} is locked by a TikTok publish and cannot be changed`,
       );
-      return error(
-        409,
-        "POST_LOCKED",
-        tiktokLockMessage(cancelError),
-      );
+      return {
+        kind: "refused",
+        result: error(409, "POST_LOCKED", tiktokLockMessage(cancelError)),
+      };
     }
     console.error(
       `[n8n-api] ${route}: deleting post ${request.postId} failed: ${cancelError.message}`,
     );
-    return error(500, "INTERNAL_ERROR", "Cancelling the post failed. Please try again.");
+    return {
+      kind: "refused",
+      result: error(500, "INTERNAL_ERROR", "Cancelling the post failed. Please try again."),
+    };
   }
   // The row was not deleted: the post is no longer a scheduled post in the
   // future, so the scheduler has it (or its time has come).
-  if (cancelled !== true) {
-    return error(
-      409,
-      "POST_STATE_CHANGED",
-      "The post changed while it was being cancelled (it may already be publishing). Check get_post.",
-    );
-  }
-  return null;
+  if (cancelled !== true) return { kind: "not_deleted" };
+  return { kind: "cancelled" };
 }
 
 // The path the route used before the RPC existed: the deadline is read on the
@@ -622,6 +658,16 @@ function isConsentBoundPost(post: PostRow): boolean {
   return typeof submissionId === "string" && submissionId.length > 0;
 }
 
+// The refusal a reschedule made before the RPC existed: the post is not a
+// scheduled post in the future, so it may not be moved.
+function notScheduledRescheduleRefusal(): ActionResult {
+  return error(
+    409,
+    "POST_NOT_SCHEDULED",
+    "Only a scheduled post whose time has not come yet can be rescheduled.",
+  );
+}
+
 export async function reschedulePost(
   deps: PostActionDeps,
   userId: string,
@@ -639,16 +685,15 @@ export async function reschedulePost(
   // The trimmed id is the one that is used: the guard validates a trimmed
   // value, so the trimmed value is what reaches the query and the log.
   const postId = rawPostId.trim();
-  const now = deps.now();
 
-  const invalid = await rescheduleRefusal(deps, {
-    route,
-    userId,
-    postId,
-    scheduledAt,
-    now,
-  });
-  if (invalid) return invalid;
+  // Only the shape of the instant is checked here, before the post is even
+  // read: a time that cannot be published at all is the caller's mistake, not
+  // the post's state. Whether it is still in the future is the database's
+  // answer, not the edge clock's.
+  const malformed = scheduledAtRefusal(scheduledAt);
+  if (malformed) {
+    return await refuse(deps, route, { userId, postId }, malformed);
+  }
 
   const read = await readOwnedPost(deps, route, postId, userId, "id, status, scheduled_at, metadata");
   if (isActionResult(read)) return read;
@@ -660,19 +705,6 @@ export async function reschedulePost(
     return await refuse(deps, route, { userId, postId }, CONSENT_BOUND_POST);
   }
 
-  if (!isFutureScheduled(post, now)) {
-    return await refuse(
-      deps,
-      route,
-      { userId, postId },
-      error(
-        409,
-        "POST_NOT_SCHEDULED",
-        "Only a scheduled post whose time has not come yet can be rescheduled.",
-      ),
-    );
-  }
-
   // Only the instant is written. The timezone is a label for the UI, and
   // rebuilding the whole metadata object from an earlier read would overwrite a
   // dashboard edit that landed in the meantime.
@@ -680,12 +712,61 @@ export async function reschedulePost(
     scheduled_at: new Date(scheduledAt).toISOString(),
   };
 
-  const updated = await rescheduleRow(deps, route, { postId, userId, payload });
-  if (isActionResult(updated)) {
-    return await refuseOrFail(deps, route, { userId, postId }, updated);
-  }
+  // The move goes first and the database decides: the RPC compares the
+  // deadline with now() inside the database, so the clock of the edge worker
+  // that answered the request cannot refuse a reschedule the database allows.
+  const outcome = await rescheduleRow(deps, route, { postId, userId, payload });
 
-  return ok({ post: updated.post, previous_scheduled_at: post.scheduled_at });
+  if (outcome.kind === "updated") {
+    return ok({ post: outcome.post, previous_scheduled_at: post.scheduled_at });
+  }
+  if (outcome.kind === "in_past") {
+    return await refuse(
+      deps,
+      route,
+      { userId, postId },
+      error(400, "SCHEDULED_AT_IN_PAST", "scheduled_at must be in the future."),
+    );
+  }
+  if (outcome.kind === "unchanged") {
+    // The database moved no row: the post is not a scheduled post any more.
+    if (!SCHEDULED_STATUSES.includes(post.status)) {
+      return await refuse(deps, route, { userId, postId }, notScheduledRescheduleRefusal());
+    }
+    return await refuse(
+      deps,
+      route,
+      { userId, postId },
+      error(
+        409,
+        "POST_STATE_CHANGED",
+        "The post changed while it was being rescheduled (it may already be publishing). Check get_post.",
+      ),
+    );
+  }
+  if (outcome.kind === "missing") {
+    // The migration that creates the RPC has not been applied to this database
+    // yet: the deadline is read on the edge clock, as it was before the RPC
+    // existed.
+    const now = deps.now();
+    if (Date.parse(scheduledAt) <= now.getTime()) {
+      return await refuse(
+        deps,
+        route,
+        { userId, postId },
+        error(400, "SCHEDULED_AT_IN_PAST", "scheduled_at must be in the future."),
+      );
+    }
+    if (!isFutureScheduled(post, now)) {
+      return await refuse(deps, route, { userId, postId }, notScheduledRescheduleRefusal());
+    }
+    const fallback = await rescheduleRowOnAppClock(deps, route, { postId, userId, payload });
+    if (isActionResult(fallback)) {
+      return await refuseOrFail(deps, route, { userId, postId }, fallback);
+    }
+    return ok({ post: fallback.post, previous_scheduled_at: post.scheduled_at });
+  }
+  return await refuseOrFail(deps, route, { userId, postId }, outcome.result);
 }
 
 // The offset of an ISO 8601 instant in minutes, or null when the string does
@@ -715,45 +796,37 @@ function hasRealCalendarDate(value: string): boolean {
     local.getUTCDate() === Number(written[3]);
 }
 
-// The body of a reschedule is checked before the post is even read: a time that
-// cannot be published is the caller's mistake, not the post's state.
-async function rescheduleRefusal(
-  deps: PostActionDeps,
-  request: {
-    route: string;
-    userId: string;
-    postId: string;
-    scheduledAt: string;
-    now: Date;
-  },
-): Promise<ActionResult | null> {
-  const { route, userId, postId, scheduledAt, now } = request;
+// The shape of the requested instant is checked before the post is even read:
+// a time that cannot be published at all is the caller's mistake, not the
+// post's state.
+//
+// Only the shape is checked here. Whether the instant is still in the future
+// is the database's answer, not the edge clock's: the clock that decides is
+// the clock the scheduler publishes on.
+function scheduledAtRefusal(scheduledAt: string): ActionResult | null {
   if (
     !ISO_DATE_TIME_RE.test(scheduledAt) ||
     !Number.isFinite(Date.parse(scheduledAt)) ||
     !hasRealCalendarDate(scheduledAt)
   ) {
-    return await refuse(
-      deps,
-      route,
-      { userId, postId },
-      error(
-        400,
-        "INVALID_SCHEDULED_AT",
-        "scheduled_at must be an ISO 8601 timestamp with a UTC offset, e.g. 2026-06-05T14:30:00Z or 2026-06-05T17:30:00+03:00.",
-      ),
-    );
-  }
-  if (Date.parse(scheduledAt) <= now.getTime()) {
-    return await refuse(
-      deps,
-      route,
-      { userId, postId },
-      error(400, "SCHEDULED_AT_IN_PAST", "scheduled_at must be in the future."),
+    return error(
+      400,
+      "INVALID_SCHEDULED_AT",
+      "scheduled_at must be an ISO 8601 timestamp with a UTC offset, e.g. 2026-06-05T14:30:00Z or 2026-06-05T17:30:00+03:00.",
     );
   }
   return null;
 }
+
+// The answer of the reschedule: the post was moved, the requested instant has
+// come, the database moved no row, the function is not in the database yet, or
+// the database refused.
+type RescheduleOutcome =
+  | { kind: "updated"; post: Record<string, unknown> }
+  | { kind: "in_past" }
+  | { kind: "unchanged" }
+  | { kind: "missing" }
+  | { kind: "refused"; result: ActionResult };
 
 async function rescheduleRow(
   deps: PostActionDeps,
@@ -763,7 +836,7 @@ async function rescheduleRow(
     userId: string;
     payload: Record<string, unknown>;
   },
-): Promise<{ post: Record<string, unknown> } | ActionResult> {
+): Promise<RescheduleOutcome> {
   const requestedAt = String(request.payload.scheduled_at);
   const { data: outcome, error: rescheduleError } = await deps.supabase.rpc(
     "mcp_reschedule_post",
@@ -779,7 +852,7 @@ async function rescheduleRow(
       console.warn(
         `[n8n-api] ${route}: mcp_reschedule_post is not in the database yet, falling back to the app-clock update`,
       );
-      return await rescheduleRowOnAppClock(deps, route, request);
+      return { kind: "missing" };
     }
     // The database refused the update on purpose, so the caller is told what
     // the database said instead of being handed a fault.
@@ -787,16 +860,18 @@ async function rescheduleRow(
       console.warn(
         `[n8n-api] ${route}: post ${request.postId} is locked by a TikTok publish and cannot be changed`,
       );
-      return error(
-        409,
-        "POST_LOCKED",
-        tiktokLockMessage(rescheduleError),
-      );
+      return {
+        kind: "refused",
+        result: error(409, "POST_LOCKED", tiktokLockMessage(rescheduleError)),
+      };
     }
     console.error(
       `[n8n-api] ${route}: updating post ${request.postId} failed: ${rescheduleError.message}`,
     );
-    return error(500, "INTERNAL_ERROR", "Rescheduling the post failed. Please try again.");
+    return {
+      kind: "refused",
+      result: error(500, "INTERNAL_ERROR", "Rescheduling the post failed. Please try again."),
+    };
   }
 
   const result = (outcome ?? {}) as { outcome?: unknown; post?: unknown };
@@ -807,24 +882,22 @@ async function rescheduleRow(
       console.error(
         `[n8n-api] ${route}: the database updated post ${request.postId} without returning it`,
       );
-      return error(500, "INTERNAL_ERROR", "Rescheduling the post failed. Please try again.");
+      return {
+        kind: "refused",
+        result: error(500, "INTERNAL_ERROR", "Rescheduling the post failed. Please try again."),
+      };
     }
-    return { post: result.post as Record<string, unknown> };
+    return { kind: "updated", post: result.post as Record<string, unknown> };
   }
-  if (result.outcome === "in_past") {
-    return error(400, "SCHEDULED_AT_IN_PAST", "scheduled_at must be in the future.");
-  }
-  if (result.outcome === "unchanged") {
-    return error(
-      409,
-      "POST_STATE_CHANGED",
-      "The post changed while it was being rescheduled (it may already be publishing). Check get_post.",
-    );
-  }
+  if (result.outcome === "in_past") return { kind: "in_past" };
+  if (result.outcome === "unchanged") return { kind: "unchanged" };
   console.error(
     `[n8n-api] ${route}: the database answered an unknown reschedule outcome for post ${request.postId}`,
   );
-  return error(500, "INTERNAL_ERROR", "Rescheduling the post failed. Please try again.");
+  return {
+    kind: "refused",
+    result: error(500, "INTERNAL_ERROR", "Rescheduling the post failed. Please try again."),
+  };
 }
 
 // The path the route used before the RPC existed: the deadline is read on the
@@ -2038,28 +2111,35 @@ interface PublishedCopyResult {
   note?: string;
 }
 
-// One row of the published copies of a post.
-interface PublishedCopyRow {
+// One row of the per-platform results of a post: the copy that went out, or
+// the copy that is still going out.
+interface PostCopyRow {
   id: string;
   platform: string | null;
   platform_post_id: string | null;
   social_account_id: string | null;
   response_data: unknown;
+  status: string | null;
 }
 
-// The published copies of one post: the per-platform results that succeeded.
-// The read is owner-joined, so the service role does not widen it.
-async function readPublishedCopies(
+// The per-platform results of one post: the copies that went out and the ones
+// that are still going out.
+//
+// The pending rows are read as well, because a publish that is still in flight
+// is a publish that may still go public: a delete that ignored it would remove
+// the Postora row and the media while the copy goes out behind it. The read is
+// owner-joined, so the service role does not widen it.
+async function readPostCopies(
   deps: PostActionDeps,
   route: string,
   request: { postId: string; userId: string },
-): Promise<PublishedCopyRow[] | ActionResult> {
+): Promise<PostCopyRow[] | ActionResult> {
   const { data, error: readError } = await deps.supabase
     .from("platform_posts")
-    .select("id, platform, platform_post_id, social_account_id, response_data, posts!inner(user_id)")
+    .select("id, platform, platform_post_id, social_account_id, response_data, status, posts!inner(user_id)")
     .eq("post_id", request.postId)
     .eq("posts.user_id", request.userId)
-    .eq("status", "success");
+    .in("status", ["success", "pending"]);
 
   if (readError) {
     console.error(
@@ -2067,7 +2147,7 @@ async function readPublishedCopies(
     );
     return error(500, "INTERNAL_ERROR", "Reading the post results failed. Please try again.");
   }
-  return (data ?? []) as PublishedCopyRow[];
+  return (data ?? []) as PostCopyRow[];
 }
 
 // The accounts the published copies went out on. The read carries the owner,
@@ -2213,15 +2293,51 @@ export async function deletePost(
     return post;
   }
 
-  const copies = await readPublishedCopies(deps, route, { postId, userId });
+  const copies = await readPostCopies(deps, route, { postId, userId });
   if (isActionResult(copies)) {
     await releasePostActionClaim(deps, route, { userId, postId, claimId });
     return copies;
   }
 
+  // A copy that is still going out is a publish that may still go public. The
+  // Postora row and the media may not go while that is true: a post that is
+  // gone from Postora and still on the platform cannot be unpublished any
+  // more, and the media is needed by the publish that is still running.
+  const pending = copies.filter((copy) => copy.status === "pending");
+  if (pending.length > 0) {
+    const pendingPlatforms = [
+      ...new Set(
+        pending
+          .map((copy) => copy.platform)
+          .filter((platform): platform is string =>
+            typeof platform === "string" && platform.length > 0
+          ),
+      ),
+    ];
+    // The claim is given back: the post is not busy for the rest of the lease
+    // over a delete that did not happen.
+    await releasePostActionClaim(deps, route, { userId, postId, claimId });
+    return await refuse(
+      deps,
+      route,
+      { userId, postId },
+      error(
+        409,
+        "POST_PUBLISHING",
+        pendingPlatforms.length > 0
+          ? `This post is still being published on ${pendingPlatforms.join(", ")}. Try again once publishing has finished.`
+          : "This post is still being published. Try again once publishing has finished.",
+        { post_id: postId, pending_platforms: pendingPlatforms },
+      ),
+    );
+  }
+
+  // Only the copies that went out are deleted on their platform.
+  const published = copies.filter((copy) => copy.status === "success");
+
   const accountIds = [
     ...new Set(
-      copies
+      published
         .map((copy) => copy.social_account_id)
         .filter((id): id is string => typeof id === "string" && id.length > 0),
     ),
@@ -2243,7 +2359,7 @@ export async function deletePost(
   };
 
   const results: PublishedCopyResult[] = [];
-  for (const copy of copies) {
+  for (const copy of published) {
     if (!copy.platform) {
       results.push({
         platform: "",

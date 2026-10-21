@@ -494,20 +494,76 @@ Deno.test("the cancel read is scoped to the authenticated user", async () => {
   assertEquals(hasFilter(read, "eq", "id", POST), true);
 });
 
-Deno.test("a post whose time has come cannot be cancelled", async () => {
+Deno.test("a cancel of a post whose time has come on the edge clock is the database's answer", async () => {
   const db = new FakeSupabase();
+  // The post is overdue on the clock of the edge, but the clock that decides
+  // is the one of the database: it compares the deadline with now() inside
+  // the database, so the edge may not refuse what the database allows.
   db.queue("posts", {
     data: { id: POST, status: "scheduled", scheduled_at: "2026-10-20T12:00:00.000Z" },
     error: null,
   });
+  db.queueRpc(CANCEL_RPC, { data: true, error: null });
+  const result = await cancelScheduledPost(depsFor(db, noNetwork()), USER, {
+    post_id: POST,
+  });
+  assertEquals(result.status, 200);
+  assertEquals(result.body, {
+    success: true,
+    post_id: POST,
+    cancelled: true,
+  });
+  // The write went through the database, where the deadline is compared.
+  assertEquals(rpcCallFor(db, CANCEL_RPC)?.args, { p_user_id: USER, p_post_id: POST });
+  // The function does not delete the row itself.
+  assertEquals(callsFor(db, "posts", "delete").length, 0);
+});
+
+Deno.test("a cancel of a post the database no longer holds as a scheduled post is the not-scheduled refusal", async () => {
+  const db = new FakeSupabase();
+  db.queue("posts", {
+    data: { id: POST, status: "completed", scheduled_at: "2026-10-22T12:00:00.000Z" },
+    error: null,
+  });
+  // The database deleted no row: the post is not a scheduled post any more.
+  db.queueRpc(CANCEL_RPC, { data: false, error: null });
   const result = await cancelScheduledPost(depsFor(db, noNetwork()), USER, {
     post_id: POST,
   });
   assertEquals(result.status, 409);
   assertEquals(errorCode(result), "POST_NOT_SCHEDULED");
+  assertEquals(
+    (result.body.error as { message: string }).message,
+    "Only a scheduled post whose time has not come yet can be cancelled.",
+  );
+  assertEquals(
+    (result.body.error as { details: { status: string } }).details.status,
+    "completed",
+  );
+  // Nothing is deleted: the post is not cancelled either.
   assertEquals(callsFor(db, "posts", "delete").length, 0);
-  // Nothing is written: the post is not cancelled through the database either.
-  assertEquals(db.rpcCalls.length, 0);
+  // The refusal leaves a durable row behind.
+  assertEquals(callsFor(db, "system_logs", "insert").length, 1);
+});
+
+Deno.test("a cancel falls back to the app-clock refusal while the function is missing", async () => {
+  const db = new FakeSupabase();
+  // The function is not in the database yet: the deadline is read on the
+  // clock of the edge, and the post is overdue there.
+  db.queue("posts", {
+    data: { id: POST, status: "scheduled", scheduled_at: "2026-10-20T12:00:00.000Z" },
+    error: null,
+  });
+  db.queueRpc(CANCEL_RPC, { data: null, error: missingRpcError(CANCEL_RPC) });
+  const result = await cancelScheduledPost(depsFor(db, noNetwork()), USER, {
+    post_id: POST,
+  });
+  assertEquals(result.status, 409);
+  assertEquals(errorCode(result), "POST_NOT_SCHEDULED");
+  // Nothing is deleted: the app clock says the time has come.
+  assertEquals(callsFor(db, "posts", "delete").length, 0);
+  // The refusal leaves a durable row behind.
+  assertEquals(callsFor(db, "system_logs", "insert").length, 1);
 });
 
 Deno.test("the cancel write is one call to the database", async () => {
@@ -716,11 +772,6 @@ Deno.test("a reschedule refuses a body that does not name a usable time", async 
       code: "INVALID_SCHEDULED_AT",
     },
     {
-      name: "a scheduled_at in the past",
-      body: { post_id: POST, scheduled_at: "2020-01-01T00:00:00Z" },
-      code: "SCHEDULED_AT_IN_PAST",
-    },
-    {
       // Date.parse reads the thirtieth of February as the second of March, so
       // the post would be published on a day nobody asked for.
       name: "a scheduled_at on a day the calendar does not have",
@@ -757,6 +808,40 @@ Deno.test("a reschedule refuses a body that does not name a usable time", async 
     assertEquals(callsFor(db, "posts").length, 0, testCase.name);
     assertEquals(callsFor(db, "system_logs", "insert").length, 1, testCase.name);
   }
+});
+
+Deno.test("a reschedule of a post whose time has come on the edge clock is the database's answer", async () => {
+  const db = new FakeSupabase();
+  // The post is overdue on the clock of the edge, but the clock that decides
+  // is the one of the database: it compares the deadline with now() inside
+  // the database, so the edge may not refuse what the database allows.
+  db.queue("posts", {
+    data: {
+      id: POST,
+      status: "scheduled",
+      scheduled_at: "2026-10-20T12:00:00.000Z",
+      metadata: null,
+    },
+    error: null,
+  });
+  db.queueRpc(RESCHEDULE_RPC, {
+    data: {
+      outcome: "updated",
+      post: { id: POST, status: "scheduled", scheduled_at: "2026-12-01T10:00:00.000Z" },
+    },
+    error: null,
+  });
+  const result = await reschedulePost(depsFor(db, noNetwork()), USER, {
+    post_id: POST,
+    scheduled_at: "2026-12-01T10:00:00Z",
+  });
+  assertEquals(result.status, 200);
+  const body = result.body as { post: { scheduled_at: string } };
+  assertEquals(body.post.scheduled_at, "2026-12-01T10:00:00.000Z");
+  // The move went through the database, where the deadline is compared.
+  assertEquals(rpcCallFor(db, RESCHEDULE_RPC)?.args.p_scheduled_at, "2026-12-01T10:00:00.000Z");
+  // The function does not update the row itself any more.
+  assertEquals(callsFor(db, "posts", "update").length, 0);
 });
 
 Deno.test("a reschedule accepts an instant that has a real calendar date and an offset", async () => {
@@ -880,6 +965,36 @@ Deno.test("a reschedule of a post that is no longer scheduled for the future is 
   assertEquals(callsFor(db, "posts", "update").length, 0);
 });
 
+Deno.test("a reschedule of a post that is not a scheduled post any more is the not-scheduled refusal", async () => {
+  const db = new FakeSupabase();
+  db.queue("posts", {
+    data: {
+      id: POST,
+      status: "completed",
+      scheduled_at: "2026-10-22T12:00:00.000Z",
+      metadata: null,
+    },
+    error: null,
+  });
+  // The database moved no row: the post is not a scheduled post any more, so
+  // the answer comes from the post that was read.
+  db.queueRpc(RESCHEDULE_RPC, { data: { outcome: "unchanged" }, error: null });
+  const result = await reschedulePost(depsFor(db, noNetwork()), USER, {
+    post_id: POST,
+    scheduled_at: "2026-12-01T10:00:00Z",
+  });
+  assertEquals(result.status, 409);
+  assertEquals(errorCode(result), "POST_NOT_SCHEDULED");
+  assertEquals(
+    (result.body.error as { message: string }).message,
+    "Only a scheduled post whose time has not come yet can be rescheduled.",
+  );
+  // The post was not moved.
+  assertEquals(callsFor(db, "posts", "update").length, 0);
+  // The refusal leaves a durable row behind.
+  assertEquals(callsFor(db, "system_logs", "insert").length, 1);
+});
+
 Deno.test("a reschedule falls back to the app-clock update while the function is missing", async () => {
   const db = new FakeSupabase();
   const writeTime = new Date("2026-10-21T12:10:00.000Z");
@@ -939,6 +1054,32 @@ Deno.test("a reschedule falls back to the app clock and refuses a time that has 
   assertEquals(errorCode(result), "SCHEDULED_AT_IN_PAST");
   // The post was not moved.
   assertEquals(callsFor(db, "posts", "update").length, 0);
+});
+
+Deno.test("a reschedule falls back to the app-clock refusal while the function is missing", async () => {
+  const db = new FakeSupabase();
+  // The function is not in the database yet: the deadline is read on the
+  // clock of the edge, and the post is overdue there.
+  db.queue("posts", {
+    data: {
+      id: POST,
+      status: "scheduled",
+      scheduled_at: "2026-10-20T12:00:00.000Z",
+      metadata: null,
+    },
+    error: null,
+  });
+  db.queueRpc(RESCHEDULE_RPC, { data: null, error: missingRpcError(RESCHEDULE_RPC) });
+  const result = await reschedulePost(depsFor(db, noNetwork()), USER, {
+    post_id: POST,
+    scheduled_at: "2026-12-01T10:00:00Z",
+  });
+  assertEquals(result.status, 409);
+  assertEquals(errorCode(result), "POST_NOT_SCHEDULED");
+  // The post was not moved.
+  assertEquals(callsFor(db, "posts", "update").length, 0);
+  // The refusal leaves a durable row behind.
+  assertEquals(callsFor(db, "system_logs", "insert").length, 1);
 });
 
 Deno.test("a post that carries a TikTok review consent cannot be rescheduled", async () => {
@@ -2845,6 +2986,23 @@ function publishedCopy(
   };
 }
 
+// One copy of a post that is still going out: the publish is in flight, so
+// the copy may still go public after the delete was asked for.
+function pendingCopy(
+  id: string,
+  platform: string | null,
+  accountId: string | null,
+): Record<string, unknown> {
+  return {
+    id,
+    platform,
+    platform_post_id: null,
+    social_account_id: accountId,
+    status: "pending",
+    response_data: null,
+  };
+}
+
 // The account a published copy went out on.
 function deleteAccount(
   overrides: Record<string, unknown> = {},
@@ -3027,6 +3185,56 @@ Deno.test("a delete whose platform refused deletes nothing in Postora and gives 
     p_post_id: POST,
     p_claim_id: CLAIM,
   });
+  // The refusal leaves a durable row behind.
+  assertEquals(callsFor(db, "system_logs", "insert").length, 1);
+});
+
+Deno.test("a delete of a post that is still being published is a 409 and deletes nothing", async () => {
+  const db = new FakeSupabase();
+  claimQueued(db, "completed");
+  queueDeleteReads(db, {
+    mediaFileIds: [MEDIA],
+    // The publish is still in flight: the copy may still go public, so the
+    // Postora row and the media may not go.
+    copies: [pendingCopy("row-tiktok", "tiktok", ACCOUNT)],
+    accounts: [],
+  });
+  db.queueRpc(RELEASE_RPC, { data: true, error: null });
+
+  const { calls, fetcher } = fakeFetcher([]);
+  const result = await deletePost(depsFor(db, fetcher), USER, {
+    post_id: POST,
+  });
+
+  assertEquals(result.status, 409);
+  assertEquals(errorCode(result), "POST_PUBLISHING");
+  assertEquals(
+    (result.body.error as { message: string }).message,
+    "This post is still being published on tiktok. Try again once publishing has finished.",
+  );
+  const details = (result.body.error as {
+    details: { post_id: string; pending_platforms: string[] };
+  }).details;
+  assertEquals(details.post_id, POST);
+  assertEquals(details.pending_platforms, ["tiktok"]);
+
+  // The pending rows are read as well: a delete that ignored them would
+  // remove the Postora row while the publish is still running.
+  const read = callsFor(db, "platform_posts", "select")[0];
+  assertEquals(hasInFilter(read, "status", ["success", "pending"]), true);
+
+  // The claim is given back, so the next call is not told the post is busy.
+  assertEquals(rpcCallFor(db, RELEASE_RPC)?.args, {
+    p_user_id: USER,
+    p_post_id: POST,
+    p_claim_id: CLAIM,
+  });
+
+  // Nothing is deleted: not on the platform, not in Postora, and not the media.
+  assertEquals(calls.length, 0);
+  assertEquals(rpcCallFor(db, DELETE_CLAIMED_RPC), undefined);
+  assertEquals(callsFor(db, "media_files").length, 0);
+  assertEquals(db.storageRemovals.length, 0);
   // The refusal leaves a durable row behind.
   assertEquals(callsFor(db, "system_logs", "insert").length, 1);
 });
