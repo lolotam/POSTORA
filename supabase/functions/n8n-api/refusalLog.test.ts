@@ -49,9 +49,8 @@ class ThrowingSupabase {
 
 // A client that fails the first write and works after that: the refusal row
 // has to be written on the next attempt, because a write that did not land is
-// not remembered. The throttle entry is only set after a row is really there,
-// so a failed write leaves nothing behind and the next identical refusal
-// tries again.
+// not remembered. The claim of a failed write is released, so a failed write
+// leaves nothing behind and the next identical refusal tries again.
 class FlakySupabase {
   attempts = 0;
 
@@ -66,6 +65,39 @@ class FlakySupabase {
         return Promise.resolve({ data: null, error });
       },
     };
+  }
+}
+
+// A client whose first write is held open on a controlled promise: the insert
+// is still in flight when the next refusal arrives, which is exactly the
+// burst an in-flight claim has to stop. The insert calls are counted apart
+// from the rows, because a burst that schedules three writes and lands one
+// row is still three writes.
+class HeldSupabase {
+  readonly inserts: RecordedInsert[] = [];
+  insertCalls = 0;
+  private releaseFn: ((result: { data: null; error: { message: string } | null }) => void) | null = null;
+  private holding = false;
+
+  from(table: string) {
+    const db = this;
+    return {
+      insert(payload: Record<string, unknown>): Promise<{ data: null; error: { message: string } | null }> {
+        db.insertCalls += 1;
+        db.inserts.push({ table, payload });
+        if (db.holding) return Promise.resolve({ data: null, error: null });
+        db.holding = true;
+        return new Promise<{ data: null; error: { message: string } | null }>((resolve) => {
+          db.releaseFn = resolve;
+        });
+      },
+    };
+  }
+
+  // Releases the held write. An error makes that write fail, so its row does
+  // not land.
+  release(error: { message: string } | null = null): void {
+    this.releaseFn?.({ data: null, error });
   }
 }
 
@@ -341,9 +373,10 @@ Deno.test("a throttled refusal is recorded again once the window has passed", as
   assertEquals(db.inserts.length, 2);
 });
 
-// The throttle entry stands for a row that is really there: it is set only
-// after the write landed. A row that was not written is not a row, and it
-// leaves no entry behind, so the next identical refusal tries again.
+// The throttle entry stands for a row that is really there: it is claimed
+// before the write starts, and only the write that claimed it may settle the
+// claim. A row that was not written is not a row, and its claim is released,
+// so the next identical refusal tries again.
 
 Deno.test("a refusal row that landed is not written again inside the window", async () => {
   resetRateLimitRefusalThrottleForTests();
@@ -376,6 +409,75 @@ Deno.test("a refusal row that did not land leaves no entry, so the next refusal 
   // that stands for a row nobody can see.
   await recordRateLimitRefusal(db, { userId: USER, route: ROUTE, now: 1_001_000 });
   assertEquals(db.attempts, 2);
+});
+
+// The claim is taken before the write starts, and it is taken synchronously:
+// a burst of identical refusals must not each schedule a row, because the
+// refusals that arrive while the first write is in flight find the claim.
+// A claim that is not settled by its own write is left alone, so a write
+// that failed late never drops the claim of a later one.
+
+Deno.test("a burst of identical refusals writes one row, not one row per refusal", async () => {
+  resetRateLimitRefusalThrottleForTests();
+  const db = new HeldSupabase();
+  const T = 1_000_000;
+
+  // The first refusal claims the key and starts a write that is held open.
+  const first = recordRateLimitRefusal(db, { userId: USER, route: ROUTE, now: T });
+  assertEquals(db.insertCalls, 1);
+
+  // The rest of the burst arrives while that write is still in flight.
+  const warned = await capturedWarn(async () => {
+    await recordRateLimitRefusal(db, { userId: USER, route: ROUTE, now: T + 5 });
+    await recordRateLimitRefusal(db, { userId: USER, route: ROUTE, now: T + 9 });
+  });
+
+  // The claim of the first refusal stopped the burst: one insert call, and
+  // the refusals that were skipped say so instead of disappearing.
+  assertEquals(db.insertCalls, 1);
+  assertEquals(warned.length, 2);
+  assertEquals(warned[0].includes(ROUTE), true);
+
+  // The held write lands, and the burst left exactly one row behind.
+  db.release();
+  await first;
+  assertEquals(db.inserts.length, 1);
+  assertEquals(db.inserts[0].payload.message, `${ROUTE} refused: RATE_LIMIT_EXCEEDED`);
+});
+
+// The window runs from the completion of the write, not from its start: a
+// slow row must not leave behind a window that is already half spent, and a
+// refusal that arrives while the row is still being written must not be
+// answered by a window that opened before the row existed.
+
+Deno.test("a slow write starts the window at its completion, not at its start", async () => {
+  resetRateLimitRefusalThrottleForTests();
+  const db = new HeldSupabase();
+  const T = 1_000_000;
+  let completedAt = T + 90_000;
+  const clock = () => completedAt;
+
+  // The write starts at T and is held open for ninety seconds.
+  const first = recordRateLimitRefusal(db, { userId: USER, route: ROUTE, now: T, clock });
+  assertEquals(db.insertCalls, 1);
+
+  // The row lands ninety seconds later: the window opens there, not at T.
+  db.release();
+  await first;
+
+  // A refusal a hundred seconds after the start is inside the window,
+  // because the window only opened when the row landed.
+  const warned = await capturedWarn(() =>
+    recordRateLimitRefusal(db, { userId: USER, route: ROUTE, now: T + 100_000, clock })
+  );
+  assertEquals(db.insertCalls, 1);
+  assertEquals(warned.length, 1);
+  assertEquals(warned[0].includes(ROUTE), true);
+
+  // A refusal after the window has passed writes its row again.
+  completedAt = T + 151_000;
+  await recordRateLimitRefusal(db, { userId: USER, route: ROUTE, now: T + 151_000, clock });
+  assertEquals(db.insertCalls, 2);
 });
 
 Deno.test("a different route gets its own row inside the same window", async () => {

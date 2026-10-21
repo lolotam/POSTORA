@@ -18,10 +18,11 @@ const REFUSAL_THROTTLE_WINDOW_MS = 60_000;
 // so a client that throttles on many routes cannot fill the edge memory.
 const REFUSAL_THROTTLE_MAX = 10_000;
 
-// The last write time per (user, route). The insertion order is the write
-// order: a write deletes and re-sets its key, so the first key in the map is
-// the one written longest ago. An entry only ever exists for a row that has
-// landed, so every entry in the map stands for a row that is really there.
+// The throttle state per (user, route): either the time a write finished, or
+// the time a write started and is still in flight. The insertion order is the
+// write order: a write deletes and re-sets its key, so the first key in the
+// map is the one written longest ago. An entry stands for a row that is really
+// there, or for a write that is on its way to put one there.
 const rateLimitRefusalThrottle = new Map<string, number>();
 
 /**
@@ -105,15 +106,18 @@ export async function recordApiRefusal(
  * either way. There is no deadline of its own here: the write is detached,
  * not raced.
  *
- * The throttle entry is set only after the row has landed, so an entry always
- * stands for a row that is really there: one row per (user, route) per
- * minute, counted from the successful write. Two refusals that arrive in the
- * same moment can therefore each write a row, because the entry of the first
- * one is not there yet when the second one arrives. That is accepted: one
- * extra row is cheaper than a trace that is missing.
+ * The key is claimed before the write starts, and the claim is synchronous:
+ * no await stands between the checks and the claim, so a burst of identical
+ * refusals cannot each schedule a row. The refusals that arrive while the
+ * first write is in flight find the claim and write nothing.
  *
- * A write that did not land is not remembered: it leaves no entry behind, so
- * the next identical refusal tries its row again.
+ * Only the write that made the claim may settle it. A write that did not
+ * land releases its claim, so the next identical refusal tries its row
+ * again: there is no row behind the entry, and an entry that stands for a
+ * row nobody can see must not silence the next refusal. A write that did
+ * land turns its claim into the window, counted from the moment the row was
+ * written and not from the moment the write started: a slow row must not
+ * leave behind a window that is already spent.
  *
  * It never throws: the caller still gets its 429, whether the row was
  * written or not.
@@ -121,10 +125,16 @@ export async function recordApiRefusal(
 export async function recordRateLimitRefusal(
   // deno-lint-ignore no-explicit-any
   supabase: any,
-  request: { userId: string; route: string; now?: number },
+  request: { userId: string; route: string; now?: number; clock?: () => number },
 ): Promise<void> {
   const { userId, route } = request;
-  const now = request.now ?? Date.now();
+  const injectedNow = request.now;
+  const now = injectedNow ?? Date.now();
+  // The clock reads the moment the write finished, so the window can start
+  // there. It defaults to Date.now; when the caller injected a fixed `now`
+  // without a clock of its own, the clock follows that injected timeline,
+  // so the two never disagree about what time it is.
+  const clock = request.clock ?? (injectedNow === undefined ? () => Date.now() : () => injectedNow);
   const key = `${userId}|${route}`;
 
   const lastWrite = rateLimitRefusalThrottle.get(key);
@@ -154,6 +164,15 @@ export async function recordRateLimitRefusal(
     rateLimitRefusalThrottle.delete(oldestKey);
   }
 
+  // The claim is taken synchronously, before the write is even started: no
+  // await stands between the checks above and this line, so a burst of
+  // identical refusals finds the claim of the first one and writes nothing
+  // more. The claim carries the start time of the write; the window it
+  // becomes is counted from the completion of the write.
+  const claim = now;
+  rateLimitRefusalThrottle.delete(key);
+  rateLimitRefusalThrottle.set(key, claim);
+
   // The row is written off the response path. The 429 is the answer, and it
   // is answered no matter what the database does: a hung insert under
   // throttling pressure would otherwise cost the caller its refusal. The
@@ -166,14 +185,24 @@ export async function recordRateLimitRefusal(
       code: "RATE_LIMIT_EXCEEDED",
       status: 429,
     });
-    if (!landed) return;
+    if (!landed) {
+      // The write did not land, so there is no row and no window: the claim
+      // is released. Only when the map still holds this call's claim, so a
+      // later claim is never dropped by a write that failed before it.
+      if (rateLimitRefusalThrottle.get(key) === claim) {
+        rateLimitRefusalThrottle.delete(key);
+      }
+      return;
+    }
 
-    // The entry is set here, after the write, never before it: an entry
-    // stands for a row that is really there. A write that did not land
-    // leaves no entry, so the next identical refusal tries its row again.
-    // The key is deleted first so the map keeps the insertion order of the
-    // writes: the first key in the map is the one written longest ago.
-    rateLimitRefusalThrottle.delete(key);
-    rateLimitRefusalThrottle.set(key, now);
+    // The row landed, so the window starts now: it runs from the completion
+    // of the write, not from its start, so a slow row does not leave a
+    // window that is already spent. The claim only becomes the window when
+    // the map still holds this call's claim.
+    const completedAt = clock();
+    if (rateLimitRefusalThrottle.get(key) === claim) {
+      rateLimitRefusalThrottle.delete(key);
+      rateLimitRefusalThrottle.set(key, completedAt);
+    }
   });
 }
