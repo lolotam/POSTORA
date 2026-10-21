@@ -124,8 +124,65 @@ function stalledBodyFetcher(): {
   return { fetcher, wasCancelled: () => state.cancelled };
 }
 
-// The Graph answer of a delete of an object that is not there any more: a 400
-// with the code 100 and the subcode 33, and not a 404.
+// A fetcher whose headers arrive only after most of the deadline of the call
+// has passed, and whose body never arrives. The call must give up at the end
+// of the deadline it was given, and not a deadline later.
+function slowHeadersStalledBodyFetcher(delayMs: number): {
+  fetcher: typeof fetch;
+  wasCancelled: () => boolean;
+} {
+  const state = { cancelled: false };
+  const fetcher = (() =>
+    new Promise<Response>((resolve) => {
+      setTimeout(() => {
+        resolve(
+          new Response(
+            new ReadableStream({
+              pull() {
+                return new Promise<void>(() => {});
+              },
+              cancel() {
+                state.cancelled = true;
+              },
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+        );
+      }, delayMs);
+    })) as unknown as typeof fetch;
+  return { fetcher, wasCancelled: () => state.cancelled };
+}
+
+// A fetcher that answers with a status and a body that is never read. The
+// stream records that it was cancelled, so a test can tell whether the
+// connection was released after the answer.
+function answerWithUnreadBodyFetcher(status: number): {
+  fetcher: typeof fetch;
+  wasCancelled: () => boolean;
+} {
+  const state = { cancelled: false };
+  const fetcher = (() =>
+    Promise.resolve(
+      new Response(
+        new ReadableStream({
+          pull() {
+            return new Promise<void>(() => {});
+          },
+          cancel() {
+            state.cancelled = true;
+          },
+        }),
+        { status, headers: { "Content-Type": "application/json" } },
+      ),
+    )) as unknown as typeof fetch;
+  return { fetcher, wasCancelled: () => state.cancelled };
+}
+
+// The Graph answer of a delete of an object that Graph cannot confirm: a 400
+// with the code 100 and the subcode 33, and not a 404. Meta uses the code for
+// an object that does not exist, for one that cannot be loaded with the
+// permissions of this connection, and for one that does not support the
+// operation, so the answer says nothing certain about the object.
 function goneFromGraph(): QueuedResponse {
   return {
     status: 400,
@@ -215,22 +272,55 @@ Deno.test("a facebook post that is not there any more is a delete that already h
   });
 });
 
-Deno.test("a facebook post that Graph says does not exist is a delete that already happened", async () => {
-  // Graph answers a delete of an object that is not there any more with a 400,
-  // the code 100 and the subcode 33, and not with a 404: the object is gone
-  // either way, so the caller is told the same thing.
-  const { fetcher } = fakeFetcher([goneFromGraph()]);
+Deno.test("a facebook 404 releases the body of the answer", async () => {
+  // The body of a 404 is never read, so it is released: the connection to
+  // the platform must not stay open behind the answer the caller got.
+  const { fetcher, wasCancelled } = answerWithUnreadBodyFetcher(404);
   const outcome = await deletePublishedPost(row(), account(), deps(fetcher));
   assertEquals(outcome, {
     outcome: "deleted",
     note: "Already removed on the platform.",
   });
+  assertEquals(wasCancelled(), true);
 });
 
-Deno.test("a facebook post that Graph says does not exist and went out as more than one item says what is left on Facebook", async () => {
-  // The recorded id is gone, but the story of the same post is not: the
-  // caller is still told what is left over on Facebook.
+Deno.test("a facebook post that Graph says does not exist is not reported as deleted", async () => {
+  // Graph answers a delete of an object it cannot confirm with a 400, the
+  // code 100 and the subcode 33, and not with a 404. The code is ambiguous:
+  // the object may be gone, may not be reachable with this connection, or may
+  // not support the operation at all. Postora cannot tell the three apart,
+  // so the delete is not confirmed and the copy may still be on Facebook.
   const { fetcher } = fakeFetcher([goneFromGraph()]);
+  const outcome = await deletePublishedPost(row(), account(), deps(fetcher));
+  if (outcome.outcome !== "not_supported") throw new Error("expected a refusal");
+  assertEquals(
+    outcome.reason,
+    "Facebook says this post does not exist or cannot be reached with this connection, so Postora cannot confirm it was removed. Check Facebook and delete it there if it is still visible.",
+  );
+});
+
+Deno.test("a facebook post that Graph says does not exist and went out as more than one item is not reported as deleted either", async () => {
+  // The answer confirms nothing, so the caller is told where to look: the
+  // copy may still be on Facebook, and only the caller can see it.
+  const { fetcher } = fakeFetcher([goneFromGraph()]);
+  const outcome = await deletePublishedPost(
+    row({ post_metadata: { facebook_post_type: ["feed", "story"] } }),
+    account(),
+    deps(fetcher),
+  );
+  if (outcome.outcome !== "not_supported") throw new Error("expected a refusal");
+  assertEquals(
+    outcome.reason,
+    "Facebook says this post does not exist or cannot be reached with this connection, so Postora cannot confirm it was removed. Check Facebook and delete it there if it is still visible.",
+  );
+});
+
+Deno.test("a facebook post that is not there any more and went out as more than one item says what is left on Facebook", async () => {
+  // The recorded id is gone (a 404 says so), but the story of the same post is
+  // not: the caller is still told what is left over on Facebook.
+  const { fetcher } = fakeFetcher([
+    { status: 404, body: { error: { message: "Unsupported get request." } } },
+  ]);
   const outcome = await deletePublishedPost(
     row({ post_metadata: { facebook_post_type: ["feed", "story"] } }),
     account(),
@@ -265,6 +355,29 @@ Deno.test("a facebook delete whose body never arrives is a failure and the conne
   assertEquals(outcome.reason, "Could not reach Facebook. Try again.");
   // The body is cancelled, so the connection to the platform is released: a
   // platform that stalls must not keep it open behind the answer.
+  assertEquals(wasCancelled(), true);
+});
+
+Deno.test("a facebook delete whose headers take most of the deadline fails within one deadline", async () => {
+  // The headers arrive late and the body never does: the call must give up
+  // at the end of the deadline it was given. The body read does not get a
+  // deadline of its own, or the call would last twice as long.
+  const timeoutMs = 200;
+  const { fetcher, wasCancelled } = slowHeadersStalledBodyFetcher(
+    Math.round(timeoutMs * 0.8),
+  );
+  const startedAt = Date.now();
+  const outcome = await deletePublishedPost(
+    row(),
+    account(),
+    deps(fetcher, { providerTimeoutMs: timeoutMs }),
+  );
+  const elapsed = Date.now() - startedAt;
+
+  if (outcome.outcome !== "failed") throw new Error("expected a failure");
+  assertEquals(outcome.reason, "Could not reach Facebook. Try again.");
+  // One deadline, not two: the body read gets what is left of it.
+  assertEquals(elapsed < timeoutMs * 1.4, true);
   assertEquals(wasCancelled(), true);
 });
 
@@ -418,19 +531,21 @@ Deno.test("a threads post that is not there any more is a delete that already ha
   });
 });
 
-Deno.test("a threads post that Graph says does not exist is a delete that already happened", async () => {
-  // Threads answers a delete of an object that is not there any more with the
-  // same 400, the code 100 and the subcode 33 that Facebook answers with.
+Deno.test("a threads post that Graph says does not exist is not reported as deleted", async () => {
+  // Threads answers a delete of an object it cannot confirm with the same
+  // 400, the code 100 and the subcode 33 that Facebook answers with. The
+  // code is ambiguous, so the delete is not confirmed.
   const { fetcher } = fakeFetcher([goneFromGraph()]);
   const outcome = await deletePublishedPost(
     row({ platform: "threads" }),
     account({ platform: "threads" }),
     deps(fetcher),
   );
-  assertEquals(outcome, {
-    outcome: "deleted",
-    note: "Already removed on the platform.",
-  });
+  if (outcome.outcome !== "not_supported") throw new Error("expected a refusal");
+  assertEquals(
+    outcome.reason,
+    "Threads says this post does not exist or cannot be reached with this connection, so Postora cannot confirm it was removed. Check Threads and delete it there if it is still visible.",
+  );
 });
 
 Deno.test("a threads delete whose answer confirms nothing is a failure", async () => {
@@ -645,17 +760,19 @@ Deno.test("a pinterest pin that cannot be reached is a failure that names the pi
   assertEquals(outcome.reason.includes("111: could not reach Pinterest"), true);
 });
 
-Deno.test("a pinterest pin whose body never arrives is a failure that names the pin", async () => {
-  // The delete was answered with its headers and then with nothing: the pin
-  // could not be confirmed, and the connection is released.
+Deno.test("a pinterest pin that answers 2xx is a delete even when its body never arrives", async () => {
+  // The 2xx is the confirmation: Pinterest says the pin is gone. The body is
+  // not read and not needed, so it is released, and a delete that Pinterest
+  // confirmed is never turned into a "could not reach".
   const { fetcher, wasCancelled } = stalledBodyFetcher();
   const outcome = await deletePublishedPost(
     row({ platform: "pinterest", platform_post_id: "111" }),
     account({ platform: "pinterest" }),
     deps(fetcher, { providerTimeoutMs: 20 }),
   );
-  if (outcome.outcome !== "failed") throw new Error("expected a failure");
-  assertEquals(outcome.reason.includes("111: could not reach Pinterest"), true);
+  assertEquals(outcome, { outcome: "deleted" });
+  // The body is released, so the connection to Pinterest does not stay open
+  // behind the answer.
   assertEquals(wasCancelled(), true);
 });
 
@@ -749,6 +866,22 @@ Deno.test("a linkedin destination that is not there any more is a delete that al
     outcome: "deleted",
     note: "Already removed on the platform.",
   });
+});
+
+Deno.test("a linkedin destination that answers 2xx is a delete even when its body never arrives", async () => {
+  // The 2xx is the confirmation: LinkedIn says the copy is gone. The body is
+  // not read and not needed, so it is released, and a delete that LinkedIn
+  // confirmed is never turned into a "could not reach".
+  const { fetcher, wasCancelled } = stalledBodyFetcher();
+  const outcome = await deletePublishedPost(
+    row({ platform: "linkedin" }),
+    account({ platform: "linkedin" }),
+    deps(fetcher, { providerTimeoutMs: 20 }),
+  );
+  assertEquals(outcome, { outcome: "deleted" });
+  // The body is released, so the connection to LinkedIn does not stay open
+  // behind the answer.
+  assertEquals(wasCancelled(), true);
 });
 
 Deno.test("a linkedin post that went to several destinations says what is left on LinkedIn", async () => {

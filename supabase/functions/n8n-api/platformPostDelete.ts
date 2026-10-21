@@ -67,6 +67,32 @@ function providerTimeout(deps: PlatformDeleteDeps): number {
   return deps.providerTimeoutMs ?? PROVIDER_TIMEOUT_MS;
 }
 
+// One call to a provider, under one deadline.
+//
+// The timer of the fetch stops when the headers arrive, so a body that stalls
+// after them would be waited for a second time if the body read were given a
+// deadline of its own: the call would last twice as long as the deadline it
+// was given, and a provider that never answers would hold the connection for
+// two deadlines instead of one. The clock therefore starts before the request
+// goes out, and the body is given what is left of the deadline.
+//
+// The module has no clock of its own to inject, so the wall clock is read.
+interface ProviderDeadline {
+  timeoutMs: number;
+  startedAt: number;
+}
+
+function startProviderDeadline(deps: PlatformDeleteDeps): ProviderDeadline {
+  return { timeoutMs: providerTimeout(deps), startedAt: Date.now() };
+}
+
+// What is left of the deadline for the body of the answer. Never negative: a
+// deadline that is used up leaves the body no time at all, and the read then
+// fails at once instead of waiting for a deadline of its own.
+function remainingProviderMs(deadline: ProviderDeadline): number {
+  return Math.max(0, deadline.timeoutMs - (Date.now() - deadline.startedAt));
+}
+
 // The body of an answer, read inside a deadline.
 //
 // fetchWithTimeout stops its timer when the headers arrive, so a body that
@@ -130,6 +156,18 @@ async function cancelReader(
   } catch {
     // Swallowed on purpose: cancelling must never turn the timeout into
     // another error.
+  }
+}
+
+// The body of an answer that is not read is given up, so the connection to the
+// provider is released: a provider that keeps the connection open must not
+// hold it behind an answer the caller already got. A cancel that fails is not
+// a new failure: the delete itself is what the caller is told about.
+export async function releaseBody(response: Response): Promise<void> {
+  try {
+    await response.body?.cancel();
+  } catch {
+    // Swallowed on purpose: releasing must never turn a delete into a fault.
   }
 }
 
@@ -241,16 +279,31 @@ interface GraphDeleteAnswer {
   errorSubcode: number | null;
   /** The platform could not be reached: there is no provider message. */
   upstreamUnavailable: boolean;
-  /** The object is not there any more. */
+  /** The object is not there any more: the platform answered 404. */
   notFound: boolean;
+  /**
+   * The platform says the object does not exist or cannot be reached. The
+   * answer is not a confirmation that the object is gone.
+   */
+  ambiguous: boolean;
 }
 
-// Graph answers a delete of an object that is not there any more with a 400
-// and not with a 404: the code is 100 and the subcode is 33, and the message
-// says "Object with ID ... does not exist". The object is gone either way, so
-// the answer is the same as the one of a 404.
-const GRAPH_GONE_CODE = 100;
-const GRAPH_GONE_SUBCODE = 33;
+// Graph answers a delete of an object that is not there any more with a 400,
+// the code 100 and the subcode 33. The code is ambiguous: Meta uses it for an
+// object that does not exist, for one that cannot be loaded because the
+// connection misses a permission, and for one that does not support the
+// operation at all. Postora cannot tell the three apart, so such an answer is
+// never reported as a delete: the copy may still be on the platform.
+const GRAPH_AMBIGUOUS_CODE = 100;
+const GRAPH_AMBIGUOUS_SUBCODE = 33;
+
+// The reason a Graph answer of "does not exist" is reported with.
+//
+// The delete cannot be confirmed, so the caller is told where to look: the
+// copy may still be on the platform, and only the caller can see it.
+function graphUnreachableReason(platform: "Facebook" | "Threads"): string {
+  return `${platform} says this post does not exist or cannot be reached with this connection, so Postora cannot confirm it was removed. Check ${platform} and delete it there if it is still visible.`;
+}
 
 // Facebook and Threads are the same Graph call against a different host, so the
 // shape lives here once and each platform keeps its own name in the message it
@@ -261,12 +314,16 @@ async function graphDelete(
   token: string,
   deps: PlatformDeleteDeps,
 ): Promise<GraphDeleteAnswer> {
+  // The deadline of the call starts here: the fetch and the body read share
+  // it, so a body that stalls after its headers arrived is given what is
+  // left of it and not a deadline of its own.
+  const deadline = startProviderDeadline(deps);
   let response: Response;
   try {
     response = await fetchWithTimeout(
       `${graph}/${encodeURIComponent(platformPostId)}?access_token=${encodeURIComponent(token)}`,
       { method: "DELETE" },
-      providerTimeout(deps),
+      deadline.timeoutMs,
       deps.fetcher,
     );
   } catch {
@@ -280,12 +337,15 @@ async function graphDelete(
       errorSubcode: null,
       upstreamUnavailable: true,
       notFound: false,
+      ambiguous: false,
     };
   }
 
   // A 404 is the whole answer: the object is not there any more, and the
-  // body of a 404 says nothing more than that.
+  // body of a 404 says nothing more than that. The body is released, so the
+  // connection to the platform does not stay open behind the answer.
   if (response.status === 404) {
+    await releaseBody(response);
     return {
       ok: false,
       data: null,
@@ -294,13 +354,14 @@ async function graphDelete(
       errorSubcode: null,
       upstreamUnavailable: false,
       notFound: true,
+      ambiguous: false,
     };
   }
 
-  // The body is read inside the deadline of the call: the timer of the fetch
-  // stops when the headers arrive, so a body that stalls after them would
-  // otherwise be waited for without a bound.
-  const body = await readJsonWithin(response, providerTimeout(deps));
+  // The body is read with what is left of the deadline of the call: the timer
+  // of the fetch stops when the headers arrive, so a body that stalls after
+  // them would otherwise be waited for without a bound.
+  const body = await readJsonWithin(response, remainingProviderMs(deadline));
   if (body.kind === "timeout") {
     // The provider answered with its headers and then said nothing: the
     // delete could not be confirmed, and the platform is not to be blamed for
@@ -313,6 +374,7 @@ async function graphDelete(
       errorSubcode: null,
       upstreamUnavailable: true,
       notFound: false,
+      ambiguous: false,
     };
   }
 
@@ -340,10 +402,10 @@ async function graphDelete(
     ? errorObject.error_subcode
     : null;
 
-  // The object is not there any more: Graph says so with a 400, the code 100
-  // and the subcode 33.
-  const alreadyGone = errorCode === GRAPH_GONE_CODE &&
-    errorSubcode === GRAPH_GONE_SUBCODE;
+  // Graph says the object does not exist with a 400, the code 100 and the
+  // subcode 33. The code is ambiguous, so the delete is not confirmed.
+  const ambiguous = errorCode === GRAPH_AMBIGUOUS_CODE &&
+    errorSubcode === GRAPH_AMBIGUOUS_SUBCODE;
 
   if (!response.ok || (rawError !== undefined && rawError !== null)) {
     return {
@@ -353,7 +415,8 @@ async function graphDelete(
       errorCode,
       errorSubcode,
       upstreamUnavailable: false,
-      notFound: alreadyGone,
+      notFound: false,
+      ambiguous,
     };
   }
 
@@ -365,6 +428,7 @@ async function graphDelete(
     errorSubcode: null,
     upstreamUnavailable: false,
     notFound: false,
+    ambiguous: false,
   };
 }
 
@@ -415,6 +479,12 @@ async function deleteFacebook(
 ): Promise<PlatformDeleteOutcome> {
   if (!account.access_token) return missingToken();
   const answer = await graphDelete(FACEBOOK_GRAPH, platformPostId, account.access_token, deps);
+  // Graph says the post does not exist or cannot be reached with this
+  // connection. The answer is ambiguous, so the delete is not confirmed and
+  // the copy may still be on Facebook.
+  if (answer.ambiguous) {
+    return { outcome: "not_supported", reason: graphUnreachableReason("Facebook") };
+  }
   // A post that is not there any more is already what the caller wanted.
   if (answer.notFound) {
     return facebookLeftover(row, " and it was already gone") ?? ALREADY_GONE;
@@ -461,6 +531,12 @@ async function deleteThreads(
 ): Promise<PlatformDeleteOutcome> {
   if (!account.access_token) return missingToken();
   const answer = await graphDelete(THREADS_GRAPH, platformPostId, account.access_token, deps);
+  // Graph says the post does not exist or cannot be reached with this
+  // connection. The answer is ambiguous, so the delete is not confirmed and
+  // the copy may still be on Threads.
+  if (answer.ambiguous) {
+    return { outcome: "not_supported", reason: graphUnreachableReason("Threads") };
+  }
   // A post that is not there any more is already what the caller wanted.
   if (answer.notFound) return ALREADY_GONE;
   if (!answer.ok) {
@@ -556,20 +632,19 @@ async function deletePinterest(
     // A pin that is not there any more is already what the caller wanted.
     if (response.status === 404) {
       alreadyGone += 1;
+      await releaseBody(response);
       continue;
     }
     if (response.status < 200 || response.status >= 300) {
       failures.push(`${pinId}: Pinterest returned ${response.status}`);
+      await releaseBody(response);
       continue;
     }
-    // The body of the answer is read inside the deadline of the call, even
-    // though a delete does not need it: a body that never arrives must not
-    // keep the call open past its deadline.
-    const body = await readJsonWithin(response, providerTimeout(deps));
-    if (body.kind === "timeout") {
-      failures.push(`${pinId}: could not reach Pinterest`);
-      continue;
-    }
+    // A 2xx is the delete: Pinterest says nothing else about it, and the body
+    // of the answer is not read and not needed. The body is released, so the
+    // connection does not stay open behind the answer, and a confirmed delete
+    // is never turned into a "could not reach" because a body did not arrive.
+    await releaseBody(response);
     deleted += 1;
   }
   if (failures.length === 0) {
@@ -678,20 +753,19 @@ async function deleteLinkedin(
     // A destination that is not there any more is already what the caller wanted.
     if (response.status === 404) {
       alreadyGone += 1;
+      await releaseBody(response);
       continue;
     }
     if (response.status < 200 || response.status >= 300) {
       failures.push(`${urn}: LinkedIn returned ${response.status}`);
+      await releaseBody(response);
       continue;
     }
-    // The body of the answer is read inside the deadline of the call, even
-    // though a delete does not need it: a body that never arrives must not
-    // keep the call open past its deadline.
-    const body = await readJsonWithin(response, providerTimeout(deps));
-    if (body.kind === "timeout") {
-      failures.push(`${urn}: could not reach LinkedIn`);
-      continue;
-    }
+    // A 2xx is the delete: LinkedIn says nothing else about it, and the body
+    // of the answer is not read and not needed. The body is released, so the
+    // connection does not stay open behind the answer, and a confirmed delete
+    // is never turned into a "could not reach" because a body did not arrive.
+    await releaseBody(response);
     deleted += 1;
   }
   if (failures.length > 0) {

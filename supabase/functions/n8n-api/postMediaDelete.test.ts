@@ -1,5 +1,9 @@
 import { assertEquals } from "jsr:@std/assert@1";
-import { deletePostMedia, type PostMediaDeleteDeps } from "./postMediaDelete.ts";
+import {
+  deletePostMedia,
+  isOwnStoragePath,
+  type PostMediaDeleteDeps,
+} from "./postMediaDelete.ts";
 
 const USER = "11111111-1111-4111-8111-111111111111";
 const OTHER_USER = "22222222-2222-4222-8222-222222222222";
@@ -176,6 +180,35 @@ function stalledBodyFetcher(): {
   return { fetcher, wasCancelled: () => state.cancelled };
 }
 
+// A fetcher whose headers arrive only after most of the deadline of the call
+// has passed, and whose body never arrives. The call must give up at the end
+// of the deadline it was given, and not a deadline later.
+function slowHeadersStalledBodyFetcher(delayMs: number): {
+  fetcher: typeof fetch;
+  wasCancelled: () => boolean;
+} {
+  const state = { cancelled: false };
+  const fetcher = (() =>
+    new Promise<Response>((resolve) => {
+      setTimeout(() => {
+        resolve(
+          new Response(
+            new ReadableStream({
+              pull() {
+                return new Promise<void>(() => {});
+              },
+              cancel() {
+                state.cancelled = true;
+              },
+            }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          ),
+        );
+      }, delayMs);
+    })) as unknown as typeof fetch;
+  return { fetcher, wasCancelled: () => state.cancelled };
+}
+
 function hasFilter(
   call: FakeCall | undefined,
   method: string,
@@ -209,6 +242,27 @@ function foreignFile(
 ): Record<string, unknown> {
   return storedFile(id, bucket, OTHER_USER);
 }
+
+Deno.test("a path under the caller's own folder is the caller's own file", () => {
+  assertEquals(isOwnStoragePath(`${USER}/x.png`, USER), true);
+  // A file in a subfolder of the caller's own folder is still their own.
+  assertEquals(isOwnStoragePath(`${USER}/sub/x.png`, USER), true);
+});
+
+Deno.test("a path that climbs out of the caller's own folder is not the caller's own file", () => {
+  // The prefix is not enough: these paths start with the folder of the caller
+  // and still point somewhere else.
+  assertEquals(isOwnStoragePath(`${USER}/../other/x.png`, USER), false);
+  assertEquals(isOwnStoragePath(`${USER}//x.png`, USER), false);
+  assertEquals(isOwnStoragePath(`${USER}/a\\b.png`, USER), false);
+  assertEquals(isOwnStoragePath(`${USER}/./x.png`, USER), false);
+});
+
+Deno.test("a path of another account is not the caller's own file", () => {
+  assertEquals(isOwnStoragePath(`${OTHER_USER}/x.png`, USER), false);
+  assertEquals(isOwnStoragePath("/x.png", USER), false);
+  assertEquals(isOwnStoragePath(`${USER}`, USER), false);
+});
 
 Deno.test("a stored file is removed from the storage and its row is deleted", async () => {
   const db = new FakeMediaDb({
@@ -361,6 +415,27 @@ Deno.test("a stored file that is not in the caller's own folder is not removed a
   assertEquals(hasFilter(removal, "in", "id", [MEDIA_TWO]), false);
 });
 
+Deno.test("a stored file whose path climbs out of the caller's own folder is not removed and its row stays", async () => {
+  // The path of the row is written by the client that uploaded the file, and
+  // the service role removes whatever it is told to remove: a path that
+  // climbs out of the caller's own folder is not the caller's file.
+  const db = new FakeMediaDb({
+    data: [
+      { id: MEDIA, file_path: `${USER}/../other/${MEDIA}.png`, storage_bucket: "media" },
+    ],
+    error: null,
+  });
+  const { fetcher } = fakeFetcher();
+  const outcome = await deletePostMedia(depsFor(db, fetcher), {
+    userId: USER,
+    mediaFileIds: [MEDIA],
+  });
+
+  assertEquals(outcome, { removedIds: [], failedIds: [MEDIA] });
+  assertEquals(db.removals.length, 0);
+  assertEquals(db.calls.filter((call) => call.op === "delete").length, 0);
+});
+
 Deno.test("a media delete service whose body never arrives leaves the provider files in the library", async () => {
   const db = new FakeMediaDb({
     data: [storedFile(MEDIA, "cloudinary")],
@@ -378,6 +453,29 @@ Deno.test("a media delete service whose body never arrives leaves the provider f
   assertEquals(db.calls.filter((call) => call.op === "delete").length, 0);
   // The body is cancelled, so the connection to the service is released.
   assertEquals(wasCancelled(), true);
+});
+
+Deno.test("a media delete service whose headers take most of the deadline fails within one deadline", async () => {
+  // The headers arrive late and the body never does: the call must give up
+  // at the end of the deadline it was given. The body read does not get a
+  // deadline of its own, or the call would last twice as long.
+  const timeoutMs = 200;
+  const db = new FakeMediaDb({
+    data: [storedFile(MEDIA, "cloudinary")],
+    error: null,
+  });
+  const { fetcher } = slowHeadersStalledBodyFetcher(Math.round(timeoutMs * 0.8));
+  const startedAt = Date.now();
+  const outcome = await deletePostMedia(
+    depsFor(db, fetcher, { providerTimeoutMs: timeoutMs }),
+    { userId: USER, mediaFileIds: [MEDIA] },
+  );
+  const elapsed = Date.now() - startedAt;
+
+  assertEquals(outcome, { removedIds: [], failedIds: [MEDIA] });
+  assertEquals(db.calls.filter((call) => call.op === "delete").length, 0);
+  // One deadline, not two: the body read gets what is left of it.
+  assertEquals(elapsed < timeoutMs * 1.4, true);
 });
 
 Deno.test("a post without media files has nothing to delete", async () => {

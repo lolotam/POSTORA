@@ -20,7 +20,7 @@
 // removed (see isOwnStoragePath).
 
 import { fetchWithTimeout } from "../_shared/request-timeout.ts";
-import { readJsonWithin } from "./platformPostDelete.ts";
+import { readJsonWithin, releaseBody } from "./platformPostDelete.ts";
 
 export interface StoredMediaRef {
   id: string;
@@ -68,9 +68,27 @@ function providerTimeout(deps: PostMediaDeleteDeps): number {
  *
  * The folder is the upload convention: every upload goes to
  * `${userId}/${fileName}` (see src/hooks/history/usePostRetry.ts).
+ *
+ * The prefix alone is not enough: a path that climbs out of the folder
+ * (`${userId}/../other/x.png`), a path with an empty segment
+ * (`${userId}//x.png`) and a path that carries a backslash
+ * (`${userId}/a\b.png`) all start with the folder and still point somewhere
+ * else, so none of them is the caller's own file.
  */
 export function isOwnStoragePath(filePath: string, userId: string): boolean {
-  return filePath.startsWith(`${userId}/`);
+  // The folder of the caller: a path of another account is not this one.
+  if (!filePath.startsWith(`${userId}/`)) return false;
+  // An absolute path is not under the folder of the caller.
+  if (filePath.startsWith("/")) return false;
+  // A backslash is a separator on some platforms and a plain character on
+  // others, so a path that carries one cannot be reasoned about here.
+  if (filePath.includes("\\")) return false;
+  // Every segment has to be a name: an empty one, a "." and a ".." all point
+  // somewhere other than the folder of the caller.
+  for (const segment of filePath.split("/")) {
+    if (segment === "" || segment === "." || segment === "..") return false;
+  }
+  return true;
 }
 
 /** The buckets whose files live in the Supabase storage, and not at a provider. */
@@ -200,6 +218,12 @@ async function deletePostMediaFiles(
   let invokeFailed = false;
   let deletedMediaFileIds: string[] | null = provider.length > 0 ? null : [];
   if (provider.length > 0) {
+    // The deadline of the call is one deadline: the headers and the body of
+    // the answer share it. The timer of the fetch stops when the headers
+    // arrive, so a body that stalls after them must get what is left of the
+    // deadline and not a deadline of its own.
+    const timeoutMs = providerTimeout(deps);
+    const startedAt = Date.now();
     try {
       const response = await fetchWithTimeout(
         `${deps.supabaseUrl}/functions/v1/cloudinary-delete`,
@@ -216,7 +240,7 @@ async function deletePostMediaFiles(
             user_id: userId,
           }),
         },
-        providerTimeout(deps),
+        timeoutMs,
         deps.fetcher,
       );
       if (!response.ok) {
@@ -224,11 +248,15 @@ async function deletePostMediaFiles(
         console.error(
           `[n8n-api] posts/delete: the media delete service answered ${response.status}`,
         );
+        // The body of a refusal is not read, so it is released: the service
+        // must not keep the connection open behind the answer.
+        await releaseBody(response);
       } else {
-        // The body is read inside the deadline of the call: the timer of the
-        // fetch stops when the headers arrive, and a body that never comes
-        // must not keep the call open.
-        const body = await readJsonWithin(response, providerTimeout(deps));
+        // The body is read with what is left of the deadline of the call: the
+        // timer of the fetch stops when the headers arrive, and a body that
+        // never comes must not keep the call open past its deadline.
+        const remainingMs = Math.max(0, timeoutMs - (Date.now() - startedAt));
+        const body = await readJsonWithin(response, remainingMs);
         // A body that did not arrive in time, or that cannot be read, is a
         // failed read and not an empty result: the files that were not named
         // as deleted are still there.
