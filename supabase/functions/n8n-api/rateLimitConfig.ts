@@ -62,6 +62,15 @@ export const FALLBACK_RATE_LIMITS: Record<string, { requests: number; windowMs: 
   // The destructive ones are kept low on purpose.
   '/api/v1/posts/cancel': { requests: 60, windowMs: 60 * 60 * 1000 },
   '/api/v1/posts/reschedule': { requests: 120, windowMs: 60 * 60 * 1000 },
+  // Every retry republishes the failed platforms of a post, so this budget is
+  // the lowest of the post routes: a caller that retries in a loop would
+  // publish the same post over and over.
+  '/api/v1/posts/retry': { requests: 10, windowMs: 60 * 60 * 1000 },
+  // Every delete removes a post from the platform as well as from Postora, and
+  // it removes the media files of the post, so it is destructive on two fronts.
+  // The budget is above the retry's because a delete does not republish
+  // anything, and below the read routes' because it is not a read.
+  '/api/v1/posts/delete': { requests: 20, windowMs: 60 * 60 * 1000 },
   '/api/v1/accounts/health': { requests: 300, windowMs: 60 * 60 * 1000 },
   // One best-times request costs up to six paid AI calls (one per platform),
   // and suggest-best-times has no per-user AI limit of its own: 5 requests per

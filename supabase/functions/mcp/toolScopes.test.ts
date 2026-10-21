@@ -33,6 +33,8 @@ Deno.test("a granted posts:write covers cancel_scheduled_post but not get_media"
 
   assertEquals(missingScope(grant, "cancel_scheduled_post"), null);
   assertEquals(missingScope(grant, "reschedule_post"), null);
+  assertEquals(missingScope(grant, "retry_failed_post"), null);
+  assertEquals(missingScope(grant, "delete_post"), null);
   assertEquals(missingScope(grant, "get_media"), "posts:read");
 });
 
@@ -52,6 +54,8 @@ Deno.test("an empty grant misses the scope of every gated tool", () => {
   const grant = granted();
 
   assertEquals(missingScope(grant, "cancel_scheduled_post"), "posts:write");
+  assertEquals(missingScope(grant, "retry_failed_post"), "posts:write");
+  assertEquals(missingScope(grant, "delete_post"), "posts:write");
   assertEquals(missingScope(grant, "check_account_health"), "accounts:read");
   assertEquals(missingScope(grant, "suggest_best_times"), "posts:read");
   assertEquals(missingScope(grant, "reply_to_comment"), "comments:write");
