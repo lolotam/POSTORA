@@ -86,6 +86,7 @@ import {
   resolveCommentAutomationHandler,
 } from "../_shared/automationHandler.ts";
 import { refuseOptedOutTemplate, sendOperatorWhatsAppMessage } from "./templateOptOut.ts";
+import { serviceRoleCallerUserId } from "../_shared/auth-helper.ts";
 
 // Meta's participant profile_pic URLs expire after a few days; re-fetch/re-cache
 // before that window closes rather than serving a dead link from messaging_cache.
@@ -95,6 +96,11 @@ const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
+
+// n8n-api reads conversations for an API-key user with the service role. Only
+// these read actions accept that caller; every send, WhatsApp, AI-config and
+// tool action stays on the user-JWT path.
+const SERVICE_ROLE_ACTIONS = new Set(["list_conversations", "get_messages"]);
 
 const GRAPH_VERSION = "v22.0";
 const GRAPH_API = `https://graph.facebook.com/${GRAPH_VERSION}`;
@@ -189,15 +195,25 @@ Deno.serve(async (req) => {
     });
     const token = authHeader.replace("Bearer ", "");
     
-    // Try getClaims first (faster), fall back to getUser
+    let serviceUserId: string | null;
+    try {
+      serviceUserId = await serviceRoleCallerUserId(req);
+    } catch {
+      return jsonResponse({ error: "Unauthorized" }, 401);
+    }
     let userId: string;
-    const { data: claimsData, error: claimsError } = await anonClient.auth.getClaims(token);
-    if (!claimsError && claimsData?.claims?.sub) {
-      userId = claimsData.claims.sub;
+    if (serviceUserId) {
+      userId = serviceUserId;
     } else {
-      const { data: { user: authUser }, error: authError } = await anonClient.auth.getUser(token);
-      if (authError || !authUser) return jsonResponse({ error: "Unauthorized" }, 401);
-      userId = authUser.id;
+      // Try getClaims first (faster), fall back to getUser
+      const { data: claimsData, error: claimsError } = await anonClient.auth.getClaims(token);
+      if (!claimsError && claimsData?.claims?.sub) {
+        userId = claimsData.claims.sub;
+      } else {
+        const { data: { user: authUser }, error: authError } = await anonClient.auth.getUser(token);
+        if (authError || !authUser) return jsonResponse({ error: "Unauthorized" }, 401);
+        userId = authUser.id;
+      }
     }
     
     // Create a virtual user object for backward compatibility
@@ -207,6 +223,10 @@ Deno.serve(async (req) => {
     const whatsappAccessClient = adminClient as unknown as WhatsAppWorkspaceAccessClient;
     const body = await req.json();
     const { action } = body;
+
+    if (serviceUserId && !SERVICE_ROLE_ACTIONS.has(action)) {
+      return jsonResponse({ error: "This action is not available to service-role callers" }, 403);
+    }
 
     // Helper: get access token for a social account
     async function getAccountToken(socialAccountId: string) {

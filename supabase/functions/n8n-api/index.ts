@@ -9,7 +9,7 @@ import { parseSubscriptionFilters } from "./webhookFilters.ts";
 import { describeBase64Failure, normalizeBase64Media } from "../_shared/base64Media.ts";
 import { clientIpFromHeaders, isValidUuid } from "./requestGuards.ts";
 import { relayUploadTarget } from "./mediaRelay.ts";
-import { MEDIA_QUOTA_CODE, invokeErrorText, isMediaQuotaMessage, mediaQuotaHumanMessage, quotaOnlyMessage } from "../_shared/mediaQuotaError.ts";
+import { MEDIA_QUOTA_CODE, invokeErrorText, isMediaQuotaMessage, mediaQuotaHumanMessage, mediaQuotaPreflight, quotaOnlyMessage, type QuotaRpc } from "../_shared/mediaQuotaError.ts";
 import {
   fetchGlobalSetting,
   fetchPlanSlug,
@@ -29,6 +29,19 @@ import { recordConnectorCall, resolveWorkspaceForCall } from "../_shared/connect
 
 import { restrictedCorsHeaders } from "../_shared/cors.ts";
 import { sha256Hex } from "../_shared/crypto.ts";
+import {
+  type AccountQueryClient,
+  createFunctionInvoker,
+  handleGenerateCaption,
+  handleGenerateHashtags,
+  handleGenerateImage,
+  handleGetPostAnalytics,
+  handleListComments,
+  handleListMessages,
+  type ServiceProxyDeps,
+  supabaseAccountLoader,
+  toProxyResponse,
+} from "./serviceProxy.ts";
 
 // Rate limiting configuration lives in ./rateLimitConfig.ts: limits resolve
 // per request from user_rate_limits -> tier_rate_limits (per plan) ->
@@ -2455,6 +2468,18 @@ export async function handleRequest(req: Request): Promise<Response> {
     // Route handling — wrap all responses with rate limit headers
     let response: Response;
 
+    // Only the service-proxy routes below build these.
+    const serviceProxyDeps = (): ServiceProxyDeps => ({
+      // Narrow structural type: the full generated client makes tsc recurse past its depth limit (TS2589).
+      loadAccount: supabaseAccountLoader(supabaseAdmin as unknown as AccountQueryClient),
+      invoke: createFunctionInvoker(
+        `${Deno.env.get('SUPABASE_URL') ?? ''}/functions/v1`,
+        Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
+      ),
+      storeImage: (ownerId, dataUrl) => uploadFileFromBase64(supabaseAdmin, ownerId, dataUrl, 'ai-image'),
+      mediaQuotaBlocked: (ownerId) => mediaQuotaPreflight(supabaseAdmin as unknown as QuotaRpc, ownerId),
+    });
+
     if (path === '/api/v1/post' && req.method === 'POST') {
       const body = await parseRequestBody(req);
       console.log('Parsed request body fields:', Object.keys(body || {}));
@@ -2491,6 +2516,18 @@ export async function handleRequest(req: Request): Promise<Response> {
       response = await handleCommentHide(req, supabaseAdmin, userId, await parseRequestBody(req));
     } else if (path === '/api/v1/comments/delete' && req.method === 'POST') {
       response = await handleCommentDelete(req, supabaseAdmin, userId, await parseRequestBody(req));
+    } else if (path === '/api/v1/comments' && req.method === 'GET') {
+      response = toProxyResponse(await handleListComments(serviceProxyDeps(), userId, url.searchParams), corsHeaders);
+    } else if (path === '/api/v1/messages' && req.method === 'GET') {
+      response = toProxyResponse(await handleListMessages(serviceProxyDeps(), userId, url.searchParams), corsHeaders);
+    } else if (path === '/api/v1/analytics' && req.method === 'GET') {
+      response = toProxyResponse(await handleGetPostAnalytics(serviceProxyDeps(), userId, url.searchParams), corsHeaders);
+    } else if (path === '/api/v1/ai/caption' && req.method === 'POST') {
+      response = toProxyResponse(await handleGenerateCaption(serviceProxyDeps(), userId, await parseRequestBody(req)), corsHeaders);
+    } else if (path === '/api/v1/ai/hashtags' && req.method === 'POST') {
+      response = toProxyResponse(await handleGenerateHashtags(serviceProxyDeps(), userId, await parseRequestBody(req)), corsHeaders);
+    } else if (path === '/api/v1/ai/image' && req.method === 'POST') {
+      response = toProxyResponse(await handleGenerateImage(serviceProxyDeps(), userId, await parseRequestBody(req)), corsHeaders);
     } else {
       // 404 for unknown routes
       response = apiError(req, 'Not Found', 404, 'NOT_FOUND', {
@@ -2508,7 +2545,13 @@ export async function handleRequest(req: Request): Promise<Response> {
           'POST /api/v1/messages/reply',
           'POST /api/v1/comments/reply',
           'POST /api/v1/comments/hide',
-          'POST /api/v1/comments/delete'
+          'POST /api/v1/comments/delete',
+          'GET /api/v1/comments',
+          'GET /api/v1/messages',
+          'GET /api/v1/analytics',
+          'POST /api/v1/ai/caption',
+          'POST /api/v1/ai/hashtags',
+          'POST /api/v1/ai/image'
         ]
       });
     }

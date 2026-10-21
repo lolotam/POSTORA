@@ -57,6 +57,15 @@ export const FALLBACK_RATE_LIMITS: Record<string, { requests: number; windowMs: 
   '/api/v1/comments/hide': { requests: 600, windowMs: 60 * 60 * 1000 },
   '/api/v1/comments/delete': { requests: 300, windowMs: 60 * 60 * 1000 },
   '/api/v1/media': { requests: 300, windowMs: 60 * 60 * 1000 },
+  // MCP tool routes served by serviceProxy.ts. The AI budgets are deliberately
+  // low; generate-caption and generate-image also enforce their own per-plan
+  // limits on the user_id they receive.
+  '/api/v1/comments': { requests: 300, windowMs: 60 * 60 * 1000 },
+  '/api/v1/messages': { requests: 300, windowMs: 60 * 60 * 1000 },
+  '/api/v1/analytics': { requests: 120, windowMs: 60 * 60 * 1000 },
+  '/api/v1/ai/caption': { requests: 30, windowMs: 60 * 60 * 1000 },
+  '/api/v1/ai/hashtags': { requests: 30, windowMs: 60 * 60 * 1000 },
+  '/api/v1/ai/image': { requests: 10, windowMs: 60 * 60 * 1000 },
   'default': { requests: 100, windowMs: 60 * 60 * 1000 },
 };
 
