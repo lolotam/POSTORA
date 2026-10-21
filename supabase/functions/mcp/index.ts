@@ -457,15 +457,13 @@ function buildServer(apiKey: string) {
       platform: z.enum(["whatsapp", "instagram", "facebook"]).optional().describe("Optional; must match the account's platform"),
     }),
     handler: async (args) => {
-      // A recipient that is only whitespace is no recipient: the API would
-      // answer with a provider error about an empty address, so the refusal
-      // happens here instead. What is sent is the trimmed value, and a
-      // recipient that is absent is left out of the body entirely.
+      // What is sent is the trimmed recipient, and a recipient that is absent
+      // or only whitespace is left out of the body entirely. A request with no
+      // recipient at all is not refused here: the API validates it and refuses
+      // it there, so the refusal is answered and recorded in one place
+      // instead of vanishing into a local answer nobody can trace.
       const recipientId = args.recipient_id?.trim();
       const recipientPhone = args.recipient_phone?.trim();
-      if (!recipientId && !recipientPhone) {
-        return fail(400, { code: "INVALID_MESSAGE", message: "Pass recipient_id or recipient_phone." });
-      }
       const body: Record<string, unknown> = { ...args };
       if (recipientId) {
         body.recipient_id = recipientId;
@@ -527,7 +525,8 @@ function buildServer(apiKey: string) {
   // ---- Account health ----
   server.tool("check_account_health", {
     description:
-      "Check whether a connected social account can still publish: active flag, whether it needs to be reconnected, refresh failures, last refresh error and days until its token expires.",
+      "Check whether a connected social account can still publish: active flag, whether it needs to be reconnected, refresh failures, last refresh error and days until its token expires. " +
+      "'healthy' is false when the account is inactive, needs a reconnect or its token has expired, true when the token is known to be still valid, and null when the token's expiry is unknown.",
     inputSchema: z.object({
       social_account_id: z.string().describe("Postora social account UUID (from list_accounts)"),
     }),

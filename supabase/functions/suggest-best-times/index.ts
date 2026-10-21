@@ -146,17 +146,27 @@ Return a JSON array of suggestions.`;
 
     // Parse JSON from response
     let suggestions = [];
+    // An answer that cannot be read is not an empty answer: the flag tells the
+    // caller that the list is missing because the model's answer failed to
+    // parse, not because the model had nothing to say.
+    let parseFailed = false;
     try {
       const jsonStr = content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-      suggestions = JSON.parse(jsonStr);
+      const parsed = JSON.parse(jsonStr);
+      if (Array.isArray(parsed)) {
+        suggestions = parsed;
+      } else {
+        parseFailed = true;
+      }
     } catch (parseError) {
       console.error('JSON parse error:', parseError, 'Content:', content);
+      parseFailed = true;
       suggestions = [];
     }
 
     console.log('Generated suggestions:', suggestions.length);
 
-    return jsonResponse({ suggestions });
+    return jsonResponse({ suggestions, ...(parseFailed ? { parse_failed: true } : {}) });
 
   } catch (error: unknown) {
     console.error('Error suggesting best times:', error);

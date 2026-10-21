@@ -629,6 +629,53 @@ Deno.test("an account that needs a reconnect is not healthy", async () => {
   assertEquals(account.failure_count, 2);
 });
 
+Deno.test("an account whose token expiry is unknown is not known to be healthy", async () => {
+  const db = new FakeSupabase();
+  db.queue("social_accounts", {
+    data: {
+      id: ACCOUNT,
+      platform: "facebook",
+      platform_username: "page",
+      is_active: true,
+      needs_reauth: false,
+      failure_count: 0,
+      last_refresh_error: null,
+      token_expires_at: null,
+    },
+    error: null,
+  });
+  const result = await checkAccountHealth(depsFor(db, noNetwork()), USER, ACCOUNT);
+  assertEquals(result.status, 200);
+  const account = (result.body as { account: Record<string, unknown> }).account;
+  // The expiry is unknown, so the state is indeterminate: null, not true. A
+  // "healthy" nobody has checked is a claim the answer cannot make.
+  assertEquals(account.token_expired, null);
+  assertEquals(account.days_until_expiry, null);
+  assertEquals(account.healthy, null);
+});
+
+Deno.test("an inactive account is not healthy even when its token expiry is unknown", async () => {
+  const db = new FakeSupabase();
+  db.queue("social_accounts", {
+    data: {
+      id: ACCOUNT,
+      platform: "facebook",
+      platform_username: "page",
+      is_active: false,
+      needs_reauth: false,
+      failure_count: 0,
+      last_refresh_error: null,
+      token_expires_at: null,
+    },
+    error: null,
+  });
+  const result = await checkAccountHealth(depsFor(db, noNetwork()), USER, ACCOUNT);
+  assertEquals(result.status, 200);
+  const account = (result.body as { account: Record<string, unknown> }).account;
+  // An account that is switched off is unhealthy whatever its token says.
+  assertEquals(account.healthy, false);
+});
+
 // ── best-times ─────────────────────────────────────────────────────────────────
 
 Deno.test("the posting histogram counts the local hour and the local weekday", () => {
@@ -995,9 +1042,45 @@ Deno.test("a suggestion service that answers 2xx without a suggestions list is a
   }
 });
 
+Deno.test("a suggestion service that could not read the model's answer is a 502", async () => {
+  const db = new FakeSupabase();
+  db.queue("platform_posts", { data: [], error: null });
+  // The service flags the answer it could not parse: the list is empty because
+  // the model's answer failed to parse, not because there was nothing to say.
+  const { fetcher } = fakeFetcher([
+    { status: 200, body: { suggestions: [], parse_failed: true } },
+  ]);
+  const logged: string[] = [];
+  const originalError = console.error;
+  console.error = (...args: unknown[]) => {
+    logged.push(args.map(String).join(" "));
+  };
+  try {
+    const result = await suggestBestTimes(
+      depsFor(db, fetcher),
+      USER,
+      { platforms: ["instagram"] },
+      null,
+    );
+    assertEquals(result.status, 502);
+    assertEquals(errorCode(result), "BEST_TIMES_FAILED");
+    // The refusal leaves a line behind, so a failed read is visible in the
+    // logs and not only in the answer the caller got.
+    assertEquals(logged.length, 1);
+    assertEquals(
+      logged[0],
+      `[n8n-api] best-times: the suggestion service could not read the model's answer (user ${USER})`,
+    );
+  } finally {
+    console.error = originalError;
+  }
+});
+
 Deno.test("an empty suggestion list from the service is a 200", async () => {
   const db = new FakeSupabase();
   db.queue("platform_posts", { data: [], error: null });
+  // Without the parse_failed flag the empty list is the service's real answer:
+  // it read the model and the model had nothing to say.
   const { fetcher } = fakeFetcher([{ status: 200, body: { suggestions: [] } }]);
   const result = await suggestBestTimes(
     depsFor(db, fetcher),

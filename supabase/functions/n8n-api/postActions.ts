@@ -634,6 +634,16 @@ export async function checkAccountHealth(
   const needsReauth = account.needs_reauth === true;
   const isActive = account.is_active === true;
 
+  // An account that is inactive, needs a reconnect or carries an expired token
+  // is not healthy. A token whose expiry is unknown is neither healthy nor
+  // unhealthy: the answer is null, so the caller reads an indeterminate state
+  // instead of a "healthy" nobody has checked.
+  const healthy = !isActive || needsReauth || tokenExpired === true
+    ? false
+    : tokenExpired === null
+    ? null
+    : true;
+
   return ok({
     account: {
       id: account.id,
@@ -646,7 +656,7 @@ export async function checkAccountHealth(
       token_expires_at: account.token_expires_at ?? null,
       token_expired: tokenExpired,
       days_until_expiry: daysUntilExpiry,
-      healthy: isActive && !needsReauth && tokenExpired !== true,
+      healthy,
     },
   });
 }
@@ -754,6 +764,15 @@ async function requestSuggestions(
   const json = await response.json().catch(() => null) as Record<string, unknown> | null;
   if (json === null || !Array.isArray(json.suggestions)) {
     console.error(`[n8n-api] ${route}: the suggestion service answered without a suggestions list for ${platform} (user ${userId})`);
+    return error(502, "BEST_TIMES_FAILED", "Could not get suggestions right now. Try again.");
+  }
+
+  // The service flags an answer it could not read: the list is empty because
+  // the model's answer failed to parse, not because there was nothing to say.
+  // That is a failed read too, so it is a 502 and never a 200 that carries no
+  // suggestions.
+  if (json.parse_failed === true) {
+    console.error(`[n8n-api] best-times: the suggestion service could not read the model's answer (user ${userId})`);
     return error(502, "BEST_TIMES_FAILED", "Could not get suggestions right now. Try again.");
   }
 
