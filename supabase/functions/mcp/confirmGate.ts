@@ -27,6 +27,9 @@
 // with a 4xx and a body and write no row of their own, so the tool that
 // forwarded the answer records it here. A refusal that happened behind the
 // API then leaves the same trace a refusal made here would have left.
+// A 429 is not one of them: the API's central rate limiter records every
+// 429 itself, before the route runs, so it is not recorded a second time
+// here.
 //
 // Refusal rows are throttled. An authenticated client can repeat an invalid
 // call forever, and every refusal used to insert a row, so the log grew with
@@ -385,6 +388,11 @@ function forwardedCode(data: unknown): string | null {
  * Only a 4xx is a refusal. A 2xx is a call that ran, and a 5xx is an
  * outage of the API, not a refused call; neither is recorded here.
  *
+ * A 429 is not recorded either: the API's central rate limiter answers it
+ * before any route runs and records it itself (see recordRateLimitRefusal
+ * in ../n8n-api/refusalLog.ts). Recording it here as well would write the
+ * same refusal twice.
+ *
  * The code is the one the answer carries, in the error envelope the API
  * answers a refusal with (`{ success: false, error: { code, message } }`,
  * see apiError in ../n8n-api/index.ts), and a top-level code is the fallback
@@ -402,6 +410,10 @@ export async function recordForwardedRefusal(
 ): Promise<void> {
   try {
     if (request.status < 400 || request.status > 499) return;
+
+    // The API's central rate limiter records every 429 itself, before the
+    // route behind this tool runs. The row is written once, there.
+    if (request.status === 429) return;
 
     let code = `HTTP_${request.status}`;
     const forwarded = forwardedCode(request.data);

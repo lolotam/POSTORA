@@ -1194,6 +1194,30 @@ Deno.test("a forwarded refusal whose body is not an object is recorded under its
   });
 });
 
+Deno.test("a forwarded 429 is not recorded: the API's central limiter records it", async () => {
+  resetRefusalThrottleForTests();
+  const { admin, calls, inserts } = createFakeAdmin();
+
+  // The API's rate limiter answers a 429 before the route behind the tool
+  // runs, and it records the refusal itself (see recordRateLimitRefusal in
+  // ../n8n-api/refusalLog.ts). Recording it here as well would write the
+  // same refusal twice.
+  await recordForwardedRefusal(
+    { admin },
+    {
+      userId: OWNER_ID,
+      tool: "reply_to_message",
+      status: 429,
+      data: { success: false, error: { code: "RATE_LIMIT_EXCEEDED", message: "x" } },
+    },
+  );
+
+  // No row, and not even a lookup: the refusal behind this answer is on
+  // record already.
+  assertEquals(inserts.length, 0);
+  assertEquals(calls.length, 0);
+});
+
 Deno.test("a forwarded answer that is not a refusal is not recorded", async () => {
   resetRefusalThrottleForTests();
   const { admin, calls, inserts } = createFakeAdmin();
