@@ -433,7 +433,7 @@ export async function cancelScheduledPost(
     );
   }
 
-  const refusal = await cancelScheduledRow(deps, route, { postId, userId, now });
+  const refusal = await cancelScheduledRow(deps, route, { postId, userId });
   if (refusal) return await refuseOrFail(deps, route, { userId, postId }, refusal);
 
   return ok({ post_id: postId, cancelled: true });
@@ -445,15 +445,18 @@ export async function cancelScheduledPost(
 async function cancelScheduledRow(
   deps: PostActionDeps,
   route: string,
-  request: { postId: string; userId: string; now: Date },
+  request: { postId: string; userId: string },
 ): Promise<ActionResult | null> {
+  // The deadline is checked at the moment of the write, not when the request
+  // began: a post whose time came while it was being read must not be deleted.
+  const writeNow = deps.now();
   const { data: deleted, error: deleteError } = await deps.supabase
     .from("posts")
     .delete()
     .eq("id", request.postId)
     .eq("user_id", request.userId)
     .in("status", SCHEDULED_STATUSES)
-    .gt("scheduled_at", request.now.toISOString())
+    .gt("scheduled_at", writeNow.toISOString())
     .select("id");
 
   if (deleteError) {
@@ -546,7 +549,7 @@ export async function reschedulePost(
     scheduled_at: new Date(scheduledAt).toISOString(),
   };
 
-  const updated = await rescheduleRow(deps, route, { postId, userId, payload, now });
+  const updated = await rescheduleRow(deps, route, { postId, userId, payload });
   if (isActionResult(updated)) {
     return await refuseOrFail(deps, route, { userId, postId }, updated);
   }
@@ -628,16 +631,24 @@ async function rescheduleRow(
     postId: string;
     userId: string;
     payload: Record<string, unknown>;
-    now: Date;
   },
 ): Promise<{ post: Record<string, unknown> } | ActionResult> {
+  // Both instants are checked at the moment of the write, not when the request
+  // began: the clock is read again here, so a time that passed while the post
+  // was being read cannot slip through.
+  const writeNow = deps.now();
+  const requestedAt = Date.parse(String(request.payload.scheduled_at));
+  if (requestedAt <= writeNow.getTime()) {
+    return error(400, "SCHEDULED_AT_IN_PAST", "scheduled_at must be in the future.");
+  }
+
   const { data: rows, error: updateError } = await deps.supabase
     .from("posts")
     .update(request.payload)
     .eq("id", request.postId)
     .eq("user_id", request.userId)
     .in("status", SCHEDULED_STATUSES)
-    .gt("scheduled_at", request.now.toISOString())
+    .gt("scheduled_at", writeNow.toISOString())
     .select("id, status, scheduled_at");
 
   if (updateError) {

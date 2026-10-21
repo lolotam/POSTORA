@@ -282,13 +282,27 @@ function chunkedBodyFetcher(chunks: string[]): typeof fetch {
     )) as unknown as typeof fetch;
 }
 
-function depsFor(db: FakeSupabase, fetcher: typeof fetch): PostActionDeps {
+function depsFor(
+  db: FakeSupabase,
+  fetcher: typeof fetch,
+  now: () => Date = () => NOW,
+): PostActionDeps {
   return {
     supabase: db,
     fetcher,
-    now: () => NOW,
+    now,
     supabaseUrl: SUPABASE_URL,
     serviceRoleKey: SERVICE_KEY,
+  };
+}
+
+// A clock that moves while the request runs: the first call is the moment the
+// request began, every call after it is the moment the write happens.
+function advancingClock(first: Date, later: Date): () => Date {
+  let calls = 0;
+  return () => {
+    calls += 1;
+    return calls === 1 ? first : later;
   };
 }
 
@@ -430,6 +444,29 @@ Deno.test("the cancel delete is a compare-and-set against the scheduler", async 
   });
 });
 
+Deno.test("the cancel delete is checked against the clock at the moment of the write", async () => {
+  const db = new FakeSupabase();
+  // The post is due in an hour, but the request takes two: by the time the
+  // delete goes out the post is overdue, and a deadline taken when the request
+  // began would let the delete through anyway.
+  const writeTime = new Date("2026-10-21T14:00:00.000Z");
+  db.queue("posts", {
+    data: { id: POST, status: "scheduled", scheduled_at: "2026-10-21T13:00:00.000Z" },
+    error: null,
+  });
+  db.queue("posts", { data: [{ id: POST }], error: null });
+  const result = await cancelScheduledPost(
+    depsFor(db, noNetwork(), advancingClock(NOW, writeTime)),
+    USER,
+    { post_id: POST },
+  );
+  assertEquals(result.status, 200);
+  const removal = callsFor(db, "posts", "delete")[0];
+  // The deadline is the one of the write, not the one of the request.
+  assertEquals(hasFilter(removal, "gt", "scheduled_at", writeTime.toISOString()), true);
+  assertEquals(hasFilter(removal, "gt", "scheduled_at", NOW_ISO), false);
+});
+
 Deno.test("a post that changed while it was being cancelled is a 409", async () => {
   const db = new FakeSupabase();
   db.queue("posts", {
@@ -558,6 +595,35 @@ Deno.test("a reschedule moves the instant and writes nothing else", async () => 
   const body = result.body as { post: { scheduled_at: string }; previous_scheduled_at: string };
   assertEquals(body.post.scheduled_at, "2026-12-01T10:00:00.000Z");
   assertEquals(body.previous_scheduled_at, "2026-10-22T12:00:00.000Z");
+});
+
+Deno.test("a reschedule whose new time has come while the post was read is refused", async () => {
+  const db = new FakeSupabase();
+  // The new time is five minutes away when the request starts and the write
+  // goes out ten minutes later: by then the instant asked for is already past,
+  // so the post may not be moved to it.
+  const writeTime = new Date("2026-10-21T12:10:00.000Z");
+  db.queue("posts", {
+    data: {
+      id: POST,
+      status: "scheduled",
+      scheduled_at: "2026-10-22T12:00:00.000Z",
+      metadata: null,
+    },
+    error: null,
+  });
+  const result = await reschedulePost(
+    depsFor(db, noNetwork(), advancingClock(NOW, writeTime)),
+    USER,
+    { post_id: POST, scheduled_at: "2026-10-21T12:05:00.000Z" },
+  );
+  assertEquals(result.status, 400);
+  assertEquals(errorCode(result), "SCHEDULED_AT_IN_PAST");
+  // The post was not moved: an instant that has already come cannot be
+  // scheduled.
+  assertEquals(callsFor(db, "posts", "update").length, 0);
+  // The refusal leaves a durable row behind.
+  assertEquals(callsFor(db, "system_logs", "insert").length, 1);
 });
 
 Deno.test("a post that carries a TikTok review consent cannot be rescheduled", async () => {
