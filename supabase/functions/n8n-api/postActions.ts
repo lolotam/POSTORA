@@ -583,11 +583,17 @@ export async function suggestBestTimes(
     ? preferredTimezone
     : "UTC";
 
+  // The history is per platform: a suggestion for TikTok must not be shaped by
+  // a LinkedIn-only post, nor by a TikTok publish that failed. The rows are
+  // the successful per-platform results, and the owner is enforced by the join
+  // to posts, so the read cannot reach another account's rows even though the
+  // service role is the one doing the reading.
   const { data, error: readError } = await deps.supabase
-    .from("posts")
-    .select("posted_at")
-    .eq("user_id", userId)
-    .eq("status", "completed")
+    .from("platform_posts")
+    .select("posted_at, posts!inner(user_id)")
+    .eq("posts.user_id", userId)
+    .eq("status", "success")
+    .in("platform", platforms)
     .not("posted_at", "is", null)
     .order("posted_at", { ascending: false })
     .limit(500);

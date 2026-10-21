@@ -594,7 +594,7 @@ Deno.test("the posting histogram counts the local hour and the local weekday", (
 
 Deno.test("the best-times request carries the platforms and the history", async () => {
   const db = new FakeSupabase();
-  db.queue("posts", {
+  db.queue("platform_posts", {
     data: [{ posted_at: "2026-10-04T21:30:00Z" }],
     error: null,
   });
@@ -611,6 +611,13 @@ Deno.test("the best-times request carries the platforms and the history", async 
   assertEquals(result.body.timezone, "Asia/Kuwait");
   assertEquals(result.body.based_on_posts, 1);
   assertEquals(result.body.suggestions, [{ platform: "instagram", day: "Monday" }]);
+
+  // The history is the successful per-platform results of the requested
+  // platforms, and the owner is enforced by the join to posts.
+  const read = callsFor(db, "platform_posts", "select")[0];
+  assertEquals(hasFilter(read, "eq", "posts.user_id", USER), true);
+  assertEquals(hasFilter(read, "eq", "status", "success"), true);
+  assertEquals(hasInFilter(read, "platform", ["instagram"]), true);
 
   assertEquals(calls.length, 1);
   assertEquals(calls[0].url, `${SUPABASE_URL}/functions/v1/suggest-best-times`);
@@ -631,7 +638,7 @@ Deno.test("the best-times request carries the platforms and the history", async 
 
 Deno.test("a best-times service that refuses is a 502", async () => {
   const db = new FakeSupabase();
-  db.queue("posts", { data: [], error: null });
+  db.queue("platform_posts", { data: [], error: null });
   const { fetcher } = fakeFetcher([{ status: 503, body: { error: "down" } }]);
   const result = await suggestBestTimes(
     depsFor(db, fetcher),
@@ -645,7 +652,7 @@ Deno.test("a best-times service that refuses is a 502", async () => {
 
 Deno.test("a suggestion service that does not answer in time is a 504 and leaves a log line", async () => {
   const db = new FakeSupabase();
-  db.queue("posts", { data: [], error: null });
+  db.queue("platform_posts", { data: [], error: null });
   const { fetcher } = fakeFetcher([{ reject: new Error("Request timed out") }]);
   const logged: string[] = [];
   const originalError = console.error;
@@ -672,7 +679,7 @@ Deno.test("a suggestion service that does not answer in time is a 504 and leaves
 
 Deno.test("a suggestion service that answers 2xx with a body that is not JSON is a 502", async () => {
   const db = new FakeSupabase();
-  db.queue("posts", { data: [], error: null });
+  db.queue("platform_posts", { data: [], error: null });
   const logged: string[] = [];
   const originalError = console.error;
   console.error = (...args: unknown[]) => {
@@ -698,7 +705,7 @@ Deno.test("a suggestion service that answers 2xx with a body that is not JSON is
 
 Deno.test("a suggestion service that answers 2xx without a suggestions list is a 502", async () => {
   const db = new FakeSupabase();
-  db.queue("posts", { data: [], error: null });
+  db.queue("platform_posts", { data: [], error: null });
   const { fetcher } = fakeFetcher([{ status: 200, body: {} }]);
   const logged: string[] = [];
   const originalError = console.error;
@@ -723,7 +730,7 @@ Deno.test("a suggestion service that answers 2xx without a suggestions list is a
 
 Deno.test("an empty suggestion list from the service is a 200", async () => {
   const db = new FakeSupabase();
-  db.queue("posts", { data: [], error: null });
+  db.queue("platform_posts", { data: [], error: null });
   const { fetcher } = fakeFetcher([{ status: 200, body: { suggestions: [] } }]);
   const result = await suggestBestTimes(
     depsFor(db, fetcher),
@@ -737,7 +744,7 @@ Deno.test("an empty suggestion list from the service is a 200", async () => {
 
 Deno.test("a timezone the runtime does not know falls back to UTC", async () => {
   const db = new FakeSupabase();
-  db.queue("posts", { data: [], error: null });
+  db.queue("platform_posts", { data: [], error: null });
   const { fetcher } = fakeFetcher([{ status: 200, body: { suggestions: [] } }]);
   const result = await suggestBestTimes(
     depsFor(db, fetcher),

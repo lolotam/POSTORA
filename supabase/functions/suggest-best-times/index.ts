@@ -2,6 +2,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.7.1";
 import { handleCorsOptions, jsonResponse, errorResponse } from "../_shared/cors.ts";
 import { callAiWithFallback, fetchAiSettings, logAiCall } from "../_shared/ai-fallback.ts";
+import { timingSafeTokenEqual } from "../_shared/auth-helper.ts";
 
 // A user id that reaches the database has to be a uuid: an id that is not one
 // makes the write of the log row fail with 22P02, and the AI call is then
@@ -57,7 +58,7 @@ serve(async (req) => {
     // a user_id from any other caller is ignored.
     if (
       serviceRoleKey.length > 0 &&
-      bearerToken === serviceRoleKey &&
+      timingSafeTokenEqual(bearerToken, serviceRoleKey) &&
       UUID_RE.test(bodyUserId)
     ) {
       userId = bodyUserId;
