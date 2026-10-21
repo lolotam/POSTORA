@@ -2,6 +2,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { deleteFromOpeninary, getOpeninaryConfig } from "../_shared/openinary.ts";
 import { logToDatabase } from "../_shared/logging.ts";
 import { destroyCloudinary } from "../_shared/cloudinaryDestroy.ts";
+import { serviceRoleCallerUserId } from "../_shared/auth-helper.ts";
 import { authorisedPublicIds, deleteAuthorisedMediaFiles, openinaryObjectKeyMatches } from "./deletePlan.ts";
 
 // The service-role client, typed loosely: the generated schema types are not wired into edge functions.
@@ -45,22 +46,48 @@ Deno.serve(async (req) => {
 
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
+    const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
     const supabase = createClient(supabaseUrl, supabaseAnonKey, {
       global: { headers: { Authorization: authHeader } },
     });
 
-    const { data: { user }, error: authError } = await supabase.auth.getUser();
-    if (authError || !user) {
-      console.error("Auth error:", authError);
-      return new Response(
-        JSON.stringify({ success: false, error: "Unauthorized" }),
-        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+    // An internal caller (n8n-api) holds the service-role key and has no user
+    // JWT: it names the user it acts for in the body. The shared helper
+    // compares the bearer with the service-role key in constant time and
+    // accepts the body only when it carries a valid uuid, so a call that is not
+    // one stays on the user-JWT path below.
+    const serviceRoleActorId = await serviceRoleCallerUserId(req).catch(() => null);
+
+    let actorId: string;
+    // The admin lookup runs only for a user call. A service-role call acts for
+    // the user it names, with that user's own rights: it is never admin here.
+    let isAdmin = false;
+    if (serviceRoleActorId) {
+      actorId = serviceRoleActorId;
+      console.log(`Service role requesting Cloudinary delete for user ${actorId}`);
+    } else {
+      const { data: { user }, error: authError } = await supabase.auth.getUser();
+      if (authError || !user) {
+        console.error("Auth error:", authError);
+        return new Response(
+          JSON.stringify({ success: false, error: "Unauthorized" }),
+          { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
+      console.log(`User ${user.id} requesting Cloudinary delete`);
+      actorId = user.id;
+
+      const { data: adminRole, error: roleError } = await supabase
+        .from("user_roles")
+        .select("role")
+        .eq("user_id", actorId)
+        .eq("role", "admin")
+        .maybeSingle();
+      if (roleError) console.error("[cloudinary-delete] admin role lookup failed");
+      isAdmin = !!adminRole && !roleError;
     }
 
-    console.log(`User ${user.id} requesting Cloudinary delete`);
-    const actorId = user.id;
-    const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
     const serviceClient: ServiceClient | null = serviceRoleKey ? createClient(supabaseUrl, serviceRoleKey) : null;
 
     // Cloudinary credentials are only required by paths that delete a Cloudinary
@@ -70,14 +97,6 @@ Deno.serve(async (req) => {
     const apiSecret = Deno.env.get("CLOUDINARY_API_SECRET");
 
     const { publicIds, mediaFileIds }: DeleteRequest = await req.json();
-    const { data: adminRole, error: roleError } = await supabase
-      .from("user_roles")
-      .select("role")
-      .eq("user_id", actorId)
-      .eq("role", "admin")
-      .maybeSingle();
-    if (roleError) console.error("[cloudinary-delete] admin role lookup failed");
-    const isAdmin = !!adminRole && !roleError;
 
     /** A lookup failure refuses the whole request; it gets a durable row, never the ids or keys. */
     async function logLookupFailure(stage: string) {

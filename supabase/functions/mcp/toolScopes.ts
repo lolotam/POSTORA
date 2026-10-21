@@ -34,6 +34,7 @@ export const NEW_TOOL_SCOPES: Readonly<Record<string, string>> = {
   cancel_scheduled_post: "posts:write",
   reschedule_post: "posts:write",
   retry_failed_post: "posts:write",
+  delete_post: "posts:write",
   check_account_health: "accounts:read",
   suggest_best_times: "posts:read",
   get_media: "posts:read",

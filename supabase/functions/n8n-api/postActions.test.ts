@@ -3,7 +3,9 @@ import {
   cancelScheduledPost,
   checkAccountHealth,
   computePostingHistogram,
+  deletePost,
   handleCancelScheduledPost,
+  handleDeletePost,
   handleReschedulePost,
   handleRetryFailedPost,
   handleSuggestBestTimes,
@@ -21,6 +23,7 @@ const POST = "22222222-2222-4222-8222-222222222222";
 const ACCOUNT = "33333333-3333-4333-8333-333333333333";
 const ACCOUNT_TWO = "44444444-4444-4444-8444-444444444444";
 const CLAIM = "55555555-5555-4555-8555-555555555555";
+const MEDIA = "66666666-6666-4666-8666-666666666666";
 const SERVICE_KEY = "service-role-key";
 const SUPABASE_URL = "https://api.postora.cloud";
 const SCHEDULED_STATUSES = ["scheduled", "pending"];
@@ -30,6 +33,8 @@ const RESCHEDULE_RPC = "mcp_reschedule_post";
 // The two database functions the retry takes and gives back its lease through.
 const CLAIM_RPC = "mcp_claim_post_action";
 const RELEASE_RPC = "mcp_release_post_action";
+// The database function that deletes the post row while the claim is held.
+const DELETE_CLAIMED_RPC = "mcp_delete_claimed_post";
 
 // ── fake Supabase ──────────────────────────────────────────────────────────────
 
@@ -51,6 +56,12 @@ interface RecordedCall {
   filters: Array<[string, ...unknown[]]>;
   /** The select columns for a select, the data object for an insert/update. */
   payload: unknown;
+  /**
+   * The order in which the call was made, counted over every table call and
+   * every RPC. Two calls can therefore be compared: the delete of the post
+   * row and the delete of the media that follows it.
+   */
+  order: number;
 }
 
 // One call to a database function: the name and the arguments it was called
@@ -59,6 +70,7 @@ interface RecordedCall {
 interface RecordedRpc {
   name: string;
   args: Record<string, unknown>;
+  order: number;
 }
 
 class FakeBuilder {
@@ -154,8 +166,11 @@ class FakeBuilder {
 class FakeSupabase {
   readonly calls: RecordedCall[] = [];
   readonly rpcCalls: RecordedRpc[] = [];
+  /** The files that were removed from the storage, and when. */
+  readonly storageRemovals: Array<{ bucket: string; paths: string[]; order: number }> = [];
   private readonly queues = new Map<string, FakeResult[]>();
   private readonly rpcQueues = new Map<string, FakeResult[]>();
+  private counter = 0;
 
   queue(table: string, result: FakeResult): this {
     const list = this.queues.get(table) ?? [];
@@ -181,7 +196,7 @@ class FakeSupabase {
   }
 
   rpc(name: string, args: Record<string, unknown>): Promise<FakeResult> {
-    this.rpcCalls.push({ name, args });
+    this.rpcCalls.push({ name, args, order: this.counter++ });
     const list = this.rpcQueues.get(name);
     if (!list || list.length === 0) {
       throw new Error(`no queued rpc result for ${name}`);
@@ -201,9 +216,19 @@ class FakeSupabase {
     return list.shift() as FakeResult;
   }
 
-  record(call: RecordedCall): void {
-    this.calls.push(call);
+  record(call: Omit<RecordedCall, "order">): void {
+    this.calls.push({ ...call, order: this.counter++ });
   }
+
+  /** The storage the media delete removes the files from. */
+  readonly storage = {
+    from: (bucket: string) => ({
+      remove: (paths: string[]) => {
+        this.storageRemovals.push({ bucket, paths, order: this.counter++ });
+        return Promise.resolve({ error: null });
+      },
+    }),
+  };
 }
 
 // ── fake fetcher ───────────────────────────────────────────────────────────────
@@ -2688,5 +2713,434 @@ Deno.test("a retry whose body cannot be parsed is a 400 and never reaches the po
   assertEquals(
     logged[0],
     `[n8n-api] posts/retry: INVALID_REQUEST (post unknown, user ${USER})`,
+  );
+});
+
+// ── posts/delete ───────────────────────────────────────────────────────────────
+
+// One published copy of a post: the per-platform result that went out.
+function publishedCopy(
+  id: string,
+  platform: string | null,
+  accountId: string | null,
+  platformPostId: string | null,
+): Record<string, unknown> {
+  return {
+    id,
+    platform,
+    platform_post_id: platformPostId,
+    social_account_id: accountId,
+    status: "success",
+    response_data: null,
+  };
+}
+
+// The account a published copy went out on.
+function deleteAccount(
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    id: ACCOUNT,
+    user_id: USER,
+    platform: "facebook",
+    access_token: "placeholder",
+    ...overrides,
+  };
+}
+
+// The reads a delete makes, in the order it makes them: the post itself, the
+// published copies and the accounts they went out on.
+function queueDeleteReads(
+  db: FakeSupabase,
+  options: {
+    mediaFileIds?: string[];
+    copies?: Array<Record<string, unknown>>;
+    accounts?: Array<Record<string, unknown>>;
+  } = {},
+): void {
+  db.queue("posts", {
+    data: {
+      id: POST,
+      status: "completed",
+      media_file_ids: options.mediaFileIds ?? [],
+    },
+    error: null,
+  });
+  db.queue("platform_posts", { data: options.copies ?? [], error: null });
+  db.queue("social_accounts", { data: options.accounts ?? [], error: null });
+}
+
+Deno.test("a delete with a non-uuid post id is refused before anything is claimed", async () => {
+  const db = new FakeSupabase();
+  const result = await deletePost(depsFor(db, noNetwork()), USER, {
+    post_id: "not-a-uuid",
+  });
+  assertEquals(result.status, 400);
+  assertEquals(errorCode(result), "INVALID_POST_ID");
+  // Nothing is claimed and nothing is deleted: the refusal only writes its
+  // own row.
+  assertEquals(db.rpcCalls.length, 0);
+  assertEquals(callsFor(db, "system_logs", "insert").length, 1);
+});
+
+Deno.test("a delete whose claim function is not in the database yet is a 503 and deletes nothing", async () => {
+  const db = new FakeSupabase();
+  // The migration that creates the claim has not been applied to this
+  // database yet: PostgREST answers PGRST202.
+  db.queueRpc(CLAIM_RPC, { data: null, error: missingRpcError(CLAIM_RPC) });
+  const { calls, fetcher } = fakeFetcher([]);
+  const logged: string[] = [];
+  const originalError = console.error;
+  console.error = (...args: unknown[]) => {
+    logged.push(args.map(String).join(" "));
+  };
+  try {
+    const result = await deletePost(depsFor(db, fetcher), USER, {
+      post_id: POST,
+    });
+    // An outage is not a refusal: the caller's request is fine, the database
+    // is not ready for it.
+    assertEquals(result.status, 503);
+    assertEquals(errorCode(result), "FEATURE_NOT_READY");
+    assertEquals(
+      (result.body.error as { message: string }).message,
+      "Deleting a post needs a database update that has not been applied yet.",
+    );
+    // Nothing is deleted: the claim never came, so the delete never goes.
+    assertEquals(calls.length, 0);
+    assertEquals(rpcCallFor(db, DELETE_CLAIMED_RPC), undefined);
+    // The outage leaves a line behind, and not a refusal row.
+    assertEquals(logged.length, 1);
+    assertEquals(logged[0].includes("is not in the database yet"), true);
+    assertEquals(callsFor(db, "system_logs", "insert").length, 0);
+  } finally {
+    console.error = originalError;
+  }
+});
+
+Deno.test("a delete of a post that is being published to TikTok is a 409, not a 500", async () => {
+  const db = new FakeSupabase();
+  // The database refused the claim on purpose: the trigger raises P0001 with
+  // the DETAIL 'TIKTOK_REVIEW_POST_LOCKED' while the post is mid-publish.
+  const triggerMessage =
+    "This TikTok post is being published right now and can't be deleted. Try again in a few minutes.";
+  db.queueRpc(CLAIM_RPC, {
+    data: null,
+    error: {
+      message: triggerMessage,
+      code: "P0001",
+      details: "TIKTOK_REVIEW_POST_LOCKED",
+    },
+  });
+  const { result, logged } = await withCapturedWarn(() =>
+    deletePost(depsFor(db, noNetwork()), USER, { post_id: POST })
+  );
+  // A lock is a decision, not a fault: the caller is told what the database
+  // said about it.
+  assertEquals(result.status, 409);
+  assertEquals(errorCode(result), "POST_LOCKED");
+  assertEquals(
+    (result.body.error as { message: string }).message,
+    triggerMessage,
+  );
+  // Nothing is deleted and no claim is given back: there was no claim.
+  assertEquals(rpcCallFor(db, DELETE_CLAIMED_RPC), undefined);
+  assertEquals(rpcCallFor(db, RELEASE_RPC), undefined);
+  // The refusal leaves a durable row behind.
+  assertEquals(callsFor(db, "system_logs", "insert").length, 1);
+  assertEquals(
+    logged.some((line) => line.includes("posts/delete") && line.includes(POST)),
+    true,
+  );
+});
+
+Deno.test("a delete of a post that did not finish publishing is a 409 and names its status", async () => {
+  const db = new FakeSupabase();
+  db.queueRpc(CLAIM_RPC, {
+    data: { outcome: "bad_status", status: "scheduled" },
+    error: null,
+  });
+  const { calls, fetcher } = fakeFetcher([]);
+  const result = await deletePost(depsFor(db, fetcher), USER, {
+    post_id: POST,
+  });
+  assertEquals(result.status, 409);
+  assertEquals(errorCode(result), "POST_NOT_DELETABLE");
+  assertEquals(
+    (result.body.error as { message: string }).message,
+    "Only a post that finished publishing (completed or failed) can be deleted here; use cancel_scheduled_post for a scheduled post.",
+  );
+  assertEquals(
+    (result.body.error as { details: { status: string } }).details.status,
+    "scheduled",
+  );
+  // Nothing is deleted: a scheduled post is the cancel path's business.
+  assertEquals(calls.length, 0);
+  assertEquals(rpcCallFor(db, DELETE_CLAIMED_RPC), undefined);
+  // The refusal leaves a durable row behind.
+  assertEquals(callsFor(db, "system_logs", "insert").length, 1);
+});
+
+Deno.test("a delete whose platform refused deletes nothing in Postora and gives the claim back", async () => {
+  const db = new FakeSupabase();
+  claimQueued(db, "completed");
+  queueDeleteReads(db, {
+    mediaFileIds: [MEDIA],
+    copies: [publishedCopy("row-facebook", "facebook", ACCOUNT, "1234567890")],
+    // The account has no token, so the platform copy cannot be deleted.
+    accounts: [deleteAccount({ access_token: null })],
+  });
+  db.queueRpc(RELEASE_RPC, { data: true, error: null });
+
+  const { calls, fetcher } = fakeFetcher([]);
+  const result = await deletePost(depsFor(db, fetcher), USER, {
+    post_id: POST,
+  });
+
+  assertEquals(result.status, 409);
+  assertEquals(errorCode(result), "PLATFORM_DELETE_FAILED");
+  const details = (result.body.error as {
+    details: { post_id: string; results: Array<{ outcome: string }> };
+  }).details;
+  assertEquals(details.post_id, POST);
+  assertEquals(details.results[0].outcome, "failed");
+
+  // The Postora record and its media stay: the caller can retry the delete.
+  assertEquals(rpcCallFor(db, DELETE_CLAIMED_RPC), undefined);
+  assertEquals(callsFor(db, "media_files").length, 0);
+  assertEquals(db.storageRemovals.length, 0);
+  // The claim is given back, so the next call is not told the post is busy.
+  assertEquals(rpcCallFor(db, RELEASE_RPC)?.args, {
+    p_user_id: USER,
+    p_post_id: POST,
+    p_claim_id: CLAIM,
+  });
+  // The refusal leaves a durable row behind.
+  assertEquals(callsFor(db, "system_logs", "insert").length, 1);
+});
+
+Deno.test("a delete whose platforms are gone removes the post and then its media", async () => {
+  const db = new FakeSupabase();
+  claimQueued(db, "completed");
+  queueDeleteReads(db, {
+    mediaFileIds: [MEDIA],
+    copies: [
+      publishedCopy("row-facebook", "facebook", ACCOUNT, "1234567890"),
+      publishedCopy("row-instagram", "instagram", ACCOUNT_TWO, "9876543210"),
+    ],
+    accounts: [
+      deleteAccount(),
+      deleteAccount({ id: ACCOUNT_TWO, platform: "instagram" }),
+    ],
+  });
+  // The media of the post: the read and the delete of its row.
+  db.queue("media_files", {
+    data: [{ id: MEDIA, file_path: `${MEDIA}.png`, storage_bucket: "media" }],
+    error: null,
+  });
+  db.queue("media_files", { data: null, error: null });
+  db.queueRpc(DELETE_CLAIMED_RPC, { data: true, error: null });
+
+  const { calls, fetcher } = fakeFetcher([{ status: 200, body: { success: true } }]);
+  const result = await deletePost(depsFor(db, fetcher), USER, {
+    post_id: POST,
+  });
+
+  assertEquals(result.status, 200);
+  assertEquals(result.body.post_id, POST);
+  assertEquals(result.body.deleted, true);
+
+  // The Facebook copy is deleted on the platform; the Instagram one stays.
+  const platforms = result.body.platforms as Array<{
+    platform: string;
+    outcome: string;
+    platform_post_id: string | null;
+  }>;
+  assertEquals(platforms.length, 2);
+  assertEquals(platforms[0].platform, "facebook");
+  assertEquals(platforms[0].platform_post_id, "1234567890");
+  assertEquals(platforms[0].outcome, "deleted");
+  assertEquals(platforms[1].platform, "instagram");
+  assertEquals(platforms[1].outcome, "not_supported");
+
+  // The Postora row is deleted while the claim is held.
+  const deleteRpc = rpcCallFor(db, DELETE_CLAIMED_RPC);
+  assertEquals(deleteRpc?.args, {
+    p_user_id: USER,
+    p_post_id: POST,
+    p_claim_id: CLAIM,
+  });
+
+  // The media goes AFTER the post row, and not before: a file that is gone
+  // while the post is still there is a file nobody can reach any more.
+  const mediaRead = callsFor(db, "media_files", "select")[0];
+  assertEquals(mediaRead !== undefined, true);
+  assertEquals(
+    deleteRpc !== undefined && mediaRead !== undefined && mediaRead.order > deleteRpc.order,
+    true,
+  );
+  // The file lives in the storage, so it is removed there and its row goes.
+  assertEquals(db.storageRemovals.length, 1);
+  assertEquals(db.storageRemovals[0].bucket, "media");
+  assertEquals(db.storageRemovals[0].paths, [`${MEDIA}.png`]);
+  assertEquals(result.body.media, { removed: 1, failed: [] });
+
+  // The Facebook copy is the one request that went out: the Instagram copy
+  // has no delete endpoint, so nothing was asked of it.
+  assertEquals(calls.length, 1);
+  assertEquals(calls[0].method, "DELETE");
+});
+
+Deno.test("a delete whose claim is not the one on the row is a 409 and the media stays", async () => {
+  const db = new FakeSupabase();
+  claimQueued(db, "completed");
+  queueDeleteReads(db, {
+    mediaFileIds: [MEDIA],
+    copies: [publishedCopy("row-facebook", "facebook", ACCOUNT, "1234567890")],
+    accounts: [deleteAccount()],
+  });
+  // The row was not deleted: the claim is not the one on the row any more, so
+  // somebody else holds the post.
+  db.queueRpc(DELETE_CLAIMED_RPC, { data: false, error: null });
+  db.queueRpc(RELEASE_RPC, { data: true, error: null });
+
+  const { fetcher } = fakeFetcher([{ status: 200, body: { success: true } }]);
+  const result = await deletePost(depsFor(db, fetcher), USER, {
+    post_id: POST,
+  });
+
+  assertEquals(result.status, 409);
+  assertEquals(errorCode(result), "POST_STATE_CHANGED");
+  // The media is not deleted: the post is still there.
+  assertEquals(callsFor(db, "media_files").length, 0);
+  assertEquals(db.storageRemovals.length, 0);
+  // The claim is given back, so the next call is not told the post is busy for
+  // the rest of the lease.
+  assertEquals(rpcCallFor(db, RELEASE_RPC)?.args, {
+    p_user_id: USER,
+    p_post_id: POST,
+    p_claim_id: CLAIM,
+  });
+  // The refusal leaves a durable row behind.
+  assertEquals(callsFor(db, "system_logs", "insert").length, 1);
+});
+
+Deno.test("a delete of a post that is locked by a TikTok publish gives the claim back", async () => {
+  const db = new FakeSupabase();
+  claimQueued(db, "completed");
+  queueDeleteReads(db, {
+    mediaFileIds: [MEDIA],
+    // The post is being published right now, so it has no published copy yet.
+    copies: [],
+    accounts: [],
+  });
+  // The database refused the delete on purpose: the trigger raises P0001 with
+  // the DETAIL 'TIKTOK_REVIEW_POST_LOCKED' while the post is mid-publish.
+  const triggerMessage =
+    "This TikTok post is being published right now and can't be deleted. Try again in a few minutes.";
+  db.queueRpc(DELETE_CLAIMED_RPC, {
+    data: null,
+    error: {
+      message: triggerMessage,
+      code: "P0001",
+      details: "TIKTOK_REVIEW_POST_LOCKED",
+    },
+  });
+  db.queueRpc(RELEASE_RPC, { data: true, error: null });
+
+  const { fetcher } = fakeFetcher([]);
+  const { result, logged } = await withCapturedWarn(() =>
+    deletePost(depsFor(db, fetcher), USER, { post_id: POST })
+  );
+
+  // A lock is a decision, not a fault: the caller is told what the database
+  // said about it.
+  assertEquals(result.status, 409);
+  assertEquals(errorCode(result), "POST_LOCKED");
+  assertEquals(
+    (result.body.error as { message: string }).message,
+    triggerMessage,
+  );
+  // The claim is given back, so the next call is not told the post is busy for
+  // the rest of the lease.
+  assertEquals(rpcCallFor(db, RELEASE_RPC)?.args, {
+    p_user_id: USER,
+    p_post_id: POST,
+    p_claim_id: CLAIM,
+  });
+  // The media is not deleted: the post is still there.
+  assertEquals(callsFor(db, "media_files").length, 0);
+  assertEquals(db.storageRemovals.length, 0);
+  // The refusal leaves a durable row behind.
+  assertEquals(callsFor(db, "system_logs", "insert").length, 1);
+  // The lock leaves a line behind that names the route and the post.
+  assertEquals(
+    logged.some((line) => line.includes("posts/delete") && line.includes(POST)),
+    true,
+  );
+});
+
+Deno.test("a delete whose database write fails is a 500 and keeps the claim", async () => {
+  const db = new FakeSupabase();
+  claimQueued(db, "completed");
+  queueDeleteReads(db, {
+    mediaFileIds: [MEDIA],
+    copies: [],
+    accounts: [],
+  });
+  // The database refused the write for a reason of its own, not on purpose.
+  db.queueRpc(DELETE_CLAIMED_RPC, {
+    data: null,
+    error: { message: "deadlock detected" },
+  });
+
+  const { fetcher } = fakeFetcher([]);
+  const logged: string[] = [];
+  const originalError = console.error;
+  console.error = (...args: unknown[]) => {
+    logged.push(args.map(String).join(" "));
+  };
+  try {
+    const result = await deletePost(depsFor(db, fetcher), USER, {
+      post_id: POST,
+    });
+    assertEquals(result.status, 500);
+    assertEquals(errorCode(result), "INTERNAL_ERROR");
+    // The claim is KEPT: it is a lease, so it runs out on its own and the
+    // caller can try again in the meantime.
+    assertEquals(rpcCallFor(db, RELEASE_RPC), undefined);
+    // The media is not deleted: the post is still there.
+    assertEquals(callsFor(db, "media_files").length, 0);
+    assertEquals(db.storageRemovals.length, 0);
+    // The fault is logged where it happened, and it is not a refusal.
+    assertEquals(logged.length, 1);
+    assertEquals(logged[0].includes("deleting post"), true);
+    assertEquals(callsFor(db, "system_logs", "insert").length, 0);
+  } finally {
+    console.error = originalError;
+  }
+});
+
+Deno.test("a delete whose body cannot be parsed is a 400 and never reaches the posts table", async () => {
+  const db = new FakeSupabase();
+  const { result: response, logged } = await withCapturedWarn(() =>
+    handleDeletePost(
+      minimalRequest("/api/v1/posts/delete"),
+      db,
+      USER,
+      MALFORMED_BODY,
+    )
+  );
+  assertEquals(response.status, 400);
+  const body = await response.json() as { error: { code: string; message: string } };
+  assertEquals(body.error.code, "INVALID_REQUEST");
+  assertEquals(body.error.message, "The request body is not valid JSON.");
+  // Nothing is claimed and nothing is deleted: the refusal only writes its
+  // own row.
+  assertEquals(db.rpcCalls.length, 0);
+  assertEquals(callsFor(db, "system_logs", "insert").length, 1);
+  assertEquals(
+    logged[0],
+    `[n8n-api] posts/delete: INVALID_REQUEST (post unknown, user ${USER})`,
   );
 });

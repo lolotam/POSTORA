@@ -11,7 +11,7 @@ import { clientIpFromHeaders, isValidUuid } from "./requestGuards.ts";
 import { INVALID_JSON_MESSAGE, InvalidRequestBodyError, looksLikeJson, parseJsonText, readJsonBody } from "./requestBody.ts";
 import { recordApiRefusal, recordRateLimitRefusal } from "./refusalLog.ts";
 import { relayUploadTarget } from "./mediaRelay.ts";
-import { handleCancelScheduledPost, handleCheckAccountHealth, handleReschedulePost, handleRetryFailedPost, handleSuggestBestTimes } from "./postActions.ts";
+import { handleCancelScheduledPost, handleCheckAccountHealth, handleDeletePost, handleReschedulePost, handleRetryFailedPost, handleSuggestBestTimes } from "./postActions.ts";
 import { MEDIA_QUOTA_CODE, invokeErrorText, isMediaQuotaMessage, mediaQuotaHumanMessage, mediaQuotaPreflight, quotaOnlyMessage, type QuotaRpc } from "../_shared/mediaQuotaError.ts";
 import {
   fetchGlobalSetting,
@@ -2568,6 +2568,8 @@ export async function handleRequest(req: Request): Promise<Response> {
       response = await handleReschedulePost(req, supabaseAdmin, userId, () => parseRequestBody(req));
     } else if (path === '/api/v1/posts/retry' && req.method === 'POST') {
       response = await handleRetryFailedPost(req, supabaseAdmin, userId, () => parseRequestBody(req));
+    } else if (path === '/api/v1/posts/delete' && req.method === 'POST') {
+      response = await handleDeletePost(req, supabaseAdmin, userId, () => parseRequestBody(req));
     } else if (path === '/api/v1/accounts/health' && req.method === 'GET') {
       response = await handleCheckAccountHealth(req, supabaseAdmin, userId, url);
     } else if (path === '/api/v1/best-times' && req.method === 'POST') {
@@ -2605,6 +2607,7 @@ export async function handleRequest(req: Request): Promise<Response> {
           'POST /api/v1/posts/cancel',
           'POST /api/v1/posts/reschedule',
           'POST /api/v1/posts/retry',
+          'POST /api/v1/posts/delete',
           'GET /api/v1/accounts/health',
           'POST /api/v1/best-times',
           'GET /api/v1/comments',

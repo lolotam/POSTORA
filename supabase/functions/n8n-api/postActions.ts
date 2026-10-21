@@ -15,6 +15,12 @@ import { restrictedCorsHeaders } from "../_shared/cors.ts";
 import { fetchWithTimeout } from "../_shared/request-timeout.ts";
 import { isValidUuid } from "./requestGuards.ts";
 import { recordApiRefusal } from "./refusalLog.ts";
+import {
+  deletePublishedPost,
+  type DeleteAccount,
+  type PlatformDeleteDeps,
+} from "./platformPostDelete.ts";
+import { deletePostMedia } from "./postMediaDelete.ts";
 
 export interface ActionResult {
   status: number;
@@ -356,6 +362,7 @@ interface PostRow {
   status: string;
   scheduled_at?: string | null;
   metadata?: Record<string, unknown> | null;
+  media_file_ids?: string[] | null;
 }
 
 // Every post use case needs the same owned read, and every one of them has to
@@ -1978,6 +1985,352 @@ export async function retryFailedPost(
   });
 }
 
+// ── 6. posts/delete ────────────────────────────────────────────────────────────
+
+// The delete of a post is destructive in two places at once: the Postora row
+// and the copy on the platform. The order is fixed, and it is the order that
+// can be undone:
+//
+// 1. the platform copy goes first, and the Postora row only when every
+//    platform confirmed it. A post that is gone from Postora and still on the
+//    platform cannot be unpublished any more, and a post that is still in
+//    Postora can be deleted again;
+// 2. the media goes last, and a media failure never undoes the delete of the
+//    post: the files that could not be removed are reported.
+//
+// Nothing is deleted locally while a platform refused: the caller gets the
+// per-platform results and can retry the whole delete.
+const DELETE_CLAIMED_RPC = "mcp_delete_claimed_post";
+
+// One published copy of a post on one platform, and what happened to it.
+interface PublishedCopyResult {
+  platform: string;
+  platform_post_id: string | null;
+  outcome: "deleted" | "not_supported" | "failed";
+  reason?: string;
+  note?: string;
+}
+
+// One row of the published copies of a post.
+interface PublishedCopyRow {
+  id: string;
+  platform: string | null;
+  platform_post_id: string | null;
+  social_account_id: string | null;
+  response_data: unknown;
+}
+
+// The published copies of one post: the per-platform results that succeeded.
+// The read is owner-joined, so the service role does not widen it.
+async function readPublishedCopies(
+  deps: PostActionDeps,
+  route: string,
+  request: { postId: string; userId: string },
+): Promise<PublishedCopyRow[] | ActionResult> {
+  const { data, error: readError } = await deps.supabase
+    .from("platform_posts")
+    .select("id, platform, platform_post_id, social_account_id, response_data, posts!inner(user_id)")
+    .eq("post_id", request.postId)
+    .eq("posts.user_id", request.userId)
+    .eq("status", "success");
+
+  if (readError) {
+    console.error(
+      `[n8n-api] ${route}: reading the published copies of post ${request.postId} failed: ${readError.message}`,
+    );
+    return error(500, "INTERNAL_ERROR", "Reading the post results failed. Please try again.");
+  }
+  return (data ?? []) as PublishedCopyRow[];
+}
+
+// The accounts the published copies went out on. The read carries the owner,
+// so a row of another account is never read. The tokens are read because the
+// deleters need them, and they are never written down.
+async function readPublishedAccounts(
+  deps: PostActionDeps,
+  route: string,
+  request: { accountIds: string[]; userId: string },
+): Promise<DeleteAccount[] | ActionResult> {
+  if (request.accountIds.length === 0) return [];
+  const { data, error: readError } = await deps.supabase
+    .from("social_accounts")
+    .select(
+      "id, user_id, platform, access_token, refresh_token, token_expires_at, auth_provider, connection_id, workspace_id, platform_user_id, account_metadata",
+    )
+    .in("id", request.accountIds)
+    .eq("user_id", request.userId);
+
+  if (readError) {
+    console.error(
+      `[n8n-api] ${route}: reading the social accounts of the post failed: ${readError.message}`,
+    );
+    return error(500, "INTERNAL_ERROR", "Reading the post results failed. Please try again.");
+  }
+  return (data ?? []) as DeleteAccount[];
+}
+
+export async function deletePost(
+  deps: PostActionDeps,
+  userId: string,
+  body: unknown,
+): Promise<ActionResult> {
+  const route = "posts/delete";
+  const postId = requirePostId(body);
+  if (typeof postId !== "string") {
+    return await refuse(deps, route, { userId }, postId);
+  }
+
+  // The claim comes before every read and every write: the post is worked on
+  // under a lease, so two deletes of the same post cannot both run, and a
+  // delete cannot run while a retry is publishing the post.
+  const { data: claim, error: claimError } = await deps.supabase.rpc(CLAIM_RPC, {
+    p_user_id: userId,
+    p_post_id: postId,
+    p_action: "delete",
+  });
+
+  if (claimError) {
+    if (isMissingRpc(claimError)) {
+      // The function is not in the schema cache: the migration that creates
+      // it has not been applied to this database yet. That is an outage and
+      // not a refusal -- the caller's request is fine, the database is not
+      // ready for it -- so it is not recorded as a refusal.
+      console.error(
+        `[n8n-api] ${route}: ${CLAIM_RPC} is not in the database yet, so a post cannot be deleted`,
+      );
+      return error(
+        503,
+        "FEATURE_NOT_READY",
+        "Deleting a post needs a database update that has not been applied yet.",
+      );
+    }
+    // The database refused the delete on purpose: a TikTok review post that
+    // is being published right now may not be deleted.
+    if (isTikTokPublishLock(claimError)) {
+      console.warn(
+        `[n8n-api] ${route}: post ${postId} is locked by a TikTok publish and cannot be deleted`,
+      );
+      return await refuse(
+        deps,
+        route,
+        { userId, postId },
+        error(409, "POST_LOCKED", tiktokLockMessage(claimError)),
+      );
+    }
+    console.error(
+      `[n8n-api] ${route}: claiming post ${postId} failed: ${claimError.message}`,
+    );
+    return error(500, "INTERNAL_ERROR", "Deleting the post failed. Please try again.");
+  }
+
+  const outcome = (claim ?? {}) as {
+    outcome?: unknown;
+    claim_id?: unknown;
+    status?: unknown;
+  };
+  const claimId = outcome.claim_id;
+
+  if (outcome.outcome === "not_found") {
+    return await refuse(deps, route, { userId, postId }, NOT_FOUND);
+  }
+  if (outcome.outcome === "busy") {
+    return await refuse(
+      deps,
+      route,
+      { userId, postId },
+      error(
+        409,
+        "POST_BUSY",
+        "Another action is running on this post. Try again in a few minutes.",
+      ),
+    );
+  }
+  if (outcome.outcome === "bad_status") {
+    return await refuse(
+      deps,
+      route,
+      { userId, postId },
+      error(
+        409,
+        "POST_NOT_DELETABLE",
+        "Only a post that finished publishing (completed or failed) can be deleted here; use cancel_scheduled_post for a scheduled post.",
+        { status: typeof outcome.status === "string" ? outcome.status : null },
+      ),
+    );
+  }
+  if (
+    outcome.outcome !== "claimed" ||
+    typeof claimId !== "string" ||
+    claimId.length === 0
+  ) {
+    // The database answered something this route does not know: a failed read
+    // and not a claim, so nothing was claimed and nothing is released.
+    console.error(
+      `[n8n-api] ${route}: the database answered an unknown claim outcome for post ${postId}`,
+    );
+    return error(500, "INTERNAL_ERROR", "Deleting the post failed. Please try again.");
+  }
+
+  // The post's own media is read under the claim: the claim proved the post is
+  // the caller's, and the read is scoped to the owner besides.
+  const post = await readOwnedPost(deps, route, postId, userId, "id, media_file_ids");
+  if (isActionResult(post)) {
+    // The claim is given back: the next call is not told the post is busy for
+    // the rest of the lease over a read that never happened.
+    await releasePostActionClaim(deps, route, { userId, postId, claimId });
+    return post;
+  }
+
+  const copies = await readPublishedCopies(deps, route, { postId, userId });
+  if (isActionResult(copies)) {
+    await releasePostActionClaim(deps, route, { userId, postId, claimId });
+    return copies;
+  }
+
+  const accountIds = [
+    ...new Set(
+      copies
+        .map((copy) => copy.social_account_id)
+        .filter((id): id is string => typeof id === "string" && id.length > 0),
+    ),
+  ];
+  const accounts = await readPublishedAccounts(deps, route, { accountIds, userId });
+  if (isActionResult(accounts)) {
+    await releasePostActionClaim(deps, route, { userId, postId, claimId });
+    return accounts;
+  }
+  const accountById = new Map<string, DeleteAccount>();
+  for (const account of accounts) accountById.set(account.id, account);
+
+  // The YouTube adapter writes to social_accounts when it has to refresh a
+  // token, so it needs the service-role client. It is built here and not in
+  // the deps, so a delete that has no YouTube copy never builds one.
+  const platformDeps: PlatformDeleteDeps = {
+    fetcher: deps.fetcher,
+    youtubeDeps: () => ({ admin: deps.supabase }),
+  };
+
+  const results: PublishedCopyResult[] = [];
+  for (const copy of copies) {
+    if (!copy.platform) {
+      results.push({
+        platform: "",
+        platform_post_id: copy.platform_post_id,
+        outcome: "not_supported",
+        reason: "The result names no platform, so there is nothing to delete on the platform.",
+      });
+      continue;
+    }
+    const account = copy.social_account_id
+      ? accountById.get(copy.social_account_id) ?? null
+      : null;
+    const outcome = await deletePublishedPost(
+      {
+        id: copy.id,
+        platform: copy.platform,
+        platform_post_id: copy.platform_post_id,
+        social_account_id: copy.social_account_id,
+        response_data: copy.response_data,
+      },
+      account,
+      platformDeps,
+    );
+    const result: PublishedCopyResult = {
+      platform: copy.platform,
+      platform_post_id: copy.platform_post_id,
+      outcome: outcome.outcome,
+    };
+    if (outcome.outcome === "deleted") {
+      // A delete that already happened says so: the copy is gone either way.
+      if (outcome.note) result.note = outcome.note;
+    } else {
+      result.reason = outcome.reason;
+    }
+    results.push(result);
+  }
+
+  // One platform refused: nothing is deleted in Postora and the media stays in
+  // the library, so the caller can retry the whole delete.
+  if (results.some((result) => result.outcome === "failed")) {
+    await releasePostActionClaim(deps, route, { userId, postId, claimId });
+    return await refuse(
+      deps,
+      route,
+      { userId, postId },
+      error(
+        409,
+        "PLATFORM_DELETE_FAILED",
+        "The post could not be deleted on every platform, so nothing was deleted in Postora.",
+        { post_id: postId, results },
+      ),
+    );
+  }
+
+  // The Postora row goes now that every platform confirmed its copy.
+  const { data: deleted, error: deleteError } = await deps.supabase.rpc(
+    DELETE_CLAIMED_RPC,
+    {
+      p_user_id: userId,
+      p_post_id: postId,
+      p_claim_id: claimId,
+    },
+  );
+
+  if (deleteError) {
+    // The database refused the delete on purpose: the TikTok review guard
+    // refuses a post that is being published right now.
+    if (isTikTokPublishLock(deleteError)) {
+      console.warn(
+        `[n8n-api] ${route}: post ${postId} is locked by a TikTok publish and cannot be deleted`,
+      );
+      // The claim is given back: the post is not busy for the rest of the lease.
+      await releasePostActionClaim(deps, route, { userId, postId, claimId });
+      return await refuse(
+        deps,
+        route,
+        { userId, postId },
+        error(409, "POST_LOCKED", tiktokLockMessage(deleteError)),
+      );
+    }
+    console.error(
+      `[n8n-api] ${route}: deleting post ${postId} failed: ${deleteError.message}`,
+    );
+    // The claim is KEPT on purpose: it is a lease, so it runs out on its own
+    // and the caller can try again in the meantime.
+    return error(500, "INTERNAL_ERROR", "Deleting the post failed. Please try again.");
+  }
+  if (deleted !== true) {
+    // The row was not deleted: the claim is not the one on the row any more,
+    // so somebody else holds the post.
+    // The claim is given back: the post is not busy for the rest of the lease.
+    await releasePostActionClaim(deps, route, { userId, postId, claimId });
+    return await refuse(
+      deps,
+      route,
+      { userId, postId },
+      error(
+        409,
+        "POST_STATE_CHANGED",
+        "The post changed while it was being deleted. Check get_post.",
+      ),
+    );
+  }
+
+  // The media goes last, and only now that the post is gone. A media delete
+  // that fails is reported and never undoes the delete of the post.
+  const media = await deletePostMedia(deps, {
+    userId,
+    mediaFileIds: Array.isArray(post.media_file_ids) ? post.media_file_ids : [],
+  });
+
+  return ok({
+    post_id: postId,
+    deleted: true,
+    platforms: results,
+    media: { removed: media.removedIds.length, failed: media.failedIds },
+  });
+}
+
 // ── route adapters ─────────────────────────────────────────────────────────────
 
 export const handleCancelScheduledPost = async (
@@ -2025,6 +2378,22 @@ export const handleRetryFailedPost = async (
     return toResponse(req, await refuse(deps, "posts/retry", { userId }, parsed));
   }
   return toResponse(req, await retryFailedPost(deps, userId, parsed.body));
+};
+
+export const handleDeletePost = async (
+  req: Request,
+  // deno-lint-ignore no-explicit-any
+  supabase: any,
+  userId: string,
+  readBody: () => Promise<unknown>,
+): Promise<Response> => {
+  const deps = defaultPostActionDeps(supabase);
+  const parsed = await parseBody(readBody);
+  if (isActionResult(parsed)) {
+    // A body that cannot be read is a refusal, so it leaves a durable row too.
+    return toResponse(req, await refuse(deps, "posts/delete", { userId }, parsed));
+  }
+  return toResponse(req, await deletePost(deps, userId, parsed.body));
 };
 
 export const handleSuggestBestTimes = async (

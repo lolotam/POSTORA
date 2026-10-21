@@ -463,3 +463,18 @@ Deno.test("the retry route republishes, so its budget is the lowest of the post 
   assertEquals(rateLimitKeyForPath(key, "POST"), key);
   assertEquals(rateLimitKeyForPath(key, "POST") !== "/api/v1/posts", true);
 });
+
+Deno.test("the delete route has its own budget, above the retry's and below the reads'", () => {
+  const key = "/api/v1/posts/delete";
+  assertEquals(FALLBACK_RATE_LIMITS[key].requests, 20);
+  assertEquals(FALLBACK_RATE_LIMITS[key].windowMs, HOUR);
+  // The route has its own budget and not the one of the post it works on.
+  assertEquals(rateLimitKeyForPath(key, "POST"), key);
+  assertEquals(rateLimitKeyForPath(key, "POST") !== "/api/v1/posts", true);
+  // A delete is not a retry: it publishes nothing, so it is not the lowest
+  // budget of the post routes.
+  assertEquals(
+    FALLBACK_RATE_LIMITS[key].requests > FALLBACK_RATE_LIMITS["/api/v1/posts/retry"].requests,
+    true,
+  );
+});

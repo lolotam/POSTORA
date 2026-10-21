@@ -669,6 +669,27 @@ function buildServer(apiKey: string, ownerId: string, grant: ScopeGrant) {
     },
   });
 
+  server.tool("delete_post", {
+    description:
+      "Delete a published post: it deletes the post from Postora and, where the platform allows it, from the platform (Facebook, Threads, YouTube native, Pinterest, LinkedIn). " +
+      "Instagram, TikTok and other platforms are reported not_supported and stay on the platform. " +
+      "If any platform delete fails, nothing is deleted and the per-platform results are returned. " +
+      "Also permanently deletes the post's media files from the library, including files other posts use. " +
+      "Cannot be undone. Requires confirm: true.",
+    inputSchema: z.object({
+      post_id: z.string().describe("Postora post UUID"),
+      confirm: confirmField,
+    }),
+    handler: async (args) => {
+      const scopeRefusal = await refuseUngranted({ admin }, { userId: ownerId, tool: "delete_post", grant });
+      if (scopeRefusal) return fail(403, scopeRefusal);
+      const refusal = await refuseUnconfirmed({ admin }, { userId: ownerId, tool: "delete_post", confirm: args.confirm });
+      if (refusal) return fail(400, refusal);
+      const r = await callN8n(apiKey, "POST", "/api/v1/posts/delete", { post_id: args.post_id });
+      return r.status >= 400 ? fail(r.status, r.data) : ok(r.data);
+    },
+  });
+
   // ---- Account health ----
   server.tool("check_account_health", {
     description:
