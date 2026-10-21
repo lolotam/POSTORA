@@ -4,6 +4,11 @@
 // Postora user account.
 
 import { createClient } from "npm:@supabase/supabase-js@2.45.0";
+import {
+  endpointForMetadataPath,
+  MCP_ENDPOINTS,
+  type McpEndpoint,
+} from "../_shared/mcpEndpoints.ts";
 
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL") ?? "";
 const SERVICE_ROLE = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
@@ -67,9 +72,13 @@ const admin = createClient(SUPABASE_URL, SERVICE_ROLE, {
 });
 
 // ---------- discovery ----------
-function protectedResourceMetadata() {
+// One document per MCP endpoint: the document of an endpoint advertises that
+// endpoint as the resource, so a client configured with /mcp/read discovers
+// /mcp/read and not /mcp. The full endpoint's document is the one this
+// function always served, unchanged.
+function protectedResourceMetadata(endpoint: McpEndpoint) {
   return {
-    resource: MCP_RESOURCE,
+    resource: `${API_ORIGIN}/functions/v1${MCP_ENDPOINTS[endpoint]}`,
     authorization_servers: [ISSUER],
     bearer_methods_supported: ["header"],
     resource_documentation: `${APP_ORIGIN}/docs/mcp-server`,
@@ -568,8 +577,12 @@ Deno.serve(async (req) => {
     .replace(/^\/mcp-oauth/, "") || "/";
 
   try {
-    if (req.method === "GET" && path === "/.well-known/oauth-protected-resource") {
-      return json(protectedResourceMetadata());
+    // One protected-resource document per MCP endpoint (see
+    // ../_shared/mcpEndpoints.ts), so a client configured with /mcp/read or
+    // /mcp/inbox discovers a resource that matches its URL.
+    const metadataEndpoint = req.method === "GET" ? endpointForMetadataPath(path) : null;
+    if (metadataEndpoint) {
+      return json(protectedResourceMetadata(metadataEndpoint));
     }
     if (req.method === "GET" && path === "/.well-known/oauth-authorization-server") {
       return json(authorizationServerMetadata());

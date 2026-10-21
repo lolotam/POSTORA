@@ -29,6 +29,11 @@
 // a new tool cannot reach a connection without someone deciding what kind of
 // tool it is, and therefore which modes may see it.
 
+import {
+  MCP_ENDPOINTS,
+  type McpEndpoint,
+} from "../_shared/mcpEndpoints.ts";
+
 /**
  * What a connection may be given.
  *
@@ -39,7 +44,7 @@
  * - `"inbox"`: `"read"` plus the tools that answer or hide a comment or a
  *   message.
  */
-export type ConnectionMode = "full" | "read" | "inbox";
+export type ConnectionMode = McpEndpoint;
 
 /**
  * What a tool does, which is what decides the modes it may be offered in.
@@ -193,9 +198,12 @@ const MODE_KINDS: Record<ConnectionMode, ReadonlySet<ToolKind>> = {
 export function modeFromPath(pathname: string): ConnectionMode | null {
   const path = pathname.endsWith("/") ? pathname.slice(0, -1) : pathname;
 
-  if (path.endsWith("/mcp")) return "full";
-  if (path.endsWith("/mcp/read")) return "read";
-  if (path.endsWith("/mcp/inbox")) return "inbox";
+  // The endpoint paths are whole segments: "/mcp/read" does not end with
+  // "/mcp", so checking each of them is enough to keep "/mcp/reader" and
+  // "/mcp/read/x" out.
+  for (const endpoint of Object.keys(MCP_ENDPOINTS) as McpEndpoint[]) {
+    if (path.endsWith(MCP_ENDPOINTS[endpoint])) return endpoint;
+  }
   return null;
 }
 

@@ -25,6 +25,7 @@ import {
   type ConnectionMode,
 } from "./connectionMode.ts";
 import { sha256Hex } from "../_shared/crypto.ts";
+import { metadataPathFor } from "../_shared/mcpEndpoints.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -42,6 +43,16 @@ const PROTECTED_RESOURCE_METADATA_URL =
   `${APP_ORIGIN}/.well-known/oauth-protected-resource`;
 const WWW_AUTHENTICATE =
   `Bearer realm="postora-mcp", resource_metadata="${PROTECTED_RESOURCE_METADATA_URL}"`;
+
+// The read and inbox endpoints each have their own protected-resource
+// metadata, served by mcp-oauth, so the resource a client discovers matches
+// the URL it was configured with. The full endpoint keeps the static document
+// on the app origin it always had.
+function wwwAuthenticateFor(mode: ConnectionMode): string {
+  if (mode === "full") return WWW_AUTHENTICATE;
+  const metadataUrl = `${API_ORIGIN}/functions/v1/mcp-oauth${metadataPathFor(mode)}`;
+  return `Bearer realm="postora-mcp", resource_metadata="${metadataUrl}"`;
+}
 
 const N8N_API_BASE = `${SUPABASE_URL}/functions/v1/n8n-api`;
 
@@ -738,11 +749,21 @@ app.get("/mcp", (c) =>
 
 app.all("/*", async (c) => {
   const req = c.req.raw;
+  const pathname = new URL(req.url).pathname;
   // Which tool set this connection gets is decided by the path, and the
   // path is read before the caller is authenticated: a request to a path
   // that names no mode costs no database lookup.
-  const mode = modeFromPath(new URL(req.url).pathname);
+  const mode = modeFromPath(pathname);
   if (!mode) {
+    // Refused before authentication, so it is logged to the edge logs and
+    // not to system_logs: an unauthenticated caller must never be able to
+    // write rows (see ./keyOwner.ts). The path is cut short so a long one
+    // cannot flood the log.
+    console.warn(JSON.stringify({
+      event: "mcp_unknown_endpoint",
+      method: req.method,
+      path: pathname.slice(0, 200),
+    }));
     return jsonRpcError(
       404,
       -32601,
@@ -773,7 +794,7 @@ app.all("/*", async (c) => {
       presented
         ? "Invalid or expired access token."
         : "Missing access token. Authorize via OAuth or pass a Postora API key.",
-      { "WWW-Authenticate": WWW_AUTHENTICATE },
+      { "WWW-Authenticate": wwwAuthenticateFor(mode) },
     );
   }
 
@@ -786,7 +807,7 @@ app.all("/*", async (c) => {
   const owner = await resolveKeyOwner({ admin, sha256Hex }, apiKey);
   if (owner.kind === "unknown") {
     return jsonRpcError(401, -32001, "Invalid or expired access token.", {
-      "WWW-Authenticate": WWW_AUTHENTICATE,
+      "WWW-Authenticate": wwwAuthenticateFor(mode),
     });
   }
   if (owner.kind === "error") {
