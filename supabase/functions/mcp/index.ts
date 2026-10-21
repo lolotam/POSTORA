@@ -591,6 +591,14 @@ function buildServer(apiKey: string, ownerId: string, grant: ScopeGrant) {
         delete body.recipient_phone;
       }
       const r = await callN8n(apiKey, "POST", "/api/v1/messages/reply", body);
+      // The API's rate limiter answers 429 before the route behind this tool runs, so
+      // only the 429 is recorded here; the route records its other refusals itself.
+      if (r.status === 429) {
+        await recordForwardedRefusal(
+          { admin },
+          { userId: ownerId, tool: "reply_to_message", status: r.status, data: r.data },
+        );
+      }
       return r.status >= 400 ? fail(r.status, r.data) : ok(r.data);
     },
   });
@@ -631,6 +639,12 @@ function buildServer(apiKey: string, ownerId: string, grant: ScopeGrant) {
       const refusal = await refuseUnconfirmed({ admin }, { userId: ownerId, tool: "cancel_scheduled_post", confirm: args.confirm });
       if (refusal) return fail(400, refusal);
       const r = await callN8n(apiKey, "POST", "/api/v1/posts/cancel", { post_id: args.post_id });
+      if (r.status === 429) {
+        await recordForwardedRefusal(
+          { admin },
+          { userId: ownerId, tool: "cancel_scheduled_post", status: r.status, data: r.data },
+        );
+      }
       return r.status >= 400 ? fail(r.status, r.data) : ok(r.data);
     },
   });
@@ -646,6 +660,12 @@ function buildServer(apiKey: string, ownerId: string, grant: ScopeGrant) {
       const scopeRefusal = await refuseUngranted({ admin }, { userId: ownerId, tool: "reschedule_post", grant });
       if (scopeRefusal) return fail(403, scopeRefusal);
       const r = await callN8n(apiKey, "POST", "/api/v1/posts/reschedule", args);
+      if (r.status === 429) {
+        await recordForwardedRefusal(
+          { admin },
+          { userId: ownerId, tool: "reschedule_post", status: r.status, data: r.data },
+        );
+      }
       return r.status >= 400 ? fail(r.status, r.data) : ok(r.data);
     },
   });
@@ -662,6 +682,12 @@ function buildServer(apiKey: string, ownerId: string, grant: ScopeGrant) {
       const scopeRefusal = await refuseUngranted({ admin }, { userId: ownerId, tool: "check_account_health", grant });
       if (scopeRefusal) return fail(403, scopeRefusal);
       const r = await callN8n(apiKey, "GET", "/api/v1/accounts/health", undefined, { social_account_id });
+      if (r.status === 429) {
+        await recordForwardedRefusal(
+          { admin },
+          { userId: ownerId, tool: "check_account_health", status: r.status, data: r.data },
+        );
+      }
       return r.status >= 400 ? fail(r.status, r.data) : ok(r.data);
     },
   });
@@ -677,6 +703,12 @@ function buildServer(apiKey: string, ownerId: string, grant: ScopeGrant) {
       const scopeRefusal = await refuseUngranted({ admin }, { userId: ownerId, tool: "suggest_best_times", grant });
       if (scopeRefusal) return fail(403, scopeRefusal);
       const r = await callN8n(apiKey, "POST", "/api/v1/best-times", normalizeListFields({ platforms: args.platforms }));
+      if (r.status === 429) {
+        await recordForwardedRefusal(
+          { admin },
+          { userId: ownerId, tool: "suggest_best_times", status: r.status, data: r.data },
+        );
+      }
       return r.status >= 400 ? fail(r.status, r.data) : ok(r.data);
     },
   });
