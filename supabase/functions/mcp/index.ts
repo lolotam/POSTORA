@@ -417,18 +417,6 @@ function buildServer(apiKey: string) {
     },
   });
 
-  server.tool("retry_failed_post", {
-    description:
-      "Retry only the platforms where a post failed. Platforms that already published are not posted again. Returns the new per-platform results, or results_pending if publishing is still running (check get_post later). If the dispatch outcome is unknown, the post stays processing until the publish settles; retry and delete are refused until then.",
-    inputSchema: z.object({
-      post_id: z.string().describe("Postora post UUID"),
-    }),
-    handler: async ({ post_id }) => {
-      const r = await callN8n(apiKey, "POST", "/api/v1/posts/retry", { post_id });
-      return r.status >= 400 ? fail(r.status, r.data) : ok(r.data);
-    },
-  });
-
   server.tool("delete_post", {
     description:
       "Delete a post from Postora AND, where the platform allows it, from the platform itself: Facebook, Threads, YouTube (native connection), Pinterest and LinkedIn posts are deleted on the platform. Instagram and TikTok have no delete API, so those posts stay on the platform (reported as kept_on_platform). If any platform delete fails, the Postora record is kept so you can retry. Media files stay in the library. Cannot be undone. Requires confirm: true. Set delete_record_if_platform_fails: true to remove the Postora record even when a platform delete fails.",

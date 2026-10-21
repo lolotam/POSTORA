@@ -7,7 +7,6 @@ import {
   deletePost,
   readPlatformResults,
   reschedulePost,
-  retryFailedPost,
   suggestBestTimes,
   type PostActionDeps,
 } from "./postActions.ts";
@@ -17,7 +16,6 @@ const NOW_ISO = NOW.toISOString();
 const USER = "11111111-1111-4111-8111-111111111111";
 const POST = "22222222-2222-4222-8222-222222222222";
 const ACCOUNT = "33333333-3333-4333-8333-333333333333";
-const OTHER_ACCOUNT = "55555555-5555-4555-8555-555555555555";
 const SERVICE_KEY = "service-role-key";
 const SUPABASE_URL = "https://api.postora.cloud";
 const SCHEDULED_STATUSES = ["scheduled", "pending"];
@@ -283,17 +281,6 @@ function hasInFilter(
   );
 }
 
-// The values of an `in` filter, so a test can assert exactly which ids a
-// delete carries and not only that one of them is there.
-function inFilterValues(
-  call: RecordedCall | undefined,
-  column: string,
-): unknown[] | null {
-  if (!call) return null;
-  const entry = call.filters.find((filter) => filter[0] === "in" && filter[1] === column);
-  return entry ? (entry[2] as unknown[]) : null;
-}
-
 // The position of the first recorded call that matches, so a test can assert that
 // one query came before another.
 function indexOfCall(
@@ -539,459 +526,7 @@ Deno.test("a post that carries a TikTok review consent cannot be rescheduled", a
   assertEquals(callsFor(db, "posts", "update").length, 0);
 });
 
-// ── posts/retry ────────────────────────────────────────────────────────────────
-
-Deno.test("a post that is publishing right now cannot be retried", async () => {
-  const db = new FakeSupabase();
-  db.queue("posts", {
-    data: { id: POST, status: "processing", scheduled_at: null, platform_posts: [] },
-    error: null,
-  });
-  const result = await retryFailedPost(depsFor(db, noNetwork()), USER, {
-    post_id: POST,
-  });
-  assertEquals(result.status, 409);
-  assertEquals(errorCode(result), "POST_PROCESSING");
-  assertEquals(db.calls.length, 1);
-});
-
-Deno.test("a post with no failed platforms has nothing to retry", async () => {
-  const db = new FakeSupabase();
-  db.queue("posts", {
-    data: { id: POST, status: "completed", scheduled_at: null },
-    error: null,
-  });
-  db.queue("posts", { data: [{ id: POST }], error: null });
-  db.queue("platform_posts", {
-    data: [
-      { id: "pp1", platform: "facebook", status: "success", social_account_id: ACCOUNT },
-    ],
-    error: null,
-  });
-  db.queue("posts", { data: [{ id: POST }], error: null });
-  const result = await retryFailedPost(depsFor(db, noNetwork()), USER, {
-    post_id: POST,
-  });
-  assertEquals(result.status, 409);
-  assertEquals(errorCode(result), "NO_FAILED_PLATFORMS");
-});
-
-Deno.test("the retry takes the post before it reads the results", async () => {
-  const db = new FakeSupabase();
-  db.queue("posts", {
-    data: { id: POST, status: "failed", scheduled_at: null },
-    error: null,
-  });
-  db.queue("posts", { data: [{ id: POST }], error: null });
-  db.queue("platform_posts", {
-    data: [
-      { id: "pp1", platform: "facebook", status: "failed", social_account_id: ACCOUNT },
-    ],
-    error: null,
-  });
-  db.queue("platform_posts", {
-    data: [
-      { id: "pp2", platform: "facebook", status: "success", social_account_id: ACCOUNT },
-    ],
-    error: null,
-  });
-  db.queue("platform_posts", { data: [], error: null });
-
-  const { fetcher } = fakeFetcher([{ status: 200, body: { status: "completed" } }]);
-  const result = await retryFailedPost(depsFor(db, fetcher), USER, { post_id: POST });
-  assertEquals(result.status, 200);
-
-  const lockIndex = indexOfCall(db, "posts", "update");
-  const resultsIndex = indexOfCall(db, "platform_posts", "select");
-  assertEquals(lockIndex < resultsIndex, true);
-  // The claim is a compare-and-set on the status that was read, not a blanket
-  // "anything that is not processing".
-  assertEquals(hasFilter(db.calls[lockIndex], "eq", "status", "failed"), true);
-  assertEquals(hasFilter(db.calls[lockIndex], "eq", "user_id", USER), true);
-});
-
-Deno.test("a retry publishes only the failed platforms and never the ones that worked", async () => {
-  const db = new FakeSupabase();
-  db.queue("posts", {
-    data: { id: POST, status: "failed", scheduled_at: null },
-    error: null,
-  });
-  db.queue("posts", { data: [{ id: POST }], error: null });
-  db.queue("platform_posts", {
-    data: [
-      { id: "pp1", platform: "facebook", status: "failed", social_account_id: ACCOUNT },
-      { id: "pp2", platform: "instagram", status: "success", social_account_id: OTHER_ACCOUNT },
-    ],
-    error: null,
-  });
-  // The results are read again once process-post accepted the retry: the old
-  // failed row is only cleared when a new result for the same account exists.
-  db.queue("platform_posts", {
-    data: [
-      { id: "pp3", platform: "facebook", status: "success", social_account_id: ACCOUNT },
-    ],
-    error: null,
-  });
-  // The rows are read once more, scoped to the owner of the post, before
-  // anything is deleted: only a row that read returns may go.
-  db.queue("platform_posts", {
-    data: [
-      { id: "pp1", platform: "facebook", status: "failed", social_account_id: ACCOUNT },
-      { id: "pp3", platform: "facebook", status: "success", social_account_id: ACCOUNT },
-    ],
-    error: null,
-  });
-  db.queue("platform_posts", { data: [], error: null });
-
-  const { calls, fetcher } = fakeFetcher([
-    {
-      status: 200,
-      body: {
-        status: "completed",
-        platform_results: [
-          {
-            platform: "facebook",
-            status: "success",
-            platform_post_url: "https://example.test/fb",
-            error_message: null,
-          },
-        ],
-      },
-    },
-  ]);
-
-  const result = await retryFailedPost(depsFor(db, fetcher), USER, { post_id: POST });
-  assertEquals(result.status, 200);
-
-  const removal = callsFor(db, "platform_posts", "delete")[0];
-  assertEquals(hasInFilter(removal, "id", ["pp1"]), true);
-  assertEquals(hasFilter(removal, "eq", "post_id", POST), true);
-
-  assertEquals(calls.length, 1);
-  assertEquals(calls[0].url, `${SUPABASE_URL}/functions/v1/process-post`);
-  assertEquals(calls[0].method, "POST");
-  assertEquals(calls[0].headers.Authorization, `Bearer ${SERVICE_KEY}`);
-  const sent = JSON.parse(String(calls[0].body)) as Record<string, unknown>;
-  assertEquals(sent.post_id, POST);
-  assertEquals(sent.platforms, ["facebook"]);
-  assertEquals(sent.account_ids, [ACCOUNT]);
-  assertEquals("expected_scheduled_at" in sent, false);
-
-  const body = result.body as {
-    retried: Array<{ platform: string; social_account_id: string | null }>;
-    platform_results: Array<{ platform: string; status: string; post_url: string | null; error_message: string | null }>;
-  };
-  assertEquals(body.retried, [{ platform: "facebook", social_account_id: ACCOUNT }]);
-  assertEquals(body.platform_results, [{
-    platform: "facebook",
-    status: "success",
-    post_url: "https://example.test/fb",
-    error_message: null,
-  }]);
-});
-
-Deno.test("an account that already published is not published a second time", async () => {
-  const db = new FakeSupabase();
-  db.queue("posts", {
-    data: { id: POST, status: "failed", scheduled_at: null },
-    error: null,
-  });
-  db.queue("posts", { data: [{ id: POST }], error: null });
-  db.queue("platform_posts", {
-    data: [
-      { id: "pp1", platform: "facebook", status: "failed", social_account_id: ACCOUNT },
-      { id: "pp2", platform: "facebook", status: "success", social_account_id: ACCOUNT },
-    ],
-    error: null,
-  });
-  db.queue("posts", { data: [{ id: POST }], error: null });
-
-  const { calls, fetcher } = fakeFetcher();
-  const result = await retryFailedPost(depsFor(db, fetcher), USER, { post_id: POST });
-  assertEquals(result.status, 409);
-  assertEquals(errorCode(result), "NO_FAILED_PLATFORMS");
-  assertEquals(calls.length, 0);
-
-  const details = errorDetails(result) as { not_retried: Array<{ platform: string; reason: string }> };
-  assertEquals(details.not_retried, [{
-    platform: "facebook",
-    reason: "This account already published this post.",
-  }]);
-});
-
-Deno.test("a failed row with no account is reported instead of retried", async () => {
-  const db = new FakeSupabase();
-  db.queue("posts", {
-    data: { id: POST, status: "failed", scheduled_at: null },
-    error: null,
-  });
-  db.queue("posts", { data: [{ id: POST }], error: null });
-  db.queue("platform_posts", {
-    data: [
-      { id: "pp1", platform: "facebook", status: "failed", social_account_id: null },
-    ],
-    error: null,
-  });
-  db.queue("posts", { data: [{ id: POST }], error: null });
-
-  const { calls, fetcher } = fakeFetcher();
-  const result = await retryFailedPost(depsFor(db, fetcher), USER, { post_id: POST });
-  assertEquals(result.status, 409);
-  assertEquals(errorCode(result), "NO_FAILED_PLATFORMS");
-  assertEquals(calls.length, 0);
-
-  const details = errorDetails(result) as { not_retried: Array<{ platform: string; reason: string }> };
-  assertEquals(details.not_retried, [{
-    platform: "facebook",
-    reason: "No account is recorded for this result; retry it from the Postora dashboard.",
-  }]);
-});
-
-Deno.test("a retry that times out is a 202 with the results still pending", async () => {
-  const db = new FakeSupabase();
-  db.queue("posts", {
-    data: { id: POST, status: "failed", scheduled_at: null },
-    error: null,
-  });
-  db.queue("posts", { data: [{ id: POST }], error: null });
-  db.queue("platform_posts", {
-    data: [
-      { id: "pp1", platform: "facebook", status: "failed", social_account_id: ACCOUNT },
-    ],
-    error: null,
-  });
-  db.queue("platform_posts", { data: [], error: null });
-
-  const { fetcher } = fakeFetcher([{ reject: new Error("Request timed out") }]);
-  const result = await retryFailedPost(depsFor(db, fetcher), USER, { post_id: POST });
-  assertEquals(result.status, 202);
-  assertEquals(result.body.success, true);
-  assertEquals(result.body.results_pending, true);
-  assertEquals(result.body.dispatched, true);
-});
-
-Deno.test("a timed-out retry keeps the old failed rows when no replacement was recorded", async () => {
-  const db = new FakeSupabase();
-  db.queue("posts", {
-    data: { id: POST, status: "failed", scheduled_at: null },
-    error: null,
-  });
-  db.queue("posts", { data: [{ id: POST }], error: null });
-  db.queue("platform_posts", {
-    data: [
-      { id: "pp1", platform: "facebook", status: "failed", social_account_id: ACCOUNT },
-    ],
-    error: null,
-  });
-  // The publish is still running, so it has not stored a replacement for the
-  // account yet.
-  db.queue("platform_posts", { data: [], error: null });
-
-  const { fetcher } = fakeFetcher([{ reject: new Error("Request timed out") }]);
-  const result = await retryFailedPost(depsFor(db, fetcher), USER, { post_id: POST });
-  assertEquals(result.status, 202);
-  assertEquals(result.body.results_pending, true);
-  assertEquals(result.body.dispatched, true);
-
-  // The old row stays: process-post may still be writing its replacement, and a
-  // later retry picks the row up again.
-  assertEquals(callsFor(db, "platform_posts", "delete").length, 0);
-  assertEquals(
-    result.body.warning,
-    "Some failed results were kept because no new result was recorded for them; retry them again later.",
-  );
-});
-
-Deno.test("a timed-out retry clears the old failed row once the replacement was recorded", async () => {
-  const db = new FakeSupabase();
-  db.queue("posts", {
-    data: { id: POST, status: "failed", scheduled_at: null },
-    error: null,
-  });
-  db.queue("posts", { data: [{ id: POST }], error: null });
-  db.queue("platform_posts", {
-    data: [
-      { id: "pp1", platform: "facebook", status: "failed", social_account_id: ACCOUNT },
-    ],
-    error: null,
-  });
-  // The replacement for the same account was stored while the answer was slow.
-  db.queue("platform_posts", {
-    data: [
-      { id: "pp2", platform: "facebook", status: "success", social_account_id: ACCOUNT },
-    ],
-    error: null,
-  });
-  // The rows are read once more, scoped to the owner of the post, before
-  // anything is deleted: only a row that read returns may go.
-  db.queue("platform_posts", {
-    data: [
-      { id: "pp1", platform: "facebook", status: "failed", social_account_id: ACCOUNT },
-      { id: "pp2", platform: "facebook", status: "success", social_account_id: ACCOUNT },
-    ],
-    error: null,
-  });
-  db.queue("platform_posts", { data: [], error: null });
-
-  const { fetcher } = fakeFetcher([{ reject: new Error("Request timed out") }]);
-  const result = await retryFailedPost(depsFor(db, fetcher), USER, { post_id: POST });
-  assertEquals(result.status, 202);
-  assertEquals(result.body.results_pending, true);
-
-  const removal = callsFor(db, "platform_posts", "delete")[0];
-  assertEquals(hasInFilter(removal, "id", ["pp1"]), true);
-  assertEquals(hasFilter(removal, "eq", "post_id", POST), true);
-  assertEquals(result.body.warning, undefined);
-});
-
-Deno.test("a rejected retry keeps the failed results and gives the post its status back", async () => {
-  const db = new FakeSupabase();
-  db.queue("posts", {
-    data: { id: POST, status: "failed", scheduled_at: null },
-    error: null,
-  });
-  db.queue("posts", { data: [{ id: POST }], error: null });
-  db.queue("platform_posts", {
-    data: [
-      { id: "pp1", platform: "facebook", status: "failed", social_account_id: ACCOUNT },
-    ],
-    error: null,
-  });
-  db.queue("posts", { data: [{ id: POST }], error: null });
-
-  const { fetcher } = fakeFetcher([{ status: 500, body: { error: "boom" } }]);
-  const result = await retryFailedPost(depsFor(db, fetcher), USER, { post_id: POST });
-  assertEquals(result.status, 502);
-  assertEquals(errorCode(result), "RETRY_FAILED");
-
-  // The old failed rows are the retry targets: they must survive a refusal.
-  assertEquals(callsFor(db, "platform_posts", "delete").length, 0);
-
-  const updates = callsFor(db, "posts", "update");
-  const rollback = updates[updates.length - 1];
-  assertEquals(rollback.payload, { status: "failed" });
-  // process-post may have set the post to `failed` before it refused, so the
-  // status it had before the claim is restored from `failed`.
-  assertEquals(hasFilter(rollback, "eq", "status", "failed"), true);
-  assertEquals(hasFilter(rollback, "eq", "user_id", USER), true);
-});
-
-Deno.test("a retry whose results cannot be read is a 500 and gives the post its status back", async () => {
-  const db = new FakeSupabase();
-  db.queue("posts", {
-    data: { id: POST, status: "failed", scheduled_at: null },
-    error: null,
-  });
-  db.queue("posts", { data: [{ id: POST }], error: null });
-  db.queue("platform_posts", { data: null, error: { message: "boom" } });
-  db.queue("posts", { data: [{ id: POST }], error: null });
-
-  const result = await retryFailedPost(depsFor(db, noNetwork()), USER, {
-    post_id: POST,
-  });
-  assertEquals(result.status, 500);
-  assertEquals(errorCode(result), "INTERNAL_ERROR");
-
-  // The claim is given back, so the post is not stuck in `processing`.
-  const updates = callsFor(db, "posts", "update");
-  const release = updates[updates.length - 1];
-  assertEquals(release.payload, { status: "failed" });
-  assertEquals(hasFilter(release, "eq", "status", "processing"), true);
-  assertEquals(hasFilter(release, "eq", "user_id", USER), true);
-});
-
-Deno.test("a retry that cannot reach process-post keeps the claim and says so", async () => {
-  const db = new FakeSupabase();
-  db.queue("posts", {
-    data: { id: POST, status: "failed", scheduled_at: null },
-    error: null,
-  });
-  db.queue("posts", { data: [{ id: POST }], error: null });
-  db.queue("platform_posts", {
-    data: [
-      { id: "pp1", platform: "facebook", status: "failed", social_account_id: ACCOUNT },
-    ],
-    error: null,
-  });
-
-  let callsBeforeFetch = 0;
-  const { fetcher } = fakeFetcher(
-    [{ reject: new Error("connection reset by peer") }],
-    () => {
-      callsBeforeFetch = db.calls.length;
-    },
-  );
-  const result = await retryFailedPost(depsFor(db, fetcher), USER, { post_id: POST });
-  assertEquals(result.status, 202);
-  assertEquals(result.body.dispatched, "unknown");
-  assertEquals(result.body.results_pending, true);
-  assertEquals(
-    result.body.message,
-    "The retry may or may not have started. The post stays 'processing' until the publish settles it; " +
-      "retrying or deleting it through the API is refused until then. Check get_post.",
-  );
-  // There is no hold any more.
-  assertEquals("retry_hold_until" in result.body, false);
-
-  // Nothing is touched after the dispatch: the claim is kept, so a second retry
-  // cannot publish the same account again while the first one may still be
-  // running, and the old rows stay for a later retry to pick up.
-  const afterFetch = db.calls.slice(callsBeforeFetch);
-  assertEquals(
-    afterFetch.filter((call) => call.table === "posts" && call.op === "update").length,
-    0,
-  );
-  assertEquals(
-    afterFetch.filter((call) => call.table === "platform_posts" && call.op === "delete").length,
-    0,
-  );
-});
-
-Deno.test("a retry that is accepted clears the old failed rows after the call", async () => {
-  const db = new FakeSupabase();
-  db.queue("posts", {
-    data: { id: POST, status: "failed", scheduled_at: null },
-    error: null,
-  });
-  db.queue("posts", { data: [{ id: POST }], error: null });
-  db.queue("platform_posts", {
-    data: [
-      { id: "pp1", platform: "facebook", status: "failed", social_account_id: ACCOUNT },
-    ],
-    error: null,
-  });
-  db.queue("platform_posts", {
-    data: [
-      { id: "pp2", platform: "facebook", status: "success", social_account_id: ACCOUNT },
-    ],
-    error: null,
-  });
-  // The rows are read once more, scoped to the owner of the post, before
-  // anything is deleted: only a row that read returns may go.
-  db.queue("platform_posts", {
-    data: [
-      { id: "pp1", platform: "facebook", status: "failed", social_account_id: ACCOUNT },
-      { id: "pp2", platform: "facebook", status: "success", social_account_id: ACCOUNT },
-    ],
-    error: null,
-  });
-  db.queue("platform_posts", { data: [], error: null });
-
-  let callsBeforeFetch = 0;
-  const { fetcher } = fakeFetcher(
-    [{ status: 200, body: { status: "completed" } }],
-    () => {
-      callsBeforeFetch = db.calls.length;
-    },
-  );
-  const result = await retryFailedPost(depsFor(db, fetcher), USER, { post_id: POST });
-  assertEquals(result.status, 200);
-
-  // The old rows go only once process-post has the request: a refusal must not
-  // leave the post with no failed rows to retry.
-  const removalIndex = indexOfCall(db, "platform_posts", "delete");
-  assertEquals(removalIndex >= callsBeforeFetch, true);
-});
+// ── platform results ─────────────────────────────────────────────────────────
 
 Deno.test("the results read is scoped to the owner of the post", async () => {
   const db = new FakeSupabase();
@@ -1008,7 +543,7 @@ Deno.test("the results read is scoped to the owner of the post", async () => {
     error: null,
   });
 
-  const results = await readPlatformResults(depsFor(db, noNetwork()), "posts/retry", {
+  const results = await readPlatformResults(depsFor(db, noNetwork()), "posts/delete", {
     postId: POST,
     userId: USER,
     columns: "id, platform, status, social_account_id",
@@ -1024,418 +559,6 @@ Deno.test("the results read is scoped to the owner of the post", async () => {
   assertEquals(rows.length, 1);
   assertEquals("posts" in rows[0], false);
   assertEquals(rows[0].id, "pp1");
-});
-
-Deno.test("an accepted retry clears the old failed row once the new result is recorded", async () => {
-  const db = new FakeSupabase();
-  db.queue("posts", {
-    data: { id: POST, status: "failed", scheduled_at: null },
-    error: null,
-  });
-  db.queue("posts", { data: [{ id: POST }], error: null });
-  db.queue("platform_posts", {
-    data: [
-      { id: "pp1", platform: "facebook", status: "failed", social_account_id: ACCOUNT },
-    ],
-    error: null,
-  });
-  // The new result for the same account was stored.
-  db.queue("platform_posts", {
-    data: [
-      { id: "pp2", platform: "facebook", status: "success", social_account_id: ACCOUNT },
-    ],
-    error: null,
-  });
-  // The rows are read once more, scoped to the owner of the post, before
-  // anything is deleted: only a row that read returns may go.
-  db.queue("platform_posts", {
-    data: [
-      { id: "pp1", platform: "facebook", status: "failed", social_account_id: ACCOUNT },
-      { id: "pp2", platform: "facebook", status: "success", social_account_id: ACCOUNT },
-    ],
-    error: null,
-  });
-  db.queue("platform_posts", { data: [], error: null });
-
-  const { fetcher } = fakeFetcher([{ status: 200, body: { status: "completed" } }]);
-  const result = await retryFailedPost(depsFor(db, fetcher), USER, { post_id: POST });
-  assertEquals(result.status, 200);
-
-  const removal = callsFor(db, "platform_posts", "delete")[0];
-  assertEquals(hasInFilter(removal, "id", ["pp1"]), true);
-  assertEquals(result.body.warning, undefined);
-});
-
-Deno.test("an accepted retry keeps the old failed row when no new result was recorded", async () => {
-  const db = new FakeSupabase();
-  db.queue("posts", {
-    data: { id: POST, status: "failed", scheduled_at: null },
-    error: null,
-  });
-  db.queue("posts", { data: [{ id: POST }], error: null });
-  db.queue("platform_posts", {
-    data: [
-      { id: "pp1", platform: "facebook", status: "failed", social_account_id: ACCOUNT },
-    ],
-    error: null,
-  });
-  // Nothing was stored for the account, so the old row has to stay.
-  db.queue("platform_posts", { data: [], error: null });
-
-  const { fetcher } = fakeFetcher([{ status: 200, body: { status: "completed" } }]);
-  const result = await retryFailedPost(depsFor(db, fetcher), USER, { post_id: POST });
-  assertEquals(result.status, 200);
-
-  assertEquals(callsFor(db, "platform_posts", "delete").length, 0);
-  assertEquals(
-    result.body.warning,
-    "Some failed results were kept because no new result was recorded for them; retry them again later.",
-  );
-});
-
-Deno.test("two old failures for one account are not each other's replacement", async () => {
-  const db = new FakeSupabase();
-  db.queue("posts", {
-    data: { id: POST, status: "failed", scheduled_at: null },
-    error: null,
-  });
-  db.queue("posts", { data: [{ id: POST }], error: null });
-  db.queue("platform_posts", {
-    data: [
-      { id: "pp1", platform: "facebook", status: "failed", social_account_id: ACCOUNT },
-      { id: "pp2", platform: "facebook", status: "failed", social_account_id: ACCOUNT },
-    ],
-    error: null,
-  });
-  // Nothing new was stored for the account: both rows are the ones that were
-  // already there before the dispatch.
-  db.queue("platform_posts", {
-    data: [
-      { id: "pp1", platform: "facebook", status: "failed", social_account_id: ACCOUNT },
-      { id: "pp2", platform: "facebook", status: "failed", social_account_id: ACCOUNT },
-    ],
-    error: null,
-  });
-
-  const { fetcher } = fakeFetcher([{ status: 200, body: { status: "completed" } }]);
-  const result = await retryFailedPost(depsFor(db, fetcher), USER, { post_id: POST });
-  assertEquals(result.status, 200);
-
-  // Neither old row replaces the other one, so neither of them goes.
-  assertEquals(callsFor(db, "platform_posts", "delete").length, 0);
-  assertEquals(
-    result.body.warning,
-    "Some failed results were kept because no new result was recorded for them; retry them again later.",
-  );
-});
-
-Deno.test("one new result replaces both old failures for the account", async () => {
-  const db = new FakeSupabase();
-  db.queue("posts", {
-    data: { id: POST, status: "failed", scheduled_at: null },
-    error: null,
-  });
-  db.queue("posts", { data: [{ id: POST }], error: null });
-  db.queue("platform_posts", {
-    data: [
-      { id: "pp1", platform: "facebook", status: "failed", social_account_id: ACCOUNT },
-      { id: "pp2", platform: "facebook", status: "failed", social_account_id: ACCOUNT },
-    ],
-    error: null,
-  });
-  // One new result for the account was stored while the retry was running.
-  db.queue("platform_posts", {
-    data: [
-      { id: "pp1", platform: "facebook", status: "failed", social_account_id: ACCOUNT },
-      { id: "pp2", platform: "facebook", status: "failed", social_account_id: ACCOUNT },
-      { id: "pp3", platform: "facebook", status: "success", social_account_id: ACCOUNT },
-    ],
-    error: null,
-  });
-  // The rows are read once more, scoped to the owner of the post, before
-  // anything is deleted: only a row that read returns may go.
-  db.queue("platform_posts", {
-    data: [
-      { id: "pp1", platform: "facebook", status: "failed", social_account_id: ACCOUNT },
-      { id: "pp2", platform: "facebook", status: "failed", social_account_id: ACCOUNT },
-      { id: "pp3", platform: "facebook", status: "success", social_account_id: ACCOUNT },
-    ],
-    error: null,
-  });
-  db.queue("platform_posts", { data: [], error: null });
-
-  const { fetcher } = fakeFetcher([{ status: 200, body: { status: "completed" } }]);
-  const result = await retryFailedPost(depsFor(db, fetcher), USER, { post_id: POST });
-  assertEquals(result.status, 200);
-
-  const removal = callsFor(db, "platform_posts", "delete")[0];
-  assertEquals(hasInFilter(removal, "id", ["pp1", "pp2"]), true);
-  assertEquals(hasFilter(removal, "eq", "post_id", POST), true);
-  assertEquals(result.body.warning, undefined);
-});
-
-Deno.test("a requested result the owner-scoped read does not return is never deleted", async () => {
-  const db = new FakeSupabase();
-  db.queue("posts", {
-    data: { id: POST, status: "failed", scheduled_at: null },
-    error: null,
-  });
-  db.queue("posts", { data: [{ id: POST }], error: null });
-  db.queue("platform_posts", {
-    data: [
-      { id: "pp1", platform: "facebook", status: "failed", social_account_id: ACCOUNT },
-    ],
-    error: null,
-  });
-  // The new result for the same account was stored.
-  db.queue("platform_posts", {
-    data: [
-      { id: "pp2", platform: "facebook", status: "success", social_account_id: ACCOUNT },
-    ],
-    error: null,
-  });
-  // The owner-scoped read does not return the old row, so it is not this
-  // user's to delete.
-  db.queue("platform_posts", {
-    data: [
-      { id: "pp2", platform: "facebook", status: "success", social_account_id: ACCOUNT },
-    ],
-    error: null,
-  });
-
-  const { fetcher } = fakeFetcher([{ status: 200, body: { status: "completed" } }]);
-  const result = await retryFailedPost(depsFor(db, fetcher), USER, { post_id: POST });
-  assertEquals(result.status, 200);
-
-  // The read that decides what may be deleted is scoped to the owner of the
-  // post, so the ownership is part of the query and not a check the caller
-  // has to do first.
-  const reads = callsFor(db, "platform_posts", "select");
-  const ownershipRead = reads[reads.length - 1];
-  assertEquals(hasFilter(ownershipRead, "eq", "post_id", POST), true);
-  assertEquals(hasFilter(ownershipRead, "eq", "posts.user_id", USER), true);
-
-  // Nothing was deleted: the row the retry wanted to clear is not one the
-  // owner-scoped read returned.
-  assertEquals(callsFor(db, "platform_posts", "delete").length, 0);
-});
-
-Deno.test("only the result ids the owner-scoped read returns are deleted", async () => {
-  const db = new FakeSupabase();
-  db.queue("posts", {
-    data: { id: POST, status: "failed", scheduled_at: null },
-    error: null,
-  });
-  db.queue("posts", { data: [{ id: POST }], error: null });
-  db.queue("platform_posts", {
-    data: [
-      { id: "pp1", platform: "facebook", status: "failed", social_account_id: ACCOUNT },
-      { id: "pp2", platform: "facebook", status: "failed", social_account_id: ACCOUNT },
-    ],
-    error: null,
-  });
-  // One new result for the account was stored while the retry was running.
-  db.queue("platform_posts", {
-    data: [
-      { id: "pp1", platform: "facebook", status: "failed", social_account_id: ACCOUNT },
-      { id: "pp2", platform: "facebook", status: "failed", social_account_id: ACCOUNT },
-      { id: "pp3", platform: "facebook", status: "success", social_account_id: ACCOUNT },
-    ],
-    error: null,
-  });
-  // The owner-scoped read returns one of the two old rows only.
-  db.queue("platform_posts", {
-    data: [
-      { id: "pp1", platform: "facebook", status: "failed", social_account_id: ACCOUNT },
-    ],
-    error: null,
-  });
-  db.queue("platform_posts", { data: [], error: null });
-
-  const { fetcher } = fakeFetcher([{ status: 200, body: { status: "completed" } }]);
-  const result = await retryFailedPost(depsFor(db, fetcher), USER, { post_id: POST });
-  assertEquals(result.status, 200);
-
-  // Only the row the read returned is deleted: the other old row is left alone.
-  const removal = callsFor(db, "platform_posts", "delete")[0];
-  assertEquals(inFilterValues(removal, "id"), ["pp1"]);
-  assertEquals(hasFilter(removal, "eq", "post_id", POST), true);
-});
-
-Deno.test("a refused retry restores the status of a post that process-post had failed", async () => {
-  const db = new FakeSupabase();
-  db.queue("posts", {
-    data: { id: POST, status: "completed", scheduled_at: null },
-    error: null,
-  });
-  db.queue("posts", { data: [{ id: POST }], error: null });
-  db.queue("platform_posts", {
-    data: [
-      { id: "pp1", platform: "facebook", status: "failed", social_account_id: ACCOUNT },
-    ],
-    error: null,
-  });
-  db.queue("posts", { data: [{ id: POST }], error: null });
-
-  const { fetcher } = fakeFetcher([{ status: 500, body: { error: "boom" } }]);
-  const result = await retryFailedPost(depsFor(db, fetcher), USER, { post_id: POST });
-  assertEquals(result.status, 502);
-  assertEquals(errorCode(result), "RETRY_FAILED");
-
-  // process-post may have set the post to `failed` before it refused, so the
-  // status it had before the claim is restored from `failed`.
-  const updates = callsFor(db, "posts", "update");
-  const rollback = updates[updates.length - 1];
-  assertEquals(rollback.payload, { status: "completed" });
-  assertEquals(hasFilter(rollback, "eq", "status", "failed"), true);
-  assertEquals(hasFilter(rollback, "eq", "user_id", USER), true);
-});
-
-Deno.test("a refusal before process-post claimed the post gives the claim back", async () => {
-  const db = new FakeSupabase();
-  db.queue("posts", {
-    data: { id: POST, status: "failed", scheduled_at: null },
-    error: null,
-  });
-  db.queue("posts", { data: [{ id: POST }], error: null });
-  db.queue("platform_posts", {
-    data: [
-      { id: "pp1", platform: "facebook", status: "failed", social_account_id: ACCOUNT },
-    ],
-    error: null,
-  });
-  db.queue("posts", { data: [{ id: POST }], error: null });
-
-  // process-post answers 404 before it claims the post (the post lookup), so
-  // the post is still `processing` under our own claim.
-  const { fetcher } = fakeFetcher([{ status: 404, body: { error: "Post not found" } }]);
-  const result = await retryFailedPost(depsFor(db, fetcher), USER, { post_id: POST });
-  assertEquals(result.status, 502);
-  assertEquals(errorCode(result), "RETRY_FAILED");
-
-  // The claim is given back: the post goes back to the status it had.
-  const updates = callsFor(db, "posts", "update");
-  const release = updates[updates.length - 1];
-  assertEquals(release.payload, { status: "failed" });
-  assertEquals(hasFilter(release, "eq", "status", "processing"), true);
-  assertEquals(hasFilter(release, "eq", "user_id", USER), true);
-});
-
-Deno.test("a 400 refusal restores the status from a failed post only", async () => {
-  const db = new FakeSupabase();
-  db.queue("posts", {
-    data: { id: POST, status: "completed", scheduled_at: null },
-    error: null,
-  });
-  db.queue("posts", { data: [{ id: POST }], error: null });
-  db.queue("platform_posts", {
-    data: [
-      { id: "pp1", platform: "facebook", status: "failed", social_account_id: ACCOUNT },
-    ],
-    error: null,
-  });
-  db.queue("posts", { data: [{ id: POST }], error: null });
-
-  // "No platforms selected" is a 400 that comes after the claim, and it sets
-  // the post to `failed` itself.
-  const { fetcher } = fakeFetcher([
-    { status: 400, body: { error: "No platforms selected for this post" } },
-  ]);
-  const result = await retryFailedPost(depsFor(db, fetcher), USER, { post_id: POST });
-  assertEquals(result.status, 502);
-  assertEquals(errorCode(result), "RETRY_FAILED");
-
-  const updates = callsFor(db, "posts", "update");
-  const rollback = updates[updates.length - 1];
-  assertEquals(rollback.payload, { status: "completed" });
-  assertEquals(hasFilter(rollback, "eq", "status", "failed"), true);
-  // A `processing` row may belong to another caller that claimed the post in
-  // the meantime: it is never given back here.
-  assertEquals(
-    updates.some((call) => hasFilter(call, "eq", "status", "processing")),
-    false,
-  );
-});
-
-Deno.test("a 500 refusal restores the status from a failed post only", async () => {
-  const db = new FakeSupabase();
-  db.queue("posts", {
-    data: { id: POST, status: "completed", scheduled_at: null },
-    error: null,
-  });
-  db.queue("posts", { data: [{ id: POST }], error: null });
-  db.queue("platform_posts", {
-    data: [
-      { id: "pp1", platform: "facebook", status: "failed", social_account_id: ACCOUNT },
-    ],
-    error: null,
-  });
-  db.queue("posts", { data: [{ id: POST }], error: null });
-
-  const { fetcher } = fakeFetcher([{ status: 500, body: { error: "boom" } }]);
-  const result = await retryFailedPost(depsFor(db, fetcher), USER, { post_id: POST });
-  assertEquals(result.status, 502);
-  assertEquals(errorCode(result), "RETRY_FAILED");
-
-  const updates = callsFor(db, "posts", "update");
-  const rollback = updates[updates.length - 1];
-  assertEquals(rollback.payload, { status: "completed" });
-  assertEquals(hasFilter(rollback, "eq", "status", "failed"), true);
-  // A `processing` row may belong to another caller that claimed the post in
-  // the meantime: it is never given back here.
-  assertEquals(
-    updates.some((call) => hasFilter(call, "eq", "status", "processing")),
-    false,
-  );
-  // The restore changed a row, so the post is not `processing` any more and
-  // there is nothing to report about it.
-  assertEquals(
-    (errorDetails(result) as { still_processing?: unknown } | undefined)?.still_processing,
-    undefined,
-  );
-});
-
-Deno.test("a 500 refusal that left the post processing says so", async () => {
-  const db = new FakeSupabase();
-  db.queue("posts", {
-    data: { id: POST, status: "completed", scheduled_at: null },
-    error: null,
-  });
-  db.queue("posts", { data: [{ id: POST }], error: null });
-  db.queue("platform_posts", {
-    data: [
-      { id: "pp1", platform: "facebook", status: "failed", social_account_id: ACCOUNT },
-    ],
-    error: null,
-  });
-  // The restore matched no row: process-post did not fail the post itself, it
-  // threw after it had claimed it, so the post is still `processing`.
-  db.queue("posts", { data: [], error: null });
-  db.queue("posts", {
-    data: { id: POST, status: "processing" },
-    error: null,
-  });
-
-  const { fetcher } = fakeFetcher([{ status: 500, body: { error: "boom" } }]);
-  const result = await retryFailedPost(depsFor(db, fetcher), USER, { post_id: POST });
-  assertEquals(result.status, 502);
-  assertEquals(errorCode(result), "RETRY_FAILED");
-
-  // The caller has to know that the post is not theirs to touch: it is
-  // `processing`, so a later retry and a later delete are refused.
-  const details = errorDetails(result) as { still_processing?: boolean };
-  assertEquals(details.still_processing, true);
-  assertEquals(
-    (result.body.error as { message: string }).message,
-    "Retry failed: boom The post still shows processing; it is released when the publish settles, " +
-      "or delete it from the dashboard.",
-  );
-
-  // The status was read through the owner of the post.
-  const statusRead = callsFor(db, "posts", "select")[1];
-  assertEquals(statusRead.payload, "status");
-  assertEquals(hasFilter(statusRead, "eq", "id", POST), true);
-  assertEquals(hasFilter(statusRead, "eq", "user_id", USER), true);
 });
 
 // ── posts/delete ───────────────────────────────────────────────────────────────
@@ -1468,11 +591,18 @@ Deno.test("a delete removes the record and keeps the media library", async () =>
     ],
     error: null,
   });
+  // The ownership check of the row that is cleared.
+  db.queue("platform_posts", { data: [{ id: "pp1" }, { id: "pp2" }], error: null });
+  db.queue("platform_posts", { data: null, error: null });
+  // The results are read once more before the record goes.
+  db.queue("platform_posts", {
+    data: [{ id: "pp2", status: "success" }],
+    error: null,
+  });
   db.queue("social_accounts", {
     data: [{ id: ACCOUNT, user_id: USER, platform: "facebook", access_token: "tok" }],
     error: null,
   });
-  db.queue("posts", { data: [{ id: POST }], error: null });
 
   const { fetcher } = fakeFetcher([{ status: 200, body: { success: true } }]);
   const result = await deletePost(depsFor(db, fetcher), USER, { post_id: POST });
@@ -1489,13 +619,14 @@ Deno.test("a delete removes the record and keeps the media library", async () =>
 
   const removal = callsFor(db, "posts", "delete")[0];
   assertEquals(hasFilter(removal, "eq", "user_id", USER), true);
-  assertEquals(hasFilter(removal, "eq", "status", "processing"), true);
+  // The record may not go while a publish is running against it.
+  assertEquals(hasFilter(removal, "neq", "status", "processing"), true);
 });
 
-Deno.test("a delete claims the post before it reads the results", async () => {
+Deno.test("a delete never claims the post", async () => {
   const db = new FakeSupabase();
   db.queue("posts", { data: { id: POST, status: "completed" }, error: null });
-  db.queue("posts", { data: [{ id: POST }], error: null });
+  db.queue("platform_posts", { data: [], error: null });
   db.queue("platform_posts", { data: [], error: null });
   db.queue("posts", { data: [{ id: POST }], error: null });
 
@@ -1503,23 +634,82 @@ Deno.test("a delete claims the post before it reads the results", async () => {
   const result = await deletePost(depsFor(db, fetcher), USER, { post_id: POST });
   assertEquals(result.status, 200);
 
-  const claimIndex = indexOfCall(db, "posts", "update");
-  const resultsIndex = indexOfCall(db, "platform_posts", "select");
-  assertEquals(claimIndex < resultsIndex, true);
-  assertEquals(hasFilter(db.calls[claimIndex], "eq", "status", "completed"), true);
+  // Not one status is written: a claim that is never given back (the function is
+  // cut off between two platforms) would leave the post `processing` for good.
+  assertEquals(callsFor(db, "posts", "update").length, 0);
+});
+
+Deno.test("a deleted copy is cleared before the next platform is asked", async () => {
+  const db = new FakeSupabase();
+  db.queue("posts", { data: { id: POST, status: "completed" }, error: null });
+  db.queue("posts", { data: [{ id: POST }], error: null });
+  db.queue("platform_posts", {
+    data: [
+      {
+        id: "pp1",
+        platform: "facebook",
+        status: "success",
+        platform_post_id: "fb-1",
+        social_account_id: ACCOUNT,
+        response_data: null,
+      },
+      {
+        id: "pp2",
+        platform: "pinterest",
+        status: "success",
+        platform_post_id: "pin-1",
+        social_account_id: ACCOUNT,
+        response_data: null,
+      },
+    ],
+    error: null,
+  });
+  // The ownership check of the row that is cleared, once per cleared row.
+  db.queue("platform_posts", { data: [{ id: "pp1" }, { id: "pp2" }], error: null });
+  db.queue("platform_posts", { data: null, error: null });
+  db.queue("platform_posts", { data: [{ id: "pp1" }, { id: "pp2" }], error: null });
+  db.queue("platform_posts", { data: null, error: null });
+  // The results are read once more before the record goes.
+  db.queue("platform_posts", { data: [], error: null });
+  db.queue("social_accounts", {
+    data: [{ id: ACCOUNT, user_id: USER, platform: "facebook", access_token: "tok" }],
+    error: null,
+  });
+
+  // How many queries had been made when each platform was asked to delete.
+  const queriesWhenAsked: number[] = [];
+  const { fetcher } = fakeFetcher(
+    [
+      { status: 200, body: { success: true } },
+      { status: 200, body: {} },
+    ],
+    () => {
+      queriesWhenAsked.push(db.calls.length);
+    },
+  );
+  const result = await deletePost(depsFor(db, fetcher), USER, { post_id: POST });
+  assertEquals(result.status, 200);
+  assertEquals(queriesWhenAsked.length, 2);
+
+  // The copy that is gone on Facebook is cleared before Pinterest is asked: a delete
+  // that dies halfway must not offer the same copy to a platform again.
+  const cleared = callsFor(db, "platform_posts", "delete");
+  assertEquals(cleared.length, 2);
+  assertEquals(hasInFilter(cleared[0], "id", ["pp1"]), true);
+  assertEquals(hasInFilter(cleared[1], "id", ["pp2"]), true);
+  const clearedIndex = indexOfCall(db, "platform_posts", "delete");
+  assertEquals(clearedIndex < queriesWhenAsked[1], true);
 });
 
 Deno.test("a delete is refused while a platform is still publishing", async () => {
   const db = new FakeSupabase();
   db.queue("posts", { data: { id: POST, status: "completed" }, error: null });
-  db.queue("posts", { data: [{ id: POST }], error: null });
   db.queue("platform_posts", {
     data: [
       { id: "pp1", platform: "tiktok", status: "pending", social_account_id: ACCOUNT },
     ],
     error: null,
   });
-  db.queue("posts", { data: [{ id: POST }], error: null });
 
   const { calls, fetcher } = fakeFetcher();
   const result = await deletePost(depsFor(db, fetcher), USER, { post_id: POST });
@@ -1531,16 +721,13 @@ Deno.test("a delete is refused while a platform is still publishing", async () =
   assertEquals(calls.length, 0);
   assertEquals(callsFor(db, "posts", "delete").length, 0);
 
-  // The claim is given back, so the post is not stuck in `processing`.
-  const updates = callsFor(db, "posts", "update");
-  assertEquals(updates.length, 2);
-  assertEquals(updates[1].payload, { status: "completed" });
+  // No claim was taken, so the post is not stuck in `processing`.
+  assertEquals(callsFor(db, "posts", "update").length, 0);
 });
 
 Deno.test("a platform delete that fails keeps the Postora record", async () => {
   const db = new FakeSupabase();
   db.queue("posts", { data: { id: POST, status: "completed" }, error: null });
-  db.queue("posts", { data: [{ id: POST }], error: null });
   db.queue("platform_posts", {
     data: [
       {
@@ -1558,7 +745,6 @@ Deno.test("a platform delete that fails keeps the Postora record", async () => {
     data: [{ id: ACCOUNT, user_id: USER, platform: "facebook", access_token: "tok" }],
     error: null,
   });
-  db.queue("posts", { data: [{ id: POST }], error: null });
 
   const { fetcher } = fakeFetcher([
     { status: 400, body: { error: { message: "Unsupported delete request." } } },
@@ -1570,11 +756,8 @@ Deno.test("a platform delete that fails keeps the Postora record", async () => {
   assertEquals(details.record_deleted, false);
   assertEquals(callsFor(db, "posts", "delete").length, 0);
 
-  // The claim is given back, so the post is not stuck in `processing`.
-  const updates = callsFor(db, "posts", "update");
-  const release = updates[updates.length - 1];
-  assertEquals(release.payload, { status: "completed" });
-  assertEquals(hasFilter(release, "eq", "status", "processing"), true);
+  // No claim was taken, so the post is not stuck in `processing`.
+  assertEquals(callsFor(db, "posts", "update").length, 0);
 });
 
 Deno.test("a failed platform delete can still be told to delete the record", async () => {
@@ -1594,11 +777,15 @@ Deno.test("a failed platform delete can still be told to delete the record", asy
     ],
     error: null,
   });
+  // The results are read once more before the record goes.
+  db.queue("platform_posts", {
+    data: [{ id: "pp1", status: "success" }],
+    error: null,
+  });
   db.queue("social_accounts", {
     data: [{ id: ACCOUNT, user_id: USER, platform: "facebook", access_token: "tok" }],
     error: null,
   });
-  db.queue("posts", { data: [{ id: POST }], error: null });
 
   const { fetcher } = fakeFetcher([
     { status: 400, body: { error: { message: "Unsupported delete request." } } },
@@ -1617,6 +804,7 @@ Deno.test("a failed platform delete can still be told to delete the record", asy
   assertEquals(platforms[0].outcome, "failed");
   assertEquals(platforms[0].deleted_on_platform, false);
   assertEquals(callsFor(db, "posts", "delete").length, 1);
+  assertEquals(callsFor(db, "posts", "update").length, 0);
 });
 
 Deno.test("a form-encoded delete can still be told to delete the record", async () => {
@@ -1636,11 +824,15 @@ Deno.test("a form-encoded delete can still be told to delete the record", async 
     ],
     error: null,
   });
+  // The results are read once more before the record goes.
+  db.queue("platform_posts", {
+    data: [{ id: "pp1", status: "success" }],
+    error: null,
+  });
   db.queue("social_accounts", {
     data: [{ id: ACCOUNT, user_id: USER, platform: "facebook", access_token: "tok" }],
     error: null,
   });
-  db.queue("posts", { data: [{ id: POST }], error: null });
 
   const { fetcher } = fakeFetcher([
     { status: 400, body: { error: { message: "Unsupported delete request." } } },
@@ -1654,12 +846,12 @@ Deno.test("a form-encoded delete can still be told to delete the record", async 
   assertEquals(result.body.record_deleted, true);
   assertEquals(result.body.kept_despite_failures, true);
   assertEquals(callsFor(db, "posts", "delete").length, 1);
+  assertEquals(callsFor(db, "posts", "update").length, 0);
 });
 
-Deno.test("a delete whose accounts cannot be read is a 500 and gives the post its status back", async () => {
+Deno.test("a delete whose accounts cannot be read is a 500", async () => {
   const db = new FakeSupabase();
   db.queue("posts", { data: { id: POST, status: "completed" }, error: null });
-  db.queue("posts", { data: [{ id: POST }], error: null });
   db.queue("platform_posts", {
     data: [
       {
@@ -1674,24 +866,20 @@ Deno.test("a delete whose accounts cannot be read is a 500 and gives the post it
     error: null,
   });
   db.queue("social_accounts", { data: null, error: { message: "boom" } });
-  db.queue("posts", { data: [{ id: POST }], error: null });
 
   const result = await deletePost(depsFor(db, noNetwork()), USER, { post_id: POST });
   assertEquals(result.status, 500);
   assertEquals(errorCode(result), "INTERNAL_ERROR");
 
-  // The claim is given back, so the post is not stuck in `processing`.
-  const updates = callsFor(db, "posts", "update");
-  const release = updates[updates.length - 1];
-  assertEquals(release.payload, { status: "completed" });
-  assertEquals(hasFilter(release, "eq", "status", "processing"), true);
-  assertEquals(hasFilter(release, "eq", "user_id", USER), true);
+  // The record was not touched, and no claim was left behind.
+  assertEquals(callsFor(db, "posts", "delete").length, 0);
+  assertEquals(callsFor(db, "posts", "update").length, 0);
 });
 
-Deno.test("a record delete that fails clears the rows that are already gone", async () => {
+Deno.test("a record delete that fails leaves the copy that is gone on the platform cleared", async () => {
   const db = new FakeSupabase();
   db.queue("posts", { data: { id: POST, status: "completed" }, error: null });
-  db.queue("posts", { data: [{ id: POST }], error: null });
+  db.queue("posts", { data: null, error: { message: "boom" } });
   db.queue("platform_posts", {
     data: [
       {
@@ -1703,45 +891,77 @@ Deno.test("a record delete that fails clears the rows that are already gone", as
         response_data: null,
       },
     ],
+    error: null,
+  });
+  // The ownership check of the row that is cleared.
+  db.queue("platform_posts", { data: [{ id: "pp1" }], error: null });
+  db.queue("platform_posts", { data: null, error: null });
+  // The results are read once more before the record goes.
+  db.queue("platform_posts", { data: [], error: null });
+  db.queue("social_accounts", {
+    data: [{ id: ACCOUNT, user_id: USER, platform: "facebook", access_token: "tok" }],
+    error: null,
+  });
+
+  const { fetcher } = fakeFetcher([{ status: 200, body: { success: true } }]);
+  const result = await deletePost(depsFor(db, fetcher), USER, { post_id: POST });
+  assertEquals(result.status, 500);
+  assertEquals(errorCode(result), "INTERNAL_ERROR");
+  assertEquals(
+    (result.body.error as { message: string }).message,
+    "Deleting the Postora record failed. Please try again.",
+  );
+
+  // The copy that is gone on the platform is not offered to the platform again.
+  const cleared = callsFor(db, "platform_posts", "delete")[0];
+  assertEquals(hasInFilter(cleared, "id", ["pp1"]), true);
+  assertEquals(hasFilter(cleared, "eq", "post_id", POST), true);
+  assertEquals(callsFor(db, "posts", "update").length, 0);
+});
+
+Deno.test("a publish that lands while the delete runs stops the record delete", async () => {
+  const db = new FakeSupabase();
+  db.queue("posts", { data: { id: POST, status: "completed" }, error: null });
+  db.queue("platform_posts", {
+    data: [
+      {
+        id: "pp1",
+        platform: "facebook",
+        status: "success",
+        platform_post_id: "fb-1",
+        social_account_id: ACCOUNT,
+        response_data: null,
+      },
+    ],
+    error: null,
+  });
+  // The ownership check of the row that is cleared.
+  db.queue("platform_posts", { data: [{ id: "pp1" }], error: null });
+  db.queue("platform_posts", { data: null, error: null });
+  // A result that was not there when the delete started: a publish landed.
+  db.queue("platform_posts", {
+    data: [{ id: "pp9", status: "success" }],
     error: null,
   });
   db.queue("social_accounts", {
     data: [{ id: ACCOUNT, user_id: USER, platform: "facebook", access_token: "tok" }],
     error: null,
   });
-  db.queue("posts", { data: null, error: { message: "boom" } });
-  // The rows are read once more, scoped to the owner of the post, before
-  // anything is deleted: only a row that read returns may go.
-  db.queue("platform_posts", {
-    data: [
-      {
-        id: "pp1",
-        platform: "facebook",
-        status: "success",
-        platform_post_id: "fb-1",
-        social_account_id: ACCOUNT,
-        response_data: null,
-      },
-    ],
-    error: null,
-  });
-  db.queue("platform_posts", { data: [], error: null });
-  db.queue("posts", { data: [{ id: POST }], error: null });
 
   const { fetcher } = fakeFetcher([{ status: 200, body: { success: true } }]);
   const result = await deletePost(depsFor(db, fetcher), USER, { post_id: POST });
-  assertEquals(result.status, 500);
-  assertEquals(errorCode(result), "INTERNAL_ERROR");
+  assertEquals(result.status, 409);
+  assertEquals(errorCode(result), "POST_STATE_CHANGED");
+  assertEquals(
+    (result.body.error as { message: string }).message,
+    "The post was published again while it was being deleted. Check get_post.",
+  );
+  const details = errorDetails(result) as { record_deleted: boolean };
+  assertEquals(details.record_deleted, false);
 
-  // The copy that is gone on the platform is not offered to the platform again.
-  const cleared = callsFor(db, "platform_posts", "delete")[0];
-  assertEquals(hasInFilter(cleared, "id", ["pp1"]), true);
-  assertEquals(hasFilter(cleared, "eq", "post_id", POST), true);
-
-  const updates = callsFor(db, "posts", "update");
-  const release = updates[updates.length - 1];
-  assertEquals(release.payload, { status: "completed" });
-  assertEquals(hasFilter(release, "eq", "status", "processing"), true);
+  // The record stays: removing it would orphan the new result.
+  assertEquals(callsFor(db, "posts", "delete").length, 0);
+  assertEquals(callsFor(db, "posts", "update").length, 0);
 });
 
 Deno.test("a post that is publishing right now cannot be deleted", async () => {
