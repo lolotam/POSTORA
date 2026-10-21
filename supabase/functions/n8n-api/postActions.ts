@@ -702,6 +702,23 @@ export function computePostingHistogram(
   return { hourCounts, dayCounts, totalPosts };
 }
 
+// A suggestion is only usable when every field the caller schedules from is
+// there: the platform, the day, the time, a score between 0 and 100, and the
+// reason. The model is asked for that shape, but the answer is whatever came
+// back, so the shape is checked rather than assumed.
+export function isBestTimeSuggestion(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return false;
+  const item = value as Record<string, unknown>;
+  return typeof item.platform === "string" &&
+    typeof item.day === "string" &&
+    typeof item.time === "string" &&
+    typeof item.score === "number" &&
+    Number.isFinite(item.score) &&
+    item.score >= 0 &&
+    item.score <= 100 &&
+    typeof item.reason === "string";
+}
+
 // One platform, one history, one AI call. The suggestion service takes a
 // single historicalData, so a platform asked about on its own is the only way
 // to keep an Instagram post out of a TikTok suggestion.
@@ -776,7 +793,29 @@ async function requestSuggestions(
     return error(502, "BEST_TIMES_FAILED", "Could not get suggestions right now. Try again.");
   }
 
-  return { suggestions: json.suggestions };
+  // The service was asked about one platform, so every suggestion it answers
+  // with has to be for that platform: a suggestion for another platform is not
+  // an answer to this question. A suggestion that does not carry every field
+  // the caller schedules from is dropped for the same reason.
+  const returned = (json.suggestions as unknown[]) ?? [];
+  const suggestions = returned.filter((value) => {
+    if (!isBestTimeSuggestion(value)) return false;
+    const item = value as { platform: string };
+    return item.platform.toLowerCase() === platform.toLowerCase();
+  });
+
+  // A list the service answered with and that carries nothing usable is a
+  // failed read, not an empty result: answering 200 with no suggestions would
+  // tell the caller the service had nothing to say, when in fact it answered
+  // with something that is not a suggestion.
+  if (returned.length > 0 && suggestions.length === 0) {
+    console.error(
+      `[n8n-api] ${route}: the suggestion service answered with no usable suggestion for ${platform} (user ${userId})`,
+    );
+    return error(502, "BEST_TIMES_FAILED", "Could not get suggestions right now. Try again.");
+  }
+
+  return { suggestions };
 }
 
 // The limit is per platform on purpose. One shared limit across the platforms

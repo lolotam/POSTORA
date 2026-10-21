@@ -6,6 +6,7 @@ import {
   handleCancelScheduledPost,
   handleReschedulePost,
   handleSuggestBestTimes,
+  isBestTimeSuggestion,
   reschedulePost,
   suggestBestTimes,
   type PostActionDeps,
@@ -678,6 +679,21 @@ Deno.test("an inactive account is not healthy even when its token expiry is unkn
 
 // ── best-times ─────────────────────────────────────────────────────────────────
 
+// The suggestion service answers with the shape the model was asked for: the
+// platform, the day, the time, the score and the reason. A suggestion that
+// does not carry every field is not usable, so the fixtures below are
+// complete and a test that wants a broken one removes the field it needs.
+function suggestion(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    platform: "instagram",
+    day: "Monday",
+    time: "11:00 AM",
+    score: 95,
+    reason: "Lunch hours perform best for this account.",
+    ...overrides,
+  };
+}
+
 Deno.test("the posting histogram counts the local hour and the local weekday", () => {
   const histogram = computePostingHistogram(["2026-10-04T21:30:00Z"], "Asia/Kuwait");
   assertEquals(histogram.hourCounts, { 0: 1 });
@@ -703,7 +719,7 @@ Deno.test("the best-times request carries the platforms and the history", async 
     error: null,
   });
   const { calls, fetcher } = fakeFetcher([
-    { status: 200, body: { suggestions: [{ platform: "instagram", day: "Monday" }] } },
+    { status: 200, body: { suggestions: [suggestion()] } },
   ]);
   const result = await suggestBestTimes(
     depsFor(db, fetcher),
@@ -714,7 +730,7 @@ Deno.test("the best-times request carries the platforms and the history", async 
   assertEquals(result.status, 200);
   assertEquals(result.body.timezone, "Asia/Kuwait");
   assertEquals(result.body.based_on_posts, { instagram: 1 });
-  assertEquals(result.body.suggestions, [{ platform: "instagram", day: "Monday" }]);
+  assertEquals(result.body.suggestions, [suggestion()]);
 
   // The history is the successful per-platform results of the requested
   // platform, and the owner is enforced by the join to posts. The platform is
@@ -754,8 +770,8 @@ Deno.test("each platform is analysed on its own publishing history", async () =>
     error: null,
   });
   const { calls, fetcher } = fakeFetcher([
-    { status: 200, body: { suggestions: [{ platform: "instagram", day: "Monday" }] } },
-    { status: 200, body: { suggestions: [{ platform: "tiktok", day: "Tuesday" }] } },
+    { status: 200, body: { suggestions: [suggestion()] } },
+    { status: 200, body: { suggestions: [suggestion({ platform: "tiktok", day: "Tuesday" })] } },
   ]);
   const result = await suggestBestTimes(
     depsFor(db, fetcher),
@@ -768,8 +784,8 @@ Deno.test("each platform is analysed on its own publishing history", async () =>
   assertEquals(result.body.based_on_posts, { instagram: 2, tiktok: 1 });
   // The suggestions come back in the order the platforms were asked for.
   assertEquals(result.body.suggestions, [
-    { platform: "instagram", day: "Monday" },
-    { platform: "tiktok", day: "Tuesday" },
+    suggestion(),
+    suggestion({ platform: "tiktok", day: "Tuesday" }),
   ]);
 
   // One call per platform, and each call carries only that platform's
@@ -798,8 +814,8 @@ Deno.test("every platform's history is read on its own, under its own limit", as
     error: null,
   });
   const { fetcher } = fakeFetcher([
-    { status: 200, body: { suggestions: [{ platform: "instagram", day: "Monday" }] } },
-    { status: 200, body: { suggestions: [{ platform: "tiktok", day: "Tuesday" }] } },
+    { status: 200, body: { suggestions: [suggestion()] } },
+    { status: 200, body: { suggestions: [suggestion({ platform: "tiktok" })] } },
   ]);
   const result = await suggestBestTimes(
     depsFor(db, fetcher),
@@ -835,8 +851,8 @@ Deno.test("a history read that fails is a 500 and no suggestion is asked for", a
   });
   db.queue("platform_posts", { data: null, error: { message: "statement timeout" } });
   const { calls, fetcher } = fakeFetcher([
-    { status: 200, body: { suggestions: [{ platform: "instagram", day: "Monday" }] } },
-    { status: 200, body: { suggestions: [{ platform: "tiktok", day: "Tuesday" }] } },
+    { status: 200, body: { suggestions: [suggestion()] } },
+    { status: 200, body: { suggestions: [suggestion({ platform: "tiktok" })] } },
   ]);
   const logged: string[] = [];
   const originalError = console.error;
@@ -871,7 +887,7 @@ Deno.test("a platform asked for twice is one platform", async () => {
     error: null,
   });
   const { calls, fetcher } = fakeFetcher([
-    { status: 200, body: { suggestions: [{ platform: "instagram", day: "Monday" }] } },
+    { status: 200, body: { suggestions: [suggestion()] } },
   ]);
   const result = await suggestBestTimes(
     depsFor(db, fetcher),
@@ -911,7 +927,7 @@ Deno.test("a platform whose suggestion call fails is the failure that is reporte
     error: null,
   });
   const { fetcher } = fakeFetcher([
-    { status: 200, body: { suggestions: [{ platform: "instagram", day: "Monday" }] } },
+    { status: 200, body: { suggestions: [suggestion()] } },
     { status: 503, body: { error: "down" } },
   ]);
   const result = await suggestBestTimes(
@@ -1074,6 +1090,99 @@ Deno.test("a suggestion service that could not read the model's answer is a 502"
   } finally {
     console.error = originalError;
   }
+});
+
+Deno.test("a suggestion that does not carry every field is dropped", async () => {
+  const db = new FakeSupabase();
+  db.queue("platform_posts", { data: [], error: null });
+  // The service answered with an item that has no time: it cannot be
+  // scheduled, so it is dropped and the usable suggestion is kept.
+  const withoutTime = {
+    platform: "instagram",
+    day: "Monday",
+    score: 95,
+    reason: "Lunch hours perform best for this account.",
+  };
+  const { fetcher } = fakeFetcher([
+    { status: 200, body: { suggestions: [suggestion(), withoutTime] } },
+  ]);
+  const result = await suggestBestTimes(
+    depsFor(db, fetcher),
+    USER,
+    { platforms: ["instagram"] },
+    null,
+  );
+  assertEquals(result.status, 200);
+  assertEquals(result.body.suggestions, [suggestion()]);
+});
+
+Deno.test("a suggestion for another platform is dropped", async () => {
+  const db = new FakeSupabase();
+  db.queue("platform_posts", { data: [], error: null });
+  // The service was asked about Instagram, so a TikTok suggestion is not an
+  // answer to this question.
+  const { fetcher } = fakeFetcher([
+    { status: 200, body: { suggestions: [suggestion(), suggestion({ platform: "tiktok" })] } },
+  ]);
+  const result = await suggestBestTimes(
+    depsFor(db, fetcher),
+    USER,
+    { platforms: ["instagram"] },
+    null,
+  );
+  assertEquals(result.status, 200);
+  assertEquals(result.body.suggestions, [suggestion()]);
+});
+
+Deno.test("a list with nothing usable in it is a 502 and leaves a log line", async () => {
+  const db = new FakeSupabase();
+  db.queue("platform_posts", { data: [], error: null });
+  // The service answered with a list, but nothing in it is a suggestion: a
+  // 200 with no suggestions would tell the caller the service had nothing to
+  // say, when in fact it answered with something unusable.
+  const { fetcher } = fakeFetcher([
+    {
+      status: 200,
+      body: { suggestions: [{ platform: "instagram", day: "Monday", score: 95 }] },
+    },
+  ]);
+  const logged: string[] = [];
+  const originalError = console.error;
+  console.error = (...args: unknown[]) => {
+    logged.push(args.map(String).join(" "));
+  };
+  try {
+    const result = await suggestBestTimes(
+      depsFor(db, fetcher),
+      USER,
+      { platforms: ["instagram"] },
+      null,
+    );
+    assertEquals(result.status, 502);
+    assertEquals(errorCode(result), "BEST_TIMES_FAILED");
+    // The failed read leaves a line behind, so it is visible in the logs and
+    // not only in the answer the caller got.
+    assertEquals(logged.length, 1);
+    assertEquals(logged[0].includes("no usable suggestion"), true);
+  } finally {
+    console.error = originalError;
+  }
+});
+
+Deno.test("a suggestion is only a suggestion when every field is there", () => {
+  assertEquals(isBestTimeSuggestion(suggestion()), true);
+  // A score outside the range is not a score.
+  assertEquals(isBestTimeSuggestion({ ...suggestion(), score: 101 }), false);
+  assertEquals(isBestTimeSuggestion({ ...suggestion(), score: -1 }), false);
+  // A score that is a string is not a number.
+  assertEquals(isBestTimeSuggestion({ ...suggestion(), score: "95" }), false);
+  // A missing field is a missing field.
+  assertEquals(isBestTimeSuggestion({ ...suggestion(), time: undefined }), false);
+  assertEquals(isBestTimeSuggestion({ ...suggestion(), day: undefined }), false);
+  assertEquals(isBestTimeSuggestion({ ...suggestion(), reason: undefined }), false);
+  // Anything that is not an object at all is not a suggestion.
+  assertEquals(isBestTimeSuggestion(null), false);
+  assertEquals(isBestTimeSuggestion("instagram"), false);
 });
 
 Deno.test("an empty suggestion list from the service is a 200", async () => {

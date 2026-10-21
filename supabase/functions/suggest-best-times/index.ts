@@ -146,6 +146,9 @@ Return a JSON array of suggestions.`;
 
     // Parse JSON from response
     let suggestions = [];
+    // The number of items in the answer that were not suggestions. The count is
+    // reported, so a caller can tell a thin answer from a broken one.
+    let droppedInvalid = 0;
     // An answer that cannot be read is not an empty answer: the flag tells the
     // caller that the list is missing because the model's answer failed to
     // parse, not because the model had nothing to say.
@@ -163,7 +166,32 @@ Return a JSON array of suggestions.`;
         const jsonStr = content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
         const parsed = JSON.parse(jsonStr);
         if (Array.isArray(parsed)) {
-          suggestions = parsed;
+          // The model is asked for a fixed shape, but the answer is whatever
+          // came back: an item without a day, a time or a score cannot be
+          // scheduled, so it is dropped instead of being handed to the caller.
+          // The check mirrors isBestTimeSuggestion in ../n8n-api/postActions.ts,
+          // which the API applies to the answers this service sends.
+          const wellFormed = parsed.filter((value: unknown) => {
+            if (typeof value !== 'object' || value === null) return false;
+            const item = value as Record<string, unknown>;
+            return typeof item.platform === 'string' &&
+              typeof item.day === 'string' &&
+              typeof item.time === 'string' &&
+              typeof item.score === 'number' &&
+              Number.isFinite(item.score) &&
+              item.score >= 0 && item.score <= 100 &&
+              typeof item.reason === 'string';
+          });
+          droppedInvalid = parsed.length - wellFormed.length;
+          if (parsed.length > 0 && wellFormed.length === 0) {
+            // A list of items that are not suggestions is an answer that failed
+            // to parse, not an answer that had nothing to say.
+            parseFailed = true;
+            suggestions = [];
+            droppedInvalid = 0;
+          } else {
+            suggestions = wellFormed;
+          }
         } else {
           parseFailed = true;
         }
@@ -176,7 +204,11 @@ Return a JSON array of suggestions.`;
 
     console.log('Generated suggestions:', suggestions.length);
 
-    return jsonResponse({ suggestions, ...(parseFailed ? { parse_failed: true } : {}) });
+    return jsonResponse({
+      suggestions,
+      ...(parseFailed ? { parse_failed: true } : {}),
+      ...(droppedInvalid > 0 ? { dropped_invalid: droppedInvalid } : {}),
+    });
 
   } catch (error: unknown) {
     console.error('Error suggesting best times:', error);

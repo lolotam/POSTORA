@@ -8,6 +8,7 @@ import { type CommentActionResult, deleteComment, hideComment, replyToComment } 
 import { parseSubscriptionFilters } from "./webhookFilters.ts";
 import { describeBase64Failure, normalizeBase64Media } from "../_shared/base64Media.ts";
 import { clientIpFromHeaders, isValidUuid } from "./requestGuards.ts";
+import { recordApiRefusal } from "./refusalLog.ts";
 import { relayUploadTarget } from "./mediaRelay.ts";
 import { handleCancelScheduledPost, handleCheckAccountHealth, handleReschedulePost, handleSuggestBestTimes } from "./postActions.ts";
 import { MEDIA_QUOTA_CODE, invokeErrorText, isMediaQuotaMessage, mediaQuotaHumanMessage, mediaQuotaPreflight, quotaOnlyMessage, type QuotaRpc } from "../_shared/mediaQuotaError.ts";
@@ -2051,19 +2052,28 @@ async function handleMessageReply(req: Request, supabase: any, userId: string, b
   const messageType = body?.message_type || 'text';
 
   if (!accountId || !recipientId || !message) {
+    await recordApiRefusal(supabase, { userId, route: 'messages/reply', code: 'INVALID_MESSAGE', status: 400, accountId });
     return apiError(req, 'social_account_id, recipient_id, and message are required', 400, 'INVALID_MESSAGE');
   }
   if (!['text', 'media'].includes(messageType)) {
+    await recordApiRefusal(supabase, { userId, route: 'messages/reply', code: 'INVALID_MESSAGE_TYPE', status: 400, accountId });
     return apiError(req, 'Only text and media messages are supported', 400, 'INVALID_MESSAGE_TYPE');
   }
   if (messageType === 'media' && typeof body?.media_url !== 'string') {
+    await recordApiRefusal(supabase, { userId, route: 'messages/reply', code: 'INVALID_MEDIA', status: 400, accountId });
     return apiError(req, 'media_url is required for media messages', 400, 'INVALID_MEDIA');
   }
   if (messageType === 'media' && body?.media_type !== undefined && !EVOLUTION_MEDIA_TYPES.includes(body.media_type)) {
+    await recordApiRefusal(supabase, { userId, route: 'messages/reply', code: 'INVALID_MEDIA_TYPE', status: 400, accountId });
     return apiError(req, `media_type must be one of ${EVOLUTION_MEDIA_TYPES.join(', ')}`, 400, 'INVALID_MEDIA_TYPE');
   }
 
-  if (!isValidUuid(accountId)) return invalidAccountIdError(req, accountId);
+  if (!isValidUuid(accountId)) {
+    // The id the caller sent is not a uuid, so it is not written down: only a
+    // real account uuid is written down.
+    await recordApiRefusal(supabase, { userId, route: 'messages/reply', code: 'INVALID_ACCOUNT_ID', status: 400 });
+    return invalidAccountIdError(req, accountId);
+  }
 
   const { data: account, error } = await supabase
     .from('social_accounts')
@@ -2073,11 +2083,13 @@ async function handleMessageReply(req: Request, supabase: any, userId: string, b
   if (error) return apiError(req, 'Failed to fetch social account', 500, 'INTERNAL_ERROR');
   if (!account || account.user_id !== userId) {
     logAccountAccessDenied('messages/reply', accountId, userId, account?.user_id ?? null);
+    await recordApiRefusal(supabase, { userId, route: 'messages/reply', code: 'ACCOUNT_NOT_FOUND', status: 404, accountId });
     return apiError(req, 'Social account not found or not owned by the authenticated user.', 404, 'ACCOUNT_NOT_FOUND');
   }
 
   const platform = body?.platform || account.platform;
   if (!['whatsapp', 'instagram', 'facebook'].includes(platform) || platform !== account.platform) {
+    await recordApiRefusal(supabase, { userId, route: 'messages/reply', code: 'INVALID_PLATFORM', status: 400, accountId });
     return apiError(req, 'platform does not match the selected social account', 400, 'INVALID_PLATFORM');
   }
 
@@ -2089,7 +2101,10 @@ async function handleMessageReply(req: Request, supabase: any, userId: string, b
       route: 'messages/reply',
       now: new Date(),
     });
-    if (refusal) return apiError(req, refusal.message, refusal.status, refusal.code);
+    if (refusal) {
+      await recordApiRefusal(supabase, { userId, route: 'messages/reply', code: refusal.code, status: refusal.status, accountId });
+      return apiError(req, refusal.message, refusal.status, refusal.code);
+    }
   }
 
   try {
