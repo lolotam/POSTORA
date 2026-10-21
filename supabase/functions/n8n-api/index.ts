@@ -2102,7 +2102,7 @@ async function handleMessageReply(req: Request, supabase: any, userId: string, b
       now: new Date(),
     });
     if (refusal) {
-      await recordApiRefusal(supabase, { userId, route: 'messages/reply', code: refusal.code, status: refusal.status, accountId });
+      // The gate records this refusal itself (logSendRefused), so no second row is written here.
       return apiError(req, refusal.message, refusal.status, refusal.code);
     }
   }

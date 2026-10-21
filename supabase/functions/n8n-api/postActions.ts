@@ -14,6 +14,7 @@ import { containsSensitiveInfo } from "../_shared/errorSanitizer.ts";
 import { restrictedCorsHeaders } from "../_shared/cors.ts";
 import { fetchWithTimeout } from "../_shared/request-timeout.ts";
 import { isValidUuid } from "./requestGuards.ts";
+import { recordApiRefusal } from "./refusalLog.ts";
 
 export interface ActionResult {
   status: number;
@@ -257,54 +258,24 @@ function describeSubject(route: string, subject: RefusalSubject): string {
 
 // The durable half of a refusal: one system_logs row per refusal, so a
 // refusal nobody watched still leaves a trace (project rule: every early
-// return that refuses work writes a log row). The route, the code, the status
-// and the ids only: never the request body, never a token, never the error
-// text the caller was given.
+// return that refuses work writes a log row). The row itself is written by
+// the one writer (./refusalLog.ts), so the route, the code, the status and
+// the ids live in exactly one place: never the request body, never a token,
+// never the error text the caller was given.
 async function writeRefusalRow(
   deps: PostActionDeps,
   route: string,
   subject: RefusalSubject,
   result: ActionResult,
 ): Promise<void> {
-  const code = actionErrorCode(result);
-  // An account id is recorded only when it is a real uuid.
-  const accountId = subject.accountId && isValidUuid(subject.accountId)
-    ? subject.accountId
-    : undefined;
-  try {
-    const { error: insertError } = await deps.supabase
-      .from("system_logs")
-      .insert({
-        source: "n8n-api",
-        // The category has to be one the column accepts: system_logs_category_check
-        // allows auth, edge, database, token, post, system, ai, scheduler,
-        // webhook, payment and media. An "api" row would be rejected by the
-        // constraint, so the refusal would leave no durable row at all.
-        category: "edge",
-        level: "warn",
-        message: `${route} refused: ${code}`,
-        user_id: subject.userId,
-        metadata: {
-          route,
-          code,
-          status: result.status,
-          ...(subject.postId ? { post_id: subject.postId } : {}),
-          ...(accountId ? { account_id: accountId } : {}),
-        },
-      });
-    if (insertError) {
-      console.error(
-        `[n8n-api] system_logs insert failed while refusing ${route} (no durable refusal row): ${insertError.message}`,
-      );
-    }
-  } catch (thrown) {
-    // A refusal that cannot be recorded is still a refusal: the caller gets
-    // the same answer, and the edge log is the only sink left.
-    const message = thrown instanceof Error ? thrown.message : String(thrown);
-    console.error(
-      `[n8n-api] system_logs insert failed while refusing ${route} (no durable refusal row): ${message}`,
-    );
-  }
+  await recordApiRefusal(deps.supabase, {
+    userId: subject.userId,
+    route,
+    code: actionErrorCode(result),
+    status: result.status,
+    postId: subject.postId,
+    accountId: subject.accountId,
+  });
 }
 
 // Every refusal leaves a line behind and a row in the database. Ids only:

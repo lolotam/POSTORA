@@ -16,9 +16,9 @@ import { isValidUuid } from "./requestGuards.ts";
 export async function recordApiRefusal(
   // deno-lint-ignore no-explicit-any
   supabase: any,
-  request: { userId: string; route: string; code: string; status: number; accountId?: string },
+  request: { userId: string; route: string; code: string; status: number; postId?: string; accountId?: string },
 ): Promise<void> {
-  const { userId, route, code, status, accountId } = request;
+  const { userId, route, code, status, postId, accountId } = request;
   try {
     const { error: insertError } = await supabase
       .from("system_logs")
@@ -36,6 +36,7 @@ export async function recordApiRefusal(
           route,
           code,
           status,
+          ...(postId ? { post_id: postId } : {}),
           ...(accountId && isValidUuid(accountId) ? { account_id: accountId } : {}),
         },
       });

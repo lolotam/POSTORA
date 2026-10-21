@@ -3,6 +3,7 @@ import { recordApiRefusal } from "./refusalLog.ts";
 
 const USER = "11111111-1111-4111-8111-111111111111";
 const ACCOUNT = "33333333-3333-4333-8333-333333333333";
+const POST = "22222222-2222-4222-8222-222222222222";
 const ROUTE = "messages/reply";
 
 // A refusal is a decision, not a fault, but it still has to leave a trace: a
@@ -125,6 +126,39 @@ Deno.test("an account id that is not a uuid is not written down", async () => {
   assertEquals("account_id" in metadata, false);
   // The id the caller made up never reaches the log, in any form.
   assertEquals(JSON.stringify(row).includes("not-a-uuid"), false);
+});
+
+Deno.test("a post id is written down as metadata.post_id", async () => {
+  const db = new FakeSupabase();
+  await recordApiRefusal(db, {
+    userId: USER,
+    route: ROUTE,
+    code: "POST_NOT_FOUND",
+    status: 404,
+    postId: POST,
+  });
+
+  const row = db.inserts[0].payload;
+  assertEquals(row.metadata, {
+    route: ROUTE,
+    code: "POST_NOT_FOUND",
+    status: 404,
+    post_id: POST,
+  });
+});
+
+Deno.test("a refusal without a post id writes no post_id key", async () => {
+  const db = new FakeSupabase();
+  await recordApiRefusal(db, {
+    userId: USER,
+    route: ROUTE,
+    code: "INVALID_MESSAGE",
+    status: 400,
+  });
+
+  const row = db.inserts[0].payload;
+  const metadata = row.metadata as Record<string, unknown>;
+  assertEquals("post_id" in metadata, false);
 });
 
 Deno.test("a row that cannot be written leaves a log line and never throws", async () => {

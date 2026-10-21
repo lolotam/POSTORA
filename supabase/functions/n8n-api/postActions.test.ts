@@ -1740,10 +1740,12 @@ Deno.test("a refusal row that cannot be written still answers the caller", async
       error: { code: "POST_NOT_FOUND", message: "Post not found." },
     });
     // The edge log is the only sink left when the database refuses the row.
+    // The wording is the one writer's (./refusalLog.ts), so the code names the
+    // refusal as well as the route.
     assertEquals(logged.length, 1);
     assertEquals(
       logged[0],
-      "[n8n-api] system_logs insert failed while refusing posts/cancel (no durable refusal row): insert failed",
+      "[n8n-api] system_logs insert failed while refusing posts/cancel (POST_NOT_FOUND, no durable refusal row): insert failed",
     );
   } finally {
     console.error = originalError;

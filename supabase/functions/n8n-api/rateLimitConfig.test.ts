@@ -452,5 +452,5 @@ Deno.test("the MCP post-management routes have their own budgets, destructive on
     assertEquals(rateLimitKeyForPath(key, "POST"), key);
   }
   assertEquals(rateLimitKeyForPath("/api/v1/accounts/health", "GET"), "/api/v1/accounts/health");
-  assertEquals(FALLBACK_RATE_LIMITS["/api/v1/best-times"].requests, 30);
+  assertEquals(FALLBACK_RATE_LIMITS["/api/v1/best-times"].requests, 5);
 });
