@@ -2314,9 +2314,11 @@ export async function handleRequest(req: Request): Promise<Response> {
 
   // The rate-limit result is hoisted above the try because the catch below
   // needs it: a body that fails to parse is still a metered request, so its
-  // 400 carries the same headers every other response does.
+  // 400 carries the same headers every other response does. The refusal row
+  // is written from the catch too, through a recorder hoisted the same way.
   let rateLimit: Awaited<ReturnType<typeof checkRateLimit>> | undefined;
   let rateLimitConfig: ResolvedRateLimit | undefined;
+  let recordInvalidBody: (() => Promise<boolean>) | undefined;
 
   try {
     const url = new URL(req.url);
@@ -2383,6 +2385,7 @@ export async function handleRequest(req: Request): Promise<Response> {
       fetchGlobalSetting: (endpointKey) => fetchGlobalSetting(supabaseAdmin, endpointKey),
     });
     rateLimit = await checkRateLimit(supabaseAdmin, userId, rateLimitKey, req.method, ipAddress, rateLimitConfig);
+    recordInvalidBody = () => recordApiRefusal(supabaseAdmin, { userId, route: rateLimitKey, code: 'INVALID_REQUEST', status: 400 });
 
     if (rateLimit.failClosed) {
       return apiError(req,
@@ -2617,7 +2620,8 @@ export async function handleRequest(req: Request): Promise<Response> {
     // A body that is not valid JSON is the caller's mistake, not a server
     // fault, so it answers 400 INVALID_REQUEST with the rate-limit headers
     // instead of the generic 500 below.
-    if (error instanceof InvalidRequestBodyError && rateLimit && rateLimitConfig) {
+    if (error instanceof InvalidRequestBodyError && rateLimit && rateLimitConfig && recordInvalidBody) {
+      await recordInvalidBody();
       return invalidRequestBodyResponse(req, rateLimit, rateLimitConfig);
     }
     console.error('n8n API error:', error);

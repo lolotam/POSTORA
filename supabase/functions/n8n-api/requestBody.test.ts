@@ -68,7 +68,7 @@ Deno.test("invalidRequestBodyResponse answers 400 INVALID_REQUEST with the rate 
   assertEquals(response.headers.get("Content-Type"), "application/json");
 });
 
-Deno.test("tripwire: the router answers an invalid body before the generic error path", () => {
+Deno.test("tripwire: the router records and answers an invalid body before the generic error path", () => {
   const routerSource = handleRequest.toString();
   assertEquals(routerSource.includes("instanceof InvalidRequestBodyError"), true);
   assertEquals(routerSource.includes("invalidRequestBodyResponse("), true);
@@ -77,6 +77,16 @@ Deno.test("tripwire: the router answers an invalid body before the generic error
       routerSource.indexOf("getSafeErrorResponse("),
     true,
   );
+  // The refusal must leave a log row, so the recorder runs before the 400 is
+  // answered, and the row carries the route the rate-limit refusal uses.
+  assertEquals(routerSource.includes("recordInvalidBody()"), true);
+  assertEquals(
+    routerSource.lastIndexOf("recordInvalidBody()") <
+      routerSource.lastIndexOf("invalidRequestBodyResponse(req, rateLimit, rateLimitConfig)"),
+    true,
+  );
+  // The transpiler reflows object literals, so any whitespace between the fields is accepted.
+  assertEquals(/code: ["']INVALID_REQUEST["'],\s*status: 400/.test(routerSource), true);
 });
 
 Deno.test("tripwire: the router never reads a request body with .json()", () => {
