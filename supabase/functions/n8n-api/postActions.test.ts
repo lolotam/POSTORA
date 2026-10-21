@@ -561,6 +561,37 @@ Deno.test("a lock that carries no message of its own is answered with a fallback
   );
 });
 
+Deno.test("a lock whose message is the lock marker itself is answered with a fallback", async () => {
+  const db = new FakeSupabase();
+  db.queue("posts", {
+    data: { id: POST, status: "scheduled", scheduled_at: "2026-10-22T12:00:00.000Z" },
+    error: null,
+  });
+  // The marker arrived in the message instead of the DETAIL: it is an internal
+  // token, so it is a lock all the same, but it never reaches the caller.
+  db.queue("posts", {
+    data: null,
+    error: {
+      message: "TIKTOK_REVIEW_POST_LOCKED",
+      code: "P0001",
+    },
+  });
+  const result = await cancelScheduledPost(depsFor(db, noNetwork()), USER, {
+    post_id: POST,
+  });
+  assertEquals(result.status, 409);
+  assertEquals(errorCode(result), "POST_LOCKED");
+  assertEquals(
+    (result.body.error as { message: string }).message,
+    "This TikTok post can't be changed right now.",
+  );
+  // The internal marker is nowhere in the answer the caller reads.
+  assertEquals(
+    JSON.stringify(result.body).includes("TIKTOK_REVIEW_POST_LOCKED"),
+    false,
+  );
+});
+
 Deno.test("a cancel with a padded post id queries the trimmed id", async () => {
   const db = new FakeSupabase();
   db.queue("posts", {

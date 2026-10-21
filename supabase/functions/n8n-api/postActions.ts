@@ -419,16 +419,21 @@ function isTikTokPublishLock(
   );
 }
 
-// The answer carries the database's own message, because the same lock marker
-// covers both a post that is mid-publish (transient) and a post that has
-// already gone to TikTok (permanent). Only the trigger knows which one it is,
-// so a fixed wording would tell a caller that a permanent refusal is
-// transient and that a retry is worth it.
+// The answer carries the database's own message when that message is safe to
+// show, because the same lock marker covers both a post that is mid-publish
+// (transient) and a post that has already gone to TikTok (permanent); a message
+// that is empty, carries the marker itself, or trips the sensitive-info check
+// falls back to a fixed wording.
 function tiktokLockMessage(err: { message?: unknown } | null): string {
-  const lockMessage = typeof err?.message === "string" && err.message.trim() !== ""
-    ? err.message.trim()
-    : "This TikTok post can't be changed right now.";
-  return lockMessage;
+  const message = typeof err?.message === "string" ? err.message.trim() : "";
+  if (
+    message === "" ||
+    message.includes(TIKTOK_PUBLISH_LOCK_DETAIL) ||
+    containsSensitiveInfo(message)
+  ) {
+    return "This TikTok post can't be changed right now.";
+  }
+  return message;
 }
 
 // ── 1. posts/cancel ────────────────────────────────────────────────────────────
