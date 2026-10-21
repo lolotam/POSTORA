@@ -5,17 +5,24 @@
 // was granted at the consent screen, and a tool the token was not granted is
 // refused before it runs.
 //
-// comments:write and messages:write are advertised in the authorization
-// server metadata, but no token can be granted them yet: the consent screen
-// that could show them ships after the frontend freeze. Over OAuth those four
-// tools therefore answer 403 until then. NOT_YET_GRANTABLE_SCOPES names them,
-// so a refusal can tell the caller what to do instead of sending it to a
-// reconnect that cannot produce the scope.
+// comments:write, messages:write, comments:read and messages:read are
+// advertised in the authorization server metadata, but no token can be granted
+// them yet: the consent screen that could show them ships after the frontend
+// freeze. Over OAuth the comment and DM reads answer 403 until then, like the
+// comment and DM writes.
+// NOT_YET_GRANTABLE_SCOPES names them, so a refusal can tell the caller what
+// to do instead of sending it to a reconnect that cannot produce the scope.
+// The set itself lives in ../_shared/mcpScopes.ts, which the mcp-oauth
+// function imports too, so the two deployed functions cannot drift apart.
 //
 // Enforcing scopes on every MCP tool is a separate follow-up. Only the tools
 // listed in NEW_TOOL_SCOPES are gated here; the older tools are not gated in
 // this change, and a tool that is not listed is never refused for a missing
 // scope.
+
+import { NOT_YET_GRANTABLE_SCOPES } from "../_shared/mcpScopes.ts";
+
+export { NOT_YET_GRANTABLE_SCOPES };
 
 /**
  * What the caller is allowed to do.
@@ -42,20 +49,9 @@ export const NEW_TOOL_SCOPES: Readonly<Record<string, string>> = {
   hide_comment: "comments:write",
   delete_comment: "comments:write",
   reply_to_message: "messages:write",
+  list_comments: "comments:read",
+  list_messages: "messages:read",
 };
-
-/**
- * The scopes that are advertised but cannot be granted yet.
- *
- * The authorization server metadata names them, so a client may ask for
- * them, but no token can be granted them until the consent screen that
- * could offer them ships. A refusal that names one of them must not send
- * the caller to reconnect: reconnecting cannot produce the scope.
- */
-export const NOT_YET_GRANTABLE_SCOPES: ReadonlySet<string> = new Set([
-  "comments:write",
-  "messages:write",
-]);
 
 /**
  * The scope the caller is missing for a tool, or null when the call may run.
