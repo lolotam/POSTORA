@@ -33,6 +33,11 @@ export interface PostActionDeps {
    * the production default unless a test asks for a shorter wait.
    */
   bestTimesTimeoutMs?: number;
+  /**
+   * The deadline for one dispatch to the publishing service. It is the
+   * production default unless a test asks for a shorter wait.
+   */
+  retryDispatchTimeoutMs?: number;
 }
 
 export function defaultPostActionDeps(
@@ -1454,6 +1459,525 @@ export async function suggestBestTimes(
   });
 }
 
+// ── 5. posts/retry ────────────────────────────────────────────────────────────
+
+// The lease on the post. Two retries of the same post, or a retry and a
+// delete of the same post, must never both run: two edge invocations share
+// no process and no lock, so a check followed by a write is a check and a
+// write, not one decision. The claim therefore lives in the posts row and is
+// taken by Postgres under a row lock, so the two callers serialize on the row
+// itself. It is a lease and not a lock: a caller that dies leaves a claim
+// that runs out, so a crashed retry cannot block its post forever.
+//
+// PostgREST answers PGRST202 when a function is not in the schema cache: the
+// migration that creates the RPC has not been applied to this database yet.
+// The migrations are applied by the owner separately from the deploys of this
+// function, so the two can be apart for a while. A retry has no path of its
+// own to fall back to -- the whole point of the retry is that the same
+// account is not published twice -- so the answer is a 503 that says the
+// database is not ready for it yet.
+const CLAIM_RPC = "mcp_claim_post_action";
+const RELEASE_RPC = "mcp_release_post_action";
+
+// The deadline for one dispatch to the publishing service. The edge worker
+// that runs this function is killed at roughly 60 s, and this clock only
+// starts once the claim, the reads and the refusals are done, so the budget
+// stays well below that limit: the route has to still be alive to answer its
+// own timeout and to log it.
+const RETRY_DISPATCH_TIMEOUT_MS = 40_000;
+
+// One row of the per-platform result of a post.
+interface PlatformPostResult {
+  id: string;
+  platform: string | null;
+  social_account_id: string | null;
+  status: string | null;
+  error_message: string | null;
+}
+
+// A failed result that is published again.
+interface RetryTarget {
+  accountId: string;
+  platform: string;
+}
+
+// A failed result that is NOT published again, and why.
+interface RetrySkip {
+  account_id: string | null;
+  platform: string | null;
+  reason: string;
+}
+
+// Which failed results are published again.
+//
+// Only a failed result is a candidate: a result that succeeded went out, and
+// a result that is pending is going out now. A failed result of an account
+// that already carries a success or a pending result is not published again
+// either: the post went out on that account, and publishing it a second time
+// is the one thing a retry must never do.
+//
+// Every candidate that is left alone is reported with its reason, so the
+// caller learns what was not touched instead of reading a short list and
+// guessing.
+function pickRetryTargets(
+  rows: PlatformPostResult[],
+): { targets: RetryTarget[]; skipped: RetrySkip[] } {
+  // The accounts that already carry a live result for this post.
+  const published = new Set<string>();
+  for (const row of rows) {
+    if (!row.social_account_id) continue;
+    if (row.status === "success" || row.status === "pending") {
+      published.add(row.social_account_id);
+    }
+  }
+
+  const targets: RetryTarget[] = [];
+  const skipped: RetrySkip[] = [];
+  const claimed = new Set<string>();
+  for (const row of rows) {
+    // Only a failed result is a candidate for a retry.
+    if (row.status !== "failed") continue;
+    const accountId = row.social_account_id;
+    if (!accountId) {
+      skipped.push({
+        account_id: null,
+        platform: row.platform,
+        reason:
+          "The failed result names no social account, so there is nothing to publish to.",
+      });
+      continue;
+    }
+    if (published.has(accountId)) {
+      skipped.push({
+        account_id: accountId,
+        platform: row.platform,
+        reason:
+          "This account already published this post (or is publishing it now), so it is not published again.",
+      });
+      continue;
+    }
+    if (!row.platform) {
+      // A result without a platform cannot be published to: the publishing
+      // service picks the accounts by platform, so it would publish to the
+      // other platforms of the post instead.
+      skipped.push({
+        account_id: accountId,
+        platform: null,
+        reason:
+          "The failed result names no platform, so it cannot be published again.",
+      });
+      continue;
+    }
+    // One account is published once, however many failed rows it carries.
+    if (claimed.has(accountId)) continue;
+    claimed.add(accountId);
+    targets.push({ accountId, platform: row.platform });
+  }
+  return { targets, skipped };
+}
+
+// The per-platform results of one post, read through the owner of the post.
+// The service role is not the boundary, so the ownership is part of the query
+// and not of the caller's trust: the rows of another user's post are not read
+// at all.
+async function readPlatformPostResults(
+  deps: PostActionDeps,
+  route: string,
+  request: { postId: string; userId: string },
+): Promise<PlatformPostResult[] | ActionResult> {
+  const { data, error: readError } = await deps.supabase
+    .from("platform_posts")
+    .select("id, platform, social_account_id, status, error_message, posts!inner(user_id)")
+    .eq("post_id", request.postId)
+    .eq("posts.user_id", request.userId);
+
+  if (readError) {
+    console.error(
+      `[n8n-api] ${route}: reading the results of post ${request.postId} failed: ${readError.message}`,
+    );
+    return error(500, "INTERNAL_ERROR", "Reading the post results failed. Please try again.");
+  }
+  return (data ?? []) as PlatformPostResult[];
+}
+
+// The claim is given back when the action is over, so the next call is not
+// told the post is busy for the rest of the lease.
+//
+// A release that does not land is logged and changes nothing: the claim is a
+// lease, so it runs out on its own, and a failed release costs the caller a
+// wait and never a wrong publish.
+async function releasePostActionClaim(
+  deps: PostActionDeps,
+  route: string,
+  request: { userId: string; postId: string; claimId: string },
+): Promise<void> {
+  const { error: releaseError } = await deps.supabase.rpc(RELEASE_RPC, {
+    p_user_id: request.userId,
+    p_post_id: request.postId,
+    p_claim_id: request.claimId,
+  });
+  if (releaseError) {
+    console.error(
+      `[n8n-api] ${route}: releasing the claim on post ${request.postId} failed: ${releaseError.message}`,
+    );
+  }
+}
+
+// What the publishing service answered.
+type RetryDispatch =
+  | { kind: "published" }
+  | { kind: "pending" }
+  | { kind: "failed"; message: string; details?: Record<string, unknown> };
+
+// The retry is published by the publishing service, not here: this route
+// decides WHICH results are published again and hands exactly those accounts
+// over. The service role is used because the publishing service is an
+// internal call, and it is the same call the create route makes.
+async function dispatchRetry(
+  deps: PostActionDeps,
+  route: string,
+  request: { postId: string; targets: RetryTarget[] },
+): Promise<RetryDispatch> {
+  const platforms = [
+    ...new Set(request.targets.map((target) => target.platform)),
+  ];
+  const accountIds = [
+    ...new Set(request.targets.map((target) => target.accountId)),
+  ];
+  const timeoutMs = deps.retryDispatchTimeoutMs ?? RETRY_DISPATCH_TIMEOUT_MS;
+
+  let response: Response;
+  try {
+    response = await fetchWithTimeout(
+      `${deps.supabaseUrl}/functions/v1/process-post`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${deps.serviceRoleKey}`,
+        },
+        body: JSON.stringify({
+          post_id: request.postId,
+          platforms,
+          account_ids: accountIds,
+          // expected_scheduled_at is deliberately not sent: it makes the
+          // publishing service compare the row's scheduled_at with the one
+          // the caller saw, and a finished post has no scheduled instant to
+          // compare. Leaving it out keeps the unconditional transition the
+          // service has always had for a retry.
+        }),
+      },
+      timeoutMs,
+      deps.fetcher,
+    );
+  } catch (thrown) {
+    const message = thrown instanceof Error ? thrown.message : String(thrown);
+    if (message === "Request timed out") {
+      console.error(
+        `[n8n-api] ${route}: the publishing service did not answer within ${timeoutMs / 1000}s for post ${request.postId}`,
+      );
+      return { kind: "pending" };
+    }
+    console.error(
+      `[n8n-api] ${route}: the publishing service could not be reached for post ${request.postId}`,
+    );
+    return { kind: "pending" };
+  }
+
+  if (!response.ok) {
+    console.error(
+      `[n8n-api] ${route}: the publishing service answered ${response.status} for post ${request.postId}`,
+    );
+    // The service refused the publish: it did not accept the work, so
+    // nothing was published and the claim is given back.
+    if (
+      response.status === 401 ||
+      response.status === 403 ||
+      response.status === 404
+    ) {
+      return {
+        kind: "failed",
+        message: "The publishing service refused the retry. Try again later.",
+      };
+    }
+    const reason = await readUpstreamReason(response);
+    return {
+      kind: "failed",
+      message: "Retrying the post failed. Try again later.",
+      ...(reason ? { details: { reason } } : {}),
+    };
+  }
+
+  return { kind: "published" };
+}
+
+// A credential never reaches the caller. The reason the publishing service
+// gave is only shown when it is safe to show it: a body that carries the
+// shape of a token or an internal database detail is dropped and the fixed
+// wording is used instead.
+const BEARER_RE = /bearer\s+[A-Za-z0-9._-]+/i;
+const JWT_RE = /eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/;
+
+async function readUpstreamReason(response: Response): Promise<string | null> {
+  let text = "";
+  try {
+    text = await response.text();
+  } catch {
+    return null;
+  }
+  const trimmed = text.trim();
+  if (trimmed.length === 0) return null;
+
+  // The body of a failure is usually an envelope with a message in it: the
+  // message is what the caller can act on, and the envelope around it is not.
+  let reason = trimmed;
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    if (typeof parsed === "object" && parsed !== null) {
+      const envelope = parsed as { error?: unknown; message?: unknown };
+      const candidate = typeof envelope.error === "string"
+        ? envelope.error
+        : typeof envelope.message === "string"
+        ? envelope.message
+        : null;
+      if (candidate !== null) reason = candidate;
+    }
+  } catch {
+    // A body that is not JSON is used as it is.
+  }
+
+  const safe = reason.trim();
+  if (safe.length === 0) return null;
+  if (containsSensitiveInfo(safe)) return null;
+  if (BEARER_RE.test(safe) || JWT_RE.test(safe)) return null;
+  return safe.slice(0, 200);
+}
+
+// The failed rows the retry replaced are removed, and the rows the publish
+// wrote are read back.
+//
+// The rows are read through the owner join, so the new row of a retried
+// account can be told apart from the failed row it replaces: a row that was
+// not there before the publish is new.
+//
+// The delete is scoped to the post and to the ids that were read. Every one of
+// those ids belongs to the caller's own post -- the claim proved the post is
+// the caller's and the read joined the owner -- so a row of another post can
+// never be in the list and the delete cannot reach one.
+async function clearReplacedResults(
+  deps: PostActionDeps,
+  route: string,
+  request: {
+    postId: string;
+    userId: string;
+    oldRows: PlatformPostResult[];
+    targets: RetryTarget[];
+  },
+): Promise<PlatformPostResult[] | null> {
+  const after = await readPlatformPostResults(deps, route, {
+    postId: request.postId,
+    userId: request.userId,
+  });
+  // A failed read is not an empty result: the caller is told that the results
+  // are not known, and the rows that were replaced are left in place.
+  if (isActionResult(after)) return null;
+
+  const oldIds = new Set(request.oldRows.map((row) => row.id));
+  const targetAccounts = new Set(request.targets.map((target) => target.accountId));
+
+  // The rows the publish wrote: a new row for one of the retried accounts.
+  const newRows = after.filter((row) =>
+    row.social_account_id !== null &&
+    targetAccounts.has(row.social_account_id) &&
+    !oldIds.has(row.id)
+  );
+
+  // The failed rows of an account that has a new row are replaced by it: they
+  // are the failure the retry just fixed, and leaving them behind would show
+  // the post as failed and published at the same time.
+  const replacedIds: string[] = [];
+  for (const target of request.targets) {
+    const republished = newRows.some((row) =>
+      row.social_account_id === target.accountId
+    );
+    if (!republished) continue;
+    for (const row of request.oldRows) {
+      if (row.social_account_id !== target.accountId) continue;
+      if (row.status !== "failed") continue;
+      if (replacedIds.includes(row.id)) continue;
+      replacedIds.push(row.id);
+    }
+  }
+
+  if (replacedIds.length > 0) {
+    const { error: deleteError } = await deps.supabase
+      .from("platform_posts")
+      .delete()
+      .eq("post_id", request.postId)
+      .in("id", replacedIds);
+    if (deleteError) {
+      console.error(
+        `[n8n-api] ${route}: deleting the replaced results of post ${request.postId} failed: ${deleteError.message}`,
+      );
+    }
+  }
+
+  return newRows;
+}
+
+export async function retryFailedPost(
+  deps: PostActionDeps,
+  userId: string,
+  body: unknown,
+): Promise<ActionResult> {
+  const route = "posts/retry";
+  const postId = requirePostId(body);
+  if (typeof postId !== "string") {
+    return await refuse(deps, route, { userId }, postId);
+  }
+
+  // The claim comes before every read and every write: the post is worked on
+  // under a lease, so two retries of the same post cannot both run.
+  const { data: claim, error: claimError } = await deps.supabase.rpc(CLAIM_RPC, {
+    p_user_id: userId,
+    p_post_id: postId,
+    p_action: "retry",
+  });
+
+  if (claimError) {
+    if (isMissingRpc(claimError)) {
+      // The function is not in the schema cache: the migration that creates
+      // it has not been applied to this database yet. That is an outage and
+      // not a refusal -- the caller's request is fine, the database is not
+      // ready for it -- so it is not recorded as a refusal.
+      console.error(
+        `[n8n-api] ${route}: ${CLAIM_RPC} is not in the database yet, so a post cannot be retried`,
+      );
+      return error(
+        503,
+        "FEATURE_NOT_READY",
+        "Retrying a post needs a database update that has not been applied yet.",
+      );
+    }
+    console.error(
+      `[n8n-api] ${route}: claiming post ${postId} failed: ${claimError.message}`,
+    );
+    return error(500, "INTERNAL_ERROR", "Retrying the post failed. Please try again.");
+  }
+
+  const outcome = (claim ?? {}) as {
+    outcome?: unknown;
+    claim_id?: unknown;
+    status?: unknown;
+  };
+  const claimId = outcome.claim_id;
+
+  if (outcome.outcome === "not_found") {
+    return await refuse(deps, route, { userId, postId }, NOT_FOUND);
+  }
+  if (outcome.outcome === "busy") {
+    return await refuse(
+      deps,
+      route,
+      { userId, postId },
+      error(
+        409,
+        "POST_BUSY",
+        "Another action is running on this post. Try again in a few minutes.",
+      ),
+    );
+  }
+  if (outcome.outcome === "bad_status") {
+    return await refuse(
+      deps,
+      route,
+      { userId, postId },
+      error(
+        409,
+        "POST_NOT_RETRYABLE",
+        "Only a post that finished publishing (completed or failed) can be retried.",
+        { status: typeof outcome.status === "string" ? outcome.status : null },
+      ),
+    );
+  }
+  if (
+    outcome.outcome !== "claimed" ||
+    typeof claimId !== "string" ||
+    claimId.length === 0
+  ) {
+    // The database answered something this route does not know: a failed read
+    // and not a claim, so nothing was claimed and nothing is released.
+    console.error(
+      `[n8n-api] ${route}: the database answered an unknown claim outcome for post ${postId}`,
+    );
+    return error(500, "INTERNAL_ERROR", "Retrying the post failed. Please try again.");
+  }
+
+  const rows = await readPlatformPostResults(deps, route, { postId, userId });
+  if (isActionResult(rows)) {
+    // The claim is given back: the next call is not told the post is busy for
+    // the rest of the lease over a read that never happened.
+    await releasePostActionClaim(deps, route, { userId, postId, claimId });
+    return rows;
+  }
+
+  const { targets, skipped } = pickRetryTargets(rows);
+  if (targets.length === 0) {
+    await releasePostActionClaim(deps, route, { userId, postId, claimId });
+    return await refuse(
+      deps,
+      route,
+      { userId, postId },
+      error(
+        409,
+        "NO_FAILED_PLATFORMS",
+        "This post has no failed platform result left to retry.",
+      ),
+    );
+  }
+
+  const retried = targets.map((target) => ({
+    account_id: target.accountId,
+    platform: target.platform,
+  }));
+
+  const dispatch = await dispatchRetry(deps, route, { postId, targets });
+  if (dispatch.kind === "pending") {
+    // The publish was sent and its answer did not come back in time. The
+    // claim is KEPT on purpose: releasing it would let a second retry take
+    // the post and publish the same accounts again while the first publish
+    // may still be running. The claim is a lease, so it runs out on its own
+    // and the post is free again after it.
+    return ok({ post_id: postId, status: "results_pending", retried }, 202);
+  }
+  if (dispatch.kind === "failed") {
+    // Nothing was published, so the post is free again right away.
+    await releasePostActionClaim(deps, route, { userId, postId, claimId });
+    return error(502, "RETRY_FAILED", dispatch.message, dispatch.details);
+  }
+
+  // The publish was accepted. The failed rows it replaced are removed, and
+  // the rows that came back are the answer.
+  const results = await clearReplacedResults(deps, route, {
+    postId,
+    userId,
+    oldRows: rows,
+    targets,
+  });
+
+  await releasePostActionClaim(deps, route, { userId, postId, claimId });
+
+  return ok({
+    post_id: postId,
+    retried,
+    skipped,
+    // The results are left out when the read behind them failed: an empty
+    // list would read as "the publish produced nothing", and a failed read is
+    // not an empty result.
+    ...(results ? { results } : {}),
+  });
+}
+
 // ── route adapters ─────────────────────────────────────────────────────────────
 
 export const handleCancelScheduledPost = async (
@@ -1485,6 +2009,22 @@ export const handleReschedulePost = async (
     return toResponse(req, await refuse(deps, "posts/reschedule", { userId }, parsed));
   }
   return toResponse(req, await reschedulePost(deps, userId, parsed.body));
+};
+
+export const handleRetryFailedPost = async (
+  req: Request,
+  // deno-lint-ignore no-explicit-any
+  supabase: any,
+  userId: string,
+  readBody: () => Promise<unknown>,
+): Promise<Response> => {
+  const deps = defaultPostActionDeps(supabase);
+  const parsed = await parseBody(readBody);
+  if (isActionResult(parsed)) {
+    // A body that cannot be read is a refusal, so it leaves a durable row too.
+    return toResponse(req, await refuse(deps, "posts/retry", { userId }, parsed));
+  }
+  return toResponse(req, await retryFailedPost(deps, userId, parsed.body));
 };
 
 export const handleSuggestBestTimes = async (

@@ -5,9 +5,11 @@ import {
   computePostingHistogram,
   handleCancelScheduledPost,
   handleReschedulePost,
+  handleRetryFailedPost,
   handleSuggestBestTimes,
   isBestTimeSuggestion,
   reschedulePost,
+  retryFailedPost,
   suggestBestTimes,
   type PostActionDeps,
 } from "./postActions.ts";
@@ -17,12 +19,17 @@ const NOW_ISO = NOW.toISOString();
 const USER = "11111111-1111-4111-8111-111111111111";
 const POST = "22222222-2222-4222-8222-222222222222";
 const ACCOUNT = "33333333-3333-4333-8333-333333333333";
+const ACCOUNT_TWO = "44444444-4444-4444-8444-444444444444";
+const CLAIM = "55555555-5555-4555-8555-555555555555";
 const SERVICE_KEY = "service-role-key";
 const SUPABASE_URL = "https://api.postora.cloud";
 const SCHEDULED_STATUSES = ["scheduled", "pending"];
 // The two database functions the cancel and the reschedule write through.
 const CANCEL_RPC = "mcp_cancel_scheduled_post";
 const RESCHEDULE_RPC = "mcp_reschedule_post";
+// The two database functions the retry takes and gives back its lease through.
+const CLAIM_RPC = "mcp_claim_post_action";
+const RELEASE_RPC = "mcp_release_post_action";
 
 // ── fake Supabase ──────────────────────────────────────────────────────────────
 
@@ -2257,4 +2264,429 @@ Deno.test("a body that cannot be parsed leaves a durable refusal row", async () 
     code: "INVALID_REQUEST",
     status: 400,
   });
+});
+
+// ── posts/retry ───────────────────────────────────────────────────────────────
+
+// A fetcher whose request never comes back: the headers and the body are both
+// late, so only the deadline can end the call. The pending promise is never
+// settled, so the request is still running when the deadline fires.
+function hangingFetcher(): typeof fetch {
+  return (() => new Promise<Response>(() => {})) as unknown as typeof fetch;
+}
+
+// The rows of a post, as they are read: one failed result per account, and
+// the results of the accounts that already went out.
+function platformResult(
+  id: string,
+  platform: string | null,
+  accountId: string | null,
+  status: string,
+): Record<string, unknown> {
+  return {
+    id,
+    platform,
+    social_account_id: accountId,
+    status,
+    error_message: status === "failed" ? "the provider refused the post" : null,
+  };
+}
+
+// The claim that says the post may be retried.
+function claimQueued(db: FakeSupabase, status = "failed"): void {
+  db.queueRpc(CLAIM_RPC, {
+    data: { outcome: "claimed", claim_id: CLAIM, status },
+    error: null,
+  });
+}
+
+Deno.test("a retry with a non-uuid post id is refused before anything is claimed", async () => {
+  const db = new FakeSupabase();
+  const result = await retryFailedPost(depsFor(db, noNetwork()), USER, {
+    post_id: "not-a-uuid",
+  });
+  assertEquals(result.status, 400);
+  assertEquals(errorCode(result), "INVALID_POST_ID");
+  // Nothing is claimed and nothing is published: the refusal only writes its
+  // own row.
+  assertEquals(db.rpcCalls.length, 0);
+  assertEquals(callsFor(db, "system_logs", "insert").length, 1);
+});
+
+Deno.test("a retry whose claim function is not in the database yet is a 503 and publishes nothing", async () => {
+  const db = new FakeSupabase();
+  // The migration that creates the claim has not been applied to this
+  // database yet: PostgREST answers PGRST202.
+  db.queueRpc(CLAIM_RPC, { data: null, error: missingRpcError(CLAIM_RPC) });
+  const { calls, fetcher } = fakeFetcher([]);
+  const logged: string[] = [];
+  const originalError = console.error;
+  console.error = (...args: unknown[]) => {
+    logged.push(args.map(String).join(" "));
+  };
+  try {
+    const result = await retryFailedPost(depsFor(db, fetcher), USER, {
+      post_id: POST,
+    });
+    // An outage is not a refusal: the caller's request is fine, the database
+    // is not ready for it.
+    assertEquals(result.status, 503);
+    assertEquals(errorCode(result), "FEATURE_NOT_READY");
+    assertEquals(
+      (result.body.error as { message: string }).message,
+      "Retrying a post needs a database update that has not been applied yet.",
+    );
+    // Nothing is published: the claim never came, so the publish never goes.
+    assertEquals(calls.length, 0);
+    // The outage leaves a line behind, and not a refusal row: it is not a
+    // decision about the caller's request.
+    assertEquals(logged.length, 1);
+    assertEquals(logged[0].includes("is not in the database yet"), true);
+    assertEquals(callsFor(db, "system_logs", "insert").length, 0);
+  } finally {
+    console.error = originalError;
+  }
+});
+
+Deno.test("a retry of a post that does not exist is a 404 and leaves a durable row", async () => {
+  const db = new FakeSupabase();
+  db.queueRpc(CLAIM_RPC, { data: { outcome: "not_found" }, error: null });
+  const { calls, fetcher } = fakeFetcher([]);
+  const result = await retryFailedPost(depsFor(db, fetcher), USER, {
+    post_id: POST,
+  });
+  assertEquals(result.status, 404);
+  assertEquals(errorCode(result), "POST_NOT_FOUND");
+  // Nothing is published and no claim is given back: there was no claim.
+  assertEquals(calls.length, 0);
+  assertEquals(rpcCallFor(db, RELEASE_RPC), undefined);
+  const rows = callsFor(db, "system_logs", "insert");
+  assertEquals(rows.length, 1);
+  const row = rows[0].payload as Record<string, unknown>;
+  assertEquals(row.message, "posts/retry refused: POST_NOT_FOUND");
+});
+
+Deno.test("a retry of a post another action is working on is a 409", async () => {
+  const db = new FakeSupabase();
+  db.queueRpc(CLAIM_RPC, { data: { outcome: "busy" }, error: null });
+  const { calls, fetcher } = fakeFetcher([]);
+  const result = await retryFailedPost(depsFor(db, fetcher), USER, {
+    post_id: POST,
+  });
+  assertEquals(result.status, 409);
+  assertEquals(errorCode(result), "POST_BUSY");
+  assertEquals(
+    (result.body.error as { message: string }).message,
+    "Another action is running on this post. Try again in a few minutes.",
+  );
+  // Nothing is published and no claim is given back: there was no claim.
+  assertEquals(calls.length, 0);
+  assertEquals(rpcCallFor(db, RELEASE_RPC), undefined);
+  // The refusal leaves a durable row behind.
+  assertEquals(callsFor(db, "system_logs", "insert").length, 1);
+});
+
+Deno.test("a retry of a post that did not finish publishing is a 409 and names its status", async () => {
+  const db = new FakeSupabase();
+  db.queueRpc(CLAIM_RPC, {
+    data: { outcome: "bad_status", status: "scheduled" },
+    error: null,
+  });
+  const { calls, fetcher } = fakeFetcher([]);
+  const result = await retryFailedPost(depsFor(db, fetcher), USER, {
+    post_id: POST,
+  });
+  assertEquals(result.status, 409);
+  assertEquals(errorCode(result), "POST_NOT_RETRYABLE");
+  assertEquals(
+    (result.body.error as { message: string }).message,
+    "Only a post that finished publishing (completed or failed) can be retried.",
+  );
+  assertEquals(
+    (result.body.error as { details: { status: string } }).details.status,
+    "scheduled",
+  );
+  // Nothing is published and no claim is given back: there was no claim.
+  assertEquals(calls.length, 0);
+  assertEquals(rpcCallFor(db, RELEASE_RPC), undefined);
+  // The refusal leaves a durable row behind.
+  assertEquals(callsFor(db, "system_logs", "insert").length, 1);
+});
+
+Deno.test("a post with no failed result left is refused and the claim is given back", async () => {
+  const db = new FakeSupabase();
+  claimQueued(db, "completed");
+  db.queue("platform_posts", {
+    data: [platformResult("row-success", "instagram", ACCOUNT, "success")],
+    error: null,
+  });
+  db.queueRpc(RELEASE_RPC, { data: true, error: null });
+  const { calls, fetcher } = fakeFetcher([]);
+  const result = await retryFailedPost(depsFor(db, fetcher), USER, {
+    post_id: POST,
+  });
+  assertEquals(result.status, 409);
+  assertEquals(errorCode(result), "NO_FAILED_PLATFORMS");
+  // Nothing is published: there is no failed result to publish again.
+  assertEquals(calls.length, 0);
+  // The claim is given back, so the next call is not told the post is busy.
+  assertEquals(rpcCallFor(db, RELEASE_RPC)?.args, {
+    p_user_id: USER,
+    p_post_id: POST,
+    p_claim_id: CLAIM,
+  });
+  // The refusal leaves a durable row behind.
+  assertEquals(callsFor(db, "system_logs", "insert").length, 1);
+});
+
+Deno.test("a failed result of an account that already published is not published again", async () => {
+  const db = new FakeSupabase();
+  claimQueued(db);
+  db.queue("platform_posts", {
+    data: [
+      platformResult("row-failed", "tiktok", ACCOUNT_TWO, "failed"),
+      platformResult("row-published", "tiktok", ACCOUNT_TWO, "success"),
+    ],
+    error: null,
+  });
+  db.queueRpc(RELEASE_RPC, { data: true, error: null });
+  const { calls, fetcher } = fakeFetcher([]);
+  const result = await retryFailedPost(depsFor(db, fetcher), USER, {
+    post_id: POST,
+  });
+  assertEquals(result.status, 409);
+  assertEquals(errorCode(result), "NO_FAILED_PLATFORMS");
+  // The account went out already, so the post is not published a second time.
+  assertEquals(calls.length, 0);
+});
+
+Deno.test("a retry publishes only the failed accounts and clears the rows it replaced", async () => {
+  const db = new FakeSupabase();
+  claimQueued(db);
+  db.queue("platform_posts", {
+    data: [
+      platformResult("row-target", "instagram", ACCOUNT, "failed"),
+      // The account of this failed result already published: it is skipped.
+      platformResult("row-published", "tiktok", ACCOUNT_TWO, "failed"),
+      platformResult("row-published-ok", "tiktok", ACCOUNT_TWO, "success"),
+      // A failed result without an account: there is nothing to publish to.
+      platformResult("row-no-account", "facebook", null, "failed"),
+    ],
+    error: null,
+  });
+  // The rows after the publish: a new row for the retried account.
+  db.queue("platform_posts", {
+    data: [
+      platformResult("row-target", "instagram", ACCOUNT, "failed"),
+      platformResult("row-new", "instagram", ACCOUNT, "success"),
+    ],
+    error: null,
+  });
+  // The delete of the row the publish replaced.
+  db.queue("platform_posts", { data: null, error: null });
+  db.queueRpc(RELEASE_RPC, { data: true, error: null });
+
+  const { calls, fetcher } = fakeFetcher([{ status: 200, body: { success: true } }]);
+  const result = await retryFailedPost(depsFor(db, fetcher), USER, {
+    post_id: POST,
+  });
+
+  assertEquals(result.status, 200);
+  // The publish went to the publishing service with the service role.
+  assertEquals(calls.length, 1);
+  assertEquals(calls[0].url, `${SUPABASE_URL}/functions/v1/process-post`);
+  assertEquals(calls[0].method, "POST");
+  assertEquals(calls[0].headers.Authorization, `Bearer ${SERVICE_KEY}`);
+  const sent = JSON.parse(String(calls[0].body)) as Record<string, unknown>;
+  assertEquals(sent.post_id, POST);
+  // Only the failed account is published again, and only on its platform.
+  assertEquals(sent.platforms, ["instagram"]);
+  assertEquals(sent.account_ids, [ACCOUNT]);
+  // The post finished, it is not scheduled: the publishing service must not
+  // be asked to match a scheduled instant it does not have.
+  assertEquals("expected_scheduled_at" in sent, false);
+
+  // The failed row the publish replaced is removed.
+  const removals = callsFor(db, "platform_posts", "delete");
+  assertEquals(removals.length, 1);
+  assertEquals(hasFilter(removals[0], "eq", "post_id", POST), true);
+  assertEquals(hasInFilter(removals[0], "id", ["row-target"]), true);
+  // The row of the account that already published is left alone.
+  assertEquals(hasInFilter(removals[0], "id", ["row-published"]), false);
+
+  // The claim is given back now that the retry is over.
+  assertEquals(rpcCallFor(db, RELEASE_RPC)?.args, {
+    p_user_id: USER,
+    p_post_id: POST,
+    p_claim_id: CLAIM,
+  });
+
+  // The answer names what was published again and what was left alone.
+  assertEquals(result.body.retried, [{ account_id: ACCOUNT, platform: "instagram" }]);
+  const skipped = result.body.skipped as Array<{
+    account_id: string | null;
+    platform: string | null;
+    reason: string;
+  }>;
+  assertEquals(skipped.length, 2);
+  const publishedSkip = skipped.find((skip) => skip.account_id === ACCOUNT_TWO);
+  assertEquals(publishedSkip !== undefined, true);
+  assertEquals((publishedSkip?.reason ?? "").includes("already published"), true);
+  const noAccountSkip = skipped.find((skip) => skip.account_id === null);
+  assertEquals(noAccountSkip !== undefined, true);
+  assertEquals((noAccountSkip?.reason ?? "").includes("no social account"), true);
+
+  // The new row is the result of the retry.
+  const results = result.body.results as Array<{ id: string; status: string }>;
+  assertEquals(results.length, 1);
+  assertEquals(results[0].id, "row-new");
+  assertEquals(results[0].status, "success");
+});
+
+Deno.test("a publish that does not answer in time is answered 202 and keeps the claim", async () => {
+  const db = new FakeSupabase();
+  claimQueued(db);
+  db.queue("platform_posts", {
+    data: [platformResult("row-target", "instagram", ACCOUNT, "failed")],
+    error: null,
+  });
+  const logged: string[] = [];
+  const originalError = console.error;
+  console.error = (...args: unknown[]) => {
+    logged.push(args.map(String).join(" "));
+  };
+  try {
+    const result = await retryFailedPost(
+      { ...depsFor(db, hangingFetcher()), retryDispatchTimeoutMs: 20 },
+      USER,
+      { post_id: POST },
+    );
+    // The publish was sent; its answer did not come back in time.
+    assertEquals(result.status, 202);
+    assertEquals(result.body.status, "results_pending");
+    assertEquals(result.body.retried, [{
+      account_id: ACCOUNT,
+      platform: "instagram",
+    }]);
+    // The claim is KEPT: releasing it would let a second retry take the post
+    // and publish the same account again while the first publish may still be
+    // running. The lease runs out on its own.
+    assertEquals(rpcCallFor(db, RELEASE_RPC), undefined);
+    assertEquals(logged.length, 1);
+    assertEquals(logged[0].includes("did not answer"), true);
+  } finally {
+    console.error = originalError;
+  }
+});
+
+Deno.test("a publishing service that cannot be reached is answered 202 and keeps the claim", async () => {
+  const db = new FakeSupabase();
+  claimQueued(db);
+  db.queue("platform_posts", {
+    data: [platformResult("row-target", "instagram", ACCOUNT, "failed")],
+    error: null,
+  });
+  const { fetcher } = fakeFetcher([{ reject: new Error("connection refused") }]);
+  const logged: string[] = [];
+  const originalError = console.error;
+  console.error = (...args: unknown[]) => {
+    logged.push(args.map(String).join(" "));
+  };
+  try {
+    const result = await retryFailedPost(depsFor(db, fetcher), USER, {
+      post_id: POST,
+    });
+    assertEquals(result.status, 202);
+    assertEquals(result.body.status, "results_pending");
+    // The claim is kept for the same reason as on a timeout.
+    assertEquals(rpcCallFor(db, RELEASE_RPC), undefined);
+    assertEquals(logged.length, 1);
+    assertEquals(logged[0].includes("could not be reached"), true);
+  } finally {
+    console.error = originalError;
+  }
+});
+
+Deno.test("a publishing service that refuses the publish is a 502 and the claim is given back", async () => {
+  const db = new FakeSupabase();
+  claimQueued(db);
+  db.queue("platform_posts", {
+    data: [platformResult("row-target", "instagram", ACCOUNT, "failed")],
+    error: null,
+  });
+  db.queueRpc(RELEASE_RPC, { data: true, error: null });
+  const { fetcher } = fakeFetcher([
+    { status: 403, body: { error: "Forbidden" } },
+  ]);
+  const logged: string[] = [];
+  const originalError = console.error;
+  console.error = (...args: unknown[]) => {
+    logged.push(args.map(String).join(" "));
+  };
+  try {
+    const result = await retryFailedPost(depsFor(db, fetcher), USER, {
+      post_id: POST,
+    });
+    assertEquals(result.status, 502);
+    assertEquals(errorCode(result), "RETRY_FAILED");
+    // Nothing was published, so the post is free again right away.
+    assertEquals(rpcCallFor(db, RELEASE_RPC)?.args, {
+      p_user_id: USER,
+      p_post_id: POST,
+      p_claim_id: CLAIM,
+    });
+    assertEquals(logged.length, 1);
+    assertEquals(logged[0].includes("answered 403"), true);
+  } finally {
+    console.error = originalError;
+  }
+});
+
+Deno.test("a publishing service that fails is a 502 with a reason that carries no credential", async () => {
+  const db = new FakeSupabase();
+  claimQueued(db);
+  db.queue("platform_posts", {
+    data: [platformResult("row-target", "instagram", ACCOUNT, "failed")],
+    error: null,
+  });
+  db.queueRpc(RELEASE_RPC, { data: true, error: null });
+  const { fetcher } = fakeFetcher([
+    {
+      status: 500,
+      body: { error: "Instagram refused the media (Bearer secret-token-value)" },
+    },
+  ]);
+  const result = await retryFailedPost(depsFor(db, fetcher), USER, {
+    post_id: POST,
+  });
+  assertEquals(result.status, 502);
+  assertEquals(errorCode(result), "RETRY_FAILED");
+  // The reason is not echoed: it carries the shape of a credential.
+  const details = (result.body.error as { details?: { reason?: string } }).details;
+  assertEquals(details === undefined || details.reason === undefined, true);
+  assertEquals(JSON.stringify(result.body).includes("secret-token-value"), false);
+});
+
+Deno.test("a retry whose body cannot be parsed is a 400 and never reaches the posts table", async () => {
+  const db = new FakeSupabase();
+  const { result: response, logged } = await withCapturedWarn(() =>
+    handleRetryFailedPost(
+      minimalRequest("/api/v1/posts/retry"),
+      db,
+      USER,
+      MALFORMED_BODY,
+    )
+  );
+  assertEquals(response.status, 400);
+  const body = await response.json() as { error: { code: string; message: string } };
+  assertEquals(body.error.code, "INVALID_REQUEST");
+  assertEquals(body.error.message, "The request body is not valid JSON.");
+  // Nothing is claimed and nothing is published: the refusal only writes its
+  // own row.
+  assertEquals(db.rpcCalls.length, 0);
+  assertEquals(callsFor(db, "system_logs", "insert").length, 1);
+  assertEquals(
+    logged[0],
+    `[n8n-api] posts/retry: INVALID_REQUEST (post unknown, user ${USER})`,
+  );
 });

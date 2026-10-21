@@ -651,6 +651,24 @@ function buildServer(apiKey: string, ownerId: string, grant: ScopeGrant) {
     },
   });
 
+  server.tool("retry_failed_post", {
+    description:
+      "Retry a post that failed to publish on some of its platforms. Only the failed platforms are published again: a platform that already published is never posted a second time. " +
+      "The answer may say 'results_pending', which means the publish was started and the results are not in yet — read them with get_post. Requires confirm: true.",
+    inputSchema: z.object({
+      post_id: z.string().describe("Postora post UUID"),
+      confirm: confirmField,
+    }),
+    handler: async (args) => {
+      const scopeRefusal = await refuseUngranted({ admin }, { userId: ownerId, tool: "retry_failed_post", grant });
+      if (scopeRefusal) return fail(403, scopeRefusal);
+      const refusal = await refuseUnconfirmed({ admin }, { userId: ownerId, tool: "retry_failed_post", confirm: args.confirm });
+      if (refusal) return fail(400, refusal);
+      const r = await callN8n(apiKey, "POST", "/api/v1/posts/retry", { post_id: args.post_id });
+      return r.status >= 400 ? fail(r.status, r.data) : ok(r.data);
+    },
+  });
+
   // ---- Account health ----
   server.tool("check_account_health", {
     description:
