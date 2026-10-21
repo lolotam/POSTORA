@@ -273,6 +273,22 @@ function hasInFilter(
   );
 }
 
+// The limit is recorded as its own filter: ["limit", count].
+function hasLimit(call: RecordedCall | undefined, count: number): boolean {
+  if (!call) return false;
+  return call.filters.some((entry) => entry[0] === "limit" && entry[1] === count);
+}
+
+// The read that was made for one platform.
+function readForPlatform(
+  db: FakeSupabase,
+  platform: string,
+): RecordedCall | undefined {
+  return callsFor(db, "platform_posts", "select").find((call) =>
+    hasFilter(call, "eq", "platform", platform)
+  );
+}
+
 function errorCode(result: { body: Record<string, unknown> }): string {
   return ((result.body.error as { code?: unknown }).code ?? "") as string;
 }
@@ -620,7 +636,7 @@ interface SentSuggestionBody {
 Deno.test("the best-times request carries the platforms and the history", async () => {
   const db = new FakeSupabase();
   db.queue("platform_posts", {
-    data: [{ platform: "instagram", posted_at: "2026-10-04T21:30:00Z" }],
+    data: [{ posted_at: "2026-10-04T21:30:00Z" }],
     error: null,
   });
   const { calls, fetcher } = fakeFetcher([
@@ -638,13 +654,13 @@ Deno.test("the best-times request carries the platforms and the history", async 
   assertEquals(result.body.suggestions, [{ platform: "instagram", day: "Monday" }]);
 
   // The history is the successful per-platform results of the requested
-  // platforms, and the owner is enforced by the join to posts. The platform
-  // comes back with the rows: the history is split by it.
+  // platform, and the owner is enforced by the join to posts. The platform is
+  // a filter of the read, not a column of the answer.
   const read = callsFor(db, "platform_posts", "select")[0];
   assertEquals(hasFilter(read, "eq", "posts.user_id", USER), true);
   assertEquals(hasFilter(read, "eq", "status", "success"), true);
-  assertEquals(hasInFilter(read, "platform", ["instagram"]), true);
-  assertEquals(String(read.payload).includes("platform, posted_at"), true);
+  assertEquals(hasFilter(read, "eq", "platform", "instagram"), true);
+  assertEquals(String(read.payload).includes("posted_at"), true);
   assertEquals(String(read.payload).includes("posts!inner(user_id)"), true);
 
   assertEquals(calls.length, 1);
@@ -662,12 +678,16 @@ Deno.test("the best-times request carries the platforms and the history", async 
 
 Deno.test("each platform is analysed on its own publishing history", async () => {
   const db = new FakeSupabase();
+  // One read per platform, in the order the platforms were asked for.
   db.queue("platform_posts", {
     data: [
-      { platform: "instagram", posted_at: "2026-10-04T21:30:00Z" },
-      { platform: "instagram", posted_at: "2026-10-05T21:30:00Z" },
-      { platform: "tiktok", posted_at: "2026-10-06T12:00:00Z" },
+      { posted_at: "2026-10-04T21:30:00Z" },
+      { posted_at: "2026-10-05T21:30:00Z" },
     ],
+    error: null,
+  });
+  db.queue("platform_posts", {
+    data: [{ posted_at: "2026-10-06T12:00:00Z" }],
     error: null,
   });
   const { calls, fetcher } = fakeFetcher([
@@ -704,10 +724,87 @@ Deno.test("each platform is analysed on its own publishing history", async () =>
   assertEquals(second.user_id, USER);
 });
 
+Deno.test("every platform's history is read on its own, under its own limit", async () => {
+  const db = new FakeSupabase();
+  db.queue("platform_posts", {
+    data: [{ posted_at: "2026-10-04T21:30:00Z" }],
+    error: null,
+  });
+  db.queue("platform_posts", {
+    data: [{ posted_at: "2026-10-06T12:00:00Z" }],
+    error: null,
+  });
+  const { fetcher } = fakeFetcher([
+    { status: 200, body: { suggestions: [{ platform: "instagram", day: "Monday" }] } },
+    { status: 200, body: { suggestions: [{ platform: "tiktok", day: "Tuesday" }] } },
+  ]);
+  const result = await suggestBestTimes(
+    depsFor(db, fetcher),
+    USER,
+    { platforms: ["instagram", "tiktok"] },
+    "UTC",
+  );
+  assertEquals(result.status, 200);
+
+  // One read per platform, each with its own limit: a shared limit would let
+  // the rows of a busy platform push every row of another platform out.
+  const reads = callsFor(db, "platform_posts", "select");
+  assertEquals(reads.length, 2);
+  for (const platform of ["instagram", "tiktok"]) {
+    const read = readForPlatform(db, platform);
+    assertEquals(read !== undefined, true, platform);
+    assertEquals(hasFilter(read, "eq", "posts.user_id", USER), true, platform);
+    assertEquals(hasFilter(read, "eq", "status", "success"), true, platform);
+    assertEquals(hasLimit(read, 500), true, platform);
+  }
+  // No read asks for the platforms together.
+  assertEquals(
+    reads.some((call) => call.filters.some((entry) => entry[0] === "in" && entry[1] === "platform")),
+    false,
+  );
+});
+
+Deno.test("a history read that fails is a 500 and no suggestion is asked for", async () => {
+  const db = new FakeSupabase();
+  db.queue("platform_posts", {
+    data: [{ posted_at: "2026-10-04T21:30:00Z" }],
+    error: null,
+  });
+  db.queue("platform_posts", { data: null, error: { message: "statement timeout" } });
+  const { calls, fetcher } = fakeFetcher([
+    { status: 200, body: { suggestions: [{ platform: "instagram", day: "Monday" }] } },
+    { status: 200, body: { suggestions: [{ platform: "tiktok", day: "Tuesday" }] } },
+  ]);
+  const logged: string[] = [];
+  const originalError = console.error;
+  console.error = (...args: unknown[]) => {
+    logged.push(args.map(String).join(" "));
+  };
+  try {
+    const result = await suggestBestTimes(
+      depsFor(db, fetcher),
+      USER,
+      { platforms: ["instagram", "tiktok"] },
+      null,
+    );
+    assertEquals(result.status, 500);
+    assertEquals(errorCode(result), "INTERNAL_ERROR");
+    // The history of one platform could not be read, so no suggestion is asked
+    // for: an answer built on a half-read history would be a suggestion for a
+    // platform that has none.
+    assertEquals(calls.length, 0);
+    // The fault is logged where it happened.
+    assertEquals(logged.length, 1);
+    assertEquals(logged[0].includes("reading the posting history failed"), true);
+  } finally {
+    console.error = originalError;
+  }
+});
+
 Deno.test("a platform asked for twice is one platform", async () => {
   const db = new FakeSupabase();
   db.queue("platform_posts", {
-    data: [{ platform: "instagram", posted_at: "2026-10-04T21:30:00Z" }],
+    data: [{ posted_at: "2026-10-04T21:30:00Z" }],
     error: null,
   });
   const { calls, fetcher } = fakeFetcher([
@@ -721,6 +818,7 @@ Deno.test("a platform asked for twice is one platform", async () => {
   );
   assertEquals(result.status, 200);
   assertEquals(calls.length, 1);
+  assertEquals(callsFor(db, "platform_posts", "select").length, 1);
   assertEquals(result.body.based_on_posts, { instagram: 1 });
 });
 
@@ -740,10 +838,11 @@ Deno.test("a best-times request for more than six platforms is refused before th
 Deno.test("a platform whose suggestion call fails is the failure that is reported", async () => {
   const db = new FakeSupabase();
   db.queue("platform_posts", {
-    data: [
-      { platform: "instagram", posted_at: "2026-10-04T21:30:00Z" },
-      { platform: "tiktok", posted_at: "2026-10-06T12:00:00Z" },
-    ],
+    data: [{ posted_at: "2026-10-04T21:30:00Z" }],
+    error: null,
+  });
+  db.queue("platform_posts", {
+    data: [{ posted_at: "2026-10-06T12:00:00Z" }],
     error: null,
   });
   const { fetcher } = fakeFetcher([
@@ -763,10 +862,11 @@ Deno.test("a platform whose suggestion call fails is the failure that is reporte
 Deno.test("the first failure in request order is the one that is reported", async () => {
   const db = new FakeSupabase();
   db.queue("platform_posts", {
-    data: [
-      { platform: "instagram", posted_at: "2026-10-04T21:30:00Z" },
-      { platform: "tiktok", posted_at: "2026-10-06T12:00:00Z" },
-    ],
+    data: [{ posted_at: "2026-10-04T21:30:00Z" }],
+    error: null,
+  });
+  db.queue("platform_posts", {
+    data: [{ posted_at: "2026-10-06T12:00:00Z" }],
     error: null,
   });
   // Instagram times out, TikTok refuses. The caller asked for Instagram

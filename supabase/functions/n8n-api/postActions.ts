@@ -642,6 +642,44 @@ async function requestSuggestions(
   return { suggestions: json.suggestions };
 }
 
+// The limit is per platform on purpose. One shared limit across the platforms
+// asked for would let a busy platform push every row of another platform out
+// of the read, and that platform would then be answered with an empty
+// history.
+const HISTORY_LIMIT_PER_PLATFORM = 500;
+
+// The history of one platform, read on its own. The rows are the successful
+// per-platform results, and the owner is enforced by the join to posts, so the
+// read cannot reach another account's rows even though the service role is the
+// one doing the reading.
+async function readPlatformHistory(
+  deps: PostActionDeps,
+  route: string,
+  request: { userId: string; platform: string },
+): Promise<string[] | ActionResult> {
+  const { data, error: readError } = await deps.supabase
+    .from("platform_posts")
+    .select("posted_at, posts!inner(user_id)")
+    .eq("posts.user_id", request.userId)
+    .eq("status", "success")
+    .eq("platform", request.platform)
+    .not("posted_at", "is", null)
+    .order("posted_at", { ascending: false })
+    .limit(HISTORY_LIMIT_PER_PLATFORM);
+
+  if (readError) {
+    console.error(`[n8n-api] ${route}: reading the posting history failed: ${readError.message}`);
+    return error(500, "INTERNAL_ERROR", "Reading the posting history failed. Please try again.");
+  }
+
+  const postedAts: string[] = [];
+  for (const row of ((data ?? []) as Array<{ posted_at: string | null }>)) {
+    if (typeof row.posted_at !== "string") continue;
+    postedAts.push(row.posted_at);
+  }
+  return postedAts;
+}
+
 export async function suggestBestTimes(
   deps: PostActionDeps,
   userId: string,
@@ -663,36 +701,27 @@ export async function suggestBestTimes(
     : "UTC";
 
   // The history is per platform: a suggestion for TikTok must not be shaped by
-  // a LinkedIn-only post, nor by a TikTok publish that failed. The rows are
-  // the successful per-platform results, and the owner is enforced by the join
-  // to posts, so the read cannot reach another account's rows even though the
-  // service role is the one doing the reading.
-  const { data, error: readError } = await deps.supabase
-    .from("platform_posts")
-    .select("platform, posted_at, posts!inner(user_id)")
-    .eq("posts.user_id", userId)
-    .eq("status", "success")
-    .in("platform", platforms)
-    .not("posted_at", "is", null)
-    .order("posted_at", { ascending: false })
-    .limit(500);
+  // a LinkedIn-only post, nor by a TikTok publish that failed. Every platform
+  // is read on its own, under its own limit, so a busy platform cannot push
+  // another platform's rows out of the read. The reads run in parallel: they
+  // are independent, and one platform's history must not wait for another's.
+  const histories = await Promise.all(
+    platforms.map((platform) => readPlatformHistory(deps, route, { userId, platform })),
+  );
 
-  if (readError) {
-    console.error(`[n8n-api] ${route}: reading the posting history failed: ${readError.message}`);
-    return error(500, "INTERNAL_ERROR", "Reading the posting history failed. Please try again.");
-  }
-
-  // The rows are grouped by their own platform before they are counted, so a
-  // platform with no history of its own gets an empty histogram instead of
-  // another platform's posts.
+  // The first history read that failed is the failure that is reported, in the
+  // order the platforms were asked for: the caller asked for these platforms
+  // in this order.
   const postedAtsByPlatform = new Map<string, string[]>();
-  for (const row of ((data ?? []) as Array<{ platform: string | null; posted_at: string | null }>)) {
-    if (typeof row.platform !== "string" || typeof row.posted_at !== "string") continue;
-    const postedAts = postedAtsByPlatform.get(row.platform) ?? [];
-    postedAts.push(row.posted_at);
-    postedAtsByPlatform.set(row.platform, postedAts);
+  for (const [index, platform] of platforms.entries()) {
+    const history = histories[index];
+    if (isActionResult(history)) return history;
+    postedAtsByPlatform.set(platform, history);
   }
 
+  // Each histogram is built from that platform's own history, so a platform
+  // with no history of its own gets an empty histogram instead of another
+  // platform's posts.
   const histograms: Record<string, PostingHistogram> = {};
   for (const platform of platforms) {
     histograms[platform] = computePostingHistogram(
