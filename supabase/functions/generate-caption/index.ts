@@ -8,6 +8,7 @@ import { callAiChain, logAiCall, resolveChatModelConfig, platformChatTiers } fro
 import { validateRequestBody, validationErrorResponse } from "../_shared/validate.ts";
 import { formatSearchResult, resolveSearchTiers, searchWeb } from "../_shared/webSearch.ts";
 import { z } from "npm:zod@3.23.8";
+import { serviceRoleCallerUserId } from "../_shared/auth-helper.ts";
 
 const GenerateCaptionSchema = z.object({
   context: z.string().max(10000).optional(),
@@ -345,11 +346,23 @@ serve(async (req) => {
     // generated client makes tsc recurse past its depth limit (TS2589).
     const routingAdmin = supabaseAdmin as unknown as AiRoutingAdmin;
 
-    const { data: { user }, error: userError } = await supabaseClient.auth.getUser(token);
-
-    if (userError || !user) {
-      console.error('Auth User Error:', userError);
+    let serviceUserId: string | null;
+    try {
+      serviceUserId = await serviceRoleCallerUserId(req);
+    } catch {
       return unauthorizedResponse();
+    }
+    let user: { id: string };
+    if (serviceUserId) {
+      user = { id: serviceUserId };
+    } else {
+      const { data: { user: authUser }, error: userError } = await supabaseClient.auth.getUser(token);
+
+      if (userError || !authUser) {
+        console.error('Auth User Error:', userError);
+        return unauthorizedResponse();
+      }
+      user = authUser;
     }
 
     console.log('User authenticated:', user.id);
