@@ -180,19 +180,37 @@ Return a JSON array of suggestions.`;
 
     const aiSuccess = aiResult.response.ok;
 
-    // Log AI call
-    await logAiCall(supabaseAdmin, 'best_times_suggestion', 'suggest-best-times', userId, aiSuccess, aiResult, {
-      platforms,
-    });
-
     if (!aiSuccess) {
+      // The provider answered with an error, so the call failed. It is logged
+      // on this path because nothing after it runs: the body is read for the
+      // error message and the request ends.
+      await logAiCall(supabaseAdmin, 'best_times_suggestion', 'suggest-best-times', userId, false, aiResult, {
+        platforms,
+      });
       const errorText = await aiResult.response.text();
       console.error('All AI tiers failed for best times:', errorText);
       return errorResponse('AI suggestion failed after all fallbacks. Please try again later.');
     }
 
-    const data = await aiResult.response.json();
-    const rawContent = data.choices?.[0]?.message?.content;
+    // The call is deliberately not logged yet: the log is written after the
+    // answer has been validated, because an answer that cannot be used is a
+    // failed call and not a successful one. A 2xx only says the provider
+    // answered, not that the caller received a suggestion it can schedule.
+    let rawContent: unknown;
+    try {
+      const data = await aiResult.response.json();
+      rawContent = data.choices?.[0]?.message?.content;
+    } catch (error) {
+      // The body could not be read, or is not a shape that can be read: there
+      // is nothing to validate, so the call is recorded as failed and the
+      // error is re-thrown to the handler's catch, which answers the caller
+      // exactly as it did before.
+      await logAiCall(supabaseAdmin, 'best_times_suggestion', 'suggest-best-times', userId, false, aiResult, {
+        platforms,
+        parse_failed: true,
+      });
+      throw error;
+    }
     console.log(`Best times generated using ${aiResult.tierUsed} tier (${aiResult.modelUsed})`);
 
     // Parse JSON from response
@@ -240,6 +258,16 @@ Return a JSON array of suggestions.`;
         suggestions = [];
       }
     }
+
+    // The answer has been read and checked, so the outcome of the call is
+    // known: it succeeded only when a usable suggestion came back. This is
+    // the one place the successful path logs, so every request that made an
+    // AI call records it exactly once.
+    await logAiCall(supabaseAdmin, 'best_times_suggestion', 'suggest-best-times', userId, !parseFailed, aiResult, {
+      platforms,
+      ...(parseFailed ? { parse_failed: true } : {}),
+      ...(droppedInvalid > 0 ? { dropped_invalid: droppedInvalid } : {}),
+    });
 
     console.log('Generated suggestions:', suggestions.length);
 
