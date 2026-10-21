@@ -403,10 +403,10 @@ function isValidTimeZone(timeZone: string): boolean {
   }
 }
 
-// The database refuses a write to a TikTok review post that is being published
-// right now: the trigger raises P0001 with the DETAIL 'TIKTOK_REVIEW_POST_LOCKED'.
-// That is a decision, not a fault, so it is answered with a 409 and not with a
-// 500. PostgREST carries the DETAIL in `details`; the other two places are read
+// The database refuses a write to a TikTok review post that is locked: the
+// trigger raises P0001 with the DETAIL 'TIKTOK_REVIEW_POST_LOCKED'. That is a
+// decision, not a fault, so it is answered with a 409 and not with a 500.
+// PostgREST carries the DETAIL in `details`; the other two places are read
 // as well, because the same text can arrive in any of them.
 const TIKTOK_PUBLISH_LOCK_DETAIL = "TIKTOK_REVIEW_POST_LOCKED";
 
@@ -417,6 +417,18 @@ function isTikTokPublishLock(
   return [err.details, err.detail, err.message].some((value) =>
     typeof value === "string" && value.includes(TIKTOK_PUBLISH_LOCK_DETAIL)
   );
+}
+
+// The answer carries the database's own message, because the same lock marker
+// covers both a post that is mid-publish (transient) and a post that has
+// already gone to TikTok (permanent). Only the trigger knows which one it is,
+// so a fixed wording would tell a caller that a permanent refusal is
+// transient and that a retry is worth it.
+function tiktokLockMessage(err: { message?: unknown } | null): string {
+  const lockMessage = typeof err?.message === "string" && err.message.trim() !== ""
+    ? err.message.trim()
+    : "This TikTok post can't be changed right now.";
+  return lockMessage;
 }
 
 // ── 1. posts/cancel ────────────────────────────────────────────────────────────
@@ -478,8 +490,8 @@ async function cancelScheduledRow(
     .select("id");
 
   if (deleteError) {
-    // The post is mid-publish: the database refused the delete on purpose, so
-    // the caller is told to come back later instead of being handed a fault.
+    // The database refused the delete on purpose, so the caller is told what
+    // the database said instead of being handed a fault.
     if (isTikTokPublishLock(deleteError)) {
       console.warn(
         `[n8n-api] ${route}: post ${request.postId} is locked by a TikTok publish and cannot be changed`,
@@ -487,7 +499,7 @@ async function cancelScheduledRow(
       return error(
         409,
         "POST_LOCKED",
-        "This TikTok post is being published right now and can't be changed. Try again in a few minutes.",
+        tiktokLockMessage(deleteError),
       );
     }
     console.error(
@@ -685,8 +697,8 @@ async function rescheduleRow(
     .select("id, status, scheduled_at");
 
   if (updateError) {
-    // The post is mid-publish: the database refused the update on purpose, so
-    // the caller is told to come back later instead of being handed a fault.
+    // The database refused the update on purpose, so the caller is told what
+    // the database said instead of being handed a fault.
     if (isTikTokPublishLock(updateError)) {
       console.warn(
         `[n8n-api] ${route}: post ${request.postId} is locked by a TikTok publish and cannot be changed`,
@@ -694,7 +706,7 @@ async function rescheduleRow(
       return error(
         409,
         "POST_LOCKED",
-        "This TikTok post is being published right now and can't be changed. Try again in a few minutes.",
+        tiktokLockMessage(updateError),
       );
     }
     console.error(

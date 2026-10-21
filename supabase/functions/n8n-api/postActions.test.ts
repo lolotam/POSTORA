@@ -496,10 +496,12 @@ Deno.test("a cancel of a post that is being published to TikTok is a 409, not a 
   });
   // The database refused the delete on purpose: the trigger raises P0001 with
   // the DETAIL 'TIKTOK_REVIEW_POST_LOCKED' while the post is mid-publish.
+  const triggerMessage =
+    "This TikTok post is being published right now and can't be deleted. Try again in a few minutes.";
   db.queue("posts", {
     data: null,
     error: {
-      message: "This TikTok post is being published right now and can't be deleted.",
+      message: triggerMessage,
       code: "P0001",
       details: "TIKTOK_REVIEW_POST_LOCKED",
     },
@@ -507,12 +509,16 @@ Deno.test("a cancel of a post that is being published to TikTok is a 409, not a 
   const { result, logged } = await withCapturedWarn(() =>
     cancelScheduledPost(depsFor(db, noNetwork()), USER, { post_id: POST })
   );
-  // A lock is a decision, not a fault: the caller is told to come back later.
+  // A lock is a decision, not a fault: the caller is told what the database
+  // said about it.
   assertEquals(result.status, 409);
   assertEquals(errorCode(result), "POST_LOCKED");
+  // The answer carries the database's own message: the same lock marker covers
+  // a transient refusal and a permanent one, and only the trigger knows which
+  // one it is.
   assertEquals(
     (result.body.error as { message: string }).message,
-    "This TikTok post is being published right now and can't be changed. Try again in a few minutes.",
+    triggerMessage,
   );
   // The refusal leaves a durable row behind: a lock nobody watched still has
   // to leave a trace.
@@ -524,6 +530,34 @@ Deno.test("a cancel of a post that is being published to TikTok is a 409, not a 
   assertEquals(
     logged.some((line) => line.includes("posts/cancel") && line.includes(POST)),
     true,
+  );
+});
+
+Deno.test("a lock that carries no message of its own is answered with a fallback", async () => {
+  const db = new FakeSupabase();
+  db.queue("posts", {
+    data: { id: POST, status: "scheduled", scheduled_at: "2026-10-22T12:00:00.000Z" },
+    error: null,
+  });
+  // The lock marker is there, but the database sent no message of its own: the
+  // answer still says something, and it does not claim that the refusal is
+  // transient.
+  db.queue("posts", {
+    data: null,
+    error: {
+      message: "",
+      code: "P0001",
+      details: "TIKTOK_REVIEW_POST_LOCKED",
+    },
+  });
+  const result = await cancelScheduledPost(depsFor(db, noNetwork()), USER, {
+    post_id: POST,
+  });
+  assertEquals(result.status, 409);
+  assertEquals(errorCode(result), "POST_LOCKED");
+  assertEquals(
+    (result.body.error as { message: string }).message,
+    "This TikTok post can't be changed right now.",
   );
 });
 
@@ -731,11 +765,14 @@ Deno.test("a reschedule of a post that is being published to TikTok is a 409, no
     error: null,
   });
   // The database refused the update on purpose: the trigger raises P0001 with
-  // the DETAIL 'TIKTOK_REVIEW_POST_LOCKED' while the post is mid-publish.
+  // the DETAIL 'TIKTOK_REVIEW_POST_LOCKED'. The post has already gone to
+  // TikTok, so this refusal is permanent and not a retry in a few minutes.
+  const triggerMessage =
+    "This TikTok post has already gone to TikTok, so its time, account and content can't change. To post again, start a new draft in TikTok review.";
   db.queue("posts", {
     data: null,
     error: {
-      message: "This TikTok post has already gone to TikTok, so its time, account and content can't change.",
+      message: triggerMessage,
       code: "P0001",
       details: "TIKTOK_REVIEW_POST_LOCKED",
     },
@@ -746,12 +783,15 @@ Deno.test("a reschedule of a post that is being published to TikTok is a 409, no
       scheduled_at: "2026-12-01T10:00:00Z",
     })
   );
-  // A lock is a decision, not a fault: the caller is told to come back later.
+  // A lock is a decision, not a fault: the caller is told what the database
+  // said about it.
   assertEquals(result.status, 409);
   assertEquals(errorCode(result), "POST_LOCKED");
+  // The answer carries the database's own message: a permanent refusal is not
+  // dressed up as a transient one.
   assertEquals(
     (result.body.error as { message: string }).message,
-    "This TikTok post is being published right now and can't be changed. Try again in a few minutes.",
+    triggerMessage,
   );
   // The refusal leaves a durable row behind: a lock nobody watched still has
   // to leave a trace.
