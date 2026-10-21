@@ -2045,9 +2045,10 @@ function logAccountAccessDenied(scope: string, accountId: string, callerId: stri
 
 async function handleMessageReply(req: Request, supabase: any, userId: string, body: any) {
   const accountId = typeof body?.social_account_id === 'string' ? body.social_account_id : '';
-  const recipientId = typeof body?.recipient_id === 'string'
-    ? body.recipient_id
-    : typeof body?.recipient_phone === 'string' ? body.recipient_phone : '';
+  // A blank recipient is a client error, not a failed send; the phone is used when the id is blank.
+  const rawRecipientId = typeof body?.recipient_id === 'string' ? body.recipient_id.trim() : '';
+  const rawRecipientPhone = typeof body?.recipient_phone === 'string' ? body.recipient_phone.trim() : '';
+  const recipientId = rawRecipientId || rawRecipientPhone;
   const message = typeof body?.message === 'string' ? body.message : '';
   const messageType = body?.message_type || 'text';
 
