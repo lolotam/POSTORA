@@ -126,7 +126,7 @@ export const TOOL_POLICIES: Readonly<Record<string, ToolPolicy>> = {
   },
   hide_comment: {
     kind: "interaction",
-    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+    annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
   },
   reply_to_message: {
     kind: "interaction",
@@ -158,7 +158,7 @@ export const TOOL_POLICIES: Readonly<Record<string, ToolPolicy>> = {
   },
   reschedule_post: {
     kind: "write",
-    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
   },
   generate_caption: {
     kind: "ai",
@@ -189,20 +189,26 @@ const MODE_KINDS: Record<ConnectionMode, ReadonlySet<ToolKind>> = {
 /**
  * The mode a request path names, or null when it names no mode.
  *
- * The path is matched on its last segments only, because the edge function is
- * mounted under a prefix the caller does not choose (`/functions/v1/mcp`).
- * One trailing slash is accepted. The match is on whole segments: `/mcp/reader`
- * and `/xmcp` name no mode, and a deeper path under an endpoint (`/mcp/read/x`)
- * names no mode either.
+ * The match is exact: after the known mount prefix the path has to be an
+ * endpoint path and nothing more. The edge function is called either directly
+ * under `/functions/v1` or through the gateway, which has already removed that
+ * prefix, so the prefix is stripped before the comparison (the same way the
+ * mcp-oauth router strips its own). One trailing slash is accepted.
+ *
+ * A nested path names no mode: `/mcp/read/mcp` and `/functions/v1/mcp/read/mcp`
+ * are not an endpoint, and neither are `/mcp/reader` and `/xmcp`.
  */
 export function modeFromPath(pathname: string): ConnectionMode | null {
   const path = pathname.endsWith("/") ? pathname.slice(0, -1) : pathname;
 
-  // The endpoint paths are whole segments: "/mcp/read" does not end with
-  // "/mcp", so checking each of them is enough to keep "/mcp/reader" and
-  // "/mcp/read/x" out.
+  // The mount prefix is the only thing that may come before an endpoint
+  // path, so it is removed and what is left has to be an endpoint exactly.
+  const mounted = path.startsWith("/functions/v1/")
+    ? path.slice("/functions/v1".length)
+    : path;
+
   for (const endpoint of Object.keys(MCP_ENDPOINTS) as McpEndpoint[]) {
-    if (path.endsWith(MCP_ENDPOINTS[endpoint])) return endpoint;
+    if (MCP_ENDPOINTS[endpoint] === mounted) return endpoint;
   }
   return null;
 }

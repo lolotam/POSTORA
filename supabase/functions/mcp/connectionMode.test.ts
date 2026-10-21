@@ -30,6 +30,12 @@ Deno.test("each request path names its connection, or none", () => {
     ["/mcp/reader", null],
     ["/xmcp", null],
     ["/mcp/read/x", null],
+    ["/functions/v1/mcp/read", "read"],
+    ["/functions/v1/mcp/inbox/", "inbox"],
+    ["/mcp/read/mcp", null],
+    ["/functions/v1/mcp/read/mcp", null],
+    ["/x/mcp/inbox", null],
+    ["/v1/mcp", null],
     ["/", null],
     ["", null],
   ];
@@ -147,6 +153,18 @@ Deno.test("a tool that is not a read is never marked read-only", () => {
     if (policy.kind === "read" || policy.kind === "untrusted_read") continue;
 
     assertEquals(policy.annotations.readOnlyHint, false, tool);
+  }
+});
+
+Deno.test("a tool that changes existing state is marked destructive", () => {
+  for (const tool of [
+    "delete_comment",
+    "delete_webhook",
+    "cancel_scheduled_post",
+    "hide_comment",
+    "reschedule_post",
+  ]) {
+    assertEquals(TOOL_POLICIES[tool].annotations.destructiveHint, true, tool);
   }
 });
 
