@@ -904,6 +904,113 @@ Deno.test("a scope that can be granted is still answered with a reconnect", asyn
 // a call that was refused behind the API leaves the same trace a call
 // refused here would have left.
 
+Deno.test("a forwarded refusal is recorded under the code the error envelope carries", async () => {
+  resetRefusalThrottleForTests();
+  const { admin, inserts } = createFakeAdmin();
+
+  // The API answers a refusal with its error envelope: { success: false,
+  // error: { code, message } } (see apiError in ../n8n-api/index.ts).
+  await recordForwardedRefusal(
+    { admin },
+    {
+      userId: OWNER_ID,
+      tool: "get_media",
+      status: 404,
+      data: { success: false, error: { code: "MEDIA_NOT_FOUND", message: "x" } },
+    },
+  );
+
+  // One row, naming the tool and the code and nothing else.
+  assertEquals(inserts.length, 1);
+  assertEquals(inserts[0].table, "system_logs");
+  assertEquals(inserts[0].row.user_id, OWNER_ID);
+  assertEquals(inserts[0].row.metadata as Record<string, unknown>, {
+    tool: "get_media",
+    code: "MEDIA_NOT_FOUND",
+  });
+});
+
+Deno.test("a forwarded refusal is recorded under the code of the envelope, not under the status", async () => {
+  resetRefusalThrottleForTests();
+  const { admin, inserts } = createFakeAdmin();
+
+  // A comment action the platform refused: a 422 carrying its own code.
+  await recordForwardedRefusal(
+    { admin },
+    {
+      userId: OWNER_ID,
+      tool: "reply_to_comment",
+      status: 422,
+      data: { success: false, error: { code: "COMMENT_ACTION_FAILED", message: "x" } },
+    },
+  );
+
+  assertEquals(inserts.length, 1);
+  assertEquals(inserts[0].row.metadata as Record<string, unknown>, {
+    tool: "reply_to_comment",
+    code: "COMMENT_ACTION_FAILED",
+  });
+});
+
+Deno.test("a forwarded refusal whose envelope code is not shaped like a code is recorded under its status", async () => {
+  resetRefusalThrottleForTests();
+  const { admin, inserts } = createFakeAdmin();
+
+  await recordForwardedRefusal(
+    { admin },
+    {
+      userId: OWNER_ID,
+      tool: "hide_comment",
+      status: 422,
+      data: { success: false, error: { code: "bad code!", message: "x" } },
+    },
+  );
+
+  assertEquals(inserts.length, 1);
+  assertEquals(inserts[0].row.metadata as Record<string, unknown>, {
+    tool: "hide_comment",
+    code: "HTTP_422",
+  });
+});
+
+Deno.test("two forwarded refusals with the same status but different codes write their own rows", async () => {
+  resetRefusalThrottleForTests();
+  const { admin, inserts } = createFakeAdmin();
+  const clock = createClock(1_000_000);
+
+  // Both answers carry a 422, but they are two different refusals: the code
+  // the API named them with is what tells them apart, so they do not share a
+  // throttle key and one of them does not swallow the other.
+  await recordForwardedRefusal(
+    { admin, now: clock.now },
+    {
+      userId: OWNER_ID,
+      tool: "reply_to_comment",
+      status: 422,
+      data: { success: false, error: { code: "COMMENT_ACTION_FAILED", message: "x" } },
+    },
+  );
+  await recordForwardedRefusal(
+    { admin, now: clock.now },
+    {
+      userId: OWNER_ID,
+      tool: "reply_to_comment",
+      status: 422,
+      data: { success: false, error: { code: "COMMENT_NOT_FOUND", message: "x" } },
+    },
+  );
+
+  assertEquals(inserts.length, 2);
+  assertEquals(inserts[0].row.metadata as Record<string, unknown>, {
+    tool: "reply_to_comment",
+    code: "COMMENT_ACTION_FAILED",
+  });
+  assertEquals(inserts[1].row.metadata as Record<string, unknown>, {
+    tool: "reply_to_comment",
+    code: "COMMENT_NOT_FOUND",
+  });
+});
+
 Deno.test("a forwarded 404 is recorded under the code the body carries", async () => {
   resetRefusalThrottleForTests();
   const { admin, inserts } = createFakeAdmin();

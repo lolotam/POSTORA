@@ -268,6 +268,41 @@ export async function recordMcpRefusal(
 const FORWARDED_CODE_RE = /^[A-Z][A-Z0-9_]{0,63}$/;
 
 /**
+ * The code a forwarded answer carries, or null when it carries none.
+ *
+ * The API answers a refusal with its error envelope: `{ success: false,
+ * error: { code, message } }` (see apiError in ../n8n-api/index.ts). So the
+ * code is read from `error.code` first, and a top-level `code` is the
+ * fallback for an answer that carries it there.
+ *
+ * A body is untrusted input, so a code is only taken from it when it is
+ * shaped like a code: an upper-case word of letters, digits and underscores.
+ * Anything else is not a code, and the status names the refusal instead.
+ */
+function forwardedCode(data: unknown): string | null {
+  if (typeof data !== "object" || data === null || Array.isArray(data)) return null;
+
+  const body = data as { error?: unknown; code?: unknown };
+
+  // The envelope the API answers a refusal with: error.code.
+  const envelope = body.error;
+  if (typeof envelope === "object" && envelope !== null && !Array.isArray(envelope)) {
+    const envelopeCode = (envelope as { code?: unknown }).code;
+    if (typeof envelopeCode === "string" && FORWARDED_CODE_RE.test(envelopeCode)) {
+      return envelopeCode;
+    }
+  }
+
+  // The top-level code, for an answer that carries one there.
+  const bodyCode = body.code;
+  if (typeof bodyCode === "string" && FORWARDED_CODE_RE.test(bodyCode)) {
+    return bodyCode;
+  }
+
+  return null;
+}
+
+/**
  * Record a refusal the API answered with a 4xx.
  *
  * Some API routes refuse a call with a 4xx and a body and write no row of
@@ -278,10 +313,13 @@ const FORWARDED_CODE_RE = /^[A-Z][A-Z0-9_]{0,63}$/;
  * Only a 4xx is a refusal. A 2xx is a call that ran, and a 5xx is an
  * outage of the API, not a refused call; neither is recorded here.
  *
- * The code is the one the body carries, when the body carries a code that
- * is shaped like one. Otherwise the status names it. The body itself is
- * never written down and never logged: it may name the account, the
- * comment, the message.
+ * The code is the one the answer carries, in the error envelope the API
+ * answers a refusal with (`{ success: false, error: { code, message } }`,
+ * see apiError in ../n8n-api/index.ts), and a top-level code is the fallback
+ * for an answer that carries one there. When the answer carries no code
+ * that is shaped like one, the status names it. The body itself is never
+ * written down and never logged: it may name the account, the comment, the
+ * message.
  *
  * The recorder never throws: a broken log must not turn a refused call
  * into a broken answer.
@@ -294,11 +332,9 @@ export async function recordForwardedRefusal(
     if (request.status < 400 || request.status > 499) return;
 
     let code = `HTTP_${request.status}`;
-    if (typeof request.data === "object" && request.data !== null && !Array.isArray(request.data)) {
-      const bodyCode = (request.data as { code?: unknown }).code;
-      if (typeof bodyCode === "string" && FORWARDED_CODE_RE.test(bodyCode)) {
-        code = bodyCode;
-      }
+    const forwarded = forwardedCode(request.data);
+    if (forwarded !== null) {
+      code = forwarded;
     }
 
     await recordMcpRefusal(deps, {
