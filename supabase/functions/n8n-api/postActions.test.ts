@@ -25,7 +25,14 @@ const SCHEDULED_STATUSES = ["scheduled", "pending"];
 
 interface FakeResult {
   data: unknown;
-  error: { message: string } | null;
+  // The shape a PostgREST error carries: the SQLSTATE in `code` and the
+  // DETAIL in `details`.
+  error: {
+    message: string;
+    code?: string;
+    details?: string;
+    detail?: string;
+  } | null;
 }
 
 interface RecordedCall {
@@ -481,6 +488,65 @@ Deno.test("a post that changed while it was being cancelled is a 409", async () 
   assertEquals(errorCode(result), "POST_STATE_CHANGED");
 });
 
+Deno.test("a cancel of a post that is being published to TikTok is a 409, not a 500", async () => {
+  const db = new FakeSupabase();
+  db.queue("posts", {
+    data: { id: POST, status: "scheduled", scheduled_at: "2026-10-22T12:00:00.000Z" },
+    error: null,
+  });
+  // The database refused the delete on purpose: the trigger raises P0001 with
+  // the DETAIL 'TIKTOK_REVIEW_POST_LOCKED' while the post is mid-publish.
+  db.queue("posts", {
+    data: null,
+    error: {
+      message: "This TikTok post is being published right now and can't be deleted.",
+      code: "P0001",
+      details: "TIKTOK_REVIEW_POST_LOCKED",
+    },
+  });
+  const { result, logged } = await withCapturedWarn(() =>
+    cancelScheduledPost(depsFor(db, noNetwork()), USER, { post_id: POST })
+  );
+  // A lock is a decision, not a fault: the caller is told to come back later.
+  assertEquals(result.status, 409);
+  assertEquals(errorCode(result), "POST_LOCKED");
+  assertEquals(
+    (result.body.error as { message: string }).message,
+    "This TikTok post is being published right now and can't be changed. Try again in a few minutes.",
+  );
+  // The refusal leaves a durable row behind: a lock nobody watched still has
+  // to leave a trace.
+  const rows = callsFor(db, "system_logs", "insert");
+  assertEquals(rows.length, 1);
+  const row = rows[0].payload as Record<string, unknown>;
+  assertEquals((row.metadata as { code: string }).code, "POST_LOCKED");
+  // The lock leaves a line behind that names the route and the post.
+  assertEquals(
+    logged.some((line) => line.includes("posts/cancel") && line.includes(POST)),
+    true,
+  );
+});
+
+Deno.test("a cancel with a padded post id queries the trimmed id", async () => {
+  const db = new FakeSupabase();
+  db.queue("posts", {
+    data: { id: POST, status: "scheduled", scheduled_at: "2026-10-22T12:00:00.000Z" },
+    error: null,
+  });
+  db.queue("posts", { data: [{ id: POST }], error: null });
+  const result = await cancelScheduledPost(depsFor(db, noNetwork()), USER, {
+    post_id: ` ${POST}\n`,
+  });
+  assertEquals(result.status, 200);
+  // The guard validates a trimmed value, so the trimmed value is the one that
+  // reaches the query: an untrimmed id is not the uuid the row is stored under.
+  const read = callsFor(db, "posts", "select")[0];
+  assertEquals(hasFilter(read, "eq", "id", POST), true);
+  const removal = callsFor(db, "posts", "delete")[0];
+  assertEquals(hasFilter(removal, "eq", "id", POST), true);
+  assertEquals(result.body.post_id, POST);
+});
+
 // ── posts/reschedule ───────────────────────────────────────────────────────────
 
 Deno.test("a reschedule refuses a body that does not name a usable time", async () => {
@@ -651,6 +717,81 @@ Deno.test("a post that carries a TikTok review consent cannot be rescheduled", a
   // The post was not moved: process-post would refuse to publish it at an
   // instant the consent does not cover.
   assertEquals(callsFor(db, "posts", "update").length, 0);
+});
+
+Deno.test("a reschedule of a post that is being published to TikTok is a 409, not a 500", async () => {
+  const db = new FakeSupabase();
+  db.queue("posts", {
+    data: {
+      id: POST,
+      status: "scheduled",
+      scheduled_at: "2026-10-22T12:00:00.000Z",
+      metadata: null,
+    },
+    error: null,
+  });
+  // The database refused the update on purpose: the trigger raises P0001 with
+  // the DETAIL 'TIKTOK_REVIEW_POST_LOCKED' while the post is mid-publish.
+  db.queue("posts", {
+    data: null,
+    error: {
+      message: "This TikTok post has already gone to TikTok, so its time, account and content can't change.",
+      code: "P0001",
+      details: "TIKTOK_REVIEW_POST_LOCKED",
+    },
+  });
+  const { result, logged } = await withCapturedWarn(() =>
+    reschedulePost(depsFor(db, noNetwork()), USER, {
+      post_id: POST,
+      scheduled_at: "2026-12-01T10:00:00Z",
+    })
+  );
+  // A lock is a decision, not a fault: the caller is told to come back later.
+  assertEquals(result.status, 409);
+  assertEquals(errorCode(result), "POST_LOCKED");
+  assertEquals(
+    (result.body.error as { message: string }).message,
+    "This TikTok post is being published right now and can't be changed. Try again in a few minutes.",
+  );
+  // The refusal leaves a durable row behind: a lock nobody watched still has
+  // to leave a trace.
+  const rows = callsFor(db, "system_logs", "insert");
+  assertEquals(rows.length, 1);
+  const row = rows[0].payload as Record<string, unknown>;
+  assertEquals((row.metadata as { code: string }).code, "POST_LOCKED");
+  // The lock leaves a line behind that names the route and the post.
+  assertEquals(
+    logged.some((line) => line.includes("posts/reschedule") && line.includes(POST)),
+    true,
+  );
+});
+
+Deno.test("a reschedule with a padded post id queries the trimmed id", async () => {
+  const db = new FakeSupabase();
+  db.queue("posts", {
+    data: {
+      id: POST,
+      status: "scheduled",
+      scheduled_at: "2026-10-22T12:00:00.000Z",
+      metadata: null,
+    },
+    error: null,
+  });
+  db.queue("posts", {
+    data: [{ id: POST, status: "scheduled", scheduled_at: "2026-12-01T10:00:00.000Z" }],
+    error: null,
+  });
+  const result = await reschedulePost(depsFor(db, noNetwork()), USER, {
+    post_id: ` ${POST}\n`,
+    scheduled_at: "2026-12-01T10:00:00Z",
+  });
+  assertEquals(result.status, 200);
+  // The guard validates a trimmed value, so the trimmed value is the one that
+  // reaches the query: an untrimmed id is not the uuid the row is stored under.
+  const read = callsFor(db, "posts", "select")[0];
+  assertEquals(hasFilter(read, "eq", "id", POST), true);
+  const update = callsFor(db, "posts", "update")[0];
+  assertEquals(hasFilter(update, "eq", "id", POST), true);
 });
 
 // ── accounts/health ────────────────────────────────────────────────────────────

@@ -326,7 +326,9 @@ function requirePostId(body: unknown): string | ActionResult {
   if (!isValidUuid(parsed.data.post_id)) {
     return invalidPostId();
   }
-  return parsed.data.post_id;
+  // The trimmed id is the one that is used: the guard validates a trimmed
+  // value, so the trimmed value is what reaches the query and the log.
+  return parsed.data.post_id.trim();
 }
 
 // The body is read by the handler, not by the router. When the router parsed
@@ -401,6 +403,22 @@ function isValidTimeZone(timeZone: string): boolean {
   }
 }
 
+// The database refuses a write to a TikTok review post that is being published
+// right now: the trigger raises P0001 with the DETAIL 'TIKTOK_REVIEW_POST_LOCKED'.
+// That is a decision, not a fault, so it is answered with a 409 and not with a
+// 500. PostgREST carries the DETAIL in `details`; the other two places are read
+// as well, because the same text can arrive in any of them.
+const TIKTOK_PUBLISH_LOCK_DETAIL = "TIKTOK_REVIEW_POST_LOCKED";
+
+function isTikTokPublishLock(
+  err: { code?: unknown; details?: unknown; detail?: unknown; message?: unknown } | null,
+): boolean {
+  if (!err || err.code !== "P0001") return false;
+  return [err.details, err.detail, err.message].some((value) =>
+    typeof value === "string" && value.includes(TIKTOK_PUBLISH_LOCK_DETAIL)
+  );
+}
+
 // ── 1. posts/cancel ────────────────────────────────────────────────────────────
 
 export async function cancelScheduledPost(
@@ -460,6 +478,18 @@ async function cancelScheduledRow(
     .select("id");
 
   if (deleteError) {
+    // The post is mid-publish: the database refused the delete on purpose, so
+    // the caller is told to come back later instead of being handed a fault.
+    if (isTikTokPublishLock(deleteError)) {
+      console.warn(
+        `[n8n-api] ${route}: post ${request.postId} is locked by a TikTok publish and cannot be changed`,
+      );
+      return error(
+        409,
+        "POST_LOCKED",
+        "This TikTok post is being published right now and can't be changed. Try again in a few minutes.",
+      );
+    }
     console.error(
       `[n8n-api] ${route}: deleting post ${request.postId} failed: ${deleteError.message}`,
     );
@@ -504,10 +534,13 @@ export async function reschedulePost(
   if (!parsed.success) {
     return await refuse(deps, route, { userId }, invalidBody(parsed));
   }
-  const { post_id: postId, scheduled_at: scheduledAt } = parsed.data;
-  if (!isValidUuid(postId)) {
+  const { post_id: rawPostId, scheduled_at: scheduledAt } = parsed.data;
+  if (!isValidUuid(rawPostId)) {
     return await refuse(deps, route, { userId }, invalidPostId());
   }
+  // The trimmed id is the one that is used: the guard validates a trimmed
+  // value, so the trimmed value is what reaches the query and the log.
+  const postId = rawPostId.trim();
   const now = deps.now();
 
   const invalid = await rescheduleRefusal(deps, {
@@ -652,6 +685,18 @@ async function rescheduleRow(
     .select("id, status, scheduled_at");
 
   if (updateError) {
+    // The post is mid-publish: the database refused the update on purpose, so
+    // the caller is told to come back later instead of being handed a fault.
+    if (isTikTokPublishLock(updateError)) {
+      console.warn(
+        `[n8n-api] ${route}: post ${request.postId} is locked by a TikTok publish and cannot be changed`,
+      );
+      return error(
+        409,
+        "POST_LOCKED",
+        "This TikTok post is being published right now and can't be changed. Try again in a few minutes.",
+      );
+    }
     console.error(
       `[n8n-api] ${route}: updating post ${request.postId} failed: ${updateError.message}`,
     );
