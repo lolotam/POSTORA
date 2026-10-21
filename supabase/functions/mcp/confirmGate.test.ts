@@ -7,6 +7,7 @@ import {
   REFUSAL_THROTTLE_MAX_ENTRIES,
   refuseUnconfirmed,
   refuseUngranted,
+  refusalThrottleSizeForTests,
   resetRefusalThrottleForTests,
   type ConfirmRefusal,
   type ScopeRefusal,
@@ -34,6 +35,9 @@ interface FakeAdminOptions {
   failInserts?: number;
   // The number of inserts that fail with a thrown error before one succeeds.
   throwOnInserts?: number;
+  // The first insert stays in flight until the test releases it, so a
+  // second refusal can arrive while the first write is still running.
+  deferFirstInsert?: boolean;
 }
 
 // A fake admin that records every call the gate makes. Nothing here talks to
@@ -44,6 +48,8 @@ function createFakeAdmin(options: FakeAdminOptions = {}) {
   const inserts: { table: string; row: Record<string, unknown> }[] = [];
   let failingInserts = options.failInserts ?? 0;
   let throwingInserts = options.throwOnInserts ?? 0;
+  let deferredInsert: Promise<{ error: { message: string } | null }> | null = null;
+  let releaseDeferred: ((result: { error: { message: string } | null }) => void) | null = null;
 
   const admin = {
     from(table: string): FakeQueryBuilder {
@@ -68,6 +74,15 @@ function createFakeAdmin(options: FakeAdminOptions = {}) {
             throwingInserts -= 1;
             throw new Error("database is down");
           }
+          if (options.deferFirstInsert && deferredInsert === null) {
+            // The write stays in flight until the test releases it.
+            deferredInsert = new Promise<{ error: { message: string } | null }>(
+              (resolve) => {
+                releaseDeferred = resolve;
+              },
+            );
+            return await deferredInsert;
+          }
           if (failingInserts > 0) {
             failingInserts -= 1;
             return { error: { message: "insert failed" } };
@@ -80,7 +95,15 @@ function createFakeAdmin(options: FakeAdminOptions = {}) {
     },
   };
 
-  return { admin, calls, inserts };
+  return {
+    admin,
+    calls,
+    inserts,
+    // Releases the deferred insert with a write that failed.
+    releaseDeferredInsert() {
+      releaseDeferred?.({ error: { message: "insert failed" } });
+    },
+  };
 }
 
 // A clock the test drives, so the refusal throttle can be exercised without
@@ -413,34 +436,95 @@ Deno.test("another owner within the window writes its own row", async () => {
   assertEquals(inserts.length, 2);
 });
 
-Deno.test("the throttle map is bounded and evicts the oldest key", async () => {
+Deno.test("a saturated throttle map does not log a new kind of refusal", async () => {
   resetRefusalThrottleForTests();
   const { admin, inserts } = createFakeAdmin();
   const clock = createClock(1_000_000);
 
-  // More distinct refusals than the map may hold. Every one of them is a
-  // different key, so every one of them writes a row.
-  for (let i = 0; i < REFUSAL_THROTTLE_MAX_ENTRIES + 5; i++) {
+  // The map is filled to its bound with distinct kinds of refusal, all of
+  // them written at T, so every one of them is inside its window.
+  for (let i = 0; i < REFUSAL_THROTTLE_MAX_ENTRIES; i++) {
     await recordMcpRefusal(
       { admin, now: clock.now },
       { userId: OWNER_ID, tool: "delete_comment", code: `CODE_${i}` },
     );
   }
+  assertEquals(inserts.length, REFUSAL_THROTTLE_MAX_ENTRIES);
+  assertEquals(refusalThrottleSizeForTests(), REFUSAL_THROTTLE_MAX_ENTRIES);
 
-  assertEquals(inserts.length, REFUSAL_THROTTLE_MAX_ENTRIES + 5);
+  // (a) A new kind of refusal is not written down: the map is full of
+  // entries whose window is still running, and none of them may be evicted
+  // to make room for it. The map keeps its size.
+  clock.advance(1_000);
+  await recordMcpRefusal(
+    { admin, now: clock.now },
+    { userId: OWNER_ID, tool: "delete_comment", code: "CODE_NEW" },
+  );
+  assertEquals(inserts.length, REFUSAL_THROTTLE_MAX_ENTRIES);
+  assertEquals(refusalThrottleSizeForTests(), REFUSAL_THROTTLE_MAX_ENTRIES);
 
-  // The first key was evicted to make room for the newer ones, so it is not
-  // throttled any more: the same refusal inside the window writes a row
-  // again instead of being skipped.
+  // (b) The first key is still throttled: it was not evicted to make room
+  // for the newer keys, so the window of its own refusal is still running.
   await recordMcpRefusal(
     { admin, now: clock.now },
     { userId: OWNER_ID, tool: "delete_comment", code: "CODE_0" },
   );
+  assertEquals(inserts.length, REFUSAL_THROTTLE_MAX_ENTRIES);
 
-  assertEquals(inserts.length, REFUSAL_THROTTLE_MAX_ENTRIES + 6);
+  // (c) Once the windows have passed, an expired entry is evicted to make
+  // room and the new kind of refusal is written down. The map stays inside
+  // its bound.
+  clock.advance(60_000);
+  await recordMcpRefusal(
+    { admin, now: clock.now },
+    { userId: OWNER_ID, tool: "delete_comment", code: "CODE_NEW" },
+  );
+  assertEquals(inserts.length, REFUSAL_THROTTLE_MAX_ENTRIES + 1);
+  assertEquals(
+    refusalThrottleSizeForTests() <= REFUSAL_THROTTLE_MAX_ENTRIES,
+    true,
+  );
 
   // The map is module state, so the next test starts from a clean slate.
   resetRefusalThrottleForTests();
+});
+
+Deno.test("a refusal that waited for a failed write writes its own row", async () => {
+  resetRefusalThrottleForTests();
+  const { admin, calls, inserts, releaseDeferredInsert } = createFakeAdmin({
+    deferFirstInsert: true,
+  });
+  const clock = createClock(1_000_000);
+
+  // The first refusal starts the write and waits for the database.
+  const first = recordMcpRefusal(
+    { admin, now: clock.now },
+    { userId: OWNER_ID, tool: "delete_comment", code: "CONFIRMATION_REQUIRED" },
+  );
+
+  // The second refusal arrives while that write is still in flight. It
+  // finds the key of the first one, and waits for the write it is
+  // throttled by instead of skipping a row that may never be written.
+  const second = recordMcpRefusal(
+    { admin, now: clock.now },
+    { userId: OWNER_ID, tool: "delete_comment", code: "CONFIRMATION_REQUIRED" },
+  );
+
+  // The write of the first refusal fails, so no row was written for it.
+  releaseDeferredInsert();
+  await first;
+  await second;
+
+  // The second refusal wrote its own row: two insert calls, one row.
+  const insertCalls = calls.filter((call) => call.method === "insert");
+  assertEquals(insertCalls.length, 2);
+  assertEquals(inserts.length, 1);
+  assertEquals(inserts[0].table, "system_logs");
+  assertEquals(inserts[0].row.user_id, OWNER_ID);
+  assertEquals(inserts[0].row.metadata as Record<string, unknown>, {
+    tool: "delete_comment",
+    code: "CONFIRMATION_REQUIRED",
+  });
 });
 
 Deno.test("a refused insert does not throttle the next identical refusal", async () => {

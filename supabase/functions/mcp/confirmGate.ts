@@ -35,6 +35,12 @@
 // throttle bounds the growth of the log, it never hides the first refusal.
 // A row that failed to be written is not throttled either: the throttle
 // remembers what was logged, so a row that never landed is tried again.
+//
+// The map that holds the throttle is bounded as well. When it is full of
+// entries whose window is still running, a NEW kind of refusal is not
+// written down at all: the log is saturated, and losing that row is better
+// than evicting a live entry, which would let the same refusal write a
+// second row inside the minute.
 
 import { z } from "npm:zod@4.1.12";
 import { missingScope, NOT_YET_GRANTABLE_SCOPES, type ScopeGrant } from "./toolScopes.ts";
@@ -74,13 +80,32 @@ const REFUSAL_THROTTLE_WINDOW_MS = 60_000;
 // map past the bound and see that it stays bounded.
 export const REFUSAL_THROTTLE_MAX_ENTRIES = 10_000;
 
-// The last write time per (owner, tool, code). It lives in the isolate, so
+// One throttle entry: when the row was written, and the promise of that
+// write.
+//
+// The promise resolves true when the row landed and false when the insert
+// errored or threw. It never rejects.
+//
+// It is what a refusal that finds a live entry waits for. A refusal must
+// not skip a row that was never written, so the waiter needs to know
+// whether the write it is throttled by landed before it can decide.
+interface RefusalThrottleEntry {
+  at: number;
+  landed: Promise<boolean>;
+}
+
+// The throttle state per (owner, tool, code). It lives in the isolate, so
 // the bound is per isolate: two isolates write their own rows.
 //
 // The map keeps insertion order, and a write moves its key to the end, so
-// the oldest key is the first one the map hands out. The eviction below
-// therefore costs one delete and never scans the map.
-const refusalThrottle = new Map<string, number>();
+// the map is ordered by write time and the oldest entry is the first one
+// the map hands out.
+//
+// An entry whose window has passed may be evicted to make room for a new
+// key. An entry whose window is still running may not: evicting it would
+// let the same refusal write a second row inside the minute, which is
+// exactly what the throttle is there to prevent.
+const refusalThrottle = new Map<string, RefusalThrottleEntry>();
 
 /**
  * Forget every throttled refusal.
@@ -90,6 +115,47 @@ const refusalThrottle = new Map<string, number>();
  */
 export function resetRefusalThrottleForTests(): void {
   refusalThrottle.clear();
+}
+
+/**
+ * The number of entries the throttle map holds.
+ *
+ * It is exported so a test can see that the map stays inside its bound.
+ * Production code never calls this.
+ */
+export function refusalThrottleSizeForTests(): number {
+  return refusalThrottle.size;
+}
+
+/**
+ * Write the row of a refusal.
+ *
+ * The promise it returns resolves true when the row landed and false when
+ * the insert errored or threw. It never rejects: a broken log must not
+ * turn a refused call into a broken answer.
+ */
+async function writeRefusalRow(
+  deps: ConfirmGateDeps,
+  request: { userId: string; tool: string; code: string },
+): Promise<boolean> {
+  try {
+    const { error: insertError } = await deps.admin.from("system_logs").insert({
+      source: "mcp",
+      category: "edge",
+      level: "warn",
+      message: `${request.tool} refused: ${request.code}`,
+      user_id: request.userId,
+      metadata: { tool: request.tool, code: request.code },
+    });
+    if (insertError) {
+      console.error(`[mcp] ${request.tool} refused: log insert failed`);
+      return false;
+    }
+    return true;
+  } catch {
+    console.error(`[mcp] ${request.tool} refused: log insert failed`);
+    return false;
+  }
 }
 
 /**
@@ -112,8 +178,19 @@ export function resetRefusalThrottleForTests(): void {
  * The row is throttled per owner, tool and code: a client that repeats the
  * same refused call gets one row per minute, not one row per call. The
  * skipped row is reported on the edge in one line, without the arguments.
- * The throttle is bounded, so a client that refuses with a different tool or
- * code every time cannot make the map grow without bound either.
+ *
+ * A refusal that arrives while the row of its kind is still being written
+ * waits for that write. If the row landed, the refusal is skipped, and if
+ * it did not, the refusal writes its own row: a refusal is never lost
+ * because the write it was throttled by failed.
+ *
+ * The throttle map is bounded. A key that is not in the map needs room in
+ * it, and an entry whose window has passed is evicted to make it: the map
+ * is ordered by write time, so the expired entries come first and the
+ * eviction costs one delete per new key. When the map is full of entries
+ * whose window is still running, a NEW kind of refusal is not written down
+ * at all: it is better to lose that row than to evict a live entry and let
+ * the same refusal write a second row inside the minute.
  */
 export async function recordMcpRefusal(
   deps: ConfirmGateDeps,
@@ -122,46 +199,65 @@ export async function recordMcpRefusal(
   const nowMs = (deps.now ?? Date.now)();
   const throttleKey = `${request.userId}:${request.tool}:${request.code}`;
 
-  const lastWrite = refusalThrottle.get(throttleKey);
-  if (lastWrite !== undefined && nowMs - lastWrite < REFUSAL_THROTTLE_WINDOW_MS) {
-    console.warn(
-      `[mcp] ${request.tool} refused: ${request.code} (repeat within 60s, not logged again)`,
-    );
-    return;
+  const existing = refusalThrottle.get(throttleKey);
+  if (existing !== undefined && nowMs - existing.at < REFUSAL_THROTTLE_WINDOW_MS) {
+    // The window of this kind of refusal is still running, so no second
+    // row may be written for it. Whether the row of the write it is
+    // throttled by landed is not known yet, so wait for it: a refusal
+    // must not skip a row that was never written.
+    const rowLanded = await existing.landed;
+    if (rowLanded) {
+      console.warn(
+        `[mcp] ${request.tool} refused: ${request.code} (repeat within 60s, not logged again)`,
+      );
+      return;
+    }
+    // The row never landed, so this refusal writes its own row below. The
+    // key is already in the map, so the map does not grow and the bound is
+    // not in the way.
+  }
+
+  if (existing === undefined) {
+    // A key that is not in the map needs room in it. The map is bounded
+    // and ordered by write time, so the entries whose window has passed
+    // come first: they are evicted, one delete per new key, until there
+    // is room.
+    while (refusalThrottle.size >= REFUSAL_THROTTLE_MAX_ENTRIES) {
+      const oldestKey = refusalThrottle.keys().next().value;
+      if (oldestKey === undefined) break;
+      const oldest = refusalThrottle.get(oldestKey);
+      if (oldest !== undefined && nowMs - oldest.at < REFUSAL_THROTTLE_WINDOW_MS) {
+        // The oldest entry is still inside its window, and every entry
+        // behind it is live too. The map is full of live entries, so the
+        // refusal is not written down rather than evicting one of them
+        // and letting the same refusal write a second row inside the
+        // minute.
+        console.warn(
+          `[mcp] ${request.tool} refused: ${request.code} (refusal log is saturated, not logged)`,
+        );
+        return;
+      }
+      refusalThrottle.delete(oldestKey);
+    }
   }
 
   // The map holds one entry per refused (owner, tool, code) and is bounded.
-  // A write moves its key to the end of the map, so the oldest key is the
-  // first one the map hands out and the eviction below is O(1): one delete
-  // per overflow, no scan of the whole map.
+  // A write moves its key to the end of the map, so the map stays ordered
+  // by write time and the oldest entry is the first one it hands out.
   refusalThrottle.delete(throttleKey);
-  refusalThrottle.set(throttleKey, nowMs);
-  while (refusalThrottle.size > REFUSAL_THROTTLE_MAX_ENTRIES) {
-    const oldest = refusalThrottle.keys().next().value;
-    if (oldest === undefined) break;
-    refusalThrottle.delete(oldest);
-  }
+  const landed = writeRefusalRow(deps, request);
+  const entry: RefusalThrottleEntry = { at: nowMs, landed };
+  refusalThrottle.set(throttleKey, entry);
 
-  try {
-    const { error: insertError } = await deps.admin.from("system_logs").insert({
-      source: "mcp",
-      category: "edge",
-      level: "warn",
-      message: `${request.tool} refused: ${request.code}`,
-      user_id: request.userId,
-      metadata: { tool: request.tool, code: request.code },
-    });
-    if (insertError) {
-      console.error(`[mcp] ${request.tool} refused: log insert failed`);
-      // The row did not land, so the throttle must not remember it: the
-      // throttle remembers what was written. The key is dropped and the
-      // next identical refusal tries the durable write again.
+  const written = await landed;
+  if (!written) {
+    // The row did not land, so the throttle must not remember it: the
+    // throttle remembers what was written. The entry is dropped, but only
+    // when the map still holds this very entry: a newer write for the same
+    // key has replaced it, and that one must not be dropped with it.
+    if (refusalThrottle.get(throttleKey) === entry) {
       refusalThrottle.delete(throttleKey);
     }
-  } catch {
-    console.error(`[mcp] ${request.tool} refused: log insert failed`);
-    // Same as above: a thrown insert wrote no row either.
-    refusalThrottle.delete(throttleKey);
   }
 }
 
