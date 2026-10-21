@@ -1,5 +1,10 @@
 import { assertEquals } from "jsr:@std/assert@1";
-import { recordApiRefusal, recordRateLimitRefusal, resetRateLimitRefusalThrottleForTests } from "./refusalLog.ts";
+import {
+  RATE_LIMIT_REFUSAL_DEADLINE_MS,
+  recordApiRefusal,
+  recordRateLimitRefusal,
+  resetRateLimitRefusalThrottleForTests,
+} from "./refusalLog.ts";
 
 const USER = "11111111-1111-4111-8111-111111111111";
 const ACCOUNT = "33333333-3333-4333-8333-333333333333";
@@ -40,6 +45,43 @@ class ThrowingSupabase {
         return Promise.reject(new Error("the database is unreachable"));
       },
     };
+  }
+}
+
+// A client that never answers: the database is the thing that is slow, which
+// is exactly the pressure that caused the throttling in the first place. The
+// insert is attempted and then left hanging, the way a hung query behaves,
+// until the test releases it.
+class HangingSupabase {
+  attempts = 0;
+  landed = false;
+  private release: (() => void) | null = null;
+
+  from(_table: string) {
+    const db = this;
+    return {
+      insert(_payload: unknown): Promise<{ data: null; error: null }> {
+        db.attempts += 1;
+        const hung = new Promise<{ data: null; error: null }>((resolve) => {
+          db.release = () => resolve({ data: null, error: null });
+        });
+        hung.then(
+          () => {
+            db.landed = true;
+          },
+          () => {
+            db.landed = true;
+          },
+        );
+        return hung;
+      },
+    };
+  }
+
+  // Lets the hung insert land, the way a slow row eventually does.
+  releaseInsert(): void {
+    this.release?.();
+    this.release = null;
   }
 }
 
@@ -282,4 +324,38 @@ Deno.test("a different route gets its own row inside the same window", async () 
   assertEquals(metadata.route, otherRoute);
   assertEquals(metadata.code, "RATE_LIMIT_EXCEEDED");
   assertEquals(metadata.status, 429);
+});
+
+// The refusal row is the trace; the 429 is the answer. The two cannot be
+// allowed to wait on each other: the database that hangs under the pressure
+// that caused the throttling would otherwise cost the caller its 429, and a
+// caller that gets an edge timeout instead of its refusal cannot tell a
+// throttled request from a broken one.
+
+Deno.test("a refusal row that never lands does not hold the 429 past its deadline", async () => {
+  resetRateLimitRefusalThrottleForTests();
+  const db = new HangingSupabase();
+
+  // The deadline is the documented one: two seconds.
+  assertEquals(RATE_LIMIT_REFUSAL_DEADLINE_MS, 2_000);
+
+  const started = Date.now();
+  const warned = await capturedWarn(() =>
+    recordRateLimitRefusal(db, { userId: USER, route: ROUTE, now: 1_000_000, deadlineMs: 20 })
+  );
+  const elapsed = Date.now() - started;
+
+  // The refusal was answered: the call resolved on its own, well inside the
+  // deadline the caller would otherwise have waited for.
+  assertEquals(elapsed < RATE_LIMIT_REFUSAL_DEADLINE_MS, true);
+  // The insert was attempted once, and it was left to finish on its own
+  // rather than cancelled: a slow row still lands.
+  assertEquals(db.attempts, 1);
+  db.releaseInsert();
+  await new Promise<void>((resolve) => setTimeout(() => resolve(), 0));
+  assertEquals(db.landed, true);
+  // The wait is not silent: one line names the route and the deadline.
+  assertEquals(warned.length, 1);
+  assertEquals(warned[0].includes(ROUTE), true);
+  assertEquals(warned[0].includes("20ms"), true);
 });
