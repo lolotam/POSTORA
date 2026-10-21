@@ -143,6 +143,10 @@ class FakeSupabase {
   take(table: string): FakeResult {
     const list = this.queues.get(table);
     if (!list || list.length === 0) {
+      // A refusal writes its durable row without the test having to queue one:
+      // the row is the record of the refusal, not a result the test reads. A
+      // test that needs the write to fail queues an error for it.
+      if (table === "system_logs") return { data: null, error: null };
       throw new Error(`no queued result for table ${table}`);
     }
     return list.shift() as FakeResult;
@@ -313,14 +317,16 @@ Deno.test("the not-found body is exactly the apiError shape", async () => {
 
 // ── posts/cancel ──────────────────────────────────────────────────────────────
 
-Deno.test("a cancel with a non-uuid post id is refused before the database", async () => {
+Deno.test("a cancel with a non-uuid post id is refused before the post is read", async () => {
   const db = new FakeSupabase();
   const result = await cancelScheduledPost(depsFor(db, noNetwork()), USER, {
     post_id: "not-a-uuid",
   });
   assertEquals(result.status, 400);
   assertEquals(errorCode(result), "INVALID_POST_ID");
-  assertEquals(db.calls.length, 0);
+  // The post is never read or written: the refusal only writes its own row.
+  assertEquals(callsFor(db, "posts").length, 0);
+  assertEquals(callsFor(db, "system_logs", "insert").length, 1);
 });
 
 Deno.test("the cancel read is scoped to the authenticated user", async () => {
@@ -437,7 +443,9 @@ Deno.test("a reschedule refuses a body that does not name a usable time", async 
     const result = await reschedulePost(depsFor(db, noNetwork()), USER, testCase.body);
     assertEquals(result.status, 400, testCase.name);
     assertEquals(errorCode(result), testCase.code, testCase.name);
-    assertEquals(db.calls.length, 0, testCase.name);
+    // The post is never read or written: the refusal only writes its own row.
+    assertEquals(callsFor(db, "posts").length, 0, testCase.name);
+    assertEquals(callsFor(db, "system_logs", "insert").length, 1, testCase.name);
   }
 });
 
@@ -538,7 +546,12 @@ Deno.test("a health check with a non-uuid account id is refused", async () => {
   const result = await checkAccountHealth(depsFor(db, noNetwork()), USER, "not-a-uuid");
   assertEquals(result.status, 400);
   assertEquals(errorCode(result), "INVALID_ACCOUNT_ID");
-  assertEquals(db.calls.length, 0);
+  // The account is never read, and the id the caller sent is not a uuid, so
+  // it is never written down either.
+  assertEquals(callsFor(db, "social_accounts").length, 0);
+  const rows = callsFor(db, "system_logs", "insert");
+  assertEquals(rows.length, 1);
+  assertEquals(JSON.stringify(rows[0].payload).includes("not-a-uuid"), false);
 });
 
 Deno.test("a health check for an account that is not there is a 404", async () => {
@@ -825,7 +838,7 @@ Deno.test("a platform asked for twice is one platform", async () => {
   assertEquals(result.body.based_on_posts, { instagram: 1 });
 });
 
-Deno.test("a best-times request for more than six platforms is refused before the database", async () => {
+Deno.test("a best-times request for more than six platforms is refused before the history is read", async () => {
   const db = new FakeSupabase();
   const result = await suggestBestTimes(
     depsFor(db, noNetwork()),
@@ -835,7 +848,9 @@ Deno.test("a best-times request for more than six platforms is refused before th
   );
   assertEquals(result.status, 400);
   assertEquals(errorCode(result), "INVALID_REQUEST");
-  assertEquals(db.calls.length, 0);
+  // The history is never read: the refusal only writes its own row.
+  assertEquals(callsFor(db, "platform_posts").length, 0);
+  assertEquals(callsFor(db, "system_logs", "insert").length, 1);
 });
 
 Deno.test("a platform whose suggestion call fails is the failure that is reported", async () => {
@@ -1013,8 +1028,8 @@ Deno.test("a timezone the runtime does not know falls back to UTC", async () => 
 // The router used to parse the body before the handler ran, so a malformed or
 // truncated body threw out of the route and was answered with a generic 500
 // that carried no rate-limit headers. The handler reads the body itself now,
-// and a body that cannot be parsed is a stable 400 that never touches the
-// database.
+// and a body that cannot be parsed is a stable 400 that never reaches a
+// business table: the only thing it writes is its own refusal row.
 const MALFORMED_BODY = () => Promise.reject(new SyntaxError("Unexpected end of JSON input"));
 
 function minimalRequest(path: string): Request {
@@ -1039,7 +1054,7 @@ async function withCapturedWarn<T>(
   }
 }
 
-Deno.test("a cancel whose body cannot be parsed is a 400 and never reaches the database", async () => {
+Deno.test("a cancel whose body cannot be parsed is a 400 and never reaches the posts table", async () => {
   const db = new FakeSupabase();
   const { result: response, logged } = await withCapturedWarn(() =>
     handleCancelScheduledPost(
@@ -1053,16 +1068,18 @@ Deno.test("a cancel whose body cannot be parsed is a 400 and never reaches the d
   const body = await response.json() as { error: { code: string; message: string } };
   assertEquals(body.error.code, "INVALID_REQUEST");
   assertEquals(body.error.message, "The request body is not valid JSON.");
-  assertEquals(db.calls.length, 0);
+  // The post is never read or written: the refusal only writes its own row.
+  assertEquals(callsFor(db, "posts").length, 0);
+  assertEquals(callsFor(db, "system_logs", "insert").length, 1);
   // The refusal leaves a line behind, ids only: never the body itself.
   assertEquals(logged.length, 1);
   assertEquals(
     logged[0],
-    `[n8n-api] posts/cancel: request body could not be parsed (user ${USER})`,
+    `[n8n-api] posts/cancel: INVALID_REQUEST (post unknown, user ${USER})`,
   );
 });
 
-Deno.test("a reschedule whose body cannot be parsed is a 400 and never reaches the database", async () => {
+Deno.test("a reschedule whose body cannot be parsed is a 400 and never reaches the posts table", async () => {
   const db = new FakeSupabase();
   const { result: response, logged } = await withCapturedWarn(() =>
     handleReschedulePost(
@@ -1076,15 +1093,16 @@ Deno.test("a reschedule whose body cannot be parsed is a 400 and never reaches t
   const body = await response.json() as { error: { code: string; message: string } };
   assertEquals(body.error.code, "INVALID_REQUEST");
   assertEquals(body.error.message, "The request body is not valid JSON.");
-  assertEquals(db.calls.length, 0);
+  assertEquals(callsFor(db, "posts").length, 0);
+  assertEquals(callsFor(db, "system_logs", "insert").length, 1);
   assertEquals(logged.length, 1);
   assertEquals(
     logged[0],
-    `[n8n-api] posts/reschedule: request body could not be parsed (user ${USER})`,
+    `[n8n-api] posts/reschedule: INVALID_REQUEST (post unknown, user ${USER})`,
   );
 });
 
-Deno.test("a best-times whose body cannot be parsed is a 400 and never reaches the database", async () => {
+Deno.test("a best-times whose body cannot be parsed is a 400 and never reaches the history table", async () => {
   const db = new FakeSupabase();
   const { result: response, logged } = await withCapturedWarn(() =>
     handleSuggestBestTimes(
@@ -1099,10 +1117,104 @@ Deno.test("a best-times whose body cannot be parsed is a 400 and never reaches t
   const body = await response.json() as { error: { code: string; message: string } };
   assertEquals(body.error.code, "INVALID_REQUEST");
   assertEquals(body.error.message, "The request body is not valid JSON.");
-  assertEquals(db.calls.length, 0);
+  assertEquals(callsFor(db, "platform_posts").length, 0);
+  assertEquals(callsFor(db, "system_logs", "insert").length, 1);
   assertEquals(logged.length, 1);
   assertEquals(
     logged[0],
-    `[n8n-api] best-times: request body could not be parsed (user ${USER})`,
+    `[n8n-api] best-times: INVALID_REQUEST (user ${USER})`,
   );
+});
+
+// ── the durable refusal row ────────────────────────────────────────────────────
+
+// A refusal that only prints a line leaves nothing behind once the request is
+// over, and a refusal nobody watched is a refusal nobody can explain later.
+// Every refusal therefore writes one system_logs row: the route, the code, the
+// status and the ids, and nothing the caller sent.
+
+Deno.test("a not-found cancel leaves exactly one durable refusal row", async () => {
+  const db = new FakeSupabase();
+  db.queue("posts", { data: null, error: null });
+  const result = await cancelScheduledPost(depsFor(db, noNetwork()), USER, {
+    post_id: POST,
+  });
+  assertEquals(result.status, 404);
+  assertEquals(errorCode(result), "POST_NOT_FOUND");
+
+  const rows = callsFor(db, "system_logs", "insert");
+  assertEquals(rows.length, 1);
+  const row = rows[0].payload as Record<string, unknown>;
+  assertEquals(row.source, "n8n-api");
+  // The category has to be one the column accepts: system_logs_category_check
+  // rejects anything outside auth, edge, database, token, post, system, ai,
+  // scheduler, webhook, payment and media.
+  assertEquals(row.category, "edge");
+  assertEquals(row.level, "warn");
+  assertEquals(row.message, "posts/cancel refused: POST_NOT_FOUND");
+  assertEquals(row.user_id, USER);
+  assertEquals(row.metadata, {
+    route: "posts/cancel",
+    code: "POST_NOT_FOUND",
+    status: 404,
+    post_id: POST,
+  });
+});
+
+Deno.test("a refusal row that cannot be written still answers the caller", async () => {
+  const db = new FakeSupabase();
+  db.queue("posts", { data: null, error: null });
+  db.queue("system_logs", { data: null, error: { message: "insert failed" } });
+  const logged: string[] = [];
+  const originalError = console.error;
+  console.error = (...args: unknown[]) => {
+    logged.push(args.map(String).join(" "));
+  };
+  try {
+    const result = await cancelScheduledPost(depsFor(db, noNetwork()), USER, {
+      post_id: POST,
+    });
+    // The answer does not change because the log row failed: the refusal is
+    // still a refusal, and it still never throws.
+    assertEquals(result.status, 404);
+    assertEquals(result.body, {
+      success: false,
+      error: { code: "POST_NOT_FOUND", message: "Post not found." },
+    });
+    // The edge log is the only sink left when the database refuses the row.
+    assertEquals(logged.length, 1);
+    assertEquals(
+      logged[0],
+      "[n8n-api] system_logs insert failed while refusing posts/cancel (no durable refusal row): insert failed",
+    );
+  } finally {
+    console.error = originalError;
+  }
+});
+
+Deno.test("a body that cannot be parsed leaves a durable refusal row", async () => {
+  const db = new FakeSupabase();
+  const response = await handleCancelScheduledPost(
+    minimalRequest("/api/v1/posts/cancel"),
+    db,
+    USER,
+    MALFORMED_BODY,
+  );
+  assertEquals(response.status, 400);
+
+  const rows = callsFor(db, "system_logs", "insert");
+  assertEquals(rows.length, 1);
+  const row = rows[0].payload as Record<string, unknown>;
+  assertEquals(row.source, "n8n-api");
+  assertEquals(row.category, "edge");
+  assertEquals(row.level, "warn");
+  assertEquals(row.message, "posts/cancel refused: INVALID_REQUEST");
+  assertEquals(row.user_id, USER);
+  // The body the caller sent is never part of the row: only the route, the
+  // code and the status.
+  assertEquals(row.metadata, {
+    route: "posts/cancel",
+    code: "INVALID_REQUEST",
+    status: 400,
+  });
 });

@@ -4,6 +4,10 @@
 //
 // This function runs with the service role, so RLS is not the boundary: every query and
 // every write on `posts` carries .eq("user_id", userId).
+//
+// A refusal is a decision, not a fault: every route that refuses work writes one
+// system_logs row (route, code, status and ids only) before it answers, so a refusal
+// nobody watched still leaves a trace.
 import { z } from "npm:zod@3.23.8";
 import { validateRequestBody } from "../_shared/validate.ts";
 import { containsSensitiveInfo } from "../_shared/errorSanitizer.ts";
@@ -33,8 +37,15 @@ export function defaultPostActionDeps(
     supabase,
     fetcher: fetch,
     now: () => new Date(),
-    supabaseUrl: Deno.env.get("SUPABASE_URL") ?? "",
-    serviceRoleKey: Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "",
+    // The two secrets are read when they are used, not when the deps are
+    // built: a route that only refuses needs the client alone, and its
+    // refusal row must not depend on the environment being readable.
+    get supabaseUrl() {
+      return Deno.env.get("SUPABASE_URL") ?? "";
+    },
+    get serviceRoleKey() {
+      return Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+    },
   };
 }
 
@@ -107,25 +118,104 @@ function actionErrorCode(result: ActionResult): string {
   return typeof failure?.code === "string" ? failure.code : "ERROR";
 }
 
-// Every refusal leaves a line behind. Ids only: never a token, never a request body.
-function refuse(
+// What a refusal is about: the owner, and the ids that were in play. Nothing
+// else is ever recorded, so an id that the caller made up is not written down.
+interface RefusalSubject {
+  userId: string;
+  postId?: string;
+  accountId?: string;
+}
+
+// The readable half of a refusal: ids and the route. The caller's raw input
+// is never echoed, so an id that is not a uuid never reaches the log.
+function describeSubject(route: string, subject: RefusalSubject): string {
+  const user = `user ${subject.userId}`;
+  if (subject.postId) return `post ${subject.postId}, ${user}`;
+  if (subject.accountId && isValidUuid(subject.accountId)) {
+    return `account ${subject.accountId}, ${user}`;
+  }
+  if (route === "accounts/health") return `account unknown, ${user}`;
+  if (route.startsWith("posts/")) return `post unknown, ${user}`;
+  return user;
+}
+
+// The durable half of a refusal: one system_logs row per refusal, so a
+// refusal nobody watched still leaves a trace (project rule: every early
+// return that refuses work writes a log row). The route, the code, the status
+// and the ids only: never the request body, never a token, never the error
+// text the caller was given.
+async function writeRefusalRow(
+  deps: PostActionDeps,
   route: string,
-  subject: string,
+  subject: RefusalSubject,
   result: ActionResult,
-): ActionResult {
-  console.warn(`[n8n-api] ${route}: ${actionErrorCode(result)} (${subject})`);
+): Promise<void> {
+  const code = actionErrorCode(result);
+  // An account id is recorded only when it is a real uuid.
+  const accountId = subject.accountId && isValidUuid(subject.accountId)
+    ? subject.accountId
+    : undefined;
+  try {
+    const { error: insertError } = await deps.supabase
+      .from("system_logs")
+      .insert({
+        source: "n8n-api",
+        // The category has to be one the column accepts: system_logs_category_check
+        // allows auth, edge, database, token, post, system, ai, scheduler,
+        // webhook, payment and media. An "api" row would be rejected by the
+        // constraint, so the refusal would leave no durable row at all.
+        category: "edge",
+        level: "warn",
+        message: `${route} refused: ${code}`,
+        user_id: subject.userId,
+        metadata: {
+          route,
+          code,
+          status: result.status,
+          ...(subject.postId ? { post_id: subject.postId } : {}),
+          ...(accountId ? { account_id: accountId } : {}),
+        },
+      });
+    if (insertError) {
+      console.error(
+        `[n8n-api] system_logs insert failed while refusing ${route} (no durable refusal row): ${insertError.message}`,
+      );
+    }
+  } catch (thrown) {
+    // A refusal that cannot be recorded is still a refusal: the caller gets
+    // the same answer, and the edge log is the only sink left.
+    const message = thrown instanceof Error ? thrown.message : String(thrown);
+    console.error(
+      `[n8n-api] system_logs insert failed while refusing ${route} (no durable refusal row): ${message}`,
+    );
+  }
+}
+
+// Every refusal leaves a line behind and a row in the database. Ids only:
+// never a token, never a request body.
+async function refuse(
+  deps: PostActionDeps,
+  route: string,
+  subject: RefusalSubject,
+  result: ActionResult,
+): Promise<ActionResult> {
+  console.warn(
+    `[n8n-api] ${route}: ${actionErrorCode(result)} (${describeSubject(route, subject)})`,
+  );
+  await writeRefusalRow(deps, route, subject, result);
   return result;
 }
 
 // A refusal is logged; a server fault is not, because the fault was already logged
 // where it happened.
-function refuseOrFail(
+async function refuseOrFail(
+  deps: PostActionDeps,
   route: string,
-  subject: string,
+  subject: RefusalSubject,
   result: ActionResult,
-): ActionResult {
+): Promise<ActionResult> {
   if (result.status >= 500) return result;
-  return refuse(route, subject, result);
+  return await refuse(deps, route, subject, result);
 }
 
 // One answer for every caller that hands over something that is not a post id,
@@ -189,7 +279,7 @@ async function readOwnedPost(
     console.error(`[n8n-api] ${route}: reading post ${postId} failed: ${readError.message}`);
     return error(500, "INTERNAL_ERROR", "Reading the post failed. Please try again.");
   }
-  if (!data) return refuse(route, `post ${postId}, user ${userId}`, NOT_FOUND);
+  if (!data) return await refuse(deps, route, { userId, postId }, NOT_FOUND);
   return data as PostRow;
 }
 
@@ -229,9 +319,8 @@ export async function cancelScheduledPost(
   const route = "posts/cancel";
   const postId = requirePostId(body);
   if (typeof postId !== "string") {
-    return refuse(route, `post unknown, user ${userId}`, postId);
+    return await refuse(deps, route, { userId }, postId);
   }
-  const subject = `post ${postId}, user ${userId}`;
   const now = deps.now();
 
   const read = await readOwnedPost(deps, route, postId, userId, "id, status, scheduled_at");
@@ -239,9 +328,10 @@ export async function cancelScheduledPost(
   const post = read;
 
   if (!isFutureScheduled(post, now)) {
-    return refuse(
+    return await refuse(
+      deps,
       route,
-      subject,
+      { userId, postId },
       error(
         409,
         "POST_NOT_SCHEDULED",
@@ -252,7 +342,7 @@ export async function cancelScheduledPost(
   }
 
   const refusal = await cancelScheduledRow(deps, route, { postId, userId, now });
-  if (refusal) return refuseOrFail(route, subject, refusal);
+  if (refusal) return await refuseOrFail(deps, route, { userId, postId }, refusal);
 
   return ok({ post_id: postId, cancelled: true });
 }
@@ -317,18 +407,18 @@ export async function reschedulePost(
   const route = "posts/reschedule";
   const parsed = validateRequestBody(RescheduleSchema, body);
   if (!parsed.success) {
-    return refuse(route, `post unknown, user ${userId}`, invalidBody(parsed));
+    return await refuse(deps, route, { userId }, invalidBody(parsed));
   }
   const { post_id: postId, scheduled_at: scheduledAt } = parsed.data;
   if (!isValidUuid(postId)) {
-    return refuse(route, `post unknown, user ${userId}`, invalidPostId());
+    return await refuse(deps, route, { userId }, invalidPostId());
   }
-  const subject = `post ${postId}, user ${userId}`;
   const now = deps.now();
 
-  const invalid = rescheduleRefusal({
+  const invalid = await rescheduleRefusal(deps, {
     route,
-    subject,
+    userId,
+    postId,
     scheduledAt,
     now,
   });
@@ -341,13 +431,14 @@ export async function reschedulePost(
   // The consent of a TikTok review post covers one account and one publish
   // instant, so the post may not be moved from here.
   if (isConsentBoundPost(post)) {
-    return refuse(route, subject, CONSENT_BOUND_POST);
+    return await refuse(deps, route, { userId, postId }, CONSENT_BOUND_POST);
   }
 
   if (!isFutureScheduled(post, now)) {
-    return refuse(
+    return await refuse(
+      deps,
       route,
-      subject,
+      { userId, postId },
       error(
         409,
         "POST_NOT_SCHEDULED",
@@ -364,7 +455,9 @@ export async function reschedulePost(
   };
 
   const updated = await rescheduleRow(deps, route, { postId, userId, payload, now });
-  if (isActionResult(updated)) return refuseOrFail(route, subject, updated);
+  if (isActionResult(updated)) {
+    return await refuseOrFail(deps, route, { userId, postId }, updated);
+  }
 
   return ok({ post: updated.post, previous_scheduled_at: post.scheduled_at });
 }
@@ -398,21 +491,26 @@ function hasRealCalendarDate(value: string): boolean {
 
 // The body of a reschedule is checked before the post is even read: a time that
 // cannot be published is the caller's mistake, not the post's state.
-function rescheduleRefusal(request: {
-  route: string;
-  subject: string;
-  scheduledAt: string;
-  now: Date;
-}): ActionResult | null {
-  const { route, subject, scheduledAt, now } = request;
+async function rescheduleRefusal(
+  deps: PostActionDeps,
+  request: {
+    route: string;
+    userId: string;
+    postId: string;
+    scheduledAt: string;
+    now: Date;
+  },
+): Promise<ActionResult | null> {
+  const { route, userId, postId, scheduledAt, now } = request;
   if (
     !ISO_DATE_TIME_RE.test(scheduledAt) ||
     !Number.isFinite(Date.parse(scheduledAt)) ||
     !hasRealCalendarDate(scheduledAt)
   ) {
-    return refuse(
+    return await refuse(
+      deps,
       route,
-      subject,
+      { userId, postId },
       error(
         400,
         "INVALID_SCHEDULED_AT",
@@ -421,9 +519,10 @@ function rescheduleRefusal(request: {
     );
   }
   if (Date.parse(scheduledAt) <= now.getTime()) {
-    return refuse(
+    return await refuse(
+      deps,
       route,
-      subject,
+      { userId, postId },
       error(400, "SCHEDULED_AT_IN_PAST", "scheduled_at must be in the future."),
     );
   }
@@ -474,16 +573,20 @@ export async function checkAccountHealth(
 ): Promise<ActionResult> {
   const route = "accounts/health";
   if (!accountId) {
-    return refuse(
+    return await refuse(
+      deps,
       route,
-      `account unknown, user ${userId}`,
+      { userId },
       error(400, "INVALID_ACCOUNT_ID", "social_account_id is required."),
     );
   }
   if (!isValidUuid(accountId)) {
-    return refuse(
+    // The id the caller sent is not a uuid, so it is not recorded: only a
+    // real account uuid is written down.
+    return await refuse(
+      deps,
       route,
-      `account <invalid id>, user ${userId}`,
+      { userId },
       error(
         400,
         "INVALID_ACCOUNT_ID",
@@ -491,7 +594,6 @@ export async function checkAccountHealth(
       ),
     );
   }
-  const subject = `account ${accountId}, user ${userId}`;
 
   // Never the tokens: this answer is read by a workflow, not by a person with a
   // permission problem to solve.
@@ -507,9 +609,10 @@ export async function checkAccountHealth(
     return error(500, "INTERNAL_ERROR", "Reading the social account failed. Please try again.");
   }
   if (!data) {
-    return refuse(
+    return await refuse(
+      deps,
       route,
-      subject,
+      { userId, accountId },
       error(
         404,
         "ACCOUNT_NOT_FOUND",
@@ -704,7 +807,7 @@ export async function suggestBestTimes(
   const route = "best-times";
   const parsed = validateRequestBody(BestTimesSchema, body);
   if (!parsed.success) {
-    return refuse(route, `user ${userId}`, invalidBody(parsed));
+    return await refuse(deps, route, { userId }, invalidBody(parsed));
   }
   // The same platform twice is one platform: one history, one AI call. The
   // order the caller asked for is kept, because it is the order the answers
@@ -786,15 +889,13 @@ export const handleCancelScheduledPost = async (
   userId: string,
   readBody: () => Promise<unknown>,
 ): Promise<Response> => {
+  const deps = defaultPostActionDeps(supabase);
   const parsed = await parseBody(readBody);
   if (isActionResult(parsed)) {
-    console.warn(`[n8n-api] posts/cancel: request body could not be parsed (user ${userId})`);
-    return toResponse(req, parsed);
+    // A body that cannot be read is a refusal, so it leaves a durable row too.
+    return toResponse(req, await refuse(deps, "posts/cancel", { userId }, parsed));
   }
-  return toResponse(
-    req,
-    await cancelScheduledPost(defaultPostActionDeps(supabase), userId, parsed.body),
-  );
+  return toResponse(req, await cancelScheduledPost(deps, userId, parsed.body));
 };
 
 export const handleReschedulePost = async (
@@ -804,15 +905,12 @@ export const handleReschedulePost = async (
   userId: string,
   readBody: () => Promise<unknown>,
 ): Promise<Response> => {
+  const deps = defaultPostActionDeps(supabase);
   const parsed = await parseBody(readBody);
   if (isActionResult(parsed)) {
-    console.warn(`[n8n-api] posts/reschedule: request body could not be parsed (user ${userId})`);
-    return toResponse(req, parsed);
+    return toResponse(req, await refuse(deps, "posts/reschedule", { userId }, parsed));
   }
-  return toResponse(
-    req,
-    await reschedulePost(defaultPostActionDeps(supabase), userId, parsed.body),
-  );
+  return toResponse(req, await reschedulePost(deps, userId, parsed.body));
 };
 
 export const handleSuggestBestTimes = async (
@@ -823,19 +921,14 @@ export const handleSuggestBestTimes = async (
   readBody: () => Promise<unknown>,
   preferredTimezone: string | null,
 ): Promise<Response> => {
+  const deps = defaultPostActionDeps(supabase);
   const parsed = await parseBody(readBody);
   if (isActionResult(parsed)) {
-    console.warn(`[n8n-api] best-times: request body could not be parsed (user ${userId})`);
-    return toResponse(req, parsed);
+    return toResponse(req, await refuse(deps, "best-times", { userId }, parsed));
   }
   return toResponse(
     req,
-    await suggestBestTimes(
-      defaultPostActionDeps(supabase),
-      userId,
-      parsed.body,
-      preferredTimezone,
-    ),
+    await suggestBestTimes(deps, userId, parsed.body, preferredTimezone),
   );
 };
 
