@@ -901,6 +901,59 @@ Deno.test("a platform asked for twice is one platform", async () => {
   assertEquals(result.body.based_on_posts, { instagram: 1 });
 });
 
+Deno.test("the same platform spelled three ways is one platform", async () => {
+  const db = new FakeSupabase();
+  db.queue("platform_posts", {
+    data: [{ posted_at: "2026-10-04T21:30:00Z" }],
+    error: null,
+  });
+  const { calls, fetcher } = fakeFetcher([
+    { status: 200, body: { suggestions: [suggestion()] } },
+  ]);
+  const result = await suggestBestTimes(
+    depsFor(db, fetcher),
+    USER,
+    { platforms: ["instagram", "Instagram", " INSTAGRAM "] },
+    null,
+  );
+  assertEquals(result.status, 200);
+
+  // One history read, for the name the rows are actually stored under: the
+  // second read of "Instagram" would have found nothing.
+  const reads = callsFor(db, "platform_posts", "select");
+  assertEquals(reads.length, 1);
+  assertEquals(hasFilter(reads[0], "eq", "platform", "instagram"), true);
+
+  // One AI call, so one platform is billed once.
+  assertEquals(calls.length, 1);
+  const sent = JSON.parse(String(calls[0].body)) as SentSuggestionBody;
+  assertEquals(sent.platforms, ["instagram"]);
+
+  // One count for one platform: two spellings would have answered with two
+  // contradictory counts for the same platform.
+  assertEquals(result.body.based_on_posts, { instagram: 1 });
+  assertEquals(result.body.suggestions, [suggestion()]);
+});
+
+Deno.test("a platform that is not a platform name is refused before the history is read", async () => {
+  const db = new FakeSupabase();
+  const result = await suggestBestTimes(
+    depsFor(db, noNetwork()),
+    USER,
+    { platforms: ["insta gram"] },
+    null,
+  );
+  assertEquals(result.status, 400);
+  assertEquals(errorCode(result), "INVALID_REQUEST");
+  assertEquals(
+    (result.body.error as { message: string }).message,
+    "platforms must be platform names such as instagram or tiktok.",
+  );
+  // The history is never read: the refusal only writes its own row.
+  assertEquals(callsFor(db, "platform_posts").length, 0);
+  assertEquals(callsFor(db, "system_logs", "insert").length, 1);
+});
+
 Deno.test("a best-times request for more than six platforms is refused before the history is read", async () => {
   const db = new FakeSupabase();
   const result = await suggestBestTimes(
@@ -1116,6 +1169,34 @@ Deno.test("a suggestion that does not carry every field is dropped", async () =>
   assertEquals(result.body.suggestions, [suggestion()]);
 });
 
+Deno.test("a suggestion nobody can schedule from is dropped", async () => {
+  const db = new FakeSupabase();
+  db.queue("platform_posts", { data: [], error: null });
+  // A day nobody can schedule on and a time that is not a clock time are not
+  // suggestions, so they are dropped the same way a missing field is.
+  const { fetcher } = fakeFetcher([
+    {
+      status: 200,
+      body: {
+        suggestions: [
+          suggestion(),
+          suggestion({ day: "Funday" }),
+          suggestion({ time: "25:90" }),
+          suggestion({ reason: "   " }),
+        ],
+      },
+    },
+  ]);
+  const result = await suggestBestTimes(
+    depsFor(db, fetcher),
+    USER,
+    { platforms: ["instagram"] },
+    null,
+  );
+  assertEquals(result.status, 200);
+  assertEquals(result.body.suggestions, [suggestion()]);
+});
+
 Deno.test("a suggestion for another platform is dropped", async () => {
   const db = new FakeSupabase();
   db.queue("platform_posts", { data: [], error: null });
@@ -1183,6 +1264,46 @@ Deno.test("a suggestion is only a suggestion when every field is there", () => {
   // Anything that is not an object at all is not a suggestion.
   assertEquals(isBestTimeSuggestion(null), false);
   assertEquals(isBestTimeSuggestion("instagram"), false);
+});
+
+Deno.test("a suggestion whose day is not a weekday is not a suggestion", () => {
+  // A day nobody can schedule on is not a day: the model is asked for a
+  // weekday, and "Funday" is not one.
+  assertEquals(isBestTimeSuggestion({ ...suggestion(), day: "" }), false);
+  assertEquals(isBestTimeSuggestion({ ...suggestion(), day: "Funday" }), false);
+  assertEquals(isBestTimeSuggestion({ ...suggestion(), day: "   " }), false);
+});
+
+Deno.test("a suggestion whose time is not a clock time is not a suggestion", () => {
+  assertEquals(isBestTimeSuggestion({ ...suggestion(), time: "" }), false);
+  assertEquals(isBestTimeSuggestion({ ...suggestion(), time: "25:90" }), false);
+  // The hour of a 12-hour clock never goes past twelve, and the minutes
+  // never past fifty-nine.
+  assertEquals(isBestTimeSuggestion({ ...suggestion(), time: "13:00 PM" }), false);
+  assertEquals(isBestTimeSuggestion({ ...suggestion(), time: "11:60" }), false);
+  assertEquals(isBestTimeSuggestion({ ...suggestion(), time: "noon" }), false);
+});
+
+Deno.test("a suggestion without a reason is not a suggestion", () => {
+  assertEquals(isBestTimeSuggestion({ ...suggestion(), reason: "" }), false);
+  assertEquals(isBestTimeSuggestion({ ...suggestion(), reason: "   " }), false);
+});
+
+Deno.test("a suggestion without a platform is not a suggestion", () => {
+  assertEquals(isBestTimeSuggestion({ ...suggestion(), platform: "" }), false);
+  assertEquals(isBestTimeSuggestion({ ...suggestion(), platform: "   " }), false);
+});
+
+Deno.test("a day and a time written in another spelling are still a suggestion", () => {
+  // The day is a weekday whatever its casing, and the time is a clock time in
+  // either of the two formats a caller writes.
+  assertEquals(
+    isBestTimeSuggestion({ ...suggestion(), day: "monday", time: "11:00 AM" }),
+    true,
+  );
+  assertEquals(isBestTimeSuggestion({ ...suggestion(), time: "18:30" }), true);
+  assertEquals(isBestTimeSuggestion({ ...suggestion(), day: " sunday " }), true);
+  assertEquals(isBestTimeSuggestion({ ...suggestion(), time: "9:05 PM" }), true);
 });
 
 Deno.test("an empty suggestion list from the service is a 200", async () => {

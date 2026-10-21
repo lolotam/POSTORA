@@ -9,6 +9,57 @@ import { timingSafeTokenEqual } from "../_shared/auth-helper.ts";
 // logged against nobody.
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+// The day a suggestion names is a weekday: "Funday" is not a day the caller
+// can schedule on, and an empty one is not a day either. The model's spelling
+// is not trusted, so the day is checked against the seven real ones instead of
+// against a pattern that would accept any word.
+const BEST_TIME_DAYS = [
+  'monday',
+  'tuesday',
+  'wednesday',
+  'thursday',
+  'friday',
+  'saturday',
+  'sunday',
+];
+
+// The time is a wall-clock time in one of the two formats a caller writes: the
+// 12-hour format the model is asked for ("11:00 AM") and the 24-hour format
+// ("18:30"). "25:90" is not a time, and neither is "13:00 PM": the hour of a
+// 12-hour clock never goes past twelve, and the minutes never past fifty-nine.
+const BEST_TIME_12_HOUR_RE = /^(0?[1-9]|1[0-2]):[0-5]\d\s?(AM|PM)$/i;
+const BEST_TIME_24_HOUR_RE = /^([01]?\d|2[0-3]):[0-5]\d$/;
+
+function isBestTimeDay(value: string): boolean {
+  return BEST_TIME_DAYS.includes(value.trim().toLowerCase());
+}
+
+function isBestTimeClock(value: string): boolean {
+  const trimmed = value.trim();
+  return BEST_TIME_12_HOUR_RE.test(trimmed) || BEST_TIME_24_HOUR_RE.test(trimmed);
+}
+
+// A suggestion is only usable when every field the caller schedules from is
+// there and carries a value: the platform, the day, the time, a score between
+// 0 and 100, and the reason. The model is asked for that shape, but the answer
+// is whatever came back, so the shape is checked rather than assumed.
+// The check mirrors isBestTimeSuggestion in ../n8n-api/postActions.ts, which
+// the API applies to the answers this service sends.
+function isWellFormedSuggestion(value: unknown): boolean {
+  if (typeof value !== 'object' || value === null) return false;
+  const item = value as Record<string, unknown>;
+  // A field of the right type is not enough: an empty platform, day, time or
+  // reason carries nothing the caller can schedule from, so it is refused the
+  // same way a missing field is.
+  if (typeof item.platform !== 'string' || item.platform.trim().length === 0) return false;
+  if (typeof item.day !== 'string' || !isBestTimeDay(item.day)) return false;
+  if (typeof item.time !== 'string' || !isBestTimeClock(item.time)) return false;
+  if (typeof item.reason !== 'string' || item.reason.trim().length === 0) return false;
+  return typeof item.score === 'number' &&
+    Number.isFinite(item.score) &&
+    item.score >= 0 && item.score <= 100;
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return handleCorsOptions();
@@ -169,19 +220,7 @@ Return a JSON array of suggestions.`;
           // The model is asked for a fixed shape, but the answer is whatever
           // came back: an item without a day, a time or a score cannot be
           // scheduled, so it is dropped instead of being handed to the caller.
-          // The check mirrors isBestTimeSuggestion in ../n8n-api/postActions.ts,
-          // which the API applies to the answers this service sends.
-          const wellFormed = parsed.filter((value: unknown) => {
-            if (typeof value !== 'object' || value === null) return false;
-            const item = value as Record<string, unknown>;
-            return typeof item.platform === 'string' &&
-              typeof item.day === 'string' &&
-              typeof item.time === 'string' &&
-              typeof item.score === 'number' &&
-              Number.isFinite(item.score) &&
-              item.score >= 0 && item.score <= 100 &&
-              typeof item.reason === 'string';
-          });
+          const wellFormed = parsed.filter((value: unknown) => isWellFormedSuggestion(value));
           droppedInvalid = parsed.length - wellFormed.length;
           if (parsed.length > 0 && wellFormed.length === 0) {
             // A list of items that are not suggestions is an answer that failed

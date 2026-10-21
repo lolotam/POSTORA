@@ -92,10 +92,12 @@ const RescheduleSchema = z.object({
   scheduled_at: z.string(),
 });
 
+// Every platform costs one AI call, so the list is short: six platforms are six
+// suggestions, not one history shared by six.
+const BEST_TIMES_MAX_PLATFORMS = 6;
+
 const BestTimesSchema = z.object({
-  // Every platform costs one AI call, so the list is short: six platforms are six
-  // suggestions, not one history shared by six.
-  platforms: z.array(z.string().min(1).max(50)).min(1).max(6),
+  platforms: z.array(z.string().min(1).max(50)).min(1).max(BEST_TIMES_MAX_PLATFORMS),
 });
 
 const BEST_TIMES_TIMEOUT_MS = 60_000;
@@ -702,21 +704,54 @@ export function computePostingHistogram(
   return { hourCounts, dayCounts, totalPosts };
 }
 
+// The day a suggestion names is a weekday: "Funday" is not a day the caller
+// can schedule on, and an empty one is not a day either. The model's spelling
+// is not trusted, so the day is checked against the seven real ones instead of
+// against a pattern that would accept any word.
+const BEST_TIME_DAYS = [
+  "monday",
+  "tuesday",
+  "wednesday",
+  "thursday",
+  "friday",
+  "saturday",
+  "sunday",
+];
+
+// The time is a wall-clock time in one of the two formats a caller writes: the
+// 12-hour format the model is asked for ("11:00 AM") and the 24-hour format
+// ("18:30"). "25:90" is not a time, and neither is "13:00 PM": the hour of a
+// 12-hour clock never goes past twelve, and the minutes never past fifty-nine.
+const BEST_TIME_12_HOUR_RE = /^(0?[1-9]|1[0-2]):[0-5]\d\s?(AM|PM)$/i;
+const BEST_TIME_24_HOUR_RE = /^([01]?\d|2[0-3]):[0-5]\d$/;
+
+function isBestTimeDay(value: string): boolean {
+  return BEST_TIME_DAYS.includes(value.trim().toLowerCase());
+}
+
+function isBestTimeClock(value: string): boolean {
+  const trimmed = value.trim();
+  return BEST_TIME_12_HOUR_RE.test(trimmed) || BEST_TIME_24_HOUR_RE.test(trimmed);
+}
+
 // A suggestion is only usable when every field the caller schedules from is
-// there: the platform, the day, the time, a score between 0 and 100, and the
-// reason. The model is asked for that shape, but the answer is whatever came
-// back, so the shape is checked rather than assumed.
+// there and carries a value: the platform, the day, the time, a score between
+// 0 and 100, and the reason. The model is asked for that shape, but the answer
+// is whatever came back, so the shape is checked rather than assumed.
 export function isBestTimeSuggestion(value: unknown): boolean {
   if (typeof value !== "object" || value === null) return false;
   const item = value as Record<string, unknown>;
-  return typeof item.platform === "string" &&
-    typeof item.day === "string" &&
-    typeof item.time === "string" &&
-    typeof item.score === "number" &&
+  // A field of the right type is not enough: an empty platform, day, time or
+  // reason carries nothing the caller can schedule from, so it is refused the
+  // same way a missing field is.
+  if (typeof item.platform !== "string" || item.platform.trim().length === 0) return false;
+  if (typeof item.day !== "string" || !isBestTimeDay(item.day)) return false;
+  if (typeof item.time !== "string" || !isBestTimeClock(item.time)) return false;
+  if (typeof item.reason !== "string" || item.reason.trim().length === 0) return false;
+  return typeof item.score === "number" &&
     Number.isFinite(item.score) &&
     item.score >= 0 &&
-    item.score <= 100 &&
-    typeof item.reason === "string";
+    item.score <= 100;
 }
 
 // One platform, one history, one AI call. The suggestion service takes a
@@ -856,6 +891,29 @@ async function readPlatformHistory(
   return postedAts;
 }
 
+// The platform identifiers Postora stores are lowercase words: "instagram",
+// "tiktok". The spelling the caller used is normalized before the platforms
+// are deduplicated and read, so "Instagram" and " instagram " are one platform:
+// one history, one AI call, one entry in based_on_posts. The platform names
+// themselves are not written down here: the platform contract owns them, and a
+// second copy of that list goes stale without anybody noticing.
+const PLATFORM_IDENTIFIER_RE = /^[a-z]+$/;
+
+// The platforms of one request: normalized, then deduplicated. The order the
+// caller asked for is kept, because it is the order the answers come back in.
+// A platform that is not a lowercase word is not a platform at all, so the
+// request is refused rather than answered with a history that is empty by
+// construction and an AI call that is billed for it.
+function normalizePlatforms(platforms: string[]): string[] | null {
+  const names: string[] = [];
+  for (const platform of platforms) {
+    const name = platform.trim().toLowerCase();
+    if (!PLATFORM_IDENTIFIER_RE.test(name)) return null;
+    names.push(name);
+  }
+  return [...new Set(names)];
+}
+
 export async function suggestBestTimes(
   deps: PostActionDeps,
   userId: string,
@@ -868,9 +926,42 @@ export async function suggestBestTimes(
     return await refuse(deps, route, { userId }, invalidBody(parsed));
   }
   // The same platform twice is one platform: one history, one AI call. The
-  // order the caller asked for is kept, because it is the order the answers
-  // come back in.
-  const platforms = [...new Set(parsed.data.platforms)];
+  // platforms are normalized before they are deduplicated, because "Instagram"
+  // and " instagram " are the same platform and the rows are stored under the
+  // lowercase name. Deduplicating the raw spellings would read the history
+  // twice, once for a spelling no row carries, and ask for two AI calls that
+  // answer with contradictory counts for one platform.
+  const platforms = normalizePlatforms(parsed.data.platforms);
+  if (!platforms) {
+    return await refuse(
+      deps,
+      route,
+      { userId },
+      error(
+        400,
+        "INVALID_REQUEST",
+        "platforms must be platform names such as instagram or tiktok.",
+      ),
+    );
+  }
+  // The limit is on the platforms that are read and asked about, so it is
+  // checked on the list that is actually used. The schema caps the raw list
+  // at the same number, and deduplication can only shorten it.
+  if (platforms.length > BEST_TIMES_MAX_PLATFORMS) {
+    return await refuse(
+      deps,
+      route,
+      { userId },
+      invalidBody({
+        details: [
+          {
+            field: "platforms",
+            message: `at most ${BEST_TIMES_MAX_PLATFORMS} platforms`,
+          },
+        ],
+      }),
+    );
+  }
 
   const timeZone = preferredTimezone && isValidTimeZone(preferredTimezone)
     ? preferredTimezone
