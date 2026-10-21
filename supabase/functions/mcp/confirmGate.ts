@@ -23,14 +23,21 @@
 // cover is refused before it runs, and that refusal is recorded like every
 // other one. The scopes themselves live in ./toolScopes.ts.
 //
+// It holds the FORWARDED gate too. Some API routes answer a refused call
+// with a 4xx and a body and write no row of their own, so the tool that
+// forwarded the answer records it here. A refusal that happened behind the
+// API then leaves the same trace a refusal made here would have left.
+//
 // Refusal rows are throttled. An authenticated client can repeat an invalid
 // call forever, and every refusal used to insert a row, so the log grew with
 // the client's patience. At most one row per (owner, tool, code) per minute
 // is written now. The first refusal of each kind is always recorded: the
 // throttle bounds the growth of the log, it never hides the first refusal.
+// A row that failed to be written is not throttled either: the throttle
+// remembers what was logged, so a row that never landed is tried again.
 
 import { z } from "npm:zod@4.1.12";
-import { missingScope, type ScopeGrant } from "./toolScopes.ts";
+import { missingScope, NOT_YET_GRANTABLE_SCOPES, type ScopeGrant } from "./toolScopes.ts";
 
 export const confirmField = z.unknown().optional().describe(
   "Must be the boolean true to run. Confirms you intend this irreversible action.",
@@ -62,10 +69,17 @@ function refusal(): ConfirmRefusal {
 // The throttle on refusal rows. A client that repeats a refused call would
 // otherwise insert one row per call, for as long as it keeps calling.
 const REFUSAL_THROTTLE_WINDOW_MS = 60_000;
-const REFUSAL_THROTTLE_MAX_ENTRIES = 10_000;
+
+// The hard bound on the throttle map. It is exported so a test can fill the
+// map past the bound and see that it stays bounded.
+export const REFUSAL_THROTTLE_MAX_ENTRIES = 10_000;
 
 // The last write time per (owner, tool, code). It lives in the isolate, so
 // the bound is per isolate: two isolates write their own rows.
+//
+// The map keeps insertion order, and a write moves its key to the end, so
+// the oldest key is the first one the map hands out. The eviction below
+// therefore costs one delete and never scans the map.
 const refusalThrottle = new Map<string, number>();
 
 /**
@@ -91,11 +105,15 @@ export function resetRefusalThrottleForTests(): void {
  *
  * A failed insert or a thrown error is reported on the edge and then
  * swallowed: the recorder never throws, and it never lets a broken log turn
- * into a broken answer.
+ * into a broken answer. A row that did not land is not throttled: the
+ * throttle is dropped for that refusal, so the next identical one tries the
+ * durable write again.
  *
  * The row is throttled per owner, tool and code: a client that repeats the
  * same refused call gets one row per minute, not one row per call. The
  * skipped row is reported on the edge in one line, without the arguments.
+ * The throttle is bounded, so a client that refuses with a different tool or
+ * code every time cannot make the map grow without bound either.
  */
 export async function recordMcpRefusal(
   deps: ConfirmGateDeps,
@@ -112,17 +130,17 @@ export async function recordMcpRefusal(
     return;
   }
 
-  // The map holds one entry per refused (owner, tool, code). It is pruned
-  // when it grows past the limit, so a client that refuses with a different
-  // tool or code every time cannot make it grow without bound either.
-  if (refusalThrottle.size > REFUSAL_THROTTLE_MAX_ENTRIES) {
-    for (const [key, writtenAt] of refusalThrottle) {
-      if (nowMs - writtenAt >= REFUSAL_THROTTLE_WINDOW_MS) {
-        refusalThrottle.delete(key);
-      }
-    }
-  }
+  // The map holds one entry per refused (owner, tool, code) and is bounded.
+  // A write moves its key to the end of the map, so the oldest key is the
+  // first one the map hands out and the eviction below is O(1): one delete
+  // per overflow, no scan of the whole map.
+  refusalThrottle.delete(throttleKey);
   refusalThrottle.set(throttleKey, nowMs);
+  while (refusalThrottle.size > REFUSAL_THROTTLE_MAX_ENTRIES) {
+    const oldest = refusalThrottle.keys().next().value;
+    if (oldest === undefined) break;
+    refusalThrottle.delete(oldest);
+  }
 
   try {
     const { error: insertError } = await deps.admin.from("system_logs").insert({
@@ -135,9 +153,66 @@ export async function recordMcpRefusal(
     });
     if (insertError) {
       console.error(`[mcp] ${request.tool} refused: log insert failed`);
+      // The row did not land, so the throttle must not remember it: the
+      // throttle remembers what was written. The key is dropped and the
+      // next identical refusal tries the durable write again.
+      refusalThrottle.delete(throttleKey);
     }
   } catch {
     console.error(`[mcp] ${request.tool} refused: log insert failed`);
+    // Same as above: a thrown insert wrote no row either.
+    refusalThrottle.delete(throttleKey);
+  }
+}
+
+// The code an API answer carries. A body is untrusted input, so a code is
+// only taken from it when it is shaped like a code: an upper-case word of
+// letters, digits and underscores. Anything else is not written down as if
+// it were a code.
+const FORWARDED_CODE_RE = /^[A-Z][A-Z0-9_]{0,63}$/;
+
+/**
+ * Record a refusal the API answered with a 4xx.
+ *
+ * Some API routes refuse a call with a 4xx and a body and write no row of
+ * their own, so the refusal only exists as the answer the MCP tool
+ * forwarded. This turns that answer back into a durable row, so a refused
+ * call leaves the same trace behind the API as it would have left here.
+ *
+ * Only a 4xx is a refusal. A 2xx is a call that ran, and a 5xx is an
+ * outage of the API, not a refused call; neither is recorded here.
+ *
+ * The code is the one the body carries, when the body carries a code that
+ * is shaped like one. Otherwise the status names it. The body itself is
+ * never written down and never logged: it may name the account, the
+ * comment, the message.
+ *
+ * The recorder never throws: a broken log must not turn a refused call
+ * into a broken answer.
+ */
+export async function recordForwardedRefusal(
+  deps: ConfirmGateDeps,
+  request: { userId: string; tool: string; status: number; data: unknown },
+): Promise<void> {
+  try {
+    if (request.status < 400 || request.status > 499) return;
+
+    let code = `HTTP_${request.status}`;
+    if (typeof request.data === "object" && request.data !== null && !Array.isArray(request.data)) {
+      const bodyCode = (request.data as { code?: unknown }).code;
+      if (typeof bodyCode === "string" && FORWARDED_CODE_RE.test(bodyCode)) {
+        code = bodyCode;
+      }
+    }
+
+    await recordMcpRefusal(deps, {
+      userId: request.userId,
+      tool: request.tool,
+      code,
+    });
+  } catch {
+    // The recorder does not throw, but nothing here may escape either: a
+    // fault in it can only cost the row.
   }
 }
 
@@ -258,6 +333,11 @@ export async function refuseUnconfirmed(
  * The grant is decided by the caller: an API-key caller holds every scope,
  * an OAuth token holds only the scopes it was granted (see ./toolScopes.ts).
  *
+ * A scope that cannot be granted yet is not answered with advice to
+ * reconnect. Reconnecting would not help: the consent screen that could
+ * offer the scope does not ship yet, so the only way to run the tool is an
+ * API key. Telling the caller to reconnect would send them in circles.
+ *
  * The log names the tool and the code only. The arguments, the API key, the
  * token and its scopes stay out of it.
  *
@@ -276,6 +356,15 @@ export async function refuseUngranted(
     tool: request.tool,
     code: "SCOPE_NOT_GRANTED",
   });
+
+  if (NOT_YET_GRANTABLE_SCOPES.has(scope)) {
+    return {
+      code: "SCOPE_NOT_GRANTED",
+      message:
+        `This tool is not available over OAuth yet (it needs the ${scope} scope, ` +
+        `which cannot be granted yet). Use a Postora API key.`,
+    };
+  }
 
   return {
     code: "SCOPE_NOT_GRANTED",

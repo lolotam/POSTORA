@@ -8,7 +8,9 @@
 // comments:write and messages:write are advertised in the authorization
 // server metadata, but no token can be granted them yet: the consent screen
 // that could show them ships after the frontend freeze. Over OAuth those four
-// tools therefore answer 403 until then.
+// tools therefore answer 403 until then. NOT_YET_GRANTABLE_SCOPES names them,
+// so a refusal can tell the caller what to do instead of sending it to a
+// reconnect that cannot produce the scope.
 //
 // Enforcing scopes on every MCP tool is a separate follow-up. Only the tools
 // listed in NEW_TOOL_SCOPES are gated here; the older tools are not gated in
@@ -39,6 +41,19 @@ export const NEW_TOOL_SCOPES: Readonly<Record<string, string>> = {
   delete_comment: "comments:write",
   reply_to_message: "messages:write",
 };
+
+/**
+ * The scopes that are advertised but cannot be granted yet.
+ *
+ * The authorization server metadata names them, so a client may ask for
+ * them, but no token can be granted them until the consent screen that
+ * could offer them ships. A refusal that names one of them must not send
+ * the caller to reconnect: reconnecting cannot produce the scope.
+ */
+export const NOT_YET_GRANTABLE_SCOPES: ReadonlySet<string> = new Set([
+  "comments:write",
+  "messages:write",
+]);
 
 /**
  * The scope the caller is missing for a tool, or null when the call may run.

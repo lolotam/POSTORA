@@ -11,6 +11,7 @@ import { normalizeListFields } from "./stringList.ts";
 import {
   auditSchemaRejection,
   confirmField,
+  recordForwardedRefusal,
   recordMcpRefusal,
   refuseUnconfirmed,
   refuseUngranted,
@@ -202,6 +203,13 @@ function okUntrusted(data: unknown) {
 // not cover is refused before it runs (see ./toolScopes.ts and refuseUngranted
 // in ./confirmGate.ts), before the confirmation check and before any argument
 // is read.
+//
+// Some API routes refuse a call with a 4xx and write no row of their own, so
+// the refusal would only exist as the answer this edge forwards. The tools
+// behind those routes record the forwarded refusal (see recordForwardedRefusal
+// in ./confirmGate.ts), so a refusal that happened behind the API leaves the
+// same trace a refusal made here would have left. The routes that record
+// their own refusals are not recorded twice.
 
 // Build a fresh MCP server bound to a specific user's API key, owner and grant.
 function buildServer(apiKey: string, ownerId: string, grant: ScopeGrant) {
@@ -464,6 +472,13 @@ function buildServer(apiKey: string, ownerId: string, grant: ScopeGrant) {
         message: args.message,
         platform: args.platform,
       });
+      // The API route behind this tool answers a refused call with a 4xx and
+      // writes no row of its own, so the refusal is recorded here. The other
+      // tools record their own refusals and must not double them.
+      await recordForwardedRefusal(
+        { admin },
+        { userId: ownerId, tool: "reply_to_comment", status: r.status, data: r.data },
+      );
       return r.status >= 400 ? fail(r.status, r.data) : ok(r.data);
     },
   });
@@ -487,6 +502,13 @@ function buildServer(apiKey: string, ownerId: string, grant: ScopeGrant) {
         comment_id: args.comment_id,
         hide: args.hide ?? true,
       });
+      // The API route behind this tool answers a refused call with a 4xx and
+      // writes no row of its own, so the refusal is recorded here. The other
+      // tools record their own refusals and must not double them.
+      await recordForwardedRefusal(
+        { admin },
+        { userId: ownerId, tool: "hide_comment", status: r.status, data: r.data },
+      );
       return r.status >= 400 ? fail(r.status, r.data) : ok(r.data);
     },
   });
@@ -508,6 +530,13 @@ function buildServer(apiKey: string, ownerId: string, grant: ScopeGrant) {
         social_account_id: args.social_account_id,
         comment_id: args.comment_id,
       });
+      // The API route behind this tool answers a refused call with a 4xx and
+      // writes no row of its own, so the refusal is recorded here. The other
+      // tools record their own refusals and must not double them.
+      await recordForwardedRefusal(
+        { admin },
+        { userId: ownerId, tool: "delete_comment", status: r.status, data: r.data },
+      );
       return r.status >= 400 ? fail(r.status, r.data) : ok(r.data);
     },
   });
@@ -577,6 +606,13 @@ function buildServer(apiKey: string, ownerId: string, grant: ScopeGrant) {
       const scopeRefusal = await refuseUngranted({ admin }, { userId: ownerId, tool: "get_media", grant });
       if (scopeRefusal) return fail(403, scopeRefusal);
       const r = await callN8n(apiKey, "GET", `/api/v1/media/${encodeURIComponent(media_id)}`);
+      // The API route behind this tool answers a refused call with a 4xx and
+      // writes no row of its own, so the refusal is recorded here. The other
+      // tools record their own refusals and must not double them.
+      await recordForwardedRefusal(
+        { admin },
+        { userId: ownerId, tool: "get_media", status: r.status, data: r.data },
+      );
       return r.status >= 400 ? fail(r.status, r.data) : ok(r.data);
     },
   });

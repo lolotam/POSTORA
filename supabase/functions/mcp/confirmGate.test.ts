@@ -2,7 +2,9 @@ import { assertEquals } from "jsr:@std/assert@1";
 import {
   auditSchemaRejection,
   confirmField,
+  recordForwardedRefusal,
   recordMcpRefusal,
+  REFUSAL_THROTTLE_MAX_ENTRIES,
   refuseUnconfirmed,
   refuseUngranted,
   resetRefusalThrottleForTests,
@@ -26,6 +28,12 @@ interface FakeQueryBuilder {
 interface FakeAdminOptions {
   insertError?: { message: string } | null;
   throwOn?: "insert" | null;
+  // The number of inserts that fail with a returned error before one
+  // succeeds. The count lives in the closure, not in the options, so the
+  // options are never mutated.
+  failInserts?: number;
+  // The number of inserts that fail with a thrown error before one succeeds.
+  throwOnInserts?: number;
 }
 
 // A fake admin that records every call the gate makes. Nothing here talks to
@@ -34,6 +42,8 @@ interface FakeAdminOptions {
 function createFakeAdmin(options: FakeAdminOptions = {}) {
   const calls: FakeCall[] = [];
   const inserts: { table: string; row: Record<string, unknown> }[] = [];
+  let failingInserts = options.failInserts ?? 0;
+  let throwingInserts = options.throwOnInserts ?? 0;
 
   const admin = {
     from(table: string): FakeQueryBuilder {
@@ -54,6 +64,14 @@ function createFakeAdmin(options: FakeAdminOptions = {}) {
         async insert(row: Record<string, unknown>) {
           calls.push({ method: "insert", args: [row] });
           if (options.throwOn === "insert") throw new Error("database is down");
+          if (throwingInserts > 0) {
+            throwingInserts -= 1;
+            throw new Error("database is down");
+          }
+          if (failingInserts > 0) {
+            failingInserts -= 1;
+            return { error: { message: "insert failed" } };
+          }
           inserts.push({ table, row });
           return { error: options.insertError ?? null };
         },
@@ -395,6 +413,77 @@ Deno.test("another owner within the window writes its own row", async () => {
   assertEquals(inserts.length, 2);
 });
 
+Deno.test("the throttle map is bounded and evicts the oldest key", async () => {
+  resetRefusalThrottleForTests();
+  const { admin, inserts } = createFakeAdmin();
+  const clock = createClock(1_000_000);
+
+  // More distinct refusals than the map may hold. Every one of them is a
+  // different key, so every one of them writes a row.
+  for (let i = 0; i < REFUSAL_THROTTLE_MAX_ENTRIES + 5; i++) {
+    await recordMcpRefusal(
+      { admin, now: clock.now },
+      { userId: OWNER_ID, tool: "delete_comment", code: `CODE_${i}` },
+    );
+  }
+
+  assertEquals(inserts.length, REFUSAL_THROTTLE_MAX_ENTRIES + 5);
+
+  // The first key was evicted to make room for the newer ones, so it is not
+  // throttled any more: the same refusal inside the window writes a row
+  // again instead of being skipped.
+  await recordMcpRefusal(
+    { admin, now: clock.now },
+    { userId: OWNER_ID, tool: "delete_comment", code: "CODE_0" },
+  );
+
+  assertEquals(inserts.length, REFUSAL_THROTTLE_MAX_ENTRIES + 6);
+
+  // The map is module state, so the next test starts from a clean slate.
+  resetRefusalThrottleForTests();
+});
+
+Deno.test("a refused insert does not throttle the next identical refusal", async () => {
+  resetRefusalThrottleForTests();
+  const { admin, calls } = createFakeAdmin({ failInserts: 1 });
+  const clock = createClock(1_000_000);
+
+  await recordMcpRefusal(
+    { admin, now: clock.now },
+    { userId: OWNER_ID, tool: "delete_comment", code: "CONFIRMATION_REQUIRED" },
+  );
+  clock.advance(1_000);
+  await recordMcpRefusal(
+    { admin, now: clock.now },
+    { userId: OWNER_ID, tool: "delete_comment", code: "CONFIRMATION_REQUIRED" },
+  );
+
+  // The first insert wrote no row, so the throttle must not remember it:
+  // the second refusal inside the window tries the write again.
+  const insertCalls = calls.filter((call) => call.method === "insert");
+  assertEquals(insertCalls.length, 2);
+});
+
+Deno.test("a throwing insert does not throttle the next identical refusal", async () => {
+  resetRefusalThrottleForTests();
+  const { admin, calls } = createFakeAdmin({ throwOnInserts: 1 });
+  const clock = createClock(1_000_000);
+
+  await recordMcpRefusal(
+    { admin, now: clock.now },
+    { userId: OWNER_ID, tool: "delete_comment", code: "CONFIRMATION_REQUIRED" },
+  );
+  clock.advance(1_000);
+  await recordMcpRefusal(
+    { admin, now: clock.now },
+    { userId: OWNER_ID, tool: "delete_comment", code: "CONFIRMATION_REQUIRED" },
+  );
+
+  // A thrown insert wrote no row either, so the write is tried again.
+  const insertCalls = calls.filter((call) => call.method === "insert");
+  assertEquals(insertCalls.length, 2);
+});
+
 // ── the schema rejection ───────────────────────────────────────────────────────
 
 // The framework validates the arguments against the tool's input schema before
@@ -608,6 +697,12 @@ const GRANT_WITHOUT_COMMENTS: ScopeGrant = {
   scopes: new Set(["accounts:read", "posts:read", "posts:write", "media:write", "webhooks:manage"]),
 };
 
+// A grant that holds neither the comment scopes nor posts:read.
+const GRANT_WITHOUT_POSTS_READ: ScopeGrant = {
+  kind: "granted",
+  scopes: new Set(["accounts:read", "media:write"]),
+};
+
 Deno.test("a tool the grant does not cover is refused and the refusal is recorded", async () => {
   resetRefusalThrottleForTests();
   const { admin, inserts } = createFakeAdmin();
@@ -621,8 +716,8 @@ Deno.test("a tool the grant does not cover is refused and the refusal is recorde
   assertEquals(refusal, {
     code: "SCOPE_NOT_GRANTED",
     message:
-      "This connection was not granted the comments:write scope. " +
-      "Reconnect with that scope, or use a Postora API key.",
+      "This tool is not available over OAuth yet (it needs the comments:write scope, " +
+      "which cannot be granted yet). Use a Postora API key.",
   } as const);
 
   // One row, naming the tool and the code and nothing else.
@@ -683,7 +778,167 @@ Deno.test("a scope refusal names the scope the token is missing", async () => {
   assertEquals(refusal, {
     code: "SCOPE_NOT_GRANTED",
     message:
-      "This connection was not granted the messages:write scope. " +
-      "Reconnect with that scope, or use a Postora API key.",
+      "This tool is not available over OAuth yet (it needs the messages:write scope, " +
+      "which cannot be granted yet). Use a Postora API key.",
   } as const);
+});
+
+Deno.test("a scope that cannot be granted yet is not answered with a dead end", async () => {
+  resetRefusalThrottleForTests();
+  const { admin } = createFakeAdmin();
+
+  const refusal: ScopeRefusal | null = await refuseUngranted(
+    { admin },
+    { userId: OWNER_ID, tool: "hide_comment", grant: GRANT_WITHOUT_COMMENTS },
+  );
+
+  // Reconnecting cannot produce a scope that no token can be granted yet,
+  // so the refusal must not send the caller into that circle.
+  assertEquals(refusal?.code, "SCOPE_NOT_GRANTED");
+  assertEquals(refusal?.message.includes("not available over OAuth yet"), true);
+  assertEquals(refusal?.message.includes("Reconnect"), false);
+});
+
+Deno.test("a scope that can be granted is still answered with a reconnect", async () => {
+  resetRefusalThrottleForTests();
+  const { admin } = createFakeAdmin();
+
+  const refusal: ScopeRefusal | null = await refuseUngranted(
+    { admin },
+    { userId: OWNER_ID, tool: "get_media", grant: GRANT_WITHOUT_POSTS_READ },
+  );
+
+  // posts:read can be granted, so reconnecting is the advice that works.
+  assertEquals(refusal?.code, "SCOPE_NOT_GRANTED");
+  assertEquals(refusal?.message.includes("Reconnect"), true);
+});
+
+// ── the forwarded refusal ─────────────────────────────────────────────────────
+
+// Some API routes refuse a call with a 4xx and a body and write no row of
+// their own. The MCP tool that forwarded the answer records the refusal, so
+// a call that was refused behind the API leaves the same trace a call
+// refused here would have left.
+
+Deno.test("a forwarded 404 is recorded under the code the body carries", async () => {
+  resetRefusalThrottleForTests();
+  const { admin, inserts } = createFakeAdmin();
+
+  await recordForwardedRefusal(
+    { admin },
+    { userId: OWNER_ID, tool: "get_media", status: 404, data: { code: "MEDIA_NOT_FOUND" } },
+  );
+
+  // One row, naming the tool and the code and nothing else.
+  assertEquals(inserts.length, 1);
+  assertEquals(inserts[0].table, "system_logs");
+  assertEquals(inserts[0].row.user_id, OWNER_ID);
+  assertEquals(inserts[0].row.metadata as Record<string, unknown>, {
+    tool: "get_media",
+    code: "MEDIA_NOT_FOUND",
+  });
+});
+
+Deno.test("a forwarded refusal whose code is not shaped like a code is recorded under its status", async () => {
+  resetRefusalThrottleForTests();
+  const { admin, inserts } = createFakeAdmin();
+
+  await recordForwardedRefusal(
+    { admin },
+    { userId: OWNER_ID, tool: "hide_comment", status: 400, data: { code: "bad code!" } },
+  );
+
+  assertEquals(inserts.length, 1);
+  assertEquals(inserts[0].row.metadata as Record<string, unknown>, {
+    tool: "hide_comment",
+    code: "HTTP_400",
+  });
+});
+
+Deno.test("a forwarded refusal whose body is not an object is recorded under its status", async () => {
+  resetRefusalThrottleForTests();
+  const { admin, inserts } = createFakeAdmin();
+
+  await recordForwardedRefusal(
+    { admin },
+    {
+      userId: OWNER_ID,
+      tool: "delete_comment",
+      status: 400,
+      data: "that comment does not exist",
+    },
+  );
+
+  assertEquals(inserts.length, 1);
+  assertEquals(inserts[0].row.metadata as Record<string, unknown>, {
+    tool: "delete_comment",
+    code: "HTTP_400",
+  });
+});
+
+Deno.test("a forwarded answer that is not a refusal is not recorded", async () => {
+  resetRefusalThrottleForTests();
+  const { admin, calls, inserts } = createFakeAdmin();
+
+  // A 2xx is a call that ran, and a 5xx is an outage of the API: neither is
+  // a refusal, so neither is written down.
+  await recordForwardedRefusal(
+    { admin },
+    { userId: OWNER_ID, tool: "get_media", status: 200, data: { id: "media-file-1" } },
+  );
+  await recordForwardedRefusal(
+    { admin },
+    { userId: OWNER_ID, tool: "get_media", status: 502, data: { error: "bad gateway" } },
+  );
+
+  assertEquals(inserts.length, 0);
+  assertEquals(calls.length, 0);
+});
+
+Deno.test("the body of a forwarded refusal is never written down", async () => {
+  resetRefusalThrottleForTests();
+  const { admin, inserts } = createFakeAdmin();
+
+  await recordForwardedRefusal(
+    { admin },
+    {
+      userId: OWNER_ID,
+      tool: "get_media",
+      status: 404,
+      data: {
+        code: "MEDIA_NOT_FOUND",
+        message: "no media file with that id",
+        media_id: "media-file-7",
+      },
+    },
+  );
+
+  // The code is written down, the body is not: it may name the account, the
+  // comment or the media the caller asked for.
+  const serialized = JSON.stringify(inserts[0].row);
+  assertEquals(serialized.includes("no media file"), false);
+  assertEquals(serialized.includes("media-file-7"), false);
+  assertEquals(serialized.includes("media_id"), false);
+});
+
+Deno.test("a forwarded refusal never throws, whatever the database does", async () => {
+  resetRefusalThrottleForTests();
+  const { admin } = createFakeAdmin({ throwOn: "insert" });
+
+  let thrown: unknown = null;
+  try {
+    await recordForwardedRefusal(
+      { admin },
+      {
+        userId: OWNER_ID,
+        tool: "hide_comment",
+        status: 400,
+        data: { code: "COMMENT_NOT_FOUND" },
+      },
+    );
+  } catch (error) {
+    thrown = error;
+  }
+
+  assertEquals(thrown, null);
 });

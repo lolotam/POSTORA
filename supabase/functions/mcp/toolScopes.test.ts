@@ -1,5 +1,10 @@
 import { assertEquals } from "jsr:@std/assert@1";
-import { missingScope, NEW_TOOL_SCOPES, type ScopeGrant } from "./toolScopes.ts";
+import {
+  missingScope,
+  NEW_TOOL_SCOPES,
+  NOT_YET_GRANTABLE_SCOPES,
+  type ScopeGrant,
+} from "./toolScopes.ts";
 
 // The scopes the authorization server advertised before this change: the five
 // an OAuth token can actually be granted today.
@@ -54,4 +59,23 @@ Deno.test("an empty grant misses the scope of every gated tool", () => {
 
 Deno.test("a tool that does not exist is not gated", () => {
   assertEquals(missingScope(granted(), "no_such_tool"), null);
+});
+
+Deno.test("the comment and message scopes are advertised but cannot be granted yet", () => {
+  assertEquals(NOT_YET_GRANTABLE_SCOPES.has("comments:write"), true);
+  assertEquals(NOT_YET_GRANTABLE_SCOPES.has("messages:write"), true);
+});
+
+Deno.test("a scope that can be granted is not in the not-yet-grantable set", () => {
+  for (const scope of OLD_SCOPES) {
+    assertEquals(NOT_YET_GRANTABLE_SCOPES.has(scope), false, scope);
+  }
+});
+
+Deno.test("every scope that cannot be granted yet is the scope of a gated tool", () => {
+  const gatedScopes = new Set(Object.values(NEW_TOOL_SCOPES));
+
+  for (const scope of NOT_YET_GRANTABLE_SCOPES) {
+    assertEquals(gatedScopes.has(scope), true, scope);
+  }
 });
