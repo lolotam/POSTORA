@@ -397,6 +397,20 @@ Deno.test("a reschedule refuses a body that does not name a usable time", async 
       body: { post_id: POST, scheduled_at: "2026-04-31T10:00:00+03:00" },
       code: "INVALID_SCHEDULED_AT",
     },
+    {
+      // Date.parse reads a date with a trailing Z as midnight, so the post
+      // would publish at a moment the caller never asked for.
+      name: "a scheduled_at that is a date with a trailing Z",
+      body: { post_id: POST, scheduled_at: "2027-01-01Z" },
+      code: "INVALID_SCHEDULED_AT",
+    },
+    {
+      // An hour without minutes is not a time: there is no instant to publish
+      // at.
+      name: "a scheduled_at with an hour but no minutes",
+      body: { post_id: POST, scheduled_at: "2027-01-01T10Z" },
+      code: "INVALID_SCHEDULED_AT",
+    },
   ];
 
   for (const testCase of cases) {
@@ -592,10 +606,21 @@ Deno.test("the posting histogram counts the local hour and the local weekday", (
   assertEquals(histogram.totalPosts, 1);
 });
 
+// The body the suggestion service is called with.
+interface SentSuggestionBody {
+  platforms: string[];
+  user_id: string;
+  historicalData: {
+    hourCounts: Record<string, number>;
+    dayCounts: Record<string, number>;
+    totalPosts: number;
+  };
+}
+
 Deno.test("the best-times request carries the platforms and the history", async () => {
   const db = new FakeSupabase();
   db.queue("platform_posts", {
-    data: [{ posted_at: "2026-10-04T21:30:00Z" }],
+    data: [{ platform: "instagram", posted_at: "2026-10-04T21:30:00Z" }],
     error: null,
   });
   const { calls, fetcher } = fakeFetcher([
@@ -609,24 +634,23 @@ Deno.test("the best-times request carries the platforms and the history", async 
   );
   assertEquals(result.status, 200);
   assertEquals(result.body.timezone, "Asia/Kuwait");
-  assertEquals(result.body.based_on_posts, 1);
+  assertEquals(result.body.based_on_posts, { instagram: 1 });
   assertEquals(result.body.suggestions, [{ platform: "instagram", day: "Monday" }]);
 
   // The history is the successful per-platform results of the requested
-  // platforms, and the owner is enforced by the join to posts.
+  // platforms, and the owner is enforced by the join to posts. The platform
+  // comes back with the rows: the history is split by it.
   const read = callsFor(db, "platform_posts", "select")[0];
   assertEquals(hasFilter(read, "eq", "posts.user_id", USER), true);
   assertEquals(hasFilter(read, "eq", "status", "success"), true);
   assertEquals(hasInFilter(read, "platform", ["instagram"]), true);
+  assertEquals(String(read.payload).includes("platform, posted_at"), true);
+  assertEquals(String(read.payload).includes("posts!inner(user_id)"), true);
 
   assertEquals(calls.length, 1);
   assertEquals(calls[0].url, `${SUPABASE_URL}/functions/v1/suggest-best-times`);
   assertEquals(calls[0].headers.Authorization, `Bearer ${SERVICE_KEY}`);
-  const sent = JSON.parse(String(calls[0].body)) as {
-    platforms: string[];
-    user_id: string;
-    historicalData: { hourCounts: Record<string, number>; dayCounts: Record<string, number>; totalPosts: number };
-  };
+  const sent = JSON.parse(String(calls[0].body)) as SentSuggestionBody;
   assertEquals(sent.platforms, ["instagram"]);
   // The suggestion service is called with the service role, so the owner of the
   // API key travels in the body: the AI call is logged against that user.
@@ -634,6 +658,131 @@ Deno.test("the best-times request carries the platforms and the history", async 
   assertEquals(sent.historicalData.hourCounts, { "0": 1 });
   assertEquals(sent.historicalData.dayCounts, { "1": 1 });
   assertEquals(sent.historicalData.totalPosts, 1);
+});
+
+Deno.test("each platform is analysed on its own publishing history", async () => {
+  const db = new FakeSupabase();
+  db.queue("platform_posts", {
+    data: [
+      { platform: "instagram", posted_at: "2026-10-04T21:30:00Z" },
+      { platform: "instagram", posted_at: "2026-10-05T21:30:00Z" },
+      { platform: "tiktok", posted_at: "2026-10-06T12:00:00Z" },
+    ],
+    error: null,
+  });
+  const { calls, fetcher } = fakeFetcher([
+    { status: 200, body: { suggestions: [{ platform: "instagram", day: "Monday" }] } },
+    { status: 200, body: { suggestions: [{ platform: "tiktok", day: "Tuesday" }] } },
+  ]);
+  const result = await suggestBestTimes(
+    depsFor(db, fetcher),
+    USER,
+    { platforms: ["instagram", "tiktok"] },
+    "UTC",
+  );
+  assertEquals(result.status, 200);
+  // Each platform is counted on its own posts.
+  assertEquals(result.body.based_on_posts, { instagram: 2, tiktok: 1 });
+  // The suggestions come back in the order the platforms were asked for.
+  assertEquals(result.body.suggestions, [
+    { platform: "instagram", day: "Monday" },
+    { platform: "tiktok", day: "Tuesday" },
+  ]);
+
+  // One call per platform, and each call carries only that platform's
+  // history: a merged histogram would have counted three posts for both.
+  assertEquals(calls.length, 2);
+  const first = JSON.parse(String(calls[0].body)) as SentSuggestionBody;
+  const second = JSON.parse(String(calls[1].body)) as SentSuggestionBody;
+  assertEquals(first.platforms, ["instagram"]);
+  assertEquals(first.historicalData.totalPosts, 2);
+  assertEquals(first.historicalData.hourCounts, { "21": 2 });
+  assertEquals(second.platforms, ["tiktok"]);
+  assertEquals(second.historicalData.totalPosts, 1);
+  assertEquals(second.historicalData.hourCounts, { "12": 1 });
+  assertEquals(first.user_id, USER);
+  assertEquals(second.user_id, USER);
+});
+
+Deno.test("a platform asked for twice is one platform", async () => {
+  const db = new FakeSupabase();
+  db.queue("platform_posts", {
+    data: [{ platform: "instagram", posted_at: "2026-10-04T21:30:00Z" }],
+    error: null,
+  });
+  const { calls, fetcher } = fakeFetcher([
+    { status: 200, body: { suggestions: [{ platform: "instagram", day: "Monday" }] } },
+  ]);
+  const result = await suggestBestTimes(
+    depsFor(db, fetcher),
+    USER,
+    { platforms: ["instagram", "instagram"] },
+    null,
+  );
+  assertEquals(result.status, 200);
+  assertEquals(calls.length, 1);
+  assertEquals(result.body.based_on_posts, { instagram: 1 });
+});
+
+Deno.test("a best-times request for more than six platforms is refused before the database", async () => {
+  const db = new FakeSupabase();
+  const result = await suggestBestTimes(
+    depsFor(db, noNetwork()),
+    USER,
+    { platforms: ["a", "b", "c", "d", "e", "f", "g"] },
+    null,
+  );
+  assertEquals(result.status, 400);
+  assertEquals(errorCode(result), "INVALID_REQUEST");
+  assertEquals(db.calls.length, 0);
+});
+
+Deno.test("a platform whose suggestion call fails is the failure that is reported", async () => {
+  const db = new FakeSupabase();
+  db.queue("platform_posts", {
+    data: [
+      { platform: "instagram", posted_at: "2026-10-04T21:30:00Z" },
+      { platform: "tiktok", posted_at: "2026-10-06T12:00:00Z" },
+    ],
+    error: null,
+  });
+  const { fetcher } = fakeFetcher([
+    { status: 200, body: { suggestions: [{ platform: "instagram", day: "Monday" }] } },
+    { status: 503, body: { error: "down" } },
+  ]);
+  const result = await suggestBestTimes(
+    depsFor(db, fetcher),
+    USER,
+    { platforms: ["instagram", "tiktok"] },
+    null,
+  );
+  assertEquals(result.status, 502);
+  assertEquals(errorCode(result), "BEST_TIMES_FAILED");
+});
+
+Deno.test("the first failure in request order is the one that is reported", async () => {
+  const db = new FakeSupabase();
+  db.queue("platform_posts", {
+    data: [
+      { platform: "instagram", posted_at: "2026-10-04T21:30:00Z" },
+      { platform: "tiktok", posted_at: "2026-10-06T12:00:00Z" },
+    ],
+    error: null,
+  });
+  // Instagram times out, TikTok refuses. The caller asked for Instagram
+  // first, so the timeout is the failure it is told about.
+  const { fetcher } = fakeFetcher([
+    { reject: new Error("Request timed out") },
+    { status: 503, body: { error: "down" } },
+  ]);
+  const result = await suggestBestTimes(
+    depsFor(db, fetcher),
+    USER,
+    { platforms: ["instagram", "tiktok"] },
+    null,
+  );
+  assertEquals(result.status, 504);
+  assertEquals(errorCode(result), "BEST_TIMES_TIMEOUT");
 });
 
 Deno.test("a best-times service that refuses is a 502", async () => {

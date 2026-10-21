@@ -433,7 +433,7 @@ function buildServer(apiKey: string) {
   // ---- Planning ----
   server.tool("suggest_best_times", {
     description:
-      "Suggest the best days and times to post on the given platforms, combining platform best practices with the user's own publishing history (in the user's preferred time zone).",
+      "Suggest the best days and times to post on the given platforms, combining platform best practices with the user's own publishing history (in the user's preferred time zone). Up to 6 platforms per call; each platform is analysed on its own publishing history.",
     inputSchema: z.object({
       platforms: stringList.describe("e.g. ['instagram','facebook']. Accepts an array, JSON-array text or comma-separated text."),
     }),

@@ -82,15 +82,21 @@ const RescheduleSchema = z.object({
 });
 
 const BestTimesSchema = z.object({
-  platforms: z.array(z.string().min(1).max(50)).min(1).max(12),
+  // Every platform costs one AI call, so the list is short: six platforms are six
+  // suggestions, not one history shared by six.
+  platforms: z.array(z.string().min(1).max(50)).min(1).max(6),
 });
 
 const BEST_TIMES_TIMEOUT_MS = 60_000;
 
-// An ISO 8601 instant without an offset is ambiguous: two machines read it as two
-// different instants, and the post would publish at the wrong hour. A trailing Z or a
-// +HH:MM offset is required.
-const EXPLICIT_OFFSET_RE = /(Z|[+-]\d{2}:\d{2})$/i;
+// A scheduled time has to be a whole instant. A date with nothing else
+// ("2027-01-01Z") is read by Date.parse as midnight, and an hour with no
+// minutes ("2027-01-01T10Z") is not a time at all: both would publish the post
+// at a moment the caller never asked for. An instant without an explicit offset
+// is ambiguous too: two machines read it as two different instants, and the
+// post would publish at the wrong hour. A trailing Z or a +HH:MM offset is
+// required.
+const ISO_DATE_TIME_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,9})?)?(Z|[+-]\d{2}:\d{2})$/i;
 
 function invalidBody(failure: { details: unknown }): ActionResult {
   return error(400, "INVALID_REQUEST", "Invalid request body", failure.details);
@@ -385,7 +391,7 @@ function rescheduleRefusal(request: {
 }): ActionResult | null {
   const { route, subject, scheduledAt, now } = request;
   if (
-    !EXPLICIT_OFFSET_RE.test(scheduledAt) ||
+    !ISO_DATE_TIME_RE.test(scheduledAt) ||
     !Number.isFinite(Date.parse(scheduledAt)) ||
     !hasRealCalendarDate(scheduledAt)
   ) {
@@ -529,14 +535,16 @@ export async function checkAccountHealth(
 
 // ── 4. best-times ──────────────────────────────────────────────────────────────
 
-export function computePostingHistogram(
-  postedAts: string[],
-  timeZone: string,
-): {
+export interface PostingHistogram {
   hourCounts: Record<number, number>;
   dayCounts: Record<number, number>;
   totalPosts: number;
-} {
+}
+
+export function computePostingHistogram(
+  postedAts: string[],
+  timeZone: string,
+): PostingHistogram {
   const hourCounts: Record<number, number> = {};
   const dayCounts: Record<number, number> = {};
   const formatter = new Intl.DateTimeFormat("en-US", {
@@ -566,47 +574,19 @@ export function computePostingHistogram(
   return { hourCounts, dayCounts, totalPosts };
 }
 
-export async function suggestBestTimes(
+// One platform, one history, one AI call. The suggestion service takes a
+// single historicalData, so a platform asked about on its own is the only way
+// to keep an Instagram post out of a TikTok suggestion.
+async function requestSuggestions(
   deps: PostActionDeps,
-  userId: string,
-  body: unknown,
-  preferredTimezone: string | null,
-): Promise<ActionResult> {
-  const route = "best-times";
-  const parsed = validateRequestBody(BestTimesSchema, body);
-  if (!parsed.success) {
-    return refuse(route, `user ${userId}`, invalidBody(parsed));
-  }
-  const { platforms } = parsed.data;
-
-  const timeZone = preferredTimezone && isValidTimeZone(preferredTimezone)
-    ? preferredTimezone
-    : "UTC";
-
-  // The history is per platform: a suggestion for TikTok must not be shaped by
-  // a LinkedIn-only post, nor by a TikTok publish that failed. The rows are
-  // the successful per-platform results, and the owner is enforced by the join
-  // to posts, so the read cannot reach another account's rows even though the
-  // service role is the one doing the reading.
-  const { data, error: readError } = await deps.supabase
-    .from("platform_posts")
-    .select("posted_at, posts!inner(user_id)")
-    .eq("posts.user_id", userId)
-    .eq("status", "success")
-    .in("platform", platforms)
-    .not("posted_at", "is", null)
-    .order("posted_at", { ascending: false })
-    .limit(500);
-
-  if (readError) {
-    console.error(`[n8n-api] ${route}: reading the posting history failed: ${readError.message}`);
-    return error(500, "INTERNAL_ERROR", "Reading the posting history failed. Please try again.");
-  }
-
-  const postedAts = ((data ?? []) as Array<{ posted_at: string | null }>)
-    .map((row) => row.posted_at)
-    .filter((value): value is string => typeof value === "string");
-  const historicalData = computePostingHistogram(postedAts, timeZone);
+  route: string,
+  request: {
+    platform: string;
+    historicalData: PostingHistogram;
+    userId: string;
+  },
+): Promise<{ suggestions: unknown[] } | ActionResult> {
+  const { platform, historicalData, userId } = request;
 
   // The suggestion service is called with the service role, so it has no user JWT
   // to read the caller from. The id of the API-key owner travels in the body
@@ -621,7 +601,11 @@ export async function suggestBestTimes(
           "Content-Type": "application/json",
           Authorization: `Bearer ${deps.serviceRoleKey}`,
         },
-        body: JSON.stringify({ platforms, historicalData, user_id: userId }),
+        body: JSON.stringify({
+          platforms: [platform],
+          historicalData,
+          user_id: userId,
+        }),
       },
       BEST_TIMES_TIMEOUT_MS,
       deps.fetcher,
@@ -629,19 +613,19 @@ export async function suggestBestTimes(
   } catch (thrown) {
     const message = thrown instanceof Error ? thrown.message : String(thrown);
     if (message === "Request timed out") {
-      console.error(`[n8n-api] ${route}: the suggestion service did not answer within ${BEST_TIMES_TIMEOUT_MS / 1000}s (user ${userId})`);
+      console.error(`[n8n-api] ${route}: the suggestion service did not answer within ${BEST_TIMES_TIMEOUT_MS / 1000}s for ${platform} (user ${userId})`);
       return error(
         504,
         "BEST_TIMES_TIMEOUT",
         "The suggestion service did not answer in time. Try again.",
       );
     }
-    console.error(`[n8n-api] ${route}: the suggestion service could not be reached`);
+    console.error(`[n8n-api] ${route}: the suggestion service could not be reached for ${platform}`);
     return error(502, "BEST_TIMES_FAILED", "Could not get suggestions right now. Try again.");
   }
 
   if (!response.ok) {
-    console.error(`[n8n-api] ${route}: the suggestion service answered ${response.status}`);
+    console.error(`[n8n-api] ${route}: the suggestion service answered ${response.status} for ${platform}`);
     return error(502, "BEST_TIMES_FAILED", "Could not get suggestions right now. Try again.");
   }
 
@@ -651,14 +635,101 @@ export async function suggestBestTimes(
   // from the service is a real answer and stays a 200.
   const json = await response.json().catch(() => null) as Record<string, unknown> | null;
   if (json === null || !Array.isArray(json.suggestions)) {
-    console.error(`[n8n-api] ${route}: the suggestion service answered without a suggestions list (user ${userId})`);
+    console.error(`[n8n-api] ${route}: the suggestion service answered without a suggestions list for ${platform} (user ${userId})`);
     return error(502, "BEST_TIMES_FAILED", "Could not get suggestions right now. Try again.");
+  }
+
+  return { suggestions: json.suggestions };
+}
+
+export async function suggestBestTimes(
+  deps: PostActionDeps,
+  userId: string,
+  body: unknown,
+  preferredTimezone: string | null,
+): Promise<ActionResult> {
+  const route = "best-times";
+  const parsed = validateRequestBody(BestTimesSchema, body);
+  if (!parsed.success) {
+    return refuse(route, `user ${userId}`, invalidBody(parsed));
+  }
+  // The same platform twice is one platform: one history, one AI call. The
+  // order the caller asked for is kept, because it is the order the answers
+  // come back in.
+  const platforms = [...new Set(parsed.data.platforms)];
+
+  const timeZone = preferredTimezone && isValidTimeZone(preferredTimezone)
+    ? preferredTimezone
+    : "UTC";
+
+  // The history is per platform: a suggestion for TikTok must not be shaped by
+  // a LinkedIn-only post, nor by a TikTok publish that failed. The rows are
+  // the successful per-platform results, and the owner is enforced by the join
+  // to posts, so the read cannot reach another account's rows even though the
+  // service role is the one doing the reading.
+  const { data, error: readError } = await deps.supabase
+    .from("platform_posts")
+    .select("platform, posted_at, posts!inner(user_id)")
+    .eq("posts.user_id", userId)
+    .eq("status", "success")
+    .in("platform", platforms)
+    .not("posted_at", "is", null)
+    .order("posted_at", { ascending: false })
+    .limit(500);
+
+  if (readError) {
+    console.error(`[n8n-api] ${route}: reading the posting history failed: ${readError.message}`);
+    return error(500, "INTERNAL_ERROR", "Reading the posting history failed. Please try again.");
+  }
+
+  // The rows are grouped by their own platform before they are counted, so a
+  // platform with no history of its own gets an empty histogram instead of
+  // another platform's posts.
+  const postedAtsByPlatform = new Map<string, string[]>();
+  for (const row of ((data ?? []) as Array<{ platform: string | null; posted_at: string | null }>)) {
+    if (typeof row.platform !== "string" || typeof row.posted_at !== "string") continue;
+    const postedAts = postedAtsByPlatform.get(row.platform) ?? [];
+    postedAts.push(row.posted_at);
+    postedAtsByPlatform.set(row.platform, postedAts);
+  }
+
+  const histograms: Record<string, PostingHistogram> = {};
+  for (const platform of platforms) {
+    histograms[platform] = computePostingHistogram(
+      postedAtsByPlatform.get(platform) ?? [],
+      timeZone,
+    );
+  }
+
+  // The suggestion service takes one history per request, so every platform is
+  // asked about on its own. The calls run in parallel: six platforms are six
+  // AI calls, and waiting for them one after another would cost the caller six
+  // times the latency for the same answer.
+  const results = await Promise.all(
+    platforms.map((platform) =>
+      requestSuggestions(deps, route, {
+        platform,
+        historicalData: histograms[platform],
+        userId,
+      }),
+    ),
+  );
+
+  // The first failure in the order the platforms were asked for is the one that
+  // is reported: the caller asked for these platforms in this order.
+  const suggestions: unknown[] = [];
+  const basedOnPosts: Record<string, number> = {};
+  for (const [index, platform] of platforms.entries()) {
+    const result = results[index];
+    if (isActionResult(result)) return result;
+    suggestions.push(...result.suggestions);
+    basedOnPosts[platform] = histograms[platform].totalPosts;
   }
 
   return ok({
     timezone: timeZone,
-    based_on_posts: historicalData.totalPosts,
-    suggestions: json.suggestions,
+    based_on_posts: basedOnPosts,
+    suggestions,
   });
 }
 
