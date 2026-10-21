@@ -208,6 +208,10 @@ Return a JSON array of suggestions.`;
       await logAiCall(supabaseAdmin, 'best_times_suggestion', 'suggest-best-times', userId, false, aiResult, {
         platforms,
         parse_failed: true,
+      }, {
+        // The provider answered, so the answer itself is what was unusable.
+        failureMessage: 'AI best_times_suggestion answered but the answer was not usable',
+        failureLevel: 'warn',
       });
       throw error;
     }
@@ -263,10 +267,22 @@ Return a JSON array of suggestions.`;
     // known: it succeeded only when a usable suggestion came back. This is
     // the one place the successful path logs, so every request that made an
     // AI call records it exactly once.
-    await logAiCall(supabaseAdmin, 'best_times_suggestion', 'suggest-best-times', userId, !parseFailed, aiResult, {
+    //
+    // An answer that parsed but carries no suggestion is not a successful
+    // call: the provider answered, and the answer held nothing the caller can
+    // schedule. It is told apart from a parse failure, which is a different
+    // fault with a different fix.
+    const emptyResult = !parseFailed && suggestions.length === 0;
+    await logAiCall(supabaseAdmin, 'best_times_suggestion', 'suggest-best-times', userId, !parseFailed && suggestions.length > 0, aiResult, {
       platforms,
       ...(parseFailed ? { parse_failed: true } : {}),
+      ...(emptyResult ? { empty_result: true } : {}),
       ...(droppedInvalid > 0 ? { dropped_invalid: droppedInvalid } : {}),
+    }, {
+      // The provider answered, so this is not an outage: the answer itself was
+      // unusable. These options apply to the failed rows only.
+      failureMessage: 'AI best_times_suggestion answered but the answer was not usable',
+      failureLevel: 'warn',
     });
 
     console.log('Generated suggestions:', suggestions.length);

@@ -2051,7 +2051,8 @@ async function handleMessageReply(req: Request, supabase: any, userId: string, b
   const message = typeof body?.message === 'string' ? body.message : '';
   const messageType = body?.message_type || 'text';
 
-  if (!accountId || !recipientId || !message) {
+  // A blank message is a client error, not something to deliver: the text is checked after trimming, so whitespace-only text is refused like a missing one.
+  if (!accountId || !recipientId || !message.trim()) {
     await recordApiRefusal(supabase, { userId, route: 'messages/reply', code: 'INVALID_MESSAGE', status: 400, accountId });
     return apiError(req, 'social_account_id, recipient_id, and message are required', 400, 'INVALID_MESSAGE');
   }
