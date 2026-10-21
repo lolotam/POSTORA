@@ -9,8 +9,15 @@
 // The schema therefore accepts any value and the handler decides:
 // `confirm: true` runs the tool, anything else is refused and recorded.
 //
-// The database client and the hashing function are injected so the gate owns
-// no client of its own and can be exercised without a database or a network.
+// A refusal is only ever recorded for an AUTHENTICATED owner. The MCP edge
+// resolves the caller to a profile before any tool runs (see ./keyOwner.ts)
+// and refuses an unauthenticated request with 401 before a server is even
+// built, so there is no unauthenticated caller that can reach this gate and
+// no row is ever written without an owner. The owner is therefore passed in
+// as an id, and the gate resolves nothing itself.
+//
+// The database client is injected so the gate owns no client of its own and
+// can be exercised without a database or a network.
 
 import { z } from "npm:zod@4.1.12";
 
@@ -20,7 +27,6 @@ export const confirmField = z.unknown().optional().describe(
 
 export interface ConfirmGateDeps {
   admin: any;
-  sha256Hex: (text: string) => Promise<string>;
 }
 
 export interface ConfirmRefusal {
@@ -37,58 +43,30 @@ function refusal(): ConfirmRefusal {
 /**
  * Record a refusal in system_logs.
  *
- * Every refusal has to leave a durable trace (AGENTS.md rule 4), so the owner
- * is resolved from the caller's key and the refusal is written under it.
- *
- * The row is written either way. A failed lookup, a missing owner or a thrown
- * error only means the owner could not be resolved: the refusal is then
- * recorded with `user_id: null` and `metadata.owner_resolved: false`, so the
- * refusal still leaves a trace instead of vanishing with the lookup.
+ * Every refusal has to leave a durable trace (AGENTS.md rule 4), and the row
+ * is written under the authenticated owner the edge resolved for the
+ * request. There is no ownerless row: an unauthenticated request never
+ * reaches this gate.
  *
  * The row names the tool and the code only. The arguments, the API key and
  * its hash stay out of it.
  *
- * A failed lookup, a missing owner, a failed insert or a thrown error are
- * all reported on the edge and then swallowed: the recorder never throws,
- * and it never lets a broken log turn into a broken answer.
+ * A failed insert or a thrown error is reported on the edge and then
+ * swallowed: the recorder never throws, and it never lets a broken log turn
+ * into a broken answer.
  */
 export async function recordMcpRefusal(
   deps: ConfirmGateDeps,
-  request: { apiKey: string; tool: string; code: string },
+  request: { userId: string; tool: string; code: string },
 ): Promise<void> {
-  // The owner, when it can be resolved. The row is written either way, so a
-  // failure here costs the row its owner, not the row itself.
-  let userId: string | null = null;
-  let ownerResolved = false;
-
-  try {
-    const apiKeyHash = await deps.sha256Hex(request.apiKey);
-    const { data: profile, error } = await deps.admin
-      .from("profiles")
-      .select("id")
-      .eq("api_key_hash", apiKeyHash)
-      .maybeSingle();
-
-    if (error) {
-      console.error(`[mcp] ${request.tool} refused: owner lookup failed`);
-    } else if (!profile) {
-      console.error(`[mcp] ${request.tool} refused: owner not found`);
-    } else {
-      userId = profile.id;
-      ownerResolved = true;
-    }
-  } catch {
-    console.error(`[mcp] ${request.tool} refused: owner lookup failed`);
-  }
-
   try {
     const { error: insertError } = await deps.admin.from("system_logs").insert({
       source: "mcp",
       category: "edge",
       level: "warn",
       message: `${request.tool} refused: ${request.code}`,
-      user_id: userId,
-      metadata: { tool: request.tool, code: request.code, owner_resolved: ownerResolved },
+      user_id: request.userId,
+      metadata: { tool: request.tool, code: request.code },
     });
     if (insertError) {
       console.error(`[mcp] ${request.tool} refused: log insert failed`);
@@ -157,7 +135,7 @@ function rejectedToolName(rpcRequest: unknown): string | null {
  */
 export async function auditSchemaRejection(
   deps: ConfirmGateDeps,
-  request: { apiKey: string; error: unknown; rpcRequest: unknown },
+  request: { userId: string; error: unknown; rpcRequest: unknown },
 ): Promise<void> {
   try {
     if (!isInvalidParams(request.error)) return;
@@ -165,7 +143,7 @@ export async function auditSchemaRejection(
     if (tool === null) return;
 
     await recordMcpRefusal(deps, {
-      apiKey: request.apiKey,
+      userId: request.userId,
       tool,
       code: "INVALID_PARAMS",
     });
@@ -185,18 +163,18 @@ export async function auditSchemaRejection(
  * The log names the tool and the code only. The arguments, the API key and
  * its hash stay out of it.
  *
- * A failed lookup, a missing owner, a failed insert or a thrown error are
- * all reported on the edge and then answered with the same refusal: the gate
- * never throws, and it never lets a broken log turn into a broken answer.
+ * A failed insert or a thrown error is reported on the edge and then
+ * answered with the same refusal: the gate never throws, and it never lets
+ * a broken log turn into a broken answer.
  */
 export async function refuseUnconfirmed(
   deps: ConfirmGateDeps,
-  request: { apiKey: string; tool: string; confirm: unknown },
+  request: { userId: string; tool: string; confirm: unknown },
 ): Promise<ConfirmRefusal | null> {
   if (request.confirm === true) return null;
 
   await recordMcpRefusal(deps, {
-    apiKey: request.apiKey,
+    userId: request.userId,
     tool: request.tool,
     code: "CONFIRMATION_REQUIRED",
   });

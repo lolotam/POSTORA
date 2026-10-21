@@ -20,14 +20,13 @@ interface FakeQueryBuilder {
 }
 
 interface FakeAdminOptions {
-  profile?: { id: string } | null;
-  lookupError?: { message: string } | null;
   insertError?: { message: string } | null;
-  throwOn?: "maybeSingle" | "insert" | null;
+  throwOn?: "insert" | null;
 }
 
 // A fake admin that records every call the gate makes. Nothing here talks to
-// a database or to the network.
+// a database or to the network. The query methods are there so that a lookup
+// the gate must no longer perform would show up in the recorded calls.
 function createFakeAdmin(options: FakeAdminOptions = {}) {
   const calls: FakeCall[] = [];
   const inserts: { table: string; row: Record<string, unknown> }[] = [];
@@ -46,9 +45,7 @@ function createFakeAdmin(options: FakeAdminOptions = {}) {
         },
         async maybeSingle() {
           calls.push({ method: "maybeSingle", args: [] });
-          if (options.throwOn === "maybeSingle") throw new Error("database is down");
-          if (options.lookupError) return { data: null, error: options.lookupError };
-          return { data: options.profile ?? null, error: null };
+          return { data: null, error: null };
         },
         async insert(row: Record<string, unknown>) {
           calls.push({ method: "insert", args: [row] });
@@ -64,11 +61,9 @@ function createFakeAdmin(options: FakeAdminOptions = {}) {
   return { admin, calls, inserts };
 }
 
-// The key is hashed exactly like the API hashes it before looking the owner
-// up: sha256Hex(apiKey) against profiles.api_key_hash.
-const sha256Hex = async (_text: string): Promise<string> => "hashed-placeholder";
-
-const CALLER_PLACEHOLDER = "placeholder-caller";
+// The owner the edge resolved before the tool ran. The gate never resolves
+// an owner itself: it is given the id and writes the row under it.
+const OWNER_ID = "user-42";
 
 const EXPECTED_REFUSAL: ConfirmRefusal = {
   code: "CONFIRMATION_REQUIRED",
@@ -84,11 +79,11 @@ Deno.test("the confirm field takes any value, so the handler refuses and records
 });
 
 Deno.test("a confirmed call is allowed and touches no database", async () => {
-  const { admin, calls } = createFakeAdmin({ profile: { id: "user-1" } });
+  const { admin, calls } = createFakeAdmin();
 
   const refusal = await refuseUnconfirmed(
-    { admin, sha256Hex },
-    { apiKey: CALLER_PLACEHOLDER, tool: "delete_comment", confirm: true },
+    { admin },
+    { userId: OWNER_ID, tool: "delete_comment", confirm: true },
   );
 
   assertEquals(refusal, null);
@@ -96,27 +91,19 @@ Deno.test("a confirmed call is allowed and touches no database", async () => {
 });
 
 Deno.test("a missing confirm is refused and the refusal is recorded", async () => {
-  const { admin, calls, inserts } = createFakeAdmin({ profile: { id: "user-42" } });
+  const { admin, calls, inserts } = createFakeAdmin();
 
   const refusal = await refuseUnconfirmed(
-    { admin, sha256Hex },
-    { apiKey: CALLER_PLACEHOLDER, tool: "delete_comment", confirm: undefined },
+    { admin },
+    { userId: OWNER_ID, tool: "delete_comment", confirm: undefined },
   );
 
   assertEquals(refusal, EXPECTED_REFUSAL);
 
-  // The owner is resolved the way the API resolves an API key.
-  assertEquals(calls.map((call) => call.method), [
-    "from",
-    "select",
-    "eq",
-    "maybeSingle",
-    "from",
-    "insert",
-  ]);
-  assertEquals(calls[0].args, ["profiles"]);
-  assertEquals(calls[1].args, ["id"]);
-  assertEquals(calls[2].args, ["api_key_hash", "hashed-placeholder"]);
+  // The owner is the one the edge resolved. The gate reads no profile: an
+  // unauthenticated caller never reaches it.
+  assertEquals(calls.map((call) => call.method), ["from", "insert"]);
+  assertEquals(calls[0].args, ["system_logs"]);
 
   // One row, naming the tool and the code and nothing else.
   assertEquals(inserts.length, 1);
@@ -126,142 +113,96 @@ Deno.test("a missing confirm is refused and the refusal is recorded", async () =
     category: "edge",
     level: "warn",
     message: "delete_comment refused: CONFIRMATION_REQUIRED",
-    user_id: "user-42",
+    user_id: OWNER_ID,
     metadata: {
       tool: "delete_comment",
       code: "CONFIRMATION_REQUIRED",
-      owner_resolved: true,
     },
   });
 
   const metadata = inserts[0].row.metadata as Record<string, unknown>;
-  assertEquals(Object.keys(metadata).sort(), ["code", "owner_resolved", "tool"]);
+  assertEquals(Object.keys(metadata).sort(), ["code", "tool"]);
 
-  // The arguments, the key and its hash are not in the row.
-  const serialized = JSON.stringify(inserts[0].row);
-  assertEquals(serialized.includes(CALLER_PLACEHOLDER), false);
-  assertEquals(serialized.includes("hashed-placeholder"), false);
+  // The arguments are not in the row.
   assertEquals("args" in metadata, false);
   assertEquals("arguments" in metadata, false);
   assertEquals("api_key" in inserts[0].row, false);
 });
 
-Deno.test("confirm: false is refused and recorded like a missing confirm", async () => {
-  const { admin, inserts } = createFakeAdmin({ profile: { id: "user-42" } });
+Deno.test("the refusal is recorded under the owner the edge resolved", async () => {
+  const { admin, inserts } = createFakeAdmin();
 
   const refusal = await refuseUnconfirmed(
-    { admin, sha256Hex },
-    { apiKey: CALLER_PLACEHOLDER, tool: "cancel_scheduled_post", confirm: false },
+    { admin },
+    { userId: "another-owner", tool: "hide_comment", confirm: undefined },
   );
 
   assertEquals(refusal, EXPECTED_REFUSAL);
   assertEquals(inserts.length, 1);
   assertEquals(inserts[0].table, "system_logs");
-  assertEquals(inserts[0].row.user_id, "user-42");
+  assertEquals(inserts[0].row.user_id, "another-owner");
+});
+
+Deno.test("confirm: false is refused and recorded like a missing confirm", async () => {
+  const { admin, inserts } = createFakeAdmin();
+
+  const refusal = await refuseUnconfirmed(
+    { admin },
+    { userId: OWNER_ID, tool: "cancel_scheduled_post", confirm: false },
+  );
+
+  assertEquals(refusal, EXPECTED_REFUSAL);
+  assertEquals(inserts.length, 1);
+  assertEquals(inserts[0].table, "system_logs");
+  assertEquals(inserts[0].row.user_id, OWNER_ID);
   assertEquals(inserts[0].row.metadata as Record<string, unknown>, {
     tool: "cancel_scheduled_post",
     code: "CONFIRMATION_REQUIRED",
-    owner_resolved: true,
   });
 });
 
 Deno.test('confirm: "true" (a string) is refused and recorded', async () => {
-  const { admin, inserts } = createFakeAdmin({ profile: { id: "user-42" } });
+  const { admin, inserts } = createFakeAdmin();
 
   const refusal = await refuseUnconfirmed(
-    { admin, sha256Hex },
-    { apiKey: CALLER_PLACEHOLDER, tool: "delete_comment", confirm: "true" },
+    { admin },
+    { userId: OWNER_ID, tool: "delete_comment", confirm: "true" },
   );
 
   assertEquals(refusal, EXPECTED_REFUSAL);
   assertEquals(inserts.length, 1);
   assertEquals(inserts[0].table, "system_logs");
-  assertEquals(inserts[0].row.user_id, "user-42");
+  assertEquals(inserts[0].row.user_id, OWNER_ID);
   assertEquals(inserts[0].row.metadata as Record<string, unknown>, {
     tool: "delete_comment",
     code: "CONFIRMATION_REQUIRED",
-    owner_resolved: true,
   });
 });
 
 Deno.test("confirm: null is refused and recorded", async () => {
-  const { admin, inserts } = createFakeAdmin({ profile: { id: "user-42" } });
+  const { admin, inserts } = createFakeAdmin();
 
   const refusal = await refuseUnconfirmed(
-    { admin, sha256Hex },
-    { apiKey: CALLER_PLACEHOLDER, tool: "delete_comment", confirm: null },
+    { admin },
+    { userId: OWNER_ID, tool: "delete_comment", confirm: null },
   );
 
   assertEquals(refusal, EXPECTED_REFUSAL);
   assertEquals(inserts.length, 1);
   assertEquals(inserts[0].table, "system_logs");
-  assertEquals(inserts[0].row.user_id, "user-42");
+  assertEquals(inserts[0].row.user_id, OWNER_ID);
   assertEquals(inserts[0].row.metadata as Record<string, unknown>, {
     tool: "delete_comment",
     code: "CONFIRMATION_REQUIRED",
-    owner_resolved: true,
-  });
-});
-
-Deno.test("an unknown owner is refused and still writes a row without an owner", async () => {
-  const { admin, calls, inserts } = createFakeAdmin({ profile: null });
-
-  const refusal = await refuseUnconfirmed(
-    { admin, sha256Hex },
-    { apiKey: CALLER_PLACEHOLDER, tool: "hide_comment", confirm: undefined },
-  );
-
-  assertEquals(refusal, EXPECTED_REFUSAL);
-
-  // The refusal leaves a trace even without an owner.
-  assertEquals(inserts.length, 1);
-  assertEquals(inserts[0].table, "system_logs");
-  assertEquals(inserts[0].row.user_id, null);
-  assertEquals(inserts[0].row.metadata as Record<string, unknown>, {
-    tool: "hide_comment",
-    code: "CONFIRMATION_REQUIRED",
-    owner_resolved: false,
-  });
-  assertEquals(calls.map((call) => call.method), [
-    "from",
-    "select",
-    "eq",
-    "maybeSingle",
-    "from",
-    "insert",
-  ]);
-});
-
-Deno.test("a failed owner lookup is refused and still writes a row without an owner", async () => {
-  const { admin, inserts } = createFakeAdmin({ lookupError: { message: "database is down" } });
-
-  const refusal = await refuseUnconfirmed(
-    { admin, sha256Hex },
-    { apiKey: CALLER_PLACEHOLDER, tool: "delete_comment", confirm: undefined },
-  );
-
-  assertEquals(refusal, EXPECTED_REFUSAL);
-
-  // The refusal leaves a trace even without an owner.
-  assertEquals(inserts.length, 1);
-  assertEquals(inserts[0].table, "system_logs");
-  assertEquals(inserts[0].row.user_id, null);
-  assertEquals(inserts[0].row.metadata as Record<string, unknown>, {
-    tool: "delete_comment",
-    code: "CONFIRMATION_REQUIRED",
-    owner_resolved: false,
   });
 });
 
 Deno.test("a failed log insert still refuses and never throws", async () => {
-  const { admin, inserts } = createFakeAdmin({
-    profile: { id: "user-42" },
-    insertError: { message: "insert failed" },
-  });
+  const { admin, inserts } = createFakeAdmin({ insertError: { message: "insert failed" } });
 
   const refusal = await refuseUnconfirmed(
-    { admin, sha256Hex },
-    { apiKey: CALLER_PLACEHOLDER, tool: "delete_comment", confirm: undefined },
+    { admin },
+    { userId: OWNER_ID, tool: "delete_comment", confirm: undefined },
   );
 
   assertEquals(refusal, EXPECTED_REFUSAL);
@@ -269,80 +210,27 @@ Deno.test("a failed log insert still refuses and never throws", async () => {
 });
 
 Deno.test("a throwing log insert still refuses and never throws", async () => {
-  const { admin } = createFakeAdmin({ profile: { id: "user-42" }, throwOn: "insert" });
+  const { admin } = createFakeAdmin({ throwOn: "insert" });
 
   const refusal = await refuseUnconfirmed(
-    { admin, sha256Hex },
-    { apiKey: CALLER_PLACEHOLDER, tool: "delete_comment", confirm: undefined },
+    { admin },
+    { userId: OWNER_ID, tool: "delete_comment", confirm: undefined },
   );
 
   assertEquals(refusal, EXPECTED_REFUSAL);
-});
-
-Deno.test("a throwing database client refuses instead of throwing", async () => {
-  const { admin, inserts } = createFakeAdmin({ throwOn: "maybeSingle" });
-
-  const refusal = await refuseUnconfirmed(
-    { admin, sha256Hex },
-    { apiKey: CALLER_PLACEHOLDER, tool: "delete_comment", confirm: undefined },
-  );
-
-  assertEquals(refusal, EXPECTED_REFUSAL);
-
-  // The thrown lookup costs the row its owner, not the row itself.
-  assertEquals(inserts.length, 1);
-  assertEquals(inserts[0].table, "system_logs");
-  assertEquals(inserts[0].row.user_id, null);
-  assertEquals(inserts[0].row.metadata as Record<string, unknown>, {
-    tool: "delete_comment",
-    code: "CONFIRMATION_REQUIRED",
-    owner_resolved: false,
-  });
-});
-
-Deno.test("a throwing hash refuses instead of throwing and still writes a row", async () => {
-  const { admin, inserts } = createFakeAdmin({ profile: { id: "user-42" } });
-  const throwingHash = async (_text: string): Promise<string> => {
-    throw new Error("hashing is unavailable");
-  };
-
-  const refusal = await refuseUnconfirmed(
-    { admin, sha256Hex: throwingHash },
-    { apiKey: CALLER_PLACEHOLDER, tool: "delete_comment", confirm: undefined },
-  );
-
-  assertEquals(refusal, EXPECTED_REFUSAL);
-
-  // The owner was never resolved, so the row is written without one.
-  assertEquals(inserts.length, 1);
-  assertEquals(inserts[0].table, "system_logs");
-  assertEquals(inserts[0].row.user_id, null);
-  assertEquals(inserts[0].row.metadata as Record<string, unknown>, {
-    tool: "delete_comment",
-    code: "CONFIRMATION_REQUIRED",
-    owner_resolved: false,
-  });
 });
 
 Deno.test("recordMcpRefusal writes one row naming the tool and the code, and nothing else", async () => {
-  const { admin, calls, inserts } = createFakeAdmin({ profile: { id: "user-42" } });
+  const { admin, calls, inserts } = createFakeAdmin();
 
   await recordMcpRefusal(
-    { admin, sha256Hex },
-    { apiKey: CALLER_PLACEHOLDER, tool: "reply_to_message", code: "INVALID_MESSAGE" },
+    { admin },
+    { userId: OWNER_ID, tool: "reply_to_message", code: "INVALID_MESSAGE" },
   );
 
-  // The owner is resolved the way the API resolves an API key.
-  assertEquals(calls.map((call) => call.method), [
-    "from",
-    "select",
-    "eq",
-    "maybeSingle",
-    "from",
-    "insert",
-  ]);
-  assertEquals(calls[0].args, ["profiles"]);
-  assertEquals(calls[2].args, ["api_key_hash", "hashed-placeholder"]);
+  // The owner comes from the edge. The gate reads no profile.
+  assertEquals(calls.map((call) => call.method), ["from", "insert"]);
+  assertEquals(calls[0].args, ["system_logs"]);
 
   // One row, naming the tool and the code and nothing else.
   assertEquals(inserts.length, 1);
@@ -352,34 +240,30 @@ Deno.test("recordMcpRefusal writes one row naming the tool and the code, and not
     category: "edge",
     level: "warn",
     message: "reply_to_message refused: INVALID_MESSAGE",
-    user_id: "user-42",
+    user_id: OWNER_ID,
     metadata: {
       tool: "reply_to_message",
       code: "INVALID_MESSAGE",
-      owner_resolved: true,
     },
   });
 
   const metadata = inserts[0].row.metadata as Record<string, unknown>;
-  assertEquals(Object.keys(metadata).sort(), ["code", "owner_resolved", "tool"]);
+  assertEquals(Object.keys(metadata).sort(), ["code", "tool"]);
 
-  // The arguments, the key and its hash are not in the row.
-  const serialized = JSON.stringify(inserts[0].row);
-  assertEquals(serialized.includes(CALLER_PLACEHOLDER), false);
-  assertEquals(serialized.includes("hashed-placeholder"), false);
+  // The arguments are not in the row.
+  assertEquals("args" in metadata, false);
+  assertEquals("arguments" in metadata, false);
+  assertEquals("api_key" in inserts[0].row, false);
 });
 
 Deno.test("a failed insert in recordMcpRefusal does not throw", async () => {
-  const { admin, inserts } = createFakeAdmin({
-    profile: { id: "user-42" },
-    insertError: { message: "insert failed" },
-  });
+  const { admin, inserts } = createFakeAdmin({ insertError: { message: "insert failed" } });
 
   let thrown: unknown = null;
   try {
     await recordMcpRefusal(
-      { admin, sha256Hex },
-      { apiKey: CALLER_PLACEHOLDER, tool: "reply_to_message", code: "INVALID_MESSAGE" },
+      { admin },
+      { userId: OWNER_ID, tool: "reply_to_message", code: "INVALID_MESSAGE" },
     );
   } catch (error) {
     thrown = error;
@@ -387,6 +271,22 @@ Deno.test("a failed insert in recordMcpRefusal does not throw", async () => {
 
   assertEquals(thrown, null);
   assertEquals(inserts.length, 1);
+});
+
+Deno.test("a throwing insert in recordMcpRefusal does not throw", async () => {
+  const { admin } = createFakeAdmin({ throwOn: "insert" });
+
+  let thrown: unknown = null;
+  try {
+    await recordMcpRefusal(
+      { admin },
+      { userId: OWNER_ID, tool: "reply_to_message", code: "INVALID_MESSAGE" },
+    );
+  } catch (error) {
+    thrown = error;
+  }
+
+  assertEquals(thrown, null);
 });
 
 // ── the schema rejection ───────────────────────────────────────────────────────
@@ -399,12 +299,12 @@ Deno.test("a failed insert in recordMcpRefusal does not throw", async () => {
 const INVALID_PARAMS = -32602;
 
 Deno.test("a schema rejection of a tool call is recorded as a refusal", async () => {
-  const { admin, inserts } = createFakeAdmin({ profile: { id: "user-42" } });
+  const { admin, inserts } = createFakeAdmin();
 
   await auditSchemaRejection(
-    { admin, sha256Hex },
+    { admin },
     {
-      apiKey: CALLER_PLACEHOLDER,
+      userId: OWNER_ID,
       error: { code: INVALID_PARAMS, message: "Invalid params" },
       rpcRequest: {
         method: "tools/call",
@@ -419,32 +319,48 @@ Deno.test("a schema rejection of a tool call is recorded as a refusal", async ()
   // One row, naming the tool and the code and nothing else.
   assertEquals(inserts.length, 1);
   assertEquals(inserts[0].table, "system_logs");
-  assertEquals(inserts[0].row.user_id, "user-42");
+  assertEquals(inserts[0].row.user_id, OWNER_ID);
   assertEquals(inserts[0].row.metadata as Record<string, unknown>, {
     tool: "reply_to_message",
     code: "INVALID_PARAMS",
-    owner_resolved: true,
   });
 
   const metadata = inserts[0].row.metadata as Record<string, unknown>;
-  assertEquals(Object.keys(metadata).sort(), ["code", "owner_resolved", "tool"]);
+  assertEquals(Object.keys(metadata).sort(), ["code", "tool"]);
 
-  // The arguments are not in the row, and neither are the key and its hash.
+  // The arguments are not in the row.
   const serialized = JSON.stringify(inserts[0].row);
   assertEquals(serialized.includes("arguments"), false);
   assertEquals(serialized.includes("hello there"), false);
   assertEquals(serialized.includes("account-1"), false);
-  assertEquals(serialized.includes(CALLER_PLACEHOLDER), false);
-  assertEquals(serialized.includes("hashed-placeholder"), false);
+});
+
+Deno.test("a schema rejection is recorded under the owner the edge resolved", async () => {
+  const { admin, inserts } = createFakeAdmin();
+
+  await auditSchemaRejection(
+    { admin },
+    {
+      userId: "another-owner",
+      error: { code: INVALID_PARAMS, message: "Invalid params" },
+      rpcRequest: {
+        method: "tools/call",
+        params: { name: "reply_to_message", arguments: {} },
+      },
+    },
+  );
+
+  assertEquals(inserts.length, 1);
+  assertEquals(inserts[0].row.user_id, "another-owner");
 });
 
 Deno.test("a schema rejection of a method that is not a tool call is not recorded", async () => {
-  const { admin, calls, inserts } = createFakeAdmin({ profile: { id: "user-42" } });
+  const { admin, calls, inserts } = createFakeAdmin();
 
   await auditSchemaRejection(
-    { admin, sha256Hex },
+    { admin },
     {
-      apiKey: CALLER_PLACEHOLDER,
+      userId: OWNER_ID,
       error: { code: INVALID_PARAMS, message: "Invalid params" },
       rpcRequest: { method: "tools/list", params: { name: "reply_to_message" } },
     },
@@ -456,12 +372,12 @@ Deno.test("a schema rejection of a method that is not a tool call is not recorde
 });
 
 Deno.test("an error that is not a schema rejection is not recorded", async () => {
-  const { admin, calls, inserts } = createFakeAdmin({ profile: { id: "user-42" } });
+  const { admin, calls, inserts } = createFakeAdmin();
 
   await auditSchemaRejection(
-    { admin, sha256Hex },
+    { admin },
     {
-      apiKey: CALLER_PLACEHOLDER,
+      userId: OWNER_ID,
       error: { code: -32601, message: "Method not found" },
       rpcRequest: {
         method: "tools/call",
@@ -475,12 +391,12 @@ Deno.test("an error that is not a schema rejection is not recorded", async () =>
 });
 
 Deno.test("an error that is not an error object is not recorded", async () => {
-  const { admin, calls, inserts } = createFakeAdmin({ profile: { id: "user-42" } });
+  const { admin, calls, inserts } = createFakeAdmin();
 
   await auditSchemaRejection(
-    { admin, sha256Hex },
+    { admin },
     {
-      apiKey: CALLER_PLACEHOLDER,
+      userId: OWNER_ID,
       error: "invalid params",
       rpcRequest: {
         method: "tools/call",
@@ -502,12 +418,12 @@ Deno.test("a tool name that is not a tool name is recorded as unknown", async ()
   ];
 
   for (const testCase of cases) {
-    const { admin, inserts } = createFakeAdmin({ profile: { id: "user-42" } });
+    const { admin, inserts } = createFakeAdmin();
 
     await auditSchemaRejection(
-      { admin, sha256Hex },
+      { admin },
       {
-        apiKey: CALLER_PLACEHOLDER,
+        userId: OWNER_ID,
         error: { code: INVALID_PARAMS, message: "Invalid params" },
         rpcRequest: {
           method: "tools/call",
@@ -521,18 +437,17 @@ Deno.test("a tool name that is not a tool name is recorded as unknown", async ()
     assertEquals(inserts[0].row.metadata as Record<string, unknown>, {
       tool: "unknown",
       code: "INVALID_PARAMS",
-      owner_resolved: true,
     }, testCase.label);
   }
 });
 
 Deno.test("a rejected tool call that names no tool is recorded as unknown", async () => {
-  const { admin, inserts } = createFakeAdmin({ profile: { id: "user-42" } });
+  const { admin, inserts } = createFakeAdmin();
 
   await auditSchemaRejection(
-    { admin, sha256Hex },
+    { admin },
     {
-      apiKey: CALLER_PLACEHOLDER,
+      userId: OWNER_ID,
       error: { code: INVALID_PARAMS, message: "Invalid params" },
       rpcRequest: { method: "tools/call", params: { arguments: {} } },
     },
@@ -542,43 +457,18 @@ Deno.test("a rejected tool call that names no tool is recorded as unknown", asyn
   assertEquals(inserts[0].row.metadata as Record<string, unknown>, {
     tool: "unknown",
     code: "INVALID_PARAMS",
-    owner_resolved: true,
-  });
-});
-
-Deno.test("a schema rejection whose owner cannot be resolved still writes a row", async () => {
-  const { admin, inserts } = createFakeAdmin({ profile: null });
-
-  await auditSchemaRejection(
-    { admin, sha256Hex },
-    {
-      apiKey: CALLER_PLACEHOLDER,
-      error: { code: INVALID_PARAMS, message: "Invalid params" },
-      rpcRequest: {
-        method: "tools/call",
-        params: { name: "reply_to_message", arguments: {} },
-      },
-    },
-  );
-
-  assertEquals(inserts.length, 1);
-  assertEquals(inserts[0].row.user_id, null);
-  assertEquals(inserts[0].row.metadata as Record<string, unknown>, {
-    tool: "reply_to_message",
-    code: "INVALID_PARAMS",
-    owner_resolved: false,
   });
 });
 
 Deno.test("the auditor never throws, whatever the database does", async () => {
-  const { admin } = createFakeAdmin({ throwOn: "maybeSingle" });
+  const { admin } = createFakeAdmin({ throwOn: "insert" });
 
   let thrown: unknown = null;
   try {
     await auditSchemaRejection(
-      { admin, sha256Hex },
+      { admin },
       {
-        apiKey: CALLER_PLACEHOLDER,
+        userId: OWNER_ID,
         error: { code: INVALID_PARAMS, message: "Invalid params" },
         rpcRequest: {
           method: "tools/call",

@@ -14,6 +14,7 @@ import {
   recordMcpRefusal,
   refuseUnconfirmed,
 } from "./confirmGate.ts";
+import { resolveKeyOwner } from "./keyOwner.ts";
 import { sha256Hex } from "../_shared/crypto.ts";
 
 const corsHeaders = {
@@ -137,6 +138,30 @@ function fail(status: number, data: unknown) {
   };
 }
 
+// A JSON-RPC error answer, with the CORS headers every answer carries.
+function jsonRpcError(
+  status: number,
+  code: number,
+  message: string,
+  extraHeaders: Record<string, string> = {},
+): Response {
+  return new Response(
+    JSON.stringify({
+      jsonrpc: "2.0",
+      error: { code, message },
+      id: null,
+    }),
+    {
+      status,
+      headers: {
+        ...corsHeaders,
+        "Content-Type": "application/json",
+        ...extraHeaders,
+      },
+    },
+  );
+}
+
 // Comments and DMs are written by outside people. They reach the model as
 // data, so the result is wrapped with a notice telling the model not to treat
 // anything inside it as an instruction (indirect prompt injection), above all
@@ -153,9 +178,14 @@ function okUntrusted(data: unknown) {
 // Destructive tools take `confirm: true` so a model has to state the intent
 // explicitly. The refusal is made in the handler, in ./confirmGate.ts, so it
 // can be recorded in system_logs instead of vanishing at the schema.
+//
+// A refusal is only ever recorded for an authenticated owner. The owner is
+// resolved before the server is built (see ./keyOwner.ts and app.all below):
+// an unauthenticated request is refused with 401 before any tool runs, so no
+// refusal can ever be recorded for a caller nobody authenticated.
 
-// Build a fresh MCP server bound to a specific user's API key.
-function buildServer(apiKey: string) {
+// Build a fresh MCP server bound to a specific user's API key and owner.
+function buildServer(apiKey: string, ownerId: string) {
   const server = new McpServer({
     name: "postora",
     version: "1.0.0",
@@ -170,7 +200,7 @@ function buildServer(apiKey: string) {
   // a refusal: the schema rejection leaves a row too. The framework's own
   // error response is kept: the hook answers nothing of its own.
   server.onError(async (error, ctx) => {
-    await auditSchemaRejection({ admin, sha256Hex }, { apiKey, error, rpcRequest: ctx.request });
+    await auditSchemaRejection({ admin }, { userId: ownerId, error, rpcRequest: ctx.request });
     return undefined;
   });
 
@@ -427,7 +457,7 @@ function buildServer(apiKey: string) {
       confirm: confirmField,
     }),
     handler: async (args) => {
-      const refusal = await refuseUnconfirmed({ admin, sha256Hex }, { apiKey, tool: "hide_comment", confirm: args.confirm });
+      const refusal = await refuseUnconfirmed({ admin }, { userId: ownerId, tool: "hide_comment", confirm: args.confirm });
       if (refusal) return fail(400, refusal);
       const r = await callN8n(apiKey, "POST", "/api/v1/comments/hide", {
         social_account_id: args.social_account_id,
@@ -447,7 +477,7 @@ function buildServer(apiKey: string) {
       confirm: confirmField,
     }),
     handler: async (args) => {
-      const refusal = await refuseUnconfirmed({ admin, sha256Hex }, { apiKey, tool: "delete_comment", confirm: args.confirm });
+      const refusal = await refuseUnconfirmed({ admin }, { userId: ownerId, tool: "delete_comment", confirm: args.confirm });
       if (refusal) return fail(400, refusal);
       const r = await callN8n(apiKey, "POST", "/api/v1/comments/delete", {
         social_account_id: args.social_account_id,
@@ -482,8 +512,8 @@ function buildServer(apiKey: string) {
       const recipientPhone = args.recipient_phone?.trim();
       if (!recipientId && !recipientPhone) {
         await recordMcpRefusal(
-          { admin, sha256Hex },
-          { apiKey, tool: "reply_to_message", code: "INVALID_MESSAGE" },
+          { admin },
+          { userId: ownerId, tool: "reply_to_message", code: "INVALID_MESSAGE" },
         );
         return fail(400, {
           code: "INVALID_MESSAGE",
@@ -528,7 +558,7 @@ function buildServer(apiKey: string) {
       confirm: confirmField,
     }),
     handler: async (args) => {
-      const refusal = await refuseUnconfirmed({ admin, sha256Hex }, { apiKey, tool: "cancel_scheduled_post", confirm: args.confirm });
+      const refusal = await refuseUnconfirmed({ admin }, { userId: ownerId, tool: "cancel_scheduled_post", confirm: args.confirm });
       if (refusal) return fail(400, refusal);
       const r = await callN8n(apiKey, "POST", "/api/v1/posts/cancel", { post_id: args.post_id });
       return r.status >= 400 ? fail(r.status, r.data) : ok(r.data);
@@ -606,29 +636,35 @@ app.all("/*", async (c) => {
     apiKey = await resolveOAuthToken(presented, req.headers.get("user-agent") ?? undefined);
   }
   if (!apiKey) {
-    return new Response(
-      JSON.stringify({
-        jsonrpc: "2.0",
-        error: {
-          code: -32001,
-          message: presented
-            ? "Invalid or expired access token."
-            : "Missing access token. Authorize via OAuth or pass a Postora API key.",
-        },
-        id: null,
-      }),
-      {
-        status: 401,
-        headers: {
-          ...corsHeaders,
-          "Content-Type": "application/json",
-          "WWW-Authenticate": WWW_AUTHENTICATE,
-        },
-      },
+    return jsonRpcError(
+      401,
+      -32001,
+      presented
+        ? "Invalid or expired access token."
+        : "Missing access token. Authorize via OAuth or pass a Postora API key.",
+      { "WWW-Authenticate": WWW_AUTHENTICATE },
     );
   }
 
-  const server = buildServer(apiKey);
+  // Authenticate the caller before anything else happens. A key that belongs
+  // to no profile is not a valid key: the request is refused here, before a
+  // server is built and before any tool can run, so an unauthenticated
+  // caller can never reach a refusal path that writes a system_logs row.
+  // The owner is resolved once and passed to the server, so every refusal is
+  // recorded under a real user.
+  const owner = await resolveKeyOwner({ admin, sha256Hex }, apiKey);
+  if (owner.kind === "unknown") {
+    return jsonRpcError(401, -32001, "Invalid or expired access token.", {
+      "WWW-Authenticate": WWW_AUTHENTICATE,
+    });
+  }
+  if (owner.kind === "error") {
+    // The lookup failed, so the edge cannot tell whether the caller is
+    // allowed in. That is an outage, not an invalid key.
+    return jsonRpcError(503, -32603, "Authentication is temporarily unavailable. Try again.");
+  }
+
+  const server = buildServer(apiKey, owner.userId);
   const transport = new StreamableHttpTransport();
   const handler = transport.bind(server);
   const res = await handler(req);
