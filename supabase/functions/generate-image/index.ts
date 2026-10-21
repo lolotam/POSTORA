@@ -12,6 +12,7 @@ import { collectReferences, isPublicHttpsUrl, parseDataUrl } from "../_shared/im
 import type { ReferenceInput } from "../_shared/image-references.ts";
 import { vercelGenerateImage } from "../_shared/vercelGateway.ts";
 import { pickRequestedModelRow } from "./modelChoice.ts";
+import { serviceRoleCallerUserId } from "../_shared/auth-helper.ts";
 
 // A reference image reaches us either as a `data:` URL — the dialog reads
 // uploads with FileReader.readAsDataURL — or as an https URL from the media
@@ -772,11 +773,23 @@ serve(async (req) => {
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
     );
 
-    const { data: { user }, error: userError } = await supabaseClient.auth.getUser(token);
-
-    if (userError || !user) {
-      console.error('Auth User Error:', userError);
+    let serviceUserId: string | null;
+    try {
+      serviceUserId = await serviceRoleCallerUserId(req);
+    } catch {
       return unauthorizedResponse();
+    }
+    let user: { id: string };
+    if (serviceUserId) {
+      user = { id: serviceUserId };
+    } else {
+      const { data: { user: authUser }, error: userError } = await supabaseClient.auth.getUser(token);
+
+      if (userError || !authUser) {
+        console.error('Auth User Error:', userError);
+        return unauthorizedResponse();
+      }
+      user = authUser;
     }
 
     console.log('User authenticated:', user.id);

@@ -77,3 +77,22 @@ export async function authenticateCaller(
 
   return { userId: jwtUserId, isServiceRole: false };
 }
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+/**
+ * For functions that keep their own user-JWT check. Returns the user a
+ * service-role call acts for (the `user_id` in its JSON body), or null when the
+ * bearer token is not the service-role key; the caller then runs its existing
+ * JWT path unchanged. The body is read from a clone, so the handler can still
+ * call req.json() afterwards. Throws, like authenticateCaller, when a
+ * service-role call carries no valid user_id.
+ */
+export async function serviceRoleCallerUserId(req: Request): Promise<string | null> {
+  const authHeader = req.headers.get("Authorization");
+  if (!authHeader?.startsWith("Bearer ") || !SUPABASE_SERVICE_ROLE_KEY) return null;
+  if (!timingSafeTokenEqual(authHeader.replace("Bearer ", ""), SUPABASE_SERVICE_ROLE_KEY)) return null;
+  const body = await req.clone().json().catch(() => null);
+  const bodyUserId = typeof body?.user_id === "string" && UUID_RE.test(body.user_id) ? body.user_id : null;
+  return (await authenticateCaller(req, bodyUserId)).userId;
+}

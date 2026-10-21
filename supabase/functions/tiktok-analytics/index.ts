@@ -2,6 +2,7 @@
 // Uses scopes: user.info.basic, user.info.profile, user.info.stats, video.list
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { serviceRoleCallerUserId } from "../_shared/auth-helper.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -112,11 +113,22 @@ Deno.serve(async (req) => {
       global: { headers: { Authorization: authHeader } },
     });
     const token = authHeader.replace("Bearer ", "");
-    const { data: claims, error: claimsErr } = await userClient.auth.getClaims(token);
-    if (claimsErr || !claims?.claims) {
+    let serviceUserId: string | null;
+    try {
+      serviceUserId = await serviceRoleCallerUserId(req);
+    } catch {
       return json({ success: false, error: "Unauthorized" }, 401);
     }
-    const userId = claims.claims.sub as string;
+    let userId: string;
+    if (serviceUserId) {
+      userId = serviceUserId;
+    } else {
+      const { data: claims, error: claimsErr } = await userClient.auth.getClaims(token);
+      if (claimsErr || !claims?.claims) {
+        return json({ success: false, error: "Unauthorized" }, 401);
+      }
+      userId = claims.claims.sub as string;
+    }
 
     const body = await req.json().catch(() => ({}));
     const { social_account_id, cursor: reqCursor } = body as {
