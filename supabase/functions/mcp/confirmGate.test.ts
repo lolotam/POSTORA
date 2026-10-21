@@ -4,8 +4,12 @@ import {
   confirmField,
   recordMcpRefusal,
   refuseUnconfirmed,
+  refuseUngranted,
+  resetRefusalThrottleForTests,
   type ConfirmRefusal,
+  type ScopeRefusal,
 } from "./confirmGate.ts";
+import type { ScopeGrant } from "./toolScopes.ts";
 
 interface FakeCall {
   method: string;
@@ -61,6 +65,18 @@ function createFakeAdmin(options: FakeAdminOptions = {}) {
   return { admin, calls, inserts };
 }
 
+// A clock the test drives, so the refusal throttle can be exercised without
+// waiting for a real minute to pass.
+function createClock(start: number) {
+  let current = start;
+  return {
+    now: () => current,
+    advance(ms: number) {
+      current += ms;
+    },
+  };
+}
+
 // The owner the edge resolved before the tool ran. The gate never resolves
 // an owner itself: it is given the id and writes the row under it.
 const OWNER_ID = "user-42";
@@ -91,6 +107,7 @@ Deno.test("a confirmed call is allowed and touches no database", async () => {
 });
 
 Deno.test("a missing confirm is refused and the refusal is recorded", async () => {
+  resetRefusalThrottleForTests();
   const { admin, calls, inserts } = createFakeAdmin();
 
   const refusal = await refuseUnconfirmed(
@@ -130,6 +147,7 @@ Deno.test("a missing confirm is refused and the refusal is recorded", async () =
 });
 
 Deno.test("the refusal is recorded under the owner the edge resolved", async () => {
+  resetRefusalThrottleForTests();
   const { admin, inserts } = createFakeAdmin();
 
   const refusal = await refuseUnconfirmed(
@@ -144,6 +162,7 @@ Deno.test("the refusal is recorded under the owner the edge resolved", async () 
 });
 
 Deno.test("confirm: false is refused and recorded like a missing confirm", async () => {
+  resetRefusalThrottleForTests();
   const { admin, inserts } = createFakeAdmin();
 
   const refusal = await refuseUnconfirmed(
@@ -162,6 +181,7 @@ Deno.test("confirm: false is refused and recorded like a missing confirm", async
 });
 
 Deno.test('confirm: "true" (a string) is refused and recorded', async () => {
+  resetRefusalThrottleForTests();
   const { admin, inserts } = createFakeAdmin();
 
   const refusal = await refuseUnconfirmed(
@@ -180,6 +200,7 @@ Deno.test('confirm: "true" (a string) is refused and recorded', async () => {
 });
 
 Deno.test("confirm: null is refused and recorded", async () => {
+  resetRefusalThrottleForTests();
   const { admin, inserts } = createFakeAdmin();
 
   const refusal = await refuseUnconfirmed(
@@ -198,6 +219,7 @@ Deno.test("confirm: null is refused and recorded", async () => {
 });
 
 Deno.test("a failed log insert still refuses and never throws", async () => {
+  resetRefusalThrottleForTests();
   const { admin, inserts } = createFakeAdmin({ insertError: { message: "insert failed" } });
 
   const refusal = await refuseUnconfirmed(
@@ -210,6 +232,7 @@ Deno.test("a failed log insert still refuses and never throws", async () => {
 });
 
 Deno.test("a throwing log insert still refuses and never throws", async () => {
+  resetRefusalThrottleForTests();
   const { admin } = createFakeAdmin({ throwOn: "insert" });
 
   const refusal = await refuseUnconfirmed(
@@ -221,6 +244,7 @@ Deno.test("a throwing log insert still refuses and never throws", async () => {
 });
 
 Deno.test("recordMcpRefusal writes one row naming the tool and the code, and nothing else", async () => {
+  resetRefusalThrottleForTests();
   const { admin, calls, inserts } = createFakeAdmin();
 
   await recordMcpRefusal(
@@ -257,6 +281,7 @@ Deno.test("recordMcpRefusal writes one row naming the tool and the code, and not
 });
 
 Deno.test("a failed insert in recordMcpRefusal does not throw", async () => {
+  resetRefusalThrottleForTests();
   const { admin, inserts } = createFakeAdmin({ insertError: { message: "insert failed" } });
 
   let thrown: unknown = null;
@@ -274,6 +299,7 @@ Deno.test("a failed insert in recordMcpRefusal does not throw", async () => {
 });
 
 Deno.test("a throwing insert in recordMcpRefusal does not throw", async () => {
+  resetRefusalThrottleForTests();
   const { admin } = createFakeAdmin({ throwOn: "insert" });
 
   let thrown: unknown = null;
@@ -289,6 +315,86 @@ Deno.test("a throwing insert in recordMcpRefusal does not throw", async () => {
   assertEquals(thrown, null);
 });
 
+// ── the refusal throttle ──────────────────────────────────────────────────────
+
+// An authenticated client can repeat an invalid call forever. Every refusal
+// used to insert a row, so the log grew with the client's patience. At most
+// one row per (owner, tool, code) per minute is written now.
+
+Deno.test("the same refusal twice within a minute writes one row", async () => {
+  resetRefusalThrottleForTests();
+  const { admin, inserts } = createFakeAdmin();
+  const clock = createClock(1_000_000);
+
+  await recordMcpRefusal(
+    { admin, now: clock.now },
+    { userId: OWNER_ID, tool: "delete_comment", code: "CONFIRMATION_REQUIRED" },
+  );
+  clock.advance(30_000);
+  await recordMcpRefusal(
+    { admin, now: clock.now },
+    { userId: OWNER_ID, tool: "delete_comment", code: "CONFIRMATION_REQUIRED" },
+  );
+
+  assertEquals(inserts.length, 1);
+});
+
+Deno.test("the same refusal after the window writes a second row", async () => {
+  resetRefusalThrottleForTests();
+  const { admin, inserts } = createFakeAdmin();
+  const clock = createClock(1_000_000);
+
+  await recordMcpRefusal(
+    { admin, now: clock.now },
+    { userId: OWNER_ID, tool: "delete_comment", code: "CONFIRMATION_REQUIRED" },
+  );
+  clock.advance(61_000);
+  await recordMcpRefusal(
+    { admin, now: clock.now },
+    { userId: OWNER_ID, tool: "delete_comment", code: "CONFIRMATION_REQUIRED" },
+  );
+
+  assertEquals(inserts.length, 2);
+});
+
+Deno.test("a different tool or code within the window writes its own row", async () => {
+  resetRefusalThrottleForTests();
+  const { admin, inserts } = createFakeAdmin();
+  const clock = createClock(1_000_000);
+
+  await recordMcpRefusal(
+    { admin, now: clock.now },
+    { userId: OWNER_ID, tool: "delete_comment", code: "CONFIRMATION_REQUIRED" },
+  );
+  await recordMcpRefusal(
+    { admin, now: clock.now },
+    { userId: OWNER_ID, tool: "hide_comment", code: "CONFIRMATION_REQUIRED" },
+  );
+  await recordMcpRefusal(
+    { admin, now: clock.now },
+    { userId: OWNER_ID, tool: "delete_comment", code: "INVALID_MESSAGE" },
+  );
+
+  assertEquals(inserts.length, 3);
+});
+
+Deno.test("another owner within the window writes its own row", async () => {
+  resetRefusalThrottleForTests();
+  const { admin, inserts } = createFakeAdmin();
+  const clock = createClock(1_000_000);
+
+  await recordMcpRefusal(
+    { admin, now: clock.now },
+    { userId: OWNER_ID, tool: "delete_comment", code: "CONFIRMATION_REQUIRED" },
+  );
+  await recordMcpRefusal(
+    { admin, now: clock.now },
+    { userId: "another-owner", tool: "delete_comment", code: "CONFIRMATION_REQUIRED" },
+  );
+
+  assertEquals(inserts.length, 2);
+});
+
 // ── the schema rejection ───────────────────────────────────────────────────────
 
 // The framework validates the arguments against the tool's input schema before
@@ -299,6 +405,7 @@ Deno.test("a throwing insert in recordMcpRefusal does not throw", async () => {
 const INVALID_PARAMS = -32602;
 
 Deno.test("a schema rejection of a tool call is recorded as a refusal", async () => {
+  resetRefusalThrottleForTests();
   const { admin, inserts } = createFakeAdmin();
 
   await auditSchemaRejection(
@@ -336,6 +443,7 @@ Deno.test("a schema rejection of a tool call is recorded as a refusal", async ()
 });
 
 Deno.test("a schema rejection is recorded under the owner the edge resolved", async () => {
+  resetRefusalThrottleForTests();
   const { admin, inserts } = createFakeAdmin();
 
   await auditSchemaRejection(
@@ -355,6 +463,7 @@ Deno.test("a schema rejection is recorded under the owner the edge resolved", as
 });
 
 Deno.test("a schema rejection of a method that is not a tool call is not recorded", async () => {
+  resetRefusalThrottleForTests();
   const { admin, calls, inserts } = createFakeAdmin();
 
   await auditSchemaRejection(
@@ -372,6 +481,7 @@ Deno.test("a schema rejection of a method that is not a tool call is not recorde
 });
 
 Deno.test("an error that is not a schema rejection is not recorded", async () => {
+  resetRefusalThrottleForTests();
   const { admin, calls, inserts } = createFakeAdmin();
 
   await auditSchemaRejection(
@@ -391,6 +501,7 @@ Deno.test("an error that is not a schema rejection is not recorded", async () =>
 });
 
 Deno.test("an error that is not an error object is not recorded", async () => {
+  resetRefusalThrottleForTests();
   const { admin, calls, inserts } = createFakeAdmin();
 
   await auditSchemaRejection(
@@ -418,6 +529,7 @@ Deno.test("a tool name that is not a tool name is recorded as unknown", async ()
   ];
 
   for (const testCase of cases) {
+    resetRefusalThrottleForTests();
     const { admin, inserts } = createFakeAdmin();
 
     await auditSchemaRejection(
@@ -442,6 +554,7 @@ Deno.test("a tool name that is not a tool name is recorded as unknown", async ()
 });
 
 Deno.test("a rejected tool call that names no tool is recorded as unknown", async () => {
+  resetRefusalThrottleForTests();
   const { admin, inserts } = createFakeAdmin();
 
   await auditSchemaRejection(
@@ -461,6 +574,7 @@ Deno.test("a rejected tool call that names no tool is recorded as unknown", asyn
 });
 
 Deno.test("the auditor never throws, whatever the database does", async () => {
+  resetRefusalThrottleForTests();
   const { admin } = createFakeAdmin({ throwOn: "insert" });
 
   let thrown: unknown = null;
@@ -481,4 +595,95 @@ Deno.test("the auditor never throws, whatever the database does", async () => {
   }
 
   assertEquals(thrown, null);
+});
+
+// ── the scope gate ─────────────────────────────────────────────────────────────
+
+// An OAuth token holds only the scopes it was granted. A tool it was not
+// granted is refused before it runs, and the refusal leaves a row like every
+// other refusal.
+
+const GRANT_WITHOUT_COMMENTS: ScopeGrant = {
+  kind: "granted",
+  scopes: new Set(["accounts:read", "posts:read", "posts:write", "media:write", "webhooks:manage"]),
+};
+
+Deno.test("a tool the grant does not cover is refused and the refusal is recorded", async () => {
+  resetRefusalThrottleForTests();
+  const { admin, inserts } = createFakeAdmin();
+
+  const refusal = await refuseUngranted(
+    { admin },
+    { userId: OWNER_ID, tool: "hide_comment", grant: GRANT_WITHOUT_COMMENTS },
+  );
+
+  // The refusal names the scope that is missing.
+  assertEquals(refusal, {
+    code: "SCOPE_NOT_GRANTED",
+    message:
+      "This connection was not granted the comments:write scope. " +
+      "Reconnect with that scope, or use a Postora API key.",
+  } as const);
+
+  // One row, naming the tool and the code and nothing else.
+  assertEquals(inserts.length, 1);
+  assertEquals(inserts[0].table, "system_logs");
+  assertEquals(inserts[0].row.user_id, OWNER_ID);
+  assertEquals(inserts[0].row.metadata as Record<string, unknown>, {
+    tool: "hide_comment",
+    code: "SCOPE_NOT_GRANTED",
+  });
+
+  // The scopes and the arguments are not in the row.
+  const serialized = JSON.stringify(inserts[0].row);
+  assertEquals(serialized.includes("comments:write"), false);
+});
+
+Deno.test("a tool the grant covers is allowed and touches no database", async () => {
+  resetRefusalThrottleForTests();
+  const { admin, calls, inserts } = createFakeAdmin();
+
+  const refusal = await refuseUngranted(
+    { admin },
+    { userId: OWNER_ID, tool: "cancel_scheduled_post", grant: GRANT_WITHOUT_COMMENTS },
+  );
+
+  assertEquals(refusal, null);
+  assertEquals(inserts.length, 0);
+  assertEquals(calls, []);
+});
+
+Deno.test("an API-key grant covers every tool and touches no database", async () => {
+  resetRefusalThrottleForTests();
+  const { admin, calls, inserts } = createFakeAdmin();
+
+  const refusal = await refuseUngranted(
+    { admin },
+    { userId: OWNER_ID, tool: "reply_to_message", grant: { kind: "all" } },
+  );
+
+  assertEquals(refusal, null);
+  assertEquals(inserts.length, 0);
+  assertEquals(calls, []);
+});
+
+Deno.test("a scope refusal names the scope the token is missing", async () => {
+  resetRefusalThrottleForTests();
+  const { admin } = createFakeAdmin();
+
+  const refusal: ScopeRefusal | null = await refuseUngranted(
+    { admin },
+    {
+      userId: OWNER_ID,
+      tool: "reply_to_message",
+      grant: { kind: "granted", scopes: new Set(["posts:read"]) },
+    },
+  );
+
+  assertEquals(refusal, {
+    code: "SCOPE_NOT_GRANTED",
+    message:
+      "This connection was not granted the messages:write scope. " +
+      "Reconnect with that scope, or use a Postora API key.",
+  } as const);
 });

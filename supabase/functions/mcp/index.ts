@@ -13,8 +13,10 @@ import {
   confirmField,
   recordMcpRefusal,
   refuseUnconfirmed,
+  refuseUngranted,
 } from "./confirmGate.ts";
 import { resolveKeyOwner } from "./keyOwner.ts";
+import type { ScopeGrant } from "./toolScopes.ts";
 import { sha256Hex } from "../_shared/crypto.ts";
 
 const corsHeaders = {
@@ -52,13 +54,21 @@ async function sha256(text: string): Promise<string> {
 }
 
 // Resolve an OAuth Bearer token (issued by mcp-oauth) to the user's Postora
-// API key. Returns null if the token is unknown / expired / revoked.
-async function resolveOAuthToken(token: string, userAgent?: string): Promise<string | null> {
+// API key and the scopes the token was granted. Returns null if the token is
+// unknown / expired / revoked.
+//
+// The scopes are the token's own (mcp_oauth_tokens.scopes). They are carried
+// along instead of being dropped, because a token may only run the tools its
+// scopes cover: the API key alone would let it reach every tool.
+async function resolveOAuthToken(
+  token: string,
+  userAgent?: string,
+): Promise<{ apiKey: string; scopes: string[] } | null> {
   if (!token || token.length < 16) return null;
   const hash = await sha256(token);
   const { data: row } = await admin
     .from("mcp_oauth_tokens")
-    .select("id, user_id, expires_at, revoked_at")
+    .select("id, user_id, expires_at, revoked_at, scopes")
     .eq("token_hash", hash)
     .maybeSingle();
   if (!row) return null;
@@ -78,7 +88,10 @@ async function resolveOAuthToken(token: string, userAgent?: string): Promise<str
     .eq("id", row.id)
     .then(() => {}, () => {});
 
-  return profile.api_key as string;
+  return {
+    apiKey: profile.api_key as string,
+    scopes: Array.isArray(row.scopes) ? row.scopes : [],
+  };
 }
 
 function extractApiKey(req: Request): string | null {
@@ -183,9 +196,15 @@ function okUntrusted(data: unknown) {
 // resolved before the server is built (see ./keyOwner.ts and app.all below):
 // an unauthenticated request is refused with 401 before any tool runs, so no
 // refusal can ever be recorded for a caller nobody authenticated.
+//
+// The grant is what the caller may do: an API-key caller holds every scope,
+// an OAuth token holds only the scopes it was granted. A tool the grant does
+// not cover is refused before it runs (see ./toolScopes.ts and refuseUngranted
+// in ./confirmGate.ts), before the confirmation check and before any argument
+// is read.
 
-// Build a fresh MCP server bound to a specific user's API key and owner.
-function buildServer(apiKey: string, ownerId: string) {
+// Build a fresh MCP server bound to a specific user's API key, owner and grant.
+function buildServer(apiKey: string, ownerId: string, grant: ScopeGrant) {
   const server = new McpServer({
     name: "postora",
     version: "1.0.0",
@@ -437,6 +456,8 @@ function buildServer(apiKey: string, ownerId: string) {
       platform: z.enum(["facebook", "instagram", "threads"]).optional().describe("Optional; must match the account's platform"),
     }),
     handler: async (args) => {
+      const scopeRefusal = await refuseUngranted({ admin }, { userId: ownerId, tool: "reply_to_comment", grant });
+      if (scopeRefusal) return fail(403, scopeRefusal);
       const r = await callN8n(apiKey, "POST", "/api/v1/comments/reply", {
         social_account_id: args.social_account_id,
         comment_id: args.comment_id,
@@ -457,6 +478,8 @@ function buildServer(apiKey: string, ownerId: string) {
       confirm: confirmField,
     }),
     handler: async (args) => {
+      const scopeRefusal = await refuseUngranted({ admin }, { userId: ownerId, tool: "hide_comment", grant });
+      if (scopeRefusal) return fail(403, scopeRefusal);
       const refusal = await refuseUnconfirmed({ admin }, { userId: ownerId, tool: "hide_comment", confirm: args.confirm });
       if (refusal) return fail(400, refusal);
       const r = await callN8n(apiKey, "POST", "/api/v1/comments/hide", {
@@ -477,6 +500,8 @@ function buildServer(apiKey: string, ownerId: string) {
       confirm: confirmField,
     }),
     handler: async (args) => {
+      const scopeRefusal = await refuseUngranted({ admin }, { userId: ownerId, tool: "delete_comment", grant });
+      if (scopeRefusal) return fail(403, scopeRefusal);
       const refusal = await refuseUnconfirmed({ admin }, { userId: ownerId, tool: "delete_comment", confirm: args.confirm });
       if (refusal) return fail(400, refusal);
       const r = await callN8n(apiKey, "POST", "/api/v1/comments/delete", {
@@ -503,6 +528,11 @@ function buildServer(apiKey: string, ownerId: string) {
       platform: z.enum(["whatsapp", "instagram", "facebook"]).optional().describe("Optional; must match the account's platform"),
     }),
     handler: async (args) => {
+      // The scope comes first: a connection that was not granted the scope
+      // may not send anything at all, so the call is refused before the
+      // arguments are read.
+      const scopeRefusal = await refuseUngranted({ admin }, { userId: ownerId, tool: "reply_to_message", grant });
+      if (scopeRefusal) return fail(403, scopeRefusal);
       // What is sent is the trimmed recipient, and a recipient that is absent
       // or only whitespace is left out of the body entirely. A request with no
       // recipient at all is refused here, before the API is called, and the
@@ -544,6 +574,8 @@ function buildServer(apiKey: string, ownerId: string) {
       media_id: z.string().describe("Postora media file UUID"),
     }),
     handler: async ({ media_id }) => {
+      const scopeRefusal = await refuseUngranted({ admin }, { userId: ownerId, tool: "get_media", grant });
+      if (scopeRefusal) return fail(403, scopeRefusal);
       const r = await callN8n(apiKey, "GET", `/api/v1/media/${encodeURIComponent(media_id)}`);
       return r.status >= 400 ? fail(r.status, r.data) : ok(r.data);
     },
@@ -558,6 +590,8 @@ function buildServer(apiKey: string, ownerId: string) {
       confirm: confirmField,
     }),
     handler: async (args) => {
+      const scopeRefusal = await refuseUngranted({ admin }, { userId: ownerId, tool: "cancel_scheduled_post", grant });
+      if (scopeRefusal) return fail(403, scopeRefusal);
       const refusal = await refuseUnconfirmed({ admin }, { userId: ownerId, tool: "cancel_scheduled_post", confirm: args.confirm });
       if (refusal) return fail(400, refusal);
       const r = await callN8n(apiKey, "POST", "/api/v1/posts/cancel", { post_id: args.post_id });
@@ -573,6 +607,8 @@ function buildServer(apiKey: string, ownerId: string) {
       scheduled_at: z.string().describe("Future ISO 8601 timestamp with offset"),
     }),
     handler: async (args) => {
+      const scopeRefusal = await refuseUngranted({ admin }, { userId: ownerId, tool: "reschedule_post", grant });
+      if (scopeRefusal) return fail(403, scopeRefusal);
       const r = await callN8n(apiKey, "POST", "/api/v1/posts/reschedule", args);
       return r.status >= 400 ? fail(r.status, r.data) : ok(r.data);
     },
@@ -587,6 +623,8 @@ function buildServer(apiKey: string, ownerId: string) {
       social_account_id: z.string().describe("Postora social account UUID (from list_accounts)"),
     }),
     handler: async ({ social_account_id }) => {
+      const scopeRefusal = await refuseUngranted({ admin }, { userId: ownerId, tool: "check_account_health", grant });
+      if (scopeRefusal) return fail(403, scopeRefusal);
       const r = await callN8n(apiKey, "GET", "/api/v1/accounts/health", undefined, { social_account_id });
       return r.status >= 400 ? fail(r.status, r.data) : ok(r.data);
     },
@@ -600,6 +638,8 @@ function buildServer(apiKey: string, ownerId: string) {
       platforms: stringList.describe("e.g. ['instagram','facebook']. Accepts an array, JSON-array text or comma-separated text."),
     }),
     handler: async (args) => {
+      const scopeRefusal = await refuseUngranted({ admin }, { userId: ownerId, tool: "suggest_best_times", grant });
+      if (scopeRefusal) return fail(403, scopeRefusal);
       const r = await callN8n(apiKey, "POST", "/api/v1/best-times", normalizeListFields({ platforms: args.platforms }));
       return r.status >= 400 ? fail(r.status, r.data) : ok(r.data);
     },
@@ -630,10 +670,20 @@ app.all("/*", async (c) => {
   const req = c.req.raw;
   const presented = extractApiKey(req);
   let apiKey: string | null = presented;
+  // What the caller may do. A Postora API key is the owner's own key and
+  // holds every scope. An MCP OAuth access token holds only the scopes it
+  // was granted, and the tools it may run are decided by those.
+  let grant: ScopeGrant = { kind: "all" };
   // Postora-issued API keys start with "postora-". Anything else is treated as
   // an MCP OAuth access token and resolved via mcp_oauth_tokens.
   if (presented && !presented.startsWith("postora-")) {
-    apiKey = await resolveOAuthToken(presented, req.headers.get("user-agent") ?? undefined);
+    const resolved = await resolveOAuthToken(presented, req.headers.get("user-agent") ?? undefined);
+    if (resolved) {
+      apiKey = resolved.apiKey;
+      grant = { kind: "granted", scopes: new Set(resolved.scopes) };
+    } else {
+      apiKey = null;
+    }
   }
   if (!apiKey) {
     return jsonRpcError(
@@ -664,7 +714,7 @@ app.all("/*", async (c) => {
     return jsonRpcError(503, -32603, "Authentication is temporarily unavailable. Try again.");
   }
 
-  const server = buildServer(apiKey, owner.userId);
+  const server = buildServer(apiKey, owner.userId, grant);
   const transport = new StreamableHttpTransport();
   const handler = transport.bind(server);
   const res = await handler(req);

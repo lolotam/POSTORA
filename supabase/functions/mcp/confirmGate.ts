@@ -18,8 +18,19 @@
 //
 // The database client is injected so the gate owns no client of its own and
 // can be exercised without a database or a network.
+//
+// The same file holds the SCOPE gate: a tool the caller's grant does not
+// cover is refused before it runs, and that refusal is recorded like every
+// other one. The scopes themselves live in ./toolScopes.ts.
+//
+// Refusal rows are throttled. An authenticated client can repeat an invalid
+// call forever, and every refusal used to insert a row, so the log grew with
+// the client's patience. At most one row per (owner, tool, code) per minute
+// is written now. The first refusal of each kind is always recorded: the
+// throttle bounds the growth of the log, it never hides the first refusal.
 
 import { z } from "npm:zod@4.1.12";
+import { missingScope, type ScopeGrant } from "./toolScopes.ts";
 
 export const confirmField = z.unknown().optional().describe(
   "Must be the boolean true to run. Confirms you intend this irreversible action.",
@@ -27,6 +38,9 @@ export const confirmField = z.unknown().optional().describe(
 
 export interface ConfirmGateDeps {
   admin: any;
+  // The clock, injected so the refusal throttle can be exercised without
+  // waiting for a real minute to pass. Defaults to Date.now.
+  now?: () => number;
 }
 
 export interface ConfirmRefusal {
@@ -34,10 +48,34 @@ export interface ConfirmRefusal {
   message: string;
 }
 
+export interface ScopeRefusal {
+  code: "SCOPE_NOT_GRANTED";
+  message: string;
+}
+
 const REFUSAL_MESSAGE = "Set confirm: true to run this action.";
 
 function refusal(): ConfirmRefusal {
   return { code: "CONFIRMATION_REQUIRED", message: REFUSAL_MESSAGE };
+}
+
+// The throttle on refusal rows. A client that repeats a refused call would
+// otherwise insert one row per call, for as long as it keeps calling.
+const REFUSAL_THROTTLE_WINDOW_MS = 60_000;
+const REFUSAL_THROTTLE_MAX_ENTRIES = 10_000;
+
+// The last write time per (owner, tool, code). It lives in the isolate, so
+// the bound is per isolate: two isolates write their own rows.
+const refusalThrottle = new Map<string, number>();
+
+/**
+ * Forget every throttled refusal.
+ *
+ * The throttle is module state, so a test that counts rows has to start from
+ * a clean slate. Production code never calls this.
+ */
+export function resetRefusalThrottleForTests(): void {
+  refusalThrottle.clear();
 }
 
 /**
@@ -54,11 +92,38 @@ function refusal(): ConfirmRefusal {
  * A failed insert or a thrown error is reported on the edge and then
  * swallowed: the recorder never throws, and it never lets a broken log turn
  * into a broken answer.
+ *
+ * The row is throttled per owner, tool and code: a client that repeats the
+ * same refused call gets one row per minute, not one row per call. The
+ * skipped row is reported on the edge in one line, without the arguments.
  */
 export async function recordMcpRefusal(
   deps: ConfirmGateDeps,
   request: { userId: string; tool: string; code: string },
 ): Promise<void> {
+  const nowMs = (deps.now ?? Date.now)();
+  const throttleKey = `${request.userId}:${request.tool}:${request.code}`;
+
+  const lastWrite = refusalThrottle.get(throttleKey);
+  if (lastWrite !== undefined && nowMs - lastWrite < REFUSAL_THROTTLE_WINDOW_MS) {
+    console.warn(
+      `[mcp] ${request.tool} refused: ${request.code} (repeat within 60s, not logged again)`,
+    );
+    return;
+  }
+
+  // The map holds one entry per refused (owner, tool, code). It is pruned
+  // when it grows past the limit, so a client that refuses with a different
+  // tool or code every time cannot make it grow without bound either.
+  if (refusalThrottle.size > REFUSAL_THROTTLE_MAX_ENTRIES) {
+    for (const [key, writtenAt] of refusalThrottle) {
+      if (nowMs - writtenAt >= REFUSAL_THROTTLE_WINDOW_MS) {
+        refusalThrottle.delete(key);
+      }
+    }
+  }
+  refusalThrottle.set(throttleKey, nowMs);
+
   try {
     const { error: insertError } = await deps.admin.from("system_logs").insert({
       source: "mcp",
@@ -180,4 +245,42 @@ export async function refuseUnconfirmed(
   });
 
   return refusal();
+}
+
+/**
+ * Refuse a call the caller's grant does not cover.
+ *
+ * - the grant covers the tool -> null: the call may run, and nothing is read
+ *   or written. A call that may run must not pay for a log lookup.
+ * - the grant does not cover it -> the refusal, after a best-effort durable
+ *   log, naming the scope that is missing.
+ *
+ * The grant is decided by the caller: an API-key caller holds every scope,
+ * an OAuth token holds only the scopes it was granted (see ./toolScopes.ts).
+ *
+ * The log names the tool and the code only. The arguments, the API key, the
+ * token and its scopes stay out of it.
+ *
+ * The gate never throws: a broken log must not turn a refused call into a
+ * broken answer.
+ */
+export async function refuseUngranted(
+  deps: ConfirmGateDeps,
+  request: { userId: string; tool: string; grant: ScopeGrant },
+): Promise<ScopeRefusal | null> {
+  const scope = missingScope(request.grant, request.tool);
+  if (scope === null) return null;
+
+  await recordMcpRefusal(deps, {
+    userId: request.userId,
+    tool: request.tool,
+    code: "SCOPE_NOT_GRANTED",
+  });
+
+  return {
+    code: "SCOPE_NOT_GRANTED",
+    message:
+      `This connection was not granted the ${scope} scope. ` +
+      `Reconnect with that scope, or use a Postora API key.`,
+  };
 }
