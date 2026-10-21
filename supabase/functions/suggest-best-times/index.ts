@@ -243,15 +243,26 @@ Return a JSON array of suggestions.`;
           // came back: an item without a day, a time or a score cannot be
           // scheduled, so it is dropped instead of being handed to the caller.
           const wellFormed = parsed.filter((value: unknown) => isWellFormedSuggestion(value));
-          droppedInvalid = parsed.length - wellFormed.length;
-          if (parsed.length > 0 && wellFormed.length === 0) {
+          // A suggestion for a platform nobody asked for cannot be scheduled
+          // for the caller, so it is not a usable suggestion either: it is
+          // dropped the same way a malformed one is, and the platforms are
+          // compared the way they were asked for, trimmed and lowercased.
+          const requestedPlatforms = new Set(
+            platforms.map((platform) => String(platform).trim().toLowerCase()),
+          );
+          const usable = wellFormed.filter((value: unknown) => {
+            const item = value as { platform: string };
+            return requestedPlatforms.has(String(item.platform).trim().toLowerCase());
+          });
+          droppedInvalid = parsed.length - usable.length;
+          if (parsed.length > 0 && usable.length === 0) {
             // A list of items that are not suggestions is an answer that failed
             // to parse, not an answer that had nothing to say.
             parseFailed = true;
             suggestions = [];
             droppedInvalid = 0;
           } else {
-            suggestions = wellFormed;
+            suggestions = usable;
           }
         } else {
           parseFailed = true;

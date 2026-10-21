@@ -8,7 +8,7 @@ import { type CommentActionResult, deleteComment, hideComment, replyToComment } 
 import { parseSubscriptionFilters } from "./webhookFilters.ts";
 import { describeBase64Failure, normalizeBase64Media } from "../_shared/base64Media.ts";
 import { clientIpFromHeaders, isValidUuid } from "./requestGuards.ts";
-import { recordApiRefusal } from "./refusalLog.ts";
+import { recordApiRefusal, recordRateLimitRefusal } from "./refusalLog.ts";
 import { relayUploadTarget } from "./mediaRelay.ts";
 import { handleCancelScheduledPost, handleCheckAccountHealth, handleReschedulePost, handleSuggestBestTimes } from "./postActions.ts";
 import { MEDIA_QUOTA_CODE, invokeErrorText, isMediaQuotaMessage, mediaQuotaHumanMessage, mediaQuotaPreflight, quotaOnlyMessage, type QuotaRpc } from "../_shared/mediaQuotaError.ts";
@@ -2375,6 +2375,8 @@ export async function handleRequest(req: Request): Promise<Response> {
 
     if (!rateLimit.allowed) {
       console.log('Rate limit exceeded for user:', userId, 'on endpoint:', path);
+      // The limiter answers before any route can record the refusal, so it is recorded here, throttled.
+      await recordRateLimitRefusal(supabaseAdmin, { userId, route: rateLimitKey });
       // The throttled client is the one that most needs these headers — it has to
       // know when to retry — so the 429 carries them too, not just the responses
       // that reach a route handler.

@@ -8,6 +8,28 @@
 // because an id the caller made up must not reach the log.
 import { isValidUuid } from "./requestGuards.ts";
 
+// The window a rate-limit refusal is recorded once in. One row per (user,
+// route) per minute is enough to leave the trace; more than that is write
+// amplification on a client that is hammering the API by definition.
+const REFUSAL_THROTTLE_WINDOW_MS = 60_000;
+
+// The bound on the throttle map. An isolate must not grow it without limit,
+// so a client that throttles on many routes cannot fill the edge memory.
+const REFUSAL_THROTTLE_MAX = 10_000;
+
+// The last write time per (user, route). The insertion order is the write
+// order: a write deletes and re-sets its key, so the first key in the map is
+// the one written longest ago.
+const rateLimitRefusalThrottle = new Map<string, number>();
+
+/**
+ * Clears the throttle map. Only the tests call this: the map is module
+ * level on purpose, because the throttle is per isolate.
+ */
+export function resetRateLimitRefusalThrottleForTests(): void {
+  rateLimitRefusalThrottle.clear();
+}
+
 /**
  * Writes the row one refusal leaves behind. It never throws: a refusal that
  * cannot be recorded is still a refusal, the caller gets the same answer, and
@@ -53,4 +75,66 @@ export async function recordApiRefusal(
       `[n8n-api] system_logs insert failed while refusing ${route} (${code}, no durable refusal row): ${message}`,
     );
   }
+}
+
+/**
+ * Records the refusal the central rate limiter answers with.
+ *
+ * The limiter answers before any route runs, so no route can record this
+ * refusal itself: without this, a caller that exhausts its quota leaves no
+ * trace at all. One row per (user, route) per window is written, because a
+ * client that is being throttled is by definition hammering the API, and one
+ * row per refused request would amplify writes exactly when the database is
+ * under pressure.
+ *
+ * It never throws: the caller still gets its 429, whether the row was
+ * written or not.
+ */
+export async function recordRateLimitRefusal(
+  // deno-lint-ignore no-explicit-any
+  supabase: any,
+  request: { userId: string; route: string; now?: number },
+): Promise<void> {
+  const { userId, route } = request;
+  const now = request.now ?? Date.now();
+  const key = `${userId}|${route}`;
+
+  const lastWrite = rateLimitRefusalThrottle.get(key);
+  if (lastWrite !== undefined && now - lastWrite < REFUSAL_THROTTLE_WINDOW_MS) {
+    // The window is still open: this refusal was already recorded, and a
+    // second row would only add write pressure.
+    console.warn(
+      `[n8n-api] rate limit refusal for ${route} was already recorded within the last ${REFUSAL_THROTTLE_WINDOW_MS / 1000}s: not writing another row`,
+    );
+    return;
+  }
+
+  if (!rateLimitRefusalThrottle.has(key) && rateLimitRefusalThrottle.size >= REFUSAL_THROTTLE_MAX) {
+    // The map is full. The oldest key goes, but only when its own window has
+    // passed: a live window still owes its caller a row, and evicting it
+    // would lose a refusal that has not been written yet.
+    const oldestKey: string | undefined = rateLimitRefusalThrottle.keys().next().value;
+    const oldestWrite = oldestKey === undefined ? undefined : rateLimitRefusalThrottle.get(oldestKey);
+    if (oldestKey === undefined || oldestWrite === undefined || now - oldestWrite < REFUSAL_THROTTLE_WINDOW_MS) {
+      console.warn(
+        `[n8n-api] rate limit refusal for ${route} was not recorded: the refusal throttle holds ${REFUSAL_THROTTLE_MAX} live entries`,
+      );
+      return;
+    }
+    rateLimitRefusalThrottle.delete(oldestKey);
+  }
+
+  // The entry is taken before the row is written, so two refusals in the same
+  // window cannot both write one. The row itself may fail to be written; the
+  // entry stays either way, because a missing row is not worth a second write
+  // attempt per window.
+  rateLimitRefusalThrottle.delete(key);
+  rateLimitRefusalThrottle.set(key, now);
+
+  await recordApiRefusal(supabase, {
+    userId,
+    route,
+    code: "RATE_LIMIT_EXCEEDED",
+    status: 429,
+  });
 }

@@ -1,5 +1,5 @@
 import { assertEquals } from "jsr:@std/assert@1";
-import { recordApiRefusal } from "./refusalLog.ts";
+import { recordApiRefusal, recordRateLimitRefusal, resetRateLimitRefusalThrottleForTests } from "./refusalLog.ts";
 
 const USER = "11111111-1111-4111-8111-111111111111";
 const ACCOUNT = "33333333-3333-4333-8333-333333333333";
@@ -53,6 +53,19 @@ function capturedError(run: () => Promise<void>): Promise<string[]> {
     .then(() => logged)
     .finally(() => {
       console.error = originalError;
+    });
+}
+
+function capturedWarn(run: () => Promise<void>): Promise<string[]> {
+  const logged: string[] = [];
+  const originalWarn = console.warn;
+  console.warn = (...args: unknown[]) => {
+    logged.push(args.map(String).join(" "));
+  };
+  return run()
+    .then(() => logged)
+    .finally(() => {
+      console.warn = originalWarn;
     });
 }
 
@@ -210,4 +223,63 @@ Deno.test("a client that throws never takes the refusal down with it", async () 
   assertEquals(logged.length, 1);
   assertEquals(logged[0].includes(ROUTE), true);
   assertEquals(logged[0].includes("INVALID_MEDIA"), true);
+});
+
+// The central limiter answers before any route runs, so the throttled refusal
+// is recorded by the limiter itself. A client that exhausts its quota is
+// hammering the API by definition, so the row is throttled: one row per user
+// and route per minute is enough to leave the trace without amplifying the
+// writes exactly when the database is under pressure.
+
+Deno.test("a throttled refusal leaves one row per user and route per minute", async () => {
+  resetRateLimitRefusalThrottleForTests();
+  const db = new FakeSupabase();
+
+  await recordRateLimitRefusal(db, { userId: USER, route: ROUTE, now: 1_000_000 });
+  const warned = await capturedWarn(() =>
+    recordRateLimitRefusal(db, { userId: USER, route: ROUTE, now: 1_030_000 })
+  );
+
+  // The second refusal inside the window is not written again: the first one
+  // already left the trace.
+  assertEquals(db.inserts.length, 1);
+  assertEquals(db.inserts[0].table, "system_logs");
+  const row = db.inserts[0].payload;
+  assertEquals(row.message, `${ROUTE} refused: RATE_LIMIT_EXCEEDED`);
+  assertEquals(row.user_id, USER);
+  assertEquals(row.metadata, {
+    route: ROUTE,
+    code: "RATE_LIMIT_EXCEEDED",
+    status: 429,
+  });
+  // The skip is not silent: one line names the refusal that was not written.
+  assertEquals(warned.length, 1);
+  assertEquals(warned[0].includes(ROUTE), true);
+});
+
+Deno.test("a throttled refusal is recorded again once the window has passed", async () => {
+  resetRateLimitRefusalThrottleForTests();
+  const db = new FakeSupabase();
+
+  await recordRateLimitRefusal(db, { userId: USER, route: ROUTE, now: 1_000_000 });
+  await recordRateLimitRefusal(db, { userId: USER, route: ROUTE, now: 1_061_000 });
+
+  assertEquals(db.inserts.length, 2);
+});
+
+Deno.test("a different route gets its own row inside the same window", async () => {
+  resetRateLimitRefusalThrottleForTests();
+  const db = new FakeSupabase();
+  const otherRoute = "posts/cancel";
+
+  await recordRateLimitRefusal(db, { userId: USER, route: ROUTE, now: 1_000_000 });
+  await recordRateLimitRefusal(db, { userId: USER, route: otherRoute, now: 1_030_000 });
+
+  // The throttle is per user and route: exhausting one route's quota says
+  // nothing about another one.
+  assertEquals(db.inserts.length, 2);
+  const metadata = db.inserts[1].payload.metadata as Record<string, unknown>;
+  assertEquals(metadata.route, otherRoute);
+  assertEquals(metadata.code, "RATE_LIMIT_EXCEEDED");
+  assertEquals(metadata.status, 429);
 });
