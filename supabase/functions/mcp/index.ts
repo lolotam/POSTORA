@@ -673,7 +673,7 @@ function buildServer(apiKey: string, ownerId: string, grant: ScopeGrant) {
     description:
       "Delete a published post: it deletes the post from Postora and, where the platform allows it, from the platform (Facebook, Threads, YouTube native, Pinterest, LinkedIn). " +
       "Instagram, TikTok and other platforms are reported not_supported and stay on the platform. " +
-      "If any platform delete fails, nothing is deleted and the per-platform results are returned. " +
+      "If any platform delete fails, the post and its media stay in Postora; copies already deleted on other platforms stay deleted, and the per-platform results say which. " +
       "Also permanently deletes the post's media files from the library, including files other posts use. " +
       "Cannot be undone. Requires confirm: true.",
     inputSchema: z.object({

@@ -137,13 +137,43 @@ function fakeFetcher(responses: Array<{ status?: number; body?: unknown }> = [])
 function depsFor(
   db: FakeMediaDb,
   fetcher: typeof fetch,
+  overrides: Partial<PostMediaDeleteDeps> = {},
 ): PostMediaDeleteDeps {
   return {
     supabase: db,
     fetcher,
     supabaseUrl: SUPABASE_URL,
     serviceRoleKey: SERVICE_KEY,
+    ...overrides,
   };
+}
+
+// A fetcher whose headers arrive and whose body never does: the stream is
+// opened and nothing is ever enqueued into it, so reading the body waits for
+// an answer that never comes. The stream records that it was cancelled, so a
+// test can tell whether the connection was released after the deadline.
+function stalledBodyFetcher(): {
+  fetcher: typeof fetch;
+  wasCancelled: () => boolean;
+} {
+  const state = { cancelled: false };
+  const fetcher = (() =>
+    Promise.resolve(
+      new Response(
+        new ReadableStream({
+          pull() {
+            // Nothing is enqueued and the pull never finishes, so the body
+            // never arrives.
+            return new Promise<void>(() => {});
+          },
+          cancel() {
+            state.cancelled = true;
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    )) as unknown as typeof fetch;
+  return { fetcher, wasCancelled: () => state.cancelled };
 }
 
 function hasFilter(
@@ -162,11 +192,22 @@ function hasFilter(
   );
 }
 
+// A stored file, at the path the upload convention gives it: every upload
+// goes to `${userId}/${fileName}`.
 function storedFile(
   id: string,
   bucket: string | null,
+  userId: string = USER,
 ): Record<string, unknown> {
-  return { id, file_path: `${id}.png`, storage_bucket: bucket };
+  return { id, file_path: `${userId}/${id}.png`, storage_bucket: bucket };
+}
+
+// A stored file whose path points outside the caller's own folder.
+function foreignFile(
+  id: string,
+  bucket: string | null,
+): Record<string, unknown> {
+  return storedFile(id, bucket, OTHER_USER);
 }
 
 Deno.test("a stored file is removed from the storage and its row is deleted", async () => {
@@ -183,7 +224,7 @@ Deno.test("a stored file is removed from the storage and its row is deleted", as
   assertEquals(outcome, { removedIds: [MEDIA], failedIds: [] });
   // The file lives in the Supabase storage, so the provider is never called.
   assertEquals(calls.length, 0);
-  assertEquals(db.removals, [{ bucket: "media", paths: [`${MEDIA}.png`] }]);
+  assertEquals(db.removals, [{ bucket: "media", paths: [`${USER}/${MEDIA}.png`] }]);
 
   const removal = db.calls.find((call) => call.op === "delete");
   assertEquals(removal !== undefined, true);
@@ -295,6 +336,48 @@ Deno.test("the read and the row delete are scoped to the owner", async () => {
   // Another user's file is never in the read, so it can never be removed.
   assertEquals(hasFilter(read, "eq", "user_id", OTHER_USER), false);
   assertEquals(hasFilter(removal, "eq", "user_id", OTHER_USER), false);
+});
+
+Deno.test("a stored file that is not in the caller's own folder is not removed and its row stays", async () => {
+  const db = new FakeMediaDb({
+    data: [storedFile(MEDIA, "media"), foreignFile(MEDIA_TWO, "media")],
+    error: null,
+  });
+  const { fetcher } = fakeFetcher();
+  const outcome = await deletePostMedia(depsFor(db, fetcher), {
+    userId: USER,
+    mediaFileIds: [MEDIA, MEDIA_TWO],
+  });
+
+  // Only the caller's own file is removed: the path of the other one points
+  // outside the caller's folder, so it is not the caller's file to remove.
+  assertEquals(outcome, { removedIds: [MEDIA], failedIds: [MEDIA_TWO] });
+  assertEquals(db.removals, [{ bucket: "media", paths: [`${USER}/${MEDIA}.png`] }]);
+
+  // The row of the file that was not removed stays: the library still lists
+  // it, and the caller is told that it is still there.
+  const removal = db.calls.find((call) => call.op === "delete");
+  assertEquals(hasFilter(removal, "in", "id", [MEDIA]), true);
+  assertEquals(hasFilter(removal, "in", "id", [MEDIA_TWO]), false);
+});
+
+Deno.test("a media delete service whose body never arrives leaves the provider files in the library", async () => {
+  const db = new FakeMediaDb({
+    data: [storedFile(MEDIA, "cloudinary")],
+    error: null,
+  });
+  const { fetcher, wasCancelled } = stalledBodyFetcher();
+  const outcome = await deletePostMedia(
+    depsFor(db, fetcher, { providerTimeoutMs: 20 }),
+    { userId: USER, mediaFileIds: [MEDIA] },
+  );
+
+  // The service answered with its headers and then with nothing: it never
+  // said which files it deleted, so none of them is gone.
+  assertEquals(outcome, { removedIds: [], failedIds: [MEDIA] });
+  assertEquals(db.calls.filter((call) => call.op === "delete").length, 0);
+  // The body is cancelled, so the connection to the service is released.
+  assertEquals(wasCancelled(), true);
 });
 
 Deno.test("a post without media files has nothing to delete", async () => {

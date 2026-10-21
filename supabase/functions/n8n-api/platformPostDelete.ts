@@ -51,9 +51,130 @@ export interface PlatformDeleteDeps {
   fetcher: typeof fetch;
   /** Lazy so tests and non-YouTube deletes never build a real Supabase client. */
   youtubeDeps: () => YouTubeCommentsDeps;
+  /**
+   * The deadline for one call to a provider, headers and body together. It is
+   * the production default unless a test asks for a shorter wait.
+   */
+  providerTimeoutMs?: number;
 }
 
 export const PROVIDER_TIMEOUT_MS = 15_000;
+
+// The deadline of one call to a provider. The headers and the body of the
+// answer share it: a body that stalls after its headers arrived must not keep
+// the call open for as long as the provider holds the connection.
+function providerTimeout(deps: PlatformDeleteDeps): number {
+  return deps.providerTimeoutMs ?? PROVIDER_TIMEOUT_MS;
+}
+
+// The body of an answer, read inside a deadline.
+//
+// fetchWithTimeout stops its timer when the headers arrive, so a body that
+// stalls after them would be waited for without a bound: the connection to
+// the provider stays open behind the answer the caller already got. The body
+// is therefore read through an explicit reader and raced against a clock of
+// its own, and the reader is cancelled when the clock wins.
+//
+// The three answers are told apart on purpose. A body that never arrives is a
+// timeout, a body that cannot be read at all (no body, a body that is not
+// JSON, a reader that throws) is unreadable, and only a body that was read
+// and parsed is a value. A timeout is never mistaken for an unreadable body:
+// the first is a provider that did not answer, the second is a provider that
+// answered with something broken.
+export type JsonWithin =
+  | { kind: "ok"; value: unknown }
+  | { kind: "timeout" }
+  | { kind: "unreadable" };
+
+// The body did not arrive in time. It is an error of its own, so that a body
+// that never comes is not mistaken for a body that could not be read.
+class BodyTimeout extends Error {
+  constructor() {
+    super("Response body timed out");
+    this.name = "BodyTimeout";
+  }
+}
+
+// The whole body, read chunk by chunk. The body is read through an explicit
+// reader and not through response.text(): a read that runs into the deadline
+// has to be cancellable, and a body that response.text() has locked cannot be
+// cancelled any more.
+async function readWholeText(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+): Promise<string> {
+  const decoder = new TextDecoder();
+  let text = "";
+  let chunk = await reader.read();
+  while (!chunk.done) {
+    // A chunk can end in the middle of a character, so the decoder keeps what
+    // is left of it until a later chunk says more.
+    text += decoder.decode(chunk.value, { stream: true });
+    chunk = await reader.read();
+  }
+  // The last characters of the body are flushed here: the decoder was still
+  // holding them.
+  return text + decoder.decode();
+}
+
+// The body is given up, so the connection to the provider is released: a
+// provider that stalls must not keep it open behind the answer the caller
+// already got. The cancel goes through the reader, because the reader is
+// what holds the body, and a body that is locked cannot be cancelled any
+// other way. A cancel that fails is not a new failure.
+async function cancelReader(
+  reader: ReadableStreamDefaultReader<Uint8Array> | undefined,
+): Promise<void> {
+  if (!reader) return;
+  try {
+    await reader.cancel();
+  } catch {
+    // Swallowed on purpose: cancelling must never turn the timeout into
+    // another error.
+  }
+}
+
+// The JSON body of an answer, read inside a deadline of its own.
+//
+// The helper lives here because this module owns the calls to the providers
+// that answer with a body: the media delete and the post actions import it
+// rather than each keeping their own copy of the same race.
+export async function readJsonWithin(
+  response: Response,
+  ms: number,
+): Promise<JsonWithin> {
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    // The reader is taken inside the try: a body that was read already throws
+    // here, and that is a failed read like any other.
+    reader = response.body?.getReader();
+    if (!reader) return { kind: "unreadable" };
+    const text = await Promise.race([
+      readWholeText(reader),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new BodyTimeout()), ms);
+      }),
+    ]);
+    try {
+      return { kind: "ok", value: JSON.parse(text) };
+    } catch {
+      // A body that is not JSON is a failed read, not an empty answer.
+      return { kind: "unreadable" };
+    }
+  } catch (thrown) {
+    if (thrown instanceof BodyTimeout) {
+      // The body is cancelled before the caller is answered, so a stalled
+      // provider does not keep the connection open behind the answer.
+      await cancelReader(reader);
+      return { kind: "timeout" };
+    }
+    return { kind: "unreadable" };
+  } finally {
+    // The timer is cleared either way: a deadline nobody waits for any more
+    // must not keep the edge awake.
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
 
 type Deleter = (
   platformPostId: string,
@@ -116,11 +237,20 @@ interface GraphDeleteAnswer {
   error: string | null;
   /** The Graph error code, when Meta sent one. */
   errorCode: number | null;
+  /** The Graph error subcode, when Meta sent one. */
+  errorSubcode: number | null;
   /** The platform could not be reached: there is no provider message. */
   upstreamUnavailable: boolean;
   /** The object is not there any more. */
   notFound: boolean;
 }
+
+// Graph answers a delete of an object that is not there any more with a 400
+// and not with a 404: the code is 100 and the subcode is 33, and the message
+// says "Object with ID ... does not exist". The object is gone either way, so
+// the answer is the same as the one of a 404.
+const GRAPH_GONE_CODE = 100;
+const GRAPH_GONE_SUBCODE = 33;
 
 // Facebook and Threads are the same Graph call against a different host, so the
 // shape lives here once and each platform keeps its own name in the message it
@@ -136,7 +266,7 @@ async function graphDelete(
     response = await fetchWithTimeout(
       `${graph}/${encodeURIComponent(platformPostId)}?access_token=${encodeURIComponent(token)}`,
       { method: "DELETE" },
-      PROVIDER_TIMEOUT_MS,
+      providerTimeout(deps),
       deps.fetcher,
     );
   } catch {
@@ -147,25 +277,55 @@ async function graphDelete(
       data: null,
       error: null,
       errorCode: null,
+      errorSubcode: null,
       upstreamUnavailable: true,
       notFound: false,
     };
   }
 
-  let data: Record<string, unknown> | null = null;
-  try {
-    const parsed: unknown = await response.json();
-    if (typeof parsed === "object" && parsed !== null) {
-      data = parsed as Record<string, unknown>;
-    }
-  } catch {
-    // A body that is not JSON is a failed read, not an empty answer.
-    data = null;
+  // A 404 is the whole answer: the object is not there any more, and the
+  // body of a 404 says nothing more than that.
+  if (response.status === 404) {
+    return {
+      ok: false,
+      data: null,
+      error: null,
+      errorCode: null,
+      errorSubcode: null,
+      upstreamUnavailable: false,
+      notFound: true,
+    };
   }
+
+  // The body is read inside the deadline of the call: the timer of the fetch
+  // stops when the headers arrive, so a body that stalls after them would
+  // otherwise be waited for without a bound.
+  const body = await readJsonWithin(response, providerTimeout(deps));
+  if (body.kind === "timeout") {
+    // The provider answered with its headers and then said nothing: the
+    // delete could not be confirmed, and the platform is not to be blamed for
+    // a refusal it never made.
+    return {
+      ok: false,
+      data: null,
+      error: null,
+      errorCode: null,
+      errorSubcode: null,
+      upstreamUnavailable: true,
+      notFound: false,
+    };
+  }
+
+  // A body that is not an object (or that could not be read) carries no
+  // answer: a delete that is not confirmed is not a delete.
+  const data = body.kind === "ok" &&
+      typeof body.value === "object" && body.value !== null
+    ? (body.value as Record<string, unknown>)
+    : null;
 
   const rawError = data?.error;
   const errorObject = typeof rawError === "object" && rawError !== null
-    ? (rawError as { message?: unknown; code?: unknown })
+    ? (rawError as { message?: unknown; code?: unknown; error_subcode?: unknown })
     : null;
   const errorText = errorObject
     ? (typeof errorObject.message === "string" && errorObject.message.length > 0
@@ -175,6 +335,15 @@ async function graphDelete(
   const errorCode = errorObject && typeof errorObject.code === "number"
     ? errorObject.code
     : null;
+  const errorSubcode = errorObject &&
+      typeof errorObject.error_subcode === "number"
+    ? errorObject.error_subcode
+    : null;
+
+  // The object is not there any more: Graph says so with a 400, the code 100
+  // and the subcode 33.
+  const alreadyGone = errorCode === GRAPH_GONE_CODE &&
+    errorSubcode === GRAPH_GONE_SUBCODE;
 
   if (!response.ok || (rawError !== undefined && rawError !== null)) {
     return {
@@ -182,8 +351,9 @@ async function graphDelete(
       data,
       error: errorText,
       errorCode,
+      errorSubcode,
       upstreamUnavailable: false,
-      notFound: response.status === 404,
+      notFound: alreadyGone,
     };
   }
 
@@ -192,8 +362,9 @@ async function graphDelete(
     data,
     error: null,
     errorCode: null,
+    errorSubcode: null,
     upstreamUnavailable: false,
-    notFound: response.status === 404,
+    notFound: false,
   };
 }
 
@@ -257,8 +428,11 @@ async function deleteFacebook(
       reason: answer.error ?? "Facebook rejected the delete request.",
     };
   }
-  // Graph answers a delete with {"success": true}; an explicit false is a refusal.
-  if (answer.data?.success === false) {
+  // Graph answers a delete with {"success": true}, and only that is a delete:
+  // a body that says nothing, or that says anything else, is not a
+  // confirmation, and a copy that may still be on Facebook must not be
+  // reported as gone.
+  if (answer.data?.success !== true) {
     return { outcome: "failed", reason: "Facebook did not confirm the delete." };
   }
   // The recorded id is gone. A post that went out as more than one Facebook
@@ -301,7 +475,11 @@ async function deleteThreads(
       reason: answer.error ?? "Threads rejected the delete request.",
     };
   }
-  if (answer.data?.success === false) {
+  // Graph answers a delete with {"success": true}, and only that is a delete:
+  // a body that says nothing, or that says anything else, is not a
+  // confirmation, and a copy that may still be on Threads must not be
+  // reported as gone.
+  if (answer.data?.success !== true) {
     return { outcome: "failed", reason: "Threads did not confirm the delete." };
   }
   return { outcome: "deleted" };
@@ -366,7 +544,7 @@ async function deletePinterest(
           method: "DELETE",
           headers: { Authorization: `Bearer ${account.access_token}` },
         },
-        PROVIDER_TIMEOUT_MS,
+        providerTimeout(deps),
         deps.fetcher,
       );
     } catch {
@@ -375,16 +553,24 @@ async function deletePinterest(
       failures.push(`${pinId}: could not reach Pinterest`);
       continue;
     }
-    if (response.status >= 200 && response.status < 300) {
-      deleted += 1;
-      continue;
-    }
     // A pin that is not there any more is already what the caller wanted.
     if (response.status === 404) {
       alreadyGone += 1;
       continue;
     }
-    failures.push(`${pinId}: Pinterest returned ${response.status}`);
+    if (response.status < 200 || response.status >= 300) {
+      failures.push(`${pinId}: Pinterest returned ${response.status}`);
+      continue;
+    }
+    // The body of the answer is read inside the deadline of the call, even
+    // though a delete does not need it: a body that never arrives must not
+    // keep the call open past its deadline.
+    const body = await readJsonWithin(response, providerTimeout(deps));
+    if (body.kind === "timeout") {
+      failures.push(`${pinId}: could not reach Pinterest`);
+      continue;
+    }
+    deleted += 1;
   }
   if (failures.length === 0) {
     return alreadyGone === pinIds.length ? ALREADY_GONE : { outcome: "deleted" };
@@ -482,15 +668,11 @@ async function deleteLinkedin(
             "X-Restli-Protocol-Version": "2.0.0",
           },
         },
-        PROVIDER_TIMEOUT_MS,
+        providerTimeout(deps),
         deps.fetcher,
       );
     } catch {
       failures.push(`${urn}: could not reach LinkedIn`);
-      continue;
-    }
-    if (response.status >= 200 && response.status < 300) {
-      deleted += 1;
       continue;
     }
     // A destination that is not there any more is already what the caller wanted.
@@ -498,7 +680,19 @@ async function deleteLinkedin(
       alreadyGone += 1;
       continue;
     }
-    failures.push(`${urn}: LinkedIn returned ${response.status}`);
+    if (response.status < 200 || response.status >= 300) {
+      failures.push(`${urn}: LinkedIn returned ${response.status}`);
+      continue;
+    }
+    // The body of the answer is read inside the deadline of the call, even
+    // though a delete does not need it: a body that never arrives must not
+    // keep the call open past its deadline.
+    const body = await readJsonWithin(response, providerTimeout(deps));
+    if (body.kind === "timeout") {
+      failures.push(`${urn}: could not reach LinkedIn`);
+      continue;
+    }
+    deleted += 1;
   }
   if (failures.length > 0) {
     return {

@@ -26,6 +26,13 @@ const CLAIM = "55555555-5555-4555-8555-555555555555";
 const MEDIA = "66666666-6666-4666-8666-666666666666";
 const SERVICE_KEY = "service-role-key";
 const SUPABASE_URL = "https://api.postora.cloud";
+// The access token of the test accounts: a fixture value that is not a
+// credential and does not look like one, so a scanner has nothing to guess
+// about.
+const FAKE_ACCESS = "fixture-access";
+// The marker of a leak check: a body that carries it must never reach the
+// answer the caller reads.
+const LEAK_MARKER = "leak-check-marker";
 const SCHEDULED_STATUSES = ["scheduled", "pending"];
 // The two database functions the cancel and the reschedule write through.
 const CANCEL_RPC = "mcp_cancel_scheduled_post";
@@ -312,7 +319,7 @@ function noNetwork(): typeof fetch {
 // opened and nothing is ever enqueued into it, so reading the body waits for
 // an answer that never comes. The stream records that it was cancelled, so a
 // test can tell whether the connection was released after the deadline.
-function stalledBodyFetcher(): {
+function stalledBodyFetcher(status = 200): {
   fetcher: typeof fetch;
   wasCancelled: () => boolean;
 } {
@@ -330,7 +337,7 @@ function stalledBodyFetcher(): {
             state.cancelled = true;
           },
         }),
-        { status: 200, headers: { "Content-Type": "application/json" } },
+        { status, headers: { "Content-Type": "application/json" } },
       ),
     )) as unknown as typeof fetch;
   return { fetcher, wasCancelled: () => state.cancelled };
@@ -2962,7 +2969,7 @@ Deno.test("a publishing service that refuses with a reason that carries no crede
       // A 4xx is a refusal: the service answered and it did not accept the
       // publish, so the reason it gave is the one the caller is told.
       status: 422,
-      body: { error: "Instagram refused the media (Bearer secret-token-value)" },
+      body: { error: `Instagram refused the media (Bearer ${LEAK_MARKER})` },
     },
   ]);
   const result = await retryFailedPost(depsFor(db, fetcher), USER, {
@@ -2973,7 +2980,32 @@ Deno.test("a publishing service that refuses with a reason that carries no crede
   // The reason is not echoed: it carries the shape of a credential.
   const details = (result.body.error as { details?: { reason?: string } }).details;
   assertEquals(details === undefined || details.reason === undefined, true);
-  assertEquals(JSON.stringify(result.body).includes("secret-token-value"), false);
+  assertEquals(JSON.stringify(result.body).includes(LEAK_MARKER), false);
+});
+
+Deno.test("a publishing service whose refusal body never arrives is a 502 without a reason", async () => {
+  const db = new FakeSupabase();
+  claimQueued(db);
+  db.queue("platform_posts", {
+    data: [platformResult("row-target", "instagram", ACCOUNT, "failed")],
+    error: null,
+  });
+  db.queueRpc(RELEASE_RPC, { data: true, error: null });
+  // The service refused the publish and then said nothing: the body never
+  // arrives, so there is no reason to show.
+  const { fetcher, wasCancelled } = stalledBodyFetcher(422);
+  const result = await retryFailedPost(
+    { ...depsFor(db, fetcher), retryDispatchTimeoutMs: 20 },
+    USER,
+    { post_id: POST },
+  );
+  assertEquals(result.status, 502);
+  assertEquals(errorCode(result), "RETRY_FAILED");
+  // The fixed wording is the answer: there is no reason to add to it.
+  const details = (result.body.error as { details?: { reason?: string } }).details;
+  assertEquals(details === undefined || details.reason === undefined, true);
+  // The body is cancelled, so the connection to the service is released.
+  assertEquals(wasCancelled(), true);
 });
 
 Deno.test("a retry whose body cannot be parsed is a 400 and never reaches the posts table", async () => {
@@ -3044,7 +3076,7 @@ function deleteAccount(
     id: ACCOUNT,
     user_id: USER,
     platform: "facebook",
-    access_token: "placeholder",
+    access_token: FAKE_ACCESS,
     ...overrides,
   };
 }
@@ -3286,9 +3318,10 @@ Deno.test("a delete whose platforms are gone removes the post and then its media
       deleteAccount({ id: ACCOUNT_TWO, platform: "instagram" }),
     ],
   });
-  // The media of the post: the read and the delete of its row.
+  // The media of the post: the read and the delete of its row. The path is
+  // the one the upload convention gives it: `${userId}/${fileName}`.
   db.queue("media_files", {
-    data: [{ id: MEDIA, file_path: `${MEDIA}.png`, storage_bucket: "media" }],
+    data: [{ id: MEDIA, file_path: `${USER}/${MEDIA}.png`, storage_bucket: "media" }],
     error: null,
   });
   db.queue("media_files", { data: null, error: null });
@@ -3335,13 +3368,72 @@ Deno.test("a delete whose platforms are gone removes the post and then its media
   // The file lives in the storage, so it is removed there and its row goes.
   assertEquals(db.storageRemovals.length, 1);
   assertEquals(db.storageRemovals[0].bucket, "media");
-  assertEquals(db.storageRemovals[0].paths, [`${MEDIA}.png`]);
+  assertEquals(db.storageRemovals[0].paths, [`${USER}/${MEDIA}.png`]);
   assertEquals(result.body.media, { removed: 1, failed: [] });
 
   // The Facebook copy is the one request that went out: the Instagram copy
   // has no delete endpoint, so nothing was asked of it.
   assertEquals(calls.length, 1);
   assertEquals(calls[0].method, "DELETE");
+});
+
+Deno.test("the copies of a post are deleted at the same time and the results keep their order", async () => {
+  const db = new FakeSupabase();
+  claimQueued(db, "completed");
+  queueDeleteReads(db, {
+    mediaFileIds: [],
+    copies: [
+      publishedCopy("row-facebook", "facebook", ACCOUNT, "1234567890"),
+      publishedCopy("row-threads", "threads", ACCOUNT_TWO, "9876543210"),
+    ],
+    accounts: [
+      deleteAccount(),
+      deleteAccount({ id: ACCOUNT_TWO, platform: "threads" }),
+    ],
+  });
+  db.queueRpc(DELETE_CLAIMED_RPC, { data: true, error: null });
+
+  // The Facebook delete is slow and the Threads one is not: a delete that
+  // waited for the other one could not be answered before it.
+  const events: string[] = [];
+  const fetcher = (async (input: RequestInfo | URL) => {
+    const url = String(input);
+    const platform = url.includes("facebook") ? "facebook" : "threads";
+    events.push(`request ${platform}`);
+    await new Promise((resolve) =>
+      setTimeout(resolve, platform === "facebook" ? 40 : 0)
+    );
+    events.push(`answer ${platform}`);
+    return new Response(JSON.stringify({ success: true }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }) as unknown as typeof fetch;
+
+  const result = await deletePost(depsFor(db, fetcher), USER, {
+    post_id: POST,
+  });
+
+  assertEquals(result.status, 200);
+  // Both requests went out before either answer came back, and the second one
+  // was answered first: the two deletes ran at the same time, so one slow
+  // platform cannot spend the budget of the others.
+  assertEquals(events[0], "request facebook");
+  assertEquals(events[1], "request threads");
+  assertEquals(
+    events.indexOf("answer threads") < events.indexOf("answer facebook"),
+    true,
+  );
+  // The results keep the order of the copies.
+  const platforms = result.body.platforms as Array<{
+    platform: string;
+    outcome: string;
+  }>;
+  assertEquals(platforms.length, 2);
+  assertEquals(platforms[0].platform, "facebook");
+  assertEquals(platforms[0].outcome, "deleted");
+  assertEquals(platforms[1].platform, "threads");
+  assertEquals(platforms[1].outcome, "deleted");
 });
 
 Deno.test("the delete reads the post metadata and hands it to the deleter", async () => {

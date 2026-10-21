@@ -17,6 +17,7 @@ import { isValidUuid } from "./requestGuards.ts";
 import { recordApiRefusal } from "./refusalLog.ts";
 import {
   deletePublishedPost,
+  readJsonWithin,
   type DeleteAccount,
   type PlatformDeleteDeps,
 } from "./platformPostDelete.ts";
@@ -1741,6 +1742,11 @@ async function dispatchRetry(
     ...new Set(request.targets.map((target) => target.accountId)),
   ];
   const timeoutMs = deps.retryDispatchTimeoutMs ?? RETRY_DISPATCH_TIMEOUT_MS;
+  // The deadline is one deadline for the whole call: the headers and the body
+  // together. The clock starts before the request goes out, because a body
+  // that stalls after the headers arrived would otherwise be read for as long
+  // as the service keeps the connection open.
+  const startedAt = deps.now().getTime();
 
   let response: Response;
   try {
@@ -1805,7 +1811,11 @@ async function dispatchRetry(
         message: "The publishing service refused the retry. Try again later.",
       };
     }
-    const reason = await readUpstreamReason(response);
+    const remainingMs = Math.max(
+      0,
+      timeoutMs - (deps.now().getTime() - startedAt),
+    );
+    const reason = await readUpstreamReason(response, remainingMs);
     return {
       kind: "failed",
       message: "Retrying the post failed. Try again later.",
@@ -1823,32 +1833,38 @@ async function dispatchRetry(
 const BEARER_RE = /bearer\s+[A-Za-z0-9._-]+/i;
 const JWT_RE = /eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/;
 
-async function readUpstreamReason(response: Response): Promise<string | null> {
-  let text = "";
-  try {
-    text = await response.text();
-  } catch {
-    return null;
-  }
-  const trimmed = text.trim();
-  if (trimmed.length === 0) return null;
+// The reason the publishing service gave, read inside the deadline of the
+// dispatch.
+//
+// The body is read through the shared helper: the timer of the fetch stops
+// when the headers arrive, so a body that stalls after them would be waited
+// for without a bound. A body that never arrives, or that cannot be read as
+// JSON, is no reason at all: the caller is told the fixed wording.
+async function readUpstreamReason(
+  response: Response,
+  deadlineMs: number,
+): Promise<string | null> {
+  const read = await readJsonWithin(response, deadlineMs);
+  if (read.kind !== "ok") return null;
 
   // The body of a failure is usually an envelope with a message in it: the
   // message is what the caller can act on, and the envelope around it is not.
-  let reason = trimmed;
-  try {
-    const parsed: unknown = JSON.parse(trimmed);
-    if (typeof parsed === "object" && parsed !== null) {
-      const envelope = parsed as { error?: unknown; message?: unknown };
-      const candidate = typeof envelope.error === "string"
-        ? envelope.error
-        : typeof envelope.message === "string"
-        ? envelope.message
-        : null;
-      if (candidate !== null) reason = candidate;
-    }
-  } catch {
-    // A body that is not JSON is used as it is.
+  let reason: string;
+  if (typeof read.value === "string") {
+    reason = read.value;
+  } else if (read.value === null || read.value === undefined) {
+    // The body said nothing: there is no reason to show.
+    return null;
+  } else if (typeof read.value === "object") {
+    const envelope = read.value as { error?: unknown; message?: unknown };
+    const candidate = typeof envelope.error === "string"
+      ? envelope.error
+      : typeof envelope.message === "string"
+      ? envelope.message
+      : null;
+    reason = candidate ?? JSON.stringify(read.value);
+  } else {
+    reason = String(read.value);
   }
 
   const safe = reason.trim();
@@ -2185,6 +2201,55 @@ async function readPublishedAccounts(
   return (data ?? []) as DeleteAccount[];
 }
 
+// The delete of one published copy of a post.
+//
+// The copies of a post are deleted at the same time: one slow platform must
+// not spend the budget of the others. The edge worker that runs this function
+// is killed at roughly 60 s, and every delete keeps its own deadline, so the
+// copies run in parallel and the results come back in the order of the copies.
+async function deletePublishedCopy(
+  copy: PostCopyRow,
+  accountById: Map<string, DeleteAccount>,
+  post: PostRow,
+  platformDeps: PlatformDeleteDeps,
+): Promise<PublishedCopyResult> {
+  if (!copy.platform) {
+    return {
+      platform: "",
+      platform_post_id: copy.platform_post_id,
+      outcome: "not_supported",
+      reason: "The result names no platform, so there is nothing to delete on the platform.",
+    };
+  }
+  const account = copy.social_account_id
+    ? accountById.get(copy.social_account_id) ?? null
+    : null;
+  const outcome = await deletePublishedPost(
+    {
+      id: copy.id,
+      platform: copy.platform,
+      platform_post_id: copy.platform_post_id,
+      social_account_id: copy.social_account_id,
+      response_data: copy.response_data,
+      post_metadata: post.metadata ?? null,
+    },
+    account,
+    platformDeps,
+  );
+  const result: PublishedCopyResult = {
+    platform: copy.platform,
+    platform_post_id: copy.platform_post_id,
+    outcome: outcome.outcome,
+  };
+  if (outcome.outcome === "deleted") {
+    // A delete that already happened says so: the copy is gone either way.
+    if (outcome.note) result.note = outcome.note;
+  } else {
+    result.reason = outcome.reason;
+  }
+  return result;
+}
+
 export async function deletePost(
   deps: PostActionDeps,
   userId: string,
@@ -2367,45 +2432,12 @@ export async function deletePost(
     youtubeDeps: () => ({ admin: deps.supabase }),
   };
 
-  const results: PublishedCopyResult[] = [];
-  for (const copy of published) {
-    if (!copy.platform) {
-      results.push({
-        platform: "",
-        platform_post_id: copy.platform_post_id,
-        outcome: "not_supported",
-        reason: "The result names no platform, so there is nothing to delete on the platform.",
-      });
-      continue;
-    }
-    const account = copy.social_account_id
-      ? accountById.get(copy.social_account_id) ?? null
-      : null;
-    const outcome = await deletePublishedPost(
-      {
-        id: copy.id,
-        platform: copy.platform,
-        platform_post_id: copy.platform_post_id,
-        social_account_id: copy.social_account_id,
-        response_data: copy.response_data,
-        post_metadata: post.metadata ?? null,
-      },
-      account,
-      platformDeps,
-    );
-    const result: PublishedCopyResult = {
-      platform: copy.platform,
-      platform_post_id: copy.platform_post_id,
-      outcome: outcome.outcome,
-    };
-    if (outcome.outcome === "deleted") {
-      // A delete that already happened says so: the copy is gone either way.
-      if (outcome.note) result.note = outcome.note;
-    } else {
-      result.reason = outcome.reason;
-    }
-    results.push(result);
-  }
+  // The copies go out at the same time: one slow platform must not spend the
+  // budget of the others. Every delete keeps its own deadline, and the
+  // results come back in the order of the copies.
+  const results = await Promise.all(
+    published.map((copy) => deletePublishedCopy(copy, accountById, post, platformDeps)),
+  );
 
   // One platform refused: nothing is deleted in Postora and the media stays in
   // the library, so the caller can retry the whole delete.

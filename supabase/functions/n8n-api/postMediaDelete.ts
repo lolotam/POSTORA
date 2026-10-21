@@ -11,8 +11,16 @@
 // of a post an agent tool asked to delete. The read and the row delete are
 // therefore scoped to the owner, because this function runs with the service
 // role and RLS is not the boundary.
+//
+// The storage removal is scoped to the owner as well, and the dashboard copy
+// does not need it: in the browser the session is the owner, so the storage
+// RLS removes only the caller's own files. Here the service role bypasses
+// that RLS and the path of a media_files row is written by the client that
+// uploaded the file, so only the paths under the caller's own folder are
+// removed (see isOwnStoragePath).
 
 import { fetchWithTimeout } from "../_shared/request-timeout.ts";
+import { readJsonWithin } from "./platformPostDelete.ts";
 
 export interface StoredMediaRef {
   id: string;
@@ -26,6 +34,12 @@ export interface PostMediaDeleteDeps {
   fetcher: typeof fetch;
   supabaseUrl: string;
   serviceRoleKey: string;
+  /**
+   * The deadline for one call to the provider delete service, headers and
+   * body together. It is the production default unless a test asks for a
+   * shorter wait.
+   */
+  providerTimeoutMs?: number;
 }
 
 export interface PostMediaDeleteOutcome {
@@ -37,6 +51,27 @@ export interface PostMediaDeleteOutcome {
 
 // The deadline for one call to the provider delete service.
 const PROVIDER_TIMEOUT_MS = 15_000;
+
+// The deadline of one call to the provider delete service. The headers and
+// the body of the answer share it.
+function providerTimeout(deps: PostMediaDeleteDeps): number {
+  return deps.providerTimeoutMs ?? PROVIDER_TIMEOUT_MS;
+}
+
+/**
+ * Whether a stored file is the caller's own file.
+ *
+ * This function runs with the service role, so the storage RLS is not the
+ * boundary, and the path of a media_files row is written by the client that
+ * uploaded the file. A path that is not under the caller's own folder is
+ * therefore not the caller's file: it is never removed.
+ *
+ * The folder is the upload convention: every upload goes to
+ * `${userId}/${fileName}` (see src/hooks/history/usePostRetry.ts).
+ */
+export function isOwnStoragePath(filePath: string, userId: string): boolean {
+  return filePath.startsWith(`${userId}/`);
+}
 
 /** The buckets whose files live in the Supabase storage, and not at a provider. */
 export function partitionStoredMedia(
@@ -130,12 +165,27 @@ async function deletePostMediaFiles(
 
   const { storage, provider } = partitionStoredMedia(files);
 
+  // Only the files under the caller's own folder are removed from the
+  // storage. A file whose path points somewhere else is not the caller's file:
+  // it stays where it is, and its row stays in the library.
+  const ownStorage = storage.filter((file) =>
+    isOwnStoragePath(file.file_path, userId)
+  );
+  const foreignStorage = storage.filter((file) =>
+    !isOwnStoragePath(file.file_path, userId)
+  );
+  for (const file of foreignStorage) {
+    console.warn(
+      `[n8n-api] posts/delete: a media file is not in the caller's own folder and was not removed: ${file.id}`,
+    );
+  }
+
   let storageFailed = false;
-  if (storage.length > 0) {
+  if (ownStorage.length > 0) {
     try {
       const { error: storageError } = await deps.supabase.storage
         .from("media")
-        .remove(storage.map((file) => file.file_path));
+        .remove(ownStorage.map((file) => file.file_path));
       storageFailed = !!storageError;
       if (storageError) {
         console.error(
@@ -166,7 +216,7 @@ async function deletePostMediaFiles(
             user_id: userId,
           }),
         },
-        PROVIDER_TIMEOUT_MS,
+        providerTimeout(deps),
         deps.fetcher,
       );
       if (!response.ok) {
@@ -175,13 +225,21 @@ async function deletePostMediaFiles(
           `[n8n-api] posts/delete: the media delete service answered ${response.status}`,
         );
       } else {
-        const body: unknown = await response.json().catch(() => null);
-        // A body that is not JSON is a failed read, not an empty result: the
-        // files that were not named as deleted are still there.
-        if (typeof body !== "object" || body === null) {
+        // The body is read inside the deadline of the call: the timer of the
+        // fetch stops when the headers arrive, and a body that never comes
+        // must not keep the call open.
+        const body = await readJsonWithin(response, providerTimeout(deps));
+        // A body that did not arrive in time, or that cannot be read, is a
+        // failed read and not an empty result: the files that were not named
+        // as deleted are still there.
+        if (
+          body.kind !== "ok" ||
+          typeof body.value !== "object" || body.value === null
+        ) {
           invokeFailed = true;
         } else {
-          const deleted = (body as { deletedMediaFileIds?: unknown }).deletedMediaFileIds;
+          const deleted = (body.value as { deletedMediaFileIds?: unknown })
+            .deletedMediaFileIds;
           deletedMediaFileIds = Array.isArray(deleted)
             ? deleted.filter((id): id is string => typeof id === "string")
             : [];
@@ -193,12 +251,19 @@ async function deletePostMediaFiles(
   }
 
   const outcome = idsConfirmedDeleted({
-    storageIds: storage.map((file) => file.id),
+    storageIds: ownStorage.map((file) => file.id),
     storageFailed,
     providerIds: provider.map((file) => file.id),
     invokeFailed,
     deletedMediaFileIds,
   });
+
+  // The files that are not under the caller's own folder were not removed,
+  // so they are reported as still there and their rows stay.
+  const failedIds = [
+    ...outcome.failedIds,
+    ...foreignStorage.map((file) => file.id),
+  ];
 
   if (outcome.removeIds.length > 0) {
     const { error: deleteError } = await deps.supabase
@@ -214,10 +279,10 @@ async function deletePostMediaFiles(
       // gone, so they are reported as failed and not as removed.
       return {
         removedIds: [],
-        failedIds: [...outcome.failedIds, ...outcome.removeIds],
+        failedIds: [...failedIds, ...outcome.removeIds],
       };
     }
   }
 
-  return { removedIds: outcome.removeIds, failedIds: outcome.failedIds };
+  return { removedIds: outcome.removeIds, failedIds };
 }
