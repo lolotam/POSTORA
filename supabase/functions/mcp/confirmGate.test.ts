@@ -1,0 +1,206 @@
+import { assertEquals } from "jsr:@std/assert@1";
+import { confirmField, refuseUnconfirmed, type ConfirmRefusal } from "./confirmGate.ts";
+
+interface FakeCall {
+  method: string;
+  args: unknown[];
+}
+
+interface FakeQueryBuilder {
+  select(columns: string): FakeQueryBuilder;
+  eq(column: string, value: unknown): FakeQueryBuilder;
+  maybeSingle(): Promise<{ data: unknown; error: { message: string } | null }>;
+  insert(row: Record<string, unknown>): Promise<{ error: { message: string } | null }>;
+}
+
+interface FakeAdminOptions {
+  profile?: { id: string } | null;
+  lookupError?: { message: string } | null;
+  insertError?: { message: string } | null;
+  throwOn?: "maybeSingle" | "insert" | null;
+}
+
+// A fake admin that records every call the gate makes. Nothing here talks to
+// a database or to the network.
+function createFakeAdmin(options: FakeAdminOptions = {}) {
+  const calls: FakeCall[] = [];
+  const inserts: { table: string; row: Record<string, unknown> }[] = [];
+
+  const admin = {
+    from(table: string): FakeQueryBuilder {
+      calls.push({ method: "from", args: [table] });
+      const builder: FakeQueryBuilder = {
+        select(columns: string) {
+          calls.push({ method: "select", args: [columns] });
+          return builder;
+        },
+        eq(column: string, value: unknown) {
+          calls.push({ method: "eq", args: [column, value] });
+          return builder;
+        },
+        async maybeSingle() {
+          calls.push({ method: "maybeSingle", args: [] });
+          if (options.throwOn === "maybeSingle") throw new Error("database is down");
+          if (options.lookupError) return { data: null, error: options.lookupError };
+          return { data: options.profile ?? null, error: null };
+        },
+        async insert(row: Record<string, unknown>) {
+          calls.push({ method: "insert", args: [row] });
+          if (options.throwOn === "insert") throw new Error("database is down");
+          inserts.push({ table, row });
+          return { error: options.insertError ?? null };
+        },
+      };
+      return builder;
+    },
+  };
+
+  return { admin, calls, inserts };
+}
+
+// The key is hashed exactly like the API hashes it before looking the owner
+// up: sha256Hex(apiKey) against profiles.api_key_hash.
+const sha256Hex = async (_text: string): Promise<string> => "hashed-placeholder";
+
+const CALLER_PLACEHOLDER = "placeholder-caller";
+
+const EXPECTED_REFUSAL: ConfirmRefusal = {
+  code: "CONFIRMATION_REQUIRED",
+  message: "Set confirm: true to run this action.",
+};
+
+Deno.test("the confirm field takes any boolean, so the handler refuses and records it", () => {
+  assertEquals(confirmField.safeParse(true).success, true);
+  assertEquals(confirmField.safeParse(false).success, true);
+  assertEquals(confirmField.safeParse(undefined).success, true);
+  assertEquals(confirmField.safeParse("true").success, false);
+});
+
+Deno.test("a confirmed call is allowed and touches no database", async () => {
+  const { admin, calls } = createFakeAdmin({ profile: { id: "user-1" } });
+
+  const refusal = await refuseUnconfirmed(
+    { admin, sha256Hex },
+    { apiKey: CALLER_PLACEHOLDER, tool: "delete_comment", confirm: true },
+  );
+
+  assertEquals(refusal, null);
+  assertEquals(calls, []);
+});
+
+Deno.test("a missing confirm is refused and the refusal is recorded", async () => {
+  const { admin, calls, inserts } = createFakeAdmin({ profile: { id: "user-42" } });
+
+  const refusal = await refuseUnconfirmed(
+    { admin, sha256Hex },
+    { apiKey: CALLER_PLACEHOLDER, tool: "delete_comment", confirm: undefined },
+  );
+
+  assertEquals(refusal, EXPECTED_REFUSAL);
+
+  // The owner is resolved the way the API resolves an API key.
+  assertEquals(calls.map((call) => call.method), [
+    "from",
+    "select",
+    "eq",
+    "maybeSingle",
+    "from",
+    "insert",
+  ]);
+  assertEquals(calls[0].args, ["profiles"]);
+  assertEquals(calls[1].args, ["id"]);
+  assertEquals(calls[2].args, ["api_key_hash", "hashed-placeholder"]);
+
+  // One row, naming the tool and the code and nothing else.
+  assertEquals(inserts.length, 1);
+  assertEquals(inserts[0].table, "system_logs");
+  assertEquals(inserts[0].row, {
+    source: "mcp",
+    category: "edge",
+    level: "warn",
+    message: "delete_comment refused: CONFIRMATION_REQUIRED",
+    user_id: "user-42",
+    metadata: { tool: "delete_comment", code: "CONFIRMATION_REQUIRED" },
+  });
+
+  const metadata = inserts[0].row.metadata as Record<string, unknown>;
+  assertEquals(Object.keys(metadata).sort(), ["code", "tool"]);
+
+  // The arguments, the key and its hash are not in the row.
+  const serialized = JSON.stringify(inserts[0].row);
+  assertEquals(serialized.includes(CALLER_PLACEHOLDER), false);
+  assertEquals(serialized.includes("hashed-placeholder"), false);
+  assertEquals("args" in metadata, false);
+  assertEquals("arguments" in metadata, false);
+  assertEquals("api_key" in inserts[0].row, false);
+});
+
+Deno.test("confirm: false is refused and recorded like a missing confirm", async () => {
+  const { admin, inserts } = createFakeAdmin({ profile: { id: "user-42" } });
+
+  const refusal = await refuseUnconfirmed(
+    { admin, sha256Hex },
+    { apiKey: CALLER_PLACEHOLDER, tool: "cancel_scheduled_post", confirm: false },
+  );
+
+  assertEquals(refusal, EXPECTED_REFUSAL);
+  assertEquals(inserts.length, 1);
+  assertEquals(inserts[0].table, "system_logs");
+  assertEquals(inserts[0].row.user_id, "user-42");
+  assertEquals(inserts[0].row.metadata as Record<string, unknown>, {
+    tool: "cancel_scheduled_post",
+    code: "CONFIRMATION_REQUIRED",
+  });
+});
+
+Deno.test("an unknown owner is refused and writes no row", async () => {
+  const { admin, calls, inserts } = createFakeAdmin({ profile: null });
+
+  const refusal = await refuseUnconfirmed(
+    { admin, sha256Hex },
+    { apiKey: CALLER_PLACEHOLDER, tool: "hide_comment", confirm: undefined },
+  );
+
+  assertEquals(refusal, EXPECTED_REFUSAL);
+  assertEquals(inserts.length, 0);
+  assertEquals(calls.map((call) => call.method), ["from", "select", "eq", "maybeSingle"]);
+});
+
+Deno.test("a failed owner lookup is refused and writes no row", async () => {
+  const { admin, inserts } = createFakeAdmin({ lookupError: { message: "database is down" } });
+
+  const refusal = await refuseUnconfirmed(
+    { admin, sha256Hex },
+    { apiKey: CALLER_PLACEHOLDER, tool: "delete_comment", confirm: undefined },
+  );
+
+  assertEquals(refusal, EXPECTED_REFUSAL);
+  assertEquals(inserts.length, 0);
+});
+
+Deno.test("a failed log insert still refuses and never throws", async () => {
+  const { admin, inserts } = createFakeAdmin({
+    profile: { id: "user-42" },
+    insertError: { message: "insert failed" },
+  });
+
+  const refusal = await refuseUnconfirmed(
+    { admin, sha256Hex },
+    { apiKey: CALLER_PLACEHOLDER, tool: "delete_comment", confirm: undefined },
+  );
+
+  assertEquals(refusal, EXPECTED_REFUSAL);
+  assertEquals(inserts.length, 1);
+});
+
+Deno.test("a throwing database client refuses instead of throwing", async () => {
+  const { admin, inserts } = createFakeAdmin({ throwOn: "maybeSingle" });
+
+  const refusal = await refuseUnconfirmed(
+    { admin, sha256Hex },
+    { apiKey: CALLER_PLACEHOLDER, tool: "delete_comment", confirm: undefined },
+  );
+
+  assertEquals(refusal, EXPECTED_REFUSAL);
+  assertEquals(inserts.length, 0);
+});

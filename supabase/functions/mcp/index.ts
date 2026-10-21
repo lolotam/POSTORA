@@ -8,6 +8,8 @@ import { McpServer, StreamableHttpTransport } from "npm:mcp-lite@^0.10.0";
 import { z } from "npm:zod@4.1.12";
 import { createClient } from "npm:@supabase/supabase-js@2.45.0";
 import { normalizeListFields } from "./stringList.ts";
+import { confirmField, refuseUnconfirmed } from "./confirmGate.ts";
+import { sha256Hex } from "../_shared/crypto.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -144,11 +146,8 @@ function okUntrusted(data: unknown) {
 }
 
 // Destructive tools take `confirm: true` so a model has to state the intent
-// explicitly; the schema rejects anything else and the handler re-checks.
-const confirmTrue = z.literal(true).describe("Must be true. Confirms you intend this irreversible action.");
-function needsConfirm(confirm: unknown) {
-  return confirm === true ? null : fail(400, { code: "CONFIRMATION_REQUIRED", message: "Set confirm: true to run this action." });
-}
+// explicitly. The refusal is made in the handler, in ./confirmGate.ts, so it
+// can be recorded in system_logs instead of vanishing at the schema.
 
 // Build a fresh MCP server bound to a specific user's API key.
 function buildServer(apiKey: string) {
@@ -408,11 +407,11 @@ function buildServer(apiKey: string) {
       social_account_id: z.string().describe("Postora social account UUID (from list_accounts)"),
       comment_id: z.string().describe("Platform comment id"),
       hide: z.boolean().optional().describe("Default true; false unhides"),
-      confirm: confirmTrue,
+      confirm: confirmField,
     }),
     handler: async (args) => {
-      const refusal = needsConfirm(args.confirm);
-      if (refusal) return refusal;
+      const refusal = await refuseUnconfirmed({ admin, sha256Hex }, { apiKey, tool: "hide_comment", confirm: args.confirm });
+      if (refusal) return fail(400, refusal);
       const r = await callN8n(apiKey, "POST", "/api/v1/comments/hide", {
         social_account_id: args.social_account_id,
         comment_id: args.comment_id,
@@ -428,11 +427,11 @@ function buildServer(apiKey: string) {
     inputSchema: z.object({
       social_account_id: z.string().describe("Postora social account UUID (from list_accounts)"),
       comment_id: z.string().describe("Platform comment id"),
-      confirm: confirmTrue,
+      confirm: confirmField,
     }),
     handler: async (args) => {
-      const refusal = needsConfirm(args.confirm);
-      if (refusal) return refusal;
+      const refusal = await refuseUnconfirmed({ admin, sha256Hex }, { apiKey, tool: "delete_comment", confirm: args.confirm });
+      if (refusal) return fail(400, refusal);
       const r = await callN8n(apiKey, "POST", "/api/v1/comments/delete", {
         social_account_id: args.social_account_id,
         comment_id: args.comment_id,
@@ -499,11 +498,11 @@ function buildServer(apiKey: string) {
       "Cancel a scheduled post that has not been published yet and remove it from Postora. Only works while the post is scheduled and its time has not come. Cannot be undone. Requires confirm: true.",
     inputSchema: z.object({
       post_id: z.string().describe("Postora post UUID"),
-      confirm: confirmTrue,
+      confirm: confirmField,
     }),
     handler: async (args) => {
-      const refusal = needsConfirm(args.confirm);
-      if (refusal) return refusal;
+      const refusal = await refuseUnconfirmed({ admin, sha256Hex }, { apiKey, tool: "cancel_scheduled_post", confirm: args.confirm });
+      if (refusal) return fail(400, refusal);
       const r = await callN8n(apiKey, "POST", "/api/v1/posts/cancel", { post_id: args.post_id });
       return r.status >= 400 ? fail(r.status, r.data) : ok(r.data);
     },

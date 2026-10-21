@@ -141,7 +141,7 @@ Return a JSON array of suggestions.`;
     }
 
     const data = await aiResult.response.json();
-    const content = data.choices?.[0]?.message?.content || '[]';
+    const rawContent = data.choices?.[0]?.message?.content;
     console.log(`Best times generated using ${aiResult.tierUsed} tier (${aiResult.modelUsed})`);
 
     // Parse JSON from response
@@ -150,18 +150,28 @@ Return a JSON array of suggestions.`;
     // caller that the list is missing because the model's answer failed to
     // parse, not because the model had nothing to say.
     let parseFailed = false;
-    try {
-      const jsonStr = content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-      const parsed = JSON.parse(jsonStr);
-      if (Array.isArray(parsed)) {
-        suggestions = parsed;
-      } else {
-        parseFailed = true;
-      }
-    } catch (parseError) {
-      console.error('JSON parse error:', parseError, 'Content:', content);
+    // Only an explicitly returned answer counts. A missing, null, empty or
+    // non-string answer (a refusal, for instance) is a failed answer, not an
+    // empty list of suggestions.
+    const content = typeof rawContent === 'string' ? rawContent.trim() : '';
+    if (content.length === 0) {
+      console.error('Best times: the model returned no content');
       parseFailed = true;
       suggestions = [];
+    } else {
+      try {
+        const jsonStr = content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+        const parsed = JSON.parse(jsonStr);
+        if (Array.isArray(parsed)) {
+          suggestions = parsed;
+        } else {
+          parseFailed = true;
+        }
+      } catch (parseError) {
+        console.error('JSON parse error:', parseError, 'Content:', content);
+        parseFailed = true;
+        suggestions = [];
+      }
     }
 
     console.log('Generated suggestions:', suggestions.length);
