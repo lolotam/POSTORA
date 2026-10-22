@@ -554,11 +554,12 @@ export async function refuseUnconfirmed(
  * The grant is decided by the caller: an API-key caller holds every scope,
  * an OAuth token holds only the scopes it was granted (see ./toolScopes.ts).
  *
- * The arguments are passed on, because a tool may need a scope only for
- * some of the calls made to it: create_post needs media:write only when it
- * uploads media inline, and webhooks:manage only when it carries a
- * webhook_url. The gate does not read them itself; it hands them to the
- * scope table (see argumentScopes in ./toolScopes.ts).
+ * The arguments are passed on, because a call may need a scope only
+ * because of what it carries. Today that is create_post with a
+ * webhook_url, which needs webhooks:manage. create_post's media:write is
+ * not argument-based: it is fixed in TOOL_SCOPES, fails closed, because
+ * the schema is .passthrough(). The gate does not read the arguments
+ * itself; it hands them to argumentScopes in ./toolScopes.ts.
  *
  * A scope that cannot be granted yet is not answered with advice to
  * reconnect. Reconnecting would not help: the consent screen that could

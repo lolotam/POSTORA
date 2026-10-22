@@ -351,10 +351,10 @@ function buildServer(
       pinterest_link: z.string().optional(),
     }).passthrough(),
     handler: async (args) => {
-      // The arguments decide what else the call needs: media it uploads
-      // inline needs media:write, a webhook_url needs webhooks:manage (see
-      // argumentScopes in ./toolScopes.ts). The scope check therefore gets
-      // the arguments, and it still runs before anything else.
+      // The arguments decide what else the call needs: a webhook_url needs
+      // webhooks:manage (see argumentScopes in ./toolScopes.ts).
+      // media:write is always required for create_post (TOOL_SCOPES, fail
+      // closed). The scope check still runs before anything else.
       const scopeRefusal = await refuseUngranted({ admin }, { userId: ownerId, tool: "create_post", grant, args });
       if (scopeRefusal) return fail(403, scopeRefusal);
       const r = await callN8n(apiKey, "POST", "/api/v1/post", normalizeListFields(args as Record<string, unknown>));
