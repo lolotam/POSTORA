@@ -694,7 +694,7 @@ function buildServer(
     },
   });
 
-  server.tool("retry_failed_post", {
+  register("retry_failed_post", {
     description:
       "Retry a post that failed to publish on some of its platforms. Only the failed platforms are published again: a platform that already published is never posted a second time. " +
       "The answer may say 'results_pending', which means the publish was started and the results are not in yet — read them with get_post. " +
@@ -713,7 +713,7 @@ function buildServer(
     },
   });
 
-  server.tool("delete_post", {
+  register("delete_post", {
     description:
       "Delete a published post: it deletes the post from Postora and, where the platform allows it, from the platform (Facebook, Threads, YouTube native, Pinterest, LinkedIn). " +
       "Instagram, TikTok and other platforms are reported not_supported and stay on the platform. " +
