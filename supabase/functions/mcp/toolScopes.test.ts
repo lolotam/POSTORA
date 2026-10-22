@@ -124,8 +124,49 @@ Deno.test("every tool registered in index.ts checks its scope first", async () =
   const source = await readIndexSource();
 
   for (const tool of registeredTools(source)) {
+    // The tool's own block: from its register(...) call to the next one, or
+    // to the end of the source when it is the last tool. The scope check
+    // only counts when it sits in this block, not somewhere else in the file.
+    const start = source.indexOf(`register("${tool}",`);
+    assertEquals(start !== -1, true, `${tool}: it has no register(...) call`);
+    const nextRegister = source.indexOf('register("', start + 1);
+    const block = source.slice(
+      start,
+      nextRegister === -1 ? source.length : nextRegister,
+    );
+
+    // The check has to be in the tool's own handler.
+    const handlerAt = block.indexOf("handler: async");
+    assertEquals(handlerAt !== -1, true, `${tool}: it has no handler`);
+    const rest = block.slice(handlerAt);
+
     const check = `refuseUngranted({ admin }, { userId: ownerId, tool: "${tool}", grant })`;
-    assertEquals(source.includes(check), true, tool);
+    const checkAt = rest.indexOf(check);
+    assertEquals(
+      checkAt !== -1,
+      true,
+      `${tool}: its handler does not check the scope`,
+    );
+
+    // And it has to come first: before the tool calls the API, and before
+    // the confirmation check.
+    const workAt = rest.indexOf("callN8n(");
+    if (workAt !== -1) {
+      assertEquals(
+        checkAt < workAt,
+        true,
+        `${tool}: it checks the scope after it calls the API`,
+      );
+    }
+
+    const confirmAt = rest.indexOf("refuseUnconfirmed(");
+    if (confirmAt !== -1) {
+      assertEquals(
+        checkAt < confirmAt,
+        true,
+        `${tool}: it checks the scope after the confirmation check`,
+      );
+    }
   }
 });
 
