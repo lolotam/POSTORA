@@ -11,6 +11,11 @@
 // run it, because that key is the owner's own and the owner may do
 // everything the tools offer.
 //
+// A tool may need more than one scope. generate_image spends AI quota AND
+// writes the image to the media library, so it needs posts:write and
+// media:write. An array in the table means the tool needs ALL of the scopes
+// it names, and the refusal names the first one the grant does not hold.
+//
 // comments:write, messages:write, comments:read and messages:read are
 // advertised in the authorization server metadata, but no token can be granted
 // them yet: the consent screen that could show them ships after the frontend
@@ -36,9 +41,18 @@ export type ScopeGrant =
   | { kind: "all" }
   | { kind: "granted"; scopes: ReadonlySet<string> };
 
+// The sentinel a missing scope carries when the tool is not in the table at
+// all. It is not a scope: no token can be granted it, and no reconnect can
+// produce it, so a refusal that carries it may not tell the caller to
+// reconnect.
+export const UNCLASSIFIED_TOOL = "unclassified";
+
 // The scope each tool needs. Every registered tool is in this table: a tool
 // that is not is refused over OAuth instead of running ungated.
-export const TOOL_SCOPES: Readonly<Record<string, string>> = {
+//
+// A string is the one scope the tool needs. An array is every scope the tool
+// needs: the tool may not run unless the grant holds all of them.
+export const TOOL_SCOPES: Readonly<Record<string, string | readonly string[]>> = {
   list_accounts: "accounts:read",
   list_posts: "posts:read",
   get_post: "posts:read",
@@ -50,7 +64,9 @@ export const TOOL_SCOPES: Readonly<Record<string, string>> = {
   get_post_analytics: "posts:read",
   generate_caption: "posts:write",
   generate_hashtags: "posts:write",
-  generate_image: "posts:write",
+  // It saves the image to the media library, so it needs media:write as well
+  // as the posts:write its AI quota spends.
+  generate_image: ["posts:write", "media:write"],
   cancel_scheduled_post: "posts:write",
   reschedule_post: "posts:write",
   retry_failed_post: "posts:write",
@@ -70,21 +86,28 @@ export const TOOL_SCOPES: Readonly<Record<string, string>> = {
  * The scope the caller is missing for a tool, or null when the call may run.
  *
  * - an API-key grant holds every scope: null.
- * - a tool that is not in the table: "unclassified", so a tool nobody
+ * - a tool that is not in the table: UNCLASSIFIED_TOOL, so a tool nobody
  *   classified is refused over OAuth instead of running ungated.
- * - a tool that is in the table and the grant holds its scope: null.
- * - a tool that is in the table and the grant does not hold its scope: the
- *   scope that is missing, which is what the refusal names.
+ * - a tool that is in the table and the grant holds every scope it needs:
+ *   null.
+ * - a tool that is in the table and the grant does not hold every scope it
+ *   needs: the FIRST scope that is missing, which is what the refusal names.
+ *   A tool that needs one scope behaves as it always did.
  */
 export function missingScope(grant: ScopeGrant, tool: string): string | null {
   if (grant.kind === "all") return null;
 
   // The lookup is annotated, so a tool that is not in the table reads as
-  // "no scope" instead of as a string that cannot be compared to undefined.
-  const required: string | undefined = TOOL_SCOPES[tool];
-  if (required === undefined) return "unclassified";
+  // "no scope" instead of as a value that cannot be compared to undefined.
+  const required: string | readonly string[] | undefined = TOOL_SCOPES[tool];
+  if (required === undefined) return UNCLASSIFIED_TOOL;
 
-  if (grant.scopes.has(required)) return null;
+  // A tool mapped to an array needs ALL of the scopes it names, so the first
+  // one the grant does not hold is the one the refusal names.
+  const scopes = typeof required === "string" ? [required] : required;
+  for (const scope of scopes) {
+    if (!grant.scopes.has(scope)) return scope;
+  }
 
-  return required;
+  return null;
 }

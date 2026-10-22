@@ -51,7 +51,12 @@
 // migration: it is out of scope here.
 
 import { z } from "npm:zod@4.1.12";
-import { missingScope, NOT_YET_GRANTABLE_SCOPES, type ScopeGrant } from "./toolScopes.ts";
+import {
+  missingScope,
+  NOT_YET_GRANTABLE_SCOPES,
+  UNCLASSIFIED_TOOL,
+  type ScopeGrant,
+} from "./toolScopes.ts";
 
 export const confirmField = z.unknown().optional().describe(
   "Must be the boolean true to run. Confirms you intend this irreversible action.",
@@ -554,6 +559,10 @@ export async function refuseUnconfirmed(
  * offer the scope does not ship yet, so the only way to run the tool is an
  * API key. Telling the caller to reconnect would send them in circles.
  *
+ * A tool nobody classified is answered the same way. It is not a scope, so
+ * no token can be granted it and no reconnect can produce it: the refusal
+ * names the API key as the way in, not a reconnect.
+ *
  * The log names the tool and the code only. The arguments, the API key, the
  * token and its scopes stay out of it.
  *
@@ -572,6 +581,13 @@ export async function refuseUngranted(
     tool: request.tool,
     code: "SCOPE_NOT_GRANTED",
   });
+
+  if (scope === UNCLASSIFIED_TOOL) {
+    return {
+      code: "SCOPE_NOT_GRANTED",
+      message: "This tool is not available over OAuth. Use a Postora API key.",
+    };
+  }
 
   if (NOT_YET_GRANTABLE_SCOPES.has(scope)) {
     return {

@@ -3,6 +3,7 @@ import {
   missingScope,
   TOOL_SCOPES,
   NOT_YET_GRANTABLE_SCOPES,
+  UNCLASSIFIED_TOOL,
   type ScopeGrant,
 } from "./toolScopes.ts";
 
@@ -28,13 +29,21 @@ async function readIndexSource(): Promise<string> {
   return Deno.readTextFile(new URL("./index.ts", import.meta.url));
 }
 
-// Every tool name index.ts registers.
+// Every tool name index.ts registers. A tool name may carry digits, so the
+// pattern holds them too.
 function registeredTools(source: string): string[] {
   return [
     ...new Set(
-      [...source.matchAll(/register\("([a-z_]+)"/g)].map((match) => match[1]),
+      [...source.matchAll(/register\("([a-z0-9_]+)"/g)].map((match) => match[1]),
     ),
   ];
+}
+
+// The scopes a tool needs. A tool mapped to an array needs ALL of them.
+function scopesFor(tool: string): string[] {
+  const required: string | readonly string[] | undefined = TOOL_SCOPES[tool];
+  if (required === undefined) return [];
+  return typeof required === "string" ? [required] : [...required];
 }
 
 Deno.test("an API-key grant holds every scope, so no tool is missing one", () => {
@@ -78,8 +87,12 @@ Deno.test("an older tool needs a scope too, so an empty grant may not run it", (
 Deno.test("an empty grant misses the scope of every tool", () => {
   const grant = granted();
 
-  for (const [tool, scope] of Object.entries(TOOL_SCOPES)) {
-    assertEquals(missingScope(grant, tool), scope, tool);
+  for (const tool of Object.keys(TOOL_SCOPES)) {
+    const scopes = scopesFor(tool);
+    assertEquals(scopes.length > 0, true, tool);
+    // A tool that needs several scopes is refused for the first one it is
+    // missing.
+    assertEquals(missingScope(grant, tool), scopes[0], tool);
   }
 });
 
@@ -101,7 +114,9 @@ Deno.test("a scope that can be granted is not in the not-yet-grantable set", () 
 });
 
 Deno.test("every scope that cannot be granted yet is the scope of a tool", () => {
-  const toolScopes = new Set(Object.values(TOOL_SCOPES));
+  const toolScopes = new Set(
+    Object.keys(TOOL_SCOPES).flatMap((tool) => scopesFor(tool)),
+  );
 
   for (const scope of NOT_YET_GRANTABLE_SCOPES) {
     assertEquals(toolScopes.has(scope), true, scope);
@@ -167,16 +182,64 @@ Deno.test("every tool registered in index.ts checks its scope first", async () =
         `${tool}: it checks the scope after the confirmation check`,
       );
     }
+
+    // And the check has to be ENFORCED: the refusal has to end the call
+    // before the tool does anything else. Calling the check is not enough:
+    // a check whose result is ignored lets the tool run anyway.
+    //
+    // The text that follows the check's own statement: from the end of the
+    // line the check sits on.
+    const afterCheck = rest.slice(checkAt);
+    const statementEnd = afterCheck.indexOf("\n");
+    assertEquals(
+      statementEnd !== -1,
+      true,
+      `${tool}: its scope check is not a statement of its own`,
+    );
+    const afterStatement = afterCheck.slice(statementEnd + 1).trimStart();
+    assertEquals(
+      afterStatement.startsWith("if (scopeRefusal) return fail(403, scopeRefusal);"),
+      true,
+      `${tool}: it does not return the scope refusal`,
+    );
   }
 });
 
 Deno.test("a token holding the default scopes can run every tool except the not-yet-grantable ones", () => {
   const grant = granted(...DEFAULT_SCOPES);
 
-  for (const [tool, scope] of Object.entries(TOOL_SCOPES)) {
-    if (NOT_YET_GRANTABLE_SCOPES.has(scope)) continue;
+  for (const tool of Object.keys(TOOL_SCOPES)) {
+    // A tool that needs a scope that cannot be granted yet is refused. A
+    // tool that needs several scopes is refused only when one of them is
+    // missing, so generate_image runs on the default grant: it holds both
+    // posts:write and media:write.
+    const blocked = scopesFor(tool).some((scope) =>
+      NOT_YET_GRANTABLE_SCOPES.has(scope)
+    );
+    if (blocked) continue;
     assertEquals(missingScope(grant, tool), null, tool);
   }
+});
+
+Deno.test("generate_image needs media:write as well as posts:write", () => {
+  const grant = granted("posts:write");
+
+  // The image is saved to the media library, so posts:write alone is not
+  // enough: the grant is missing media:write.
+  assertEquals(missingScope(grant, "generate_image"), "media:write");
+});
+
+Deno.test("a grant that holds both of generate_image's scopes may run it", () => {
+  const grant = granted("posts:write", "media:write");
+
+  assertEquals(missingScope(grant, "generate_image"), null);
+});
+
+Deno.test("a tool nobody classified is refused with the unclassified sentinel", () => {
+  const grant = granted("posts:read");
+
+  assertEquals(missingScope(grant, "not_a_registered_tool"), UNCLASSIFIED_TOOL);
+  assertEquals(missingScope(ALL, "not_a_registered_tool"), null);
 });
 
 Deno.test("a token missing a scope is refused for the tools that need it", () => {

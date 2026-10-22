@@ -1024,6 +1024,38 @@ Deno.test("a scope that can be granted is still answered with a reconnect", asyn
   assertEquals(refusal?.message.includes("Reconnect"), true);
 });
 
+Deno.test("a tool nobody classified is refused without a dead end", async () => {
+  resetRefusalThrottleForTests();
+  const { admin, inserts } = createFakeAdmin();
+
+  const refusal = await refuseUngranted(
+    { admin },
+    {
+      userId: OWNER_ID,
+      tool: "not_a_registered_tool",
+      grant: GRANT_WITHOUT_COMMENTS,
+    },
+  );
+
+  // Nobody classified the tool, so there is no scope to grant it: a
+  // reconnect cannot produce one, and the refusal must not send the caller
+  // into that circle.
+  assertEquals(refusal, {
+    code: "SCOPE_NOT_GRANTED",
+    message: "This tool is not available over OAuth. Use a Postora API key.",
+  } as const);
+  assertEquals(refusal?.message.includes("Reconnect"), false);
+
+  // It still leaves a row, like every other refusal.
+  assertEquals(inserts.length, 1);
+  assertEquals(inserts[0].table, "system_logs");
+  assertEquals(inserts[0].row.user_id, OWNER_ID);
+  assertEquals(inserts[0].row.metadata as Record<string, unknown>, {
+    tool: "not_a_registered_tool",
+    code: "SCOPE_NOT_GRANTED",
+  });
+});
+
 // ── the forwarded refusal ─────────────────────────────────────────────────────
 
 // Some API routes refuse a call with a 4xx and a body and write no row of
