@@ -161,6 +161,16 @@ export const TOOL_POLICIES: Readonly<Record<string, ToolPolicy>> = {
     kind: "write",
     annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
   },
+  // Publishes again to the platforms: a write that reaches the outside world but deletes nothing.
+  retry_failed_post: {
+    kind: "write",
+    annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+  },
+  // Deletes the post, its platform copies and its media: cannot be undone.
+  delete_post: {
+    kind: "write",
+    annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
+  },
   generate_caption: {
     kind: "ai",
     annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
