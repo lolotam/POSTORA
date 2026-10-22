@@ -71,6 +71,19 @@ Deno.test("the full connection offers the publish, delete and AI tools", () => {
   assertEquals(offered.includes("create_post"), true);
   assertEquals(offered.includes("delete_comment"), true);
   assertEquals(offered.includes("generate_image"), true);
+  assertEquals(offered.includes("retry_failed_post"), true);
+  assertEquals(offered.includes("delete_post"), true);
+});
+
+Deno.test("the read and inbox connections never offer retry_failed_post or delete_post", () => {
+  const modes: ConnectionMode[] = ["read", "inbox"];
+
+  for (const mode of modes) {
+    const offered = toolsForMode(mode);
+
+    assertEquals(offered.includes("retry_failed_post"), false, mode);
+    assertEquals(offered.includes("delete_post"), false, mode);
+  }
 });
 
 Deno.test("the read connection offers the tools that return other people's text", () => {
