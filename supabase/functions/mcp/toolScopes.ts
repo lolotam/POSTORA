@@ -56,7 +56,9 @@ export const TOOL_SCOPES: Readonly<Record<string, string | readonly string[]>> =
   list_accounts: "accounts:read",
   list_posts: "posts:read",
   get_post: "posts:read",
-  create_post: "posts:write",
+  // create_post can upload media inline (media_urls / media_base64) into the
+  // media library, so it needs media:write as well, the same as upload_media.
+  create_post: ["posts:write", "media:write"],
   upload_media: "media:write",
   list_webhooks: "webhooks:manage",
   register_webhook: "webhooks:manage",

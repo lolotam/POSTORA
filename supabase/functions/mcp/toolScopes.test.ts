@@ -235,6 +235,18 @@ Deno.test("a grant that holds both of generate_image's scopes may run it", () =>
   assertEquals(missingScope(grant, "generate_image"), null);
 });
 
+Deno.test("create_post needs media:write as well as posts:write", () => {
+  const grant = granted("posts:write");
+
+  // The post can carry media inline, and that upload lands in the media
+  // library, so posts:write alone is not enough: the grant is missing
+  // media:write.
+  assertEquals(missingScope(grant, "create_post"), "media:write");
+
+  const both = granted("posts:write", "media:write");
+  assertEquals(missingScope(both, "create_post"), null);
+});
+
 Deno.test("a tool nobody classified is refused with the unclassified sentinel", () => {
   const grant = granted("posts:read");
 
