@@ -5,6 +5,12 @@
 // was granted at the consent screen, and a tool the token was not granted is
 // refused before it runs.
 //
+// Every tool needs a scope over OAuth. TOOL_SCOPES names the scope each tool
+// needs, and a tool that is not in the table is refused as well: nobody
+// classified it, so it may not run over OAuth. An API-key caller may still
+// run it, because that key is the owner's own and the owner may do
+// everything the tools offer.
+//
 // comments:write, messages:write, comments:read and messages:read are
 // advertised in the authorization server metadata, but no token can be granted
 // them yet: the consent screen that could show them ships after the frontend
@@ -14,11 +20,6 @@
 // to do instead of sending it to a reconnect that cannot produce the scope.
 // The set itself lives in ../_shared/mcpScopes.ts, which the mcp-oauth
 // function imports too, so the two deployed functions cannot drift apart.
-//
-// Enforcing scopes on every MCP tool is a separate follow-up. Only the tools
-// listed in NEW_TOOL_SCOPES are gated here; the older tools are not gated in
-// this change, and a tool that is not listed is never refused for a missing
-// scope.
 
 import { NOT_YET_GRANTABLE_SCOPES } from "../_shared/mcpScopes.ts";
 
@@ -35,9 +36,21 @@ export type ScopeGrant =
   | { kind: "all" }
   | { kind: "granted"; scopes: ReadonlySet<string> };
 
-// The scope each gated tool needs. A tool that is not listed here is not
-// gated by scope in this change.
-export const NEW_TOOL_SCOPES: Readonly<Record<string, string>> = {
+// The scope each tool needs. Every registered tool is in this table: a tool
+// that is not is refused over OAuth instead of running ungated.
+export const TOOL_SCOPES: Readonly<Record<string, string>> = {
+  list_accounts: "accounts:read",
+  list_posts: "posts:read",
+  get_post: "posts:read",
+  create_post: "posts:write",
+  upload_media: "media:write",
+  list_webhooks: "webhooks:manage",
+  register_webhook: "webhooks:manage",
+  delete_webhook: "webhooks:manage",
+  get_post_analytics: "posts:read",
+  generate_caption: "posts:write",
+  generate_hashtags: "posts:write",
+  generate_image: "posts:write",
   cancel_scheduled_post: "posts:write",
   reschedule_post: "posts:write",
   retry_failed_post: "posts:write",
@@ -57,18 +70,19 @@ export const NEW_TOOL_SCOPES: Readonly<Record<string, string>> = {
  * The scope the caller is missing for a tool, or null when the call may run.
  *
  * - an API-key grant holds every scope: null.
- * - a tool that is not gated: null.
- * - a tool that is gated and the grant holds its scope: null.
- * - a tool that is gated and the grant does not hold its scope: the scope
- *   that is missing, which is what the refusal names.
+ * - a tool that is not in the table: "unclassified", so a tool nobody
+ *   classified is refused over OAuth instead of running ungated.
+ * - a tool that is in the table and the grant holds its scope: null.
+ * - a tool that is in the table and the grant does not hold its scope: the
+ *   scope that is missing, which is what the refusal names.
  */
 export function missingScope(grant: ScopeGrant, tool: string): string | null {
   if (grant.kind === "all") return null;
 
   // The lookup is annotated, so a tool that is not in the table reads as
   // "no scope" instead of as a string that cannot be compared to undefined.
-  const required: string | undefined = NEW_TOOL_SCOPES[tool];
-  if (required === undefined) return null;
+  const required: string | undefined = TOOL_SCOPES[tool];
+  if (required === undefined) return "unclassified";
 
   if (grant.scopes.has(required)) return null;
 

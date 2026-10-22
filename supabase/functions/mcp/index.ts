@@ -279,6 +279,8 @@ function buildServer(
       platform: z.string().optional().describe("Optional filter by platform"),
     }),
     handler: async ({ platform }) => {
+      const scopeRefusal = await refuseUngranted({ admin }, { userId: ownerId, tool: "list_accounts", grant });
+      if (scopeRefusal) return fail(403, scopeRefusal);
       const r = await callN8n(apiKey, "GET", "/api/v1/accounts", undefined, { platform });
       return r.status >= 400 ? fail(r.status, r.data) : ok(r.data);
     },
@@ -293,6 +295,8 @@ function buildServer(
       offset: z.number().optional(),
     }),
     handler: async (args) => {
+      const scopeRefusal = await refuseUngranted({ admin }, { userId: ownerId, tool: "list_posts", grant });
+      if (scopeRefusal) return fail(403, scopeRefusal);
       const r = await callN8n(apiKey, "GET", "/api/v1/posts", undefined, args);
       return r.status >= 400 ? fail(r.status, r.data) : ok(r.data);
     },
@@ -302,6 +306,8 @@ function buildServer(
     description: "Get a single post (and its per-platform results) by Postora post id.",
     inputSchema: z.object({ post_id: z.string().describe("Postora post UUID") }),
     handler: async ({ post_id }) => {
+      const scopeRefusal = await refuseUngranted({ admin }, { userId: ownerId, tool: "get_post", grant });
+      if (scopeRefusal) return fail(403, scopeRefusal);
       const r = await callN8n(apiKey, "GET", `/api/v1/post/${encodeURIComponent(post_id)}`);
       return r.status >= 400 ? fail(r.status, r.data) : ok(r.data);
     },
@@ -345,6 +351,8 @@ function buildServer(
       pinterest_link: z.string().optional(),
     }).passthrough(),
     handler: async (args) => {
+      const scopeRefusal = await refuseUngranted({ admin }, { userId: ownerId, tool: "create_post", grant });
+      if (scopeRefusal) return fail(403, scopeRefusal);
       const r = await callN8n(apiKey, "POST", "/api/v1/post", normalizeListFields(args as Record<string, unknown>));
       return r.status >= 400 ? fail(r.status, r.data) : ok(r.data);
     },
@@ -363,6 +371,8 @@ function buildServer(
       mime_type: z.string().optional(),
     }),
     handler: async (args) => {
+      const scopeRefusal = await refuseUngranted({ admin }, { userId: ownerId, tool: "upload_media", grant });
+      if (scopeRefusal) return fail(403, scopeRefusal);
       const r = await callN8n(apiKey, "POST", "/api/v1/upload-media", args);
       return r.status >= 400 ? fail(r.status, r.data) : ok(r.data);
     },
@@ -373,6 +383,8 @@ function buildServer(
     description: "List the user's registered webhook subscriptions for post status updates.",
     inputSchema: z.object({}),
     handler: async () => {
+      const scopeRefusal = await refuseUngranted({ admin }, { userId: ownerId, tool: "list_webhooks", grant });
+      if (scopeRefusal) return fail(403, scopeRefusal);
       const r = await callN8n(apiKey, "GET", "/api/v1/webhooks");
       return r.status >= 400 ? fail(r.status, r.data) : ok(r.data);
     },
@@ -385,6 +397,8 @@ function buildServer(
       events: z.array(z.string()).optional(),
     }),
     handler: async (args) => {
+      const scopeRefusal = await refuseUngranted({ admin }, { userId: ownerId, tool: "register_webhook", grant });
+      if (scopeRefusal) return fail(403, scopeRefusal);
       const r = await callN8n(apiKey, "POST", "/api/v1/webhooks", args);
       return r.status >= 400 ? fail(r.status, r.data) : ok(r.data);
     },
@@ -394,6 +408,8 @@ function buildServer(
     description: "Delete a registered webhook by id.",
     inputSchema: z.object({ webhook_id: z.string() }),
     handler: async ({ webhook_id }) => {
+      const scopeRefusal = await refuseUngranted({ admin }, { userId: ownerId, tool: "delete_webhook", grant });
+      if (scopeRefusal) return fail(403, scopeRefusal);
       const r = await callN8n(apiKey, "DELETE", `/api/v1/webhooks/${encodeURIComponent(webhook_id)}`);
       return r.status >= 400 ? fail(r.status, r.data) : ok(r.data);
     },
@@ -446,6 +462,8 @@ function buildServer(
         .describe("Threads only: 7, 14, 30 or 90 days (default 7)"),
     }),
     handler: async (args) => {
+      const scopeRefusal = await refuseUngranted({ admin }, { userId: ownerId, tool: "get_post_analytics", grant });
+      if (scopeRefusal) return fail(403, scopeRefusal);
       const r = await callN8n(apiKey, "GET", "/api/v1/analytics", undefined, args);
       return r.status >= 400 ? fail(r.status, r.data) : ok(r.data);
     },
@@ -463,6 +481,8 @@ function buildServer(
       language: z.string().optional().describe("english (default), arabic, or both"),
     }),
     handler: async (args) => {
+      const scopeRefusal = await refuseUngranted({ admin }, { userId: ownerId, tool: "generate_caption", grant });
+      if (scopeRefusal) return fail(403, scopeRefusal);
       const r = await callN8n(apiKey, "POST", "/api/v1/ai/caption", args);
       return r.status >= 400 ? fail(r.status, r.data) : ok(r.data);
     },
@@ -476,6 +496,8 @@ function buildServer(
       platform: z.string().describe("Target platform, e.g. instagram, tiktok"),
     }),
     handler: async (args) => {
+      const scopeRefusal = await refuseUngranted({ admin }, { userId: ownerId, tool: "generate_hashtags", grant });
+      if (scopeRefusal) return fail(403, scopeRefusal);
       const r = await callN8n(apiKey, "POST", "/api/v1/ai/hashtags", args);
       return r.status >= 400 ? fail(r.status, r.data) : ok(r.data);
     },
@@ -492,6 +514,8 @@ function buildServer(
       quality: z.string().optional().describe("Optional quality hint added to the prompt, e.g. high"),
     }),
     handler: async (args) => {
+      const scopeRefusal = await refuseUngranted({ admin }, { userId: ownerId, tool: "generate_image", grant });
+      if (scopeRefusal) return fail(403, scopeRefusal);
       const r = await callN8n(apiKey, "POST", "/api/v1/ai/image", args);
       return r.status >= 400 ? fail(r.status, r.data) : ok(r.data);
     },
