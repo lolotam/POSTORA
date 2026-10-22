@@ -246,60 +246,31 @@ Deno.test("a grant that holds both of generate_image's scopes may run it", () =>
   assertEquals(missingScope(grant, "generate_image"), null);
 });
 
-Deno.test("create_post needs only posts:write when it carries no media", () => {
+Deno.test("create_post needs media:write for every call, whatever it carries", () => {
   const grant = granted("posts:write");
 
-  // A text-only post writes no media, so it needs no media:write.
+  // The schema is .passthrough(), so create_post can upload media inline
+  // through several fields, and a deny-list over open input lets every
+  // field it does not name slip through. The media scope is therefore
+  // required for every call (fail closed) and is not guessed from the
+  // fields the call carries: a text-only post needs it too.
+  assertEquals(
+    missingScope(grant, "create_post", { caption: "hi" }),
+    "media:write",
+  );
+
+  // A list field may arrive as text. "[]" is text, and it is not read as an
+  // empty list here: the scope does not depend on the arguments at all.
+  assertEquals(
+    missingScope(grant, "create_post", { media_urls: "[]" }),
+    "media:write",
+  );
+});
+
+Deno.test("a grant that holds both of create_post's scopes may run it", () => {
+  const grant = granted("posts:write", "media:write");
+
   assertEquals(missingScope(grant, "create_post", { caption: "hi" }), null);
-
-  // media_file_ids reuses files that are already in the media library, so
-  // it writes nothing there either.
-  assertEquals(missingScope(grant, "create_post", { media_file_ids: ["x"] }), null);
-});
-
-Deno.test("create_post needs media:write when it carries media to upload", () => {
-  const grant = granted("posts:write");
-
-  // The media lands in the media library, so posts:write alone is not
-  // enough: the grant is missing media:write.
-  assertEquals(
-    missingScope(grant, "create_post", { media_urls: ["https://a"] }),
-    "media:write",
-  );
-
-  // A list field may arrive as text instead of as an array.
-  assertEquals(
-    missingScope(grant, "create_post", { media_urls: "https://a" }),
-    "media:write",
-  );
-
-  assertEquals(
-    missingScope(grant, "create_post", { media_base64: ["abc"] }),
-    "media:write",
-  );
-});
-
-Deno.test("create_post needs no media:write when its media list is empty", () => {
-  const grant = granted("posts:write");
-
-  // An empty list uploads nothing, so there is no media write to gate.
-  assertEquals(missingScope(grant, "create_post", { media_urls: [] }), null);
-  assertEquals(missingScope(grant, "create_post", { media_urls: "  " }), null);
-});
-
-Deno.test("create_post needs media:write when it carries a single media_url", () => {
-  const grant = granted("posts:write");
-
-  // The API accepts a single media_url as well as a list of media_urls, and
-  // it uploads either one inline, so it writes to the media library exactly
-  // like media_urls does: posts:write alone is not enough.
-  assertEquals(
-    missingScope(grant, "create_post", { media_url: "https://a" }),
-    "media:write",
-  );
-
-  // An empty media_url carries nothing, so there is no media write to gate.
-  assertEquals(missingScope(grant, "create_post", { media_url: "" }), null);
 });
 
 Deno.test("create_post needs webhooks:manage when it carries a webhook_url", () => {
@@ -326,13 +297,17 @@ Deno.test("an API-key grant runs create_post whatever its arguments carry", () =
 
 Deno.test("only create_post has scopes that depend on its arguments", () => {
   assertEquals(argumentScopes("list_posts", { media_urls: ["x"] }), []);
-  assertEquals(argumentScopes("create_post", { media_urls: ["https://a"] }), ["media:write"]);
+
+  // The media scope is not one of them: create_post needs it for every
+  // call, so it lives in the scope table and not in the arguments. Only
+  // the webhook scope comes from the arguments.
+  assertEquals(argumentScopes("create_post", { media_urls: ["https://a"] }), []);
   assertEquals(
     argumentScopes("create_post", {
       media_urls: ["https://a"],
       webhook_url: "https://hook",
     }),
-    ["media:write", "webhooks:manage"],
+    ["webhooks:manage"],
   );
 });
 

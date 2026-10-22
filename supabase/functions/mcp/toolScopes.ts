@@ -17,12 +17,14 @@
 // it names, and the refusal names the first one the grant does not hold.
 //
 // A tool may also need a scope only for SOME of the calls made to it.
-// create_post always writes a post, so it always needs posts:write, but the
-// media it uploads inline (media_urls / media_url / media_base64) lands in the
-// media library, and a webhook_url registers a callback that receives the post's
-// results. Those are media:write and webhooks:manage, and a text-only post
-// needs neither. argumentScopes names the scopes a call needs because of its
-// arguments, so what a call needs depends on what the call carries.
+// create_post always writes a post, so it always needs posts:write, and it
+// always needs media:write as well: its schema is .passthrough(), so it can
+// upload media inline through several fields, and a deny-list over open input
+// lets every field it does not name slip through. The media scope is required
+// for every call (fail closed) and is not guessed from field names. A
+// webhook_url registers a callback that receives the post's results, and that
+// is webhooks:manage. argumentScopes names the scopes a call needs because of
+// its arguments, so what a call needs depends on what the call carries.
 //
 // comments:write, messages:write, comments:read and messages:read are
 // advertised in the authorization server metadata, but no token can be granted
@@ -64,10 +66,12 @@ export const TOOL_SCOPES: Readonly<Record<string, string | readonly string[]>> =
   list_accounts: "accounts:read",
   list_posts: "posts:read",
   get_post: "posts:read",
-  // create_post always needs posts:write. The scopes beyond that depend on
-  // the arguments the call carries: media:write for media it uploads
-  // inline, webhooks:manage for a webhook_url. See argumentScopes.
-  create_post: "posts:write",
+  // create_post always needs posts:write AND media:write: it can upload
+  // media inline through several fields of a passthrough schema, so the
+  // media scope is required for every call (fail closed) and is not guessed
+  // from field names. Only the webhook part depends on the arguments the
+  // call carries. See argumentScopes.
+  create_post: ["posts:write", "media:write"],
   upload_media: "media:write",
   list_webhooks: "webhooks:manage",
   register_webhook: "webhooks:manage",
@@ -94,34 +98,23 @@ export const TOOL_SCOPES: Readonly<Record<string, string | readonly string[]>> =
 };
 
 /**
- * Whether a value carries something.
- *
- * A list field may arrive as a real array or as text (see ./stringList.ts),
- * so both shapes count: a non-empty array, or a non-empty string once it is
- * trimmed. Anything else carries nothing.
- */
-function isNonEmpty(value: unknown): boolean {
-  if (Array.isArray(value)) return value.length > 0;
-  if (typeof value === "string") return value.trim().length > 0;
-  return false;
-}
-
-/**
  * The extra scopes a call needs because of its arguments.
  *
  * A tool may need a scope only for some of the calls made to it:
  *
- * - create_post needs media:write when it carries media it uploads inline
- *   (media_urls / media_url / media_base64): that upload lands in the media
- *   library, the same write upload_media does. media_file_ids does not need
- *   it: those files are already in the library and are only reused.
  * - create_post needs webhooks:manage when it carries a webhook_url: that
  *   registers a callback which receives the post's results, and registering
- *   a callback is webhook management.
+ *   a callback is webhook management. The n8n-api create-post handler reads
+ *   only webhook_url for callbacks.
  *
- * The arguments are untrusted input, so they are read defensively: a value
- * that is not a list carries nothing, and arguments that are not an object
- * carry nothing at all.
+ * The media scope create_post needs is NOT decided here. Its schema is
+ * .passthrough(), so it can upload media inline through several fields, and a
+ * deny-list over open input lets every upload field it does not name slip
+ * through. The media scope is therefore required for every call and lives in
+ * TOOL_SCOPES.
+ *
+ * The arguments are untrusted input, so they are read defensively: arguments
+ * that are not an object carry nothing at all.
  *
  * Any other tool needs no extra scope today.
  */
@@ -132,17 +125,9 @@ export function argumentScopes(tool: string, args: unknown): string[] {
   const call = args as Record<string, unknown>;
   const scopes: string[] = [];
 
-  // media_urls and media_url are the same thing to the API: it accepts a
-  // single media URL as well as a list of them, and it uploads either one
-  // inline, into the media library.
-  if (
-    isNonEmpty(call.media_urls) ||
-    isNonEmpty(call.media_url) ||
-    isNonEmpty(call.media_base64)
-  ) {
-    scopes.push("media:write");
-  }
-
+  // A webhook_url registers a callback that receives the post's results.
+  // Only a string that carries something counts: a blank one registers no
+  // callback.
   const webhookUrl = call.webhook_url;
   if (typeof webhookUrl === "string" && webhookUrl.trim().length > 0) {
     scopes.push("webhooks:manage");
