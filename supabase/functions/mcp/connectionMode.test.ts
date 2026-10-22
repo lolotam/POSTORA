@@ -192,7 +192,7 @@ Deno.test("a tool that changes existing state is marked destructive", () => {
 Deno.test("index.ts registers every tool of the policy table", async () => {
   const source = await Deno.readTextFile(new URL("./index.ts", import.meta.url));
 
-  const registered = [...source.matchAll(/register\("([a-z_]+)"/g)].map(
+  const registered = [...source.matchAll(/register\("([a-z0-9_]+)"/g)].map(
     (match) => match[1],
   );
 

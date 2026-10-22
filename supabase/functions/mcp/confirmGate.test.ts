@@ -959,6 +959,40 @@ Deno.test("a tool the grant covers is allowed and touches no database", async ()
   assertEquals(calls, []);
 });
 
+Deno.test("a create_post that uploads media is refused without media:write, and the refusal is recorded", async () => {
+  resetRefusalThrottleForTests();
+  const { admin, inserts } = createFakeAdmin();
+
+  const refusal = await refuseUngranted(
+    { admin },
+    {
+      userId: OWNER_ID,
+      tool: "create_post",
+      grant: { kind: "granted", scopes: new Set(["posts:write"]) },
+      args: { media_urls: ["https://a"] },
+    },
+  );
+
+  // The media it uploads lands in the media library, so the grant does not
+  // cover the call: the refusal names the scope that is missing.
+  assertEquals(refusal?.code, "SCOPE_NOT_GRANTED");
+  assertEquals(refusal?.message.includes("media:write"), true);
+
+  // One row, naming the tool and the code and nothing else.
+  assertEquals(inserts.length, 1);
+  assertEquals(inserts[0].table, "system_logs");
+  assertEquals(inserts[0].row.user_id, OWNER_ID);
+  assertEquals(inserts[0].row.metadata as Record<string, unknown>, {
+    tool: "create_post",
+    code: "SCOPE_NOT_GRANTED",
+  });
+
+  // The arguments are not in the row.
+  const serialized = JSON.stringify(inserts[0].row);
+  assertEquals(serialized.includes("media_urls"), false);
+  assertEquals(serialized.includes("https://a"), false);
+});
+
 Deno.test("an API-key grant covers every tool and touches no database", async () => {
   resetRefusalThrottleForTests();
   const { admin, calls, inserts } = createFakeAdmin();
@@ -1022,6 +1056,38 @@ Deno.test("a scope that can be granted is still answered with a reconnect", asyn
   // posts:read can be granted, so reconnecting is the advice that works.
   assertEquals(refusal?.code, "SCOPE_NOT_GRANTED");
   assertEquals(refusal?.message.includes("Reconnect"), true);
+});
+
+Deno.test("a tool nobody classified is refused without a dead end", async () => {
+  resetRefusalThrottleForTests();
+  const { admin, inserts } = createFakeAdmin();
+
+  const refusal = await refuseUngranted(
+    { admin },
+    {
+      userId: OWNER_ID,
+      tool: "not_a_registered_tool",
+      grant: GRANT_WITHOUT_COMMENTS,
+    },
+  );
+
+  // Nobody classified the tool, so there is no scope to grant it: a
+  // reconnect cannot produce one, and the refusal must not send the caller
+  // into that circle.
+  assertEquals(refusal, {
+    code: "SCOPE_NOT_GRANTED",
+    message: "This tool is not available over OAuth. Use a Postora API key.",
+  } as const);
+  assertEquals(refusal?.message.includes("Reconnect"), false);
+
+  // It still leaves a row, like every other refusal.
+  assertEquals(inserts.length, 1);
+  assertEquals(inserts[0].table, "system_logs");
+  assertEquals(inserts[0].row.user_id, OWNER_ID);
+  assertEquals(inserts[0].row.metadata as Record<string, unknown>, {
+    tool: "not_a_registered_tool",
+    code: "SCOPE_NOT_GRANTED",
+  });
 });
 
 // ── the forwarded refusal ─────────────────────────────────────────────────────
