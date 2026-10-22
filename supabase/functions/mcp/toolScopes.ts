@@ -23,9 +23,10 @@
 // lets every field it does not name slip through. The media scope is required
 // for every call (fail closed) and is not guessed from field names. A
 // webhook_url registers a callback that receives the post's results, and that
-// is webhooks:manage. The webhook check fails closed as well: the n8n-api
-// create-post handler stores whatever webhook_url it is given, so any carried
-// value needs the scope, not only a string that looks like a URL.
+// is webhooks:manage. The webhook check asks for the scope on exactly the
+// values the n8n-api create-post handler stores: it keeps whatever
+// webhook_url it is given whenever that value is truthy, so a carried value
+// needs the scope, not only a string that looks like a URL.
 // argumentScopes names the scopes a call needs because of its arguments, so
 // what a call needs depends on what the call carries.
 //
@@ -73,8 +74,8 @@ export const TOOL_SCOPES: Readonly<Record<string, string | readonly string[]>> =
   // media inline through several fields of a passthrough schema, so the
   // media scope is required for every call (fail closed) and is not guessed
   // from field names. Only the webhook part depends on the arguments the
-  // call carries, and it fails closed on any webhook_url the call carries.
-  // See argumentScopes.
+  // call carries, and it asks for the scope on every webhook_url the
+  // handler would store. See argumentScopes.
   create_post: ["posts:write", "media:write"],
   upload_media: "media:write",
   list_webhooks: "webhooks:manage",
@@ -105,19 +106,16 @@ export const TOOL_SCOPES: Readonly<Record<string, string | readonly string[]>> =
  * Whether a webhook_url carries anything that registers a callback.
  *
  * The n8n-api create-post handler stores whatever webhook_url it is handed:
- * `if (webhook_url) { metadata.webhook_url = webhook_url; }`, so a truthy
- * array or object registers a callback exactly as a string does. The check
- * therefore fails closed and asks for the scope for every carried value.
+ * `if (webhook_url) { metadata.webhook_url = webhook_url; }`, so the scope
+ * is asked for on exactly the values the handler stores. A truthy array or
+ * object registers a callback exactly as a string does.
  *
- * Only the values that carry nothing at all are left out: nothing there
- * (undefined), null, false, 0, and a string that is empty after trimming.
+ * The values left out are exactly the falsy ones: undefined, null, false,
+ * 0, NaN, and the empty string "". A string that holds only whitespace is
+ * truthy, so the handler stores it and it needs the scope as well.
  */
 function carriesWebhookUrl(value: unknown): boolean {
-  if (value === undefined || value === null || value === false || value === 0) {
-    return false;
-  }
-  if (typeof value === "string") return value.trim().length > 0;
-  return true;
+  return Boolean(value);
 }
 
 /**
@@ -129,8 +127,10 @@ function carriesWebhookUrl(value: unknown): boolean {
  *   registers a callback which receives the post's results, and registering
  *   a callback is webhook management. The n8n-api create-post handler reads
  *   only webhook_url for callbacks, and it stores whatever webhook_url it is
- *   given, so the check fails closed on any carried value: an array or an
- *   object registers a callback as well as a string does.
+ *   given whenever that value is truthy, so the scope is asked for on
+ *   exactly the values that are stored: an array or an object registers a
+ *   callback as well as a string does, and a string of only whitespace is
+ *   stored as well.
  *
  * The media scope create_post needs is NOT decided here. Its schema is
  * .passthrough(), so it can upload media inline through several fields, and a
@@ -151,9 +151,10 @@ export function argumentScopes(tool: string, args: unknown): string[] {
   const scopes: string[] = [];
 
   // A webhook_url registers a callback that receives the post's results, and
-  // the n8n-api create-post handler stores whatever webhook_url it is given,
-  // whatever its type. The check therefore fails closed: any carried value
-  // needs the scope, and only a value that carries nothing at all does not.
+  // the n8n-api create-post handler stores whatever webhook_url it is given
+  // whenever that value is truthy, whatever its type. The check therefore
+  // asks for the scope on exactly the values the handler stores, and only a
+  // falsy value is left out.
   const webhookUrl = call.webhook_url;
   if (carriesWebhookUrl(webhookUrl)) {
     scopes.push("webhooks:manage");

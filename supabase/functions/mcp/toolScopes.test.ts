@@ -289,11 +289,11 @@ Deno.test("create_post needs webhooks:manage when it carries a webhook_url", () 
   );
 });
 
-Deno.test("create_post needs webhooks:manage for any webhook_url it carries", () => {
+Deno.test("create_post needs webhooks:manage for any webhook_url the handler stores", () => {
   // The n8n-api create-post handler stores whatever webhook_url it is given
   // (`if (webhook_url) { metadata.webhook_url = webhook_url; }`), so a value
   // that is not a string registers a callback as well as a string does. The
-  // check therefore fails closed: any carried value needs the scope.
+  // check asks for the scope on exactly the values the handler stores.
   const grant = granted("posts:write", "media:write");
 
   assertEquals(
@@ -309,14 +309,34 @@ Deno.test("create_post needs webhooks:manage for any webhook_url it carries", ()
     "webhooks:manage",
   );
 
-  // A webhook_url that carries nothing registers no callback, so it needs no
-  // scope: an empty string, null and a missing webhook_url are all nothing.
+  // A string of only whitespace is truthy, so the handler stores it and it
+  // needs the scope as well.
+  assertEquals(
+    missingScope(grant, "create_post", { webhook_url: " " }),
+    "webhooks:manage",
+  );
+
+  // A webhook_url the handler does not store registers no callback, so it
+  // needs no scope: the falsy values are all left out, and the handler
+  // stores none of them.
   assertEquals(
     missingScope(grant, "create_post", { webhook_url: "" }),
     null,
   );
   assertEquals(
     missingScope(grant, "create_post", { webhook_url: null }),
+    null,
+  );
+  assertEquals(
+    missingScope(grant, "create_post", { webhook_url: false }),
+    null,
+  );
+  assertEquals(
+    missingScope(grant, "create_post", { webhook_url: 0 }),
+    null,
+  );
+  assertEquals(
+    missingScope(grant, "create_post", { webhook_url: Number.NaN }),
     null,
   );
   assertEquals(
