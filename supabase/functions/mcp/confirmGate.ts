@@ -51,7 +51,12 @@
 // migration: it is out of scope here.
 
 import { z } from "npm:zod@4.1.12";
-import { missingScope, NOT_YET_GRANTABLE_SCOPES, type ScopeGrant } from "./toolScopes.ts";
+import {
+  missingScope,
+  NOT_YET_GRANTABLE_SCOPES,
+  UNCLASSIFIED_TOOL,
+  type ScopeGrant,
+} from "./toolScopes.ts";
 
 export const confirmField = z.unknown().optional().describe(
   "Must be the boolean true to run. Confirms you intend this irreversible action.",
@@ -549,10 +554,21 @@ export async function refuseUnconfirmed(
  * The grant is decided by the caller: an API-key caller holds every scope,
  * an OAuth token holds only the scopes it was granted (see ./toolScopes.ts).
  *
+ * The arguments are passed on, because a call may need a scope only
+ * because of what it carries. Today that is create_post with a
+ * webhook_url, which needs webhooks:manage. create_post's media:write is
+ * not argument-based: it is fixed in TOOL_SCOPES, fails closed, because
+ * the schema is .passthrough(). The gate does not read the arguments
+ * itself; it hands them to argumentScopes in ./toolScopes.ts.
+ *
  * A scope that cannot be granted yet is not answered with advice to
  * reconnect. Reconnecting would not help: the consent screen that could
  * offer the scope does not ship yet, so the only way to run the tool is an
  * API key. Telling the caller to reconnect would send them in circles.
+ *
+ * A tool nobody classified is answered the same way. It is not a scope, so
+ * no token can be granted it and no reconnect can produce it: the refusal
+ * names the API key as the way in, not a reconnect.
  *
  * The log names the tool and the code only. The arguments, the API key, the
  * token and its scopes stay out of it.
@@ -562,9 +578,9 @@ export async function refuseUnconfirmed(
  */
 export async function refuseUngranted(
   deps: ConfirmGateDeps,
-  request: { userId: string; tool: string; grant: ScopeGrant },
+  request: { userId: string; tool: string; grant: ScopeGrant; args?: unknown },
 ): Promise<ScopeRefusal | null> {
-  const scope = missingScope(request.grant, request.tool);
+  const scope = missingScope(request.grant, request.tool, request.args);
   if (scope === null) return null;
 
   await recordMcpRefusal(deps, {
@@ -572,6 +588,13 @@ export async function refuseUngranted(
     tool: request.tool,
     code: "SCOPE_NOT_GRANTED",
   });
+
+  if (scope === UNCLASSIFIED_TOOL) {
+    return {
+      code: "SCOPE_NOT_GRANTED",
+      message: "This tool is not available over OAuth. Use a Postora API key.",
+    };
+  }
 
   if (NOT_YET_GRANTABLE_SCOPES.has(scope)) {
     return {
