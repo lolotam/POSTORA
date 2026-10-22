@@ -1,5 +1,6 @@
 import { assertEquals } from "jsr:@std/assert@1";
 import {
+  argumentScopes,
   missingScope,
   TOOL_SCOPES,
   NOT_YET_GRANTABLE_SCOPES,
@@ -150,15 +151,25 @@ Deno.test("every tool registered in index.ts checks its scope first", async () =
       nextRegister === -1 ? source.length : nextRegister,
     );
 
-    // The check has to be in the tool's own handler.
+    // The check has to be in the tool's own handler. A tool whose scope
+    // depends on its arguments passes them on, so the check may end in
+    // `grant })` or in `grant, args })`.
     const handlerAt = block.indexOf("handler: async");
     assertEquals(handlerAt !== -1, true, `${tool}: it has no handler`);
     const rest = block.slice(handlerAt);
 
-    const check = `refuseUngranted({ admin }, { userId: ownerId, tool: "${tool}", grant })`;
-    const checkAt = rest.indexOf(check);
+    const checks = [
+      `refuseUngranted({ admin }, { userId: ownerId, tool: "${tool}", grant })`,
+      `refuseUngranted({ admin }, { userId: ownerId, tool: "${tool}", grant, args })`,
+    ];
+    const checkAt = Math.min(
+      ...checks.map((check) => {
+        const at = rest.indexOf(check);
+        return at === -1 ? Number.MAX_SAFE_INTEGER : at;
+      }),
+    );
     assertEquals(
-      checkAt !== -1,
+      checkAt !== Number.MAX_SAFE_INTEGER,
       true,
       `${tool}: its handler does not check the scope`,
     );
@@ -235,16 +246,94 @@ Deno.test("a grant that holds both of generate_image's scopes may run it", () =>
   assertEquals(missingScope(grant, "generate_image"), null);
 });
 
-Deno.test("create_post needs media:write as well as posts:write", () => {
+Deno.test("create_post needs only posts:write when it carries no media", () => {
   const grant = granted("posts:write");
 
-  // The post can carry media inline, and that upload lands in the media
-  // library, so posts:write alone is not enough: the grant is missing
-  // media:write.
-  assertEquals(missingScope(grant, "create_post"), "media:write");
+  // A text-only post writes no media, so it needs no media:write.
+  assertEquals(missingScope(grant, "create_post", { caption: "hi" }), null);
 
-  const both = granted("posts:write", "media:write");
-  assertEquals(missingScope(both, "create_post"), null);
+  // media_file_ids reuses files that are already in the media library, so
+  // it writes nothing there either.
+  assertEquals(missingScope(grant, "create_post", { media_file_ids: ["x"] }), null);
+});
+
+Deno.test("create_post needs media:write when it carries media to upload", () => {
+  const grant = granted("posts:write");
+
+  // The media lands in the media library, so posts:write alone is not
+  // enough: the grant is missing media:write.
+  assertEquals(
+    missingScope(grant, "create_post", { media_urls: ["https://a"] }),
+    "media:write",
+  );
+
+  // A list field may arrive as text instead of as an array.
+  assertEquals(
+    missingScope(grant, "create_post", { media_urls: "https://a" }),
+    "media:write",
+  );
+
+  assertEquals(
+    missingScope(grant, "create_post", { media_base64: ["abc"] }),
+    "media:write",
+  );
+});
+
+Deno.test("create_post needs no media:write when its media list is empty", () => {
+  const grant = granted("posts:write");
+
+  // An empty list uploads nothing, so there is no media write to gate.
+  assertEquals(missingScope(grant, "create_post", { media_urls: [] }), null);
+  assertEquals(missingScope(grant, "create_post", { media_urls: "  " }), null);
+});
+
+Deno.test("create_post needs media:write when it carries a single media_url", () => {
+  const grant = granted("posts:write");
+
+  // The API accepts a single media_url as well as a list of media_urls, and
+  // it uploads either one inline, so it writes to the media library exactly
+  // like media_urls does: posts:write alone is not enough.
+  assertEquals(
+    missingScope(grant, "create_post", { media_url: "https://a" }),
+    "media:write",
+  );
+
+  // An empty media_url carries nothing, so there is no media write to gate.
+  assertEquals(missingScope(grant, "create_post", { media_url: "" }), null);
+});
+
+Deno.test("create_post needs webhooks:manage when it carries a webhook_url", () => {
+  // A webhook_url registers a callback that receives the post's results,
+  // and that is webhook management.
+  const grant = granted("posts:write", "media:write");
+  assertEquals(
+    missingScope(grant, "create_post", { webhook_url: "https://hook" }),
+    "webhooks:manage",
+  );
+
+  const all = granted("posts:write", "media:write", "webhooks:manage");
+  assertEquals(
+    missingScope(all, "create_post", { webhook_url: "https://hook" }),
+    null,
+  );
+});
+
+Deno.test("an API-key grant runs create_post whatever its arguments carry", () => {
+  assertEquals(missingScope(ALL, "create_post", { caption: "hi" }), null);
+  assertEquals(missingScope(ALL, "create_post", { media_urls: ["https://a"] }), null);
+  assertEquals(missingScope(ALL, "create_post", { webhook_url: "https://hook" }), null);
+});
+
+Deno.test("only create_post has scopes that depend on its arguments", () => {
+  assertEquals(argumentScopes("list_posts", { media_urls: ["x"] }), []);
+  assertEquals(argumentScopes("create_post", { media_urls: ["https://a"] }), ["media:write"]);
+  assertEquals(
+    argumentScopes("create_post", {
+      media_urls: ["https://a"],
+      webhook_url: "https://hook",
+    }),
+    ["media:write", "webhooks:manage"],
+  );
 });
 
 Deno.test("a tool nobody classified is refused with the unclassified sentinel", () => {

@@ -554,6 +554,12 @@ export async function refuseUnconfirmed(
  * The grant is decided by the caller: an API-key caller holds every scope,
  * an OAuth token holds only the scopes it was granted (see ./toolScopes.ts).
  *
+ * The arguments are passed on, because a tool may need a scope only for
+ * some of the calls made to it: create_post needs media:write only when it
+ * uploads media inline, and webhooks:manage only when it carries a
+ * webhook_url. The gate does not read them itself; it hands them to the
+ * scope table (see argumentScopes in ./toolScopes.ts).
+ *
  * A scope that cannot be granted yet is not answered with advice to
  * reconnect. Reconnecting would not help: the consent screen that could
  * offer the scope does not ship yet, so the only way to run the tool is an
@@ -571,9 +577,9 @@ export async function refuseUnconfirmed(
  */
 export async function refuseUngranted(
   deps: ConfirmGateDeps,
-  request: { userId: string; tool: string; grant: ScopeGrant },
+  request: { userId: string; tool: string; grant: ScopeGrant; args?: unknown },
 ): Promise<ScopeRefusal | null> {
-  const scope = missingScope(request.grant, request.tool);
+  const scope = missingScope(request.grant, request.tool, request.args);
   if (scope === null) return null;
 
   await recordMcpRefusal(deps, {

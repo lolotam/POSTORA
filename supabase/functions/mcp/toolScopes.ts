@@ -16,6 +16,14 @@
 // media:write. An array in the table means the tool needs ALL of the scopes
 // it names, and the refusal names the first one the grant does not hold.
 //
+// A tool may also need a scope only for SOME of the calls made to it.
+// create_post always writes a post, so it always needs posts:write, but the
+// media it uploads inline (media_urls / media_url / media_base64) lands in the
+// media library, and a webhook_url registers a callback that receives the post's
+// results. Those are media:write and webhooks:manage, and a text-only post
+// needs neither. argumentScopes names the scopes a call needs because of its
+// arguments, so what a call needs depends on what the call carries.
+//
 // comments:write, messages:write, comments:read and messages:read are
 // advertised in the authorization server metadata, but no token can be granted
 // them yet: the consent screen that could show them ships after the frontend
@@ -56,9 +64,10 @@ export const TOOL_SCOPES: Readonly<Record<string, string | readonly string[]>> =
   list_accounts: "accounts:read",
   list_posts: "posts:read",
   get_post: "posts:read",
-  // create_post can upload media inline (media_urls / media_base64) into the
-  // media library, so it needs media:write as well, the same as upload_media.
-  create_post: ["posts:write", "media:write"],
+  // create_post always needs posts:write. The scopes beyond that depend on
+  // the arguments the call carries: media:write for media it uploads
+  // inline, webhooks:manage for a webhook_url. See argumentScopes.
+  create_post: "posts:write",
   upload_media: "media:write",
   list_webhooks: "webhooks:manage",
   register_webhook: "webhooks:manage",
@@ -85,6 +94,64 @@ export const TOOL_SCOPES: Readonly<Record<string, string | readonly string[]>> =
 };
 
 /**
+ * Whether a value carries something.
+ *
+ * A list field may arrive as a real array or as text (see ./stringList.ts),
+ * so both shapes count: a non-empty array, or a non-empty string once it is
+ * trimmed. Anything else carries nothing.
+ */
+function isNonEmpty(value: unknown): boolean {
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === "string") return value.trim().length > 0;
+  return false;
+}
+
+/**
+ * The extra scopes a call needs because of its arguments.
+ *
+ * A tool may need a scope only for some of the calls made to it:
+ *
+ * - create_post needs media:write when it carries media it uploads inline
+ *   (media_urls / media_url / media_base64): that upload lands in the media
+ *   library, the same write upload_media does. media_file_ids does not need
+ *   it: those files are already in the library and are only reused.
+ * - create_post needs webhooks:manage when it carries a webhook_url: that
+ *   registers a callback which receives the post's results, and registering
+ *   a callback is webhook management.
+ *
+ * The arguments are untrusted input, so they are read defensively: a value
+ * that is not a list carries nothing, and arguments that are not an object
+ * carry nothing at all.
+ *
+ * Any other tool needs no extra scope today.
+ */
+export function argumentScopes(tool: string, args: unknown): string[] {
+  if (tool !== "create_post") return [];
+  if (typeof args !== "object" || args === null || Array.isArray(args)) return [];
+
+  const call = args as Record<string, unknown>;
+  const scopes: string[] = [];
+
+  // media_urls and media_url are the same thing to the API: it accepts a
+  // single media URL as well as a list of them, and it uploads either one
+  // inline, into the media library.
+  if (
+    isNonEmpty(call.media_urls) ||
+    isNonEmpty(call.media_url) ||
+    isNonEmpty(call.media_base64)
+  ) {
+    scopes.push("media:write");
+  }
+
+  const webhookUrl = call.webhook_url;
+  if (typeof webhookUrl === "string" && webhookUrl.trim().length > 0) {
+    scopes.push("webhooks:manage");
+  }
+
+  return scopes;
+}
+
+/**
  * The scope the caller is missing for a tool, or null when the call may run.
  *
  * - an API-key grant holds every scope: null.
@@ -95,8 +162,18 @@ export const TOOL_SCOPES: Readonly<Record<string, string | readonly string[]>> =
  * - a tool that is in the table and the grant does not hold every scope it
  *   needs: the FIRST scope that is missing, which is what the refusal names.
  *   A tool that needs one scope behaves as it always did.
+ *
+ * The scopes the table names are checked first and the scopes the arguments
+ * call for (see argumentScopes) after them: the table says what the tool
+ * always needs, and the arguments say what this call adds on top of that.
+ * Arguments that are not passed are not read, so a call whose arguments were
+ * not handed over is judged on the table alone.
  */
-export function missingScope(grant: ScopeGrant, tool: string): string | null {
+export function missingScope(
+  grant: ScopeGrant,
+  tool: string,
+  args?: unknown,
+): string | null {
   if (grant.kind === "all") return null;
 
   // The lookup is annotated, so a tool that is not in the table reads as
@@ -108,6 +185,11 @@ export function missingScope(grant: ScopeGrant, tool: string): string | null {
   // one the grant does not hold is the one the refusal names.
   const scopes = typeof required === "string" ? [required] : required;
   for (const scope of scopes) {
+    if (!grant.scopes.has(scope)) return scope;
+  }
+
+  // The scopes this call needs because of the arguments it carries.
+  for (const scope of argumentScopes(tool, args)) {
     if (!grant.scopes.has(scope)) return scope;
   }
 
