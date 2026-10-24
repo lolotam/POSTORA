@@ -1,13 +1,107 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.7.1";
-import { handleCorsOptions, jsonResponse, errorResponse } from "../_shared/cors.ts";
+import { corsHeaders, handleCorsOptions, jsonResponse, errorResponse } from "../_shared/cors.ts";
 import { callAiWithFallback, fetchAiSettings, logAiCall } from "../_shared/ai-fallback.ts";
 import { timingSafeTokenEqual } from "../_shared/auth-helper.ts";
+import { sanitizeErrorMessage } from "../_shared/errorSanitizer.ts";
+import { checkUserRateLimit, rateLimitExceededResponse } from "../_shared/rate-limiter.ts";
+import { createLogger } from "../_shared/logging.ts";
 
 // A user id that reaches the database has to be a uuid: an id that is not one
 // makes the write of the log row fail with 22P02, and the AI call is then
 // logged against nobody.
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+// The platforms one request may name. The request makes one AI call whatever
+// the count, so the cap bounds the prompt, not the number of calls. It sits
+// above anything the dashboard can select: the web app sends its whole
+// selection in one call and has no fallback when it is refused. n8n-api keeps
+// its own, tighter cap of 6.
+const MAX_PLATFORMS = 20;
+
+// The length of one platform name. A platform name is a short word, so a
+// longer one is not a platform. It matches the cap n8n-api's BestTimesSchema
+// puts on the same field, so a name the API accepts is never refused here.
+const MAX_PLATFORM_NAME_LENGTH = 50;
+
+// The serialized size of historicalData, which goes into the prompt verbatim.
+const MAX_HISTORY_CHARS = 2_000;
+
+// The whole body: 20 platforms of 50 characters plus the history fit well
+// inside it.
+const MAX_BODY_CHARS = 16_000;
+
+// The budget of one signed-in user, per hour, for calls made with the user's
+// own token. Service-role calls from n8n-api are not counted here: that route
+// calls this function once per platform and keeps its own 5/hour limit, so
+// counting them twice would refuse a caller the API had already admitted.
+const USER_RATE_LIMIT_REQUESTS = 20;
+const USER_RATE_LIMIT_WINDOW_SECONDS = 3600;
+
+// Every refusal writes a warn row (AGENTS.md: an early return that refuses
+// work must leave a log row), but some refusals come before the caller is
+// known, so a loop of bad requests must not become a row per request. At most
+// one row per (reason, owner) per window is written; all anonymous callers
+// share one owner key. The map is per worker and is cleared when it grows past
+// its cap, the same bound the MCP refusal throttle uses.
+const REFUSAL_LOG_WINDOW_MS = 60_000;
+const REFUSAL_LOG_MAX_KEYS = 10_000;
+const lastRefusalLogAt = new Map<string, number>();
+
+function shouldLogRefusal(reason: string, userId: string | null, now: number): boolean {
+  const key = `${reason}:${userId ?? 'anonymous'}`;
+  const last = lastRefusalLogAt.get(key);
+  if (last !== undefined && now - last < REFUSAL_LOG_WINDOW_MS) return false;
+  if (lastRefusalLogAt.size >= REFUSAL_LOG_MAX_KEYS) lastRefusalLogAt.clear();
+  lastRefusalLogAt.set(key, now);
+  return true;
+}
+
+// Writes the (throttled) refusal row. The writer never throws, so a failed log
+// write never changes the answer.
+function refusalLogger(log: ReturnType<typeof createLogger>) {
+  return async (
+    reason: string,
+    userId: string | null,
+    metadata: Record<string, unknown>,
+  ): Promise<void> => {
+    if (shouldLogRefusal(reason, userId, Date.now())) {
+      await log.warn(`refused: ${reason}`, metadata, userId ?? undefined);
+    }
+  };
+}
+
+// Who is calling. A service-role call carries no user JWT, so the owner of the
+// API key is named in the body instead: the bearer token is the service-role
+// key, so the caller is authenticated as the service role and the id may be
+// used. A user_id from any other caller is ignored.
+async function resolveCaller(
+  req: Request,
+  body: { user_id?: unknown },
+): Promise<{ userId: string | null; isServiceRoleCall: boolean; hadAuthHeader: boolean }> {
+  const authHeader = req.headers.get('Authorization');
+  const bearerToken = authHeader ? authHeader.replace('Bearer ', '').trim() : '';
+  const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
+  const bodyUserId = typeof body.user_id === 'string' ? body.user_id.trim() : '';
+
+  if (
+    serviceRoleKey.length > 0 &&
+    timingSafeTokenEqual(bearerToken, serviceRoleKey) &&
+    UUID_RE.test(bodyUserId)
+  ) {
+    return { userId: bodyUserId, isServiceRoleCall: true, hadAuthHeader: true };
+  }
+  if (!authHeader) {
+    return { userId: null, isServiceRoleCall: false, hadAuthHeader: false };
+  }
+  const supabaseClient = createClient(
+    Deno.env.get('SUPABASE_URL') ?? '',
+    Deno.env.get('SUPABASE_ANON_KEY') ?? '',
+    { global: { headers: { Authorization: authHeader } } }
+  );
+  const { data: { user } } = await supabaseClient.auth.getUser(authHeader.replace('Bearer ', ''));
+  return { userId: user?.id || null, isServiceRoleCall: false, hadAuthHeader: true };
+}
 
 // The day a suggestion names is a weekday: "Funday" is not a day the caller
 // can schedule on, and an empty one is not a day either. The model's spelling
@@ -66,22 +160,93 @@ serve(async (req) => {
   }
 
   try {
+    const supabaseAdmin = createClient(
+      Deno.env.get('SUPABASE_URL') ?? '',
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+    );
+    const logRefusal = refusalLogger(createLogger(supabaseAdmin, 'suggest-best-times'));
+    const refuse = async (
+      reason: string,
+      userId: string | null,
+      message: string,
+      status: number,
+      metadata: Record<string, unknown> = {},
+    ): Promise<Response> => {
+      await logRefusal(reason, userId, { status, ...metadata });
+      return errorResponse(message, status);
+    };
+
     // Parse + validate body before touching any field. Previously this
     // function crashed with "Cannot read properties of undefined (reading
     // 'join')" when `platforms` or `historicalData` was missing.
     let body: { platforms?: unknown; historicalData?: unknown; user_id?: unknown } = {};
     try {
       const text = await req.text();
-      body = text ? JSON.parse(text) : {};
+      if (text.length > MAX_BODY_CHARS) {
+        return await refuse('body too large', null, 'Request body is too large', 413);
+      }
+      const parsed: unknown = text ? JSON.parse(text) : {};
+      // JSON that is not an object (null, a number, an array) has no fields.
+      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+        throw new SyntaxError('body is not a JSON object');
+      }
+      body = parsed as typeof body;
     } catch {
-      return errorResponse('Malformed JSON body', 400);
+      return await refuse('malformed JSON', null, 'Malformed JSON body', 400);
+    }
+
+    const { userId, isServiceRoleCall, hadAuthHeader } = await resolveCaller(req, body);
+
+    // An anonymous caller gets no suggestion: the call is paid for, so it
+    // needs an owner before it runs. The service role names the owner in the
+    // body and a user names it with their own token; nobody else gets one.
+    if (!userId) {
+      return await refuse('no authenticated user', null, 'Authentication required', 401, {
+        had_auth_header: hadAuthHeader,
+      });
+    }
+
+    // See USER_RATE_LIMIT_REQUESTS for why service-role calls are not counted.
+    if (!isServiceRoleCall) {
+      // This file pins supabase-js 2.7.1 while the limiter types its client with
+      // the current 2.x; only .rpc() is used, which both versions share.
+      const rateLimit = await checkUserRateLimit(
+        supabaseAdmin as unknown as Parameters<typeof checkUserRateLimit>[0],
+        'suggest-best-times',
+        userId,
+        USER_RATE_LIMIT_REQUESTS,
+        USER_RATE_LIMIT_WINDOW_SECONDS,
+      );
+      if (!rateLimit.allowed) {
+        await logRefusal('hourly per-user limit reached', userId, {
+          status: 429,
+          retry_after_seconds: rateLimit.retryAfter,
+        });
+        return rateLimitExceededResponse(rateLimit, corsHeaders);
+      }
     }
 
     const platforms = Array.isArray(body.platforms)
       ? body.platforms.filter((p): p is string => typeof p === 'string' && p.length > 0)
       : [];
     if (platforms.length === 0) {
-      return errorResponse('platforms is required and must be a non-empty array of strings', 400);
+      return await refuse('no platforms', userId,
+        'platforms is required and must be a non-empty array of strings', 400);
+    }
+    if (platforms.length > MAX_PLATFORMS) {
+      return await refuse('too many platforms', userId,
+        `platforms may list at most ${MAX_PLATFORMS} platforms`, 400, { platform_count: platforms.length });
+    }
+    if (platforms.some((platform) => platform.length > MAX_PLATFORM_NAME_LENGTH)) {
+      return await refuse('platform name too long', userId,
+        `each platform name must be at most ${MAX_PLATFORM_NAME_LENGTH} characters`, 400);
+    }
+    // The history is written into the prompt as it is, so its size is the
+    // size of the prompt. A real histogram (24 hours, 7 days) is far below
+    // this; anything larger is not a posting history.
+    if (JSON.stringify(body.historicalData ?? {}).length > MAX_HISTORY_CHARS) {
+      return await refuse('historicalData too large', userId,
+        `historicalData must be at most ${MAX_HISTORY_CHARS} characters`, 400);
     }
 
     const hd = (body.historicalData ?? {}) as Record<string, unknown>;
@@ -90,39 +255,6 @@ serve(async (req) => {
       dayCounts: (hd.dayCounts as Record<string, number> | undefined) ?? {},
       totalPosts: typeof hd.totalPosts === 'number' ? hd.totalPosts : 0,
     };
-
-    const supabaseAdmin = createClient(
-      Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
-    );
-
-    // Get user from auth header if available
-    let userId: string | null = null;
-    const authHeader = req.headers.get('Authorization');
-    const bearerToken = authHeader ? authHeader.replace('Bearer ', '').trim() : '';
-    const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
-    const bodyUserId = typeof body.user_id === 'string' ? body.user_id.trim() : '';
-
-    // A service-role call carries no user JWT, so the owner of the API key is
-    // named in the body instead. The bearer token is the service-role key, so
-    // the caller is authenticated as the service role and the id may be used;
-    // a user_id from any other caller is ignored.
-    if (
-      serviceRoleKey.length > 0 &&
-      timingSafeTokenEqual(bearerToken, serviceRoleKey) &&
-      UUID_RE.test(bodyUserId)
-    ) {
-      userId = bodyUserId;
-    } else if (authHeader) {
-      const token = authHeader.replace('Bearer ', '');
-      const supabaseClient = createClient(
-        Deno.env.get('SUPABASE_URL') ?? '',
-        Deno.env.get('SUPABASE_ANON_KEY') ?? '',
-        { global: { headers: { Authorization: authHeader } } }
-      );
-      const { data: { user } } = await supabaseClient.auth.getUser(token);
-      userId = user?.id || null;
-    }
 
     // Fetch AI settings from app_settings
     const aiSettings = await fetchAiSettings(supabaseAdmin);
@@ -307,7 +439,8 @@ Return a JSON array of suggestions.`;
 
   } catch (error: unknown) {
     console.error('Error suggesting best times:', error);
-    const message = error instanceof Error ? error.message : 'Unknown error';
-    return errorResponse(message);
+    // The whole error stays in the log; the caller gets the sanitized one, so
+    // a database or a provider message never reaches the caller as it is.
+    return errorResponse(sanitizeErrorMessage(error));
   }
 });

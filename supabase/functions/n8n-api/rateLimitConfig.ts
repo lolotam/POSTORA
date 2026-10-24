@@ -73,8 +73,11 @@ export const FALLBACK_RATE_LIMITS: Record<string, { requests: number; windowMs: 
   '/api/v1/posts/delete': { requests: 20, windowMs: 60 * 60 * 1000 },
   '/api/v1/accounts/health': { requests: 300, windowMs: 60 * 60 * 1000 },
   // One best-times request costs up to six paid AI calls (one per platform),
-  // and suggest-best-times has no per-user AI limit of its own: 5 requests per
-  // hour is at most 30 AI calls per hour.
+  // and every one of those calls tries up to three tiers before it gives up:
+  // 5 requests per hour is at most 6 platforms x 3 tiers x 5 requests = 90 AI
+  // calls per hour. This limit is the only one on that path: suggest-best-times
+  // meters a signed-in user's own calls (20/hour) but not the service-role
+  // calls this route makes.
   '/api/v1/best-times': { requests: 5, windowMs: 60 * 60 * 1000 },
   // MCP tool routes served by serviceProxy.ts. The AI budgets are deliberately
   // low; generate-caption and generate-image also enforce their own per-plan

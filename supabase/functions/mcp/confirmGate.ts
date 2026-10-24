@@ -54,6 +54,7 @@ import { z } from "npm:zod@4.1.12";
 import {
   missingScope,
   NOT_YET_GRANTABLE_SCOPES,
+  TOOL_SCOPES,
   UNCLASSIFIED_TOOL,
   type ScopeGrant,
 } from "./toolScopes.ts";
@@ -460,6 +461,11 @@ function isInvalidParams(error: unknown): boolean {
 // The tool a rejected call was for, or null when the request was not a tool
 // call at all. The arguments are never read: only the name of the tool is
 // taken out of the request, and only when it is a tool name.
+//
+// Only a registered tool name becomes a throttle key. The refusal rows are
+// throttled per (owner, tool, code), so a name nobody registered would give
+// a caller one row per invented name, and the throttle would never see them
+// as the same kind of refusal.
 function rejectedToolName(rpcRequest: unknown): string | null {
   if (typeof rpcRequest !== "object" || rpcRequest === null) return null;
   const request = rpcRequest as { method?: unknown; params?: unknown };
@@ -472,6 +478,7 @@ function rejectedToolName(rpcRequest: unknown): string | null {
   if (typeof name !== "string") return UNKNOWN_TOOL;
   if (name.length === 0 || name.length > TOOL_NAME_MAX_LENGTH) return UNKNOWN_TOOL;
   if (!TOOL_NAME_RE.test(name)) return UNKNOWN_TOOL;
+  if (!Object.hasOwn(TOOL_SCOPES, name)) return UNKNOWN_TOOL;
   return name;
 }
 
