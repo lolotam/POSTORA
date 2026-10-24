@@ -669,6 +669,11 @@ function notScheduledRescheduleRefusal(): ActionResult {
   );
 }
 
+// The furthest ahead a post may be moved: two years from now. A date years
+// away is not a schedule, it is a row that sits in the queue for a time
+// nobody is going to see.
+const MAX_RESCHEDULE_AHEAD_MS = 730 * 24 * 60 * 60 * 1000;
+
 export async function reschedulePost(
   deps: PostActionDeps,
   userId: string,
@@ -694,6 +699,17 @@ export async function reschedulePost(
   const malformed = scheduledAtRefusal(scheduledAt);
   if (malformed) {
     return await refuse(deps, route, { userId, postId }, malformed);
+  }
+
+  // Checked before the post is read, so a date nobody can publish to costs
+  // nothing.
+  if (Date.parse(scheduledAt) > deps.now().getTime() + MAX_RESCHEDULE_AHEAD_MS) {
+    return await refuse(
+      deps,
+      route,
+      { userId, postId },
+      error(400, "SCHEDULED_AT_TOO_FAR", "scheduled_at must be within 2 years from now."),
+    );
   }
 
   const read = await readOwnedPost(deps, route, postId, userId, "id, status, scheduled_at, metadata");
@@ -977,7 +993,8 @@ export async function checkAccountHealth(
   }
   if (!isValidUuid(accountId)) {
     // The id the caller sent is not a uuid, so it is not recorded: only a
-    // real account uuid is written down.
+    // real account uuid is written down. It is not echoed back either: the
+    // answer says what a valid id looks like, not what the caller sent.
     return await refuse(
       deps,
       route,
@@ -985,7 +1002,7 @@ export async function checkAccountHealth(
       error(
         400,
         "INVALID_ACCOUNT_ID",
-        `social_account_id must be a Postora account UUID (from GET /api/v1/accounts), not '${accountId}'.`,
+        "social_account_id must be a Postora account UUID (from GET /api/v1/accounts).",
       ),
     );
   }

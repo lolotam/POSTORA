@@ -1,13 +1,32 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.7.1";
-import { handleCorsOptions, jsonResponse, errorResponse } from "../_shared/cors.ts";
+import { corsHeaders, handleCorsOptions, jsonResponse, errorResponse } from "../_shared/cors.ts";
 import { callAiWithFallback, fetchAiSettings, logAiCall } from "../_shared/ai-fallback.ts";
 import { timingSafeTokenEqual } from "../_shared/auth-helper.ts";
+import { sanitizeErrorMessage } from "../_shared/errorSanitizer.ts";
+import { checkUserRateLimit, rateLimitExceededResponse } from "../_shared/rate-limiter.ts";
 
 // A user id that reaches the database has to be a uuid: an id that is not one
 // makes the write of the log row fail with 22P02, and the AI call is then
 // logged against nobody.
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+// The platforms one request may name. Every platform costs one AI call, so
+// the list is short: a request that names more of them is a request the
+// caller made by mistake.
+const MAX_PLATFORMS = 6;
+
+// The length of one platform name. A platform name is a short word, so a
+// longer one is not a platform. It matches the cap n8n-api's BestTimesSchema
+// puts on the same field, so a name the API accepts is never refused here.
+const MAX_PLATFORM_NAME_LENGTH = 50;
+
+// The budget of one signed-in user, per hour, for calls made with the user's
+// own token. Service-role calls from n8n-api are not counted here: that route
+// calls this function once per platform and keeps its own 5/hour limit, so
+// counting them twice would refuse a caller the API had already admitted.
+const USER_RATE_LIMIT_REQUESTS = 20;
+const USER_RATE_LIMIT_WINDOW_SECONDS = 3600;
 
 // The day a suggestion names is a weekday: "Funday" is not a day the caller
 // can schedule on, and an empty one is not a day either. The model's spelling
@@ -83,6 +102,15 @@ serve(async (req) => {
     if (platforms.length === 0) {
       return errorResponse('platforms is required and must be a non-empty array of strings', 400);
     }
+    // The list is bounded before anything is paid for: every platform costs
+    // one AI call, so a list nobody can publish to is refused here rather
+    // than answered with an empty suggestion.
+    if (platforms.length > MAX_PLATFORMS) {
+      return errorResponse(`platforms may list at most ${MAX_PLATFORMS} platforms`, 400);
+    }
+    if (platforms.some((platform) => platform.length > MAX_PLATFORM_NAME_LENGTH)) {
+      return errorResponse(`each platform name must be at most ${MAX_PLATFORM_NAME_LENGTH} characters`, 400);
+    }
 
     const hd = (body.historicalData ?? {}) as Record<string, unknown>;
     const historicalData = {
@@ -107,12 +135,14 @@ serve(async (req) => {
     // named in the body instead. The bearer token is the service-role key, so
     // the caller is authenticated as the service role and the id may be used;
     // a user_id from any other caller is ignored.
+    let isServiceRoleCall = false;
     if (
       serviceRoleKey.length > 0 &&
       timingSafeTokenEqual(bearerToken, serviceRoleKey) &&
       UUID_RE.test(bodyUserId)
     ) {
       userId = bodyUserId;
+      isServiceRoleCall = true;
     } else if (authHeader) {
       const token = authHeader.replace('Bearer ', '');
       const supabaseClient = createClient(
@@ -122,6 +152,29 @@ serve(async (req) => {
       );
       const { data: { user } } = await supabaseClient.auth.getUser(token);
       userId = user?.id || null;
+    }
+
+    // An anonymous caller gets no suggestion: the call is paid for, so it
+    // needs an owner before it runs. The service role names the owner in the
+    // body and a user names it with their own token; nobody else gets one.
+    if (!userId) {
+      return errorResponse('Authentication required', 401);
+    }
+
+    // See USER_RATE_LIMIT_REQUESTS for why service-role calls are not counted.
+    if (!isServiceRoleCall) {
+      // This file pins supabase-js 2.7.1 while the limiter types its client with
+      // the current 2.x; only .rpc() is used, which both versions share.
+      const rateLimit = await checkUserRateLimit(
+        supabaseAdmin as unknown as Parameters<typeof checkUserRateLimit>[0],
+        'suggest-best-times',
+        userId,
+        USER_RATE_LIMIT_REQUESTS,
+        USER_RATE_LIMIT_WINDOW_SECONDS,
+      );
+      if (!rateLimit.allowed) {
+        return rateLimitExceededResponse(rateLimit, corsHeaders);
+      }
     }
 
     // Fetch AI settings from app_settings
@@ -307,7 +360,8 @@ Return a JSON array of suggestions.`;
 
   } catch (error: unknown) {
     console.error('Error suggesting best times:', error);
-    const message = error instanceof Error ? error.message : 'Unknown error';
-    return errorResponse(message);
+    // The whole error stays in the log; the caller gets the sanitized one, so
+    // a database or a provider message never reaches the caller as it is.
+    return errorResponse(sanitizeErrorMessage(error));
   }
 });
