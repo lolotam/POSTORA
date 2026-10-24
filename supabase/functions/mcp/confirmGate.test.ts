@@ -873,6 +873,32 @@ Deno.test("a rejected tool call that names no tool is recorded as unknown", asyn
   });
 });
 
+Deno.test("a rejected tool call that names a tool nobody registered is recorded as unknown", async () => {
+  resetRefusalThrottleForTests();
+  const { admin, inserts } = createFakeAdmin();
+
+  await auditSchemaRejection(
+    { admin },
+    {
+      userId: OWNER_ID,
+      error: { code: INVALID_PARAMS, message: "Invalid params" },
+      rpcRequest: {
+        method: "tools/call",
+        params: { name: "not_a_real_tool", arguments: {} },
+      },
+    },
+  );
+
+  // The name is well formed, but no tool carries it: the row names no tool
+  // rather than a tool that does not exist, so a caller cannot get one row
+  // per invented name.
+  assertEquals(inserts.length, 1);
+  assertEquals(inserts[0].row.metadata as Record<string, unknown>, {
+    tool: "unknown",
+    code: "INVALID_PARAMS",
+  });
+});
+
 Deno.test("the auditor never throws, whatever the database does", async () => {
   resetRefusalThrottleForTests();
   const { admin } = createFakeAdmin({ throwOn: "insert" });

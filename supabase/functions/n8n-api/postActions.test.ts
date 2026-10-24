@@ -817,6 +817,57 @@ Deno.test("a reschedule refuses a body that does not name a usable time", async 
   }
 });
 
+Deno.test("a reschedule to a date years ahead is refused before the post is read", async () => {
+  const db = new FakeSupabase();
+  // Three years ahead is not a schedule: a post moved there would sit in the
+  // queue for a time nobody is going to see.
+  const result = await reschedulePost(depsFor(db, noNetwork()), USER, {
+    post_id: POST,
+    scheduled_at: "2029-10-21T12:00:00Z",
+  });
+  assertEquals(result.status, 400);
+  assertEquals(errorCode(result), "SCHEDULED_AT_TOO_FAR");
+  assertEquals(
+    (result.body.error as { message: string }).message,
+    "scheduled_at must be within 2 years from now.",
+  );
+  // The post is never read or written: the refusal only writes its own row.
+  assertEquals(callsFor(db, "posts").length, 0);
+  assertEquals(db.rpcCalls.length, 0);
+  assertEquals(callsFor(db, "system_logs", "insert").length, 1);
+});
+
+Deno.test("a reschedule to a year ahead is not refused as too far", async () => {
+  const db = new FakeSupabase();
+  db.queue("posts", {
+    data: {
+      id: POST,
+      status: "scheduled",
+      scheduled_at: "2026-10-22T12:00:00.000Z",
+      metadata: null,
+    },
+    error: null,
+  });
+  db.queueRpc(RESCHEDULE_RPC, {
+    data: {
+      outcome: "updated",
+      post: { id: POST, status: "scheduled", scheduled_at: "2027-10-21T12:00:00.000Z" },
+    },
+    error: null,
+  });
+  // A year is inside the window, so the post is moved and the answer is the
+  // move itself.
+  const result = await reschedulePost(depsFor(db, noNetwork()), USER, {
+    post_id: POST,
+    scheduled_at: "2027-10-21T12:00:00Z",
+  });
+  assertEquals(result.status, 200);
+  assertEquals(
+    rpcCallFor(db, RESCHEDULE_RPC)?.args.p_scheduled_at,
+    "2027-10-21T12:00:00.000Z",
+  );
+});
+
 Deno.test("a reschedule of a post whose time has come on the edge clock is the database's answer", async () => {
   const db = new FakeSupabase();
   // The post is overdue on the clock of the edge, but the clock that decides
@@ -1208,6 +1259,16 @@ Deno.test("a health check with a non-uuid account id is refused", async () => {
   const result = await checkAccountHealth(depsFor(db, noNetwork()), USER, "not-a-uuid");
   assertEquals(result.status, 400);
   assertEquals(errorCode(result), "INVALID_ACCOUNT_ID");
+  // The answer says what a valid id looks like, and it does not echo back
+  // what the caller sent.
+  assertEquals(
+    (result.body.error as { message: string }).message,
+    "social_account_id must be a Postora account UUID (from GET /api/v1/accounts).",
+  );
+  assertEquals(
+    (result.body.error as { message: string }).message.includes("not-a-uuid"),
+    false,
+  );
   // The account is never read, and the id the caller sent is not a uuid, so
   // it is never written down either.
   assertEquals(callsFor(db, "social_accounts").length, 0);
