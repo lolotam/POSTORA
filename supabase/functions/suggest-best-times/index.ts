@@ -5,6 +5,7 @@ import { callAiWithFallback, fetchAiSettings, logAiCall } from "../_shared/ai-fa
 import { timingSafeTokenEqual } from "../_shared/auth-helper.ts";
 import { sanitizeErrorMessage } from "../_shared/errorSanitizer.ts";
 import { checkUserRateLimit, rateLimitExceededResponse } from "../_shared/rate-limiter.ts";
+import { createLogger } from "../_shared/logging.ts";
 
 // A user id that reaches the database has to be a uuid: an id that is not one
 // makes the write of the log row fail with 22P02, and the AI call is then
@@ -12,9 +13,10 @@ import { checkUserRateLimit, rateLimitExceededResponse } from "../_shared/rate-l
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 // The platforms one request may name. Every platform costs one AI call, so
-// the list is short: a request that names more of them is a request the
-// caller made by mistake.
-const MAX_PLATFORMS = 6;
+// the list is bounded, but above anything the dashboard can select: the web
+// app sends its whole selection in one call and has no fallback when it is
+// refused. n8n-api keeps its own, tighter cap of 6.
+const MAX_PLATFORMS = 20;
 
 // The length of one platform name. A platform name is a short word, so a
 // longer one is not a platform. It matches the cap n8n-api's BestTimesSchema
@@ -96,6 +98,14 @@ serve(async (req) => {
       return errorResponse('Malformed JSON body', 400);
     }
 
+    const supabaseAdmin = createClient(
+      Deno.env.get('SUPABASE_URL') ?? '',
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+    );
+    // Every refusal below writes a warn row (AGENTS.md: an early return that
+    // refuses work must leave a log row). The writer never throws.
+    const log = createLogger(supabaseAdmin, 'suggest-best-times');
+
     const platforms = Array.isArray(body.platforms)
       ? body.platforms.filter((p): p is string => typeof p === 'string' && p.length > 0)
       : [];
@@ -106,9 +116,11 @@ serve(async (req) => {
     // one AI call, so a list nobody can publish to is refused here rather
     // than answered with an empty suggestion.
     if (platforms.length > MAX_PLATFORMS) {
+      await log.warn('refused: too many platforms', { platform_count: platforms.length });
       return errorResponse(`platforms may list at most ${MAX_PLATFORMS} platforms`, 400);
     }
     if (platforms.some((platform) => platform.length > MAX_PLATFORM_NAME_LENGTH)) {
+      await log.warn('refused: platform name too long', { platform_count: platforms.length });
       return errorResponse(`each platform name must be at most ${MAX_PLATFORM_NAME_LENGTH} characters`, 400);
     }
 
@@ -118,11 +130,6 @@ serve(async (req) => {
       dayCounts: (hd.dayCounts as Record<string, number> | undefined) ?? {},
       totalPosts: typeof hd.totalPosts === 'number' ? hd.totalPosts : 0,
     };
-
-    const supabaseAdmin = createClient(
-      Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
-    );
 
     // Get user from auth header if available
     let userId: string | null = null;
@@ -158,6 +165,7 @@ serve(async (req) => {
     // needs an owner before it runs. The service role names the owner in the
     // body and a user names it with their own token; nobody else gets one.
     if (!userId) {
+      await log.warn('refused: no authenticated user', { had_auth_header: Boolean(authHeader) });
       return errorResponse('Authentication required', 401);
     }
 
@@ -173,6 +181,10 @@ serve(async (req) => {
         USER_RATE_LIMIT_WINDOW_SECONDS,
       );
       if (!rateLimit.allowed) {
+        await log.warn('refused: hourly per-user limit reached', {
+          limit: USER_RATE_LIMIT_REQUESTS,
+          retry_after_seconds: rateLimit.retryAfter,
+        }, userId);
         return rateLimitExceededResponse(rateLimit, corsHeaders);
       }
     }
