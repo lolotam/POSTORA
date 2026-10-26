@@ -4640,6 +4640,116 @@ export type Database = {
           },
         ]
       }
+      instagram_account_capabilities: {
+        Row: {
+          created_at: string
+          credential_generation: number
+          credential_updated_at: string | null
+          generation_reason: string | null
+          granted_scopes: string[]
+          last_read_error_code: string | null
+          last_read_failed_at: string | null
+          login_kind: string
+          permission_read_state: string
+          platform: string
+          reconnected_at: string | null
+          scopes_read_at: string | null
+          social_account_id: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          credential_generation?: number
+          credential_updated_at?: string | null
+          generation_reason?: string | null
+          granted_scopes?: string[]
+          last_read_error_code?: string | null
+          last_read_failed_at?: string | null
+          login_kind: string
+          permission_read_state?: string
+          platform?: string
+          reconnected_at?: string | null
+          scopes_read_at?: string | null
+          social_account_id: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          credential_generation?: number
+          credential_updated_at?: string | null
+          generation_reason?: string | null
+          granted_scopes?: string[]
+          last_read_error_code?: string | null
+          last_read_failed_at?: string | null
+          login_kind?: string
+          permission_read_state?: string
+          platform?: string
+          reconnected_at?: string | null
+          scopes_read_at?: string | null
+          social_account_id?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "instagram_account_capabilities_owner_fkey"
+            columns: ["social_account_id", "user_id", "platform"]
+            isOneToOne: false
+            referencedRelation: "social_accounts"
+            referencedColumns: ["id", "user_id", "platform"]
+          },
+        ]
+      }
+      instagram_account_credentials: {
+        Row: {
+          created_at: string
+          credential_kind: string
+          platform: string
+          social_account_id: string
+          token: string
+          token_expires_at: string | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          credential_kind: string
+          platform?: string
+          social_account_id: string
+          token: string
+          token_expires_at?: string | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          credential_kind?: string
+          platform?: string
+          social_account_id?: string
+          token?: string
+          token_expires_at?: string | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "instagram_account_credentials_capability_fkey"
+            columns: ["social_account_id"]
+            isOneToOne: true
+            referencedRelation: "instagram_account_capabilities"
+            referencedColumns: ["social_account_id"]
+          },
+          {
+            foreignKeyName: "instagram_account_credentials_owner_fkey"
+            columns: ["social_account_id", "user_id", "platform"]
+            isOneToOne: false
+            referencedRelation: "social_accounts"
+            referencedColumns: ["id", "user_id", "platform"]
+          },
+        ]
+      }
       social_contacts: {
         Row: {
           company: string | null
@@ -8494,6 +8604,38 @@ export type Database = {
       }
       patch_account_metadata_in_workspace: {
         Args: { p_account_id: string; p_workspace_id: string; p_patch: Json }
+        Returns: Json
+      }
+      instagram_account_capability_projection: {
+        Args: { p_social_account_id: string }
+        Returns: Json
+      }
+      read_instagram_account_capability: {
+        Args: { p_social_account_id: string; p_user_id: string }
+        Returns: Json
+      }
+      write_instagram_account_capability: {
+        Args: { p_social_account_id: string; p_user_id: string; p_payload: Json }
+        Returns: Json
+      }
+      replace_instagram_account_credential: {
+        Args: { p_social_account_id: string; p_user_id: string; p_payload: Json }
+        Returns: Json
+      }
+      record_instagram_account_reconnect: {
+        Args: { p_social_account_id: string; p_user_id: string; p_payload: Json }
+        Returns: Json
+      }
+      bump_instagram_credential_generation: {
+        Args: { p_social_account_id: string; p_user_id: string; p_reason: string }
+        Returns: Json
+      }
+      revoke_instagram_account_credential: {
+        Args: { p_social_account_id: string; p_user_id: string; p_reason: string }
+        Returns: Json
+      }
+      read_instagram_account_credential: {
+        Args: { p_social_account_id: string; p_user_id: string }
         Returns: Json
       }
       prune_ai_knowledge_entities: {
