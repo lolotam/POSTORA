@@ -51,7 +51,7 @@ Research-driven changes to the spec sketch: validate credential type instead of 
 |---|---|---|---|
 | P1 | Implementation base/integration branch and release scope | Fresh implementation worktree based on the manager-selected non-main branch; keep this planning branch separate | All implementation dispatch |
 | P2 | Stories | Skip in v1; hide unsupported Story filter. Four-hour polling/webhook work is a separately accepted Phase 1b | Task 6/9 scope |
-| P3 | Competitor quota per plan, admin override and downgrade behavior | Add `max_tracked_competitors` to canonical plan/effective-quota path; owner chooses plan numbers. Reject new/reactivated entries above entitlement; do not silently delete history on downgrade | Tasks 3/7/8 |
+| P3 | Competitor quota per plan, admin override and downgrade behavior | APPROVED 2026-10-26: Free 5 / Pro 20 / Business 30 / Admin unlimited. Add `max_tracked_competitors` to canonical plan/effective-quota path; preserve per-user overrides. Reject new/reactivated entries above entitlement; do not silently delete history on downgrade | Numbers resolved; Tasks 3/7/8 still depend on schema/security gates |
 | P4 | Optional competitor MCP tools and scope | Defer tools in v1; existing `get_post_analytics` remains `posts:read`. If included, approve scope and use `okUntrusted` | Task 10 optional slice |
 | P5 | Scheduled Apify fallback/cost policy | Interactive fallback unchanged; scheduled fallback OFF unless explicitly approved, bounded and fail-closed on unreadable settings | Tasks 7/8 |
 | P6 | Continuation cadence | Daily enqueue at specified times, short bounded drain ticks until due queue empty; ticks must not recollect every completed account | Task 4 scheduling |
@@ -313,3 +313,18 @@ No fourth review round is implied; final corrections are orchestrator-adjudicate
 ## 11. Planning-stage completion
 
 Three requested rounds completed; 22 findings adjudicated (including evidence-backed partial/rejected claims), revisions incorporated. A concurrent process committed the supplied spec and gap analysis unchanged in `718940fe` while this plan was being drafted; preserve that user work and do not recommit it. Commit only this debated plan. Documentation validation: task/debate structure and local links checked, diff whitespace/secret-pattern review performed before commit. Dedicated docs-guard unavailable, so this is manual documentation review, not a passed guard invocation; implementation requires available guards or explicit waiver. Production/test guards and application suites not applicable to this documentation-only diff; no production code changed. mem0 recall/save unavailable. No push, merge, deployment or production access performed. Ask implementer choice; implementation remains paused until chosen and remaining decisions/configuration are confirmed.
+
+## 12. Approved competitor limits (2026-10-26)
+
+Waleed explicitly approved the following limits after the planning stage:
+
+| Plan / role | Maximum active tracked Instagram competitors per user |
+|---|---:|
+| Free | 5 |
+| Pro | 20 |
+| Business | 30 |
+| Admin | Unlimited |
+
+This is a concurrent active-watchlist limit, not a daily addition allowance, a provider-call budget, or a connected-social-account limit. Daily sync refreshes those active entries without consuming additional watchlist slots. A soft removal frees a slot; reactivation must pass the same atomic quota check as adding an entry. Preserve established per-user override precedence and the approved non-destructive downgrade behavior: keep history and existing entries, block additional activations above entitlement. Admin bypass follows the enforcement/read-boundary pattern in the binding clarifications; do not introduce an admin cap of 30. Seed the approved plan defaults without overwriting subsequently edited administrator values. Update quota tests, database enforcement and admin/user UI from this single approved decision.
+
+Only P3's plan numbers are newly resolved here. Initial implementer availability and unanswered product-scope choices remain separate blockers; this approval does not silently settle them.
