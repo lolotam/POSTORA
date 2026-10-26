@@ -460,8 +460,9 @@ Deno.serve(async (req) => {
           user_id,
           metadata: { reason, had_state: Boolean(state) },
         });
+        // 200 like the other answers the page reads: supabase-js hides the body of a non-2xx
+        // response behind a generic error, and the page needs this message (and "expired").
         return new Response(JSON.stringify({ success: false, error: message }), {
-          status: 400,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       };
