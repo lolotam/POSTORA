@@ -10,6 +10,18 @@ vi.mock("@/integrations/supabase/client", () => ({
 
 import { createSupabaseConnectionGateway } from "./supabaseConnectionGateway";
 
+describe("supabaseConnectionGateway.authorizeUrl", () => {
+  beforeEach(() => invoke.mockReset());
+
+  it("asks the backend to return to Integrations after TikTok answers", async () => {
+    invoke.mockResolvedValue({ data: { url: "https://www.tiktok.com/v2/auth/authorize/?client_key=k" }, error: null });
+    await createSupabaseConnectionGateway().authorizeUrl();
+    expect(invoke).toHaveBeenCalledWith("tiktok-oauth", {
+      body: expect.objectContaining({ action: "authorize", return_to: `${window.location.origin}/integrations` }),
+    });
+  });
+});
+
 describe("supabaseConnectionGateway.disconnect", () => {
   beforeEach(() => {
     invoke.mockReset();

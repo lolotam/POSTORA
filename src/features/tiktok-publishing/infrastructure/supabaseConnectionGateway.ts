@@ -11,7 +11,13 @@ export function createSupabaseConnectionGateway(): TikTokConnectionGateway {
   return {
     async authorizeUrl() {
       const { data, error } = await supabase.functions.invoke("tiktok-oauth", {
-        body: { action: "authorize", redirect_uri: TIKTOK_REDIRECT_URI },
+        // return_to travels in the signed state: the edge function finishes the exchange and sends the user
+        // back to Integrations (it adds ?connected=tiktok).
+        body: {
+          action: "authorize",
+          redirect_uri: TIKTOK_REDIRECT_URI,
+          return_to: `${window.location.origin}/integrations`,
+        },
       });
       if (error) throw new ReviewGatewayError("INTERNAL", error.message || "Could not start the TikTok connection.", 502);
       const url = (data as { url?: unknown } | null)?.url;

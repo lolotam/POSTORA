@@ -5,6 +5,7 @@ import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { Loader2, CheckCircle, XCircle, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { tiktokBackendCallbackUrl } from "@/lib/tiktokCallbackForward";
 import { TIKTOK_RETURN_KEY } from "@/features/tiktok-publishing";
 
 export default function TikTokCallback() {
@@ -54,6 +55,12 @@ export default function TikTokCallback() {
 
   useEffect(() => {
     const handleCallback = async () => {
+      const backendCallback = tiktokBackendCallbackUrl(searchParams, import.meta.env.VITE_SUPABASE_URL);
+      if (backendCallback) {
+        window.location.replace(backendCallback);
+        return;
+      }
+
       const code = searchParams.get("code");
       const error = searchParams.get("error");
       const errorDescription = searchParams.get("error_description");
