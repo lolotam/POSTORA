@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useSearchParams, useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
@@ -7,12 +7,18 @@ import { Loader2, CheckCircle, XCircle, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { TIKTOK_RETURN_KEY } from "@/features/tiktok-publishing";
 
-// The return path the signed state carried, when it is on this site.
-function sameSiteReturnPath(returnTo: unknown): string | null {
+// Where the signed state asked to land after a successful connection. It mirrors
+// safeReturnTo in supabase/functions/_shared/oauthState.ts: https on postora.cloud or a
+// subdomain. Same origin goes through the router; another allowed origin through the browser.
+function signedReturnTarget(returnTo: unknown): { path: string } | { href: string } | null {
   if (typeof returnTo !== "string") return null;
   try {
     const url = new URL(returnTo);
-    return url.origin === window.location.origin ? `${url.pathname}${url.search}` : null;
+    const host = url.hostname.toLowerCase().replace(/\.$/, "");
+    if (url.protocol !== "https:" || !(host === "postora.cloud" || host.endsWith(".postora.cloud"))) return null;
+    return url.origin === window.location.origin
+      ? { path: `${url.pathname}${url.search}${url.hash}` }
+      : { href: url.toString() };
   } catch {
     return null;
   }
@@ -21,7 +27,8 @@ function sameSiteReturnPath(returnTo: unknown): string | null {
 export default function TikTokCallback() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, isLoading: authLoading } = useAuth();
+  const exchangeStarted = useRef(false);
   const { toast } = useToast();
   const [status, setStatus] = useState<"loading" | "success" | "error" | "expired">("loading");
   const [message, setMessage] = useState("Connecting your TikTok account...");
@@ -65,6 +72,9 @@ export default function TikTokCallback() {
 
   useEffect(() => {
     const handleCallback = async () => {
+      // The session is restored asynchronously after TikTok sends the user back: deciding before it
+      // is known would send a signed-in user to /auth. A TikTok code can be redeemed only once.
+      if (authLoading || exchangeStarted.current) return;
       const code = searchParams.get("code");
       const error = searchParams.get("error");
       const errorDescription = searchParams.get("error_description");
@@ -113,6 +123,7 @@ export default function TikTokCallback() {
         return;
       }
 
+      exchangeStarted.current = true;
       try {
         // Must match exactly what was used for authorization - use production domain
         const redirectUri = "https://postora.cloud/tiktok-callback";
@@ -158,8 +169,9 @@ export default function TikTokCallback() {
           sessionStorage.removeItem(TIKTOK_RETURN_KEY);
           const successPath = fromReviewShell
             ? "/integrations?connected=tiktok"
-            : isDemoReturn ? "/tiktok-auth" : sameSiteReturnPath(data.return_to) ?? "/profiles";
-          setTimeout(() => navigate(successPath), 1500);
+            : isDemoReturn ? "/tiktok-auth" : null;
+          const target = successPath ? { path: successPath } : signedReturnTarget(data.return_to) ?? { path: "/profiles" };
+          setTimeout(() => ("href" in target ? window.location.assign(target.href) : navigate(target.path)), 1500);
         } else {
           console.error("[TikTok Callback] Connection failed:", data?.error);
           
@@ -216,7 +228,7 @@ export default function TikTokCallback() {
     };
 
     handleCallback();
-  }, [searchParams, user, navigate, toast, fromReviewShell, home]);
+  }, [searchParams, user, authLoading, navigate, toast, fromReviewShell, home]);
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-background">
