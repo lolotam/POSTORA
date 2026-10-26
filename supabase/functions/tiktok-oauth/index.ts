@@ -2,6 +2,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { cacheAvatarToCdn } from "../_shared/avatar-cache.ts";
 import { authenticateCaller } from "../_shared/auth-helper.ts";
 import { createOAuthState, verifyOAuthState } from "../_shared/oauthState.ts";
+import { logToDatabase } from "../_shared/logging.ts";
 import { revokeTikTokAccess } from "./revoke.ts";
 
 import { restrictedCorsHeaders } from "../_shared/cors.ts";
@@ -257,6 +258,22 @@ function reconnectErrorParam(message: string): string {
   return "tiktok_callback_failed";
 }
 
+// A refused callback writes one system_logs row per (user, reason) per minute; repeats only reach
+// the console. The map is per worker and is cleared when it passes its cap.
+const CALLBACK_REFUSAL_LOG_WINDOW_MS = 60_000;
+const CALLBACK_REFUSAL_LOG_MAX_KEYS = 10_000;
+const lastCallbackRefusalLogAt = new Map<string, number>();
+
+function shouldLogCallbackRefusal(reason: string, userId: string): boolean {
+  const key = `${userId}:${reason}`;
+  const now = Date.now();
+  const last = lastCallbackRefusalLogAt.get(key);
+  if (last !== undefined && now - last < CALLBACK_REFUSAL_LOG_WINDOW_MS) return false;
+  if (lastCallbackRefusalLogAt.size >= CALLBACK_REFUSAL_LOG_MAX_KEYS) lastCallbackRefusalLogAt.clear();
+  lastCallbackRefusalLogAt.set(key, now);
+  return true;
+}
+
 Deno.serve(async (req) => {
   const corsHeaders = restrictedCorsHeaders(req);
   if (req.method === "OPTIONS") {
@@ -346,6 +363,7 @@ Deno.serve(async (req) => {
       social_account_id,
       return_to,
       mode,
+      state,
     } = body;
     const account_id = rawAccountId || social_account_id;
 
@@ -444,18 +462,57 @@ Deno.serve(async (req) => {
       // at /authorize). Reject empty values defensively.
       if (!redirect_uri) throw new Error("Missing redirect_uri");
 
+      // Every flow is started by `authorize`, which signs a state, and comes back
+      // with it. The state is required, must be valid and must belong to the
+      // signed-in caller: otherwise a TikTok authorization code obtained by one
+      // person could be linked to whichever Postora user opens the callback.
+      // Reconnect mode, the profile and the return path travel in the state.
+      const refuseCallback = async (reason: string, message: string) => {
+        console.warn(`[tiktok-oauth] callback refused: ${reason} (user ${user_id})`);
+        if (shouldLogCallbackRefusal(reason, user_id)) await logToDatabase(createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY), {
+          level: "warn",
+          category: "auth",
+          source: "tiktok-oauth",
+          message: `TikTok callback refused: ${reason}`,
+          user_id,
+          metadata: { reason, had_state: Boolean(state) },
+        });
+        // 200 like the other answers the page reads: supabase-js hides the body of a non-2xx
+        // response behind a generic error, and the page needs this message (and "expired").
+        return new Response(JSON.stringify({ success: false, error: message }), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      };
+      if (!state) {
+        return await refuseCallback("missing_state", "This TikTok sign-in link is not valid. Please start the connection again.");
+      }
+      let payload: Awaited<ReturnType<typeof verifyOAuthState>>;
+      try {
+        payload = await verifyOAuthState(state, { expectedPlatform: "tiktok" });
+      } catch {
+        return await refuseCallback("invalid_state", "This TikTok sign-in link is no longer valid. Please start the connection again.");
+      }
+      if (payload.user_id !== user_id) {
+        return await refuseCallback("state_user_mismatch", "This TikTok sign-in was started by another account. Please start the connection again.");
+      }
+      const flow = payload as Record<string, unknown>;
+      const flowMode = flow.mode as string | undefined;
+      const flowAccountId = flow.social_account_id as string | undefined;
+      const flowProfileId = payload.profile_id ?? null;
+      const returnTo = payload.return_to ?? null;
+
       const tokenData = await exchangeCodeForToken(code, redirect_uri);
       const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-      if (mode === "reconnect" && social_account_id) {
+      if (flowMode === "reconnect" && flowAccountId) {
         const { username } = await reconnectTikTokAccount(
           supabase,
-          social_account_id,
+          flowAccountId,
           user_id,
           tokenData,
         );
         return new Response(
-          JSON.stringify({ success: true, username, reconnected: true }),
+          JSON.stringify({ success: true, username, reconnected: true, return_to: returnTo }),
           { headers: { ...corsHeaders, "Content-Type": "application/json" } },
         );
       }
@@ -463,10 +520,10 @@ Deno.serve(async (req) => {
       const { username } = await saveTikTokAccount(
         supabase,
         user_id,
-        social_profile_id ?? null,
+        flowProfileId,
         tokenData,
       );
-      return new Response(JSON.stringify({ success: true, username }), {
+      return new Response(JSON.stringify({ success: true, username, return_to: returnTo }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
