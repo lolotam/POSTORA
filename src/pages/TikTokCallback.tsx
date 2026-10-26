@@ -5,7 +5,6 @@ import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { Loader2, CheckCircle, XCircle, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { tiktokBackendCallbackUrl } from "@/lib/tiktokCallbackForward";
 
 export default function TikTokCallback() {
   const [searchParams] = useSearchParams();
@@ -51,12 +50,6 @@ export default function TikTokCallback() {
 
   useEffect(() => {
     const handleCallback = async () => {
-      const backendCallback = tiktokBackendCallbackUrl(searchParams, import.meta.env.VITE_SUPABASE_URL);
-      if (backendCallback) {
-        window.location.replace(backendCallback);
-        return;
-      }
-
       const code = searchParams.get("code");
       const error = searchParams.get("error");
       const errorDescription = searchParams.get("error_description");
@@ -117,6 +110,8 @@ export default function TikTokCallback() {
           body: {
             action: "callback",
             code,
+            // Signed by `authorize`; the function verifies it belongs to this user and reads reconnect mode from it.
+            state: searchParams.get("state"),
             redirect_uri: redirectUri,
             user_id: user.id,
             social_profile_id: profileId || null,
