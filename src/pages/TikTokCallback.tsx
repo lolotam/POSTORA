@@ -7,6 +7,17 @@ import { Loader2, CheckCircle, XCircle, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { TIKTOK_RETURN_KEY } from "@/features/tiktok-publishing";
 
+// The return path the signed state carried, when it is on this site.
+function sameSiteReturnPath(returnTo: unknown): string | null {
+  if (typeof returnTo !== "string") return null;
+  try {
+    const url = new URL(returnTo);
+    return url.origin === window.location.origin ? `${url.pathname}${url.search}` : null;
+  } catch {
+    return null;
+  }
+}
+
 export default function TikTokCallback() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
@@ -147,7 +158,7 @@ export default function TikTokCallback() {
           sessionStorage.removeItem(TIKTOK_RETURN_KEY);
           const successPath = fromReviewShell
             ? "/integrations?connected=tiktok"
-            : isDemoReturn ? "/tiktok-auth" : "/profiles";
+            : isDemoReturn ? "/tiktok-auth" : sameSiteReturnPath(data.return_to) ?? "/profiles";
           setTimeout(() => navigate(successPath), 1500);
         } else {
           console.error("[TikTok Callback] Connection failed:", data?.error);

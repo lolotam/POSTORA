@@ -2,6 +2,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { cacheAvatarToCdn } from "../_shared/avatar-cache.ts";
 import { authenticateCaller } from "../_shared/auth-helper.ts";
 import { createOAuthState, verifyOAuthState } from "../_shared/oauthState.ts";
+import { logToDatabase } from "../_shared/logging.ts";
 import { revokeTikTokAccess } from "./revoke.ts";
 
 import { restrictedCorsHeaders } from "../_shared/cors.ts";
@@ -445,24 +446,42 @@ Deno.serve(async (req) => {
       // at /authorize). Reject empty values defensively.
       if (!redirect_uri) throw new Error("Missing redirect_uri");
 
-      // A flow started by `authorize` comes back with its signed state. The state
-      // must be valid and must belong to the signed-in caller: otherwise a
-      // TikTok authorization link started by one Postora user could link the
-      // TikTok account of whoever opens it to that user. Reconnect mode and the
-      // profile travel in the state, not in the request body.
-      let flowMode = mode;
-      let flowAccountId = social_account_id;
-      let flowProfileId = social_profile_id ?? null;
-      if (state) {
-        const payload = await verifyOAuthState(state, { expectedPlatform: "tiktok" });
-        if (payload.user_id !== user_id) {
-          throw new Error("OAuth state does not belong to the signed-in user");
-        }
-        const flow = payload as Record<string, unknown>;
-        flowMode = flow.mode as string | undefined;
-        flowAccountId = flow.social_account_id as string | undefined;
-        flowProfileId = payload.profile_id ?? null;
+      // Every flow is started by `authorize`, which signs a state, and comes back
+      // with it. The state is required, must be valid and must belong to the
+      // signed-in caller: otherwise a TikTok authorization code obtained by one
+      // person could be linked to whichever Postora user opens the callback.
+      // Reconnect mode, the profile and the return path travel in the state.
+      const refuseCallback = async (reason: string, message: string) => {
+        await logToDatabase(createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY), {
+          level: "warn",
+          category: "auth",
+          source: "tiktok-oauth",
+          message: `TikTok callback refused: ${reason}`,
+          user_id,
+          metadata: { reason, had_state: Boolean(state) },
+        });
+        return new Response(JSON.stringify({ success: false, error: message }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      };
+      if (!state) {
+        return await refuseCallback("missing_state", "This TikTok sign-in link is not valid. Please start the connection again.");
       }
+      let payload: Awaited<ReturnType<typeof verifyOAuthState>>;
+      try {
+        payload = await verifyOAuthState(state, { expectedPlatform: "tiktok" });
+      } catch {
+        return await refuseCallback("invalid_state", "This TikTok sign-in link has expired. Please start the connection again.");
+      }
+      if (payload.user_id !== user_id) {
+        return await refuseCallback("state_user_mismatch", "This TikTok sign-in was started by another account. Please start the connection again.");
+      }
+      const flow = payload as Record<string, unknown>;
+      const flowMode = flow.mode as string | undefined;
+      const flowAccountId = flow.social_account_id as string | undefined;
+      const flowProfileId = payload.profile_id ?? null;
+      const returnTo = payload.return_to ?? null;
 
       const tokenData = await exchangeCodeForToken(code, redirect_uri);
       const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
@@ -475,7 +494,7 @@ Deno.serve(async (req) => {
           tokenData,
         );
         return new Response(
-          JSON.stringify({ success: true, username, reconnected: true }),
+          JSON.stringify({ success: true, username, reconnected: true, return_to: returnTo }),
           { headers: { ...corsHeaders, "Content-Type": "application/json" } },
         );
       }
@@ -486,7 +505,7 @@ Deno.serve(async (req) => {
         flowProfileId,
         tokenData,
       );
-      return new Response(JSON.stringify({ success: true, username }), {
+      return new Response(JSON.stringify({ success: true, username, return_to: returnTo }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
