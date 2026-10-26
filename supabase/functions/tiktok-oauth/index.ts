@@ -258,6 +258,22 @@ function reconnectErrorParam(message: string): string {
   return "tiktok_callback_failed";
 }
 
+// A refused callback writes one system_logs row per (user, reason) per minute; repeats only reach
+// the console. The map is per worker and is cleared when it passes its cap.
+const CALLBACK_REFUSAL_LOG_WINDOW_MS = 60_000;
+const CALLBACK_REFUSAL_LOG_MAX_KEYS = 10_000;
+const lastCallbackRefusalLogAt = new Map<string, number>();
+
+function shouldLogCallbackRefusal(reason: string, userId: string): boolean {
+  const key = `${userId}:${reason}`;
+  const now = Date.now();
+  const last = lastCallbackRefusalLogAt.get(key);
+  if (last !== undefined && now - last < CALLBACK_REFUSAL_LOG_WINDOW_MS) return false;
+  if (lastCallbackRefusalLogAt.size >= CALLBACK_REFUSAL_LOG_MAX_KEYS) lastCallbackRefusalLogAt.clear();
+  lastCallbackRefusalLogAt.set(key, now);
+  return true;
+}
+
 Deno.serve(async (req) => {
   const corsHeaders = restrictedCorsHeaders(req);
   if (req.method === "OPTIONS") {
@@ -452,7 +468,8 @@ Deno.serve(async (req) => {
       // person could be linked to whichever Postora user opens the callback.
       // Reconnect mode, the profile and the return path travel in the state.
       const refuseCallback = async (reason: string, message: string) => {
-        await logToDatabase(createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY), {
+        console.warn(`[tiktok-oauth] callback refused: ${reason} (user ${user_id})`);
+        if (shouldLogCallbackRefusal(reason, user_id)) await logToDatabase(createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY), {
           level: "warn",
           category: "auth",
           source: "tiktok-oauth",
@@ -473,7 +490,7 @@ Deno.serve(async (req) => {
       try {
         payload = await verifyOAuthState(state, { expectedPlatform: "tiktok" });
       } catch {
-        return await refuseCallback("invalid_state", "This TikTok sign-in link has expired. Please start the connection again.");
+        return await refuseCallback("invalid_state", "This TikTok sign-in link is no longer valid. Please start the connection again.");
       }
       if (payload.user_id !== user_id) {
         return await refuseCallback("state_user_mismatch", "This TikTok sign-in was started by another account. Please start the connection again.");
