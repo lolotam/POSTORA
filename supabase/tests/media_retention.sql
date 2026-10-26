@@ -8,6 +8,11 @@
 BEGIN;
 -- Fixture posts must not hit the per-plan daily post quota; the ROLLBACK restores the trigger.
 ALTER TABLE public.posts DISABLE TRIGGER trg_enforce_post_quota_on_insert;
+-- Media inserts stay under trg_enforce_media_quota_on_insert. Migration
+-- 20261002130000 charges every media_files insert, and a later upload cap must
+-- not block this retention fixture. The owners below get max_media_uploads_per_day
+-- = -1 inside this transaction. Disabling the media trigger would skip real
+-- enforcement; the quota suite owns that behavior.
 
 CREATE FUNCTION pg_temp.mfile(
   p_id uuid,
@@ -42,6 +47,19 @@ BEGIN
   VALUES
     (u_a, 'retention-a-' || u_a::text || '@example.invalid'),
     (u_b, 'retention-b-' || u_b::text || '@example.invalid');
+
+  -- Signup inserts user_quotas with max_media_uploads_per_day NULL, which
+  -- inherits the free plan (20) through effective_user_quotas: non-null
+  -- override, else plan, else 20. NULL does not lift the cap, and -1 is the
+  -- canonical unlimited override. This suite then inserts the reference map
+  -- and a 5000-row explain; those rows cover retention, not upload quota.
+  -- Scoped to these two owners. They stay non-admin so later RLS checks still
+  -- see ordinary owners. The media trigger's own insert does nothing on
+  -- conflict, so this override survives. ROLLBACK removes it with the fixtures.
+  INSERT INTO public.user_quotas (user_id, max_media_uploads_per_day)
+  VALUES (u_a, -1), (u_b, -1)
+  ON CONFLICT (user_id) DO UPDATE
+  SET max_media_uploads_per_day = EXCLUDED.max_media_uploads_per_day;
 
   -- S1: only 7, 30, 90 or NULL.
   BEGIN
