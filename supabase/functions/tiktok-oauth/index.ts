@@ -346,6 +346,7 @@ Deno.serve(async (req) => {
       social_account_id,
       return_to,
       mode,
+      state,
     } = body;
     const account_id = rawAccountId || social_account_id;
 
@@ -444,13 +445,32 @@ Deno.serve(async (req) => {
       // at /authorize). Reject empty values defensively.
       if (!redirect_uri) throw new Error("Missing redirect_uri");
 
+      // A flow started by `authorize` comes back with its signed state. The state
+      // must be valid and must belong to the signed-in caller: otherwise a
+      // TikTok authorization link started by one Postora user could link the
+      // TikTok account of whoever opens it to that user. Reconnect mode and the
+      // profile travel in the state, not in the request body.
+      let flowMode = mode;
+      let flowAccountId = social_account_id;
+      let flowProfileId = social_profile_id ?? null;
+      if (state) {
+        const payload = await verifyOAuthState(state, { expectedPlatform: "tiktok" });
+        if (payload.user_id !== user_id) {
+          throw new Error("OAuth state does not belong to the signed-in user");
+        }
+        const flow = payload as Record<string, unknown>;
+        flowMode = flow.mode as string | undefined;
+        flowAccountId = flow.social_account_id as string | undefined;
+        flowProfileId = payload.profile_id ?? null;
+      }
+
       const tokenData = await exchangeCodeForToken(code, redirect_uri);
       const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-      if (mode === "reconnect" && social_account_id) {
+      if (flowMode === "reconnect" && flowAccountId) {
         const { username } = await reconnectTikTokAccount(
           supabase,
-          social_account_id,
+          flowAccountId,
           user_id,
           tokenData,
         );
@@ -463,7 +483,7 @@ Deno.serve(async (req) => {
       const { username } = await saveTikTokAccount(
         supabase,
         user_id,
-        social_profile_id ?? null,
+        flowProfileId,
         tokenData,
       );
       return new Response(JSON.stringify({ success: true, username }), {
