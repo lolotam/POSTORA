@@ -1,21 +1,36 @@
 #!/usr/bin/env node
 // Honest lint + Arabic i18n gate.
 //
-// Exit 0 means the proposed merge adds no diagnostics and does not dirty the
-// feature-clean manifest. It does not mean `npm run lint` or `npm run check:i18n`
-// are clean. Historical debt stays visible in the report counts.
-// The JSON artifact keeps the full normalized base, head, and merge reports
-// (exits, counts, findings, and tool hashes). Removing the temp work directory
-// does not discard that evidence. Config hashes stay on analyzer.hashes.
+// Exit 0 means the proposed merge adds no diagnostics in any lane and does not
+// dirty the feature-clean manifest. It does not mean `npm run lint` or
+// `npm run check:i18n` are clean. Historical debt stays visible in the report
+// counts. A higher total in the inline-disabled lane is not an allowance and
+// is not a baseline shift: the same immutable base is recomputed in that mode.
+//
+// Two ESLint lanes share the pinned binary, config, and source coverage:
+// ordinary messages (inline config left on) and messages with inline config
+// disabled (`--no-inline-config`). Ordinary suppressedMessages are a third
+// comparison. Each lane must add zero findings, and a feature-clean path must
+// have zero findings in each lane. The JSON artifact keeps the full normalized
+// base, head, and merge reports for every lane, plus exits and tool hashes.
 //
 // Baseline is an immutable commit: the pull_request event base SHA, or, on a
 // branch push, the merge-base with a pinned origin/main. A missing base, a
 // base equal to head, or a failed tool is a failure. Install failure is not
-// an empty baseline.
+// an empty baseline. An omitted suppressedMessages array is not an empty one.
+//
+// Comment policy reads comments the pinned TypeScript parser reports.
+// parseUnifiedDiff only records changed lines: a diff line has no token
+// context, so a string, template, regex, or mention of a directive is not one.
+// Disable comments keep their existing signatures. Inline rule-configuration
+// comments (block comments whose label is eslint) are rejected when new or
+// changed, without deciding whether a severity is weaker. A source file that
+// fails to parse fails the gate closed.
 
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -274,15 +289,53 @@ function stableAnchor(text) {
   return `sha256:${sha256Text(text)}:${text.slice(0, 80)}`;
 }
 
+function lintFindingFromMessage(file, message) {
+  if (!message || message.fatal || message.ruleId == null || typeof message.message !== "string") {
+    return null;
+  }
+  const anchor = sliceSource(file.source ?? "", message);
+  if (!anchor || !Number.isInteger(message.severity)) return null;
+  return {
+    kind: "lint",
+    path: file.filePath,
+    rule: message.ruleId,
+    severity: message.severity,
+    message: message.message,
+    anchor,
+    line: message.line,
+    column: message.column,
+    category: null,
+    locale: null,
+    namespace: null,
+    key: null,
+  };
+}
+
+function suppressionMetadata(message) {
+  if (!message || !Array.isArray(message.suppressions) || message.suppressions.length === 0) return null;
+  const metadata = [];
+  for (const entry of message.suppressions) {
+    if (!entry || typeof entry.kind !== "string" || entry.kind.length === 0 || typeof entry.justification !== "string") {
+      return null;
+    }
+    metadata.push({ kind: entry.kind, justification: entry.justification });
+  }
+  return metadata;
+}
+
 export function normalizeEslintReport(payload) {
   if (!Array.isArray(payload)) return { ok: false, reason: "eslint_json_not_array" };
   const findings = [];
+  const suppressedFindings = [];
   let errorCount = 0;
   let warningCount = 0;
   let fatalCount = 0;
   for (const file of payload) {
     if (!file || typeof file.filePath !== "string" || !Array.isArray(file.messages)) {
       return { ok: false, reason: "eslint_file_incomplete" };
+    }
+    if (!Array.isArray(file.suppressedMessages)) {
+      return { ok: false, reason: "eslint_suppressed_missing", path: file.filePath };
     }
     errorCount += file.errorCount ?? 0;
     warningCount += file.warningCount ?? 0;
@@ -294,8 +347,8 @@ export function normalizeEslintReport(payload) {
       if (message.fatal || message.ruleId == null) {
         return { ok: false, reason: "eslint_fatal_message", path: file.filePath };
       }
-      const anchor = sliceSource(file.source ?? "", message);
-      if (!anchor) {
+      const finding = lintFindingFromMessage(file, message);
+      if (!finding) {
         return {
           ok: false,
           reason: "eslint_message_missing_span",
@@ -303,26 +356,34 @@ export function normalizeEslintReport(payload) {
           rule: message.ruleId,
         };
       }
-      findings.push({
-        kind: "lint",
-        path: file.filePath,
-        rule: message.ruleId,
-        severity: message.severity,
-        message: message.message,
-        anchor,
-        line: message.line,
-        column: message.column,
-        category: null,
-        locale: null,
-        namespace: null,
-        key: null,
-      });
+      findings.push(finding);
+    }
+    for (const message of file.suppressedMessages) {
+      const metadata = suppressionMetadata(message);
+      const finding = metadata ? lintFindingFromMessage(file, message) : null;
+      if (!metadata || !finding) {
+        return {
+          ok: false,
+          reason: metadata ? "eslint_message_missing_span" : "eslint_suppression_incomplete",
+          path: file.filePath,
+          rule: message?.ruleId ?? null,
+        };
+      }
+      suppressedFindings.push({ ...finding, suppressions: metadata });
     }
   }
   if (findings.length !== errorCount + warningCount) {
     return { ok: false, reason: "eslint_count_mismatch" };
   }
-  return { ok: true, findings, errorCount, warningCount, fatalCount, fileCount: payload.length };
+  return {
+    ok: true,
+    findings,
+    suppressedFindings,
+    errorCount,
+    warningCount,
+    fatalCount,
+    fileCount: payload.length,
+  };
 }
 
 export function relativizeFindings(findings, rootDir) {
@@ -439,7 +500,6 @@ export function parseNameStatusZ(text) {
 
 export function parseUnifiedDiff(text) {
   const changed = new Map();
-  const suppressions = [];
   const opaque = [];
   let path = null;
   let newLine = 0;
@@ -473,9 +533,6 @@ export function parseUnifiedDiff(text) {
       }
       if (!changed.has(path)) changed.set(path, new Set());
       changed.get(path).add(newLine);
-      if (line.includes("eslint-disable")) {
-        suppressions.push({ path, line: newLine, text: line.slice(1).trim() });
-      }
       newLine += 1;
       continue;
     }
@@ -487,7 +544,7 @@ export function parseUnifiedDiff(text) {
       break;
     }
   }
-  return { changed, suppressions, ambiguous };
+  return { changed, ambiguous };
 }
 
 function unquoteGitPath(value) {
@@ -511,6 +568,344 @@ function unquoteGitPath(value) {
     } else return null;
   }
   return Buffer.from(bytes).toString("utf8");
+}
+
+// ESLint applies a directive only when the comment body starts with the label.
+// Line comments accept disable-line and disable-next-line. Block comments also
+// accept disable, enable, and eslint (inline rule configuration). enable is
+// not itself a suppression; it bounds a range disable. The eslint label keeps
+// the configuration text verbatim and does not interpret severities.
+const SUPPRESSION_LABEL = /^(eslint-disable-next-line|eslint-disable-line|eslint-disable|eslint-enable|eslint)(?=\s|$)/u;
+const LINE_DISABLE_LABELS = new Set(["eslint-disable-next-line", "eslint-disable-line"]);
+
+let typescriptModule;
+
+function loadTypescript() {
+  if (!typescriptModule) {
+    try {
+      typescriptModule = createRequire(import.meta.url)("typescript");
+    } catch (err) {
+      throw new GateError("typescript_parser_missing", err.message);
+    }
+  }
+  return typescriptModule;
+}
+
+function scriptKindForPath(filePath) {
+  const ts = loadTypescript();
+  const lower = String(filePath).toLowerCase();
+  if (lower.endsWith(".tsx")) return ts.ScriptKind.TSX;
+  if (lower.endsWith(".ts")) return ts.ScriptKind.TS;
+  if (lower.endsWith(".jsx")) return ts.ScriptKind.JSX;
+  if (lower.endsWith(".mjs") || lower.endsWith(".cjs") || lower.endsWith(".js")) return ts.ScriptKind.JS;
+  return null;
+}
+
+function sourceLines(text) {
+  if (text.length === 0) return [];
+  const lines = text.split("\n");
+  if (lines[lines.length - 1] === "") lines.pop();
+  return lines;
+}
+
+function lineStarts(text) {
+  const starts = [0];
+  for (let i = 0; i < text.length; i++) {
+    if (text.charCodeAt(i) === 10) starts.push(i + 1);
+  }
+  return starts;
+}
+
+function lineAt(starts, offset) {
+  let low = 0;
+  let high = starts.length - 1;
+  while (low < high) {
+    const mid = Math.ceil((low + high + 1) / 2);
+    if (starts[mid] <= offset) low = mid;
+    else high = mid - 1;
+  }
+  return low + 1;
+}
+
+function splitJustification(value) {
+  const match = /\s-{2,}\s/u.exec(value);
+  if (!match) return value.trim();
+  return value.slice(0, match.index).trim();
+}
+
+function parseRuleList(value) {
+  const rules = [];
+  for (const part of value.split(",")) {
+    const trimmed = part.trim().replace(/^(?<quote>['"]?)(?<ruleId>.*)\k<quote>$/su, "$<ruleId>").trim();
+    if (trimmed) rules.push(trimmed);
+  }
+  return rules.length > 0 ? rules : null;
+}
+
+function commentBody(raw) {
+  if (raw.startsWith("//")) return { kind: "line", value: raw.slice(2) };
+  if (raw.startsWith("/*") && raw.endsWith("*/") && raw.length >= 4) return { kind: "block", value: raw.slice(2, -2) };
+  return null;
+}
+
+function parseDirectiveComment(raw) {
+  const body = commentBody(raw);
+  if (!body) return null;
+  const directivePart = splitJustification(body.value);
+  const match = SUPPRESSION_LABEL.exec(directivePart);
+  if (!match) return null;
+  const label = match[1];
+  if (body.kind === "line" && !LINE_DISABLE_LABELS.has(label)) return null;
+  if (label === "eslint") {
+    if (body.kind !== "block") return null;
+    return {
+      label,
+      kind: body.kind,
+      rules: null,
+      configText: directivePart.slice(label.length).trim(),
+    };
+  }
+  return {
+    label,
+    kind: body.kind,
+    rules: parseRuleList(directivePart.slice(label.length)),
+    configText: "",
+  };
+}
+
+function ruleKey(rules) {
+  if (rules == null) return "*";
+  return [...rules].sort().join(",");
+}
+
+function codeOnLine(lines, starts, spans, lineNumber) {
+  if (lineNumber < 1 || lineNumber > lines.length) return "";
+  const lineStart = starts[lineNumber - 1];
+  const lineText = lines[lineNumber - 1];
+  const lineEnd = lineStart + lineText.length;
+  let code = lineText;
+  const cuts = spans
+    .filter((span) => span.end > lineStart && span.start < lineEnd)
+    .map((span) => ({
+      from: Math.max(0, span.start - lineStart),
+      to: Math.min(lineText.length, span.end - lineStart),
+    }))
+    .sort((left, right) => right.from - left.from);
+  for (const cut of cuts) code = `${code.slice(0, cut.from)}${code.slice(cut.to)}`;
+  return code.replace(/\s+/g, " ").trim();
+}
+
+function firstCodeBetween(text, spans, fromOffset, toOffset) {
+  if (fromOffset >= toOffset) return "";
+  const hidden = new Array(toOffset - fromOffset).fill(false);
+  for (const span of spans) {
+    const from = Math.max(0, span.start - fromOffset);
+    const to = Math.min(hidden.length, span.end - fromOffset);
+    for (let index = from; index < to; index++) hidden[index] = true;
+  }
+  let line = "";
+  const collapsed = () => line.replace(/\s+/g, " ").trim();
+  for (let index = 0; index < hidden.length; index++) {
+    const ch = text[fromOffset + index];
+    if (ch === "\n") {
+      const code = collapsed();
+      if (code) return code;
+      line = "";
+      continue;
+    }
+    line += hidden[index] ? " " : ch;
+  }
+  return collapsed();
+}
+
+function rangeAnchor(directives, index, text, spans) {
+  const directive = directives[index];
+  const pending = directive.rules == null ? null : new Set(directive.rules);
+  const bounds = [];
+  let closedAt = text.length;
+  for (let cursor = index + 1; cursor < directives.length; cursor++) {
+    const candidate = directives[cursor];
+    if (candidate.label !== "eslint-enable" || candidate.kind !== "block") continue;
+    const blanket = candidate.rules == null;
+    const closesSome = !blanket && pending != null && candidate.rules.some((rule) => pending.has(rule));
+    if (!blanket && !closesSome) continue;
+    if (closesSome) {
+      for (const rule of candidate.rules) pending.delete(rule);
+    }
+    bounds.push(`${ruleKey(candidate.rules)}:${firstCodeBetween(text, spans, candidate.end, text.length)}`);
+    closedAt = candidate.start;
+    if (blanket || pending == null || pending.size === 0) break;
+  }
+  const inside = firstCodeBetween(text, spans, directive.end, closedAt);
+  return `${inside}\0${bounds.length > 0 ? bounds.join("\0") : "EOF"}`;
+}
+
+function directiveSignature(directive, directives, index, lines, starts, spans, text) {
+  const rules = ruleKey(directive.rules);
+  if (directive.label === "eslint-disable-line") {
+    return `${directive.label}\0${rules}\0${codeOnLine(lines, starts, spans, directive.line)}`;
+  }
+  if (directive.label === "eslint-disable-next-line") {
+    return `${directive.label}\0${rules}\0${codeOnLine(lines, starts, spans, directive.endLine + 1)}`;
+  }
+  if (directive.label === "eslint") {
+    return `eslint\0${directive.configText}\0${firstCodeBetween(text, spans, directive.end, text.length)}`;
+  }
+  return `${directive.label}\0${rules}\0${rangeAnchor(directives, index, text, spans)}`;
+}
+
+function collectParsedComments(ts, sourceFile, text) {
+  const comments = [];
+  const seen = new Set();
+  const shebang = typeof ts.getShebang === "function" ? (ts.getShebang(text) ?? "") : "";
+  const add = (pos, end) => {
+    if (seen.has(pos)) return;
+    seen.add(pos);
+    comments.push({ start: pos, end, raw: text.slice(pos, end) });
+  };
+  const queue = [sourceFile];
+  while (queue.length > 0) {
+    let node = queue.pop();
+    while (true) {
+      if (ts.isTokenKind(node.kind)) {
+        const triviaStart = node.pos === 0 ? shebang.length : node.pos;
+        if (node.pos !== node.end) {
+          ts.forEachLeadingCommentRange(text, triviaStart, add);
+          ts.forEachTrailingCommentRange(text, node.end, add);
+        }
+        break;
+      }
+      const children = node.getChildren(sourceFile);
+      if (children.length === 0) break;
+      if (children.length === 1) {
+        node = children[0];
+        continue;
+      }
+      for (let index = children.length - 1; index >= 1; index--) queue.push(children[index]);
+      node = children[0];
+    }
+  }
+  comments.sort((left, right) => left.start - right.start);
+  return comments;
+}
+
+export function extractSuppressionDirectives(source, filePath) {
+  const scriptKind = scriptKindForPath(filePath);
+  if (scriptKind == null) return { ok: false, directives: [], detail: `unsupported source ${filePath}` };
+  const ts = loadTypescript();
+  const text = String(source).replace(/\r\n/g, "\n");
+  let sourceFile;
+  try {
+    sourceFile = ts.createSourceFile(filePath, text, ts.ScriptTarget.Latest, true, scriptKind);
+  } catch (err) {
+    return { ok: false, directives: [], detail: err.message };
+  }
+  if (sourceFile.parseDiagnostics.length > 0) {
+    const message = ts.flattenDiagnosticMessageText(sourceFile.parseDiagnostics[0].messageText, " ");
+    return { ok: false, directives: [], detail: message };
+  }
+  const comments = collectParsedComments(ts, sourceFile, text);
+  const spans = comments.map((comment) => ({ start: comment.start, end: comment.end }));
+  const lines = sourceLines(text);
+  const starts = lineStarts(text);
+  const directives = [];
+  for (const comment of comments) {
+    const parsed = parseDirectiveComment(comment.raw);
+    if (!parsed) continue;
+    const line = lineAt(starts, comment.start);
+    const endLine = lineAt(starts, Math.max(comment.start, comment.end - 1));
+    directives.push({
+      ...parsed,
+      line,
+      endLine,
+      start: comment.start,
+      end: comment.end,
+      text: comment.raw.replace(/\s+/g, " ").trim(),
+    });
+  }
+  const reported = [];
+  for (let index = 0; index < directives.length; index++) {
+    const directive = directives[index];
+    if (directive.label === "eslint-enable") continue;
+    reported.push({
+      line: directive.line,
+      text: directive.text,
+      signature: directiveSignature(directive, directives, index, lines, starts, spans, text),
+    });
+  }
+  return { ok: true, directives: reported, detail: "" };
+}
+
+export function diffSuppressionDirectives(baseSource, headSource, filePath) {
+  const base = extractSuppressionDirectives(baseSource ?? "", filePath);
+  if (!base.ok) return { ok: false, suppressions: [], detail: `base ${filePath}: ${base.detail}` };
+  const head = extractSuppressionDirectives(headSource ?? "", filePath);
+  if (!head.ok) return { ok: false, suppressions: [], detail: `head ${filePath}: ${head.detail}` };
+  const available = new Map();
+  for (const directive of base.directives) {
+    available.set(directive.signature, (available.get(directive.signature) ?? 0) + 1);
+  }
+  const suppressions = [];
+  for (const directive of head.directives) {
+    const remaining = available.get(directive.signature) ?? 0;
+    if (remaining > 0) {
+      available.set(directive.signature, remaining - 1);
+      continue;
+    }
+    suppressions.push({ path: filePath, line: directive.line, text: directive.text });
+  }
+  return { ok: true, suppressions, detail: "" };
+}
+
+function decodeSourceBytes(bytes) {
+  if (bytes.includes(0)) return { ok: false, detail: "NUL byte" };
+  try {
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes).replace(/\r\n/g, "\n");
+    return { ok: true, text };
+  } catch (err) {
+    return { ok: false, detail: err.message };
+  }
+}
+
+function readGitBlob(repo, treeish, filePath) {
+  const result = spawnSync("git", ["cat-file", "-p", `${treeish}:${filePath}`], {
+    cwd: repo,
+    maxBuffer: 64 * 1024 * 1024,
+    windowsHide: true,
+  });
+  if (result.status !== 0) {
+    const detail = `${result.stderr?.toString?.() || "git cat-file failed"}`.slice(0, 500);
+    return { ok: false, detail };
+  }
+  return { ok: true, bytes: result.stdout };
+}
+
+function suppressionDelta(repo, fromSha, toTree, names, unified) {
+  if (names.ambiguous || unified.ambiguous) return { suppressions: [], ambiguous: null };
+  const basePathByHead = new Map(names.renames.map((rename) => [rename.to, rename.from]));
+  const paths = [...new Set([...unified.changed.keys(), ...names.added])].sort();
+  const suppressions = [];
+  for (const filePath of paths) {
+    if (!scriptKindForPath(filePath)) continue;
+    const renamedFrom = basePathByHead.get(filePath);
+    const basePath = renamedFrom ?? (names.added.has(filePath) ? null : filePath);
+    let baseSource = "";
+    if (basePath) {
+      const blob = readGitBlob(repo, fromSha, basePath);
+      if (!blob.ok) return { suppressions: [], ambiguous: `suppression blob missing ${fromSha}:${basePath}: ${blob.detail}` };
+      const decoded = decodeSourceBytes(blob.bytes);
+      if (!decoded.ok) return { suppressions: [], ambiguous: `suppression decode failed ${basePath}: ${decoded.detail}` };
+      baseSource = decoded.text;
+    }
+    const headBlob = readGitBlob(repo, toTree, filePath);
+    if (!headBlob.ok) return { suppressions: [], ambiguous: `suppression blob missing ${toTree}:${filePath}: ${headBlob.detail}` };
+    const headDecoded = decodeSourceBytes(headBlob.bytes);
+    if (!headDecoded.ok) return { suppressions: [], ambiguous: `suppression decode failed ${filePath}: ${headDecoded.detail}` };
+    const delta = diffSuppressionDirectives(baseSource, headDecoded.text, filePath);
+    if (!delta.ok) return { suppressions: [], ambiguous: delta.detail };
+    suppressions.push(...delta.suppressions);
+  }
+  return { suppressions, ambiguous: null };
 }
 
 function findingIdentity(finding) {
@@ -623,7 +1018,7 @@ export function gateDecision({ analyzerEqual, toolFailure, comparisons }) {
   if (!analyzerEqual) return { ok: false, reason: "analyzer_changed" };
   if (toolFailure) return { ok: false, reason: toolFailure };
   const failed = comparisons.find((comparison) => !comparison.ok);
-  if (failed) return { ok: false, reason: failed.reason };
+  if (failed) return { ok: false, reason: failed.reason, detail: failed.detail || "" };
   return { ok: true, reason: null };
 }
 
@@ -651,6 +1046,36 @@ export function renderSummary(report) {
     const i18nRow = i18n[name];
     lines.push(`| ${name} | ${show(lintRow?.exitCode)} | ${show(lintRow?.errorCount)} | ${show(lintRow?.warningCount)} | ${show(i18nRow?.exitCode)} | ${show(i18nRow?.failureCount)} | ${show(i18nRow?.callsiteCount)} |`);
   }
+  const hidden = report.counts?.lintNoInlineConfig;
+  const suppressedCounts = report.counts?.suppressed;
+  if (hidden) {
+    lines.push(
+      "",
+      "## Inline-disabled lane",
+      "",
+      "Same pinned ESLint, config, and files, with inline configuration disabled (`--no-inline-config`). Historical totals in this lane are recorded and are not an allowance.",
+      "",
+      "| Tree | Exit | Errors | Warnings |",
+      "| --- | ---: | ---: | ---: |",
+    );
+    for (const name of ["base", "head", "merge"]) {
+      const row = hidden[name];
+      lines.push(`| ${name} | ${show(row?.exitCode)} | ${show(row?.errorCount)} | ${show(row?.warningCount)} |`);
+    }
+  }
+  if (suppressedCounts) {
+    lines.push(
+      "",
+      "## Ordinary suppressedMessages",
+      "",
+      "| Tree | Exit | Suppressed findings |",
+      "| --- | ---: | ---: |",
+    );
+    for (const name of ["base", "head", "merge"]) {
+      const row = suppressedCounts[name];
+      lines.push(`| ${name} | ${show(row?.exitCode)} | ${show(row?.count)} |`);
+    }
+  }
   lines.push(
     "",
     "## Comparison of the proposed merge against the immutable base",
@@ -661,6 +1086,12 @@ export function renderSummary(report) {
     `- Clean-namespace violations: ${report.cleanNamespaceViolations.length}`,
     `- Suppressions added: ${report.suppressions.length}`,
   );
+  if (report.lanes?.noInlineConfig?.merge) {
+    lines.push(`- Inline-disabled new diagnostics: ${report.lanes.noInlineConfig.merge.newCount}`);
+  }
+  if (report.lanes?.suppressedMessages?.merge) {
+    lines.push(`- Newly suppressed findings: ${report.lanes.suppressedMessages.merge.newCount}`);
+  }
   if (report.analyzer && report.analyzer.differences?.length) {
     lines.push(`- Analyzer differences: ${report.analyzer.differences.join(", ")}`);
   }
@@ -729,13 +1160,14 @@ export function readTreeDiff(repo, fromSha, toTree) {
   const patch = gitOk(repo, ["diff", "--find-renames=80%", "--unified=0", "--no-color", "--no-ext-diff", fromSha, toTree], "git_diff_failed");
   const names = parseNameStatusZ(status);
   const unified = parseUnifiedDiff(patch);
+  const suppressions = suppressionDelta(repo, fromSha, toTree, names, unified);
   return {
     renames: names.renames,
     added: names.added,
     deleted: names.deleted,
     changed: unified.changed,
-    suppressions: unified.suppressions,
-    ambiguous: names.ambiguous || unified.ambiguous,
+    suppressions: suppressions.suppressions,
+    ambiguous: names.ambiguous || unified.ambiguous || suppressions.ambiguous,
   };
 }
 
@@ -770,17 +1202,152 @@ function copyScript(source, dest) {
   `;
 }
 
-function runEslint(repo, snapshot, outFile) {
+function runEslint(repo, snapshot, outFile, allowInlineConfig) {
   const bin = join(repo, "node_modules", "eslint", "bin", "eslint.js");
   if (!existsSync(bin)) throw new GateError("node_modules_missing", bin);
-  const result = spawnSync(process.execPath, [
+  const args = [
     bin,
     "--config", join(repo, "eslint.config.js"),
     "--format", "json",
     "--output-file", outFile,
-    ".",
-  ], { cwd: snapshot, encoding: "utf8", maxBuffer: 20 * 1024 * 1024, windowsHide: true });
+  ];
+  if (allowInlineConfig === false) args.push("--no-inline-config");
+  args.push(".");
+  const result = spawnSync(process.execPath, args, {
+    cwd: snapshot,
+    encoding: "utf8",
+    maxBuffer: 20 * 1024 * 1024,
+    windowsHide: true,
+  });
   return { exitCode: result.status, stderr: result.stderr || "", error: result.error };
+}
+
+function backfillEslintSources(payload) {
+  if (!Array.isArray(payload)) return;
+  for (const file of payload) {
+    if (!file || typeof file.filePath !== "string") continue;
+    const pending = (Array.isArray(file.messages) && file.messages.length > 0)
+      || (Array.isArray(file.suppressedMessages) && file.suppressedMessages.length > 0);
+    if (!pending || (typeof file.source === "string" && file.source.length > 0)) continue;
+    if (!existsSync(file.filePath)) throw new GateError("eslint_source_missing", file.filePath);
+    file.source = readFileSync(file.filePath, "utf8");
+  }
+}
+
+export function collectEslintLane(repo, snapshot, outFile, allowInlineConfig) {
+  const eslint = runEslint(repo, snapshot, outFile, allowInlineConfig);
+  if (eslint.error || eslint.exitCode == null) {
+    throw new GateError("eslint_spawn_failed", eslint.error?.message || "eslint produced no exit code");
+  }
+  const empty = {
+    exitCode: eslint.exitCode,
+    allowInlineConfig,
+    findings: [],
+    suppressedFindings: [],
+    errorCount: null,
+    warningCount: null,
+    fileCount: null,
+    suppressedCount: null,
+  };
+  let eslintJson;
+  try {
+    eslintJson = readJsonIfPresent(outFile);
+  } catch (err) {
+    return { ...empty, fatal: err.reason, detail: err.detail };
+  }
+  if (eslintJson == null) {
+    return { ...empty, fatal: "eslint_report_missing", detail: (eslint.stderr || "").slice(0, 2000) };
+  }
+  try {
+    backfillEslintSources(eslintJson);
+  } catch (err) {
+    return { ...empty, fatal: err.reason, detail: err.detail };
+  }
+  const normalized = normalizeEslintReport(eslintJson);
+  const eslintClass = classifyEslintRun(eslint.exitCode, normalized);
+  if (!normalized.ok || !eslintClass.ok) {
+    return {
+      ...empty,
+      fatal: eslintClass.ok ? normalized.reason : eslintClass.reason,
+      detail: normalized.path || "",
+      fileCount: normalized.fileCount ?? null,
+    };
+  }
+  let findings;
+  let suppressedFindings;
+  try {
+    findings = relativizeFindings(normalized.findings, snapshot);
+    suppressedFindings = relativizeFindings(normalized.suppressedFindings, snapshot);
+  } catch (err) {
+    return { ...empty, fatal: err.reason, detail: err.detail };
+  }
+  const lane = {
+    ...empty,
+    fatal: null,
+    findings,
+    suppressedFindings,
+    errorCount: normalized.errorCount,
+    warningCount: normalized.warningCount,
+    fileCount: normalized.fileCount,
+    suppressedCount: suppressedFindings.length,
+  };
+  if (normalized.fileCount === 0 && existsSync(join(snapshot, "src"))) {
+    return { ...lane, fatal: "eslint_report_empty" };
+  }
+  return lane;
+}
+
+export function collectEslintPair(repo, snapshot, reportDir, label) {
+  mkdirSync(reportDir, { recursive: true });
+  const ordinary = collectEslintLane(repo, snapshot, join(reportDir, `eslint-${label}.json`), true);
+  const noInlineConfig = collectEslintLane(
+    repo,
+    snapshot,
+    join(reportDir, `eslint-${label}-no-inline-config.json`),
+    false,
+  );
+  let fatal = ordinary.fatal || noInlineConfig.fatal;
+  let detail = ordinary.detail || noInlineConfig.detail || "";
+  if (!fatal && ordinary.fileCount !== noInlineConfig.fileCount) {
+    fatal = "eslint_lane_file_mismatch";
+    detail = `${label} ordinary=${ordinary.fileCount} noInlineConfig=${noInlineConfig.fileCount}`;
+  }
+  return { fatal, detail, ordinary, noInlineConfig };
+}
+
+export function compareLintLanes({
+  baseOrdinary,
+  headOrdinary,
+  baseNoInline,
+  headNoInline,
+  baseSuppressed,
+  headSuppressed,
+  diff,
+  cleanPathGlobs,
+  cleanNamespaces,
+}) {
+  const shared = { cleanPathGlobs, cleanNamespaces };
+  const findingsDiff = { ...diff, suppressions: [] };
+  return {
+    ordinary: compareDiagnostics({
+      baseFindings: baseOrdinary,
+      headFindings: headOrdinary,
+      diff,
+      ...shared,
+    }),
+    noInlineConfig: compareDiagnostics({
+      baseFindings: baseNoInline,
+      headFindings: headNoInline,
+      diff: findingsDiff,
+      ...shared,
+    }),
+    suppressedMessages: compareDiagnostics({
+      baseFindings: baseSuppressed,
+      headFindings: headSuppressed,
+      diff: findingsDiff,
+      ...shared,
+    }),
+  };
 }
 
 function runI18n(snapshot, outFile) {
@@ -809,39 +1376,53 @@ function prepareSnapshot(dir, checkerBytes) {
   writeFileSync(destination, checkerBytes);
 }
 
+function lintLaneCounts(lane) {
+  if (!lane) return null;
+  return {
+    exitCode: lane.exitCode ?? null,
+    errorCount: lane.errorCount ?? null,
+    warningCount: lane.warningCount ?? null,
+    fileCount: lane.fileCount ?? null,
+    allowInlineConfig: lane.allowInlineConfig ?? null,
+  };
+}
+
+function suppressedLaneCounts(lane) {
+  if (!lane) return null;
+  return {
+    exitCode: lane.exitCode ?? null,
+    count: lane.suppressedCount ?? null,
+    field: "suppressedMessages",
+    allowInlineConfig: true,
+  };
+}
+
+function countsFromPair(pair) {
+  return {
+    lint: lintLaneCounts(pair.ordinary),
+    lintNoInlineConfig: lintLaneCounts(pair.noInlineConfig),
+    suppressed: suppressedLaneCounts(pair.ordinary),
+  };
+}
+
 function collectToolRun(repo, snapshot, label, reportDir) {
-  const eslintFile = join(reportDir, `eslint-${label}.json`);
   const i18nFile = join(reportDir, `i18n-${label}.json`);
-  process.stderr.write(`eslint ${label}\n`);
-  const eslint = runEslint(repo, snapshot, eslintFile);
-  if (eslint.error) throw new GateError("eslint_spawn_failed", eslint.error.message);
-  let eslintJson = null;
-  try {
-    eslintJson = readJsonIfPresent(eslintFile);
-  } catch (err) {
-    return { fatal: err.reason, detail: err.detail, eslintExit: eslint.exitCode };
-  }
-  if (eslintJson == null) {
-    return { fatal: "eslint_report_missing", detail: (eslint.stderr || "").slice(0, 2000), eslintExit: eslint.exitCode };
-  }
-  for (const file of eslintJson) {
-    if (file && (!file.source || file.source.length === 0) && file.messages?.length && file.filePath && existsSync(file.filePath)) {
-      file.source = readFileSync(file.filePath, "utf8");
-    }
-  }
-  const normalized = normalizeEslintReport(eslintJson);
-  const eslintClass = classifyEslintRun(eslint.exitCode, normalized);
-  let findings = [];
-  if (normalized.ok) {
-    try {
-      findings = relativizeFindings(normalized.findings, snapshot);
-    } catch (err) {
-      return { fatal: err.reason, detail: err.detail, eslintExit: eslint.exitCode };
-    }
-  }
+  process.stderr.write(`eslint ${label} ordinary + no-inline-config\n`);
+  const pair = collectEslintPair(repo, snapshot, reportDir, label);
   process.stderr.write(
-    `eslint ${label} exit=${eslint.exitCode} errors=${normalized.ok ? normalized.errorCount : "n/a"} warnings=${normalized.ok ? normalized.warningCount : "n/a"}\n`,
+    `eslint ${label} ordinary exit=${pair.ordinary.exitCode} errors=${pair.ordinary.errorCount ?? "n/a"} warnings=${pair.ordinary.warningCount ?? "n/a"} suppressed=${pair.ordinary.suppressedCount ?? "n/a"}\n`,
   );
+  process.stderr.write(
+    `eslint ${label} no-inline-config exit=${pair.noInlineConfig.exitCode} errors=${pair.noInlineConfig.errorCount ?? "n/a"} warnings=${pair.noInlineConfig.warningCount ?? "n/a"}\n`,
+  );
+  if (pair.fatal) {
+    return {
+      fatal: pair.fatal,
+      detail: pair.detail,
+      eslintExit: pair.ordinary.exitCode,
+      counts: countsFromPair(pair),
+    };
+  }
   process.stderr.write(`i18n ${label}\n`);
   const i18n = runI18n(snapshot, i18nFile);
   if (i18n.error) throw new GateError("i18n_spawn_failed", i18n.error.message);
@@ -849,30 +1430,28 @@ function collectToolRun(repo, snapshot, label, reportDir) {
   try {
     i18nJson = readJsonIfPresent(i18nFile);
   } catch (err) {
-    return { fatal: err.reason, detail: err.detail, eslintExit: eslint.exitCode };
+    return { fatal: err.reason, detail: err.detail, eslintExit: pair.ordinary.exitCode, counts: countsFromPair(pair) };
   }
   if (i18nJson == null) {
-    return { fatal: "i18n_report_missing", detail: (i18n.stderr || "").slice(0, 2000), eslintExit: eslint.exitCode };
+    return {
+      fatal: "i18n_report_missing",
+      detail: (i18n.stderr || "").slice(0, 2000),
+      eslintExit: pair.ordinary.exitCode,
+      counts: countsFromPair(pair),
+    };
   }
   const i18nClass = classifyI18nRun(i18n.exitCode, i18nJson);
   process.stderr.write(
     `i18n ${label} exit=${i18n.exitCode} aggregate=${Number.isInteger(i18nJson.failureCount) ? i18nJson.failureCount : "n/a"} callsites=${Array.isArray(i18nJson.findings) ? i18nJson.findings.length : "n/a"}\n`,
   );
-  const fatal = !eslintClass.ok ? eslintClass.reason : (!i18nClass.ok ? i18nClass.reason : null);
-  if (normalized.ok && normalized.fileCount === 0 && existsSync(join(snapshot, "src"))) {
-    return { fatal: "eslint_report_empty", eslintExit: eslint.exitCode };
-  }
   return {
-    fatal,
-    lintFindings: findings,
+    fatal: i18nClass.ok ? null : i18nClass.reason,
+    lintFindings: pair.ordinary.findings,
+    lintNoInlineFindings: pair.noInlineConfig.findings,
+    suppressedFindings: pair.ordinary.suppressedFindings,
     i18nFindings: i18nClass.ok ? i18nToFindings(i18nJson) : [],
     counts: {
-      lint: {
-        exitCode: eslint.exitCode,
-        errorCount: normalized.ok ? normalized.errorCount : null,
-        warningCount: normalized.ok ? normalized.warningCount : null,
-        fileCount: normalized.ok ? normalized.fileCount : null,
-      },
+      ...countsFromPair(pair),
       i18n: {
         exitCode: i18n.exitCode,
         failureCount: Number.isInteger(i18nJson.failureCount) ? i18nJson.failureCount : null,
@@ -902,8 +1481,14 @@ function writeReport(reportPath, summaryPath, report) {
 function emptyCounts() {
   return {
     lint: { base: null, head: null, merge: null },
+    lintNoInlineConfig: { base: null, head: null, merge: null },
+    suppressed: { base: null, head: null, merge: null },
     i18n: { base: null, head: null, merge: null },
   };
+}
+
+function hashedLane(body) {
+  return { ...body, sha256: sha256Text(JSON.stringify(body)) };
 }
 
 function normalizedTreeReport(run) {
@@ -912,6 +1497,7 @@ function normalizedTreeReport(run) {
     errorCount: run.counts?.lint?.errorCount ?? null,
     warningCount: run.counts?.lint?.warningCount ?? null,
     fileCount: run.counts?.lint?.fileCount ?? null,
+    allowInlineConfig: true,
     findings: run.lintFindings ?? [],
   };
   const i18n = {
@@ -920,17 +1506,72 @@ function normalizedTreeReport(run) {
     callsiteCount: run.counts?.i18n?.callsiteCount ?? null,
     findings: run.i18nFindings ?? [],
   };
+  const report = {
+    lint: hashedLane(lint),
+    i18n: hashedLane(i18n),
+  };
+  if (Object.prototype.hasOwnProperty.call(run, "lintNoInlineFindings")) {
+    const hidden = {
+      exitCode: run.counts?.lintNoInlineConfig?.exitCode ?? null,
+      errorCount: run.counts?.lintNoInlineConfig?.errorCount ?? null,
+      warningCount: run.counts?.lintNoInlineConfig?.warningCount ?? null,
+      fileCount: run.counts?.lintNoInlineConfig?.fileCount ?? null,
+      allowInlineConfig: false,
+      cli: "--no-inline-config",
+      findings: run.lintNoInlineFindings ?? [],
+    };
+    report.lintNoInlineConfig = hashedLane(hidden);
+  }
+  if (Object.prototype.hasOwnProperty.call(run, "suppressedFindings")) {
+    const suppressed = {
+      exitCode: run.counts?.suppressed?.exitCode ?? null,
+      count: run.counts?.suppressed?.count ?? null,
+      field: "suppressedMessages",
+      allowInlineConfig: true,
+      findings: run.suppressedFindings ?? [],
+    };
+    report.suppressedMessages = hashedLane(suppressed);
+  }
+  return report;
+}
+
+function laneSummary(comparison) {
+  if (!comparison) return null;
   return {
-    lint: { ...lint, sha256: sha256Text(JSON.stringify(lint)) },
-    i18n: { ...i18n, sha256: sha256Text(JSON.stringify(i18n)) },
+    ok: comparison.ok,
+    reason: comparison.reason ?? null,
+    newCount: comparison.newDiagnostics.length,
+    resolvedCount: comparison.resolvedDiagnostics.length,
+    featurePathViolations: comparison.featurePathViolations.length,
+    cleanNamespaceViolations: comparison.cleanNamespaceViolations.length,
+    suppressions: comparison.suppressions,
+    newDiagnostics: comparison.newDiagnostics,
   };
 }
 
-export function applyComparisonOutcome(report, { baseRun, headRun, mergeRun, mergeComparison, headComparison }) {
+export function applyComparisonOutcome(report, {
+  baseRun,
+  headRun,
+  mergeRun,
+  mergeComparison,
+  headComparison,
+  mergeNoInlineComparison = null,
+  headNoInlineComparison = null,
+  mergeSuppressedComparison = null,
+  headSuppressedComparison = null,
+}) {
+  const lanes = [
+    mergeComparison,
+    headComparison,
+    mergeNoInlineComparison,
+    headNoInlineComparison,
+    mergeSuppressedComparison,
+    headSuppressedComparison,
+  ].filter(Boolean);
   const decision = gateDecision({
     analyzerEqual: true,
     toolFailure: null,
-    comparisons: [mergeComparison, headComparison],
+    comparisons: lanes,
   });
   report.ok = decision.ok;
   report.reason = decision.reason;
@@ -952,6 +1593,35 @@ export function applyComparisonOutcome(report, { baseRun, headRun, mergeRun, mer
     report.cleanNamespaceViolations = headComparison.cleanNamespaceViolations;
     report.suppressions = headComparison.suppressions;
   }
+  if (mergeComparison.ok && headComparison.ok) {
+    const later = [
+      mergeNoInlineComparison,
+      headNoInlineComparison,
+      mergeSuppressedComparison,
+      headSuppressedComparison,
+    ].find((comparison) => comparison && !comparison.ok);
+    if (later) {
+      report.newDiagnostics = later.newDiagnostics;
+      report.newCount = later.newDiagnostics.length;
+      report.resolvedDiagnostics = later.resolvedDiagnostics;
+      report.resolvedCount = later.resolvedDiagnostics.length;
+      report.featurePathViolations = later.featurePathViolations;
+      report.cleanNamespaceViolations = later.cleanNamespaceViolations;
+    }
+  }
+  if (mergeNoInlineComparison || mergeSuppressedComparison) {
+    report.lanes = {
+      ordinary: { merge: laneSummary(mergeComparison), head: laneSummary(headComparison) },
+      noInlineConfig: {
+        merge: laneSummary(mergeNoInlineComparison),
+        head: laneSummary(headNoInlineComparison),
+      },
+      suppressedMessages: {
+        merge: laneSummary(mergeSuppressedComparison),
+        head: laneSummary(headSuppressedComparison),
+      },
+    };
+  }
   report.findings = {
     base: { lint: baseRun.lintFindings.length, i18n: baseRun.i18nFindings.length },
     head: { lint: headRun.lintFindings.length, i18n: headRun.i18nFindings.length },
@@ -962,7 +1632,7 @@ export function applyComparisonOutcome(report, { baseRun, headRun, mergeRun, mer
     head: normalizedTreeReport(headRun),
     merge: normalizedTreeReport(mergeRun),
   };
-  if (!decision.ok) throw new GateError(decision.reason);
+  if (!decision.ok) throw new GateError(decision.reason, decision.detail || "");
   return report;
 }
 
@@ -995,6 +1665,8 @@ export async function runRegression(options) {
     cleanNamespaceViolations: [],
     suppressions: [],
     analyzer: null,
+    analysis: null,
+    lanes: null,
   };
   try {
     const reportRelative = relative(owned, reportPath);
@@ -1007,6 +1679,13 @@ export async function runRegression(options) {
     baseReport.headSha = baseline.headSha;
     baseReport.baselineMode = baseline.mode;
     baseReport.mainShaPinned = baseline.mainShaPinned;
+    baseReport.analysis = {
+      recomputedBase: baseline.baseSha,
+      ordinary: { allowInlineConfig: true, findings: "messages" },
+      noInlineConfig: { allowInlineConfig: false, cli: "--no-inline-config", findings: "messages" },
+      suppressedMessages: { allowInlineConfig: true, field: "suppressedMessages" },
+      historicalCounts: "Inline-disabled totals may exceed ordinary totals. That difference is not a baseline shift or an allowance.",
+    };
     gitOk(repo, ["cat-file", "-e", `${baseline.baseSha}^{commit}`], "invalid_base");
     gitOk(repo, ["cat-file", "-e", `${baseline.headSha}^{commit}`], "invalid_head");
     const merge = runGit(repo, ["merge-tree", "--write-tree", baseline.baseSha, baseline.headSha]);
@@ -1055,6 +1734,8 @@ export async function runRegression(options) {
       eslintConfigSha256: sha256Text(readFileSync(join(repo, "eslint.config.js"))),
       i18nCheckerSha256: sha256Text(executedChecker),
     };
+    baseReport.analysis.eslintVersion = analyzer.hashes.installedEslintVersion;
+    baseReport.analysis.eslintConfigSha256 = baseReport.analyzer.eslintConfigSha256;
     if (!analyzer.equal) throw new GateError("analyzer_changed", analyzer.differences.join(","));
     prepareSnapshot(baseDir, executedChecker);
     prepareSnapshot(mergeDir, executedChecker);
@@ -1064,26 +1745,42 @@ export async function runRegression(options) {
     const baseRun = collectToolRun(repo, baseDir, "base", reportDir);
     const mergeRun = collectToolRun(repo, mergeDir, "merge", reportDir);
     const headRun = headDir === mergeDir ? mergeRun : collectToolRun(repo, headDir, "head", reportDir);
-    baseReport.counts.lint.base = baseRun.counts?.lint ?? null;
-    baseReport.counts.lint.merge = mergeRun.counts?.lint ?? null;
-    baseReport.counts.lint.head = headRun.counts?.lint ?? null;
-    baseReport.counts.i18n.base = baseRun.counts?.i18n ?? null;
-    baseReport.counts.i18n.merge = mergeRun.counts?.i18n ?? null;
-    baseReport.counts.i18n.head = headRun.counts?.i18n ?? null;
+    const assignCounts = (name, run) => {
+      baseReport.counts.lint[name] = run.counts?.lint ?? null;
+      baseReport.counts.lintNoInlineConfig[name] = run.counts?.lintNoInlineConfig ?? null;
+      baseReport.counts.suppressed[name] = run.counts?.suppressed ?? null;
+      baseReport.counts.i18n[name] = run.counts?.i18n ?? null;
+    };
+    assignCounts("base", baseRun);
+    assignCounts("merge", mergeRun);
+    assignCounts("head", headRun);
     const toolFailure = baseRun.fatal || mergeRun.fatal || headRun.fatal;
     if (toolFailure) throw new GateError(toolFailure, baseRun.detail || mergeRun.detail || headRun.detail || "");
+    for (const [name, run] of [["base", baseRun], ["merge", mergeRun], ["head", headRun]]) {
+      if (!Array.isArray(run.lintFindings) || !Array.isArray(run.lintNoInlineFindings) || !Array.isArray(run.suppressedFindings)) {
+        throw new GateError("eslint_report_incomplete", `${name} lane missing`);
+      }
+    }
     const manifest = loadCleanManifest(readFileSync(join(SCRIPT_DIR, "feature-clean-manifest.json"), "utf8"));
     const mergeDiff = readTreeDiff(repo, baseline.baseSha, mergeTree);
-    const mergeComparison = compareDiagnostics({
-      baseFindings: [...baseRun.lintFindings, ...baseRun.i18nFindings],
-      headFindings: [...mergeRun.lintFindings, ...mergeRun.i18nFindings],
+    const mergeLanes = compareLintLanes({
+      baseOrdinary: [...baseRun.lintFindings, ...baseRun.i18nFindings],
+      headOrdinary: [...mergeRun.lintFindings, ...mergeRun.i18nFindings],
+      baseNoInline: baseRun.lintNoInlineFindings,
+      headNoInline: mergeRun.lintNoInlineFindings,
+      baseSuppressed: baseRun.suppressedFindings,
+      headSuppressed: mergeRun.suppressedFindings,
       diff: mergeDiff,
       cleanPathGlobs: manifest.cleanPathGlobs,
       cleanNamespaces: manifest.cleanI18nNamespaces,
     });
-    const headComparison = headDir === mergeDir ? mergeComparison : compareDiagnostics({
-      baseFindings: [...baseRun.lintFindings, ...baseRun.i18nFindings],
-      headFindings: [...headRun.lintFindings, ...headRun.i18nFindings],
+    const headLanes = headDir === mergeDir ? mergeLanes : compareLintLanes({
+      baseOrdinary: [...baseRun.lintFindings, ...baseRun.i18nFindings],
+      headOrdinary: [...headRun.lintFindings, ...headRun.i18nFindings],
+      baseNoInline: baseRun.lintNoInlineFindings,
+      headNoInline: headRun.lintNoInlineFindings,
+      baseSuppressed: baseRun.suppressedFindings,
+      headSuppressed: headRun.suppressedFindings,
       diff: readTreeDiff(repo, baseline.baseSha, baseline.headSha),
       cleanPathGlobs: manifest.cleanPathGlobs,
       cleanNamespaces: manifest.cleanI18nNamespaces,
@@ -1092,8 +1789,12 @@ export async function runRegression(options) {
       baseRun,
       headRun,
       mergeRun,
-      mergeComparison,
-      headComparison,
+      mergeComparison: mergeLanes.ordinary,
+      headComparison: headLanes.ordinary,
+      mergeNoInlineComparison: mergeLanes.noInlineConfig,
+      headNoInlineComparison: headLanes.noInlineConfig,
+      mergeSuppressedComparison: mergeLanes.suppressedMessages,
+      headSuppressedComparison: headLanes.suppressedMessages,
     });
     return baseReport;
   } catch (err) {
