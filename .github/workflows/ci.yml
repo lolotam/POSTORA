@@ -1,0 +1,238 @@
+# CI for pull requests and pushes to main or feat/*.
+#
+# Node is pinned to 22.14.0 because that release ships npm 10.9.2, the
+# resolver this lockfile was repaired against. A newer npm can demand
+# additional optional peer entries and fail `npm ci` again.
+#
+# `npm run typecheck`, `npm test`, and `npm run build` must finish green.
+# Lint and Arabic i18n are historical debt. The job "Lint/i18n: no regressions"
+# compares the immutable base with the head and the proposed merge. Exit 0
+# means no new diagnostics. It does not mean the full checkers exited 0, and
+# it does not use continue-on-error. Counts stay in the job summary and the
+# uploaded report.
+#
+# Deno runs the hermetic service-proxy and MCP suites only, with the historical
+# `--no-check` exemption left on that existing command. New pure modules are
+# typechecked without that exemption. The outlier module and its test are both
+# required on this branch; missing either one fails the job. Capabilities SQL
+# is the Postgres job's instagram_capabilities suite, not a Deno suite. Later
+# collector tests are added when those files exist. There is no blanket --no-check.
+#
+# SQL uses scripts/db-harness.sh against a disposable supabase/postgres
+# container (baseline snapshot plus newer migrations). History is not replayed.
+#
+# Playwright is not a job. e2e/seed-test-data.ts needs a service-role key,
+# and e2e/fixtures/auth.ts swallows login failure. The UI slice adds a mocked
+# fixture-backed journey later. This workflow does not add real-user auth.
+
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - "feat/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  node:
+    name: npm run ${{ matrix.script }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        script:
+          - typecheck
+          - test
+          - build
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js 22.14.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22.14.0"
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Run ${{ matrix.script }}
+        run: npm run ${{ matrix.script }}
+
+  lint-i18n-regression:
+    name: "Lint/i18n: no regressions"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout immutable head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: true
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+
+      - name: Fetch the immutable base history
+        run: |
+          set -euo pipefail
+          cleanup() {
+            git config --unset-all "http.https://github.com/.extraheader" || true
+          }
+          trap cleanup EXIT
+          if [ "${GITHUB_EVENT_NAME}" = "pull_request" ]; then
+            git fetch --no-tags origin "${{ github.event.pull_request.base.ref }}"
+            git cat-file -e "${{ github.event.pull_request.base.sha }}^{commit}"
+            git cat-file -e "${{ github.event.pull_request.head.sha }}^{commit}"
+          else
+            git fetch --no-tags origin main
+          fi
+
+      - name: Setup Node.js 22.14.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22.14.0"
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Test the regression comparator
+        run: node --test scripts/ci/lint-i18n-regression.test.mjs
+
+      - name: Compare lint and i18n against the immutable base
+        run: |
+          set -euo pipefail
+          report="${RUNNER_TEMP}/lint-i18n-regression.json"
+          summary="${RUNNER_TEMP}/lint-i18n-summary.md"
+          if [ "${GITHUB_EVENT_NAME}" = "pull_request" ]; then
+            node scripts/ci/lint-i18n-regression.mjs \
+              --event pull_request \
+              --base "${{ github.event.pull_request.base.sha }}" \
+              --head "${{ github.event.pull_request.head.sha }}" \
+              --report "${report}" \
+              --summary "${summary}"
+          else
+            node scripts/ci/lint-i18n-regression.mjs \
+              --event push \
+              --ref "${GITHUB_REF}" \
+              --head "${GITHUB_SHA}" \
+              --before "${{ github.event.before }}" \
+              --main-ref origin/main \
+              --report "${report}" \
+              --summary "${summary}"
+          fi
+
+      - name: Publish job summary
+        if: always()
+        run: |
+          set -euo pipefail
+          summary="${RUNNER_TEMP}/lint-i18n-summary.md"
+          if [ ! -f "${summary}" ]; then
+            echo "Lint/i18n regression report was not produced. This is a failure, not a pass." >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          cat "${summary}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload regression report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: lint-i18n-regression
+          path: ${{ runner.temp }}/lint-i18n-regression.json
+          if-no-files-found: error
+
+  deno-proxy-mcp:
+    name: Deno service proxy and MCP
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Deno 2.9.8
+        uses: denoland/setup-deno@22d081ff2d3a40755e97629de92e3bcbfa7cf2ed # v2.0.5
+        with:
+          deno-version: "2.9.8"
+
+      - name: Test service proxy and MCP
+        run: >
+          deno test
+          --allow-read=supabase/functions/mcp
+          --no-check
+          --node-modules-dir=none
+          supabase/functions/mcp
+          supabase/functions/n8n-api/serviceProxy.test.ts
+
+      - name: Typecheck and test the outlier module
+        run: |
+          set -euo pipefail
+          module="supabase/functions/_shared/outlierScore.ts"
+          test_file="supabase/functions/_shared/outlierScore.test.ts"
+          if [ ! -f "${module}" ] || [ ! -f "${test_file}" ]; then
+            echo "outlierScore.ts and outlierScore.test.ts are both required. Missing either file is a failure."
+            exit 1
+          fi
+          echo "deno check --node-modules-dir=none ${module}"
+          deno check --node-modules-dir=none "${module}"
+          echo "deno test ${test_file} with typecheck enabled"
+          deno test --allow-read=supabase/functions/_shared --node-modules-dir=none "${test_file}"
+
+  db-harness:
+    name: Postgres baseline plus delta
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Start disposable Postgres
+        run: |
+          docker run -d --name pg-harness \
+            -e POSTGRES_PASSWORD=postgres \
+            -v "${GITHUB_WORKSPACE}:/repo" \
+            supabase/postgres:17.6.1.158 \
+            -c cron.database_name=partner_api_harness \
+            -c shared_preload_libraries=pg_cron,pg_net
+          status="none"
+          for _ in $(seq 1 90); do
+            status="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' pg-harness 2>/dev/null || echo missing)"
+            if [ "$status" = "healthy" ]; then
+              exit 0
+            fi
+            if [ "$status" = "unhealthy" ]; then
+              docker logs pg-harness
+              exit 1
+            fi
+            sleep 5
+          done
+          docker logs pg-harness
+          if [ "$status" = "none" ] && docker exec pg-harness pg_isready -U supabase_admin -d postgres; then
+            exit 0
+          fi
+          exit 1
+
+      - name: Run db-harness
+        run: |
+          docker exec -e HARNESS_DB_NAME=partner_api_harness pg-harness \
+            bash -c "cd /repo && bash scripts/db-harness.sh 'postgres://supabase_admin:postgres@localhost:5432/postgres'"
+
+      - name: Show Postgres logs on failure
+        if: failure()
+        run: docker logs pg-harness
