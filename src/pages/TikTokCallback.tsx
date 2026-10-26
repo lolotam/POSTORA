@@ -6,6 +6,17 @@ import { useToast } from "@/hooks/use-toast";
 import { Loader2, CheckCircle, XCircle, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
+// The return path the signed state carried, when it is on this site.
+function sameSiteReturnPath(returnTo: unknown): string | null {
+  if (typeof returnTo !== "string") return null;
+  try {
+    const url = new URL(returnTo);
+    return url.origin === window.location.origin ? `${url.pathname}${url.search}` : null;
+  } catch {
+    return null;
+  }
+}
+
 export default function TikTokCallback() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
@@ -140,7 +151,7 @@ export default function TikTokCallback() {
           // Redirect to /tiktok-auth if demo flow, otherwise /profiles
           const isDemoReturn = sessionStorage.getItem("tiktok_demo_return") === "true";
           sessionStorage.removeItem("tiktok_demo_return");
-          setTimeout(() => navigate(isDemoReturn ? "/tiktok-auth" : "/profiles"), 1500);
+          setTimeout(() => navigate(isDemoReturn ? "/tiktok-auth" : sameSiteReturnPath(data.return_to) ?? "/profiles"), 1500);
         } else {
           console.error("[TikTok Callback] Connection failed:", data?.error);
           
