@@ -144,6 +144,7 @@ SUITES=(
   facebook_user_credential_bindings.sql
   instagram_tracking_schema.sql
   instagram_durable_collection_jobs.sql
+  meta_pending_selection_secret_boundary.sql
 )
 # These fixtures build their own focused schema and apply the migration under
 # test. They must never run against the restored production-shaped database.

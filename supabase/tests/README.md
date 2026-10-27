@@ -34,6 +34,7 @@ below). So the harness does not replay history. It:
 | `facebook_user_credential_bindings.sql` | protected User-token authority, ownership, account connection versions, detach/rebind fencing and grant surface; rolls back |
 | `instagram_tracking_schema.sql` | tracking quotas, snapshots, retention and soft removal; rolls back |
 | `instagram_durable_collection_jobs.sql` | durable claims, context and generation fences, checkpoints, completion truth and lease expiry; rolls back |
+| `meta_pending_selection_secret_boundary.sql` | pending OAuth stash browser denial and service-owned picker query compatibility; rolls back |
 
 The harness's `SUITES` array is the complete executable inventory; the table
 above highlights selected suites, not the entire list. No existing suite may
