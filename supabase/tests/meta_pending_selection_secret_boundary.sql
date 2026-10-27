@@ -239,7 +239,16 @@ BEGIN
   END LOOP;
 
   -- The table shape is unchanged: same columns, same order, same types, same
-  -- nullability, same "has a default" answer.
+  -- nullability, same "has a default" answer -- with ONE addition. Migration
+  -- 20261027110000_meta_oauth_attempt_lifecycle.sql appends a nullable
+  -- `meta_oauth_attempt_id uuid` to each pending table, with no default and no
+  -- change to any pre-existing column, so legacy rows keep their exact shape
+  -- and legacy queries keep their exact result shape.
+  --
+  -- The appended column is matched exactly like every other column: type,
+  -- nullability and the "has a default" answer are all part of the expected
+  -- string. It is not filtered out of the comparison and the comparison is not
+  -- weakened to tolerate its absence.
   SELECT string_agg(
            column_name || ':' || data_type || ':' || is_nullable || ':' ||
            (column_default IS NOT NULL)::text,
@@ -248,8 +257,8 @@ BEGIN
     FROM information_schema.columns
    WHERE table_schema = 'public'
      AND table_name = 'oauth_pending_facebook_selections';
-  ASSERT shape = 'id:uuid:NO:true,user_id:uuid:NO:false,social_profile_id:uuid:YES:false,target_platform:text:NO:false,provider_token:text:NO:false,pages_json:jsonb:NO:true,ig_standalone_json:jsonb:NO:true,created_at:timestamp with time zone:NO:true,expires_at:timestamp with time zone:NO:true',
-    format('S1 the Facebook pending table shape is unchanged (got %s)', shape);
+  ASSERT shape = 'id:uuid:NO:true,user_id:uuid:NO:false,social_profile_id:uuid:YES:false,target_platform:text:NO:false,provider_token:text:NO:false,pages_json:jsonb:NO:true,ig_standalone_json:jsonb:NO:true,created_at:timestamp with time zone:NO:true,expires_at:timestamp with time zone:NO:true,meta_oauth_attempt_id:uuid:YES:false',
+    format('S1 the Facebook pending table shape is unchanged apart from the appended nullable attempt reference (got %s)', shape);
 
   SELECT string_agg(
            column_name || ':' || data_type || ':' || is_nullable || ':' ||
@@ -259,8 +268,8 @@ BEGIN
     FROM information_schema.columns
    WHERE table_schema = 'public'
      AND table_name = 'oauth_pending_instagram_selections';
-  ASSERT shape = 'id:uuid:NO:true,user_id:uuid:NO:false,social_profile_id:uuid:YES:false,ig_candidates_json:jsonb:NO:true,long_lived_token:text:NO:false,expires_in:integer:NO:true,created_at:timestamp with time zone:NO:true,expires_at:timestamp with time zone:NO:true',
-    format('S1 the Instagram pending table shape is unchanged (got %s)', shape);
+  ASSERT shape = 'id:uuid:NO:true,user_id:uuid:NO:false,social_profile_id:uuid:YES:false,ig_candidates_json:jsonb:NO:true,long_lived_token:text:NO:false,expires_in:integer:NO:true,created_at:timestamp with time zone:NO:true,expires_at:timestamp with time zone:NO:true,meta_oauth_attempt_id:uuid:YES:false',
+    format('S1 the Instagram pending table shape is unchanged apart from the appended nullable attempt reference (got %s)', shape);
 
   -- The indexes and constraints are still there.
   ASSERT EXISTS (

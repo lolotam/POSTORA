@@ -3669,6 +3669,192 @@ export type Database = {
         }
         Relationships: []
       }
+      meta_oauth_attempt_receipts: {
+        Row: {
+          attempt_id: string
+          capability_generation: number | null
+          committed_at: string
+          companion_social_account_id: string | null
+          connection_version: number | null
+          credential_id: string | null
+          credential_revision: number | null
+          facebook_page_id: string | null
+          facebook_user_id: string | null
+          id: string
+          instagram_user_id: string | null
+          login_kind: string | null
+          platform: string
+          platform_user_id: string
+          receipt: Json
+          selection_key: string
+          social_account_id: string | null
+          user_id: string
+        }
+        Insert: {
+          attempt_id: string
+          capability_generation?: number | null
+          committed_at?: string
+          companion_social_account_id?: string | null
+          connection_version?: number | null
+          credential_id?: string | null
+          credential_revision?: number | null
+          facebook_page_id?: string | null
+          facebook_user_id?: string | null
+          id?: string
+          instagram_user_id?: string | null
+          login_kind?: string | null
+          platform: string
+          platform_user_id: string
+          receipt: Json
+          selection_key: string
+          social_account_id?: string | null
+          user_id: string
+        }
+        Update: {
+          attempt_id?: string
+          capability_generation?: number | null
+          committed_at?: string
+          companion_social_account_id?: string | null
+          connection_version?: number | null
+          credential_id?: string | null
+          credential_revision?: number | null
+          facebook_page_id?: string | null
+          facebook_user_id?: string | null
+          id?: string
+          instagram_user_id?: string | null
+          login_kind?: string | null
+          platform?: string
+          platform_user_id?: string
+          receipt?: Json
+          selection_key?: string
+          social_account_id?: string | null
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "meta_oauth_attempt_receipts_account_fkey"
+            columns: ["social_account_id", "user_id"]
+            isOneToOne: false
+            referencedRelation: "social_accounts"
+            referencedColumns: ["id", "user_id"]
+          },
+          {
+            foreignKeyName: "meta_oauth_attempt_receipts_attempt_fkey"
+            columns: ["attempt_id", "user_id"]
+            isOneToOne: false
+            referencedRelation: "meta_oauth_attempts"
+            referencedColumns: ["id", "user_id"]
+          },
+          {
+            foreignKeyName: "meta_oauth_attempt_receipts_companion_fkey"
+            columns: ["companion_social_account_id", "user_id"]
+            isOneToOne: false
+            referencedRelation: "social_accounts"
+            referencedColumns: ["id", "user_id"]
+          },
+        ]
+      }
+      meta_oauth_attempts: {
+        Row: {
+          authority_progression: Json
+          callback_deadline: string
+          capture: Json
+          capture_version: number
+          captured_at: string
+          claim_token: string | null
+          claimed_at: string | null
+          created_at: string
+          flow: string
+          id: string
+          intended_social_profile_id: string | null
+          intent: string
+          linked_target_social_account_id: string | null
+          nonce_digest: string
+          pending_selection_id: string | null
+          picker_deadline: string
+          source_social_account_id: string | null
+          status: string
+          target_social_account_id: string | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          authority_progression?: Json
+          callback_deadline: string
+          capture: Json
+          capture_version?: number
+          captured_at: string
+          claim_token?: string | null
+          claimed_at?: string | null
+          created_at?: string
+          flow: string
+          id?: string
+          intended_social_profile_id?: string | null
+          intent: string
+          linked_target_social_account_id?: string | null
+          nonce_digest: string
+          pending_selection_id?: string | null
+          picker_deadline: string
+          source_social_account_id?: string | null
+          status?: string
+          target_social_account_id?: string | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          authority_progression?: Json
+          callback_deadline?: string
+          capture?: Json
+          capture_version?: number
+          captured_at?: string
+          claim_token?: string | null
+          claimed_at?: string | null
+          created_at?: string
+          flow?: string
+          id?: string
+          intended_social_profile_id?: string | null
+          intent?: string
+          linked_target_social_account_id?: string | null
+          nonce_digest?: string
+          pending_selection_id?: string | null
+          picker_deadline?: string
+          source_social_account_id?: string | null
+          status?: string
+          target_social_account_id?: string | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "meta_oauth_attempts_linked_target_fkey"
+            columns: ["linked_target_social_account_id", "user_id"]
+            isOneToOne: false
+            referencedRelation: "social_accounts"
+            referencedColumns: ["id", "user_id"]
+          },
+          {
+            foreignKeyName: "meta_oauth_attempts_profile_fkey"
+            columns: ["intended_social_profile_id", "user_id"]
+            isOneToOne: false
+            referencedRelation: "social_profiles"
+            referencedColumns: ["id", "user_id"]
+          },
+          {
+            foreignKeyName: "meta_oauth_attempts_source_fkey"
+            columns: ["source_social_account_id", "user_id"]
+            isOneToOne: false
+            referencedRelation: "social_accounts"
+            referencedColumns: ["id", "user_id"]
+          },
+          {
+            foreignKeyName: "meta_oauth_attempts_target_fkey"
+            columns: ["target_social_account_id", "user_id"]
+            isOneToOne: false
+            referencedRelation: "social_accounts"
+            referencedColumns: ["id", "user_id"]
+          },
+        ]
+      }
       node_execution_logs: {
         Row: {
           completed_at: string | null
@@ -3830,6 +4016,7 @@ export type Database = {
           expires_at: string
           id: string
           ig_standalone_json: Json
+          meta_oauth_attempt_id: string | null
           pages_json: Json
           provider_token: string
           social_profile_id: string | null
@@ -3841,6 +4028,7 @@ export type Database = {
           expires_at?: string
           id?: string
           ig_standalone_json?: Json
+          meta_oauth_attempt_id?: string | null
           pages_json?: Json
           provider_token: string
           social_profile_id?: string | null
@@ -3852,13 +4040,22 @@ export type Database = {
           expires_at?: string
           id?: string
           ig_standalone_json?: Json
+          meta_oauth_attempt_id?: string | null
           pages_json?: Json
           provider_token?: string
           social_profile_id?: string | null
           target_platform?: string
           user_id?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "oauth_pending_facebook_selections_attempt_fkey"
+            columns: ["meta_oauth_attempt_id", "user_id"]
+            isOneToOne: false
+            referencedRelation: "meta_oauth_attempts"
+            referencedColumns: ["id", "user_id"]
+          },
+        ]
       }
       oauth_pending_instagram_selections: {
         Row: {
@@ -3868,6 +4065,7 @@ export type Database = {
           id: string
           ig_candidates_json: Json
           long_lived_token: string
+          meta_oauth_attempt_id: string | null
           social_profile_id: string | null
           user_id: string
         }
@@ -3878,6 +4076,7 @@ export type Database = {
           id?: string
           ig_candidates_json?: Json
           long_lived_token: string
+          meta_oauth_attempt_id?: string | null
           social_profile_id?: string | null
           user_id: string
         }
@@ -3888,10 +4087,19 @@ export type Database = {
           id?: string
           ig_candidates_json?: Json
           long_lived_token?: string
+          meta_oauth_attempt_id?: string | null
           social_profile_id?: string | null
           user_id?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "oauth_pending_instagram_selections_attempt_fkey"
+            columns: ["meta_oauth_attempt_id", "user_id"]
+            isOneToOne: false
+            referencedRelation: "meta_oauth_attempts"
+            referencedColumns: ["id", "user_id"]
+          },
+        ]
       }
       oauth_redirect_requests: {
         Row: {
@@ -10028,6 +10236,30 @@ export type Database = {
       }
       list_whatsapp_setup_move_candidates: {
         Args: { p_to: string }
+        Returns: Json
+      }
+      begin_meta_oauth_attempt: {
+        Args: { p_user_id: string; p_payload: Json }
+        Returns: Json
+      }
+      claim_meta_oauth_callback: {
+        Args: { p_user_id: string; p_payload: Json }
+        Returns: Json
+      }
+      complete_meta_oauth_callback: {
+        Args: { p_user_id: string; p_payload: Json }
+        Returns: Json
+      }
+      commit_meta_oauth_selection: {
+        Args: { p_user_id: string; p_payload: Json }
+        Returns: Json
+      }
+      read_meta_oauth_attempt: {
+        Args: { p_user_id: string; p_pending_selection_id: string }
+        Returns: Json
+      }
+      purge_expired_meta_oauth_pending: {
+        Args: { p_limit: number }
         Returns: Json
       }
     }
