@@ -1,5 +1,21 @@
 import { verifyCronAuth } from "../_shared/cron-auth.ts";
 import {
+  appSettingReadResult,
+  configurationClientError,
+  createAppSettingLookup,
+  isLifecycleRefusal,
+  LIFECYCLE_PREREQUISITE_CODE,
+  LIFECYCLE_PREREQUISITE_MESSAGE,
+  LIFECYCLE_PREREQUISITE_STATUS,
+  loadFacebookCredentialSettings,
+  type FacebookCredentialMode,
+} from "../_shared/facebookCredentialMode.ts";
+import {
+  isProtectedMetaRefreshPlatform,
+  refreshTripwirePorts,
+  settleMetaRefreshAttempt,
+} from "./protectedMetaRefresh.ts";
+import {
   accountCanAttemptRefresh,
   metaRefreshStrategy,
   metaTokenTooYoungToRefresh,
@@ -74,6 +90,7 @@ interface RefreshResult {
   userId?: string;
   status: 'refreshed' | 'error' | 'failed' | 'skipped' | 'needs_reauth' | 'already_refreshed' | 'cooldown';
   error?: string;
+  error_code?: string;
   avatarRefreshed?: boolean;
 }
 
@@ -314,12 +331,36 @@ async function handleRefreshSuccess(
 }
 
 // Handle failed token refresh - increment failures and potentially mark as needs_reauth
-async function handleRefreshFailure(
-  supabaseAdmin: AnySupabase,
-  account: SocialAccountWithDetails,
+interface RefreshFailureOutcome {
+  message: string;
+  failureCount: number;
+  needsReauth: boolean;
+  shouldAlert: boolean;
+  failureIsTransient: boolean;
+  isPermanentError: boolean;
+}
+
+/** The account fields the escalation decision reads. */
+interface RefreshFailureAccount {
+  platform: string;
+  refresh_token?: string | null;
+  failure_count?: number;
+  last_alert_sent_at?: string;
+  alerts_snoozed?: boolean;
+}
+
+/**
+ * The escalation decision for one failed legacy refresh.
+ *
+ * The legacy path records this outcome with the partner failure RPC.
+ * Protected Meta refresh never reaches this function. It refuses before any
+ * failure write, reauthorization event, or alert.
+ */
+function computeRefreshFailureOutcome(
+  account: RefreshFailureAccount,
   errorMessage: string,
   providerError?: MetaProviderError,
-): Promise<{ needsReauth: boolean; shouldAlert: boolean }> {
+): RefreshFailureOutcome {
   const failureIsTransient = providerError?.transient === true;
   const currentFailureCount = nextFailureCount(account.failure_count || 0, providerError);
   const isPermanentError = isPermanentAuthError(errorMessage) || errorMessage.includes('Token limit exceeded');
@@ -327,10 +368,45 @@ async function handleRefreshFailure(
     failureCount: currentFailureCount,
     maxFailures: MAX_FAILURES_BEFORE_REAUTH,
     isPermanentMessage: isPermanentError,
-    canAttemptRefresh: accountCanAttemptRefresh(account),
+    canAttemptRefresh: accountCanAttemptRefresh({
+      platform: account.platform,
+      refresh_token: account.refresh_token ?? null,
+    }),
     providerError,
   });
-  
+
+  // Check alert cooldown (24 hours)
+  const now = new Date();
+  const lastAlertSentAt = account.last_alert_sent_at ? new Date(account.last_alert_sent_at) : null;
+  const shouldAlert = !account.alerts_snoozed && (
+    !lastAlertSentAt ||
+    (now.getTime() - lastAlertSentAt.getTime()) > ALERT_COOLDOWN_MS
+  );
+
+  return {
+    message: errorMessage,
+    failureCount: currentFailureCount,
+    needsReauth,
+    shouldAlert,
+    failureIsTransient,
+    isPermanentError,
+  };
+}
+
+async function handleRefreshFailure(
+  supabaseAdmin: AnySupabase,
+  account: SocialAccountWithDetails,
+  errorMessage: string,
+  providerError?: MetaProviderError,
+): Promise<{ needsReauth: boolean; shouldAlert: boolean }> {
+  const {
+    failureCount: currentFailureCount,
+    needsReauth,
+    shouldAlert,
+    failureIsTransient,
+    isPermanentError,
+  } = computeRefreshFailureOutcome(account, errorMessage, providerError);
+
   // Log detailed info for debugging
   console.log(`[refresh-failure] Account ${account.id} (${account.platform}):`, {
     error: errorMessage,
@@ -340,14 +416,6 @@ async function handleRefreshFailure(
     platform_username: account.platform_username,
     token_expires_at: account.token_expires_at,
   });
-
-  // Check alert cooldown (24 hours)
-  const now = new Date();
-  const lastAlertSentAt = account.last_alert_sent_at ? new Date(account.last_alert_sent_at) : null;
-  const shouldAlert = !account.alerts_snoozed && (
-    !lastAlertSentAt || 
-    (now.getTime() - lastAlertSentAt.getTime()) > ALERT_COOLDOWN_MS
-  );
 
   if (failureIsTransient) {
     // Recorded so the error is visible, but the count is deliberately left where it was.
@@ -362,6 +430,7 @@ async function handleRefreshFailure(
   // event. The occurrence id carries the transition timestamp because an
   // account can be flipped, repaired, and flipped again -- the second flip
   // is a new occurrence, not a duplicate.
+  const now = new Date();
   const { data: reauthResult, error: reauthError } = await supabaseAdmin
     .rpc('partner_record_refresh_failure', {
       p_account_id: account.id,
@@ -427,8 +496,14 @@ async function probeComposioYouTubeAccount(
 async function refreshSingleAccount(
   supabaseAdmin: AnySupabase,
   account: SocialAccountWithDetails,
-  _force: boolean = false
+  _force: boolean = false,
+  protectedContext?: ProtectedRefreshContext,
 ): Promise<RefreshResult> {
+  if (protectedContext?.mode === "protected") {
+    const refusal = await protectedRefreshRefusal(protectedContext.mode, account, "manual");
+    if (refusal) return refusal;
+  }
+
   const oldRefreshToken = account.refresh_token;
 
   const composioProbe = await probeComposioYouTubeAccount(supabaseAdmin, account);
@@ -673,6 +748,63 @@ async function refreshSingleAccount(
  *    bearer token — this stack has shipped without CRON_SECRET before);
  *  - a signed-in admin, via their Supabase JWT, for the admin "Refresh tokens" button.
  */
+/**
+ * Server-controlled credential mode.
+ *
+ * Legacy mode keeps the existing refresh behaviour and does not touch the
+ * protected credential schema. Protected Facebook and Instagram refreshes
+ * refuse before HTTP and before any health, attempt, alert, or event write.
+ */
+interface ProtectedRefreshContext {
+  mode: FacebookCredentialMode;
+}
+
+async function resolveProtectedRefreshContext(
+  supabaseAdmin: AnySupabase,
+): Promise<ProtectedRefreshContext> {
+  const { credentialMode } = await loadFacebookCredentialSettings(
+    createAppSettingLookup(async (key) => {
+      const { data, error } = await supabaseAdmin
+        .from('app_settings')
+        .select('value')
+        .eq('key', key)
+        .maybeSingle();
+      return appSettingReadResult(data, error);
+    }),
+  );
+  return { mode: credentialMode };
+}
+
+async function protectedRefreshRefusal(
+  mode: FacebookCredentialMode,
+  account: { id: string; platform: string },
+  trigger: "scheduled" | "manual",
+): Promise<RefreshResult | null> {
+  if (mode !== "protected" || !isProtectedMetaRefreshPlatform(account.platform)) return null;
+  const settled = await settleMetaRefreshAttempt({
+    mode,
+    platform: account.platform,
+    trigger,
+    ports: refreshTripwirePorts(),
+    legacy: async () => {
+      throw new Error("legacy refresh invoked");
+    },
+    onLegacyFailure: async () => {
+      throw new Error("legacy refresh failure handler invoked");
+    },
+  });
+  if (!isLifecycleRefusal(settled)) {
+    throw new Error("protected refresh returned no refusal");
+  }
+  return {
+    id: account.id,
+    platform: account.platform,
+    status: "skipped",
+    error: settled.error,
+    error_code: settled.errorCode,
+  };
+}
+
 async function authorizeRefreshRequest(
   req: Request,
 ): Promise<{ ok: true; mode: 'cron' | 'admin' } | { ok: false; response: Response }> {
@@ -732,6 +864,13 @@ Deno.serve(async (req) => {
 
     const logger = createLogger(supabaseAdmin, 'refresh-tokens', 'token');
 
+    // Server-controlled credential mode. Legacy mode keeps the existing refresh
+    // behaviour; protected mode owns the Meta token and health writes.
+    const protectedContext = await resolveProtectedRefreshContext(supabaseAdmin);
+    if (protectedContext.mode === 'protected') {
+      console.log('[refresh-tokens] protected credential mode is active');
+    }
+
     // Parse request body for optional parameters
     let accountId: string | null = null;
     let accountIds: string[] = [];
@@ -767,8 +906,8 @@ Deno.serve(async (req) => {
         .single();
 
       if (fetchError || !account) {
-        console.error('Error fetching account for force refresh:', fetchError);
-        return errorResponse(fetchError?.message || 'Account not found');
+        console.error('[refresh-tokens] account read failed', { event: 'account_read_failed' });
+        return errorResponse('Account not found');
       }
 
       // Only mark the attempt. Clearing needs_reauth/failure_count here would declare
@@ -777,10 +916,25 @@ Deno.serve(async (req) => {
       // failure_count from the stale value, stays under MAX_FAILURES_BEFORE_REAUTH and
       // never restores the flag — leaving a genuinely dead account green.
       // handleRefreshSuccess is the only place that may clear these.
+      //
+      // Protected Facebook and Instagram refresh refuses before this marker.
+      const manualRefusal = await protectedRefreshRefusal(protectedContext.mode, account, "manual");
+      if (manualRefusal) {
+        manualRefusal.username = account.platform_username;
+        await logRefreshHistory(supabaseAdmin, [manualRefusal], 'force');
+        return jsonResponse({
+          ...manualRefusal,
+          message: 'Protected Meta refresh refused',
+          error_code: manualRefusal.error_code,
+          error: manualRefusal.error,
+          accountId,
+          refused: 1,
+        }, LIFECYCLE_PREREQUISITE_STATUS);
+      }
       await markRefreshAttempt(supabaseAdmin, accountId);
 
       // Attempt the refresh
-      const result = await refreshSingleAccount(supabaseAdmin, account as SocialAccountWithDetails, true);
+      const result = await refreshSingleAccount(supabaseAdmin, account as SocialAccountWithDetails, true, protectedContext);
       result.username = account.platform_username;
       
       // Log to history
@@ -807,8 +961,8 @@ Deno.serve(async (req) => {
         .eq('is_active', true);
 
       if (fetchError) {
-        console.error('Error fetching accounts for bulk force refresh:', fetchError);
-        return errorResponse(fetchError.message);
+        console.error('[refresh-tokens] account read failed', { event: 'account_read_failed' });
+        return errorResponse('Could not load accounts');
       }
 
       if (!accountsToRefresh || accountsToRefresh.length === 0) {
@@ -818,11 +972,17 @@ Deno.serve(async (req) => {
       const bulkResults: RefreshResult[] = [];
       
       for (const account of accountsToRefresh as SocialAccountWithDetails[]) {
-        // See the single-account path: only mark the attempt, never pre-clear health.
+        // Protected Facebook and Instagram refresh refuses before the attempt marker.
+        const manualRefusal = await protectedRefreshRefusal(protectedContext.mode, account, "manual");
+        if (manualRefusal) {
+          manualRefusal.username = account.platform_username;
+          bulkResults.push(manualRefusal);
+          continue;
+        }
         await markRefreshAttempt(supabaseAdmin, account.id);
 
         // Attempt the refresh
-        const result = await refreshSingleAccount(supabaseAdmin, account, true);
+        const result = await refreshSingleAccount(supabaseAdmin, account, true, protectedContext);
         result.username = account.platform_username;
         bulkResults.push(result);
       }
@@ -833,17 +993,23 @@ Deno.serve(async (req) => {
       const refreshed = bulkResults.filter(r => r.status === 'refreshed').length;
       const alreadyRefreshed = bulkResults.filter(r => r.status === 'already_refreshed').length;
       const failed = bulkResults.filter(r => r.status === 'failed' || r.status === 'error' || r.status === 'needs_reauth').length;
+      const refused = bulkResults.filter(r => r.error_code === LIFECYCLE_PREREQUISITE_CODE).length;
+      const allRefused = bulkResults.length > 0 && refused === bulkResults.length;
       
       await logger.info(`Bulk force refresh complete: ${refreshed} refreshed, ${alreadyRefreshed} already_refreshed, ${failed} failed`);
       
       return jsonResponse({
-        message: 'Bulk force refresh complete',
+        message: allRefused ? 'Protected Meta refresh refused' : 'Bulk force refresh complete',
+        ...(allRefused
+          ? { error_code: LIFECYCLE_PREREQUISITE_CODE, error: LIFECYCLE_PREREQUISITE_MESSAGE }
+          : {}),
         refreshed,
         alreadyRefreshed,
         failed,
+        ...(refused > 0 ? { refused } : {}),
         total: accountsToRefresh.length,
         results: bulkResults,
-      });
+      }, allRefused ? LIFECYCLE_PREREQUISITE_STATUS : 200);
     }
 
     // Log platform filter if provided
@@ -876,8 +1042,8 @@ Deno.serve(async (req) => {
     const { data: allAccounts, error: fetchError } = await query;
 
     if (fetchError) {
-      console.error('Error fetching accounts:', fetchError);
-      throw fetchError;
+      console.error('[refresh-tokens] account read failed', { event: 'account_read_failed' });
+      throw new Error('account_read_failed');
     }
 
     const platformsFilter = platforms.length > 0 ? ` for platforms [${platforms.join(', ')}]` : '';
@@ -917,6 +1083,7 @@ Deno.serve(async (req) => {
     console.log('Platforms needing refresh:', platformsNeedingRefresh);
 
     const results: RefreshResult[] = [];
+    const refusedAccountIds = new Set<string>();
     const accountsToAlert: SocialAccountWithDetails[] = [];
 
     // 57 accounts × 8s worst case is 456s against a 60s worker ceiling — a per-request
@@ -952,6 +1119,20 @@ Deno.serve(async (req) => {
         failure_count: account.failure_count || 0,
         refresh_window: platformConfig?.refreshWindowSeconds || 'default',
       });
+
+      // Protected Facebook and Instagram refresh refuses before cooldown handling,
+      // the no-token failure write, the attempt marker, provider HTTP, alerts,
+      // and reauthorization events.
+      const scheduledRefusal = await protectedRefreshRefusal(
+        protectedContext.mode,
+        account,
+        "scheduled",
+      );
+      if (scheduledRefusal) {
+        refusedAccountIds.add(account.id);
+        results.push(scheduledRefusal);
+        continue;
+      }
 
       // Check cooldown to prevent concurrent refresh attempts
       if (!adminTriggered && isWithinRefreshCooldown(account.last_refresh_attempt_at)) {
@@ -990,7 +1171,9 @@ Deno.serve(async (req) => {
         continue;
       }
 
-      // Mark refresh attempt before starting (prevents concurrent attempts)
+      // Mark refresh attempt before starting (prevents concurrent attempts).
+      // Protected Meta accounts already continued above, so this write is the
+      // legacy path only.
       await markRefreshAttempt(supabaseAdmin, account.id);
 
       // Store the old refresh token for optimistic concurrency
@@ -1228,6 +1411,8 @@ Deno.serve(async (req) => {
     const failed = results.filter(r => r.status === 'failed' || r.status === 'error').length;
     const skipped = results.filter(r => r.status === 'skipped').length;
     const markedNeedsReauth = results.filter(r => r.status === 'needs_reauth').length;
+    const refused = results.filter(r => r.error_code === LIFECYCLE_PREREQUISITE_CODE).length;
+    const allRefused = results.length > 0 && refused === results.length;
 
     // Log summary with enhanced stats
     await logger.info(`Token refresh complete: ${refreshed} refreshed, ${alreadyRefreshed} already_refreshed, ${cooldown} cooldown, ${failed} failed, ${skipped} skipped, ${markedNeedsReauth} needs_reauth`, {
@@ -1326,18 +1511,29 @@ Deno.serve(async (req) => {
         .select('id, platform, platform_username, token_expires_at, needs_reauth, is_active')
         .eq('is_active', true);
 
-      if (!healthError && allActiveAccounts && allActiveAccounts.length > 0) {
+      // Protected Facebook and Instagram have no lifecycle authority, so none
+      // of them belong in this population. That includes accounts the sweep
+      // never visited: needs_reauth, a platform filter, or the sweep budget.
+      // Legacy mode keeps the previous population. Non-Meta accounts still
+      // count, and a mixed sweep can still alert for them.
+      const healthAccounts = (allActiveAccounts ?? []).filter((account: { id: string; platform: string }) => {
+        if (protectedContext.mode === "protected" && isProtectedMetaRefreshPlatform(account.platform)) {
+          return false;
+        }
+        return !refusedAccountIds.has(account.id);
+      });
+      if (!healthError && healthAccounts.length > 0) {
         const now = new Date();
         
         // Calculate health: healthy = not expired and not needs_reauth
-        const healthyAccounts = allActiveAccounts.filter((account: { token_expires_at: string | null; needs_reauth: boolean }) => {
+        const healthyAccounts = healthAccounts.filter((account: { token_expires_at: string | null; needs_reauth: boolean }) => {
           if (account.needs_reauth) return false;
           if (!account.token_expires_at) return false;
           const expiryDate = new Date(account.token_expires_at);
           return expiryDate > now;
         });
 
-        const totalAccounts = allActiveAccounts.length;
+        const totalAccounts = healthAccounts.length;
         const healthyCount = healthyAccounts.length;
         const healthPercentage = Math.round((healthyCount / totalAccounts) * 100);
 
@@ -1351,14 +1547,14 @@ Deno.serve(async (req) => {
           console.log(`[health-alert] Health ${healthPercentage}% is below threshold ${HEALTH_THRESHOLD_PERCENT}%, sending admin alert`);
           
           // Group unhealthy accounts by status
-          const expiredAccounts = allActiveAccounts.filter((account: { token_expires_at: string | null; needs_reauth: boolean }) => {
+          const expiredAccounts = healthAccounts.filter((account: { token_expires_at: string | null; needs_reauth: boolean }) => {
             if (account.needs_reauth) return false;
             if (!account.token_expires_at) return true;
             const expiryDate = new Date(account.token_expires_at);
             return expiryDate <= now;
           });
           
-          const needsReauthAccounts = allActiveAccounts.filter((account: { needs_reauth: boolean }) => account.needs_reauth);
+          const needsReauthAccounts = healthAccounts.filter((account: { needs_reauth: boolean }) => account.needs_reauth);
 
           // Send health alert
           const healthAlertResponse = await fetch(
@@ -1396,22 +1592,32 @@ Deno.serve(async (req) => {
     }
 
     return jsonResponse({
-      message: 'Token refresh complete',
+      message: allRefused ? 'Protected Meta refresh refused' : 'Token refresh complete',
+      ...(allRefused
+        ? { error_code: LIFECYCLE_PREREQUISITE_CODE, error: LIFECYCLE_PREREQUISITE_MESSAGE }
+        : {}),
       refreshed,
       alreadyRefreshed,
       cooldown,
       failed,
       skipped,
       markedNeedsReauth,
+      ...(refused > 0 ? { refused } : {}),
       alertsSent: accountsToAlert.length,
       checked: allAccounts.length,
       processed: accountsNeedingRefresh.length,
       results
-    });
+    }, allRefused ? LIFECYCLE_PREREQUISITE_STATUS : 200);
 
   } catch (error: unknown) {
-    console.error('Error in refresh-tokens:', error);
-    const message = error instanceof Error ? error.message : 'Unknown error';
-    return errorResponse(message);
+    const config = configurationClientError(error);
+    if (config) {
+      console.error("[refresh-tokens] credential configuration refused", {
+        event: config.error_code,
+      });
+      return jsonResponse({ error_code: config.error_code, error: config.error }, config.status);
+    }
+    console.error("Error in refresh-tokens:", error instanceof Error ? error.name : "unknown");
+    return errorResponse("Token refresh failed");
   }
 });

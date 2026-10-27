@@ -1,6 +1,25 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { createLogger } from "../_shared/logging.ts";
 import {
+  appSettingReadResult,
+  configurationClientError,
+  createAppSettingLookup,
+  loadFacebookCredentialSettings,
+  type FacebookCredentialMode,
+} from "../_shared/facebookCredentialMode.ts";
+import {
+  CredentialStoreError,
+  createFacebookUserCredentialStore,
+  createInstagramAccountCapabilityStore,
+  createServiceRpcCaller,
+  credentialReadClientError,
+  type RpcCapableClient,
+} from "../_shared/facebookUserCredentialStore.ts";
+import {
+  resolveProtectedUserToken,
+  type ProtectedCredentialDeps,
+} from "../_shared/protectedFacebookCredentials.ts";
+import {
   getThreadsAccount,
   summarizeAccount,
   debugThreadsToken,
@@ -17,6 +36,21 @@ const corsHeaders = {
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const REQUEST_SOURCE = "threads-location-search";
+
+/**
+ * Where the Facebook Pages Search token comes from.
+ *
+ * Legacy mode keeps the browser-readable metadata copy and the Page token.
+ * Protected mode uses the owner-scoped protected authority and nothing else:
+ * a missing protected credential skips that account, and a failed protected
+ * read is reported instead of being degraded into an empty result.
+ */
+interface FacebookPageSearchCredentials {
+  mode: FacebookCredentialMode;
+  resolve: (
+    socialAccountId: string,
+  ) => Promise<{ token: string } | { missing: true }>;
+}
 
 interface PlaceResult {
   id: string;
@@ -49,9 +83,10 @@ async function searchFacebookPages(
   supabase: any,
   userId: string,
   query: string,
+  credentials: FacebookPageSearchCredentials,
 ): Promise<PlaceResult[]> {
   // Find a usable Facebook or Instagram account with a token
-  const { data: accounts } = await supabase
+  const { data: accounts, error: accountsError } = await supabase
     .from("social_accounts")
     .select("id, platform, access_token, account_metadata")
     .eq("user_id", userId)
@@ -59,11 +94,23 @@ async function searchFacebookPages(
     .eq("is_active", true)
     .order("connected_at", { ascending: false });
 
+  if (accountsError) {
+    console.error("[threads-location-search] account read failed", { event: "account_read_failed" });
+    throw new CredentialStoreError("read_failed", "the account read failed");
+  }
+
   if (!accounts || accounts.length === 0) return [];
 
   for (const acc of accounts) {
-    const userToken = acc.account_metadata?.user_token;
-    const tokensToTry = userToken ? [userToken, acc.access_token] : [acc.access_token];
+    const tokensToTry: string[] = [];
+    if (credentials.mode === "protected") {
+      const outcome = await credentials.resolve(acc.id);
+      if ("missing" in outcome) continue;
+      tokensToTry.push(outcome.token);
+    } else {
+      const userToken = acc.account_metadata?.user_token;
+      tokensToTry.push(...(userToken ? [userToken, acc.access_token] : [acc.access_token]));
+    }
 
     for (const token of tokensToTry) {
       if (!token) continue;
@@ -76,7 +123,10 @@ async function searchFacebookPages(
         const res = await fetch(url.toString());
         const data = await res.json().catch(() => ({}));
         if (data?.error) {
-          console.warn(`[threads-location-search] FB pages/search err: ${data.error.code} ${data.error.message}`);
+          console.warn("[threads-location-search] FB pages/search err", {
+            event: "provider_error",
+            error_code: data.error.code ?? "unknown",
+          });
           continue;
         }
         const rows = Array.isArray(data?.data) ? data.data.filter((p: any) => p.location) : [];
@@ -94,7 +144,10 @@ async function searchFacebookPages(
           }));
         }
       } catch (e) {
-        console.warn(`[threads-location-search] FB fallback fetch failed: ${(e as Error).message}`);
+        if (e instanceof CredentialStoreError) throw e;
+        console.warn("[threads-location-search] FB fallback fetch failed", {
+          event: "provider_fetch_failed",
+        });
       }
     }
   }
@@ -102,6 +155,41 @@ async function searchFacebookPages(
 }
 
 // ─── Nominatim fallback (last resort — produces non-tagable osm_ ids) ───
+async function resolveFacebookPageSearchCredentials(
+  client: RpcCapableClient,
+  userId: string,
+  mode: FacebookCredentialMode,
+): Promise<FacebookPageSearchCredentials> {
+  return {
+    mode,
+    resolve: async (socialAccountId: string) => {
+      const rpc = createServiceRpcCaller(client);
+      const deps: ProtectedCredentialDeps = {
+        credentials: createFacebookUserCredentialStore(rpc),
+        capabilities: createInstagramAccountCapabilityStore(rpc),
+      };
+      try {
+        const resolved = await resolveProtectedUserToken(deps, {
+          userId,
+          socialAccountId,
+        });
+        return { token: resolved.token };
+      } catch (error) {
+        if (error instanceof CredentialStoreError) {
+          const clientError = credentialReadClientError(error);
+          if (error.code === "not_found" || error.code === "refused") return { missing: true };
+          console.warn("[threads-location-search] protected credential unavailable", {
+            event: clientError.error_code,
+            account_id: socialAccountId,
+          });
+          throw error;
+        }
+        throw error;
+      }
+    },
+  };
+}
+
 async function searchNominatim(query: string): Promise<PlaceResult[]> {
   try {
     const url = new URL("https://nominatim.openstreetmap.org/search");
@@ -165,9 +253,26 @@ Deno.serve(async (req) => {
     }
 
     const account = await getThreadsAccount(supabase, userId);
+    // Server-controlled credential mode. Resolved before any protected-schema
+    // access, so legacy mode never touches the protected authority.
+    const { credentialMode } = await loadFacebookCredentialSettings(
+      createAppSettingLookup(async (key) => {
+        const { data, error } = await supabase
+          .from("app_settings")
+          .select("value")
+          .eq("key", key)
+          .maybeSingle();
+        return appSettingReadResult(data, error);
+      }),
+    );
+    const facebookSearchCredentials = await resolveFacebookPageSearchCredentials(
+      supabase,
+      userId,
+      credentialMode,
+    );
     if (!account?.access_token) {
       // No Threads account — but we can still return FB Pages so the composer is useful
-      const fbResults = await searchFacebookPages(supabase, userId, query);
+      const fbResults = await searchFacebookPages(supabase, userId, query, facebookSearchCredentials);
       if (fbResults.length > 0) {
         return ok({ results: fbResults, query, source: "facebook", fallback: true });
       }
@@ -240,7 +345,7 @@ Deno.serve(async (req) => {
     }
 
     // ─── Fallback 1: Facebook Pages Search (real Meta Page IDs — Threads can tag these) ───
-    const fbResults = await searchFacebookPages(supabase, userId, query);
+    const fbResults = await searchFacebookPages(supabase, userId, query, facebookSearchCredentials);
     if (fbResults.length > 0) {
       await logger.info("Threads location search — facebook fallback used", {
         event: "facebook_fallback",
@@ -271,13 +376,22 @@ Deno.serve(async (req) => {
         : "No locations found.",
     });
   } catch (error) {
-    const errMsg = (error as Error).message || "Location search failed";
+    const config = configurationClientError(error);
+    const credential = error instanceof CredentialStoreError ? credentialReadClientError(error) : null;
+    const safe = config ?? credential;
+    const message = safe?.error ?? "Location search failed.";
+    const errorCode = safe?.error_code ?? "LOCATION_SEARCH_FAILED";
     await logger.error("Threads location search — internal error", {
       event: "internal_error",
       platform: "threads",
       query,
-      error_message: errMsg,
+      error_code: errorCode,
     }, userId);
-    return structured({ reason: "unknown", message: errMsg, results: [] });
+    return structured({
+      reason: "unknown",
+      message,
+      error_code: errorCode,
+      results: [],
+    });
   }
 });

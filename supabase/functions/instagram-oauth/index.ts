@@ -13,6 +13,16 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { cacheAvatarToCdn } from "../_shared/avatar-cache.ts";
 import { authenticateCaller } from "../_shared/auth-helper.ts";
 import { createOAuthState, verifyOAuthState } from "../_shared/oauthState.ts";
+import {
+  appSettingReadResult,
+  configurationClientError,
+  createAppSettingLookup,
+  isLifecycleRefusal,
+} from "../_shared/facebookCredentialMode.ts";
+import {
+  beginOAuthRequest,
+  oauthTripwirePorts,
+} from "../facebook-oauth/protectedPageConnect.ts";
 
 import { restrictedCorsHeaders } from "../_shared/cors.ts";
 
@@ -282,6 +292,41 @@ Deno.serve(async (req) => {
       );
     }
 
+    // Direct Instagram login is an active writer. Protected mode refuses
+    // before the code exchange and before the account upsert.
+    try {
+      const settingsClient = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+      const decision = await beginOAuthRequest({
+        lookup: createAppSettingLookup(async (key) => {
+          const { data, error } = await settingsClient
+            .from("app_settings")
+            .select("value")
+            .eq("key", key)
+            .maybeSingle();
+          return appSettingReadResult(data, error);
+        }),
+        flow: "instagram_oauth",
+        action: "callback",
+        ports: oauthTripwirePorts(),
+        legacy: async () => "continue" as const,
+      });
+      if (isLifecycleRefusal(decision)) {
+        return Response.redirect(appendQuery(returnTo, { error: decision.errorCode }), 302);
+      }
+    } catch (error) {
+      const config = configurationClientError(error);
+      if (config) {
+        console.error("[instagram-oauth] credential configuration refused", {
+          event: config.error_code,
+        });
+        return Response.redirect(
+          appendQuery(returnTo, { error: "credential_configuration_unavailable" }),
+          302,
+        );
+      }
+      throw error;
+    }
+
     try {
       const result = await exchangeAndPersist(
         code,
@@ -333,6 +378,28 @@ Deno.serve(async (req) => {
   }
 
   try {
+    const settingsClient = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+    const decision = await beginOAuthRequest({
+      lookup: createAppSettingLookup(async (key) => {
+        const { data, error } = await settingsClient
+          .from("app_settings")
+          .select("value")
+          .eq("key", key)
+          .maybeSingle();
+        return appSettingReadResult(data, error);
+      }),
+      flow: "instagram_oauth",
+      action,
+      ports: oauthTripwirePorts(),
+      legacy: async () => "continue" as const,
+    });
+    if (isLifecycleRefusal(decision)) {
+      return jsonResponse(req, {
+        error_code: decision.errorCode,
+        error: decision.error,
+      }, decision.status);
+    }
+
     // -------------------- POST authorize -------------------------
     if (action === "authorize") {
       const social_profile_id = (body.social_profile_id as string | null | undefined) ?? null;
@@ -386,7 +453,17 @@ Deno.serve(async (req) => {
 
     return jsonResponse(req, { error: "Invalid action" }, 400);
   } catch (err) {
-    console.error("instagram-oauth POST failed:", err);
+    const config = configurationClientError(err);
+    if (config) {
+      console.error("[instagram-oauth] credential configuration refused", {
+        event: config.error_code,
+      });
+      return jsonResponse(req, {
+        error_code: config.error_code,
+        error: config.error,
+      }, config.status);
+    }
+    console.error("instagram-oauth POST failed:", err instanceof Error ? err.name : "unknown");
     return jsonResponse(req, { error: "Authentication failed. Please try again." }, 500);
   }
 });

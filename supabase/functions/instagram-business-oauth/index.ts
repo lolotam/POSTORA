@@ -15,6 +15,16 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { cacheAvatarToCdn } from "../_shared/avatar-cache.ts";
 import { authenticateCaller } from "../_shared/auth-helper.ts";
 import { createOAuthState, verifyOAuthState } from "../_shared/oauthState.ts";
+import {
+  appSettingReadResult,
+  configurationClientError,
+  createAppSettingLookup,
+  isLifecycleRefusal,
+} from "../_shared/facebookCredentialMode.ts";
+import {
+  beginOAuthRequest,
+  oauthTripwirePorts,
+} from "../facebook-oauth/protectedPageConnect.ts";
 
 import { restrictedCorsHeaders } from "../_shared/cors.ts";
 
@@ -131,9 +141,8 @@ async function exchangeAndListIg(
     // keep short-lived
   }
 
-  // Fetch the user's *granted* permission set so we can persist it on each
-  // social_account. Used by the messaging/comments UI to detect when a scope
-  // (e.g. `instagram_manage_messages`) was declined and prompt for reconnect.
+  // Fetch the user's granted permission set so each saved account records the
+  // scopes the messaging UI uses to detect a declined permission.
   let grantedScopes: string[] = [];
   try {
     const permUrl = `https://graph.facebook.com/${GRAPH_VERSION}/me/permissions?access_token=${encodeURIComponent(longLivedToken)}`;
@@ -145,7 +154,7 @@ async function exchangeAndListIg(
         .map((p: { permission: string }) => p.permission);
     }
   } catch (_err) {
-    // best-effort; leave empty so UI assumes nothing about granted scopes
+    // best-effort; leave empty so the UI does not invent a grant
   }
 
   const pages: FbPage[] = [];
@@ -283,6 +292,40 @@ Deno.serve(async (req) => {
       );
     }
 
+    // Refuse protected callbacks before code exchange and before the token stash.
+    try {
+      const settingsClient = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+      const decision = await beginOAuthRequest({
+        lookup: createAppSettingLookup(async (key) => {
+          const { data, error } = await settingsClient
+            .from("app_settings")
+            .select("value")
+            .eq("key", key)
+            .maybeSingle();
+          return appSettingReadResult(data, error);
+        }),
+        flow: "instagram_business_oauth",
+        action: "callback",
+        ports: oauthTripwirePorts(),
+        legacy: async () => "continue" as const,
+      });
+      if (isLifecycleRefusal(decision)) {
+        return Response.redirect(appendQuery(returnTo, { error: decision.errorCode }), 302);
+      }
+    } catch (error) {
+      const config = configurationClientError(error);
+      if (config) {
+        console.error("[instagram-business-oauth] credential configuration refused", {
+          event: config.error_code,
+        });
+        return Response.redirect(
+          appendQuery(returnTo, { error: "credential_configuration_unavailable" }),
+          302,
+        );
+      }
+      throw error;
+    }
+
     try {
       const result = await exchangeAndListIg(code);
       if (result.kind === "no_instagram") {
@@ -340,6 +383,44 @@ Deno.serve(async (req) => {
     user_id = auth.userId;
   } catch {
     return jsonResponse(req, { error: "Unauthorized" }, 401);
+  }
+
+  // Protected mode refuses authorize, callback completion, picker reads, and
+  // store before any provider call, token read, or account write.
+  try {
+    const settingsClient = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+    const decision = await beginOAuthRequest({
+      lookup: createAppSettingLookup(async (key) => {
+        const { data, error } = await settingsClient
+          .from("app_settings")
+          .select("value")
+          .eq("key", key)
+          .maybeSingle();
+        return appSettingReadResult(data, error);
+      }),
+      flow: "instagram_business_oauth",
+      action: action ?? "unknown",
+      ports: oauthTripwirePorts(),
+      legacy: async () => "continue" as const,
+    });
+    if (isLifecycleRefusal(decision)) {
+      return jsonResponse(req, {
+        error_code: decision.errorCode,
+        error: decision.error,
+      }, decision.status);
+    }
+  } catch (error) {
+    const config = configurationClientError(error);
+    if (config) {
+      console.error("[instagram-business-oauth] credential configuration refused", {
+        event: config.error_code,
+      });
+      return jsonResponse(req, {
+        error_code: config.error_code,
+        error: config.error,
+      }, config.status);
+    }
+    throw error;
   }
 
   // ---------------- get_pending_selection: load candidates for picker ----------
@@ -409,6 +490,7 @@ Deno.serve(async (req) => {
     if (!candidate) {
       return jsonResponse(req, { success: false, error: "Account not in selection" }, 404);
     }
+
 
     // Fetch the user's currently-granted scopes from Meta so we can persist the
     // actual permission set (used by messaging/comments UI to detect missing

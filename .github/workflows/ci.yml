@@ -11,13 +11,16 @@
 # it does not use continue-on-error. Counts stay in the job summary and the
 # uploaded report.
 #
-# Deno runs the hermetic service-proxy and MCP suites only, with the historical
+# Deno runs the hermetic service-proxy and MCP suites, with the historical
 # `--no-check` exemption left on that existing command. New pure modules are
 # typechecked without that exemption. The outlier module and its test are both
 # required on this branch; missing either one fails the job. Capabilities SQL
 # is the Postgres job's instagram_capabilities suite, not a Deno suite. Later
 # owner-report DTO is checked and tested independently as well. Later collector
-# tests are added when those files exist. There is no blanket --no-check.
+# tests are added when those files exist. Protected credential/refusal tests
+# are required as well. Their actual-handler harness bundles the checked-out
+# routes with synthetic infrastructure ports and needs the locked npm esbuild
+# dependency, but no runtime network permission. There is no blanket --no-check.
 #
 # SQL uses scripts/db-harness.sh against a disposable supabase/postgres
 # container (baseline snapshot plus newer migrations). History is not replayed.
@@ -170,6 +173,14 @@ jobs:
         with:
           deno-version: "2.9.8"
 
+      - name: Setup Node.js 22.14.0 for handler-test bundling
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22.14.0"
+
+      - name: Install locked handler-test dependencies
+        run: npm ci --no-audit --no-fund
+
       - name: Test service proxy and MCP
         run: >
           deno test
@@ -205,6 +216,43 @@ jobs:
           done
           deno check --node-modules-dir=none "${report_dir}/contracts.ts" "${report_dir}/assemble.ts" "${report_dir}/assemble.test.ts"
           deno test --node-modules-dir=none "${report_dir}/assemble.test.ts"
+
+      - name: Typecheck and test protected Meta credential readers and refusals
+        run: |
+          set -euo pipefail
+          tests=(
+            supabase/functions/_shared/facebookCredentialMode.test.ts
+            supabase/functions/_shared/facebookUserCredentialStore.test.ts
+            supabase/functions/_shared/protectedFacebookCredentials.test.ts
+            supabase/functions/facebook-oauth/protectedPageConnect.test.ts
+            supabase/functions/refresh-tokens/protectedMetaRefresh.test.ts
+            supabase/functions/instagram-oauth/protectedDirectRefusal.test.ts
+          )
+          for file in "${tests[@]}"; do
+            if [ ! -f "${file}" ]; then
+              echo "Protected Meta contract test is required: ${file}"
+              exit 1
+            fi
+          done
+          deno test --node-modules-dir=none "${tests[@]}"
+
+      - name: Typecheck and test actual protected Meta request handlers
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: |
+          set -euo pipefail
+          tests=(
+            supabase/functions/_shared/protectedRouteHandlers.test.ts
+            supabase/functions/_shared/protectedReaderRouteFailures.test.ts
+          )
+          for file in "${tests[@]}"; do
+            if [ ! -f "${file}" ]; then
+              echo "Protected Meta handler test is required: ${file}"
+              exit 1
+            fi
+          done
+          deno test --node-modules-dir=none \
+            --allow-read --allow-write --allow-env --allow-run "${tests[@]}"
 
   db-harness:
     name: Postgres baseline plus delta

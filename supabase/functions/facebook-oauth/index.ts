@@ -2,6 +2,16 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { cacheAvatarToCdn } from "../_shared/avatar-cache.ts";
 import { authenticateCaller } from "../_shared/auth-helper.ts";
 import { createOAuthState, verifyOAuthState } from "../_shared/oauthState.ts";
+import {
+  appSettingReadResult,
+  configurationClientError,
+  createAppSettingLookup,
+  isLifecycleRefusal,
+} from "../_shared/facebookCredentialMode.ts";
+import {
+  beginOAuthRequest,
+  oauthTripwirePorts,
+} from "./protectedPageConnect.ts";
 
 import { restrictedCorsHeaders } from "../_shared/cors.ts";
 
@@ -328,6 +338,7 @@ async function ensurePageAccessToken(page: FacebookPage, providerToken: string):
   return null;
 }
 
+
 function safeReturnTo(candidate: unknown): string {
   if (typeof candidate === "string") {
     try {
@@ -340,7 +351,8 @@ function safeReturnTo(candidate: unknown): string {
   return FB_DEFAULT_RETURN_TO;
 }
 
-function redirectResponse(req, url: string): Response {
+
+function redirectResponse(req: Request, url: string): Response {
   return new Response(null, { status: 302, headers: { ...restrictedCorsHeaders(req), Location: url } });
 }
 
@@ -416,6 +428,44 @@ async function handleFacebookGetCallback(req: Request): Promise<Response> {
     target.searchParams.set("connected", "facebook");
     target.searchParams.set("error", "service_configuration");
     return redirectResponse(req, target.toString());
+  }
+
+  // Protected mode has no atomic attempt/completion contract. Refuse before
+  // the code exchange and before the pending-selection stash.
+  const settingsClient = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+  try {
+    const decision = await beginOAuthRequest({
+      lookup: createAppSettingLookup(async (key) => {
+        const { data, error } = await settingsClient
+          .from("app_settings")
+          .select("value")
+          .eq("key", key)
+          .maybeSingle();
+        return appSettingReadResult(data, error);
+      }),
+      flow: "facebook_oauth",
+      action: "callback",
+      ports: oauthTripwirePorts(),
+      legacy: async () => "continue" as const,
+    });
+    if (isLifecycleRefusal(decision)) {
+      const target = new URL(returnTo);
+      target.searchParams.set("connected", "facebook");
+      target.searchParams.set("error", decision.errorCode);
+      return redirectResponse(req, target.toString());
+    }
+  } catch (error) {
+    const config = configurationClientError(error);
+    if (config) {
+      console.error("[facebook-oauth] credential configuration refused", {
+        event: config.error_code,
+      });
+      const target = new URL(returnTo);
+      target.searchParams.set("connected", "facebook");
+      target.searchParams.set("error", "credential_configuration_unavailable");
+      return redirectResponse(req, target.toString());
+    }
+    throw error;
   }
 
   // Exchange code → short-lived user token, then upgrade to long-lived.
@@ -575,6 +625,33 @@ Deno.serve(async (req) => {
 
 
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+
+    // Protected mode refuses every OAuth action before provider exchange,
+    // token stash, and account writes. Legacy mode continues below and does
+    // not touch the protected credential schema.
+    const decision = await beginOAuthRequest({
+      lookup: createAppSettingLookup(async (key) => {
+        const { data, error } = await supabase
+          .from("app_settings")
+          .select("value")
+          .eq("key", key)
+          .maybeSingle();
+        return appSettingReadResult(data, error);
+      }),
+      flow: "facebook_oauth",
+      action: String(action),
+      ports: oauthTripwirePorts(),
+      legacy: async () => "continue" as const,
+    });
+    if (isLifecycleRefusal(decision)) {
+      return new Response(JSON.stringify({
+        error_code: decision.errorCode,
+        error: decision.error,
+      }), {
+        status: decision.status,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
 
     // Check if Instagram via Facebook is enabled (used in multiple actions)
     const igViaFbEnabled = await isInstagramViaFacebookEnabled(supabase);
@@ -1087,7 +1164,20 @@ Deno.serve(async (req) => {
     });
 
   } catch (error: unknown) {
-    console.error("Facebook OAuth request failed:", error);
+    const config = configurationClientError(error);
+    if (config) {
+      console.error("[facebook-oauth] credential configuration refused", {
+        event: config.error_code,
+      });
+      return new Response(JSON.stringify({
+        error_code: config.error_code,
+        error: config.error,
+      }), {
+        status: config.status,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    console.error("Facebook OAuth request failed:", error instanceof Error ? error.name : "unknown");
     return new Response(JSON.stringify({ error: "Authentication failed. Please try again." }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
