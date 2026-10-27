@@ -36,6 +36,7 @@ below). So the harness does not replay history. It:
 | `instagram_durable_collection_jobs.sql` | durable claims, context and generation fences, checkpoints, completion truth and lease expiry; rolls back |
 | `meta_pending_selection_secret_boundary.sql` | pending OAuth stash browser denial and service-owned picker query compatibility; rolls back |
 | `meta_oauth_attempt_lifecycle.sql` | captured OAuth authority, callback claims, atomic selection and replay/ownership refusals; rolls back |
+| `meta_account_refresh_lifecycle.sql` | coherent Meta refresh captures, atomic direct/shared token writes and fenced health/event transitions; rolls back |
 
 The harness's `SUITES` array is the complete executable inventory; the table
 above highlights selected suites, not the entire list. No existing suite may
@@ -45,8 +46,9 @@ These fixtures are explicitly classified as **manual multi-session rehearsals**,
 not omitted test suites: `partner_api_race_fixture.sql`,
 `instagram_tracking_schema_race_fixture.sql`,
 `facebook_user_credential_bindings_race_fixture.sql`,
-`instagram_durable_collection_jobs_race_fixture.sql`, and
-`meta_oauth_attempt_lifecycle_race_fixture.sql`. Their headers document
+`instagram_durable_collection_jobs_race_fixture.sql`,
+`meta_oauth_attempt_lifecycle_race_fixture.sql`, and
+`meta_account_refresh_lifecycle_race_fixture.sql`. Their headers document
 setup, interleavings, expected outcomes and cleanup. A single-session harness
 pass does not prove concurrency. Run the applicable fixtures separately against
 the same isolated candidate and record both sessions' results. Never run them

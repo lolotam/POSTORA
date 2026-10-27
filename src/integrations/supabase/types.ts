@@ -3669,6 +3669,45 @@ export type Database = {
         }
         Relationships: []
       }
+      meta_account_refresh_captures: {
+        Row: {
+          capture: Json
+          capture_version: number
+          captured_at: string
+          created_at: string
+          expires_at: string
+          id: string
+          operation: string
+          status: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          capture: Json
+          capture_version?: number
+          captured_at: string
+          created_at?: string
+          expires_at: string
+          id?: string
+          operation: string
+          status?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          capture?: Json
+          capture_version?: number
+          captured_at?: string
+          created_at?: string
+          expires_at?: string
+          id?: string
+          operation?: string
+          status?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       meta_oauth_attempt_receipts: {
         Row: {
           attempt_id: string
@@ -9130,6 +9169,10 @@ export type Database = {
         Args: { p_ticket_id: string; p_assignee_id: string }
         Returns: boolean
       }
+      begin_meta_account_refresh: {
+        Args: { p_user_id: string; p_payload: Json }
+        Returns: Json
+      }
       binary_quantize: {
         Args: { "": string } | { "": unknown }
         Returns: unknown
@@ -9704,6 +9747,10 @@ export type Database = {
         Args: { p_social_account_id: string; p_user_id: string }
         Returns: Json
       }
+      write_direct_instagram_account: {
+        Args: { p_user_id: string; p_payload: Json }
+        Returns: Json
+      }
       write_instagram_account_capability: {
         Args: { p_social_account_id: string; p_user_id: string; p_payload: Json }
         Returns: Json
@@ -9839,6 +9886,10 @@ export type Database = {
       reap_exhausted_agent_replies: {
         Args: { p_max_attempts: number }
         Returns: Database["public"]["Tables"]["pending_agent_replies"]["Row"][]
+      }
+      record_meta_refresh_failure: {
+        Args: { p_user_id: string; p_payload: Json }
+        Returns: Json
       }
       redeem_coupon: {
         Args: { p_subscription_id?: string; p_user_id: string; p_code: string }
@@ -10260,6 +10311,10 @@ export type Database = {
       }
       purge_expired_meta_oauth_pending: {
         Args: { p_limit: number }
+        Returns: Json
+      }
+      write_meta_account_refresh_success: {
+        Args: { p_user_id: string; p_payload: Json }
         Returns: Json
       }
     }
