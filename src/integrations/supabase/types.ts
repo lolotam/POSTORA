@@ -1763,6 +1763,184 @@ export type Database = {
           },
         ]
       }
+      competitor_media_snapshots: {
+        Row: {
+          caption: string | null
+          capture_timezone: string
+          captured_at: string
+          captured_on: string
+          comments_count: number | null
+          created_at: string
+          id: string
+          ig_media_id: string
+          like_count: number | null
+          media_product_type: string | null
+          media_type: string | null
+          permalink: string | null
+          published_at: string
+          source: string
+          status: string
+          thumbnail_url: string | null
+          user_id: string
+          view_count: number | null
+          watchlist_id: string
+        }
+        Insert: {
+          caption?: string | null
+          capture_timezone?: string
+          captured_at?: string
+          captured_on: string
+          comments_count?: number | null
+          created_at?: string
+          id?: string
+          ig_media_id: string
+          like_count?: number | null
+          media_product_type?: string | null
+          media_type?: string | null
+          permalink?: string | null
+          published_at: string
+          source: string
+          status?: string
+          thumbnail_url?: string | null
+          user_id: string
+          view_count?: number | null
+          watchlist_id: string
+        }
+        Update: {
+          caption?: string | null
+          capture_timezone?: string
+          captured_at?: string
+          captured_on?: string
+          comments_count?: number | null
+          created_at?: string
+          id?: string
+          ig_media_id?: string
+          like_count?: number | null
+          media_product_type?: string | null
+          media_type?: string | null
+          permalink?: string | null
+          published_at?: string
+          source?: string
+          status?: string
+          thumbnail_url?: string | null
+          user_id?: string
+          view_count?: number | null
+          watchlist_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "competitor_media_snapshots_owner_fkey"
+            columns: ["watchlist_id", "user_id"]
+            isOneToOne: false
+            referencedRelation: "competitor_watchlist"
+            referencedColumns: ["id", "user_id"]
+          },
+        ]
+      }
+      competitor_profile_snapshots: {
+        Row: {
+          capture_timezone: string
+          captured_at: string
+          captured_on: string
+          created_at: string
+          followers_count: number | null
+          id: string
+          media_count: number | null
+          source: string
+          status: string
+          user_id: string
+          watchlist_id: string
+        }
+        Insert: {
+          capture_timezone?: string
+          captured_at?: string
+          captured_on: string
+          created_at?: string
+          followers_count?: number | null
+          id?: string
+          media_count?: number | null
+          source: string
+          status?: string
+          user_id: string
+          watchlist_id: string
+        }
+        Update: {
+          capture_timezone?: string
+          captured_at?: string
+          captured_on?: string
+          created_at?: string
+          followers_count?: number | null
+          id?: string
+          media_count?: number | null
+          source?: string
+          status?: string
+          user_id?: string
+          watchlist_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "competitor_profile_snapshots_owner_fkey"
+            columns: ["watchlist_id", "user_id"]
+            isOneToOne: false
+            referencedRelation: "competitor_watchlist"
+            referencedColumns: ["id", "user_id"]
+          },
+        ]
+      }
+      competitor_watchlist: {
+        Row: {
+          created_at: string
+          id: string
+          is_active: boolean
+          label: string | null
+          last_error: string | null
+          last_error_code: string | null
+          last_synced_at: string | null
+          next_retry_at: string | null
+          platform: string
+          removed_at: string | null
+          source: string | null
+          status: string
+          updated_at: string
+          user_id: string
+          username: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          is_active?: boolean
+          label?: string | null
+          last_error?: string | null
+          last_error_code?: string | null
+          last_synced_at?: string | null
+          next_retry_at?: string | null
+          platform?: string
+          removed_at?: string | null
+          source?: string | null
+          status?: string
+          updated_at?: string
+          user_id: string
+          username: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          is_active?: boolean
+          label?: string | null
+          last_error?: string | null
+          last_error_code?: string | null
+          last_synced_at?: string | null
+          next_retry_at?: string | null
+          platform?: string
+          removed_at?: string | null
+          source?: string | null
+          status?: string
+          updated_at?: string
+          user_id?: string
+          username?: string
+        }
+        Relationships: []
+      }
       connector_connections: {
         Row: {
           auth_strategy: string
@@ -2485,6 +2663,259 @@ export type Database = {
           user_id?: string
         }
         Relationships: []
+      }
+      ig_account_insight_daily: {
+        Row: {
+          accounts_engaged: number | null
+          captured_at: string
+          comments: number | null
+          created_at: string
+          follows: number | null
+          id: string
+          likes: number | null
+          metric_date: string
+          period_end: string | null
+          period_start: string | null
+          provider_date: string
+          provider_timezone: string | null
+          reach: number | null
+          saves: number | null
+          shares: number | null
+          social_account_id: string
+          status: string
+          total_interactions: number | null
+          unfollows: number | null
+          updated_at: string
+          user_id: string
+          views: number | null
+        }
+        Insert: {
+          accounts_engaged?: number | null
+          captured_at?: string
+          comments?: number | null
+          created_at?: string
+          follows?: number | null
+          id?: string
+          likes?: number | null
+          metric_date: string
+          period_end?: string | null
+          period_start?: string | null
+          provider_date: string
+          provider_timezone?: string | null
+          reach?: number | null
+          saves?: number | null
+          shares?: number | null
+          social_account_id: string
+          status?: string
+          total_interactions?: number | null
+          unfollows?: number | null
+          updated_at?: string
+          user_id: string
+          views?: number | null
+        }
+        Update: {
+          accounts_engaged?: number | null
+          captured_at?: string
+          comments?: number | null
+          created_at?: string
+          follows?: number | null
+          id?: string
+          likes?: number | null
+          metric_date?: string
+          period_end?: string | null
+          period_start?: string | null
+          provider_date?: string
+          provider_timezone?: string | null
+          reach?: number | null
+          saves?: number | null
+          shares?: number | null
+          social_account_id?: string
+          status?: string
+          total_interactions?: number | null
+          unfollows?: number | null
+          updated_at?: string
+          user_id?: string
+          views?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ig_account_insight_daily_account_owner_fkey"
+            columns: ["social_account_id", "user_id"]
+            isOneToOne: false
+            referencedRelation: "social_accounts"
+            referencedColumns: ["id", "user_id"]
+          },
+        ]
+      }
+      ig_account_profile_observations: {
+        Row: {
+          capture_timezone: string
+          captured_at: string
+          created_at: string
+          followers_count: number | null
+          id: string
+          media_count: number | null
+          observed_at: string
+          observed_on: string
+          social_account_id: string
+          status: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          capture_timezone?: string
+          captured_at?: string
+          created_at?: string
+          followers_count?: number | null
+          id?: string
+          media_count?: number | null
+          observed_at: string
+          observed_on: string
+          social_account_id: string
+          status?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          capture_timezone?: string
+          captured_at?: string
+          created_at?: string
+          followers_count?: number | null
+          id?: string
+          media_count?: number | null
+          observed_at?: string
+          observed_on?: string
+          social_account_id?: string
+          status?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ig_account_profile_observations_account_owner_fkey"
+            columns: ["social_account_id", "user_id"]
+            isOneToOne: false
+            referencedRelation: "social_accounts"
+            referencedColumns: ["id", "user_id"]
+          },
+        ]
+      }
+      ig_media_insight_snapshots: {
+        Row: {
+          caption: string | null
+          capture_timezone: string
+          captured_at: string
+          captured_on: string
+          comments: number | null
+          comments_count_public: number | null
+          created_at: string
+          follows: number | null
+          id: string
+          ig_media_id: string
+          ig_reels_avg_watch_time_ms: number | null
+          like_count_public: number | null
+          likes: number | null
+          media_product_type: string | null
+          media_type: string | null
+          permalink: string | null
+          post_id: string | null
+          product: string | null
+          profile_visits: number | null
+          published_at: string
+          reach: number | null
+          replies: number | null
+          saved: number | null
+          shares: number | null
+          social_account_id: string
+          status: string
+          thumbnail_url: string | null
+          total_interactions: number | null
+          updated_at: string
+          user_id: string
+          views: number | null
+        }
+        Insert: {
+          caption?: string | null
+          capture_timezone?: string
+          captured_at?: string
+          captured_on: string
+          comments?: number | null
+          comments_count_public?: number | null
+          created_at?: string
+          follows?: number | null
+          id?: string
+          ig_media_id: string
+          ig_reels_avg_watch_time_ms?: number | null
+          like_count_public?: number | null
+          likes?: number | null
+          media_product_type?: string | null
+          media_type?: string | null
+          permalink?: string | null
+          post_id?: string | null
+          product?: string | null
+          profile_visits?: number | null
+          published_at: string
+          reach?: number | null
+          replies?: number | null
+          saved?: number | null
+          shares?: number | null
+          social_account_id: string
+          status?: string
+          thumbnail_url?: string | null
+          total_interactions?: number | null
+          updated_at?: string
+          user_id: string
+          views?: number | null
+        }
+        Update: {
+          caption?: string | null
+          capture_timezone?: string
+          captured_at?: string
+          captured_on?: string
+          comments?: number | null
+          comments_count_public?: number | null
+          created_at?: string
+          follows?: number | null
+          id?: string
+          ig_media_id?: string
+          ig_reels_avg_watch_time_ms?: number | null
+          like_count_public?: number | null
+          likes?: number | null
+          media_product_type?: string | null
+          media_type?: string | null
+          permalink?: string | null
+          post_id?: string | null
+          product?: string | null
+          profile_visits?: number | null
+          published_at?: string
+          reach?: number | null
+          replies?: number | null
+          saved?: number | null
+          shares?: number | null
+          social_account_id?: string
+          status?: string
+          thumbnail_url?: string | null
+          total_interactions?: number | null
+          updated_at?: string
+          user_id?: string
+          views?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "ig_media_insight_snapshots_account_owner_fkey"
+            columns: ["social_account_id", "user_id"]
+            isOneToOne: false
+            referencedRelation: "social_accounts"
+            referencedColumns: ["id", "user_id"]
+          },
+          {
+            foreignKeyName: "ig_media_insight_snapshots_post_owner_fkey"
+            columns: ["post_id", "user_id"]
+            isOneToOne: false
+            referencedRelation: "posts"
+            referencedColumns: ["id", "user_id"]
+          },
+        ]
       }
       image_reference_presets: {
         Row: {
@@ -4702,12 +5133,15 @@ export type Database = {
           },
         ]
       }
-      instagram_account_credentials: {
+      facebook_user_credentials: {
         Row: {
           created_at: string
-          credential_kind: string
-          platform: string
-          social_account_id: string
+          id: string
+          lifecycle: string
+          provenance_captured_at: string | null
+          provenance_source: string
+          provider_user_id: string | null
+          revision: number
           token: string
           token_expires_at: string | null
           updated_at: string
@@ -4715,9 +5149,12 @@ export type Database = {
         }
         Insert: {
           created_at?: string
-          credential_kind: string
-          platform?: string
-          social_account_id: string
+          id?: string
+          lifecycle?: string
+          provenance_captured_at?: string | null
+          provenance_source: string
+          provider_user_id?: string | null
+          revision?: number
           token: string
           token_expires_at?: string | null
           updated_at?: string
@@ -4725,11 +5162,98 @@ export type Database = {
         }
         Update: {
           created_at?: string
-          credential_kind?: string
-          platform?: string
-          social_account_id?: string
+          id?: string
+          lifecycle?: string
+          provenance_captured_at?: string | null
+          provenance_source?: string
+          provider_user_id?: string | null
+          revision?: number
           token?: string
           token_expires_at?: string | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      facebook_user_credential_bindings: {
+        Row: {
+          connection_version: number
+          created_at: string
+          credential_id: string
+          evidence_source: string
+          platform: string
+          social_account_id: string
+          updated_at: string
+          user_id: string
+          verified_facebook_page_id: string | null
+          verified_facebook_user_id: string | null
+          verified_instagram_user_id: string | null
+        }
+        Insert: {
+          connection_version?: number
+          created_at?: string
+          credential_id: string
+          evidence_source: string
+          platform: string
+          social_account_id: string
+          updated_at?: string
+          user_id: string
+          verified_facebook_page_id?: string | null
+          verified_facebook_user_id?: string | null
+          verified_instagram_user_id?: string | null
+        }
+        Update: {
+          connection_version?: number
+          created_at?: string
+          credential_id?: string
+          evidence_source?: string
+          platform?: string
+          social_account_id?: string
+          updated_at?: string
+          user_id?: string
+          verified_facebook_page_id?: string | null
+          verified_facebook_user_id?: string | null
+          verified_instagram_user_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "facebook_user_credential_bindings_account_fkey"
+            columns: ["social_account_id", "user_id", "platform"]
+            isOneToOne: false
+            referencedRelation: "social_accounts"
+            referencedColumns: ["id", "user_id", "platform"]
+          },
+          {
+            foreignKeyName: "facebook_user_credential_bindings_credential_fkey"
+            columns: ["credential_id", "user_id"]
+            isOneToOne: false
+            referencedRelation: "facebook_user_credentials"
+            referencedColumns: ["id", "user_id"]
+          },
+        ]
+      }
+      instagram_account_credentials: {
+        Row: {
+          created_at: string
+          credential_id: string
+          platform: string
+          social_account_id: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          credential_id: string
+          platform?: string
+          social_account_id: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          credential_id?: string
+          platform?: string
+          social_account_id?: string
           updated_at?: string
           user_id?: string
         }
@@ -4742,6 +5266,13 @@ export type Database = {
             referencedColumns: ["social_account_id"]
           },
           {
+            foreignKeyName: "instagram_account_credentials_credential_fkey"
+            columns: ["credential_id", "user_id"]
+            isOneToOne: false
+            referencedRelation: "facebook_user_credentials"
+            referencedColumns: ["id", "user_id"]
+          },
+          {
             foreignKeyName: "instagram_account_credentials_owner_fkey"
             columns: ["social_account_id", "user_id", "platform"]
             isOneToOne: false
@@ -4749,6 +5280,343 @@ export type Database = {
             referencedColumns: ["id", "user_id", "platform"]
           },
         ]
+      }
+      facebook_user_credential_connection_fences: {
+        Row: {
+          connection_version: number
+          created_at: string
+          platform: string
+          social_account_id: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          connection_version?: number
+          created_at?: string
+          platform: string
+          social_account_id: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          connection_version?: number
+          created_at?: string
+          platform?: string
+          social_account_id?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "facebook_user_credential_connection_fences_account_fkey"
+            columns: ["social_account_id", "user_id", "platform"]
+            isOneToOne: false
+            referencedRelation: "social_accounts"
+            referencedColumns: ["id", "user_id", "platform"]
+          },
+        ]
+      }
+      instagram_collection_jobs: {
+        Row: {
+          attempts: number
+          captured_on: string
+          context_credential_generation: number | null
+          context_login_kind: string | null
+          context_viewer_social_account_id: string | null
+          created_at: string
+          due_at: string
+          id: string
+          job_generation: number
+          last_attempt_at: string | null
+          last_partial_at: string | null
+          last_reason_code: string | null
+          last_success_at: string | null
+          lease_expires_at: string | null
+          lease_token: string | null
+          retry_at: string | null
+          social_account_id: string | null
+          status: string
+          target_id: string
+          target_kind: string
+          updated_at: string
+          user_id: string
+          watchlist_id: string | null
+        }
+        Insert: {
+          attempts?: number
+          captured_on: string
+          context_credential_generation?: number | null
+          context_login_kind?: string | null
+          context_viewer_social_account_id?: string | null
+          created_at?: string
+          due_at?: string
+          id?: string
+          job_generation?: number
+          last_attempt_at?: string | null
+          last_partial_at?: string | null
+          last_reason_code?: string | null
+          last_success_at?: string | null
+          lease_expires_at?: string | null
+          lease_token?: string | null
+          retry_at?: string | null
+          social_account_id?: string | null
+          status?: string
+          target_id: string
+          target_kind: string
+          updated_at?: string
+          user_id: string
+          watchlist_id?: string | null
+        }
+        Update: {
+          attempts?: number
+          captured_on?: string
+          context_credential_generation?: number | null
+          context_login_kind?: string | null
+          context_viewer_social_account_id?: string | null
+          created_at?: string
+          due_at?: string
+          id?: string
+          job_generation?: number
+          last_attempt_at?: string | null
+          last_partial_at?: string | null
+          last_reason_code?: string | null
+          last_success_at?: string | null
+          lease_expires_at?: string | null
+          lease_token?: string | null
+          retry_at?: string | null
+          social_account_id?: string | null
+          status?: string
+          target_id?: string
+          target_kind?: string
+          updated_at?: string
+          user_id?: string
+          watchlist_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "instagram_collection_jobs_account_owner_fkey"
+            columns: ["social_account_id", "user_id"]
+            isOneToOne: false
+            referencedRelation: "social_accounts"
+            referencedColumns: ["id", "user_id"]
+          },
+          {
+            foreignKeyName: "instagram_collection_jobs_context_owner_fkey"
+            columns: ["context_viewer_social_account_id", "user_id"]
+            isOneToOne: false
+            referencedRelation: "social_accounts"
+            referencedColumns: ["id", "user_id"]
+          },
+          {
+            foreignKeyName: "instagram_collection_jobs_watchlist_owner_fkey"
+            columns: ["watchlist_id", "user_id"]
+            isOneToOne: false
+            referencedRelation: "competitor_watchlist"
+            referencedColumns: ["id", "user_id"]
+          },
+        ]
+      }
+      instagram_collection_job_operations: {
+        Row: {
+          attempts: number
+          completed_at: string | null
+          created_at: string
+          id: string
+          job_generation: number
+          job_id: string
+          last_attempt_at: string | null
+          operation_key: string
+          operation_kind: string
+          provider_date: string | null
+          query_kind: string | null
+          reason_code: string | null
+          retry_at: string | null
+          state: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          attempts?: number
+          completed_at?: string | null
+          created_at?: string
+          id?: string
+          job_generation: number
+          job_id: string
+          last_attempt_at?: string | null
+          operation_key: string
+          operation_kind: string
+          provider_date?: string | null
+          query_kind?: string | null
+          reason_code?: string | null
+          retry_at?: string | null
+          state?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          attempts?: number
+          completed_at?: string | null
+          created_at?: string
+          id?: string
+          job_generation?: number
+          job_id?: string
+          last_attempt_at?: string | null
+          operation_key?: string
+          operation_kind?: string
+          provider_date?: string | null
+          query_kind?: string | null
+          reason_code?: string | null
+          retry_at?: string | null
+          state?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "instagram_collection_job_operations_job_owner_fkey"
+            columns: ["job_id", "user_id"]
+            isOneToOne: false
+            referencedRelation: "instagram_collection_jobs"
+            referencedColumns: ["id", "user_id"]
+          },
+        ]
+      }
+      instagram_collection_job_checkpoints: {
+        Row: {
+          inventory_cursor: string | null
+          inventory_gap_reason: string | null
+          inventory_oldest_returned_at: string | null
+          inventory_pages_fetched: number
+          inventory_partial: boolean
+          inventory_remaining_ids: string[]
+          inventory_truncated: boolean
+          inventory_window_covered: boolean
+          inventory_window_end: string | null
+          inventory_window_start: string | null
+          job_generation: number
+          job_id: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          inventory_cursor?: string | null
+          inventory_gap_reason?: string | null
+          inventory_oldest_returned_at?: string | null
+          inventory_pages_fetched?: number
+          inventory_partial?: boolean
+          inventory_remaining_ids?: string[]
+          inventory_truncated?: boolean
+          inventory_window_covered?: boolean
+          inventory_window_end?: string | null
+          inventory_window_start?: string | null
+          job_generation: number
+          job_id: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          inventory_cursor?: string | null
+          inventory_gap_reason?: string | null
+          inventory_oldest_returned_at?: string | null
+          inventory_pages_fetched?: number
+          inventory_partial?: boolean
+          inventory_remaining_ids?: string[]
+          inventory_truncated?: boolean
+          inventory_window_covered?: boolean
+          inventory_window_end?: string | null
+          inventory_window_start?: string | null
+          job_generation?: number
+          job_id?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "instagram_collection_job_checkpoints_job_owner_fkey"
+            columns: ["job_id", "user_id"]
+            isOneToOne: false
+            referencedRelation: "instagram_collection_jobs"
+            referencedColumns: ["id", "user_id"]
+          },
+        ]
+      }
+      instagram_collection_request_throttles: {
+        Row: {
+          accepted_count: number
+          created_at: string
+          last_accepted_at: string | null
+          scope: string
+          social_account_id: string | null
+          target_id: string
+          target_kind: string
+          updated_at: string
+          user_id: string
+          watchlist_id: string | null
+        }
+        Insert: {
+          accepted_count?: number
+          created_at?: string
+          last_accepted_at?: string | null
+          scope?: string
+          social_account_id?: string | null
+          target_id: string
+          target_kind: string
+          updated_at?: string
+          user_id: string
+          watchlist_id?: string | null
+        }
+        Update: {
+          accepted_count?: number
+          created_at?: string
+          last_accepted_at?: string | null
+          scope?: string
+          social_account_id?: string | null
+          target_id?: string
+          target_kind?: string
+          updated_at?: string
+          user_id?: string
+          watchlist_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "instagram_collection_request_throttles_account_owner_fkey"
+            columns: ["social_account_id", "user_id"]
+            isOneToOne: false
+            referencedRelation: "social_accounts"
+            referencedColumns: ["id", "user_id"]
+          },
+          {
+            foreignKeyName: "instagram_collection_request_throttles_watchlist_owner_fkey"
+            columns: ["watchlist_id", "user_id"]
+            isOneToOne: false
+            referencedRelation: "competitor_watchlist"
+            referencedColumns: ["id", "user_id"]
+          },
+        ]
+      }
+      instagram_provider_throttle_buckets: {
+        Row: {
+          bucket_key: string
+          last_reported_at: string | null
+          throttled_until: string | null
+          updated_at: string
+          usage_percent: number | null
+        }
+        Insert: {
+          bucket_key: string
+          last_reported_at?: string | null
+          throttled_until?: string | null
+          updated_at?: string
+          usage_percent?: number | null
+        }
+        Update: {
+          bucket_key?: string
+          last_reported_at?: string | null
+          throttled_until?: string | null
+          updated_at?: string
+          usage_percent?: number | null
+        }
+        Relationships: []
       }
       social_contacts: {
         Row: {
@@ -4960,6 +5828,7 @@ export type Database = {
           max_posts_per_day: number | null
           max_posts_per_month: number | null
           max_social_accounts: number | null
+          max_tracked_competitors: number | null
           name: string
           price_monthly: number | null
           price_yearly: number | null
@@ -4978,6 +5847,7 @@ export type Database = {
           max_posts_per_day?: number | null
           max_posts_per_month?: number | null
           max_social_accounts?: number | null
+          max_tracked_competitors?: number | null
           name: string
           price_monthly?: number | null
           price_yearly?: number | null
@@ -4996,6 +5866,7 @@ export type Database = {
           max_posts_per_day?: number | null
           max_posts_per_month?: number | null
           max_social_accounts?: number | null
+          max_tracked_competitors?: number | null
           name?: string
           price_monthly?: number | null
           price_yearly?: number | null
@@ -6024,6 +6895,7 @@ export type Database = {
           max_posts_per_month: number | null
           max_profiles: number | null
           max_social_accounts: number | null
+          max_tracked_competitors: number | null
           media_daily_reset_date: string | null
           media_uploads_today: number | null
           posts_this_month: number | null
@@ -6044,6 +6916,7 @@ export type Database = {
           max_posts_per_month?: number | null
           max_profiles?: number | null
           max_social_accounts?: number | null
+          max_tracked_competitors?: number | null
           media_daily_reset_date?: string | null
           media_uploads_today?: number | null
           posts_this_month?: number | null
@@ -6064,6 +6937,7 @@ export type Database = {
           max_posts_per_month?: number | null
           max_profiles?: number | null
           max_social_accounts?: number | null
+          max_tracked_competitors?: number | null
           media_daily_reset_date?: string | null
           media_uploads_today?: number | null
           posts_this_month?: number | null
@@ -7995,6 +8869,10 @@ export type Database = {
         Args: { p_ids: string[]; p_keep: boolean }
         Returns: number
       }
+      add_competitor_watchlist: {
+        Args: { p_username: string; p_label?: string | null }
+        Returns: Json
+      }
       add_ticket_message: {
         Args: {
           p_message: string
@@ -8162,6 +9040,10 @@ export type Database = {
           p_subject: string
         }
         Returns: string
+      }
+      effective_competitor_quota: {
+        Args: { p_user_id: string }
+        Returns: number
       }
       effective_user_quotas: {
         Args: { p_user_id: string }
@@ -8627,15 +9509,111 @@ export type Database = {
         Returns: Json
       }
       bump_instagram_credential_generation: {
-        Args: { p_social_account_id: string; p_user_id: string; p_reason: string }
+        Args: { p_social_account_id: string; p_user_id: string; p_reason: string; p_expected_generation: number }
         Returns: Json
       }
       revoke_instagram_account_credential: {
-        Args: { p_social_account_id: string; p_user_id: string; p_reason: string }
+        Args: { p_social_account_id: string; p_user_id: string; p_reason: string; p_expected_generation: number }
         Returns: Json
       }
       read_instagram_account_credential: {
         Args: { p_social_account_id: string; p_user_id: string }
+        Returns: Json
+      }
+      bind_facebook_user_credential: {
+        Args: { p_user_id: string; p_payload: Json }
+        Returns: Json
+      }
+      write_facebook_user_credential: {
+        Args: { p_user_id: string; p_payload: Json }
+        Returns: Json
+      }
+      unbind_facebook_user_credential: {
+        Args: { p_user_id: string; p_payload: Json }
+        Returns: Json
+      }
+      revoke_facebook_user_credential: {
+        Args: { p_user_id: string; p_payload: Json }
+        Returns: Json
+      }
+      describe_facebook_user_credential: {
+        Args: { p_user_id: string; p_credential_id: string }
+        Returns: Json
+      }
+      read_facebook_user_credential: {
+        Args: { p_user_id: string; p_credential_id: string }
+        Returns: Json
+      }
+      read_facebook_user_account_credential: {
+        Args: { p_user_id: string; p_social_account_id: string }
+        Returns: Json
+      }
+      enqueue_instagram_collection_job: {
+        Args: { p_target_kind: string; p_target_id: string; p_mode?: string }
+        Returns: Json
+      }
+      read_instagram_collection_job_status: {
+        Args: { p_target_kind: string; p_target_id: string; p_capture_day?: string | null }
+        Returns: Json
+      }
+      enqueue_instagram_collection_jobs_service: {
+        Args: { p_owner_id: string; p_requests: Json }
+        Returns: Json
+      }
+      claim_instagram_collection_jobs: {
+        Args: { p_target_kind: string; p_limit: number }
+        Returns: Json[]
+      }
+      attach_instagram_collection_job_viewer_context: {
+        Args: {
+          p_job_id: string
+          p_claim_token: string
+          p_job_generation: number
+          p_viewer_social_account_id: string
+        }
+        Returns: Json
+      }
+      record_instagram_collection_job_progress: {
+        Args: {
+          p_job_id: string
+          p_claim_token: string
+          p_job_generation: number
+          p_payload: Json
+        }
+        Returns: Json
+      }
+      persist_instagram_collection_snapshot: {
+        Args: {
+          p_job_id: string
+          p_claim_token: string
+          p_job_generation: number
+          p_payload: Json
+        }
+        Returns: Json
+      }
+      complete_instagram_collection_job: {
+        Args: {
+          p_job_id: string
+          p_claim_token: string
+          p_job_generation: number
+          p_outcome: string
+          p_reason_code?: string | null
+        }
+        Returns: Json
+      }
+      record_instagram_provider_throttle: {
+        Args: {
+          p_bucket_key: string
+          p_usage_percent: number
+          p_throttled_until: string
+          p_job_id?: string | null
+          p_claim_token?: string | null
+          p_job_generation?: number | null
+        }
+        Returns: Json
+      }
+      read_instagram_collection_job_context: {
+        Args: { p_job_id: string; p_claim_token: string }
         Returns: Json
       }
       prune_ai_knowledge_entities: {
@@ -8645,6 +9623,10 @@ export type Database = {
       prune_all_ai_knowledge_entities: {
         Args: Record<PropertyKey, never>
         Returns: number
+      }
+      read_own_competitor_quota: {
+        Args: Record<PropertyKey, never>
+        Returns: Json
       }
       reap_exhausted_agent_replies: {
         Args: { p_max_attempts: number }
@@ -8683,6 +9665,10 @@ export type Database = {
           usage_count: number
           allowed: boolean
         }[]
+      }
+      resolve_ig_media_post_link: {
+        Args: { p_social_account_id: string; p_ig_media_id: string }
+        Returns: string
       }
       revoke_partner_key: {
         Args: { p_key_id: string; p_reason: string }
@@ -8955,6 +9941,10 @@ export type Database = {
       try_cast_double: {
         Args: { inp: string }
         Returns: number
+      }
+      update_competitor_watchlist: {
+        Args: { p_watchlist_id: string; p_label?: string | null; p_is_active?: boolean | null }
+        Returns: Json
       }
       update_email_status: {
         Args: {

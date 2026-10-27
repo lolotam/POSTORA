@@ -16,7 +16,8 @@
 # typechecked without that exemption. The outlier module and its test are both
 # required on this branch; missing either one fails the job. Capabilities SQL
 # is the Postgres job's instagram_capabilities suite, not a Deno suite. Later
-# collector tests are added when those files exist. There is no blanket --no-check.
+# owner-report DTO is checked and tested independently as well. Later collector
+# tests are added when those files exist. There is no blanket --no-check.
 #
 # SQL uses scripts/db-harness.sh against a disposable supabase/postgres
 # container (baseline snapshot plus newer migrations). History is not replayed.
@@ -192,6 +193,19 @@ jobs:
           echo "deno test ${test_file} with typecheck enabled"
           deno test --allow-read=supabase/functions/_shared --node-modules-dir=none "${test_file}"
 
+      - name: Typecheck and test the owner-report contract
+        run: |
+          set -euo pipefail
+          report_dir="supabase/functions/instagram-insights-report"
+          for file in contracts.ts assemble.ts assemble.test.ts; do
+            if [ ! -f "${report_dir}/${file}" ]; then
+              echo "Owner-report contract file is required: ${file}"
+              exit 1
+            fi
+          done
+          deno check --node-modules-dir=none "${report_dir}/contracts.ts" "${report_dir}/assemble.ts" "${report_dir}/assemble.test.ts"
+          deno test --node-modules-dir=none "${report_dir}/assemble.test.ts"
+
   db-harness:
     name: Postgres baseline plus delta
     runs-on: ubuntu-24.04
@@ -209,7 +223,7 @@ jobs:
             -v "${GITHUB_WORKSPACE}:/repo" \
             supabase/postgres:17.6.1.158 \
             -c cron.database_name=partner_api_harness \
-            -c shared_preload_libraries=pg_cron,pg_net
+            -c shared_preload_libraries=pg_cron,pg_net,pgsodium,supabase_vault
           status="none"
           for _ in $(seq 1 90); do
             status="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' pg-harness 2>/dev/null || echo missing)"

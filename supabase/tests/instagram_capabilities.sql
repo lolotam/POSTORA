@@ -136,8 +136,8 @@ BEGIN
     'public.write_instagram_account_capability(uuid,uuid,jsonb)',
     'public.replace_instagram_account_credential(uuid,uuid,jsonb)',
     'public.record_instagram_account_reconnect(uuid,uuid,jsonb)',
-    'public.bump_instagram_credential_generation(uuid,uuid,text)',
-    'public.revoke_instagram_account_credential(uuid,uuid,text)',
+    'public.bump_instagram_credential_generation(uuid,uuid,text,bigint)',
+    'public.revoke_instagram_account_credential(uuid,uuid,text,bigint)',
     'public.read_instagram_account_credential(uuid,uuid)'
   ] LOOP
     ASSERT NOT has_function_privilege('anon', f, 'EXECUTE'),
@@ -147,6 +147,11 @@ BEGIN
     ASSERT has_function_privilege('service_role', f, 'EXECUTE'),
       format('S1 service_role can execute %s', f);
   END LOOP;
+
+  ASSERT to_regprocedure('public.bump_instagram_credential_generation(uuid,uuid,text)') IS NULL,
+    'S1 the unfenced generation bump signature is gone';
+  ASSERT to_regprocedure('public.revoke_instagram_account_credential(uuid,uuid,text)') IS NULL,
+    'S1 the unfenced account revoke signature is gone';
 END $$;
 
 -- ---------------------------------------------------------------------------
@@ -408,10 +413,26 @@ DECLARE
   acct_a uuid := 'c1c1c1c1-c1c1-4c1c-8c1c-c1c1c1c1c1c1';
   v      jsonb;
 BEGIN
-  -- The capability record exists (S4), so a replacement is allowed.
+  -- The capability record exists (S4) and is page-linked. A replacement
+  -- still has to name the generation captured before it runs.
+  BEGIN
+    PERFORM public.replace_instagram_account_credential(
+      acct_a, u_a,
+      '{"credential_kind":"facebook_user","token":"user-token-missing-generation","token_expires_at":"2026-12-26T00:00:00Z"}'::jsonb);
+    RAISE EXCEPTION 'S6 failed: a replacement without a generation was accepted'
+      USING ERRCODE = 'assert_failure';
+  EXCEPTION WHEN SQLSTATE 'ICG03' THEN
+    ASSERT SQLERRM = 'expected_credential_generation is required',
+      'S6 a replacement without a generation is refused';
+  END;
+  ASSERT (public.read_instagram_account_credential(acct_a, u_a)->>'found') = 'false',
+    'S6 a replacement without a generation stores nothing';
+  ASSERT (public.read_instagram_account_capability(acct_a, u_a)->>'credential_generation') = '0',
+    'S6 a replacement without a generation leaves generation 0';
+
   v := public.replace_instagram_account_credential(
     acct_a, u_a,
-    '{"credential_kind":"facebook_user","token":"user-token-1","token_expires_at":"2026-12-26T00:00:00Z"}'::jsonb);
+    '{"credential_kind":"facebook_user","token":"user-token-1","token_expires_at":"2026-12-26T00:00:00Z","expected_credential_generation":0}'::jsonb);
   ASSERT v->>'credential_generation' = '1',
     'S6 the first replacement moves the generation to 1';
   ASSERT v->>'has_protected_credential' = 'true',
@@ -430,9 +451,24 @@ BEGIN
   ASSERT v->>'credential_generation' = '1',
     'S6 the credential reads at the current generation';
 
+  BEGIN
+    PERFORM public.replace_instagram_account_credential(
+      acct_a, u_a,
+      '{"credential_kind":"facebook_user","token":"user-token-stale","expected_credential_generation":0}'::jsonb);
+    RAISE EXCEPTION 'S6 failed: a stale replacement was accepted'
+      USING ERRCODE = 'assert_failure';
+  EXCEPTION WHEN SQLSTATE 'ICG01' THEN
+    NULL;
+  END;
+  ASSERT (public.read_instagram_account_credential(acct_a, u_a)->>'token') = 'user-token-1',
+    'S6 a stale replacement leaves the stored token untouched';
+  ASSERT (public.read_instagram_account_capability(acct_a, u_a)->>'credential_generation') = '1',
+    'S6 a stale replacement leaves the generation untouched';
+
   -- A second replacement moves the generation again, by exactly one.
   v := public.replace_instagram_account_credential(
-    acct_a, u_a, '{"credential_kind":"facebook_user","token":"user-token-2"}'::jsonb);
+    acct_a, u_a,
+    '{"credential_kind":"facebook_user","token":"user-token-2","expected_credential_generation":1}'::jsonb);
   ASSERT v->>'credential_generation' = '2',
     'S6 the second replacement moves the generation to 2';
   v := public.read_instagram_account_credential(acct_a, u_a);
@@ -456,6 +492,28 @@ BEGIN
     'S6 a refused replacement leaves the stored token untouched';
   ASSERT v->>'credential_generation' = '2',
     'S6 a refused replacement leaves the generation untouched';
+
+  -- Direct login keeps its account token in social_accounts. The Facebook
+  -- User store must not accept it, even with the live generation.
+  BEGIN
+    PERFORM public.replace_instagram_account_credential(
+      'c2c2c2c2-c2c2-4c2c-8c2c-c2c2c2c2c2c2'::uuid,
+      'b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1b1'::uuid,
+      '{"credential_kind":"facebook_user","token":"direct-login-token","expected_credential_generation":0}'::jsonb);
+    RAISE EXCEPTION 'S6 failed: a direct-login Facebook user credential was accepted'
+      USING ERRCODE = 'assert_failure';
+  EXCEPTION WHEN SQLSTATE 'FUC02' THEN
+    ASSERT SQLERRM = 'direct Instagram login cannot bind a Facebook user credential',
+      'S6 direct Instagram is refused';
+  END;
+  ASSERT (public.read_instagram_account_credential(
+            'c2c2c2c2-c2c2-4c2c-8c2c-c2c2c2c2c2c2'::uuid,
+            'b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1b1'::uuid)->>'found') = 'false',
+    'S6 a refused direct-login replacement stores nothing';
+  ASSERT (public.read_instagram_account_capability(
+            'c2c2c2c2-c2c2-4c2c-8c2c-c2c2c2c2c2c2'::uuid,
+            'b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1b1'::uuid)->>'credential_generation') = '0',
+    'S6 a refused direct-login replacement leaves the generation untouched';
 END $$;
 
 RESET ROLE;
@@ -475,7 +533,7 @@ BEGIN
   PERFORM public.replace_instagram_account_credential(
     'c1c1c1c1-c1c1-4c1c-8c1c-c1c1c1c1c1c1'::uuid,
     'a1a1a1a1-a1a1-4a1a-8a1a-a1a1a1a1a1a1'::uuid,
-    '{"credential_kind":"facebook_user","token":"user-token-3"}'::jsonb);
+    '{"credential_kind":"facebook_user","token":"user-token-3","expected_credential_generation":2}'::jsonb);
 END $$;
 
 SAVEPOINT ig_cap_generation_probe;
@@ -484,7 +542,7 @@ BEGIN
   PERFORM public.replace_instagram_account_credential(
     'c1c1c1c1-c1c1-4c1c-8c1c-c1c1c1c1c1c1'::uuid,
     'a1a1a1a1-a1a1-4a1a-8a1a-a1a1a1a1a1a1'::uuid,
-    '{"credential_kind":"facebook_user","token":"user-token-4"}'::jsonb);
+    '{"credential_kind":"facebook_user","token":"user-token-4","expected_credential_generation":3}'::jsonb);
 END $$;
 ROLLBACK TO SAVEPOINT ig_cap_generation_probe;
 
@@ -515,8 +573,21 @@ DECLARE
   acct_a uuid := 'c1c1c1c1-c1c1-4c1c-8c1c-c1c1c1c1c1c1';
   v      jsonb;
 BEGIN
+  BEGIN
+    PERFORM public.record_instagram_account_reconnect(
+      acct_a, u_a, '{"reason":"user_reconnect"}'::jsonb);
+    RAISE EXCEPTION 'S7 failed: a reconnect without a generation was accepted'
+      USING ERRCODE = 'assert_failure';
+  EXCEPTION WHEN SQLSTATE 'ICG03' THEN
+    ASSERT SQLERRM = 'expected_credential_generation is required',
+      'S7 a reconnect without a generation is refused';
+  END;
+  ASSERT (public.read_instagram_account_capability(acct_a, u_a)->>'credential_generation') = '3',
+    'S7 a reconnect without a generation leaves the generation untouched';
+
   v := public.record_instagram_account_reconnect(
-    acct_a, u_a, '{"reason":"user_reconnect"}'::jsonb);
+    acct_a, u_a,
+    '{"reason":"user_reconnect","expected_credential_generation":3}'::jsonb);
   ASSERT v->>'credential_generation' = '4',
     'S7 a reconnect advances the generation';
   ASSERT v->>'generation_reason' = 'user_reconnect',
@@ -555,8 +626,19 @@ DECLARE
   acct_a uuid := 'c1c1c1c1-c1c1-4c1c-8c1c-c1c1c1c1c1c1';
   v      jsonb;
 BEGIN
+  BEGIN
+    PERFORM public.bump_instagram_credential_generation(
+      acct_a, u_a, 'token_refreshed', 0);
+    RAISE EXCEPTION 'S8 failed: a stale bump was accepted'
+      USING ERRCODE = 'assert_failure';
+  EXCEPTION WHEN SQLSTATE 'ICG01' THEN
+    NULL;
+  END;
+  ASSERT (public.read_instagram_account_capability(acct_a, u_a)->>'credential_generation') = '4',
+    'S8 a stale bump leaves the generation untouched';
+
   v := public.bump_instagram_credential_generation(
-    acct_a, u_a, 'token_refreshed');
+    acct_a, u_a, 'token_refreshed', 4);
   ASSERT v->>'credential_generation' = '5',
     'S8 the bump advances the generation by one';
   ASSERT v->>'generation_reason' = 'token_refreshed',
@@ -570,7 +652,7 @@ BEGIN
     PERFORM public.bump_instagram_credential_generation(
       'c4c4c4c4-c4c4-4c4c-8c4c-c4c4c4c4c4c4'::uuid,
       'a1a1a1a1-a1a1-4a1a-8a1a-a1a1a1a1a1a1'::uuid,
-      'token_refreshed');
+      'token_refreshed', 0);
     RAISE EXCEPTION 'S8 failed: a bump succeeded without a capability record'
       USING ERRCODE = 'assert_failure';
   EXCEPTION WHEN OTHERS THEN
@@ -594,13 +676,26 @@ DECLARE
 BEGIN
   -- Put a credential back so the revocation has something to remove.
   v := public.replace_instagram_account_credential(
-    acct_a, u_a, '{"credential_kind":"facebook_user","token":"user-token-revoked"}'::jsonb);
+    acct_a, u_a,
+    '{"credential_kind":"facebook_user","token":"user-token-revoked","expected_credential_generation":5}'::jsonb);
   ASSERT v->>'credential_generation' = '6',
     'S8b the credential is stored at generation 6';
   ASSERT v->>'has_protected_credential' = 'true',
     'S8b a credential is present before the revocation';
 
-  v := public.revoke_instagram_account_credential(acct_a, u_a, 'provider_revoked');
+  BEGIN
+    PERFORM public.revoke_instagram_account_credential(acct_a, u_a, 'provider_revoked', 5);
+    RAISE EXCEPTION 'S8b failed: a stale revocation was accepted'
+      USING ERRCODE = 'assert_failure';
+  EXCEPTION WHEN SQLSTATE 'ICG01' THEN
+    NULL;
+  END;
+  ASSERT (public.read_instagram_account_credential(acct_a, u_a)->>'found') = 'true',
+    'S8b a stale revocation leaves the credential in place';
+  ASSERT (public.read_instagram_account_capability(acct_a, u_a)->>'credential_generation') = '6',
+    'S8b a stale revocation leaves the generation untouched';
+
+  v := public.revoke_instagram_account_credential(acct_a, u_a, 'provider_revoked', 6);
   ASSERT v->>'credential_generation' = '7',
     'S8b the revocation advances the generation';
   ASSERT v->>'has_protected_credential' = 'false',
@@ -617,7 +712,7 @@ BEGIN
   -- A cross-owner revocation is refused.
   BEGIN
     PERFORM public.revoke_instagram_account_credential(
-      acct_a, 'b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1b1'::uuid, 'provider_revoked');
+      acct_a, 'b1b1b1b1-b1b1-4b1b-8b1b-b1b1b1b1b1b1'::uuid, 'provider_revoked', 0);
     RAISE EXCEPTION 'S8b failed: a cross-owner revocation was accepted'
       USING ERRCODE = 'assert_failure';
   EXCEPTION WHEN OTHERS THEN
@@ -651,7 +746,8 @@ BEGIN
 
   -- The reconnect path is the one that may change it.
   v := public.record_instagram_account_reconnect(
-    acct_a, u_a, '{"login_kind":"direct","reason":"reauth_as_direct"}'::jsonb);
+    acct_a, u_a,
+    '{"login_kind":"direct","reason":"reauth_as_direct","expected_credential_generation":7}'::jsonb);
   ASSERT v->>'login_kind' = 'direct',
     'S9 a reconnect may set the new login kind';
   ASSERT v->>'credential_generation' = '8',
@@ -784,7 +880,7 @@ BEGIN
     PERFORM public.replace_instagram_account_credential(
       'c4c4c4c4-c4c4-4c4c-8c4c-c4c4c4c4c4c4'::uuid,
       'a1a1a1a1-a1a1-4a1a-8a1a-a1a1a1a1a1a1'::uuid,
-      '{"credential_kind":"facebook_user","token":"x"}'::jsonb);
+      '{"credential_kind":"facebook_user","token":"x","expected_credential_generation":0}'::jsonb);
     RAISE EXCEPTION 'S10 failed: a credential was written without a capability record'
       USING ERRCODE = 'assert_failure';
   EXCEPTION WHEN OTHERS THEN
@@ -1098,7 +1194,8 @@ BEGIN
   -- Review probe: reconnect, then the in-flight success from the previous
   -- generation. Generation becomes 1. The old result must not restore scopes.
   v_after := public.record_instagram_account_reconnect(
-    acct_d, u_a, '{"login_kind":"direct","reason":"review_reconnect"}'::jsonb);
+    acct_d, u_a,
+    '{"login_kind":"direct","reason":"review_reconnect","expected_credential_generation":0}'::jsonb);
   ASSERT v_after->>'credential_generation' = '1',
     'S13 the review reconnect advances generation to 1';
   ASSERT v_after->>'login_kind' = 'direct',
@@ -1191,13 +1288,44 @@ BEGIN
   ASSERT v_after->>'credential_generation' = '1',
     'S13 a permission read does not itself advance the generation';
 
-  -- Replacement: the in-flight result from generation 1 must not write,
-  -- even with an evidence timestamp newer than anything stored.
+  -- Direct login cannot take a Facebook User credential.
+  v_before := public.read_instagram_account_capability(acct_d, u_a);
+  BEGIN
+    PERFORM public.replace_instagram_account_credential(
+      acct_d, u_a,
+      '{"credential_kind":"facebook_user","token":"review-token-not-a-secret","expected_credential_generation":1}'::jsonb);
+    RAISE EXCEPTION 'S13 failed: a direct-login replacement was accepted'
+      USING ERRCODE = 'assert_failure';
+  EXCEPTION WHEN SQLSTATE 'FUC02' THEN
+    NULL;
+  END;
+  ASSERT public.read_instagram_account_capability(acct_d, u_a) = v_before,
+    'S13 a direct-login replacement writes nothing';
+
+  -- The positive replacement is page-linked. Reconnect with the generation
+  -- captured above, then restore the grant that replacement must keep.
+  v_after := public.record_instagram_account_reconnect(
+    acct_d, u_a,
+    '{"login_kind":"page_linked","reason":"page_linked_credential","expected_credential_generation":1}'::jsonb);
+  ASSERT v_after->>'login_kind' = 'page_linked',
+    'S13 the credential replacement account is page-linked';
+  ASSERT v_after->>'credential_generation' = '2',
+    'S13 the page-linked reconnect advances the generation to 2';
+  v_after := public.write_instagram_account_capability(
+    acct_d, u_a,
+    jsonb_build_object(
+      'permission_read_state', 'ok',
+      'expected_credential_generation', 2,
+      'granted_scopes', jsonb_build_array('instagram_basic'),
+      'scopes_read_at', v_t1_text));
+  ASSERT v_after->>'credential_generation' = '2',
+    'S13 restoring the grant does not advance the generation';
+
   v_after := public.replace_instagram_account_credential(
     acct_d, u_a,
-    '{"credential_kind":"facebook_user","token":"review-token-not-a-secret"}'::jsonb);
-  ASSERT v_after->>'credential_generation' = '2',
-    'S13 replacement advances the generation to 2';
+    '{"credential_kind":"facebook_user","token":"review-token-not-a-secret","expected_credential_generation":2}'::jsonb);
+  ASSERT v_after->>'credential_generation' = '3',
+    'S13 replacement advances the generation to 3';
   ASSERT v_after->'granted_scopes' = '["instagram_basic"]'::jsonb,
     'S13 replacement keeps the current scope set';
   v_before := v_after;
@@ -1207,7 +1335,7 @@ BEGIN
       acct_d, u_a,
       jsonb_build_object(
         'permission_read_state', 'ok',
-        'expected_credential_generation', 1,
+        'expected_credential_generation', 2,
         'granted_scopes', jsonb_build_array('instagram_manage_insights'),
         'scopes_read_at', v_t2_text));
     RAISE EXCEPTION 'S13 failed: a pre-replacement success was accepted'
@@ -1223,9 +1351,9 @@ BEGIN
 
   -- Revocation: same fence. The timestamp would otherwise be acceptable.
   v_after := public.revoke_instagram_account_credential(
-    acct_d, u_a, 'provider_revoked');
-  ASSERT v_after->>'credential_generation' = '3',
-    'S13 revocation advances the generation to 3';
+    acct_d, u_a, 'provider_revoked', 3);
+  ASSERT v_after->>'credential_generation' = '4',
+    'S13 revocation advances the generation to 4';
   ASSERT v_after->>'has_protected_credential' = 'false',
     'S13 revocation removes the credential';
   ASSERT v_after->'granted_scopes' = '["instagram_basic"]'::jsonb,
@@ -1252,7 +1380,7 @@ BEGIN
     'S13 a pre-revocation success does not restore or replace scopes';
   ASSERT v_after->>'has_protected_credential' = 'false',
     'S13 a pre-revocation success does not recreate the credential';
-  ASSERT v_after->>'credential_generation' = '3',
+  ASSERT v_after->>'credential_generation' = '4',
     'S13 a pre-revocation success does not move the generation';
 
   -- Stored ok/failed rows cannot omit or carry a non-finite timestamp,
@@ -1355,10 +1483,17 @@ DO $$
 DECLARE
   v jsonb;
 BEGIN
+  -- S9 left this account on direct login. A Facebook User credential
+  -- requires page_linked, and the generation captured before the switch.
+  v := public.record_instagram_account_reconnect(
+    'c1c1c1c1-c1c1-4c1c-8c1c-c1c1c1c1c1c1'::uuid,
+    'a1a1a1a1-a1a1-4a1a-8a1a-a1a1a1a1a1a1'::uuid,
+    '{"login_kind":"page_linked","reason":"projection_credential","expected_credential_generation":8}'::jsonb);
   PERFORM public.replace_instagram_account_credential(
     'c1c1c1c1-c1c1-4c1c-8c1c-c1c1c1c1c1c1'::uuid,
     'a1a1a1a1-a1a1-4a1a-8a1a-a1a1a1a1a1a1'::uuid,
-    '{"credential_kind":"facebook_user","token":"super-secret-value"}'::jsonb);
+    format('{"credential_kind":"facebook_user","token":"super-secret-value","expected_credential_generation":%s}',
+           v->>'credential_generation')::jsonb);
 
   v := public.read_instagram_account_capability(
     'c1c1c1c1-c1c1-4c1c-8c1c-c1c1c1c1c1c1'::uuid,

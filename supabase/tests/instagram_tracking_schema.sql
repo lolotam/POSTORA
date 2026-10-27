@@ -694,10 +694,14 @@ BEGIN
       'S4 cross-owner media snapshot is refused by the account ownership key, got: ' || SQLERRM;
   END;
 
+  -- The seeded metric day for this account is 2026-10-25. The day before
+  -- that fixture day keeps the day key off the existing row, so a session
+  -- whose current_date is the seeded day cannot raise the unique key ahead
+  -- of the ownership key.
   BEGIN
     INSERT INTO public.ig_account_insight_daily
       (user_id, social_account_id, metric_date, provider_date)
-    VALUES (u_b, acct_a, current_date, current_date);
+    VALUES (u_b, acct_a, DATE '2026-10-25' - 1, DATE '2026-10-25' - 1);
     RAISE EXCEPTION 'S4 failed: a cross-owner account day was accepted'
       USING ERRCODE = 'assert_failure';
   EXCEPTION WHEN foreign_key_violation THEN
@@ -717,12 +721,15 @@ BEGIN
   END;
 
   -- A competitor snapshot that names owner A's watchlist entry but owner B.
-  -- A distinct capture day, so the refusal under test is the ownership one
-  -- and not the daily uniqueness key.
+  -- The capture day is the day before the seeded capture (2026-10-26). On
+  -- UTC 2026-10-27, current_date - 1 is that seeded day, and the daily
+  -- uniqueness key is checked before the ownership key. The media row uses
+  -- the same fixture-relative day and a media id that is not the seeded one,
+  -- so neither natural key is the seeded capture.
   BEGIN
     INSERT INTO public.competitor_profile_snapshots
       (watchlist_id, user_id, captured_on, source)
-    VALUES (wl_a, u_b, current_date - 1, 'official');
+    VALUES (wl_a, u_b, DATE '2026-10-26' - 1, 'official');
     RAISE EXCEPTION 'S4 failed: a cross-owner competitor profile snapshot was accepted'
       USING ERRCODE = 'assert_failure';
   EXCEPTION WHEN foreign_key_violation THEN
@@ -733,7 +740,7 @@ BEGIN
   BEGIN
     INSERT INTO public.competitor_media_snapshots
       (watchlist_id, user_id, ig_media_id, captured_on, published_at, source)
-    VALUES (wl_a, u_b, 'ig-cross', current_date - 1, now(), 'official');
+    VALUES (wl_a, u_b, 'ig-cross', DATE '2026-10-26' - 1, now(), 'official');
     RAISE EXCEPTION 'S4 failed: a cross-owner competitor media snapshot was accepted'
       USING ERRCODE = 'assert_failure';
   EXCEPTION WHEN foreign_key_violation THEN
@@ -832,10 +839,14 @@ BEGIN
       'S5 a foreign post link is refused with the link error';
   END;
 
-  -- The same post for the media it actually published is accepted.
+  -- The same post for the media it actually published is accepted. The
+  -- capture day is the day before the seeded capture of this media
+  -- (2026-10-26), so the row is a second capture. current_date - 1 equals
+  -- that seeded day on UTC 2026-10-27. The duplicate-day refusal below still
+  -- targets the seeded day.
   INSERT INTO public.ig_media_insight_snapshots
     (user_id, social_account_id, post_id, ig_media_id, published_at, captured_on, views)
-  VALUES (u_a, acct_a, post_a, 'ig-itk-media-1', now(), current_date - 1, 10);
+  VALUES (u_a, acct_a, post_a, 'ig-itk-media-1', now(), DATE '2026-10-26' - 1, 10);
   ASSERT (SELECT count(*) FROM public.ig_media_insight_snapshots
            WHERE ig_media_id = 'ig-itk-media-1') = 2,
     'S5 an owned post link is accepted';
@@ -895,10 +906,12 @@ BEGIN
       'S6 a negative view count is refused by the views check, got: ' || SQLERRM;
   END;
 
+  -- Negative reach on a day offset from the seeded metric day (2026-10-25),
+  -- so the reach check is the refusal rather than that occupied day key.
   BEGIN
     INSERT INTO public.ig_account_insight_daily
       (user_id, social_account_id, metric_date, provider_date, reach)
-    VALUES (u_a, acct_a, current_date - 5, current_date - 5, -3);
+    VALUES (u_a, acct_a, DATE '2026-10-25' - 5, DATE '2026-10-25' - 5, -3);
     RAISE EXCEPTION 'S6 failed: a negative reach was accepted'
       USING ERRCODE = 'assert_failure';
   EXCEPTION WHEN check_violation THEN
@@ -919,11 +932,12 @@ BEGIN
       'S6 an unknown product type is refused by the product-type check, got: ' || SQLERRM;
   END;
 
-  -- An unknown source on a competitor snapshot.
+  -- An unknown source on a competitor snapshot. The day is two days before
+  -- the seeded capture, so it is not the occupied (watchlist, day) key.
   BEGIN
     INSERT INTO public.competitor_profile_snapshots
       (watchlist_id, user_id, captured_on, source)
-    VALUES (wl_a, u_a, current_date - 2, 'scraper');
+    VALUES (wl_a, u_a, DATE '2026-10-26' - 2, 'scraper');
     RAISE EXCEPTION 'S6 failed: an unknown source was accepted'
       USING ERRCODE = 'assert_failure';
   EXCEPTION WHEN check_violation THEN
@@ -954,11 +968,12 @@ BEGIN
       'S6 an unknown status is refused by the status check, got: ' || SQLERRM;
   END;
 
-  -- An inverted provider window.
+  -- An inverted provider window. The metric day is offset from the seeded
+  -- account day; the period bounds themselves stay the inverted pair.
   BEGIN
     INSERT INTO public.ig_account_insight_daily
       (user_id, social_account_id, metric_date, provider_date, period_start, period_end)
-    VALUES (u_a, acct_a, current_date - 9, current_date - 9,
+    VALUES (u_a, acct_a, DATE '2026-10-25' - 9, DATE '2026-10-25' - 9,
             '2026-10-26T00:00:00Z', '2026-10-25T00:00:00Z');
     RAISE EXCEPTION 'S6 failed: an inverted provider window was accepted'
       USING ERRCODE = 'assert_failure';
