@@ -1,6 +1,6 @@
 # Milestone 2 subplan: Page-token reconciliation before owner ingestion
 
-Status: contract reviewed and approved for bounded local P1 implementation by consultations 38–39; implementation not yet dispatched. Orchestrator authors the subplan; Codex Astra 6 High is the independent read-only reviewer. Initial implementation/tests/SQL stay MiniMax Token Plan `minimax-coding-plan/MiniMax-M3.1-Flash`; corrections stay Grok `grok-4.7-build-fast`/high. Project-specific §13 overrides the general pipeline SQL lane.
+Status: P1 SQL prerequisite accepted locally at `2c9cefcd`; P2 maintained types and adapter/provider/route integration are next, not yet implemented. [Acceptance and evidence](2026-10-26-instagram-insights-and-competitor-tracking.md#p1-page-reconciliation-sql-prerequisite-accepted-locally). Orchestrator owns the subplan and acceptance; Codex Astra 6 High remains the independent read-only reviewer. Initial implementation/tests/SQL stay MiniMax Token Plan `minimax-coding-plan/MiniMax-M3.1-Flash`; corrections stay Grok `grok-4.7-build-fast`/high. Project-specific §13 overrides the general pipeline SQL lane.
 
 Spec: [captured Page-token reconciliation](../specs/2026-10-28-meta-page-token-reconciliation.md). Parent: [Instagram plan §14](2026-10-26-instagram-insights-and-competitor-tracking.md#14-user-approved-sequential-milestone-gates-2026-10-27). Resume existing `feat/instagram-insights-competitors` checkout; commit verified slices locally only. No worktree/branch switch or push is implied.
 
@@ -64,7 +64,20 @@ Only after P2 acceptance, continue parent owner tasks 4/6 → 5/10 authenticated
 | Astra 39 | Six calls still require one overall provider deadline | accept | Four-second persistence reserve remains required; individual timeouts cannot consume it |
 | Astra 39 | Exact protected Page matching can bound portfolio work | accept for P2 | Same-capture-context binding read may permit early stop; retain documented `/accounts` token derivation |
 | Astra 39 | Hosted status green only for `aa985e0a` | accept | Six executed successful jobs do not cover any unpushed revision |
+| Astra 40 | SQL permits NBSP/BOM at credential boundaries | accept; bounded correction verified | New validators explicitly reject the ECMAScript trim set at either boundary; preserve valid literals and opaque IDs |
+| Astra 40 | Repository must reproduce actual post-admission waits | accept; verified | New capability/fence holder modes and fresh-stat observer were independently replayed through the actual repository fixture |
+| Astra 40 | Existing late-expiry transaction checks need no lock-framework rewrite | accept | Five independent observed waits prove pre-deadline commit and capture/User-expiry rollback |
+| Astra 41 | Accept only the local SQL prerequisite after exact-byte staging | accept | Tested/staged/committed tree is exactly `fe6ed37567f7d868a38cff89a2c6d045a6a7fd58`; runtime callers and live verification remain pending |
+| Astra 41 | Two wording caveats are documentation follow-ups, not material holds | accept and retain | Expiry must be set before capture for MAR07; privileged postgres EXECUTE is not literal owner-only access |
 
 ## Contract review completion
 
 Consultations 38–39 are read-only and independently adjudicated above. Astra disclosed using supplied source/evidence after prior policy-denied reads; no fresh advisor-side inspection or tests are claimed. The migration collision was independently confirmed and corrected before dispatch, not ignored as a suffix change. Freeze this spec and plan as separate local commits, then dispatch only P1. Contract acceptance is not SQL implementation acceptance, protected-refresh completion, whole-owner acceptance or release approval.
+
+## P1 acceptance boundary and retained follow-ups
+
+P1 is now accepted only as the local prerequisite described in the linked parent acceptance record. No HTTP consumer is implemented by this commit. Freeze its SQL/catalog contract before P2; do not relabel local SQL acceptance as runtime completion or permission to merge/deploy.
+
+- Before the manual fixture's next reuse, make C14/C16 ordering explicit: set known User expiry **before taking the capture**. Shorten a capture deadline after capture. A User-expiry edit after capture is correctly `MAR04` mismatch, not the intended `MAR07` late-expiry case. The accepted independent replay used the correct order and recorded actual waits and complete rollback. Do not silently amend the frozen fixture or claim amended bytes were tested as the accepted tree.
+- Clarify the older helper header's “owner alone” wording in a separately scoped documentation change: privileged `postgres` retains default EXECUTE, just as for accepted refresh RPCs. Browser roles and direct service-role helper calls remain denied. Actual executable ACLs, not that header, define the boundary.
+- Named memory/brainstorming/guard tools and graph CLI were unavailable; retained manual/source/advisory equivalents are not named-tool passes. Live configured-version Meta validation, retention/cleanup readiness and the whole owner journey remain later activation gates.

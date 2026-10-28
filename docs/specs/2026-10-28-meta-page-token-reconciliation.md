@@ -1,6 +1,6 @@
 # Captured Page-token reconciliation for the owner Instagram flow
 
-Status: contract approved for bounded local SQL implementation by consultations 38–39, after correcting the migration version. This is not implemented, deployed or enabled.
+Status: P1 SQL prerequisite accepted locally at `2c9cefcd` after consultations 38–41 and independent verification. P2 maintained types, provider/adapter and actual route integration remain pending; nothing is deployed or enabled. See the [P1 acceptance record](../plans/2026-10-26-instagram-insights-and-competitor-tracking.md#p1-page-reconciliation-sql-prerequisite-accepted-locally).
 
 Parent authority: [Instagram implementation plan §13–14](../plans/2026-10-26-instagram-insights-and-competitor-tracking.md#14-user-approved-sequential-milestone-gates-2026-10-27). Accepted direct refresh `dd7257d2` is unchanged. This slice precedes the owner collector/report/UI and does not authorize competitor work.
 
