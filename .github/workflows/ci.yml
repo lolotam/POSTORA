@@ -305,6 +305,29 @@ jobs:
           deno test --node-modules-dir=none \
             --allow-read --allow-write --allow-env --allow-run "${route}"
 
+      - name: Typecheck and test the owner collection worker
+        run: |
+          set -euo pipefail
+          modules=(
+            supabase/functions/instagram-insights-sync/graphProvider.ts
+            supabase/functions/instagram-insights-sync/workerStore.ts
+            supabase/functions/instagram-insights-sync/worker.ts
+          )
+          tests=(
+            supabase/functions/instagram-insights-sync/graphProvider.test.ts
+            supabase/functions/instagram-insights-sync/workerStore.test.ts
+            supabase/functions/instagram-insights-sync/worker.test.ts
+          )
+          for file in "${modules[@]}" "${tests[@]}"; do
+            if [ ! -f "${file}" ]; then
+              echo "Worker file is required: ${file}"
+              exit 1
+            fi
+          done
+          deno check --node-modules-dir=none "${modules[@]}" "${tests[@]}"
+          deno test --node-modules-dir=none \
+            --allow-read --allow-env "${tests[@]}"
+
   db-harness:
     name: Postgres baseline plus delta
     runs-on: ubuntu-24.04
