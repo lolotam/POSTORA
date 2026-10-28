@@ -266,6 +266,45 @@ jobs:
           deno test --node-modules-dir=none \
             --allow-read --allow-write --allow-env --allow-run "${tests[@]}"
 
+      - name: Typecheck and test the authenticated owner intake contract
+        run: |
+          set -euo pipefail
+          modules=(
+            supabase/functions/instagram-insights-sync/store.ts
+            supabase/functions/instagram-insights-sync/handler.ts
+            supabase/functions/instagram-insights-sync/index.ts
+          )
+          tests=(
+            supabase/functions/instagram-insights-sync/store.test.ts
+            supabase/functions/instagram-insights-sync/handler.test.ts
+            supabase/functions/instagram-insights-sync/handlers.test.ts
+          )
+          for file in "${modules[@]}" "${tests[@]}"; do
+            if [ ! -f "${file}" ]; then
+              echo "Owner intake file is required: ${file}"
+              exit 1
+            fi
+          done
+          deno check --node-modules-dir=none "${modules[@]}" "${tests[@]}"
+          deno test --node-modules-dir=none \
+            --allow-read --allow-env \
+            supabase/functions/instagram-insights-sync/store.test.ts \
+            supabase/functions/instagram-insights-sync/handler.test.ts
+
+      - name: Typecheck and test the actual owner intake route
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: |
+          set -euo pipefail
+          route="supabase/functions/instagram-insights-sync/handlers.test.ts"
+          if [ ! -f "${route}" ]; then
+            echo "Owner intake route test is required: ${route}"
+            exit 1
+          fi
+          deno check --node-modules-dir=none "${route}"
+          deno test --node-modules-dir=none \
+            --allow-read --allow-write --allow-env --allow-run "${route}"
+
   db-harness:
     name: Postgres baseline plus delta
     runs-on: ubuntu-24.04
