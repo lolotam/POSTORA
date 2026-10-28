@@ -14,14 +14,22 @@ import {
 import {
   isProtectedMetaRefreshPlatform,
   PROTECTED_REFRESH_REASONS,
-  refreshProtectedDirectAccount,
   refreshTripwirePorts,
   settleMetaRefreshAttempt,
   type ProtectedDirectDeps,
-  type ProtectedRefreshOutcome,
 } from "./protectedMetaRefresh.ts";
+import {
+  refreshProtectedMetaAccount,
+  type ProtectedMetaAccountOutcome,
+  type ProtectedMetaPageDeps,
+} from "./protectedPageReconciliation.ts";
 import { createMetaRefreshStore } from "./metaRefreshStore.ts";
 import { createMetaRefreshTransport } from "./metaRefreshProvider.ts";
+import {
+  createMetaPageReconciliationStore,
+  type ProtectedBindingReader,
+} from "./metaPageReconciliationStore.ts";
+import { createMetaPageReconciliationProvider } from "./metaPageReconciliationProvider.ts";
 import {
   createInstagramAccountCapabilityStore,
   createServiceRpcCaller,
@@ -774,15 +782,17 @@ async function refreshSingleAccount(
  * Server-controlled credential mode.
  *
  * Legacy mode keeps the existing refresh behaviour and does not touch the
- * protected credential schema. Protected Facebook and Instagram refreshes
- * are owned by the accepted protected lifecycle: the direct Instagram branch
- * is supported, the Facebook Page and the shared Facebook User grant stay
- * refused before any capture, provider call or write.
+ * protected credential schema. Protected mode owns the Meta token and health
+ * writes: the direct Instagram branch and the Page reconciliation branch are
+ * supported, and every other Meta account is refused before any capture,
+ * provider call or write.
  */
 interface ProtectedRefreshContext {
   mode: FacebookCredentialMode;
   /** The accepted protected lifecycle. Never used while the mode is legacy. */
   deps: ProtectedDirectDeps;
+  /** The Page reconciliation branch. Never used while the mode is legacy. */
+  pageDeps: ProtectedMetaPageDeps;
 }
 
 async function resolveProtectedRefreshContext(
@@ -798,7 +808,11 @@ async function resolveProtectedRefreshContext(
       return appSettingReadResult(data, error);
     }),
   );
-  return { mode: credentialMode, deps: createProtectedDirectDeps(supabaseAdmin) };
+  return {
+    mode: credentialMode,
+    deps: createProtectedDirectDeps(supabaseAdmin),
+    pageDeps: createProtectedPageDeps(supabaseAdmin),
+  };
 }
 
 /**
@@ -828,6 +842,61 @@ function createProtectedDirectDeps(supabaseAdmin: AnySupabase): ProtectedDirectD
 }
 
 /**
+ * The narrow protected-binding read.
+ *
+ * The composition root owns the query and the client. The projection is
+ * EXACTLY the accepted protected evidence of the binding relation, and the
+ * filters are the owner, the selected account, the captured credential and
+ * the captured connection version. The raw envelope is returned unchanged:
+ * normalizing it here would make a malformed envelope look successful before
+ * validation.
+ *
+ * The read carries no secret: the binding relation holds identifiers only.
+ */
+function createProtectedBindingReader(supabaseAdmin: AnySupabase): ProtectedBindingReader {
+  return (request) =>
+    supabaseAdmin
+      .from('facebook_user_credential_bindings')
+      .select(
+        'social_account_id,user_id,platform,credential_id,connection_version,' +
+          'verified_facebook_user_id,verified_facebook_page_id,verified_instagram_user_id',
+      )
+      .eq('social_account_id', request.socialAccountId)
+      .eq('user_id', request.userId)
+      .eq('credential_id', request.credentialId)
+      .eq('connection_version', request.connectionVersion)
+      .maybeSingle();
+}
+
+/**
+ * The composition root of the Page reconciliation branch.
+ *
+ * The same accepted SQL seam as the direct branch, the same notification
+ * transport, and the bounded Graph provider with the configured version.
+ */
+function createProtectedPageDeps(supabaseAdmin: AnySupabase): ProtectedMetaPageDeps {
+  const rpc = createServiceRpcCaller(supabaseAdmin);
+  return {
+    store: createMetaPageReconciliationStore(rpc, createProtectedBindingReader(supabaseAdmin)),
+    provider: createMetaPageReconciliationProvider({
+      // The configured Graph version wins. A malformed configured value
+      // refuses inside the provider; it never selects another version.
+      graphVersion: Deno.env.get('FACEBOOK_GRAPH_API_VERSION') ?? null,
+    }),
+    transport: createMetaRefreshTransport({
+      supabaseUrl: Deno.env.get('SUPABASE_URL') ?? '',
+      serviceRoleKey: Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
+      readProfileEmail: (userId: string) =>
+        supabaseAdmin
+          .from('profiles')
+          .select('id, email')
+          .eq('id', userId)
+          .maybeSingle(),
+    }),
+  };
+}
+
+/**
  * Maps one protected outcome onto the existing result shape.
  *
  * The browser contract does not change: the statuses are the ones the route
@@ -836,7 +905,7 @@ function createProtectedDirectDeps(supabaseAdmin: AnySupabase): ProtectedDirectD
  */
 function mapProtectedOutcomeToResult(
   account: { id: string; platform: string },
-  outcome: ProtectedRefreshOutcome,
+  outcome: ProtectedMetaAccountOutcome,
 ): RefreshResult {
   switch (outcome.kind) {
     case "refreshed":
@@ -899,7 +968,7 @@ async function runProtectedRefresh(input: {
   bypassCooldown: boolean;
   protectedContext: ProtectedRefreshContext;
 }): Promise<RefreshResult | null> {
-  const { mode, deps } = input.protectedContext;
+  const { mode, deps, pageDeps } = input.protectedContext;
   if (mode !== "protected" || !isProtectedMetaRefreshPlatform(input.account.platform)) {
     return null;
   }
@@ -915,38 +984,40 @@ async function runProtectedRefresh(input: {
     onLegacyFailure: async () => {
       throw new Error("legacy refresh failure handler invoked");
     },
-    supportedDirect: input.account.platform === "instagram"
-      ? async () => {
-        const outcome = await refreshProtectedDirectAccount({
-          account: {
-            id: input.account.id,
-            // The owner comes from the validated account row, never from the
-            // request body.
-            userId: input.account.user_id,
-            platform: input.account.platform,
-            platformUsername: input.account.platform_username ?? null,
-            platformUserId: input.account.platform_user_id ?? null,
-            lastRefreshAttemptAt: input.account.last_refresh_attempt_at ?? null,
-          },
-          trigger: input.trigger,
-          bypassCooldown: input.bypassCooldown,
-          deps,
+    // The protected-Meta gate covers both protected platforms. The entry
+    // decides the branch itself: a direct Instagram account goes to the
+    // accepted direct function unchanged, a Page-linked account and a
+    // Facebook Page go to the Page reconciliation.
+    supportedMeta: async () => {
+      const outcome = await refreshProtectedMetaAccount({
+        account: {
+          id: input.account.id,
+          // The owner comes from the validated account row, never from the
+          // request body.
+          userId: input.account.user_id,
+          platform: input.account.platform,
+          platformUsername: input.account.platform_username ?? null,
+          platformUserId: input.account.platform_user_id ?? null,
+          lastRefreshAttemptAt: input.account.last_refresh_attempt_at ?? null,
+        },
+        trigger: input.trigger,
+        bypassCooldown: input.bypassCooldown,
+        deps: { direct: deps, page: pageDeps, now: deps.now },
+      });
+      if (outcome.kind === 'committed_failure' && outcome.alert) {
+        // The delivery outcome is its own operational event. It is never a
+        // refresh failure, and it never rolls back the committed failure,
+        // its counter or its alert marker.
+        console.log('[refresh-tokens] protected refresh notification', {
+          event: 'protected_refresh_alert',
+          account_id: input.account.id,
+          platform: input.account.platform,
+          outcome: outcome.alert.outcome,
+          reason: outcome.alert.reason,
         });
-        if (outcome.kind === 'committed_failure' && outcome.alert) {
-          // The delivery outcome is its own operational event. It is never a
-          // refresh failure, and it never rolls back the committed failure,
-          // its counter or its alert marker.
-          console.log('[refresh-tokens] protected refresh notification', {
-            event: 'protected_refresh_alert',
-            account_id: input.account.id,
-            platform: input.account.platform,
-            outcome: outcome.alert.outcome,
-            reason: outcome.alert.reason,
-          });
-        }
-        return mapProtectedOutcomeToResult(input.account, outcome);
       }
-      : undefined,
+      return mapProtectedOutcomeToResult(input.account, outcome);
+    },
   });
 
   if (isLifecycleRefusal(settled)) {

@@ -12,12 +12,14 @@
  *   and on failure, and owns the counters, the escalation, the alert marker
  *   and the partner event. The route no longer refuses that path.
  *
- *   The Facebook Page and the shared Facebook User grant stay refused, before
- *   the capture, before the provider and before any operational write. Their
- *   transport is not established: a Page capture returns the operational Page
- *   token but no User secret, and the shared-User success writer cannot carry
- *   Page reconciliation. Refusing them is the honest answer, and it is the
- *   answer this module gives.
+ *   The Facebook Page and the shared Facebook User grant used to be refused
+ *   here, before the capture, before the provider and before any operational
+ *   write. They are now handled by the Page reconciliation branch, which
+ *   lives in `protectedPageReconciliation.ts` and is reached through the
+ *   additive `supportedMeta` gate below. A shared-User grant is still never
+ *   renewed here: the Page branch derives an operational Page token from the
+ *   UNCHANGED captured grant, and the renewal of that grant stays the
+ *   reconnect/OAuth path.
  *
  * THE ORDER OF THE PROTECTED PATH
  *
@@ -102,10 +104,16 @@ export function refreshTripwirePorts(): MetaRefreshPorts {
  * thrown legacy error is the caller's existing failure handler. A protected
  * refusal never reaches it.
  *
- * `supportedDirect` is the one supported protected branch. It is offered for
+ * `supportedDirect` is the accepted direct Instagram branch. It is offered for
  * Instagram only, and only when the caller wired it. Without it the gate
  * refuses exactly as it did before, which is what the existing refusal
  * callers and their tests rely on.
+ *
+ * `supportedMeta` is the additive protected-Meta gate. It is checked BEFORE
+ * `supportedDirect` and it covers BOTH protected platforms, so the caller can
+ * decide, inside the branch, whether the account is a direct Instagram
+ * account or a Page-linked one. A caller that does not wire it keeps the exact
+ * previous behavior of this function.
  */
 export async function settleMetaRefreshAttempt<T>(input: {
   mode: FacebookCredentialMode;
@@ -115,9 +123,16 @@ export async function settleMetaRefreshAttempt<T>(input: {
   legacy: () => Promise<T>;
   onLegacyFailure: (error: unknown) => Promise<T>;
   supportedDirect?: () => Promise<T>;
+  supportedMeta?: () => Promise<T>;
 }): Promise<LifecycleRefusal | T> {
   assertUncalledPorts(input.ports);
   if (input.mode === "protected" && isProtectedMetaRefreshPlatform(input.platform)) {
+    // The protected-Meta gate comes first. It decides the branch itself, so
+    // the accepted direct branch below is never reached for an account the
+    // gate already handled.
+    if (input.supportedMeta) {
+      return input.supportedMeta();
+    }
     if (input.platform === "instagram" && input.supportedDirect) {
       return input.supportedDirect();
     }

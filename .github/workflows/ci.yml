@@ -229,6 +229,9 @@ jobs:
             supabase/functions/refresh-tokens/protectedDirectRefresh.test.ts
             supabase/functions/refresh-tokens/metaRefreshStore.test.ts
             supabase/functions/refresh-tokens/metaRefreshProvider.test.ts
+            supabase/functions/refresh-tokens/metaPageReconciliationStore.test.ts
+            supabase/functions/refresh-tokens/metaPageReconciliationProvider.test.ts
+            supabase/functions/refresh-tokens/protectedPageReconciliation.test.ts
             supabase/functions/instagram-oauth/protectedDirectRefusal.test.ts
           )
           for file in "${tests[@]}"; do
@@ -252,6 +255,7 @@ jobs:
             supabase/functions/_shared/metaOAuthProtectedBoundary.test.ts
             supabase/functions/_shared/protectedOAuthHandlers.test.ts
             supabase/functions/refresh-tokens/refreshTokensHandlers.test.ts
+            supabase/functions/refresh-tokens/pageReconciliationHandlers.test.ts
           )
           for file in "${tests[@]}"; do
             if [ ! -f "${file}" ]; then

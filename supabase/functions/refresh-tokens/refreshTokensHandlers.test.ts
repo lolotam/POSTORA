@@ -35,6 +35,14 @@ const TIKTOK_ACCOUNT_ID = "0f1a0003-0000-4000-8000-000000000013";
 const CAPTURED_TOKEN = "captured-direct-token-must-not-leak";
 const FRESH_TOKEN = "fresh-direct-token-must-not-leak";
 const LEGACY_TOKEN = "legacy-token-must-not-leak";
+const CAPTURED_USER_TOKEN = "captured-user-secret-must-not-leak";
+const DERIVED_PAGE_TOKEN = "derived-page-token-must-not-leak";
+const PROVIDER_USER_ID = "fb-user-9001";
+const PAGE_ID = "page-7001";
+const INSTAGRAM_ID = "ig-page-7001";
+const CREDENTIAL_ID = "9a2c0001-0000-4000-8000-000000000021";
+const BINDING_CONNECTION_VERSION = 4;
+const PAGE_CAPTURE_ID = "726f97c3-305f-4674-a89d-79c4463b506a";
 
 const ENV: Record<string, string> = {
   CRON_SECRET,
@@ -118,6 +126,10 @@ interface Probe {
   history: Array<Record<string, unknown>>;
   logs: string[];
   legacyCalls: string[];
+  /** The protected binding rows the narrow binding reader may see. */
+  bindings: Array<Record<string, unknown>>;
+  /** The account the last Page capture was taken for. */
+  pageCaptureAccountId: string | null;
 }
 
 function account(overrides: Partial<AccountRow> = {}): AccountRow {
@@ -169,6 +181,8 @@ function probe(overrides: Partial<Probe> = {}): Probe {
     history: [],
     logs: [],
     legacyCalls: [],
+    bindings: [],
+    pageCaptureAccountId: null,
     ...overrides,
   };
 }
@@ -290,6 +304,121 @@ function accountState(row: AccountRow, overrides: Record<string, unknown> = {}) 
     needs_reauth: row.needs_reauth,
     is_active: true,
     ...overrides,
+  };
+}
+
+/**
+ * The captured Page reconciliation capture.
+ *
+ * This is the real shape of an accepted `facebook_user_token` capture: one
+ * credential-scoped token entry, a validated credential object and the
+ * captured membership of that one grant.
+ */
+function pageBeginWire(current: Probe, row: AccountRow): Record<string, unknown> {
+  const capturedAt = new Date();
+  const expiresAt = new Date(capturedAt.getTime() + 30 * 60 * 1000);
+  const capturedIso = capturedAt.toISOString();
+  const expiresIso = expiresAt.toISOString();
+  const generation = current.capabilityGeneration;
+  return {
+    capture_id: PAGE_CAPTURE_ID,
+    capture_version: 1,
+    captured_at: capturedIso,
+    expires_at: expiresIso,
+    operation: "facebook_user_token",
+    attempt_marker: capturedIso,
+    capture: {
+      capture_version: 1,
+      captured_at: capturedIso,
+      expires_at: expiresIso,
+      user_id: row.user_id,
+      operation: "facebook_user_token",
+      credential: {
+        credential_id: CREDENTIAL_ID,
+        revision: 7,
+        provider_user_id: PROVIDER_USER_ID,
+        token_expires_at: "2026-12-01T00:00:00+00:00",
+      },
+      members: [
+        {
+          social_account_id: row.id,
+          platform: row.platform,
+          connection_version: BINDING_CONNECTION_VERSION,
+          capability_generation: generation,
+          fence_connection_version: BINDING_CONNECTION_VERSION,
+        },
+      ],
+      targets: [
+        {
+          social_account_id: row.id,
+          platform: row.platform,
+          platform_user_id: row.platform_user_id,
+          binding_present: true,
+          binding_credential_id: CREDENTIAL_ID,
+          binding_connection_version: BINDING_CONNECTION_VERSION,
+          fence_state: "present",
+          fence_connection_version: BINDING_CONNECTION_VERSION,
+          credential_revision: 7,
+          provider_user_id: PROVIDER_USER_ID,
+          capability_present: true,
+          capability_generation: generation,
+          capability_login_kind: "page_linked",
+          capability_permission_read_state: "unknown",
+          token_expires_at: "2026-10-01T00:00:00+00:00",
+          refresh_token_present: true,
+          failure_count: 0,
+          needs_reauth: row.needs_reauth,
+          last_refresh_attempt_at: capturedIso,
+        },
+      ],
+    },
+    tokens: [
+      {
+        scope: "credential",
+        social_account_id: null,
+        credential_id: CREDENTIAL_ID,
+        credential_revision: 7,
+        token: CAPTURED_USER_TOKEN,
+        token_expires_at: "2026-12-01T00:00:00+00:00",
+        refresh_token: null,
+      },
+    ],
+  };
+}
+
+/** The exact eight-key receipt of the accepted Page reconciliation writer. */
+function pageWriteReceipt(current: Probe, args: Record<string, unknown>) {
+  const payload = args.p_payload as { capture_id: string };
+  const row = current.accounts.find((candidate) => candidate.id === current.pageCaptureAccountId) ??
+    current.accounts[0];
+  const generation = current.capabilityGeneration + 1;
+  return {
+    data: {
+      capture_id: String(payload.capture_id),
+      operation: "page_reconciliation",
+      applied: true,
+      credential_id: CREDENTIAL_ID,
+      credential_revision: 7,
+      credential_generation: generation,
+      expiry_state: "unknown",
+      account: {
+        found: true,
+        social_account_id: row.id,
+        platform: row.platform,
+        platform_user_id: row.platform_user_id,
+        login_kind: "page_linked",
+        credential_generation: generation,
+        binding_credential_id: CREDENTIAL_ID,
+        binding_connection_version: BINDING_CONNECTION_VERSION,
+        credential_revision: 7,
+        token_expires_at: null,
+        refresh_token_present: true,
+        failure_count: 0,
+        needs_reauth: row.needs_reauth,
+        is_active: true,
+      },
+    },
+    error: null,
   };
 }
 
@@ -427,6 +556,28 @@ function installClient(current: Probe) {
         };
       }
 
+      if (this.table === "facebook_user_credential_bindings") {
+        const rows = current.bindings.filter((row) => {
+          if (
+            this.filters.social_account_id !== undefined &&
+            row.social_account_id !== this.filters.social_account_id
+          ) return false;
+          if (this.filters.user_id !== undefined && row.user_id !== this.filters.user_id) {
+            return false;
+          }
+          if (
+            this.filters.credential_id !== undefined &&
+            row.credential_id !== this.filters.credential_id
+          ) return false;
+          if (
+            this.filters.connection_version !== undefined &&
+            row.connection_version !== this.filters.connection_version
+          ) return false;
+          return true;
+        });
+        return { data: this.one ? (rows[0] ?? null) : rows, error: null };
+      }
+
       let rows = current.accounts.filter((row) => {
         if (this.filters.id !== undefined && row.id !== this.filters.id) return false;
         if (this.filters.user_id !== undefined && row.user_id !== this.filters.user_id) return false;
@@ -541,9 +692,24 @@ function rpcResult(current: Probe, name: string, args: Record<string, unknown>) 
       (args.p_payload as { accounts: Array<{ social_account_id: string }> }).accounts[0]
         .social_account_id,
     );
+    const operation = String(
+      (args.p_payload as { accounts: Array<{ operation: string }> }).accounts[0].operation,
+    );
     const row = current.accounts.find((candidate) => candidate.id === accountId) ??
       current.accounts[0];
+    if (operation === "facebook_user_token") {
+      current.pageCaptureAccountId = row.id;
+      return { data: pageBeginWire(current, row), error: null };
+    }
     return { data: beginWire(current, row), error: null };
+  }
+
+  if (name === "write_meta_page_reconciliation_success") {
+    if (current.writeMode === "throw") {
+      return { data: null, error: { message: `write refused ${LEGACY_TOKEN}`, code: "MAR04" } };
+    }
+    if (current.writeMode === "malformed") return { data: { applied: false }, error: null };
+    return pageWriteReceipt(current, args);
   }
 
   if (name === "write_direct_instagram_account") {
@@ -777,6 +943,62 @@ function providerResponse(current: Probe, url: string): Response {
     });
   }
 
+  // The Graph provider of the Page reconciliation branch.
+  if (url.includes("graph.facebook.com")) {
+    if (current.providerMode === "timeout") {
+      throw new DOMException("The operation was aborted.", "AbortError");
+    }
+    if (current.providerMode === "revoked") {
+      return new Response(
+        JSON.stringify({ error: { type: "OAuthException", code: 190, message: "revoked" } }),
+        { status: 400, headers: { "content-type": "application/json" } },
+      );
+    }
+    if (current.providerMode === "permission") {
+      return new Response(
+        JSON.stringify({ error: { type: "OAuthException", code: 200, message: "denied" } }),
+        { status: 400, headers: { "content-type": "application/json" } },
+      );
+    }
+    if (current.providerMode === "rate-limited") {
+      return new Response(JSON.stringify({}), {
+        status: 429,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (current.providerMode === "server-error") {
+      return new Response(JSON.stringify({}), {
+        status: 503,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (current.providerMode === "unclassified") {
+      return new Response(JSON.stringify({ unexpected: true }), {
+        status: 400,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (url.includes("/me/accounts")) {
+      return new Response(
+        JSON.stringify({ data: [{ id: PAGE_ID, access_token: DERIVED_PAGE_TOKEN }] }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    if (url.includes("/me?")) {
+      return new Response(JSON.stringify({ id: PROVIDER_USER_ID }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return new Response(
+      JSON.stringify({
+        id: PAGE_ID,
+        instagram_business_account: { id: INSTAGRAM_ID },
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  }
+
   if (current.providerMode === "timeout") {
     throw new DOMException("The operation was aborted.", "AbortError");
   }
@@ -969,16 +1191,28 @@ routeTest("a failed settings read never selects the legacy path", async () => {
   assertEquals(current.rpc.length, 0);
 });
 
-routeTest("a page-linked account is refused before the capture", async () => {
+routeTest("a page-linked account reconciles its Page token", async () => {
   const current = probe({
     accounts: [
       account({
         id: PAGE_ACCOUNT_ID,
-        platform_user_id: "ig-page-1",
+        platform_user_id: INSTAGRAM_ID,
         platform_username: "ig_page_1",
         ig_auth_type: "business_login",
         loginKind: "page_linked",
       }),
+    ],
+    bindings: [
+      {
+        social_account_id: PAGE_ACCOUNT_ID,
+        user_id: OWNER_ID,
+        platform: "instagram",
+        credential_id: CREDENTIAL_ID,
+        connection_version: BINDING_CONNECTION_VERSION,
+        verified_facebook_user_id: PROVIDER_USER_ID,
+        verified_facebook_page_id: PAGE_ID,
+        verified_instagram_user_id: INSTAGRAM_ID,
+      },
     ],
   });
   const handler = await loadHandler(current);
@@ -988,23 +1222,74 @@ routeTest("a page-linked account is refused before the capture", async () => {
     adminHeaders(),
   );
 
-  assertEquals(result.status, 503);
-  assertEquals(result.json.error_code, "lifecycle_prerequisite_missing");
-  assertEquals(result.json.refused, 1);
-  assertEquals(current.rpc.includes("begin_meta_account_refresh"), false);
-  assertEquals(current.http.filter((entry) => entry.url.includes("graph.instagram.com")).length, 0);
+  assertEquals(result.status, 200);
+  assertEquals(result.json.status, "refreshed");
+  assertEquals(result.json.error_code, undefined);
+
+  // The accepted Page writer consumed the capture. The direct writer and the
+  // shared-User rotation writer are never used.
+  assertEquals(current.rpc.includes("write_meta_page_reconciliation_success"), true);
+  assertEquals(current.rpc.includes("write_direct_instagram_account"), false);
+  assertEquals(current.rpc.includes("write_meta_account_refresh_success"), false);
+  assertEquals(current.rpc.includes("record_meta_refresh_failure"), false);
+
+  // The provider received the CAPTURED User grant, never the account row.
+  const graphCalls = current.http.filter((entry) => entry.url.includes("graph.facebook.com"));
+  assertEquals(graphCalls.length, 3);
+  assertEquals(graphCalls.some((entry) => entry.url.includes(CAPTURED_USER_TOKEN)), true);
+  assertEquals(graphCalls.some((entry) => entry.url.includes(LEGACY_TOKEN)), false);
+  assertEquals(graphCalls.some((entry) => entry.url.includes(DERIVED_PAGE_TOKEN)), true);
 });
 
-routeTest("a bulk force refresh mixes a supported and an unsupported account", async () => {
+routeTest("an Instagram account without a proven authority is still refused", async () => {
+  const current = probe({
+    accounts: [
+      account({
+        id: PAGE_ACCOUNT_ID,
+        platform_user_id: INSTAGRAM_ID,
+        platform_username: "ig_page_1",
+        ig_auth_type: "business_login",
+        loginKind: "page_linked",
+      }),
+    ],
+    capabilityMode: "missing",
+  });
+  const handler = await loadHandler(current);
+  const result = await callJson(
+    handler,
+    { accountId: PAGE_ACCOUNT_ID, force: true },
+    adminHeaders(),
+  );
+
+  assertEquals(result.status, 200);
+  assertEquals(result.json.status, "failed");
+  assertEquals(result.json.error, "protected_capability_read_failed");
+  assertEquals(current.rpc.includes("begin_meta_account_refresh"), false);
+  assertEquals(current.http.filter((entry) => entry.url.includes("graph.facebook.com")).length, 0);
+});
+
+routeTest("a bulk force refresh mixes a direct account and a Page account", async () => {
   const current = probe({
     accounts: [
       account(),
       account({
         id: PAGE_ACCOUNT_ID,
-        platform_user_id: "ig-page-1",
+        platform_user_id: INSTAGRAM_ID,
         platform_username: "ig_page_1",
         loginKind: "page_linked",
       }),
+    ],
+    bindings: [
+      {
+        social_account_id: PAGE_ACCOUNT_ID,
+        user_id: OWNER_ID,
+        platform: "instagram",
+        credential_id: CREDENTIAL_ID,
+        connection_version: BINDING_CONNECTION_VERSION,
+        verified_facebook_user_id: PROVIDER_USER_ID,
+        verified_facebook_page_id: PAGE_ID,
+        verified_instagram_user_id: INSTAGRAM_ID,
+      },
     ],
   });
   const handler = await loadHandler(current);
@@ -1015,21 +1300,33 @@ routeTest("a bulk force refresh mixes a supported and an unsupported account", a
   );
 
   assertEquals(result.status, 200);
-  assertEquals(result.json.refreshed, 1);
-  assertEquals(result.json.refused, 1);
+  assertEquals(result.json.refreshed, 2);
   assertEquals(result.json.total, 2);
   assertEquals(current.rpc.includes("write_direct_instagram_account"), true);
+  assertEquals(current.rpc.includes("write_meta_page_reconciliation_success"), true);
 });
 
-routeTest("a bulk force refresh of only unsupported accounts is a 503", async () => {
+routeTest("a bulk force refresh of only Page accounts succeeds", async () => {
   const current = probe({
     accounts: [
       account({
         id: PAGE_ACCOUNT_ID,
-        platform_user_id: "ig-page-1",
+        platform_user_id: INSTAGRAM_ID,
         platform_username: "ig_page_1",
         loginKind: "page_linked",
       }),
+    ],
+    bindings: [
+      {
+        social_account_id: PAGE_ACCOUNT_ID,
+        user_id: OWNER_ID,
+        platform: "instagram",
+        credential_id: CREDENTIAL_ID,
+        connection_version: BINDING_CONNECTION_VERSION,
+        verified_facebook_user_id: PROVIDER_USER_ID,
+        verified_facebook_page_id: PAGE_ID,
+        verified_instagram_user_id: INSTAGRAM_ID,
+      },
     ],
   });
   const handler = await loadHandler(current);
@@ -1038,8 +1335,9 @@ routeTest("a bulk force refresh of only unsupported accounts is a 503", async ()
     { accountIds: [PAGE_ACCOUNT_ID], force: true },
     adminHeaders(),
   );
-  assertEquals(result.status, 503);
-  assertEquals(result.json.error_code, "lifecycle_prerequisite_missing");
+  assertEquals(result.status, 200);
+  assertEquals(result.json.refreshed, 1);
+  assertEquals(result.json.total, 1);
 });
 
 routeTest("the scheduled sweep refreshes the direct account", async () => {

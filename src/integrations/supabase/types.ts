@@ -10317,6 +10317,10 @@ export type Database = {
         Args: { p_user_id: string; p_payload: Json }
         Returns: Json
       }
+      write_meta_page_reconciliation_success: {
+        Args: { p_user_id: string; p_payload: Json }
+        Returns: Json
+      }
     }
     Enums: {
       app_role: "user" | "admin" | "subscriber" | "support"

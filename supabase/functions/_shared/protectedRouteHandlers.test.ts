@@ -37,6 +37,12 @@ const INSTAGRAM_ID = "a0000000-0000-4000-8000-000000000005";
 const PAGE_TOKEN = "page-token-must-not-leak";
 const METADATA_TOKEN = "metadata-token-must-not-leak";
 const RPC_TOKEN = "rpc-user-token-only";
+const PAGE_CREDENTIAL_ID = "33333333-3333-4333-8333-333333333333";
+const PAGE_CAPTURE_ID = "726f97c3-305f-4674-a89d-79c4463b506a";
+const PAGE_PROVIDER_USER_ID = "fb-user-9001";
+const PAGE_CONNECTION_VERSION = 4;
+const CAPTURED_USER_TOKEN = "captured-user-secret-must-not-leak";
+const DERIVED_PAGE_TOKEN = "derived-page-token-must-not-leak";
 
 const ENV: Record<string, string> = {
   SUPABASE_URL: "https://synthetic.invalid",
@@ -60,7 +66,15 @@ type SettingMode =
   | "throw"
   | "malformed";
 
-type RpcMode = "forbid" | "token" | "missing" | "schema" | "transport" | "malformed" | "refused";
+type RpcMode =
+  | "forbid"
+  | "token"
+  | "missing"
+  | "schema"
+  | "transport"
+  | "malformed"
+  | "refused"
+  | "page";
 
 interface AccountRow {
   id: string;
@@ -93,8 +107,16 @@ interface Probe {
   http: { url: string; body?: string }[];
   mutations: { table: string; op: string }[];
   history: number;
+  historyPayloads: unknown[];
   rpc: string[];
   reads: string[];
+  /** Graph bodies for an approved Page capture. Off unless a Page test asks. */
+  pageGraph: boolean;
+  /** The protected binding read. Present matches the captured credential. */
+  bindingMode: "present" | "missing" | "error";
+  /** Instagram authority returned by the capability read. Facebook ignores it. */
+  pageAuthority: "live" | "unknown";
+  pageCaptureAccountId: string | null;
 }
 
 function facebookAccount(overrides: Partial<AccountRow> = {}): AccountRow {
@@ -136,8 +158,13 @@ function probe(overrides: Partial<Probe> = {}): Probe {
     http: [],
     mutations: [],
     history: 0,
+    historyPayloads: [],
     rpc: [],
     reads: [],
+    pageGraph: false,
+    bindingMode: "present",
+    pageAuthority: "live",
+    pageCaptureAccountId: null,
     ...overrides,
   };
 }
@@ -213,12 +240,15 @@ function installClient(current: Probe) {
 
     execute() {
       if (this.op !== "select") {
-        if (this.table === "token_refresh_history") current.history += 1;
-        else current.mutations.push({ table: this.table, op: this.op });
+        if (this.table === "token_refresh_history") {
+          current.history += 1;
+          current.historyPayloads.push(this.filters.payload);
+        } else current.mutations.push({ table: this.table, op: this.op });
         return { data: this.op === "insert" ? { id: "synthetic-row" } : null, error: null };
       }
       current.reads.push(this.table);
       if (this.table === "app_settings") return settingsRow(current, String(this.filters.key ?? ""));
+      if (this.table === "facebook_user_credential_bindings") return bindingEnvelope(current, this.filters);
       const rows = current.accounts.filter((account) => {
         if (this.filters.id && account.id !== this.filters.id) return false;
         if (this.filters.user_id && account.user_id !== this.filters.user_id) return false;
@@ -243,6 +273,7 @@ function installClient(current: Probe) {
     from: (table: string) => new Query(table),
     rpc: async (name: string, args: Record<string, unknown>) => {
       current.rpc.push(name);
+      if (current.rpcMode === "page") return pageRpc(current, name, args);
       if (current.rpcMode === "forbid" || current.rpcMode === "transport") {
         throw new Error(`rpc failed access_token=${SECRET}`);
       }
@@ -355,13 +386,197 @@ function requestUrl(input: RequestInfo | URL): string {
 
 function installFetch(current: Probe) {
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = requestUrl(input);
     const body = typeof init?.body === "string" ? init.body : undefined;
-    current.http.push({ url: requestUrl(input), body });
+    current.http.push({ url, body });
+    if (current.pageGraph && url.includes("graph.facebook.com")) {
+      return new Response(JSON.stringify(pageGraphBody(url)), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
     return new Response(JSON.stringify({ data: [] }), {
       status: 200,
       headers: { "content-type": "application/json" },
     });
   }) as typeof fetch;
+}
+
+function pageGraphBody(url: string): Record<string, unknown> {
+  if (url.includes("/me/accounts")) {
+    return { data: [{ id: "synthetic-fb", access_token: DERIVED_PAGE_TOKEN }] };
+  }
+  if (url.includes("/me?")) return { id: PAGE_PROVIDER_USER_ID };
+  return { id: "synthetic-fb" };
+}
+
+function bindingEnvelope(current: Probe, filters: Record<string, unknown>) {
+  if (current.bindingMode === "missing") return { data: null, error: null };
+  if (current.bindingMode === "error") {
+    return { data: null, error: { message: "binding read failed" } };
+  }
+  const account = current.accounts.find((row) => row.id === filters.social_account_id);
+  if (!account) return { data: null, error: null };
+  const row = {
+    social_account_id: account.id,
+    user_id: account.user_id,
+    platform: account.platform,
+    credential_id: PAGE_CREDENTIAL_ID,
+    connection_version: PAGE_CONNECTION_VERSION,
+    verified_facebook_user_id: PAGE_PROVIDER_USER_ID,
+    verified_facebook_page_id: account.platform === "facebook" ? null : "synthetic-fb",
+    verified_instagram_user_id: account.platform === "instagram" ? account.platform_user_id : null,
+  };
+  const matches = (filters.user_id === undefined || row.user_id === filters.user_id) &&
+    (filters.credential_id === undefined || row.credential_id === filters.credential_id) &&
+    (filters.connection_version === undefined || row.connection_version === filters.connection_version);
+  return { data: matches ? row : null, error: null };
+}
+
+function pageBeginWire(row: AccountRow): Record<string, unknown> {
+  const capturedAt = new Date();
+  const expiresAt = new Date(capturedAt.getTime() + 30 * 60 * 1000);
+  const capturedIso = capturedAt.toISOString();
+  const expiresIso = expiresAt.toISOString();
+  const isFacebook = row.platform === "facebook";
+  return {
+    capture_id: PAGE_CAPTURE_ID,
+    capture_version: 1,
+    captured_at: capturedIso,
+    expires_at: expiresIso,
+    operation: "facebook_user_token",
+    attempt_marker: capturedIso,
+    capture: {
+      capture_version: 1,
+      captured_at: capturedIso,
+      expires_at: expiresIso,
+      user_id: row.user_id,
+      operation: "facebook_user_token",
+      credential: {
+        credential_id: PAGE_CREDENTIAL_ID,
+        revision: 7,
+        provider_user_id: PAGE_PROVIDER_USER_ID,
+        token_expires_at: "2027-02-01T00:00:00+00:00",
+      },
+      members: [
+        {
+          social_account_id: row.id,
+          platform: row.platform,
+          connection_version: PAGE_CONNECTION_VERSION,
+          capability_generation: isFacebook ? null : 11,
+          fence_connection_version: PAGE_CONNECTION_VERSION,
+        },
+      ],
+      targets: [
+        {
+          social_account_id: row.id,
+          platform: row.platform,
+          platform_user_id: row.platform_user_id,
+          binding_present: true,
+          binding_credential_id: PAGE_CREDENTIAL_ID,
+          binding_connection_version: PAGE_CONNECTION_VERSION,
+          fence_state: "present",
+          fence_connection_version: PAGE_CONNECTION_VERSION,
+          credential_revision: 7,
+          provider_user_id: PAGE_PROVIDER_USER_ID,
+          capability_present: !isFacebook,
+          capability_generation: isFacebook ? null : 11,
+          capability_login_kind: isFacebook ? null : "page_linked",
+          capability_permission_read_state: "unknown",
+          token_expires_at: "2026-10-01T00:00:00+00:00",
+          refresh_token_present: true,
+          failure_count: row.failure_count,
+          needs_reauth: row.needs_reauth,
+          last_refresh_attempt_at: capturedIso,
+        },
+      ],
+    },
+    tokens: [
+      {
+        scope: "credential",
+        social_account_id: null,
+        credential_id: PAGE_CREDENTIAL_ID,
+        credential_revision: 7,
+        token: CAPTURED_USER_TOKEN,
+        token_expires_at: "2027-02-01T00:00:00+00:00",
+        refresh_token: null,
+      },
+    ],
+  };
+}
+
+function pageWriteReceipt(current: Probe, args: Record<string, unknown>) {
+  const payload = args.p_payload as { capture_id?: string };
+  const row = current.accounts.find((candidate) => candidate.id === current.pageCaptureAccountId) ??
+    current.accounts[0];
+  const isFacebook = row.platform === "facebook";
+  return {
+    data: {
+      capture_id: String(payload.capture_id ?? PAGE_CAPTURE_ID),
+      operation: "page_reconciliation",
+      applied: true,
+      credential_id: PAGE_CREDENTIAL_ID,
+      credential_revision: 7,
+      credential_generation: isFacebook ? null : 12,
+      expiry_state: "unknown",
+      account: {
+        found: true,
+        social_account_id: row.id,
+        platform: row.platform,
+        platform_user_id: row.platform_user_id,
+        login_kind: isFacebook ? null : "page_linked",
+        credential_generation: isFacebook ? null : 12,
+        binding_credential_id: PAGE_CREDENTIAL_ID,
+        binding_connection_version: isFacebook ? PAGE_CONNECTION_VERSION + 1 : PAGE_CONNECTION_VERSION,
+        credential_revision: 7,
+        token_expires_at: null,
+        refresh_token_present: true,
+        failure_count: 0,
+        needs_reauth: row.needs_reauth,
+        is_active: true,
+      },
+    },
+    error: null,
+  };
+}
+
+function capabilityWire(current: Probe, accountId: string): Record<string, unknown> {
+  const unknown = current.pageAuthority === "unknown";
+  return {
+    social_account_id: accountId,
+    capability_present: !unknown,
+    login_kind: unknown ? null : "page_linked",
+    permission_read_state: "unknown",
+    scopes_authoritative: false,
+    granted_scopes: [],
+    scopes_read_at: null,
+    last_read_failed_at: null,
+    last_read_error_code: null,
+    credential_generation: unknown ? 0 : 11,
+    credential_updated_at: null,
+    generation_reason: null,
+    reconnected_at: null,
+    has_protected_credential: !unknown,
+    updated_at: null,
+  };
+}
+
+function pageRpc(current: Probe, name: string, args: Record<string, unknown>) {
+  if (name === "begin_meta_account_refresh") {
+    const accounts = (args.p_payload as { accounts?: Array<{ social_account_id?: string }> }).accounts ?? [];
+    const accountId = String(accounts[0]?.social_account_id ?? "");
+    const row = current.accounts.find((candidate) => candidate.id === accountId) ?? current.accounts[0];
+    current.pageCaptureAccountId = row.id;
+    return { data: pageBeginWire(row), error: null };
+  }
+  if (name === "write_meta_page_reconciliation_success") return pageWriteReceipt(current, args);
+  if (name === "read_instagram_account_capability") {
+    return {
+      data: capabilityWire(current, String(args.p_social_account_id ?? "")),
+      error: null,
+    };
+  }
+  return { data: null, error: { message: "unexpected protected rpc", code: "P0001" } };
 }
 
 function settingsRow(current: Probe, key: string) {
@@ -536,6 +751,21 @@ function providerUrls(current: Probe): string[] {
   );
 }
 
+function graphUrls(current: Probe): string[] {
+  return current.http.map((call) => call.url).filter((url) => url.includes("graph.facebook.com"));
+}
+
+function assertNoSecrets(current: Probe, body: unknown) {
+  const rendered = JSON.stringify({ body, history: current.historyPayloads });
+  for (const secret of [SECRET, CAPTURED_USER_TOKEN, DERIVED_PAGE_TOKEN, PAGE_TOKEN, METADATA_TOKEN, RPC_TOKEN]) {
+    assertEquals(rendered.includes(secret), false);
+  }
+}
+
+function pageProbe(overrides: Partial<Probe> = {}): Probe {
+  return probe({ rpcMode: "page", pageGraph: true, ...overrides });
+}
+
 function accountMutations(current: Probe): { table: string; op: string }[] {
   return current.mutations.filter((mutation) =>
     mutation.table === "social_accounts" ||
@@ -682,66 +912,155 @@ routeTest("undefined and failed settings reads do not continue an oauth route", 
   }
 });
 
-routeTest("protected scheduled, single, and bulk refresh refuse without alerts or account writes", async () => {
+routeTest("protected scheduled, single, and bulk refresh reconcile a captured facebook page", async () => {
   const entry = "refresh-tokens/index.ts";
   const url = "https://synthetic.invalid/functions/v1/refresh-tokens";
 
-  const scheduled = probe();
+  const scheduled = pageProbe();
   const scheduledHandler = await loadHandler(entry, scheduled);
   const scheduledResult = await callJson(scheduledHandler, url, {});
-  assertEquals(scheduledResult.status, 503);
-  assertEquals(scheduledResult.body.message, "Protected Meta refresh refused");
-  assertEquals(scheduledResult.body.error_code, "lifecycle_prerequisite_missing");
-  assertEquals(scheduledResult.body.refused, 1);
+  assertEquals(scheduledResult.status, 200);
+  assertEquals(scheduledResult.body.message, "Token refresh complete");
+  assertEquals(scheduledResult.body.results[0].status, "refreshed");
+  assertEquals(scheduledResult.body.results[0].id, FACEBOOK_ID);
   assertEquals(scheduledResult.body.alertsSent, 0);
+  assertEquals(scheduledResult.body.refused, undefined);
   assertEquals(scheduled.providerCalls, []);
-  assertEquals(providerUrls(scheduled), []);
+  assertEquals(graphUrls(scheduled).length, 3);
+  assertEquals(scheduled.http.some((call) => call.url.includes("send-token-failure-alert")), false);
   assertEquals(accountMutations(scheduled), []);
-  assertEquals(scheduled.rpc, []);
+  assertEquals(scheduled.rpc, [
+    "begin_meta_account_refresh",
+    "write_meta_page_reconciliation_success",
+  ]);
   assertEquals(scheduled.history, 1);
+  assertNoSecrets(scheduled, scheduledResult.body);
 
-  const single = probe({ accounts: [facebookAccount({ needs_reauth: true })] });
+  const single = pageProbe({ accounts: [facebookAccount({ needs_reauth: true })] });
   const singleHandler = await loadHandler(entry, single);
   const singleResult = await callJson(singleHandler, url, { accountId: FACEBOOK_ID, force: true });
-  assertEquals(singleResult.status, 503);
-  assertEquals(singleResult.body.message, "Protected Meta refresh refused");
-  assertEquals(singleResult.body.message.includes("complete"), false);
+  assertEquals(singleResult.status, 200);
+  assertEquals(singleResult.body.message, "Force refresh complete");
+  assertEquals(singleResult.body.status, "refreshed");
+  assertEquals(singleResult.body.id, FACEBOOK_ID);
   assertEquals(single.providerCalls, []);
-  assertEquals(providerUrls(single), []);
+  assertEquals(graphUrls(single).length, 3);
   assertEquals(accountMutations(single), []);
-  assertEquals(single.rpc, []);
+  assertEquals(single.rpc, [
+    "begin_meta_account_refresh",
+    "write_meta_page_reconciliation_success",
+  ]);
   assertEquals(single.history, 1);
+  assertNoSecrets(single, singleResult.body);
 
-  const bulk = probe();
+  const bulk = pageProbe();
   const bulkHandler = await loadHandler(entry, bulk);
   const bulkResult = await callJson(bulkHandler, url, { accountIds: [FACEBOOK_ID], force: true });
-  assertEquals(bulkResult.status, 503);
-  assertEquals(bulkResult.body.message, "Protected Meta refresh refused");
-  assertEquals(bulkResult.body.refused, 1);
+  assertEquals(bulkResult.status, 200);
+  assertEquals(bulkResult.body.message, "Bulk force refresh complete");
+  assertEquals(bulkResult.body.refreshed, 1);
+  assertEquals(bulkResult.body.refused, undefined);
+  assertEquals(bulkResult.body.results[0].status, "refreshed");
   assertEquals(bulk.providerCalls, []);
+  assertEquals(graphUrls(bulk).length, 3);
   assertEquals(accountMutations(bulk), []);
-  assertEquals(bulk.rpc, []);
+  assertEquals(bulk.rpc, [
+    "begin_meta_account_refresh",
+    "write_meta_page_reconciliation_success",
+  ]);
   assertEquals(bulk.history, 1);
+  assertNoSecrets(bulk, bulkResult.body);
+
+  const schema = probe({ rpcMode: "schema" });
+  const schemaHandler = await loadHandler(entry, schema);
+  const schemaResult = await callJson(schemaHandler, url, {});
+  assertEquals(schemaResult.status, 200);
+  assertEquals(schemaResult.body.message, "Token refresh complete");
+  assertEquals(schemaResult.body.results[0].status, "failed");
+  assertEquals(schemaResult.body.results[0].error_code, "refresh_schema_unavailable");
+  assertEquals(schemaResult.body.alertsSent, 0);
+  assertEquals(schema.providerCalls, []);
+  assertEquals(graphUrls(schema), []);
+  assertEquals(schema.http.some((call) => call.url.includes("send-token-failure-alert")), false);
+  assertEquals(accountMutations(schema), []);
+  assertEquals(schema.rpc, ["begin_meta_account_refresh"]);
+  assertEquals(schema.history, 1);
+  assertNoSecrets(schema, schemaResult.body);
+
+  const missingBinding = pageProbe({ pageGraph: false, bindingMode: "missing" });
+  const missingBindingHandler = await loadHandler(entry, missingBinding);
+  const missingBindingResult = await callJson(missingBindingHandler, url, {});
+  assertEquals(missingBindingResult.status, 200);
+  assertEquals(missingBindingResult.body.results[0].status, "skipped");
+  assertEquals(missingBindingResult.body.results[0].error_code, "page_binding_missing");
+  assertEquals(missingBinding.providerCalls, []);
+  assertEquals(graphUrls(missingBinding), []);
+  assertEquals(accountMutations(missingBinding), []);
+  assertEquals(missingBinding.rpc, ["begin_meta_account_refresh"]);
+  assertEquals(missingBinding.history, 1);
+
+  const failedBinding = pageProbe({ pageGraph: false, bindingMode: "error" });
+  const failedBindingHandler = await loadHandler(entry, failedBinding);
+  const failedBindingResult = await callJson(failedBindingHandler, url, {});
+  assertEquals(failedBindingResult.status, 200);
+  assertEquals(failedBindingResult.body.results[0].status, "failed");
+  assertEquals(failedBindingResult.body.results[0].error_code, "page_binding_read_failed");
+  assertEquals(failedBinding.providerCalls, []);
+  assertEquals(graphUrls(failedBinding), []);
+  assertEquals(accountMutations(failedBinding), []);
+  assertEquals(failedBinding.rpc, ["begin_meta_account_refresh"]);
+  assertEquals(failedBinding.history, 1);
+
+  const unknown = pageProbe({
+    pageGraph: false,
+    pageAuthority: "unknown",
+    accounts: [facebookAccount({
+      id: INSTAGRAM_ID,
+      platform: "instagram",
+      platform_username: "ig",
+      platform_user_id: "synthetic-ig",
+    })],
+  });
+  const unknownHandler = await loadHandler(entry, unknown);
+  const unknownResult = await callJson(unknownHandler, url, {});
+  assertEquals(unknownResult.status, 503);
+  assertEquals(unknownResult.body.message, "Protected Meta refresh refused");
+  assertEquals(unknownResult.body.error_code, "lifecycle_prerequisite_missing");
+  assertEquals(unknownResult.body.refused, 1);
+  assertEquals(unknownResult.body.results[0].id, INSTAGRAM_ID);
+  assertEquals(unknownResult.body.results[0].error_code, "lifecycle_prerequisite_missing");
+  assertEquals(unknown.providerCalls, []);
+  assertEquals(graphUrls(unknown), []);
+  assertEquals(providerUrls(unknown), []);
+  assertEquals(accountMutations(unknown), []);
+  assertEquals(unknown.rpc, ["read_instagram_account_capability"]);
+  assertEquals(unknown.rpc.includes("begin_meta_account_refresh"), false);
+  assertEquals(unknown.history, 1);
+  assertNoSecrets(unknown, unknownResult.body);
 });
 
-routeTest("cooldown and a recent attempt do not bypass a protected meta refusal", async () => {
+routeTest("a recent attempt defers a protected page refresh before the capture", async () => {
   const current = probe({
     accounts: [facebookAccount({ last_refresh_attempt_at: new Date().toISOString(), access_token: null })],
   });
   const handler = await loadHandler("refresh-tokens/index.ts", current);
   const result = await callJson(handler, "https://synthetic.invalid/functions/v1/refresh-tokens", {});
-  assertEquals(result.status, 503);
-  assertEquals(result.body.results[0].error_code, "lifecycle_prerequisite_missing");
-  assertEquals(result.body.results[0].status === "cooldown", false);
-  assertEquals(result.body.results[0].status === "needs_reauth", false);
+  assertEquals(result.status, 200);
+  assertEquals(result.body.message, "Token refresh complete");
+  assertEquals(result.body.results[0].status, "cooldown");
+  assertEquals(result.body.results[0].error_code, "refresh_cooldown");
+  assertEquals(result.body.results[0].id, FACEBOOK_ID);
+  assertEquals(result.body.refused, undefined);
   assertEquals(current.providerCalls, []);
   assertEquals(accountMutations(current), []);
   assertEquals(current.rpc, []);
   assertEquals(providerUrls(current), []);
+  assertEquals(current.history, 1);
+  assertNoSecrets(current, result.body);
 });
 
-routeTest("a mixed sweep refreshes non-meta work and does not let a refused account send the health alert alone", async () => {
-  const current = probe({
+routeTest("a mixed sweep refreshes the page and leaves the health alert to the non-meta account", async () => {
+  const current = pageProbe({
     providerMode: "success",
     accounts: [
       facebookAccount(),
@@ -758,19 +1077,30 @@ routeTest("a mixed sweep refreshes non-meta work and does not let a refused acco
   const result = await callJson(handler, "https://synthetic.invalid/functions/v1/refresh-tokens", {});
   assertEquals(result.status, 200);
   assertEquals(result.body.message, "Token refresh complete");
-  assertEquals(result.body.refused, 1);
+  assertEquals(result.body.refused, undefined);
+  assertEquals(result.body.results.map((row: { id: string; status: string }) => [row.id, row.status]), [
+    [FACEBOOK_ID, "refreshed"],
+    [TIKTOK_ID, "already_refreshed"],
+  ]);
   assertEquals(current.providerCalls.includes("refreshFacebookToken"), false);
   assertEquals(current.providerCalls.includes("refreshTikTokToken"), true);
+  assertEquals(graphUrls(current).length, 3);
+  assertEquals(current.rpc, [
+    "begin_meta_account_refresh",
+    "write_meta_page_reconciliation_success",
+  ]);
   const alerts = current.http.filter((call) => call.url.includes("send-token-failure-alert"));
   assertEquals(alerts.length, 1);
   const alertBody = JSON.parse(alerts[0].body ?? "{}");
   assertEquals(alertBody.healthAlert.expiredCount, 1);
   assertEquals(alertBody.healthAlert.totalAccounts, 1);
   assertEquals(alertBody.healthAlert.needsReauthCount, 0);
+  assertEquals(JSON.stringify(alertBody).includes(FACEBOOK_ID), false);
+  assertNoSecrets(current, result.body);
 });
 
 routeTest("a protected needs_reauth sibling does not send the global health alert", async () => {
-  const current = probe({
+  const current = pageProbe({
     accounts: [
       facebookAccount(),
       facebookAccount({ id: SIBLING_ID, needs_reauth: true, platform_username: "sibling" }),
@@ -778,16 +1108,22 @@ routeTest("a protected needs_reauth sibling does not send the global health aler
   });
   const handler = await loadHandler("refresh-tokens/index.ts", current);
   const result = await callJson(handler, "https://synthetic.invalid/functions/v1/refresh-tokens", {});
-  assertEquals(result.status, 503);
-  assertEquals(result.body.message, "Protected Meta refresh refused");
-  assertEquals(result.body.refused, 1);
+  assertEquals(result.status, 200);
+  assertEquals(result.body.message, "Token refresh complete");
+  assertEquals(result.body.refused, undefined);
   assertEquals(result.body.results.length, 1);
   assertEquals(result.body.results[0].id, FACEBOOK_ID);
+  assertEquals(result.body.results[0].status, "refreshed");
   assertEquals(current.http.some((call) => call.url.includes("send-token-failure-alert")), false);
   assertEquals(current.providerCalls, []);
+  assertEquals(graphUrls(current).length, 3);
   assertEquals(accountMutations(current), []);
-  assertEquals(current.rpc, []);
+  assertEquals(current.rpc, [
+    "begin_meta_account_refresh",
+    "write_meta_page_reconciliation_success",
+  ]);
   assertEquals(current.history, 1);
+  assertNoSecrets(current, result.body);
 });
 
 routeTest("platform-filtered protected meta stays out of the health population", async () => {
@@ -824,8 +1160,8 @@ routeTest("platform-filtered protected meta stays out of the health population",
   assertEquals(current.history, 1);
 });
 
-routeTest("a facebook-only sweep does not alert for protected meta left out of the filter", async () => {
-  const current = probe({
+routeTest("a facebook-only sweep reconciles the page and does not alert for protected meta", async () => {
+  const current = pageProbe({
     accounts: [
       facebookAccount(),
       facebookAccount({ id: SIBLING_ID, needs_reauth: true, platform_username: "sibling" }),
@@ -836,19 +1172,27 @@ routeTest("a facebook-only sweep does not alert for protected meta left out of t
   const result = await callJson(handler, "https://synthetic.invalid/functions/v1/refresh-tokens", {
     platforms: ["facebook"],
   });
-  assertEquals(result.status, 503);
-  assertEquals(result.body.refused, 1);
+  assertEquals(result.status, 200);
+  assertEquals(result.body.message, "Token refresh complete");
+  assertEquals(result.body.refused, undefined);
   assertEquals(result.body.results.length, 1);
   assertEquals(result.body.results[0].id, FACEBOOK_ID);
+  assertEquals(result.body.results[0].status, "refreshed");
   assertEquals(current.http.some((call) => call.url.includes("send-token-failure-alert")), false);
   assertEquals(current.providerCalls, []);
+  assertEquals(graphUrls(current).length, 3);
   assertEquals(accountMutations(current), []);
-  assertEquals(current.rpc, []);
+  assertEquals(current.rpc, [
+    "begin_meta_account_refresh",
+    "write_meta_page_reconciliation_success",
+  ]);
+  assertEquals(current.rpc.includes("read_instagram_account_capability"), false);
   assertEquals(current.history, 1);
+  assertNoSecrets(current, result.body);
 });
 
 routeTest("a budget-deferred protected account does not send the global health alert", async () => {
-  const current = probe({
+  const current = pageProbe({
     accounts: [
       facebookAccount(),
       facebookAccount({ id: DEFERRED_ID, platform_username: "deferred" }),
@@ -862,18 +1206,27 @@ routeTest("a budget-deferred protected account does not send the global health a
     return reads <= 2 ? start : start + 30_000;
   };
   const result = await callJson(handler, "https://synthetic.invalid/functions/v1/refresh-tokens", {});
-  assertEquals(result.body.results.map((row: { id: string; error?: string }) => [row.id, row.error]), [
-    [FACEBOOK_ID, "Protected Meta account changes are unavailable until the lifecycle contract is ready."],
-    [DEFERRED_ID, "Deferred: sweep budget spent"],
+  assertEquals(result.body.results.map((row: { id: string; status: string; error?: string }) => [
+    row.id,
+    row.status,
+    row.error,
+  ]), [
+    [FACEBOOK_ID, "refreshed", undefined],
+    [DEFERRED_ID, "skipped", "Deferred: sweep budget spent"],
   ]);
   assertEquals(result.status, 200);
   assertEquals(result.body.message, "Token refresh complete");
-  assertEquals(result.body.refused, 1);
+  assertEquals(result.body.refused, undefined);
   assertEquals(current.http.some((call) => call.url.includes("send-token-failure-alert")), false);
   assertEquals(current.providerCalls, []);
+  assertEquals(graphUrls(current).length, 3);
   assertEquals(accountMutations(current), []);
-  assertEquals(current.rpc, []);
+  assertEquals(current.rpc, [
+    "begin_meta_account_refresh",
+    "write_meta_page_reconciliation_success",
+  ]);
   assertEquals(current.history, 1);
+  assertNoSecrets(current, result.body);
 });
 
 routeTest("an absent settings row still refreshes a legacy meta account and does not read the protected schema", async () => {
