@@ -208,14 +208,14 @@ jobs:
         run: |
           set -euo pipefail
           report_dir="supabase/functions/instagram-insights-report"
-          for file in contracts.ts assemble.ts assemble.test.ts; do
+          for file in contracts.ts assemble.ts reportStore.ts handler.ts index.ts assemble.test.ts reportStore.test.ts handler.test.ts; do
             if [ ! -f "${report_dir}/${file}" ]; then
               echo "Owner-report contract file is required: ${file}"
               exit 1
             fi
           done
-          deno check --node-modules-dir=none "${report_dir}/contracts.ts" "${report_dir}/assemble.ts" "${report_dir}/assemble.test.ts"
-          deno test --node-modules-dir=none "${report_dir}/assemble.test.ts"
+          deno check --node-modules-dir=none "${report_dir}"/*.ts
+          deno test --node-modules-dir=none "${report_dir}"/*.test.ts
 
       - name: Typecheck and test protected Meta credential readers and refusals
         run: |

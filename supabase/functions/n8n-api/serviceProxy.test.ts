@@ -376,6 +376,20 @@ Deno.test("tiktok analytics reads the account's videos", async () => {
   });
 });
 
+Deno.test("instagram analytics reads the account's report", async () => {
+  const instagram = fakeDeps({
+    account: { id: ACCOUNT_ID, user_id: OWNER, platform: "instagram", platform_user_id: "ig-1", is_active: true },
+  });
+  const instagramResult = await handleGetPostAnalytics(instagram.deps, OWNER, params({ social_account_id: ACCOUNT_ID, period_days: "30" }));
+  assertEquals(instagramResult.status, 200);
+  assertEquals(instagram.calls.invokes[0].functionName, "instagram-insights-report");
+  assertEquals(instagram.calls.invokes[0].body, {
+    user_id: OWNER,
+    social_account_id: ACCOUNT_ID,
+    period_days: 30,
+  });
+});
+
 Deno.test("analytics on any other platform says it is not supported yet", async () => {
   const facebook = fakeDeps();
   const facebookResult = await handleGetPostAnalytics(facebook.deps, OWNER, params({ social_account_id: ACCOUNT_ID }));
