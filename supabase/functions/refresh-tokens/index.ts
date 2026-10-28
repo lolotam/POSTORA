@@ -8,13 +8,24 @@ import {
   LIFECYCLE_PREREQUISITE_MESSAGE,
   LIFECYCLE_PREREQUISITE_STATUS,
   loadFacebookCredentialSettings,
+  refuseProtectedLifecycle,
   type FacebookCredentialMode,
 } from "../_shared/facebookCredentialMode.ts";
 import {
   isProtectedMetaRefreshPlatform,
+  PROTECTED_REFRESH_REASONS,
+  refreshProtectedDirectAccount,
   refreshTripwirePorts,
   settleMetaRefreshAttempt,
+  type ProtectedDirectDeps,
+  type ProtectedRefreshOutcome,
 } from "./protectedMetaRefresh.ts";
+import { createMetaRefreshStore } from "./metaRefreshStore.ts";
+import { createMetaRefreshTransport } from "./metaRefreshProvider.ts";
+import {
+  createInstagramAccountCapabilityStore,
+  createServiceRpcCaller,
+} from "../_shared/facebookUserCredentialStore.ts";
 import {
   accountCanAttemptRefresh,
   metaRefreshStrategy,
@@ -23,6 +34,7 @@ import {
 import { nextFailureCount, shouldEscalateToReauth } from "./escalation.ts";
 import { mayStartAnotherAccount } from "./sweepBudget.ts";
 import { type MetaProviderError } from "../_shared/metaErrors.ts";
+import { readMaybeSingle } from "../_shared/metaOAuthProtectedBoundary.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import { handleCorsOptions, jsonResponse, errorResponse } from "../_shared/cors.ts";
 import {
@@ -499,9 +511,19 @@ async function refreshSingleAccount(
   _force: boolean = false,
   protectedContext?: ProtectedRefreshContext,
 ): Promise<RefreshResult> {
-  if (protectedContext?.mode === "protected") {
-    const refusal = await protectedRefreshRefusal(protectedContext.mode, account, "manual");
-    if (refusal) return refusal;
+  // A protected Meta account never reaches the legacy path. The route reaches
+  // the protected service before this helper is called, and it does so
+  // exactly once: this gate is the fail-closed backstop, and it never starts
+  // a second capture.
+  if (protectedContext?.mode === "protected" && isProtectedMetaRefreshPlatform(account.platform)) {
+    const refusal = refuseProtectedLifecycle("meta_refresh", "manual");
+    return {
+      id: account.id,
+      platform: account.platform,
+      status: "skipped",
+      error: refusal.error,
+      error_code: refusal.errorCode,
+    };
   }
 
   const oldRefreshToken = account.refresh_token;
@@ -753,10 +775,14 @@ async function refreshSingleAccount(
  *
  * Legacy mode keeps the existing refresh behaviour and does not touch the
  * protected credential schema. Protected Facebook and Instagram refreshes
- * refuse before HTTP and before any health, attempt, alert, or event write.
+ * are owned by the accepted protected lifecycle: the direct Instagram branch
+ * is supported, the Facebook Page and the shared Facebook User grant stay
+ * refused before any capture, provider call or write.
  */
 interface ProtectedRefreshContext {
   mode: FacebookCredentialMode;
+  /** The accepted protected lifecycle. Never used while the mode is legacy. */
+  deps: ProtectedDirectDeps;
 }
 
 async function resolveProtectedRefreshContext(
@@ -772,19 +798,116 @@ async function resolveProtectedRefreshContext(
       return appSettingReadResult(data, error);
     }),
   );
-  return { mode: credentialMode };
+  return { mode: credentialMode, deps: createProtectedDirectDeps(supabaseAdmin) };
 }
 
-async function protectedRefreshRefusal(
-  mode: FacebookCredentialMode,
+/**
+ * The composition root of the protected branch.
+ *
+ * The client is never constructed here: the adapters take the client as a
+ * dependency, so the whole protected path stays testable without a database.
+ */
+function createProtectedDirectDeps(supabaseAdmin: AnySupabase): ProtectedDirectDeps {
+  const rpc = createServiceRpcCaller(supabaseAdmin);
+  return {
+    store: createMetaRefreshStore(rpc),
+    capabilities: createInstagramAccountCapabilityStore(rpc),
+    transport: createMetaRefreshTransport({
+      supabaseUrl: Deno.env.get('SUPABASE_URL') ?? '',
+      serviceRoleKey: Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '',
+      // A strict owner-scoped read. The envelope is validated by the
+      // transport; a missing row is a genuine absence, not a failure.
+      readProfileEmail: (userId: string) =>
+        supabaseAdmin
+          .from('profiles')
+          .select('id, email')
+          .eq('id', userId)
+          .maybeSingle(),
+    }),
+  };
+}
+
+/**
+ * Maps one protected outcome onto the existing result shape.
+ *
+ * The browser contract does not change: the statuses are the ones the route
+ * already returned, and the reasons are stable codes. A provider message, a
+ * token and a capture never reach this result.
+ */
+function mapProtectedOutcomeToResult(
   account: { id: string; platform: string },
-  trigger: "scheduled" | "manual",
-): Promise<RefreshResult | null> {
-  if (mode !== "protected" || !isProtectedMetaRefreshPlatform(account.platform)) return null;
-  const settled = await settleMetaRefreshAttempt({
+  outcome: ProtectedRefreshOutcome,
+): RefreshResult {
+  switch (outcome.kind) {
+    case "refreshed":
+      return { id: account.id, platform: account.platform, status: 'refreshed' };
+    case "committed_failure":
+      return {
+        id: account.id,
+        platform: account.platform,
+        status: outcome.needsReauth ? 'needs_reauth' : 'failed',
+        error: outcome.category,
+        error_code: outcome.category,
+      };
+    case "unsupported":
+      return {
+        id: account.id,
+        platform: account.platform,
+        status: 'skipped',
+        error: LIFECYCLE_PREREQUISITE_MESSAGE,
+        error_code: LIFECYCLE_PREREQUISITE_CODE,
+      };
+    case "deferred":
+      return {
+        id: account.id,
+        platform: account.platform,
+        status: outcome.reason === PROTECTED_REFRESH_REASONS.refreshCooldown ? 'cooldown' : 'skipped',
+        error: outcome.reason,
+        error_code: outcome.reason,
+      };
+    case "local_failure":
+      return {
+        id: account.id,
+        platform: account.platform,
+        status: 'failed',
+        error: outcome.reason,
+        error_code: outcome.reason,
+      };
+    case "indeterminate":
+      return {
+        id: account.id,
+        platform: account.platform,
+        status: 'error',
+        error: outcome.reason,
+        error_code: outcome.reason,
+      };
+  }
+}
+
+/**
+ * Runs the protected lifecycle for one account, exactly once.
+ *
+ * Returns null when the account is not a protected Meta account, and the
+ * caller then continues with the legacy path. For a protected Meta account
+ * the legacy path is never taken: the accepted SQL owns the attempt marker,
+ * the health columns, the counters and the failure policy.
+ */
+async function runProtectedRefresh(input: {
+  account: SocialAccountWithDetails;
+  trigger: "scheduled" | "manual";
+  /** A manual force bypasses the window and the cooldown, never the age. */
+  bypassCooldown: boolean;
+  protectedContext: ProtectedRefreshContext;
+}): Promise<RefreshResult | null> {
+  const { mode, deps } = input.protectedContext;
+  if (mode !== "protected" || !isProtectedMetaRefreshPlatform(input.account.platform)) {
+    return null;
+  }
+
+  const settled = await settleMetaRefreshAttempt<RefreshResult>({
     mode,
-    platform: account.platform,
-    trigger,
+    platform: input.account.platform,
+    trigger: input.trigger,
     ports: refreshTripwirePorts(),
     legacy: async () => {
       throw new Error("legacy refresh invoked");
@@ -792,17 +915,50 @@ async function protectedRefreshRefusal(
     onLegacyFailure: async () => {
       throw new Error("legacy refresh failure handler invoked");
     },
+    supportedDirect: input.account.platform === "instagram"
+      ? async () => {
+        const outcome = await refreshProtectedDirectAccount({
+          account: {
+            id: input.account.id,
+            // The owner comes from the validated account row, never from the
+            // request body.
+            userId: input.account.user_id,
+            platform: input.account.platform,
+            platformUsername: input.account.platform_username ?? null,
+            platformUserId: input.account.platform_user_id ?? null,
+            lastRefreshAttemptAt: input.account.last_refresh_attempt_at ?? null,
+          },
+          trigger: input.trigger,
+          bypassCooldown: input.bypassCooldown,
+          deps,
+        });
+        if (outcome.kind === 'committed_failure' && outcome.alert) {
+          // The delivery outcome is its own operational event. It is never a
+          // refresh failure, and it never rolls back the committed failure,
+          // its counter or its alert marker.
+          console.log('[refresh-tokens] protected refresh notification', {
+            event: 'protected_refresh_alert',
+            account_id: input.account.id,
+            platform: input.account.platform,
+            outcome: outcome.alert.outcome,
+            reason: outcome.alert.reason,
+          });
+        }
+        return mapProtectedOutcomeToResult(input.account, outcome);
+      }
+      : undefined,
   });
-  if (!isLifecycleRefusal(settled)) {
-    throw new Error("protected refresh returned no refusal");
+
+  if (isLifecycleRefusal(settled)) {
+    return {
+      id: input.account.id,
+      platform: input.account.platform,
+      status: "skipped",
+      error: settled.error,
+      error_code: settled.errorCode,
+    };
   }
-  return {
-    id: account.id,
-    platform: account.platform,
-    status: "skipped",
-    error: settled.error,
-    error_code: settled.errorCode,
-  };
+  return settled;
 }
 
 async function authorizeRefreshRequest(
@@ -832,13 +988,34 @@ async function authorizeRefreshRequest(
     const { data: { user }, error } = await admin.auth.getUser(token);
     if (error || !user) return { ok: false, response: errorResponse('Unauthorized', 401) };
 
-    const { data: roleData } = await admin
-      .from('user_roles')
-      .select('role')
-      .eq('user_id', user.id)
-      .eq('role', 'admin')
-      .maybeSingle();
-    if (!roleData) return { ok: false, response: errorResponse('Admin access required', 403) };
+    // The role read is the raw driver envelope, not a truthy check.
+    // Success is an own `data` object and an own `error: null`, then an own
+    // `role` of exactly `admin`. A missing, undefined, false or inherited
+    // error is a failure. The driver error itself is never logged.
+    const roleRead = await readMaybeSingle(() =>
+      admin
+        .from('user_roles')
+        .select('role')
+        .eq('user_id', user.id)
+        .eq('role', 'admin')
+        .maybeSingle(),
+    );
+    if (roleRead.status === 'failed') {
+      console.error('[refresh-tokens] admin role read failed', {
+        event: 'admin_role_read_failed',
+      });
+    }
+    const roleField = roleRead.status === 'row'
+      ? Object.getOwnPropertyDescriptor(roleRead.row, 'role')
+      : undefined;
+    if (
+      roleRead.status !== 'row' ||
+      roleField === undefined ||
+      !('value' in roleField) ||
+      roleField.value !== 'admin'
+    ) {
+      return { ok: false, response: errorResponse('Admin access required', 403) };
+    }
 
     console.log(`refresh-tokens authorized via admin JWT: ${user.id}`);
     return { ok: true, mode: 'admin' };
@@ -917,19 +1094,35 @@ Deno.serve(async (req) => {
       // never restores the flag — leaving a genuinely dead account green.
       // handleRefreshSuccess is the only place that may clear these.
       //
-      // Protected Facebook and Instagram refresh refuses before this marker.
-      const manualRefusal = await protectedRefreshRefusal(protectedContext.mode, account, "manual");
-      if (manualRefusal) {
-        manualRefusal.username = account.platform_username;
-        await logRefreshHistory(supabaseAdmin, [manualRefusal], 'force');
+      // The protected lifecycle is reached first and exactly once. It owns the
+      // attempt marker, the health columns and the failure policy, so the
+      // legacy marker and the legacy failure handler are never reached for a
+      // protected account.
+      const protectedResult = await runProtectedRefresh({
+        account: account as SocialAccountWithDetails,
+        trigger: "manual",
+        bypassCooldown: true,
+        protectedContext,
+      });
+      if (protectedResult) {
+        protectedResult.username = account.platform_username;
+        await logRefreshHistory(supabaseAdmin, [protectedResult], 'force');
+        if (protectedResult.error_code === LIFECYCLE_PREREQUISITE_CODE) {
+          return jsonResponse({
+            ...protectedResult,
+            message: 'Protected Meta refresh refused',
+            error_code: protectedResult.error_code,
+            error: protectedResult.error,
+            accountId,
+            refused: 1,
+          }, LIFECYCLE_PREREQUISITE_STATUS);
+        }
+        await logger.info(`Force refresh complete for ${accountId}:`, { result: protectedResult });
         return jsonResponse({
-          ...manualRefusal,
-          message: 'Protected Meta refresh refused',
-          error_code: manualRefusal.error_code,
-          error: manualRefusal.error,
+          message: 'Force refresh complete',
           accountId,
-          refused: 1,
-        }, LIFECYCLE_PREREQUISITE_STATUS);
+          ...protectedResult,
+        });
       }
       await markRefreshAttempt(supabaseAdmin, accountId);
 
@@ -972,11 +1165,17 @@ Deno.serve(async (req) => {
       const bulkResults: RefreshResult[] = [];
       
       for (const account of accountsToRefresh as SocialAccountWithDetails[]) {
-        // Protected Facebook and Instagram refresh refuses before the attempt marker.
-        const manualRefusal = await protectedRefreshRefusal(protectedContext.mode, account, "manual");
-        if (manualRefusal) {
-          manualRefusal.username = account.platform_username;
-          bulkResults.push(manualRefusal);
+        // The protected lifecycle is reached first and exactly once, before the
+        // legacy attempt marker and before the legacy failure handler.
+        const protectedResult = await runProtectedRefresh({
+          account,
+          trigger: "manual",
+          bypassCooldown: true,
+          protectedContext,
+        });
+        if (protectedResult) {
+          protectedResult.username = account.platform_username;
+          bulkResults.push(protectedResult);
           continue;
         }
         await markRefreshAttempt(supabaseAdmin, account.id);
@@ -1120,17 +1319,21 @@ Deno.serve(async (req) => {
         refresh_window: platformConfig?.refreshWindowSeconds || 'default',
       });
 
-      // Protected Facebook and Instagram refresh refuses before cooldown handling,
-      // the no-token failure write, the attempt marker, provider HTTP, alerts,
-      // and reauthorization events.
-      const scheduledRefusal = await protectedRefreshRefusal(
-        protectedContext.mode,
+      // The protected lifecycle is reached first and exactly once, before the
+      // legacy cooldown handling, the legacy no-token failure write, the
+      // legacy attempt marker, the legacy platform switch and the legacy
+      // catch. The accepted SQL owns all of those for a protected account.
+      const protectedResult = await runProtectedRefresh({
         account,
-        "scheduled",
-      );
-      if (scheduledRefusal) {
-        refusedAccountIds.add(account.id);
-        results.push(scheduledRefusal);
+        trigger: adminTriggered ? "manual" : "scheduled",
+        bypassCooldown: adminTriggered,
+        protectedContext,
+      });
+      if (protectedResult) {
+        if (protectedResult.error_code === LIFECYCLE_PREREQUISITE_CODE) {
+          refusedAccountIds.add(account.id);
+        }
+        results.push(protectedResult);
         continue;
       }
 
