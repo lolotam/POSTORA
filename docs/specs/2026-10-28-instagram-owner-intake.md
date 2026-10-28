@@ -1,6 +1,6 @@
 # Owner intake/status contract — O1
 
-Status: contract frozen after read-only Astra consultation 45; implementation pending. This is the first bounded owner-worker infrastructure slice after [Page reconciliation acceptance](../plans/2026-10-26-instagram-insights-and-competitor-tracking.md#p2-protected-page-reconciliation-runtime-accepted-locally), not collection, report/API/UI or complete owner-milestone acceptance. [Execution subplan](../plans/2026-10-28-instagram-owner-intake.md).
+Status: implemented and accepted locally at `bf74af2a`; [canonical acceptance and evidence](../plans/2026-10-26-instagram-insights-and-competitor-tracking.md#slice-o1-authenticated-owner-intake-and-status-accepted-locally-2026-10-29). The contract was frozen after read-only Astra consultation 45; final consultation 46 accepts the independently verified implementation. This is the first bounded owner-worker infrastructure slice after [Page reconciliation acceptance](../plans/2026-10-26-instagram-insights-and-competitor-tracking.md#p2-protected-page-reconciliation-runtime-accepted-locally), not collection, report/API/UI or complete owner-milestone acceptance. [Execution subplan](../plans/2026-10-28-instagram-owner-intake.md).
 
 ## Scope and existing authority
 

@@ -1,6 +1,6 @@
 # O1 — bounded authenticated owner intake and status
 
-Status: accepted locally at `bf74af2a`. [Spec](../specs/2026-10-28-instagram-owner-intake.md) · [parent milestone order](2026-10-26-instagram-insights-and-competitor-tracking.md#14-user-approved-sequential-milestone-gates-2026-10-27). O1 authenticated owner intake and status endpoint is accepted locally with all 14 independent automated gates green, 25 real-SQL store scenarios, 16 registered-route real-SQL scenarios, 30 actual boundary controls, and zero regressions. O1 is the first small part of parent Tasks 4/6; worker/collection is Slice O2.
+Status: accepted locally at `bf74af2a`. [Spec](../specs/2026-10-28-instagram-owner-intake.md) · [canonical acceptance and final evidence](2026-10-26-instagram-insights-and-competitor-tracking.md#slice-o1-authenticated-owner-intake-and-status-accepted-locally-2026-10-29) · [parent milestone order](2026-10-26-instagram-insights-and-competitor-tracking.md#14-user-approved-sequential-milestone-gates-2026-10-27). O1 is the first small part of parent Tasks 4/6; worker/collection is Slice O2. The parent acceptance record owns the final exact-tree verification, retained failures and read-only review; this subplan does not establish full owner-milestone or release readiness.
 
 Read-only Astra consultation **45** approves a real user-JWT enqueue/status boundary over the unchanged SQL, before combining service collection, provider credentials, metrics and checkpoints. It discloses using supplied source contracts after prior policy-denied reads, not fresh advisor-side inspection/tests. Initial work stays MiniMax Token Plan `minimax-coding-plan/MiniMax-M3.1-Flash`; corrections Grok `grok-4.7-build-fast/high`; advisor read-only.
 
@@ -38,7 +38,9 @@ After O1 acceptance, separately bound the service-side owner collector using exi
 
 Milestone **2 of 4** remains incomplete. PR294 stays draft, legacy active, collection OFF. Hosted green covers remote `aa985e0a` only, not local accepted slices. No new-work push, merge, production migration, deployment, cutover or activation is implied. Live configured-version Meta and provider-day/media-classification readiness remain later gates, not invented fixtures.
 
-## O1 local acceptance evidence (2026-10-29)
+## Earlier local acceptance snapshot (2026-10-29)
+
+The following snapshot was already committed by another actor in `090c4a48` and is retained as history, including its earlier timings and 30-control count. It is not the canonical final evidence inventory. The [parent acceptance record](2026-10-26-instagram-insights-and-competitor-tracking.md#slice-o1-authenticated-owner-intake-and-status-accepted-locally-2026-10-29) supersedes it with independently verified final results, review limitations and commit identity; no duplicate source commit was created during reconciliation.
 
 - **Commit**: `bf74af2a` (`feat(instagram): add authenticated owner insights intake and status endpoint`).
 - **Files**:
@@ -70,4 +72,3 @@ Milestone **2 of 4** remains incomplete. PR294 stays draft, legacy active, colle
   - 24 preflight role/policy/grant scenarios passed.
 - **Boundary Controls**:
   - 30/30 registered index boundary controls passed with non-blocking stream cancellation and raw-envelope descriptor validation.
-
