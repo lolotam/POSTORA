@@ -38,6 +38,7 @@ below). So the harness does not replay history. It:
 | `meta_oauth_attempt_lifecycle.sql` | captured OAuth authority, callback claims, atomic selection and replay/ownership refusals; rolls back |
 | `meta_account_refresh_lifecycle.sql` | coherent Meta refresh captures, atomic direct/shared token writes and fenced health/event transitions; rolls back |
 | `meta_oauth_identity_alias.sql` | atomic direct Instagram messaging alias validation, conversion, metadata confinement and replay; rolls back |
+| `meta_page_token_reconciliation.sql` | selected operational Page-token reconciliation from a captured unchanged User grant, protected identity agreement and sibling/reauth preservation; rolls back |
 
 The harness's `SUITES` array is the complete executable inventory; the table
 above highlights selected suites, not the entire list. No existing suite may
@@ -49,8 +50,9 @@ not omitted test suites: `partner_api_race_fixture.sql`,
 `facebook_user_credential_bindings_race_fixture.sql`,
 `instagram_durable_collection_jobs_race_fixture.sql`,
 `meta_oauth_attempt_lifecycle_race_fixture.sql`,
-`meta_account_refresh_lifecycle_race_fixture.sql`, and
-`meta_oauth_identity_alias_race_fixture.sql`. Their headers document
+`meta_account_refresh_lifecycle_race_fixture.sql`,
+`meta_oauth_identity_alias_race_fixture.sql`, and
+`meta_page_token_reconciliation_race_fixture.sql`. Their headers document
 setup, interleavings, expected outcomes and cleanup. A single-session harness
 pass does not prove concurrency. Run the applicable fixtures separately against
 the same isolated candidate and record both sessions' results. Never run them
