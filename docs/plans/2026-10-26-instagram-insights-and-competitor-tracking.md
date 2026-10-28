@@ -743,3 +743,33 @@ Everything remains local: PR #294 draft, default legacy authority and collection
 - **Review and evidence:** mechanical/source/manual production/test guards confirm unchanged accepted direct bodies/types/age policy, exact coordinator type adoption, active production callers for all three new modules, retained CI inventory/runners/exemptions and no new skips. Astra **44** accepted this scoped local slice subject to the final byte/tree checks, which subsequently passed; it disclosed using supplied immutable excerpts/evidence after earlier policy-denied reads, not fresh advisor-side tests. Evidence under `E:/Dev/Temp/opencode/`: `instagram-page-reconciliation-p2-independent-02/manifest.json`, `instagram-page-reconciliation-p2-independent-sql-02/result.json`, `instagram-page-reconciliation-p2-portable-controls-02/result.json`, `instagram-page-reconciliation-p2-adapter-sql02.json`, `instagram-page-reconciliation-p2-policy-sql04.json`, `instagram-page-reconciliation-p2-independent-recovery-03/{result,regression}.json`, `instagram-page-reconciliation-p2-semantic-review02.json`, `instagram-advisor-consult-44/result.json` and `instagram-page-reconciliation-p2-local-commit03.json`. Named mem0/brainstorming/guard tools and graph CLI were unavailable; manual equivalents are not named-tool passes or a memory save.
 - **Files:** `.github/workflows/ci.yml`; `src/integrations/supabase/types.ts`; `supabase/functions/_shared/protectedRouteHandlers.test.ts`; and `supabase/functions/refresh-tokens/{index,protectedMetaRefresh,metaPageReconciliationStore,metaPageReconciliationProvider,protectedPageReconciliation}.ts` plus `{refreshTokensHandlers,metaPageReconciliationStore,metaPageReconciliationProvider,protectedPageReconciliation,pageReconciliationHandlers}.test.ts`. No SQL, dependency, quota, schedule, billing, credential-mode, collection or competitor changes.
 - **Next and release limits:** still milestone **2 of 4**, incomplete. Continue bounded owner collector/ingestion → database report reader/authenticated API/proxy → owner UI → verified complete owner journey, one accepted slice at a time. Competitors remain prohibited. Configured-version live Meta compatibility, retention/cleanup readiness and whole-flow verification remain later gates. Hosted green still covers remote **`aa985e0a` only**, not local direct/P1/P2. PR294 stays OPEN/DRAFT, legacy active, collection OFF. No new-work push, merge, production migration, deployment, cutover or activation occurred or is authorized by this local acceptance.
+
+### Slice O1 authenticated owner intake and status accepted locally (2026-10-29)
+
+- **Local implementation commit:** `bf74af2a`, exact reviewed seven-path tree `92cf35f47ef3f26a9b6e0cc64c93e8bad581011c`.
+- **Scope**:
+  - `supabase/functions/instagram-insights-sync/{index,handler,store}.ts`
+  - `supabase/functions/instagram-insights-sync/{handler,store,handlers}.test.ts`
+  - `.github/workflows/ci.yml` (additive CI steps)
+- **14 Independent Automated Verification Gates (All Green)**:
+  - `owner-intake-six-file-typecheck`: passed
+  - `owner-intake-pure`: 96 tests passed, 0 failed
+  - `owner-intake-actual-route`: 23 tests passed, 0 failed
+  - `independent-boundary-controls`: 6 tests passed, 0 failed
+  - `required-protected-pure`: 222 tests passed, 0 failed
+  - `required-actual-handlers`: 206 tests passed, 0 failed
+  - `outlier`: 28 tests passed, 0 failed
+  - `report-v1`: 62 tests passed, 0 failed
+  - `historical-proxy-mcp`: 147 tests passed, 0 failed
+  - `typecheck`: passed (79.6s)
+  - `full-node`: 2,211 tests passed across 320 files (15 skipped across 2 files disclosed)
+  - `production-build`: passed (39.2s)
+  - `comparator-self-tests`: passed (99.4s)
+  - `immutable-no-regressions`: passed (zero new diagnostics or suppressions against PR base `a57dc86d`)
+- **Real-SQL Database Evidence (PG17 container)**:
+  - 25 store scenarios passed with clean rollback and audit receipts.
+  - 16 registered HTTP route -> SQL scenarios passed with authenticated role and claim verification.
+  - 24 preflight role/policy/grant scenarios passed.
+- **Boundary Controls**:
+  - 30/30 registered index boundary controls passed with non-blocking stream cancellation and raw-envelope descriptor validation.
+- **Next**: Slice O2 (Bounded Owner Collection Worker) consuming claims from `claim_instagram_collection_jobs` (batch 25).
