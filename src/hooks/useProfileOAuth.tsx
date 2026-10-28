@@ -16,9 +16,11 @@ import {
   useInstagramOAuth,
   useOAuthRedirectHandler,
 } from "./oauth";
+import type { OAuthConnectOptions } from "./oauth/useFacebookOAuth";
 
 // Re-export types for backward compatibility
 export type { FacebookPage, StandaloneInstagram, PageSelectionData } from "./oauth";
+export type { OAuthConnectOptions } from "./oauth/useFacebookOAuth";
 
 /**
  * A pending Instagram connection waiting on the user to choose a login method
@@ -26,9 +28,15 @@ export type { FacebookPage, StandaloneInstagram, PageSelectionData } from "./oau
  * where the flow branches before any provider redirect, so the choice is owned here
  * rather than by one page — the dashboard reauth banner and the profiles page both
  * need it, and both connect and reconnect raise it.
+ *
+ * The explicit intent travels with the request. A reconnect names the owned
+ * account it targets, so the backend can capture that intent before the
+ * provider is contacted instead of hoping the provider returns the same
+ * identity.
  */
 export interface InstagramFlowRequest {
   profileId: string;
+  options: OAuthConnectOptions;
 }
 
 export function useProfileOAuth() {
@@ -125,10 +133,10 @@ export function useProfileOAuth() {
         // set would disable the dialog's own buttons.
         setConnectingPlatform(null);
         setConnectingProfile(null);
-        setInstagramFlowRequest({ profileId });
+        setInstagramFlowRequest({ profileId, options });
         return;
       } else if (platform === "facebook") {
-        await handleFacebookConnect(platform, profileId);
+        await handleFacebookConnect(platform, profileId, options);
       } else if ((platform as ExtendedPlatform) === "youtube") {
         await handleYouTubeConnect(profileId);
       } else if ((platform as ExtendedPlatform) === "pinterest") {
@@ -155,9 +163,9 @@ export function useProfileOAuth() {
   /** Resume a pending Instagram connection with the login method the user chose. */
   const selectInstagramFlow = async (flow: "direct" | "facebook_business") => {
     if (!instagramFlowRequest) return;
-    const { profileId } = instagramFlowRequest;
+    const { profileId, options } = instagramFlowRequest;
     setInstagramFlowRequest(null);
-    await handleInstagramConnect(profileId, flow);
+    await handleInstagramConnect(profileId, flow, options);
   };
 
   const clearInstagramFlowRequest = () => setInstagramFlowRequest(null);

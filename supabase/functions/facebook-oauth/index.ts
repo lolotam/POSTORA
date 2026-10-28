@@ -7,16 +7,58 @@ import {
   configurationClientError,
   createAppSettingLookup,
   isLifecycleRefusal,
+  loadFacebookCredentialSettings,
+  type FacebookCredentialMode,
 } from "../_shared/facebookCredentialMode.ts";
 import {
   beginOAuthRequest,
+  createFacebookRouteContext,
+  facebookRouteFlow,
   oauthTripwirePorts,
+  projectFacebookPicker,
+  type FacebookProtectedRuntime,
 } from "./protectedPageConnect.ts";
+import {
+  createMetaOAuthAttemptStoreFromClient,
+  type MetaOAuthCandidate,
+  type MetaOAuthFlow,
+} from "../_shared/metaOAuthAttemptStore.ts";
+import {
+  PROTECTED_ATTEMPT_STATE_KEY,
+  ProtectedOAuthError,
+  assertWebhookSubscription,
+  beginProtectedAttempt,
+  classifyPendingReference,
+  completeProtectedCallback,
+  createPendingLinkageReader,
+  createProtectedAttemptReader,
+  createProtectedReceiptReader,
+  pendingReferenceRefusal,
+  protectedCommit,
+  protectedOAuthClientError,
+  protectedPickerRead,
+  protectedSelectionRefusal,
+  readProtectedAttemptContext,
+  resolveProtectedIntent,
+  type PendingReferenceOutcome,
+  type ProtectedAttemptStateContext,
+} from "../_shared/metaOAuthProtectedFlow.ts";
 
+import {
+  ProtectedProviderFailure,
+  createOperationBudget,
+  exchangeProtectedFacebookCode,
+  listProtectedManagedPages,
+  logProtectedFailure,
+  protectedProviderClientReason,
+  protectedWebhookSubscribe,
+  PROTECTED_HTTP_TIMEOUT_MS,
+  PROTECTED_OPERATION_BUDGET_MS,
+} from "../_shared/metaOAuthProtectedBoundary.ts";
 import { restrictedCorsHeaders } from "../_shared/cors.ts";
 
-const SUPABASE_URL = Deno.env.get("SUPABASE_URL");
-const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
+const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 // Public origin used to derive the OAuth redirect URI registered with Meta.
 // On self-hosted Supabase, SUPABASE_URL points at the internal Kong gateway
 // (http://kong:8000), which is unreachable from the provider — never derive
@@ -44,7 +86,7 @@ interface FacebookPage {
   name: string;
   access_token: string;
   category?: string;
-  instagram_business_account?: { id: string; username?: string };
+  instagram_business_account?: { id: string; username?: string; profile_picture_url?: string };
   picture?: { data?: { url?: string } };
 }
 
@@ -217,9 +259,32 @@ async function subscribePageToWebhooks(pageId: string, pageToken: string): Promi
   }
 }
 
-const PAGE_FIELDS = "id,name,access_token,category,picture.type(large),instagram_business_account{id,username}";
+/**
+ * The protected Page subscription.
+ *
+ * It runs only after the account commit, it never receives a browser-supplied
+ * token, and it reports the failure without copying provider text.
+ */
+async function subscribeProtectedPageToWebhooks(
+  pageId: string,
+  pageToken: string,
+): Promise<void> {
+  const url = new URL(`https://graph.facebook.com/v22.0/${pageId}/subscribed_apps`);
+  url.searchParams.set("subscribed_fields", PAGE_WEBHOOK_FIELDS);
+  url.searchParams.set("access_token", pageToken);
+  await protectedWebhookSubscribe({
+    url: url.toString(),
+    budget: createOperationBudget(PROTECTED_HTTP_TIMEOUT_MS),
+  });
+}
 
-async function fetchFacebookPages(providerToken: string, fbUserId?: string): Promise<FacebookPage[]> {
+const PAGE_FIELDS = "id,name,access_token,category,picture.type(large),instagram_business_account{id,username,profile_picture_url}";
+
+async function fetchFacebookPages(
+  providerToken: string,
+  fbUserId?: string,
+  options: { logRaw?: boolean } = {},
+): Promise<FacebookPage[]> {
   const candidates: Array<{ label: string; url: string }> = [
     {
       label: "me/accounts",
@@ -243,7 +308,9 @@ async function fetchFacebookPages(providerToken: string, fbUserId?: string): Pro
       console.log(`Fetching pages from (${c.label}):`, c.url.replace(providerToken, "[TOKEN]"));
       const res = await fetch(c.url);
       const json = await res.json();
-      console.log(`Pages API raw response (${c.label}):`, JSON.stringify(json));
+      if (options.logRaw !== false) {
+        console.log(`Pages API raw response (${c.label}):`, JSON.stringify(json));
+      }
 
       if (json?.error) {
         console.error(`Pages API error (${c.label}):`, JSON.stringify(json.error));
@@ -256,6 +323,10 @@ async function fetchFacebookPages(providerToken: string, fbUserId?: string): Pro
       const pages: FacebookPage[] = json?.data || [];
       if (pages.length > 0) return pages;
     } catch (e) {
+      if (options.logRaw === false) {
+        console.warn(`Failed to fetch pages via ${c.label}`);
+        continue;
+      }
       console.warn(`Failed to fetch pages via ${c.label}:`, e);
     }
   }
@@ -380,6 +451,148 @@ async function loadPendingSelectionRow(
   return data;
 }
 
+/**
+ * A protected Facebook callback that cannot be completed. The attempt has
+ * already been claimed, so the user has to start a new authorization.
+ */
+class ProtectedFacebookRefusal extends Error {
+  readonly reason: string;
+
+  constructor(reason: string) {
+    super(reason);
+    this.name = "ProtectedFacebookRefusal";
+    this.reason = reason;
+  }
+}
+
+/**
+ * The protected Facebook callback.
+ *
+ * The attempt is claimed BEFORE the code exchange. Only the claimed service
+ * data builds the candidate set, the attempt is completed once, and the
+ * picker receives nothing but the opaque pending selection id.
+ */
+async function handleProtectedFacebookCallback(
+  req: Request,
+  returnTo: string,
+  code: string,
+  userId: string,
+  context: ProtectedAttemptStateContext,
+): Promise<Response> {
+  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+  const store = createMetaOAuthAttemptStoreFromClient(supabase);
+
+  try {
+    const complete = await completeProtectedCallback(store, {
+      userId,
+      context,
+      resolveCandidates: async () => {
+        const appId = Deno.env.get("FACEBOOK_APP_ID");
+        const appSecret = Deno.env.get("FACEBOOK_APP_SECRET");
+        if (!appId || !appSecret) {
+          throw new ProtectedFacebookRefusal("service_configuration");
+        }
+
+        const budget = createOperationBudget(PROTECTED_OPERATION_BUDGET_MS);
+        const grant = await exchangeProtectedFacebookCode({
+          graphVersion: "v22.0",
+          appId,
+          appSecret,
+          redirectUri: FACEBOOK_REDIRECT_URI,
+          code,
+          budget,
+        });
+        const pages = await listProtectedManagedPages({
+          graphVersion: "v22.0",
+          accessToken: grant.token,
+          budget,
+        });
+        if (pages.length === 0) {
+          throw new ProtectedFacebookRefusal("no_pages");
+        }
+
+        const candidates: MetaOAuthCandidate[] = [];
+        for (const page of pages) {
+          const base: MetaOAuthCandidate = {
+            facebook_page_id: page.id,
+            facebook_page_name: page.name,
+            page_access_token: page.accessToken,
+            facebook_user_id: grant.facebookUserId,
+          };
+          if (context.flow === "facebook_page") {
+            if (page.instagram) {
+              candidates.push({
+                ...base,
+                candidate_kind: "page_plus_ig",
+                ig_user_id: page.instagram.id,
+                ig_username: page.instagram.username ?? `ig_${page.instagram.id}`,
+                ig_profile_picture_url: page.instagram.profilePictureUrl,
+              });
+            } else {
+              candidates.push({ ...base, candidate_kind: "page_only" });
+            }
+          } else if (page.instagram) {
+            candidates.push({
+              ...base,
+              candidate_kind: "ig_only",
+              ig_user_id: page.instagram.id,
+              ig_username: page.instagram.username ?? `ig_${page.instagram.id}`,
+              ig_profile_picture_url: page.instagram.profilePictureUrl,
+            });
+          }
+        }
+
+        if (candidates.length === 0) {
+          throw new ProtectedFacebookRefusal("no_pages");
+        }
+
+        return {
+          candidates,
+          stash: {
+            user_token: grant.token,
+            ...(grant.expiresIn !== null ? { user_token_expires_in: grant.expiresIn } : {}),
+          },
+        };
+      },
+    });
+
+    const marker = complete.flow === "facebook_page" ? "facebook" : "instagram_business";
+    const target = new URL(returnTo);
+    target.searchParams.set("connected", marker);
+    target.searchParams.set("select", complete.pendingSelectionId);
+    return redirectResponse(req, target.toString());
+  } catch (error) {
+    if (error instanceof ProtectedFacebookRefusal) {
+      const target = new URL(returnTo);
+      target.searchParams.set("connected", "facebook");
+      target.searchParams.set("error", error.reason);
+      return redirectResponse(req, target.toString());
+    }
+    if (error instanceof ProtectedProviderFailure) {
+      logProtectedFailure("facebook-oauth", error);
+      const target = new URL(returnTo);
+      target.searchParams.set("connected", "facebook");
+      target.searchParams.set("error", protectedProviderClientReason(error));
+      return redirectResponse(req, target.toString());
+    }
+    const client = protectedOAuthClientError(error);
+    if (client) {
+      console.error("[facebook-oauth] protected callback refused", {
+        event: client.error_code,
+      });
+      const target = new URL(returnTo);
+      target.searchParams.set("connected", "facebook");
+      target.searchParams.set("error", client.error_code);
+      return redirectResponse(req, target.toString());
+    }
+    logProtectedFailure("facebook-oauth", error);
+    const target = new URL(returnTo);
+    target.searchParams.set("connected", "facebook");
+    target.searchParams.set("error", "internal_error");
+    return redirectResponse(req, target.toString());
+  }
+}
+
 async function handleFacebookGetCallback(req: Request): Promise<Response> {
   const url = new URL(req.url);
   const code = url.searchParams.get("code");
@@ -430,12 +643,24 @@ async function handleFacebookGetCallback(req: Request): Promise<Response> {
     return redirectResponse(req, target.toString());
   }
 
-  // Protected mode has no atomic attempt/completion contract. Refuse before
-  // the code exchange and before the pending-selection stash.
-  const settingsClient = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+  // The mode is read before any claim or provider call. An unreadable
+  // setting refuses. A readable legacy setting does not downgrade a signed
+  // protected attempt.
+  let attemptContext: ProtectedAttemptStateContext | null = null;
   try {
-    const decision = await beginOAuthRequest({
-      lookup: createAppSettingLookup(async (key) => {
+    attemptContext = readProtectedAttemptContext(state);
+  } catch {
+    const target = new URL(returnTo);
+    target.searchParams.set("connected", "facebook");
+    target.searchParams.set("error", "invalid_state");
+    return redirectResponse(req, target.toString());
+  }
+
+  const settingsClient = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+  let credentialMode: FacebookCredentialMode;
+  try {
+    const loaded = await loadFacebookCredentialSettings(
+      createAppSettingLookup(async (key) => {
         const { data, error } = await settingsClient
           .from("app_settings")
           .select("value")
@@ -443,29 +668,43 @@ async function handleFacebookGetCallback(req: Request): Promise<Response> {
           .maybeSingle();
         return appSettingReadResult(data, error);
       }),
-      flow: "facebook_oauth",
-      action: "callback",
-      ports: oauthTripwirePorts(),
-      legacy: async () => "continue" as const,
-    });
-    if (isLifecycleRefusal(decision)) {
-      const target = new URL(returnTo);
-      target.searchParams.set("connected", "facebook");
-      target.searchParams.set("error", decision.errorCode);
-      return redirectResponse(req, target.toString());
-    }
+    );
+    credentialMode = loaded.credentialMode;
   } catch (error) {
     const config = configurationClientError(error);
-    if (config) {
-      console.error("[facebook-oauth] credential configuration refused", {
-        event: config.error_code,
-      });
+    console.error("[facebook-oauth] credential configuration refused", {
+      event: config?.error_code ?? "CREDENTIAL_CONFIGURATION_UNAVAILABLE",
+    });
+    const target = new URL(returnTo);
+    target.searchParams.set("connected", "facebook");
+    target.searchParams.set("error", "credential_configuration_unavailable");
+    return redirectResponse(req, target.toString());
+  }
+
+  if (attemptContext) {
+    const expectedFlow = facebookRouteFlow(targetPlatform);
+    if (attemptContext.flow !== expectedFlow) {
       const target = new URL(returnTo);
       target.searchParams.set("connected", "facebook");
-      target.searchParams.set("error", "credential_configuration_unavailable");
+      target.searchParams.set("error", "protected_oauth_flow_mismatch");
       return redirectResponse(req, target.toString());
     }
-    throw error;
+    return await handleProtectedFacebookCallback(
+      req,
+      returnTo,
+      code,
+      state.user_id,
+      attemptContext,
+    );
+  }
+
+  // A legacy callback. While protected mode is selected it refuses and asks
+  // for a restart instead of writing a legacy account.
+  if (credentialMode === "protected") {
+    const target = new URL(returnTo);
+    target.searchParams.set("connected", "facebook");
+    target.searchParams.set("error", "protected_reauthorization_required");
+    return redirectResponse(req, target.toString());
   }
 
   // Exchange code → short-lived user token, then upgrade to long-lived.
@@ -599,13 +838,17 @@ Deno.serve(async (req) => {
   ];
   // Legacy actions that require the FB JS SDK provider_token. New backend
   // callback path uses `selection_id` instead, so providing either satisfies
-  // store_page / store_instagram.
+  // store_page / store_instagram. The protected path uses the attempt id plus
+  // the opaque selection key instead of a page id.
   const legacyTokenActions = ["list_pages", "store_account"];
   const selectionOrTokenActions = ["store_page", "store_instagram"];
   const missingActionField =
     (legacyTokenActions.includes(body.action) && !body.provider_token) ||
-    (selectionOrTokenActions.includes(body.action) && !body.provider_token && !body.selection_id) ||
-    (body.action === "store_page" && !body.page_id) ||
+    (selectionOrTokenActions.includes(body.action) &&
+      !body.provider_token &&
+      !body.selection_id &&
+      !body.selection_key) ||
+    (body.action === "store_page" && !body.page_id && !body.selection_key) ||
     (body.action === "store_instagram" && !body.instagram_account_id) ||
     (body.action === "get_pending_selection" && !body.selection_id);
 
@@ -625,10 +868,42 @@ Deno.serve(async (req) => {
 
 
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+    const store = createMetaOAuthAttemptStoreFromClient(supabase);
+    const runtime: FacebookProtectedRuntime = {
+      store,
+      linkage: createPendingLinkageReader(supabase),
+      attempts: createProtectedAttemptReader(supabase),
+      receipts: createProtectedReceiptReader(supabase),
+    };
 
-    // Protected mode refuses every OAuth action before provider exchange,
-    // token stash, and account writes. Legacy mode continues below and does
-    // not touch the protected credential schema.
+    // Every supplied pending reference is classified in BOTH modes, before any
+    // provider call, mutation, secret read or deletion.
+    const selectionId = (body.selection_id as string | undefined) ?? null;
+    const attemptId = (body.attempt_id as string | undefined) ?? null;
+    const selectionKey = (body.selection_key as string | undefined) ?? null;
+    const providerTokenPresent =
+      typeof provider_token === "string" && provider_token.length > 0;
+    const classification = await classifyPendingReference(runtime.linkage, {
+      userId: user_id,
+      selectionId,
+      attemptId,
+      providerTokenPresent,
+    });
+    const classificationError = pendingReferenceRefusal(classification);
+    if (classificationError) {
+      return new Response(JSON.stringify({
+        error_code: classificationError.code,
+        error: classificationError.message,
+      }), {
+        status: classificationError.status,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    // Protected mode dispatches the supported captured lifecycle and refuses
+    // every unsupported action before provider exchange, token stash and
+    // account writes. Legacy mode continues below and does not touch the
+    // protected credential schema.
     const decision = await beginOAuthRequest({
       lookup: createAppSettingLookup(async (key) => {
         const { data, error } = await supabase
@@ -642,6 +917,22 @@ Deno.serve(async (req) => {
       action: String(action),
       ports: oauthTripwirePorts(),
       legacy: async () => "continue" as const,
+      protected:
+        action === "authorize"
+          ? async () => "protected" as const
+          : classification.kind === "protected"
+          ? async () => "protected" as const
+          : async () => {
+            // A selection that no captured attempt owns cannot be committed
+            // by the protected lifecycle. The user has to reconnect.
+            const refusal = protectedSelectionRefusal(classification);
+            throw refusal ?? new ProtectedOAuthError(
+              "PROTECTED_OAUTH_REFUSED",
+              "This selection cannot be completed. Please reconnect.",
+              403,
+            );
+          },
+      attemptOwned: classification.kind === "protected",
     });
     if (isLifecycleRefusal(decision)) {
       return new Response(JSON.stringify({
@@ -661,6 +952,51 @@ Deno.serve(async (req) => {
     if (action === "authorize") {
       const targetPlatform = body.target_platform === "instagram" ? "instagram" : "facebook";
       const returnTo = safeReturnTo(body.return_to);
+      const flow: MetaOAuthFlow = facebookRouteFlow(targetPlatform);
+      const appId = Deno.env.get("FACEBOOK_APP_ID")!;
+
+      if (decision === "protected") {
+        const intent = resolveProtectedIntent({
+          intent: body.intent,
+          targetSocialAccountId: body.target_social_account_id,
+          sourceSocialAccountId: body.source_social_account_id,
+          linkedTargetSocialAccountId: body.linked_target_social_account_id,
+        });
+
+        // The capture happens BEFORE the authorization URL is returned.
+        const begun = await beginProtectedAttempt(store, {
+          userId: user_id,
+          flow,
+          intent: intent.intent,
+          targetSocialAccountId: intent.targetSocialAccountId,
+          sourceSocialAccountId: intent.sourceSocialAccountId,
+          linkedTargetSocialAccountId: intent.linkedTargetSocialAccountId,
+          intendedSocialProfileId: (social_profile_id as string | null | undefined) ?? undefined,
+        });
+
+        const state = await createOAuthState({
+          platform: "facebook",
+          flow: "pages",
+          user_id,
+          profile_id: social_profile_id ?? null,
+          return_to: returnTo,
+          extra: {
+            target_platform: targetPlatform,
+            [PROTECTED_ATTEMPT_STATE_KEY]: begun.stateContext,
+          },
+        });
+        const authorizeUrl =
+          `https://www.facebook.com/v22.0/dialog/oauth` +
+          `?client_id=${encodeURIComponent(appId)}` +
+          `&redirect_uri=${encodeURIComponent(FACEBOOK_REDIRECT_URI)}` +
+          `&state=${encodeURIComponent(state)}` +
+          `&response_type=code` +
+          `&scope=${encodeURIComponent(FB_OAUTH_SCOPES.join(","))}`;
+        return new Response(JSON.stringify({ success: true, url: authorizeUrl }), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
       const state = await createOAuthState({
         platform: "facebook",
         flow: "pages",
@@ -669,7 +1005,6 @@ Deno.serve(async (req) => {
         return_to: returnTo,
         extra: { target_platform: targetPlatform },
       });
-      const appId = Deno.env.get("FACEBOOK_APP_ID")!;
       const authorizeUrl =
         `https://www.facebook.com/v22.0/dialog/oauth` +
         `?client_id=${encodeURIComponent(appId)}` +
@@ -685,6 +1020,27 @@ Deno.serve(async (req) => {
     // Action: Look up a pending selection row created by the GET callback.
     // Returns pages + standalone IG but NEVER the provider token.
     if (action === "get_pending_selection") {
+      if (decision === "protected") {
+        const projection = await protectedPickerRead(
+          createFacebookRouteContext(runtime, user_id, [
+            "facebook_page",
+            "instagram_page_linked",
+          ]),
+          { pendingSelectionId: selectionId as string },
+        );
+        const projected = projectFacebookPicker(projection);
+        return new Response(JSON.stringify({
+          success: true,
+          protected: true,
+          attempt_id: projected.attempt_id,
+          social_profile_id: projected.social_profile_id,
+          expired: projected.expired,
+          committed_selection_keys: projected.committed_selection_keys,
+          pages: projected.pages,
+          standalone_instagram: projected.standalone_instagram,
+        }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+
       const row = await loadPendingSelectionRow(supabase, body.selection_id, user_id);
       if (!row) {
         return new Response(JSON.stringify({ error: "Selection not found or expired" }), {
@@ -705,8 +1061,17 @@ Deno.serve(async (req) => {
     // pending selection row created by the GET callback instead of sending
     // the FB SDK provider_token directly. The server reads the long-lived
     // token from that row and deletes it after a successful store.
+    //
+    // A protected row never reaches this read: the classification above
+    // routed it to the protected adapter, and a protected row's secret
+    // projection is never read by the legacy path.
     let pendingSelectionId: string | null = null;
-    if ((action === "store_page" || action === "store_instagram") && body.selection_id && !provider_token) {
+    if (
+      decision !== "protected" &&
+      (action === "store_page" || action === "store_instagram") &&
+      body.selection_id &&
+      !provider_token
+    ) {
       const row = await loadPendingSelectionRow(supabase, body.selection_id, user_id);
       if (!row) {
         return new Response(JSON.stringify({ error: "Selection not found or expired" }), {
@@ -776,6 +1141,59 @@ Deno.serve(async (req) => {
 
     // Action: Store a specific Facebook Page (after user selection)
     if (action === "store_page") {
+      if (decision === "protected") {
+        // The protected path commits the verified candidate through the
+        // accepted atomic selection transaction. The authority is the attempt
+        // id plus the opaque selection key, never a browser-supplied page
+        // name or username.
+        const committed = await protectedCommit(
+          createFacebookRouteContext(runtime, user_id, ["facebook_page"]),
+          {
+            selectionId,
+            attemptId,
+            selectionKey,
+            providerTokenPresent,
+          },
+        );
+
+        // Bounded, best effort, and only after the commit.
+        const subscription = await assertWebhookSubscription({
+          receipt: committed.receipt,
+          userId: user_id,
+          tokens: {
+            async readOperationalToken(input) {
+              const { data, error } = await supabase
+                .from("social_accounts")
+                .select("access_token")
+                .eq("id", input.socialAccountId)
+                .eq("user_id", input.userId)
+                .eq("platform", input.platform)
+                .eq("platform_user_id", input.platformUserId)
+                .maybeSingle();
+              if (error || !data) return null;
+              return typeof data.access_token === "string" ? data.access_token : null;
+            },
+          },
+          subscription: {
+            async subscribe(input: { platform: "facebook" | "instagram"; providerId: string; token: string }) {
+              await subscribeProtectedPageToWebhooks(input.providerId, input.token);
+            },
+          },
+        });
+
+        return new Response(JSON.stringify({
+          success: true,
+          protected: true,
+          attempt_id: committed.receipt.attemptId,
+          selection_key: committed.receipt.selectionKey,
+          page_name: committed.receipt.username,
+          has_instagram: committed.receipt.companionSocialAccountId !== null,
+          subscription,
+        }), {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
       if (!user_id || !provider_token || !page_id) {
         throw new Error("Missing user_id, provider_token, or page_id");
       }
@@ -1164,6 +1582,19 @@ Deno.serve(async (req) => {
     });
 
   } catch (error: unknown) {
+    const protectedError = protectedOAuthClientError(error);
+    if (protectedError) {
+      console.error("[facebook-oauth] protected request refused", {
+        event: protectedError.error_code,
+      });
+      return new Response(JSON.stringify({
+        error_code: protectedError.error_code,
+        error: protectedError.error,
+      }), {
+        status: protectedError.status,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
     const config = configurationClientError(error);
     if (config) {
       console.error("[facebook-oauth] credential configuration refused", {

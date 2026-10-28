@@ -41,6 +41,24 @@ export interface CreateStateInput {
   extra?: Record<string, unknown>;
 }
 
+/**
+ * The identity fields of the state payload. They are always server-authored.
+ *
+ * A caller that puts one of these into `extra` cannot override it: the key
+ * is dropped before the payload is built, and the server value wins. The
+ * protected Meta OAuth lifecycle depends on this — the owner, the platform,
+ * the provider flow and the CSRF nonce must never be a browser-supplied
+ * value.
+ */
+const RESERVED_STATE_FIELDS = [
+  "platform",
+  "flow",
+  "user_id",
+  "profile_id",
+  "nonce",
+  "iat",
+] as const;
+
 function base64UrlEncode(bytes: Uint8Array | string): string {
   const bin =
     typeof bytes === "string"
@@ -117,15 +135,26 @@ export function safeReturnTo(
 export async function createOAuthState(input: CreateStateInput): Promise<string> {
   const nonceBytes = new Uint8Array(16);
   crypto.getRandomValues(nonceBytes);
+
+  // The extra fields are spread first and the reserved identity fields are
+  // written afterwards, so a caller can never overwrite the owner, the
+  // platform, the provider flow or the CSRF nonce. `return_to` stays
+  // overridable but is always re-validated against the allowed origin.
+  const extra: Record<string, unknown> = { ...(input.extra ?? {}) };
+  for (const key of RESERVED_STATE_FIELDS) delete extra[key];
+  const requestedReturnTo =
+    input.return_to ?? (typeof extra.return_to === "string" ? extra.return_to : undefined);
+  delete extra.return_to;
+
   const payload: OAuthStatePayload = {
+    ...extra,
     platform: input.platform,
     flow: input.flow,
     user_id: input.user_id,
     profile_id: input.profile_id ?? null,
-    return_to: input.return_to ? safeReturnTo(input.return_to) : undefined,
+    return_to: requestedReturnTo ? safeReturnTo(requestedReturnTo) : undefined,
     nonce: base64UrlEncode(nonceBytes),
     iat: Math.floor(Date.now() / 1000),
-    ...(input.extra ?? {}),
   };
   const raw = JSON.stringify(payload);
   const sig = await hmacSign(raw, getSecret());

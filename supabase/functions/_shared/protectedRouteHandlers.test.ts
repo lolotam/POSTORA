@@ -543,12 +543,11 @@ function accountMutations(current: Probe): { table: string; op: string }[] {
   );
 }
 
-routeTest("protected oauth routes refuse before provider exchange, state creation, and writes", async () => {
+routeTest("protected oauth routes refuse the unsupported actions before provider exchange, state creation, and writes", async () => {
+  // The JavaScript-SDK and provider-token-only shapes cannot substitute for a
+  // captured preauthorization. They stay refused in protected mode.
   const facebookPosts = [
-    { action: "authorize" },
-    { action: "get_pending_selection", selection_id: "selection-1" },
     { action: "list_pages", provider_token: PAGE_TOKEN },
-    { action: "store_page", page_id: "page-1", selection_id: "selection-1" },
     { action: "store_account", provider_token: PAGE_TOKEN },
     { action: "store_instagram", instagram_account_id: "ig-1", selection_id: "selection-1" },
   ];
@@ -566,35 +565,8 @@ routeTest("protected oauth routes refuse before provider exchange, state creatio
     assertEquals(JSON.stringify(result.body).includes(PAGE_TOKEN), false);
   }
 
-  const businessPosts = [
-    { action: "authorize" },
-    { action: "get_pending_selection", selection_id: "selection-1" },
-    { action: "store_ig_account", selection_id: "selection-1", ig_user_id: "ig-1" },
-    { action: "clear_pending_selection", selection_id: "selection-1" },
-  ];
-  for (const body of businessPosts) {
-    const current = probe({
-      statePayload: {
-        user_id: USER_ID,
-        platform: "instagram",
-        flow: "facebook_business",
-        return_to: "https://postora.cloud/profiles?connected=instagram_business",
-      },
-    });
-    const handler = await loadHandler("instagram-business-oauth/index.ts", current);
-    const result = await callJson(
-      handler,
-      "https://synthetic.invalid/functions/v1/instagram-business-oauth",
-      body,
-    );
-    assertEquals(result.status, 503);
-    assertEquals(result.body.error_code, "lifecycle_prerequisite_missing");
-    assertEquals(current.stateCreates, 0);
-    assertEquals(providerUrls(current), []);
-    assertEquals(accountMutations(current), []);
-  }
-
-  for (const action of ["authorize", "callback"]) {
+  // The unsigned direct POST callback shim carries no signed attempt.
+  {
     const current = probe({
       statePayload: {
         user_id: USER_ID,
@@ -604,7 +576,11 @@ routeTest("protected oauth routes refuse before provider exchange, state creatio
       },
     });
     const handler = await loadHandler("instagram-oauth/index.ts", current);
-    const result = await callJson(handler, "https://synthetic.invalid/functions/v1/instagram-oauth", { action });
+    const result = await callJson(
+      handler,
+      "https://synthetic.invalid/functions/v1/instagram-oauth",
+      { action: "callback" },
+    );
     assertEquals(result.status, 503);
     assertEquals(result.body.error_code, "lifecycle_prerequisite_missing");
     assertEquals(current.stateCreates, 0);
@@ -614,6 +590,8 @@ routeTest("protected oauth routes refuse before provider exchange, state creatio
 });
 
 routeTest("protected oauth callbacks redirect before the code exchange", async () => {
+  // A legacy callback that arrives while protected mode is selected refuses
+  // and asks for a restart instead of writing a legacy account.
   const cases = [
     {
       entry: "facebook-oauth/index.ts",
@@ -655,7 +633,7 @@ routeTest("protected oauth callbacks redirect before the code exchange", async (
     ));
     assertEquals(response.status, 302);
     const location = response.headers.get("location") ?? "";
-    assertEquals(location.includes("error=lifecycle_prerequisite_missing"), true);
+    assertEquals(location.includes("error=protected_reauthorization_required"), true);
     assertEquals(location.includes(SECRET), false);
     assertEquals(current.stateCreates, 0);
     assertEquals(current.stateVerifies, 1);

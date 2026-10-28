@@ -3,7 +3,6 @@ import { renderHook, act } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { useProfileOAuth } from "../useProfileOAuth";
-import { facebookLogin } from "@/lib/facebookSdk";
 import { supabase } from "@/integrations/supabase/client";
 
 // Mock dependencies
@@ -21,10 +20,6 @@ vi.mock("@/hooks/use-toast", () => ({
 
 vi.mock("@/hooks/useAuth", () => ({
     useAuth: () => ({ user: { id: "test-user-id" } }),
-}));
-
-vi.mock("@/lib/facebookSdk", () => ({
-    facebookLogin: vi.fn(),
 }));
 
 vi.mock("@/integrations/supabase/client", () => ({
@@ -61,6 +56,20 @@ function createWrapper() {
     );
 }
 
+function installLocation() {
+    const assigned: string[] = [];
+    delete (window as unknown as { location?: unknown }).location;
+    (window as unknown as { location: { href: string; assign: (url: string) => void } }).location = {
+        href: "",
+        assign: (url: string) => {
+            assigned.push(url);
+        },
+    };
+    return assigned;
+}
+
+const invokeMock = supabase.functions.invoke as unknown as ReturnType<typeof vi.fn>;
+
 describe("useProfileOAuth Hook", () => {
     beforeEach(() => {
         vi.clearAllMocks();
@@ -76,18 +85,10 @@ describe("useProfileOAuth Hook", () => {
         expect(mockSetSearchParams).toHaveBeenCalledWith({});
     });
 
-    it("should start Facebook connection successfully", async () => {
-        (facebookLogin as any).mockResolvedValue({
-            success: true,
-            response: {
-                status: "connected",
-                authResponse: { accessToken: "fb-token" },
-            },
-            diagnostics: { origin: "https://postora.cloud", timestamp: new Date().toISOString(), sdkLoaded: true, loginStatus: "connected" },
-        });
-
-        (supabase.functions.invoke as any).mockResolvedValue({
-            data: { success: true },
+    it("should start Facebook connection through the backend authorization", async () => {
+        const assigned = installLocation();
+        invokeMock.mockResolvedValue({
+            data: { success: true, url: "https://www.facebook.com/v22.0/dialog/oauth?state=abc" },
             error: null,
         });
 
@@ -97,16 +98,67 @@ describe("useProfileOAuth Hook", () => {
             await result.current.handleConnectPlatform("profile_123", "facebook");
         });
 
-        expect(facebookLogin).toHaveBeenCalled();
         expect(supabase.functions.invoke).toHaveBeenCalledWith("facebook-oauth", expect.any(Object));
+        const call = invokeMock.mock.calls[0];
+        expect(call[1].body).toMatchObject({
+            action: "authorize",
+            target_platform: "facebook",
+            social_profile_id: "profile_123",
+        });
+        expect(assigned).toEqual(["https://www.facebook.com/v22.0/dialog/oauth?state=abc"]);
     });
 
-    it("should handle user_cancelled Facebook login", async () => {
-        (facebookLogin as any).mockResolvedValue({
-            success: false,
-            response: { status: "unknown" },
-            failureReason: "user_cancelled",
-            diagnostics: { origin: "https://postora.cloud", timestamp: new Date().toISOString(), sdkLoaded: true, loginStatus: "unknown" },
+    it("navigates only after the backend returned the authorization URL", async () => {
+        const assigned = installLocation();
+        let release: (value: { data: unknown; error: unknown }) => void = () => {};
+        invokeMock.mockImplementation(
+            () => new Promise((resolve) => { release = resolve; }),
+        );
+
+        const { result } = renderHook(() => useProfileOAuth(), { wrapper: createWrapper() });
+
+        let pending: Promise<void> | undefined;
+        await act(async () => {
+            pending = result.current.handleConnectPlatform("profile_123", "facebook");
+        });
+
+        // The capture is still in flight: the browser must not have navigated.
+        expect(assigned).toEqual([]);
+
+        await act(async () => {
+            release({ data: { success: true, url: "https://www.facebook.com/authorize" }, error: null });
+            await pending;
+        });
+
+        expect(assigned).toEqual(["https://www.facebook.com/authorize"]);
+    });
+
+    it("names the owned target account when reconnecting", async () => {
+        const assigned = installLocation();
+        invokeMock.mockResolvedValue({
+            data: { success: true, url: "https://www.facebook.com/authorize" },
+            error: null,
+        });
+
+        const { result } = renderHook(() => useProfileOAuth(), { wrapper: createWrapper() });
+
+        await act(async () => {
+            await result.current.handleReconnectPlatform("profile_123", "facebook", "account_9");
+        });
+
+        const call = invokeMock.mock.calls[0];
+        expect(call[1].body).toMatchObject({
+            action: "authorize",
+            intent: "reconnect",
+            target_social_account_id: "account_9",
+        });
+    });
+
+    it("reports a failed authorization and does not navigate", async () => {
+        const assigned = installLocation();
+        invokeMock.mockResolvedValue({
+            data: null,
+            error: new Error("connection refused"),
         });
 
         const { result } = renderHook(() => useProfileOAuth(), { wrapper: createWrapper() });
@@ -115,58 +167,11 @@ describe("useProfileOAuth Hook", () => {
             await result.current.handleConnectPlatform("profile_123", "facebook");
         });
 
+        expect(assigned).toEqual([]);
         expect(mockToast).toHaveBeenCalledWith(
             expect.objectContaining({
                 title: "Connection failed",
                 variant: "destructive",
-            })
-        );
-        expect(supabase.functions.invoke).not.toHaveBeenCalled();
-    });
-
-    it("should handle not_authorized Facebook login", async () => {
-        (facebookLogin as any).mockResolvedValue({
-            success: false,
-            response: { status: "not_authorized" },
-            failureReason: "not_authorized",
-            diagnostics: { origin: "https://postora.cloud", timestamp: new Date().toISOString(), sdkLoaded: true, loginStatus: "not_authorized" },
-        });
-
-        const { result } = renderHook(() => useProfileOAuth(), { wrapper: createWrapper() });
-
-        await act(async () => {
-            await result.current.handleConnectPlatform("profile_123", "facebook");
-        });
-
-        expect(mockToast).toHaveBeenCalledWith(
-            expect.objectContaining({
-                variant: "destructive",
-            })
-        );
-        // Should store debug info
-        const stored = sessionStorage.getItem("fb_last_oauth_debug");
-        expect(stored).toBeTruthy();
-        const parsed = JSON.parse(stored!);
-        expect(parsed.reason).toBe("not_authorized");
-    });
-
-    it("should handle SDK load failure", async () => {
-        (facebookLogin as any).mockResolvedValue({
-            success: false,
-            response: { status: "unknown" },
-            failureReason: "sdk_load_failed",
-            diagnostics: { origin: "https://postora.cloud", timestamp: new Date().toISOString(), sdkLoaded: false, loginStatus: "sdk_not_loaded" },
-        });
-
-        const { result } = renderHook(() => useProfileOAuth(), { wrapper: createWrapper() });
-
-        await act(async () => {
-            await result.current.handleConnectPlatform("profile_123", "facebook");
-        });
-
-        expect(mockToast).toHaveBeenCalledWith(
-            expect.objectContaining({
-                description: expect.stringContaining("ad-blocker"),
             })
         );
     });

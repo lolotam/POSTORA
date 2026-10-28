@@ -59,30 +59,40 @@ import { useProfileOAuth } from "@/hooks/useProfileOAuth";
 describe("Instagram flow-choice request", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("reconnecting Instagram raises the flow-choice request", async () => {
+  it("reconnecting Instagram raises the flow-choice request with the target account", async () => {
     // Regression: this used to return early with only a toast, so the red
     // Reconnect button appeared to do nothing and no dialog ever opened.
+    //
+    // The explicit intent travels with the request. The backend captures it
+    // before the provider is contacted, so the reconnect must still name the
+    // owned account it targets once the user picks a login method.
     const { result } = renderHook(() => useProfileOAuth());
 
     await act(async () => {
       await result.current.handleReconnectPlatform("profile-1", "instagram", "account-9");
     });
 
-    expect(result.current.instagramFlowRequest).toEqual({ profileId: "profile-1" });
+    expect(result.current.instagramFlowRequest).toEqual({
+      profileId: "profile-1",
+      options: { mode: "reconnect", socialAccountId: "account-9" },
+    });
     expect(handleInstagramConnect).not.toHaveBeenCalled();
   });
 
-  it("connecting Instagram raises the same request", async () => {
+  it("connecting Instagram raises the same request without a target", async () => {
     const { result } = renderHook(() => useProfileOAuth());
 
     await act(async () => {
       await result.current.handleConnectPlatform("profile-2", "instagram");
     });
 
-    expect(result.current.instagramFlowRequest).toEqual({ profileId: "profile-2" });
+    expect(result.current.instagramFlowRequest).toEqual({
+      profileId: "profile-2",
+      options: {},
+    });
   });
 
-  it("choosing a flow starts that connect and clears the request", async () => {
+  it("choosing a flow starts that connect with the preserved options", async () => {
     const { result } = renderHook(() => useProfileOAuth());
 
     await act(async () => {
@@ -92,7 +102,10 @@ describe("Instagram flow-choice request", () => {
       await result.current.selectInstagramFlow("direct");
     });
 
-    expect(handleInstagramConnect).toHaveBeenCalledWith("profile-1", "direct");
+    expect(handleInstagramConnect).toHaveBeenCalledWith("profile-1", "direct", {
+      mode: "reconnect",
+      socialAccountId: "account-9",
+    });
     expect(result.current.instagramFlowRequest).toBeNull();
   });
 

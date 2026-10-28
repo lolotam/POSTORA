@@ -244,6 +244,10 @@ jobs:
           tests=(
             supabase/functions/_shared/protectedRouteHandlers.test.ts
             supabase/functions/_shared/protectedReaderRouteFailures.test.ts
+            supabase/functions/_shared/metaOAuthAttemptStore.test.ts
+            supabase/functions/_shared/metaOAuthProtectedFlow.test.ts
+            supabase/functions/_shared/metaOAuthProtectedBoundary.test.ts
+            supabase/functions/_shared/protectedOAuthHandlers.test.ts
           )
           for file in "${tests[@]}"; do
             if [ ! -f "${file}" ]; then

@@ -142,6 +142,7 @@ export function useOAuthRedirectHandler(handlers: CallbackHandlers) {
 
 
     const isReconnect = searchParams.get("reconnected") === "1";
+    const subscriptionUnconfirmed = searchParams.get("warning") === "subscription_unconfirmed";
     // instagram-oauth appends ?username=, unlike the account_name= the other providers use.
     const igUsername = searchParams.get("username") ?? accountName;
 
@@ -169,17 +170,23 @@ export function useOAuthRedirectHandler(handlers: CallbackHandlers) {
     const msg = isReconnect && baseMsg
       ? { title: "Connection refreshed", description: `Your ${connected} account is reconnected and active.` }
       : baseMsg;
-    if (msg) {
+    const shown = msg && subscriptionUnconfirmed
+      ? {
+        ...msg,
+        description: `${msg.description} The webhook subscription could not be confirmed.`,
+      }
+      : msg;
+    if (shown) {
       // One-shot guard: avoid duplicate toasts when this effect re-runs
       // (handlers object identity changes on parent re-renders) or when the
       // legacy code-callback path also fires its own success toast.
-      const dedupeKey = `oauth_toast_shown:${connected}:${isReconnect ? "reconnect" : "connect"}:${accountName ?? ""}:${channel ?? ""}`;
+      const dedupeKey = `oauth_toast_shown:${connected}:${isReconnect ? "reconnect" : "connect"}:${accountName ?? ""}:${channel ?? ""}:${subscriptionUnconfirmed ? "subscription_unconfirmed" : ""}`;
       const alreadyShown = sessionStorage.getItem(dedupeKey);
       if (!alreadyShown) {
         sessionStorage.setItem(dedupeKey, String(Date.now()));
         // Auto-expire after 10s so a future reconnect can toast again.
         setTimeout(() => sessionStorage.removeItem(dedupeKey), 10_000);
-        toast(msg);
+        toast(shown);
         refetchSocialQueries(queryClient);
       }
       setSearchParams({});
