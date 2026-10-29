@@ -104,6 +104,16 @@ export function readDeferral(responseData: unknown): Deferral | null {
   return parsed.success ? parsed.data : null;
 }
 
+type WriteResult = PromiseLike<{ error: { message: string } | null }>;
+
+/** The two platform_posts writes recordStillProcessing makes, and nothing more. */
+interface PlatformPostsWriter {
+  from(table: "platform_posts"): {
+    insert(values: Record<string, unknown>): WriteResult;
+    update(values: Record<string, unknown>): { eq(column: string, value: string): { eq(column: string, value: string): WriteResult } };
+  };
+}
+
 type Settle = (supabase: unknown, args: {
   platformPostId: string | null;
   postId: string;
@@ -119,8 +129,7 @@ type Settle = (supabase: unknown, args: {
  * next check out a minute, or gives the account up once the deadline has passed.
  */
 export async function recordStillProcessing(
-  // deno-lint-ignore no-explicit-any
-  supabase: any,
+  supabase: unknown,
   settle: Settle,
   args: {
     postId: string;
@@ -131,8 +140,9 @@ export async function recordStillProcessing(
   },
   now = new Date(),
 ): Promise<{ gaveUp: boolean; error: string | null }> {
+  const db = supabase as PlatformPostsWriter;
   if (!args.resume) {
-    const { error } = await supabase.from("platform_posts").insert({
+    const { error } = await db.from("platform_posts").insert({
       post_id: args.postId,
       social_account_id: args.account.id,
       platform: args.account.platform,
@@ -158,7 +168,7 @@ export async function recordStillProcessing(
     return { gaveUp: true, error: settled.error };
   }
 
-  const { error } = await supabase
+  const { error } = await db
     .from("platform_posts")
     .update({ response_data: { ...(args.resumeResponseData ?? {}), deferred: nextDeferral(args.resume.deferral, now) } })
     .eq("id", args.resume.platformPostId)
