@@ -214,6 +214,418 @@ for (const ns of [...namespaces].sort()) {
   }
 }
 
+// STRUCTURED_OUTPUT_REGION
+// Machine-readable callsites for the no-regression comparator.
+// This block does not change the set-based exit count above: `failures`
+// is already final, and nothing here calls `report()`.
+
+function resolveStructuredJsonArg(argv) {
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] !== "--json") continue;
+    const value = argv[i + 1];
+    if (!value || value.startsWith("-")) {
+      console.error("ERROR: --json requires a file path.");
+      process.exit(1);
+    }
+    return value;
+  }
+  return null;
+}
+
+function structuredPosition(content, index) {
+  let line = 1;
+  let column = 1;
+  for (let i = 0; i < index; i++) {
+    if (content.charCodeAt(i) === 10) {
+      line += 1;
+      column = 1;
+    } else {
+      column += 1;
+    }
+  }
+  return { line, column };
+}
+
+function structuredPosix(absPath) {
+  return relative(root, absPath).split("\\").join("/");
+}
+
+function cloneStructuredRegex(re) {
+  return new RegExp(re.source, re.flags);
+}
+
+// Line of each leaf key path. Returns null when the bundle is not uniquely located.
+function jsonLeafLines(text) {
+  let i = 0;
+  let line = 1;
+  const found = new Map();
+
+  function bump(ch) {
+    if (ch === "\n") line += 1;
+  }
+  function skipWs() {
+    while (i < text.length && " \t\r\n".includes(text[i])) {
+      bump(text[i]);
+      i += 1;
+    }
+  }
+  function parseString() {
+    if (text[i] !== '"') return undefined;
+    bump(text[i]);
+    i += 1;
+    let value = "";
+    while (i < text.length) {
+      const ch = text[i];
+      bump(ch);
+      i += 1;
+      if (ch === "\\") {
+        if (i >= text.length) return undefined;
+        const escaped = text[i];
+        bump(escaped);
+        i += 1;
+        value += escaped;
+        continue;
+      }
+      if (ch === '"') return value;
+      value += ch;
+    }
+    return undefined;
+  }
+  function skipAny() {
+    skipWs();
+    if (i >= text.length) return false;
+    const ch = text[i];
+    if (ch === "{") return skipObject();
+    if (ch === "[") return skipArray();
+    if (ch === '"') return parseString() !== undefined;
+    if ("-0123456789tfn".includes(ch)) {
+      while (i < text.length && !",]}".includes(text[i]) && !" \t\r\n".includes(text[i])) i += 1;
+      return true;
+    }
+    return false;
+  }
+  function skipArray() {
+    if (text[i] !== "[") return false;
+    bump(text[i]);
+    i += 1;
+    skipWs();
+    if (text[i] === "]") {
+      bump(text[i]);
+      i += 1;
+      return true;
+    }
+    while (i < text.length) {
+      if (!skipAny()) return false;
+      skipWs();
+      if (text[i] === ",") {
+        bump(text[i]);
+        i += 1;
+        continue;
+      }
+      if (text[i] === "]") {
+        bump(text[i]);
+        i += 1;
+        return true;
+      }
+      return false;
+    }
+    return false;
+  }
+  function skipObject() {
+    if (text[i] !== "{") return false;
+    bump(text[i]);
+    i += 1;
+    skipWs();
+    if (text[i] === "}") {
+      bump(text[i]);
+      i += 1;
+      return true;
+    }
+    while (i < text.length) {
+      skipWs();
+      if (parseString() === undefined) return false;
+      skipWs();
+      if (text[i] !== ":") return false;
+      bump(text[i]);
+      i += 1;
+      if (!skipAny()) return false;
+      skipWs();
+      if (text[i] === ",") {
+        bump(text[i]);
+        i += 1;
+        continue;
+      }
+      if (text[i] === "}") {
+        bump(text[i]);
+        i += 1;
+        return true;
+      }
+      return false;
+    }
+    return false;
+  }
+  function record(keyPath, keyLine) {
+    if (!found.has(keyPath)) found.set(keyPath, []);
+    found.get(keyPath).push(keyLine);
+  }
+  function parseObject(prefix) {
+    if (text[i] !== "{") return false;
+    bump(text[i]);
+    i += 1;
+    skipWs();
+    if (text[i] === "}") {
+      bump(text[i]);
+      i += 1;
+      return true;
+    }
+    while (i < text.length) {
+      skipWs();
+      const keyLine = line;
+      const key = parseString();
+      if (key === undefined) return false;
+      skipWs();
+      if (text[i] !== ":") return false;
+      bump(text[i]);
+      i += 1;
+      const keyPath = prefix ? `${prefix}.${key}` : key;
+      skipWs();
+      if (text[i] === "{") {
+        if (!parseObject(keyPath)) return false;
+      } else if (text[i] === "[") {
+        record(keyPath, keyLine);
+        if (!skipArray()) return false;
+      } else if (text[i] === '"') {
+        record(keyPath, keyLine);
+        if (parseString() === undefined) return false;
+      } else if (i < text.length && "-0123456789tfn".includes(text[i])) {
+        record(keyPath, keyLine);
+        while (i < text.length && !",]}".includes(text[i]) && !" \t\r\n".includes(text[i])) i += 1;
+      } else {
+        return false;
+      }
+      skipWs();
+      if (text[i] === ",") {
+        bump(text[i]);
+        i += 1;
+        continue;
+      }
+      if (text[i] === "}") {
+        bump(text[i]);
+        i += 1;
+        return true;
+      }
+      return false;
+    }
+    return false;
+  }
+
+  skipWs();
+  if (!parseObject("")) return null;
+  skipWs();
+  if (i !== text.length) return null;
+  return found;
+}
+
+function uniqueLeafLine(leafLines, key) {
+  if (!leafLines) return null;
+  const lines = leafLines.get(key);
+  if (!lines || lines.length !== 1) return null;
+  return lines[0];
+}
+
+function pushStructured(findings, finding) {
+  findings.push({
+    category: finding.category,
+    locale: "ar",
+    namespace: finding.namespace ?? null,
+    key: finding.key ?? null,
+    path: finding.path,
+    line: finding.line ?? null,
+    column: finding.column ?? null,
+    anchor: finding.anchor,
+  });
+}
+
+function collectStructuredI18nFindings() {
+  const findings = [];
+  const useTranslationRe = cloneStructuredRegex(useTranslationRegex);
+  const callRe = cloneStructuredRegex(tCallRegex);
+  const transRe = cloneStructuredRegex(transKeyRegex);
+  const bundleKeys = new Map();
+  const bundleLines = new Map();
+  const bundleProblems = new Map();
+
+  if (existsSync(localesDir)) {
+    for (const entry of readdirSync(localesDir)) {
+      if (!entry.endsWith(".json")) continue;
+      const ns = entry.slice(0, -5);
+      const bundlePath = join(localesDir, entry);
+      let parsed;
+      try {
+        const text = readFileSync(bundlePath, "utf8");
+        parsed = JSON.parse(text);
+        bundleLines.set(ns, jsonLeafLines(text));
+      } catch (err) {
+        bundleProblems.set(ns, {
+          category: "UNPARSEABLE",
+          path: structuredPosix(bundlePath),
+          anchor: err.message,
+        });
+        continue;
+      }
+      bundleKeys.set(ns, new Set(flattenKeys(parsed)));
+    }
+  }
+
+  for (const file of sourceFiles) {
+    const content = readFileSync(file, "utf8");
+    const calls = [...content.matchAll(useTranslationRe)];
+    if (calls.length === 0) continue;
+    const rel = structuredPosix(file);
+    const fileNamespaces = new Set();
+
+    for (const call of calls) {
+      const args = call[1];
+      const at = structuredPosition(content, call.index);
+      if (args.includes("keyPrefix")) {
+        pushStructured(findings, {
+          category: "UNSUPPORTED",
+          namespace: null,
+          key: null,
+          path: rel,
+          line: at.line,
+          column: at.column,
+          anchor: call[0],
+        });
+        continue;
+      }
+      const explicit = quotedStrings(args);
+      const mentioned = explicit.length === 0 ? [defaultNs] : explicit;
+      for (const ns of mentioned) {
+        fileNamespaces.add(ns);
+        if (!registeredNamespaces.has(ns)) {
+          pushStructured(findings, {
+            category: "UNREGISTERED",
+            namespace: ns,
+            key: null,
+            path: rel,
+            line: at.line,
+            column: at.column,
+            anchor: call[0],
+          });
+        }
+      }
+    }
+    if (fileNamespaces.size === 0) continue;
+
+    const keyMatches = [
+      ...content.matchAll(callRe),
+      ...content.matchAll(transRe),
+    ];
+    for (const match of keyMatches) {
+      const rawKey = match[1];
+      const at = structuredPosition(content, match.index);
+      const separator = rawKey.indexOf(":");
+      const targets = [];
+      if (separator > 0) {
+        targets.push({ ns: rawKey.slice(0, separator), key: rawKey.slice(separator + 1) });
+      } else {
+        for (const ns of fileNamespaces) targets.push({ ns, key: rawKey });
+      }
+      for (const target of targets) {
+        if (bundleProblems.has(target.ns)) continue;
+        if (!bundleKeys.has(target.ns)) continue;
+        if (bundleKeys.get(target.ns).has(target.key)) continue;
+        pushStructured(findings, {
+          category: "MISSING",
+          namespace: target.ns,
+          key: target.key,
+          path: rel,
+          line: at.line,
+          column: at.column,
+          anchor: match[0],
+        });
+      }
+    }
+  }
+
+  const structuredNamespaces = new Set(codeKeysByNs.keys());
+  if (existsSync(localesDir)) {
+    for (const entry of readdirSync(localesDir)) {
+      if (entry.endsWith(".json")) structuredNamespaces.add(entry.slice(0, -5));
+    }
+  }
+  for (const ns of structuredNamespaces) {
+    const bundlePath = join(localesDir, `${ns}.json`);
+    if (!existsSync(bundlePath)) {
+      pushStructured(findings, {
+        category: "MISSING_BUNDLE",
+        namespace: ns,
+        key: null,
+        path: structuredPosix(bundlePath),
+        line: null,
+        column: null,
+        anchor: "MISSING_BUNDLE",
+      });
+      continue;
+    }
+    const problem = bundleProblems.get(ns);
+    if (problem) {
+      pushStructured(findings, {
+        category: "UNPARSEABLE",
+        namespace: ns,
+        key: null,
+        path: problem.path,
+        line: null,
+        column: null,
+        anchor: problem.anchor,
+      });
+      continue;
+    }
+    const present = bundleKeys.get(ns) ?? new Set();
+    const used = codeKeysByNs.get(ns) ?? new Set();
+    const leafLines = bundleLines.get(ns) ?? null;
+    for (const key of [...present].filter((item) => !used.has(item)).sort()) {
+      pushStructured(findings, {
+        category: "ORPHAN",
+        namespace: ns,
+        key,
+        path: structuredPosix(bundlePath),
+        line: uniqueLeafLine(leafLines, key),
+        column: null,
+        anchor: key,
+      });
+    }
+  }
+
+  return {
+    version: 1,
+    locale: "ar",
+    defaultNS: defaultNs,
+    failureCount: failures,
+    registeredNamespaces: [...registeredNamespaces].sort(),
+    findings,
+  };
+}
+
+const structuredJsonPath = resolveStructuredJsonArg(process.argv.slice(2));
+if (structuredJsonPath) {
+  const { writeFileSync } = await import("node:fs");
+  let structuredPayload;
+  try {
+    structuredPayload = collectStructuredI18nFindings();
+  } catch (err) {
+    console.error(`ERROR: i18n structured report failed: ${err && err.message ? err.message : err}`);
+    process.exit(1);
+  }
+  try {
+    writeFileSync(structuredJsonPath, `${JSON.stringify(structuredPayload)}\n`, "utf8");
+  } catch (err) {
+    console.error(`ERROR: could not write i18n structured report: ${err && err.message ? err.message : err}`);
+    process.exit(1);
+  }
+}
+// END_STRUCTURED_OUTPUT_REGION
 console.log("");
 if (failures > 0) {
   console.error(`FAILED: ${failures} i18n coverage issue(s) found.`);

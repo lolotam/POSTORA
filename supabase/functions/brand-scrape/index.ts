@@ -1,5 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { createLogger } from "../_shared/logging.ts";
+import { pickBusinessDiscoveryViewer, type ViewerCandidate } from "../_shared/instagramDiscoveryViewer.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -539,20 +540,17 @@ Deno.serve(async (req) => {
 
     // ─── Instagram (and Threads fallback) ───
     if (!result && (platform === "instagram" || platform === "threads")) {
-      // Prefer facebook_page accounts — their tokens (EAAS...) work with Business Discovery API
-      const { data: fbPageAccount } = await supabaseAdmin
+      // Canonical viewer selection (spec §R0.1) for Business Discovery API
+      const { data: userAccounts } = await supabaseAdmin
         .from("social_accounts")
-        .select("platform_user_id, access_token, ig_auth_type")
+        .select("id, user_id, platform, platform_user_id, access_token, is_active, needs_reauth, ig_auth_type, account_metadata, connected_at")
         .eq("user_id", user.id)
         .eq("platform", "instagram")
-        .eq("is_active", true)
-        .eq("ig_auth_type", "facebook_page")
-        .limit(1)
-        .single();
+        .eq("is_active", true);
 
-      const hasValidOfficialToken = fbPageAccount?.access_token && fbPageAccount.access_token.startsWith("EAAS");
+      const fbPageAccount = pickBusinessDiscoveryViewer((userAccounts || []) as ViewerCandidate[]);
 
-      if (hasValidOfficialToken) {
+      if (fbPageAccount?.access_token && fbPageAccount?.platform_user_id) {
         try {
           result = await scrapeInstagramOfficial(cleanUsername, fbPageAccount.platform_user_id, fbPageAccount.access_token, maxPosts);
           strategyUsed = "official";

@@ -3,12 +3,10 @@
 `scripts/db-harness.sh` proves database changes against a production-shaped
 database.
 
-> **It does not gate anything automatically.** This said it ran as the
-> `db-harness` job in `.github/workflows/test.yml`; that directory is empty and
-> the job does not exist, so **run it yourself before merging a migration or a
-> suite**. Nobody did between roughly 2026-09-20 and 2026-09-22, and it sat red
-> the whole time — see "Running locally" below, and the note there about running
-> it on Contabo, which is usually faster than a local pull.
+> The `Postgres baseline plus delta` job in `.github/workflows/ci.yml` runs
+> this harness. A configured job is not proof of successful hosted execution:
+> inspect the final revision's actual checks before merging. Run the harness
+> locally against an isolated database as well when changing migrations or suites.
 
 ## What it does
 
@@ -32,10 +30,35 @@ below). So the harness does not replay history. It:
 | `log_system_event.sql` | consent-log RPC: actor binding, service allow-list, grant surface; self-cleaning |
 | `whatsapp_workspace_crm.sql` | pgTAP; rolls itself back |
 | `import_whatsapp_contacts_to_workspace.sql` | pgTAP; rolls itself back |
+| `instagram_capabilities.sql` | capability generations, credential access and stale-response fencing; rolls back |
+| `facebook_user_credential_bindings.sql` | protected User-token authority, ownership, account connection versions, detach/rebind fencing and grant surface; rolls back |
+| `instagram_tracking_schema.sql` | tracking quotas, snapshots, retention and soft removal; rolls back |
+| `instagram_durable_collection_jobs.sql` | durable claims, context and generation fences, checkpoints, completion truth and lease expiry; rolls back |
+| `meta_pending_selection_secret_boundary.sql` | pending OAuth stash browser denial and service-owned picker query compatibility; rolls back |
+| `meta_oauth_attempt_lifecycle.sql` | captured OAuth authority, callback claims, atomic selection and replay/ownership refusals; rolls back |
+| `meta_account_refresh_lifecycle.sql` | coherent Meta refresh captures, atomic direct/shared token writes and fenced health/event transitions; rolls back |
+| `meta_oauth_identity_alias.sql` | atomic direct Instagram messaging alias validation, conversion, metadata confinement and replay; rolls back |
+| `meta_page_token_reconciliation.sql` | selected operational Page-token reconciliation from a captured unchanged User grant, protected identity agreement and sibling/reauth preservation; rolls back |
+| `competitor_collection_results.sql` | atomic competitor result write, watchlist publication, weekly retry gate, context rules and result fences; rolls back |
 
-`partner_api_race_fixture.sql` is **not** run by the harness: it is a
-committed fixture for the manual two-session concurrency rehearsal, not a
-suite.
+The harness's `SUITES` array is the complete executable inventory; the table
+above highlights selected suites, not the entire list. No existing suite may
+be excluded to make a rehearsal pass.
+
+These fixtures are explicitly classified as **manual multi-session rehearsals**,
+not omitted test suites: `partner_api_race_fixture.sql`,
+`instagram_tracking_schema_race_fixture.sql`,
+`facebook_user_credential_bindings_race_fixture.sql`,
+`instagram_durable_collection_jobs_race_fixture.sql`,
+`meta_oauth_attempt_lifecycle_race_fixture.sql`,
+`meta_account_refresh_lifecycle_race_fixture.sql`,
+`meta_oauth_identity_alias_race_fixture.sql`, and
+`meta_page_token_reconciliation_race_fixture.sql`. Their headers document
+setup, interleavings, expected outcomes and cleanup. A single-session harness
+pass does not prove concurrency. Run the applicable fixtures separately against
+the same isolated candidate and record both sessions' results. Never run them
+against production; the Instagram credential/job fixtures require
+`-v disposable=1` because setup commits synthetic records.
 
 ## Running locally
 
@@ -47,7 +70,7 @@ docker run -d --name pg-harness -p 5432:5432 \
   -e POSTGRES_PASSWORD=postgres \
   supabase/postgres:17.6.1.158 \
   -c cron.database_name=partner_api_harness \
-  -c shared_preload_libraries=pg_cron,pg_net
+  -c shared_preload_libraries=pg_cron,pg_net,pgsodium,supabase_vault
 
 # connect as supabase_admin (the image's superuser — 'postgres' is not one
 # in this image and cannot touch the auth schema)
@@ -66,7 +89,7 @@ rm -rf /root/hg && mkdir /root/hg
 git -C /root/postora-runtime archive FETCH_HEAD | tar -x -C /root/hg
 docker run -d --name hg17 -e POSTGRES_PASSWORD=harness -v /root/hg:/repo \
   supabase/postgres:17.6.1.158 \
-  -c cron.database_name=partner_api_harness -c shared_preload_libraries=pg_cron,pg_net
+  -c cron.database_name=partner_api_harness -c shared_preload_libraries=pg_cron,pg_net,pgsodium,supabase_vault
 # wait for HEALTHCHECK to report healthy, then:
 docker exec -e HARNESS_DB_NAME=partner_api_harness hg17 bash -c \
   "cd /repo && bash scripts/db-harness.sh 'postgres://supabase_admin@localhost:5432/postgres'"

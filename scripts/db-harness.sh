@@ -71,9 +71,15 @@
 # pg_cron note: pg_cron refuses CREATE EXTENSION in any database except the
 # one named by cron.database_name (a postmaster-level setting). Start the
 # server with:
-#   -c cron.database_name=$HARNESS_DB_NAME -c shared_preload_libraries=pg_cron,pg_net
-# CI does exactly this. Without it the harness still runs — prep prints a
-# NOTICE and a migration that needs cron fails loudly with the hint below.
+#   -c cron.database_name=$HARNESS_DB_NAME \
+#     -c shared_preload_libraries=pg_cron,pg_net,pgsodium,supabase_vault
+# CI does exactly this. pg_cron and pg_net have to be preloaded or the
+# migrations that schedule jobs fail. supabase_vault has to be preloaded too:
+# its root key is loaded only from vault.getkey_script during preload, and
+# CREATE EXTENSION alone leaves create_secret unable to derive a key.
+# pgsodium is preloaded beside it, matching the image. Without cron the
+# harness still runs — prep prints a NOTICE and a migration that needs cron
+# fails loudly with the hint below.
 #
 # Usage:
 #   DB_URL='postgres://supabase_admin:pass@localhost:5432/postgres' \
@@ -134,6 +140,17 @@ SUITES=(
   store_webhook_silence.sql
   whatsapp_number_mismatch.sql
   whatsapp_account_setup_move.sql
+  instagram_capabilities.sql
+  facebook_user_credential_bindings.sql
+  instagram_tracking_schema.sql
+  instagram_durable_collection_jobs.sql
+  meta_pending_selection_secret_boundary.sql
+  meta_oauth_attempt_lifecycle.sql
+  meta_account_refresh_lifecycle.sql
+  meta_oauth_identity_alias.sql
+  meta_page_token_reconciliation.sql
+  competitor_collection_results.sql
+  instagram_direct_collection_credential.sql
 )
 # These fixtures build their own focused schema and apply the migration under
 # test. They must never run against the restored production-shaped database.
@@ -463,6 +480,56 @@ VECTOR_PREP
 grep -v '^CREATE SCHEMA public;$' "$BASELINE" \
   | psql "${PSQL_COMMON[@]}" "$HARNESS_URL" -q
 
+# --- 4b. supabase_vault --------------------------------------------------------
+# Production reclaim triggers delete from vault.secrets. The baseline dump is
+# schema-filtered and contains no CREATE EXTENSION, and prep's DROP SCHEMA
+# public CASCADE would take a vault extension with it if one had been created
+# earlier and depended on public. Create the real extension after the restore,
+# before migrations and suites. Do not stub the relation or skip the assertions.
+# Browser roles get no vault privileges. service_role receives the grants from
+# the image init 20221207154255_create_pgsodium_and_vault.sql. That init
+# connects to cron.database_name before this database exists, so it never
+# reaches the harness database. SECURITY DEFINER reclaim functions run as
+# their owner.
+STEP="create supabase_vault"
+psql "${PSQL_COMMON[@]}" "$HARNESS_URL" -v ON_ERROR_STOP=1 -q <<'VAULT'
+CREATE EXTENSION IF NOT EXISTS supabase_vault;
+
+-- vault.create_secret derives its key inside supabase_vault.so. That library
+-- reads vault.getkey_script only while it is preloaded. CREATE EXTENSION
+-- does not load the key.
+DO $vault_ready$
+BEGIN
+  IF coalesce(btrim(current_setting('vault.getkey_script', true)), '') = '' THEN
+    RAISE EXCEPTION 'supabase_vault is not preloaded, so vault.create_secret cannot derive a key. Start the server with shared_preload_libraries including supabase_vault, pgsodium, pg_cron, and pg_net.';
+  END IF;
+END
+$vault_ready$;
+
+REVOKE ALL ON SCHEMA vault FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON ALL TABLES IN SCHEMA vault FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON ALL SEQUENCES IN SCHEMA vault FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON ALL ROUTINES IN SCHEMA vault FROM PUBLIC, anon, authenticated;
+
+-- Same service_role surface as the image init for supabase_vault 0.3.x.
+-- postgres is not the harness superuser; supabase_admin owns the extension.
+GRANT USAGE ON SCHEMA vault TO service_role;
+GRANT SELECT, DELETE ON vault.secrets, vault.decrypted_secrets TO service_role;
+GRANT EXECUTE ON FUNCTION vault.create_secret, vault.update_secret, vault._crypto_aead_det_decrypt TO service_role;
+
+DO $vault_probe$
+DECLARE
+  v_id uuid;
+BEGIN
+  v_id := vault.create_secret('harness-vault-probe', 'harness-vault-probe');
+  DELETE FROM vault.secrets WHERE id = v_id;
+  IF EXISTS (SELECT 1 FROM vault.secrets WHERE id = v_id) THEN
+    RAISE EXCEPTION 'vault probe secret was not removed';
+  END IF;
+END
+$vault_probe$;
+VAULT
+
 # --- 5. apply only migrations strictly newer than the marker -----------------
 # Pure-bash glob (not `ls *.sql` under nullglob, and not `find -printf`,
 # which does not exist on BusyBox userlands like the postgres image's):
@@ -613,7 +680,7 @@ psql "${PSQL_COMMON[@]}" "$HARNESS_URL" -q -c \
 # moved. So: every *.sql in the tests dir must be listed, or named here as
 # deliberately excluded, or the harness fails before running anything.
 STEP="suite inventory"
-EXCLUDED_FROM_SUITES=(baseline_schema.sql partner_api_race_fixture.sql)
+EXCLUDED_FROM_SUITES=(baseline_schema.sql partner_api_race_fixture.sql instagram_tracking_schema_race_fixture.sql facebook_user_credential_bindings_race_fixture.sql instagram_durable_collection_jobs_race_fixture.sql meta_oauth_attempt_lifecycle_race_fixture.sql meta_account_refresh_lifecycle_race_fixture.sql meta_oauth_identity_alias_race_fixture.sql meta_page_token_reconciliation_race_fixture.sql)
 for f in "$TESTS_DIR"/*.sql; do
   name="$(basename "$f")"
   listed=0

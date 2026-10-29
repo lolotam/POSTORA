@@ -225,4 +225,4 @@ END $r$;
 RESET ROLE;
 
 SELECT pg_temp.aad_cleanup();
-\echo '=== ai_agent_dashboard: PASS ==='
+\echo '=== ai_agent_dashboard: ALL CHECKS PASSED ==='

@@ -1,0 +1,14 @@
+{
+  "cleanPathGlobs": [
+    "src/features/instagram-insights/**",
+    "src/features/competitor-tracking/**",
+    "supabase/functions/_shared/outlierScore.ts",
+    "supabase/functions/_shared/outlierScore.test.ts",
+    "supabase/functions/_shared/instagramInsights*.ts",
+    "supabase/functions/_shared/instagramCompetitor*.ts",
+    "supabase/tests/instagram_capabilities.sql"
+  ],
+  "cleanI18nNamespaces": [
+    { "locale": "ar", "namespace": "analytics" }
+  ]
+}

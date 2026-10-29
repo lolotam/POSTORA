@@ -1,9 +1,40 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.89.0";
+import {
+  appSettingReadResult,
+  configurationClientError,
+  createAppSettingLookup,
+  loadFacebookCredentialSettings,
+  type FacebookCredentialMode,
+} from "../_shared/facebookCredentialMode.ts";
+import {
+  CredentialStoreError,
+  createFacebookUserCredentialStore,
+  createInstagramAccountCapabilityStore,
+  createServiceRpcCaller,
+  credentialReadClientError,
+} from "../_shared/facebookUserCredentialStore.ts";
+import {
+  resolveProtectedUserToken,
+  type ProtectedCredentialDeps,
+} from "../_shared/protectedFacebookCredentials.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
+
+/**
+ * Where the Meta Pages Search token comes from.
+ *
+ * In legacy mode it is the browser-readable metadata copy and then the Page
+ * token, exactly as before. In protected mode it is the owner-scoped protected
+ * authority and nothing else: a missing protected credential is a typed
+ * failure, not a Page-token guess.
+ */
+interface MetaSearchCredentials {
+  mode: FacebookCredentialMode;
+  protectedToken: (socialAccountId: string) => Promise<string | null>;
+}
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -48,7 +79,14 @@ Deno.serve(async (req) => {
 
     // ─── Try Meta Pages Search API if account_id is provided ───
     if (account_id) {
-      const metaResult = await searchMetaPlaces(query, account_id, user.id, SUPABASE_URL, platform);
+      const metaResult = await searchMetaPlaces(
+        query,
+        account_id,
+        user.id,
+        SUPABASE_URL,
+        platform,
+        await resolveMetaSearchCredentials(SUPABASE_URL, user.id),
+      );
       if (metaResult) {
         return new Response(JSON.stringify(metaResult), {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -59,11 +97,40 @@ Deno.serve(async (req) => {
     // ─── Fallback: OpenStreetMap Nominatim ───
     return await searchNominatim(query, corsHeaders);
   } catch (error) {
-    console.error("[facebook-places-search] Error:", error);
+    const config = configurationClientError(error);
+    if (config) {
+      console.error("[facebook-places-search] credential configuration refused", {
+        event: config.error_code,
+      });
+      return new Response(JSON.stringify({
+        places: [],
+        error_code: config.error_code,
+        error: config.error,
+      }), {
+        status: config.status,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    if (error instanceof CredentialStoreError) {
+      const clientError = credentialReadClientError(error);
+      console.error("[facebook-places-search] protected credential unavailable", {
+        event: clientError.error_code,
+      });
+      return new Response(JSON.stringify({
+        places: [],
+        error_code: clientError.error_code,
+        error: clientError.error,
+      }), {
+        status: clientError.status,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    console.error("[facebook-places-search] Error:", error instanceof Error ? error.name : "unknown");
     return new Response(
       JSON.stringify({
         places: [],
-        error: error instanceof Error ? error.message : "Unknown error",
+        error_code: "PLACES_SEARCH_FAILED",
+        error: "Place search failed.",
       }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
@@ -71,34 +138,109 @@ Deno.serve(async (req) => {
 });
 
 // ─── Meta Pages Search ───
+async function resolveMetaSearchCredentials(
+  supabaseUrl: string,
+  userId: string,
+): Promise<MetaSearchCredentials> {
+  const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+  const supabase = createClient(supabaseUrl, serviceRoleKey);
+
+  const { credentialMode } = await loadFacebookCredentialSettings(
+    createAppSettingLookup(async (key) => {
+      const { data, error } = await supabase
+        .from("app_settings")
+        .select("value")
+        .eq("key", key)
+        .maybeSingle();
+      return appSettingReadResult(data, error);
+    }),
+  );
+
+  return {
+    mode: credentialMode,
+    protectedToken: async (socialAccountId: string) => {
+      const rpc = createServiceRpcCaller(supabase);
+      const deps: ProtectedCredentialDeps = {
+        credentials: createFacebookUserCredentialStore(rpc),
+        capabilities: createInstagramAccountCapabilityStore(rpc),
+      };
+      try {
+        const resolved = await resolveProtectedUserToken(deps, {
+          userId,
+          socialAccountId,
+        });
+        return resolved.token;
+      } catch (error) {
+        if (error instanceof CredentialStoreError) {
+          const clientError = credentialReadClientError(error);
+          console.warn("[facebook-places-search] protected credential unavailable", {
+            event: clientError.error_code,
+            account_id: socialAccountId,
+          });
+          if (error.code === "not_found" || error.code === "refused") return null;
+          throw error;
+        }
+        throw error;
+      }
+    },
+  };
+}
+
 async function searchMetaPlaces(
   query: string,
   accountId: string,
   userId: string,
   supabaseUrl: string,
-  platform?: "facebook" | "instagram"
+  platform?: "facebook" | "instagram",
+  credentials?: MetaSearchCredentials,
 ): Promise<{ places: any[]; source: string; error?: string } | null> {
   try {
     const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const adminClient = createClient(supabaseUrl, SERVICE_ROLE_KEY);
 
-    const { data: accountData, error: accountError } = await adminClient
-      .from("social_accounts")
-      .select("access_token, platform, account_metadata")
-      .eq("id", accountId)
-      .eq("user_id", userId)
-      .eq("is_active", true)
-      .single();
+    // This catch belongs to the account read only. The catch at the end of the
+    // function is the provider-search fallback and must not see a rejected read.
+    let accountRead;
+    try {
+      accountRead = await adminClient
+        .from("social_accounts")
+        .select("access_token, platform, account_metadata")
+        .eq("id", accountId)
+        .eq("user_id", userId)
+        .eq("is_active", true)
+        .single();
+    } catch {
+      console.warn("[facebook-places-search] account read failed", { event: "account_read_failed" });
+      return { places: [], source: "meta", error: "ACCOUNT_READ_FAILED" };
+    }
 
-    if (accountError || !accountData?.access_token) {
-      console.warn("[facebook-places-search] Account lookup failed:", accountError?.message);
+    const { data: accountData, error: accountError } = accountRead;
+
+    if (accountError) {
+      console.warn("[facebook-places-search] account read failed", { event: "account_read_failed" });
+      return { places: [], source: "meta", error: "ACCOUNT_READ_FAILED" };
+    }
+
+    if (!accountData?.access_token) {
       return null;
     }
 
-    const userToken = accountData.account_metadata?.user_token;
-    const tokensToTry = userToken
-      ? [userToken, accountData.access_token]
-      : [accountData.access_token];
+    const tokensToTry: string[] = [];
+    if (credentials?.mode === "protected") {
+      // Protected mode: the User token comes from the owner-scoped protected
+      // authority only. There is no metadata copy and no Page-token guess.
+      const protectedToken = await credentials.protectedToken(accountId);
+      if (!protectedToken) {
+        console.warn(
+          "[facebook-places-search] No protected Facebook User credential for the selected account",
+        );
+        return { places: [], source: "meta", error: "PROTECTED_CREDENTIAL_UNAVAILABLE" };
+      }
+      tokensToTry.push(protectedToken);
+    } else {
+      const userToken = accountData.account_metadata?.user_token;
+      tokensToTry.push(...(userToken ? [userToken, accountData.access_token] : [accountData.access_token]));
+    }
 
     for (const token of tokensToTry) {
       const metaUrl = new URL("https://graph.facebook.com/v22.0/pages/search");
@@ -115,7 +257,7 @@ async function searchMetaPlaces(
       if (metaData.error) {
         const errCode = metaData.error.code;
         const errMsg = metaData.error.message;
-        console.warn(`[facebook-places-search] Meta error: code=${errCode}, message=${errMsg}`);
+        console.warn(`[facebook-places-search] Meta error: code=${errCode ?? "unknown"}`);
 
         // Permission error — return actionable reconnect message
         if (errCode === 10 || errCode === 200 || errMsg?.includes("permission")) {
@@ -188,7 +330,8 @@ async function searchMetaPlaces(
     console.log("[facebook-places-search] Meta search returned no usable results, falling back");
     return null;
   } catch (err) {
-    console.warn("[facebook-places-search] Meta search failed:", err);
+    if (err instanceof CredentialStoreError) throw err;
+    console.warn("[facebook-places-search] Meta search failed", { event: "meta_search_failed" });
     return null;
   }
 }

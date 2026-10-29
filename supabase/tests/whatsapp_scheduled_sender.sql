@@ -1,7 +1,8 @@
 -- supabase/tests/whatsapp_scheduled_sender.sql
 -- Whatsapp scheduled sender (migration 20260930100000): FK + status CHECK,
 -- owner-scoped RLS with owned-whatsapp-account writes, the client state
--- guard, the fenced claim, grants, the inactive cron job, and cascade.
+-- guard, the fenced claim, grants, the cron job left active by
+-- 20260930110000, and cascade.
 -- Style: one transaction, fixtures inside, labelled S1..S11 ASSERTs,
 -- expected errors in nested BEGIN/EXCEPTION blocks, ROLLBACK, sentinel
 -- last. Fixture values are synthetic ('...@example.invalid', '9655551xxxx'
@@ -420,26 +421,30 @@ BEGIN
     'S9 service_role can EXECUTE claim_whatsapp_scheduled_messages';
 END $$;
 
--- S10: the cron job exists and is inactive. Skipped with a NOTICE where
--- pg_cron is absent: the harness baseline has no pg_cron, production does.
+-- S10: final migrated cron contract. 20260930100000 installs
+-- whatsapp-scheduled-sender inactive so the unfenced sender cannot run.
+-- 20260930110000_activate_whatsapp_scheduled_sender.sql activates that job
+-- (creating it if missing) after the fenced sender is deployed. This harness
+-- preloads pg_cron and applies that migration before the suite, so the single
+-- every-minute job must be active and must post with the cron-secret bearer.
+-- Absence of pg_cron fails this assertion. The WhatsApp sender stays active
+-- while Instagram collection is off.
 DO $s10_cron$
-DECLARE
-  v_cron_present boolean;
 BEGIN
-  SELECT EXISTS(SELECT 1 FROM pg_extension WHERE extname = 'pg_cron')
-    INTO v_cron_present;
-  IF NOT v_cron_present THEN
-    RAISE NOTICE 'pg_cron absent: skipping S10 cron assertions';
-    RETURN;
-  END IF;
-
-  ASSERT EXISTS (SELECT 1 FROM cron.job
-                 WHERE jobname = 'whatsapp-scheduled-sender'
-                   AND schedule = '* * * * *'),
+  ASSERT (SELECT count(*) FROM cron.job
+          WHERE jobname = 'whatsapp-scheduled-sender') = 1,
+    'S10 whatsapp-scheduled-sender is scheduled once';
+  ASSERT (SELECT schedule FROM cron.job
+          WHERE jobname = 'whatsapp-scheduled-sender') = '* * * * *',
     'S10 whatsapp-scheduled-sender runs every minute';
   ASSERT (SELECT active FROM cron.job
-          WHERE jobname = 'whatsapp-scheduled-sender') = false,
-    'S10 whatsapp-scheduled-sender is inactive until hand-activated';
+          WHERE jobname = 'whatsapp-scheduled-sender') = true,
+    'S10 whatsapp-scheduled-sender is active after 20260930110000';
+  ASSERT (SELECT btrim(regexp_replace(command, '[[:space:]]+', ' ', 'g'))
+          FROM cron.job
+          WHERE jobname = 'whatsapp-scheduled-sender')
+    = $$SELECT net.http_post(url := 'https://api.postora.cloud/functions/v1/whatsapp-scheduled-sender', headers := jsonb_build_object('Content-Type','application/json','Authorization','Bearer ' || get_cron_secret()), body := '{}'::jsonb);$$,
+    'S10 whatsapp-scheduled-sender posts with the cron-secret bearer';
 END $s10_cron$;
 
 -- S11: deleting the account deletes its scheduled rows.

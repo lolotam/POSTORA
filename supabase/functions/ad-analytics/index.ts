@@ -1,4 +1,22 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.4";
+import {
+  appSettingReadResult,
+  configurationClientError,
+  createAppSettingLookup,
+  loadFacebookCredentialSettings,
+} from "../_shared/facebookCredentialMode.ts";
+import {
+  CredentialStoreError,
+  createFacebookUserCredentialStore,
+  createInstagramAccountCapabilityStore,
+  createServiceRpcCaller,
+  credentialReadClientError,
+  type RpcCapableClient,
+} from "../_shared/facebookUserCredentialStore.ts";
+import {
+  resolveProtectedUserToken,
+  type ProtectedCredentialDeps,
+} from "../_shared/protectedFacebookCredentials.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -8,6 +26,49 @@ const corsHeaders = {
 
 const GRAPH_API_VERSION = "v22.0";
 const GRAPH_API_BASE = `https://graph.facebook.com/${GRAPH_API_VERSION}`;
+
+/**
+ * The protected Facebook User token for one owned account.
+ *
+ * In protected mode the token comes from the owner-scoped protected authority
+ * and from nowhere else: not from `account_metadata.user_token`, not from the
+ * Page token, and not from a username-shaped lookup. A missing protected
+ * credential is a typed failure, never a silent fallback to a Page-token guess
+ * that `me/adaccounts` would reject.
+ */
+async function resolveAdAccountToken(
+  supabase: RpcCapableClient,
+  userId: string,
+  socialAccountId: string,
+): Promise<
+  | { token: string }
+  | { error: string; status: number; error_code: string }
+> {
+  const rpc = createServiceRpcCaller(supabase);
+  const deps: ProtectedCredentialDeps = {
+    credentials: createFacebookUserCredentialStore(rpc),
+    capabilities: createInstagramAccountCapabilityStore(rpc),
+  };
+
+  try {
+    const resolved = await resolveProtectedUserToken(deps, {
+      userId,
+      socialAccountId,
+    });
+    return { token: resolved.token };
+  } catch (error) {
+    if (error instanceof CredentialStoreError) {
+      const clientError = credentialReadClientError(error);
+      console.error("[ad-analytics] protected credential unavailable", {
+        event: "protected_credential_unavailable",
+        error_code: clientError.error_code,
+        account_id: socialAccountId,
+      });
+      return { error: clientError.error, status: clientError.status, error_code: clientError.error_code };
+    }
+    throw error;
+  }
+}
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -45,13 +106,38 @@ Deno.serve(async (req) => {
     const body = await req.json();
     const { action, social_account_id } = body;
 
+    // Server-controlled credential mode. Resolved BEFORE any protected-schema
+    // access, so legacy mode never touches the protected authority and never
+    // changes where the User token comes from.
+    const { credentialMode } = await loadFacebookCredentialSettings(
+      createAppSettingLookup(async (key) => {
+        const { data, error } = await supabase
+          .from("app_settings")
+          .select("value")
+          .eq("key", key)
+          .maybeSingle();
+        return appSettingReadResult(data, error);
+      }),
+    );
+
     // Get access token and account metadata
-    const { data: account } = await supabase
+    const { data: account, error: accountError } = await supabase
       .from("social_accounts")
       .select("access_token, platform_user_id, platform, account_metadata")
       .eq("id", social_account_id)
       .eq("user_id", userId)
       .single();
+
+    if (accountError) {
+      console.error("[ad-analytics] account read failed", { event: "account_read_failed" });
+      return new Response(JSON.stringify({
+        error_code: "ACCOUNT_READ_FAILED",
+        error: "The social account could not be read.",
+      }), {
+        status: 503,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
 
     if (!account?.access_token) {
       return new Response(JSON.stringify({ error: "Social account not found" }), {
@@ -61,16 +147,37 @@ Deno.serve(async (req) => {
     }
 
     const { access_token: accessToken, platform_user_id: platformUserId } = account;
-    // User-level token for ad account queries (me/adaccounts requires user token, not page token)
-    const userToken = (account.account_metadata as Record<string, unknown>)?.user_token as string | undefined;
+    // User-level token for ad account queries (me/adaccounts requires user token, not page token).
+    // Protected mode never reads it from account metadata: the protected
+    // authority is the only source there.
+    const userToken = credentialMode === "protected"
+      ? undefined
+      : (account.account_metadata as Record<string, unknown>)?.user_token as string | undefined;
     let result: unknown;
 
     switch (action) {
       case "get_ad_accounts": {
         // me/adaccounts requires a user-level token, not a page token
-        const adToken = userToken || accessToken;
-        if (!userToken) {
+        let adToken = userToken;
+        if (credentialMode === "protected") {
+          // The User token comes from the owner-scoped protected authority and
+          // from nowhere else. There is no fallback to the Page token: a Page
+          // token is not a User token, and a guess that happens to work is a
+          // credential bug, not a fallback.
+          const protectedToken = await resolveAdAccountToken(supabase, userId, social_account_id);
+          if ("error" in protectedToken) {
+            return new Response(JSON.stringify({
+              error_code: protectedToken.error_code,
+              error: protectedToken.error,
+            }), {
+              status: protectedToken.status,
+              headers: { ...corsHeaders, "Content-Type": "application/json" },
+            });
+          }
+          adToken = protectedToken.token;
+        } else if (!adToken) {
           console.warn("No user_token found in account_metadata, falling back to page token (may fail)");
+          adToken = accessToken;
         }
         const url = `${GRAPH_API_BASE}/me/adaccounts?fields=id,name,account_status,currency,balance,amount_spent&access_token=${adToken}`;
         const res = await fetch(url);
@@ -145,9 +252,28 @@ Deno.serve(async (req) => {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (error) {
-    console.error("Ad Analytics API error:", error);
+    const config = configurationClientError(error);
+    if (config) {
+      console.error("[ad-analytics] credential configuration refused", { event: config.error_code });
+      return new Response(JSON.stringify({ error_code: config.error_code, error: config.error }), {
+        status: config.status,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    if (error instanceof CredentialStoreError) {
+      const clientError = credentialReadClientError(error);
+      console.error("[ad-analytics] protected credential unavailable", { event: clientError.error_code });
+      return new Response(JSON.stringify({
+        error_code: clientError.error_code,
+        error: clientError.error,
+      }), {
+        status: clientError.status,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    console.error("Ad Analytics API error:", error instanceof Error ? error.name : "unknown");
     return new Response(
-      JSON.stringify({ error: error instanceof Error ? error.message : "Internal server error" }),
+      JSON.stringify({ error: "Internal server error" }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }
