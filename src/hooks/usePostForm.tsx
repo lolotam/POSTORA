@@ -11,6 +11,8 @@ import { checkFileSizeForPlatforms } from "@/components/post/VideoPreview";
 import { analyzeMedia, MediaAnalysis } from "@/lib/mediaAnalyzer";
 import { getAllPlatformEligibility, PlatformEligibility } from "@/lib/platformEligibility";
 import { resolveMediaPublicUrl } from "@/lib/mediaUrl";
+import { formatUploadLimit, maxUploadBytesFor, mediaTypeForFileName, needsDirectUpload } from "@/lib/mediaTypes";
+import { uploadLargeMedia, useMediaUploadLimits } from "@/features/media-upload";
 
 export interface UploadedFile {
   id: string;
@@ -525,16 +527,70 @@ export function usePostForm() {
     toast({ title, description, variant: "destructive" });
   };
 
+  const uploadLimits = useMediaUploadLimits();
+
+  const setUploadProgress = (fileId: string, uploadProgress: number) => {
+    setFiles((prev) => prev.map((f) => (f.id === fileId ? { ...f, uploadProgress } : f)));
+  };
+
+  // Update file with Cloudinary URL and database ID.
+  // IMPORTANT: also switch previewUrl to the stable Cloudinary https: URL and
+  // revoke the orphaned blob: URL created at selection time. The blob: URL is
+  // (a) blocked by the CSP img-src/media-src policy in production and
+  // (b) a temporary handle that should not outlive upload. Without this, the
+  // live preview keeps pointing at the dead blob: URL and only shows correctly
+  // after a page refresh, when the draft-restore path sets previewUrl from
+  // cloudinaryUrl.
+  const markUploaded = (uploadFile: UploadedFile, data: { url: string; mediaFileId?: string; publicId?: string }) => {
+    const secureUrl: string = data.url;
+    setFiles((prev) =>
+      prev.map((f) => {
+        if (f.id !== uploadFile.id) return f;
+        const prevPreview = f.previewUrl;
+        if (
+          typeof prevPreview === "string" &&
+          prevPreview.startsWith("blob:") &&
+          prevPreview !== secureUrl
+        ) {
+          try { URL.revokeObjectURL(prevPreview); } catch { /* ignore */ }
+        }
+        return {
+          ...f,
+          uploadProgress: 100,
+          uploaded: true,
+          storagePath: data.mediaFileId, // Database UUID for media_file_ids
+          cloudinaryUrl: secureUrl,
+          cloudinaryPublicId: data.publicId,
+          previewUrl: secureUrl, // Live preview now uses the stable https URL
+        };
+      })
+    );
+  };
+
   // File upload handler - uploads to Cloudinary
   const uploadFileToStorage = async (uploadFile: UploadedFile) => {
     if (!user) return;
 
     try {
-      setFiles((prev) =>
-        prev.map((f) =>
-          f.id === uploadFile.id ? { ...f, uploadProgress: 10 } : f
-        )
-      );
+      const kind = mediaTypeForFileName(uploadFile.file.name)?.kind
+        ?? (uploadFile.fileType === "video" ? "video" : "image");
+      const limit = maxUploadBytesFor(kind, uploadLimits);
+      if (uploadFile.file.size > limit) {
+        throw new Error(`${uploadFile.file.name} is over the ${formatUploadLimit(limit)} limit`);
+      }
+
+      // Over 10 MB the file goes straight to the storage provider; the edge
+      // function only signs the upload and records it.
+      if (needsDirectUpload(kind, uploadFile.file.size, uploadLimits)) {
+        setUploadProgress(uploadFile.id, 5);
+        const data = await uploadLargeMedia(uploadFile.file, (percent) =>
+          setUploadProgress(uploadFile.id, Math.max(5, Math.round(percent * 0.95))),
+        );
+        markUploaded(uploadFile, data);
+        return;
+      }
+
+      setUploadProgress(uploadFile.id, 10);
 
       // Convert file to base64
       const base64 = await new Promise<string>((resolve, reject) => {
@@ -544,11 +600,7 @@ export function usePostForm() {
         reader.readAsDataURL(uploadFile.file);
       });
 
-      setFiles((prev) =>
-        prev.map((f) =>
-          f.id === uploadFile.id ? { ...f, uploadProgress: 30 } : f
-        )
-      );
+      setUploadProgress(uploadFile.id, 30);
 
       // Upload to Cloudinary via edge function
       const { data, error } = await supabase.functions.invoke("cloudinary-upload", {
@@ -576,44 +628,8 @@ export function usePostForm() {
       }
       if (!data?.success) throw new Error(data?.error || "Upload failed");
 
-      setFiles((prev) =>
-        prev.map((f) =>
-          f.id === uploadFile.id ? { ...f, uploadProgress: 90 } : f
-        )
-      );
-
-      // Update file with Cloudinary URL and database ID.
-      // IMPORTANT: also switch previewUrl to the stable Cloudinary https: URL and
-      // revoke the orphaned blob: URL created at selection time. The blob: URL is
-      // (a) blocked by the CSP img-src/media-src policy in production and
-      // (b) a temporary handle that should not outlive upload. Without this, the
-      // live preview keeps pointing at the dead blob: URL and only shows correctly
-      // after a page refresh, when the draft-restore path sets previewUrl from
-      // cloudinaryUrl.
-      const secureUrl: string = data.url;
-      setFiles((prev) =>
-        prev.map((f) => {
-          if (f.id !== uploadFile.id) return f;
-          const prevPreview = f.previewUrl;
-          if (
-            typeof prevPreview === "string" &&
-            prevPreview.startsWith("blob:") &&
-            prevPreview !== secureUrl
-          ) {
-            try { URL.revokeObjectURL(prevPreview); } catch { /* ignore */ }
-          }
-          return {
-            ...f,
-            uploadProgress: 100,
-            uploaded: true,
-            storagePath: data.mediaFileId, // Database UUID for media_file_ids
-            cloudinaryUrl: secureUrl,
-            cloudinaryPublicId: data.publicId,
-            previewUrl: secureUrl, // Live preview now uses the stable https URL
-          };
-        })
-      );
-
+      setUploadProgress(uploadFile.id, 90);
+      markUploaded(uploadFile, data);
       console.log(`File uploaded to Cloudinary: ${data.url}, DB ID: ${data.mediaFileId}`);
 
     } catch (error) {

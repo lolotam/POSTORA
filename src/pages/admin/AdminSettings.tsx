@@ -11,6 +11,7 @@ import { AppCredentialsSettings } from "@/components/admin/AppCredentialsSetting
 import { AdminAiAgentSection } from "@/components/admin/AdminAiAgentSection";
 import { TikTokAnalyticsSourceCard } from "@/components/admin/settings/TikTokAnalyticsSourceCard";
 import { CdnStorageSettings } from "@/components/admin/settings/CdnStorageSettings";
+import { MediaUploadLimitsSettings } from "@/components/admin/settings/MediaUploadLimitsSettings";
 import { HiggsfieldIntegrationCard } from "@/components/admin/settings/HiggsfieldIntegrationCard";
 import { GeneralIdentitySettings } from "@/components/admin/settings/GeneralIdentitySettings";
 import { TikTokSandboxToggle } from "@/components/admin/settings/TikTokSandboxToggle";
@@ -52,6 +53,7 @@ const SECTION_COMPONENTS: Record<SettingsSectionId, ComponentType> = {
   "tiktok-sandbox": TikTokSandboxToggle,
   "tiktok-analytics-source": TikTokAnalyticsSourceCard,
   "cdn-storage": CdnStorageSettings,
+  "media-upload-limits": MediaUploadLimitsSettings,
   "scraping-services": ScrapingServicesSettings,
   "ai-search-models": SearchModelsCard,
   "ai-embedding-models": EmbeddingModelsCard,

@@ -2,6 +2,12 @@ import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   MEDIA_DECODED_BYTE_CAP,
   MEDIA_TYPES,
+  DEFAULT_UPLOAD_LIMITS,
+  directUploadByteCap,
+  formatUploadLimit,
+  maxUploadBytesFor,
+  needsDirectUpload,
+  parseUploadLimits,
   dedupeEligible,
   isPostableLibraryFile,
   matchesLibraryFilter,
@@ -51,4 +57,49 @@ Deno.test("a local file name keeps '#' and '?', while a URL drops its query and 
   assertEquals(originalBasename("photo#1.jpg"), "photo#1.jpg");
   assertEquals(extensionOfName("photo#1.jpg"), "jpg");
   assertEquals(originalBasename("https://cdn.example/a/pic.png?token=1#x"), "pic.png");
+});
+
+Deno.test("only images (20 MB) and video (500 MB) have a direct upload cap", () => {
+  const MB = 1024 * 1024;
+  assertEquals(directUploadByteCap("image"), 20 * MB);
+  assertEquals(directUploadByteCap("video"), 500 * MB);
+  for (const kind of ["audio", "document", "archive"] as const) {
+    assertEquals(directUploadByteCap(kind), null, kind);
+    assertEquals(maxUploadBytesFor(kind), MEDIA_DECODED_BYTE_CAP, kind);
+  }
+  assertEquals(maxUploadBytesFor("video"), 500 * MB);
+  assertEquals(formatUploadLimit(500 * MB), "500 MB");
+});
+
+Deno.test("files up to 10 MB keep the edge path; larger images and video go direct", () => {
+  const MB = 1024 * 1024;
+  assertEquals(needsDirectUpload("video", MEDIA_DECODED_BYTE_CAP), false);
+  assertEquals(needsDirectUpload("video", MEDIA_DECODED_BYTE_CAP + 1), true);
+  assertEquals(needsDirectUpload("video", 500 * MB + 1), false);
+  assertEquals(needsDirectUpload("image", 20 * MB), true);
+  assertEquals(needsDirectUpload("document", 11 * MB), false);
+});
+
+Deno.test("the stored limits are used only when each value is one of its options", () => {
+  assertEquals(parseUploadLimits({ image_max_mb: 50, video_max_mb: 2000 }), { image_max_mb: 50, video_max_mb: 2000 });
+  assertEquals(parseUploadLimits({ image_max_mb: 30, video_max_mb: 5000 }), DEFAULT_UPLOAD_LIMITS);
+  assertEquals(parseUploadLimits({ image_max_mb: "50", video_max_mb: null }), DEFAULT_UPLOAD_LIMITS);
+  assertEquals(parseUploadLimits({ image_max_mb: 100 }), { image_max_mb: 100, video_max_mb: 500 });
+  assertEquals(parseUploadLimits(null), DEFAULT_UPLOAD_LIMITS);
+  assertEquals(parseUploadLimits("broken"), DEFAULT_UPLOAD_LIMITS);
+});
+
+Deno.test("the caps follow the admin's limits", () => {
+  const MB = 1024 * 1024;
+  const limits = { image_max_mb: 50, video_max_mb: 100 };
+  assertEquals(directUploadByteCap("image", limits), 50 * MB);
+  assertEquals(maxUploadBytesFor("video", limits), 100 * MB);
+  assertEquals(needsDirectUpload("video", 150 * MB, limits), false);
+  assertEquals(needsDirectUpload("image", 40 * MB, limits), true);
+});
+
+Deno.test("a 10 MB image limit leaves no direct path for images", () => {
+  const limits = { image_max_mb: 10, video_max_mb: 500 };
+  assertEquals(maxUploadBytesFor("image", limits), MEDIA_DECODED_BYTE_CAP);
+  assertEquals(needsDirectUpload("image", MEDIA_DECODED_BYTE_CAP + 1, limits), false);
 });

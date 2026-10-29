@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect } from "react";
 import { Trans, useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import { useDropzone, type FileRejection } from "react-dropzone";
 import {
   Dialog,
@@ -37,13 +38,17 @@ import { cn } from "@/lib/utils";
 import { FileTypeTile } from "@/components/media/FileTypeTile";
 import { readUploadRefusal } from "@/components/media/uploadErrors";
 import {
-  MEDIA_DECODED_BYTE_CAP,
   dropzoneAccept,
+  formatUploadLimit,
   libraryFilePresentation,
+  maxUploadBytesFor,
   mediaTypeForFileName,
+  needsDirectUpload,
   uploadFileTypeFor,
   type MediaKind,
+  type UploadLimits,
 } from "@/lib/mediaTypes";
+import { uploadLargeMedia, useMediaUploadLimits } from "@/features/media-upload";
 
 interface UploadedFile {
   id: string;
@@ -66,6 +71,26 @@ interface MediaUploadDialogProps {
   onUploadComplete: () => void;
 }
 
+function tooLargeMessage(t: TFunction<"assets">, name: string, kind: MediaKind, limits: UploadLimits): string {
+  return t("upload.tooLarge", "{{name}} is over the {{limit}} limit", { name, limit: formatUploadLimit(maxUploadBytesFor(kind, limits)) });
+}
+
+/** Files up to 10 MB: base64 through cloudinary-upload, which stores and records them. */
+async function uploadThroughEdgeFunction(file: File, fileType: string, onProgress: (percent: number) => void) {
+  const base64 = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+  onProgress(30);
+  const { data, error } = await supabase.functions.invoke("cloudinary-upload", {
+    body: { fileData: base64, fileName: file.name, fileType },
+  });
+  if (error) throw error;
+  return data;
+}
+
 export function MediaUploadDialog({
   open,
   onClose,
@@ -81,6 +106,7 @@ export function MediaUploadDialog({
   const [fileIssues, setFileIssues] = useState<string[]>([]);
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
   const { t } = useTranslation("assets");
+  const limits = useMediaUploadLimits();
   const { toast } = useToast();
   const { canUploadMedia, quota, planLimits } = useQuotas();
   const { logOperation, completeOperation, failOperation } = useLogMediaOperation();
@@ -111,30 +137,31 @@ export function MediaUploadDialog({
         issues.push(t("upload.typeRejected", "{{name}} is not an allowed file type", { name: file.name }));
         continue;
       }
-      if (file.size > entry.maxBytes) {
-        issues.push(t("upload.tooLarge", "{{name}} is over the 10 MB limit", { name: file.name }));
+      if (file.size > maxUploadBytesFor(entry.kind, limits)) {
+        issues.push(tooLargeMessage(t, file.name, entry.kind, limits));
         continue;
       }
       accepted.push(file);
     }
     setFileIssues(issues);
     setFiles((prev) => [...prev, ...accepted]);
-  }, [t]);
+  }, [t, limits]);
 
   const onDropRejected = useCallback((rejections: FileRejection[]) => {
     setFileIssues(rejections.map((rejection) => {
       const tooLarge = rejection.errors.some((error) => error.code === "file-too-large");
       return tooLarge
-        ? t("upload.tooLarge", "{{name}} is over the 10 MB limit", { name: rejection.file.name })
+        ? tooLargeMessage(t, rejection.file.name, mediaTypeForFileName(rejection.file.name)?.kind ?? "video", limits)
         : t("upload.typeRejected", "{{name}} is not an allowed file type", { name: rejection.file.name });
     }));
-  }, [t]);
+  }, [t, limits]);
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
     onDropRejected,
     accept: dropzoneAccept(),
-    maxSize: MEDIA_DECODED_BYTE_CAP,
+    // The largest any kind allows; each file is then held to its own kind's limit in onDrop.
+    maxSize: Math.max(maxUploadBytesFor("video", limits), maxUploadBytesFor("image", limits)),
   });
 
   const removeFile = (index: number) => {
@@ -171,10 +198,10 @@ export function MediaUploadDialog({
       let operationId: string | null = null;
 
       const entry = mediaTypeForFileName(file.name);
-      if (!entry || file.size > (entry?.maxBytes ?? 0)) {
+      if (!entry || file.size > maxUploadBytesFor(entry.kind, limits)) {
         setFileIssues((prev) => [...prev, !entry
           ? t("upload.typeRejected", "{{name}} is not an allowed file type", { name: file.name })
-          : t("upload.tooLarge", "{{name}} is over the 10 MB limit", { name: file.name })]);
+          : tooLargeMessage(t, file.name, entry.kind, limits)]);
         continue;
       }
 
@@ -194,28 +221,13 @@ export function MediaUploadDialog({
           },
         });
 
-        // Convert file to base64
-        const reader = new FileReader();
-        const base64 = await new Promise<string>((resolve, reject) => {
-          reader.onload = () => resolve(reader.result as string);
-          reader.onerror = reject;
-          reader.readAsDataURL(file);
-        });
-
-        setUploadProgress((prev) => ({ ...prev, [fileId]: 30 }));
-
-        // Upload to Cloudinary via edge function
-        const { data, error } = await supabase.functions.invoke("cloudinary-upload", {
-          body: {
-            fileData: base64,
-            fileName: file.name,
-            fileType,
-          },
-        });
+        const data = needsDirectUpload(entry.kind, file.size, limits)
+          ? await uploadLargeMedia(file, (percent) =>
+            setUploadProgress((prev) => ({ ...prev, [fileId]: 10 + Math.round(percent * 0.8) })))
+          : await uploadThroughEdgeFunction(file, fileType, (percent) =>
+            setUploadProgress((prev) => ({ ...prev, [fileId]: percent })));
 
         setUploadProgress((prev) => ({ ...prev, [fileId]: 90 }));
-
-        if (error) throw error;
 
         if (data?.success && data?.mediaFileId) {
           // Update the folder_path in the media_files table
@@ -500,7 +512,10 @@ export function MediaUploadDialog({
                 <>
                   <p className="font-medium">{t("upload.dropOrClick", "Drop files here or click to browse")}</p>
                   <p className="text-sm text-muted-foreground mt-1">
-                    {t("upload.sizeHint", "Images, video, audio, documents and archives, up to 10 MB each")}
+                    {t("upload.sizeHint", "Images up to {{image}}, video up to {{video}}, audio, documents and archives up to 10 MB", {
+                      image: formatUploadLimit(maxUploadBytesFor("image", limits)),
+                      video: formatUploadLimit(maxUploadBytesFor("video", limits)),
+                    })}
                   </p>
                 </>
               )}

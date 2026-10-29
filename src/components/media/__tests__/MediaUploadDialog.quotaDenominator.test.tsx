@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MediaUploadDialog } from "../MediaUploadDialog";
 
 // I2 (2026-08-23 final review): the dialog used to read the raw
@@ -51,14 +52,16 @@ describe("MediaUploadDialog — quota denominator", () => {
     });
 
     render(
-      <MemoryRouter>
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter>
         <MediaUploadDialog
           open={true}
           onClose={() => {}}
           currentFolder="/"
           onUploadComplete={() => {}}
         />
-      </MemoryRouter>,
+      </MemoryRouter>
+      </QueryClientProvider>,
     );
 
     // 10 (plan limit) - 3 (used) = 7 remaining. The old hardcoded-20 bug
