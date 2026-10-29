@@ -37,6 +37,8 @@ import {
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
 
 import { InstagramGraphProvider } from "./graphProvider.ts";
+import { InstagramDirectGraphProvider } from "./directGraphProvider.ts";
+import type { ClaimedOwnerJob } from "./receipts.ts";
 import {
   boundedStep,
   BudgetExceededError,
@@ -78,6 +80,12 @@ const MEDIA = [
 /** A second account, for the fairness tests. */
 const SECOND_ACCOUNT_ID = "01810006-0000-4000-8000-000000000006";
 
+/** The job id of the second owner, for the fairness tests. */
+const SECOND_JOB_ID = "01810007-0000-4000-8000-000000000007";
+
+/** The claim token of the second owner, for the fairness tests. */
+const SECOND_CLAIM_TOKEN = "01810008-0000-4000-8000-000000000008";
+
 interface Harness {
   readonly ports: OwnerWorkerPorts;
   readonly calls: ReturnType<typeof createFakeStore>["calls"];
@@ -110,6 +118,10 @@ function createHarness(
   const ports: OwnerWorkerPorts = {
     store,
     provider: new InstagramGraphProvider({ fetchFn }),
+    // The Instagram-login adapter answers on a different host with a
+    // different token, so both adapters are built here. The recorded URLs
+    // say which one was used.
+    directProvider: new InstagramDirectGraphProvider({ fetchFn }),
     bucketKeyFor: async (credentialId) => await sha256Of(credentialId),
     now: options.now ?? fixedClock(),
     log: (event) => logs.push({ ...event }),
@@ -518,7 +530,10 @@ Deno.test("a truncated inventory is a partial and never a full success", async (
                     timestamp: "2026-10-20T12:00:00Z",
                   },
                 ],
-                paging: { cursors: { after: "cursor-1" } },
+                paging: {
+                  cursors: { after: "cursor-1" },
+                  next: "https://graph.facebook.com/v22.0/ig/media?after=cursor-1",
+                },
               }),
               { status: 200, headers: { "Content-Type": "application/json" } },
             ),
@@ -785,6 +800,128 @@ Deno.test("a throttled credential does not stall the next owner", async () => {
   assertEquals(harness.calls.snapshots.length, 5);
 });
 
+/**
+ * The owner whose write the database refuses.
+ *
+ * It is NOT a fresh job: its checkpoint says the window is covered and that
+ * nothing is owed, so the FIRST write it attempts is the snapshot write -
+ * the write the accepted fence refused with SQLSTATE 40001.
+ */
+function createRefusedWriteJob(): ClaimedOwnerJob {
+  return createClaimedJob({
+    job_id: SECOND_JOB_ID,
+    claim_token: SECOND_CLAIM_TOKEN,
+    social_account_id: SECOND_ACCOUNT_ID,
+    target_id: SECOND_ACCOUNT_ID,
+    context: {
+      viewer_social_account_id: SECOND_ACCOUNT_ID,
+      credential_generation: 7,
+      login_kind: "page_linked",
+      capability_present: true,
+      permission_read_state: "ok",
+      granted_scopes: ["instagram_basic", "instagram_manage_insights"],
+    },
+    checkpoint: {
+      inventory_pages_fetched: 1,
+      inventory_window_covered: true,
+      inventory_window_start: "2026-07-30",
+      inventory_window_end: TEST_CAPTURED_ON,
+      inventory_remaining_ids: [],
+    },
+  });
+}
+
+Deno.test("a snapshot write the database refused does not stall the next owner", async () => {
+  // The account reconnected while its media insights call was in flight: the
+  // database refused the next snapshot write with SQLSTATE 40001 and stored
+  // nothing. The condition belongs to THAT owner alone.
+  const broken = createRefusedWriteJob();
+
+  const harness = createHarness({
+    store: {
+      jobs: [broken, createClaimedJob()],
+      writeFailure: {
+        jobId: SECOND_JOB_ID,
+        failure: "stale_claim",
+        sqlstate: "40001",
+      },
+    },
+  });
+
+  const summary = await runOwnerDrain(harness.ports);
+
+  assertEquals(summary.claimed, 2);
+  assertEquals(summary.abandoned, 1);
+  assertEquals(summary.completed, 1);
+  assertEquals(summary.stoppedEarly, false);
+  assertEquals(summary.jobs[0]!.reasonCode, "stale_claim");
+  assertEquals(summary.jobs[1]!.outcome, "completed");
+
+  // Nothing was written for the refused job, and the healthy owner was
+  // collected.
+  assertEquals(harness.calls.completes.length, 1);
+  assertEquals(harness.calls.completes[0]!.outcome, "completed");
+
+  // The write the database refused WAS the snapshot write of that job.
+  assertEquals(harness.calls.refusedWrites.length, 1);
+  assertEquals(harness.calls.refusedWrites[0]!.jobId, SECOND_JOB_ID);
+  assertEquals(harness.calls.refusedWrites[0]!.kind, "snapshot");
+});
+
+Deno.test("a write refused because the connection changed does not stall the next owner", async () => {
+  // The same refusal, read as the replaced connection it also is.
+  const broken = createRefusedWriteJob();
+
+  const harness = createHarness({
+    store: {
+      jobs: [broken, createClaimedJob()],
+      writeFailure: {
+        jobId: SECOND_JOB_ID,
+        failure: "credential_changed",
+        sqlstate: "40001",
+      },
+    },
+  });
+
+  const summary = await runOwnerDrain(harness.ports);
+
+  assertEquals(summary.claimed, 2);
+  assertEquals(summary.abandoned, 1);
+  assertEquals(summary.completed, 1);
+  assertEquals(summary.stoppedEarly, false);
+  assertEquals(summary.jobs[0]!.reasonCode, "credential_changed");
+  assertEquals(summary.jobs[1]!.outcome, "completed");
+});
+
+Deno.test("a write that failed for an unknown reason still stops the run", async () => {
+  // An unknown failure is NOT a definitive refusal: the statement may have
+  // committed, so nothing is reported as stored and the run stops.
+  const broken = createRefusedWriteJob();
+
+  const harness = createHarness({
+    store: {
+      jobs: [broken, createClaimedJob()],
+      writeFailure: {
+        jobId: SECOND_JOB_ID,
+        failure: "rpc_failed",
+        sqlstate: "57014",
+      },
+    },
+  });
+
+  const summary = await runOwnerDrain(harness.ports);
+
+  assertEquals(summary.claimed, 2);
+  assertEquals(summary.abandoned, 1);
+  assertEquals(summary.completed, 0);
+  assertEquals(summary.stoppedEarly, true);
+  assertEquals(summary.jobs[0]!.reasonCode, "storage_error");
+
+  // The second job was never reached: the run stopped.
+  assertEquals(summary.jobs.length, 1);
+  assertEquals(harness.calls.completes.length, 0);
+});
+
 // ---------------------------------------------------------------------------
 // The context, the credential and the direct-login account
 // ---------------------------------------------------------------------------
@@ -850,7 +987,172 @@ Deno.test("an account without a protected credential is a retry, not a collectio
   ]);
 });
 
-Deno.test("a direct-login account is closed with a stable outcome and no provider call", async () => {
+Deno.test("a media that was already collected keeps its stored metrics and is never queued twice", async () => {
+  const harness = createHarness({
+    store: {
+      jobs: [createClaimedJob()],
+      // The row this capture day already stores carries the insights that
+      // were collected for this media, so the media owes nothing.
+      mediaInventory: { "media-1": { views: 200, reach: 100 } },
+    },
+  });
+
+  const summary = await runOwnerDrain(harness.ports);
+
+  // The media is not collected again: no provider call is spent on a media
+  // the database already knows.
+  assertEquals(harness.graphCalls.includes("mediaInsight"), false);
+
+  // The queue is empty, so the job is a full success.
+  const progress = lastInventoryProgress(harness.calls);
+  assertEquals(progress.remaining_ids, []);
+  assertEquals(summary.completed, 1);
+
+  // The inventory write carries the stored insight metrics over. The
+  // accepted upsert writes the EXCLUDED columns, so a metric that is not in
+  // the payload is nulled - and a re-swept page would wipe the insights this
+  // capture day already stored.
+  const inventory = harness.calls.snapshots.find((entry) => entry.kind === "owner_media")!;
+  assertEquals(inventory.items[0]!.metrics, {
+    like_count_public: 55,
+    comments_count_public: 3,
+    views: 200,
+    reach: 100,
+  });
+});
+
+Deno.test("a media whose insights are still owed is queued again", async () => {
+  const harness = createHarness({
+    store: {
+      jobs: [createClaimedJob()],
+      // The row exists, but it carries no insight metric: the media was
+      // inventoried and its insights are still owed.
+      mediaInventory: { "media-1": { views: null, reach: null } },
+    },
+  });
+
+  await runOwnerDrain(harness.ports);
+
+  // The media was collected again, because it still owed its insights.
+  assertEquals(harness.graphCalls.filter((call) => call === "mediaInsight").length, 1);
+});
+
+// ---------------------------------------------------------------------------
+// The login kinds
+// ---------------------------------------------------------------------------
+
+Deno.test("a page-linked account is collected through the Facebook login adapter", async () => {
+  const harness = createHarness({ store: { jobs: [createClaimedJob()] } });
+
+  await runOwnerDrain(harness.ports);
+
+  assertEquals(harness.graphUrls.length > 0, true);
+  for (const url of harness.graphUrls) {
+    assert(url.startsWith("https://graph.facebook.com/"));
+  }
+});
+
+Deno.test("a direct-login account is collected through the Instagram login adapter", async () => {
+  const harness = createHarness({
+    store: {
+      jobs: [
+        createClaimedJob({
+          context: {
+            viewer_social_account_id: TEST_ACCOUNT_ID,
+            credential_generation: 7,
+            login_kind: "direct",
+            capability_present: true,
+            permission_read_state: "ok",
+            granted_scopes: ["instagram_business_basic", "instagram_business_manage_insights"],
+          },
+        }),
+      ],
+      capability: {
+        loginKind: "direct",
+        grantedScopes: ["instagram_business_basic", "instagram_business_manage_insights"],
+      },
+    },
+  });
+
+  const summary = await runOwnerDrain(harness.ports);
+
+  assertEquals(summary.completed, 1);
+
+  // Every provider call went to the Instagram-login host. The host and the
+  // token never come from different logins.
+  assertEquals(harness.graphUrls.length > 0, true);
+  for (const url of harness.graphUrls) {
+    assert(url.startsWith("https://graph.instagram.com/"));
+  }
+
+  // The protected Facebook credential was never read, and the operational
+  // token came from the fenced direct reader.
+  assertEquals(harness.calls.credentialReads.length, 0);
+  assertEquals(harness.calls.directCredentialReads.length, 1);
+});
+
+Deno.test("a direct credential whose generation moved on spends no provider call", async () => {
+  const harness = createHarness({
+    store: {
+      jobs: [
+        createClaimedJob({
+          context: {
+            viewer_social_account_id: TEST_ACCOUNT_ID,
+            credential_generation: 7,
+            login_kind: "direct",
+            capability_present: true,
+            permission_read_state: "ok",
+            granted_scopes: ["instagram_business_basic", "instagram_business_manage_insights"],
+          },
+        }),
+      ],
+      capability: {
+        loginKind: "direct",
+        // The connection was replaced after the claim.
+        credentialGeneration: 9,
+        grantedScopes: ["instagram_business_basic", "instagram_business_manage_insights"],
+      },
+    },
+  });
+
+  const summary = await runOwnerDrain(harness.ports);
+
+  assertEquals(summary.abandoned, 1);
+  assertEquals(summary.completed, 0);
+  assertEquals(harness.graphCalls.length, 0);
+  assertEquals(harness.calls.completes.length, 0);
+});
+
+Deno.test("a direct credential that the database refuses is not a collection", async () => {
+  const harness = createHarness({
+    store: {
+      jobs: [
+        createClaimedJob({
+          context: {
+            viewer_social_account_id: TEST_ACCOUNT_ID,
+            credential_generation: 7,
+            login_kind: "direct",
+            capability_present: true,
+            permission_read_state: "ok",
+            granted_scopes: ["instagram_business_basic", "instagram_business_manage_insights"],
+          },
+        }),
+      ],
+      capability: {
+        loginKind: "direct",
+        grantedScopes: ["instagram_business_basic", "instagram_business_manage_insights"],
+      },
+      directCredentialFailure: "credential_changed",
+    },
+  });
+
+  const summary = await runOwnerDrain(harness.ports);
+
+  assertEquals(summary.abandoned, 1);
+  assertEquals(harness.graphCalls.length, 0);
+});
+
+Deno.test("a direct-login account without the insights permission is closed with a stable outcome and no provider call", async () => {
   const harness = createHarness({
     store: {
       jobs: [
@@ -878,6 +1180,7 @@ Deno.test("a direct-login account is closed with a stable outcome and no provide
   // The outcome is decided from the trusted capability, before the
   // credential is read and without a provider call.
   assertEquals(harness.calls.credentialReads.length, 0);
+  assertEquals(harness.calls.directCredentialReads.length, 0);
   assertEquals(harness.graphCalls.length, 0);
   assertEquals(harness.calls.completes, [
     { outcome: "unavailable", reasonCode: "direct_login_unsupported" },

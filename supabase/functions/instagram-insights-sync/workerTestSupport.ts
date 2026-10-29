@@ -32,12 +32,17 @@ import type {
   OwnerMediaInventoryRow,
   OwnerProgressPayload,
   OwnerSnapshotPayload,
+  OwnerStoreFailure,
   OwnerThrottleBucket,
   OwnerTarget,
   ResolvedOwnerCredential,
 } from "./workerStore.ts";
 import { OwnerWorkerStoreError } from "./workerStore.ts";
-import { parseClaimedOwnerJob, type ClaimedOwnerJob } from "./receipts.ts";
+import {
+  parseClaimedOwnerJob,
+  type ClaimedOwnerJob,
+  type DirectOwnerCredential,
+} from "./receipts.ts";
 
 /** The identifiers the doubles use. */
 export const TEST_JOB_ID = "01810001-0000-4000-8000-000000000001";
@@ -109,7 +114,13 @@ export interface RecordedStoreCalls {
   }>;
   readonly credentialReads: Array<{ userId: string; socialAccountId: string }>;
   readonly capabilityReads: Array<{ userId: string; socialAccountId: string }>;
+  readonly directCredentialReads: Array<{
+    jobId: string;
+    expectedCredentialGeneration: number;
+  }>;
   readonly mediaInventoryReads: Array<{ capturedOn: string; mediaIds: readonly string[] }>;
+  /** The writes the database refused, and the job they refused. */
+  readonly refusedWrites: Array<{ jobId: string; kind: string }>;
 }
 
 /** The knobs of the store double. */
@@ -132,6 +143,7 @@ export interface FakeStoreOptions {
     | "target"
     | "capability"
     | "credential"
+    | "directCredential"
     | "bucket"
     | "snapshot"
     | "progress"
@@ -144,6 +156,7 @@ export interface FakeStoreOptions {
     | "target"
     | "capability"
     | "credential"
+    | "directCredential"
     | "bucket"
     | "snapshot"
     | "progress"
@@ -154,6 +167,22 @@ export interface FakeStoreOptions {
   readonly credentialFailure?: "credential_missing" | "credential_changed";
   /** The capability read refuses with this failure. */
   readonly capabilityFailure?: "credential_missing" | "credential_changed";
+  /** The direct credential read refuses with this failure. */
+  readonly directCredentialFailure?: "credential_missing" | "credential_changed";
+  /**
+   * The write the DATABASE refuses for one job.
+   *
+   * This is how the accepted fence is reproduced: the write is refused with
+   * the failure the database raises, and the test watches what the worker
+   * does with that refusal.
+   */
+  readonly writeFailure?: {
+    readonly jobId: string;
+    readonly failure: OwnerStoreFailure;
+    readonly sqlstate?: string | null;
+  };
+  /** The operational token the direct reader answers with. */
+  readonly directCredential?: Partial<DirectOwnerCredential>;
   /** The inventory rows the media read answers with. */
   readonly mediaInventory?: Record<string, Partial<OwnerMediaInventoryRow>>;
 }
@@ -184,7 +213,9 @@ export function createFakeStore(options: FakeStoreOptions & {
     throttles: [],
     credentialReads: [],
     capabilityReads: [],
+    directCredentialReads: [],
     mediaInventoryReads: [],
+    refusedWrites: [],
   };
 
   const hang = async (): Promise<never> => {
@@ -197,6 +228,26 @@ export function createFakeStore(options: FakeStoreOptions & {
     const specific = options.accounts?.[socialAccountId];
     if (specific === undefined) return options;
     return { ...options, ...specific };
+  };
+
+  /**
+   * The refusal the database raises for a write of one job.
+   *
+   * It is null for every other job, so a test can refuse the write of ONE
+   * job and watch the others. The refusal is recorded, so a test can prove
+   * WHICH write the database refused.
+   */
+  const refusalOf = (
+    jobId: string | null | undefined,
+    kind: string,
+  ): OwnerWorkerStoreError | null => {
+    if (options.writeFailure === undefined) return null;
+    if (options.writeFailure.jobId !== jobId) return null;
+    calls.refusedWrites.push({ jobId: jobId ?? "", kind });
+    return new OwnerWorkerStoreError(
+      options.writeFailure.failure,
+      options.writeFailure.sqlstate ?? null,
+    );
   };
 
   const store: OwnerCollectionServiceStore = {
@@ -236,6 +287,8 @@ export function createFakeStore(options: FakeStoreOptions & {
       return {
         loginKind: "page_linked",
         credentialGeneration: 7,
+        scopesAuthoritative: true,
+        grantedScopes: ["instagram_basic", "instagram_manage_insights"],
         ...(account.capability ?? {}),
       };
     },
@@ -256,6 +309,32 @@ export function createFakeStore(options: FakeStoreOptions & {
         credentialId: TEST_CREDENTIAL_ID,
         capabilityGeneration: 7,
         ...(account.credential ?? {}),
+      };
+    },
+
+    async resolveDirectOwnerCredential(input) {
+      calls.directCredentialReads.push({
+        jobId: input.jobId,
+        expectedCredentialGeneration: input.expectedCredentialGeneration,
+      });
+      const account = accountOf(input.socialAccountId);
+      if (account.hangOn === "directCredential") return await hang();
+      if (account.failOn === "directCredential") {
+        throw new Error("the direct credential read failed");
+      }
+      if (account.directCredentialFailure) {
+        throw new OwnerWorkerStoreError(account.directCredentialFailure);
+      }
+      return {
+        jobId: input.jobId,
+        userId: TEST_USER_ID,
+        socialAccountId: input.socialAccountId,
+        igUserId: TEST_IG_USER_ID,
+        loginKind: "direct",
+        credentialGeneration: input.expectedCredentialGeneration,
+        accessToken: "the-direct-token",
+        tokenExpiresAt: null,
+        ...(account.directCredential ?? {}),
       };
     },
 
@@ -284,6 +363,18 @@ export function createFakeStore(options: FakeStoreOptions & {
           permalink: null,
           caption: null,
           thumbnailUrl: null,
+          status: "ok",
+          views: null,
+          reach: null,
+          likes: null,
+          comments: null,
+          saved: null,
+          shares: null,
+          totalInteractions: null,
+          follows: null,
+          profileVisits: null,
+          replies: null,
+          igReelsAvgWatchTimeMs: null,
           ...(override ?? {}),
         });
       }
@@ -301,6 +392,8 @@ export function createFakeStore(options: FakeStoreOptions & {
     async persistSnapshot(input) {
       if (options.hangOn === "snapshot") return await hang();
       if (options.failOn === "snapshot") throw new Error("the snapshot write failed");
+      const refused = refusalOf(input.jobId, "snapshot");
+      if (refused !== null) throw refused;
       calls.snapshots.push({ kind: input.payload.kind, items: input.payload.items });
       return {
         jobId: input.jobId,
@@ -312,6 +405,8 @@ export function createFakeStore(options: FakeStoreOptions & {
     async recordProgress(input) {
       if (options.hangOn === "progress") return await hang();
       if (options.failOn === "progress") throw new Error("the progress write failed");
+      const refused = refusalOf(input.jobId, "progress");
+      if (refused !== null) throw refused;
       calls.progresses.push(input.payload);
       return {
         jobId: input.jobId,
@@ -324,6 +419,8 @@ export function createFakeStore(options: FakeStoreOptions & {
     async completeJob(input) {
       if (options.hangOn === "complete") return await hang();
       if (options.failOn === "complete") throw new Error("the completion write failed");
+      const refused = refusalOf(input.jobId, "complete");
+      if (refused !== null) throw refused;
       calls.completes.push({ outcome: input.outcome, reasonCode: input.reasonCode });
       return {
         jobId: input.jobId,

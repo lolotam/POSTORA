@@ -312,7 +312,9 @@ jobs:
         run: |
           set -euo pipefail
           modules=(
+            supabase/functions/instagram-insights-sync/providerTransport.ts
             supabase/functions/instagram-insights-sync/graphProvider.ts
+            supabase/functions/instagram-insights-sync/directGraphProvider.ts
             supabase/functions/instagram-insights-sync/receipts.ts
             supabase/functions/instagram-insights-sync/workerStore.ts
             supabase/functions/instagram-insights-sync/worker.ts
@@ -320,6 +322,7 @@ jobs:
           )
           tests=(
             supabase/functions/instagram-insights-sync/graphProvider.test.ts
+            supabase/functions/instagram-insights-sync/directGraphProvider.test.ts
             supabase/functions/instagram-insights-sync/workerStore.test.ts
             supabase/functions/instagram-insights-sync/worker.test.ts
             supabase/functions/instagram-insights-sync/drainHandler.test.ts

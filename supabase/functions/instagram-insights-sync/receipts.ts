@@ -103,6 +103,25 @@ const THROTTLE_BUCKET_KEYS = [
 ] as const;
 const THROTTLE_PARKED_KEYS = [...THROTTLE_BUCKET_KEYS, "status"] as const;
 
+/**
+ * The exact key set of the direct credential reader's answer.
+ *
+ * The reader is a closed projection built by `jsonb_build_object`, so an
+ * extra key means a different deployment and is refused. A refresh token or
+ * an account metadata key in this document is a contract violation, not a
+ * field to ignore.
+ */
+const DIRECT_CREDENTIAL_KEYS = [
+  "job_id",
+  "user_id",
+  "social_account_id",
+  "ig_user_id",
+  "login_kind",
+  "credential_generation",
+  "access_token",
+  "token_expires_at",
+] as const;
+
 /** The outcomes `complete_instagram_collection_job` accepts. */
 export const OWNER_JOB_OUTCOMES = [
   "completed",
@@ -598,4 +617,90 @@ export function parseThrottleReceipt(
     isUuidText(jobId) &&
     sameUuid(jobId, request.jobId) &&
     readOwnData(value, "status").value === "retry";
+}
+
+// ---------------------------------------------------------------------------
+// The direct credential
+// ---------------------------------------------------------------------------
+
+/**
+ * The operational credential of a DIRECT Instagram login.
+ *
+ * The token is carried here and nowhere else: it is never logged, never
+ * returned to a client and never serialised into a summary.
+ */
+export interface DirectOwnerCredential {
+  readonly jobId: string;
+  readonly userId: string;
+  readonly socialAccountId: string;
+  /** The canonical Instagram user id the provider endpoints are addressed to. */
+  readonly igUserId: string;
+  readonly loginKind: "direct";
+  readonly credentialGeneration: number;
+  readonly accessToken: string;
+  readonly tokenExpiresAt: string | null;
+}
+
+/**
+ * Parses the direct credential answer and binds it to the request.
+ *
+ * The answer must name the same job, the same account and the same
+ * credential generation the request asked for, must classify the login as
+ * `direct`, and must carry a non-empty operational token. Anything else is
+ * indeterminate: the caller abandons the job to its lease rather than
+ * spending a provider call on a credential it cannot vouch for.
+ *
+ * The expiry is explicit about being unknown: a null expiry is a valid
+ * answer (the provider may not state one) and is never a failure, and a
+ * malformed expiry is a refusal.
+ */
+export function parseDirectOwnerCredential(
+  value: unknown,
+  request: {
+    readonly jobId: string;
+    readonly socialAccountId: string;
+    readonly credentialGeneration: number;
+  },
+): DirectOwnerCredential | null {
+  if (!isPlainRecord(value) || !hasExactKeys(value, DIRECT_CREDENTIAL_KEYS)) return null;
+
+  const jobId = readOwnData(value, "job_id").value;
+  if (!isUuidText(jobId) || !sameUuid(jobId, request.jobId)) return null;
+
+  const userId = readOwnData(value, "user_id").value;
+  if (!isUuidText(userId)) return null;
+
+  const socialAccountId = readOwnData(value, "social_account_id").value;
+  if (!isUuidText(socialAccountId) || !sameUuid(socialAccountId, request.socialAccountId)) {
+    return null;
+  }
+
+  const igUserId = readOwnData(value, "ig_user_id").value;
+  if (typeof igUserId !== "string" || igUserId.trim() === "" || igUserId.length > 255) {
+    return null;
+  }
+
+  const loginKind = readOwnData(value, "login_kind").value;
+  if (loginKind !== "direct") return null;
+
+  const credentialGeneration = readOwnData(value, "credential_generation").value;
+  if (!isPositiveSafeInteger(credentialGeneration)) return null;
+  if (credentialGeneration !== request.credentialGeneration) return null;
+
+  const accessToken = readOwnData(value, "access_token").value;
+  if (typeof accessToken !== "string" || accessToken.trim() === "") return null;
+
+  const tokenExpiresAt = readOwnData(value, "token_expires_at").value;
+  if (!isNullableTimestamp(tokenExpiresAt)) return null;
+
+  return {
+    jobId: jobId.toLowerCase(),
+    userId: userId.toLowerCase(),
+    socialAccountId: socialAccountId.toLowerCase(),
+    igUserId,
+    loginKind: "direct",
+    credentialGeneration,
+    accessToken,
+    tokenExpiresAt,
+  };
 }

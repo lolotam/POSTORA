@@ -20,9 +20,16 @@
  *   ignores the abort cannot keep the worker waiting.
  *
  *   A step that misses its deadline, or a store call that fails, ABANDONS
- *   the job to its lease: nothing is reported as stored, the lease is left to
- *   expire, and the run stops. An abandonment is never described as a
- *   recovery and never described as stored.
+ *   the job to its lease: nothing is reported as stored and the lease is left
+ *   to expire. A store failure whose outcome is UNKNOWN also stops the run.
+ *
+ *   A store failure the DATABASE itself refused is different: the fence
+ *   raised, so the statement did not commit, and the condition belongs to
+ *   that one job. The job is abandoned to its lease and the run continues
+ *   with the next claimed owner.
+ *
+ *   An abandonment is never described as a recovery and never described as
+ *   stored.
  *
  * THE BOUND CONTEXT
  *
@@ -38,15 +45,25 @@
  *   to spend a provider call when the resolved protected credential no
  *   longer carries the generation the context captured.
  *
+ * THE LOGIN KINDS
+ *
+ *   The TRUSTED capability decides how an owner is collected, and the
+ *   adapter and the token are chosen together from it. A page-linked
+ *   account is collected through graph.facebook.com with the protected
+ *   Facebook User credential. A direct account is collected through
+ *   graph.instagram.com with the operational token the fenced direct
+ *   reader returns. A host and a token never come from different logins.
+ *
  * ONE JOB NEVER STALLS THE OTHERS
  *
  *   A condition that belongs to ONE job - a missing context, a target that
  *   is gone, a credential that was replaced, a shared bucket that is still
- *   throttled for that credential - ends that job and lets the run continue
- *   with the next claimed job. Only a condition that belongs to EVERYONE
- *   stops the run: a provider rate limit or a nearly spent usage budget
- *   that was actually observed on a response, the run budget, the outer
- *   abort, or a store failure.
+ *   throttled for that credential, a write the database refused because the
+ *   lease or the generation moved on - ends that job and lets the run
+ *   continue with the next claimed job. Only a condition that belongs to
+ *   EVERYONE stops the run: a provider rate limit or a nearly spent usage
+ *   budget that was actually observed on a response, the run budget, the
+ *   outer abort, or a store failure whose outcome is unknown.
  *
  * THE DAYS THIS JOB OWES
  *
@@ -98,11 +115,18 @@ import {
   MEDIA_INSIGHT_ATTEMPT_TIMEOUT_MS,
   OwnerProviderError,
   USAGE_STOP_PERCENT,
+  type OwnerAccountDay,
+  type OwnerMediaInsights,
+  type OwnerMediaSweep,
+  type OwnerProfileObservation,
+  type OwnerProviderResult,
 } from "./graphProvider.ts";
+import { InstagramDirectGraphProvider } from "./directGraphProvider.ts";
 import {
   OwnerWorkerStoreError,
   type OwnerCollectionServiceStore,
   type OwnerInventoryProgressPayload,
+  type OwnerMediaInventoryRow,
   type OwnerSnapshotPayload,
 } from "./workerStore.ts";
 import type { ClaimedOwnerJob } from "./receipts.ts";
@@ -157,6 +181,15 @@ export const MEDIA_QUEUE_LIMIT = 500;
 const MEDIA_QUEUE_CAPPED = "media_queue_capped";
 
 /**
+ * The permission an Instagram-login account needs to read its insights.
+ *
+ * Meta documents the Instagram API with Instagram Login as
+ * `instagram_business_basic` plus `instagram_business_manage_insights`
+ * (https://developers.facebook.com/documentation/instagram-platform/api-reference/instagram-user/insights).
+ */
+export const DIRECT_INSIGHTS_SCOPE = "instagram_business_manage_insights";
+
+/**
  * The stable reason codes.
  *
  * They are lower-case snake_case because the accepted SQL validates them as
@@ -175,12 +208,22 @@ export type OwnerReasonCode =
   | "provider_error"
   /** The credential or the captured context changed under the attempt. */
   | "credential_changed"
+  /**
+   * The database's own fence refused the write: the lease or the job
+   * generation moved on, so the statement did not commit and the job is
+   * abandoned to its lease.
+   */
+  | "stale_claim"
   /** The account owns no usable protected credential. */
   | "credential_unavailable"
   /**
-   * The account logs in with Instagram directly, and the collector for that
-   * login kind does not exist yet. It is a temporary, stable outcome: the
-   * job is not retried forever.
+   * The account logs in with Instagram directly and its TRUSTED capability
+   * says so POSITIVELY: the insights permission is missing from an
+   * authoritative scope set. The data is not obtainable with this
+   * connection, so the job is closed with a stable, non-looping outcome.
+   *
+   * It is NOT the answer for a direct account that merely has an unknown
+   * scope set: an unknown set is not a denial.
    */
   | "direct_login_unsupported"
   /** The provider reported no metric for the capture day. */
@@ -244,10 +287,52 @@ export interface OwnerWorkerLogEvent {
   readonly mediaCount?: number;
 }
 
+/**
+ * The provider surface the worker collects through.
+ *
+ * Both adapters implement it: the Facebook-login one and the
+ * Instagram-login one. The adapter is chosen from the TRUSTED login kind,
+ * never from a flag the caller supplies, so the host and the token always
+ * belong to the same login.
+ */
+export interface OwnerCollectionProvider {
+  fetchAccountProfile(input: {
+    readonly igUserId: string;
+    readonly token: string;
+    readonly signal: AbortSignal;
+  }): Promise<OwnerProviderResult<OwnerProfileObservation>>;
+  fetchAccountDay(input: {
+    readonly igUserId: string;
+    readonly token: string;
+    readonly date: string;
+    readonly signal: AbortSignal;
+  }): Promise<OwnerProviderResult<OwnerAccountDay>>;
+  fetchMediaInsights(input: {
+    readonly igMediaId: string;
+    readonly token: string;
+    readonly mediaProductType: string | null;
+    readonly mediaType: string | null;
+    readonly signal: AbortSignal;
+  }): Promise<OwnerProviderResult<OwnerMediaInsights>>;
+  fetchMediaWindow(input: {
+    readonly igUserId: string;
+    readonly token: string;
+    readonly windowStart: string;
+    readonly windowEnd: string;
+    readonly cursor: string | null;
+    readonly maxPages: number;
+    readonly pageSize?: number;
+    readonly signal: AbortSignal;
+  }): Promise<OwnerProviderResult<OwnerMediaSweep>>;
+}
+
 /** The ports of the owner collection worker. */
 export interface OwnerWorkerPorts {
   readonly store: OwnerCollectionServiceStore;
+  /** The Facebook-login provider. */
   readonly provider: InstagramGraphProvider;
+  /** The Instagram-login provider. It is a different host and a different token. */
+  readonly directProvider: InstagramDirectGraphProvider;
   /**
    * The shared throttle bucket key of a protected credential.
    *
@@ -474,6 +559,16 @@ async function processClaimedJob(
   try {
     return await collect(context);
   } catch (error) {
+    // A DEFINITIVE refusal of THIS job: the database's own fence raised, so
+    // the statement did not commit and the condition belongs to this job
+    // alone. The job is abandoned to its lease and the run continues with the
+    // next claimed owner: one reconnecting account must not stall every
+    // other owner in the run.
+    const refusal = definitivePerJobRefusal(error);
+    if (refusal !== null) {
+      return await abandon(context, refusal);
+    }
+
     // A store failure, a refused write or a step that ran out of budget. The
     // outcome is unknown, so nothing is reported as stored and the run stops.
     const reasonCode: OwnerReasonCode = error instanceof BudgetExceededError
@@ -497,6 +592,26 @@ async function processClaimedJob(
       stopRun: true,
     };
   }
+}
+
+/**
+ * The store failures that are a DEFINITIVE refusal of ONE job.
+ *
+ * `stale_claim` and `credential_changed` are raised by the database's own
+ * fence: the lease moved on, or the connection was replaced under the
+ * attempt. The statement did not commit, so nothing is reported as stored,
+ * and the condition belongs to this job alone - the run continues with the
+ * next claimed owner.
+ *
+ * Every other failure keeps the run-ending behaviour: the outcome of the
+ * statement is unknown, so the run stops rather than repeating a write that
+ * may already have committed.
+ */
+function definitivePerJobRefusal(error: unknown): OwnerReasonCode | null {
+  if (!(error instanceof OwnerWorkerStoreError)) return null;
+  if (error.failure === "stale_claim") return "stale_claim";
+  if (error.failure === "credential_changed") return "credential_changed";
+  return null;
 }
 
 function result(
@@ -630,6 +745,60 @@ function compareMediaItems(
   return left.ig_media_id < right.ig_media_id ? -1 : 1;
 }
 
+/**
+ * The insight metrics a stored media row already carries.
+ *
+ * They are carried into the next inventory write, so the accepted upsert
+ * writes the SAME values back instead of nulling them. Only the metrics
+ * the accepted `owner_media` whitelist can store are carried; the public
+ * counts are not, because the sweep reports them again.
+ */
+function carriedInsightMetrics(
+  row: OwnerMediaInventoryRow | undefined,
+): Record<string, number> {
+  if (row === undefined) return {};
+
+  const carried: Record<string, number> = {};
+  const entries: ReadonlyArray<readonly [string, number | null]> = [
+    ["views", row.views],
+    ["reach", row.reach],
+    ["likes", row.likes],
+    ["comments", row.comments],
+    ["saved", row.saved],
+    ["shares", row.shares],
+    ["total_interactions", row.totalInteractions],
+    ["follows", row.follows],
+    ["profile_visits", row.profileVisits],
+    ["replies", row.replies],
+    ["ig_reels_avg_watch_time_ms", row.igReelsAvgWatchTimeMs],
+  ];
+
+  for (const [name, value] of entries) {
+    if (value === null) continue;
+    carried[name] = value;
+  }
+  return carried;
+}
+
+/**
+ * True when the media owes nothing for this capture day.
+ *
+ * A stored insight metric is proof that the insights were collected. A
+ * stored 'unavailable' status is the provider's own documented statement
+ * that this media type has no insights at all, and it is terminal too.
+ *
+ * A row that exists but carries no insight metric was INVENTORIED and not
+ * collected: Meta documents that an empty insights answer means the data
+ * does not exist yet or is not available yet, so it is not evidence that the
+ * media will never have insights. Such a media is queued again, and the
+ * re-read is idempotent: it never corrupts a stored metric.
+ */
+function isCollectedMedia(row: OwnerMediaInventoryRow | undefined): boolean {
+  if (row === undefined) return false;
+  if (row.status === "unavailable") return true;
+  return Object.keys(carriedInsightMetrics(row)).length > 0;
+}
+
 async function collect(context: JobContext): Promise<JobStep> {
   const { ports, job } = context;
   const checkpoint = job.checkpoint;
@@ -690,62 +859,135 @@ async function collect(context: JobContext): Promise<JobStep> {
     throw error;
   }
 
-  // --- The direct-login account (TEMPORARY) ------------------------------
-  if (capability.loginKind === "direct") {
-    // A direct Instagram login has no protected Facebook User credential,
-    // and the collector for that login kind does not exist yet. The job is
-    // closed with a stable, non-looping outcome: it is not retried forever,
-    // no credential is read and no provider call is spent.
+  // --- The provider, the token and the bucket ------------------------------
+  //
+  // The adapter and the token are chosen TOGETHER, from the TRUSTED login
+  // kind. A page-linked account is collected through graph.facebook.com
+  // with the protected Facebook User credential; a direct account is
+  // collected through graph.instagram.com with the operational token the
+  // fenced direct reader returns. A host and a token never come from
+  // different logins.
+  const direct = capability.loginKind === "direct";
+
+  let provider: OwnerCollectionProvider;
+  let token: string;
+  let credentialGeneration: number;
+  let bucketKey: string;
+
+  if (direct) {
+    // --- The required permission ----------------------------------------
     //
-    // TEMPORARY: the dedicated reader and the graph.instagram.com adapter
-    // are the next round.
-    return await persistFailure(context, "unavailable", "direct_login_unsupported");
-  }
-
-  // --- The protected credential -----------------------------------------
-  let credential;
-  try {
-    credential = await read(context, (signal) =>
-      ports.store.resolveOwnerCredential({
-        userId: job.userId,
-        socialAccountId: job.socialAccountId,
-        signal,
-      })
-    );
-  } catch (error) {
-    if (error instanceof OwnerWorkerStoreError) {
-      if (error.failure === "credential_missing") {
-        return await persistFailure(context, "retry", "credential_unavailable");
-      }
-      if (error.failure === "credential_changed") {
-        return await abandon(context, "credential_changed");
-      }
+    // The scope set is authoritative only when the permission read
+    // succeeded. An unknown scope set is NOT a denial, so it never closes
+    // the job: only a positively missing permission does.
+    if (
+      capability.scopesAuthoritative &&
+      !capability.grantedScopes.includes(DIRECT_INSIGHTS_SCOPE)
+    ) {
+      return await persistFailure(context, "unavailable", "direct_login_unsupported");
     }
-    throw error;
-  }
 
-  if (credential.capabilityGeneration !== capability.credentialGeneration) {
-    // The connection was replaced between the two reads. No provider call is
-    // spent on a token whose generation no longer matches the connection.
-    return await abandon(context, "credential_changed");
-  }
+    if (capability.credentialGeneration !== job.context.credentialGeneration) {
+      // The connection was replaced after the claim. No provider call is
+      // spent on a token whose generation no longer matches the connection,
+      // and no write is attempted: every result write is fenced on that
+      // same generation.
+      return await abandon(context, "credential_changed");
+    }
 
-  if (credential.capabilityGeneration !== job.context.credentialGeneration) {
-    // The connection was replaced after the claim. The captured context no
-    // longer matches the live credential, so no provider call is spent on it
-    // and no write is attempted: every result write is fenced on that same
-    // generation. The job is abandoned to its lease and is re-claimed with
-    // the new context.
-    return await abandon(context, "credential_changed");
-  }
+    // --- The operational token ------------------------------------------
+    //
+    // It comes from the fenced direct reader and from nowhere else. The
+    // account row's `access_token` is never read by this worker.
+    let directCredential;
+    try {
+      directCredential = await read(context, (signal) =>
+        ports.store.resolveDirectOwnerCredential({
+          jobId: job.jobId,
+          claimToken: job.claimToken,
+          jobGeneration: job.jobGeneration,
+          expectedCredentialGeneration: capability.credentialGeneration,
+          socialAccountId: job.socialAccountId,
+          signal,
+        })
+      );
+    } catch (error) {
+      if (error instanceof OwnerWorkerStoreError) {
+        if (error.failure === "credential_missing") {
+          return await persistFailure(context, "retry", "credential_unavailable");
+        }
+        if (error.failure === "credential_changed") {
+          return await abandon(context, "credential_changed");
+        }
+      }
+      throw error;
+    }
 
-  // The bucket key is a digest of two non-secret values. It is still a
-  // step: a runtime without SHA-256 must fail inside the budget rather than
-  // hang the worker.
-  const bucketKey = await read(context, async (signal) => {
-    void signal;
-    return await ports.bucketKeyFor(credential.credentialId);
-  });
+    if (directCredential.credentialGeneration !== capability.credentialGeneration) {
+      return await abandon(context, "credential_changed");
+    }
+
+    provider = ports.directProvider;
+    token = directCredential.accessToken;
+    credentialGeneration = directCredential.credentialGeneration;
+
+    // The bucket key is a digest of the app, the account and the
+    // credential generation. It is never the token, and it is never a
+    // fabricated Facebook credential id: a direct account has none.
+    bucketKey = await read(context, async (signal) => {
+      void signal;
+      return await ports.directProvider.bucketKey(job.socialAccountId, credentialGeneration);
+    });
+  } else {
+    // --- The protected credential ----------------------------------------
+    let credential;
+    try {
+      credential = await read(context, (signal) =>
+        ports.store.resolveOwnerCredential({
+          userId: job.userId,
+          socialAccountId: job.socialAccountId,
+          signal,
+        })
+      );
+    } catch (error) {
+      if (error instanceof OwnerWorkerStoreError) {
+        if (error.failure === "credential_missing") {
+          return await persistFailure(context, "retry", "credential_unavailable");
+        }
+        if (error.failure === "credential_changed") {
+          return await abandon(context, "credential_changed");
+        }
+      }
+      throw error;
+    }
+
+    if (credential.capabilityGeneration !== capability.credentialGeneration) {
+      // The connection was replaced between the two reads. No provider call is
+      // spent on a token whose generation no longer matches the connection.
+      return await abandon(context, "credential_changed");
+    }
+
+    if (credential.capabilityGeneration !== job.context.credentialGeneration) {
+      // The connection was replaced after the claim. The captured context no
+      // longer matches the live credential, so no provider call is spent on it
+      // and no write is attempted: every result write is fenced on that same
+      // generation. The job is abandoned to its lease and is re-claimed with
+      // the new context.
+      return await abandon(context, "credential_changed");
+    }
+
+    provider = ports.provider;
+    token = credential.token;
+    credentialGeneration = credential.capabilityGeneration;
+
+    // The bucket key is a digest of two non-secret values. It is still a
+    // step: a runtime without SHA-256 must fail inside the budget rather than
+    // hang the worker.
+    bucketKey = await read(context, async (signal) => {
+      void signal;
+      return await ports.bucketKeyFor(credential.credentialId);
+    });
+  }
 
   // --- The shared throttle window ---------------------------------------
   const bucket = await read(context, (signal) =>
@@ -883,9 +1125,9 @@ async function collect(context: JobContext): Promise<JobStep> {
 
   try {
     const profile = await providerStep(context, (signal) =>
-      ports.provider.fetchAccountProfile({
+      provider.fetchAccountProfile({
         igUserId: target.platformUserId,
-        token: credential.token,
+        token: token,
         signal,
       })
     );
@@ -943,9 +1185,9 @@ async function collect(context: JobContext): Promise<JobStep> {
 
     try {
       const answer = await providerStep(context, (signal) =>
-        ports.provider.fetchAccountDay({
+        provider.fetchAccountDay({
           igUserId: target.platformUserId,
-          token: credential.token,
+          token: token,
           date: day,
           signal,
         })
@@ -1012,9 +1254,9 @@ async function collect(context: JobContext): Promise<JobStep> {
 
     try {
       const sweep = await providerStep(context, (signal) =>
-        ports.provider.fetchMediaWindow({
+        provider.fetchMediaWindow({
           igUserId: target.platformUserId,
-          token: credential.token,
+          token: token,
           windowStart,
           windowEnd,
           cursor,
@@ -1044,28 +1286,52 @@ async function collect(context: JobContext): Promise<JobStep> {
     }
 
     if (sweepValue.items.length > 0) {
+      // The rows this capture day already stores for the discovered media.
+      //
+      // The accepted upsert writes the EXCLUDED columns, so a metric that
+      // is not in the payload is NULLed. An inventory write for a media
+      // whose insights were already collected would therefore wipe them.
+      // The stored metrics are read back and carried over, and the stored
+      // status is carried over with them.
+      const existing = await read(context, (signal) =>
+        ports.store.readOwnerMediaInventory({
+          socialAccountId: job.socialAccountId,
+          capturedOn: job.capturedOn,
+          mediaIds: sweepValue.items.map((item) => item.ig_media_id),
+          signal,
+        })
+      );
+      const existingById = new Map(existing.map((row) => [row.igMediaId, row]));
+
       const mediaPayload: OwnerSnapshotPayload = {
         kind: "owner_media",
-        items: sweepValue.items.map((item) => ({
-          ig_media_id: item.ig_media_id,
-          ...(item.media_product_type === null
-            ? {}
-            : { media_product_type: item.media_product_type }),
-          ...(item.media_type === null ? {} : { media_type: item.media_type }),
-          ...(item.thumbnail_url === null ? {} : { thumbnail_url: item.thumbnail_url }),
-          ...(item.caption === null ? {} : { caption: item.caption }),
-          ...(item.permalink === null ? {} : { permalink: item.permalink }),
-          published_at: item.published_at,
-          status: "ok",
-          metrics: {
-            ...(item.like_count_public === null
+        items: sweepValue.items.map((item) => {
+          const stored = existingById.get(item.ig_media_id);
+          return {
+            ig_media_id: item.ig_media_id,
+            ...(item.media_product_type === null
               ? {}
-              : { like_count_public: item.like_count_public }),
-            ...(item.comments_count_public === null
-              ? {}
-              : { comments_count_public: item.comments_count_public }),
-          },
-        })),
+              : { media_product_type: item.media_product_type }),
+            ...(item.media_type === null ? {} : { media_type: item.media_type }),
+            ...(item.thumbnail_url === null ? {} : { thumbnail_url: item.thumbnail_url }),
+            ...(item.caption === null ? {} : { caption: item.caption }),
+            ...(item.permalink === null ? {} : { permalink: item.permalink }),
+            published_at: item.published_at,
+            // A media whose insights were positively established as
+            // unavailable keeps that status: an inventory write must not
+            // turn a terminal media back into an open one.
+            status: stored?.status === "unavailable" ? "unavailable" : "ok",
+            metrics: {
+              ...(item.like_count_public === null
+                ? {}
+                : { like_count_public: item.like_count_public }),
+              ...(item.comments_count_public === null
+                ? {}
+                : { comments_count_public: item.comments_count_public }),
+              ...carriedInsightMetrics(stored),
+            },
+          };
+        }),
       };
       await write(context, (signal) =>
         ports.store.persistSnapshot({
@@ -1076,15 +1342,21 @@ async function collect(context: JobContext): Promise<JobStep> {
           signal,
         })
       );
-    }
 
-    // The discovered media join the queue. The sweep walks the feed newest
-    // first, so the new media are older than the ones already queued and
-    // they are appended in their own order.
-    const discovered = [...sweepValue.items].sort(compareMediaItems);
-    for (const item of discovered) {
-      if (mediaQueue.includes(item.ig_media_id)) continue;
-      mediaQueue.push(item.ig_media_id);
+      // The discovered media join the queue. The sweep walks the feed newest
+      // first, so the new media are older than the ones already queued and
+      // they are appended in their own order.
+      //
+      // A media that is already in the queue is not queued twice, and a
+      // media whose insights were already collected for this capture day is
+      // not queued again: it owes nothing, and re-queuing it would spend a
+      // provider call on a media the database already knows.
+      const discovered = [...sweepValue.items].sort(compareMediaItems);
+      for (const item of discovered) {
+        if (mediaQueue.includes(item.ig_media_id)) continue;
+        if (isCollectedMedia(existingById.get(item.ig_media_id))) continue;
+        mediaQueue.push(item.ig_media_id);
+      }
     }
 
     if (mediaQueue.length > MEDIA_QUEUE_LIMIT) {
@@ -1130,9 +1402,9 @@ async function collect(context: JobContext): Promise<JobStep> {
 
       try {
         const answer = await providerStep(context, (signal) =>
-          ports.provider.fetchMediaInsights({
+          provider.fetchMediaInsights({
             igMediaId: mediaId,
-            token: credential.token,
+            token: token,
             mediaProductType: row.mediaProductType,
             mediaType: row.mediaType,
             signal,

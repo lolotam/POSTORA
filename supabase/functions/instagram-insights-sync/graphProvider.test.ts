@@ -820,11 +820,43 @@ Deno.test("the next page is requested on the trusted host with a rebuilt cursor"
   assertStringIncludes(urls[1]!, "after=cursor-1");
 });
 
+Deno.test("a page without a next URL is the last page", async () => {
+  const { provider, urls } = providerWith(() =>
+    jsonResponse({
+      data: [{ id: "m1", media_type: "IMAGE", timestamp: "2026-10-20T12:00:00Z" }],
+      // A cursor WITHOUT a next-page URL. The provider documented no other
+      // page, so the sweep must stop here instead of spending one more
+      // call on a cursor it never offered a page for.
+      paging: { cursors: { after: "cursor-1" } },
+    })
+  );
+
+  const result = await provider.fetchMediaWindow({
+    igUserId: "1784140001",
+    token: "the-token",
+    windowStart: "2026-07-30",
+    windowEnd: "2026-10-28",
+    cursor: null,
+    maxPages: 2,
+    signal: new AbortController().signal,
+  });
+
+  assertEquals(urls.length, 1);
+  assertEquals(result.value.pagesFetched, 1);
+  assertEquals(result.value.truncated, false);
+  assertEquals(result.value.windowCovered, true);
+  assertEquals(result.value.stopped, "feed_exhausted");
+  assertEquals(result.value.nextCursor, null);
+});
+
 Deno.test("a cursor the adapter cannot follow stops the sweep as truncated", async () => {
   const { provider } = providerWith(() =>
     jsonResponse({
       data: [{ id: "m1", media_type: "IMAGE", timestamp: "2026-10-20T12:00:00Z" }],
-      paging: { cursors: { after: "https://evil.example.com/steal" } },
+      paging: {
+        cursors: { after: "https://evil.example.com/steal" },
+        next: "https://graph.facebook.com/v22.0/me/media?after=steal",
+      },
     })
   );
 

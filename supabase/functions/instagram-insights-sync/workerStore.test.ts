@@ -84,6 +84,23 @@ const CAPABILITY_ROW = {
   updated_at: "2026-10-28T12:00:00+00:00",
 };
 
+/**
+ * The direct credential answer.
+ *
+ * It is the accepted projection: eight keys, no refresh token and no
+ * account metadata.
+ */
+const DIRECT_CREDENTIAL_ROW = {
+  job_id: TEST_JOB_ID,
+  user_id: TEST_USER_ID,
+  social_account_id: TEST_ACCOUNT_ID,
+  ig_user_id: "1784140001",
+  login_kind: "direct",
+  credential_generation: 7,
+  access_token: "the-direct-token",
+  token_expires_at: null,
+};
+
 function createStore(
   responder: (name: string, args: Record<string, unknown>) => unknown,
   reads: { rows?: Record<string, unknown> | null; mediaRows?: unknown[] } = {},
@@ -210,6 +227,36 @@ Deno.test("a snapshot receipt that disagrees with the request is refused", async
       OwnerWorkerStoreError,
     );
   }
+});
+
+Deno.test("a snapshot write the database refused is a definitive per-job refusal", async () => {
+  // The Facebook-login path writes through the same accepted function, and
+  // the accepted fence refuses it with SQLSTATE 40001 when the lease or the
+  // generation moved on. That refusal is `stale_claim`, and it is a
+  // DEFINITIVE refusal of one job: the statement did not commit, so the
+  // worker abandons that job alone instead of stopping the whole run.
+  const { store } = createStore(() => ({
+    data: null,
+    error: { code: "40001", message: "secret sql text" },
+  }));
+
+  const error = await assertRejects(
+    () =>
+      store.persistSnapshot({
+        jobId: TEST_JOB_ID,
+        claimToken: TEST_CLAIM_TOKEN,
+        jobGeneration: 1,
+        payload: {
+          kind: "owner_profile_observation",
+          items: [{ observed_at: "2026-10-28T12:00:00.000Z", status: "ok", metrics: {} }],
+        },
+      }),
+    OwnerWorkerStoreError,
+  );
+
+  assertEquals(error.failure, "stale_claim");
+  assertEquals(error.sqlstate, "40001");
+  assertEquals(error.message.includes("secret"), false);
 });
 
 Deno.test("the progress write sends the accepted inventory payload", async () => {
@@ -494,6 +541,117 @@ Deno.test("a driver error is classified by its SQLSTATE and its message is dropp
 });
 
 // ---------------------------------------------------------------------------
+// The direct credential
+// ---------------------------------------------------------------------------
+
+Deno.test("the direct credential is read through the fenced reader and bound to the request", async () => {
+  const { store, calls } = createStore((name) => {
+    if (name === "read_instagram_direct_collection_credential") {
+      return { data: DIRECT_CREDENTIAL_ROW, error: null };
+    }
+    return { data: null, error: null };
+  });
+
+  const credential = await store.resolveDirectOwnerCredential({
+    jobId: TEST_JOB_ID,
+    claimToken: TEST_CLAIM_TOKEN,
+    jobGeneration: 3,
+    expectedCredentialGeneration: 7,
+    socialAccountId: TEST_ACCOUNT_ID,
+  });
+
+  assertEquals(credential.accessToken, "the-direct-token");
+  assertEquals(credential.igUserId, "1784140001");
+  assertEquals(credential.loginKind, "direct");
+  assertEquals(credential.credentialGeneration, 7);
+  assertEquals(credential.tokenExpiresAt, null);
+
+  // The call names the accepted function and its accepted arguments, and it
+  // carries NO account or owner selector: the database derives the target
+  // from the fenced job.
+  assertEquals(calls.length, 1);
+  assertEquals(calls[0]!.name, "read_instagram_direct_collection_credential");
+  assertEquals(calls[0]!.args, {
+    p_job_id: TEST_JOB_ID,
+    p_claim_token: TEST_CLAIM_TOKEN,
+    p_job_generation: 3,
+    p_expected_credential_generation: 7,
+  });
+});
+
+Deno.test("a direct receipt that does not answer for the request is indeterminate", async () => {
+  const cases: Array<[string, Record<string, unknown>]> = [
+    ["another job", { ...DIRECT_CREDENTIAL_ROW, job_id: TEST_CLAIM_TOKEN }],
+    ["another account", { ...DIRECT_CREDENTIAL_ROW, social_account_id: TEST_CREDENTIAL_ID }],
+    ["another generation", { ...DIRECT_CREDENTIAL_ROW, credential_generation: 8 }],
+    ["another login kind", { ...DIRECT_CREDENTIAL_ROW, login_kind: "page_linked" }],
+    ["an empty token", { ...DIRECT_CREDENTIAL_ROW, access_token: "" }],
+    ["a missing token", { ...DIRECT_CREDENTIAL_ROW, access_token: null }],
+    ["a refresh token", { ...DIRECT_CREDENTIAL_ROW, refresh_token: "the-refresh-token" }],
+    ["an extra key", { ...DIRECT_CREDENTIAL_ROW, account_metadata: {} }],
+    ["a malformed expiry", { ...DIRECT_CREDENTIAL_ROW, token_expires_at: "not-a-timestamp" }],
+  ];
+
+  for (const [label, row] of cases) {
+    const { store } = createStore((name) => {
+      if (name === "read_instagram_direct_collection_credential") {
+        return { data: row, error: null };
+      }
+      return { data: null, error: null };
+    });
+
+    const error = await assertRejects(
+      () =>
+        store.resolveDirectOwnerCredential({
+          jobId: TEST_JOB_ID,
+          claimToken: TEST_CLAIM_TOKEN,
+          jobGeneration: 3,
+          expectedCredentialGeneration: 7,
+          socialAccountId: TEST_ACCOUNT_ID,
+        }),
+      OwnerWorkerStoreError,
+    );
+    assertEquals(error.failure, "invalid_envelope", label);
+  }
+});
+
+Deno.test("a direct refusal is classified by its SQLSTATE and its message is dropped", async () => {
+  const cases: Array<[string, string]> = [
+    ["IDC03", "credential_changed"],
+    ["IDC04", "credential_changed"],
+    ["IDC05", "credential_missing"],
+    ["IDC01", "invalid"],
+    ["IDC02", "invalid"],
+    ["40001", "credential_changed"],
+    ["42501", "forbidden"],
+    ["PGRST202", "schema_unavailable"],
+    ["57014", "rpc_failed"],
+  ];
+
+  for (const [sqlstate, failure] of cases) {
+    const { store } = createStore(() => ({
+      data: null,
+      error: { code: sqlstate, message: "secret sql text" },
+    }));
+
+    const error = await assertRejects(
+      () =>
+        store.resolveDirectOwnerCredential({
+          jobId: TEST_JOB_ID,
+          claimToken: TEST_CLAIM_TOKEN,
+          jobGeneration: 3,
+          expectedCredentialGeneration: 7,
+          socialAccountId: TEST_ACCOUNT_ID,
+        }),
+      OwnerWorkerStoreError,
+    );
+    assertEquals(error.failure, failure, sqlstate);
+    assertEquals(error.sqlstate, sqlstate);
+    assertEquals(error.message.includes("secret"), false);
+  }
+});
+
+// ---------------------------------------------------------------------------
 // The protected credential
 // ---------------------------------------------------------------------------
 
@@ -585,6 +743,18 @@ Deno.test("the media inventory is read back for the account and the capture day"
         permalink: "https://instagram.com/p/1",
         caption: "the caption",
         thumbnail_url: null,
+        status: "ok",
+        views: 200,
+        reach: 100,
+        likes: 55,
+        comments: 3,
+        saved: null,
+        shares: null,
+        total_interactions: 58,
+        follows: null,
+        profile_visits: null,
+        replies: null,
+        ig_reels_avg_watch_time_ms: null,
       },
     ],
   });
@@ -601,6 +771,15 @@ Deno.test("the media inventory is read back for the account and the capture day"
   assertEquals(rows[0]!.likeCountPublic, 55);
   assertEquals(rows[0]!.commentsCountPublic, 3);
   assertEquals(rows[0]!.permalink, "https://instagram.com/p/1");
+
+  // The insight metrics this capture day already stores are read back, so
+  // an inventory write can carry them over instead of nulling them.
+  assertEquals(rows[0]!.status, "ok");
+  assertEquals(rows[0]!.views, 200);
+  assertEquals(rows[0]!.reach, 100);
+  assertEquals(rows[0]!.totalInteractions, 58);
+  assertEquals(rows[0]!.saved, null);
+  assertEquals(rows[0]!.igReelsAvgWatchTimeMs, null);
 
   assertEquals(calls[0]!.name, "readMany:ig_media_insight_snapshots");
   assertEquals(calls[0]!.args.social_account_id, TEST_ACCOUNT_ID);

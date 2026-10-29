@@ -25,6 +25,7 @@ import {
 } from "./handler.ts";
 import type { OwnerCollectionStore } from "./store.ts";
 import { InstagramGraphProvider } from "./graphProvider.ts";
+import { InstagramDirectGraphProvider } from "./directGraphProvider.ts";
 import type { OwnerWorkerPorts } from "./worker.ts";
 import { createFakeGraph, createFakeStore } from "./workerTestSupport.ts";
 
@@ -78,6 +79,7 @@ function createHarness(options: HarnessOptions = {}): Harness {
   const workerPorts: OwnerWorkerPorts = {
     store,
     provider: new InstagramGraphProvider({ fetchFn }),
+    directProvider: new InstagramDirectGraphProvider({ fetchFn }),
     bucketKeyFor: async () => "a".repeat(64),
     now: () => 0,
     log: () => undefined,

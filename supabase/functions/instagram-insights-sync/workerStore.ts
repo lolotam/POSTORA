@@ -18,12 +18,18 @@
  *
  * WHY THE TOKEN IS NEVER READ FROM `social_accounts`
  *
- *   The protected credential adapter is the only authority for a Facebook
- *   User token. The account row's `access_token` is never read here, and a
- *   direct-login Instagram account - which has no protected binding - is
- *   refused instead of falling back to the browser-readable column. The
- *   trusted capability is read on its own, so a direct-login account can be
- *   decided before the credential is even looked for.
+ *   The account row's `access_token` is readable by the browser roles, so
+ *   it is not an authority and this module never reads it.
+ *
+ *   A Facebook-login account's token comes from the protected credential
+ *   adapter, which is the only authority for a Facebook User token. A
+ *   DIRECT-login account has no protected binding at all, so its token
+ *   comes from the fenced direct reader instead: the database derives the
+ *   owner and the target from the claimed job and returns the operational
+ *   token only when the whole fence holds.
+ *
+ *   The trusted capability is read on its own, so a direct-login account is
+ *   decided before any credential is looked for.
  *
  * WHY THE MEDIA INVENTORY IS READ BACK
  *
@@ -33,6 +39,11 @@
  *   media row. A queue that an earlier visit built is therefore read back
  *   from the rows that visit wrote, and the read is scoped to the account
  *   and to the capture day.
+ *
+ *   The same read carries the insight metrics this capture day already
+ *   stored. The accepted upsert writes the EXCLUDED columns, so a metric
+ *   that is not in the payload is nulled, and an inventory write for a
+ *   media whose insights were already collected would wipe them.
  *
  * WHY EVERY RECEIPT IS BOUND TO ITS REQUEST
  *
@@ -53,12 +64,14 @@ import {
   isTimestampText,
   parseClaimedOwnerJob,
   parseCompleteReceipt,
+  parseDirectOwnerCredential,
   parseProgressReceipt,
   parseSnapshotReceipt,
   parseThrottleReceipt,
   readOwnData,
   type ClaimedOwnerJob,
   type CompleteReceipt,
+  type DirectOwnerCredential,
   type OwnerJobOutcome,
   type ProgressReceipt,
   type SnapshotReceipt,
@@ -266,10 +279,17 @@ export interface ResolvedOwnerCredential {
  * authority for the login kind. The worker reads it BEFORE the protected
  * credential, so a direct-login account is decided without a credential
  * read and without a provider call.
+ *
+ * The scope set is authoritative only when the permission read succeeded:
+ * an unknown scope set is not a denial, and it is never read as one.
  */
 export interface OwnerCapability {
   readonly loginKind: "direct" | "page_linked";
   readonly credentialGeneration: number;
+  /** True when the stored scope set is authoritative. */
+  readonly scopesAuthoritative: boolean;
+  /** The granted scopes. Authoritative only when `scopesAuthoritative`. */
+  readonly grantedScopes: readonly string[];
 }
 
 /**
@@ -278,6 +298,12 @@ export interface OwnerCapability {
  * It is the metadata the accepted snapshot writer cannot receive from the
  * provider again: the publication time is required by every media snapshot,
  * and the product type decides which metrics exist for that media.
+ *
+ * It also carries the insight metrics this capture day already stored. The
+ * accepted upsert writes the EXCLUDED columns, so a metric that is not in
+ * the payload is nulled - and an inventory write for a media whose insights
+ * were already collected would wipe them. The stored metrics are therefore
+ * read back and carried over.
  */
 export interface OwnerMediaInventoryRow {
   readonly igMediaId: string;
@@ -289,6 +315,19 @@ export interface OwnerMediaInventoryRow {
   readonly permalink: string | null;
   readonly caption: string | null;
   readonly thumbnailUrl: string | null;
+  /** The status the row was stored with. */
+  readonly status: "ok" | "unavailable";
+  readonly views: number | null;
+  readonly reach: number | null;
+  readonly likes: number | null;
+  readonly comments: number | null;
+  readonly saved: number | null;
+  readonly shares: number | null;
+  readonly totalInteractions: number | null;
+  readonly follows: number | null;
+  readonly profileVisits: number | null;
+  readonly replies: number | null;
+  readonly igReelsAvgWatchTimeMs: number | null;
 }
 
 /** The shared throttle bucket state of a credential. */
@@ -381,6 +420,25 @@ export interface OwnerCollectionServiceStore {
     readonly signal?: AbortSignal;
   }): Promise<ResolvedOwnerCredential>;
   /**
+   * The operational token of a DIRECT Instagram login.
+   *
+   * The database derives the owner and the target from the fenced job
+   * alone, so this call carries no account or owner selector. The account
+   * id is passed only to BIND the answer: a receipt that names another
+   * account is not evidence that the read happened as asked.
+   *
+   * A credential generation that moved on refuses; the read never adopts
+   * the current authority.
+   */
+  resolveDirectOwnerCredential(input: {
+    readonly jobId: string;
+    readonly claimToken: string;
+    readonly jobGeneration: number;
+    readonly expectedCredentialGeneration: number;
+    readonly socialAccountId: string;
+    readonly signal?: AbortSignal;
+  }): Promise<DirectOwnerCredential>;
+  /**
    * The inventory metadata of the queued media.
    *
    * The queue is persisted by the accepted checkpoint, but the metadata a
@@ -433,6 +491,95 @@ export interface OwnerCollectionServiceStore {
 export interface OwnerCollectionServiceStoreDeps {
   readonly rpc: OwnerServiceRpcCaller;
   readonly reads: OwnerServiceReadPort;
+}
+
+/**
+ * The SQLSTATEs of the direct credential reader.
+ *
+ *   IDC01  a required argument is missing
+ *   IDC02  the job is not an owner job
+ *   IDC03  the trusted capability is not a direct login
+ *   IDC04  the credential generation moved on before the read
+ *   IDC05  there is no usable operational token
+ */
+const DIRECT_CREDENTIAL_GENERATION_CODES = new Set(["IDC03", "IDC04"]);
+const DIRECT_CREDENTIAL_MISSING_CODES = new Set(["IDC05"]);
+const DIRECT_CREDENTIAL_REFUSED_CODES = new Set(["IDC01", "IDC02"]);
+
+/**
+ * Maps a direct-credential refusal onto a stable failure kind.
+ *
+ * The `40001` of the accepted fence is folded into `credential_changed` on
+ * purpose: for THIS reader a stale claim and a replaced connection are the
+ * same outcome for the worker - this job may not be collected, and no other
+ * job may be held up by it. Folding it here keeps that condition a
+ * per-job one instead of a run-ending one.
+ *
+ * Only the SQLSTATE is read. The message is never copied.
+ */
+function classifyDirectCredentialError(error: unknown): OwnerWorkerStoreError {
+  if (!isPlainRecord(error)) {
+    return new OwnerWorkerStoreError("rpc_failed");
+  }
+
+  const code = readOwnData(error, "code");
+  const sqlstate = code.present && typeof code.value === "string" ? code.value : null;
+
+  if (sqlstate === "42501") return new OwnerWorkerStoreError("forbidden", sqlstate);
+  if (sqlstate === "P0002") return new OwnerWorkerStoreError("not_found", sqlstate);
+  if (sqlstate === "40001") return new OwnerWorkerStoreError("credential_changed", sqlstate);
+
+  if (sqlstate !== null && DIRECT_CREDENTIAL_GENERATION_CODES.has(sqlstate)) {
+    return new OwnerWorkerStoreError("credential_changed", sqlstate);
+  }
+  if (sqlstate !== null && DIRECT_CREDENTIAL_MISSING_CODES.has(sqlstate)) {
+    return new OwnerWorkerStoreError("credential_missing", sqlstate);
+  }
+  if (sqlstate !== null && DIRECT_CREDENTIAL_REFUSED_CODES.has(sqlstate)) {
+    return new OwnerWorkerStoreError("invalid", sqlstate);
+  }
+  if (sqlstate === "PGRST202" || sqlstate === "42883") {
+    return new OwnerWorkerStoreError("schema_unavailable", sqlstate);
+  }
+
+  return new OwnerWorkerStoreError("rpc_failed", sqlstate);
+}
+
+/**
+ * Reads the payload of the direct credential call.
+ *
+ * The envelope is read by its own descriptors, exactly like every other
+ * read in this module: a missing `error` is a malformed envelope and not a
+ * success, and an explicit null error is the only completed read.
+ */
+async function callDirectCredentialRpc(
+  rpc: OwnerServiceRpcCaller,
+  functionName: string,
+  args: Record<string, unknown>,
+  signal?: AbortSignal,
+): Promise<unknown> {
+  let envelope: unknown;
+  try {
+    envelope = await rpc(functionName, args, signal);
+  } catch (error) {
+    if (error instanceof OwnerWorkerStoreError) throw error;
+    throw new OwnerWorkerStoreError("rpc_failed");
+  }
+
+  if (!isPlainRecord(envelope)) {
+    throw new OwnerWorkerStoreError("invalid_envelope");
+  }
+
+  const error = readOwnData(envelope, "error");
+  const data = readOwnData(envelope, "data");
+  if (!error.present || !data.present) {
+    throw new OwnerWorkerStoreError("invalid_envelope");
+  }
+  if (error.value !== null) {
+    throw classifyDirectCredentialError(error.value);
+  }
+
+  return data.value;
 }
 
 /**
@@ -562,7 +709,12 @@ export function createOwnerCollectionServiceStore(
         throw new OwnerWorkerStoreError("invalid_envelope");
       }
 
-      return { loginKind: capability.loginKind, credentialGeneration: generation };
+      return {
+        loginKind: capability.loginKind,
+        credentialGeneration: generation,
+        scopesAuthoritative: capability.scopesAuthoritative,
+        grantedScopes: [...capability.grantedScopes],
+      };
     },
 
     async resolveOwnerCredential(input) {
@@ -614,13 +766,45 @@ export function createOwnerCollectionServiceStore(
       };
     },
 
+    async resolveDirectOwnerCredential(input) {
+      // The database derives the owner and the target from the fenced job.
+      // This call carries NO account or owner selector; the account id that
+      // travels with the request is used only to bind the answer.
+      const data = await callDirectCredentialRpc(
+        deps.rpc,
+        "read_instagram_direct_collection_credential",
+        {
+          p_job_id: input.jobId,
+          p_claim_token: input.claimToken,
+          p_job_generation: input.jobGeneration,
+          p_expected_credential_generation: input.expectedCredentialGeneration,
+        },
+        input.signal,
+      );
+
+      const credential = parseDirectOwnerCredential(data, {
+        jobId: input.jobId,
+        socialAccountId: input.socialAccountId,
+        credentialGeneration: input.expectedCredentialGeneration,
+      });
+      if (credential === null) {
+        // The answer did not name this job, this account and this
+        // credential generation. It is not evidence that the read happened
+        // as asked.
+        throw new OwnerWorkerStoreError("invalid_envelope");
+      }
+      return credential;
+    },
+
     async readOwnerMediaInventory(input) {
       if (input.mediaIds.length === 0) return [];
 
       const envelope = await deps.reads.readMany(
         "ig_media_insight_snapshots",
         "ig_media_id, media_product_type, media_type, published_at, " +
-          "like_count_public, comments_count_public, permalink, caption, thumbnail_url",
+          "like_count_public, comments_count_public, permalink, caption, thumbnail_url, " +
+          "status, views, reach, likes, comments, saved, shares, total_interactions, " +
+          "follows, profile_visits, replies, ig_reels_avg_watch_time_ms",
         {
           social_account_id: input.socialAccountId,
           captured_on: input.capturedOn,
@@ -646,6 +830,11 @@ export function createOwnerCollectionServiceStore(
           throw new OwnerWorkerStoreError("invalid_envelope");
         }
 
+        const status = requireString(row, "status");
+        if (status !== "ok" && status !== "unavailable") {
+          throw new OwnerWorkerStoreError("invalid_envelope");
+        }
+
         inventory.push({
           igMediaId,
           mediaProductType: optionalString(row, "media_product_type"),
@@ -656,6 +845,18 @@ export function createOwnerCollectionServiceStore(
           permalink: optionalString(row, "permalink"),
           caption: optionalString(row, "caption"),
           thumbnailUrl: optionalString(row, "thumbnail_url"),
+          status,
+          views: optionalNumber(row, "views"),
+          reach: optionalNumber(row, "reach"),
+          likes: optionalNumber(row, "likes"),
+          comments: optionalNumber(row, "comments"),
+          saved: optionalNumber(row, "saved"),
+          shares: optionalNumber(row, "shares"),
+          totalInteractions: optionalNumber(row, "total_interactions"),
+          follows: optionalNumber(row, "follows"),
+          profileVisits: optionalNumber(row, "profile_visits"),
+          replies: optionalNumber(row, "replies"),
+          igReelsAvgWatchTimeMs: optionalNumber(row, "ig_reels_avg_watch_time_ms"),
         });
       }
 

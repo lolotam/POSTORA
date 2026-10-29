@@ -55,6 +55,10 @@ import { isPlainRecord, readOwnData } from "./receipts.ts";
 import { createOwnerCollectionStore, type UserRpcCaller } from "./store.ts";
 import { InstagramGraphProvider } from "./graphProvider.ts";
 import {
+  InstagramDirectGraphProvider,
+  resolveDirectAppId,
+} from "./directGraphProvider.ts";
+import {
   createOwnerCollectionServiceStore,
   type OwnerServiceReadPort,
   type OwnerServiceRpcCaller,
@@ -285,6 +289,27 @@ function createGraphProvider(): InstagramGraphProvider {
 }
 
 /**
+ * The Instagram-login provider.
+ *
+ * It is a DIFFERENT adapter and not the Facebook one with another host:
+ * the Instagram API with Instagram Login answers on graph.instagram.com,
+ * with an Instagram User token, and it does not return the Facebook-login
+ * media fields. Its version is server configuration and it is validated
+ * separately, so the two logins can be pinned apart.
+ *
+ * Its app id is the INSTAGRAM-LOGIN app (`INSTAGRAM_APP_ID`), the same app
+ * the direct-login OAuth flow exchanges its code against - never the
+ * Facebook-login app, which meters a different grant. When it is not
+ * configured, the adapter keeps a stable unconfigured namespace.
+ */
+function createDirectGraphProvider(): InstagramDirectGraphProvider {
+  return new InstagramDirectGraphProvider({
+    apiVersion: Deno.env.get("INSTAGRAM_GRAPH_API_VERSION") ?? undefined,
+    appId: resolveDirectAppId((name) => Deno.env.get(name)),
+  });
+}
+
+/**
  * The service worker ports.
  *
  * The worker runs with the service role: the accepted worker RPCs are
@@ -292,6 +317,7 @@ function createGraphProvider(): InstagramGraphProvider {
  */
 function createOwnerWorkerPorts(environment: ServerEnvironment): OwnerWorkerPorts {
   const provider = createGraphProvider();
+  const directProvider = createDirectGraphProvider();
   const store = createOwnerCollectionServiceStore({
     rpc: createServiceRpcCaller(environment),
     reads: createServiceReadPort(environment),
@@ -300,6 +326,7 @@ function createOwnerWorkerPorts(environment: ServerEnvironment): OwnerWorkerPort
   return {
     store,
     provider,
+    directProvider,
     // The shared bucket follows the credential that Meta meters: the app and
     // the protected credential id. The token is never part of it.
     bucketKeyFor: async (credentialId) => await provider.bucketKey(credentialId),
