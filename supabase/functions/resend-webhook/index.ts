@@ -1,5 +1,10 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import {
+  attachmentFailureLogMetadata,
+  storeEmailAttachment,
+} from "../_shared/emailAttachmentStorage.ts";
+import { logToDatabase } from "../_shared/logging.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -117,27 +122,22 @@ async function fetchEmailContent(
   }
 }
 
-// Fetch inbound attachments from Resend Receiving API and upload to Cloudinary
+type StoredInboundAttachment = {
+  id: string;
+  filename: string;
+  content_type: string;
+  size: number;
+  url: string;
+  publicId: string;
+};
+
+// Fetch inbound attachments from Resend Receiving API and store them in Openinary.
 async function fetchAndStoreAttachments(
   emailId: string,
-  apiKey: string
-): Promise<
-  Array<{
-    id: string;
-    filename: string;
-    content_type: string;
-    size: number;
-    url: string;
-    publicId: string;
-  }>
-> {
+  apiKey: string,
+  supabase: Parameters<typeof logToDatabase>[0]
+): Promise<StoredInboundAttachment[]> {
   try {
-    const { uploadToCloudinaryEmail } = await import("../_shared/cloudinary-email-helper.ts");
-
-    const cloudName = Deno.env.get("CLOUDINARY_CLOUD_NAME")!;
-    const cloudApiKey = Deno.env.get("CLOUDINARY_API_KEY")!;
-    const cloudApiSecret = Deno.env.get("CLOUDINARY_API_SECRET")!;
-
     console.log(`Fetching inbound attachments for email_id: ${emailId}`);
 
     const listResponse = await fetch(
@@ -175,16 +175,9 @@ async function fetchAndStoreAttachments(
       return [];
     }
 
-    const storedAttachments: Array<{
-      id: string;
-      filename: string;
-      content_type: string;
-      size: number;
-      url: string;
-      publicId: string;
-    }> = [];
+    const storedAttachments: StoredInboundAttachment[] = [];
 
-    for (const attachment of attachments) {
+    for (const [index, attachment] of attachments.entries()) {
       try {
         const filename = attachment.filename || "attachment";
         console.log(`Processing attachment: ${filename}`);
@@ -212,17 +205,15 @@ async function fetchAndStoreAttachments(
         const fileBuffer = await fileBlob.arrayBuffer();
         const contentType = attachment.content_type || attachment.contentType || "application/octet-stream";
 
-        console.log(`Uploading attachment to Cloudinary: ${filename}`);
+        console.log(`Storing attachment: ${filename}`);
 
-        const result = await uploadToCloudinaryEmail(
-          new Uint8Array(fileBuffer),
+        const result = await storeEmailAttachment({
+          bytes: new Uint8Array(fileBuffer),
           filename,
           contentType,
-          `admin/email/inbound/${emailId}`,
-          cloudName,
-          cloudApiKey,
-          cloudApiSecret
-        );
+          folder: `admin/email/inbound/${emailId}`,
+          uniqueKey: attachment.id || String(index),
+        });
 
         storedAttachments.push({
           id: crypto.randomUUID(),
@@ -236,6 +227,14 @@ async function fetchAndStoreAttachments(
         console.log(`Successfully stored attachment: ${filename}`);
       } catch (attError) {
         console.error(`Error processing attachment ${attachment.filename}:`, attError);
+        // The message is still saved, so the failure has to be findable afterwards.
+        await logToDatabase(supabase, {
+          level: "error",
+          category: "system",
+          source: "resend-webhook",
+          message: "Inbound email attachment could not be stored",
+          metadata: attachmentFailureLogMetadata(attachment.filename || "attachment", attError),
+        });
       }
     }
 
@@ -355,7 +354,7 @@ serve(async (req) => {
           const webhookAttachments = data.attachments || [];
           if (webhookAttachments.length > 0) {
             console.log(`Email has ${webhookAttachments.length} attachments, fetching...`);
-            storedAttachments = await fetchAndStoreAttachments(emailId, resendApiKey);
+            storedAttachments = await fetchAndStoreAttachments(emailId, resendApiKey, supabase);
           }
         } else {
           console.warn("RESEND_API_KEY not configured, cannot fetch email content");

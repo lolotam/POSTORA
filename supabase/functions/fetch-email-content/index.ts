@@ -1,5 +1,10 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import {
+  attachmentFailureLogMetadata,
+  storeEmailAttachment,
+} from "../_shared/emailAttachmentStorage.ts";
+import { logToDatabase } from "../_shared/logging.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -40,26 +45,22 @@ async function fetchEmailContent(
   };
 }
 
-// Fetch inbound attachments from Resend Receiving API and upload to Cloudinary
+type StoredInboundAttachment = {
+  id: string;
+  filename: string;
+  content_type: string;
+  size: number;
+  url: string;
+  publicId: string;
+};
+
+// Fetch inbound attachments from Resend Receiving API and store them in Openinary.
+// `failed` counts attachments that could not be stored, so the caller can report it.
 async function fetchAndStoreAttachments(
   emailId: string,
-  apiKey: string
-): Promise<
-  Array<{
-    id: string;
-    filename: string;
-    content_type: string;
-    size: number;
-    url: string;
-    publicId: string;
-  }>
-> {
-  const { uploadToCloudinaryEmail } = await import("../_shared/cloudinary-email-helper.ts");
-
-  const cloudName = Deno.env.get("CLOUDINARY_CLOUD_NAME")!;
-  const cloudApiKey = Deno.env.get("CLOUDINARY_API_KEY")!;
-  const cloudApiSecret = Deno.env.get("CLOUDINARY_API_SECRET")!;
-
+  apiKey: string,
+  supabase: Parameters<typeof logToDatabase>[0]
+): Promise<{ stored: StoredInboundAttachment[]; failed: number }> {
   console.log(`Fetching inbound attachments for email_id: ${emailId}`);
 
   const listResponse = await fetch(
@@ -75,7 +76,7 @@ async function fetchAndStoreAttachments(
 
   if (!listResponse.ok) {
     console.error(`Failed to fetch attachments list: ${listResponse.status} ${listResponse.statusText}`);
-    return [];
+    return { stored: [], failed: 0 };
   }
 
   const attachmentsJson = await listResponse.json();
@@ -94,23 +95,20 @@ async function fetchAndStoreAttachments(
 
   if (attachments.length === 0) {
     console.log("No attachments found");
-    return [];
+    return { stored: [], failed: 0 };
   }
 
-  const storedAttachments: Array<{
-    id: string;
-    filename: string;
-    content_type: string;
-    size: number;
-    url: string;
-    publicId: string;
-  }> = [];
+  const storedAttachments: StoredInboundAttachment[] = [];
+  let failed = 0;
 
-  for (const attachment of attachments) {
+  for (const [index, attachment] of attachments.entries()) {
     try {
       const filename = attachment.filename || "attachment";
       const downloadUrl = attachment.download_url || attachment.url;
-      if (!downloadUrl) continue;
+      if (!downloadUrl) {
+        failed++;
+        continue;
+      }
 
       let fileResponse = await fetch(downloadUrl);
       if (!fileResponse.ok && (fileResponse.status === 401 || fileResponse.status === 403)) {
@@ -118,21 +116,22 @@ async function fetchAndStoreAttachments(
           headers: { Authorization: `Bearer ${apiKey}` },
         });
       }
-      if (!fileResponse.ok) continue;
+      if (!fileResponse.ok) {
+        failed++;
+        continue;
+      }
 
       const fileBlob = await fileResponse.blob();
       const fileBuffer = await fileBlob.arrayBuffer();
       const contentType = attachment.content_type || attachment.contentType || "application/octet-stream";
 
-      const result = await uploadToCloudinaryEmail(
-        new Uint8Array(fileBuffer),
+      const result = await storeEmailAttachment({
+        bytes: new Uint8Array(fileBuffer),
         filename,
         contentType,
-        `admin/email/inbound/${emailId}`,
-        cloudName,
-        cloudApiKey,
-        cloudApiSecret
-      );
+        folder: `admin/email/inbound/${emailId}`,
+        uniqueKey: attachment.id || String(index),
+      });
 
       storedAttachments.push({
         id: crypto.randomUUID(),
@@ -145,11 +144,19 @@ async function fetchAndStoreAttachments(
 
       console.log(`Successfully stored attachment: ${filename}`);
     } catch (attError) {
+      failed++;
       console.error(`Error processing attachment ${attachment.filename}:`, attError);
+      await logToDatabase(supabase, {
+        level: "error",
+        category: "system",
+        source: "fetch-email-content",
+        message: "Inbound email attachment could not be stored",
+        metadata: attachmentFailureLogMetadata(attachment.filename || "attachment", attError),
+      });
     }
   }
 
-  return storedAttachments;
+  return { stored: storedAttachments, failed };
 }
 
 serve(async (req) => {
@@ -265,18 +272,14 @@ serve(async (req) => {
     }
 
     // Fetch and store attachments
-    let storedAttachments: Array<{
-      id: string;
-      filename: string;
-      content_type: string;
-      size: number;
-      url: string;
-      publicId: string;
-    }> = [];
+    let storedAttachments: StoredInboundAttachment[] = [];
+    let attachmentsFailed = 0;
 
     try {
-      storedAttachments = await fetchAndStoreAttachments(resendId, resendApiKey);
-      console.log(`Stored ${storedAttachments.length} attachments`);
+      const outcome = await fetchAndStoreAttachments(resendId, resendApiKey, supabase);
+      storedAttachments = outcome.stored;
+      attachmentsFailed = outcome.failed;
+      console.log(`Stored ${storedAttachments.length} attachments, ${attachmentsFailed} failed`);
     } catch (error) {
       console.error("Failed to fetch attachments:", error);
     }
@@ -320,6 +323,7 @@ serve(async (req) => {
           bodyLength: textBody.length,
           hasHtml: !!htmlBody,
           attachments: storedAttachments.length,
+          attachments_failed: attachmentsFailed,
         }
       }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
