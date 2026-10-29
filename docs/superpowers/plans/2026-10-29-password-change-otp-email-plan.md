@@ -12,7 +12,7 @@ The owner creates the key in Resend, confirms `postora.cloud` is Verified, and s
 
 With the owner's go-ahead, via `ssh-contabo-mcp`:
 1. `docker compose up -d --no-deps --force-recreate functions` in the stack directory.
-2. Compare SHA-256 prefixes of `.env` and container values; they must match.
+2. Compare SHA-256 prefixes of `.env` and container values (strip the trailing newline from the `.env` value first, or the hashes never match); they must match.
 3. `GET https://api.resend.com/domains` with the container key (piped in): expect 200, `postora.cloud` verified.
 
 ## Task 3 — classify Resend failures (code)

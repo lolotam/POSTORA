@@ -1,6 +1,6 @@
 # Password change OTP email fails — debugging spec
 
-Status: root cause proven; fix awaiting approval. Branch: `fix/password-change-otp-email`.
+Status: root cause proven; fixed on 2026-10-29 (new key, functions container recreated). Branch: `fix/password-change-otp-email`.
 
 ## Symptom
 
@@ -27,16 +27,17 @@ shows "Could not send verification email" (the function's error).
    `401 missing_api_key`. So the test is sound, and the real key is unknown to Resend
    (revoked or deleted), not malformed. Shape check: 36 chars, `re_` prefix, no quotes or
    whitespace.
-5. **The `.env` key is invalid too.** The stack's `code/.env` holds a *different* key
-   (SHA-256 prefixes `e516a123…` vs the container's `d5da2aea…`), and it fails the same way.
-   The container was started 2026-10-29 15:12, after `.env` last changed (2026-10-26), but
-   kept the old value: `docker restart` does not re-read `env_file`, only a recreate does.
+5. **The `.env` key is invalid too.** Read straight from `code/.env`, it gets the same
+   `400 validation_error`. *Correction (2026-10-29, after the fix):* an earlier version of this
+   spec said `.env` and the container held different keys. That comparison was flawed: the
+   `.env` hash included a trailing newline and the container hash did not, so it proves
+   nothing either way. Whether a plain restart had left a stale value is unknown; the fix
+   recreates the container regardless.
 6. `EMAIL_FROM` is not set, so the sender is `Postora <noreply@postora.cloud>`.
 
 ## Root cause
 
-`RESEND_API_KEY` is invalid on the server; the replacement in `.env` is invalid as well, and
-the running container was never recreated to load it.
+`RESEND_API_KEY` is invalid on the server; the value in `.env` is invalid as well.
 
 ## Impact (wider than the reported bug)
 
