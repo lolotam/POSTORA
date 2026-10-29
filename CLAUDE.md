@@ -367,6 +367,7 @@ All edge functions are in `supabase/functions/` and deployed to Supabase.
 | `check-connection-health` | Verify social account connections |
 | `tiktok-webhook` | TikTok webhook handler |
 | `youtube-poll-comments` | Cron (every 5 min): reads new YouTube comments per channel and hands them to workflows / the agent |
+| `media-direct-upload` | Signs browser-direct uploads over 10 MB (images to 20 MB, video to 500 MB) and records them; see `docs/runbooks/large-media-uploads.md` |
 
 ---
 

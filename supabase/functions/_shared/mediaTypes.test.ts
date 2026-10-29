@@ -2,6 +2,10 @@ import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   MEDIA_DECODED_BYTE_CAP,
   MEDIA_TYPES,
+  directUploadByteCap,
+  formatUploadLimit,
+  maxUploadBytesFor,
+  needsDirectUpload,
   dedupeEligible,
   isPostableLibraryFile,
   matchesLibraryFilter,
@@ -51,4 +55,25 @@ Deno.test("a local file name keeps '#' and '?', while a URL drops its query and 
   assertEquals(originalBasename("photo#1.jpg"), "photo#1.jpg");
   assertEquals(extensionOfName("photo#1.jpg"), "jpg");
   assertEquals(originalBasename("https://cdn.example/a/pic.png?token=1#x"), "pic.png");
+});
+
+Deno.test("only images (20 MB) and video (500 MB) have a direct upload cap", () => {
+  const MB = 1024 * 1024;
+  assertEquals(directUploadByteCap("image"), 20 * MB);
+  assertEquals(directUploadByteCap("video"), 500 * MB);
+  for (const kind of ["audio", "document", "archive"] as const) {
+    assertEquals(directUploadByteCap(kind), null, kind);
+    assertEquals(maxUploadBytesFor(kind), MEDIA_DECODED_BYTE_CAP, kind);
+  }
+  assertEquals(maxUploadBytesFor("video"), 500 * MB);
+  assertEquals(formatUploadLimit(500 * MB), "500 MB");
+});
+
+Deno.test("files up to 10 MB keep the edge path; larger images and video go direct", () => {
+  const MB = 1024 * 1024;
+  assertEquals(needsDirectUpload("video", MEDIA_DECODED_BYTE_CAP), false);
+  assertEquals(needsDirectUpload("video", MEDIA_DECODED_BYTE_CAP + 1), true);
+  assertEquals(needsDirectUpload("video", 500 * MB + 1), false);
+  assertEquals(needsDirectUpload("image", 20 * MB), true);
+  assertEquals(needsDirectUpload("document", 11 * MB), false);
 });

@@ -26,6 +26,36 @@ export type MediaIcon =
 export type LibraryFilter = "all" | "image" | "video" | "audio" | "document" | "archive";
 export type UploadFileType = "image" | "video" | "audio" | "document";
 
+/**
+ * Largest file the browser may send straight to the storage provider. That path
+ * skips the edge function, so the base64 cap above does not bound it. Only images
+ * and video have a direct path; every other kind keeps MEDIA_DECODED_BYTE_CAP.
+ */
+export const MEDIA_DIRECT_UPLOAD_BYTE_CAPS: Readonly<Partial<Record<MediaKind, number>>> = {
+  image: 20 * 1024 * 1024,
+  video: 500 * 1024 * 1024,
+};
+
+export function directUploadByteCap(kind: MediaKind): number | null {
+  return MEDIA_DIRECT_UPLOAD_BYTE_CAPS[kind] ?? null;
+}
+
+/** The largest file of this kind that some upload path accepts. */
+export function maxUploadBytesFor(kind: MediaKind): number {
+  return Math.max(MEDIA_DECODED_BYTE_CAP, directUploadByteCap(kind) ?? 0);
+}
+
+/** A file over the base64 cap must go direct; anything smaller keeps the edge-function path. */
+export function needsDirectUpload(kind: MediaKind, size: number): boolean {
+  const cap = directUploadByteCap(kind);
+  return cap !== null && size > MEDIA_DECODED_BYTE_CAP && size <= cap;
+}
+
+/** "20 MB" for 20 MiB: the label every size-limit message shows. */
+export function formatUploadLimit(bytes: number): string {
+  return `${Math.round(bytes / (1024 * 1024))} MB`;
+}
+
 export interface MediaTypeEntry {
   mime: string;
   kind: MediaKind;

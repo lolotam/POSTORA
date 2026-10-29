@@ -14,6 +14,8 @@ import {
   readJsonBodyCapped,
   resolveUpload,
 } from "./uploadPolicy.ts";
+import { getCdnPolicy, orderWriteProviders } from "./providerPolicy.ts";
+import { getTodayFolder, mediaPublicId, sanitizeEmailForFolder } from "./objectNaming.ts";
 import { commitMediaReplace, parseReplaceMediaFileId, prepareMediaReplace, type ReplaceTargetRow, type ReplaceUploadFacts } from "./replace.ts";
 import { deleteJustUploaded, mediaQuotaPreflight, quotaInsertRefusal } from "./mediaQuota.ts";
 
@@ -51,23 +53,6 @@ interface UploadResponse {
   storedIn?: string[];
   partial?: boolean;
   errors?: string[];
-}
-
-type CdnPolicy = { providers: string[]; required: string[]; readPreference: string; openinaryEnabled: boolean };
-async function getCdnPolicy(db: any): Promise<CdnPolicy> {
-  const { data } = await db.from("app_settings").select("value").eq("key", "cdn_storage").maybeSingle();
-  const value = data?.value || {};
-  const policy = value?.write_policy;
-  // Openinary is the primary provider, so an unreadable setting falls back to
-  // it. Defaulting to Cloudinary let a transient read error reinstate a provider
-  // the admin had turned off — and mark it required, which then failed every
-  // upload as partial against a cloud account that answers 401.
-  return {
-    providers: Array.isArray(policy?.providers) && policy.providers.length ? policy.providers : ["openinary"],
-    required: Array.isArray(policy?.required) && policy.required.length ? policy.required : ["openinary"],
-    readPreference: typeof value?.read_preference === "string" ? value.read_preference : "openinary",
-    openinaryEnabled: value?.openinary?.enabled === true,
-  };
 }
 
 async function logUploadRefusal(userId: string | undefined, message: string, metadata: Record<string, unknown>) {
@@ -252,24 +237,6 @@ async function readCappedBytes(response: Response, maxBytes: number): Promise<Ui
     offset += chunk.length;
   }
   return merged;
-}
-
-// Sanitize email for folder name (replace special chars)
-function sanitizeEmailForFolder(email: string): string {
-  return email
-    .toLowerCase()
-    .replace(/@/g, "_at_")
-    .replace(/\./g, "_")
-    .replace(/[^a-z0-9_-]/g, "_");
-}
-
-// Get today's date in YYYY-MM-DD format
-function getTodayFolder(): string {
-  const today = new Date();
-  const year = today.getFullYear();
-  const month = String(today.getMonth() + 1).padStart(2, "0");
-  const day = String(today.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
 }
 
 export async function handleCloudinaryUpload(req: Request): Promise<Response> {
@@ -640,7 +607,7 @@ export async function handleCloudinaryUpload(req: Request): Promise<Response> {
       console.warn(`[cloudinary-upload] next_media_seq failed (${seqError?.message}); falling back to timestamp suffix`);
     }
     const sequencePart = seqError || seq == null ? Date.now() : seq;
-    const uniquePublicId = `postora_${dailyFolder}_${userId}_${sequencePart}`;
+    const uniquePublicId = mediaPublicId(dailyFolder, userId, sequencePart);
     const objectExt = resolved.upload.ext;
     const uploadMime = resolved.upload.entry.mime;
 
@@ -648,15 +615,7 @@ export async function handleCloudinaryUpload(req: Request): Promise<Response> {
     // empty policy, Openinary counted as disabled, and every upload fell back to Cloudinary.
     const cdnPolicy = await getCdnPolicy(dbAdmin);
     const openinaryConfig = getOpeninaryConfig();
-    const openinaryUsable = cdnPolicy.openinaryEnabled && !!openinaryConfig;
-    const orderedProviders: string[] = [];
-    if (cdnPolicy.providers.includes("openinary") && openinaryUsable) orderedProviders.push("openinary");
-    for (const p of cdnPolicy.providers) {
-      if (p === "openinary") { if (!openinaryUsable) continue; }
-      if (p === "cloudinary" && !cloudinaryUsable) continue;
-      orderedProviders.push(p);
-    }
-    const orderedUnique = [...new Set(orderedProviders.length ? orderedProviders : (cloudinaryUsable ? ["cloudinary"] : openinaryUsable ? ["openinary"] : []))];
+    const orderedUnique = orderWriteProviders(cdnPolicy, { cloudinary: cloudinaryUsable, openinaryConfigured: !!openinaryConfig });
     const limitedProviders = limitProvidersForKind(resolved.upload.entry.kind, orderedUnique, cdnPolicy.required);
     const effectiveProviders = limitedProviders.attempted;
     const requiredProviders = limitedProviders.required;
