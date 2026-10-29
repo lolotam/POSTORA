@@ -12,6 +12,7 @@ import {
   checkUserRateLimit,
   rateLimitExceededResponse,
 } from "../_shared/rate-limiter.ts";
+import { describeResendFailure, resendFailureLog } from "../_shared/resendFailure.ts";
 
 async function hashOTP(otp: string): Promise<string> {
   const data = new TextEncoder().encode(otp);
@@ -161,7 +162,7 @@ Deno.serve(async (req) => {
       }
     }
     if (!attempt.ok) {
-      console.error("send-change-password-otp: resend send failed");
+      console.error(resendFailureLog("send-change-password-otp", describeResendFailure(attempt.error)));
       return jsonResponse({ error: "Could not send verification email" }, 502, corsHeaders);
     }
 

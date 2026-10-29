@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { Resend } from "https://esm.sh/resend@2.0.0";
+import { describeResendFailure, resendFailureLog } from "../_shared/resendFailure.ts";
 import { restrictedCorsHeaders } from "../_shared/cors.ts";
 import { checkIpRateLimit, rateLimitExceededResponse } from "../_shared/rate-limiter.ts";
 
@@ -231,7 +232,7 @@ serve(async (req) => {
       const message = String((rawError as any)?.message ?? rawError ?? "");
       const statusCode = Number((rawError as any)?.statusCode ?? 0);
 
-      console.error("send-reset-otp: Resend email send failed (code:", statusCode, ")");
+      console.error(resendFailureLog("send-reset-otp", describeResendFailure(rawError)));
 
       if (
         primaryFrom !== fallbackFrom &&
