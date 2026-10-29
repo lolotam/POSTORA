@@ -8,6 +8,35 @@
  *   calls, the truthful inventory progress, the shared throttle and the
  *   fenced result writes. It owns no SQL, no HTTP and no request contract.
  *
+ * THE STEPS OF ONE VISIT
+ *
+ *   A visit of ONE claimed job is a sequence of named steps, and every step
+ *   either CONTINUES the visit with the state it produced or ENDS it with
+ *   the outcome of the job. It never does both, so the orchestrator reads
+ *   the outcome of a step in exactly one place:
+ *
+ *     readJobContext     the bound context and the truth of this visit;
+ *     readTarget         the target account row;
+ *     resolveCredential  the trusted capability, the credential, the bucket;
+ *     checkThrottle      the shared window this credential is in;
+ *     planOwedDays       the days this job owes, planned before the attempt;
+ *     collectDays        the profile and the daily observations;
+ *     sweepInventory     the media inventory;
+ *     drainMediaQueue    the media insights, the bounded continuation;
+ *     finalize           the truth of the inventory and the outcome.
+ *
+ *   The order IS the contract: the credential is resolved before the
+ *   provider is used, the days are planned before they are collected, and
+ *   the truth of the visit is recorded before the outcome that describes
+ *   it.
+ *
+ *   The rate limit has ONE path as well: the checkpoint of the visit goes
+ *   first, then the throttle record - job-scoped when the provider refused
+ *   this job, shared when the usage budget of the bucket is nearly spent -
+ *   and then the outcome. The media loop, the provider failure path, the
+ *   shared window and the end of the visit all come through it, so they
+ *   cannot drift.
+ *
  * THE BUDGET
  *
  *   The whole run has forty seconds, counted from before the claim. EVERY
@@ -152,10 +181,12 @@ import {
 import { InstagramDirectGraphProvider } from "./directGraphProvider.ts";
 import {
   OwnerWorkerStoreError,
+  type OwnerCapability,
   type OwnerCollectionServiceStore,
   type OwnerInventoryProgressPayload,
   type OwnerMediaInventoryRow,
   type OwnerSnapshotPayload,
+  type OwnerTarget,
 } from "./workerStore.ts";
 import type { ClaimedOwnerJob } from "./receipts.ts";
 
@@ -953,31 +984,100 @@ function isCollectedMedia(row: OwnerMediaInventoryRow | undefined): boolean {
   return Object.keys(carriedInsightMetrics(row)).length > 0;
 }
 
+// ---------------------------------------------------------------------------
+// The steps of ONE visit
+// ---------------------------------------------------------------------------
+
+/**
+ * The result of ONE step of a visit.
+ *
+ * A step either CONTINUES the visit with the state it produced, or it ENDS
+ * the visit with the outcome of the job. It never does both, so the
+ * orchestrator reads the outcome of a step in exactly one place.
+ */
+type StepResult<T> =
+  | { readonly kind: "continue"; readonly state: T }
+  | { readonly kind: "end"; readonly step: JobStep };
+
+/**
+ * The provider, the token and the bucket of ONE visit.
+ *
+ * The adapter and the token are chosen TOGETHER, from the TRUSTED login
+ * kind. A page-linked account is collected through graph.facebook.com with
+ * the protected Facebook User credential; a direct account is collected
+ * through graph.instagram.com with the operational token the fenced direct
+ * reader returns. A host and a token never come from different logins.
+ */
+interface VisitCredential {
+  readonly provider: OwnerCollectionProvider;
+  /** The token. It is never logged, returned or serialised. */
+  readonly token: string;
+  /** The shared throttle bucket key of this credential. */
+  readonly bucketKey: string;
+}
+
+/**
+ * The visit of ONE claimed job.
+ *
+ * The visit is a sequence of steps, and every step either continues the
+ * visit with the state it produced or ends it with the outcome of the job:
+ *
+ *   readJobContext    the bound context and the truth of this visit;
+ *   readTarget        the target account row;
+ *   resolveCredential the trusted capability, the credential and the bucket;
+ *   checkThrottle     the shared window this credential is in;
+ *   planOwedDays      the days this job owes, planned before the attempt;
+ *   collectDays       the profile and the daily observations;
+ *   sweepInventory    the media inventory;
+ *   drainMediaQueue   the media insights, the bounded continuation;
+ *   finalize          the truth of the inventory and the outcome.
+ *
+ * The order IS the contract: the credential is resolved before the
+ * provider is used, the days are planned before they are collected, and the
+ * truth of the visit is recorded before the outcome that describes it.
+ */
 async function collect(context: JobContext): Promise<JobStep> {
-  const { ports, job } = context;
+  const contextStep = await readJobContext(context);
+  if (contextStep.kind === "end") return contextStep.step;
+  const visit = contextStep.state;
+
+  const targetStep = await readTarget(context);
+  if (targetStep.kind === "end") return targetStep.step;
+
+  const credentialStep = await resolveCredential(context, visit);
+  if (credentialStep.kind === "end") return credentialStep.step;
+  const credential = credentialStep.state;
+
+  const throttleStep = await checkThrottle(context, credential);
+  if (throttleStep.kind === "end") return throttleStep.step;
+
+  const planStep = await planOwedDays(context, visit);
+  if (planStep.kind === "end") return planStep.step;
+
+  const daysStep = await collectDays(context, visit, targetStep.state, credential);
+  if (daysStep.kind === "end") return daysStep.step;
+
+  const sweepStep = await sweepInventory(context, visit, targetStep.state, credential);
+  if (sweepStep.kind === "end") return sweepStep.step;
+
+  const queueStep = await drainMediaQueue(context, visit, credential);
+  if (queueStep.kind === "end") return queueStep.step;
+
+  return await finalize(context, visit, credential);
+}
+
+/**
+ * The truth of ONE visit, as the claim carries it.
+ *
+ * It is the state every step works on, and EVERY exit records it: the days
+ * that were collected, the media that still owe their insights, the cursor
+ * the next visit resumes from and the coverage of the window. A visit that
+ * stops half way records what it did, so the next visit does not ask for it
+ * again.
+ */
+function createVisitState(job: ClaimedOwnerJob): OwnerVisitState {
   const checkpoint = job.checkpoint;
 
-  // --- The bound context -------------------------------------------------
-  if (!verifyBoundContext(job)) {
-    // Nothing can be written for this job, so there is nothing to record.
-    // The lease is left to expire and the job is recovered later - but the
-    // RUN continues: one unusable job must not stall every other owner.
-    ports.log({
-      event: "owner_job_abandoned",
-      jobId: job.jobId,
-      socialAccountId: job.socialAccountId,
-      outcome: "abandoned",
-      reasonCode: "context_missing",
-      durationMs: ports.now() - context.startedAt,
-    });
-    return { job: result(context, "abandoned", "context_missing"), stopRun: false };
-  }
-
-  // --- The truth of this visit --------------------------------------------
-  //
-  // It is created before the first read, because EVERY exit records it: a
-  // visit that stops half way says what it did, so the next visit does not
-  // ask for it again.
   const visit: OwnerVisitState = {
     owedDays: [],
     collectedDays: [],
@@ -1005,18 +1105,62 @@ async function collect(context: JobContext): Promise<JobStep> {
   visit.owedDays = queuedDays;
   visit.mediaQueue = queuedTokens.filter((token) => plannedDayFromToken(token) === null);
 
-  // --- The end of the continuation ----------------------------------------
-  //
-  // A job that keeps coming back must stop coming back. The capture day may
-  // be continued on the capture day itself and on the next Kuwait day; after
-  // that the continuation would cross into the next capture day's job, so
-  // the job is finished with a terminal outcome and the work that is still
-  // owed is recorded as the gap it is.
-  if (continuationExpired(job.capturedOn, context.startedAt)) {
-    return await expireContinuation(context, visit);
+  return visit;
+}
+
+/**
+ * The bound context of this visit, and the truth it starts from.
+ *
+ * A job without a captured context cannot be written at all: the accepted
+ * SQL refuses every provider result write without one. Such a job is
+ * abandoned to its lease and the run continues - one unusable job must not
+ * stall every other owner.
+ *
+ * A job that keeps coming back must stop coming back, so a continuation
+ * that outlived its capture day is finished here, before a provider call is
+ * spent on a capture day that has moved on.
+ */
+async function readJobContext(
+  context: JobContext,
+): Promise<StepResult<OwnerVisitState>> {
+  const { ports, job } = context;
+
+  if (!verifyBoundContext(job)) {
+    // Nothing can be written for this job, so there is nothing to record.
+    // The lease is left to expire and the job is recovered later - but the
+    // RUN continues: one unusable job must not stall every other owner.
+    ports.log({
+      event: "owner_job_abandoned",
+      jobId: job.jobId,
+      socialAccountId: job.socialAccountId,
+      outcome: "abandoned",
+      reasonCode: "context_missing",
+      durationMs: ports.now() - context.startedAt,
+    });
+    return {
+      kind: "end",
+      step: { job: result(context, "abandoned", "context_missing"), stopRun: false },
+    };
   }
 
-  // --- The target --------------------------------------------------------
+  const visit = createVisitState(job);
+
+  if (continuationExpired(job.capturedOn, context.startedAt)) {
+    return { kind: "end", step: await expireContinuation(context, visit) };
+  }
+
+  return { kind: "continue", state: visit };
+}
+
+/**
+ * The target account of this visit.
+ *
+ * The account row is gone: the job cannot be collected for an account that
+ * is not there. It is abandoned to its lease and the run continues.
+ */
+async function readTarget(context: JobContext): Promise<StepResult<OwnerTarget>> {
+  const { ports, job } = context;
+
   const target = await read(context, (signal) =>
     ports.store.readOwnerTarget({
       socialAccountId: job.socialAccountId,
@@ -1024,6 +1168,7 @@ async function collect(context: JobContext): Promise<JobStep> {
       signal,
     })
   );
+
   if (!target) {
     ports.log({
       event: "owner_job_abandoned",
@@ -1033,13 +1178,30 @@ async function collect(context: JobContext): Promise<JobStep> {
       reasonCode: "target_missing",
       durationMs: ports.now() - context.startedAt,
     });
-    return { job: result(context, "abandoned", "target_missing"), stopRun: false };
+    return {
+      kind: "end",
+      step: { job: result(context, "abandoned", "target_missing"), stopRun: false },
+    };
   }
 
-  // --- The trusted capability -------------------------------------------
-  //
-  // It is read BEFORE the protected credential, because a direct-login
-  // account has no protected Facebook User credential at all.
+  return { kind: "continue", state: target };
+}
+
+/**
+ * The trusted capability, the credential and the bucket of this visit.
+ *
+ * The capability is read BEFORE the protected credential, because a
+ * direct-login account has no protected Facebook User credential at all.
+ *
+ * Every refusal here belongs to THIS job alone: the job is abandoned to its
+ * lease, and the run continues with the next claimed owner.
+ */
+async function resolveCredential(
+  context: JobContext,
+  visit: OwnerVisitState,
+): Promise<StepResult<VisitCredential>> {
+  const { ports, job } = context;
+
   let capability;
   try {
     capability = await read(context, (signal) =>
@@ -1051,195 +1213,242 @@ async function collect(context: JobContext): Promise<JobStep> {
     );
   } catch (error) {
     if (error instanceof OwnerWorkerStoreError && error.failure === "credential_missing") {
-      return await persistFailure(context, "retry", "credential_unavailable");
+      return {
+        kind: "end",
+        step: await persistFailure(context, "retry", "credential_unavailable"),
+      };
     }
     throw error;
   }
 
-  // --- The provider, the token and the bucket ------------------------------
-  //
-  // The adapter and the token are chosen TOGETHER, from the TRUSTED login
-  // kind. A page-linked account is collected through graph.facebook.com
-  // with the protected Facebook User credential; a direct account is
-  // collected through graph.instagram.com with the operational token the
-  // fenced direct reader returns. A host and a token never come from
-  // different logins.
-  const direct = capability.loginKind === "direct";
+  if (capability.loginKind === "direct") {
+    return await resolveDirectCredential(context, visit, capability);
+  }
+  return await resolveProtectedCredential(context, capability);
+}
 
-  let provider: OwnerCollectionProvider;
-  let token: string;
-  let credentialGeneration: number;
-  let bucketKey: string;
+/**
+ * The operational token of a DIRECT Instagram login.
+ *
+ * It comes from the fenced direct reader and from nowhere else. The account
+ * row's `access_token` is never read by this worker.
+ *
+ * The scope set is authoritative only when the permission read succeeded. An
+ * unknown scope set is NOT a denial, so it never closes the job: only a
+ * positively missing permission does.
+ */
+async function resolveDirectCredential(
+  context: JobContext,
+  visit: OwnerVisitState,
+  capability: OwnerCapability,
+): Promise<StepResult<VisitCredential>> {
+  const { ports, job } = context;
 
-  if (direct) {
-    // --- The required permission ----------------------------------------
-    //
-    // The scope set is authoritative only when the permission read
-    // succeeded. An unknown scope set is NOT a denial, so it never closes
-    // the job: only a positively missing permission does.
-    if (
-      capability.scopesAuthoritative &&
-      !capability.grantedScopes.includes(DIRECT_INSIGHTS_SCOPE)
-    ) {
-      // The data is not obtainable with this connection. The checkpoint is
-      // written before the terminal outcome, so the work that is still owed
-      // is on the record and not only in this run.
-      await recordVisitProgress(context, visit);
-      return await persistFailure(context, "unavailable", "direct_login_unsupported");
-    }
-
-    if (capability.credentialGeneration !== job.context.credentialGeneration) {
-      // The connection was replaced after the claim. No provider call is
-      // spent on a token whose generation no longer matches the connection,
-      // and no write is attempted: every result write is fenced on that
-      // same generation.
-      return await abandon(context, "credential_changed");
-    }
-
-    // --- The operational token ------------------------------------------
-    //
-    // It comes from the fenced direct reader and from nowhere else. The
-    // account row's `access_token` is never read by this worker.
-    let directCredential;
-    try {
-      directCredential = await read(context, (signal) =>
-        ports.store.resolveDirectOwnerCredential({
-          jobId: job.jobId,
-          claimToken: job.claimToken,
-          jobGeneration: job.jobGeneration,
-          expectedCredentialGeneration: capability.credentialGeneration,
-          socialAccountId: job.socialAccountId,
-          signal,
-        })
-      );
-    } catch (error) {
-      if (error instanceof OwnerWorkerStoreError) {
-        if (error.failure === "credential_missing") {
-          return await persistFailure(context, "retry", "credential_unavailable");
-        }
-        if (error.failure === "credential_changed") {
-          return await abandon(context, "credential_changed");
-        }
-      }
-      throw error;
-    }
-
-    if (directCredential.credentialGeneration !== capability.credentialGeneration) {
-      return await abandon(context, "credential_changed");
-    }
-
-    provider = ports.directProvider;
-    token = directCredential.accessToken;
-    credentialGeneration = directCredential.credentialGeneration;
-
-    // The bucket key is a digest of the app, the account and the
-    // credential generation. It is never the token, and it is never a
-    // fabricated Facebook credential id: a direct account has none.
-    bucketKey = await read(context, async (signal) => {
-      void signal;
-      return await ports.directProvider.bucketKey(job.socialAccountId, credentialGeneration);
-    });
-  } else {
-    // --- The protected credential ----------------------------------------
-    let credential;
-    try {
-      credential = await read(context, (signal) =>
-        ports.store.resolveOwnerCredential({
-          userId: job.userId,
-          socialAccountId: job.socialAccountId,
-          signal,
-        })
-      );
-    } catch (error) {
-      if (error instanceof OwnerWorkerStoreError) {
-        if (error.failure === "credential_missing") {
-          return await persistFailure(context, "retry", "credential_unavailable");
-        }
-        if (error.failure === "credential_changed") {
-          return await abandon(context, "credential_changed");
-        }
-      }
-      throw error;
-    }
-
-    if (credential.capabilityGeneration !== capability.credentialGeneration) {
-      // The connection was replaced between the two reads. No provider call is
-      // spent on a token whose generation no longer matches the connection.
-      return await abandon(context, "credential_changed");
-    }
-
-    if (credential.capabilityGeneration !== job.context.credentialGeneration) {
-      // The connection was replaced after the claim. The captured context no
-      // longer matches the live credential, so no provider call is spent on it
-      // and no write is attempted: every result write is fenced on that same
-      // generation. The job is abandoned to its lease and is re-claimed with
-      // the new context.
-      return await abandon(context, "credential_changed");
-    }
-
-    provider = ports.provider;
-    token = credential.token;
-    credentialGeneration = credential.capabilityGeneration;
-
-    // The bucket key is a digest of two non-secret values. It is still a
-    // step: a runtime without SHA-256 must fail inside the budget rather than
-    // hang the worker.
-    bucketKey = await read(context, async (signal) => {
-      void signal;
-      return await ports.bucketKeyFor(credential.credentialId);
-    });
+  if (
+    capability.scopesAuthoritative &&
+    !capability.grantedScopes.includes(DIRECT_INSIGHTS_SCOPE)
+  ) {
+    // The data is not obtainable with this connection. The checkpoint is
+    // written before the terminal outcome, so the work that is still owed
+    // is on the record and not only in this run.
+    await recordVisitProgress(context, visit);
+    return {
+      kind: "end",
+      step: await persistFailure(context, "unavailable", "direct_login_unsupported"),
+    };
   }
 
-  // --- The shared throttle window ---------------------------------------
+  if (capability.credentialGeneration !== job.context.credentialGeneration) {
+    // The connection was replaced after the claim. No provider call is
+    // spent on a token whose generation no longer matches the connection,
+    // and no write is attempted: every result write is fenced on that same
+    // generation.
+    return { kind: "end", step: await abandon(context, "credential_changed") };
+  }
+
+  let directCredential;
+  try {
+    directCredential = await read(context, (signal) =>
+      ports.store.resolveDirectOwnerCredential({
+        jobId: job.jobId,
+        claimToken: job.claimToken,
+        jobGeneration: job.jobGeneration,
+        expectedCredentialGeneration: capability.credentialGeneration,
+        socialAccountId: job.socialAccountId,
+        signal,
+      })
+    );
+  } catch (error) {
+    if (error instanceof OwnerWorkerStoreError) {
+      if (error.failure === "credential_missing") {
+        return {
+          kind: "end",
+          step: await persistFailure(context, "retry", "credential_unavailable"),
+        };
+      }
+      if (error.failure === "credential_changed") {
+        return { kind: "end", step: await abandon(context, "credential_changed") };
+      }
+    }
+    throw error;
+  }
+
+  if (directCredential.credentialGeneration !== capability.credentialGeneration) {
+    return { kind: "end", step: await abandon(context, "credential_changed") };
+  }
+
+  // The bucket key is a digest of the app, the account and the credential
+  // generation. It is never the token, and it is never a fabricated
+  // Facebook credential id: a direct account has none.
+  const bucketKey = await read(context, async (signal) => {
+    void signal;
+    return await ports.directProvider.bucketKey(
+      job.socialAccountId,
+      directCredential.credentialGeneration,
+    );
+  });
+
+  return {
+    kind: "continue",
+    state: {
+      provider: ports.directProvider,
+      token: directCredential.accessToken,
+      bucketKey,
+    },
+  };
+}
+
+/**
+ * The protected Facebook User credential of a page-linked account.
+ *
+ * The protected credential adapter is the only authority for that token:
+ * the account row's `access_token` is never read.
+ */
+async function resolveProtectedCredential(
+  context: JobContext,
+  capability: OwnerCapability,
+): Promise<StepResult<VisitCredential>> {
+  const { ports, job } = context;
+
+  let credential;
+  try {
+    credential = await read(context, (signal) =>
+      ports.store.resolveOwnerCredential({
+        userId: job.userId,
+        socialAccountId: job.socialAccountId,
+        signal,
+      })
+    );
+  } catch (error) {
+    if (error instanceof OwnerWorkerStoreError) {
+      if (error.failure === "credential_missing") {
+        return {
+          kind: "end",
+          step: await persistFailure(context, "retry", "credential_unavailable"),
+        };
+      }
+      if (error.failure === "credential_changed") {
+        return { kind: "end", step: await abandon(context, "credential_changed") };
+      }
+    }
+    throw error;
+  }
+
+  if (credential.capabilityGeneration !== capability.credentialGeneration) {
+    // The connection was replaced between the two reads. No provider call
+    // is spent on a token whose generation no longer matches the connection.
+    return { kind: "end", step: await abandon(context, "credential_changed") };
+  }
+
+  if (credential.capabilityGeneration !== job.context.credentialGeneration) {
+    // The connection was replaced after the claim. The captured context no
+    // longer matches the live credential, so no provider call is spent on it
+    // and no write is attempted: every result write is fenced on that same
+    // generation. The job is abandoned to its lease and is re-claimed with
+    // the new context.
+    return { kind: "end", step: await abandon(context, "credential_changed") };
+  }
+
+  // The bucket key is a digest of two non-secret values. It is still a
+  // step: a runtime without SHA-256 must fail inside the budget rather than
+  // hang the worker.
+  const bucketKey = await read(context, async (signal) => {
+    void signal;
+    return await ports.bucketKeyFor(credential.credentialId);
+  });
+
+  return {
+    kind: "continue",
+    state: {
+      provider: ports.provider,
+      token: credential.token,
+      bucketKey,
+    },
+  };
+}
+
+/**
+ * The shared window this credential is in.
+ *
+ * The shared bucket says THIS credential is still throttled. No provider
+ * call is made, the job waits for the window instead of polling it, and the
+ * run continues with the next owner: another credential has its own bucket.
+ */
+async function checkThrottle(
+  context: JobContext,
+  credential: VisitCredential,
+): Promise<StepResult<null>> {
+  const { ports } = context;
+
   const bucket = await read(context, (signal) =>
-    ports.store.readThrottleBucket({ bucketKey, signal })
+    ports.store.readThrottleBucket({ bucketKey: credential.bucketKey, signal })
   );
+
   if (bucket?.throttledUntil && new Date(bucket.throttledUntil).getTime() > ports.now()) {
     // The shared bucket says THIS credential is still throttled. No provider
     // call is made, the job waits for the window instead of polling it, and
     // the run continues with the next owner: another credential has its own
-    // bucket.
-    await write(context, (signal) =>
-      ports.store.recordThrottle({
-        bucketKey,
+    // bucket. There is no progress to record: nothing was collected.
+    return {
+      kind: "end",
+      step: await stopForThrottle(context, credential.bucketKey, {
+        scope: "waiting",
         usagePercent: bucket.usagePercent,
         throttledUntil: bucket.throttledUntil,
-        jobId: job.jobId,
-        claimToken: job.claimToken,
-        jobGeneration: job.jobGeneration,
-        signal,
-      })
-    );
-    ports.log({
-      event: "owner_capture",
-      jobId: job.jobId,
-      socialAccountId: job.socialAccountId,
-      outcome: "retry",
-      reasonCode: "rate_limited",
-      durationMs: ports.now() - context.startedAt,
-    });
-    return { job: result(context, "retry", "rate_limited"), stopRun: false };
+      }),
+    };
   }
 
   if (!context.budget.canStartProviderCall()) {
     throw new BudgetExceededError();
   }
 
-  // --- The provider ------------------------------------------------------
-  //
-  // The provider calls and the writes are separated on purpose: a failed
-  // WRITE is an abandonment, and it must never be reported as a provider
-  // failure that is then written back as a retry.
-  //
-  // A nearly spent usage budget stops the provider work: no further call is
-  // made for this job, and the run stops after it.
+  return { kind: "continue", state: null };
+}
 
-  // --- The days this job owes --------------------------------------------
-  //
-  // The capture day is never collected: it is still running in Kuwait. The
-  // job owes the last completed Kuwait day and the day before it.
+/**
+ * The days this job owes.
+ *
+ * The capture day is never collected: it is still running in Kuwait. The
+ * job owes the last completed Kuwait day and the day before it.
+ *
+ * The plan is recorded BEFORE the first attempt. A `pending` operation
+ * keeps the job claimable and keeps a `completed` completion refused until
+ * the day is collected, so a day that does not fit this visit's budget is
+ * resumed instead of being dropped.
+ */
+async function planOwedDays(
+  context: JobContext,
+  visit: OwnerVisitState,
+): Promise<StepResult<null>> {
+  const { ports, job } = context;
+  const checkpoint = job.checkpoint;
+
   const primaryDay = previousDay(job.capturedOn);
   const correctionDay = previousDay(primaryDay);
+
+  const queuedTokens = [...checkpoint.remainingIds];
+  const queuedDays = visit.owedDays;
 
   const freshJob = checkpoint.pagesFetched === 0 && checkpoint.cursor === null &&
     !checkpoint.windowCovered && queuedTokens.length === 0;
@@ -1258,43 +1467,60 @@ async function collect(context: JobContext): Promise<JobStep> {
   }
   visit.owedDays = owedDays;
 
-  if (owedDays.length > 0) {
-    // The plan is recorded BEFORE the first attempt. A `pending` operation
-    // keeps the job claimable and keeps a `completed` completion refused
-    // until the day is collected, so a day that does not fit this visit's
-    // budget is resumed instead of being dropped.
-    await write(context, (signal) =>
-      ports.store.recordProgress({
-        jobId: job.jobId,
-        claimToken: job.claimToken,
-        jobGeneration: job.jobGeneration,
-        payload: {
-          kind: "operations",
-          items: owedDays.map((day) => ({
-            operation_key: accountDayOperationKey(day),
-            operation_kind: "account_day" as const,
-            state: "pending" as const,
-            provider_date: day,
-            query_kind: "interactions",
-          })),
-        },
-        signal,
-      })
-    );
-
-    // The queue names the planned days too, so the checkpoint itself says
-    // which daily observations are still owed. The sweep state of the
-    // checkpoint is carried over unchanged: this write only plans work.
-    const plannedQueue = mergeQueue(owedDays.map(accountDayToken), queuedTokens);
-    await recordVisitProgress(context, visit, {
-      cursor: checkpoint.cursor,
-      partial: checkpoint.partial || plannedQueue.length > 0,
-      truncated: checkpoint.truncated,
-      windowCovered: checkpoint.windowCovered,
-      gapReason: checkpoint.gapReason,
-      remainingIds: plannedQueue,
-    });
+  if (owedDays.length === 0) {
+    return { kind: "continue", state: null };
   }
+
+  await write(context, (signal) =>
+    ports.store.recordProgress({
+      jobId: job.jobId,
+      claimToken: job.claimToken,
+      jobGeneration: job.jobGeneration,
+      payload: {
+        kind: "operations",
+        items: owedDays.map((day) => ({
+          operation_key: accountDayOperationKey(day),
+          operation_kind: "account_day" as const,
+          state: "pending" as const,
+          provider_date: day,
+          query_kind: "interactions",
+        })),
+      },
+      signal,
+    })
+  );
+
+  // The queue names the planned days too, so the checkpoint itself says
+  // which daily observations are still owed. The sweep state of the
+  // checkpoint is carried over unchanged: this write only plans work.
+  const plannedQueue = mergeQueue(owedDays.map(accountDayToken), queuedTokens);
+  await recordVisitProgress(context, visit, {
+    cursor: checkpoint.cursor,
+    partial: checkpoint.partial || plannedQueue.length > 0,
+    truncated: checkpoint.truncated,
+    windowCovered: checkpoint.windowCovered,
+    gapReason: checkpoint.gapReason,
+    remainingIds: plannedQueue,
+  });
+
+  return { kind: "continue", state: null };
+}
+
+/**
+ * The profile observation and the daily observations of this visit.
+ *
+ * They run BEFORE the media continuation: they are small, and the day that
+ * does not fit is resumed on the next visit.
+ */
+async function collectDays(
+  context: JobContext,
+  visit: OwnerVisitState,
+  target: OwnerTarget,
+  credential: VisitCredential,
+): Promise<StepResult<null>> {
+  const { ports, job } = context;
+  const provider = credential.provider;
+  const token = credential.token;
 
   // --- The profile observation ------------------------------------------
   let profileCounts: { followers_count: number | null; media_count: number | null } | null = null;
@@ -1312,7 +1538,10 @@ async function collect(context: JobContext): Promise<JobStep> {
     visit.usageStop = visit.usagePercent >= USAGE_STOP_PERCENT;
   } catch (error) {
     if (error instanceof BudgetExceededError) throw error;
-    return await handleProviderFailure(context, bucketKey, error, visit);
+    return {
+      kind: "end",
+      step: await handleProviderFailure(context, credential.bucketKey, error, visit),
+    };
   }
 
   if (profileCounts !== null) {
@@ -1345,10 +1574,7 @@ async function collect(context: JobContext): Promise<JobStep> {
   }
 
   // --- The daily observations --------------------------------------------
-  //
-  // They run BEFORE the media continuation: they are small, and the day
-  // that does not fit is resumed on the next visit.
-  for (const day of owedDays) {
+  for (const day of visit.owedDays) {
     // The usage budget is nearly spent: no further provider call is made.
     if (visit.usageStop) break;
     if (!context.budget.canStartProviderCall()) break;
@@ -1371,7 +1597,10 @@ async function collect(context: JobContext): Promise<JobStep> {
       dayValue = answer.value;
     } catch (error) {
       if (error instanceof BudgetExceededError) throw error;
-      return await handleProviderFailure(context, bucketKey, error, visit);
+      return {
+        kind: "end",
+        step: await handleProviderFailure(context, credential.bucketKey, error, visit),
+      };
     }
 
     const accountDayPayload: OwnerSnapshotPayload = {
@@ -1408,136 +1637,179 @@ async function collect(context: JobContext): Promise<JobStep> {
     if (visit.usageStop) break;
   }
 
-  // --- The media inventory ------------------------------------------------
+  return { kind: "continue", state: null };
+}
+
+/**
+ * The media inventory of this visit.
+ *
+ * The sweep is the truth of the window: how many pages were fetched,
+ * whether it was truncated, whether the window was covered and where the
+ * next visit resumes.
+ */
+async function sweepInventory(
+  context: JobContext,
+  visit: OwnerVisitState,
+  target: OwnerTarget,
+  credential: VisitCredential,
+): Promise<StepResult<null>> {
+  const { ports, job } = context;
+  const provider = credential.provider;
+  const token = credential.token;
+  const checkpoint = job.checkpoint;
+
   const resuming = checkpoint.pagesFetched > 0 && !checkpoint.windowCovered;
 
   // The sweep resumes from the cursor of the last visit, unless the window
   // was already covered.
   visit.cursor = resuming ? checkpoint.cursor : null;
 
-  if (!visit.windowCovered && !visit.usageStop) {
-    let sweepValue: Awaited<
-      ReturnType<InstagramGraphProvider["fetchMediaWindow"]>
-    >["value"];
+  if (visit.windowCovered || visit.usageStop) {
+    return { kind: "continue", state: null };
+  }
 
-    try {
-      const sweep = await providerStep(context, (signal) =>
-        provider.fetchMediaWindow({
-          igUserId: target.platformUserId,
-          token: token,
-          windowStart: visit.windowStart,
-          windowEnd: visit.windowEnd,
-          cursor: visit.cursor,
-          maxPages: MEDIA_PAGES_PER_ATTEMPT,
-          signal,
-        })
-      );
-      visit.usagePercent = Math.max(visit.usagePercent, sweep.usagePercent);
-      visit.usageStop = visit.usagePercent >= USAGE_STOP_PERCENT;
-      sweepValue = sweep.value;
-    } catch (error) {
-      if (error instanceof BudgetExceededError) throw error;
-      return await handleProviderFailure(context, bucketKey, error, visit);
-    }
+  let sweepValue: Awaited<
+    ReturnType<InstagramGraphProvider["fetchMediaWindow"]>
+  >["value"];
 
-    visit.pagesFetched += sweepValue.pagesFetched;
-    visit.truncated = sweepValue.truncated;
-    visit.windowCovered = sweepValue.windowCovered;
-    visit.cursor = sweepValue.nextCursor;
-    visit.sweepStopped = sweepValue.stopped;
+  try {
+    const sweep = await providerStep(context, (signal) =>
+      provider.fetchMediaWindow({
+        igUserId: target.platformUserId,
+        token: token,
+        windowStart: visit.windowStart,
+        windowEnd: visit.windowEnd,
+        cursor: visit.cursor,
+        maxPages: MEDIA_PAGES_PER_ATTEMPT,
+        signal,
+      })
+    );
+    visit.usagePercent = Math.max(visit.usagePercent, sweep.usagePercent);
+    visit.usageStop = visit.usagePercent >= USAGE_STOP_PERCENT;
+    sweepValue = sweep.value;
+  } catch (error) {
+    if (error instanceof BudgetExceededError) throw error;
+    return {
+      kind: "end",
+      step: await handleProviderFailure(context, credential.bucketKey, error, visit),
+    };
+  }
 
-    if (
-      sweepValue.oldestReturnedAt !== null &&
-      (visit.oldestReturnedAt === null ||
-        sweepValue.oldestReturnedAt < visit.oldestReturnedAt)
-    ) {
-      visit.oldestReturnedAt = sweepValue.oldestReturnedAt;
-    }
+  visit.pagesFetched += sweepValue.pagesFetched;
+  visit.truncated = sweepValue.truncated;
+  visit.windowCovered = sweepValue.windowCovered;
+  visit.cursor = sweepValue.nextCursor;
+  visit.sweepStopped = sweepValue.stopped;
 
-    if (sweepValue.items.length > 0) {
-      // The rows this capture day already stores for the discovered media.
-      //
-      // The accepted upsert writes the EXCLUDED columns, so a metric that
-      // is not in the payload is NULLed. An inventory write for a media
-      // whose insights were already collected would therefore wipe them.
-      // The stored metrics are read back and carried over, and the stored
-      // status is carried over with them.
-      const existing = await read(context, (signal) =>
-        ports.store.readOwnerMediaInventory({
-          socialAccountId: job.socialAccountId,
-          capturedOn: job.capturedOn,
-          mediaIds: sweepValue.items.map((item) => item.ig_media_id),
-          signal,
-        })
-      );
-      const existingById = new Map(existing.map((row) => [row.igMediaId, row]));
+  if (
+    sweepValue.oldestReturnedAt !== null &&
+    (visit.oldestReturnedAt === null ||
+      sweepValue.oldestReturnedAt < visit.oldestReturnedAt)
+  ) {
+    visit.oldestReturnedAt = sweepValue.oldestReturnedAt;
+  }
 
-      const mediaPayload: OwnerSnapshotPayload = {
-        kind: "owner_media",
-        items: sweepValue.items.map((item) => {
-          const stored = existingById.get(item.ig_media_id);
-          return {
-            ig_media_id: item.ig_media_id,
-            ...(item.media_product_type === null
+  if (sweepValue.items.length > 0) {
+    // The rows this capture day already stores for the discovered media.
+    //
+    // The accepted upsert writes the EXCLUDED columns, so a metric that
+    // is not in the payload is NULLed. An inventory write for a media
+    // whose insights were already collected would therefore wipe them.
+    // The stored metrics are read back and carried over, and the stored
+    // status is carried over with them.
+    const existing = await read(context, (signal) =>
+      ports.store.readOwnerMediaInventory({
+        socialAccountId: job.socialAccountId,
+        capturedOn: job.capturedOn,
+        mediaIds: sweepValue.items.map((item) => item.ig_media_id),
+        signal,
+      })
+    );
+    const existingById = new Map(existing.map((row) => [row.igMediaId, row]));
+
+    const mediaPayload: OwnerSnapshotPayload = {
+      kind: "owner_media",
+      items: sweepValue.items.map((item) => {
+        const stored = existingById.get(item.ig_media_id);
+        return {
+          ig_media_id: item.ig_media_id,
+          ...(item.media_product_type === null
+            ? {}
+            : { media_product_type: item.media_product_type }),
+          ...(item.media_type === null ? {} : { media_type: item.media_type }),
+          ...(item.thumbnail_url === null ? {} : { thumbnail_url: item.thumbnail_url }),
+          ...(item.caption === null ? {} : { caption: item.caption }),
+          ...(item.permalink === null ? {} : { permalink: item.permalink }),
+          published_at: item.published_at,
+          // A media whose insights were positively established as
+          // unavailable keeps that status: an inventory write must not
+          // turn a terminal media back into an open one.
+          status: stored?.status === "unavailable" ? "unavailable" : "ok",
+          metrics: {
+            ...(item.like_count_public === null
               ? {}
-              : { media_product_type: item.media_product_type }),
-            ...(item.media_type === null ? {} : { media_type: item.media_type }),
-            ...(item.thumbnail_url === null ? {} : { thumbnail_url: item.thumbnail_url }),
-            ...(item.caption === null ? {} : { caption: item.caption }),
-            ...(item.permalink === null ? {} : { permalink: item.permalink }),
-            published_at: item.published_at,
-            // A media whose insights were positively established as
-            // unavailable keeps that status: an inventory write must not
-            // turn a terminal media back into an open one.
-            status: stored?.status === "unavailable" ? "unavailable" : "ok",
-            metrics: {
-              ...(item.like_count_public === null
-                ? {}
-                : { like_count_public: item.like_count_public }),
-              ...(item.comments_count_public === null
-                ? {}
-                : { comments_count_public: item.comments_count_public }),
-              ...carriedInsightMetrics(stored),
-            },
-          };
-        }),
-      };
-      await write(context, (signal) =>
-        ports.store.persistSnapshot({
-          jobId: job.jobId,
-          claimToken: job.claimToken,
-          jobGeneration: job.jobGeneration,
-          payload: mediaPayload,
-          signal,
-        })
-      );
+              : { like_count_public: item.like_count_public }),
+            ...(item.comments_count_public === null
+              ? {}
+              : { comments_count_public: item.comments_count_public }),
+            ...carriedInsightMetrics(stored),
+          },
+        };
+      }),
+    };
+    await write(context, (signal) =>
+      ports.store.persistSnapshot({
+        jobId: job.jobId,
+        claimToken: job.claimToken,
+        jobGeneration: job.jobGeneration,
+        payload: mediaPayload,
+        signal,
+      })
+    );
 
-      // The discovered media join the queue. The sweep walks the feed newest
-      // first, so the new media are older than the ones already queued and
-      // they are appended in their own order.
-      //
-      // A media that is already in the queue is not queued twice, and a
-      // media whose insights were already collected for this capture day is
-      // not queued again: it owes nothing, and re-queuing it would spend a
-      // provider call on a media the database already knows.
-      const discovered = [...sweepValue.items].sort(compareMediaItems);
-      for (const item of discovered) {
-        if (visit.mediaQueue.includes(item.ig_media_id)) continue;
-        if (isCollectedMedia(existingById.get(item.ig_media_id))) continue;
-        visit.mediaQueue.push(item.ig_media_id);
-      }
-    }
-
-    if (visit.mediaQueue.length > MEDIA_QUEUE_LIMIT) {
-      visit.mediaQueue = visit.mediaQueue.slice(0, MEDIA_QUEUE_LIMIT);
-      visit.gapReason = MEDIA_QUEUE_CAPPED;
+    // The discovered media join the queue. The sweep walks the feed newest
+    // first, so the new media are older than the ones already queued and
+    // they are appended in their own order.
+    //
+    // A media that is already in the queue is not queued twice, and a
+    // media whose insights were already collected for this capture day is
+    // not queued again: it owes nothing, and re-queuing it would spend a
+    // provider call on a media the database already knows.
+    const discovered = [...sweepValue.items].sort(compareMediaItems);
+    for (const item of discovered) {
+      if (visit.mediaQueue.includes(item.ig_media_id)) continue;
+      if (isCollectedMedia(existingById.get(item.ig_media_id))) continue;
+      visit.mediaQueue.push(item.ig_media_id);
     }
   }
 
-  // --- The media insights (the bounded continuation) ----------------------
-  //
-  // At most five media per visit, one after the other, and a media leaves
-  // the queue only after its snapshot was persisted.
+  if (visit.mediaQueue.length > MEDIA_QUEUE_LIMIT) {
+    visit.mediaQueue = visit.mediaQueue.slice(0, MEDIA_QUEUE_LIMIT);
+    visit.gapReason = MEDIA_QUEUE_CAPPED;
+  }
+
+  return { kind: "continue", state: null };
+}
+
+/**
+ * The media insights of this visit: the bounded continuation.
+ *
+ * At most five media per visit, one after the other, and a media leaves
+ * the queue only after its snapshot was persisted.
+ *
+ * A media that FAILED goes to the BACK of the queue, so it never blocks the
+ * media behind it. A DEFINITIVE refusal of ONE media closes that media and
+ * only that media.
+ */
+async function drainMediaQueue(
+  context: JobContext,
+  visit: OwnerVisitState,
+  credential: VisitCredential,
+): Promise<StepResult<null>> {
+  const { ports, job } = context;
+  const provider = credential.provider;
+  const token = credential.token;
+
   const candidates = visit.mediaQueue.slice(0, MEDIA_INSIGHTS_PER_VISIT);
   let droppedMedia = 0;
 
@@ -1589,38 +1861,24 @@ async function collect(context: JobContext): Promise<JobStep> {
             // The provider is throttling: the progress of this visit is
             // recorded FIRST, then the job is parked and the run stops,
             // because a rate limit is a condition of everyone.
-            //
-            // The checkpoint goes first because the job-scoped throttle
-            // record releases the lease: a later write would be refused.
-            await recordVisitProgress(context, visit);
-            const until = error.throttledUntil ?? new Date(ports.now() + THROTTLE_WINDOW_MS);
-            await write(context, (signal) =>
-              ports.store.recordThrottle({
-                bucketKey,
-                usagePercent: Math.round(error.usagePercent),
-                throttledUntil: until.toISOString(),
-                jobId: job.jobId,
-                claimToken: job.claimToken,
-                jobGeneration: job.jobGeneration,
-                signal,
-              })
-            );
-            ports.log({
-              event: "owner_capture",
-              jobId: job.jobId,
-              socialAccountId: job.socialAccountId,
-              outcome: "retry",
-              reasonCode: "rate_limited",
-              usagePercent: error.usagePercent,
-              durationMs: ports.now() - context.startedAt,
-            });
-            return { job: result(context, "retry", "rate_limited"), stopRun: true };
+            return {
+              kind: "end",
+              step: await stopForThrottle(context, credential.bucketKey, {
+                scope: "parked",
+                visit,
+                usagePercent: error.usagePercent,
+                throttledUntil: error.throttledUntil,
+              }),
+            };
           }
           if (error.kind === "token_invalid") {
             // The credential is dead. The progress of this visit is recorded
             // first, so the next visit does not ask for it again.
             await recordVisitProgress(context, visit);
-            return await persistFailure(context, "retry", "token_invalid");
+            return {
+              kind: "end",
+              step: await persistFailure(context, "retry", "token_invalid"),
+            };
           }
           if (isDefinitiveMediaRefusal(error)) {
             // The provider refuses THIS media and will refuse it again. The
@@ -1689,7 +1947,22 @@ async function collect(context: JobContext): Promise<JobStep> {
     });
   }
 
-  // --- The truth of the inventory ----------------------------------------
+  return { kind: "continue", state: null };
+}
+
+/**
+ * The truth of the inventory and the outcome of this visit.
+ *
+ * The progress of this visit is recorded BEFORE the outcome, so the next
+ * visit resumes from it instead of asking for the same work again.
+ */
+async function finalize(
+  context: JobContext,
+  visit: OwnerVisitState,
+  credential: VisitCredential,
+): Promise<JobStep> {
+  const { ports, job } = context;
+
   const pendingDays = visit.owedDays.filter((day) => !visit.collectedDays.includes(day));
   const remainingIds = mergeQueue(
     pendingDays.map(accountDayToken),
@@ -1718,43 +1991,32 @@ async function collect(context: JobContext): Promise<JobStep> {
     return await persistFailure(context, "unavailable", "inventory_unavailable");
   }
 
+  const nearlySpent = visit.usagePercent >= USAGE_STOP_PERCENT;
+
+  if (nearlySpent) {
+    // The usage budget is nearly spent. The shared bucket carries the
+    // window, the job is left partial and the run stops, so the next worker
+    // sees the window before it spends a provider call.
+    return await stopForThrottle(context, credential.bucketKey, {
+      scope: "usage",
+      visit,
+      usagePercent: visit.usagePercent,
+    });
+  }
+
   // The progress of this visit is recorded BEFORE the outcome, so the next
   // visit resumes from it instead of asking for the same work again.
   await recordVisitProgress(context, visit, { remainingIds });
 
-  // --- The shared bucket --------------------------------------------------
-  const nearlySpent = visit.usagePercent >= USAGE_STOP_PERCENT;
+  // The shared bucket carries the usage the provider reported.
   if (visit.usagePercent > 0) {
-    await write(context, (signal) =>
-      ports.store.recordThrottle({
-        bucketKey,
-        usagePercent: Math.round(visit.usagePercent),
-        throttledUntil: nearlySpent
-          ? new Date(ports.now() + THROTTLE_WINDOW_MS).toISOString()
-          : null,
-        signal,
-      })
-    );
-  }
-
-  if (nearlySpent) {
-    ports.log({
-      event: "owner_usage_stop",
-      jobId: job.jobId,
-      socialAccountId: job.socialAccountId,
-      outcome: "usage_stop",
-      usagePercent: visit.usagePercent,
-      durationMs: ports.now() - context.startedAt,
+    await writeThrottle(context, credential.bucketKey, {
+      scope: "shared",
+      usagePercent: Math.round(visit.usagePercent),
+      throttledUntil: null,
     });
   }
 
-  // --- The completion -----------------------------------------------------
-  if (nearlySpent) {
-    // The usage budget is nearly spent. The job is left partial and the run
-    // stops, so the next worker sees the shared window before it spends a
-    // provider call.
-    return await persistFailure(context, "partial", "rate_limited", true);
-  }
   if (pendingDays.length > 0) {
     // A daily observation is still owed. The job stays claimable and it is
     // completed again on the next visit.
@@ -1836,6 +2098,170 @@ function inventoryProgress(input: {
 }
 
 /**
+ * The throttle record of a bucket.
+ *
+ * It is the ONE place that writes a throttle, and it decides the SCOPE:
+ *
+ *   - a JOB-SCOPED record carries the job, its claim token and its
+ *     generation. It parks THIS job: the accepted SQL releases the lease
+ *     and puts the job into a fenced retry. A parked job is NOT a completed
+ *     job.
+ *   - a SHARED record carries no job. It is the state of the bucket alone,
+ *     and it parks no job: another account with its own credential is not
+ *     held up by it.
+ */
+async function writeThrottle(
+  context: JobContext,
+  bucketKey: string,
+  input: {
+    readonly scope: "job" | "shared";
+    readonly usagePercent: number | null;
+    readonly throttledUntil: string | null;
+  },
+): Promise<void> {
+  const { ports, job } = context;
+
+  await write(context, (signal) =>
+    ports.store.recordThrottle({
+      bucketKey,
+      usagePercent: input.usagePercent,
+      throttledUntil: input.throttledUntil,
+      ...(input.scope === "job"
+        ? {
+          jobId: job.jobId,
+          claimToken: job.claimToken,
+          jobGeneration: job.jobGeneration,
+        }
+        : {}),
+      signal,
+    })
+  );
+}
+
+/**
+ * The ONE rate-limit path.
+ *
+ * A provider rate limit, a credential that is already inside a shared
+ * window and a nearly spent usage budget are the same condition for the
+ * worker: no provider call may be spent until the window is over. They
+ * differ in what happens to the JOB, and the scope says which:
+ *
+ *   - "parked": the provider refused THIS job. The checkpoint of the visit
+ *     goes first, the job-scoped throttle record parks the job - it
+ *     releases the lease and puts the job into a fenced retry - and the run
+ *     stops, because a rate limit is a condition of everyone. A parked job
+ *     is NOT completed afterwards.
+ *   - "waiting": the shared window of this credential is still open. No
+ *     provider call was made, so there is no progress to record; the
+ *     job-scoped throttle record parks the job and the run CONTINUES with
+ *     the next owner, because another credential has its own bucket.
+ *   - "usage": the usage budget of the bucket is nearly spent. The
+ *     checkpoint goes first, the SHARED throttle record carries the window
+ *     and parks no job, the collected job is completed as a partial, and
+ *     the run stops so the next worker sees the window.
+ *
+ * The order never changes where it applies: the CHECKPOINT of the visit
+ * goes first, so the next visit resumes from what was really collected;
+ * then the THROTTLE RECORD; then the OUTCOME.
+ *
+ * The media loop, the provider failure path, the shared window and the end
+ * of the visit all come here, so they cannot drift.
+ */
+type ThrottleInput =
+  | {
+    readonly scope: "parked";
+    readonly visit: OwnerVisitState;
+    readonly usagePercent: number;
+    /** The provider's own deadline, when it gave one. */
+    readonly throttledUntil: Date | null;
+  }
+  | {
+    readonly scope: "waiting";
+    readonly usagePercent: number | null;
+    readonly throttledUntil: string | null;
+  }
+  | {
+    readonly scope: "usage";
+    readonly visit: OwnerVisitState;
+    readonly usagePercent: number;
+  };
+
+async function stopForThrottle(
+  context: JobContext,
+  bucketKey: string,
+  input: ThrottleInput,
+): Promise<JobStep> {
+  const { ports, job } = context;
+
+  if (input.scope === "waiting") {
+    // Nothing was collected, so there is no progress to record.
+    await writeThrottle(context, bucketKey, {
+      scope: "job",
+      usagePercent: input.usagePercent,
+      throttledUntil: input.throttledUntil,
+    });
+
+    ports.log({
+      event: "owner_capture",
+      jobId: job.jobId,
+      socialAccountId: job.socialAccountId,
+      outcome: "retry",
+      reasonCode: "rate_limited",
+      durationMs: ports.now() - context.startedAt,
+    });
+
+    return { job: result(context, "retry", "rate_limited"), stopRun: false };
+  }
+
+  // The checkpoint of the visit. It goes first: the job-scoped throttle
+  // record releases the lease, so a later write would be refused.
+  await recordVisitProgress(context, input.visit);
+
+  if (input.scope === "usage") {
+    // The shared window is used, so the bucket really blocks the next
+    // request.
+    const until = new Date(ports.now() + THROTTLE_WINDOW_MS);
+    await writeThrottle(context, bucketKey, {
+      scope: "shared",
+      usagePercent: Math.round(input.usagePercent),
+      throttledUntil: until.toISOString(),
+    });
+
+    ports.log({
+      event: "owner_usage_stop",
+      jobId: job.jobId,
+      socialAccountId: job.socialAccountId,
+      outcome: "usage_stop",
+      usagePercent: input.usagePercent,
+      durationMs: ports.now() - context.startedAt,
+    });
+
+    return await persistFailure(context, "partial", "rate_limited", true);
+  }
+
+  // "parked": without the provider's own deadline the shared window is
+  // used, so the bucket really blocks the next request.
+  const until = input.throttledUntil ?? new Date(ports.now() + THROTTLE_WINDOW_MS);
+  await writeThrottle(context, bucketKey, {
+    scope: "job",
+    usagePercent: Math.round(input.usagePercent),
+    throttledUntil: until.toISOString(),
+  });
+
+  ports.log({
+    event: "owner_capture",
+    jobId: job.jobId,
+    socialAccountId: job.socialAccountId,
+    outcome: "retry",
+    reasonCode: "rate_limited",
+    usagePercent: input.usagePercent,
+    durationMs: ports.now() - context.startedAt,
+  });
+
+  return { job: result(context, "retry", "rate_limited"), stopRun: true };
+}
+
+/**
  * The provider failure path.
  *
  * A throttle is recorded against the SHARED bucket AND parks this job, which
@@ -1853,44 +2279,20 @@ async function handleProviderFailure(
   error: unknown,
   visit: OwnerVisitState,
 ): Promise<JobStep> {
-  const { ports, job } = context;
-
   if (!(error instanceof OwnerProviderError)) {
     await recordVisitProgress(context, visit);
     return await persistFailure(context, "retry", "provider_error");
   }
 
   if (error.kind === "rate_limited") {
-    // Without the provider's own deadline the shared window is used, so the
-    // bucket really blocks the next request.
-    //
-    // The checkpoint goes first: the job-scoped throttle record releases the
-    // lease, so a later write would be refused.
-    await recordVisitProgress(context, visit);
-    const until = error.throttledUntil ?? new Date(ports.now() + THROTTLE_WINDOW_MS);
-    await write(context, (signal) =>
-      ports.store.recordThrottle({
-        bucketKey,
-        usagePercent: Math.round(error.usagePercent),
-        throttledUntil: until.toISOString(),
-        jobId: job.jobId,
-        claimToken: job.claimToken,
-        jobGeneration: job.jobGeneration,
-        signal,
-      })
-    );
-
-    ports.log({
-      event: "owner_capture",
-      jobId: job.jobId,
-      socialAccountId: job.socialAccountId,
-      outcome: "retry",
-      reasonCode: "rate_limited",
+    // The checkpoint goes first, then the job-scoped throttle record, then
+    // the outcome: the ONE rate-limit path.
+    return await stopForThrottle(context, bucketKey, {
+      scope: "parked",
+      visit,
       usagePercent: error.usagePercent,
-      durationMs: ports.now() - context.startedAt,
+      throttledUntil: error.throttledUntil,
     });
-
-    return { job: result(context, "retry", "rate_limited"), stopRun: true };
   }
 
   if (error.kind === "token_invalid") {

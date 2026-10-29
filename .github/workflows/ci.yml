@@ -325,6 +325,7 @@ jobs:
             supabase/functions/instagram-insights-sync/directGraphProvider.test.ts
             supabase/functions/instagram-insights-sync/workerStore.test.ts
             supabase/functions/instagram-insights-sync/worker.test.ts
+            supabase/functions/instagram-insights-sync/workerTermination.test.ts
             supabase/functions/instagram-insights-sync/drainHandler.test.ts
           )
           for file in "${modules[@]}" "${tests[@]}"; do

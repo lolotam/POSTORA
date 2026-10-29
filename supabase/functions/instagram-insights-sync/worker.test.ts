@@ -205,7 +205,15 @@ Deno.test("a claimed owner job is collected, recorded and completed", async () =
   const mediaInsights = harness.calls.snapshots[4]!.items[0]!;
   assertEquals(mediaInsights.ig_media_id, "media-1");
   assertEquals(mediaInsights.status, "ok");
-  assertEquals(mediaInsights.metrics, { reach: 100, views: 200 });
+  // The public counts are carried over with the insights: the accepted
+  // upsert writes the EXCLUDED columns, so a media write that left them
+  // out would NULL the counts the inventory write stored.
+  assertEquals(mediaInsights.metrics, {
+    like_count_public: 55,
+    comments_count_public: 3,
+    reach: 100,
+    views: 200,
+  });
 
   // The job is completed once, as a full success.
   assertEquals(harness.calls.completes, [{ outcome: "completed", reasonCode: null }]);
@@ -375,6 +383,10 @@ Deno.test("the pending media queue is resumed instead of rebuilt", async () => {
           checkpoint: { inventory_remaining_ids: ["media-7"], inventory_pages_fetched: 1 },
         }),
       ],
+      // The row an EARLIER visit stored for the queued media. The queue
+      // says what is left, and the row says what that media is: a media
+      // nobody stored is not owed any more, and it is dropped.
+      mediaInventory: { "media-7": {} },
     },
     graph: { media: [] },
   });
@@ -458,11 +470,12 @@ Deno.test("a media whose insights fail goes to the back of the queue", async () 
  */
 Deno.test("an album media is asked for its insights", async () => {
   const harness = createHarness({
-    store: {
-      jobs: [createClaimedJob()],
-      mediaInventory: {
-        "media-1": { mediaProductType: "FEED", mediaType: "CAROUSEL_ALBUM" },
-      },
+    store: { jobs: [createClaimedJob()] },
+    // The album comes from the SWEEP: the read-back answers with the type
+    // the provider really returned, so the worker asks for the album with
+    // the metric set of its own surface.
+    graph: {
+      media: [{ ...MEDIA[0]!, media_type: "CAROUSEL_ALBUM" }],
     },
   });
 
@@ -478,7 +491,12 @@ Deno.test("an album media is asked for its insights", async () => {
   assertEquals(insight.ig_media_id, "media-1");
   assertEquals(insight.media_type, "CAROUSEL_ALBUM");
   assertEquals(insight.status, "ok");
-  assertEquals(insight.metrics, { reach: 100, views: 200 });
+  assertEquals(insight.metrics, {
+    like_count_public: 55,
+    comments_count_public: 3,
+    reach: 100,
+    views: 200,
+  });
 });
 
 /**
