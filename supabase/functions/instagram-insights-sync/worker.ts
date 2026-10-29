@@ -89,6 +89,33 @@
  *   the other, and a media leaves the queue only after its snapshot was
  *   persisted.
  *
+ *   A media that FAILED goes to the BACK of that queue. A media that keeps
+ *   its place at the head would block every media behind it for as long as
+ *   it keeps failing, and the queue would never drain.
+ *
+ *   A DEFINITIVE refusal of ONE media closes that media and only that
+ *   media: the provider answers with a Graph error object of code 10 or
+ *   100, which is its own statement that this media has no insights to
+ *   give. The item is written as `unavailable`, it leaves the queue, and
+ *   the JOB is not closed by it. A refusal of the ACCOUNT endpoints - the
+ *   profile, the account insights and the media list - is a different
+ *   thing: it closes the job, because the data is not obtainable with that
+ *   credential at all.
+ *
+ * THE END OF A CONTINUATION
+ *
+ *   A job that keeps coming back must stop coming back. The capture day
+ *   may be continued on the capture day itself and on the next Kuwait day;
+ *   after that the continuation would cross into the next capture day's
+ *   job, so the job is finished with a terminal outcome
+ *   (`unavailable`, reason `continuation_expired`) and the work that is
+ *   still owed is recorded as the gap it is.
+ *
+ *   A day the provider answered with NO metric is not a failure and not an
+ *   open question: the answer was well formed and it was empty, so the day
+ *   is collected with null metrics - the truthful availability - and the
+ *   job does not keep it.
+ *
  * THE THROTTLE
  *
  *   A provider rate limit parks the job: the job-scoped throttle record
@@ -115,6 +142,7 @@ import {
   MEDIA_INSIGHT_ATTEMPT_TIMEOUT_MS,
   OwnerProviderError,
   USAGE_STOP_PERCENT,
+  type MediaSweepStop,
   type OwnerAccountDay,
   type OwnerMediaInsights,
   type OwnerMediaSweep,
@@ -181,6 +209,51 @@ export const MEDIA_QUEUE_LIMIT = 500;
 const MEDIA_QUEUE_CAPPED = "media_queue_capped";
 
 /**
+ * The gap of a continuation that outlived its capture day.
+ *
+ * The work that is still owed is not lost and not hidden: the checkpoint
+ * carries it, and the window that is not covered is stated.
+ */
+const CONTINUATION_EXPIRED = "continuation_expired";
+
+/**
+ * The item-level reason of a media the provider refused for good.
+ *
+ * It belongs to the ITEM, not to the job: the media is closed, the job is
+ * not. The accepted SQL stores the item's state - `unavailable` - and has
+ * no column for the reason of one item, so the reason lives in the worker's
+ * bounded log.
+ */
+const MEDIA_INSIGHTS_UNAVAILABLE = "media_insights_unavailable";
+
+/**
+ * The Graph error codes that are a refusal of ONE media.
+ *
+ * Meta answers a media it will never answer - a media without insights, a
+ * media it has no permission to read - with a Graph error object of code 10
+ * or 100. The refusal is about that media, and it is permanent.
+ */
+const DEFINITIVE_MEDIA_GRAPH_CODES: ReadonlySet<number> = new Set([10, 100]);
+
+/**
+ * The number of Kuwait days a capture day may be continued for.
+ *
+ * The capture day itself and the next Kuwait day are the continuation of the
+ * same capture. On the day after that the continuation would cross into the
+ * next capture day's job, and the job is finished instead.
+ */
+export const CONTINUATION_MAX_AGE_DAYS = 1;
+
+/**
+ * The offset of Asia/Kuwait, in hours.
+ *
+ * The days of this worker are KUWAIT days: the capture day is still running
+ * in Kuwait while the worker runs, and the window of a capture day is
+ * counted in the same calendar.
+ */
+const KUWAIT_OFFSET_MS = 3 * 60 * 60 * 1000;
+
+/**
  * The permission an Instagram-login account needs to read its insights.
  *
  * Meta documents the Instagram API with Instagram Login as
@@ -226,12 +299,17 @@ export type OwnerReasonCode =
    * scope set: an unknown set is not a denial.
    */
   | "direct_login_unsupported"
-  /** The provider reported no metric for the capture day. */
-  | "metrics_unavailable"
   /** The media inventory did not cover the window. */
   | "inventory_incomplete"
   /** The media inventory cannot be completed for this account. */
   | "inventory_unavailable"
+  /**
+   * The continuation of this capture day outlived the capture day.
+   *
+   * It is terminal: the work that is still owed is recorded as a gap, and
+   * the next capture day's job owns the window from now on.
+   */
+  | "continuation_expired"
   /** A daily observation is still owed. */
   | "daily_observation_pending"
   /** The insights of one or more media are still owed. */
@@ -537,6 +615,46 @@ interface JobContext {
 }
 
 /**
+ * The truth of ONE visit, as far as the visit knows it.
+ *
+ * It is one object because every exit has to be able to record it: the days
+ * that were collected, the media that still owe their insights, the cursor
+ * the next visit resumes from and the coverage of the window. A visit that
+ * stops half way records what it did, so the next visit does not ask for it
+ * again.
+ */
+interface OwnerVisitState {
+  /** The days this job owes, planned before the first attempt. */
+  owedDays: string[];
+  /** The days that were collected, with their metrics or without them. */
+  collectedDays: string[];
+  /** The media that still owe their insights, in the order they are owed. */
+  mediaQueue: string[];
+  /** The cursor the next visit resumes the media sweep from. */
+  cursor: string | null;
+  /** The pages the media sweep fetched so far. */
+  pagesFetched: number;
+  /** The oldest publication instant the provider returned. */
+  oldestReturnedAt: string | null;
+  /** The start of the media window. */
+  windowStart: string;
+  /** The end of the media window. */
+  windowEnd: string;
+  /** True when the media inventory was cut short. */
+  truncated: boolean;
+  /** True when the media window was covered. */
+  windowCovered: boolean;
+  /** The gap of this visit, when there is one. */
+  gapReason: string | null;
+  /** Why the media sweep stopped, when it ran. */
+  sweepStopped: MediaSweepStop | null;
+  /** The highest usage percentage the provider reported. */
+  usagePercent: number;
+  /** True when the usage budget is nearly spent. */
+  usageStop: boolean;
+}
+
+/**
  * Processes one claimed job.
  *
  * Every exit either writes a verified outcome or abandons the job to its
@@ -700,6 +818,42 @@ function previousDay(day: string): string {
 }
 
 /**
+ * The Kuwait calendar day of an instant.
+ *
+ * The days of this worker are KUWAIT days, because the capture day is still
+ * running in Kuwait while the worker runs.
+ */
+function kuwaitDayOf(instantMs: number): string {
+  return new Date(instantMs + KUWAIT_OFFSET_MS).toISOString().slice(0, 10);
+}
+
+/**
+ * The number of days from one calendar day to another.
+ *
+ * Both days are `YYYY-MM-DD`, so they are counted at UTC midnight and the
+ * answer is a whole number of days.
+ */
+function daysBetween(from: string, to: string): number {
+  const start = Date.parse(`${from}T00:00:00Z`);
+  const end = Date.parse(`${to}T00:00:00Z`);
+  if (Number.isNaN(start) || Number.isNaN(end)) return 0;
+  return Math.round((end - start) / 86_400_000);
+}
+
+/**
+ * True when the continuation of this capture day has outlived the capture
+ * day.
+ *
+ * The capture day may be continued on the capture day itself and on the next
+ * Kuwait day. After that the continuation would cross into the next capture
+ * day's job, and the job is finished instead of coming back.
+ */
+function continuationExpired(capturedOn: string, nowMs: number): boolean {
+  const age = daysBetween(capturedOn, kuwaitDayOf(nowMs));
+  return age > CONTINUATION_MAX_AGE_DAYS;
+}
+
+/**
  * The token that names a planned daily observation inside the queue.
  *
  * The queue of the accepted checkpoint holds the work that is still owed.
@@ -819,6 +973,49 @@ async function collect(context: JobContext): Promise<JobStep> {
     return { job: result(context, "abandoned", "context_missing"), stopRun: false };
   }
 
+  // --- The truth of this visit --------------------------------------------
+  //
+  // It is created before the first read, because EVERY exit records it: a
+  // visit that stops half way says what it did, so the next visit does not
+  // ask for it again.
+  const visit: OwnerVisitState = {
+    owedDays: [],
+    collectedDays: [],
+    mediaQueue: [],
+    cursor: checkpoint.cursor,
+    pagesFetched: checkpoint.pagesFetched,
+    oldestReturnedAt: checkpoint.oldestReturnedAt,
+    windowStart: checkpoint.windowStart ?? mediaWindowStart(job.capturedOn),
+    windowEnd: checkpoint.windowEnd ?? job.capturedOn,
+    truncated: checkpoint.truncated,
+    windowCovered: checkpoint.windowCovered,
+    gapReason: checkpoint.gapReason,
+    sweepStopped: checkpoint.windowCovered ? "window_covered" : null,
+    usagePercent: 0,
+    usageStop: false,
+  };
+
+  // The queue of the work that is still owed, as the claim carries it.
+  const queuedTokens = [...checkpoint.remainingIds];
+  const queuedDays: string[] = [];
+  for (const token of queuedTokens) {
+    const day = plannedDayFromToken(token);
+    if (day !== null && !queuedDays.includes(day)) queuedDays.push(day);
+  }
+  visit.owedDays = queuedDays;
+  visit.mediaQueue = queuedTokens.filter((token) => plannedDayFromToken(token) === null);
+
+  // --- The end of the continuation ----------------------------------------
+  //
+  // A job that keeps coming back must stop coming back. The capture day may
+  // be continued on the capture day itself and on the next Kuwait day; after
+  // that the continuation would cross into the next capture day's job, so
+  // the job is finished with a terminal outcome and the work that is still
+  // owed is recorded as the gap it is.
+  if (continuationExpired(job.capturedOn, context.startedAt)) {
+    return await expireContinuation(context, visit);
+  }
+
   // --- The target --------------------------------------------------------
   const target = await read(context, (signal) =>
     ports.store.readOwnerTarget({
@@ -884,6 +1081,10 @@ async function collect(context: JobContext): Promise<JobStep> {
       capability.scopesAuthoritative &&
       !capability.grantedScopes.includes(DIRECT_INSIGHTS_SCOPE)
     ) {
+      // The data is not obtainable with this connection. The checkpoint is
+      // written before the terminal outcome, so the work that is still owed
+      // is on the record and not only in this run.
+      await recordVisitProgress(context, visit);
       return await persistFailure(context, "unavailable", "direct_login_unsupported");
     }
 
@@ -1032,9 +1233,6 @@ async function collect(context: JobContext): Promise<JobStep> {
   //
   // A nearly spent usage budget stops the provider work: no further call is
   // made for this job, and the run stops after it.
-  let usagePercent = 0;
-  let usageStop = false;
-  let metricsAvailable = true;
 
   // --- The days this job owes --------------------------------------------
   //
@@ -1042,17 +1240,6 @@ async function collect(context: JobContext): Promise<JobStep> {
   // job owes the last completed Kuwait day and the day before it.
   const primaryDay = previousDay(job.capturedOn);
   const correctionDay = previousDay(primaryDay);
-
-  // The media window of this capture day.
-  const windowStart = checkpoint.windowStart ?? mediaWindowStart(job.capturedOn);
-  const windowEnd = checkpoint.windowEnd ?? job.capturedOn;
-
-  const queuedTokens = [...checkpoint.remainingIds];
-  const queuedDays: string[] = [];
-  for (const token of queuedTokens) {
-    const day = plannedDayFromToken(token);
-    if (day !== null && !queuedDays.includes(day)) queuedDays.push(day);
-  }
 
   const freshJob = checkpoint.pagesFetched === 0 && checkpoint.cursor === null &&
     !checkpoint.windowCovered && queuedTokens.length === 0;
@@ -1069,6 +1256,7 @@ async function collect(context: JobContext): Promise<JobStep> {
     // contract is owed even when the queue does not name it.
     if (job.pendingOperations.includes(accountDayOperationKey(day))) owedDays.push(day);
   }
+  visit.owedDays = owedDays;
 
   if (owedDays.length > 0) {
     // The plan is recorded BEFORE the first attempt. A `pending` operation
@@ -1098,26 +1286,14 @@ async function collect(context: JobContext): Promise<JobStep> {
     // which daily observations are still owed. The sweep state of the
     // checkpoint is carried over unchanged: this write only plans work.
     const plannedQueue = mergeQueue(owedDays.map(accountDayToken), queuedTokens);
-    await write(context, (signal) =>
-      ports.store.recordProgress({
-        jobId: job.jobId,
-        claimToken: job.claimToken,
-        jobGeneration: job.jobGeneration,
-        payload: inventoryProgress({
-          cursor: checkpoint.cursor,
-          pagesFetched: checkpoint.pagesFetched,
-          oldestReturnedAt: checkpoint.oldestReturnedAt,
-          windowStart,
-          windowEnd,
-          partial: checkpoint.partial || plannedQueue.length > 0,
-          truncated: checkpoint.truncated,
-          windowCovered: checkpoint.windowCovered,
-          gapReason: checkpoint.gapReason,
-          remainingIds: plannedQueue,
-        }),
-        signal,
-      })
-    );
+    await recordVisitProgress(context, visit, {
+      cursor: checkpoint.cursor,
+      partial: checkpoint.partial || plannedQueue.length > 0,
+      truncated: checkpoint.truncated,
+      windowCovered: checkpoint.windowCovered,
+      gapReason: checkpoint.gapReason,
+      remainingIds: plannedQueue,
+    });
   }
 
   // --- The profile observation ------------------------------------------
@@ -1131,12 +1307,12 @@ async function collect(context: JobContext): Promise<JobStep> {
         signal,
       })
     );
-    usagePercent = Math.max(usagePercent, profile.usagePercent);
+    visit.usagePercent = Math.max(visit.usagePercent, profile.usagePercent);
     profileCounts = profile.value;
-    usageStop = usagePercent >= USAGE_STOP_PERCENT;
+    visit.usageStop = visit.usagePercent >= USAGE_STOP_PERCENT;
   } catch (error) {
     if (error instanceof BudgetExceededError) throw error;
-    return await handleProviderFailure(context, bucketKey, error);
+    return await handleProviderFailure(context, bucketKey, error, visit);
   }
 
   if (profileCounts !== null) {
@@ -1172,11 +1348,9 @@ async function collect(context: JobContext): Promise<JobStep> {
   //
   // They run BEFORE the media continuation: they are small, and the day
   // that does not fit is resumed on the next visit.
-  const collectedDays: string[] = [];
-
   for (const day of owedDays) {
     // The usage budget is nearly spent: no further provider call is made.
-    if (usageStop) break;
+    if (visit.usageStop) break;
     if (!context.budget.canStartProviderCall()) break;
 
     let dayValue: Awaited<
@@ -1192,12 +1366,12 @@ async function collect(context: JobContext): Promise<JobStep> {
           signal,
         })
       );
-      usagePercent = Math.max(usagePercent, answer.usagePercent);
-      usageStop = usagePercent >= USAGE_STOP_PERCENT;
+      visit.usagePercent = Math.max(visit.usagePercent, answer.usagePercent);
+      visit.usageStop = visit.usagePercent >= USAGE_STOP_PERCENT;
       dayValue = answer.value;
     } catch (error) {
       if (error instanceof BudgetExceededError) throw error;
-      return await handleProviderFailure(context, bucketKey, error);
+      return await handleProviderFailure(context, bucketKey, error, visit);
     }
 
     const accountDayPayload: OwnerSnapshotPayload = {
@@ -1210,6 +1384,10 @@ async function collect(context: JobContext): Promise<JobStep> {
           period_start: dayValue.period_start,
           period_end: dayValue.period_end,
           provider_timezone: dayValue.provider_timezone,
+          // A well formed answer with no metric is a FACT about that day, not
+          // a failure: the provider says there is nothing to report, and the
+          // row says so truthfully. The day is collected either way, so the
+          // job does not keep it and does not come back for it.
           status: Object.keys(dayValue.metrics).length > 0 ? "ok" : "unavailable",
           metrics: { ...dayValue.metrics },
         },
@@ -1225,29 +1403,19 @@ async function collect(context: JobContext): Promise<JobStep> {
       })
     );
 
-    collectedDays.push(day);
-    if (day === primaryDay && Object.keys(dayValue.metrics).length === 0) {
-      metricsAvailable = false;
-    }
+    visit.collectedDays.push(day);
 
-    if (usageStop) break;
+    if (visit.usageStop) break;
   }
 
   // --- The media inventory ------------------------------------------------
   const resuming = checkpoint.pagesFetched > 0 && !checkpoint.windowCovered;
 
-  let pagesFetched = checkpoint.pagesFetched;
-  let truncated = checkpoint.truncated;
-  let windowCovered = checkpoint.windowCovered;
-  let oldestReturnedAt = checkpoint.oldestReturnedAt;
-  let cursor = resuming ? checkpoint.cursor : null;
-  let gapReason = checkpoint.gapReason;
-  let sweepStopped = checkpoint.windowCovered ? "window_covered" : null;
+  // The sweep resumes from the cursor of the last visit, unless the window
+  // was already covered.
+  visit.cursor = resuming ? checkpoint.cursor : null;
 
-  // The queue of the media that still owe their insights.
-  let mediaQueue = queuedTokens.filter((token) => plannedDayFromToken(token) === null);
-
-  if (!windowCovered && !usageStop) {
+  if (!visit.windowCovered && !visit.usageStop) {
     let sweepValue: Awaited<
       ReturnType<InstagramGraphProvider["fetchMediaWindow"]>
     >["value"];
@@ -1257,32 +1425,33 @@ async function collect(context: JobContext): Promise<JobStep> {
         provider.fetchMediaWindow({
           igUserId: target.platformUserId,
           token: token,
-          windowStart,
-          windowEnd,
-          cursor,
+          windowStart: visit.windowStart,
+          windowEnd: visit.windowEnd,
+          cursor: visit.cursor,
           maxPages: MEDIA_PAGES_PER_ATTEMPT,
           signal,
         })
       );
-      usagePercent = Math.max(usagePercent, sweep.usagePercent);
-      usageStop = usagePercent >= USAGE_STOP_PERCENT;
+      visit.usagePercent = Math.max(visit.usagePercent, sweep.usagePercent);
+      visit.usageStop = visit.usagePercent >= USAGE_STOP_PERCENT;
       sweepValue = sweep.value;
     } catch (error) {
       if (error instanceof BudgetExceededError) throw error;
-      return await handleProviderFailure(context, bucketKey, error);
+      return await handleProviderFailure(context, bucketKey, error, visit);
     }
 
-    pagesFetched += sweepValue.pagesFetched;
-    truncated = sweepValue.truncated;
-    windowCovered = sweepValue.windowCovered;
-    cursor = sweepValue.nextCursor;
-    sweepStopped = sweepValue.stopped;
+    visit.pagesFetched += sweepValue.pagesFetched;
+    visit.truncated = sweepValue.truncated;
+    visit.windowCovered = sweepValue.windowCovered;
+    visit.cursor = sweepValue.nextCursor;
+    visit.sweepStopped = sweepValue.stopped;
 
     if (
       sweepValue.oldestReturnedAt !== null &&
-      (oldestReturnedAt === null || sweepValue.oldestReturnedAt < oldestReturnedAt)
+      (visit.oldestReturnedAt === null ||
+        sweepValue.oldestReturnedAt < visit.oldestReturnedAt)
     ) {
-      oldestReturnedAt = sweepValue.oldestReturnedAt;
+      visit.oldestReturnedAt = sweepValue.oldestReturnedAt;
     }
 
     if (sweepValue.items.length > 0) {
@@ -1353,15 +1522,15 @@ async function collect(context: JobContext): Promise<JobStep> {
       // provider call on a media the database already knows.
       const discovered = [...sweepValue.items].sort(compareMediaItems);
       for (const item of discovered) {
-        if (mediaQueue.includes(item.ig_media_id)) continue;
+        if (visit.mediaQueue.includes(item.ig_media_id)) continue;
         if (isCollectedMedia(existingById.get(item.ig_media_id))) continue;
-        mediaQueue.push(item.ig_media_id);
+        visit.mediaQueue.push(item.ig_media_id);
       }
     }
 
-    if (mediaQueue.length > MEDIA_QUEUE_LIMIT) {
-      mediaQueue = mediaQueue.slice(0, MEDIA_QUEUE_LIMIT);
-      gapReason = MEDIA_QUEUE_CAPPED;
+    if (visit.mediaQueue.length > MEDIA_QUEUE_LIMIT) {
+      visit.mediaQueue = visit.mediaQueue.slice(0, MEDIA_QUEUE_LIMIT);
+      visit.gapReason = MEDIA_QUEUE_CAPPED;
     }
   }
 
@@ -1369,7 +1538,7 @@ async function collect(context: JobContext): Promise<JobStep> {
   //
   // At most five media per visit, one after the other, and a media leaves
   // the queue only after its snapshot was persisted.
-  const candidates = mediaQueue.slice(0, MEDIA_INSIGHTS_PER_VISIT);
+  const candidates = visit.mediaQueue.slice(0, MEDIA_INSIGHTS_PER_VISIT);
   let droppedMedia = 0;
 
   if (candidates.length > 0) {
@@ -1392,7 +1561,7 @@ async function collect(context: JobContext): Promise<JobStep> {
         // The inventory row of this media is gone. It cannot be collected,
         // and it is not owed any more: the queue says what is left.
         droppedMedia += 1;
-        mediaQueue = mediaQueue.filter((id) => id !== mediaId);
+        visit.mediaQueue = visit.mediaQueue.filter((id) => id !== mediaId);
         continue;
       }
 
@@ -1410,15 +1579,20 @@ async function collect(context: JobContext): Promise<JobStep> {
             signal,
           })
         );
-        usagePercent = Math.max(usagePercent, answer.usagePercent);
-        usageStop = usagePercent >= USAGE_STOP_PERCENT;
+        visit.usagePercent = Math.max(visit.usagePercent, answer.usagePercent);
+        visit.usageStop = visit.usagePercent >= USAGE_STOP_PERCENT;
         insights = answer.value;
       } catch (error) {
         if (error instanceof BudgetExceededError) throw error;
         if (error instanceof OwnerProviderError) {
           if (error.kind === "rate_limited") {
-            // The provider is throttling: the job is parked and the run
-            // stops, because a rate limit is a condition of everyone.
+            // The provider is throttling: the progress of this visit is
+            // recorded FIRST, then the job is parked and the run stops,
+            // because a rate limit is a condition of everyone.
+            //
+            // The checkpoint goes first because the job-scoped throttle
+            // record releases the lease: a later write would be refused.
+            await recordVisitProgress(context, visit);
             const until = error.throttledUntil ?? new Date(ports.now() + THROTTLE_WINDOW_MS);
             await write(context, (signal) =>
               ports.store.recordThrottle({
@@ -1443,15 +1617,24 @@ async function collect(context: JobContext): Promise<JobStep> {
             return { job: result(context, "retry", "rate_limited"), stopRun: true };
           }
           if (error.kind === "token_invalid") {
+            // The credential is dead. The progress of this visit is recorded
+            // first, so the next visit does not ask for it again.
+            await recordVisitProgress(context, visit);
             return await persistFailure(context, "retry", "token_invalid");
           }
-          if (error.kind === "scope_missing") {
-            return await persistFailure(context, "unavailable", "scope_missing");
+          if (isDefinitiveMediaRefusal(error)) {
+            // The provider refuses THIS media and will refuse it again. The
+            // item is closed, and only the item: the job keeps the work it
+            // has left.
+            await closeMediaItem(context, visit, mediaId, row);
+            continue;
           }
         }
-        // A timeout, a transport failure and a malformed answer are NOT
-        // evidence that the metric is unsupported. The media keeps its place
-        // in the queue and is collected on a later visit.
+        // A timeout, a transport failure, a malformed answer and a refusal
+        // of the account's permission are NOT evidence that the media has no
+        // insights. The media goes to the BACK of the queue, so it never
+        // blocks the media behind it, and it is collected on a later visit.
+        moveToBackOfQueue(visit, mediaId);
         continue;
       }
 
@@ -1466,7 +1649,7 @@ async function collect(context: JobContext): Promise<JobStep> {
             ...(row.caption === null ? {} : { caption: row.caption }),
             ...(row.permalink === null ? {} : { permalink: row.permalink }),
             published_at: row.publishedAt,
-            status: insights.supported ? "ok" : "unavailable",
+            status: "ok",
             metrics: {
               ...(row.likeCountPublic === null
                 ? {}
@@ -1490,9 +1673,9 @@ async function collect(context: JobContext): Promise<JobStep> {
       );
 
       // Only now is the media out of the queue.
-      mediaQueue = mediaQueue.filter((id) => id !== mediaId);
+      visit.mediaQueue = visit.mediaQueue.filter((id) => id !== mediaId);
 
-      if (usageStop) break;
+      if (visit.usageStop) break;
     }
   }
 
@@ -1507,82 +1690,45 @@ async function collect(context: JobContext): Promise<JobStep> {
   }
 
   // --- The truth of the inventory ----------------------------------------
-  const pendingDays = owedDays.filter((day) => !collectedDays.includes(day));
+  const pendingDays = visit.owedDays.filter((day) => !visit.collectedDays.includes(day));
   const remainingIds = mergeQueue(
     pendingDays.map(accountDayToken),
-    mediaQueue,
+    visit.mediaQueue,
   );
 
   // A covered window is never a truncated one.
-  if (windowCovered) truncated = false;
+  if (visit.windowCovered) visit.truncated = false;
 
-  if (sweepStopped === "unusable_cursor" || (truncated && cursor === null)) {
+  if (visit.sweepStopped === "unusable_cursor") {
     // The provider's pagination cannot be followed. The window can never be
     // covered for this account, and a retry would fetch exactly the same
     // page. The outcome is terminal and says why.
-    gapReason = "inventory_cursor_unusable";
-    await write(context, (signal) =>
-      ports.store.recordProgress({
-        jobId: job.jobId,
-        claimToken: job.claimToken,
-        jobGeneration: job.jobGeneration,
-        payload: inventoryProgress({
-          cursor: null,
-          pagesFetched,
-          oldestReturnedAt,
-          windowStart,
-          windowEnd,
-          partial: true,
-          truncated: true,
-          windowCovered: false,
-          gapReason,
-          remainingIds,
-        }),
-        signal,
-      })
-    );
+    //
+    // A sweep that stopped for a RATE LIMIT or for the usage budget is NOT
+    // this case: it is temporary, and the job stays resumable.
+    visit.gapReason = "inventory_cursor_unusable";
+    await recordVisitProgress(context, visit, {
+      cursor: null,
+      partial: true,
+      truncated: true,
+      windowCovered: false,
+      gapReason: visit.gapReason,
+      remainingIds,
+    });
     return await persistFailure(context, "unavailable", "inventory_unavailable");
   }
 
-  const progress: OwnerInventoryProgressPayload = inventoryProgress({
-    cursor: truncated ? cursor : null,
-    pagesFetched,
-    oldestReturnedAt,
-    windowStart,
-    windowEnd,
-    partial: remainingIds.length > 0 || !windowCovered,
-    truncated,
-    windowCovered,
-    // A durable gap survives the visit; the others describe this visit.
-    gapReason: gapReason === MEDIA_QUEUE_CAPPED
-      ? MEDIA_QUEUE_CAPPED
-      : truncated
-      ? (gapReason ?? "inventory_truncated")
-      : remainingIds.length > 0
-      ? (gapReason ?? "collection_continues")
-      : usageStop
-      ? "usage_stop"
-      : null,
-    remainingIds,
-  });
-
-  await write(context, (signal) =>
-    ports.store.recordProgress({
-      jobId: job.jobId,
-      claimToken: job.claimToken,
-      jobGeneration: job.jobGeneration,
-      payload: progress,
-      signal,
-    })
-  );
+  // The progress of this visit is recorded BEFORE the outcome, so the next
+  // visit resumes from it instead of asking for the same work again.
+  await recordVisitProgress(context, visit, { remainingIds });
 
   // --- The shared bucket --------------------------------------------------
-  const nearlySpent = usagePercent >= USAGE_STOP_PERCENT;
-  if (usagePercent > 0) {
+  const nearlySpent = visit.usagePercent >= USAGE_STOP_PERCENT;
+  if (visit.usagePercent > 0) {
     await write(context, (signal) =>
       ports.store.recordThrottle({
         bucketKey,
-        usagePercent: Math.round(usagePercent),
+        usagePercent: Math.round(visit.usagePercent),
         throttledUntil: nearlySpent
           ? new Date(ports.now() + THROTTLE_WINDOW_MS).toISOString()
           : null,
@@ -1597,7 +1743,7 @@ async function collect(context: JobContext): Promise<JobStep> {
       jobId: job.jobId,
       socialAccountId: job.socialAccountId,
       outcome: "usage_stop",
-      usagePercent,
+      usagePercent: visit.usagePercent,
       durationMs: ports.now() - context.startedAt,
     });
   }
@@ -1614,16 +1760,13 @@ async function collect(context: JobContext): Promise<JobStep> {
     // completed again on the next visit.
     return await persistFailure(context, "partial", "daily_observation_pending");
   }
-  if (mediaQueue.length > 0) {
+  if (visit.mediaQueue.length > 0) {
     // The insights of some media are still owed. The job stays claimable and
     // the queue is resumed on the next visit.
     return await persistFailure(context, "partial", "media_insights_pending");
   }
-  if (!windowCovered) {
+  if (!visit.windowCovered) {
     return await persistFailure(context, "partial", "inventory_incomplete");
-  }
-  if (!metricsAvailable) {
-    return await persistFailure(context, "partial", "metrics_unavailable");
   }
 
   await write(context, (signal) =>
@@ -1698,21 +1841,32 @@ function inventoryProgress(input: {
  * A throttle is recorded against the SHARED bucket AND parks this job, which
  * releases the lease. The parked job is not completed afterwards: a parked
  * job and a completed job are two different states.
+ *
+ * The progress of the visit is recorded BEFORE the outcome in every case:
+ * the days that were collected stay collected, the media that still owe
+ * their insights stay in the queue, and the next visit resumes from there
+ * instead of asking for the same work again.
  */
 async function handleProviderFailure(
   context: JobContext,
   bucketKey: string,
   error: unknown,
+  visit: OwnerVisitState,
 ): Promise<JobStep> {
   const { ports, job } = context;
 
   if (!(error instanceof OwnerProviderError)) {
+    await recordVisitProgress(context, visit);
     return await persistFailure(context, "retry", "provider_error");
   }
 
   if (error.kind === "rate_limited") {
     // Without the provider's own deadline the shared window is used, so the
     // bucket really blocks the next request.
+    //
+    // The checkpoint goes first: the job-scoped throttle record releases the
+    // lease, so a later write would be refused.
+    await recordVisitProgress(context, visit);
     const until = error.throttledUntil ?? new Date(ports.now() + THROTTLE_WINDOW_MS);
     await write(context, (signal) =>
       ports.store.recordThrottle({
@@ -1740,17 +1894,238 @@ async function handleProviderFailure(
   }
 
   if (error.kind === "token_invalid") {
+    await recordVisitProgress(context, visit);
     return await persistFailure(context, "retry", "token_invalid");
   }
 
   if (error.kind === "scope_missing") {
-    // The provider refused the permission for this account. That is a
+    // The provider refused the permission for this ACCOUNT. That is a
     // terminal, classified outcome: the data is not obtainable with this
     // credential, and the reason code says why.
+    //
+    // The days that were collected before the refusal stay collected, and
+    // the checkpoint says what is still owed.
+    await recordVisitProgress(context, visit);
     return await persistFailure(context, "unavailable", "scope_missing");
   }
 
+  await recordVisitProgress(context, visit);
   return await persistFailure(context, "retry", "provider_error");
+}
+
+/**
+ * The inventory progress of one visit.
+ *
+ * The truth it carries is the truth of the visit: the pages that were
+ * fetched, the cursor the next visit resumes from, the days that are still
+ * owed, the media that still owe their insights and whether the window was
+ * covered.
+ */
+function visitProgress(
+  visit: OwnerVisitState,
+  overrides: {
+    readonly cursor?: string | null;
+    readonly partial?: boolean;
+    readonly truncated?: boolean;
+    readonly windowCovered?: boolean;
+    readonly gapReason?: string | null;
+    readonly remainingIds?: readonly string[];
+  } = {},
+): OwnerInventoryProgressPayload {
+  const pendingDays = visit.owedDays.filter((day) => !visit.collectedDays.includes(day));
+  const remainingIds = overrides.remainingIds ??
+    mergeQueue(pendingDays.map(accountDayToken), visit.mediaQueue);
+  const truncated = overrides.truncated ?? visit.truncated;
+  const windowCovered = overrides.windowCovered ?? visit.windowCovered;
+  const gapReason = overrides.gapReason !== undefined
+    ? overrides.gapReason
+    : visit.gapReason === MEDIA_QUEUE_CAPPED
+    ? MEDIA_QUEUE_CAPPED
+    : truncated
+    ? (visit.gapReason ?? "inventory_truncated")
+    : remainingIds.length > 0
+    ? (visit.gapReason ?? "collection_continues")
+    : visit.usageStop
+    ? "usage_stop"
+    : null;
+
+  return inventoryProgress({
+    cursor: overrides.cursor !== undefined
+      ? overrides.cursor
+      : truncated
+      ? visit.cursor
+      : null,
+    pagesFetched: visit.pagesFetched,
+    oldestReturnedAt: visit.oldestReturnedAt,
+    windowStart: visit.windowStart,
+    windowEnd: visit.windowEnd,
+    partial: overrides.partial ?? (remainingIds.length > 0 || !windowCovered),
+    truncated,
+    windowCovered,
+    gapReason,
+    remainingIds,
+  });
+}
+
+/**
+ * Records the truth of one visit in the accepted checkpoint.
+ *
+ * It is a write, and it is fenced by the claim like every other write: a
+ * refused write throws, and the caller abandons the job to its lease.
+ */
+async function recordVisitProgress(
+  context: JobContext,
+  visit: OwnerVisitState,
+  overrides: {
+    readonly cursor?: string | null;
+    readonly partial?: boolean;
+    readonly truncated?: boolean;
+    readonly windowCovered?: boolean;
+    readonly gapReason?: string | null;
+    readonly remainingIds?: readonly string[];
+  } = {},
+): Promise<void> {
+  const { ports, job } = context;
+  const payload = visitProgress(visit, overrides);
+
+  await write(context, (signal) =>
+    ports.store.recordProgress({
+      jobId: job.jobId,
+      claimToken: job.claimToken,
+      jobGeneration: job.jobGeneration,
+      payload,
+      signal,
+    })
+  );
+}
+
+/**
+ * Moves a media to the BACK of the queue of the media that owe insights.
+ *
+ * A media that keeps its place at the head of the queue blocks every media
+ * behind it for as long as it keeps failing, and the queue never drains.
+ */
+function moveToBackOfQueue(visit: OwnerVisitState, mediaId: string): void {
+  visit.mediaQueue = [
+    ...visit.mediaQueue.filter((id) => id !== mediaId),
+    mediaId,
+  ];
+}
+
+/**
+ * True when the provider refused ONE media and will refuse it again.
+ *
+ * Meta answers a media it will never answer with a Graph error object of
+ * code 10 ("not enough viewers for the media to show insights") or of code
+ * 100. The refusal is about that media alone: it says nothing about the
+ * account and nothing about the other media.
+ */
+function isDefinitiveMediaRefusal(error: OwnerProviderError): boolean {
+  return error.graphCode !== null &&
+    DEFINITIVE_MEDIA_GRAPH_CODES.has(error.graphCode);
+}
+
+/**
+ * Closes ONE media that the provider refuses for good.
+ *
+ * The item is written as `unavailable`, which is the provider's own
+ * statement that this media has no insights to give, and it leaves the
+ * queue. The JOB is not closed by it: the other media are still owed and
+ * the account is still collectable.
+ *
+ * The item-level reason has no column in the accepted SQL - the media
+ * snapshot carries a status and the media operation carries a state - so it
+ * is recorded in the bounded log of this worker.
+ */
+async function closeMediaItem(
+  context: JobContext,
+  visit: OwnerVisitState,
+  mediaId: string,
+  row: OwnerMediaInventoryRow,
+): Promise<void> {
+  const { ports, job } = context;
+
+  const payload: OwnerSnapshotPayload = {
+    kind: "owner_media",
+    items: [
+      {
+        ig_media_id: mediaId,
+        ...(row.mediaProductType === null ? {} : { media_product_type: row.mediaProductType }),
+        ...(row.mediaType === null ? {} : { media_type: row.mediaType }),
+        ...(row.thumbnailUrl === null ? {} : { thumbnail_url: row.thumbnailUrl }),
+        ...(row.caption === null ? {} : { caption: row.caption }),
+        ...(row.permalink === null ? {} : { permalink: row.permalink }),
+        published_at: row.publishedAt,
+        // The provider refuses this media: its insights are unavailable, and
+        // the row says so. The insight metrics stay null: the provider
+        // never reported them.
+        status: "unavailable",
+        metrics: {
+          ...(row.likeCountPublic === null
+            ? {}
+            : { like_count_public: row.likeCountPublic }),
+          ...(row.commentsCountPublic === null
+            ? {}
+            : { comments_count_public: row.commentsCountPublic }),
+        },
+      },
+    ],
+  };
+
+  await write(context, (signal) =>
+    ports.store.persistSnapshot({
+      jobId: job.jobId,
+      claimToken: job.claimToken,
+      jobGeneration: job.jobGeneration,
+      payload,
+      signal,
+    })
+  );
+
+  // The closed media leaves the queue: it owes nothing any more.
+  visit.mediaQueue = visit.mediaQueue.filter((id) => id !== mediaId);
+
+  ports.log({
+    event: "owner_media_insights_unavailable",
+    jobId: job.jobId,
+    socialAccountId: job.socialAccountId,
+    outcome: "unavailable",
+    reasonCode: MEDIA_INSIGHTS_UNAVAILABLE,
+    durationMs: ports.now() - context.startedAt,
+  });
+}
+
+/**
+ * Finishes a continuation that outlived its capture day.
+ *
+ * The terminal outcome is `unavailable` with the reason `continuation_
+ * expired`, and the checkpoint carries the truthful gap: the window is not
+ * covered, the gap says why, and the work that is still owed is listed.
+ */
+async function expireContinuation(
+  context: JobContext,
+  visit: OwnerVisitState,
+): Promise<JobStep> {
+  const { ports, job } = context;
+
+  ports.log({
+    event: "owner_continuation_expired",
+    jobId: job.jobId,
+    socialAccountId: job.socialAccountId,
+    outcome: "unavailable",
+    reasonCode: CONTINUATION_EXPIRED,
+    durationMs: ports.now() - context.startedAt,
+  });
+
+  await recordVisitProgress(context, visit, {
+    cursor: visit.cursor,
+    partial: true,
+    truncated: visit.truncated,
+    windowCovered: false,
+    gapReason: CONTINUATION_EXPIRED,
+  });
+
+  return await persistFailure(context, "unavailable", "continuation_expired");
 }
 
 /**

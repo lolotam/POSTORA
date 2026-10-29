@@ -411,7 +411,52 @@ Deno.test("a media whose insights failed keeps its place in the queue", async ()
   ]);
 });
 
-Deno.test("a media whose type has no insights is closed truthfully", async () => {
+/**
+ * A media that keeps failing must not block the media behind it.
+ *
+ * The queue is the work that is still owed, and the worker always takes the
+ * first five of it. A media that keeps its place at the head would be taken
+ * again and again, and the media behind it would never be collected.
+ */
+Deno.test("a media whose insights fail goes to the back of the queue", async () => {
+  const media = Array.from({ length: 8 }, (_unused, index) => ({
+    id: `media-${index + 1}`,
+    media_type: "IMAGE",
+    media_product_type: "FEED",
+    timestamp: `2026-10-${String(20 - index).padStart(2, "0")}T12:00:00Z`,
+  }));
+
+  const harness = createHarness({
+    store: { jobs: [createClaimedJob()] },
+    graph: {
+      media,
+      mediaInsights: {
+        "media-1": { error: { message: "temporary" } },
+      },
+    },
+  });
+
+  const summary = await runOwnerDrain(harness.ports);
+
+  assertEquals(summary.partial, 1);
+
+  // The failed media is at the BACK of the queue, behind the media that were
+  // not reached in this visit.
+  const progress = lastInventoryProgress(harness.calls);
+  assertEquals(progress.remaining_ids, ["media-6", "media-7", "media-8", "media-1"]);
+});
+
+/**
+ * An ALBUM is a FEED media and it HAS insights.
+ *
+ * The media insights reference says, under "Album metrics": "Insights data
+ * is not available for any media WITHIN an Instagram Media album"
+ * (https://developers.facebook.com/docs/instagram-platform/reference/instagram-media/insights).
+ *
+ * The sentence is about the CHILDREN of an album. The album itself is
+ * asked, and its answer is stored like every other media's answer.
+ */
+Deno.test("an album media is asked for its insights", async () => {
   const harness = createHarness({
     store: {
       jobs: [createClaimedJob()],
@@ -425,10 +470,63 @@ Deno.test("a media whose type has no insights is closed truthfully", async () =>
 
   assertEquals(summary.completed, 1);
 
-  // The media was written as unavailable, and no insight was requested.
+  // The album was asked: the provider call was spent.
+  assertEquals(harness.graphCalls.includes("mediaInsight"), true);
+
+  // The answer was stored as the answer of a media with insights.
   const insight = harness.calls.snapshots[4]!.items[0]!;
-  assertEquals(insight.status, "unavailable");
-  assertEquals(harness.graphCalls.includes("mediaInsight"), false);
+  assertEquals(insight.ig_media_id, "media-1");
+  assertEquals(insight.media_type, "CAROUSEL_ALBUM");
+  assertEquals(insight.status, "ok");
+  assertEquals(insight.metrics, { reach: 100, views: 200 });
+});
+
+/**
+ * A refusal of ONE media closes that media and only that media.
+ *
+ * Meta answers a media it will never answer with a Graph error object of
+ * code 10 ("not enough viewers for the media to show insights") or of code
+ * 100. The refusal is about that media: it says nothing about the account
+ * and nothing about the other media, so it must not close the job.
+ */
+Deno.test("a media the provider refuses for good closes only that media", async () => {
+  for (const code of [10, 100]) {
+    const harness = createHarness({
+      store: { jobs: [createClaimedJob()] },
+      graph: {
+        mediaInsights: {
+          "media-1": { error: { code, message: "the provider refuses this media" } },
+        },
+      },
+    });
+
+    const summary = await runOwnerDrain(harness.ports);
+
+    // The JOB is not closed: the account is still collectable.
+    assertEquals(summary.unavailable, 0, `code ${code}`);
+    assertEquals(summary.completed, 1, `code ${code}`);
+    assertEquals(harness.calls.completes, [
+      { outcome: "completed", reasonCode: null },
+    ], `code ${code}`);
+
+    // The ITEM is closed, and it leaves the queue.
+    const closed = harness.calls.snapshots
+      .filter((entry) => entry.kind === "owner_media")
+      .at(-1)!.items[0]!;
+    assertEquals(closed.ig_media_id, "media-1", `code ${code}`);
+    assertEquals(closed.status, "unavailable", `code ${code}`);
+
+    const progress = lastInventoryProgress(harness.calls);
+    assertEquals(progress.remaining_ids, [], `code ${code}`);
+
+    // The item-level reason is on the log of this worker, and it never
+    // reaches the job's reason code.
+    const refusal = harness.logs.find(
+      (event) => event.event === "owner_media_insights_unavailable",
+    );
+    assertEquals(refusal !== undefined, true, `code ${code}`);
+    assertEquals(refusal!.reasonCode, "media_insights_unavailable", `code ${code}`);
+  }
 });
 
 Deno.test("a queue that cannot hold every media records the gap", async () => {
@@ -655,6 +753,46 @@ Deno.test("a nearly spent usage budget stops the run after the job", async () =>
   ]);
 });
 
+/**
+ * A sweep that stopped for the usage budget is TEMPORARY.
+ *
+ * The provider stopped the sweep because the shared budget is nearly spent,
+ * not because the pagination cannot be followed. The job has to stay
+ * resumable: the next visit continues the sweep, from the cursor if there is
+ * one and from the beginning of the feed if there is not.
+ */
+Deno.test("a usage stop during the first media page leaves the job resumable", async () => {
+  const harness = createHarness({
+    store: { jobs: [createClaimedJob()] },
+    graph: {
+      mediaHeaders: { "x-app-usage": JSON.stringify({ call_count: 85 }) },
+    },
+  });
+
+  const summary = await runOwnerDrain(harness.ports);
+
+  // The job is NOT closed as unavailable: a usage stop is temporary.
+  assertEquals(summary.unavailable, 0);
+  assertEquals(summary.partial, 1);
+  assertEquals(harness.calls.completes, [
+    { outcome: "partial", reasonCode: "rate_limited" },
+  ]);
+
+  // The shared bucket carries the window, and the job is not parked by it.
+  assertEquals(harness.calls.throttles.length, 1);
+  assertEquals(harness.calls.throttles[0]!.jobId, null);
+  assertEquals(harness.calls.throttles[0]!.usagePercent, 85);
+  assertEquals(harness.calls.throttles[0]!.throttledUntil !== null, true);
+
+  // The sweep is visibly incomplete and it resumes from the beginning: there
+  // is no cursor to resume from, because the first page never returned one.
+  const progress = lastInventoryProgress(harness.calls);
+  assertEquals(progress.truncated, true);
+  assertEquals(progress.window_covered, false);
+  assertEquals(progress.cursor, null);
+  assertEquals(progress.gap_reason, "inventory_truncated");
+});
+
 // ---------------------------------------------------------------------------
 // The fairness: one job never stalls the others
 // ---------------------------------------------------------------------------
@@ -751,8 +889,38 @@ Deno.test("a credential that was replaced does not stall the next owner", async 
   assertEquals(summary.jobs[1]!.outcome, "completed");
 });
 
-Deno.test("a throttled credential does not stall the next owner", async () => {
-  const throttledKey = await sha256Of("credential-throttled");
+/**
+ * A run that stops in the middle of the queue keeps what it collected.
+ *
+ * The days that were collected are collected: they are not owed again on the
+ * next visit. The media that still owe their insights stay in the queue, and
+ * the media that left it are not asked for again.
+ */
+Deno.test("a rate limit in the media queue keeps the days that were collected", async () => {
+  const harness = createHarness({
+    store: { jobs: [createClaimedJob()] },
+    graph: {
+      mediaInsights: {
+        "media-1": { error: { code: 32, message: "Page request limit reached" } },
+      },
+    },
+  });
+
+  const summary = await runOwnerDrain(harness.ports);
+
+  // The job is parked by the shared throttle, and the run stops.
+  assertEquals(summary.retried, 1);
+  assertEquals(summary.stoppedEarly, true);
+  assertEquals(harness.calls.throttles.length, 1);
+  assertEquals(harness.calls.throttles[0]!.jobId, TEST_JOB_ID);
+
+  // The checkpoint carries the work that is still owed: the media, and NOT
+  // the days that were collected before the throttle.
+  const progress = lastInventoryProgress(harness.calls);
+  assertEquals(progress.remaining_ids, ["media-1"]);
+});
+
+Deno.test("a throttled credential does not stall the next owner", async () => {  const throttledKey = await sha256Of("credential-throttled");
   const healthyKey = await sha256Of("credential-healthy");
 
   const broken = createClaimedJob({
@@ -1330,6 +1498,114 @@ Deno.test("a failed write abandons the job and stores nothing", async () => {
   assertEquals(summary.abandoned, 1);
   assertEquals(summary.processed, 0);
   assertEquals(summary.stoppedEarly, true);
+});
+
+// ---------------------------------------------------------------------------
+// The end of a continuation
+// ---------------------------------------------------------------------------
+
+/**
+ * A day the provider reports no metric for is a FACT, not a question.
+ *
+ * The answer was well formed and it was empty, so the day is collected with
+ * null metrics - the truthful availability - and the job does not keep it.
+ * A job that kept it would be re-claimed every minute for ever.
+ */
+Deno.test("a day the provider reports no metric for is collected and not re-owned", async () => {
+  const harness = createHarness({
+    store: { jobs: [createClaimedJob()] },
+    graph: {
+      accountDays: {
+        [TEST_PRIMARY_DAY]: { data: [] },
+        [TEST_CORRECTION_DAY]: accountDayAnswer({ reach: 450 }),
+      },
+    },
+  });
+
+  const summary = await runOwnerDrain(harness.ports);
+
+  // The day was collected, with its truthful status.
+  const primaryDay = harness.calls.snapshots
+    .filter((entry) => entry.kind === "owner_account_day")
+    .map((entry) => entry.items[0]!)
+    .find((item) => item.provider_date === TEST_PRIMARY_DAY)!;
+  assertEquals(primaryDay.status, "unavailable");
+  assertEquals(primaryDay.metrics, {});
+
+  // The job does not keep the day: it is completed, not left partial.
+  assertEquals(summary.completed, 1);
+  assertEquals(summary.partial, 0);
+  assertEquals(harness.calls.completes, [
+    { outcome: "completed", reasonCode: null },
+  ]);
+
+  // The day is not owed any more.
+  const progress = lastInventoryProgress(harness.calls);
+  assertEquals(progress.remaining_ids, []);
+});
+
+/**
+ * A continuation that outlived its capture day is finished.
+ *
+ * The capture day may be continued on the capture day itself and on the
+ * next Kuwait day. After that the continuation would cross into the next
+ * capture day's job, so the job is finished with a terminal outcome and the
+ * work that is still owed is recorded as the gap it is.
+ */
+Deno.test("a continuation that outlived its capture day is finished with the truthful gap", async () => {
+  const harness = createHarness({
+    store: {
+      jobs: [
+        createClaimedJob({
+          captured_on: "2026-10-20",
+          checkpoint: {
+            inventory_pages_fetched: 1,
+            inventory_remaining_ids: ["media-9"],
+            inventory_window_start: "2026-07-22",
+            inventory_window_end: "2026-10-20",
+          },
+        }),
+      ],
+    },
+    // The second Kuwait day after the capture day.
+    now: fixedClock(Date.parse("2026-10-22T09:00:00.000Z")),
+  });
+
+  const summary = await runOwnerDrain(harness.ports);
+
+  // The job is finished, terminally, and it says why.
+  assertEquals(summary.unavailable, 1);
+  assertEquals(summary.completed, 0);
+  assertEquals(harness.calls.completes, [
+    { outcome: "unavailable", reasonCode: "continuation_expired" },
+  ]);
+
+  // No provider call was spent on a capture day that has moved on.
+  assertEquals(harness.graphCalls.length, 0);
+
+  // The truthful gap is on the record: the window is not covered, the gap
+  // says why, and the work that is still owed is listed.
+  const progress = lastInventoryProgress(harness.calls);
+  assertEquals(progress.window_covered, false);
+  assertEquals(progress.gap_reason, "continuation_expired");
+  assertEquals(progress.remaining_ids, ["media-9"]);
+  assertEquals(progress.pages_fetched, 1);
+});
+
+Deno.test("a continuation inside its capture day is still collected", async () => {
+  const harness = createHarness({
+    store: {
+      jobs: [createClaimedJob({ captured_on: "2026-10-20" })],
+    },
+    // The next Kuwait day: the continuation is still inside the window.
+    now: fixedClock(Date.parse("2026-10-21T09:00:00.000Z")),
+  });
+
+  const summary = await runOwnerDrain(harness.ports);
+
+  assertEquals(summary.completed, 1);
+  assertEquals(summary.unavailable, 0);
+  assertEquals(harness.graphCalls.length > 0, true);
 });
 
 // ---------------------------------------------------------------------------

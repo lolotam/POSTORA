@@ -186,11 +186,16 @@ const UNIVERSAL_MEDIA_INSIGHT_METRICS: readonly string[] = [
 ];
 
 /**
- * The media type whose insights Meta documents as unavailable.
+ * The media type of an Instagram Media ALBUM.
  *
- * "Insights data is not available for any media within an Instagram Media
- * album." A media of that type therefore has no insight metrics at all, and
- * that is a POSITIVE statement about the provider, not a failed request.
+ * Meta documents, under "Album metrics" of the media insights reference
+ * (https://developers.facebook.com/docs/instagram-platform/reference/instagram-media/insights):
+ * "Insights data is not available for any media WITHIN an Instagram Media
+ * album."
+ *
+ * The sentence is about the CHILDREN of an album - the single images and
+ * videos it holds. The album itself is a FEED media and it HAS insights, so
+ * it is collected with the documented FEED metrics.
  */
 const ALBUM_MEDIA_TYPE = "CAROUSEL_ALBUM";
 
@@ -233,10 +238,13 @@ export function resolveOwnerGraphApiVersion(raw: string | null | undefined): str
 /**
  * The documented media insights metrics of one media.
  *
- * The set depends on the media's own product type, because Meta documents
- * which metric exists for which type. A media whose type has no insights
- * at all gets an EMPTY set: that is a positive statement from the provider's
- * documentation, and it is the only case in which a metric is terminal.
+ * The set depends on the media's own surface, because Meta documents which
+ * metric exists for which surface.
+ *
+ * An ALBUM is a FEED media: the media insights reference says that "Insights
+ * data is not available for any media WITHIN an Instagram Media album", and
+ * the children of an album are the ones without insights - not the album
+ * itself. The album is therefore collected with the documented FEED metrics.
  *
  * An unknown product type gets the intersection of the documented sets, so
  * the request stays inside what the provider certainly has.
@@ -246,7 +254,7 @@ export function mediaInsightMetricsFor(
   mediaType: string | null,
 ): readonly string[] {
   if (mediaType !== null && mediaType.trim().toUpperCase() === ALBUM_MEDIA_TYPE) {
-    return [];
+    return MEDIA_INSIGHT_METRICS_BY_PRODUCT_TYPE.FEED;
   }
 
   const key = mediaProductType === null ? "" : mediaProductType.trim().toUpperCase();
@@ -432,11 +440,6 @@ export class InstagramGraphProvider {
     readonly signal: AbortSignal;
   }): Promise<OwnerProviderResult<OwnerMediaInsights>> {
     const metrics = mediaInsightMetricsFor(input.mediaProductType, input.mediaType);
-    if (metrics.length === 0) {
-      // The provider's own documentation says this media has no insights.
-      // That is a positive statement about the media, not a failure.
-      return { value: { supported: false, metrics: {} }, usagePercent: 0 };
-    }
 
     const url = `${GRAPH_HOST}/${this.#apiVersion}/${encodeURIComponent(input.igMediaId)}` +
       `/insights?metric=${encodeURIComponent(metrics.join(","))}` +
@@ -487,7 +490,7 @@ export class InstagramGraphProvider {
       reported[name] = raw;
     }
 
-    return { value: { supported: true, metrics: reported }, usagePercent: response.usagePercent };
+    return { value: { metrics: reported }, usagePercent: response.usagePercent };
   }
 
   /**

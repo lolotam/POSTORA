@@ -88,6 +88,15 @@ export interface OwnerProviderErrorOptions {
   readonly usagePercent?: number;
   readonly throttledUntil?: Date | null;
   readonly retryable?: boolean;
+  /**
+   * The Graph error code the provider named, when it named one.
+   *
+   * The code is a NUMBER, never the provider's text, and it is what tells a
+   * refusal of ONE item apart from a refusal of the whole account: Meta
+   * answers a single media it will never answer with code 10 or 100, while
+   * a credential the provider rejects answers with 190.
+   */
+  readonly graphCode?: number | null;
 }
 
 /**
@@ -102,6 +111,8 @@ export class OwnerProviderError extends Error {
   readonly usagePercent: number;
   readonly throttledUntil: Date | null;
   readonly retryable: boolean;
+  /** The Graph error code, when the provider named one. */
+  readonly graphCode: number | null;
 
   constructor(message: string, options: OwnerProviderErrorOptions) {
     super(message);
@@ -111,6 +122,7 @@ export class OwnerProviderError extends Error {
     this.usagePercent = options.usagePercent ?? 0;
     this.throttledUntil = options.throttledUntil ?? null;
     this.retryable = options.retryable ?? false;
+    this.graphCode = options.graphCode ?? null;
   }
 }
 
@@ -158,13 +170,15 @@ export interface OwnerMediaItem {
 /**
  * The insights of one media object.
  *
- * `supported` is false only when the provider's own documentation says the
- * media type has no insights at all. A timeout, a transport failure and a
- * malformed response are NEVER evidence that a metric is unsupported: they
- * are failures, and the media stays in the queue.
+ * The metrics are the ones the provider REPORTED. A metric the provider did
+ * not report is absent, never zero: "the provider reported zero" and "the
+ * provider reported nothing" are different facts, and only one of them is a
+ * measurement.
+ *
+ * A timeout, a transport failure and a malformed response are NOT an empty
+ * answer: they are failures, and the media stays in the queue.
  */
 export interface OwnerMediaInsights {
-  readonly supported: boolean;
   readonly metrics: Readonly<Record<string, number>>;
 }
 
@@ -339,7 +353,12 @@ export function classifyOwnerGraphError(
   usagePercent: number,
   throttledUntil: Date | null,
 ): OwnerProviderError {
-  const options = { usagePercent, throttledUntil, statusCode: httpStatus };
+  const options = {
+    usagePercent,
+    throttledUntil,
+    statusCode: httpStatus,
+    graphCode: envelope.code,
+  };
 
   if (httpStatus === 429) {
     return new OwnerProviderError(

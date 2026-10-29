@@ -17,7 +17,9 @@
  *   6. the pagination: the cursor is rebuilt and the provider's own next
  *      URL is never requested;
  *   7. the bucket key: a digest of the app and the credential, never the
- *      token.
+ *      token;
+ *   8. the ALBUM: it is a FEED media and it IS asked for its insights. The
+ *      media the reference excludes are the media WITHIN an album.
  */
 import {
   assert,
@@ -255,7 +257,6 @@ Deno.test("the media insights are read from the documented values shape", async 
     signal: new AbortController().signal,
   });
 
-  assertEquals(result.value.supported, true);
   assertEquals(result.value.metrics, { reach: 450, views: 890 });
   assertStringIncludes(urls[0]!, "/17932174733377207/insights?metric=");
 });
@@ -309,10 +310,27 @@ Deno.test("the metric set follows the media product type", async () => {
   }
 });
 
-Deno.test("an album media has no insights, and that is a positive fact", async () => {
-  assertEquals(mediaInsightMetricsFor("FEED", "CAROUSEL_ALBUM").length, 0);
+/**
+ * An ALBUM has insights.
+ *
+ * The media insights reference says, under "Album metrics": "Insights data
+ * is not available for any media WITHIN an Instagram Media album"
+ * (https://developers.facebook.com/docs/instagram-platform/reference/instagram-media/insights).
+ *
+ * The sentence is about the CHILDREN of an album. The album itself is a
+ * FEED media and it is collected with the documented FEED metrics.
+ */
+Deno.test("an album media is asked for the documented feed insights", async () => {
+  const feed = mediaInsightMetricsFor("FEED", "IMAGE");
+  const album = mediaInsightMetricsFor("FEED", "CAROUSEL_ALBUM");
 
-  const { provider, attempts } = providerWith(() => jsonResponse({ data: [] }));
+  assertEquals(album, feed);
+  assertEquals(album.includes("reach"), true);
+  assertEquals(album.length > 0, true);
+
+  const { provider, urls } = providerWith(() =>
+    jsonResponse({ data: [{ name: "reach", period: "lifetime", values: [{ value: 12 }] }] })
+  );
   const result = await provider.fetchMediaInsights({
     igMediaId: "17932174733377207",
     token: "the-token",
@@ -321,10 +339,10 @@ Deno.test("an album media has no insights, and that is a positive fact", async (
     signal: new AbortController().signal,
   });
 
-  assertEquals(result.value.supported, false);
-  assertEquals(result.value.metrics, {});
-  // No provider call was spent on a media that cannot have insights.
-  assertEquals(attempts(), 0);
+  // The album is asked, and the answer is read like every other media.
+  assertEquals(urls.length, 1);
+  assertStringIncludes(urls[0]!, "/17932174733377207/insights?metric=");
+  assertEquals(result.value.metrics, { reach: 12 });
 });
 
 Deno.test("an unknown product type asks only for the universal metrics", () => {

@@ -12,7 +12,8 @@
  *      and the documented `total_value.value` answer, with a missing metric
  *      staying null;
  *   4. the MEDIA INSIGHTS: the documented `values[].value` answer, the
- *      documented metric set, and the album that has no insights at all;
+ *      documented metric set, and the ALBUM - which IS asked, because the
+ *      media the reference excludes are the media WITHIN an album;
  *   5. the PAGINATION: a page without a next-page URL is the last page, and
  *      the provider's own URL is never requested;
  *   6. the THROTTLE BUCKET: a digest of the app, the account and the
@@ -28,7 +29,7 @@ import {
 } from "https://deno.land/std@0.224.0/assert/mod.ts";
 
 import {
-  directMediaInsightMetricsFor,
+  directMediaInsightMetrics,
   InstagramDirectGraphProvider,
   resolveDirectAppId,
   UNCONFIGURED_DIRECT_APP_NAMESPACE,
@@ -257,7 +258,6 @@ Deno.test("the media insights are read from the documented values shape", async 
     signal: new AbortController().signal,
   });
 
-  assertEquals(answer.value.supported, true);
   assertEquals(answer.value.metrics, { views: 200, reach: 100 });
   assertStringIncludes(urls[0]!, "/media-1/insights");
 });
@@ -287,14 +287,29 @@ Deno.test("the media insights ask only for the metrics every surface has", async
   assertEquals(metric.includes("ig_reels_avg_watch_time"), false);
 });
 
-Deno.test("an album media has no insights, and that is a positive fact", () => {
-  assertEquals(directMediaInsightMetricsFor("CAROUSEL_ALBUM"), []);
-  assertEquals(directMediaInsightMetricsFor("IMAGE").length, 4);
-  assertEquals(directMediaInsightMetricsFor(null).length, 4);
+/**
+ * An ALBUM has insights.
+ *
+ * The media insights reference says, under "Album metrics": "Insights data
+ * is not available for any media WITHIN an Instagram Media album"
+ * (https://developers.facebook.com/docs/instagram-platform/reference/instagram-media/insights).
+ *
+ * The sentence is about the CHILDREN of an album. The album itself is a
+ * FEED media, and this login asks with the documented intersection for every
+ * media - an album included.
+ */
+Deno.test("an album media is asked with the documented intersection", () => {
+  assertEquals(directMediaInsightMetrics().length, 4);
+  assertEquals(directMediaInsightMetrics().includes("views"), true);
+  assertEquals(directMediaInsightMetrics().includes("reach"), true);
+  assertEquals(directMediaInsightMetrics().includes("shares"), true);
+  assertEquals(directMediaInsightMetrics().includes("total_interactions"), true);
 });
 
-Deno.test("an album media is never asked about", async () => {
-  const { provider, urls } = providerWith(() => jsonResponse({ data: [] }));
+Deno.test("an album media is asked about, and the answer is read", async () => {
+  const { provider, urls } = providerWith(() =>
+    jsonResponse(mediaInsightAnswer({ views: 200, reach: 100 }))
+  );
 
   const answer = await provider.fetchMediaInsights({
     igMediaId: "media-1",
@@ -304,9 +319,9 @@ Deno.test("an album media is never asked about", async () => {
     signal: new AbortController().signal,
   });
 
-  assertEquals(answer.value.supported, false);
-  assertEquals(answer.value.metrics, {});
-  assertEquals(urls.length, 0);
+  assertEquals(urls.length, 1);
+  assertStringIncludes(urls[0]!, "/media-1/insights");
+  assertEquals(answer.value.metrics, { views: 200, reach: 100 });
 });
 
 // ---------------------------------------------------------------------------

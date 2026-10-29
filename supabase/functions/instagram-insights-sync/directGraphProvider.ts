@@ -156,15 +156,6 @@ const DIRECT_MEDIA_INSIGHT_METRICS: readonly string[] = [
 ];
 
 /**
- * The media type whose insights Meta documents as unavailable.
- *
- * "Insights data is not available for any media within an Instagram Media
- * album." A media of that type therefore has no insight metrics at all, and
- * that is a POSITIVE statement about the provider, not a failed request.
- */
-const ALBUM_MEDIA_TYPE = "CAROUSEL_ALBUM";
-
-/**
  * The media fields this adapter requests.
  *
  * `caption` and `media_product_type` are deliberately absent: Meta
@@ -211,16 +202,19 @@ export function resolveOwnerInstagramApiVersion(raw: string | null | undefined):
 /**
  * The documented media insights metrics of one media, for this login.
  *
- * An album has no insights at all, and that is a positive statement from
- * the provider's documentation. Every other media gets the documented
- * intersection, because the surface cannot be named with this login.
+ * `media_product_type` is not available with this login, so the surface of
+ * a media cannot be named and EVERY media is asked with the documented
+ * INTERSECTION of the per-surface sets.
+ *
+ * An album is a FEED media, and the intersection contains the documented
+ * FEED metrics, so an album is asked with the very same set. The media
+ * insights reference says that "Insights data is not available for any
+ * media WITHIN an Instagram Media album"
+ * (https://developers.facebook.com/docs/instagram-platform/reference/instagram-media/insights),
+ * and that sentence is about the CHILDREN of an album - not about the album
+ * itself.
  */
-export function directMediaInsightMetricsFor(
-  mediaType: string | null,
-): readonly string[] {
-  if (mediaType !== null && mediaType.trim().toUpperCase() === ALBUM_MEDIA_TYPE) {
-    return [];
-  }
+export function directMediaInsightMetrics(): readonly string[] {
   return DIRECT_MEDIA_INSIGHT_METRICS;
 }
 
@@ -403,15 +397,16 @@ export class InstagramDirectGraphProvider {
      * naming it would ask for metrics Meta documents for the wrong surface.
      */
     readonly mediaProductType: string | null;
+    /**
+     * The media type.
+     *
+     * It is IGNORED here too: the surface of a media cannot be named with
+     * this login, so every media is asked with the documented intersection.
+     */
     readonly mediaType: string | null;
     readonly signal: AbortSignal;
   }): Promise<OwnerProviderResult<OwnerMediaInsights>> {
-    const metrics = directMediaInsightMetricsFor(input.mediaType);
-    if (metrics.length === 0) {
-      // The provider's own documentation says this media has no insights.
-      // That is a positive statement about the media, not a failure.
-      return { value: { supported: false, metrics: {} }, usagePercent: 0 };
-    }
+    const metrics = directMediaInsightMetrics();
 
     const url = `${INSTAGRAM_GRAPH_HOST}/${this.#apiVersion}/${
       encodeURIComponent(input.igMediaId)
@@ -462,7 +457,7 @@ export class InstagramDirectGraphProvider {
       reported[name] = raw;
     }
 
-    return { value: { supported: true, metrics: reported }, usagePercent: response.usagePercent };
+    return { value: { metrics: reported }, usagePercent: response.usagePercent };
   }
 
   /**
