@@ -269,6 +269,7 @@ export function AnimatedRoutes() {
         />
         <Route path="/analytics/facebook" element={<ProtectedRoute><AnimatedPage><FacebookAnalytics /></AnimatedPage></ProtectedRoute>} />
         <Route path="/analytics/instagram" element={<ProtectedRoute><AnimatedPage><InstagramAnalytics /></AnimatedPage></ProtectedRoute>} />
+        <Route path="/analytics/instagram/performance" element={<ProtectedRoute><AnimatedPage><InstagramAnalytics defaultTab="performance" /></AnimatedPage></ProtectedRoute>} />
         <Route path="/analytics/threads" element={<ProtectedRoute><AnimatedPage><ThreadsAnalytics /></AnimatedPage></ProtectedRoute>} />
         <Route path="/threads" element={<Navigate to="/analytics/threads" replace />} />
         <Route path="/analytics/tiktok" element={<ProtectedRoute><AnimatedPage><TikTokAnalytics /></AnimatedPage></ProtectedRoute>} />

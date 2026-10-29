@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
@@ -6,18 +6,27 @@ import { useAuth } from "@/hooks/useAuth";
 import { Platform } from "@/lib/types";
 import { buildReturnUrl } from "@/lib/oauthRedirects";
 import { refetchSocialQueries } from "./oauthUtils";
+import type { OAuthConnectOptions } from "./useFacebookOAuth";
 import type { IgAccountCard } from "@/components/profiles/InstagramSelectionDialog";
 
 export interface IgSelectionData {
   selectionId: string;
   profileId: string | null;
   accounts: IgAccountCard[];
+  /** The captured attempt that owns a protected selection. */
+  attemptId?: string | null;
+  /** The selection keys this attempt has already committed. */
+  committedSelectionKeys?: string[];
 }
 
 export function useInstagramOAuth(
-  setConnectingPlatform: (p: any) => void,
+  setConnectingPlatform: (p: Platform | null) => void,
   setConnectingProfile: (p: string | null) => void,
-  handleFacebookConnect: (targetPlatform: Platform, profileId: string) => Promise<void>,
+  handleFacebookConnect: (
+    targetPlatform: Platform,
+    profileId: string,
+    options?: OAuthConnectOptions,
+  ) => Promise<void>,
 ) {
   const { toast } = useToast();
   const { user } = useAuth();
@@ -26,9 +35,27 @@ export function useInstagramOAuth(
   const [igSelectionData, setIgSelectionData] = useState<IgSelectionData | null>(null);
   const [selectingIg, setSelectingIg] = useState<string | null>(null);
   const [connectedIgIds, setConnectedIgIds] = useState<string[]>([]);
+  const selectingRef = useRef<string | null>(null);
+
+  /**
+   * The explicit intent of the request.
+   *
+   * The backend captures it before it returns the authorization URL, so a
+   * reconnect names the owned account it targets instead of hoping the
+   * provider returns the same identity.
+   */
+  function intentBody(options: OAuthConnectOptions): Record<string, unknown> {
+    if (options.mode === "reconnect" && options.socialAccountId) {
+      return { intent: "reconnect", target_social_account_id: options.socialAccountId };
+    }
+    return {};
+  }
 
   // ---------- Direct Instagram (Business Login) ----------
-  const handleInstagramBusinessLogin = async (profileId: string) => {
+  const handleInstagramBusinessLogin = async (
+    profileId: string,
+    options: OAuthConnectOptions = {},
+  ) => {
     if (!user) throw new Error("Not authenticated");
     setConnectingPlatform("instagram");
     setConnectingProfile(profileId);
@@ -39,10 +66,12 @@ export function useInstagramOAuth(
           action: "authorize",
           social_profile_id: profileId,
           return_to: buildReturnUrl("instagram"),
+          ...intentBody(options),
         },
       });
       if (error) throw error;
       if (data?.url) {
+        // The redirect only happens after the backend captured the intent.
         window.location.href = data.url;
       } else {
         throw new Error("No authorization URL received");
@@ -131,7 +160,10 @@ export function useInstagramOAuth(
   };
 
   // ---------- Instagram via Facebook Business ----------
-  const connectInstagramViaFacebookBusiness = async (profileId: string) => {
+  const connectInstagramViaFacebookBusiness = async (
+    profileId: string,
+    options: OAuthConnectOptions = {},
+  ) => {
     if (!user) throw new Error("Not authenticated");
     setConnectingPlatform("instagram");
     setConnectingProfile(profileId);
@@ -144,6 +176,7 @@ export function useInstagramOAuth(
             action: "authorize",
             social_profile_id: profileId,
             return_to: buildReturnUrl("instagramBusiness"),
+            ...intentBody(options),
           },
         },
       );
@@ -152,6 +185,7 @@ export function useInstagramOAuth(
         throw new Error(data.error);
       }
       if (data?.url) {
+        // The redirect only happens after the backend captured the intent.
         window.location.href = data.url;
       } else {
         throw new Error("No authorization URL received");
@@ -171,18 +205,19 @@ export function useInstagramOAuth(
     }
   };
 
-  const connectInstagramDirect = (profileId: string) =>
-    handleInstagramBusinessLogin(profileId);
+  const connectInstagramDirect = (profileId: string, options: OAuthConnectOptions = {}) =>
+    handleInstagramBusinessLogin(profileId, options);
 
   const handleInstagramConnect = async (
     profileId: string,
     flow: "direct" | "facebook_business",
+    options: OAuthConnectOptions = {},
   ) => {
     if (flow === "facebook_business") {
-      await connectInstagramViaFacebookBusiness(profileId);
+      await connectInstagramViaFacebookBusiness(profileId, options);
       return;
     }
-    await connectInstagramDirect(profileId);
+    await connectInstagramDirect(profileId, options);
   };
 
   // ---------- Card picker (Facebook Business candidates) ----------
@@ -216,6 +251,8 @@ export function useInstagramOAuth(
         selectionId,
         profileId: data.social_profile_id ?? null,
         accounts: (data.ig_accounts ?? []) as IgAccountCard[],
+        attemptId: data.attempt_id ?? null,
+        committedSelectionKeys: data.committed_selection_keys || [],
       });
       setConnectingPlatform("instagram");
       setConnectingProfile(data.social_profile_id ?? null);
@@ -224,33 +261,66 @@ export function useInstagramOAuth(
     }
   };
 
-  const handleSelectIgAccount = async (igUserId: string) => {
+  const handleSelectIgAccount = async (igUserId: string, selectionKey?: string) => {
     if (!igSelectionData || !user) return;
+    if (selectingRef.current) return;
+    const protectedAttempt = Boolean(igSelectionData.attemptId && selectionKey);
+    if (igSelectionData.attemptId && !selectionKey) {
+      toast({
+        title: "Connection failed",
+        description: "This account cannot be selected. Please reconnect.",
+        variant: "destructive",
+      });
+      return;
+    }
+    selectingRef.current = igUserId;
     setSelectingIg(igUserId);
     try {
+      const body: Record<string, unknown> = {
+        action: "store_ig_account",
+        user_id: user.id,
+        social_profile_id: igSelectionData.profileId,
+      };
+      if (protectedAttempt) {
+        // Canonical protected shape: attempt id plus the opaque key.
+        body.attempt_id = igSelectionData.attemptId;
+        body.selection_key = selectionKey;
+      } else {
+        body.selection_id = igSelectionData.selectionId;
+        body.ig_user_id = igUserId;
+      }
       const { data, error } = await supabase.functions.invoke(
         "instagram-business-oauth",
-        {
-          body: {
-            action: "store_ig_account",
-            user_id: user.id,
-            selection_id: igSelectionData.selectionId,
-            ig_user_id: igUserId,
-            social_profile_id: igSelectionData.profileId,
-          },
-        },
+        { body },
       );
       if (error || !data?.success) {
         throw new Error(data?.error || (error instanceof Error ? error.message : "Failed to connect account"));
       }
+      const subscriptionFailed = data.subscription?.status === "failed";
+      const connected = data.ig_username
+        ? `Connected @${data.ig_username}${data.facebook_page_name ? ` (via ${data.facebook_page_name})` : ""}`
+        : "Account connected.";
       toast({
         title: "Instagram connected!",
-        description: data.ig_username
-          ? `Connected @${data.ig_username}${data.facebook_page_name ? ` (via ${data.facebook_page_name})` : ""}`
-          : "Account connected.",
+        description: subscriptionFailed
+          ? `${connected} The webhook subscription could not be confirmed.`
+          : connected,
       });
       setConnectedIgIds((prev) => Array.from(new Set([...prev, igUserId])));
       refetchSocialQueries(queryClient);
+      if (protectedAttempt && selectionKey) {
+        const committed = [...(igSelectionData.committedSelectionKeys ?? []), selectionKey];
+        const remaining = igSelectionData.accounts.some(
+          (account) => account.selection_key && !committed.includes(account.selection_key),
+        );
+        if (remaining) {
+          setIgSelectionData({ ...igSelectionData, committedSelectionKeys: committed });
+        } else {
+          setIgSelectionData(null);
+          setConnectingPlatform(null);
+          setConnectingProfile(null);
+        }
+      }
     } catch (err) {
       console.error("Instagram select error:", err);
       toast({
@@ -259,6 +329,7 @@ export function useInstagramOAuth(
         variant: "destructive",
       });
     } finally {
+      selectingRef.current = null;
       setSelectingIg(null);
     }
   };
@@ -271,7 +342,9 @@ export function useInstagramOAuth(
     setConnectingPlatform(null);
     setConnectingProfile(null);
     if (selectionId && user) {
-      // Fire-and-forget cleanup; row will expire anyway.
+      // Fire-and-forget cleanup. A protected selection is retained on the
+      // server until it expires, and the server reports that truthfully. The
+      // dialog closes either way and never claims a deletion.
       supabase.functions
         .invoke("instagram-business-oauth", {
           body: {

@@ -458,12 +458,12 @@ function buildServer(
 
   register("get_post_analytics", {
     description:
-      "Get analytics for a connected account's recent posts. Supported today: Threads (insights over period_days) " +
-      "and TikTok (profile stats and recent videos). Other platforms return a 'not supported yet' error.",
+      "Get analytics for a connected account's recent posts. Supported today: Threads (insights over period_days), " +
+      "TikTok (profile stats and recent videos), and Instagram (insights report and outlier detection over period_days). Other platforms return a 'not supported yet' error.",
     inputSchema: z.object({
       social_account_id: z.string().describe("Postora account UUID from list_accounts"),
       period_days: z.union([z.literal(7), z.literal(14), z.literal(30), z.literal(90)]).optional()
-        .describe("Threads only: 7, 14, 30 or 90 days (default 7)"),
+        .describe("Threads and Instagram: 7, 14, 30 or 90 days (default 7 for Threads, default 30 for Instagram)"),
     }),
     handler: async (args) => {
       const scopeRefusal = await refuseUngranted({ admin }, { userId: ownerId, tool: "get_post_analytics", grant });

@@ -248,7 +248,11 @@ export async function handleGetPostAnalytics(deps: ServiceProxyDeps, userId: str
     const upstream = await deps.invoke("tiktok-analytics", { user_id: userId, social_account_id: account.id }, READ_TIMEOUT_MS);
     return fromUpstream("tiktok-analytics", upstream);
   }
-  return unsupported("Post analytics", account.platform, "threads, tiktok");
+  if (account.platform === "instagram") {
+    const upstream = await deps.invoke("instagram-insights-report", { user_id: userId, social_account_id: account.id, period_days: periodDays }, READ_TIMEOUT_MS);
+    return fromUpstream("instagram-insights-report", upstream);
+  }
+  return unsupported("Post analytics", account.platform, "threads, tiktok, instagram");
 }
 
 function requireText(input: Record<string, unknown>, field: string, maxLength: number): string | ProxyResult {

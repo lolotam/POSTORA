@@ -17,12 +17,18 @@ interface FacebookPage {
   name: string;
   has_instagram?: boolean;
   picture_url?: string;
+  /**
+   * The opaque authority of a protected candidate. The protected store action
+   * accepts the attempt id plus this key, never a page name.
+   */
+  selection_key?: string;
 }
 
 interface StandaloneInstagram {
   id: string;
   username: string;
   profile_picture_url?: string;
+  selection_key?: string;
 }
 
 interface PageSelectionDialogProps {
@@ -32,9 +38,11 @@ interface PageSelectionDialogProps {
   standaloneInstagram?: StandaloneInstagram[];
   pageSearchQuery: string;
   onPageSearchChange: (query: string) => void;
-  onSelectPage: (pageId: string) => void;
+  onSelectPage: (pageId: string, selectionKey?: string) => void;
   onSelectStandaloneInstagram?: (igAccount: StandaloneInstagram) => void;
   selectingPage: string | null;
+  /** Selection keys this attempt has already committed. */
+  committedSelectionKeys?: string[];
 }
 
 function PageLogo({ page }: { page: FacebookPage }) {
@@ -68,6 +76,7 @@ export function PageSelectionDialog({
   onSelectPage,
   onSelectStandaloneInstagram,
   selectingPage,
+  committedSelectionKeys = [],
 }: PageSelectionDialogProps) {
   const q = pageSearchQuery.trim().toLowerCase();
 
@@ -126,13 +135,14 @@ export function PageSelectionDialog({
               <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
                 {filteredPages.map((page) => {
                   const isSelecting = selectingPage === page.id;
-                  const disabled = !!selectingPage;
+                  const isCommitted = !!page.selection_key && committedSelectionKeys.includes(page.selection_key);
+                  const disabled = !!selectingPage || isCommitted;
                   return (
                     <button
                       key={page.id}
                       type="button"
                       disabled={disabled}
-                      onClick={() => onSelectPage(page.id)}
+                      onClick={() => onSelectPage(page.id, page.selection_key)}
                       className={cn(
                         "group flex w-full flex-col items-center gap-2.5 rounded-lg border border-input p-2.5 text-center transition-all",
                         "hover:bg-accent/50 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary",
@@ -172,7 +182,8 @@ export function PageSelectionDialog({
                 <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
                   {filteredIg.map((ig) => {
                     const isSelecting = selectingPage === ig.id;
-                    const disabled = !!selectingPage;
+                    const isCommitted = !!ig.selection_key && committedSelectionKeys.includes(ig.selection_key);
+                    const disabled = !!selectingPage || isCommitted;
                     return (
                       <button
                         key={ig.id}

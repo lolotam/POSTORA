@@ -17,16 +17,23 @@ export interface IgAccountCard {
   ig_username: string;
   ig_profile_picture_url: string | null;
   facebook_page_name: string;
+  /**
+   * The opaque authority of a protected candidate. The protected store action
+   * accepts the attempt id plus this key, never a username.
+   */
+  selection_key?: string;
 }
 
 interface InstagramSelectionDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   accounts: IgAccountCard[];
-  onSelect: (igUserId: string) => void;
+  onSelect: (igUserId: string, selectionKey?: string) => void;
   onDone: () => void;
   selectingId?: string | null;
   connectedIds?: string[];
+  /** The selection keys this attempt has already committed. */
+  committedSelectionKeys?: string[];
 }
 
 export function InstagramSelectionDialog({
@@ -37,6 +44,7 @@ export function InstagramSelectionDialog({
   onDone,
   selectingId,
   connectedIds = [],
+  committedSelectionKeys = [],
 }: InstagramSelectionDialogProps) {
   const [search, setSearch] = useState("");
 
@@ -82,14 +90,16 @@ export function InstagramSelectionDialog({
           <div className="grid max-h-[60vh] grid-cols-2 gap-2.5 overflow-y-auto sm:grid-cols-3">
             {filtered.map((acc) => {
               const isSelecting = selectingId === acc.ig_user_id;
-              const isConnected = connectedIds.includes(acc.ig_user_id);
+              const isCommitted =
+                !!acc.selection_key && committedSelectionKeys.includes(acc.selection_key);
+              const isConnected = connectedIds.includes(acc.ig_user_id) || isCommitted;
               const disabled = !!selectingId || isConnected;
               return (
                 <button
                   key={acc.ig_user_id}
                   type="button"
                   disabled={disabled}
-                  onClick={() => onSelect(acc.ig_user_id)}
+                  onClick={() => onSelect(acc.ig_user_id, acc.selection_key)}
                   className={cn(
                     "group relative rounded-lg border border-input p-2.5 text-center transition-all",
                     "flex w-full flex-col items-center gap-2.5",

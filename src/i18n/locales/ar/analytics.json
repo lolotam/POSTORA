@@ -218,7 +218,8 @@
     "tokenExpired": "انتهت صلاحية توكن TikTok",
     "tokenExpiredBody": "أعد ربط حساب TikTok ده عشان تجدّد الوصول.",
     "transcribeFirst": "فرّغ الفيديو الأول أو تأكد إن فيه كابشن",
-    "unknown": "خطأ غير معروف"
+    "unknown": "خطأ غير معروف",
+    "failedToLoad": "مقدرناش نحمّل التقرير"
   },
   "filters": {
     "activeCount": "{{count}} فلتر شغال",
@@ -280,7 +281,8 @@
     "tiktok": "تحليلات TikTok",
     "tiktokSubtitle": "حلّل صنّاع TikTok وأحسن المحتوى أداءً",
     "today": "النهاردة",
-    "yesterday": "امبارح"
+    "yesterday": "امبارح",
+    "instagramPerformanceSubtitle": "تابع أداء حسابك، والإحصائيات اليومية، والمنشورات اللي وصولها أعلى من المعتاد"
   },
   "history": {
     "actions": "إجراءات",
@@ -323,6 +325,44 @@
     "views": "مشاهدات",
     "yourAccountOnly": "حسابك فقط",
     "yourActivity": "نشاطك"
+  },
+  "instagram": {
+    "account": "الحساب",
+    "actions": "الرابط",
+    "content": "المحتوى",
+    "dailyTrends": "الأداء اليومي",
+    "engagement": "التفاعل",
+    "followers": "المتابعين",
+    "impressionsCount": "مرات ظهور الريلز والمنشورات",
+    "interactions": "التفاعلات",
+    "lagAdvisory": "البيانات ممكن تتأخر لحد 48 ساعة حسب Meta.",
+    "lastSynced": "آخر مزامنة",
+    "likesCommentsShares": "إعجابات وتعليقات ومشاركات وحفظ",
+    "mediaPerformance": "أداء المنشورات والمنشورات المميزة",
+    "newest": "الأحدث",
+    "noAccountsConnected": "مفيش حسابات Instagram شغالة.",
+    "noAccountsDescription": "اربط حساب Instagram Business أو Creator عشان تشوف تحليلات الأداء، والوصول اليومي، وتقييم المنشورات المميزة.",
+    "noAccountsTitle": "اربط حساب Instagram بتاعك",
+    "noDailyData": "لسه مفيش بيانات يومية للفترة دي.",
+    "noMediaInWindow": "مفيش منشورات اتنشرت في الفترة دي.",
+    "openOnInstagram": "افتح على Instagram",
+    "outlierScore": "درجة التميّز",
+    "period": "الفترة",
+    "posts": "المنشورات",
+    "profileObservation": "الجمهور الحالي",
+    "published": "اتنشر",
+    "reach": "الوصول",
+    "reels": "الريلز",
+    "selectAccount": "اختار حساب",
+    "syncFailed": "مقدرناش نبدأ المزامنة",
+    "syncNow": "زامن دلوقتي",
+    "syncQueued": "بدأنا نجمع إحصائيات Instagram. الحالة هتتحدّث بعد شوية.",
+    "syncing": "بنزامن...",
+    "tabCompetitors": "البراند والمنافسين",
+    "tabPerformance": "الأداء والإحصائيات",
+    "type": "النوع",
+    "uniqueAccounts": "حسابات مختلفة وصلها المحتوى",
+    "views": "المشاهدات"
   },
   "keyword": {
     "all": "الكل",

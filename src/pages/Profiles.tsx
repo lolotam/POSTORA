@@ -399,6 +399,7 @@ export default function Profiles() {
         onSelectPage={handleSelectPage}
         onSelectStandaloneInstagram={handleSelectStandaloneInstagram}
         selectingPage={selectingPage}
+        committedSelectionKeys={pageSelectionData?.committedSelectionKeys}
       />
 
       <BlueskyConnectDialog
@@ -427,6 +428,7 @@ export default function Profiles() {
         accounts={igSelectionData?.accounts ?? []}
         selectingId={selectingIg}
         connectedIds={connectedIgIds}
+        committedSelectionKeys={igSelectionData?.committedSelectionKeys}
         onSelect={handleSelectIgAccount}
         onDone={clearIgSelection}
       />
