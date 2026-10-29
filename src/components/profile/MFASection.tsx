@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
+import { DisableMfaDialog, useDisableMfa } from "@/features/mfa";
 import {
   Shield,
   Smartphone,
@@ -37,7 +38,6 @@ export function MFASection() {
   const [verifyCode, setVerifyCode] = useState("");
   const [isVerifying, setIsVerifying] = useState(false);
   const [showDialog, setShowDialog] = useState(false);
-  const [isUnenrolling, setIsUnenrolling] = useState<string | null>(null);
   const { toast } = useToast();
 
   useEffect(() => {
@@ -122,30 +122,26 @@ export function MFASection() {
     }
   };
 
-  const handleUnenroll = async (id: string) => {
-    setIsUnenrolling(id);
-    try {
-      const { error } = await supabase.auth.mfa.unenroll({ factorId: id });
-
-      if (error) throw error;
-
+  const disableMfa = useDisableMfa({
+    onDisabled: async () => {
       toast({
         title: "2FA disabled",
         description: "Two-factor authentication has been removed from your account.",
       });
-
       await loadFactors();
-    } catch (error) {
-      console.error("MFA unenroll error:", error);
+    },
+    onError: (message) => {
+      console.error("MFA unenroll error:", message);
       toast({
         title: "Failed to disable 2FA",
-        description: error instanceof Error ? error.message : "An error occurred",
+        description: message || "An error occurred",
         variant: "destructive",
       });
-    } finally {
-      setIsUnenrolling(null);
-    }
-  };
+    },
+  });
+
+  // Supabase removes a verified factor only from an AAL2 session; the hook asks for a code when needed.
+  const handleUnenroll = (id: string) => disableMfa.requestDisable(id);
 
   const resetState = () => {
     setQrCode(null);
@@ -201,10 +197,10 @@ export function MFASection() {
                   variant="ghost"
                   size="sm"
                   onClick={() => handleUnenroll(factor.id)}
-                  disabled={isUnenrolling === factor.id}
+                  disabled={disableMfa.busyFactorId === factor.id}
                   className="text-destructive hover:text-destructive"
                 >
-                  {isUnenrolling === factor.id ? (
+                  {disableMfa.busyFactorId === factor.id ? (
                     <Loader2 className="w-4 h-4 animate-spin" />
                   ) : (
                     <X className="w-4 h-4" />
@@ -309,6 +305,13 @@ export function MFASection() {
           </div>
         </DialogContent>
       </Dialog>
+      <DisableMfaDialog
+        open={disableMfa.pendingFactorId !== null}
+        submitting={disableMfa.submitting}
+        codeError={disableMfa.codeError}
+        onSubmit={(code) => { void disableMfa.submitCode(code, "Invalid code. Please try again."); }}
+        onCancel={disableMfa.cancel}
+      />
     </>
   );
 }
