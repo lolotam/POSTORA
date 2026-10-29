@@ -30,30 +30,60 @@ export type UploadFileType = "image" | "video" | "audio" | "document";
  * Largest file the browser may send straight to the storage provider. That path
  * skips the edge function, so the base64 cap above does not bound it. Only images
  * and video have a direct path; every other kind keeps MEDIA_DECODED_BYTE_CAP.
+ *
+ * The admin picks each limit from these lists (Admin → Settings → Media upload
+ * limits); the choice is stored in app_settings `media_upload_limits`.
  */
-export const MEDIA_DIRECT_UPLOAD_BYTE_CAPS: Readonly<Partial<Record<MediaKind, number>>> = {
-  image: 20 * 1024 * 1024,
-  video: 500 * 1024 * 1024,
-};
+export const UPLOAD_LIMIT_OPTIONS_MB = {
+  image: [10, 20, 50, 100],
+  video: [100, 200, 500, 1000, 2000],
+} as const;
 
-export function directUploadByteCap(kind: MediaKind): number | null {
-  return MEDIA_DIRECT_UPLOAD_BYTE_CAPS[kind] ?? null;
+export interface UploadLimits {
+  image_max_mb: number;
+  video_max_mb: number;
+}
+
+export const DEFAULT_UPLOAD_LIMITS: Readonly<UploadLimits> = { image_max_mb: 20, video_max_mb: 500 };
+
+const MB = 1024 * 1024;
+
+/**
+ * The stored setting, field by field: a value outside its option list (a hand-edited
+ * row, an old shape, a read error) falls back to the default instead of widening the cap.
+ */
+export function parseUploadLimits(value: unknown): UploadLimits {
+  const stored = (value && typeof value === "object" ? value : {}) as Record<string, unknown>;
+  const pick = (field: keyof UploadLimits, options: readonly number[]) => {
+    const raw = stored[field];
+    return typeof raw === "number" && options.includes(raw) ? raw : DEFAULT_UPLOAD_LIMITS[field];
+  };
+  return {
+    image_max_mb: pick("image_max_mb", UPLOAD_LIMIT_OPTIONS_MB.image),
+    video_max_mb: pick("video_max_mb", UPLOAD_LIMIT_OPTIONS_MB.video),
+  };
+}
+
+export function directUploadByteCap(kind: MediaKind, limits: UploadLimits = DEFAULT_UPLOAD_LIMITS): number | null {
+  if (kind === "image") return limits.image_max_mb * MB;
+  if (kind === "video") return limits.video_max_mb * MB;
+  return null;
 }
 
 /** The largest file of this kind that some upload path accepts. */
-export function maxUploadBytesFor(kind: MediaKind): number {
-  return Math.max(MEDIA_DECODED_BYTE_CAP, directUploadByteCap(kind) ?? 0);
+export function maxUploadBytesFor(kind: MediaKind, limits: UploadLimits = DEFAULT_UPLOAD_LIMITS): number {
+  return Math.max(MEDIA_DECODED_BYTE_CAP, directUploadByteCap(kind, limits) ?? 0);
 }
 
 /** A file over the base64 cap must go direct; anything smaller keeps the edge-function path. */
-export function needsDirectUpload(kind: MediaKind, size: number): boolean {
-  const cap = directUploadByteCap(kind);
+export function needsDirectUpload(kind: MediaKind, size: number, limits: UploadLimits = DEFAULT_UPLOAD_LIMITS): boolean {
+  const cap = directUploadByteCap(kind, limits);
   return cap !== null && size > MEDIA_DECODED_BYTE_CAP && size <= cap;
 }
 
 /** "20 MB" for 20 MiB: the label every size-limit message shows. */
 export function formatUploadLimit(bytes: number): string {
-  return `${Math.round(bytes / (1024 * 1024))} MB`;
+  return `${Math.round(bytes / MB)} MB`;
 }
 
 export interface MediaTypeEntry {

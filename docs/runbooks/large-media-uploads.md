@@ -1,4 +1,4 @@
-# Large media uploads (images to 20 MB, video to 500 MB)
+# Large media uploads (admin-selected limits)
 
 Files up to 10 MB still go through `cloudinary-upload` as base64. Larger images and
 video go **straight from the browser to the storage provider**:
@@ -14,6 +14,26 @@ No bytes pass through an edge function: a worker has 150 MB of memory and 60 sec
 The providers come from the same `cdn_storage` setting as every other upload (Admin →
 Settings → CDN storage), Openinary first.
 
+## Limits
+
+An admin chooses them in **Admin → Settings → Media upload limits**:
+
+| Kind | Options | Default |
+|---|---|---|
+| Image | 10, 20, 50, 100 MB | 20 MB |
+| Video | 100, 200, 500, 1000, 2000 MB | 500 MB |
+
+They are stored in `app_settings` under `media_upload_limits`, which every signed-in user
+can read and only admins can write (migration `20261029170000_media_upload_limits.sql`).
+`media-direct-upload` enforces them; the browser only uses them to warn early. A value
+outside the option lists is ignored and the default applies.
+
+Before raising the video limit, make the infrastructure match it:
+- Openinary `MAX_FILE_SIZE_MB` at least the new limit (a little over is safer).
+- For 1000/2000 MB: Openinary holds the whole upload in memory, so raise its container
+  memory (`DOCKER_MEMORY_LIMIT`) and test one 2 GB upload first. The presigned upload must
+  also finish within one hour.
+
 ## One-time setup
 
 ### Openinary server (`OPENINARY_SERVER_URL`)
@@ -24,9 +44,9 @@ Set on the Openinary deployment and restart it:
 |---|---|---|
 | `API_SECRET` | a long random string | `POST /upload/sign` refuses to presign without it |
 | `CORS_ORIGIN` | `https://postora.cloud,https://www.postora.cloud` | the browser posts to Openinary directly |
-| `MAX_FILE_SIZE_MB` | `520` | Openinary's default is 50 MB |
+| `MAX_FILE_SIZE_MB` | the video limit plus a margin (e.g. `520` for 500 MB) | Openinary's default is 50 MB |
 
-Any reverse proxy in front of Openinary must accept a 520 MB body and a slow upload
+Any reverse proxy in front of Openinary must accept a body the size of the video limit and a slow upload
 (nginx `client_max_body_size 0` and long `proxy_*_timeout`, which Openinary's own
 image ships with).
 
@@ -55,6 +75,8 @@ Copy these to the functions volume, then restart `functions`
 - `media-direct-upload/` (new)
 - `cloudinary-upload/index.ts`, `cloudinary-upload/providerPolicy.ts`, `cloudinary-upload/objectNaming.ts`
 - `_shared/mediaTypes.ts`
+
+Apply the migration `20261029170000_media_upload_limits.sql` to the database first.
 
 ## Check it works
 

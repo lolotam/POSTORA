@@ -15,6 +15,7 @@ import { z } from "npm:zod@3.23.8";
 import { authenticateCaller } from "../_shared/auth-helper.ts";
 import { handleRestrictedCorsOptions, restrictedJsonResponse } from "../_shared/cors.ts";
 import { getOpeninaryConfig, openinaryTarget } from "../_shared/openinary.ts";
+import { parseUploadLimits, type UploadLimits } from "../_shared/mediaTypes.ts";
 import { mediaQuotaBody, type QuotaRpc } from "../_shared/mediaQuotaError.ts";
 import { mediaQuotaPreflight } from "../cloudinary-upload/mediaQuota.ts";
 import { getCdnPolicy } from "../cloudinary-upload/providerPolicy.ts";
@@ -71,11 +72,18 @@ function cloudinaryCredentials() {
   return cloudName && apiKey && apiSecret ? { cloudName, apiKey, apiSecret } : null;
 }
 
+/** The admin's choice from Settings → Media upload limits; a failed read means the defaults. */
+async function readUploadLimits(adminDb: SupabaseClient): Promise<UploadLimits> {
+  const { data, error } = await adminDb.from("app_settings").select("value").eq("key", "media_upload_limits").maybeSingle();
+  if (error) console.warn("[media-direct-upload] upload limits unreadable; using the defaults");
+  return parseUploadLimits(data?.value);
+}
+
 async function handleStart(req: Request, input: z.infer<typeof StartSchema>, userId: string, userDb: SupabaseClient, adminDb: SupabaseClient, secret: string) {
   const cloudinary = cloudinaryCredentials();
   const openinaryConfig = getOpeninaryConfig();
-  const policy = await getCdnPolicy(adminDb);
-  const plan = planDirectUpload(input, policy, { cloudinary: !!cloudinary, openinaryConfigured: !!openinaryConfig });
+  const [policy, limits] = await Promise.all([getCdnPolicy(adminDb), readUploadLimits(adminDb)]);
+  const plan = planDirectUpload(input, policy, { cloudinary: !!cloudinary, openinaryConfigured: !!openinaryConfig }, limits);
   if (!plan.ok) {
     console.warn(`[media-direct-upload] start refused: ${plan.reason}`);
     return restrictedJsonResponse(req, { success: false, error: plan.error, retryable: plan.status === 503 }, plan.status);

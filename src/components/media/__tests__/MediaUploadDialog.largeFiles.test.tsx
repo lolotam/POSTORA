@@ -7,6 +7,7 @@ import { MediaUploadDialog } from "../MediaUploadDialog";
 const toast = vi.hoisted(() => vi.fn());
 const invoke = vi.hoisted(() => vi.fn());
 const uploadLargeMedia = vi.hoisted(() => vi.fn());
+const limits = vi.hoisted(() => ({ current: { image_max_mb: 20, video_max_mb: 500 } }));
 
 vi.mock("@/hooks/useQuotas", () => ({
   useQuotas: () => ({
@@ -26,7 +27,7 @@ vi.mock("@/hooks/useMediaOperationsHistory", () => ({
 
 vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast }) }));
 vi.mock("@/integrations/supabase/client", () => ({ supabase: { functions: { invoke }, from: vi.fn() } }));
-vi.mock("@/features/media-upload", () => ({ uploadLargeMedia }));
+vi.mock("@/features/media-upload", () => ({ uploadLargeMedia, useMediaUploadLimits: () => limits.current }));
 
 const MB = 1024 * 1024;
 
@@ -50,6 +51,7 @@ describe("MediaUploadDialog — files over 10 MB", () => {
     toast.mockClear();
     invoke.mockReset();
     uploadLargeMedia.mockReset();
+    limits.current = { image_max_mb: 20, video_max_mb: 500 };
   });
 
   it("sends a 300 MB video straight to the provider instead of through the edge function", async () => {
@@ -75,5 +77,17 @@ describe("MediaUploadDialog — files over 10 MB", () => {
     fireEvent.change(input, { target: { files: [fileOfSize("big.jpg", "image/jpeg", 21 * MB)] } });
     expect(await screen.findByText("big.jpg is over the 20 MB limit")).toBeInTheDocument();
     expect(screen.queryByText(/Files to upload/)).toBeNull();
+  });
+
+  it("holds files to the limits the admin chose", async () => {
+    limits.current = { image_max_mb: 50, video_max_mb: 100 };
+    const input = renderDialog();
+    expect(screen.getByText(/Images up to 50 MB, video up to 100 MB/)).toBeInTheDocument();
+
+    fireEvent.change(input, { target: { files: [fileOfSize("clip.mp4", "video/mp4", 150 * MB)] } });
+    expect(await screen.findByText("clip.mp4 is over the 100 MB limit")).toBeInTheDocument();
+
+    fireEvent.change(input, { target: { files: [fileOfSize("photo.jpg", "image/jpeg", 40 * MB)] } });
+    expect(await screen.findByText(/Files to upload/)).toBeInTheDocument();
   });
 });

@@ -59,3 +59,18 @@ Deno.test("Cloudinary public ids match with or without the folder", () => {
   assertEquals(cloudinaryPublicIdMatches("media/u/postora_x_12", "postora_x_1"), false);
   assertEquals(cloudinaryPublicIdMatches("evil/postora_x_1_copy", "postora_x_1"), false);
 });
+
+Deno.test("the admin's limits replace the defaults", () => {
+  const limits = { image_max_mb: 50, video_max_mb: 100 };
+  const over = planDirectUpload({ fileName: "clip.mp4", size: 150 * MB, mimeType: "video/mp4" }, OPENINARY_ONLY, ALL_USABLE, limits);
+  assertEquals(over.ok ? null : over.error, "File exceeds the 100 MB limit");
+  assertEquals(planDirectUpload({ fileName: "photo.jpg", size: 50 * MB }, OPENINARY_ONLY, ALL_USABLE, limits).ok, true);
+  const huge = { image_max_mb: 20, video_max_mb: 2000 };
+  assertEquals(planDirectUpload({ fileName: "clip.mp4", size: 2000 * MB }, OPENINARY_ONLY, ALL_USABLE, huge).ok, true);
+  assertEquals(planDirectUpload({ fileName: "clip.mp4", size: 2000 * MB + 1 }, OPENINARY_ONLY, ALL_USABLE, huge).ok, false);
+});
+
+Deno.test("a 10 MB image limit refuses every image on the direct path", () => {
+  const plan = planDirectUpload({ fileName: "photo.jpg", size: 11 * MB }, OPENINARY_ONLY, ALL_USABLE, { image_max_mb: 10, video_max_mb: 500 });
+  assertEquals(plan.ok ? null : plan.error, "File exceeds the 10 MB limit");
+});

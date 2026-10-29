@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MediaUploadDialog } from "../MediaUploadDialog";
 
 const toast = vi.hoisted(() => vi.fn());
@@ -71,9 +72,11 @@ describe("MediaUploadDialog — server quota refusal", () => {
     });
 
     render(
-      <MemoryRouter>
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter>
         <MediaUploadDialog open onClose={() => {}} currentFolder="/" onUploadComplete={() => {}} />
-      </MemoryRouter>,
+      </MemoryRouter>
+      </QueryClientProvider>,
     );
 
     const input = document.querySelector('input[type="file"]') as HTMLInputElement;

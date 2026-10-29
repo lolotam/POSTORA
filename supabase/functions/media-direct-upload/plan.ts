@@ -3,7 +3,13 @@
  * it be, and which providers take it. No I/O, so every rule here is unit-tested.
  */
 
-import { directUploadByteCap, formatUploadLimit, type MediaTypeEntry } from "../_shared/mediaTypes.ts";
+import {
+  DEFAULT_UPLOAD_LIMITS,
+  directUploadByteCap,
+  formatUploadLimit,
+  type MediaTypeEntry,
+  type UploadLimits,
+} from "../_shared/mediaTypes.ts";
 import { limitProvidersForKind, resolveUpload } from "../cloudinary-upload/uploadPolicy.ts";
 import { orderWriteProviders, type CdnPolicy } from "../cloudinary-upload/providerPolicy.ts";
 
@@ -28,13 +34,14 @@ export function planDirectUpload(
   request: DirectUploadRequest,
   policy: CdnPolicy,
   usable: { cloudinary: boolean; openinaryConfigured: boolean },
+  limits: UploadLimits = DEFAULT_UPLOAD_LIMITS,
 ): DirectUploadPlan {
   const legacyType = request.mimeType?.startsWith("video/") ? "video" : "image";
   const resolved = resolveUpload({ fileName: request.fileName, fileType: legacyType, contentType: request.mimeType });
   if (!resolved.ok) return { ok: false, status: 400, error: resolved.error, reason: "type" };
 
   const { entry, ext, originalFilename } = resolved.upload;
-  const cap = directUploadByteCap(entry.kind);
+  const cap = directUploadByteCap(entry.kind, limits);
   if (cap === null) {
     return { ok: false, status: 400, error: "Only images and videos can be uploaded over 10 MB", reason: "kind" };
   }

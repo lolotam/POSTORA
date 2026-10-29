@@ -60,6 +60,12 @@ export const SETTINGS_SECTIONS = [
     keywords: ["cdn", "storage", "cloudinary", "openinary", "media", "uploads", "images", "bucket"],
   },
   {
+    id: "media-upload-limits",
+    tab: "integrations",
+    title: "Media upload limits",
+    keywords: ["upload", "uploads", "size", "limit", "limits", "maximum", "video", "image", "mb", "file size"],
+  },
+  {
     id: "scraping-services",
     tab: "integrations",
     title: "Scraping services",

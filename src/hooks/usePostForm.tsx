@@ -12,7 +12,7 @@ import { analyzeMedia, MediaAnalysis } from "@/lib/mediaAnalyzer";
 import { getAllPlatformEligibility, PlatformEligibility } from "@/lib/platformEligibility";
 import { resolveMediaPublicUrl } from "@/lib/mediaUrl";
 import { formatUploadLimit, maxUploadBytesFor, mediaTypeForFileName, needsDirectUpload } from "@/lib/mediaTypes";
-import { uploadLargeMedia } from "@/features/media-upload";
+import { uploadLargeMedia, useMediaUploadLimits } from "@/features/media-upload";
 
 export interface UploadedFile {
   id: string;
@@ -527,6 +527,8 @@ export function usePostForm() {
     toast({ title, description, variant: "destructive" });
   };
 
+  const uploadLimits = useMediaUploadLimits();
+
   const setUploadProgress = (fileId: string, uploadProgress: number) => {
     setFiles((prev) => prev.map((f) => (f.id === fileId ? { ...f, uploadProgress } : f)));
   };
@@ -572,14 +574,14 @@ export function usePostForm() {
     try {
       const kind = mediaTypeForFileName(uploadFile.file.name)?.kind
         ?? (uploadFile.fileType === "video" ? "video" : "image");
-      const limit = maxUploadBytesFor(kind);
+      const limit = maxUploadBytesFor(kind, uploadLimits);
       if (uploadFile.file.size > limit) {
         throw new Error(`${uploadFile.file.name} is over the ${formatUploadLimit(limit)} limit`);
       }
 
       // Over 10 MB the file goes straight to the storage provider; the edge
       // function only signs the upload and records it.
-      if (needsDirectUpload(kind, uploadFile.file.size)) {
+      if (needsDirectUpload(kind, uploadFile.file.size, uploadLimits)) {
         setUploadProgress(uploadFile.id, 5);
         const data = await uploadLargeMedia(uploadFile.file, (percent) =>
           setUploadProgress(uploadFile.id, Math.max(5, Math.round(percent * 0.95))),
