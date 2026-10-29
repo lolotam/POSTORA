@@ -1309,6 +1309,37 @@ Deno.test("a direct credential whose generation moved on spends no provider call
   assertEquals(harness.calls.completes.length, 0);
 });
 
+Deno.test("a direct credential that names another Instagram user spends no provider call", async () => {
+  const harness = createHarness({
+    store: {
+      jobs: [
+        createClaimedJob({
+          context: {
+            viewer_social_account_id: TEST_ACCOUNT_ID,
+            credential_generation: 7,
+            login_kind: "direct",
+            capability_present: true,
+            permission_read_state: "ok",
+            granted_scopes: ["instagram_business_basic", "instagram_business_manage_insights"],
+          },
+        }),
+      ],
+      capability: {
+        loginKind: "direct",
+        grantedScopes: ["instagram_business_basic", "instagram_business_manage_insights"],
+      },
+      directCredential: { igUserId: "17841499999999999" },
+    },
+  });
+
+  const summary = await runOwnerDrain(harness.ports);
+
+  assertEquals(summary.abandoned, 1);
+  assertEquals(summary.completed, 0);
+  assertEquals(harness.graphCalls.length, 0);
+  assertEquals(harness.calls.completes.length, 0);
+});
+
 Deno.test("a direct credential that the database refuses is not a collection", async () => {
   const harness = createHarness({
     store: {

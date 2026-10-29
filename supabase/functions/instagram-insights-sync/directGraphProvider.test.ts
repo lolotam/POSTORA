@@ -108,6 +108,26 @@ Deno.test("every call goes to the Instagram login host", async () => {
   assertEquals(urls[0]!.includes("graph.facebook.com"), false);
 });
 
+Deno.test("a redirect is never followed, because the token is in the query string", async () => {
+  const inits: (RequestInit | undefined)[] = [];
+  const provider = new InstagramDirectGraphProvider({
+    appId: "the-app",
+    fetchFn: ((_input: RequestInfo | URL, init?: RequestInit) => {
+      inits.push(init);
+      return Promise.resolve(jsonResponse({ followers_count: 1, media_count: 1 }));
+    }) as unknown as typeof fetch,
+  });
+
+  await provider.fetchAccountProfile({
+    igUserId: "1784140001",
+    token: "the-token",
+    signal: new AbortController().signal,
+  });
+
+  assertEquals(inits.length, 1);
+  assertEquals(inits[0]?.redirect, "error");
+});
+
 Deno.test("the version is pinned and it is the Instagram API version", async () => {
   const { provider, urls } = providerWith(() => jsonResponse({ data: [] }));
 

@@ -1044,7 +1044,7 @@ async function collect(context: JobContext): Promise<JobStep> {
   const targetStep = await readTarget(context);
   if (targetStep.kind === "end") return targetStep.step;
 
-  const credentialStep = await resolveCredential(context, visit);
+  const credentialStep = await resolveCredential(context, visit, targetStep.state);
   if (credentialStep.kind === "end") return credentialStep.step;
   const credential = credentialStep.state;
 
@@ -1199,6 +1199,7 @@ async function readTarget(context: JobContext): Promise<StepResult<OwnerTarget>>
 async function resolveCredential(
   context: JobContext,
   visit: OwnerVisitState,
+  target: OwnerTarget,
 ): Promise<StepResult<VisitCredential>> {
   const { ports, job } = context;
 
@@ -1222,7 +1223,7 @@ async function resolveCredential(
   }
 
   if (capability.loginKind === "direct") {
-    return await resolveDirectCredential(context, visit, capability);
+    return await resolveDirectCredential(context, visit, capability, target);
   }
   return await resolveProtectedCredential(context, capability);
 }
@@ -1241,6 +1242,7 @@ async function resolveDirectCredential(
   context: JobContext,
   visit: OwnerVisitState,
   capability: OwnerCapability,
+  target: OwnerTarget,
 ): Promise<StepResult<VisitCredential>> {
   const { ports, job } = context;
 
@@ -1294,6 +1296,13 @@ async function resolveDirectCredential(
   }
 
   if (directCredential.credentialGeneration !== capability.credentialGeneration) {
+    return { kind: "end", step: await abandon(context, "credential_changed") };
+  }
+
+  // The fenced reader names the Instagram user its token belongs to. Every
+  // provider call below targets the account row's user id, so the two must
+  // agree; otherwise the token is not spent.
+  if (directCredential.igUserId !== target.platformUserId) {
     return { kind: "end", step: await abandon(context, "credential_changed") };
   }
 

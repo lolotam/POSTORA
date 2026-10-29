@@ -705,7 +705,12 @@ export class OwnerProviderTransport {
     try {
       // Raced, not merely signalled: a transport that ignores the abort must
       // not keep the attempt waiting past its ceiling.
-      const pending = this.#fetchFn(url, { signal: controller.signal });
+      // The token travels in the query string, so a redirect to any other
+      // host must fail rather than be followed.
+      const pending = this.#fetchFn(url, {
+        signal: controller.signal,
+        redirect: "error",
+      });
       pending.catch(() => undefined);
       const response = await Promise.race([
         pending,
