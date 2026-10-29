@@ -97,6 +97,18 @@ import { publishYouTubeViaComposio } from "./youtubeComposio.ts";
 import { prepareTikTokReviewPublish, recordReviewPublishId, requiredReviewSubmissionId } from "./tiktokReview.ts";
 import { firstPublicPostId } from "../_shared/tiktokPublishOutcome.ts";
 import { classifyContainerStatus, CONTAINER_STATUS_FIELDS, containerFailureMessage, pollContainer } from "../_shared/metaContainerStatus.ts";
+import {
+  ContainerStillProcessing,
+  giveUpMessage,
+  isPastGiveUp,
+  NO_DEFERRAL,
+  pollDeadline,
+  readDeferral,
+  recordStillProcessing,
+  type DeferredKind,
+  type PublishTiming,
+  type ResumeContext,
+} from "./deferredPublish.ts";
 import { z } from "npm:zod@3.23.8";
 
 const ProcessPostSchema = z.object({
@@ -107,6 +119,9 @@ const ProcessPostSchema = z.object({
   // processing claim honours it (see _shared/postProcessingClaim.ts), so a
   // post unscheduled after selection is declined rather than published.
   expected_scheduled_at: z.string().max(64).nullable().optional(),
+  // Sent by reconcile-deferred-publishes (service role only): finish the pending row
+  // a Meta container was deferred on, instead of publishing the post afresh.
+  resume_platform_post_id: z.string().uuid().optional(),
 }).passthrough();
 
 /**
@@ -1228,6 +1243,9 @@ Deno.serve(async (req) => {
     return new Response(null, { headers: corsHeaders });
   }
 
+  // Pollers that can defer a container stop waiting a fixed time after this.
+  const requestStartedAt = Date.now();
+
   try {
     // Parse request body first (can only be consumed once)
     // Supports optional `platforms` and `account_ids` for single-platform retry
@@ -1241,10 +1259,11 @@ Deno.serve(async (req) => {
     }
     const {
       post_id,
-      platforms: overridePlatforms,
-      account_ids: overrideAccountIds,
       expected_scheduled_at: expectedScheduledAt,
+      resume_platform_post_id: resumePlatformPostId,
     } = validation.data;
+    // A resumed run narrows both to the deferred row's account (below).
+    let { platforms: overridePlatforms, account_ids: overrideAccountIds } = validation.data;
 
     if (!post_id) {
       return createErrorResponse("Missing post_id", 400);
@@ -1326,12 +1345,58 @@ Deno.serve(async (req) => {
 
     console.log("Post data:", { platforms: post.platforms, caption: post.caption?.substring(0, 50) });
 
+    // Resume mode: finish one deferred Meta container. Only the reconciler calls it.
+    let resume: ResumeContext | null = null;
+    let resumeResponseData: Record<string, unknown> | null = null;
+    if (resumePlatformPostId) {
+      if (!isServiceRoleAuth) return createErrorResponse("Forbidden: resume is internal", 403);
+      const { data: row, error: rowError } = await supabase
+        .from("platform_posts")
+        .select("id, social_account_id, platform, status, response_data")
+        .eq("id", resumePlatformPostId)
+        .eq("post_id", post_id)
+        .maybeSingle();
+      // A failed read is not "nothing deferred": answer retryable and touch nothing.
+      if (rowError) return createErrorResponse(`Could not read the deferred row: ${rowError.message}`, 503);
+      const deferral = row?.status === "pending" ? readDeferral(row.response_data) : null;
+      if (!row || !deferral || !row.social_account_id) {
+        return createJsonResponse({ success: true, status: "skipped", reason: "nothing deferred on this row" });
+      }
+      // Bounded whatever happens later in this request: a row past its deadline, or on
+      // a post someone has since changed, is settled now rather than checked forever.
+      const abandon = isPastGiveUp(deferral, new Date())
+        ? giveUpMessage(deferral.kind)
+        : post.status !== "processing"
+          ? "The post was changed while the video was processing. Safe to retry."
+          : null;
+      if (abandon) {
+        const settled = await settlePlatformPost(supabase, {
+          platformPostId: row.id,
+          postId: post_id,
+          socialAccountId: row.social_account_id,
+          platform: row.platform,
+          status: "failed",
+          errorMessage: abandon,
+        });
+        if (settled.error) return createErrorResponse(`Could not settle the deferred row: ${settled.error}`, 503);
+        return createJsonResponse({ success: true, status: "failed", reason: abandon });
+      }
+      resume = { platformPostId: row.id, deferral };
+      resumeResponseData = (row.response_data as Record<string, unknown> | null) ?? null;
+      overrideAccountIds = [row.social_account_id];
+      overridePlatforms = [row.platform];
+      console.log("Resuming deferred publish", { post_id, platform_post_id: row.id, kind: deferral.kind, attempts: deferral.attempts });
+    }
+    const timing: PublishTiming = { resume, deadlineMs: pollDeadline(requestStartedAt, !!resume) };
+
     // The transition to `processing` is a CLAIM: when the scheduler says
     // which scheduled_at it selected, a row that no longer carries it -- the
     // partner or the UI unscheduled or moved it after the cron's SELECT --
     // matches nothing, and this publish is declined before any provider is
     // touched. Callers with no expectation keep the unconditional transition.
-    const claim = await claimPostForProcessing(supabase, post_id, expectedScheduledAt);
+    // A resumed run continues the original run's claim; claiming again would also
+    // restart the stale-post clock.
+    const claim = resume ? { claimed: true, error: null } : await claimPostForProcessing(supabase, post_id, expectedScheduledAt);
     if (claim.error) {
       return createErrorResponse(`Could not claim post for processing: ${claim.error}`, 500);
     }
@@ -1618,6 +1683,8 @@ Deno.serve(async (req) => {
     // ─────────────────────────────────────────────────────────────────────
     let hasSuccess = false;
     let hasFailed = false;
+    // An account whose Meta container is left for reconcile-deferred-publishes.
+    let hasDeferred = false;
     const platformResults: PlatformResultSummary[] = [];
 
     for (const account of (accounts || [])) {
@@ -1637,9 +1704,9 @@ Deno.serve(async (req) => {
           case "instagram": {
             const igAuthType = (account as any).ig_auth_type || (account.account_metadata as Record<string, unknown>)?.account_type;
             if (igAuthType === 'business_login') {
-              result = await postToInstagramBusinessLogin(account, post, mediaUrls, mediaFiles, supabase, post_id);
+              result = await postToInstagramBusinessLogin(account, post, mediaUrls, mediaFiles, supabase, post_id, timing);
             } else {
-              result = await postToInstagram(account, post, mediaUrls, mediaFiles);
+              result = await postToInstagram(account, post, mediaUrls, mediaFiles, timing);
             }
             break;
           }
@@ -1653,7 +1720,7 @@ Deno.serve(async (req) => {
             result = await postToReddit(account, post, mediaUrls);
             break;
           case "threads":
-            result = await postToThreads(account, post, mediaUrls);
+            result = await postToThreads(account, post, mediaUrls, timing);
             break;
           case "tiktok": {
             const reviewSubmissionId = requiredReviewSubmissionId(post);
@@ -1747,7 +1814,8 @@ Deno.serve(async (req) => {
           platformPostRecord = data;
         } else {
           const settled = await settlePlatformPost(supabase, {
-            platformPostId: null,
+            // A resumed run settles the pending row the first run left.
+            platformPostId: resume?.platformPostId ?? null,
             postId: post_id,
             socialAccountId: account.id,
             platform: account.platform,
@@ -1795,7 +1863,30 @@ Deno.serve(async (req) => {
         hasSuccess = true;
         console.log(`Successfully posted to ${account.platform}${isTikTokProcessing ? " (processing in background)" : ""}`);
 
-      } catch (error) {
+      } catch (caught) {
+        let error = caught;
+        if (error instanceof ContainerStillProcessing) {
+          const recorded = await recordStillProcessing(supabase, settlePlatformPost, {
+            postId: post_id,
+            account,
+            signal: error,
+            resume,
+            resumeResponseData,
+          });
+          if (!recorded.error && !recorded.gaveUp) {
+            console.log(`[${account.platform}] container ${error.containerId} still processing; left for the reconciler`);
+            platformResults.push({ platform: account.platform, status: "pending" });
+            hasDeferred = true;
+            continue;
+          }
+          if (!recorded.error) {
+            platformResults.push({ platform: account.platform, status: "failed", error_message: giveUpMessage(error.kind) });
+            hasFailed = true;
+            continue;
+          }
+          console.error(`[${account.platform}] could not record the deferred container:`, recorded.error);
+          error = new Error(`${account.platform === "threads" ? "Threads" : "Instagram"} was still processing the video and it could not be finished later. Safe to retry.`);
+        }
         console.error(`Error posting to ${account.platform}:`, error);
 
         // If the handler already wrote its own rows (selfWroteRows flag on the error),
@@ -1803,7 +1894,7 @@ Deno.serve(async (req) => {
         const selfWrote = (error as { selfWroteRows?: boolean })?.selfWroteRows === true;
         if (!selfWrote) {
           const { error: settleError } = await settlePlatformPost(supabase, {
-            platformPostId: null,
+            platformPostId: resume?.platformPostId ?? null,
             postId: post_id,
             socialAccountId: account.id,
             platform: account.platform,
@@ -1828,15 +1919,36 @@ Deno.serve(async (req) => {
     // ─────────────────────────────────────────────────────────────────────
     // Step 5: Update post status and quotas
     // ─────────────────────────────────────────────────────────────────────
-    const finalStatus = hasSuccess && !hasFailed ? "completed" : hasFailed && !hasSuccess ? "failed" : "completed";
+    let finalStatus = hasSuccess && !hasFailed ? "completed" : hasFailed && !hasSuccess ? "failed" : "completed";
+    // Notifications go out once the post is final: here, or from the resumed run that settles it.
+    let notify = true;
 
-    await supabase
-      .from("posts")
-      .update({
-        status: finalStatus,
-        posted_at: hasSuccess ? new Date().toISOString() : null
-      })
-      .eq("id", post_id);
+    if (resume) {
+      // The settle RPC rolled the post up when this row became terminal.
+      const { data: current } = await supabase.from("posts").select("status").eq("id", post_id).maybeSingle();
+      if (current?.status === "completed" || current?.status === "failed") {
+        finalStatus = current.status;
+      } else {
+        finalStatus = "processing";
+        notify = false;
+      }
+    } else if (hasDeferred) {
+      // Stays `processing` until the deferred rows settle; the RPC rolls it up then.
+      finalStatus = "processing";
+      notify = false;
+      await supabase
+        .from("posts")
+        .update({ status: "processing", posted_at: hasSuccess ? new Date().toISOString() : null })
+        .eq("id", post_id);
+    } else {
+      await supabase
+        .from("posts")
+        .update({
+          status: finalStatus,
+          posted_at: hasSuccess ? new Date().toISOString() : null
+        })
+        .eq("id", post_id);
+    }
 
     console.log("Post processing complete:", finalStatus);
 
@@ -1846,53 +1958,55 @@ Deno.serve(async (req) => {
     // ─────────────────────────────────────────────────────────────────────
     // Step 6: Send webhook notifications (non-blocking)
     // ─────────────────────────────────────────────────────────────────────
-    const webhookEvent = finalStatus === "completed" ? "post.completed" : "post.failed";
-    const webhookData = {
-      post_id: post_id,
-      caption: post.caption,
-      platforms: post.platforms,
-      status: finalStatus,
-      platform_results: platformResults.reduce((acc, r) => {
-        acc[r.platform] = {
-          status: r.status,
-          post_url: r.platform_post_url || null
-        };
-        return acc;
-      }, {} as Record<string, { status: string; post_url: string | null }>)
-    };
+    if (notify) {
+      const webhookEvent = finalStatus === "completed" ? "post.completed" : "post.failed";
+      const webhookData = {
+        post_id: post_id,
+        caption: post.caption,
+        platforms: post.platforms,
+        status: finalStatus,
+        platform_results: platformResults.reduce((acc, r) => {
+          acc[r.platform] = {
+            status: r.status,
+            post_url: r.platform_post_url || null
+          };
+          return acc;
+        }, {} as Record<string, { status: string; post_url: string | null }>)
+      };
 
-    // Extract per-request webhook configuration from post metadata
-    const perRequestWebhook = post.metadata?.webhook_url ? {
-      url: post.metadata.webhook_url as string,
-      secret: post.metadata.webhook_secret as string | undefined
-    } : undefined;
+      // Extract per-request webhook configuration from post metadata
+      const perRequestWebhook = post.metadata?.webhook_url ? {
+        url: post.metadata.webhook_url as string,
+        secret: post.metadata.webhook_secret as string | undefined
+      } : undefined;
 
-    // Use EdgeRuntime.waitUntil for non-blocking webhook delivery
-    if (typeof EdgeRuntime !== "undefined" && EdgeRuntime.waitUntil) {
-      EdgeRuntime.waitUntil(sendWebhookNotifications(supabase, post.user_id, webhookEvent, webhookData, perRequestWebhook));
+      // Use EdgeRuntime.waitUntil for non-blocking webhook delivery
+      if (typeof EdgeRuntime !== "undefined" && EdgeRuntime.waitUntil) {
+        EdgeRuntime.waitUntil(sendWebhookNotifications(supabase, post.user_id, webhookEvent, webhookData, perRequestWebhook));
 
-      // Also send individual post.published events for each successful platform
-      for (const result of platformResults) {
-        if (result.status === "success" && result.platform_post_url) {
-          EdgeRuntime.waitUntil(sendWebhookNotifications(supabase, post.user_id, "post.published", {
-            post_id: post_id,
-            platform: result.platform,
-            post_url: result.platform_post_url,
-            caption: post.caption
-          }, perRequestWebhook));
+        // Also send individual post.published events for each successful platform
+        for (const result of platformResults) {
+          if (result.status === "success" && result.platform_post_url) {
+            EdgeRuntime.waitUntil(sendWebhookNotifications(supabase, post.user_id, "post.published", {
+              post_id: post_id,
+              platform: result.platform,
+              post_url: result.platform_post_url,
+              caption: post.caption
+            }, perRequestWebhook));
+          }
         }
-      }
-      // Send email notification for failed posts (non-blocking)
-      if (hasFailed) {
-        EdgeRuntime.waitUntil(sendFailureEmailNotification(supabase, post.user_id, post.caption || "", platformResults));
-      }
-    } else {
-      // Fallback: send synchronously but don't block response
-      sendWebhookNotifications(supabase, post.user_id, webhookEvent, webhookData, perRequestWebhook).catch(console.error);
+        // Send email notification for failed posts (non-blocking)
+        if (hasFailed) {
+          EdgeRuntime.waitUntil(sendFailureEmailNotification(supabase, post.user_id, post.caption || "", platformResults));
+        }
+      } else {
+        // Fallback: send synchronously but don't block response
+        sendWebhookNotifications(supabase, post.user_id, webhookEvent, webhookData, perRequestWebhook).catch(console.error);
 
-      // Send email notification for failed posts
-      if (hasFailed) {
-        sendFailureEmailNotification(supabase, post.user_id, post.caption || "", platformResults).catch(console.error);
+        // Send email notification for failed posts
+        if (hasFailed) {
+          sendFailureEmailNotification(supabase, post.user_id, post.caption || "", platformResults).catch(console.error);
+        }
       }
     }
 
@@ -1909,11 +2023,12 @@ Deno.serve(async (req) => {
         level: hasFailed && !hasSuccess ? 'error' : hasFailed ? 'warn' : 'info',
         category: 'post',
         source: 'process-post',
-        message: hasSuccess && !hasFailed
+        message: (hasSuccess && !hasFailed
           ? `Post published successfully to ${successPlatforms.join(', ')}`
           : hasFailed && !hasSuccess
             ? `Post failed on all platforms: ${failedPlatforms.join(', ')}`
-            : `Post partially succeeded: ${successPlatforms.join(', ')} succeeded, ${failedPlatforms.join(', ')} failed`,
+            : `Post partially succeeded: ${successPlatforms.join(', ')} succeeded, ${failedPlatforms.join(', ')} failed`)
+          + (hasDeferred ? " (a video is still processing and will be finished in the background)" : ""),
         user_id: post.user_id,
         metadata: {
           post_id: post_id,
@@ -3326,7 +3441,10 @@ async function pollContainerStatus(
   containerId: string,
   accessToken: string,
   maxAttempts = 60, // Increased from 30 to 60 (2 min total for large video reels)
-  delayMs = 2000
+  delayMs = 2000,
+  // Set where the container can be finished later: past the deadline the wait stops
+  // with ContainerStillProcessing instead of running the worker out of time.
+  deferral?: { kind: DeferredKind; deadlineMs: number },
 ): Promise<string> {
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const response = await fetchWithTimeout(
@@ -3343,7 +3461,8 @@ async function pollContainerStatus(
     }
 
     const container = classifyContainerStatus("instagram", data);
-    if (container.state === "finished" || container.state === "published") {
+    if (container.state === "published") return "PUBLISHED";
+    if (container.state === "finished") {
       // Add a buffer delay after FINISHED to ensure Instagram's backend is truly ready
       console.log(`Container ${containerId} finished, waiting 3s before publish...`);
       await new Promise((resolve) => setTimeout(resolve, 3000));
@@ -3352,6 +3471,10 @@ async function pollContainerStatus(
 
     if (container.state === "failed") {
       throw new Error(containerFailureMessage("instagram", container.reason));
+    }
+
+    if (deferral && Date.now() + delayMs > deferral.deadlineMs) {
+      throw new ContainerStillProcessing(deferral.kind, containerId);
     }
 
     // Still IN_PROGRESS, wait and retry
@@ -3427,7 +3550,8 @@ async function postToInstagram(
   account: SocialAccount,
   post: PostData,
   mediaUrls: string[],
-  mediaFiles: MediaFile[]
+  mediaFiles: MediaFile[],
+  timing: PublishTiming = NO_DEFERRAL,
 ): Promise<PlatformPostResult> {
   const igUserId = account.platform_user_id;
   const accessToken = account.access_token;
@@ -3782,7 +3906,8 @@ async function postToInstagram(
   // Handle story separately if included in post types
   const igAllResults: Array<{ id: string; url?: string; warnings?: string[] }> = [];
 
-  if (igPostTypes.includes("story") && mediaUrls.length > 0) {
+  // A resumed run finishes only the deferred reel: the story was handled the first time.
+  if (!timing.resume && igPostTypes.includes("story") && mediaUrls.length > 0) {
     const storyBody: Record<string, unknown> = {
       media_type: "STORIES",
       access_token: accessToken,
@@ -3880,38 +4005,53 @@ async function postToInstagram(
       reelsBody.location_id = igLocationId;
     }
 
-    console.log("Instagram REELS request:", JSON.stringify(reelsBody).slice(0, 500));
+    // A resumed run already has the container; creating another would publish twice.
+    let reelContainerId: string;
+    if (timing.resume) {
+      reelContainerId = timing.resume.deferral.container_id;
+    } else {
+      console.log("Instagram REELS request:", JSON.stringify(reelsBody).slice(0, 500));
 
-    let createData = await igMediaCreateWithLocationRetry(
-      `https://graph.facebook.com/v18.0/${igUserId}/media`,
-      reelsBody,
-    );
-    // After a location-retry, body may have been stripped; mirror that on the local body.
-    if (createData && !("error" in (createData as object)) && reelsBody.location_id && !("location_id" in reelsBody)) {
-      // no-op — kept for clarity; helper already pushed the warning.
-    }
-    console.log("Instagram REELS creation response:", JSON.stringify(createData).slice(0, 300));
-
-    // Retry without collaborator if "User not visible" error
-    if (createData.error && reelsBody.collaborators && (createData.error.code === 210 || createData.error.message?.includes("not visible"))) {
-      const skippedCollaborator = (reelsBody.collaborators as string[])[0];
-      console.warn("Collaborator rejected by Instagram API, retrying without collaborator:", createData.error.message);
-      delete reelsBody.collaborators;
-      warnings.push(`Collaborator @${skippedCollaborator} was skipped — their account must be a Business or Creator account to accept API collaboration invites`);
-      createData = await igMediaCreateWithLocationRetry(
+      let createData = await igMediaCreateWithLocationRetry(
         `https://graph.facebook.com/v18.0/${igUserId}/media`,
         reelsBody,
       );
-      console.log("Instagram REELS retry response:", JSON.stringify(createData).slice(0, 300));
+      // After a location-retry, body may have been stripped; mirror that on the local body.
+      if (createData && !("error" in (createData as object)) && reelsBody.location_id && !("location_id" in reelsBody)) {
+        // no-op — kept for clarity; helper already pushed the warning.
+      }
+      console.log("Instagram REELS creation response:", JSON.stringify(createData).slice(0, 300));
+
+      // Retry without collaborator if "User not visible" error
+      if (createData.error && reelsBody.collaborators && (createData.error.code === 210 || createData.error.message?.includes("not visible"))) {
+        const skippedCollaborator = (reelsBody.collaborators as string[])[0];
+        console.warn("Collaborator rejected by Instagram API, retrying without collaborator:", createData.error.message);
+        delete reelsBody.collaborators;
+        warnings.push(`Collaborator @${skippedCollaborator} was skipped — their account must be a Business or Creator account to accept API collaboration invites`);
+        createData = await igMediaCreateWithLocationRetry(
+          `https://graph.facebook.com/v18.0/${igUserId}/media`,
+          reelsBody,
+        );
+        console.log("Instagram REELS retry response:", JSON.stringify(createData).slice(0, 300));
+      }
+
+      if (createData.error) throw new Error(createData.error.message);
+      reelContainerId = String(createData.id);
     }
 
-    if (createData.error) throw new Error(createData.error.message);
-
     // Poll for container status before publishing (Required for videos)
-    await pollContainerStatus(createData.id, accessToken);
+    const reelStatus = await pollContainerStatus(reelContainerId, accessToken, 60, 2000, { kind: "ig_reel", deadlineMs: timing.deadlineMs });
+    if (reelStatus === "PUBLISHED") {
+      // Only a resumed run sees this: an earlier run published but died before recording it.
+      // No id: the container id is not the media id, and analytics would read it as one.
+      return {
+        url: username ? `https://www.instagram.com/${username}/` : `https://instagram.com`,
+        warnings: [...warnings, "Instagram had already published this reel; its direct link could not be read."],
+      };
+    }
 
     // Publish the media with retry logic
-    const publishData = await publishInstagramMedia(igUserId, createData.id, accessToken);
+    const publishData = await publishInstagramMedia(igUserId, reelContainerId, accessToken);
 
     // Post first comment
     await postInstagramFirstComment(publishData.id);
@@ -4145,7 +4285,8 @@ async function pollBusinessLoginContainerStatus(
   containerId: string,
   accessToken: string,
   maxAttempts = 30,
-  delayMs = 2000
+  delayMs = 2000,
+  deferral?: { kind: DeferredKind; deadlineMs: number },
 ): Promise<string> {
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const response = await fetchWithTimeout(
@@ -4162,7 +4303,8 @@ async function pollBusinessLoginContainerStatus(
     }
 
     const container = classifyContainerStatus("instagram", data);
-    if (container.state === "finished" || container.state === "published") {
+    if (container.state === "published") return "PUBLISHED";
+    if (container.state === "finished") {
       console.log(`BL Container ${containerId} finished, waiting 3s before publish...`);
       await new Promise((resolve) => setTimeout(resolve, 3000));
       return data.status_code;
@@ -4170,6 +4312,10 @@ async function pollBusinessLoginContainerStatus(
 
     if (container.state === "failed") {
       throw new Error(containerFailureMessage("instagram", container.reason));
+    }
+
+    if (deferral && Date.now() + delayMs > deferral.deadlineMs) {
+      throw new ContainerStillProcessing(deferral.kind, containerId);
     }
 
     await new Promise((resolve) => setTimeout(resolve, delayMs));
@@ -4252,7 +4398,8 @@ async function postToInstagramBusinessLogin(
   mediaUrls: string[],
   mediaFiles: MediaFile[],
   supabase: SupabaseClient,
-  postId: string
+  postId: string,
+  timing: PublishTiming = NO_DEFERRAL,
 ): Promise<PlatformPostResult> {
   const igUserId = account.platform_user_id;
   const accessToken = account.access_token;
@@ -4553,7 +4700,8 @@ async function postToInstagramBusinessLogin(
       // keying the event on the POST id rather than the row id would collapse
       // them into one.
       const settled = await settlePlatformPost(supabase, {
-        platformPostId: null,
+        // A resumed run settles the pending row the first run left; only the reel resumes.
+        platformPostId: subtype !== "story" ? timing.resume?.platformPostId ?? null : null,
         postId,
         socialAccountId: account.id,
         platform: "instagram",
@@ -4619,7 +4767,8 @@ async function postToInstagramBusinessLogin(
 
   // ─── 1. STORY ──────────────────────────────────────────────────────────────
   const wantStory = blPostTypes.includes("story") || (shareToStory && mediaUrls.length > 0);
-  if (wantStory) {
+  // A resumed run finishes only the deferred reel: the story was handled the first time.
+  if (wantStory && !timing.resume) {
     try {
       const storyBody: Record<string, unknown> = {
         media_type: "STORIES",
@@ -4683,10 +4832,13 @@ async function postToInstagramBusinessLogin(
       }
       if (await checkBLLocationEligibility()) reelsBody.location_id = instagramLocationId;
 
-      let createData = await blMediaCreateWithLocationRetry(
-        `https://graph.instagram.com/v22.0/${igUserId}/media`,
-        reelsBody,
-      );
+      // A resumed run already has the container; creating another would publish twice.
+      let createData: Awaited<ReturnType<typeof blMediaCreateWithLocationRetry>> = timing.resume
+        ? { id: timing.resume.deferral.container_id }
+        : await blMediaCreateWithLocationRetry(
+          `https://graph.instagram.com/v22.0/${igUserId}/media`,
+          reelsBody,
+        );
 
       if (createData.error && reelsBody.collaborators && (createData.error.code === 210 || createData.error.message?.includes("not visible"))) {
         const skipped = (reelsBody.collaborators as string[])[0];
@@ -4709,19 +4861,32 @@ async function postToInstagramBusinessLogin(
         await insertIGRow(subtype, "failed", undefined, undefined, msg);
         subResults.push({ subtype, status: "failed", error: msg });
       } else {
-        await pollBusinessLoginContainerStatus(createData.id, accessToken);
-        const publishData = await publishBusinessLoginMedia(igUserId, createData.id, accessToken);
+        const reelStatus = await pollBusinessLoginContainerStatus(createData.id, accessToken, 30, 2000, {
+          kind: "ig_business_reel",
+          deadlineMs: timing.deadlineMs,
+        });
         const fallbackUrl = username ? `https://www.instagram.com/${username}/` : `https://instagram.com`;
         const subtype = wantReel ? "reel" : "feed";
-        const blDebug = await finalizeBLLocationDebug(publishData.id);
-        const rowId = await insertIGRow(subtype, "success", publishData.id, fallbackUrl, undefined, {
-          shared_to_feed: wantFeed,
-          ...(blDebug ? { location_debug: blDebug } : {}),
-        });
-        subResults.push({ subtype, status: "success", id: publishData.id, url: fallbackUrl });
-        enrichInBackground(rowId, publishData.id, subtype, fallbackUrl);
+        if (reelStatus === "PUBLISHED") {
+          // Only a resumed run sees this: an earlier run published but died before recording it.
+          const note = "Instagram had already published this reel; its direct link could not be read.";
+          await insertIGRow(subtype, "success", undefined, fallbackUrl, undefined, { warnings: [note] });
+          subResults.push({ subtype, status: "success", url: fallbackUrl });
+          warnings.push(note);
+        } else {
+          const publishData = await publishBusinessLoginMedia(igUserId, createData.id, accessToken);
+          const blDebug = await finalizeBLLocationDebug(publishData.id);
+          const rowId = await insertIGRow(subtype, "success", publishData.id, fallbackUrl, undefined, {
+            shared_to_feed: wantFeed,
+            ...(blDebug ? { location_debug: blDebug } : {}),
+          });
+          subResults.push({ subtype, status: "success", id: publishData.id, url: fallbackUrl });
+          enrichInBackground(rowId, publishData.id, subtype, fallbackUrl);
+        }
       }
     } catch (e) {
+      // Not a failure: the main loop records the container for the reconciler to finish.
+      if (e instanceof ContainerStillProcessing) throw e;
       const msg = e instanceof Error ? e.message : String(e);
       const subtype = wantReel ? "reel" : "feed";
       await insertIGRow(subtype, "failed", undefined, undefined, msg);
@@ -5586,7 +5751,8 @@ async function postToReddit(
 async function postToThreads(
   account: SocialAccount,
   post: PostData,
-  mediaUrls: string[]
+  mediaUrls: string[],
+  timing: PublishTiming = NO_DEFERRAL,
 ): Promise<PlatformPostResult> {
   const accessToken = account.access_token;
   const userId = account.platform_user_id;
@@ -5949,93 +6115,115 @@ async function postToThreads(
     containerParams.media_type = "TEXT";
   }
 
-  console.log("Threads: Creating container...");
+  // Creating the container is skipped on a resumed run, which already has one.
+  const createThreadsContainer = async (): Promise<string> => {
+    console.log("Threads: Creating container...");
 
-  // Create the container
-  const containerUrl = new URL(containerEndpoint);
-  Object.entries(containerParams).forEach(([key, value]) => {
-    containerUrl.searchParams.set(key, value);
-  });
+    // Create the container
+    const containerUrl = new URL(containerEndpoint);
+    Object.entries(containerParams).forEach(([key, value]) => {
+      containerUrl.searchParams.set(key, value);
+    });
 
-  const containerResponse = await fetch(containerUrl.toString(), {
-    method: "POST",
-  });
-  const containerData = await containerResponse.json();
+    const containerResponse = await fetch(containerUrl.toString(), {
+      method: "POST",
+    });
+    const containerData = await containerResponse.json();
 
-  console.log("Threads: Container response:", JSON.stringify(containerData).slice(0, 200));
+    console.log("Threads: Container response:", JSON.stringify(containerData).slice(0, 200));
 
-  if (containerData.error) {
-    tLocationDebug.create_container_success = false;
-    tLocationDebug.create_container_error = redactMetaError(containerData.error);
-    const errMsg = (containerData.error.message || "").toString();
-    const errCode = containerData.error.code;
-    const errLower = errMsg.toLowerCase();
-    const wantedCrossShare = !!metadata?.threads_cross_share_to_ig;
+    if (containerData.error) {
+      tLocationDebug.create_container_success = false;
+      tLocationDebug.create_container_error = redactMetaError(containerData.error);
+      const errMsg = (containerData.error.message || "").toString();
+      const errCode = containerData.error.code;
+      const errLower = errMsg.toLowerCase();
+      const wantedCrossShare = !!metadata?.threads_cross_share_to_ig;
 
-    // If we sent crossreshare_to_ig and Meta rejected the container, retry
-    // ONCE without the cross-share flag so the Thread itself still publishes.
-    // Common cases:
-    //  - code 33 ("does not exist or does not support this action") → no IG
-    //    account linked in Meta Accounts Center, or media not Story-eligible.
-    //  - code 10 / 200                                              → missing
-    //    threads_share_to_instagram scope on the token.
-    const crossShareLikelyCulprit =
-      crossShareApplied && (
-        errCode === 33 || errCode === 10 || errCode === 200 ||
-        errLower.includes("crossreshare") ||
-        errLower.includes("crosspost") ||
-        errLower.includes("instagram") ||
-        errLower.includes("ig account") ||
-        errLower.includes("linked")
-      );
+      // If we sent crossreshare_to_ig and Meta rejected the container, retry
+      // ONCE without the cross-share flag so the Thread itself still publishes.
+      // Common cases:
+      //  - code 33 ("does not exist or does not support this action") → no IG
+      //    account linked in Meta Accounts Center, or media not Story-eligible.
+      //  - code 10 / 200                                              → missing
+      //    threads_share_to_instagram scope on the token.
+      const crossShareLikelyCulprit =
+        crossShareApplied && (
+          errCode === 33 || errCode === 10 || errCode === 200 ||
+          errLower.includes("crossreshare") ||
+          errLower.includes("crosspost") ||
+          errLower.includes("instagram") ||
+          errLower.includes("ig account") ||
+          errLower.includes("linked")
+        );
 
-    if (crossShareLikelyCulprit) {
-      console.warn(
-        `Threads: Container create failed with cross-share enabled [code=${errCode}]: ${errMsg}. Retrying without crossreshare_to_ig…`
-      );
-      delete containerParams.crossreshare_to_ig;
-      delete containerParams.crossreshare_to_ig_dark_mode;
-      crossShareApplied = false;
-      crossShareIgStatus = "rejected_by_meta";
-      threadsWarnings.push(
-        `Instagram Story cross-share was rejected by Meta (code ${errCode}). Make sure your Instagram account is linked to this Threads profile in Meta Accounts Center, then reconnect Threads in Postora. The Thread itself was still published.`
-      );
+      if (crossShareLikelyCulprit) {
+        console.warn(
+          `Threads: Container create failed with cross-share enabled [code=${errCode}]: ${errMsg}. Retrying without crossreshare_to_ig…`
+        );
+        delete containerParams.crossreshare_to_ig;
+        delete containerParams.crossreshare_to_ig_dark_mode;
+        crossShareApplied = false;
+        crossShareIgStatus = "rejected_by_meta";
+        threadsWarnings.push(
+          `Instagram Story cross-share was rejected by Meta (code ${errCode}). Make sure your Instagram account is linked to this Threads profile in Meta Accounts Center, then reconnect Threads in Postora. The Thread itself was still published.`
+        );
 
-      const retryUrl = new URL(containerEndpoint);
-      Object.entries(containerParams).forEach(([key, value]) => {
-        retryUrl.searchParams.set(key, value);
-      });
-      const retryResponse = await fetch(retryUrl.toString(), { method: "POST" });
-      const retryData = await retryResponse.json();
-      console.log("Threads: Retry container response:", JSON.stringify(retryData).slice(0, 200));
-      if (retryData.error) {
-        throw new Error(`Threads API error [code=${retryData.error.code}]: ${retryData.error.message}`);
+        const retryUrl = new URL(containerEndpoint);
+        Object.entries(containerParams).forEach(([key, value]) => {
+          retryUrl.searchParams.set(key, value);
+        });
+        const retryResponse = await fetch(retryUrl.toString(), { method: "POST" });
+        const retryData = await retryResponse.json();
+        console.log("Threads: Retry container response:", JSON.stringify(retryData).slice(0, 200));
+        if (retryData.error) {
+          throw new Error(`Threads API error [code=${retryData.error.code}]: ${retryData.error.message}`);
+        }
+        // Replace containerData with the successful retry so downstream code uses it.
+        (containerData as Record<string, unknown>).id = retryData.id;
+      } else {
+        throw new Error(`Threads API error [code=${errCode}]: ${containerData.error.message}`);
       }
-      // Replace containerData with the successful retry so downstream code uses it.
-      (containerData as Record<string, unknown>).id = retryData.id;
-    } else {
-      throw new Error(`Threads API error [code=${errCode}]: ${containerData.error.message}`);
     }
-  }
 
-  tLocationDebug.create_container_success = true;
-  // If we sent a topic_tag and the container creation succeeded, Meta accepted it.
-  if (tTopicTagDebug.sent) {
-    tTopicTagDebug.accepted = true;
-  }
+    tLocationDebug.create_container_success = true;
+    // If we sent a topic_tag and the container creation succeeded, Meta accepted it.
+    if (tTopicTagDebug.sent) {
+      tTopicTagDebug.accepted = true;
+    }
+    return containerData.id;
+  };
 
-  const containerId = containerData.id;
+  // A resumed run already has the container; creating another would post twice.
+  const containerId = timing.resume ? timing.resume.deferral.container_id : await createThreadsContainer();
 
   // Poll container status until FINISHED (required by Threads API)
   const statusEndpoint = `https://graph.threads.net/v1.0/${containerId}?fields=${CONTAINER_STATUS_FIELDS.threads}&access_token=${accessToken}`;
-  const maxAttempts = 15;
   const pollInterval = 2000; // 2 seconds
+  // Only a single video can be finished later; a resumed run checks once, now.
+  const deferrable = containerParams.media_type === "VIDEO";
+  const container = timing.resume
+    ? await pollContainer("threads", statusEndpoint, { maxAttempts: 1, intervalMs: 0 })
+    : await pollContainer("threads", statusEndpoint, {
+      maxAttempts: deferrable
+        ? Math.max(1, Math.min(15, Math.floor((timing.deadlineMs - Date.now()) / pollInterval)))
+        : 15,
+      intervalMs: pollInterval,
+    });
 
   // Meta's ERROR ends the wait, and a container that never finished is never published blindly.
-  const container = await pollContainer("threads", statusEndpoint, { maxAttempts, intervalMs: pollInterval });
   if (container.state === "failed") throw new Error(containerFailureMessage("threads", container.reason));
   if (container.state === "waiting") {
+    if (deferrable && Number.isFinite(timing.deadlineMs)) throw new ContainerStillProcessing("threads", containerId);
     throw new Error("Threads did not finish processing the media in time. Safe to retry.");
+  }
+  if (container.state === "published") {
+    // Only a resumed run sees this: an earlier run published but died before recording it.
+    // No id: the container id is not the post id, and analytics would read it as one.
+    return {
+      url: username ? `https://www.threads.com/@${username}` : undefined,
+      warnings: [...threadsWarnings, "Threads had already published this post; its direct link could not be read."],
+    };
   }
 
   // Publish the container

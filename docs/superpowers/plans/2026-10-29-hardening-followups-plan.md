@@ -83,14 +83,14 @@ Files: new `supabase/functions/_shared/metaContainerStatus.ts` (+ test), `proces
 ## Task 6 — Part B2: deferred completion and stale sweeper
 
 Files: migration `2026103xxxxxxx_deferred_publishes.sql` (+ SQL suite), `_shared/postProcessingClaim.ts`,
-new `_shared/deferredPublish.ts` (+ test), `process-post/index.ts`, new function
+new `process-post/deferredPublish.ts` (+ test), `process-post/index.ts`, new function
 `supabase/functions/reconcile-deferred-publishes/` (+ test), cron registration in the migration.
 
 1. Migration: `posts.processing_started_at timestamptz`; a partial index on `platform_posts (created_at) WHERE status = 'pending'`; `cron.schedule('reconcile-deferred-publishes', '* * * * *', …)` calling the function with the service key, same pattern as `process-scheduled-posts`.
 2. `claimPostForProcessing` also sets `processing_started_at = now()`.
-3. `_shared/deferredPublish.ts`: the `deferred` payload type + zod schema, `deadlineFor(startedAt)`, and `remainingBudgetMs(startedAt)`.
+3. `process-post/deferredPublish.ts`: the `deferred` payload schema, the poll deadline, and `recordStillProcessing` (pending row on a first run; recheck or give up on a resumed one).
 4. process-post: the pollers take the budget; on exhaustion with state `waiting` they return a `deferred` result. The main loop writes the `pending` row (as for TikTok), and the final status write keeps `processing` while any deferred row exists. Post-publish steps move into one helper used by both the inline and deferred paths.
-5. reconcile-deferred-publishes: service-role only (shared auth helper), claims due rows with `FOR UPDATE SKIP LOCKED` through an RPC (so two runs never publish twice), polls once, publishes on `finished`, runs the post-publish helper, settles through `partner_settle_platform_post`. Then sweeps posts `processing` > 20 min with no `pending` row. Every outcome writes a `system_logs` row.
+5. reconcile-deferred-publishes: cron-secret auth, claims due rows through `claim_deferred_publishes` (`FOR UPDATE SKIP LOCKED`, so two runs never take one row), and calls process-post in resume mode for each, which reuses the handler's own publish and post-publish steps. Then `sweep_stale_processing_posts()`. A run that did anything, or failed, writes a `system_logs` row.
 6. Tests: deferred row shape; reconciler finished → publish + settle success; failed → settle failed with reason; past deadline → failed; sweeper writes failed rows only for accounts without a row; a row claimed by one run is skipped by another.
 7. Commit: `feat(publish): finish slow Instagram/Threads videos outside the worker`.
 
