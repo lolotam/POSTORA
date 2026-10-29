@@ -1,6 +1,6 @@
 # Large media uploads and admin-selectable size limits — design
 
-Status: Part 1 built (PR #295, branch `feat/large-media-uploads`). Part 2 proposed, awaiting approval.
+Status: Parts 1 and 2 built and merged in #295 (`d4e12ed`, 2026-10-29). Part 2 was approved with the defaults below. Review findings raised after the merge are tracked separately.
 
 > Process note: Part 1 was implemented before this spec was written. This document records
 > it after the fact so the design is reviewable, and Part 2 follows the normal order:
@@ -101,7 +101,7 @@ These cannot be read from Postora, so the UI warns rather than blocks.
 | Risk | Detail | Mitigation |
 |---|---|---|
 | Openinary memory | Its upload route calls `file.arrayBuffer()`, holding the whole file in RAM; default container limit 4 GB | Runbook: raise `DOCKER_MEMORY_LIMIT`, test 2 GB before offering it |
-| Presign expiry | Openinary checks `expires` after the body arrives; max lifetime 1 hour. 2 GB needs ≥ ~4.5 Mbit/s upstream | Documented; Cloudinary path is chunked and unaffected |
+| Presign expiry | Openinary checks `expires` after the body arrives; max lifetime 1 hour. 2 GB needs ≥ ~4.5 Mbit/s upstream | Documented. Cloudinary signatures also expire after about an hour, so with both providers enabled a long Openinary leg can make the later Cloudinary chunks fail (that copy is then recorded as failed) |
 | Publishing | Facebook, LinkedIn, Pinterest, TikTok, X and YouTube publishers in `process-post` load the whole video into a 150 MB worker | Known limit, separate change; Instagram/Threads pull by URL |
 | Platform limits | Platforms cap video size themselves (e.g. Bluesky 50 MB) | Existing per-platform checks in the post form still run |
 
@@ -119,6 +119,6 @@ publishers.
 - Manual: set image 50 MB → a 30 MB image uploads; set video 100 MB → a 150 MB video is
   refused in the browser, and a forged `start` for 150 MB is refused with 413.
 
-### Open question
+### Decided
 
-Defaults: keep 20 MB / 500 MB (today's behaviour), or change?
+Defaults stay at 20 MB for images and 500 MB for video (approved by the owner, 2026-10-29).
