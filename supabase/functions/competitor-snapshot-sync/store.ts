@@ -51,7 +51,7 @@ import {
   isThrottleReceipt,
   parseEnqueueReceipt,
   parseOwnerStatus,
-  parseResultReceipt,
+  parseCoverageResultReceipt,
   readOwnData,
 } from "./receipts.ts";
 
@@ -643,7 +643,11 @@ export function createCompetitorServiceStore(
     },
 
     async persistResult(input) {
-      const data = await callRpc(deps.rpc, "persist_competitor_collection_result", {
+      // The v2 writer. It is the versioned one: the same four arguments as
+      // v1, plus the coverage evidence in the payload, and a receipt that
+      // carries `version = 2`. The v1 writer stays callable in the database
+      // for deployment compatibility; nothing here calls it.
+      const data = await callRpc(deps.rpc, "persist_competitor_collection_result_v2", {
         p_job_id: input.jobId,
         p_claim_token: input.claimToken,
         p_job_generation: input.jobGeneration,
@@ -651,9 +655,10 @@ export function createCompetitorServiceStore(
       });
 
       // The receipt must answer for THIS job, generation, outcome and
-      // capture. One that disagrees is not evidence the write happened as
-      // asked, so it is indeterminate, never success.
-      const receipt = parseResultReceipt(data, input);
+      // capture, and it must report the coverage the database STORED. One
+      // that disagrees is not evidence the write happened as asked, so it is
+      // indeterminate, never success.
+      const receipt = parseCoverageResultReceipt(data, input);
       if (receipt === null) throw new CompetitorStoreError("read_failed");
       return receipt;
     },

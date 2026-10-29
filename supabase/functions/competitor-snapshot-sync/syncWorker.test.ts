@@ -31,6 +31,12 @@ import {
   type CompetitorWorkerLogEvent,
   type CompetitorWorkerPorts,
 } from "./syncWorker.ts";
+import {
+  CompetitorStoreError,
+  createCompetitorServiceStore,
+  type CompetitorRpcCaller,
+  type ServiceReadPort,
+} from "./store.ts";
 import type { CompetitorServiceStore } from "./store.ts";
 import {
   CompetitorProviderError,
@@ -145,6 +151,7 @@ function fakeStore(options: {
         written: 1,
         mediaCount: 0,
         capturedAt: null,
+        coverage: null,
       };
     },
     async recordThrottle(input) {
@@ -175,6 +182,16 @@ const CAPTURE: CompetitorCapture = {
     view_count: 12000,
   }],
   truncated: false,
+  coverage: {
+    captureStartedAt: "2026-10-29T02:00:00.000Z",
+    captureEndedAt: "2026-10-29T02:00:05.000Z",
+    oldestReturnedAt: "2026-10-28T12:00:00.000Z",
+    orderingVerified: false,
+    cursorPresent: false,
+    exhausted: true,
+    truncated: false,
+    gapReason: null,
+  },
 };
 
 function provider(
@@ -274,6 +291,16 @@ Deno.test("A12 no viewer and the paid fallback on files the capture as apify", a
           profile: { followers_count: 10, media_count: 2 },
           media: [],
           truncated: false,
+          coverage: {
+            captureStartedAt: "2026-10-29T02:00:00.000Z",
+            captureEndedAt: "2026-10-29T02:00:04.000Z",
+            oldestReturnedAt: null,
+            orderingVerified: false,
+            cursorPresent: null,
+            exhausted: true,
+            truncated: false,
+            gapReason: null,
+          },
         },
       };
     },
@@ -759,4 +786,236 @@ Deno.test("a viewer token or scope failure is a retry, never the weekly verdict"
     assertEquals(recorder.persisted[0]!.outcome, "retry");
     assertEquals(recorder.persisted[0]!.reason_code, kind);
   }
+});
+
+Deno.test("a capture that claims another source is never filed as official", async () => {
+  const recorder = fakeStore();
+  const adapter = provider({ ...CAPTURE, source: "apify" });
+
+  const summary = await runCompetitorDrain(ports(recorder, adapter), {});
+
+  assertEquals(summary.completed, 0);
+  assertEquals(summary.retried, 1);
+  assertEquals(recorder.persisted.length, 1);
+  assertEquals(recorder.persisted[0]!.outcome, "retry");
+  assertEquals(recorder.persisted[0]!.source, undefined);
+});
+
+// ---------------------------------------------------------------------------
+// The PRODUCTION path: index -> worker -> store -> the v2 SQL.
+//
+// The store below is the real module, not a fake: the worker writes through
+// it, it calls the versioned writer by name, and it validates the receipt
+// the database would send back. Mocking the whole path away would prove
+// nothing about the contract that actually runs.
+// ---------------------------------------------------------------------------
+
+Deno.test("the production path carries the coverage into the versioned write", async () => {
+  const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
+
+  const rpc: CompetitorRpcCaller = async (name, args) => {
+    calls.push({ name, args });
+    if (name === "claim_instagram_collection_jobs") {
+      return {
+        data: [{
+          job_id: JOB,
+          user_id: OWNER,
+          watchlist_id: WATCHLIST,
+          captured_on: "2026-10-29",
+          job_generation: 1,
+          claim_token: "claim-token",
+          lease_expires_at: "2026-10-29T02:02:00Z",
+          attempts: 1,
+        }],
+        error: null,
+      };
+    }
+    if (name === "attach_instagram_collection_job_viewer_context") {
+      return {
+        data: {
+          viewer_social_account_id: ACCOUNT,
+          credential_generation: 3,
+          login_kind: "page_linked",
+        },
+        error: null,
+      };
+    }
+    if (name === "read_facebook_user_account_credential") {
+      return {
+        data: {
+          found: true,
+          social_account_id: ACCOUNT,
+          platform: "instagram",
+          credential_id: "cred-1",
+          credential_kind: "facebook_user",
+          token: "protected-token",
+          token_expires_at: null,
+          revision: 4,
+          capability_generation: 3,
+          connection_version: 1,
+        },
+        error: null,
+      };
+    }
+    if (name === "read_instagram_account_capability") {
+      return {
+        data: {
+          social_account_id: ACCOUNT,
+          capability_present: true,
+          login_kind: "page_linked",
+          permission_read_state: "ok",
+          scopes_authoritative: true,
+          granted_scopes: ["instagram_manage_insights"],
+          scopes_read_at: "2026-01-01T00:00:00Z",
+          last_read_failed_at: null,
+          last_read_error_code: null,
+          credential_generation: 3,
+          credential_updated_at: null,
+          generation_reason: null,
+          reconnected_at: null,
+          has_protected_credential: true,
+          updated_at: null,
+        },
+        error: null,
+      };
+    }
+    if (name === "persist_competitor_collection_result_v2") {
+      return {
+        data: {
+          version: 2,
+          job_id: JOB,
+          job_generation: 1,
+          outcome: "completed",
+          source: "official",
+          watchlist_id: WATCHLIST,
+          captured_on: "2026-10-29",
+          written: 2,
+          media_count: 1,
+          captured_at: "2026-10-29T02:00:00+00:00",
+          coverage: {
+            watchlist_id: WATCHLIST,
+            user_id: OWNER,
+            captured_on: "2026-10-29",
+            captured_at: "2026-10-29T02:00:00+00:00",
+            source: "official",
+            job_generation: 1,
+            capture_started_at: "2026-10-29T02:00:00.000Z",
+            capture_ended_at: "2026-10-29T02:00:05.000Z",
+            oldest_returned_at: "2026-10-28T12:00:00.000Z",
+            ordering_verified: false,
+            cursor_present: false,
+            exhausted: true,
+            truncated: false,
+            gap_reason: null,
+            inventory_complete: true,
+          },
+        },
+        error: null,
+      };
+    }
+    return { data: null, error: null };
+  };
+
+  const reads: ServiceReadPort = {
+    async readOne(table, _columns, filters) {
+      if (table === "competitor_watchlist") {
+        return { data: { id: WATCHLIST, user_id: OWNER, username: "competitor_brand" }, error: null };
+      }
+      if (table === "instagram_provider_throttle_buckets") {
+        return { data: null, error: null };
+      }
+      return { data: filters ? null : null, error: null };
+    },
+    async readMany(table) {
+      if (table === "social_accounts") {
+        return {
+          data: [{
+            id: ACCOUNT,
+            user_id: OWNER,
+            platform: "instagram",
+            platform_user_id: "ig-viewer",
+            is_active: true,
+            needs_reauth: false,
+            connected_at: "2026-01-01T00:00:00Z",
+          }],
+          error: null,
+        };
+      }
+      if (table === "instagram_account_capabilities") {
+        return {
+          data: [{
+            social_account_id: ACCOUNT,
+            user_id: OWNER,
+            platform: "instagram",
+            login_kind: "page_linked",
+            permission_read_state: "ok",
+            granted_scopes: ["instagram_manage_insights"],
+            credential_generation: 3,
+          }],
+          error: null,
+        };
+      }
+      return { data: [], error: null };
+    },
+  };
+
+  const store = createCompetitorServiceStore({ rpc, reads });
+
+  const summary = await runCompetitorDrain(
+    {
+      store,
+      officialProvider: provider(),
+      paidFallback: { enabled: false, refusalReason: "apify_disabled" },
+      bucketKeyFor: async () => "a".repeat(64),
+      now: () => Date.now(),
+      log: () => undefined,
+    },
+    {},
+  );
+
+  assertEquals(summary.completed, 1);
+
+  const write = calls.find((call) => call.name === "persist_competitor_collection_result_v2");
+  assert(write !== undefined, "the versioned writer was called");
+  assertEquals(
+    calls.some((call) => call.name === "persist_competitor_collection_result"),
+    false,
+    "the v1 writer was not called",
+  );
+
+  const payload = write.args.p_payload as {
+    readonly coverage?: Record<string, unknown>;
+  };
+
+  assertEquals(
+    JSON.stringify(payload.coverage),
+    JSON.stringify({
+      capture_started_at: "2026-10-29T02:00:00.000Z",
+      capture_ended_at: "2026-10-29T02:00:05.000Z",
+      oldest_returned_at: "2026-10-28T12:00:00.000Z",
+      ordering_verified: false,
+      cursor_present: false,
+      exhausted: true,
+      truncated: false,
+      gap_reason: null,
+    }),
+    "the coverage travelled with the payload",
+  );
+});
+
+Deno.test("the production path refuses a receipt the coverage does not answer for", async () => {
+  // The store validates the receipt it gets back. A receipt whose stored
+  // coverage disagrees with the request is not evidence that the write
+  // happened as asked, so the write is never reported as stored.
+  const recorder = fakeStore();
+  recorder.store.persistResult = async () => {
+    throw new CompetitorStoreError("read_failed");
+  };
+
+  const adapter = provider();
+  const summary = await runCompetitorDrain(ports(recorder, adapter), {});
+
+  assertEquals(summary.completed, 0);
+  assertEquals(summary.abandoned, 1);
+  assertEquals(summary.jobs[0]!.reasonCode, "storage_error");
 });

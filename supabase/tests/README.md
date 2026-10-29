@@ -40,6 +40,7 @@ below). So the harness does not replay history. It:
 | `meta_oauth_identity_alias.sql` | atomic direct Instagram messaging alias validation, conversion, metadata confinement and replay; rolls back |
 | `meta_page_token_reconciliation.sql` | selected operational Page-token reconciliation from a captured unchanged User grant, protected identity agreement and sibling/reauth preservation; rolls back |
 | `competitor_collection_results.sql` | atomic competitor result write, watchlist publication, weekly retry gate, context rules and result fences; rolls back |
+| `competitor_capture_coverage.sql` | the v2 competitor result write: coverage evidence stored atomically with the snapshots, the v2 fences, the malformed-coverage refusals, same-day idempotency, generation supersession, stale-worker refusal, unknown coverage for a legacy v1 capture, bounded completion vs full inventory, and the role boundary; rolls back |
 
 The harness's `SUITES` array is the complete executable inventory; the table
 above highlights selected suites, not the entire list. No existing suite may

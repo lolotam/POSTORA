@@ -107,6 +107,13 @@ export interface CompetitorWorkerLogEvent {
   readonly mediaCount?: number;
   readonly usagePercent?: number;
   readonly durationMs?: number;
+  /**
+   * Whether the capture reached the end of the target's feed without a
+   * cap. It is the operational answer to "was this a full inventory", and
+   * it is deliberately NOT the same question as the weekly coverage, which
+   * also needs a verified provider order.
+   */
+  readonly coverageComplete?: boolean;
 }
 
 export interface CompetitorWorkerPorts {
@@ -556,6 +563,15 @@ async function collect(context: JobContext): Promise<JobStep> {
     );
     capture = outcome.capture;
     usagePercent = outcome.usagePercent;
+
+    // The capture must be filed under the source of the adapter that
+    // produced it. A capture that claims another source is not trusted and
+    // it is never stored as an official one: the source decides who may
+    // read the row and which rules apply to it.
+    if (capture.source !== "official") {
+      return await persistFailure(context, "retry", "provider_error",
+        "The provider returned a capture from an unexpected source.");
+    }
   } catch (error) {
     if (error instanceof BudgetExceededError) throw error;
     return await handleProviderFailure(context, bucketKey, error);
@@ -713,6 +729,19 @@ async function persistCapture(
         view_count: item.view_count,
       },
     })),
+    // The coverage travels with the payload because only the provider
+    // knows what it observed. The worker never infers it: a sorted array
+    // is not a verified order, and a capped window is not a complete feed.
+    coverage: {
+      capture_started_at: capture.coverage.captureStartedAt,
+      capture_ended_at: capture.coverage.captureEndedAt,
+      oldest_returned_at: capture.coverage.oldestReturnedAt,
+      ordering_verified: capture.coverage.orderingVerified,
+      cursor_present: capture.coverage.cursorPresent,
+      exhausted: capture.coverage.exhausted,
+      truncated: capture.coverage.truncated,
+      gap_reason: capture.coverage.gapReason,
+    },
   });
 
   context.ports.log({
@@ -722,6 +751,7 @@ async function persistCapture(
     outcome: "completed",
     source,
     mediaCount: receipt.mediaCount,
+    coverageComplete: receipt.coverage?.inventoryComplete ?? false,
     durationMs: context.ports.now() - context.startedAt,
   });
 
