@@ -313,13 +313,16 @@ jobs:
           set -euo pipefail
           modules=(
             supabase/functions/instagram-insights-sync/graphProvider.ts
+            supabase/functions/instagram-insights-sync/receipts.ts
             supabase/functions/instagram-insights-sync/workerStore.ts
             supabase/functions/instagram-insights-sync/worker.ts
+            supabase/functions/instagram-insights-sync/workerTestSupport.ts
           )
           tests=(
             supabase/functions/instagram-insights-sync/graphProvider.test.ts
             supabase/functions/instagram-insights-sync/workerStore.test.ts
             supabase/functions/instagram-insights-sync/worker.test.ts
+            supabase/functions/instagram-insights-sync/drainHandler.test.ts
           )
           for file in "${modules[@]}" "${tests[@]}"; do
             if [ ! -f "${file}" ]; then

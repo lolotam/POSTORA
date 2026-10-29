@@ -51,7 +51,15 @@ import {
   type InstagramInsightsSyncDeps,
   type OwnerIntakeAuditEvent,
 } from "./handler.ts";
+import { isPlainRecord, readOwnData } from "./receipts.ts";
 import { createOwnerCollectionStore, type UserRpcCaller } from "./store.ts";
+import { InstagramGraphProvider } from "./graphProvider.ts";
+import {
+  createOwnerCollectionServiceStore,
+  type OwnerServiceReadPort,
+  type OwnerServiceRpcCaller,
+} from "./workerStore.ts";
+import type { OwnerWorkerPorts } from "./worker.ts";
 
 interface ServerEnvironment {
   readonly url: string;
@@ -166,6 +174,142 @@ function createAuditSink(environment: ServerEnvironment) {
   };
 }
 
+/**
+ * The service RPC caller.
+ *
+ * It uses the service role and it runs only the service RPCs of the durable
+ * collection job substrate, whose ownership checks live in SQL. The client is
+ * built per call so the caller's abort signal reaches the transport.
+ */
+function createServiceRpcCaller(environment: ServerEnvironment): OwnerServiceRpcCaller {
+  return async (functionName, args, signal) => {
+    const client = createClient(environment.url, environment.serviceRoleKey, {
+      global: {
+        fetch: (input: RequestInfo | URL, init?: RequestInit) =>
+          fetch(input, { ...init, signal: signal ?? init?.signal }),
+      },
+      auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+    });
+
+    // The raw driver envelope. The store reads its own descriptors before a
+    // SQLSTATE is allowed to mean anything.
+    return await client.rpc(functionName, args);
+  };
+}
+
+/**
+ * The service read port.
+ *
+ * The table name is a closed union in the store, so no dynamic table can be
+ * smuggled in, and every read is owner-scoped by its filters.
+ */
+function createServiceReadPort(environment: ServerEnvironment): OwnerServiceReadPort {
+  return {
+    async readOne(table, columns, filters) {
+      const client = createClient(environment.url, environment.serviceRoleKey, {
+        auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+      });
+
+      let builder = client.from(table).select(columns);
+      for (const [column, value] of Object.entries(filters)) {
+        builder = builder.eq(column, value);
+      }
+      return await builder.maybeSingle();
+    },
+
+    async readMany(table, columns, filters, idColumn, ids) {
+      if (ids.length === 0) return { data: [], error: null };
+
+      const client = createClient(environment.url, environment.serviceRoleKey, {
+        auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+      });
+
+      let builder = client.from(table).select(columns);
+      for (const [column, value] of Object.entries(filters)) {
+        builder = builder.eq(column, value);
+      }
+      builder = builder.in(idColumn, [...ids]);
+      return await builder;
+    },
+  };
+}
+
+/**
+ * The administrator check.
+ *
+ * A failed read is NOT an administrator. The check fails closed, so an
+ * unreachable database locks the service path rather than opening it.
+ */
+function createAdminChecker(environment: ServerEnvironment) {
+  return async (userId: string): Promise<boolean> => {
+    try {
+      const client = createClient(environment.url, environment.serviceRoleKey, {
+        auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+      });
+
+      const envelope: unknown = await client
+        .from("user_roles")
+        .select("role")
+        .eq("user_id", userId)
+        .eq("role", "admin")
+        .maybeSingle();
+
+      // The envelope is read by its own data descriptors and accessors are
+      // never run. Only an explicit null error with an own `admin` row is an
+      // administrator; a missing error, a missing row, another role or any
+      // malformed shape fails closed.
+      if (!isPlainRecord(envelope)) return false;
+      const error = readOwnData(envelope, "error");
+      const data = readOwnData(envelope, "data");
+      if (!error.present || error.value !== null || !data.present) return false;
+      if (!isPlainRecord(data.value)) return false;
+      return readOwnData(data.value, "role").value === "admin";
+    } catch {
+      return false;
+    }
+  };
+}
+
+/**
+ * The Graph provider.
+ *
+ * The version is server configuration and it is validated. The app id is
+ * only used to build the shared throttle bucket key, which is a digest of
+ * two non-secret values.
+ */
+function createGraphProvider(): InstagramGraphProvider {
+  return new InstagramGraphProvider({
+    apiVersion: Deno.env.get("FACEBOOK_GRAPH_API_VERSION") ?? undefined,
+    appId: Deno.env.get("FACEBOOK_APP_ID") ?? null,
+  });
+}
+
+/**
+ * The service worker ports.
+ *
+ * The worker runs with the service role: the accepted worker RPCs are
+ * service-only and they re-derive the owner from the target row.
+ */
+function createOwnerWorkerPorts(environment: ServerEnvironment): OwnerWorkerPorts {
+  const provider = createGraphProvider();
+  const store = createOwnerCollectionServiceStore({
+    rpc: createServiceRpcCaller(environment),
+    reads: createServiceReadPort(environment),
+  });
+
+  return {
+    store,
+    provider,
+    // The shared bucket follows the credential that Meta meters: the app and
+    // the protected credential id. The token is never part of it.
+    bucketKeyFor: async (credentialId) => await provider.bucketKey(credentialId),
+    now: () => Date.now(),
+    log: (event) => {
+      console.log("[instagram-insights-sync]", JSON.stringify(event));
+    },
+  };
+}
+
 const deps: InstagramInsightsSyncDeps = {
   configuration: () => (currentEnvironment() ? "ready" : "unavailable"),
 
@@ -200,6 +344,23 @@ const deps: InstagramInsightsSyncDeps = {
     return createOwnerCollectionStore(
       createUserRpcCaller(environment, verifiedToken),
     );
+  },
+
+  service: {
+    cronSecret: () => Deno.env.get("CRON_SECRET") ?? null,
+    serviceRoleKey: () => Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? null,
+
+    isAdmin: async (userId) => {
+      const environment = currentEnvironment();
+      if (!environment) return false;
+      return await createAdminChecker(environment)(userId);
+    },
+
+    createServiceWorker: () => {
+      const environment = currentEnvironment();
+      if (!environment) throw new Error("the server configuration is not usable");
+      return createOwnerWorkerPorts(environment);
+    },
   },
 
   audit: async (event) => {

@@ -1,0 +1,601 @@
+/**
+ * Strict parsers for the durable Instagram collection receipts.
+ *
+ * WHAT THIS MODULE OWNS
+ *
+ *   The exact shapes of the accepted SQL projections of
+ *   `20261026150000_instagram_durable_collection_jobs.sql`, and the rule that
+ *   a receipt must agree with the request that produced it. A parser returns
+ *   `null` for anything that is not exactly the documented projection; the
+ *   store turns that into an indeterminate failure. Nothing here invents a
+ *   default: a malformed claim is never "no jobs", a malformed write receipt
+ *   is never "written".
+ *
+ * WHY OWN DATA DESCRIPTORS
+ *
+ *   An inherited value is not authority and an accessor is code this contract
+ *   did not ask to run. Both read as absent, and a required value that reads
+ *   as absent is a refusal.
+ *
+ * WHY THE CLAIM ROW IS PARSED EXACTLY BUT THE CHECKPOINT IS NOT
+ *
+ *   The claim row is a closed projection built by `jsonb_build_object`: its
+ *   key set is part of the contract, so an extra key means a different
+ *   deployment and is refused. The checkpoint is the job's own mutable state
+ *   bag: the accepted table may gain a column, and a new column is not a
+ *   reason to refuse a claim. Every checkpoint field this worker ACTS on is
+ *   still read through its own data descriptor and type-checked, so a
+ *   malformed value is refused rather than believed.
+ *
+ * WHY NO PROVIDER OR DRIVER TEXT IS EVER COPIED
+ *
+ *   A reason code is lower-case snake_case and a receipt carries only
+ *   database values. A Graph message can quote the token, the account id or
+ *   an internal URL, so it never becomes a reason code, a stored
+ *   `last_reason_code`, a log line or a client response.
+ */
+
+/** The one UUID shape PostgreSQL prints. */
+const UUID_PATTERN =
+  /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+
+/** A calendar date. */
+const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+/** A zoned timestamp. PostgreSQL always prints the offset. */
+const TIMESTAMP_PATTERN =
+  /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}(?::?\d{2})?)$/;
+
+/** The reason-code grammar the accepted SQL enforces. */
+const REASON_CODE_PATTERN = /^[a-z0-9_]{1,64}$/;
+
+/** The throttle bucket key grammar the accepted SQL enforces. */
+const BUCKET_KEY_PATTERN = /^[0-9a-f]{64}$/;
+
+/**
+ * The exact key sets of the accepted projections.
+ *
+ * A receipt with a different key set belongs to a different contract and is
+ * refused instead of being read loosely.
+ */
+const CLAIM_KEYS = [
+  "job_id",
+  "user_id",
+  "target_kind",
+  "target_id",
+  "social_account_id",
+  "watchlist_id",
+  "captured_on",
+  "job_generation",
+  "claim_token",
+  "lease_expires_at",
+  "attempts",
+  "context",
+  "checkpoint",
+  "pending_operations",
+  "claimed_at",
+] as const;
+
+const CONTEXT_KEYS = [
+  "viewer_social_account_id",
+  "credential_generation",
+  "login_kind",
+  "capability_present",
+  "permission_read_state",
+  "granted_scopes",
+] as const;
+
+const SNAPSHOT_KEYS = ["job_id", "job_generation", "written"] as const;
+const PROGRESS_OPERATIONS_KEYS = ["job_id", "job_generation", "recorded"] as const;
+const PROGRESS_INVENTORY_KEYS = ["job_id", "job_generation", "inventory"] as const;
+const COMPLETE_KEYS = [
+  "job_id",
+  "job_generation",
+  "status",
+  "outcome",
+  "reason_code",
+] as const;
+const THROTTLE_BUCKET_KEYS = [
+  "bucket_key",
+  "usage_percent",
+  "throttled_until",
+  "job_id",
+] as const;
+const THROTTLE_PARKED_KEYS = [...THROTTLE_BUCKET_KEYS, "status"] as const;
+
+/** The outcomes `complete_instagram_collection_job` accepts. */
+export const OWNER_JOB_OUTCOMES = [
+  "completed",
+  "partial",
+  "retry",
+  "unavailable",
+  "error",
+] as const;
+
+export type OwnerJobOutcome = (typeof OWNER_JOB_OUTCOMES)[number];
+
+/** The job statuses the accepted SQL's CHECK constraint allows. */
+export const OWNER_JOB_STATUSES = [
+  "queued",
+  "leased",
+  "retry",
+  "partial",
+  "completed",
+  "unavailable",
+  "error",
+] as const;
+
+export type OwnerJobStatus = (typeof OWNER_JOB_STATUSES)[number];
+
+export function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+/**
+ * Reads an OWN DATA property without invoking an accessor.
+ *
+ * An inherited value is not authority, and an accessor is not a value this
+ * contract accepts: both are reported as absent so the caller refuses the
+ * receipt instead of running code it did not expect.
+ */
+export function readOwnData(
+  record: object,
+  key: string,
+): { readonly present: boolean; readonly value: unknown } {
+  if (!Object.hasOwn(record, key)) return { present: false, value: undefined };
+  const descriptor = Object.getOwnPropertyDescriptor(record, key);
+  if (!descriptor || !("value" in descriptor)) return { present: false, value: undefined };
+  return { present: true, value: descriptor.value };
+}
+
+/**
+ * True when the record carries exactly the expected own keys and nothing
+ * else. An unknown key is refused rather than dropped.
+ */
+export function hasExactKeys(record: object, expected: readonly string[]): boolean {
+  const keys = Reflect.ownKeys(record);
+  if (keys.length !== expected.length) return false;
+  return expected.every((key) => Object.hasOwn(record, key));
+}
+
+export function isUuidText(value: unknown): value is string {
+  return typeof value === "string" && UUID_PATTERN.test(value);
+}
+
+export function isDateText(value: unknown): value is string {
+  if (typeof value !== "string" || !DATE_PATTERN.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().startsWith(value);
+}
+
+export function isTimestampText(value: unknown): value is string {
+  if (typeof value !== "string" || !TIMESTAMP_PATTERN.test(value)) return false;
+  return !Number.isNaN(new Date(value).getTime());
+}
+
+export function isNullableTimestamp(value: unknown): value is string | null {
+  return value === null || isTimestampText(value);
+}
+
+export function isReasonCode(value: unknown): value is string {
+  return typeof value === "string" && REASON_CODE_PATTERN.test(value);
+}
+
+export function isNonNegativeSafeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+export function isPositiveSafeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+
+export function isJobStatus(value: unknown): value is OwnerJobStatus {
+  return typeof value === "string" && (OWNER_JOB_STATUSES as readonly string[]).includes(value);
+}
+
+export function isJobOutcome(value: unknown): value is OwnerJobOutcome {
+  return typeof value === "string" && (OWNER_JOB_OUTCOMES as readonly string[]).includes(value);
+}
+
+function sameUuid(left: string, right: string): boolean {
+  return left.toLowerCase() === right.toLowerCase();
+}
+
+// ---------------------------------------------------------------------------
+// The claim
+// ---------------------------------------------------------------------------
+
+/** The connection context the claim captured for this generation. */
+export interface ClaimedOwnerContext {
+  readonly viewerSocialAccountId: string | null;
+  readonly credentialGeneration: number | null;
+  readonly loginKind: "direct" | "page_linked" | null;
+  readonly capabilityPresent: boolean;
+  readonly permissionReadState: string | null;
+  readonly grantedScopes: readonly string[];
+}
+
+/** The media inventory checkpoint of the current generation. */
+export interface ClaimedInventoryCheckpoint {
+  readonly cursor: string | null;
+  readonly remainingIds: readonly string[];
+  readonly pagesFetched: number;
+  readonly partial: boolean;
+  readonly truncated: boolean;
+  readonly oldestReturnedAt: string | null;
+  readonly windowStart: string | null;
+  readonly windowEnd: string | null;
+  readonly windowCovered: boolean;
+  readonly gapReason: string | null;
+}
+
+/** One claimed owner job. */
+export interface ClaimedOwnerJob {
+  readonly jobId: string;
+  readonly userId: string;
+  readonly targetKind: string;
+  readonly targetId: string;
+  readonly socialAccountId: string;
+  readonly watchlistId: string | null;
+  readonly capturedOn: string;
+  readonly jobGeneration: number;
+  readonly claimToken: string;
+  readonly leaseExpiresAt: string;
+  readonly attempts: number;
+  readonly context: ClaimedOwnerContext;
+  readonly checkpoint: ClaimedInventoryCheckpoint;
+  readonly pendingOperations: readonly string[];
+  readonly claimedAt: string;
+}
+
+const EMPTY_CHECKPOINT: ClaimedInventoryCheckpoint = {
+  cursor: null,
+  remainingIds: [],
+  pagesFetched: 0,
+  partial: false,
+  truncated: false,
+  oldestReturnedAt: null,
+  windowStart: null,
+  windowEnd: null,
+  windowCovered: false,
+  gapReason: null,
+};
+
+function parseContext(value: unknown): ClaimedOwnerContext | null {
+  if (!isPlainRecord(value) || !hasExactKeys(value, CONTEXT_KEYS)) return null;
+
+  const viewer = readOwnData(value, "viewer_social_account_id").value;
+  if (viewer !== null && !isUuidText(viewer)) return null;
+
+  const generation = readOwnData(value, "credential_generation").value;
+  if (generation !== null && !isPositiveSafeInteger(generation)) return null;
+
+  const loginKind = readOwnData(value, "login_kind").value;
+  if (loginKind !== null && loginKind !== "direct" && loginKind !== "page_linked") return null;
+
+  const capabilityPresent = readOwnData(value, "capability_present").value;
+  if (typeof capabilityPresent !== "boolean") return null;
+
+  const permissionReadState = readOwnData(value, "permission_read_state").value;
+  if (permissionReadState !== null && typeof permissionReadState !== "string") return null;
+
+  const scopes = readOwnData(value, "granted_scopes").value;
+  if (!Array.isArray(scopes)) return null;
+  for (const scope of scopes) {
+    if (typeof scope !== "string") return null;
+  }
+
+  return {
+    viewerSocialAccountId: viewer === null ? null : (viewer as string),
+    credentialGeneration: generation as number | null,
+    loginKind: loginKind as "direct" | "page_linked" | null,
+    capabilityPresent,
+    permissionReadState: permissionReadState as string | null,
+    grantedScopes: scopes as string[],
+  };
+}
+
+/**
+ * Parses the inventory checkpoint.
+ *
+ * The checkpoint is the job's own state, so an unknown column is ignored. A
+ * field this worker acts on is still type-checked: a malformed value is a
+ * refusal, not a belief.
+ */
+function parseCheckpoint(value: unknown): ClaimedInventoryCheckpoint | null {
+  if (!isPlainRecord(value)) return null;
+
+  const cursor = readOwnData(value, "inventory_cursor").value;
+  if (cursor !== undefined && cursor !== null && typeof cursor !== "string") return null;
+
+  const remaining = readOwnData(value, "inventory_remaining_ids").value;
+  if (remaining !== undefined && remaining !== null) {
+    if (!Array.isArray(remaining)) return null;
+    for (const id of remaining) {
+      if (typeof id !== "string") return null;
+    }
+  }
+
+  const pagesFetched = readOwnData(value, "inventory_pages_fetched").value;
+  if (pagesFetched !== undefined && !isNonNegativeSafeInteger(pagesFetched)) return null;
+
+  const partial = readOwnData(value, "inventory_partial").value;
+  if (partial !== undefined && typeof partial !== "boolean") return null;
+
+  const truncated = readOwnData(value, "inventory_truncated").value;
+  if (truncated !== undefined && typeof truncated !== "boolean") return null;
+
+  const oldest = readOwnData(value, "inventory_oldest_returned_at").value;
+  if (oldest !== undefined && oldest !== null && !isTimestampText(oldest)) return null;
+
+  const windowStart = readOwnData(value, "inventory_window_start").value;
+  if (windowStart !== undefined && windowStart !== null && !isDateText(windowStart)) return null;
+
+  const windowEnd = readOwnData(value, "inventory_window_end").value;
+  if (windowEnd !== undefined && windowEnd !== null && !isDateText(windowEnd)) return null;
+
+  const covered = readOwnData(value, "inventory_window_covered").value;
+  if (covered !== undefined && typeof covered !== "boolean") return null;
+
+  const gapReason = readOwnData(value, "inventory_gap_reason").value;
+  if (gapReason !== undefined && gapReason !== null && !isReasonCode(gapReason)) return null;
+
+  return {
+    cursor: typeof cursor === "string" ? cursor : null,
+    remainingIds: Array.isArray(remaining) ? (remaining as string[]) : [],
+    pagesFetched: isNonNegativeSafeInteger(pagesFetched) ? pagesFetched : 0,
+    partial: partial === true,
+    truncated: truncated === true,
+    oldestReturnedAt: typeof oldest === "string" ? oldest : null,
+    windowStart: typeof windowStart === "string" ? windowStart : null,
+    windowEnd: typeof windowEnd === "string" ? windowEnd : null,
+    windowCovered: covered === true,
+    gapReason: typeof gapReason === "string" ? gapReason : null,
+  };
+}
+
+/**
+ * Parses one claimed job.
+ *
+ * The row must be an owner job: a competitor job has no owner account to
+ * collect for, and a worker that claimed one has to refuse it rather than
+ * collect the wrong thing.
+ */
+export function parseClaimedOwnerJob(value: unknown): ClaimedOwnerJob | null {
+  if (!isPlainRecord(value) || !hasExactKeys(value, CLAIM_KEYS)) return null;
+
+  const jobId = readOwnData(value, "job_id").value;
+  const userId = readOwnData(value, "user_id").value;
+  const targetKind = readOwnData(value, "target_kind").value;
+  const targetId = readOwnData(value, "target_id").value;
+  const socialAccountId = readOwnData(value, "social_account_id").value;
+  const watchlistId = readOwnData(value, "watchlist_id").value;
+  const capturedOn = readOwnData(value, "captured_on").value;
+  const jobGeneration = readOwnData(value, "job_generation").value;
+  const claimToken = readOwnData(value, "claim_token").value;
+  const leaseExpiresAt = readOwnData(value, "lease_expires_at").value;
+  const attempts = readOwnData(value, "attempts").value;
+  const claimedAt = readOwnData(value, "claimed_at").value;
+
+  if (!isUuidText(jobId) || !isUuidText(userId) || !isUuidText(targetId)) return null;
+  if (targetKind !== "owner") return null;
+  if (!isUuidText(socialAccountId)) return null;
+  if (watchlistId !== null && !isUuidText(watchlistId)) return null;
+  if (!isDateText(capturedOn)) return null;
+  if (!isPositiveSafeInteger(jobGeneration)) return null;
+  if (!isUuidText(claimToken)) return null;
+  if (!isTimestampText(leaseExpiresAt)) return null;
+  if (!isNonNegativeSafeInteger(attempts)) return null;
+  if (!isTimestampText(claimedAt)) return null;
+
+  const context = parseContext(readOwnData(value, "context").value);
+  if (context === null) return null;
+
+  const checkpoint = parseCheckpoint(readOwnData(value, "checkpoint").value);
+  if (checkpoint === null) return null;
+
+  const operations = readOwnData(value, "pending_operations").value;
+  if (!Array.isArray(operations)) return null;
+  const operationKeys: string[] = [];
+  for (const entry of operations) {
+    if (!isPlainRecord(entry)) return null;
+    const key = readOwnData(entry, "operation_key").value;
+    if (typeof key !== "string") return null;
+    operationKeys.push(key);
+  }
+
+  return {
+    jobId: jobId.toLowerCase(),
+    userId: userId.toLowerCase(),
+    targetKind,
+    targetId: targetId.toLowerCase(),
+    socialAccountId: socialAccountId.toLowerCase(),
+    watchlistId: watchlistId === null ? null : (watchlistId as string).toLowerCase(),
+    capturedOn,
+    jobGeneration,
+    claimToken: claimToken.toLowerCase(),
+    leaseExpiresAt,
+    attempts,
+    context,
+    checkpoint,
+    pendingOperations: operationKeys,
+    claimedAt,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// The write receipts
+// ---------------------------------------------------------------------------
+
+/** The receipt of one snapshot write. */
+export interface SnapshotReceipt {
+  readonly jobId: string;
+  readonly jobGeneration: number;
+  readonly written: number;
+}
+
+/**
+ * Parses the snapshot receipt and binds it to the request.
+ *
+ * The receipt must name the same job and generation, and the number of
+ * written items must be the number of items the payload carried. A receipt
+ * that disagrees is not evidence that the write happened as asked.
+ */
+export function parseSnapshotReceipt(
+  value: unknown,
+  request: {
+    readonly jobId: string;
+    readonly jobGeneration: number;
+    readonly itemCount: number;
+  },
+): SnapshotReceipt | null {
+  if (!isPlainRecord(value) || !hasExactKeys(value, SNAPSHOT_KEYS)) return null;
+
+  const jobId = readOwnData(value, "job_id").value;
+  if (!isUuidText(jobId) || !sameUuid(jobId, request.jobId)) return null;
+
+  const jobGeneration = readOwnData(value, "job_generation").value;
+  if (jobGeneration !== request.jobGeneration) return null;
+
+  const written = readOwnData(value, "written").value;
+  if (!isNonNegativeSafeInteger(written)) return null;
+  if (written !== request.itemCount) return null;
+
+  return { jobId: jobId.toLowerCase(), jobGeneration, written };
+}
+
+/** The receipt of one progress record. */
+export interface ProgressReceipt {
+  readonly jobId: string;
+  readonly jobGeneration: number;
+  readonly recorded: number | null;
+  readonly inventory: boolean;
+}
+
+/**
+ * Parses the progress receipt and binds it to the request.
+ *
+ * The accepted SQL answers an operations record with a count and an inventory
+ * record with the literal `recorded`. Both must name the same job and
+ * generation as the request.
+ */
+export function parseProgressReceipt(
+  value: unknown,
+  request: { readonly jobId: string; readonly jobGeneration: number },
+): ProgressReceipt | null {
+  if (!isPlainRecord(value)) return null;
+
+  const jobId = readOwnData(value, "job_id").value;
+  if (!isUuidText(jobId) || !sameUuid(jobId, request.jobId)) return null;
+
+  const jobGeneration = readOwnData(value, "job_generation").value;
+  if (jobGeneration !== request.jobGeneration) return null;
+
+  const inventory = readOwnData(value, "inventory").value;
+  if (inventory !== undefined) {
+    if (!hasExactKeys(value, PROGRESS_INVENTORY_KEYS)) return null;
+    if (inventory !== "recorded") return null;
+    return { jobId: jobId.toLowerCase(), jobGeneration, recorded: null, inventory: true };
+  }
+
+  if (!hasExactKeys(value, PROGRESS_OPERATIONS_KEYS)) return null;
+  const recorded = readOwnData(value, "recorded").value;
+  if (!isNonNegativeSafeInteger(recorded)) return null;
+  return { jobId: jobId.toLowerCase(), jobGeneration, recorded, inventory: false };
+}
+
+/** The receipt of one completion. */
+export interface CompleteReceipt {
+  readonly jobId: string;
+  readonly jobGeneration: number;
+  readonly status: OwnerJobStatus;
+  readonly outcome: OwnerJobOutcome;
+  readonly reasonCode: string | null;
+}
+
+/**
+ * Parses the completion receipt and binds it to the request.
+ *
+ * The status the database reports must be the status the requested outcome
+ * produces, and the reason code must be the one that was sent. A receipt
+ * that disagrees is not evidence that the job was closed as asked.
+ */
+export function parseCompleteReceipt(
+  value: unknown,
+  request: {
+    readonly jobId: string;
+    readonly jobGeneration: number;
+    readonly outcome: OwnerJobOutcome;
+    readonly reasonCode: string | null;
+  },
+): CompleteReceipt | null {
+  if (!isPlainRecord(value) || !hasExactKeys(value, COMPLETE_KEYS)) return null;
+
+  const jobId = readOwnData(value, "job_id").value;
+  if (!isUuidText(jobId) || !sameUuid(jobId, request.jobId)) return null;
+
+  const jobGeneration = readOwnData(value, "job_generation").value;
+  if (jobGeneration !== request.jobGeneration) return null;
+
+  const outcome = readOwnData(value, "outcome").value;
+  if (!isJobOutcome(outcome)) return null;
+  if (outcome !== request.outcome) return null;
+
+  const status = readOwnData(value, "status").value;
+  if (!isJobStatus(status)) return null;
+  if (status !== outcome) return null;
+
+  const reasonCode = readOwnData(value, "reason_code").value;
+  if (reasonCode !== request.reasonCode) return null;
+  if (reasonCode !== null && !isReasonCode(reasonCode)) return null;
+
+  return {
+    jobId: jobId.toLowerCase(),
+    jobGeneration,
+    status,
+    outcome,
+    reasonCode: reasonCode === null ? null : (reasonCode as string),
+  };
+}
+
+/**
+ * Parses the throttle receipt.
+ *
+ * A null or partial receipt is not proof the shared backoff was stored. A
+ * job-scoped throttle must answer for that job and report it parked; a
+ * bucket-scoped throttle must answer with a null job.
+ */
+export function parseThrottleReceipt(
+  value: unknown,
+  request: {
+    readonly bucketKey: string;
+    readonly jobId: string | null;
+    readonly throttledUntil: string | null;
+  },
+): boolean {
+  if (!isPlainRecord(value)) return false;
+
+  const bucketKey = readOwnData(value, "bucket_key").value;
+  if (bucketKey !== request.bucketKey) return false;
+  if (typeof bucketKey !== "string" || !BUCKET_KEY_PATTERN.test(bucketKey)) return false;
+
+  const usage = readOwnData(value, "usage_percent").value;
+  if (usage !== null && !isNonNegativeSafeInteger(usage)) return false;
+
+  const throttledUntil = readOwnData(value, "throttled_until").value;
+  if (!isNullableTimestamp(throttledUntil)) return false;
+  if (request.throttledUntil !== null && throttledUntil !== request.throttledUntil) return false;
+
+  const jobId = readOwnData(value, "job_id").value;
+
+  if (request.jobId === null) {
+    return hasExactKeys(value, THROTTLE_BUCKET_KEYS) && jobId === null;
+  }
+
+  return hasExactKeys(value, THROTTLE_PARKED_KEYS) &&
+    isUuidText(jobId) &&
+    sameUuid(jobId, request.jobId) &&
+    readOwnData(value, "status").value === "retry";
+}

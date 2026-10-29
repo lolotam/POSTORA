@@ -78,11 +78,25 @@ import {
   type OwnerEnqueueOutcome,
   type OwnerStatusProjection,
 } from "./store.ts";
+import {
+  runOwnerDrain,
+  WORKER_TOTAL_BUDGET_MS,
+  type OwnerWorkerPorts,
+} from "./worker.ts";
 
 /** The whole operation, counted from before the body is read. */
 export const OWNER_INTAKE_TOTAL_BUDGET_MS = 15_000;
 
-/** The ceiling of a single dependency: the body, the claims, a read, a write, the log. */
+/**
+ * The whole SERVICE drain, counted from before the body is read.
+ *
+ * The drain is not a user request: it is a bounded worker run with its own
+ * per-step budget, and the five second dependency ceiling cannot cut it off
+ * before its first provider call. It therefore gets its own deadline.
+ */
+export const OWNER_DRAIN_TOTAL_BUDGET_MS = 45_000;
+
+/** The ceiling of a single dependency: the body, the claims, a read, a write. */
 export const OWNER_INTAKE_DEPENDENCY_CEILING_MS = 5_000;
 
 /** The reserve kept for the audit record and the response. */
@@ -100,13 +114,16 @@ export type OwnerIntakeErrorCode =
   | "invalid_request"
   | "payload_too_large"
   | "unauthorized"
+  | "forbidden"
   | "not_found"
   | "throttled"
   | "collection_disabled"
   | "protected_credentials_required"
   | "settings_unavailable"
+  | "service_auth_unavailable"
   | "enqueue_indeterminate"
   | "status_unavailable"
+  | "work_indeterminate"
   | "request_unavailable";
 
 /** The server-verified claim reader. It resolves the raw envelope only. */
@@ -126,7 +143,7 @@ export type SettingReader = (key: string) => Promise<unknown>;
 
 /** One audit record. It carries no token, no body and no driver text. */
 export interface OwnerIntakeAuditEvent {
-  readonly action: "enqueue" | "status" | "unknown";
+  readonly action: "enqueue" | "status" | "drain" | "unknown";
   readonly outcome: string;
   readonly status: number;
   readonly userId?: string;
@@ -135,6 +152,24 @@ export interface OwnerIntakeAuditEvent {
 
 /** The bounded audit sink. It never throws and never blocks the response. */
 export type OwnerIntakeAuditSink = (event: OwnerIntakeAuditEvent) => Promise<void>;
+
+/**
+ * The service-side ports of the drain action.
+ *
+ * They are OPTIONAL on the handler: a deployment that does not inject them
+ * has no service credential, and a drain request is then refused as a
+ * misconfiguration rather than reaching any work.
+ */
+export interface InstagramInsightsSyncServiceDeps {
+  /** The cron secret, or null when it is not configured. */
+  readonly cronSecret: () => string | null;
+  /** The service-role key, or null when it is not configured. */
+  readonly serviceRoleKey: () => string | null;
+  /** Whether an owner is an administrator. A failed lookup is false. */
+  readonly isAdmin: (userId: string) => Promise<boolean>;
+  /** Builds the service worker ports. */
+  readonly createServiceWorker: () => OwnerWorkerPorts;
+}
 
 export interface InstagramInsightsSyncDeps {
   /**
@@ -152,6 +187,11 @@ export interface InstagramInsightsSyncDeps {
    * the caller's own identity.
    */
   readonly createOwnerStore: (verifiedToken: string) => OwnerCollectionStore;
+  /**
+   * The service ports of the drain action. Absent means that no service
+   * credential is configured, and a drain request is refused.
+   */
+  readonly service?: InstagramInsightsSyncServiceDeps;
   readonly audit: OwnerIntakeAuditSink;
 }
 
@@ -183,6 +223,19 @@ const statusRequestSchema = z
   .strict();
 
 /**
+ * The service drain action.
+ *
+ * It carries NO key other than the action: a target, a limit, an owner id or
+ * a credential in the body is a malformed request, not a silently ignored
+ * field. The worker itself decides what it claims and how much it claims.
+ */
+const drainRequestSchema = z
+  .object({
+    action: z.literal("drain"),
+  })
+  .strict();
+
+/**
  * The strict request union.
  *
  * Unknown keys are refused, so a service action, a target kind, a job id, an
@@ -193,6 +246,7 @@ const statusRequestSchema = z
 const ownerIntakeRequestSchema = z.discriminatedUnion("action", [
   enqueueRequestSchema,
   statusRequestSchema,
+  drainRequestSchema,
 ]);
 
 // ---------------------------------------------------------------------------
@@ -206,11 +260,14 @@ export interface OwnerIntakeDeadline {
   totalMs(): number;
 }
 
-function createDeadline(startedAt: number): OwnerIntakeDeadline {
+function createDeadline(
+  startedAt: number,
+  totalMs: number = OWNER_INTAKE_TOTAL_BUDGET_MS,
+  reserveMs: number = OWNER_INTAKE_LOG_RESERVE_MS,
+): OwnerIntakeDeadline {
   return {
-    workMs: () =>
-      OWNER_INTAKE_TOTAL_BUDGET_MS - OWNER_INTAKE_LOG_RESERVE_MS - (Date.now() - startedAt),
-    totalMs: () => OWNER_INTAKE_TOTAL_BUDGET_MS - (Date.now() - startedAt),
+    workMs: () => totalMs - reserveMs - (Date.now() - startedAt),
+    totalMs: () => totalMs - (Date.now() - startedAt),
   };
 }
 
@@ -396,16 +453,19 @@ interface VerifiedOwner {
   readonly userId: string;
 }
 
+interface VerifiedClaims {
+  readonly userId: string;
+  readonly role: string;
+}
+
 /**
  * Validates the server-verified claim envelope.
  *
  * The envelope must be a plain record with an own `error` that is exactly
  * null, an own `data` with an own `claims`, and a `claims` object with an
- * own `sub` that is a usable UUID and an own `role`. The role must be
- * `authenticated`: a verified administrator is an ordinary owner here and
- * still carries that role, while a service identity is refused outright.
+ * own `sub` that is a usable UUID and an own `role`.
  */
-function parseVerifiedOwner(envelope: unknown): VerifiedOwner | null {
+function parseVerifiedClaims(envelope: unknown): VerifiedClaims | null {
   if (!isPlainRecord(envelope)) return null;
 
   const error = readOwnData(envelope, "error");
@@ -418,12 +478,41 @@ function parseVerifiedOwner(envelope: unknown): VerifiedOwner | null {
   if (!claims.present || !isPlainRecord(claims.value)) return null;
 
   const role = readOwnData(claims.value, "role");
-  if (!role.present || role.value !== "authenticated") return null;
+  if (!role.present || typeof role.value !== "string") return null;
 
   const sub = readOwnData(claims.value, "sub");
   if (!sub.present || !isUuidText(sub.value)) return null;
 
-  return { userId: canonicalUuid(sub.value) };
+  return { userId: canonicalUuid(sub.value), role: role.value };
+}
+
+/**
+ * The owner variant of the verified claim envelope.
+ *
+ * The role must be `authenticated`: a verified administrator is an ordinary
+ * owner here and still carries that role, while a service identity is
+ * refused outright.
+ */
+function parseVerifiedOwner(envelope: unknown): VerifiedOwner | null {
+  const claims = parseVerifiedClaims(envelope);
+  if (claims === null) return null;
+  if (claims.role !== "authenticated") return null;
+  return { userId: claims.userId };
+}
+
+/**
+ * A constant-time comparison.
+ *
+ * The length is not secret and is compared first, which is the same posture
+ * the shared cron helper uses.
+ */
+function timingSafeEqual(left: string, right: string): boolean {
+  if (!left || !right || left.length !== right.length) return false;
+  let diff = 0;
+  for (let index = 0; index < left.length; index += 1) {
+    diff |= left.charCodeAt(index) ^ right.charCodeAt(index);
+  }
+  return diff === 0;
 }
 
 /** Extracts the bearer token, unchanged. A missing or malformed header is a refusal. */
@@ -521,12 +610,25 @@ export function createInstagramInsightsSyncHandler(
 
   return async function handleOwnerIntake(request: Request): Promise<Response> {
     // The deadline starts BEFORE the body is read.
-    const deadline = createDeadline(Date.now());
+    const startedAt = Date.now();
+    const deadline = createDeadline(startedAt);
+    // The service drain has its own, longer deadline. It is a bounded worker
+    // run, not a user request.
+    const drainDeadline = createDeadline(
+      startedAt,
+      OWNER_DRAIN_TOTAL_BUDGET_MS,
+      OWNER_INTAKE_LOG_RESERVE_MS,
+    );
+
+    // The deadline the current path is charged against. The owner actions
+    // keep the short one; the drain switches to its own before it does any
+    // work.
+    let activeDeadline = deadline;
 
     // What is known about the caller so far. It grows as the request is
     // understood, and it is the only thing the audit record carries.
     const context: {
-      action: "enqueue" | "status" | "unknown";
+      action: "enqueue" | "status" | "drain" | "unknown";
       userId?: string;
       socialAccountId?: string;
     } = { action: "unknown" };
@@ -545,7 +647,7 @@ export function createInstagramInsightsSyncHandler(
       outcome: string,
       extraHeaders?: Record<string, string>,
     ): Promise<Response> => {
-      await audit(deadline, auditEvent(outcome, status));
+      await audit(activeDeadline, auditEvent(outcome, status));
       return jsonResponse(request, body, status, extraHeaders);
     };
 
@@ -554,8 +656,196 @@ export function createInstagramInsightsSyncHandler(
       code: OwnerIntakeErrorCode,
       extraHeaders?: Record<string, string>,
     ): Promise<Response> => {
-      await audit(deadline, auditEvent(code, status));
+      await audit(activeDeadline, auditEvent(code, status));
       return errorResponse(request, code, status, extraHeaders);
+    };
+
+    /**
+     * The two server-controlled availability gates.
+     *
+     * They are read BEFORE any job schema, RPC, credential or provider
+     * access, for the owner actions and for the service drain alike. A
+     * refusal is returned; `null` means the caller may continue.
+     */
+    const readGates = async (): Promise<Response | null> => {
+      // The shared classifier and the shared resolvers own the setting
+      // semantics. The descriptor check in front of them is what makes
+      // reading those envelopes safe, and the bounded read is what keeps a
+      // hanging settings query inside the budget.
+      const readRequiredSetting = async (key: string): Promise<unknown> => {
+        const outcome = await runBounded(
+          () => deps.readSetting(key),
+          dependencyCeiling(activeDeadline),
+        );
+        if (!outcome.ok) throw new CredentialConfigurationError();
+
+        assertSettingEnvelopeIsSafe(outcome.value);
+
+        // `data` was proved to be an own data property. Read it the same way
+        // so the shared classifier, which uses ordinary property access, never
+        // receives a getter.
+        const classified = classifyAppSettingRow(readOwnData(outcome.value, "data").value);
+        if (classified.shape === "malformed") throw new CredentialConfigurationError();
+        if (classified.shape === "absent") return null;
+        return classified.value;
+      };
+
+      let collectionEnabled: boolean;
+      try {
+        collectionEnabled = resolveInstagramCollectionEnabled(
+          await readRequiredSetting(INSTAGRAM_COLLECTION_ENABLED_SETTING_KEY),
+        );
+      } catch {
+        // A failed, malformed or unreadable required setting is unavailable.
+        // It is never read as absent and never read as off.
+        return await refuse(503, "settings_unavailable");
+      }
+
+      if (!collectionEnabled) {
+        // Nothing else is read: no job schema, no RPC, no credential, no
+        // provider. The stored history stays in the database and this
+        // endpoint does not expose it while collection is off.
+        return await refuse(503, "collection_disabled");
+      }
+
+      let credentialMode: string;
+      try {
+        credentialMode = resolveFacebookCredentialMode(
+          await readRequiredSetting(FACEBOOK_CREDENTIAL_MODE_SETTING_KEY),
+        );
+      } catch {
+        return await refuse(503, "settings_unavailable");
+      }
+
+      if (credentialMode !== "protected") {
+        return await refuse(503, "protected_credentials_required");
+      }
+
+      return null;
+    };
+
+    /**
+     * The service drain.
+     *
+     * The authorization matrix:
+     *
+     *   - the cron secret (constant-time comparison) or the service-role key
+     *     is a service caller;
+     *   - a VERIFIED user session whose role is `authenticated` AND who is an
+     *     administrator by a strict, fail-closed lookup is a service caller;
+     *   - a plain user session is refused;
+     *   - a claims object that says `service_role` is NOT a user and is never
+     *     upgraded into one;
+     *   - a deployment with no service credential at all is a
+     *     misconfiguration, and the refusal says so.
+     *
+     * The gates run BEFORE the worker is built, so a disabled collection
+     * never reaches the job schema, a credential or a provider.
+     */
+    const handleServiceDrain = async (
+      _drainRequest: Request,
+      bearer: string,
+    ): Promise<Response> => {
+      const service = deps.service;
+      if (!service) {
+        // This deployment has no service ports at all: no service caller can
+        // be authenticated.
+        return await refuse(503, "service_auth_unavailable");
+      }
+
+      const cronSecret = service.cronSecret();
+      const serviceRoleKey = service.serviceRoleKey();
+      const isServiceCredential =
+        (cronSecret !== null && timingSafeEqual(bearer, cronSecret)) ||
+        (serviceRoleKey !== null && timingSafeEqual(bearer, serviceRoleKey));
+
+      if (!isServiceCredential && cronSecret === null && serviceRoleKey === null) {
+        // Neither service credential is configured, so no service caller can
+        // be authenticated at all.
+        return await refuse(503, "service_auth_unavailable");
+      }
+
+      if (!isServiceCredential) {
+        const claimsOutcome = await runBounded(
+          (signal) => deps.verifyClaims(bearer, signal),
+          dependencyCeiling(activeDeadline),
+        );
+        if (!claimsOutcome.ok) {
+          return await refuse(503, "request_unavailable");
+        }
+
+        const caller = parseVerifiedClaims(claimsOutcome.value);
+        if (!caller) {
+          return await refuse(401, "unauthorized");
+        }
+        if (caller.role !== "authenticated") {
+          return await refuse(403, "forbidden");
+        }
+
+        const adminOutcome = await runBounded(
+          () => service.isAdmin(caller.userId),
+          dependencyCeiling(activeDeadline),
+        );
+        // A failed, late or non-boolean answer is not an administrator.
+        const admin = adminOutcome.ok && adminOutcome.value === true;
+        if (!admin) {
+          return await refuse(403, "forbidden");
+        }
+        context.userId = caller.userId;
+      }
+
+      const gateRefusal = await readGates();
+      if (gateRefusal) return gateRefusal;
+
+      let worker: OwnerWorkerPorts;
+      try {
+        worker = service.createServiceWorker();
+      } catch {
+        return await refuse(503, "request_unavailable");
+      }
+
+      // The service work is NOT one dependency call: it is the bounded worker
+      // run, which has its own per-step budget. It is given the remaining
+      // work budget of this request (never more than the worker's own forty
+      // seconds), so the five second dependency ceiling cannot cut the drain
+      // off before its first provider call.
+      const workBudgetMs = Math.min(WORKER_TOTAL_BUDGET_MS, activeDeadline.workMs());
+      if (workBudgetMs <= 0) {
+        return await refuse(503, "request_unavailable");
+      }
+      const boundedWorker: OwnerWorkerPorts = { ...worker, budgetMs: workBudgetMs };
+
+      const outcome = await runBounded(
+        (signal) => runOwnerDrain(boundedWorker, { signal }),
+        workBudgetMs,
+      );
+      if (!outcome.ok) {
+        // The work is indeterminate. It is never reported as a drained
+        // cycle, and it is never replayed here.
+        return await refuse(503, "work_indeterminate");
+      }
+
+      const summary = outcome.value;
+      return await finish(
+        200,
+        {
+          claimed: summary.claimed,
+          processed: summary.processed,
+          completed: summary.completed,
+          partial: summary.partial,
+          retried: summary.retried,
+          unavailable: summary.unavailable,
+          abandoned: summary.abandoned,
+          stopped_early: summary.stoppedEarly,
+          jobs: summary.jobs.map((job) => ({
+            job_id: job.jobId,
+            social_account_id: job.socialAccountId,
+            outcome: job.outcome,
+            reason_code: job.reasonCode,
+          })),
+        },
+        "drained",
+      );
     };
 
     if (request.method === "OPTIONS") {
@@ -611,7 +901,9 @@ export function createInstagramInsightsSyncHandler(
     );
     if (
       peekedAction.present &&
-      (peekedAction.value === "enqueue" || peekedAction.value === "status")
+      (peekedAction.value === "enqueue" ||
+        peekedAction.value === "status" ||
+        peekedAction.value === "drain")
     ) {
       context.action = peekedAction.value;
     }
@@ -622,15 +914,23 @@ export function createInstagramInsightsSyncHandler(
     }
 
     const intake = validated.data;
-    const canonicalAccountId = canonicalUuid(intake.social_account_id);
-    context.socialAccountId = canonicalAccountId;
 
-    // --- The verified identity -----------------------------------------
+    // --- The bearer ------------------------------------------------------
     const token = readBearerToken(request);
     if (!token) {
       return await refuse(401, "unauthorized");
     }
 
+    // --- The service drain -----------------------------------------------
+    if (intake.action === "drain") {
+      activeDeadline = drainDeadline;
+      return await handleServiceDrain(request, token);
+    }
+
+    const canonicalAccountId = canonicalUuid(intake.social_account_id);
+    context.socialAccountId = canonicalAccountId;
+
+    // --- The verified identity -----------------------------------------
     const claimsOutcome = await runBounded(
       (signal) => deps.verifyClaims(token, signal),
       dependencyCeiling(deadline),
@@ -646,60 +946,10 @@ export function createInstagramInsightsSyncHandler(
       return await refuse(401, "unauthorized");
     }
     context.userId = owner.userId;
+
     // --- The availability gates ----------------------------------------
-    //
-    // The shared classifier and the shared resolvers own the setting
-    // semantics. The descriptor check in front of them is what makes reading
-    // those envelopes safe, and the bounded read is what keeps a hanging
-    // settings query inside the budget.
-    const readRequiredSetting = async (key: string): Promise<unknown> => {
-      const outcome = await runBounded(
-        () => deps.readSetting(key),
-        dependencyCeiling(deadline),
-      );
-      if (!outcome.ok) throw new CredentialConfigurationError();
-
-      assertSettingEnvelopeIsSafe(outcome.value);
-
-      // `data` was proved to be an own data property. Read it the same way
-      // so the shared classifier, which uses ordinary property access, never
-      // receives a getter.
-      const classified = classifyAppSettingRow(readOwnData(outcome.value, "data").value);
-      if (classified.shape === "malformed") throw new CredentialConfigurationError();
-      if (classified.shape === "absent") return null;
-      return classified.value;
-    };
-
-    let collectionEnabled: boolean;
-    try {
-      collectionEnabled = resolveInstagramCollectionEnabled(
-        await readRequiredSetting(INSTAGRAM_COLLECTION_ENABLED_SETTING_KEY),
-      );
-    } catch {
-      // A failed, malformed or unreadable required setting is unavailable.
-      // It is never read as absent and never read as off.
-      return await refuse(503, "settings_unavailable");
-    }
-
-    if (!collectionEnabled) {
-      // Nothing else is read: no job schema, no RPC, no credential, no
-      // provider. The stored history stays in the database and this
-      // endpoint does not expose it while collection is off.
-      return await refuse(503, "collection_disabled");
-    }
-
-    let credentialMode: string;
-    try {
-      credentialMode = resolveFacebookCredentialMode(
-        await readRequiredSetting(FACEBOOK_CREDENTIAL_MODE_SETTING_KEY),
-      );
-    } catch {
-      return await refuse(503, "settings_unavailable");
-    }
-
-    if (credentialMode !== "protected") {
-      return await refuse(503, "protected_credentials_required");
-    }
+    const gateRefusal = await readGates();
+    if (gateRefusal) return gateRefusal;
 
     // --- The owner RPC --------------------------------------------------
     if (deadline.workMs() <= 0) {
