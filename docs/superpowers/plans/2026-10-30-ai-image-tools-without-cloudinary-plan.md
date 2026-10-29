@@ -30,9 +30,13 @@ multipart `file`; size cap; type sniff), `stageInput`, `fetchOutputBytes` (bound
 Tests `aiImageIo.test.ts` with a stubbed `fetch`: parsing variants, oversize, bad type, stage/
 store/discard calls, store failure falls back.
 
-## Task 4 — caller auth
+## Task 4 — caller auth for `remove-background`
 
-`_shared/imageToolAuth.ts` extracted from `upscale-image` (API key or JWT). Tests with fake clients.
+Keep the existing in-file `profiles.api_key` lookup untouched: `partner-api/d8Containment.test.ts`
+pins exactly one such site per grandfathered file and fails any new file that has the shape, so it
+must not be moved into `_shared/`. Add the browser path with the approved helper
+`authenticateCaller` (`_shared/auth-helper.ts`) for non-`postora-` bearer tokens. `upscale-image`
+auth is not touched.
 
 ## Task 5 — the two functions
 

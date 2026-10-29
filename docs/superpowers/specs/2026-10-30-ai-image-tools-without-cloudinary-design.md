@@ -111,8 +111,10 @@ No raw provider text is sent to the client (ARCHITECTURE.md §16).
 ## Decision 5 — auth for `remove-background`
 
 It accepts the `x-api-key` / `Bearer postora-…` key as before and now also a browser JWT,
-like `upscale-image`, so the app can call it. `_shared/imageToolAuth.ts` is extracted from
-`upscale-image` (same behaviour) and used by both.
+like `upscale-image`, so the app can call it. The legacy key lookup stays in the file
+(`partner-api/d8Containment.test.ts` pins one `profiles.api_key` site per grandfathered file
+and rejects the shape anywhere new); the JWT path uses `_shared/auth-helper.ts`
+`authenticateCaller`. `upscale-image` auth is untouched.
 
 ## Front end
 
