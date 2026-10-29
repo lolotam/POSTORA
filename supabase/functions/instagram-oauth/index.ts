@@ -700,6 +700,7 @@ Deno.serve(async (req) => {
           : // The unsigned POST callback shim carries no signed attempt. It
             // stays refused in protected mode.
             undefined,
+      userId: user_id,
     });
     if (isLifecycleRefusal(decision)) {
       return jsonResponse(req, {

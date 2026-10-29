@@ -12,6 +12,10 @@ import {
   type FacebookCredentialMode,
 } from "../_shared/facebookCredentialMode.ts";
 import {
+  accountCredentialMode,
+  readProtectedAuthorities,
+} from "../_shared/protectedAccountCutover.ts";
+import {
   isProtectedMetaRefreshPlatform,
   PROTECTED_REFRESH_REASONS,
   refreshTripwirePorts,
@@ -523,7 +527,7 @@ async function refreshSingleAccount(
   // the protected service before this helper is called, and it does so
   // exactly once: this gate is the fail-closed backstop, and it never starts
   // a second capture.
-  if (protectedContext?.mode === "protected" && isProtectedMetaRefreshPlatform(account.platform)) {
+  if (protectedContext?.accountMode(account) === "protected" && isProtectedMetaRefreshPlatform(account.platform)) {
     const refusal = refuseProtectedLifecycle("meta_refresh", "manual");
     return {
       id: account.id,
@@ -779,16 +783,21 @@ async function refreshSingleAccount(
  *  - a signed-in admin, via their Supabase JWT, for the admin "Refresh tokens" button.
  */
 /**
- * Server-controlled credential mode.
+ * Server-controlled credential mode, decided per account.
  *
- * Legacy mode keeps the existing refresh behaviour and does not touch the
- * protected credential schema. Protected mode owns the Meta token and health
- * writes: the direct Instagram branch and the Page reconciliation branch are
- * supported, and every other Meta account is refused before any capture,
- * provider call or write.
+ * A global `protected` moves every Meta account, as before. Under a global
+ * `legacy`, a Meta account runs protected only when it already holds a
+ * protected authority owned by the same user (`protectedAccountCutover.ts`);
+ * every other account keeps the existing legacy refresh. A protected account
+ * owns the Meta token and health writes: the direct Instagram branch and the
+ * Page reconciliation branch are supported, and every other protected Meta
+ * account is refused before any capture, provider call or write.
  */
 interface ProtectedRefreshContext {
+  /** The global switch. Logging only; decisions use `accountMode`. */
   mode: FacebookCredentialMode;
+  /** The mode one account runs in. */
+  accountMode: (account: { id: string; user_id: string; platform: string }) => FacebookCredentialMode;
   /** The accepted protected lifecycle. Never used while the mode is legacy. */
   deps: ProtectedDirectDeps;
   /** The Page reconciliation branch. Never used while the mode is legacy. */
@@ -808,8 +817,19 @@ async function resolveProtectedRefreshContext(
       return appSettingReadResult(data, error);
     }),
   );
+  // Existence only, read once per run. Skipped when the global mode already
+  // decides every Meta account.
+  const authorities = credentialMode === 'protected'
+    ? { has: () => true }
+    : await readProtectedAuthorities(supabaseAdmin);
   return {
     mode: credentialMode,
+    accountMode: (account) =>
+      accountCredentialMode(credentialMode, authorities, {
+        id: account.id,
+        userId: account.user_id,
+        platform: account.platform,
+      }),
     deps: createProtectedDirectDeps(supabaseAdmin),
     pageDeps: createProtectedPageDeps(supabaseAdmin),
   };
@@ -968,7 +988,8 @@ async function runProtectedRefresh(input: {
   bypassCooldown: boolean;
   protectedContext: ProtectedRefreshContext;
 }): Promise<RefreshResult | null> {
-  const { mode, deps, pageDeps } = input.protectedContext;
+  const { deps, pageDeps } = input.protectedContext;
+  const mode = input.protectedContext.accountMode(input.account);
   if (mode !== "protected" || !isProtectedMetaRefreshPlatform(input.account.platform)) {
     return null;
   }
@@ -1782,16 +1803,17 @@ Deno.serve(async (req) => {
       // Fetch current health status of all active accounts
       const { data: allActiveAccounts, error: healthError } = await supabaseAdmin
         .from('social_accounts')
-        .select('id, platform, platform_username, token_expires_at, needs_reauth, is_active')
+        .select('id, user_id, platform, platform_username, token_expires_at, needs_reauth, is_active')
         .eq('is_active', true);
 
       // Protected Facebook and Instagram have no lifecycle authority, so none
       // of them belong in this population. That includes accounts the sweep
       // never visited: needs_reauth, a platform filter, or the sweep budget.
-      // Legacy mode keeps the previous population. Non-Meta accounts still
-      // count, and a mixed sweep can still alert for them.
-      const healthAccounts = (allActiveAccounts ?? []).filter((account: { id: string; platform: string }) => {
-        if (protectedContext.mode === "protected" && isProtectedMetaRefreshPlatform(account.platform)) {
+      // The decision is per account, so a legacy Meta account still counts
+      // while one protected pilot account is left out. Non-Meta accounts
+      // still count, and a mixed sweep can still alert for them.
+      const healthAccounts = (allActiveAccounts ?? []).filter((account: { id: string; user_id: string; platform: string }) => {
+        if (protectedContext.accountMode(account) === "protected" && isProtectedMetaRefreshPlatform(account.platform)) {
           return false;
         }
         return !refusedAccountIds.has(account.id);

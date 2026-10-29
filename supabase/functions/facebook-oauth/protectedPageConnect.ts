@@ -45,6 +45,7 @@ import {
   type ProtectedReceiptReader,
   type ProtectedRouteContext,
 } from "../_shared/metaOAuthProtectedFlow.ts";
+import { isProtectedPilotUser } from "../_shared/protectedAccountCutover.ts";
 
 export interface OAuthLifecyclePorts {
   provider: () => Promise<unknown>;
@@ -126,6 +127,10 @@ export function isProtectedActionSupported(flow: OAuthGateFlow, action: string):
  * `attemptOwned` marks a request whose pending reference carries an attempt
  * linkage. Such a request keeps its protected lifecycle in legacy mode too:
  * a captured attempt never downgrades to the legacy writer.
+ *
+ * Under a global `legacy`, `authorize` for a user in the protected pilot list
+ * (`protectedAccountCutover.ts`) begins a protected attempt. That is the one
+ * way an account gets a protected authority while everyone else stays legacy.
  */
 export async function beginOAuthRequest<T>(input: {
   lookup: AppSettingLookup;
@@ -137,8 +142,17 @@ export async function beginOAuthRequest<T>(input: {
   protected?: () => Promise<T>;
   /** True when the request is owned by a captured OAuth attempt. */
   attemptOwned?: boolean;
+  /**
+   * The authenticated caller. Only used to ask whether this user is in the
+   * protected pilot list, and only for `authorize` under a global `legacy`.
+   */
+  userId?: string;
 }): Promise<LifecycleRefusal | T> {
   const { credentialMode } = await loadFacebookCredentialSettings(input.lookup);
+  const protectedPilot = credentialMode === "legacy" &&
+    input.action === "authorize" &&
+    typeof input.userId === "string" &&
+    await isProtectedPilotUser(input.lookup, input.userId);
   return continueOAuthRequest({
     mode: credentialMode,
     flow: input.flow,
@@ -147,6 +161,7 @@ export async function beginOAuthRequest<T>(input: {
     legacy: input.legacy,
     protected: input.protected,
     attemptOwned: input.attemptOwned,
+    protectedPilot,
   });
 }
 
@@ -159,6 +174,12 @@ export async function continueOAuthRequest<T>(input: {
   protected?: () => Promise<T>;
   /** True when the request is owned by a captured OAuth attempt. */
   attemptOwned?: boolean;
+  /**
+   * True when a pilot user starts `authorize` under a global `legacy`. The
+   * protected attempt it begins then carries the rest of the lifecycle
+   * through `attemptOwned`, so no later step needs the pilot list.
+   */
+  protectedPilot?: boolean;
 }): Promise<LifecycleRefusal | T> {
   assertUncalledPorts(input.ports);
   if (input.mode === "protected") {
@@ -168,6 +189,12 @@ export async function continueOAuthRequest<T>(input: {
     return input.protected();
   }
   if (input.attemptOwned && input.protected) {
+    return input.protected();
+  }
+  if (
+    input.protectedPilot && input.action === "authorize" && input.protected &&
+    isProtectedActionSupported(input.flow, input.action)
+  ) {
     return input.protected();
   }
   return input.legacy();

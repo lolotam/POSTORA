@@ -114,6 +114,14 @@ interface Probe {
   pageGraph: boolean;
   /** The protected binding read. Present matches the captured credential. */
   bindingMode: "present" | "missing" | "error";
+  /**
+   * What the per-account cutover existence read sees. Separate from
+   * `bindingMode`, which answers the narrow binding reader of a protected
+   * account. Empty means every account is legacy under a global legacy.
+   */
+  authorityRows: Array<{ table: string; social_account_id: string; user_id: string }>;
+  /** The columns every authority existence read asked for. */
+  authorityColumns: string[];
   /** Instagram authority returned by the capability read. Facebook ignores it. */
   pageAuthority: "live" | "unknown";
   pageCaptureAccountId: string | null;
@@ -163,6 +171,8 @@ function probe(overrides: Partial<Probe> = {}): Probe {
     reads: [],
     pageGraph: false,
     bindingMode: "present",
+    authorityRows: [],
+    authorityColumns: [],
     pageAuthority: "live",
     pageCaptureAccountId: null,
     ...overrides,
@@ -178,11 +188,14 @@ function installClient(current: Probe) {
     op = "select";
     one = false;
 
+    columns = "*";
+
     constructor(table: string) {
       this.table = table;
     }
 
-    select() {
+    select(columns?: string) {
+      this.columns = String(columns ?? "*");
       return this;
     }
     eq(key: string, value: unknown) {
@@ -248,6 +261,18 @@ function installClient(current: Probe) {
       }
       current.reads.push(this.table);
       if (this.table === "app_settings") return settingsRow(current, String(this.filters.key ?? ""));
+      const authorityTable = this.table === "facebook_user_credential_bindings" ||
+        this.table === "instagram_account_credentials";
+      if (authorityTable && this.columns === "social_account_id, user_id") {
+        current.authorityColumns.push(this.columns);
+        const rows = current.authorityRows
+          .filter((row) => row.table === this.table)
+          .filter((row) =>
+            !this.inFilter || this.inFilter.values.includes(row.social_account_id)
+          )
+          .map(({ social_account_id, user_id }) => ({ social_account_id, user_id }));
+        return { data: rows, error: null };
+      }
       if (this.table === "facebook_user_credential_bindings") return bindingEnvelope(current, this.filters);
       const rows = current.accounts.filter((account) => {
         if (this.filters.id && account.id !== this.filters.id) return false;
@@ -1229,7 +1254,7 @@ routeTest("a budget-deferred protected account does not send the global health a
   assertNoSecrets(current, result.body);
 });
 
-routeTest("an absent settings row still refreshes a legacy meta account and does not read the protected schema", async () => {
+routeTest("an absent settings row still refreshes a legacy meta account and reads no protected credential", async () => {
   const current = probe({ setting: "absent", providerMode: "success" });
   const handler = await loadHandler("refresh-tokens/index.ts", current);
   const result = await callJson(handler, "https://synthetic.invalid/functions/v1/refresh-tokens", {});
@@ -1237,6 +1262,9 @@ routeTest("an absent settings row still refreshes a legacy meta account and does
   assertEquals(result.body.message, "Token refresh complete");
   assertEquals(current.providerCalls.includes("refreshFacebookToken"), true);
   assertEquals(current.rpc, []);
+  // The per-account cutover only asked which accounts hold an authority.
+  assertEquals(current.authorityColumns.length, 2);
+  assertEquals(current.authorityColumns.every((columns) => columns === "social_account_id, user_id"), true);
   const alerts = current.http.filter((call) => call.url.includes("send-token-failure-alert"));
   assertEquals(alerts.length, 1);
   const alertBody = JSON.parse(alerts[0].body ?? "{}");
