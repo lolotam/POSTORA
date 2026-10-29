@@ -96,6 +96,7 @@ import { composioClientFromEnv } from "../_shared/composioClient.ts";
 import { publishYouTubeViaComposio } from "./youtubeComposio.ts";
 import { prepareTikTokReviewPublish, recordReviewPublishId, requiredReviewSubmissionId } from "./tiktokReview.ts";
 import { firstPublicPostId } from "../_shared/tiktokPublishOutcome.ts";
+import { classifyContainerStatus, CONTAINER_STATUS_FIELDS, containerFailureMessage, pollContainer } from "../_shared/metaContainerStatus.ts";
 import { z } from "npm:zod@3.23.8";
 
 const ProcessPostSchema = z.object({
@@ -3329,27 +3330,28 @@ async function pollContainerStatus(
 ): Promise<string> {
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const response = await fetchWithTimeout(
-      `https://graph.facebook.com/v18.0/${containerId}?fields=status_code&access_token=${accessToken}`,
+      `https://graph.facebook.com/v18.0/${containerId}?fields=${CONTAINER_STATUS_FIELDS.instagram}&access_token=${accessToken}`,
       {},
       15000,
     );
     const data = await response.json();
 
-    console.log(`Container ${containerId} status check ${attempt + 1}:`, data.status_code);
+    console.log(`Container ${containerId} status check ${attempt + 1}:`, data.status_code, data.status ?? "");
 
     if (data.error) {
       throw new Error(`Container status error: ${data.error.message}`);
     }
 
-    if (data.status_code === "FINISHED") {
+    const container = classifyContainerStatus("instagram", data);
+    if (container.state === "finished" || container.state === "published") {
       // Add a buffer delay after FINISHED to ensure Instagram's backend is truly ready
       console.log(`Container ${containerId} finished, waiting 3s before publish...`);
       await new Promise((resolve) => setTimeout(resolve, 3000));
       return data.status_code;
     }
 
-    if (data.status_code === "ERROR" || data.status_code === "EXPIRED") {
-      throw new Error(`Container failed with status: ${data.status_code}`);
+    if (container.state === "failed") {
+      throw new Error(containerFailureMessage("instagram", container.reason));
     }
 
     // Still IN_PROGRESS, wait and retry
@@ -4146,25 +4148,28 @@ async function pollBusinessLoginContainerStatus(
   delayMs = 2000
 ): Promise<string> {
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    const response = await fetch(
-      `https://graph.instagram.com/v22.0/${containerId}?fields=status_code&access_token=${accessToken}`
+    const response = await fetchWithTimeout(
+      `https://graph.instagram.com/v22.0/${containerId}?fields=${CONTAINER_STATUS_FIELDS.instagram}&access_token=${accessToken}`,
+      {},
+      15000,
     );
     const data = await response.json();
 
-    console.log(`BL Container ${containerId} status check ${attempt + 1}:`, data.status_code);
+    console.log(`BL Container ${containerId} status check ${attempt + 1}:`, data.status_code, data.status ?? "");
 
     if (data.error) {
       throw new Error(`Container status error: ${data.error.message}`);
     }
 
-    if (data.status_code === "FINISHED") {
+    const container = classifyContainerStatus("instagram", data);
+    if (container.state === "finished" || container.state === "published") {
       console.log(`BL Container ${containerId} finished, waiting 3s before publish...`);
       await new Promise((resolve) => setTimeout(resolve, 3000));
       return data.status_code;
     }
 
-    if (data.status_code === "ERROR" || data.status_code === "EXPIRED") {
-      throw new Error(`Container failed with status: ${data.status_code}`);
+    if (container.state === "failed") {
+      throw new Error(containerFailureMessage("instagram", container.reason));
     }
 
     await new Promise((resolve) => setTimeout(resolve, delayMs));
@@ -4187,7 +4192,9 @@ async function publishBusinessLoginMedia(
   let lastError: Error | null = null;
 
   for (let attempt = 0; attempt < maxRetries; attempt++) {
-    const publishResponse = await fetch(
+    // Bounded so a hung publish fails this account instead of killing the worker. A timeout
+    // throws out of the loop rather than retrying: Meta may have published already.
+    const publishResponse = await fetchWithTimeout(
       `https://graph.instagram.com/v22.0/${igUserId}/media_publish`,
       {
         method: "POST",
@@ -4196,7 +4203,8 @@ async function publishBusinessLoginMedia(
           creation_id: creationId,
           access_token: accessToken,
         }),
-      }
+      },
+      30000,
     );
 
     const publishData = await publishResponse.json();
@@ -6019,33 +6027,15 @@ async function postToThreads(
   const containerId = containerData.id;
 
   // Poll container status until FINISHED (required by Threads API)
-  const statusEndpoint = `https://graph.threads.net/v1.0/${containerId}?fields=status&access_token=${accessToken}`;
+  const statusEndpoint = `https://graph.threads.net/v1.0/${containerId}?fields=${CONTAINER_STATUS_FIELDS.threads}&access_token=${accessToken}`;
   const maxAttempts = 15;
   const pollInterval = 2000; // 2 seconds
 
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    await new Promise(resolve => setTimeout(resolve, pollInterval));
-    
-    try {
-      const statusResponse = await fetch(statusEndpoint);
-      const statusData = await statusResponse.json();
-      const status = statusData?.status;
-      
-      console.log(`Threads: Container status check ${attempt}/${maxAttempts}: ${status}`);
-      
-      if (status === "FINISHED") {
-        break;
-      } else if (status === "ERROR") {
-        throw new Error(`Threads container processing failed: ${JSON.stringify(statusData)}`);
-      }
-      
-      if (attempt === maxAttempts) {
-        console.warn("Threads: Container did not reach FINISHED status after max attempts, attempting publish anyway...");
-      }
-    } catch (statusErr) {
-      console.warn(`Threads: Status check ${attempt} failed:`, statusErr);
-      if (attempt === maxAttempts) break;
-    }
+  // Meta's ERROR ends the wait, and a container that never finished is never published blindly.
+  const container = await pollContainer("threads", statusEndpoint, { maxAttempts, intervalMs: pollInterval });
+  if (container.state === "failed") throw new Error(containerFailureMessage("threads", container.reason));
+  if (container.state === "waiting") {
+    throw new Error("Threads did not finish processing the media in time. Safe to retry.");
   }
 
   // Publish the container
