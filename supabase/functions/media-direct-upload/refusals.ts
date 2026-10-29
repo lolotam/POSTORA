@@ -1,5 +1,5 @@
 /**
- * Fail-closed reads and logged refusals for media-direct-upload.
+ * Logged refusals for media-direct-upload (and its fail-closed limits read, re-exported).
  *
  * Kept apart from index.ts so they can be tested without a running server.
  */
@@ -7,17 +7,7 @@
 import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { restrictedJsonResponse } from "../_shared/cors.ts";
 import { logToDatabase } from "../_shared/logging.ts";
-import { parseUploadLimits, type UploadLimits } from "../_shared/mediaTypes.ts";
-
-/**
- * The admin's choice from Settings → Media upload limits. Defaults apply only when the row
- * is absent; a failed read returns null, so an admin's lower cap is never silently lifted.
- */
-export async function readUploadLimits(adminDb: SupabaseClient): Promise<UploadLimits | null> {
-  const { data, error } = await adminDb.from("app_settings").select("value").eq("key", "media_upload_limits").maybeSingle();
-  if (error) return null;
-  return parseUploadLimits(data?.value);
-}
+export { readUploadLimits } from "../_shared/uploadLimitsSetting.ts";
 
 export interface Refusal {
   status: number;

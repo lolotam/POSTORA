@@ -6,6 +6,7 @@
 
 import { cloudinarySignature } from "../_shared/cloudinarySignature.ts";
 import { listOpeninaryFolder, openinaryDeliveryUrl, type OpeninaryConfig, type OpeninaryFile } from "../_shared/openinary.ts";
+export { openinaryUploadBaseUrl } from "../_shared/openinary.ts";
 
 /** Cloudinary takes chunks of at least 5 MB; 20 MB keeps a 500 MB video to 25 requests. */
 export const CLOUDINARY_CHUNK_BYTES = 20 * 1024 * 1024;
@@ -29,15 +30,6 @@ export interface CloudinaryUploadTarget {
 }
 
 export type UploadTarget = OpeninaryUploadTarget | CloudinaryUploadTarget;
-
-/**
- * The host the browser posts to. OPENINARY_UPLOAD_URL lets a large upload skip a
- * proxy that caps request bodies (Cloudflare refuses any proxied body over 100 MB)
- * while reads keep the server URL.
- */
-export function openinaryUploadBaseUrl(config: OpeninaryConfig, override = Deno.env.get("OPENINARY_UPLOAD_URL")): string {
-  return (override?.trim() || config.serverUrl).replace(/\/+$/, "");
-}
 
 export async function presignOpeninary(
   config: OpeninaryConfig,

@@ -87,10 +87,10 @@ Openinary-only, so C3 is the leg that matters now; C4 keeps working the day Clou
 
 | # | Fix |
 |---|---|
-| C1 | **Cap from the admin limits.** The URL branch reads `media_upload_limits` (same reader as `media-direct-upload`, same fail-closed rule as A5) and caps at `directUploadByteCap(kind, limits)`, further limited to `URL_INGEST_MAX_BYTES` = 95 MB while Openinary sits behind Cloudflare's 100 MB request cap. The refusal names the limit that applied. |
-| C2 | **Preflight before any byte moves.** SSRF-checked `HEAD` (redirects followed through `safeFetchExternal`); a missing or over-cap `Content-Length` is refused up front with a clear message. The streamed body is still counted, so a lying header aborts at the cap. |
-| C3 | **Stream to Openinary instead of buffering.** The GET body is piped into a streamed multipart request (`folder`, `files`) to Openinary's `/api/upload`, with the same adopt-before-upload and collision checks as `storeOpeninaryObject`. Memory stays flat; the whole leg is bounded to ≈45 s, after which the upload fails "too slow to fetch; upload the file from the browser instead". |
-| C4 | **Cloudinary gets the URL, never the bytes.** When Cloudinary is enabled it is handed the URL (as today) and its upload `fetch` gets a 60 s timeout. With Openinary off, the worker no longer downloads the file at all. |
+| C1 | **Cap from the admin limits.** A URL whose response declares a `Content-Length` over 10 MB is streamed. Its cap is `directUploadByteCap(kind, limits)`, read fail-closed like A5, then held to `STREAM_INGEST_MAX_BYTES` = 95 MB while Openinary sits behind Cloudflare's 100 MB request cap. Only images and videos stream. The refusal names the limit that applied, and every refusal is logged. |
+| C2 | **No extra request.** The SSRF-checked GET (`safeFetchExternal`) is the only fetch. Its `Content-Length` picks the path: up to 10 MB, or with no length, the body is buffered as today, still capped at 10 MB. Above 10 MB, only the first 4 KB are read, to tell the file's type, before the stream is passed on. The streamed body is counted, so a source that sends more or fewer bytes than it declared fails the upload. |
+| C3 | **Stream to Openinary instead of buffering.** `uploadStreamToOpeninary` pipes the body into a streamed multipart request (`folder`, `files`) of exact `Content-Length`. It keeps the adopt-before-upload and collision rules of `storeOpeninaryObject` and is bounded to 45 s end to end. Memory stays flat. |
+| C4 | **Cloudinary gets the URL, never the bytes.** When Cloudinary is enabled it is handed the URL, as today, and its upload `fetch` now times out after 60 s. A streamed upload needs Openinary: with Openinary off, a URL over 10 MB is refused with a clear message. |
 | C5 | **Base64 stays at 10 MB.** A JSON body cannot carry more through the worker. The MCP tool and API docs say: over 10 MB, pass `media_url`. |
 
 ---
