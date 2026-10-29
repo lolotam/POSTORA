@@ -10,8 +10,8 @@ The Cloudinary account (cloud `dur1soa8n`) has answered `401 cloud_name is disab
 
 | Path | Evidence |
 |---|---|
-| Admin composes an email and attaches a file | `src/components/admin/inbox/EmailAttachments.tsx:57` invokes `cloudinary-email-upload`, whose upload branch calls `uploadToCloudinaryEmail` (`cloudinary-email-upload/index.ts:114`), which POSTs to `https://api.cloudinary.com/v1_1/<cloud>/auto/upload` (`_shared/cloudinary-email-helper.ts:47`) and throws on any non-2xx (`:54-58`). Every attachment upload now fails. |
-| Removing an attachment | `index.ts:66` calls `deleteFromCloudinary` (`/image/destroy`, `helper:88`). It returns `false`, the function answers `200 {success:false}`, and the UI ignores it. |
+| Admin composes an email and attaches a file | `src/components/admin/inbox/EmailAttachments.tsx:57` invokes `cloudinary-email-upload`, whose upload branch calls `uploadToCloudinaryEmail` (`cloudinary-email-upload/index.ts:114`), which POSTs to `https://api.cloudinary.com/v1_1/<cloud>/auto/upload` (`_shared/cloudinary-email-helper.ts:50`) and throws on any non-2xx (`:57`). Every attachment upload now fails. |
+| Removing an attachment | `index.ts:81` calls `deleteFromCloudinary` (`/image/destroy`, `helper:95`). It returns `false`, the function answers `200 {success:false}`, and the UI ignores it. |
 | Inbound email attachments (Resend webhook) | `resend-webhook/index.ts:135-139,217` call the same helper. The per-attachment `catch` (`:239`) swallows the error, so the message is saved with no attachments and the webhook answers 200. |
 | Inbound attachments (manual "fetch content") | `fetch-email-content/index.ts:57-61,127` — same helper, same swallow; the response reports `attachments: 0` and `success: true`. |
 
@@ -63,7 +63,7 @@ Unchanged: `{url, publicId, filename, size, contentType}` from the upload action
 ### Failure visibility
 
 - Upload endpoint: typed errors map to `415` (unsupported type), `503` (no provider), `502` (provider rejected), each with a clear message, and write a `system_logs` row.
-- Inbound paths: `fetchAndStoreAttachments` returns `{stored, failed}`; a failure writes a `system_logs` row (extension and error code only, never the file name or bytes), and `fetch-email-content` adds `attachments_failed` to its response so a manual refetch no longer reports a clean zero.
+- Inbound paths: a failed attachment writes a `system_logs` row (extension and error code only, never the file name or bytes) from both `resend-webhook` and `fetch-email-content`. `fetch-email-content` also counts failures (`fetchAndStoreAttachments` returns `{stored, failed}`) and adds `attachments_failed` to its response, so a manual refetch no longer reports a clean zero.
 
 ## Out of scope
 

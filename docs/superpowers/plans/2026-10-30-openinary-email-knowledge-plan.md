@@ -19,7 +19,7 @@ Each task ends green: `deno test` for the files touched, `deno check` (no new er
 
 ## Task 3 — `fetch-email-content` and `resend-webhook`
 
-- Replace the Cloudinary block with `storeEmailAttachment`; `fetchAndStoreAttachments` returns `{stored, failed}` and logs failures; `fetch-email-content` reports `attachments_failed`.
+- Replace the Cloudinary block with `storeEmailAttachment` in both; each failure writes a `system_logs` row. `fetch-email-content` also returns `{stored, failed}` from `fetchAndStoreAttachments` and reports `attachments_failed`.
 - No other behaviour changes: download, auth-retry and the saved attachment record are as before.
 
 ## Task 4 — verification
