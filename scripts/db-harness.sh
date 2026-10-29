@@ -149,6 +149,7 @@ SUITES=(
   meta_account_refresh_lifecycle.sql
   meta_oauth_identity_alias.sql
   meta_page_token_reconciliation.sql
+  competitor_collection_results.sql
 )
 # These fixtures build their own focused schema and apply the migration under
 # test. They must never run against the restored production-shaped database.

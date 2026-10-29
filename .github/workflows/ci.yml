@@ -24,6 +24,9 @@
 #
 # SQL uses scripts/db-harness.sh against a disposable supabase/postgres
 # container (baseline snapshot plus newer migrations). History is not replayed.
+# The competitor collection worker and its actual registered route are
+# checked and tested here as well, with the same permission posture as the
+# owner worker steps above.
 #
 # Playwright is not a job. e2e/seed-test-data.ts needs a service-role key,
 # and e2e/fixtures/auth.ts swallows login failure. The UI slice adds a mocked
@@ -327,6 +330,51 @@ jobs:
           deno check --node-modules-dir=none "${modules[@]}" "${tests[@]}"
           deno test --node-modules-dir=none \
             --allow-read --allow-env "${tests[@]}"
+
+      - name: Typecheck and test the competitor collection worker
+        run: |
+          set -euo pipefail
+          modules=(
+            supabase/functions/competitor-snapshot-sync/types.ts
+            supabase/functions/competitor-snapshot-sync/graphProvider.ts
+            supabase/functions/competitor-snapshot-sync/apifyProvider.ts
+            supabase/functions/competitor-snapshot-sync/receipts.ts
+            supabase/functions/competitor-snapshot-sync/store.ts
+            supabase/functions/competitor-snapshot-sync/syncWorker.ts
+            supabase/functions/competitor-snapshot-sync/handler.ts
+            supabase/functions/competitor-snapshot-sync/index.ts
+          )
+          tests=(
+            supabase/functions/competitor-snapshot-sync/graphProvider.test.ts
+            supabase/functions/competitor-snapshot-sync/apifyProvider.test.ts
+            supabase/functions/competitor-snapshot-sync/store.test.ts
+            supabase/functions/competitor-snapshot-sync/syncWorker.test.ts
+            supabase/functions/competitor-snapshot-sync/handler.test.ts
+            supabase/functions/competitor-snapshot-sync/sqlContract.test.ts
+          )
+          for file in "${modules[@]}" "${tests[@]}"; do
+            if [ ! -f "${file}" ]; then
+              echo "Competitor collection file is required: ${file}"
+              exit 1
+            fi
+          done
+          deno check --node-modules-dir=none "${modules[@]}" "${tests[@]}"
+          deno test --node-modules-dir=none \
+            --allow-read --allow-env "${tests[@]}"
+
+      - name: Typecheck and test the actual competitor collection route
+        env:
+          TMPDIR: ${{ runner.temp }}
+        run: |
+          set -euo pipefail
+          route="supabase/functions/competitor-snapshot-sync/route.test.ts"
+          if [ ! -f "${route}" ]; then
+            echo "Competitor collection route test is required: ${route}"
+            exit 1
+          fi
+          deno check --node-modules-dir=none "${route}"
+          deno test --node-modules-dir=none \
+            --allow-read --allow-write --allow-env --allow-run "${route}"
 
   db-harness:
     name: Postgres baseline plus delta
