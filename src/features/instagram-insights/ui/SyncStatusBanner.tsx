@@ -44,7 +44,7 @@ export function SyncStatusBanner({
 
   return (
     <div className="space-y-3">
-      <div className="flex flex-wrap items-center justify-between gap-3 p-3.5 rounded-xl border border-border/70 bg-card/60 backdrop-blur-sm">
+      <div className="flex flex-wrap items-center justify-between gap-3 p-3.5 rounded-xl border border-border/70 bg-card">
         <div className="flex flex-wrap items-center gap-3">
           <Badge
             variant={variant === "success" ? "default" : variant === "destructive" ? "destructive" : "outline"}

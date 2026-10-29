@@ -31,7 +31,7 @@ export function DailyTrendChart({ daily = [] }: DailyTrendChartProps) {
 
   if (chartData.length === 0) {
     return (
-      <Card className="border border-border/70 bg-card/60 backdrop-blur-sm">
+      <Card className="border border-border/70 bg-card">
         <CardHeader className="pb-2">
           <CardTitle className="text-sm font-semibold flex items-center gap-2">
             <TrendingUp className="h-4 w-4 text-rose-500" />
@@ -46,7 +46,7 @@ export function DailyTrendChart({ daily = [] }: DailyTrendChartProps) {
   }
 
   return (
-    <Card className="border border-border/70 bg-card/60 backdrop-blur-sm">
+    <Card className="border border-border/70 bg-card">
       <CardHeader className="pb-2">
         <CardTitle className="text-sm font-semibold flex items-center gap-2">
           <TrendingUp className="h-4 w-4 text-rose-500" />

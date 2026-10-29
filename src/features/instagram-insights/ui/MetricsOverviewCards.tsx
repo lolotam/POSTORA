@@ -93,7 +93,7 @@ export function MetricsOverviewCards({ report }: MetricsOverviewCardsProps) {
       {cards.map((card, idx) => {
         const Icon = card.icon;
         return (
-          <Card key={idx} className={`border ${card.border} bg-card/60 backdrop-blur-sm overflow-hidden`}>
+          <Card key={idx} className={`border ${card.border} bg-card overflow-hidden`}>
             <CardContent className="p-4 sm:p-5">
               <div className="flex items-center justify-between">
                 <span className="text-xs font-medium text-muted-foreground">{card.title}</span>

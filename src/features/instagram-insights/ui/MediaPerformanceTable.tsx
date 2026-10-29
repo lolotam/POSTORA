@@ -73,7 +73,7 @@ export function MediaPerformanceTable({
   }, [media?.items, formatFilter, sortBy]);
 
   return (
-    <Card className="border border-border/70 bg-card/60 backdrop-blur-sm overflow-hidden">
+    <Card className="border border-border/70 bg-card overflow-hidden">
       <CardHeader className="p-4 sm:p-5 border-b border-border/50 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <Film className="h-4 w-4 text-rose-500" />

@@ -49,7 +49,7 @@ export function AccountPicker({
         onValueChange={onSelectAccount}
         disabled={disabled || igAccounts.length <= 1}
       >
-        <SelectTrigger className="w-[240px] bg-background/80 backdrop-blur-sm border-border/80 h-9">
+        <SelectTrigger className="w-[240px] bg-background border-border/80 h-9">
           <SelectValue placeholder={t("instagram.selectAccount", "Select account")}>
             {selected && (
               <div className="flex items-center gap-2 truncate">
