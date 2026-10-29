@@ -26,18 +26,23 @@ const OPENINARY = { path: "postora.cloud/media/u/2026-10-29/postora_2026-10-29_u
 const CLOUDINARY = { public_id: "media/u/2026-10-29/postora_2026-10-29_user-1_7", secure_url: "https://res.cloudinary.com/x.mp4", bytes: 300, duration: 12 };
 
 /** Records every write; answers the duplicate lookup and the insert as configured. */
-function fakeDb(options: { existing?: { id: string; file_path: string }; insertError?: string } = {}) {
-  const writes: { table: string; rows: unknown }[] = [];
+function fakeDb(options: { existing?: { id: string; file_path: string }; insertError?: string; lookupError?: string } = {}) {
+  const writes: { table: string; rows: unknown; options?: unknown }[] = [];
   const db = {
     writes,
     from(table: string) {
       const query = {
         select: () => query,
         eq: () => query,
-        maybeSingle: () => Promise.resolve({ data: options.existing ?? null, error: null }),
+        maybeSingle: () => Promise.resolve(options.lookupError
+          ? { data: null, error: { message: options.lookupError } }
+          : { data: options.existing ?? null, error: null }),
+        upsert(rows: unknown, upsertOptions: unknown) {
+          writes.push({ table, rows, options: upsertOptions });
+          return Promise.resolve({ error: null });
+        },
         insert(rows: unknown) {
           writes.push({ table, rows });
-          if (table === "media_file_providers") return Promise.resolve({ error: null });
           return {
             select: () => ({
               single: () => Promise.resolve(options.insertError
@@ -74,6 +79,7 @@ Deno.test("an Openinary-only upload records one library row and a ready provider
   const row = library.rows as Record<string, unknown>;
   assertEquals(row.storage_bucket, "openinary");
   assertEquals((row.metadata as Record<string, unknown>).direct_upload_id, SESSION.publicId);
+  assertEquals(providers.options, { onConflict: "media_file_id,provider,object_version", ignoreDuplicates: true });
   assertEquals(providers.rows, [{
     media_file_id: "media-1", provider: "openinary", object_version: 1, object_key: OPENINARY.path,
     status: "ready", delivery_url: OPENINARY.url, error: null, bytes: 300, mime_type: "video/mp4",
@@ -99,10 +105,21 @@ Deno.test("nothing stored means no library row", async () => {
   assertEquals(db.writes.length, 0);
 });
 
-Deno.test("a retried complete returns the existing row instead of adding one", async () => {
+Deno.test("a retried complete returns the existing row and repairs its provider rows", async () => {
   const db = fakeDb({ existing: { id: "media-0", file_path: OPENINARY.url } });
   const outcome = await registerDirectUpload(client(db), client(db), facts());
   assertEquals(outcome.body.mediaFileId, "media-0");
+  assertEquals(db.writes.map((w) => w.table), ["media_file_providers"]);
+  const rows = db.writes[0].rows as Record<string, unknown>[];
+  assertEquals(rows.map((r) => [r.media_file_id, r.provider]), [["media-0", "openinary"], ["media-0", "cloudinary"]]);
+});
+
+Deno.test("a failed duplicate lookup is retryable and writes nothing", async () => {
+  const db = fakeDb({ lookupError: "canceling statement due to statement timeout" });
+  const outcome = await registerDirectUpload(client(db), client(db), facts());
+  assertEquals(outcome.status, 503);
+  assertEquals(outcome.refusal, "duplicate_lookup_failed");
+  assertEquals(outcome.body.retryable, true);
   assertEquals(db.writes.length, 0);
 });
 
@@ -110,6 +127,7 @@ Deno.test("an insert error is not echoed to the browser", async () => {
   const db = fakeDb({ insertError: "permission denied for table media_files" });
   const outcome = await registerDirectUpload(client(db), client(db), facts());
   assertEquals(outcome.status, 500);
+  assertEquals(outcome.refusal, "library_insert_failed");
   assertEquals(outcome.body.error, "Could not save the upload to your library");
 });
 

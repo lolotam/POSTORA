@@ -33,6 +33,8 @@ export interface DirectUploadFacts {
 export interface RegisterOutcome {
   status: number;
   body: Record<string, unknown>;
+  /** Set on every refusal, for the caller's log row. */
+  refusal?: string;
 }
 
 const OBJECT_VERSION = 1;
@@ -75,17 +77,25 @@ export async function registerDirectUpload(userDb: SupabaseClient, adminDb: Supa
   const { session } = facts;
   const storedIn = storedProviders(facts);
   if (storedIn.length === 0) {
-    return { status: 502, body: { success: false, storedIn, errors: facts.errors, error: facts.errors.join("; ") || "Upload failed" } };
+    return { status: 502, refusal: "nothing_stored", body: { success: false, storedIn, errors: facts.errors, error: facts.errors.join("; ") || "Upload failed" } };
   }
 
   // `complete` may be retried after a dropped response; the same session must not add a second row.
-  const { data: existing } = await userDb
+  const { data: existing, error: lookupError } = await userDb
     .from("media_files")
     .select("id, file_path")
     .eq("user_id", session.uid)
     .eq("metadata->>direct_upload_id", session.publicId)
     .maybeSingle();
-  if (existing?.id) return { status: 200, body: successBody(facts, existing.id, existing.file_path) };
+  // A failed lookup is not "no row": inserting now could duplicate the file, and the
+  // quota clean-up below could delete an object an earlier row already serves.
+  if (lookupError) {
+    return { status: 503, refusal: "duplicate_lookup_failed", body: { success: false, error: "Could not save the upload right now. Please try again.", retryable: true } };
+  }
+  if (existing?.id) {
+    const errors = await recordProviderRows(adminDb, facts, existing.id);
+    return { status: 200, body: successBody({ ...facts, errors }, existing.id, existing.file_path) };
+  }
 
   const url = primaryDeliveryUrl(facts);
   const { data: row, error: insertError } = await userDb
@@ -121,16 +131,26 @@ export async function registerDirectUpload(userDb: SupabaseClient, adminDb: Supa
       cloudinaryPublicId: facts.cloudinary?.public_id ?? null,
       kind: session.kind,
     }));
-    if (quotaRace) return { status: quotaRace.status, body: quotaRace.body };
+    if (quotaRace) return { status: quotaRace.status, refusal: "quota_exceeded", body: quotaRace.body };
     console.error("[media-direct-upload] media_files insert failed");
-    return { status: 500, body: { success: false, error: "Could not save the upload to your library" } };
+    return { status: 500, refusal: "library_insert_failed", body: { success: false, error: "Could not save the upload to your library" } };
   }
 
+  const errors = await recordProviderRows(adminDb, facts, row.id);
+  return { status: 200, body: successBody({ ...facts, errors }, row.id, url) };
+}
+
+/**
+ * One row per attempted provider. A retried `complete` runs this again, so a row lost
+ * the first time is written now; rows already there are left exactly as they are.
+ */
+async function recordProviderRows(adminDb: SupabaseClient, facts: DirectUploadFacts, mediaFileId: string): Promise<string[]> {
+  const { session } = facts;
   const providerRows = session.providers.map((provider) => {
     const failure = facts.errors.find((error) => error.startsWith(`${provider}:`));
     const ready = provider === "openinary" ? facts.openinary : facts.cloudinary;
     return {
-      media_file_id: row.id,
+      media_file_id: mediaFileId,
       provider,
       object_version: OBJECT_VERSION,
       object_key: provider === "cloudinary"
@@ -143,11 +163,12 @@ export async function registerDirectUpload(userDb: SupabaseClient, adminDb: Supa
       mime_type: session.mime,
     };
   });
-  const { error: providerError } = await adminDb.from("media_file_providers").insert(providerRows);
+  const { error: providerError } = await adminDb
+    .from("media_file_providers")
+    .upsert(providerRows, { onConflict: "media_file_id,provider,object_version", ignoreDuplicates: true });
   // The library row already points at a stored object, so a lost bookkeeping row is
   // reported rather than turned into a failed upload the user would retry.
-  const errors = providerError ? [...facts.errors, "provider state: could not record provider rows"] : facts.errors;
-  if (providerError) console.error("[media-direct-upload] media_file_providers insert failed");
-
-  return { status: 200, body: successBody({ ...facts, errors }, row.id, url) };
+  if (!providerError) return facts.errors;
+  console.error("[media-direct-upload] media_file_providers upsert failed");
+  return [...facts.errors, "provider state: could not record provider rows"];
 }
