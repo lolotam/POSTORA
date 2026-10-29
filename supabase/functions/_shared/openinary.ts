@@ -120,10 +120,13 @@ async function storeOpeninaryObject(config: OpeninaryConfig, body: Blob, folder:
   if (match) return { success: true, adopted: true, path: match.path, url: openinaryDeliveryUrl(config, match.path) };
   const form = new FormData(); form.append("folder", folder); form.append("files", new File([body], fileName, { type: body.type || "application/octet-stream" }));
   const response = await request(`${config.serverUrl}/api/upload`, { method: "POST", headers: { Authorization: `Bearer ${config.apiKey}` }, body: form }, 120_000);
+  return await uploadOutcome(config, response, `${folder}/${fileName}`);
+}
+
+async function uploadOutcome(config: OpeninaryConfig, response: Response, requested: string): Promise<OpeninaryUploadResult> {
   const result = await response.json().catch(() => null);
   if (!response.ok || !result?.success) return { success: false, error: `Openinary upload failed: ${result?.error || result?.errors?.[0]?.error || response.status}` };
   const stored = result.files?.[0]?.path;
-  const requested = `${folder}/${fileName}`;
   // COLLISION-AS-FAILURE: a suffixed path is unreachable by the deterministic read URL.
   if (typeof stored !== "string") return { success: false, error: "Openinary upload returned no stored path" };
   if (stored !== requested) return { success: false, path: stored, error: `Openinary stored "${stored}" instead of requested "${requested}" (collision rename)` };
@@ -141,4 +144,119 @@ export async function openinaryHealthCheck(config: OpeninaryConfig): Promise<{ o
     const octet = await (async()=>{ const form=new FormData(); form.append("folder",base); form.append("files",new File([data],"octet.png",{type:"application/octet-stream"})); return request(`${config.serverUrl}/api/upload`,{method:"POST",headers:{Authorization:`Bearer ${config.apiKey}`},body:form}); })(); if (octet.ok) throw new Error("MIME rejection behavior moved: octet-stream accepted"); moved.push("MIME rejection");
     return { ok:true, moved };
   } catch(error) { return { ok:false, moved, error:error instanceof Error?error.message:String(error) }; } finally { for (const path of paths) { try { await deleteFromOpeninary(config,path); } catch { /* cleanup is best effort */ } } try { await deleteFromOpeninary(config,base); } catch { } }
+}
+
+/**
+ * Where uploads are sent. OPENINARY_UPLOAD_URL can name a host that skips the CDN's
+ * per-request size cap (Cloudflare's is 100 MB), while reads keep the server URL.
+ */
+export function openinaryUploadBaseUrl(config: OpeninaryConfig, override = Deno.env.get("OPENINARY_UPLOAD_URL")): string {
+  return (override?.trim() || config.serverUrl).replace(/\/+$/, "");
+}
+
+/**
+ * A multipart/form-data body (`folder`, then the file) streamed from `source`, so a large
+ * file never sits in worker memory. The body errors, failing the upload, if the source
+ * sends more or fewer bytes than `byteCount`: Content-Length is promised up front.
+ */
+export function streamedMultipart(
+  fields: Record<string, string>,
+  file: { field: string; name: string; mime: string; source: ReadableStream<Uint8Array>; byteCount: number },
+): { body: ReadableStream<Uint8Array>; contentType: string; contentLength: number } {
+  const boundary = `postora-${crypto.randomUUID()}`;
+  const encoder = new TextEncoder();
+  const preamble = encoder.encode(
+    Object.entries(fields).map(([name, value]) =>
+      `--${boundary}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n${value}\r\n`
+    ).join("") +
+      `--${boundary}\r\nContent-Disposition: form-data; name="${file.field}"; filename="${file.name}"\r\nContent-Type: ${file.mime}\r\n\r\n`,
+  );
+  const epilogue = encoder.encode(`\r\n--${boundary}--\r\n`);
+  const reader = file.source.getReader();
+  let sent = 0;
+  let stage: "preamble" | "file" | "done" = "preamble";
+
+  const body = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      if (stage === "preamble") {
+        stage = "file";
+        controller.enqueue(preamble);
+        return;
+      }
+      if (stage === "done") return;
+      const { done, value } = await reader.read();
+      if (!done) {
+        sent += value.byteLength;
+        if (sent > file.byteCount) {
+          await reader.cancel().catch(() => {});
+          controller.error(new Error(`Source sent more than the ${file.byteCount} bytes it declared`));
+          return;
+        }
+        controller.enqueue(value);
+        return;
+      }
+      if (sent !== file.byteCount) {
+        controller.error(new Error(`Source sent ${sent} of the ${file.byteCount} bytes it declared`));
+        return;
+      }
+      stage = "done";
+      controller.enqueue(epilogue);
+      controller.close();
+    },
+    cancel(reason) {
+      return reader.cancel(reason);
+    },
+  });
+
+  return {
+    body,
+    contentType: `multipart/form-data; boundary=${boundary}`,
+    contentLength: preamble.byteLength + file.byteCount + epilogue.byteLength,
+  };
+}
+
+/**
+ * Streams `source` into Openinary, with the same adopt-before-upload and
+ * collision-as-failure rules as the byte upload. Bounded by `timeoutMs` end to end,
+ * since the source is read while the request is sent.
+ */
+export async function uploadStreamToOpeninary(
+  config: OpeninaryConfig,
+  source: ReadableStream<Uint8Array>,
+  target: { folder: string; baseName: string; extension: string; mimeType: string; byteCount: number },
+  options: { timeoutMs?: number; uploadBaseUrl?: string; fetcher?: typeof fetch; lister?: typeof listOpeninaryFolder } = {},
+): Promise<OpeninaryUploadResult> {
+  const fileName = `${target.baseName}.${target.extension}`;
+  const requested = `${target.folder}/${fileName}`;
+  try {
+    const existing = await (options.lister ?? listOpeninaryFolder)(config, target.folder);
+    const match = existing.find((file) => file.name === fileName && shouldAdoptOpeninaryFile(file, requested, target.byteCount));
+    if (match) {
+      await source.cancel().catch(() => {});
+      return { success: true, adopted: true, path: match.path, url: openinaryDeliveryUrl(config, match.path) };
+    }
+    const multipart = streamedMultipart({ folder: target.folder }, {
+      field: "files",
+      name: fileName,
+      mime: target.mimeType || "application/octet-stream",
+      source,
+      byteCount: target.byteCount,
+    });
+    const response = await (options.fetcher ?? fetch)(`${options.uploadBaseUrl ?? openinaryUploadBaseUrl(config)}/api/upload`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${config.apiKey}`,
+        "Content-Type": multipart.contentType,
+        "Content-Length": String(multipart.contentLength),
+      },
+      body: multipart.body,
+      signal: AbortSignal.timeout(options.timeoutMs ?? 45_000),
+      // Required by fetch for a streamed request body.
+      duplex: "half",
+    } as RequestInit);
+    return await uploadOutcome(config, response, requested);
+  } catch (error) {
+    await source.cancel().catch(() => {});
+    return { success: false, error: error instanceof Error ? error.message : String(error) };
+  }
 }

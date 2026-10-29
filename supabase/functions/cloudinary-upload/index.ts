@@ -1,9 +1,10 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { isServiceRoleBearer } from "./serviceCaller.ts";
-import { getOpeninaryConfig, openinaryTarget, openinaryDeliveryUrl, uploadBytesToOpeninary } from "../_shared/openinary.ts";
+import { getOpeninaryConfig, openinaryTarget, openinaryDeliveryUrl, uploadBytesToOpeninary, uploadStreamToOpeninary } from "../_shared/openinary.ts";
 import { mediaQuotaBody } from "../_shared/mediaQuotaError.ts";
 import { logToDatabase } from "../_shared/logging.ts";
-import { MEDIA_DECODED_BYTE_CAP, dedupeEligible } from "../_shared/mediaTypes.ts";
+import { MEDIA_DECODED_BYTE_CAP, dedupeEligible, formatUploadLimit, type UploadLimits } from "../_shared/mediaTypes.ts";
+import { readUploadLimits } from "../_shared/uploadLimitsSetting.ts";
 import {
   BodyTooLargeError,
   estimateBase64DecodedBytes,
@@ -18,6 +19,7 @@ import { getCdnPolicy, orderWriteProviders } from "./providerPolicy.ts";
 import { getTodayFolder, mediaPublicId, sanitizeEmailForFolder } from "./objectNaming.ts";
 import { commitMediaReplace, parseReplaceMediaFileId, prepareMediaReplace, type ReplaceTargetRow, type ReplaceUploadFacts } from "./replace.ts";
 import { deleteJustUploaded, mediaQuotaPreflight, quotaInsertRefusal } from "./mediaQuota.ts";
+import { prefixedStream, readPrefix, streamedSourceLength, streamIngestCap } from "./urlIngest.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -450,6 +452,13 @@ export async function handleCloudinaryUpload(req: Request): Promise<Response> {
     const timestamp = Math.floor(Date.now() / 1000);
 
     let payloadBytes: Uint8Array | null = null;
+    // A URL over the in-memory cap: only its first bytes are held; the rest streams to Openinary.
+    let externalStream: {
+      prefix: Uint8Array;
+      reader: ReadableStreamDefaultReader<Uint8Array>;
+      byteCount: number;
+      limits: UploadLimits;
+    } | null = null;
     let externalContentType: string | null = null;
     let uploadSource = externalUrl || "";
     let incomingFileSize: number | null = null;
@@ -492,8 +501,24 @@ export async function handleCloudinaryUpload(req: Request): Promise<Response> {
           );
         }
         externalContentType = res.headers.get("content-type");
-        payloadBytes = await readCappedBytes(res, MAX_EXTERNAL_BYTES);
-        incomingFileSize = payloadBytes.length;
+        const streamedLength = streamedSourceLength(res.headers.get("content-length"));
+        if (streamedLength !== null && res.body) {
+          const limits = await readUploadLimits(dbAdmin);
+          if (!limits) {
+            await res.body.cancel().catch(() => {});
+            await logUploadRefusal(userId, "Rejected external upload", { reason: "limits_unavailable" });
+            return new Response(
+              JSON.stringify({ success: false, error: "Uploads are temporarily unavailable. Please try again.", retryable: true }),
+              { status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+            );
+          }
+          const reader = res.body.getReader();
+          externalStream = { prefix: await readPrefix(reader), reader, byteCount: streamedLength, limits };
+          incomingFileSize = streamedLength;
+        } else {
+          payloadBytes = await readCappedBytes(res, MAX_EXTERNAL_BYTES);
+          incomingFileSize = payloadBytes.length;
+        }
       } catch (fetchError) {
         const tooLarge = fetchError instanceof Error && fetchError.message.includes("byte limit");
         await logUploadRefusal(userId, tooLarge ? "Rejected oversized external upload" : "Rejected external upload", { reason: tooLarge ? "external_length" : "external_fetch" });
@@ -504,7 +529,7 @@ export async function handleCloudinaryUpload(req: Request): Promise<Response> {
       }
     }
 
-    const resolved = resolveUpload({ fileName, fileType, bytes: payloadBytes, contentType: externalContentType });
+    const resolved = resolveUpload({ fileName, fileType, bytes: payloadBytes ?? externalStream?.prefix, contentType: externalContentType });
     if (!resolved.ok) {
       await logUploadRefusal(userId, "Rejected upload type", { extension: resolved.extension, fileType });
       return new Response(
@@ -518,6 +543,29 @@ export async function handleCloudinaryUpload(req: Request): Promise<Response> {
         JSON.stringify({ success: false, error: "File exceeds the 10 MB limit" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
+    }
+    if (externalStream) {
+      const cap = streamIngestCap(resolved.upload.entry.kind, externalStream.limits);
+      // Only Openinary can take a stream; Cloudinary is handed the URL on top of it.
+      const openinaryWrites = orderWriteProviders(await getCdnPolicy(dbAdmin), {
+        cloudinary: cloudinaryUsable,
+        openinaryConfigured: !!getOpeninaryConfig(),
+      }).includes("openinary");
+      const refusal = cap === null
+        ? { reason: "kind_cap", error: "Only images and videos can be uploaded over 10 MB" }
+        : externalStream.byteCount > cap
+          ? { reason: "external_length", error: `File exceeds the ${formatUploadLimit(cap)} limit` }
+          : !openinaryWrites
+            ? { reason: "no_stream_provider", error: "Files over 10 MB need Openinary storage, which is not enabled" }
+            : null;
+      if (refusal) {
+        await externalStream.reader.cancel().catch(() => {});
+        await logUploadRefusal(userId, "Rejected oversized external upload", { reason: refusal.reason, bytes: externalStream.byteCount, extension: resolved.upload.ext });
+        return new Response(
+          JSON.stringify({ success: false, error: refusal.error }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
     }
 
     const originalFilename = resolved.upload.originalFilename;
@@ -598,7 +646,7 @@ export async function handleCloudinaryUpload(req: Request): Promise<Response> {
 
     // Postora naming convention: postora_<date>_<userId>_<seq>
     // Sequence numbers are allocated atomically per user per day, so concurrent
-    // uploads never collide (Cloudinary uploads run with overwrite=true).
+    // uploads never collide (and Cloudinary runs with overwrite=false, so one never replaces another).
     const { data: seq, error: seqError } = await dbClient.rpc("next_media_seq", {
       p_user_id: userId,
       p_upload_date: todayDate,
@@ -640,9 +688,17 @@ export async function handleCloudinaryUpload(req: Request): Promise<Response> {
 
     for (const provider of effectiveProviders) {
       try {
-        if (provider === "openinary" && openinaryConfig && payloadBytes) {
+        if (provider === "openinary" && openinaryConfig && (payloadBytes || externalStream)) {
           const target = openinaryTarget(`${folder}/${uniquePublicId}`, openinaryConfig.folderPrefix);
-          const openResult = await uploadBytesToOpeninary(openinaryConfig, payloadBytes, target.folder, openinaryBaseName, objectExt, uploadMime, payloadBytes.length);
+          const openResult = payloadBytes
+            ? await uploadBytesToOpeninary(openinaryConfig, payloadBytes, target.folder, openinaryBaseName, objectExt, uploadMime, payloadBytes.length)
+            : await uploadStreamToOpeninary(openinaryConfig, prefixedStream(externalStream!.prefix, externalStream!.reader), {
+              folder: target.folder,
+              baseName: openinaryBaseName,
+              extension: objectExt,
+              mimeType: uploadMime,
+              byteCount: externalStream!.byteCount,
+            });
           if (openResult.success && openResult.path) {
             openinaryPath = openResult.path;
             openinaryUrl = openResult.url || openinaryDeliveryUrl(openinaryConfig, openResult.path);
@@ -653,10 +709,11 @@ export async function handleCloudinaryUpload(req: Request): Promise<Response> {
             console.error("Openinary upload failed:", openResult.error);
           }
         } else if (provider === "cloudinary") {
-          // Build signature string - use overwrite to allow replacing duplicates
+          // Signed with overwrite=false, as the browser-direct path is: an object already
+          // stored under this public id is kept, never replaced.
           const signatureParams = [
             `folder=${folder}`,
-            `overwrite=true`,
+            `overwrite=false`,
             `public_id=${uniquePublicId}`,
             `timestamp=${timestamp}`,
           ].sort().join("&");
@@ -681,12 +738,22 @@ export async function handleCloudinaryUpload(req: Request): Promise<Response> {
           formData.append("signature", signature);
           formData.append("folder", folder);
           formData.append("public_id", uniquePublicId);
-          formData.append("overwrite", "true");
+          formData.append("overwrite", "false");
 
           console.log(`Uploading to Cloudinary: ${uploadUrl}`);
-          const uploadResponse = await fetch(uploadUrl, { method: "POST", body: formData });
+          // Bounded: Cloudinary fetches a URL source itself, and a stalled one must not
+          // run the worker out of time.
+          const uploadResponse = await fetch(uploadUrl, { method: "POST", body: formData, signal: AbortSignal.timeout(60_000) });
           if (uploadResponse.ok) {
-            cloudinaryResult = await uploadResponse.json();
+            const uploaded = await uploadResponse.json();
+            // Every call allocates a fresh public id, so an existing object is a collision,
+            // not this upload: report it rather than register someone else's bytes.
+            if (uploaded?.existing === true) {
+              errors.push("cloudinary: an object with this name already exists");
+              console.error(`Cloudinary refused to overwrite ${uniquePublicId}`);
+              continue;
+            }
+            cloudinaryResult = uploaded;
             storedIn.push("cloudinary");
             console.log(`Cloudinary upload successful: ${cloudinaryResult.secure_url}`);
           } else {
