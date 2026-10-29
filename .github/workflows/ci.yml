@@ -218,7 +218,8 @@ jobs:
             fi
           done
           deno check --node-modules-dir=none "${report_dir}"/*.ts
-          deno test --node-modules-dir=none "${report_dir}"/*.test.ts
+          # handlers.test.ts drives the real index.ts, whose auth helper reads these at import.
+          deno test --allow-env=SUPABASE_URL,SUPABASE_ANON_KEY,SUPABASE_SERVICE_ROLE_KEY --node-modules-dir=none "${report_dir}"/*.test.ts
 
       - name: Typecheck and test protected Meta credential readers and refusals
         run: |
