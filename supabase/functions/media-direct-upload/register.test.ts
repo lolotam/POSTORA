@@ -1,4 +1,5 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { primaryDeliveryUrl, registerDirectUpload, type DirectUploadFacts } from "./register.ts";
 import type { DirectUploadSession } from "./session.ts";
 
@@ -52,13 +53,18 @@ function fakeDb(options: { existing?: { id: string; file_path: string }; insertE
   return db;
 }
 
+/** The fake answers only the calls register.ts makes. */
+function client(db: ReturnType<typeof fakeDb>): SupabaseClient {
+  return db as unknown as SupabaseClient;
+}
+
 function facts(overrides: Partial<DirectUploadFacts> = {}): DirectUploadFacts {
   return { session: SESSION, cloudinary: null, openinary: OPENINARY, errors: [], ...overrides };
 }
 
 Deno.test("an Openinary-only upload records one library row and a ready provider row", async () => {
   const db = fakeDb();
-  const outcome = await registerDirectUpload(db, db, facts({ session: { ...SESSION, providers: ["openinary"] } }));
+  const outcome = await registerDirectUpload(client(db), client(db), facts({ session: { ...SESSION, providers: ["openinary"] } }));
   assertEquals(outcome.status, 200);
   assertEquals(outcome.body.mediaFileId, "media-1");
   assertEquals(outcome.body.url, OPENINARY.url);
@@ -76,7 +82,7 @@ Deno.test("an Openinary-only upload records one library row and a ready provider
 
 Deno.test("a provider the browser failed on gets a failed row and the upload is partial", async () => {
   const db = fakeDb();
-  const outcome = await registerDirectUpload(db, db, facts({ errors: ["cloudinary: HTTP 400 File size too large"] }));
+  const outcome = await registerDirectUpload(client(db), client(db), facts({ errors: ["cloudinary: HTTP 400 File size too large"] }));
   assertEquals(outcome.status, 200);
   assertEquals(outcome.body.partial, true);
   const rows = db.writes[1].rows as Record<string, unknown>[];
@@ -88,21 +94,21 @@ Deno.test("a provider the browser failed on gets a failed row and the upload is 
 
 Deno.test("nothing stored means no library row", async () => {
   const db = fakeDb();
-  const outcome = await registerDirectUpload(db, db, facts({ openinary: null, errors: ["openinary: object not found after upload"] }));
+  const outcome = await registerDirectUpload(client(db), client(db), facts({ openinary: null, errors: ["openinary: object not found after upload"] }));
   assertEquals(outcome.status, 502);
   assertEquals(db.writes.length, 0);
 });
 
 Deno.test("a retried complete returns the existing row instead of adding one", async () => {
   const db = fakeDb({ existing: { id: "media-0", file_path: OPENINARY.url } });
-  const outcome = await registerDirectUpload(db, db, facts());
+  const outcome = await registerDirectUpload(client(db), client(db), facts());
   assertEquals(outcome.body.mediaFileId, "media-0");
   assertEquals(db.writes.length, 0);
 });
 
 Deno.test("an insert error is not echoed to the browser", async () => {
   const db = fakeDb({ insertError: "permission denied for table media_files" });
-  const outcome = await registerDirectUpload(db, db, facts());
+  const outcome = await registerDirectUpload(client(db), client(db), facts());
   assertEquals(outcome.status, 500);
   assertEquals(outcome.body.error, "Could not save the upload to your library");
 });

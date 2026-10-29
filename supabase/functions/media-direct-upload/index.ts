@@ -10,12 +10,12 @@
  * memory and 60 seconds, which a 500 MB video cannot fit through.
  */
 
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { z } from "npm:zod@3.23.8";
 import { authenticateCaller } from "../_shared/auth-helper.ts";
 import { handleRestrictedCorsOptions, restrictedJsonResponse } from "../_shared/cors.ts";
 import { getOpeninaryConfig, openinaryTarget } from "../_shared/openinary.ts";
-import { mediaQuotaBody } from "../_shared/mediaQuotaError.ts";
+import { mediaQuotaBody, type QuotaRpc } from "../_shared/mediaQuotaError.ts";
 import { mediaQuotaPreflight } from "../cloudinary-upload/mediaQuota.ts";
 import { getCdnPolicy } from "../cloudinary-upload/providerPolicy.ts";
 import { getTodayFolder, mediaPublicId, sanitizeEmailForFolder } from "../cloudinary-upload/objectNaming.ts";
@@ -71,10 +71,7 @@ function cloudinaryCredentials() {
   return cloudName && apiKey && apiSecret ? { cloudName, apiKey, apiSecret } : null;
 }
 
-// deno-lint-ignore no-explicit-any
-type Db = any;
-
-async function handleStart(req: Request, input: z.infer<typeof StartSchema>, userId: string, userDb: Db, adminDb: Db, secret: string) {
+async function handleStart(req: Request, input: z.infer<typeof StartSchema>, userId: string, userDb: SupabaseClient, adminDb: SupabaseClient, secret: string) {
   const cloudinary = cloudinaryCredentials();
   const openinaryConfig = getOpeninaryConfig();
   const policy = await getCdnPolicy(adminDb);
@@ -84,7 +81,8 @@ async function handleStart(req: Request, input: z.infer<typeof StartSchema>, use
     return restrictedJsonResponse(req, { success: false, error: plan.error, retryable: plan.status === 503 }, plan.status);
   }
 
-  const blocked = await mediaQuotaPreflight(adminDb, userId);
+  // The typed client answers rpc() with a thenable builder, which QuotaRpc models as a Promise.
+  const blocked = await mediaQuotaPreflight(adminDb as unknown as QuotaRpc, userId);
   if (blocked) return restrictedJsonResponse(req, mediaQuotaBody(blocked.limit), 429);
 
   const { data: profile } = await adminDb.from("profiles").select("email").eq("id", userId).maybeSingle();
@@ -152,7 +150,7 @@ async function handleStart(req: Request, input: z.infer<typeof StartSchema>, use
   });
 }
 
-async function handleComplete(req: Request, input: z.infer<typeof CompleteSchema>, userId: string, userDb: Db, adminDb: Db, secret: string) {
+async function handleComplete(req: Request, input: z.infer<typeof CompleteSchema>, userId: string, userDb: SupabaseClient, adminDb: SupabaseClient, secret: string) {
   const checked = await verifySession(input.session, secret, userId);
   if (!checked.ok) {
     console.warn(`[media-direct-upload] complete refused: session ${checked.reason}`);

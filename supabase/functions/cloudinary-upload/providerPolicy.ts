@@ -5,27 +5,34 @@
  * (media-direct-upload), so both honour the same Settings → CDN storage choice.
  */
 
+import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
+
 export type CdnPolicy = { providers: string[]; required: string[]; readPreference: string; openinaryEnabled: boolean };
 
-// deno-lint-ignore no-explicit-any
-export async function getCdnPolicy(db: any): Promise<CdnPolicy> {
+/** The stored `cdn_storage` value; every field may be missing or malformed. */
+interface CdnSetting {
+  write_policy?: { providers?: unknown; required?: unknown };
+  read_preference?: unknown;
+  openinary?: { enabled?: unknown };
+}
+
+export async function getCdnPolicy(db: SupabaseClient): Promise<CdnPolicy> {
   const { data } = await db.from("app_settings").select("value").eq("key", "cdn_storage").maybeSingle();
   return parseCdnPolicy(data?.value);
 }
 
 export function parseCdnPolicy(value: unknown): CdnPolicy {
-  // deno-lint-ignore no-explicit-any
-  const setting = (value || {}) as any;
-  const policy = setting?.write_policy;
+  const setting = (value || {}) as CdnSetting;
+  const policy = setting.write_policy;
   // Openinary is the primary provider, so an unreadable setting falls back to
   // it. Defaulting to Cloudinary let a transient read error reinstate a provider
   // the admin had turned off — and mark it required, which then failed every
   // upload as partial against a cloud account that answers 401.
   return {
-    providers: Array.isArray(policy?.providers) && policy.providers.length ? policy.providers : ["openinary"],
-    required: Array.isArray(policy?.required) && policy.required.length ? policy.required : ["openinary"],
-    readPreference: typeof setting?.read_preference === "string" ? setting.read_preference : "openinary",
-    openinaryEnabled: setting?.openinary?.enabled === true,
+    providers: Array.isArray(policy?.providers) && policy.providers.length ? policy.providers as string[] : ["openinary"],
+    required: Array.isArray(policy?.required) && policy.required.length ? policy.required as string[] : ["openinary"],
+    readPreference: typeof setting.read_preference === "string" ? setting.read_preference : "openinary",
+    openinaryEnabled: setting.openinary?.enabled === true,
   };
 }
 

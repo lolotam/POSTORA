@@ -7,6 +7,7 @@
  * the admin client.
  */
 
+import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { deleteJustUploaded, quotaInsertRefusal } from "../cloudinary-upload/mediaQuota.ts";
 import type { DirectUploadSession } from "./session.ts";
 
@@ -33,9 +34,6 @@ export interface RegisterOutcome {
   status: number;
   body: Record<string, unknown>;
 }
-
-// deno-lint-ignore no-explicit-any
-type Db = any;
 
 const OBJECT_VERSION = 1;
 
@@ -73,7 +71,7 @@ function successBody(facts: DirectUploadFacts, mediaFileId: string, url: string 
   };
 }
 
-export async function registerDirectUpload(userDb: Db, adminDb: Db, facts: DirectUploadFacts): Promise<RegisterOutcome> {
+export async function registerDirectUpload(userDb: SupabaseClient, adminDb: SupabaseClient, facts: DirectUploadFacts): Promise<RegisterOutcome> {
   const { session } = facts;
   const storedIn = storedProviders(facts);
   if (storedIn.length === 0) {
