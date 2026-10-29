@@ -933,6 +933,7 @@ Deno.serve(async (req) => {
             );
           },
       attemptOwned: classification.kind === "protected",
+      userId: user_id,
     });
     if (isLifecycleRefusal(decision)) {
       return new Response(JSON.stringify({

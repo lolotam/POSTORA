@@ -6,6 +6,7 @@ import {
   loadFacebookCredentialSettings,
   type FacebookCredentialMode,
 } from "../_shared/facebookCredentialMode.ts";
+import { resolveAccountCredentialMode } from "../_shared/protectedAccountCutover.ts";
 import {
   CredentialStoreError,
   createFacebookUserCredentialStore,
@@ -30,6 +31,10 @@ const corsHeaders = {
  * token, exactly as before. In protected mode it is the owner-scoped protected
  * authority and nothing else: a missing protected credential is a typed
  * failure, not a Page-token guess.
+ *
+ * The mode is the selected account's own (`protectedAccountCutover.ts`): an
+ * account without a protected authority stays legacy unless the global switch
+ * is `protected`.
  */
 interface MetaSearchCredentials {
   mode: FacebookCredentialMode;
@@ -85,7 +90,7 @@ Deno.serve(async (req) => {
         user.id,
         SUPABASE_URL,
         platform,
-        await resolveMetaSearchCredentials(SUPABASE_URL, user.id),
+        await resolveMetaSearchCredentials(SUPABASE_URL, user.id, account_id),
       );
       if (metaResult) {
         return new Response(JSON.stringify(metaResult), {
@@ -141,6 +146,7 @@ Deno.serve(async (req) => {
 async function resolveMetaSearchCredentials(
   supabaseUrl: string,
   userId: string,
+  socialAccountId: string,
 ): Promise<MetaSearchCredentials> {
   const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
   const supabase = createClient(supabaseUrl, serviceRoleKey);
@@ -157,7 +163,10 @@ async function resolveMetaSearchCredentials(
   );
 
   return {
-    mode: credentialMode,
+    mode: await resolveAccountCredentialMode(credentialMode, supabase, {
+      id: socialAccountId,
+      userId,
+    }),
     protectedToken: async (socialAccountId: string) => {
       const rpc = createServiceRpcCaller(supabase);
       const deps: ProtectedCredentialDeps = {

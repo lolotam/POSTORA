@@ -12,6 +12,7 @@ import {
   oauthTripwirePorts,
   type OAuthLifecyclePorts,
 } from "./protectedPageConnect.ts";
+import { PROTECTED_PILOT_USERS_SETTING_KEY } from "../_shared/protectedAccountCutover.ts";
 
 const ACTIONS = [
   "authorize",
@@ -124,4 +125,120 @@ Deno.test("a token-bearing action is not copied into the refusal", async () => {
   assertEquals(decision.action, "unknown");
   assertEquals(decision.error.includes(secret), false);
   assertEquals(decision.error.includes("access_token"), false);
+});
+
+// ---------------------------------------------------------------------------
+// Per-account cutover: the protected pilot list under a global `legacy`.
+// ---------------------------------------------------------------------------
+
+const PILOT_USER = "0f200001-0000-4000-8000-000000000001";
+const OTHER_USER = "0f200002-0000-4000-8000-000000000002";
+
+function legacyLookup(pilot: { value?: unknown; error?: boolean; absent?: boolean } = {}) {
+  return createAppSettingLookup(async (key) => {
+    if (key === FACEBOOK_CREDENTIAL_MODE_SETTING_KEY) {
+      return { data: { value: "legacy" }, error: null };
+    }
+    if (key === PROTECTED_PILOT_USERS_SETTING_KEY) {
+      if (pilot.error) return { data: null, error: { message: "read failed" } };
+      if (pilot.absent) return { data: null, error: null };
+      return { data: { value: pilot.value ?? [PILOT_USER] }, error: null };
+    }
+    return { data: null, error: null };
+  });
+}
+
+async function decide(input: {
+  lookup: ReturnType<typeof legacyLookup>;
+  flow: (typeof FLOWS)[number];
+  action: string;
+  userId?: string;
+}): Promise<unknown> {
+  return await beginOAuthRequest({
+    lookup: input.lookup,
+    flow: input.flow,
+    action: input.action,
+    ports: oauthTripwirePorts(),
+    legacy: async () => "legacy",
+    protected: async () => "protected",
+    userId: input.userId,
+  });
+}
+
+Deno.test("a pilot user starts authorize on the protected branch under a global legacy", async () => {
+  for (const flow of FLOWS) {
+    assertEquals(
+      await decide({ lookup: legacyLookup(), flow, action: "authorize", userId: PILOT_USER }),
+      "protected",
+    );
+  }
+});
+
+Deno.test("a user outside the pilot list keeps the legacy authorize", async () => {
+  for (const flow of FLOWS) {
+    assertEquals(
+      await decide({ lookup: legacyLookup(), flow, action: "authorize", userId: OTHER_USER }),
+      "legacy",
+    );
+    assertEquals(
+      await decide({ lookup: legacyLookup({ absent: true }), flow, action: "authorize", userId: OTHER_USER }),
+      "legacy",
+    );
+  }
+});
+
+Deno.test("the pilot list never moves an action other than authorize", async () => {
+  for (const flow of FLOWS) {
+    for (const action of ACTIONS.filter((name) => name !== "authorize")) {
+      assertEquals(
+        await decide({ lookup: legacyLookup(), flow, action, userId: PILOT_USER }),
+        "legacy",
+      );
+    }
+  }
+});
+
+Deno.test("an unreadable or invalid pilot list reads as nobody", async () => {
+  const lookups = [
+    legacyLookup({ error: true }),
+    legacyLookup({ value: "not-a-list" }),
+    legacyLookup({ value: [PILOT_USER, 7] }),
+    legacyLookup({ value: ["not-a-uuid"] }),
+  ];
+  for (const lookup of lookups) {
+    assertEquals(
+      await decide({ lookup, flow: "instagram_oauth", action: "authorize", userId: PILOT_USER }),
+      "legacy",
+    );
+  }
+});
+
+Deno.test("an authorize without a caller identity is never a pilot", async () => {
+  assertEquals(
+    await decide({ lookup: legacyLookup(), flow: "facebook_oauth", action: "authorize" }),
+    "legacy",
+  );
+});
+
+Deno.test("a global protected mode is unchanged by the pilot list", async () => {
+  const lookup = createAppSettingLookup(async (key) => {
+    if (key === FACEBOOK_CREDENTIAL_MODE_SETTING_KEY) {
+      return { data: { value: "protected" }, error: null };
+    }
+    if (key === PROTECTED_PILOT_USERS_SETTING_KEY) {
+      return { data: { value: [] }, error: null };
+    }
+    return { data: null, error: null };
+  });
+  assertEquals(
+    await decide({ lookup, flow: "instagram_oauth", action: "authorize", userId: OTHER_USER }),
+    "protected",
+  );
+  const refused = await decide({
+    lookup,
+    flow: "facebook_oauth",
+    action: "list_pages",
+    userId: PILOT_USER,
+  });
+  assertEquals(isLifecycleRefusal(refused), true);
 });

@@ -5,6 +5,7 @@ import {
   createAppSettingLookup,
   loadFacebookCredentialSettings,
 } from "../_shared/facebookCredentialMode.ts";
+import { resolveAccountCredentialMode } from "../_shared/protectedAccountCutover.ts";
 import {
   CredentialStoreError,
   createFacebookUserCredentialStore,
@@ -106,10 +107,9 @@ Deno.serve(async (req) => {
     const body = await req.json();
     const { action, social_account_id } = body;
 
-    // Server-controlled credential mode. Resolved BEFORE any protected-schema
-    // access, so legacy mode never touches the protected authority and never
-    // changes where the User token comes from.
-    const { credentialMode } = await loadFacebookCredentialSettings(
+    // Server-controlled credential mode. The global switch is read first; the
+    // account's own mode is decided once the owned account is known.
+    const { credentialMode: globalCredentialMode } = await loadFacebookCredentialSettings(
       createAppSettingLookup(async (key) => {
         const { data, error } = await supabase
           .from("app_settings")
@@ -145,6 +145,15 @@ Deno.serve(async (req) => {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
+
+    // An account runs protected only when it already holds a protected
+    // authority, or when the global switch says so. Every other account keeps
+    // the legacy metadata token, unchanged.
+    const credentialMode = await resolveAccountCredentialMode(globalCredentialMode, supabase, {
+      id: social_account_id,
+      userId,
+      platform: account.platform,
+    });
 
     const { access_token: accessToken, platform_user_id: platformUserId } = account;
     // User-level token for ad account queries (me/adaccounts requires user token, not page token).

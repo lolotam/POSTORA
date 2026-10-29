@@ -56,6 +56,10 @@ interface ProbeState {
   mode: "protected" | "absent";
   rpcKind: RpcKind;
   accountRead: AccountRead;
+  /** Authority rows the per-account cutover read sees (existence columns). */
+  authorities: Array<{ social_account_id: string; user_id: string }>;
+  /** Every authority-table select and the columns it asked for. */
+  authorityReads: Array<{ table: string; columns: string }>;
   http: string[];
   rpc: string[];
   mutations: string[];
@@ -100,17 +104,31 @@ function rpcEnvelope(kind: RpcKind): unknown {
   }
 }
 
+const AUTHORITY_TABLES = new Set([
+  "facebook_user_credential_bindings",
+  "instagram_account_credentials",
+]);
+
 function createClient(state: ProbeState) {
   class Query {
     private readonly table: string;
     private readonly filters: Record<string, unknown> = {};
+    private inValues: unknown[] | null = null;
     private op = "select";
 
     constructor(table: string) {
       this.table = table;
     }
 
-    select() {
+    select(columns?: string) {
+      if (AUTHORITY_TABLES.has(this.table)) {
+        state.authorityReads.push({ table: this.table, columns: String(columns ?? "*") });
+      }
+      return this;
+    }
+
+    in(_column: string, values: unknown[]) {
+      this.inValues = values;
       return this;
     }
 
@@ -180,6 +198,14 @@ function createClient(state: ProbeState) {
           error: null,
         };
       }
+      if (AUTHORITY_TABLES.has(this.table)) {
+        // Only the binding table carries this synthetic account.
+        if (this.table !== "facebook_user_credential_bindings") return { data: [], error: null };
+        const rows = state.authorities.filter((row) =>
+          !this.inValues || this.inValues.includes(row.social_account_id)
+        );
+        return { data: rows, error: null };
+      }
       throw new Error(`unexpected table ${this.table}`);
     }
   }
@@ -199,11 +225,15 @@ function createClient(state: ProbeState) {
   };
 }
 
-function createState(overrides: Partial<Pick<ProbeState, "mode" | "rpcKind" | "accountRead">> = {}): ProbeState {
+function createState(
+  overrides: Partial<Pick<ProbeState, "mode" | "rpcKind" | "accountRead" | "authorities">> = {},
+): ProbeState {
   const state = {
     mode: overrides.mode ?? "protected",
     rpcKind: overrides.rpcKind ?? "error-null",
     accountRead: overrides.accountRead ?? "ok",
+    authorities: overrides.authorities ?? [],
+    authorityReads: [] as ProbeState["authorityReads"],
     http: [] as string[],
     rpc: [] as string[],
     mutations: [] as string[],
@@ -554,4 +584,46 @@ readerTest("legacy mode with no provider results still falls back to Nominatim",
   assertEquals(state.rpc.length, 0);
   assertEquals(state.mutations.length, 0);
   assertEquals(leaked(JSON.stringify(body)), false);
+  // The per-account cutover asked only whether an authority exists.
+  assertEquals(state.authorityReads.length > 0, true);
+  for (const read of state.authorityReads) {
+    assertEquals(read.columns, "social_account_id, user_id");
+  }
+});
+
+readerTest("legacy mode reads the protected credential for an account that holds an authority", async () => {
+  const state = createState({
+    mode: "absent",
+    rpcKind: "error-null",
+    accountRead: "ok",
+    authorities: [{ social_account_id: ACCOUNT_ID, user_id: USER_ID }],
+  });
+  const response = await withState(state, () => handlers["facebook-places-search"](placesRequest({
+    query: "Kuwait",
+    account_id: ACCOUNT_ID,
+  })));
+  await response.json();
+  assertEquals(response.status, 200);
+  // The protected credential, never the metadata copy or the Page token.
+  assertEquals(state.rpc.length > 0, true);
+  assertEquals(state.http.some((url) => url.includes(RPC_TOKEN)), true);
+  assertEquals(state.http.some((url) => url.includes(METADATA_TOKEN)), false);
+  assertEquals(state.http.some((url) => url.includes(PAGE_TOKEN)), false);
+  assertEquals(state.mutations.length, 0);
+});
+
+readerTest("legacy mode ignores an authority row that belongs to another owner", async () => {
+  const state = createState({
+    mode: "absent",
+    rpcKind: "error-null",
+    accountRead: "ok",
+    authorities: [{ social_account_id: ACCOUNT_ID, user_id: "b0000000-0000-4000-8000-000000000002" }],
+  });
+  const response = await withState(state, () => handlers["facebook-places-search"](placesRequest({
+    query: "Kuwait",
+    account_id: ACCOUNT_ID,
+  })));
+  await response.json();
+  assertEquals(state.rpc.length, 0);
+  assertEquals(state.http.some((url) => url.includes(METADATA_TOKEN)), true);
 });

@@ -434,8 +434,13 @@ function installClient(current: Probe) {
         };
       }
 
+      // The per-account cutover existence read: no direct credential exists
+      // in this suite.
+      if (this.table === "instagram_account_credentials") return { data: [], error: null };
+
       if (this.table === "facebook_user_credential_bindings") {
         const rows = current.bindings.filter((row) => {
+          if (this.inFilter && !this.inFilter.values.includes(row.social_account_id)) return false;
           if (
             this.filters.social_account_id !== undefined &&
             row.social_account_id !== this.filters.social_account_id
@@ -1099,8 +1104,8 @@ routeTest("a stale Page expiry is never reported as a refresh", async () => {
   assertEquals(result.json.error, "refresh_commit_indeterminate");
 });
 
-routeTest("the legacy mode never touches the protected schema", async () => {
-  const current = probe({ setting: "legacy" });
+routeTest("in legacy mode an account without a binding never reaches the protected lifecycle", async () => {
+  const current = probe({ setting: "legacy", bindings: [] });
   const handler = await loadHandler(current);
   const result = await callJson(
     handler,
@@ -1112,6 +1117,19 @@ routeTest("the legacy mode never touches the protected schema", async () => {
   assertEquals(current.rpc.includes("read_instagram_account_capability"), false);
   assertEquals(current.rpc.includes("begin_meta_account_refresh"), false);
   assertEquals(current.rpc.includes("write_meta_page_reconciliation_success"), false);
+});
+
+routeTest("in legacy mode a bound Page-linked account reconciles through the protected lifecycle", async () => {
+  const current = probe({ setting: "legacy" });
+  const handler = await loadHandler(current);
+  const result = await callJson(
+    handler,
+    { accountId: INSTAGRAM_ACCOUNT_ID, force: true },
+    adminHeaders(),
+  );
+
+  assertEquals(result.status, 200);
+  assertEquals(current.rpc.includes("write_meta_page_reconciliation_success"), true);
 });
 
 routeTest("an ordinary owner is refused before any protected work", async () => {

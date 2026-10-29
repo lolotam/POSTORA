@@ -226,6 +226,7 @@ jobs:
           set -euo pipefail
           tests=(
             supabase/functions/_shared/facebookCredentialMode.test.ts
+            supabase/functions/_shared/protectedAccountCutover.test.ts
             supabase/functions/_shared/facebookUserCredentialStore.test.ts
             supabase/functions/_shared/protectedFacebookCredentials.test.ts
             supabase/functions/facebook-oauth/protectedPageConnect.test.ts

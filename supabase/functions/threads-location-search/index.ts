@@ -20,6 +20,10 @@ import {
   type ProtectedCredentialDeps,
 } from "../_shared/protectedFacebookCredentials.ts";
 import {
+  accountCredentialMode,
+  readProtectedAuthorities,
+} from "../_shared/protectedAccountCutover.ts";
+import {
   getThreadsAccount,
   summarizeAccount,
   debugThreadsToken,
@@ -44,6 +48,10 @@ const REQUEST_SOURCE = "threads-location-search";
  * Protected mode uses the owner-scoped protected authority and nothing else:
  * a missing protected credential skips that account, and a failed protected
  * read is reported instead of being degraded into an empty result.
+ *
+ * `mode` is the global switch. Each account's own mode comes from
+ * `protectedAccountCutover.ts`, so under a global `legacy` only an account
+ * that already holds a protected authority takes the protected branch.
  */
 interface FacebookPageSearchCredentials {
   mode: FacebookCredentialMode;
@@ -101,9 +109,21 @@ async function searchFacebookPages(
 
   if (!accounts || accounts.length === 0) return [];
 
+  // Each account runs in its own mode: under a global `legacy`, only an
+  // account that already holds a protected authority reads the protected
+  // credential. One existence read covers the whole list.
+  const authorities = credentials.mode === "protected"
+    ? { has: () => true }
+    : await readProtectedAuthorities(supabase, accounts.map((acc: { id: string }) => acc.id));
+
   for (const acc of accounts) {
     const tokensToTry: string[] = [];
-    if (credentials.mode === "protected") {
+    const accountMode = accountCredentialMode(credentials.mode, authorities, {
+      id: acc.id,
+      userId,
+      platform: acc.platform,
+    });
+    if (accountMode === "protected") {
       const outcome = await credentials.resolve(acc.id);
       if ("missing" in outcome) continue;
       tokensToTry.push(outcome.token);
@@ -253,8 +273,8 @@ Deno.serve(async (req) => {
     }
 
     const account = await getThreadsAccount(supabase, userId);
-    // Server-controlled credential mode. Resolved before any protected-schema
-    // access, so legacy mode never touches the protected authority.
+    // Server-controlled global credential mode. Under `legacy`, the protected
+    // schema is touched only to ask which accounts hold an authority.
     const { credentialMode } = await loadFacebookCredentialSettings(
       createAppSettingLookup(async (key) => {
         const { data, error } = await supabase

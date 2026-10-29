@@ -128,6 +128,12 @@ interface Probe {
   legacyCalls: string[];
   /** The protected binding rows the narrow binding reader may see. */
   bindings: Array<Record<string, unknown>>;
+  /** The direct Instagram credential rows, existence columns only. */
+  directCredentials: Array<{ social_account_id: string; user_id: string }>;
+  /** The per-account cutover read of the two authority tables. */
+  authorityMode: "ok" | "error";
+  /** Every select: the table and the columns it asked for. */
+  selects: Array<{ table: string; columns: string }>;
   /** The account the last Page capture was taken for. */
   pageCaptureAccountId: string | null;
 }
@@ -182,6 +188,9 @@ function probe(overrides: Partial<Probe> = {}): Probe {
     logs: [],
     legacyCalls: [],
     bindings: [],
+    directCredentials: [],
+    authorityMode: "ok",
+    selects: [],
     pageCaptureAccountId: null,
     ...overrides,
   };
@@ -437,7 +446,8 @@ function installClient(current: Probe) {
     constructor(table: string) {
       this.table = table;
     }
-    select() {
+    select(columns?: string) {
+      current.selects.push({ table: this.table, columns: String(columns ?? "*") });
       return this;
     }
     eq(key: string, value: unknown) {
@@ -556,8 +566,26 @@ function installClient(current: Probe) {
         };
       }
 
+      const isAuthorityExistenceRead = this.inFilter?.column === "social_account_id" ||
+        (this.table === "instagram_account_credentials") ||
+        (this.table === "facebook_user_credential_bindings" &&
+          Object.keys(this.filters).length === 0);
+      if (isAuthorityExistenceRead && current.authorityMode === "error") {
+        return { data: null, error: { message: "authority read failed" } };
+      }
+
+      if (this.table === "instagram_account_credentials") {
+        const rows = current.directCredentials.filter((row) =>
+          !this.inFilter || this.inFilter.values.includes(row.social_account_id)
+        );
+        return { data: rows, error: null };
+      }
+
       if (this.table === "facebook_user_credential_bindings") {
         const rows = current.bindings.filter((row) => {
+          if (this.inFilter && !this.inFilter.values.includes(row.social_account_id)) {
+            return false;
+          }
           if (
             this.filters.social_account_id !== undefined &&
             row.social_account_id !== this.filters.social_account_id
@@ -1556,7 +1584,7 @@ routeTest("a moved generation stops the attempt before the provider", async () =
   assertEquals(current.rpc.includes("record_meta_refresh_failure"), false);
 });
 
-routeTest("the legacy mode never touches the protected schema", async () => {
+routeTest("a legacy account in legacy mode never reaches the protected lifecycle", async () => {
   const current = probe({ setting: "legacy" });
   const handler = await loadHandler(current);
   const result = await callJson(
@@ -1570,6 +1598,106 @@ routeTest("the legacy mode never touches the protected schema", async () => {
   assertEquals(current.rpc.includes("begin_meta_account_refresh"), false);
   assertEquals(current.rpc.includes("write_direct_instagram_account"), false);
   assertEquals(current.legacyCalls.includes("refreshInstagramBusinessToken"), true);
+  // The only protected-schema access is the existence read: no token column.
+  for (const select of current.selects) {
+    if (
+      select.table === "instagram_account_credentials" ||
+      select.table === "facebook_user_credential_bindings"
+    ) {
+      assertEquals(select.columns, "social_account_id, user_id");
+    }
+  }
+});
+
+routeTest("in legacy mode an account holding a protected authority refreshes protected", async () => {
+  const current = probe({
+    setting: "legacy",
+    directCredentials: [{ social_account_id: DIRECT_ACCOUNT_ID, user_id: OWNER_ID }],
+  });
+  const handler = await loadHandler(current);
+  const result = await callJson(
+    handler,
+    { accountId: DIRECT_ACCOUNT_ID, force: true },
+    adminHeaders(),
+  );
+
+  assertEquals(result.status, 200);
+  assertEquals(result.json.status, "refreshed");
+  assertEquals(current.rpc.includes("begin_meta_account_refresh"), true);
+  assertEquals(current.rpc.includes("write_direct_instagram_account"), true);
+  assertEquals(current.legacyCalls.includes("refreshInstagramBusinessToken"), false);
+  const providerCalls = current.http.filter((entry) => entry.url.includes("graph.instagram.com"));
+  assertEquals(providerCalls.length, 1);
+  assertEquals(providerCalls[0].url.includes(CAPTURED_TOKEN), true);
+});
+
+routeTest("in legacy mode another owner's authority row does not move the account", async () => {
+  const current = probe({
+    setting: "legacy",
+    directCredentials: [{ social_account_id: DIRECT_ACCOUNT_ID, user_id: OTHER_OWNER_ID }],
+  });
+  const handler = await loadHandler(current);
+  const result = await callJson(
+    handler,
+    { accountId: DIRECT_ACCOUNT_ID, force: true },
+    adminHeaders(),
+  );
+
+  assertEquals(result.status, 200);
+  assertEquals(current.rpc.includes("begin_meta_account_refresh"), false);
+  assertEquals(current.legacyCalls.includes("refreshInstagramBusinessToken"), true);
+});
+
+routeTest("in legacy mode the sweep keeps legacy accounts legacy beside a protected one", async () => {
+  const current = probe({
+    setting: "legacy",
+    accounts: [
+      account(),
+      account({
+        id: PAGE_ACCOUNT_ID,
+        platform: "facebook",
+        platform_user_id: PAGE_ID,
+        platform_username: "page_7001",
+        ig_auth_type: null,
+      }),
+    ],
+    directCredentials: [{ social_account_id: DIRECT_ACCOUNT_ID, user_id: OWNER_ID }],
+  });
+  const handler = await loadHandler(current);
+  const result = await callJson(
+    handler,
+    { accountIds: [DIRECT_ACCOUNT_ID, PAGE_ACCOUNT_ID], force: true },
+    adminHeaders(),
+  );
+
+  assertEquals(result.status, 200);
+  // The protected account took the accepted lifecycle.
+  assertEquals(current.rpc.includes("write_direct_instagram_account"), true);
+  assertEquals(current.rpc.filter((name) => name === "begin_meta_account_refresh").length, 1);
+  // The Facebook Page without an authority took the legacy path, exactly as
+  // before: no Page capture, no Page reconciliation.
+  assertEquals(current.rpc.includes("write_meta_page_reconciliation_success"), false);
+  assertEquals(current.pageCaptureAccountId, null);
+  assertEquals(current.legacyCalls.includes("refreshFacebookToken"), true);
+  assertEquals(current.legacyCalls.includes("refreshInstagramBusinessToken"), false);
+});
+
+routeTest("a failed authority read never selects the legacy path", async () => {
+  const current = probe({ setting: "legacy", authorityMode: "error" });
+  const handler = await loadHandler(current);
+  const result = await callJson(
+    handler,
+    { accountId: DIRECT_ACCOUNT_ID, force: true },
+    adminHeaders(),
+  );
+
+  assertEquals(result.status >= 500, true);
+  assertEquals(current.legacyCalls.length, 0);
+  assertEquals(current.rpc.includes("begin_meta_account_refresh"), false);
+  assertEquals(
+    current.mutations.some((mutation) => mutation.table === "social_accounts"),
+    false,
+  );
 });
 
 routeTest("an unrelated platform still refreshes in protected mode", async () => {
