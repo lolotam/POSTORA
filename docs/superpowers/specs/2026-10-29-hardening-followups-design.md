@@ -82,6 +82,10 @@ even when Cloudinary — which fetches the URL itself — is the only provider. 
 refused uploads (00:19–00:21) were this cap. The browser path already goes to 20 MB / 500 MB
 (admin-set) because it uploads straight to the provider.
 
+**Provider status (owner, 2026-10-29):** the Cloudinary account is blocked until a paid plan
+exists (free quota used up). Openinary is the main store for every asset, and `cdn_storage` is
+Openinary-only, so C3 is the leg that matters now; C4 keeps working the day Cloudinary returns.
+
 | # | Fix |
 |---|---|
 | C1 | **Cap from the admin limits.** The URL branch reads `media_upload_limits` (same reader as `media-direct-upload`, same fail-closed rule as A5) and caps at `directUploadByteCap(kind, limits)`, further limited to `URL_INGEST_MAX_BYTES` = 95 MB while Openinary sits behind Cloudflare's 100 MB request cap. The refusal names the limit that applied. |
