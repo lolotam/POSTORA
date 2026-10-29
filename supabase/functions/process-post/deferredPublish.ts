@@ -90,6 +90,13 @@ export function giveUpMessage(kind: DeferredKind): string {
   return `${platform} did not finish processing the video within 30 minutes. Safe to retry.`;
 }
 
+/** Why a resumed run settles its row failed without asking Meta again, or null to go on. */
+export function abandonReason(deferral: Deferral, postStatus: string | null, now: Date): string | null {
+  if (isPastGiveUp(deferral, now)) return giveUpMessage(deferral.kind);
+  if (postStatus !== "processing") return "The post was changed while the video was processing. Safe to retry.";
+  return null;
+}
+
 /**
  * The deadline a poller checks against. A resumed run checks once and stops (Meta
  * is asked again next minute); a first run waits while the worker has time.

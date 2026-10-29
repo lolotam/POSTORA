@@ -1,5 +1,5 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { prefixedStream, readPrefix, shouldStreamExternal, STREAM_INGEST_MAX_BYTES, streamIngestCap } from "./urlIngest.ts";
+import { prefixedStream, readPrefix, streamedSourceLength, STREAM_INGEST_MAX_BYTES, streamIngestCap } from "./urlIngest.ts";
 
 const MB = 1024 * 1024;
 
@@ -17,10 +17,10 @@ async function collect(stream: ReadableStream<Uint8Array>): Promise<number[]> {
 }
 
 Deno.test("only a declared length over 10 MB is streamed", () => {
-  assertEquals(shouldStreamExternal(String(10 * MB)), null);
-  assertEquals(shouldStreamExternal(String(10 * MB + 1)), 10 * MB + 1);
-  assertEquals(shouldStreamExternal(null), null);
-  assertEquals(shouldStreamExternal("abc"), null);
+  assertEquals(streamedSourceLength(String(10 * MB)), null);
+  assertEquals(streamedSourceLength(String(10 * MB + 1)), 10 * MB + 1);
+  assertEquals(streamedSourceLength(null), null);
+  assertEquals(streamedSourceLength("abc"), null);
 });
 
 Deno.test("the streamed cap is the admin's limit, held under Cloudflare's", () => {

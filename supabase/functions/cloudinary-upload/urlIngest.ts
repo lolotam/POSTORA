@@ -18,8 +18,8 @@ export const STREAM_INGEST_MAX_BYTES = 95 * 1024 * 1024;
 /** Bytes kept from the start of the body to tell the file's type, as the buffered path does. */
 export const SNIFF_BYTES = 4096;
 
-/** Whether a source that declared this Content-Length goes the streamed way. */
-export function shouldStreamExternal(contentLength: string | null): number | null {
+/** The declared length of a source that goes the streamed way, or null when it is read into memory. */
+export function streamedSourceLength(contentLength: string | null): number | null {
   const declared = Number(contentLength);
   return Number.isSafeInteger(declared) && declared > MEDIA_DECODED_BYTE_CAP ? declared : null;
 }

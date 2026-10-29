@@ -19,7 +19,7 @@ import { getCdnPolicy, orderWriteProviders } from "./providerPolicy.ts";
 import { getTodayFolder, mediaPublicId, sanitizeEmailForFolder } from "./objectNaming.ts";
 import { commitMediaReplace, parseReplaceMediaFileId, prepareMediaReplace, type ReplaceTargetRow, type ReplaceUploadFacts } from "./replace.ts";
 import { deleteJustUploaded, mediaQuotaPreflight, quotaInsertRefusal } from "./mediaQuota.ts";
-import { prefixedStream, readPrefix, shouldStreamExternal, streamIngestCap } from "./urlIngest.ts";
+import { prefixedStream, readPrefix, streamedSourceLength, streamIngestCap } from "./urlIngest.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -501,7 +501,7 @@ export async function handleCloudinaryUpload(req: Request): Promise<Response> {
           );
         }
         externalContentType = res.headers.get("content-type");
-        const streamedLength = shouldStreamExternal(res.headers.get("content-length"));
+        const streamedLength = streamedSourceLength(res.headers.get("content-length"));
         if (streamedLength !== null && res.body) {
           const limits = await readUploadLimits(dbAdmin);
           if (!limits) {

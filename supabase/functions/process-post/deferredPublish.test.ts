@@ -1,5 +1,6 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
+  abandonReason,
   ContainerStillProcessing,
   DEFERRAL_GIVE_UP_MS,
   FIRST_RUN_POLL_BUDGET_MS,
@@ -40,6 +41,14 @@ Deno.test("the deadline is passed at give_up_at, not before", () => {
   assertEquals(isPastGiveUp(deferral, new Date(NOW.getTime() + DEFERRAL_GIVE_UP_MS - 1)), false);
   assertEquals(isPastGiveUp(deferral, new Date(NOW.getTime() + DEFERRAL_GIVE_UP_MS)), true);
   assertEquals(giveUpMessage("threads"), "Threads did not finish processing the video within 30 minutes. Safe to retry.");
+});
+
+Deno.test("a resumed run is abandoned past its deadline or once the post has changed", () => {
+  const deferral = newDeferral("ig_reel", "c-5", NOW);
+  const inTime = new Date(NOW.getTime() + DEFERRAL_GIVE_UP_MS - 1);
+  assertEquals(abandonReason(deferral, "processing", inTime), null);
+  assertEquals(abandonReason(deferral, "processing", new Date(NOW.getTime() + DEFERRAL_GIVE_UP_MS)), giveUpMessage("ig_reel"));
+  assertEquals(abandonReason(deferral, "failed", inTime), "The post was changed while the video was processing. Safe to retry.");
 });
 
 Deno.test("a resumed run checks once; a first run waits within its budget", () => {

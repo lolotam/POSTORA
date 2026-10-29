@@ -98,9 +98,9 @@ import { prepareTikTokReviewPublish, recordReviewPublishId, requiredReviewSubmis
 import { firstPublicPostId } from "../_shared/tiktokPublishOutcome.ts";
 import { classifyContainerStatus, CONTAINER_STATUS_FIELDS, containerFailureMessage, pollContainer } from "../_shared/metaContainerStatus.ts";
 import {
+  abandonReason,
   ContainerStillProcessing,
   giveUpMessage,
-  isPastGiveUp,
   NO_DEFERRAL,
   pollDeadline,
   readDeferral,
@@ -1364,11 +1364,7 @@ Deno.serve(async (req) => {
       }
       // Bounded whatever happens later in this request: a row past its deadline, or on
       // a post someone has since changed, is settled now rather than checked forever.
-      const abandon = isPastGiveUp(deferral, new Date())
-        ? giveUpMessage(deferral.kind)
-        : post.status !== "processing"
-          ? "The post was changed while the video was processing. Safe to retry."
-          : null;
+      const abandon = abandonReason(deferral, post.status, new Date());
       if (abandon) {
         const settled = await settlePlatformPost(supabase, {
           platformPostId: row.id,
