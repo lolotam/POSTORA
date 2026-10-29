@@ -24,9 +24,10 @@ describe("contentRangeHeader", () => {
 
 describe("combinedProgress", () => {
   it("splits the bar evenly between providers uploaded one after another", () => {
-    expect(combinedProgress(0, 0.5, 2)).toBe(25);
-    expect(combinedProgress(1, 0.5, 2)).toBe(75);
-    expect(combinedProgress(0, 1, 1)).toBe(100);
-    expect(combinedProgress(0, 2, 1)).toBe(100);
+    expect(combinedProgress([0.5, 0])).toBe(25);
+    expect(combinedProgress([1, 0.5])).toBe(75);
+    expect(combinedProgress([1])).toBe(100);
+    expect(combinedProgress([2, -1])).toBe(50);
+    expect(combinedProgress([])).toBe(0);
   });
 });

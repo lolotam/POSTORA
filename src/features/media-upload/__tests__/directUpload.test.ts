@@ -97,6 +97,31 @@ describe("uploadLargeMedia", () => {
     }));
   });
 
+  it("uploads to every provider at the same time and reports their mean progress", async () => {
+    const releases: (() => void)[] = [];
+    const reporters: ((fraction: number) => void)[] = [];
+    const postForm = vi.fn<PostForm>((url, _form, { onProgress }) => new Promise((resolve) => {
+      reporters.push((fraction) => onProgress?.(fraction));
+      releases.push(() => resolve(url.startsWith("https://openinary")
+        ? { status: 200, body: { success: true, files: [{ path: STORED_PATH }] } }
+        : { status: 200, body: CLOUDINARY_DONE }));
+    }));
+    const d = deps([OPENINARY_TARGET, { ...CLOUDINARY_TARGET, chunkSize: 100 }], postForm);
+    const progress: number[] = [];
+
+    const upload = uploadLargeMedia(video(20), (p) => progress.push(p), d);
+    await vi.waitFor(() => expect(postForm).toHaveBeenCalledTimes(2));
+    reporters[0](1);
+    reporters[1](0.5);
+    expect(progress.at(-1)).toBe(75);
+    releases.forEach((release) => release());
+    await upload;
+
+    expect(d.invoke).toHaveBeenLastCalledWith(expect.objectContaining({
+      results: { openinary: { path: STORED_PATH }, cloudinary: CLOUDINARY_DONE },
+    }));
+  });
+
   it("does not call complete when no provider took the file", async () => {
     const postForm = vi.fn<PostForm>(async () => ({ status: 413, body: "Request Entity Too Large" }));
     const d = deps([OPENINARY_TARGET], postForm);

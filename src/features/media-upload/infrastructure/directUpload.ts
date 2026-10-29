@@ -72,17 +72,24 @@ export async function uploadLargeMedia(
 
   const results: { openinary?: { path: string }; cloudinary?: CloudinaryResult } = {};
   const failures: Partial<Record<UploadTarget["provider"], string>> = {};
-  const total = started.targets.length;
-  for (const [index, target] of started.targets.entries()) {
-    const report = (fraction: number) => onProgress(combinedProgress(index, fraction, total));
+  // All providers at once: one after another, Cloudinary's signed target could expire
+  // behind a long Openinary leg.
+  const fractions = started.targets.map(() => 0);
+  await Promise.all(started.targets.map(async (target, index) => {
+    const report = (fraction: number) => {
+      fractions[index] = fraction;
+      onProgress(combinedProgress(fractions));
+    };
     try {
       if (target.provider === "openinary") results.openinary = await uploadToOpeninary(target, file, deps.postForm, report);
       else results.cloudinary = await uploadToCloudinary(target, file, deps.postForm, report);
     } catch (error) {
       // One provider failing is not the end: `complete` keeps whichever copy landed.
       failures[target.provider] = (error instanceof Error ? error.message : String(error)).slice(0, 500);
+      // A finished leg, even a failed one, must not hold the bar below 100%.
+      report(1);
     }
-  }
+  }));
   if (!results.openinary && !results.cloudinary) {
     throw new Error(Object.values(failures)[0] || "Upload failed");
   }

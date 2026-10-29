@@ -65,7 +65,7 @@ Files: `src/features/media-upload/{ui/useMediaUploadLimits.ts, infrastructure/di
 `src/components/admin/settings/MediaUploadLimitsSettings.tsx`, tests, locale files.
 
 1. **A9** the hook exposes `isLoading`/`isError`/`refetch`; the editor disables the selects and Save until loaded, and shows an error with Retry.
-2. **A10** targets uploaded with `Promise.all`; progress = mean of fractions; one failure aborts the others.
+2. **A10** targets uploaded with `Promise.all`; progress = mean of fractions; a failed leg still lets the others finish (as today, `complete` keeps whichever copy landed).
 3. Tests: Save disabled while loading and on error; two targets run concurrently (fake XHR); progress mean.
 4. Commit: `fix(media): guard the limits editor and upload targets in parallel`.
 

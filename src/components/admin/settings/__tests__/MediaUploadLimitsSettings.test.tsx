@@ -4,10 +4,12 @@ import { MediaUploadLimitsSettings } from "../MediaUploadLimitsSettings";
 
 const toast = vi.hoisted(() => vi.fn());
 const mutate = vi.hoisted(() => vi.fn());
+const retry = vi.hoisted(() => vi.fn());
+const limitsState = vi.hoisted(() => ({ status: "ready" as "loading" | "error" | "ready" }));
 
 vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast }) }));
 vi.mock("@/features/media-upload", () => ({
-  useMediaUploadLimits: () => ({ image_max_mb: 20, video_max_mb: 500 }),
+  useMediaUploadLimitsState: () => ({ limits: { image_max_mb: 20, video_max_mb: 500 }, status: limitsState.status, retry }),
   useSaveMediaUploadLimits: () => ({ mutate, isPending: false }),
 }));
 
@@ -15,6 +17,8 @@ vi.mock("@/features/media-upload", () => ({
 beforeEach(() => {
   toast.mockClear();
   mutate.mockReset();
+  retry.mockReset();
+  limitsState.status = "ready";
   Element.prototype.hasPointerCapture ??= () => false;
   Element.prototype.releasePointerCapture ??= () => {};
   Element.prototype.scrollIntoView ??= () => {};
@@ -52,5 +56,23 @@ describe("MediaUploadLimitsSettings", () => {
 
     expect(mutate).toHaveBeenCalledWith({ image_max_mb: 20, video_max_mb: 2000 }, expect.anything());
     await waitFor(() => expect(toast).toHaveBeenCalledWith({ title: "Upload limits saved" }));
+  });
+
+  it("keeps the selects and Save off while the stored limits load", () => {
+    limitsState.status = "loading";
+    render(<MediaUploadLimitsSettings />);
+    expect(screen.getByRole("combobox", { name: "Maximum video size" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save limits" })).toBeDisabled();
+    expect(screen.getByText("Loading the current limits…")).toBeInTheDocument();
+  });
+
+  it("offers a retry instead of saving the fallback when the limits cannot be read", () => {
+    limitsState.status = "error";
+    render(<MediaUploadLimitsSettings />);
+    expect(screen.getByRole("combobox", { name: "Maximum image size" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save limits" })).toBeDisabled();
+    expect(screen.getByRole("alert")).toHaveTextContent("Could not load the current limits.");
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+    expect(retry).toHaveBeenCalled();
   });
 });
