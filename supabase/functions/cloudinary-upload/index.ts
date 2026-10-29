@@ -598,7 +598,7 @@ export async function handleCloudinaryUpload(req: Request): Promise<Response> {
 
     // Postora naming convention: postora_<date>_<userId>_<seq>
     // Sequence numbers are allocated atomically per user per day, so concurrent
-    // uploads never collide (Cloudinary uploads run with overwrite=true).
+    // uploads never collide (and Cloudinary runs with overwrite=false, so one never replaces another).
     const { data: seq, error: seqError } = await dbClient.rpc("next_media_seq", {
       p_user_id: userId,
       p_upload_date: todayDate,
@@ -653,10 +653,11 @@ export async function handleCloudinaryUpload(req: Request): Promise<Response> {
             console.error("Openinary upload failed:", openResult.error);
           }
         } else if (provider === "cloudinary") {
-          // Build signature string - use overwrite to allow replacing duplicates
+          // Signed with overwrite=false, as the browser-direct path is: an object already
+          // stored under this public id is kept, never replaced.
           const signatureParams = [
             `folder=${folder}`,
-            `overwrite=true`,
+            `overwrite=false`,
             `public_id=${uniquePublicId}`,
             `timestamp=${timestamp}`,
           ].sort().join("&");
@@ -681,12 +682,20 @@ export async function handleCloudinaryUpload(req: Request): Promise<Response> {
           formData.append("signature", signature);
           formData.append("folder", folder);
           formData.append("public_id", uniquePublicId);
-          formData.append("overwrite", "true");
+          formData.append("overwrite", "false");
 
           console.log(`Uploading to Cloudinary: ${uploadUrl}`);
           const uploadResponse = await fetch(uploadUrl, { method: "POST", body: formData });
           if (uploadResponse.ok) {
-            cloudinaryResult = await uploadResponse.json();
+            const uploaded = await uploadResponse.json();
+            // Every call allocates a fresh public id, so an existing object is a collision,
+            // not this upload: report it rather than register someone else's bytes.
+            if (uploaded?.existing === true) {
+              errors.push("cloudinary: an object with this name already exists");
+              console.error(`Cloudinary refused to overwrite ${uniquePublicId}`);
+              continue;
+            }
+            cloudinaryResult = uploaded;
             storedIn.push("cloudinary");
             console.log(`Cloudinary upload successful: ${cloudinaryResult.secure_url}`);
           } else {

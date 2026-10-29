@@ -16,7 +16,7 @@ const CLOUDINARY_TARGET = {
   url: "https://api.cloudinary.com/v1_1/demo/video/upload",
   fileField: "file",
   chunkSize: 20,
-  fields: { api_key: "k", timestamp: "1", signature: "s", folder: "media/u/2026-10-29", public_id: "postora_x_1", overwrite: "true" },
+  fields: { api_key: "k", timestamp: "1", signature: "s", folder: "media/u/2026-10-29", public_id: "postora_x_1", overwrite: "false" },
 };
 
 const CLOUDINARY_DONE = { public_id: "media/u/2026-10-29/postora_x_1", version: 7, signature: "abc", secure_url: "https://res.cloudinary.com/x.mp4", bytes: 45 };

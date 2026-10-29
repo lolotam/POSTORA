@@ -92,7 +92,8 @@ export async function cloudinaryUploadTarget(input: {
   // Same signed parameters as the edge-function upload, so both paths name objects identically.
   const signed = [
     `folder=${input.folder}`,
-    "overwrite=true",
+    // false: once `complete` has verified an object, a replayed signed target cannot replace it.
+    "overwrite=false",
     `public_id=${input.publicId}`,
     `timestamp=${input.timestamp}`,
   ].sort().join("&");
@@ -107,7 +108,7 @@ export async function cloudinaryUploadTarget(input: {
       signature: await cloudinarySignature(signed + input.apiSecret),
       folder: input.folder,
       public_id: input.publicId,
-      overwrite: "true",
+      overwrite: "false",
     },
   };
 }
@@ -129,6 +130,67 @@ export async function isGenuineCloudinaryResult(
 ): Promise<boolean> {
   const expected = await cloudinarySignature(`public_id=${result.public_id}&version=${result.version}${apiSecret}`);
   return constantTimeEqual(expected, result.signature.toLowerCase());
+}
+
+export interface CloudinaryAsset {
+  public_id: string;
+  version: number;
+  secure_url: string;
+  bytes: number;
+  width?: number;
+  height?: number;
+  format?: string;
+  duration?: number;
+}
+
+/**
+ * The asset as Cloudinary's Admin API describes it. The browser's upload response is
+ * signed only over public_id and version, so its URL and size are never stored as given.
+ */
+export async function fetchCloudinaryAsset(
+  credentials: { cloudName: string; apiKey: string; apiSecret: string },
+  resourceType: "image" | "video",
+  publicId: string,
+  fetcher: typeof fetch = fetch,
+): Promise<{ ok: true; asset: CloudinaryAsset } | { ok: false; error: string }> {
+  const url = `https://api.cloudinary.com/v1_1/${credentials.cloudName}/resources/${resourceType}/upload/${publicId.split("/").map(encodeURIComponent).join("/")}`;
+  try {
+    const response = await fetcher(url, {
+      headers: { Authorization: `Basic ${btoa(`${credentials.apiKey}:${credentials.apiSecret}`)}` },
+      signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS),
+    });
+    if (response.status === 404) return { ok: false, error: "cloudinary: object not found after upload" };
+    const body = await response.json().catch(() => null);
+    if (!response.ok || !body) return { ok: false, error: `cloudinary: could not confirm the upload (HTTP ${response.status})` };
+    if (typeof body.secure_url !== "string" || !Number.isFinite(body.bytes) || !Number.isFinite(Number(body.version))) {
+      return { ok: false, error: "cloudinary: could not confirm the upload (incomplete asset details)" };
+    }
+    return {
+      ok: true,
+      asset: {
+        public_id: String(body.public_id ?? publicId),
+        version: Number(body.version),
+        secure_url: body.secure_url,
+        bytes: body.bytes,
+        width: Number.isFinite(body.width) ? body.width : undefined,
+        height: Number.isFinite(body.height) ? body.height : undefined,
+        format: typeof body.format === "string" ? body.format : undefined,
+        duration: Number.isFinite(body.duration) ? body.duration : undefined,
+      },
+    };
+  } catch (error) {
+    return { ok: false, error: `cloudinary: could not confirm the upload (${error instanceof Error ? error.message : String(error)})` };
+  }
+}
+
+/**
+ * Whether Cloudinary's own description matches what this session signed for: the same
+ * version the signed response named, and no more bytes than the size checked at `start`.
+ */
+export function cloudinaryAssetMismatch(asset: CloudinaryAsset, signedVersion: number | string, declaredSize: number): string | null {
+  if (String(asset.version) !== String(signedVersion)) return "cloudinary: the stored object changed after upload";
+  if (asset.bytes > declaredSize) return `cloudinary: stored ${asset.bytes} bytes, more than the ${declaredSize} declared`;
+  return null;
 }
 
 /** The object Openinary holds at exactly this path and size, or why it does not count. */

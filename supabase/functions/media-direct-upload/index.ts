@@ -23,8 +23,10 @@ import { getCdnPolicy } from "../cloudinary-upload/providerPolicy.ts";
 import { getTodayFolder, mediaPublicId, sanitizeEmailForFolder } from "../cloudinary-upload/objectNaming.ts";
 import { cloudinaryPublicIdMatches, planDirectUpload } from "./plan.ts";
 import {
+  cloudinaryAssetMismatch,
   cloudinaryUploadTarget,
   confirmOpeninaryObject,
+  fetchCloudinaryAsset,
   isGenuineCloudinaryResult,
   openinaryUploadBaseUrl,
   openinaryUploadTarget,
@@ -51,7 +53,8 @@ const CloudinaryResultSchema = z.object({
   public_id: z.string().min(1),
   version: z.union([z.number(), z.string()]),
   signature: z.string().min(1),
-  secure_url: z.string().url(),
+  // Only public_id and version are signed; the stored URL and size come from the Admin API.
+  secure_url: z.string().url().optional(),
   bytes: z.number().int().nonnegative().optional(),
   width: z.number().optional(),
   height: z.number().optional(),
@@ -218,8 +221,14 @@ async function handleComplete(req: Request, input: z.infer<typeof CompleteSchema
     if (result && credentials) {
       const genuine = await isGenuineCloudinaryResult(result, credentials.apiSecret);
       const ours = cloudinaryPublicIdMatches(result.public_id, session.publicId);
-      if (genuine && ours) cloudinary = result;
-      else errors.push(`cloudinary: ${genuine ? "result is for another object" : "result signature does not match"}`);
+      if (!genuine || !ours) {
+        errors.push(`cloudinary: ${genuine ? "result is for another object" : "result signature does not match"}`);
+      } else {
+        const confirmed = await fetchCloudinaryAsset(credentials, session.kind === "video" ? "video" : "image", result.public_id);
+        const mismatch = confirmed.ok ? cloudinaryAssetMismatch(confirmed.asset, result.version, session.size) : confirmed.error;
+        if (confirmed.ok && !mismatch) cloudinary = confirmed.asset;
+        else errors.push(mismatch!);
+      }
     } else {
       errors.push(failureFor("cloudinary"));
     }
