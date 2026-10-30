@@ -111,6 +111,7 @@ import {
   type ResumeContext,
   unfinishedError,
 } from "./deferredPublish.ts";
+import { claimFinalNotification } from "./finalNotification.ts";
 import { recordPublishedStory } from "./instagramStory.ts";
 import {
   buildWebhookResults,
@@ -1292,6 +1293,30 @@ function sendFinalNotifications(
   }
 }
 
+/**
+ * Announce a final post once. Every path that makes a post final (the first run, a resumed run,
+ * a given-up account) goes through here: the claim is atomic, so two runs that settle the last
+ * rows at the same moment cannot both send. Returns whether this run sent.
+ */
+async function announceFinalPost(
+  supabase: SupabaseClient,
+  post: PostData,
+  finalStatus: string,
+  platformResults: PlatformResultSummary[],
+  hasFailed: boolean,
+): Promise<boolean> {
+  const claim = await claimFinalNotification(supabase, post.id);
+  if (claim.error) {
+    // The claim could not be made. A notice sent twice is better than one never sent.
+    console.error(`[process-post] final-notification claim failed, sending anyway: ${claim.error}`);
+  } else if (!claim.claimed) {
+    console.log(`[process-post] post ${post.id} was already announced; not sending again`);
+    return false;
+  }
+  sendFinalNotifications(supabase, post, finalStatus, platformResults, hasFailed);
+  return true;
+}
+
 /** The reads readPostOutcome needs, against the service-role client. */
 function postReaderFor(supabase: SupabaseClient): PostReader {
   return {
@@ -1321,8 +1346,8 @@ async function finishDeferredPost(
     return { finalStatus: "processing", notified: false };
   }
   if (outcome.degraded) console.warn(`[process-post] notifying with a partial read: ${outcome.degraded}`);
-  sendFinalNotifications(supabase, post, outcome.status, outcome.results, outcome.hasFailed);
-  return { finalStatus: outcome.status, notified: true };
+  const notified = await announceFinalPost(supabase, post, outcome.status, outcome.results, outcome.hasFailed);
+  return { finalStatus: outcome.status, notified };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -2056,7 +2081,7 @@ Deno.serve(async (req) => {
     // Step 6: Send webhook notifications (non-blocking)
     // ─────────────────────────────────────────────────────────────────────
     if (notify) {
-      sendFinalNotifications(supabase, post, finalStatus, platformResults, hasFailed);
+      await announceFinalPost(supabase, post, finalStatus, platformResults, hasFailed);
     }
 
     // ─────────────────────────────────────────────────────────────────────
