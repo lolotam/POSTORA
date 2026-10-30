@@ -14,12 +14,14 @@ Date: 2026-10-30. Status: documentation only; numbered work below requires a fut
 
 Read [ARCHITECTURE.md](../../ARCHITECTURE.md) in full, especially §0, §1, §3–4, §12–17, §23–28, §31–39 and §45–46; [CLAUDE.md](../../CLAUDE.md), [AGENTS.md](../../AGENTS.md), [PROJECT_AGENT.md](../../PROJECT_AGENT.md) and any directory instructions before implementation. Consult the earlier [intake](2026-10-28-instagram-owner-intake.md), [Page reconciliation](2026-10-28-meta-page-token-reconciliation.md) and [worker](2026-10-29-instagram-owner-collection-worker.md) plans for test-contract lineage, not current deployment status.
 
-Execute **one numbered task at a time**, freeze its evidence and review before starting the next. Do not dispatch all tasks in parallel or change another task's product files to turn a blocked test green. No delegation/model choice is authorized by this document. The present request authorizes only this plan, its spec and their local commit; that specific commit instruction overrides the historical no-commit delegate constraint for this authoring delivery.
+Execute **one numbered task at a time**, freeze its evidence and review before starting the next. Do not dispatch all tasks in parallel or change another task's product files to turn a blocked test green. No delegation/model choice is authorized by this document.
 
 ## Global constraints — parent §4, quoted verbatim
 
 1. Read `AGENTS.md`, `CLAUDE.md`, `ARCHITECTURE.md` (§3–4, §12–17, §23–28, §31–39), `PROJECT_AGENT.md`, this plan and the source spec before changing code. Follow directory-scoped instructions.
 2. Implement only the numbered task(s) assigned. Do not commit, push, merge, deploy, run production SQL, modify secrets or touch the standalone n8n node repository. The orchestrator reviews and commits scoped files.
+
+> These constraints bind a **delegated implementer**. The orchestrating session still follows the full CLAUDE.md Task Execution Workflow (mem0 recall and save, brainstorming, guard pass, scoped local commit); nothing in this plan replaces or waives it.
 3. Preserve unrelated user work and existing API behavior. No broad refactors, platform-version migration, scraping index, Facebook insights, hashtag search, Ad Library, or optional work without explicit approval.
 4. Derive caller identity from verified auth. Service-role reads and writes must structurally enforce resource ownership, including denormalized user IDs and post/account links. RLS alone does not protect service-role work.
 5. Null means unavailable, never zero. Failed reads/writes are failures, never empty data or successful syncs. Validate untrusted inputs/responses, sanitize client errors, redact logs, and log every refusal/early exit.
@@ -194,8 +196,14 @@ docker run -d --name postora-task11-sql --network none \
   supabase/postgres:17.6.1.158 \
   -c cron.database_name=instagram_release_harness \
   -c shared_preload_libraries=pg_cron,pg_net,pgsodium,supabase_vault
-docker inspect --format '{{.State.Health.Status}}' postora-task11-sql
-# Continue only when healthy; bound health checks and retain startup failures.
+# Wait for a healthy database (at most 120 s); stop on unhealthy or timeout.
+for _ in $(seq 1 60); do
+  status=$(docker inspect --format '{{.State.Health.Status}}' postora-task11-sql)
+  [ "$status" = healthy ] && break
+  [ "$status" = unhealthy ] && { docker logs postora-task11-sql; exit 1; }
+  sleep 2
+done
+[ "$status" = healthy ] || { echo "postora-task11-sql not healthy after 120 s"; docker logs postora-task11-sql; exit 1; }
 docker exec -e HARNESS_DB_NAME=instagram_release_harness postora-task11-sql \
   bash -c "cd /repo && bash scripts/db-harness.sh 'postgres://supabase_admin:postgres@localhost:5432/postgres'"
 ```
@@ -241,7 +249,7 @@ Graph update applies after implementation code changes, not this two-document ta
 
 The exact procedure/checklists are in [spec §5–6](../specs/2026-10-30-instagram-release-gates.md#5-deployment-manifest-and-rollback-contract) and the existing deployment runbook. Future actions proceed: approved manifest/schema preflight and manual missing migrations → immutable function/shared deployment and boot → pilot user list → approved reconnect → login/refresh/approved posting checks → reviewed single-account collection prerequisite and pilot → competitor pilot → approved all-eligible collection/schedules → retention dry run and separately approved deletion → observation/acceptance. **Waleed must approve each B–E action against its preceding evidence.** None is executed by authoring or implementing Task 11 tests/docs.
 
-Do not treat main's existing merges, automatic frontend deploy or edge reconciler as migration/activation evidence. Do not push/merge dependent runtime before schema readiness. The proposed C1 schedule and per-account eligibility dependency are not permission to change production or switch the global credential mode. Rollback preserves protected authority and retained history as specified; it never restores exposed tokens.
+Do not treat main's existing merges, automatic frontend deploy or edge reconciler as migration/activation evidence. Do not push/merge dependent runtime before schema readiness. The proposed collection-cron migration (C1 in the spec's migration table, not the C1 reconnect gate) and the per-account eligibility dependency are not permission to change production or switch the global credential mode. Rollback preserves protected authority and retained history as specified; it never restores exposed tokens.
 
 ## Open questions for Waleed
 
@@ -255,6 +263,4 @@ Required documentation checks: compare all source/T8 IDs to the matrix; verify s
 
 Authoring results: all 78 expected IDs are present exactly once with the recorded counts; the parent quotation matches; local links and qualified file/line targets resolve; all 16 migration entries are ordered, with the first 11 verified in inspected main, M1 present on this branch and M2–M4/C1 absent/proposed. Recursive local-import inspection found 50 shared modules and no unresolved local imports in the inspected runtime set. Manual source/authorization/proposed-path review completed. `git diff --check` and `git diff --cached --check` passed; staged scope is exactly the two requested documents. An initial validation script failed to match a Unicode heading through the shell encoding; the corrected UTF-8 run passed without changing the requirements. These are documentation checks, not application or live-provider test results.
 
-Session tooling limits: mem0 recall/save and named brainstorming/guard tools were unavailable; a bounded local skill search found no brainstorming skill. Manual requirements/design and documentation review were used, not represented as named-skill passes. Graph CLI was unavailable; a read-only graph adjacency lookup supplied orientation, then actual source inspection supplied current facts. Production/test guards are not applicable to this documentation-only diff. No code change means no graph update is required. No memory save is claimed.
-
-Commit only this plan and `docs/specs/2026-10-30-instagram-release-gates.md` with message `docs: specify Instagram release gates and journeys (Task 11)` and trailer `Co-Authored-By: Codex <noreply@openai.com>`, using `git commit -- <the two paths>`. Report commit, document summaries, status counts, deployment manifest and open questions/defaults. Then **STOP**. No implementation, Arabic journey file, push, PR, merge, production access, secret read, deployment or activation in this authoring task.
+This is an authoring record only. It instructs no reader to commit, push, merge, deploy or stop; those steps follow the repository workflow and Waleed's approvals.
