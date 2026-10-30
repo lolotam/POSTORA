@@ -45,7 +45,7 @@ Each mode is exactly `off|allowlist|all`. Owner entries are internal `social_acc
 
 Effective permission is the intersection of master-enabled, valid policy membership and live target/credential eligibility. A missing policy means off; a failed/malformed read means configuration unavailable, never off-as-success or all. Master missing/false refuses before touching new rollout/job/credential schema. Master malformed/unreadable refuses with `settings_unavailable`. Neither missing setting nor a failed lookup may enable work. Migrations insert default policy only if absent and never overwrite an operator's existing value.
 
-Only existing trusted admin/service configuration paths may write this key. Ordinary authenticated and anonymous clients cannot read/write it; test actual table policies and grants. No UI or general-purpose new configuration endpoint is in scope. An admin JWT may invoke a privileged drain but cannot bypass the policy. Audit the policy change with actor, timestamp and a server-computed canonical policy fingerprint; never accept a fingerprint or eligibility boolean supplied by a caller.
+Writes go only through one service-only RPC, `set_instagram_collection_rollout_policy(p_expected_fingerprint text, p_policy jsonb)`. It locks the `app_settings` row, refuses with a typed `policy_stale` when the stored canonical fingerprint differs from the expected one, validates and canonicalizes the new value, and commits the policy change audit in the same transaction. The existing admin `app_settings` upserts are last-write-wins, so they must not write this key: a trigger refuses any other write to it. A stale edit after a rollback therefore cannot restore a removed allowlist member. Ordinary authenticated and anonymous clients cannot read/write it; test actual table policies and grants. No UI or general-purpose new configuration endpoint is in scope. An admin JWT may invoke a privileged drain but cannot bypass the policy. Audit the policy change with actor, timestamp and a server-computed canonical policy fingerprint; never accept a fingerprint or eligibility boolean supplied by a caller.
 
 ### Enforcement sites
 
@@ -118,11 +118,11 @@ Exact proposed migrations, checked against this worktree's migration filenames a
 
 | Order | ID and filename | Owns |
 |---|---|---|
-| R1 | `20261030133000_instagram_collection_rollout_controls.sql` | Policy default/evaluator, SQL admission and provider/write fences, refusal audit integration. |
-| R2 | `20261030134000_instagram_collection_daily_dispatch.sql` | Durable sweep relation, bounded atomic daily-page RPC and ACLs. |
-| C1 | `20261030140000_instagram_collection_cron.sql` | Four inactive jobs; retains Task 11's existing reservation. |
+| R1 | *unassigned* `_instagram_collection_rollout_controls.sql` | Policy default/evaluator, SQL admission and provider/write fences, refusal audit integration. |
+| R2 | *unassigned* `_instagram_collection_daily_dispatch.sql` | Durable sweep relation, bounded atomic daily-page RPC and ACLs. |
+| C1 | *unassigned* `_instagram_collection_cron.sql` | Four inactive jobs. |
 
-R1/R2 precede C1 and follow Task 8's reserved M4 `20261030130000`; no existing migration bytes change. Recheck filename and documentation collisions at implementation and against the applied ledger before a separately approved release. M1's v2 writer exists here; M2–M4 remain other-task dependencies, not permission to invent their delivery.
+Each version is assigned when its task creates the file: unused in `supabase/migrations/`, newer than every migration on main and the harness baseline marker at that time, and in the order R1 < R2 < C1. `20261030140000` and `20261030150000` are already taken on main (`sweep_ai_image_staging_cron`, `record_published_story`), so no 20261030 slot is reserved. No existing migration bytes change. Recheck filename and documentation collisions at implementation and against the applied ledger before a separately approved release. M1–M4 are on main since #306; they remain Task 8's contracts.
 
 | Job name | UTC cadence | Endpoint/body |
 |---|---|---|
@@ -172,6 +172,7 @@ All IDs below are proposed implementation gates; none is a test pass in this doc
 | RC-14 | Stored owner/competitor reports remain readable under existing authorization when collection is off/excluded; successful existing DTOs/throttles/force semantics preserved. No quota bypass, history deletion, scheduled Apify or provider call from a report. |
 | RC-15 | Rollback with a live lease and request preserves snapshots/credentials, blocks subsequent permits/results, then demonstrates quiescence and safe scoped resume. Tested last-good runtime contains rollout checks. |
 | RC-16 | Reachable index→dispatcher/worker→SQL→provider guard chains, complete Deno/SQL/typecheck and relevant existing regression gates, exact migration/type/ACL manifest, immutable evidence and unresolved live approvals handed to Task 11. No mocked proof is labeled live Meta evidence. |
+| RC-17 | Two sessions read the same policy fingerprint; one removes an allowlist member and commits, the other then adds a different entry with the stale fingerprint and gets `policy_stale`, so the removed member stays removed. A direct `app_settings` write to the key is refused; the audit row commits with the change, or not at all. |
 
 ## 8. Open questions for Waleed
 
