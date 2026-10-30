@@ -4336,25 +4336,37 @@ async function postToInstagram(
     }
   }
 
+  // A retry whose feed post or reel is not published again still owes its "Also share to Story"
+  // mirror when no row records it. The mirror is recorded as its own row, so a later retry sees it
+  // and never mirrors it twice.
+  const mirrorStoryOnRetry = async () => {
+    if (!shareToStory || igPostTypes.includes("story") || retry.storyRecorded) return;
+    const mirror = await publishIgStoryFromMedia();
+    const recordError = mirror && recordStory ? await recordStory(mirror) : null;
+    if (mirror && recordError) {
+      console.error(`[IG story] mirror published but not recorded: ${recordError}`);
+      warnings.push("The Instagram Story was published but could not be recorded.");
+      unrecordedStory = mirror;
+    }
+  };
+
   // This post's own row already records the feed post or reel: it is done, and that row stays the
-  // record. Counted as a success, nothing new is written (the story step above ran).
+  // record. What this retry owes is the story.
   if (retry.feedRecorded && !igPostTypes.every((type) => type === "story")) {
+    await mirrorStoryOnRetry();
+    // The story this retry was for failed again: a failure, not the feed's old success.
+    if (igPostTypes.includes("story") && !retry.storyRecorded && igAllResults.length === 0) {
+      throw new Error(warnings.join("; ") || "Instagram Story failed");
+    }
+    // A live story without its own row goes to the main loop, which records and logs it.
+    if (unrecordedStory) return { id: unrecordedStory.id, url: unrecordedStory.url, warnings, ...{ unrecorded_story: unrecordedStory } };
     return { selfWroteRows: true, subResults: [{ subtype: "feed", status: "success" }], warnings } as PlatformPostResult;
   }
 
   // The feed post or reel is already live: recorded, not posted again (the story step above ran).
   if (live) {
     // Its publish went unanswered, so the run that published it never mirrored it to the Story.
-    // The mirror is recorded as its own row, so a later retry sees it and never mirrors it twice.
-    if (shareToStory && !igPostTypes.includes("story") && !retry.storyRecorded) {
-      const mirror = await publishIgStoryFromMedia();
-      const recordError = mirror && recordStory ? await recordStory(mirror) : null;
-      if (mirror && recordError) {
-        console.error(`[IG story] mirror published but not recorded: ${recordError}`);
-        warnings.push("The Instagram Story was published but could not be recorded.");
-        unrecordedStory = mirror;
-      }
-    }
+    await mirrorStoryOnRetry();
     const carried = unrecordedStory ? { unrecorded_story: unrecordedStory } : {};
     return live.kind === "already_live"
       ? { id: live.media.id, url: live.media.permalink ?? profileUrl, warnings: [...warnings, ALREADY_LIVE_MESSAGE], ...carried }
@@ -5450,11 +5462,9 @@ async function postToInstagramBusinessLogin(
   }
 
   // ─── Aggregate ─────────────────────────────────────────────────────────────
-  // A retry whose every part an earlier run already recorded has nothing left to write.
-  if (subResults.length === 0 && feedDone) {
-    // Counted as a success (its rows already say so); nothing new is written.
-    return { selfWroteRows: true, subResults: [{ subtype: "feed", status: "success" }], warnings } as PlatformPostResult;
-  }
+  // The feed post or reel an earlier run recorded still counts as this account's success, whatever
+  // this retry's story did (its row already says so; nothing new is written).
+  if (feedDone) subResults.push({ subtype: "feed", status: "success" });
   if (subResults.length === 0) {
     throw new Error("Instagram: no post type matched (selected: " + JSON.stringify(blPostTypes) + ")");
   }
