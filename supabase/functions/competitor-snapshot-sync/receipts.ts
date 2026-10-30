@@ -18,15 +18,19 @@
 
 import type {
   CompetitorCoverageGapReason,
+  CompetitorEnqueueRefusalReason,
   CompetitorOutcome,
   CompetitorReasonCode,
   CompetitorResultPayload,
   CompetitorSource,
   EnqueueReceipt,
+  EnqueueRefusedProjection,
   OwnerStatusProjection,
   PersistResultReceipt,
   PersistedCompetitorCoverage,
 } from "./types.ts";
+
+import { COMPETITOR_ENQUEUE_REFUSAL_REASONS } from "./types.ts";
 
 const UUID_PATTERN =
   /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
@@ -241,6 +245,60 @@ function isJobStatus(value: unknown): value is (typeof JOB_STATUSES)[number] {
 // ---------------------------------------------------------------------------
 // The owner enqueue receipt
 // ---------------------------------------------------------------------------
+
+/**
+ * The exact key set of the rollout refusal.
+ *
+ * The accepted SQL answers a definite rollout refusal with
+ * `{accepted:false, refused:true, reason_code, captured_on}`. It is a
+ * closed projection, so an extra key means a different deployment and is
+ * refused instead of being read loosely.
+ */
+const ENQUEUE_REFUSED_KEYS = [
+  "accepted",
+  "refused",
+  "reason_code",
+  "captured_on",
+] as const;
+
+/**
+ * Parses the rollout refusal.
+ *
+ * The receipt must say `refused: true` and carry one of the closed reason
+ * codes. A reason code this contract does not know is not a refusal: the
+ * statement may have committed, so the outcome is indeterminate and it is
+ * never reported as a refusal.
+ */
+export function parseEnqueueRefusal(
+  value: unknown,
+): EnqueueRefusedProjection | null {
+  if (!isPlainRecord(value)) return null;
+  if (!hasExactKeys(value, ENQUEUE_REFUSED_KEYS)) return null;
+
+  const accepted = readOwnData(value, "accepted");
+  if (!accepted.present || accepted.value !== false) return null;
+
+  const refused = readOwnData(value, "refused");
+  if (!refused.present || refused.value !== true) return null;
+
+  const reasonCode = readOwnData(value, "reason_code").value;
+  if (
+    typeof reasonCode !== "string" ||
+    !(COMPETITOR_ENQUEUE_REFUSAL_REASONS as readonly string[]).includes(reasonCode)
+  ) {
+    return null;
+  }
+
+  const capturedOn = readOwnData(value, "captured_on").value;
+  if (!isDate(capturedOn)) return null;
+
+  return {
+    accepted: false,
+    refused: true,
+    reason_code: reasonCode as CompetitorEnqueueRefusalReason,
+    captured_on: capturedOn,
+  };
+}
 
 export function parseEnqueueReceipt(
   value: unknown,
@@ -647,6 +705,162 @@ export function parseCoverageResultReceipt(
     capturedAt: null,
     coverage: null,
   };
+}
+
+// ---------------------------------------------------------------------------
+// The provider permit
+// ---------------------------------------------------------------------------
+
+/**
+ * The exact key sets of the provider permit.
+ *
+ * The permit is a closed projection built by `jsonb_build_object`, so an
+ * extra key means a different deployment and a missing key means the answer
+ * is not the permit. Both are refused instead of being read loosely.
+ */
+const PROVIDER_PERMIT_ALLOWED_KEYS = [
+  "allowed",
+  "job_id",
+  "target_kind",
+  "target_id",
+  "viewer_social_account_id",
+  "job_generation",
+  "credential_generation",
+  "policy_fingerprint",
+] as const;
+
+const PROVIDER_PERMIT_REFUSED_KEYS = ["allowed", "reason_code"] as const;
+
+/**
+ * The refusal reasons the accepted SQL returns.
+ *
+ * The set is closed. An unknown reason is NOT a refusal this contract
+ * knows: it is unavailable, never permission. A reason that is not in this
+ * list can never turn into a provider request.
+ */
+export const PROVIDER_PERMIT_REFUSAL_REASONS = [
+  "invalid_request",
+  "job_not_found",
+  "claim_stale",
+  "credential_changed",
+  "target_inactive",
+  "context_missing",
+  "context_unusable",
+  "collection_not_eligible",
+  "collection_disabled",
+  "settings_unavailable",
+  "not_authorized",
+] as const;
+
+export type ProviderPermitRefusalReason =
+  (typeof PROVIDER_PERMIT_REFUSAL_REASONS)[number];
+
+export function isProviderPermitRefusalReason(
+  value: unknown,
+): value is ProviderPermitRefusalReason {
+  return typeof value === "string" &&
+    (PROVIDER_PERMIT_REFUSAL_REASONS as readonly string[]).includes(value);
+}
+
+/** The SHA-256 fingerprint of the policy document. Audit evidence only. */
+const POLICY_FINGERPRINT_PATTERN = /^[0-9a-f]{64}$/;
+
+/** A granted permit. */
+export interface AllowedProviderPermit {
+  readonly allowed: true;
+  readonly jobId: string;
+  readonly targetKind: string;
+  readonly targetId: string;
+  readonly viewerSocialAccountId: string | null;
+  readonly jobGeneration: number;
+  readonly credentialGeneration: number | null;
+  /** The server-computed policy fingerprint. It is never an authorization token. */
+  readonly policyFingerprint: string | null;
+}
+
+/** A refused permit. */
+export interface RefusedProviderPermit {
+  readonly allowed: false;
+  readonly reasonCode: ProviderPermitRefusalReason;
+}
+
+export type ProviderPermit = AllowedProviderPermit | RefusedProviderPermit;
+
+/**
+ * Parses the provider permit and binds it to the request.
+ *
+ * The permit must name the SAME job, the SAME generation, the SAME target
+ * and the SAME bound viewer the request asked for: a permit for another job
+ * is not evidence that THIS job may spend a provider call, and a permit
+ * without the pinned viewer is not evidence that the approved viewer is the
+ * one that would be used.
+ *
+ * A malformed answer, an extra key, a missing key, a mismatched identity
+ * and an unknown reason are ALL unavailable. None of them is permission.
+ */
+export function parseProviderPermit(
+  value: unknown,
+  request: {
+    readonly jobId: string;
+    readonly jobGeneration: number;
+    readonly targetId: string;
+    readonly viewerSocialAccountId: string;
+  },
+): ProviderPermit | null {
+  if (!isPlainRecord(value)) return null;
+
+  const allowed = readOwnData(value, "allowed");
+  if (!allowed.present || typeof allowed.value !== "boolean") return null;
+
+  if (allowed.value === false) {
+    if (!hasExactKeys(value, PROVIDER_PERMIT_REFUSED_KEYS)) return null;
+    const reasonCode = readOwnData(value, "reason_code").value;
+    if (!isProviderPermitRefusalReason(reasonCode)) return null;
+    return { allowed: false, reasonCode };
+  }
+
+  if (!hasExactKeys(value, PROVIDER_PERMIT_ALLOWED_KEYS)) return null;
+
+  const jobId = readOwnData(value, "job_id").value;
+  if (!isUuidText(jobId) || !sameUuid(jobId, request.jobId)) return null;
+
+  const jobGeneration = readOwnData(value, "job_generation").value;
+  if (!isPositiveSafeInteger(jobGeneration)) return null;
+  if (jobGeneration !== request.jobGeneration) return null;
+
+  const targetKind = readOwnData(value, "target_kind").value;
+  if (targetKind !== "competitor") return null;
+
+  const targetId = readOwnData(value, "target_id").value;
+  if (!isUuidText(targetId) || !sameUuid(targetId, request.targetId)) return null;
+
+  // The bound viewer. A competitor permit always carries one: the permit is
+  // only obtainable once a viewer is attached, and a caller-selected
+  // substitute is never acceptable.
+  const viewer = readOwnData(value, "viewer_social_account_id").value;
+  if (!isUuidText(viewer)) return null;
+  if (!sameUuid(viewer, request.viewerSocialAccountId)) return null;
+
+  const credentialGeneration = readOwnData(value, "credential_generation").value;
+  if (!isPositiveSafeInteger(credentialGeneration)) return null;
+
+  const fingerprint = readOwnData(value, "policy_fingerprint").value;
+  if (fingerprint !== null && !isPolicyFingerprint(fingerprint)) return null;
+
+  return {
+    allowed: true,
+    jobId: jobId.toLowerCase(),
+    targetKind,
+    targetId: targetId.toLowerCase(),
+    viewerSocialAccountId: viewer.toLowerCase(),
+    jobGeneration,
+    credentialGeneration,
+    policyFingerprint: fingerprint === null ? null : (fingerprint as string),
+  };
+}
+
+function isPolicyFingerprint(value: unknown): value is string {
+  return typeof value === "string" && POLICY_FINGERPRINT_PATTERN.test(value);
 }
 
 // ---------------------------------------------------------------------------

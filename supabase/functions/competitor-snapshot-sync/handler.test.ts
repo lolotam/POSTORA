@@ -99,7 +99,9 @@ function buildDeps(probe: Probe): CompetitorSyncDeps {
       const receipt = probe.enqueueReceipt as {
         data: {
           accepted: boolean;
-          reason: string;
+          refused?: boolean;
+          reason?: string;
+          reason_code?: string;
           job_id?: string;
           job_generation?: number;
           status?: string;
@@ -109,15 +111,34 @@ function buildDeps(probe: Probe): CompetitorSyncDeps {
         error: unknown;
       };
       const row = receipt.data;
-      return {
+
+      if (row.refused === true) {
+        return {
+          kind: "refused",
+          projection: {
+            accepted: false,
+            refused: true,
+            reason_code: (row.reason_code ?? "collection_not_eligible") as
+              | "collection_not_eligible"
+              | "collection_disabled"
+              | "settings_unavailable",
+            captured_on: row.captured_on ?? "2026-10-29",
+          },
+        };
+      }
+
+      const projection = {
         accepted: row.accepted,
-        reason: row.reason,
+        reason: row.reason ?? "enqueued",
         jobId: row.job_id ?? null,
         jobGeneration: row.job_generation ?? null,
         status: row.status ?? null,
         capturedOn: row.captured_on ?? null,
         retryAfterSeconds: row.retry_after_seconds ?? null,
       };
+      return row.accepted
+        ? { kind: "accepted", projection }
+        : { kind: "throttled", projection };
     },
     async readCompetitorStatus(input) {
       probe.ownerCalls.push({
@@ -164,6 +185,12 @@ function buildDeps(probe: Probe): CompetitorSyncDeps {
       },
       async attachViewerContext() {
         throw new Error("not used");
+      },
+      async authorizeProviderCall() {
+        throw new Error("not used");
+      },
+      async auditAdmissionRefusal() {
+        return true;
       },
       async persistResult() {
         throw new Error("not used");
@@ -415,7 +442,7 @@ Deno.test("a failed collection setting read is unavailable", async () => {
   assertEquals(probe.ownerCalls.length, 0);
 });
 
-Deno.test("a legacy credential mode is refused and never falls back", async () => {
+Deno.test("a legacy credential mode is not a refusal: the rollout policy is the gate", async () => {
   const probe = newProbe();
   probe.settings.credential_facebook_user_mode = { data: { value: "legacy" }, error: null };
   const handler = createCompetitorSyncHandler(buildDeps(probe));
@@ -424,9 +451,70 @@ Deno.test("a legacy credential mode is refused and never falls back", async () =
     post({ mode: "entry", watchlist_id: WATCHLIST }, USER_TOKEN),
   );
 
+  // The global mode says WHERE a Facebook User secret is read from. It is
+  // still read and still validated, but it is not collection permission:
+  // the accepted SQL decides which watchlist entry may be collected for.
+  assertEquals(response.status, 202);
+  assertEquals(probe.ownerCalls.length, 1);
+  assertEquals(probe.settingReads.length, 2);
+});
+
+Deno.test("a malformed credential mode is unavailable and never off", async () => {
+  const probe = newProbe();
+  probe.settings.credential_facebook_user_mode = { data: { value: "maybe" }, error: null };
+  const handler = createCompetitorSyncHandler(buildDeps(probe));
+
+  const response = await handler(
+    post({ mode: "entry", watchlist_id: WATCHLIST }, USER_TOKEN),
+  );
+
   assertEquals(response.status, 503);
-  assertEquals((await response.json()).error, "protected_credentials_required");
+  assertEquals((await response.json()).error, "settings_unavailable");
   assertEquals(probe.ownerCalls.length, 0);
+});
+
+Deno.test("a rollout refusal is a 403 and never an enqueue", async () => {
+  const probe = newProbe();
+  probe.enqueueReceipt = {
+    data: {
+      accepted: false,
+      refused: true,
+      reason_code: "collection_not_eligible",
+      captured_on: "2026-10-29",
+    },
+    error: null,
+  };
+  const handler = createCompetitorSyncHandler(buildDeps(probe));
+
+  const response = await handler(
+    post({ mode: "entry", watchlist_id: WATCHLIST }, USER_TOKEN),
+  );
+
+  // The watchlist entry IS owned by the caller. The policy simply does not
+  // admit it yet, so the answer is one 403.
+  assertEquals(response.status, 403);
+  assertEquals((await response.json()).error, "collection_not_eligible");
+});
+
+Deno.test("an unavailable rollout configuration is a 503 and never a refusal", async () => {
+  const probe = newProbe();
+  probe.enqueueReceipt = {
+    data: {
+      accepted: false,
+      refused: true,
+      reason_code: "settings_unavailable",
+      captured_on: "2026-10-29",
+    },
+    error: null,
+  };
+  const handler = createCompetitorSyncHandler(buildDeps(probe));
+
+  const response = await handler(
+    post({ mode: "entry", watchlist_id: WATCHLIST }, USER_TOKEN),
+  );
+
+  assertEquals(response.status, 503);
+  assertEquals((await response.json()).error, "settings_unavailable");
 });
 
 Deno.test("a malformed request is refused", async () => {

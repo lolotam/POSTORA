@@ -58,6 +58,7 @@ import {
   createCompetitorOwnerStore,
   createCompetitorServiceStore,
   type CompetitorRpcCaller,
+  type CompetitorServiceWritePort,
   type ServiceOwnedTable,
   type ServiceReadPort,
 } from "./store.ts";
@@ -180,6 +181,44 @@ function createSettingReader(environment: ServerEnvironment) {
       .select("value")
       .eq("key", key)
       .maybeSingle();
+  };
+}
+
+/**
+ * The service write port.
+ *
+ * It writes ONE kind of row: the exception-path audit of an admission
+ * refusal the accepted SQL could not audit itself, because the statement
+ * raised and the raise rolled its audit row back. A refusal that RETURNS
+ * is audited by the accepted SQL in the same committed transaction and
+ * never comes through here.
+ *
+ * The write answers whether the row COMMITTED. A failed write is false, and
+ * the worker then stops the work and reports the audit failure: a row that
+ * did not commit is never reported as a stored row.
+ */
+function createServiceWritePort(environment: ServerEnvironment): CompetitorServiceWritePort {
+  return {
+    async insertSystemLog(row) {
+      try {
+        const client = createClient(environment.url, environment.serviceRoleKey, {
+          auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+        });
+
+        const { error } = await client.from("system_logs").insert({
+          source: row.source,
+          category: row.category,
+          level: row.level,
+          message: row.message,
+          user_id: row.userId,
+          metadata: redactSensitive(row.metadata) as Record<string, unknown>,
+        });
+
+        return error === null;
+      } catch {
+        return false;
+      }
+    },
   };
 }
 
@@ -344,6 +383,7 @@ const deps: CompetitorSyncDeps = {
     const store = createCompetitorServiceStore({
       rpc: createServiceRpcCaller(environment),
       reads: createServiceReadPort(environment),
+      writes: createServiceWritePort(environment),
     });
 
     const worker: CompetitorWorkerPorts = {

@@ -48,6 +48,16 @@
  *   a refusal; a failed or malformed setting is UNAVAILABLE, never
  *   "absent" and never "off".
  *
+ * WHY THE CREDENTIAL MODE IS NOT COLLECTION PERMISSION
+ *
+ *   The global credential mode says WHERE a Facebook User secret is read
+ *   from. It does not say WHICH watchlist entries may be collected for and
+ *   which viewer is approved for them: that is the rollout policy, and the
+ *   accepted SQL decides it per target, per viewer and per request. So the
+ *   mode is still READ and still VALIDATED here - a malformed or unreadable
+ *   mode is still unavailable - but a readable `legacy` mode is no longer a
+ *   refusal, and this endpoint never decides the admission itself.
+ *
  * ONE DEADLINE
  *
  *   The request has forty-five seconds, counted from before the body is
@@ -105,7 +115,14 @@ export type CompetitorSyncErrorCode =
   | "not_found"
   | "throttled"
   | "collection_disabled"
-  | "protected_credentials_required"
+  /**
+   * The rollout policy does not admit this target.
+   *
+   * It is a DEFINITE refusal of a target that IS owned by the caller: the
+   * watchlist entry exists and belongs to the caller, and the collection
+   * policy simply does not admit it yet.
+   */
+  | "collection_not_eligible"
   | "settings_unavailable"
   | "service_auth_unavailable"
   | "request_unavailable"
@@ -679,19 +696,18 @@ export function createCompetitorSyncHandler(
       return await refuse(503, "collection_disabled");
     }
 
-    let credentialMode: string;
     try {
-      credentialMode = resolveFacebookCredentialMode(
+      // The mode is read for its validity, NOT as collection permission.
+      // `legacy` and `protected` are both usable; the resolver has already
+      // refused anything else as a malformed setting. The mode says WHERE a
+      // Facebook User secret is read from; it does not say WHICH targets may
+      // be collected for. That is the rollout policy, and the accepted SQL
+      // decides it - per watchlist, per viewer and per request.
+      resolveFacebookCredentialMode(
         await readRequiredSetting(FACEBOOK_CREDENTIAL_MODE_SETTING_KEY),
       );
     } catch {
       return await refuse(503, "settings_unavailable");
-    }
-
-    if (credentialMode !== "protected") {
-      // The official path needs the protected authority. There is no legacy
-      // fallback.
-      return await refuse(503, "protected_credentials_required");
     }
 
     // --- The work -------------------------------------------------------
@@ -770,15 +786,33 @@ export function createCompetitorSyncHandler(
         }
 
         const receipt = outcome.value;
-        if (!receipt.accepted) {
-          const retryAfter = Math.max(1, Math.trunc(receipt.retryAfterSeconds ?? 60));
+        if (receipt.kind === "refused") {
+          // A DEFINITE rollout refusal. The watchlist entry IS owned by the
+          // caller, and the policy simply does not admit it yet: 403. An
+          // unavailable or disabled configuration is 503, and it is never
+          // reported as a refusal of the caller's own entry.
+          const reason = receipt.projection.reason_code;
+          if (reason === "collection_not_eligible") {
+            return await refuse(403, "collection_not_eligible");
+          }
+          if (reason === "collection_disabled") {
+            return await refuse(503, "collection_disabled");
+          }
+          return await refuse(503, "settings_unavailable");
+        }
+
+        if (receipt.kind === "throttled") {
+          const retryAfter = Math.max(
+            1,
+            Math.trunc(receipt.projection.retryAfterSeconds ?? 60),
+          );
           return await finish(
             429,
             {
               accepted: false,
-              reason: receipt.reason,
+              reason: receipt.projection.reason,
               retry_after_seconds: retryAfter,
-              captured_on: receipt.capturedOn,
+              captured_on: receipt.projection.capturedOn,
             },
             "throttled",
             { "Retry-After": String(retryAfter) },
@@ -789,11 +823,11 @@ export function createCompetitorSyncHandler(
           202,
           {
             accepted: true,
-            reason: receipt.reason,
-            job_id: receipt.jobId,
-            job_generation: receipt.jobGeneration,
-            status: receipt.status,
-            captured_on: receipt.capturedOn,
+            reason: receipt.projection.reason,
+            job_id: receipt.projection.jobId,
+            job_generation: receipt.projection.jobGeneration,
+            status: receipt.projection.status,
+            captured_on: receipt.projection.capturedOn,
           },
           "enqueued",
         );

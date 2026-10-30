@@ -69,6 +69,8 @@ interface Probe {
   readonly tableReads: Array<{ table: string; filters: Record<string, unknown>; clientKey: string }>;
   claims: unknown;
   rpc: unknown;
+  /** The answer of one named function. It wins over the shared answer. */
+  rpcByName: Record<string, unknown>;
   appSettings: Record<string, unknown>;
   userRoles: unknown;
 }
@@ -95,6 +97,7 @@ function newProbe(): Probe {
       },
       error: null,
     },
+    rpcByName: {},
     appSettings: {
       collection_instagram_insights_enabled: { data: { value: true }, error: null },
       credential_facebook_user_mode: { data: { value: "protected" }, error: null },
@@ -160,11 +163,17 @@ export function createClient(url, key, options) {
     },
     rpc(name, args) {
       probe.rpcCalls.push({ name, args, key, authorization });
-      // The bearer is the identity this fake answers for. A different
-      // Authorization value is refused.
-      if (authorization !== ${JSON.stringify(`Bearer ${BEARER}`)}) {
+      // The OWNER RPCs run as the CALLER: a different Authorization value is
+      // refused, because the accepted SQL derives the owner from
+      // auth.uid() and an impersonation would have to be a different,
+      // unsound contract.
+      const isOwnerRpc = name === "enqueue_instagram_collection_job" ||
+        name === "read_instagram_collection_job_status";
+      if (isOwnerRpc && authorization !== ${JSON.stringify(`Bearer ${BEARER}`)}) {
         return Promise.resolve({ data: null, error: { code: "42501" } });
       }
+      const named = probe.rpcByName ? probe.rpcByName[name] : undefined;
+      if (named !== undefined) return Promise.resolve(named);
       return Promise.resolve(probe.rpc);
     },
     from,
@@ -484,7 +493,7 @@ Deno.test("the actual registered route refuses a disabled collection before any 
   assertEquals(probe.settingReads.length, 1);
 });
 
-Deno.test("the actual registered route refuses a legacy credential mode", async () => {
+Deno.test("the actual registered route does not refuse a legacy credential mode", async () => {
   const probe = newProbe();
   probe.appSettings = {
     collection_instagram_insights_enabled: { data: { value: true }, error: null },
@@ -494,8 +503,28 @@ Deno.test("the actual registered route refuses a legacy credential mode", async 
   const handler = await loadRoute(probe);
   const response = await handler(request({ mode: "entry", watchlist_id: WATCHLIST_ID }));
 
+  // The global mode says WHERE a Facebook User secret is read from. It is
+  // still read and still validated, but it is not collection permission:
+  // the accepted SQL decides which watchlist entry may be collected for.
+  assertEquals(response.status, 202);
+  assertEquals(probe.rpcCalls.length, 1);
+  assertEquals(probe.settingReads.length, 2);
+});
+
+Deno.test("the actual registered route refuses a malformed credential mode", async () => {
+  const probe = newProbe();
+  probe.appSettings = {
+    collection_instagram_insights_enabled: { data: { value: true }, error: null },
+    credential_facebook_user_mode: { data: { value: "maybe" }, error: null },
+  };
+
+  const handler = await loadRoute(probe);
+  const response = await handler(request({ mode: "entry", watchlist_id: WATCHLIST_ID }));
+
+  // A malformed configuration is UNAVAILABLE. It is never read as off and
+  // never read as a legacy mode that happens to be usable.
   assertEquals(response.status, 503);
-  assertEquals((await body(response)).error, "protected_credentials_required");
+  assertEquals((await body(response)).error, "settings_unavailable");
   assertEquals(probe.rpcCalls.length, 0);
 });
 
@@ -539,6 +568,132 @@ Deno.test("the relocated route still enqueues and still reads a status", async (
   const status = await handler(request({ mode: "status", watchlist_id: WATCHLIST_ID }));
   assertEquals(status.status, 200);
   assertEquals((await body(status)).target_kind, "competitor");
+});
+
+Deno.test("the actual registered route forces as the verified caller", async () => {
+  const probe = newProbe();
+  probe.rpcByName["enqueue_instagram_collection_job"] = {
+    data: {
+      accepted: true,
+      reason: "forced",
+      job_id: "5c1b0003-0000-4000-8000-000000000003",
+      job_generation: 2,
+      status: "queued",
+      captured_on: "2026-10-29",
+      created: true,
+      accepted_at: "2026-10-29T02:00:00.123456+00:00",
+    },
+    error: null,
+  };
+
+  const handler = await loadRoute(probe);
+
+  const response = await handler(request({ mode: "force", watchlist_id: WATCHLIST_ID }));
+
+  assertEquals(response.status, 202);
+  const call = probe.rpcCalls.find((entry) =>
+    entry.name === "enqueue_instagram_collection_job"
+  );
+  assert(call !== undefined);
+  assertEquals(call.args.p_mode, "force");
+  assertEquals(call.args.p_target_kind, "competitor");
+  assertEquals(call.key, ANON_KEY);
+});
+
+Deno.test("the actual registered route maps a rollout refusal to one 403", async () => {
+  const probe = newProbe();
+  probe.rpcByName["enqueue_instagram_collection_job"] = {
+    data: {
+      accepted: false,
+      refused: true,
+      reason_code: "collection_not_eligible",
+      captured_on: "2026-10-29",
+    },
+    error: null,
+  };
+
+  const handler = await loadRoute(probe);
+  const response = await handler(request({ mode: "entry", watchlist_id: WATCHLIST_ID }));
+
+  // The watchlist entry IS owned by the caller. The policy simply does not
+  // admit it yet, so the answer is one 403 and no job is reported.
+  assertEquals(response.status, 403);
+  const payload = await body(response);
+  assertEquals(payload.error, "collection_not_eligible");
+  assertEquals(payload.accepted, undefined);
+  assertEquals(payload.job_id, undefined);
+});
+
+Deno.test("the actual registered route drains the competitors as a service caller", async () => {
+  const probe = newProbe();
+  probe.rpcByName["claim_instagram_collection_jobs"] = { data: [], error: null };
+
+  const handler = await loadRoute(probe);
+  const response = await handler(
+    request({ mode: "all" }, { Authorization: `Bearer ${CRON_SECRET}` }),
+  );
+
+  assertEquals(response.status, 200);
+
+  const claim = probe.rpcCalls.find((entry) =>
+    entry.name === "claim_instagram_collection_jobs"
+  );
+  assert(claim !== undefined, "the claim was called");
+  assertEquals(claim.args.p_target_kind, "competitor");
+  // The service RPCs run with the SERVICE credential and never as a user.
+  assertEquals(claim.key, SERVICE_ROLE_KEY);
+  assertEquals(claim.authorization, null);
+});
+
+Deno.test("the actual registered route enqueues the daily competitors as a service caller", async () => {
+  const probe = newProbe();
+  probe.rpcByName["list_due_competitor_collection_targets"] = { data: [], error: null };
+
+  const handler = await loadRoute(probe);
+  const response = await handler(
+    request({ mode: "enqueue-daily" }, { Authorization: `Bearer ${CRON_SECRET}` }),
+  );
+
+  assertEquals(response.status, 200);
+
+  const read = probe.rpcCalls.find((entry) =>
+    entry.name === "list_due_competitor_collection_targets"
+  );
+  assert(read !== undefined, "the due-target read was called");
+  assertEquals(read.key, SERVICE_ROLE_KEY);
+  assertEquals(read.authorization, null);
+});
+
+Deno.test("the actual registered route refuses a plain user for the service modes", async () => {
+  const probe = newProbe();
+  const handler = await loadRoute(probe);
+
+  const response = await handler(request({ mode: "all" }));
+
+  assertEquals(response.status, 403);
+  assertEquals((await body(response)).error, "forbidden");
+  assertEquals(
+    probe.rpcCalls.some((entry) => entry.name === "claim_instagram_collection_jobs"),
+    false,
+  );
+});
+
+Deno.test("the actual registered route refuses the service modes when the administrator lookup fails", async () => {
+  const probe = newProbe();
+  // The administrator lookup answers with a role that is not `admin`.
+  probe.userRoles = { data: { role: "user" }, error: null };
+
+  const handler = await loadRoute(probe);
+  const response = await handler(request({ mode: "all" }));
+
+  // The authority is LOST, so the service path is refused and no claim is
+  // made.
+  assertEquals(response.status, 403);
+  assertEquals((await body(response)).error, "forbidden");
+  assertEquals(
+    probe.rpcCalls.some((entry) => entry.name === "claim_instagram_collection_jobs"),
+    false,
+  );
 });
 
 Deno.test("a copy that swaps the caller identity is refused and never enqueues", async () => {

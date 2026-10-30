@@ -35,6 +35,24 @@
  *   the database captured when the viewer was attached. A reconnect
  *   between the two is refused before a provider call is spent.
  *
+ * WHY THE ELIGIBLE CANDIDATE SET IS DECIDED BY THE DATABASE
+ *
+ *   The rollout policy decides which watchlist may be collected for and
+ *   which viewer is approved for it, and SQL owns that decision. The
+ *   worker therefore asks the job-scoped SQL to attach the candidate the
+ *   shared selector picked, and it acts on the answer:
+ *
+ *     - a viewer the policy does not approve is EXCLUDED from the eligible
+ *       set, and the selector runs again on the candidates that are left,
+ *       so the existing ordering is kept INSIDE the eligible set and never
+ *       outside it;
+ *     - a target the policy does not admit refuses the work, and nothing
+ *       is written.
+ *
+ *   There is no substitution: the candidate that the policy approved is the
+ *   one that is used, and a failure of that candidate never reaches for
+ *   another one.
+ *
  * WHY A FAILED ATTEMPT IS STILL RECORDED
  *
  *   "There is no usable viewer" is a fact about the owner's account, and
@@ -42,17 +60,28 @@
  *   the entry to error and leaves the job retryable. A weekly "the target
  *   is gone" verdict is reserved for the one outcome that PROVES the
  *   target cannot be analysed.
+ *
+ * WHY A ROLLOUT REFUSAL IS NEVER WRITTEN
+ *
+ *   A refusal of the rollout policy is not a fact about the target: it is
+ *   a fact about the configuration. The job is abandoned to its lease, no
+ *   result is written, no target is marked unavailable, no credential is
+ *   revoked and no success time advances.
  */
 
 import { pickBusinessDiscoveryViewer } from "../_shared/instagramDiscoveryViewer.ts";
+import type { ViewerCandidate } from "../_shared/instagramDiscoveryViewer.ts";
 
 import { type CompetitorServiceStore, CompetitorStoreError } from "./store.ts";
 import {
   CompetitorProviderError,
+  CompetitorProviderPermitError,
+  type AttachedViewerContext,
   type ClaimedCompetitorJob,
   type CompetitorCapture,
   type CompetitorDrainSummary,
   type CompetitorProvider,
+  type CompetitorProviderPermit,
   type CompetitorReasonCode,
   type CompetitorResultPayload,
   type CompetitorSource,
@@ -491,21 +520,24 @@ async function collect(context: JobContext): Promise<JobStep> {
   const ordered = [...candidates].sort((left, right) =>
     left.id < right.id ? -1 : left.id > right.id ? 1 : 0
   );
-  const viewer = pickBusinessDiscoveryViewer(ordered);
 
-  if (!viewer) {
+  if (ordered.length === 0) {
+    // There is no viewer candidate at all. That is a fact about the owner's
+    // account, and the paid fallback policy decides what happens next -
+    // exactly as it did before the rollout controls.
     return await handleMissingViewer(context);
   }
 
-  const attached = await read(context, (signal) =>
-    ports.store.attachViewerContext({
-      jobId: job.jobId,
-      claimToken: job.claimToken,
-      jobGeneration: job.jobGeneration,
-      viewerSocialAccountId: viewer.id,
-      signal,
-    })
-  );
+  // The ELIGIBLE candidate set is decided by the database, and the shared
+  // selector orders INSIDE it. A candidate the policy does not approve is
+  // excluded and the next one is offered; there is no substitution, and
+  // the credential of the approved viewer is the only one that is read.
+  const eligible = await resolveEligibleViewer(context, ordered);
+  if (eligible.kind === "refused") {
+    return await handleAdmissionRefusal(context, eligible);
+  }
+
+  const { viewer, attached } = eligible;
 
   let credential: ResolvedViewerCredential;
   try {
@@ -558,6 +590,10 @@ async function collect(context: JobContext): Promise<JobStep> {
         username: target.username,
         viewerIgUserId: viewer.platform_user_id,
         token: credential.token,
+        // The permit travels with the request and is asked again by the
+        // adapter immediately before every request that leaves the process:
+        // every attempt, every retry and every page of the feed.
+        permit: visitPermit(context, viewer.id),
         signal,
       })
     );
@@ -574,6 +610,11 @@ async function collect(context: JobContext): Promise<JobStep> {
     }
   } catch (error) {
     if (error instanceof BudgetExceededError) throw error;
+    if (error instanceof CompetitorProviderPermitError) {
+      // The request was never authorized. It is not a provider failure and
+      // it is never retried.
+      return await handlePermitFailure(context, error);
+    }
     return await handleProviderFailure(context, bucketKey, error);
   }
 
@@ -610,11 +651,284 @@ async function collect(context: JobContext): Promise<JobStep> {
 }
 
 /**
+ * The eligible viewer of this job, and the one that is used.
+ *
+ * The shared selector orders the candidates, and the DATABASE decides which
+ * of them is eligible. A candidate the policy does not approve is excluded
+ * and the selector runs again on the candidates that are left, so the
+ * existing ordering is kept inside the eligible set and never outside it.
+ */
+type EligibleViewer =
+  | {
+    readonly kind: "eligible";
+    readonly viewer: ViewerCandidate;
+    readonly attached: AttachedViewerContext;
+  }
+  | {
+    readonly kind: "refused";
+    readonly reasonCode: CompetitorReasonCode;
+    readonly stopRun: boolean;
+    readonly auditFailed: boolean;
+  };
+
+/**
+ * Asks the database which candidate is eligible, and binds that one.
+ *
+ * The attachment is the JOB-SCOPED admission decision, and it happens
+ * BEFORE the credential is resolved: no token is read for a target the
+ * policy does not admit, and no token is read for a viewer the policy does
+ * not approve.
+ *
+ * There is no substitution. The candidate the policy approved is the one
+ * that is used, and a failure of that candidate never reaches for another
+ * one.
+ */
+async function resolveEligibleViewer(
+  context: JobContext,
+  candidates: readonly ViewerCandidate[],
+): Promise<EligibleViewer> {
+  let remaining = [...candidates];
+
+  while (remaining.length > 0) {
+    const viewer = pickBusinessDiscoveryViewer(remaining);
+    if (!viewer) break;
+
+    const decision = await read(context, (signal) =>
+      context.ports.store.attachViewerContext({
+        jobId: context.job.jobId,
+        claimToken: context.job.claimToken,
+        jobGeneration: context.job.jobGeneration,
+        viewerSocialAccountId: viewer.id,
+        signal,
+      })
+    );
+
+    if (decision.kind === "attached") {
+      return { kind: "eligible", viewer, attached: decision.context };
+    }
+
+    if (decision.kind === "not_approved" || decision.kind === "already_bound") {
+      // The candidate is excluded from the eligible set. The next one is
+      // offered, and only the candidate the policy approves may be used.
+      remaining = remaining.filter((candidate) => candidate.id !== viewer.id);
+      continue;
+    }
+
+    return {
+      kind: "refused",
+      reasonCode: admissionRefusalReason(decision),
+      // A configuration that cannot be read, and a gate that cannot be
+      // read, leave the outcome UNKNOWN: the run stops. A refusal of one
+      // target belongs to that target alone.
+      stopRun: decision.kind === "configuration_unavailable" ||
+        decision.kind === "unavailable",
+      auditFailed: !decision.auditStored,
+    };
+  }
+
+  // Every candidate the policy knows was excluded. The work is refused and
+  // nothing is written.
+  //
+  // The refusal is audited here, in a separate bounded call: the accepted
+  // SQL refuses by RAISING, so its own audit row did not commit with the
+  // refusal. The per-candidate exclusions are excluded rows and not
+  // refusal events, so they produce no row of their own.
+  const auditStored = await context.ports.store.auditAdmissionRefusal({
+    jobId: context.job.jobId,
+    reasonCode: "collection_not_eligible",
+  });
+
+  return {
+    kind: "refused",
+    reasonCode: "collection_not_eligible",
+    stopRun: false,
+    auditFailed: !auditStored,
+  };
+}
+
+/**
+ * The stable reason of one admission refusal.
+ *
+ * It is a CLOSED mapping: the reason code is one this contract knows, and
+ * it never carries a driver message.
+ */
+function admissionRefusalReason(
+  decision: Exclude<
+    Awaited<ReturnType<CompetitorServiceStore["attachViewerContext"]>>,
+    { readonly kind: "attached" } | { readonly kind: "not_approved" } |
+      { readonly kind: "already_bound" }
+  >,
+): CompetitorReasonCode {
+  if (decision.kind === "target_not_eligible") return "collection_not_eligible";
+  if (decision.kind === "configuration_unavailable") return "collection_unavailable";
+  if (decision.kind === "viewer_unusable") return "viewer_unavailable";
+  if (decision.kind === "stale_claim") return "credential_changed";
+  return "collection_unavailable";
+}
+
+/**
+ * The refusal of the admission gate.
+ *
+ * A refusal is a condition of ONE job: the policy does not admit this
+ * target, so the job is abandoned to its lease and the run continues with
+ * the next claimed competitor. No later request is sent and NOTHING is
+ * written: a rollout refusal never marks a target unavailable, never
+ * revokes a credential and never advances a success.
+ */
+async function handleAdmissionRefusal(
+  context: JobContext,
+  refusal: {
+    readonly reasonCode: CompetitorReasonCode;
+    readonly stopRun: boolean;
+    readonly auditFailed: boolean;
+  },
+): Promise<JobStep> {
+  const { ports, job } = context;
+
+  ports.log({
+    event: "competitor_admission_refused",
+    jobId: job.jobId,
+    watchlistId: job.watchlistId,
+    outcome: "abandoned",
+    reasonCode: refusal.reasonCode,
+    durationMs: ports.now() - context.startedAt,
+  });
+
+  if (refusal.auditFailed) {
+    // The refusal row did not commit. The work stops and the audit failure
+    // is reported: a row that did not commit is never reported as stored.
+    ports.log({
+      event: "competitor_admission_audit_failed",
+      jobId: job.jobId,
+      watchlistId: job.watchlistId,
+      outcome: "abandoned",
+      reasonCode: "collection_unavailable",
+      durationMs: ports.now() - context.startedAt,
+    });
+  }
+
+  return {
+    job: result(context, "abandoned", null, refusal.reasonCode, 0),
+    // A refusal whose audit did not commit stops the work: a row that did
+    // not commit is never reported as a stored row, and the run may not
+    // repeat work whose refusal was never recorded.
+    stopRun: refusal.stopRun || refusal.auditFailed,
+  };
+}
+
+/**
+ * The per-request admission permit of ONE job.
+ *
+ * It asks the accepted SQL for a FRESH permit immediately before every
+ * provider request. The call names the job, its claim token and its
+ * generation and NOTHING else, so the database derives the owner, the
+ * target and the viewer from the live fenced job - a caller can never
+ * redirect the request to another account.
+ *
+ * A refused permit is a refusal. A permit that could not be read is
+ * UNAVAILABLE: the outcome of the decision is unknown, and an unknown
+ * outcome is never permission.
+ */
+function visitPermit(
+  context: JobContext,
+  viewerSocialAccountId: string,
+): CompetitorProviderPermit {
+  const { ports, job } = context;
+
+  return async (signal: AbortSignal): Promise<void> => {
+    const decision = await ports.store.authorizeProviderCall({
+      jobId: job.jobId,
+      claimToken: job.claimToken,
+      jobGeneration: job.jobGeneration,
+      targetId: job.watchlistId,
+      viewerSocialAccountId,
+      signal,
+    });
+
+    if (decision.kind === "allowed") return;
+
+    if (decision.kind === "refused") {
+      throw new CompetitorProviderPermitError("refused", decision.reasonCode);
+    }
+
+    throw new CompetitorProviderPermitError(
+      "unavailable",
+      decision.reasonCode,
+      !decision.auditStored,
+    );
+  };
+}
+
+/**
+ * The refusal of the per-request admission gate.
+ *
+ * A REFUSED permit is a condition of ONE job: the policy no longer admits
+ * this target, so the job is abandoned to its lease and the run continues
+ * with the next claimed competitor. No later request is sent and NOTHING
+ * is written.
+ *
+ * An UNAVAILABLE permit - the gate could not be read, or its refusal could
+ * not be audited - is a condition of the RUN: the outcome is unknown, so
+ * the run stops rather than repeating work that may already have happened.
+ */
+async function handlePermitFailure(
+  context: JobContext,
+  error: CompetitorProviderPermitError,
+): Promise<JobStep> {
+  const { ports, job } = context;
+
+  const configurationRefusal = error.reasonCode === "collection_disabled" ||
+    error.reasonCode === "settings_unavailable";
+  const stopRun = error.kind === "unavailable" || configurationRefusal;
+  const reasonCode: CompetitorReasonCode = stopRun
+    ? "collection_unavailable"
+    : "collection_not_eligible";
+
+  // The log carries the reason the DATABASE gave, verbatim. It is one of
+  // the closed reason codes of the accepted SQL: never provider text, never
+  // a policy list and never a credential.
+  ports.log({
+    event: "competitor_provider_call_refused",
+    jobId: job.jobId,
+    watchlistId: job.watchlistId,
+    outcome: "abandoned",
+    reasonCode: error.reasonCode,
+    durationMs: ports.now() - context.startedAt,
+  });
+
+  if (error.auditFailed) {
+    // The refusal row did not commit. The work stops and the audit failure
+    // is reported: a row that did not commit is never reported as stored.
+    ports.log({
+      event: "competitor_provider_call_audit_failed",
+      jobId: job.jobId,
+      watchlistId: job.watchlistId,
+      outcome: "abandoned",
+      reasonCode: "collection_unavailable",
+      durationMs: ports.now() - context.startedAt,
+    });
+  }
+
+  return { job: result(context, "abandoned", null, reasonCode, 0), stopRun };
+}
+
+/**
  * The no-viewer path.
  *
  * The paid fallback is used only when the injected policy authorises it.
  * Otherwise the entry is recorded as an error with a stable reason and the
  * job stays retryable.
+ *
+ * WHY THE PAID PATH IS NOT PERMIT-GUARDED
+ *
+ *   The permit requires a BOUND viewer: the accepted SQL refuses a
+ *   competitor permit for a job that has no viewer context. The paid
+ *   fallback is exactly the path with no viewer, so no permit can be
+ *   obtained there. It is guarded by the injected policy instead, and the
+ *   shipped composition injects a DISABLED one: the paid adapter is built
+ *   but unreachable. The rollout policy still decides the TARGET: the
+ *   claim only hands out admitted watchlists, and a policy refusal of a
+ *   candidate never reaches this path.
  */
 async function handleMissingViewer(context: JobContext): Promise<JobStep> {
   const policy = context.ports.paidFallback;
@@ -650,6 +964,12 @@ async function handleProviderFailure(
   error: unknown,
 ): Promise<JobStep> {
   const { ports, job } = context;
+
+  if (error instanceof CompetitorProviderPermitError) {
+    // The request was not authorized. It is not a provider failure: it is
+    // never retried and it never becomes a stored outcome.
+    return await handlePermitFailure(context, error);
+  }
 
   if (!(error instanceof CompetitorProviderError)) {
     return await persistFailure(context, "retry", "provider_error",
