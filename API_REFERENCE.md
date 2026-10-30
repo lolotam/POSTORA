@@ -311,8 +311,8 @@ Total: **96 functions** (verified against `supabase/functions/` directory).
 | `process-video` | user JWT | POST | Mark video as ready / metadata extraction |
 | `transcode-video` | user JWT | POST | Submit transcode job (external service — Deno has no FFmpeg) |
 | `transcribe-media` | user JWT | POST | 3-tier fallback STT chain |
-| `remove-background` | user JWT or API key | POST | AI background removal: AtlasCloud, or Cloudinary while the admin CDN policy writes to it; result stored in Openinary; 503 `PROVIDER_UNAVAILABLE` when no provider is available |
-| `upscale-image` | user JWT or API key | POST | AI upscale: Cloudinary while the admin CDN policy writes to it, otherwise AtlasCloud (2K/4K, result stored in Openinary); 503 `PROVIDER_UNAVAILABLE` when no provider is available |
+| `remove-background` | user JWT or API key | POST | AI background removal: AtlasCloud, or Cloudinary while the admin CDN policy writes to it; result stored in Openinary; 503 `PROVIDER_UNAVAILABLE` when no provider is available; a job slower than ~45 s answers 202 `{status:"processing", prediction_id}` and the same endpoint takes `{prediction_id}` to collect it (token bound to the caller, valid 1 h); 30 AtlasCloud jobs/hour/user (429 `RATE_LIMITED`) |
+| `upscale-image` | user JWT or API key | POST | AI upscale: Cloudinary while the admin CDN policy writes to it, otherwise AtlasCloud (2K/4K, `output_format` png\|jpeg, result stored in Openinary); 503 `PROVIDER_UNAVAILABLE` when no provider is available; same 202 / `{prediction_id}` follow-up and hourly cap as `remove-background` |
 | `upscale-image-atlas` | user JWT | POST | AtlasCloud 4K upscale (premium) |
 | `cleanup-media` | cron / admin | POST | Sweep orphaned media |
 | `check-music-copyright` | user JWT | POST | ACRCloud lookup |

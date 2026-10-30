@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AiImageToolError,
+  CLIENT_TIMEOUT_CODE,
   PROVIDER_UNAVAILABLE_CODE,
+  cloudinaryTransformsState,
   isCloudinaryTransformsAvailable,
   isProviderUnavailable,
   runBackgroundRemoval,
@@ -19,16 +21,24 @@ function httpFailure(status: number, body: unknown) {
   return { data: null, error };
 }
 
-describe("isCloudinaryTransformsAvailable", () => {
+const withCloudinary = { ...DEFAULT_CDN_STORAGE_CONFIG, write_policy: { providers: ["openinary", "cloudinary"] as ("openinary" | "cloudinary")[], required: ["openinary"] as ("openinary" | "cloudinary")[] } };
+
+describe("Cloudinary transforms state", () => {
   it("is false under the default policy (Openinary only) and before the config has loaded", () => {
     expect(isCloudinaryTransformsAvailable(DEFAULT_CDN_STORAGE_CONFIG)).toBe(false);
     expect(isCloudinaryTransformsAvailable(undefined)).toBe(false);
   });
 
   it("is true when the admin policy still writes to Cloudinary", () => {
-    expect(
-      isCloudinaryTransformsAvailable({ ...DEFAULT_CDN_STORAGE_CONFIG, write_policy: { providers: ["openinary", "cloudinary"], required: ["openinary"] } }),
-    ).toBe(true);
+    expect(isCloudinaryTransformsAvailable(withCloudinary)).toBe(true);
+  });
+
+  it("tells 'still loading' apart from 'confirmed unavailable'", () => {
+    expect(cloudinaryTransformsState({ data: undefined, isLoading: true })).toBe("loading");
+    expect(cloudinaryTransformsState({ data: DEFAULT_CDN_STORAGE_CONFIG, isLoading: false })).toBe("unavailable");
+    expect(cloudinaryTransformsState({ data: withCloudinary, isLoading: false })).toBe("available");
+    // a failed read: the config reader's own fallback is the Openinary-only default
+    expect(cloudinaryTransformsState({ data: undefined, isLoading: false })).toBe("unavailable");
   });
 });
 
@@ -41,10 +51,17 @@ describe("AI image tool calls", () => {
     expect(invoke).toHaveBeenCalledWith("remove-background", { body: { image_url: "https://o.example/t/in.jpg" } });
   });
 
-  it("upscale asks AtlasCloud for 4K and returns upscaled_url", async () => {
+  it("upscale names no provider (the server decides) and returns upscaled_url", async () => {
     invoke.mockResolvedValue({ data: { success: true, upscaled_url: "https://o.example/t/up.jpg" }, error: null });
     await expect(runUpscale("https://o.example/t/in.jpg")).resolves.toBe("https://o.example/t/up.jpg");
-    expect(invoke).toHaveBeenCalledWith("upscale-image", { body: { image_url: "https://o.example/t/in.jpg", platform: "atlascloud", scale: 4 } });
+    expect(invoke).toHaveBeenCalledWith("upscale-image", { body: { image_url: "https://o.example/t/in.jpg", scale: 4 } });
+    expect(JSON.stringify(invoke.mock.calls[0][1])).not.toContain("platform");
+  });
+
+  it("upscale can ask for PNG, so a cut-out keeps its transparency", async () => {
+    invoke.mockResolvedValue({ data: { success: true, upscaled_url: "https://o.example/t/up.png" }, error: null });
+    await runUpscale("https://o.example/t/cutout.png", { outputFormat: "png" });
+    expect(invoke).toHaveBeenCalledWith("upscale-image", { body: { image_url: "https://o.example/t/cutout.png", scale: 4, output_format: "png" } });
   });
 
   it("a 503 PROVIDER_UNAVAILABLE keeps the server's message and is recognised as 'unavailable'", async () => {
@@ -72,5 +89,68 @@ describe("AI image tool calls", () => {
     await expect(runBackgroundRemoval("https://o.example/in.jpg")).rejects.toBeInstanceOf(AiImageToolError);
     invoke.mockResolvedValue({ data: { success: false, error: "nope" }, error: null });
     await expect(runUpscale("https://o.example/in.jpg")).rejects.toThrow("nope");
+  });
+});
+
+describe("a job that is still running when the first request answers (202)", () => {
+  beforeEach(() => invoke.mockReset());
+
+  const processing = (token: string, retry = 3) => ({ data: { success: true, status: "processing", prediction_id: token, retry_after_seconds: retry }, error: null });
+  /** A clock the fake sleep advances. */
+  function clock() {
+    let t = 0;
+    const waits: number[] = [];
+    return { now: () => t, sleep: (ms: number) => { waits.push(ms); t += ms; return Promise.resolve(); }, waits };
+  }
+
+  it("asks again with only the prediction_id, at the server's pace, until the result is ready", async () => {
+    invoke
+      .mockResolvedValueOnce(processing("tok-1", 3))
+      .mockResolvedValueOnce(processing("tok-1", 3))
+      .mockResolvedValueOnce({ data: { success: true, status: "completed", processed_url: "https://o.example/t/out.png" }, error: null });
+    const c = clock();
+    await expect(runBackgroundRemoval("https://o.example/in.jpg", c)).resolves.toBe("https://o.example/t/out.png");
+    expect(invoke.mock.calls.map((call) => call[1])).toEqual([
+      { body: { image_url: "https://o.example/in.jpg" } },
+      { body: { prediction_id: "tok-1" } },
+      { body: { prediction_id: "tok-1" } },
+    ]);
+    expect(c.waits).toEqual([3000, 3000]);
+    expect(invoke.mock.calls.every((call) => call[0] === "remove-background")).toBe(true);
+  });
+
+  it("follows up on the same function for upscale too", async () => {
+    invoke
+      .mockResolvedValueOnce(processing("tok-2"))
+      .mockResolvedValueOnce({ data: { success: true, status: "completed", upscaled_url: "https://o.example/t/up.png" }, error: null });
+    await expect(runUpscale("https://o.example/in.png", { ...clock(), outputFormat: "png" })).resolves.toBe("https://o.example/t/up.png");
+    expect(invoke.mock.calls[1]).toEqual(["upscale-image", { body: { prediction_id: "tok-2" } }]);
+  });
+
+  it("gives up after the bounded wait with a clear 'timed out' error", async () => {
+    invoke.mockResolvedValue(processing("tok-3", 3));
+    const c = clock();
+    const failure = await runBackgroundRemoval("https://o.example/in.jpg", { ...c, maxWaitMs: 10_000 }).catch((e: unknown) => e);
+    expect(failure).toBeInstanceOf(AiImageToolError);
+    expect((failure as AiImageToolError).code).toBe(CLIENT_TIMEOUT_CODE);
+    expect((failure as Error).message).toMatch(/timed out/i);
+    expect(invoke.mock.calls.length).toBeLessThanOrEqual(6);
+  });
+
+  it("a failure on a follow-up reaches the caller with the server's message and code", async () => {
+    invoke
+      .mockResolvedValueOnce(processing("tok-4"))
+      .mockResolvedValueOnce(httpFailure(503, { success: false, error: "Background removal is temporarily unavailable", code: PROVIDER_UNAVAILABLE_CODE }));
+    const failure = await runBackgroundRemoval("https://o.example/in.jpg", clock()).catch((e: unknown) => e);
+    expect(isProviderUnavailable(failure)).toBe(true);
+  });
+
+  it("without a retry hint it waits a default interval", async () => {
+    invoke
+      .mockResolvedValueOnce({ data: { success: true, status: "processing", prediction_id: "tok-5" }, error: null })
+      .mockResolvedValueOnce({ data: { success: true, status: "completed", processed_url: "https://o.example/t/out.png" }, error: null });
+    const c = clock();
+    await runBackgroundRemoval("https://o.example/in.jpg", c);
+    expect(c.waits).toEqual([3000]);
   });
 });

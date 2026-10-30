@@ -3,17 +3,18 @@ import { handleCorsOptions, jsonResponse, errorResponse, unauthorizedResponse } 
 import { authenticateCaller } from "../_shared/auth-helper.ts";
 import {
   BACKGROUND_REMOVAL_UNAVAILABLE_MESSAGE,
-  PROVIDER_UNAVAILABLE_CODE,
   resolveBackgroundRemovalProvider,
   resolveCloudinaryUsable,
 } from "../_shared/aiImageProviders.ts";
-import { runAtlasImageJob } from "../_shared/aiImageJob.ts";
-import { logImageTool, pngSize, readImageInput, toDataUri, toolFailureResponse } from "../_shared/aiImageIo.ts";
-import { getOpeninaryConfig } from "../_shared/openinary.ts";
-import { checkUserRateLimit } from "../_shared/rate-limiter.ts";
-
-/** AtlasCloud jobs one caller may start per hour; each one is billed to the platform. */
-const ATLAS_JOBS_PER_HOUR = 30;
+import { imageInputFrom, parseToolRequest, pngSize, resumeTokenOf, toDataUri } from "../_shared/aiImageIo.ts";
+import {
+  invalidInput,
+  providerUnavailable,
+  readRouteEnv,
+  resumeAtlasRoute,
+  startAtlasRoute,
+  type AtlasRoute,
+} from "../_shared/aiImageAtlasRoute.ts";
 
 const CLOUDINARY_CLOUD_NAME = Deno.env.get('CLOUDINARY_CLOUD_NAME');
 const CLOUDINARY_API_KEY = Deno.env.get('CLOUDINARY_API_KEY');
@@ -23,8 +24,38 @@ const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')!;
 
 /** AtlasCloud background-removal model; an env override means a deprecation is not a deploy. */
 const DEFAULT_ATLAS_BG_REMOVAL_MODEL = 'midjourney/v8.2/remove-background';
-/** The remover can take over a minute per image, so it gets a longer poll budget than the upscaler. */
-const ATLAS_BG_REMOVAL_MAX_POLLS = 90;
+
+/** A longer source URL is not echoed back after a follow-up (the token has to stay small). */
+const MAX_TOKEN_URL_CHARS = 512;
+
+const ROUTE: AtlasRoute = {
+  source: 'remove-background',
+  operation: 'background_removal',
+  area: 'processed',
+  failureCode: 'BACKGROUND_REMOVAL_FAILED',
+  wantOutputDetails: true,
+  messages: {
+    unavailable: BACKGROUND_REMOVAL_UNAVAILABLE_MESSAGE,
+    busy: 'Background removal is busy. Please wait a moment and try again.',
+    timeout: 'Background removal timed out. Please try again.',
+    failed: 'Background removal failed. Please try again.',
+  },
+  completedBody: (job) => {
+    const size = job.output ? pngSize(job.output.bytes) : null;
+    return {
+      success: true,
+      original_url: job.meta.original_url ?? null,
+      processed_url: job.resultUrl,
+      public_id: job.storedPath,
+      width: size?.width ?? null,
+      height: size?.height ?? null,
+      format: job.output?.extension ?? null,
+      bytes: job.output?.bytes.length ?? null,
+      platform: 'atlascloud',
+      stored_in: job.storedIn,
+    };
+  },
+};
 
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
@@ -32,6 +63,7 @@ Deno.serve(async (req) => {
   }
 
   try {
+    const startedAt = Date.now();
     // Get API key from headers
     const apiKey = req.headers.get('x-api-key') ||
                    req.headers.get('authorization')?.replace(/^(Bearer |Apikey )/i, '') || '';
@@ -63,68 +95,40 @@ Deno.serve(async (req) => {
       return unauthorizedResponse('Invalid or missing API key');
     }
 
-    const parsed = await readImageInput(req);
-    if (!parsed.ok) return toolFailureResponse(parsed.status, 'INVALID_INPUT', parsed.message);
-    const { input } = parsed;
-
     // Which provider serves this request follows the admin CDN policy, not env presence:
     // a disabled Cloudinary account keeps its credentials.
     const dbAdmin = createClient(SUPABASE_URL, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '');
-    const atlasApiKey = Deno.env.get('ATLASCLOUD_API_KEY') ?? '';
+    const caller = { db: dbAdmin, userId, startedAt };
+
+    const body = await parseToolRequest(req);
+    if (!body.ok) return await invalidInput(ROUTE, caller, body.status, body.message);
+
+    // A follow-up for a job that was still running when the first request had to answer.
+    const resumeToken = resumeTokenOf(body.fields);
+    if (resumeToken) return await resumeAtlasRoute(ROUTE, caller, readRouteEnv(), resumeToken);
+
+    const parsed = await imageInputFrom(body);
+    if (!parsed.ok) return await invalidInput(ROUTE, caller, parsed.status, parsed.message);
+    const { input } = parsed;
+
+    const env = readRouteEnv();
     const decision = resolveBackgroundRemovalProvider({
       cloudinaryUsable: await resolveCloudinaryUsable(dbAdmin),
-      atlasConfigured: atlasApiKey !== '',
+      atlasConfigured: env.atlasApiKey !== '',
     });
-    if (!decision.ok) {
-      logImageTool('error', 'ai_image_provider_unavailable', { operation: 'background_removal', user_id: userId, reason: decision.reason });
-      return toolFailureResponse(503, PROVIDER_UNAVAILABLE_CODE, decision.message);
-    }
+    if (!decision.ok) return await providerUnavailable(ROUTE, caller, decision.message, decision.reason);
 
     const originalUrl = input.kind === 'url' ? input.url : 'base64_upload';
 
     if (decision.provider === 'atlascloud') {
-      // Each AtlasCloud job is paid by the platform account, so a caller is capped per hour.
-      const rate = await checkUserRateLimit(dbAdmin, 'remove-background:atlascloud', userId, ATLAS_JOBS_PER_HOUR, 3600);
-      if (!rate.allowed) {
-        logImageTool('warn', 'ai_image_rate_limited', { operation: 'background_removal', user_id: userId });
-        return toolFailureResponse(429, 'RATE_LIMITED', 'Too many image jobs this hour. Please try again later.');
-      }
-      const job = await runAtlasImageJob({
-        operation: 'background_removal',
-        userId,
+      return await startAtlasRoute(ROUTE, caller, env, {
         input,
-        openinary: getOpeninaryConfig(),
-        atlasApiKey,
         buildBody: (sourceUrl) => ({
           model: Deno.env.get('ATLASCLOUD_BG_REMOVAL_MODEL') || DEFAULT_ATLAS_BG_REMOVAL_MODEL,
           image: sourceUrl,
           enable_base64_output: false,
         }),
-        area: 'processed',
-        maxPolls: ATLAS_BG_REMOVAL_MAX_POLLS,
-        wantOutputDetails: true,
-        messages: {
-          unavailable: BACKGROUND_REMOVAL_UNAVAILABLE_MESSAGE,
-          busy: 'Background removal is busy. Please wait a moment and try again.',
-          timeout: 'Background removal timed out. Please try again.',
-          failed: 'Background removal failed. Please try again.',
-        },
-        failureCode: 'BACKGROUND_REMOVAL_FAILED',
-      });
-      if (!job.ok) return toolFailureResponse(job.status, job.code, job.message);
-
-      const size = job.output ? pngSize(job.output.bytes) : null;
-      return jsonResponse({
-        success: true,
-        original_url: originalUrl,
-        processed_url: job.resultUrl,
-        public_id: job.storedPath,
-        width: size?.width ?? null,
-        height: size?.height ?? null,
-        format: job.output?.extension ?? null,
-        bytes: job.output?.bytes.length ?? null,
-        platform: 'atlascloud',
-        stored_in: job.storedIn,
+        meta: { original_url: originalUrl.length <= MAX_TOKEN_URL_CHARS ? originalUrl : null },
       });
     }
 

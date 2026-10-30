@@ -11,7 +11,8 @@ const runBackgroundRemoval = vi.hoisted(() => vi.fn());
 vi.mock("@/hooks/use-toast", () => ({ useToast: () => ({ toast }) }));
 vi.mock("@/integrations/supabase/client", () => ({ supabase: { functions: { invoke }, from: vi.fn() } }));
 // The default policy writes to Openinary only, i.e. Cloudinary is not serving transforms.
-vi.mock("@/hooks/useCdnConfig", () => ({ useCdnConfig: () => ({ data: DEFAULT_CDN_STORAGE_CONFIG }) }));
+const cdnQuery = vi.hoisted(() => ({ current: {} as { data?: unknown; isLoading: boolean } }));
+vi.mock("@/hooks/useCdnConfig", () => ({ useCdnConfig: () => cdnQuery.current }));
 vi.mock("@/components/media/image-tools/aiImageTools", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/components/media/image-tools/aiImageTools")>()),
   runBackgroundRemoval,
@@ -33,6 +34,15 @@ describe("BackgroundRemovalDialog while Cloudinary is not serving transforms", (
     toast.mockClear();
     invoke.mockReset();
     runBackgroundRemoval.mockReset();
+    cdnQuery.current = { data: DEFAULT_CDN_STORAGE_CONFIG, isLoading: false };
+  });
+
+  it("does not guess while the CDN config is loading: the button waits and no notice claims anything", () => {
+    cdnQuery.current = { data: undefined, isLoading: true };
+    renderDialog();
+    expect(screen.getByRole("button", { name: /Remove Background/ })).toBeDisabled();
+    expect(screen.queryByText(/Edge quality and resize are not available right now/)).not.toBeInTheDocument();
+    expect(runBackgroundRemoval).not.toHaveBeenCalled();
   });
 
   it("removes the background on the server from the file's public URL, without any Cloudinary upload", async () => {

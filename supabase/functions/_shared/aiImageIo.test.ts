@@ -11,7 +11,7 @@ import {
 } from "./aiImageIo.ts";
 import type { OpeninaryConfig } from "./openinary.ts";
 
-const config: OpeninaryConfig = { serverUrl: "https://o.example", apiKey: "openinary-secret", folderPrefix: "postora.cloud" };
+const config: OpeninaryConfig = { serverUrl: "https://o.example", apiKey: "test-key", folderPrefix: "postora.cloud" };
 
 /** PNG signature + IHDR header: enough for type sniffing and size reading. */
 function png(width: number, height: number): Uint8Array {
@@ -152,7 +152,7 @@ Deno.test("an uploaded image is staged under the user's ai-tmp folder and gets a
     assertEquals(staged.ok, true);
     if (!staged.ok) return;
     const upload = calls.find((c) => c.url.endsWith("/api/upload"))!;
-    assertEquals(upload.auth, "Bearer openinary-secret");
+    assertEquals(upload.auth, "Bearer test-key");
     assertEquals(upload.folder, "postora.cloud/postora/user-1/ai-tmp");
     assertEquals(staged.path, `${upload.folder}/${upload.fileName}`);
     assertEquals(upload.fileName?.endsWith(".png"), true);
@@ -180,7 +180,7 @@ Deno.test("discardStaged deletes the staged object and never throws", async () =
     await discardStaged(config, "postora.cloud/postora/user-1/ai-tmp/x.png");
     const del = calls.find((c) => c.method === "DELETE")!;
     assertEquals(del.url, "https://o.example/api/storage/postora.cloud/postora/user-1/ai-tmp/x.png");
-    assertEquals(del.auth, "Bearer openinary-secret");
+    assertEquals(del.auth, "Bearer test-key");
   });
   const original = globalThis.fetch;
   globalThis.fetch = (() => Promise.reject(new Error("down"))) as typeof fetch;
@@ -193,16 +193,16 @@ Deno.test("discardStaged deletes the staged object and never throws", async () =
 
 Deno.test("fetchOutputImage returns bytes with the type read from them", async () => {
   const fetchFn = (() => Promise.resolve(new Response(png(8, 8)))) as typeof fetch;
-  const result = await fetchOutputImage("https://cdn.example/o.png", fetchFn);
+  const result = await fetchOutputImage("https://cdn.example/o.png", { fetchFn });
   assertEquals(result.ok && [result.extension, result.mime], ["png", "image/png"]);
 });
 
 Deno.test("fetchOutputImage refuses an error status, a non-image, an empty body and an oversize one", async () => {
   const answer = (body: BodyInit | null, init?: ResponseInit) => (() => Promise.resolve(new Response(body, init))) as typeof fetch;
-  assertEquals((await fetchOutputImage("https://c.example/o", answer("nope", { status: 404 }))).ok, false);
-  assertEquals((await fetchOutputImage("https://c.example/o", answer("<html>"))).ok, false);
-  assertEquals((await fetchOutputImage("https://c.example/o", answer(new Uint8Array(0)))).ok, false);
-  assertEquals((await fetchOutputImage("https://c.example/o", answer(png(1, 1), { headers: { "content-length": "999999999" } }))).ok, false);
-  assertEquals((await fetchOutputImage("https://c.example/o", answer(png(1, 1)), 10)).ok, false);
-  assertEquals((await fetchOutputImage("https://c.example/o", (() => Promise.reject(new Error("dns"))) as typeof fetch)).ok, false);
+  assertEquals((await fetchOutputImage("https://c.example/o", { fetchFn: answer("nope", { status: 404 }) })).ok, false);
+  assertEquals((await fetchOutputImage("https://c.example/o", { fetchFn: answer("<html>") })).ok, false);
+  assertEquals((await fetchOutputImage("https://c.example/o", { fetchFn: answer(new Uint8Array(0)) })).ok, false);
+  assertEquals((await fetchOutputImage("https://c.example/o", { fetchFn: answer(png(1, 1), { headers: { "content-length": "999999999" } }) })).ok, false);
+  assertEquals((await fetchOutputImage("https://c.example/o", { fetchFn: answer(png(1, 1)), maxBytes: 10 })).ok, false);
+  assertEquals((await fetchOutputImage("https://c.example/o", { fetchFn: (() => Promise.reject(new Error("dns"))) as typeof fetch })).ok, false);
 });

@@ -89,6 +89,14 @@ const bgRemovalResponse = `{
   "stored_in": "openinary"
 }
 
+# Slower than ~45 s (HTTP 202): send {"prediction_id": "<this id>"} to the same endpoint to collect the result
+{
+  "success": true,
+  "status": "processing",
+  "prediction_id": "eyJwcmVkaWN0aW9uIjoi...",
+  "retry_after_seconds": 3
+}
+
 # No provider available (HTTP 503):
 {
   "success": false,
@@ -311,6 +319,9 @@ export function ApiEndpointsSection() {
           <p className="text-muted-foreground mb-4">
             Remove background from images using AI (AtlasCloud). The result is stored in Postora storage and returned as <code>processed_url</code>.
             If no AI provider is available the endpoint answers <code>503</code> with <code>code: "PROVIDER_UNAVAILABLE"</code>.
+            A job that takes longer than about 45 seconds answers <code>202</code> with <code>status: "processing"</code> and a <code>prediction_id</code>:
+            send <code>{'{"prediction_id": "..."}'}</code> to the same endpoint until you get the <code>200</code> result (the id works for you only, for one hour).
+            Up to 30 jobs per hour per account.
           </p>
 
           <Tabs defaultValue="json" className="mb-4">
@@ -372,6 +383,10 @@ export function ApiEndpointsSection() {
           <p className="text-muted-foreground mb-4">
             Upscale images using AI. With no <code>platform</code> the request uses Cloudinary while it is available and AtlasCloud (2K/4K) otherwise;
             AtlasCloud results are stored in Postora storage. If no AI provider is available the endpoint answers <code>503</code> with <code>code: "PROVIDER_UNAVAILABLE"</code>.
+            AtlasCloud takes an optional <code>output_format</code> (<code>png</code> or <code>jpeg</code>; PNG in gives PNG out by default).
+            A job that takes longer than about 45 seconds answers <code>202</code> with <code>status: "processing"</code> and a <code>prediction_id</code>:
+            send <code>{'{"prediction_id": "..."}'}</code> to the same endpoint until you get the <code>200</code> result (the id works for you only, for one hour).
+            Up to 30 AtlasCloud jobs per hour per account.
           </p>
 
           <Tabs defaultValue="cloudinary-json" className="mb-4">

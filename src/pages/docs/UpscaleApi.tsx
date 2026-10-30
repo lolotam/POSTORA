@@ -119,11 +119,26 @@ export default function UpscaleApi() {
       icon: Sparkles
     },
     {
+      name: "output_format",
+      type: "string",
+      required: false,
+      description: "Output format of an AtlasCloud upscale. When omitted, a PNG source gives PNG (transparency is kept) and anything else gives JPEG.",
+      options: ["png", "jpeg"],
+      icon: Download
+    },
+    {
       name: "file",
       type: "binary",
       required: false,
-      description: "Image file for a multipart/form-data request, instead of image_url or image_base64.",
+      description: "Image file for a multipart/form-data request, instead of image_url or image_base64. When a file and image_url are both sent, the file is used.",
       icon: Upload
+    },
+    {
+      name: "prediction_id",
+      type: "string",
+      required: false,
+      description: "The id from an earlier HTTP 202 answer. Send it alone (no image) to collect that job's result.",
+      icon: Zap
     }
   ];
 
@@ -171,6 +186,7 @@ export default function UpscaleApi() {
                 <ul className="text-sm text-muted-foreground space-y-1">
                   <li>• Max upload size: 10MB (image_base64 or file)</li>
                   <li>• Formats: JPEG, PNG, WebP, GIF</li>
+                  <li>• Slow jobs answer HTTP 202 with a prediction_id; send it back to collect the result</li>
                   <li>• HTTP 503 PROVIDER_UNAVAILABLE when no AI provider is available</li>
                 </ul>
               </div>
@@ -298,17 +314,20 @@ export default function UpscaleApi() {
             <Tabs defaultValue="success">
               <TabsList className="mb-4">
                 <TabsTrigger value="success">Success</TabsTrigger>
+                <TabsTrigger value="processing">Still processing (202)</TabsTrigger>
                 <TabsTrigger value="error">Error</TabsTrigger>
               </TabsList>
               <TabsContent value="success">
                 <CodeBlock 
                   code={`{
   "success": true,
+  "status": "completed",
   "original_url": "https://example.com/photo.jpg",
   "upscaled_url": "https://cdn.postora.cloud/t/postora.cloud/postora/user-id/upscaled/abc123.jpg",
   "prediction_id": "pred_abc123",
   "target_resolution": "4k",
   "scale": 4,
+  "output_format": "jpeg",
   "platform": "atlascloud",
   "stored_in": "openinary"
 }`}
@@ -317,8 +336,33 @@ export default function UpscaleApi() {
                   title="Success response"
                 />
               </TabsContent>
+              <TabsContent value="processing">
+                <CodeBlock
+                  code={`# 1. The first request answers within about 45 seconds. A slower job returns HTTP 202:
+{
+  "success": true,
+  "status": "processing",
+  "prediction_id": "eyJwcmVkaWN0aW9uIjoi...",
+  "retry_after_seconds": 3,
+  "platform": "atlascloud",
+  "target_resolution": "4k",
+  "scale": 4,
+  "output_format": "jpeg"
+}
+
+# 2. Ask again with only that id until you get the normal success response (HTTP 200).
+#    Keep the same x-api-key. The id works for you only, for this endpoint, for one hour.
+curl -X POST "${API_BASE}/upscale-image" \\
+  -H "Content-Type: application/json" \\
+  -H "x-api-key: YOUR_API_KEY" \\
+  -d '{ "prediction_id": "eyJwcmVkaWN0aW9uIjoi..." }'`}
+                  language="bash"
+                  id="processing-response"
+                  title="Job still running"
+                />
+              </TabsContent>
               <TabsContent value="error">
-                <CodeBlock 
+                <CodeBlock
                   code={`{
   "success": false,
   "error": "Image upscaling is temporarily unavailable",
@@ -327,7 +371,8 @@ export default function UpscaleApi() {
 
 // HTTP 503: no AI provider is available right now, retry later.
 // HTTP 400 INVALID_INPUT: missing or unsupported image. HTTP 413: image over 10MB.
-// HTTP 429: busy, retry shortly. HTTP 502/504: the job failed or timed out.`}
+// HTTP 429 RATE_LIMITED: more than 30 AtlasCloud jobs this hour, or the provider is busy. HTTP 502/504: the job failed or timed out.
+// HTTP 400 INVALID_PREDICTION: unknown prediction_id. HTTP 410 PREDICTION_EXPIRED: older than one hour, start again.`}
                   language="json"
                   id="error-response"
                   title="Error response"

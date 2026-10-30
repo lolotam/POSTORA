@@ -1,10 +1,10 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { runAtlasImageModel } from "./atlasCloudImage.ts";
+import { checkAtlasJob, pollAtlasJob, submitAtlasJob, type AtlasCheckResult } from "./atlasCloudImage.ts";
 
 type Call = { url: string; method: string; auth: string | null; body: unknown };
 
 /** A fake AtlasCloud: `submit` answers the POST, `polls` answer the GETs in order (the last repeats). */
-function fakeAtlas(submit: () => Response | Promise<Response>, polls: Array<() => Response>) {
+function fakeAtlas(submit: () => Response | Promise<Response>, polls: Array<() => Response | Promise<Response>> = []) {
   const calls: Call[] = [];
   let pollIndex = 0;
   const fetchFn = ((input: string | URL | Request, init?: RequestInit) => {
@@ -21,87 +21,139 @@ function fakeAtlas(submit: () => Response | Promise<Response>, polls: Array<() =
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 const submitted = () => json({ code: 200, data: { id: "pred-1" } });
 const pending = () => json({ data: { status: "processing" } });
-const completed = () => json({ data: { status: "completed", outputs: ["https://cdn.example/out.png"] } });
-const noSleep = () => Promise.resolve();
+const completed = (output: unknown = "https://cdn.example/out.png") => () => json({ data: { status: "completed", outputs: [output] } });
 
-const base = { apiKey: "atlas-secret", body: { model: "m", image: "https://x/y.png" }, sleep: noSleep, pollIntervalMs: 1 };
+const base = { apiKey: "test-key" };
 
-Deno.test("submits the body with the bearer key, polls the prediction, returns the first output", async () => {
-  const { fetchFn, calls } = fakeAtlas(submitted, [pending, pending, completed]);
-  const result = await runAtlasImageModel({ ...base, fetchFn });
-  assertEquals(result, { ok: true, outputUrl: "https://cdn.example/out.png", predictionId: "pred-1" });
+Deno.test("submit sends the body with the bearer key and returns the prediction id", async () => {
+  const { fetchFn, calls } = fakeAtlas(submitted);
+  const result = await submitAtlasJob({ ...base, body: { model: "m", image: "https://x/y.png" }, fetchFn });
+  assertEquals(result, { ok: true, predictionId: "pred-1" });
   assertEquals(calls[0], {
     url: "https://api.atlascloud.ai/api/v1/model/generateImage",
     method: "POST",
-    auth: "Bearer atlas-secret",
+    auth: "Bearer test-key",
     body: { model: "m", image: "https://x/y.png" },
   });
-  assertEquals(calls.slice(1).map((c) => c.url), Array(3).fill("https://api.atlascloud.ai/api/v1/model/prediction/pred-1"));
-  assertEquals(calls[1].auth, "Bearer atlas-secret");
 });
 
-Deno.test("an exhausted balance is the operator's problem: provider_rejected, answered as 503", async () => {
-  for (const response of [() => new Response("insufficient_balance", { status: 402 }), () => json({ message: "Insufficient balance" }, 400)]) {
-    const result = await runAtlasImageModel({ ...base, fetchFn: fakeAtlas(response, []).fetchFn });
-    assertEquals(result.ok, false);
-    if (!result.ok) {
-      assertEquals(result.kind, "provider_rejected");
-      assertEquals(result.httpStatus, 503);
-    }
+Deno.test("submit: an exhausted balance or a refused key is the operator's problem, answered as 503", async () => {
+  const answers = [
+    () => new Response("insufficient_balance", { status: 402 }),
+    () => json({ message: "Insufficient balance" }, 400),
+    () => new Response("bad key", { status: 401 }),
+    () => json({ code: 400, message: "Not enough credit" }),
+  ];
+  for (const answer of answers) {
+    const result = await submitAtlasJob({ ...base, body: {}, fetchFn: fakeAtlas(answer).fetchFn });
+    assertEquals(result.ok === false && [result.kind, result.httpStatus], ["provider_rejected", 503]);
   }
 });
 
-Deno.test("a rejected provider key is provider_rejected (503), never a 401 for the caller", async () => {
-  const result = await runAtlasImageModel({ ...base, fetchFn: fakeAtlas(() => new Response("bad key", { status: 401 }), []).fetchFn });
-  assertEquals(result.ok === false && [result.kind, result.httpStatus], ["provider_rejected", 503]);
+Deno.test("submit: a rate limit is passed on as 429, an answer without an id is a bad_response", async () => {
+  const limited = await submitAtlasJob({ ...base, body: {}, fetchFn: fakeAtlas(() => new Response("slow down", { status: 429 })).fetchFn });
+  assertEquals(limited.ok === false && [limited.kind, limited.httpStatus], ["rate_limited", 429]);
+  const noId = await submitAtlasJob({ ...base, body: {}, fetchFn: fakeAtlas(() => json({ code: 200, data: {} })).fetchFn });
+  assertEquals(noId.ok === false && [noId.kind, noId.httpStatus], ["bad_response", 502]);
 });
 
-Deno.test("a rate limit is passed on as 429", async () => {
-  const result = await runAtlasImageModel({ ...base, fetchFn: fakeAtlas(() => new Response("slow down", { status: 429 }), []).fetchFn });
-  assertEquals(result.ok === false && [result.kind, result.httpStatus], ["rate_limited", 429]);
-});
-
-Deno.test("a balance message inside an HTTP 200 body is also provider_rejected", async () => {
-  const result = await runAtlasImageModel({ ...base, fetchFn: fakeAtlas(() => json({ code: 400, message: "Not enough credit" }), []).fetchFn });
-  assertEquals(result.ok === false && result.kind, "provider_rejected");
-});
-
-Deno.test("a submit answer without a prediction id is a bad_response", async () => {
-  const result = await runAtlasImageModel({ ...base, fetchFn: fakeAtlas(() => json({ code: 200, data: {} }), []).fetchFn });
-  assertEquals(result.ok === false && [result.kind, result.httpStatus], ["bad_response", 502]);
-});
-
-Deno.test("a failed prediction reports failed (502) and keeps the provider's reason for the log only", async () => {
-  const failed = () => json({ data: { status: "failed", error: "unsupported image" } });
-  const result = await runAtlasImageModel({ ...base, fetchFn: fakeAtlas(submitted, [pending, failed]).fetchFn });
-  assertEquals(result.ok, false);
-  if (!result.ok) {
-    assertEquals([result.kind, result.httpStatus], ["failed", 502]);
-    assertEquals(result.detail.includes("unsupported image"), true);
+Deno.test("submit: a timeout is a 504, an unreachable provider a 502", async () => {
+  const timedOut = ["Request timed out", "The signal has been aborted"].map((message) => (() => Promise.reject(new Error(message))) as typeof fetch);
+  for (const fetchFn of timedOut) {
+    const result = await submitAtlasJob({ ...base, body: {}, fetchFn });
+    assertEquals(result.ok === false && [result.kind, result.httpStatus], ["timeout", 504]);
   }
-});
+  const abort = (() => Promise.reject(new DOMException("aborted", "AbortError"))) as typeof fetch;
+  assertEquals((await submitAtlasJob({ ...base, body: {}, fetchFn: abort })).ok === false && "timeout", "timeout");
 
-Deno.test("a prediction that never finishes times out (504) after the poll budget", async () => {
-  const { fetchFn, calls } = fakeAtlas(submitted, [pending]);
-  const result = await runAtlasImageModel({ ...base, fetchFn, maxPolls: 4 });
-  assertEquals(result.ok === false && [result.kind, result.httpStatus], ["timeout", 504]);
-  assertEquals(calls.filter((c) => c.method === "GET").length, 4);
-});
-
-Deno.test("a poll that errors is retried instead of failing the job", async () => {
-  const flaky = () => new Response("oops", { status: 500 });
-  const result = await runAtlasImageModel({ ...base, fetchFn: fakeAtlas(submitted, [flaky, completed]).fetchFn });
-  assertEquals(result.ok, true);
-});
-
-Deno.test("a completed prediction whose output is not an https URL is a bad_response", async () => {
-  const insecure = () => json({ data: { status: "completed", outputs: ["http://internal.example/out.png"] } });
-  const result = await runAtlasImageModel({ ...base, fetchFn: fakeAtlas(submitted, [insecure]).fetchFn });
-  assertEquals(result.ok === false && result.kind, "bad_response");
-});
-
-Deno.test("an unreachable provider is unreachable (502), not a crash", async () => {
-  const fetchFn = (() => Promise.reject(new Error("connection refused"))) as typeof fetch;
-  const result = await runAtlasImageModel({ ...base, fetchFn });
+  const down = (() => Promise.reject(new Error("connection refused"))) as typeof fetch;
+  const result = await submitAtlasJob({ ...base, body: {}, fetchFn: down });
   assertEquals(result.ok === false && [result.kind, result.httpStatus], ["unreachable", 502]);
+});
+
+Deno.test("check: pending, done, and a failed prediction (the reason stays in the detail)", async () => {
+  const check = (answer: () => Response) => checkAtlasJob({ ...base, predictionId: "pred-1", fetchFn: fakeAtlas(submitted, [answer]).fetchFn });
+  assertEquals(await check(pending), { ok: true, state: "pending" });
+  assertEquals(await check(completed()), { ok: true, state: "done", outputUrl: "https://cdn.example/out.png" });
+  const failed = await check(() => json({ data: { status: "failed", error: "unsupported image" } }));
+  assertEquals(failed.ok === false && [failed.kind, failed.httpStatus, failed.detail.includes("unsupported image")], ["failed", 502, true]);
+});
+
+Deno.test("check: an output that is not a well-formed https URL is a bad_response", async () => {
+  for (const output of ["http://internal.example/out.png", "https://", "not a url", "/relative/out.png", 42, null]) {
+    const result = await checkAtlasJob({ ...base, predictionId: "p", fetchFn: fakeAtlas(submitted, [completed(output)]).fetchFn });
+    assertEquals(result.ok === false && result.kind, "bad_response", String(output));
+  }
+});
+
+Deno.test("check: rejections and rate limits are final at once; a missing prediction is a failure", async () => {
+  const check = (status: number) =>
+    checkAtlasJob({ ...base, predictionId: "p", fetchFn: fakeAtlas(submitted, [() => new Response("no", { status })]).fetchFn });
+  for (const status of [401, 402, 403]) {
+    const result = await check(status);
+    assertEquals(result.ok === false && [result.kind, result.httpStatus], ["provider_rejected", 503], String(status));
+  }
+  const limited = await check(429);
+  assertEquals(limited.ok === false && [limited.kind, limited.httpStatus], ["rate_limited", 429]);
+  const missing = await check(404);
+  assertEquals(missing.ok === false && missing.kind, "failed");
+});
+
+Deno.test("check: a server error or a network failure is transient, so it reads as pending", async () => {
+  assertEquals(
+    await checkAtlasJob({ ...base, predictionId: "p", fetchFn: fakeAtlas(submitted, [() => new Response("oops", { status: 503 })]).fetchFn }),
+    { ok: true, state: "pending" },
+  );
+  const down = (() => Promise.reject(new Error("reset"))) as typeof fetch;
+  assertEquals(await checkAtlasJob({ ...base, predictionId: "p", fetchFn: down }), { ok: true, state: "pending" });
+});
+
+/** A clock the fake `sleep` advances, so the polling deadline is exercised without waiting. */
+function fakeClock() {
+  let now = 1_000_000;
+  const sleeps: number[] = [];
+  return {
+    now: () => now,
+    sleep: (ms: number) => {
+      sleeps.push(ms);
+      now += ms;
+      return Promise.resolve();
+    },
+    sleeps,
+  };
+}
+
+Deno.test("poll: keeps checking until the prediction is done", async () => {
+  const clock = fakeClock();
+  const { fetchFn, calls } = fakeAtlas(submitted, [pending, pending, completed()]);
+  const result = await pollAtlasJob({ ...base, predictionId: "pred-1", fetchFn, deadline: clock.now() + 30_000, now: clock.now, sleep: clock.sleep });
+  assertEquals(result, { ok: true, state: "done", outputUrl: "https://cdn.example/out.png" });
+  assertEquals(calls.length, 3);
+  assertEquals(calls[0].url, "https://api.atlascloud.ai/api/v1/model/prediction/pred-1");
+});
+
+Deno.test("poll: at the deadline a running job is still pending, never a timeout failure", async () => {
+  const clock = fakeClock();
+  const { fetchFn, calls } = fakeAtlas(submitted, [pending]);
+  const result = await pollAtlasJob({ ...base, predictionId: "p", fetchFn, deadline: clock.now() + 5_000, intervalMs: 2_000, now: clock.now, sleep: clock.sleep });
+  assertEquals(result, { ok: true, state: "pending" });
+  assertEquals(clock.sleeps, [2_000, 2_000, 1_000]); // the last wait is cut to the deadline
+  assertEquals(calls.length, 4); // one final look at the deadline
+});
+
+Deno.test("poll: a refused key ends the loop on the first answer instead of retrying until the deadline", async () => {
+  const clock = fakeClock();
+  const { fetchFn, calls } = fakeAtlas(submitted, [() => new Response("no", { status: 401 })]);
+  const result: AtlasCheckResult = await pollAtlasJob({ ...base, predictionId: "p", fetchFn, deadline: clock.now() + 30_000, now: clock.now, sleep: clock.sleep });
+  assertEquals(result.ok === false && result.kind, "provider_rejected");
+  assertEquals(calls.length, 1);
+  assertEquals(clock.sleeps, []);
+});
+
+Deno.test("poll: transient errors are retried within the deadline", async () => {
+  const clock = fakeClock();
+  const flaky = () => new Response("oops", { status: 500 });
+  const { fetchFn } = fakeAtlas(submitted, [flaky, flaky, completed()]);
+  const result = await pollAtlasJob({ ...base, predictionId: "p", fetchFn, deadline: clock.now() + 30_000, now: clock.now, sleep: clock.sleep });
+  assertEquals(result.ok && result.state, "done");
 });

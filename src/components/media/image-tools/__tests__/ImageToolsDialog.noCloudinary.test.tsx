@@ -17,7 +17,8 @@ vi.mock("@/hooks/useMediaOperationsHistory", () => ({
   useLogMediaOperation: () => ({ logOperation: vi.fn().mockResolvedValue("op-1"), completeOperation, failOperation: vi.fn() }),
 }));
 // The default policy writes to Openinary only, i.e. Cloudinary is not serving transforms.
-vi.mock("@/hooks/useCdnConfig", () => ({ useCdnConfig: () => ({ data: DEFAULT_CDN_STORAGE_CONFIG }) }));
+const cdnQuery = vi.hoisted(() => ({ current: {} as { data?: unknown; isLoading: boolean } }));
+vi.mock("@/hooks/useCdnConfig", () => ({ useCdnConfig: () => cdnQuery.current }));
 vi.mock("../aiImageTools", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../aiImageTools")>()),
   runBackgroundRemoval,
@@ -45,6 +46,7 @@ describe("ImageToolsDialog while Cloudinary is not serving transforms", () => {
     runBackgroundRemoval.mockReset();
     runUpscale.mockReset();
     completeOperation.mockReset();
+    cdnQuery.current = { data: DEFAULT_CDN_STORAGE_CONFIG, isLoading: false };
   });
 
   it("removes the background on the server from the file's public URL, without any Cloudinary upload", async () => {
@@ -70,7 +72,49 @@ describe("ImageToolsDialog while Cloudinary is not serving transforms", () => {
 
     await waitFor(() => expect(screen.getByAltText("Processed")).toHaveAttribute("src", "https://o.example/t/step2.jpg"));
     expect(runBackgroundRemoval).toHaveBeenCalledWith(file.publicUrl);
-    expect(runUpscale).toHaveBeenCalledWith("https://o.example/t/step1.png");
+    // the cut-out has transparency, so the upscale after it asks for PNG; no provider is named
+    expect(runUpscale).toHaveBeenCalledWith("https://o.example/t/step1.png", { outputFormat: "png" });
+  });
+
+  it("upscale alone leaves the output format to the server", async () => {
+    runUpscale.mockResolvedValue("https://o.example/t/up.jpg");
+    renderDialog();
+
+    fireEvent.click(screen.getAllByRole("switch")[SWITCH.bgRemoval]); // off
+    fireEvent.click(screen.getAllByRole("switch")[SWITCH.upscale]); // on
+    fireEvent.click(await screen.findByRole("button", { name: /Process Image/ }));
+
+    await waitFor(() => expect(screen.getByAltText("Processed")).toBeInTheDocument());
+    expect(runBackgroundRemoval).not.toHaveBeenCalled();
+    expect(runUpscale).toHaveBeenCalledWith(file.publicUrl, {});
+  });
+
+  it("does not guess while the CDN config is loading: nothing runs, and no notice claims the tools are gone", async () => {
+    cdnQuery.current = { data: undefined, isLoading: true };
+    renderDialog();
+
+    expect(screen.getByRole("button", { name: /Process Image/ })).toBeDisabled();
+    expect(screen.queryByText(/Only background removal and upscale are available/)).not.toBeInTheDocument();
+    expect(screen.getAllByRole("switch")[SWITCH.resize]).toBeEnabled();
+    expect(runBackgroundRemoval).not.toHaveBeenCalled();
+  });
+
+  it("switches that were on turn off when the transforms are confirmed unavailable, instead of staying on and disabled", async () => {
+    cdnQuery.current = { data: undefined, isLoading: true };
+    const { rerender } = render(<ImageToolsDialog open onClose={() => {}} file={file} cloudName="" />);
+    fireEvent.click(screen.getAllByRole("switch")[SWITCH.resize]);
+    fireEvent.click(screen.getAllByRole("switch")[SWITCH.filters]);
+    fireEvent.click(screen.getAllByRole("switch")[SWITCH.quality]);
+    expect(screen.getAllByRole("switch")[SWITCH.resize]).toBeChecked();
+
+    cdnQuery.current = { data: DEFAULT_CDN_STORAGE_CONFIG, isLoading: false };
+    rerender(<ImageToolsDialog open onClose={() => {}} file={file} cloudName="" />);
+
+    await waitFor(() => expect(screen.getAllByRole("switch")[SWITCH.resize]).not.toBeChecked());
+    for (const index of [SWITCH.resize, SWITCH.filters, SWITCH.quality]) {
+      expect(screen.getAllByRole("switch")[index]).not.toBeChecked();
+      expect(screen.getAllByRole("switch")[index]).toBeDisabled();
+    }
   });
 
   it("offers upscale without a provider choice, even with the AtlasCloud flag off", async () => {

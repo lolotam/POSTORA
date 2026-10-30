@@ -15,7 +15,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { readUploadRefusal } from "@/components/media/uploadErrors";
 import { useToast } from "@/hooks/use-toast";
 import { useCdnConfig } from "@/hooks/useCdnConfig";
-import { isCloudinaryTransformsAvailable, isProviderUnavailable, runBackgroundRemoval } from "@/components/media/image-tools/aiImageTools";
+import { cloudinaryTransformsState, isProviderUnavailable, runBackgroundRemoval } from "@/components/media/image-tools/aiImageTools";
 import {
   Loader2,
   Download,
@@ -69,9 +69,11 @@ export function BackgroundRemovalDialog({
   cloudName,
   onProcessComplete,
 }: BackgroundRemovalDialogProps) {
-  const { data: cdnConfig } = useCdnConfig();
-  // Without Cloudinary the server-side AI remover is the only way; edge quality and resize are Cloudinary transforms.
-  const cloudinaryAvailable = isCloudinaryTransformsAvailable(cdnConfig);
+  const cdn = useCdnConfig();
+  // `unavailable`: the server-side AI remover is the only way; edge quality and resize are Cloudinary transforms.
+  const cdnState = cloudinaryTransformsState(cdn);
+  const cloudinaryAvailable = cdnState === "available";
+  const transformsUnavailable = cdnState === "unavailable";
   const [processing, setProcessing] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [processedUrl, setProcessedUrl] = useState<string | null>(null);
@@ -194,12 +196,12 @@ export function BackgroundRemovalDialog({
   };
 
   const handleProcess = async () => {
-    if (!file) return;
+    if (!file || cdnState === "loading") return;
 
     setProcessing(true);
 
     try {
-      if (!cloudinaryAvailable) {
+      if (transformsUnavailable) {
         setProcessedUrl(await runBackgroundRemoval(file.publicUrl));
         toast({
           title: t("toast.backgroundRemoved", "Background removed"),
@@ -426,7 +428,7 @@ export function BackgroundRemovalDialog({
             </Alert>
           )}
 
-          {!cloudinaryAvailable && (
+          {transformsUnavailable && (
             <Alert>
               <Upload className="h-4 w-4" />
               <AlertDescription>
@@ -436,7 +438,7 @@ export function BackgroundRemovalDialog({
           )}
 
           {/* Settings: edge quality and resize are Cloudinary transforms */}
-          <div className={cn("grid grid-cols-1 sm:grid-cols-2 gap-4 p-4 bg-muted/50 rounded-lg", !cloudinaryAvailable && "hidden")}>
+          <div className={cn("grid grid-cols-1 sm:grid-cols-2 gap-4 p-4 bg-muted/50 rounded-lg", transformsUnavailable && "hidden")}>
             <div className="space-y-2">
               <Label className="flex items-center gap-2">
                 <SlidersHorizontal className="w-4 h-4" />
@@ -608,7 +610,7 @@ export function BackgroundRemovalDialog({
               </Button>
               <Button
                 onClick={handleProcess}
-                disabled={processing || uploading || !file}
+                disabled={processing || uploading || !file || cdnState === "loading"}
               >
                 {processing || uploading ? (
                   <>

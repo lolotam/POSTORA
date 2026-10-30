@@ -1,47 +1,73 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { runAtlasImageJob, type AtlasJobDeps, type AtlasJobSpec } from "./aiImageJob.ts";
-import type { AtlasResult } from "./atlasCloudImage.ts";
-import type { FetchedImage, ImageInput } from "./aiImageIo.ts";
+import {
+  FINISH_BUDGET_MS,
+  POLL_BUDGET_MS,
+  abandonAtlasImageJob,
+  resumeAtlasImageJob,
+  startAtlasImageJob,
+  type AtlasJobBase,
+  type AtlasJobDeps,
+  type StartSpec,
+} from "./aiImageJob.ts";
+import type { AtlasCheckResult, AtlasSubmitResult } from "./atlasCloudImage.ts";
+import { resultNameFor, type FetchedImage, type ImageInput } from "./aiImageIo.ts";
+import type { JobTokenPayload } from "./aiImageToken.ts";
 import type { OpeninaryConfig } from "./openinary.ts";
 
-const openinary: OpeninaryConfig = { serverUrl: "https://o.example", apiKey: "openinary-secret", folderPrefix: "postora.cloud" };
+const openinary: OpeninaryConfig = { serverUrl: "https://o.example", apiKey: "test-key", folderPrefix: "postora.cloud" };
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 0, 2, 0, 0, 0, 2, 8, 6, 0, 0, 0]);
 const urlInput: ImageInput = { kind: "url", url: "https://x.example/in.png" };
 const bytesInput: ImageInput = { kind: "bytes", bytes: PNG, extension: "png", mime: "image/png" };
+const T0 = 5_000_000;
 
 const messages = { unavailable: "UNAVAILABLE", busy: "BUSY", timeout: "TIMEOUT", failed: "FAILED" };
-const spec = (over: Partial<AtlasJobSpec> = {}): AtlasJobSpec => ({
+const base = (over: Partial<AtlasJobBase> = {}): AtlasJobBase => ({
   operation: "background_removal",
   userId: "user-1",
-  input: urlInput,
   openinary,
-  atlasApiKey: "atlas-secret",
-  buildBody: (image) => ({ model: "m", image }),
+  atlasApiKey: "test-key",
   area: "processed",
+  startedAt: T0,
+  sign: (payload) => Promise.resolve(`signed:${payload.prediction}:${payload.staged ?? "none"}`),
   messages,
   failureCode: "JOB_FAILED",
+  meta: { original_url: "https://x.example/in.png" },
   ...over,
 });
+const start = (over: Partial<StartSpec> = {}): StartSpec => ({ ...base(), input: urlInput, buildBody: (image) => ({ model: "m", image }), ...over });
 
-const atlasOk: AtlasResult = { ok: true, outputUrl: "https://atlas.example/out.png", predictionId: "pred-9" };
+const done: AtlasCheckResult = { ok: true, state: "done", outputUrl: "https://atlas.example/out.png" };
+const pending: AtlasCheckResult = { ok: true, state: "pending" };
 const fetchedPng: FetchedImage = { ok: true, bytes: PNG, extension: "png", mime: "image/png" };
 
-type Seen = { atlasBodies: unknown[]; outputFetches: string[] };
-function deps(atlas: AtlasResult, output: FetchedImage = fetchedPng): { deps: AtlasJobDeps; seen: Seen } {
-  const seen: Seen = { atlasBodies: [], outputFetches: [] };
-  return {
-    seen,
-    deps: {
-      runAtlas: (options) => {
-        seen.atlasBodies.push(options.body);
-        return Promise.resolve(atlas);
-      },
-      fetchOutput: (url) => {
-        seen.outputFetches.push(url);
-        return Promise.resolve(output);
-      },
+interface Seen {
+  submitted: unknown[];
+  polls: Array<{ deadline: number }>;
+  checks: string[];
+  outputFetches: Array<{ url: string; timeoutMs?: number }>;
+}
+function deps(over: { submit?: AtlasSubmitResult; poll?: AtlasCheckResult; check?: AtlasCheckResult; output?: FetchedImage; now?: () => number } = {}) {
+  const seen: Seen = { submitted: [], polls: [], checks: [], outputFetches: [] };
+  const d: AtlasJobDeps = {
+    submit: (options) => {
+      seen.submitted.push(options.body);
+      return Promise.resolve(over.submit ?? { ok: true, predictionId: "pred-9" });
     },
+    poll: (options) => {
+      seen.polls.push({ deadline: options.deadline });
+      return Promise.resolve(over.poll ?? done);
+    },
+    check: (options) => {
+      seen.checks.push(options.predictionId);
+      return Promise.resolve(over.check ?? done);
+    },
+    fetchOutput: (url, options) => {
+      seen.outputFetches.push({ url, timeoutMs: options?.timeoutMs });
+      return Promise.resolve(over.output ?? fetchedPng);
+    },
+    now: over.now ?? (() => T0 + 1000),
   };
+  return { deps: d, seen };
 }
 
 type Call = { method: string; url: string };
@@ -68,94 +94,198 @@ async function withOpeninary(failUpload: boolean, run: (calls: Call[]) => Promis
     globalThis.fetch = original;
   }
 }
+const deletes = (calls: Call[]) => calls.filter((c) => c.method === "DELETE");
 
-Deno.test("a URL input goes straight to the model and the result is copied into Openinary", async () => {
+Deno.test("a URL input goes straight to the model; the result is copied into Openinary under a name derived from the prediction", async () => {
   await withOpeninary(false, async (calls) => {
-    const { deps: d, seen } = deps(atlasOk);
-    const result = await runAtlasImageJob(spec(), d);
-    assertEquals(seen.atlasBodies, [{ model: "m", image: "https://x.example/in.png" }]);
-    assertEquals(seen.outputFetches, ["https://atlas.example/out.png"]);
-    assertEquals(result.ok, true);
-    if (!result.ok) return;
+    const { deps: d, seen } = deps();
+    const result = await startAtlasImageJob(start(), d);
+    assertEquals(seen.submitted, [{ model: "m", image: "https://x.example/in.png" }]);
+    assertEquals(seen.outputFetches.map((f) => f.url), ["https://atlas.example/out.png"]);
+    assertEquals(result.ok && result.status, "completed");
+    if (!result.ok || result.status !== "completed") return;
     assertEquals(result.storedIn, "openinary");
     assertEquals(result.predictionId, "pred-9");
-    assertEquals(result.resultUrl.startsWith("https://o.example/t/postora.cloud/postora/user-1/processed/"), true);
-    assertEquals(result.storedPath === null, false);
-    assertEquals(calls.some((c) => c.method === "DELETE"), false); // nothing was staged
+    assertEquals(result.storedPath, `postora.cloud/postora/user-1/processed/${await resultNameFor("pred-9")}.png`);
+    assertEquals(result.resultUrl, `https://o.example/t/${result.storedPath}`);
+    assertEquals(result.meta, { original_url: "https://x.example/in.png" });
+    assertEquals(deletes(calls).length, 0); // nothing was staged
   });
 });
 
-Deno.test("an uploaded input is staged for the model and the staged copy is removed afterwards", async () => {
+Deno.test("polling stops at the poll budget, measured from the start of the request", async () => {
+  const { deps: d, seen } = deps();
+  await withOpeninary(false, async () => {
+    await startAtlasImageJob(start(), d);
+  });
+  assertEquals(seen.polls, [{ deadline: T0 + POLL_BUDGET_MS }]);
+  assertEquals(POLL_BUDGET_MS < FINISH_BUDGET_MS && FINISH_BUDGET_MS <= 45_000, true);
+});
+
+Deno.test("an uploaded input is staged for the model and the staged copy is removed once the job is done", async () => {
   await withOpeninary(false, async (calls) => {
-    const { deps: d, seen } = deps(atlasOk);
-    const result = await runAtlasImageJob(spec({ input: bytesInput }), d);
-    assertEquals(result.ok, true);
-    const body = seen.atlasBodies[0] as { image: string };
+    const { deps: d, seen } = deps();
+    const result = await startAtlasImageJob(start({ input: bytesInput }), d);
+    assertEquals(result.ok && result.status, "completed");
+    const body = seen.submitted[0] as { image: string };
     assertEquals(body.image.startsWith("https://o.example/t/postora.cloud/postora/user-1/ai-tmp/"), true);
-    const deletes = calls.filter((c) => c.method === "DELETE");
-    assertEquals(deletes.length, 1);
-    assertEquals(deletes[0].url.includes("/ai-tmp/"), true);
+    assertEquals(deletes(calls).length, 1);
+    assertEquals(deletes(calls)[0].url.includes("/ai-tmp/"), true);
   });
 });
 
-Deno.test("the staged copy is removed even when the model fails", async () => {
+Deno.test("a job still running at the budget answers 'processing' with a token and keeps the staged input", async () => {
   await withOpeninary(false, async (calls) => {
-    const { deps: d } = deps({ ok: false, kind: "failed", httpStatus: 502, detail: "boom" });
-    const result = await runAtlasImageJob(spec({ input: bytesInput }), d);
-    assertEquals(result.ok, false);
-    assertEquals(calls.filter((c) => c.method === "DELETE").length, 1);
+    const { deps: d, seen } = deps({ poll: pending });
+    const result = await startAtlasImageJob(start({ input: bytesInput }), d);
+    assertEquals(result.ok && result.status, "processing");
+    if (!result.ok || result.status !== "processing") return;
+    const staged = (seen.submitted[0] as { image: string }).image.replace("https://o.example/t/", "");
+    assertEquals(result.token, `signed:pred-9:${staged}`); // the token remembers the staged path
+    assertEquals(result.retryAfterSeconds > 0, true);
+    assertEquals(deletes(calls).length, 0);
+    assertEquals(seen.outputFetches, []);
   });
 });
 
-Deno.test("an uploaded input without Openinary is a logged 503, and the model is never called", async () => {
-  const { deps: d, seen } = deps(atlasOk);
-  const result = await runAtlasImageJob(spec({ input: bytesInput, openinary: null }), d);
-  assertEquals(result, { ok: false, status: 503, code: "PROVIDER_UNAVAILABLE", message: "UNAVAILABLE" });
-  assertEquals(seen.atlasBodies, []);
+Deno.test("the token records the prediction, operation, result area and the values to report", async () => {
+  let signed: JobTokenPayload | null = null;
+  const { deps: d } = deps({ poll: pending });
+  await startAtlasImageJob(start({ sign: (p) => { signed = p; return Promise.resolve("tok"); } }), d);
+  assertEquals(signed, {
+    prediction: "pred-9",
+    staged: null,
+    operation: "background_removal",
+    area: "processed",
+    issuedAt: T0,
+    meta: { original_url: "https://x.example/in.png" },
+  });
 });
 
-Deno.test("staging that fails is a 503 and the model is never called", async () => {
+Deno.test("when staging fails, or the model cannot be submitted, the staged copy goes and the failure is mapped", async () => {
+  await withOpeninary(false, async (calls) => {
+    const { deps: d } = deps({ submit: { ok: false, kind: "failed", httpStatus: 502, detail: "boom" } });
+    const result = await startAtlasImageJob(start({ input: bytesInput }), d);
+    assertEquals(result.ok === false && [result.status, result.code, result.reason], [502, "JOB_FAILED", "failed"]);
+    assertEquals(deletes(calls).length, 1);
+  });
   await withOpeninary(true, async () => {
-    const { deps: d, seen } = deps(atlasOk);
-    const result = await runAtlasImageJob(spec({ input: bytesInput }), d);
-    assertEquals(result.ok === false && [result.status, result.code], [503, "PROVIDER_UNAVAILABLE"]);
-    assertEquals(seen.atlasBodies, []);
+    const { deps: d, seen } = deps();
+    const result = await startAtlasImageJob(start({ input: bytesInput }), d);
+    assertEquals(result.ok === false && [result.status, result.code, result.reason], [503, "PROVIDER_UNAVAILABLE", "stage_failed"]);
+    assertEquals(seen.submitted, []);
   });
 });
 
-Deno.test("provider failures map to the caller-safe status, code and message", async () => {
-  const cases: Array<[AtlasResult, number, string, string]> = [
-    [{ ok: false, kind: "provider_rejected", httpStatus: 503, detail: "key revoked" }, 503, "PROVIDER_UNAVAILABLE", "UNAVAILABLE"],
-    [{ ok: false, kind: "rate_limited", httpStatus: 429, detail: "x" }, 429, "JOB_FAILED", "BUSY"],
-    [{ ok: false, kind: "timeout", httpStatus: 504, detail: "x" }, 504, "JOB_FAILED", "TIMEOUT"],
-    [{ ok: false, kind: "failed", httpStatus: 502, detail: "secret provider text" }, 502, "JOB_FAILED", "FAILED"],
-    [{ ok: false, kind: "unreachable", httpStatus: 502, detail: "x" }, 502, "JOB_FAILED", "FAILED"],
+Deno.test("an uploaded input without Openinary is a 503 and the model is never called", async () => {
+  const { deps: d, seen } = deps();
+  const result = await startAtlasImageJob(start({ input: bytesInput, openinary: null }), d);
+  assertEquals(result.ok === false && [result.status, result.code, result.message, result.reason], [503, "PROVIDER_UNAVAILABLE", "UNAVAILABLE", "openinary_not_configured"]);
+  assertEquals(seen.submitted, []);
+});
+
+Deno.test("provider failures map to the caller-safe status, code, message and log reason", async () => {
+  const cases: Array<[AtlasCheckResult, number, string, string, string]> = [
+    [{ ok: false, kind: "provider_rejected", httpStatus: 503, detail: "key revoked" }, 503, "PROVIDER_UNAVAILABLE", "UNAVAILABLE", "provider_rejected"],
+    [{ ok: false, kind: "rate_limited", httpStatus: 429, detail: "x" }, 429, "JOB_FAILED", "BUSY", "rate_limited"],
+    [{ ok: false, kind: "timeout", httpStatus: 504, detail: "x" }, 504, "JOB_FAILED", "TIMEOUT", "timeout"],
+    [{ ok: false, kind: "failed", httpStatus: 502, detail: "raw provider text" }, 502, "JOB_FAILED", "FAILED", "failed"],
+    [{ ok: false, kind: "bad_response", httpStatus: 502, detail: "x" }, 502, "JOB_FAILED", "FAILED", "bad_response"],
   ];
-  for (const [atlas, status, code, message] of cases) {
-    const result = await runAtlasImageJob(spec(), deps(atlas).deps);
-    assertEquals(result, { ok: false, status, code, message });
+  for (const [poll, status, code, message, reason] of cases) {
+    const result = await startAtlasImageJob(start(), deps({ poll }).deps);
+    assertEquals(result.ok === false && [result.status, result.code, result.message, result.reason], [status, code, message, reason]);
+    assertEquals(result.ok === false && JSON.stringify(result).includes("raw provider text"), false);
   }
 });
 
 Deno.test("a result that cannot be copied is still returned, from the provider's URL (the job is paid for)", async () => {
   await withOpeninary(true, async () => {
-    const result = await runAtlasImageJob(spec(), deps(atlasOk).deps);
-    assertEquals(result.ok && [result.storedIn, result.resultUrl, result.storedPath], ["provider", "https://atlas.example/out.png", null]);
+    const result = await startAtlasImageJob(start(), deps().deps);
+    assertEquals(result.ok && result.status === "completed" && [result.storedIn, result.resultUrl, result.storedPath], ["provider", "https://atlas.example/out.png", null]);
   });
   await withOpeninary(false, async () => {
-    const result = await runAtlasImageJob(spec(), deps(atlasOk, { ok: false, error: "output fetch failed: HTTP 404" }).deps);
-    assertEquals(result.ok && [result.storedIn, result.resultUrl, result.output], ["provider", "https://atlas.example/out.png", null]);
+    const result = await startAtlasImageJob(start(), deps({ output: { ok: false, error: "output fetch failed: HTTP 404" } }).deps);
+    assertEquals(result.ok && result.status === "completed" && [result.storedIn, result.resultUrl, result.output], ["provider", "https://atlas.example/out.png", null]);
   });
 });
 
 Deno.test("without Openinary the output is only downloaded when the caller reports its details", async () => {
-  const quiet = deps(atlasOk);
-  const withoutDetails = await runAtlasImageJob(spec({ openinary: null }), quiet.deps);
+  const quiet = deps();
+  const without = await startAtlasImageJob(start({ openinary: null }), quiet.deps);
   assertEquals(quiet.seen.outputFetches, []);
-  assertEquals(withoutDetails.ok && [withoutDetails.storedIn, withoutDetails.output], ["provider", null]);
+  assertEquals(without.ok && without.status === "completed" && [without.storedIn, without.output], ["provider", null]);
 
-  const detailed = deps(atlasOk);
-  const withDetails = await runAtlasImageJob(spec({ openinary: null, wantOutputDetails: true }), detailed.deps);
+  const detailed = deps();
+  const withDetails = await startAtlasImageJob(start({ openinary: null, wantOutputDetails: true }), detailed.deps);
   assertEquals(detailed.seen.outputFetches.length, 1);
-  assertEquals(withDetails.ok && withDetails.output?.extension, "png");
+  assertEquals(withDetails.ok && withDetails.status === "completed" && withDetails.output?.extension, "png");
+});
+
+Deno.test("a job that finishes near the end of the budget skips the copy and returns the provider URL", async () => {
+  await withOpeninary(false, async () => {
+    const late = deps({ now: () => T0 + FINISH_BUDGET_MS - 1000 });
+    const result = await startAtlasImageJob(start(), late.deps);
+    assertEquals(late.seen.outputFetches, []);
+    assertEquals(result.ok && result.status === "completed" && [result.storedIn, result.resultUrl], ["provider", "https://atlas.example/out.png"]);
+  });
+});
+
+Deno.test("the output download never gets more than the time left in the budget", async () => {
+  await withOpeninary(false, async () => {
+    const { deps: d, seen } = deps({ now: () => T0 + FINISH_BUDGET_MS - 10_000 });
+    await startAtlasImageJob(start(), d);
+    assertEquals(seen.outputFetches[0].timeoutMs, 5_000);
+  });
+});
+
+const payload: JobTokenPayload = {
+  prediction: "pred-9",
+  staged: "postora.cloud/postora/user-1/ai-tmp/in.png",
+  operation: "background_removal",
+  area: "processed",
+  issuedAt: T0 - 60_000,
+  meta: { original_url: "https://x.example/in.png" },
+};
+const resumeSpec = () => ({ ...base({ meta: payload.meta }), token: "the-token", payload });
+
+Deno.test("resume: still running answers 'processing' again with the same token and keeps the staged input", async () => {
+  await withOpeninary(false, async (calls) => {
+    const { deps: d, seen } = deps({ check: pending });
+    const result = await resumeAtlasImageJob(resumeSpec(), d);
+    assertEquals(result.ok && result.status === "processing" && result.token, "the-token");
+    assertEquals(seen.checks, ["pred-9"]);
+    assertEquals(deletes(calls).length, 0);
+  });
+});
+
+Deno.test("resume: a finished job is copied into Openinary, the staged input is removed, and the stored name is the same every time", async () => {
+  await withOpeninary(false, async (calls) => {
+    const first = await resumeAtlasImageJob(resumeSpec(), deps({ check: done }).deps);
+    const again = await resumeAtlasImageJob(resumeSpec(), deps({ check: done }).deps);
+    assertEquals(first.ok && first.status === "completed" && first.storedIn, "openinary");
+    assertEquals(
+      first.ok && first.status === "completed" && first.storedPath,
+      again.ok && again.status === "completed" && again.storedPath,
+    );
+    assertEquals(deletes(calls).length, 2);
+    assertEquals(deletes(calls)[0].url.includes("/ai-tmp/in.png"), true);
+  });
+});
+
+Deno.test("resume: a failed job removes the staged input and reports the failure", async () => {
+  await withOpeninary(false, async (calls) => {
+    const result = await resumeAtlasImageJob(resumeSpec(), deps({ check: { ok: false, kind: "failed", httpStatus: 502, detail: "x" } }).deps);
+    assertEquals(result.ok === false && [result.status, result.code], [502, "JOB_FAILED"]);
+    assertEquals(deletes(calls).length, 1);
+  });
+});
+
+Deno.test("abandon removes the staged input of a token that can no longer be resumed", async () => {
+  await withOpeninary(false, async (calls) => {
+    await abandonAtlasImageJob(base(), payload, deps().deps);
+    assertEquals(deletes(calls).length, 1);
+    await abandonAtlasImageJob(base(), { ...payload, staged: null }, deps().deps);
+    assertEquals(deletes(calls).length, 1);
+  });
 });

@@ -119,11 +119,49 @@ like `upscale-image`, so the app can call it. The legacy key lookup stays in the
 and rejects the shape anywhere new); the JWT path uses `_shared/auth-helper.ts`
 `authenticateCaller`. `upscale-image` auth is untouched.
 
+## Decision 6 — no request outlives ~45 s (added after review)
+
+The functions run in a worker killed at 60 s behind a gateway with a 60 s upstream timeout, so a
+slow paid job must not hold one request. Budgets are measured from the start of the request
+(`_shared/aiImageJob.ts`): submit and poll until 32 s; everything (copying the result, cleanup)
+by 44 s. Each provider call has a 10 s timeout, the output download is capped by the time left
+(body included, streamed against a 40 MB limit), and a late finish returns the provider URL instead
+of copying.
+
+- Not finished in time: **202** `{success:true, status:"processing", prediction_id, retry_after_seconds, platform, ...}`.
+  Nothing the result still needs is deleted (the staged input stays).
+- `prediction_id` is an opaque signed token (`_shared/aiImageToken.ts`): base64url payload
+  (provider prediction id, staged path, operation, result area, issue time, the values the
+  response reports) plus an HMAC-SHA256 over `context + userId + payload`, keyed with the
+  service-role key. Bound to the caller (another user's token verifies as forged), to the function
+  (an upscale token is refused by remove-background) and valid for one hour. No table, no migration.
+- Follow-up: the same function takes `{prediction_id}` (JSON or form field, no image), authenticates
+  as usual, checks once and answers 202 again, or finishes (200, the normal body, staged input removed)
+  or fails. A repeated follow-up is harmless: the result is stored under a name derived from the
+  prediction id, so a second store adopts the first copy. A token past its hour answers 410, and its
+  staged input is still removed. Follow-ups are not counted against the hourly cap.
+- Unredeemed staged inputs (client never came back) stay in `postora/<user>/ai-tmp/`; they are not
+  swept by this change.
+- Rate limit: 30 AtlasCloud jobs per user per hour per function, 429 `RATE_LIMITED`.
+- Every refusal or failed job (invalid input, unavailable, rate limited, invalid or expired token,
+  provider failure) writes a `system_logs` row through `_shared/logging.ts` (`source` = function,
+  user, operation, `code`, short `reason`, status). Never URLs, image data, tokens or provider text.
+  Auth failures (401) are not logged: there is no user, and a flood of bad keys would flood the table.
+
+Other review fixes: multipart `file` wins over `image_url` again; poll answers 401/402/403 and 429
+end the job at once and only 5xx/network errors are retried; a submit timeout is 504; output URLs must
+be well-formed https; the upscaler takes `output_format` (png|jpeg, default PNG for PNG input) so a
+background-removed image keeps its transparency through upscale; JSON bodies are read under a size cap.
+
 ## Front end
 
-- `ImageToolsDialog` and `BackgroundRemovalDialog` read `useCdnConfig`. When Cloudinary
-  transforms are not available they call the functions (`image-tools/aiImageTools.ts`)
-  with the file's public URL: bg removal, then upscale (chained). The Cloudinary-only
+- `ImageToolsDialog` and `BackgroundRemovalDialog` read `useCdnConfig` as a three-state value
+  (`loading` / `available` / `unavailable`): while loading nothing runs and no notice is shown. When
+  Cloudinary transforms are confirmed unavailable they call the functions (`image-tools/aiImageTools.ts`)
+  with the file's public URL, naming **no provider** (the server decides): bg removal, then upscale
+  (chained, the second asking for PNG). The helper follows a 202 by asking again with the
+  `prediction_id` until done, bounded at 5 minutes. Resize, filters and quality are switched off
+  and any that were on are cleared. The Cloudinary-only
   options (resize, filters, quality, "fine edges") are refused up front with a clear
   message instead of failing later. Upscale offers AtlasCloud only, regardless of the
   `atlascloudUpscale` flag: the flag hides the *choice* between providers; it must not

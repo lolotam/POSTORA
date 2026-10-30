@@ -100,17 +100,28 @@ function dbAnswering(answer: { data: unknown; error: { message: string } | null 
   return { from: () => query } as unknown as SupabaseClient;
 }
 
+function setEnv(name: string, value: string | undefined): void {
+  if (value === undefined) Deno.env.delete(name);
+  else Deno.env.set(name, value);
+}
+
 async function withEnv(vars: Record<string, string | undefined>, run: () => Promise<void>): Promise<void> {
   const before = Object.fromEntries(Object.keys(vars).map((k) => [k, Deno.env.get(k)]));
-  for (const [k, v] of Object.entries(vars)) v === undefined ? Deno.env.delete(k) : Deno.env.set(k, v);
+  for (const [k, v] of Object.entries(vars)) setEnv(k, v);
   try {
     await run();
   } finally {
-    for (const [k, v] of Object.entries(before)) v === undefined ? Deno.env.delete(k) : Deno.env.set(k, v);
+    for (const [k, v] of Object.entries(before)) setEnv(k, v);
   }
 }
 
-const cloudinaryEnv = { CLOUDINARY_CLOUD_NAME: "cloud", CLOUDINARY_API_KEY: "key", CLOUDINARY_API_SECRET: "secret", OPENINARY_SERVER_URL: "https://o.example", OPENINARY_API_KEY: "ok" };
+const cloudinaryEnv = {
+  CLOUDINARY_CLOUD_NAME: "test-cloud",
+  CLOUDINARY_API_KEY: "test-value-1",
+  CLOUDINARY_API_SECRET: "test-value-2",
+  OPENINARY_SERVER_URL: "https://o.example",
+  OPENINARY_API_KEY: "test-value-3",
+};
 
 Deno.test("resolveCloudinaryUsable follows the stored policy: Openinary only means no, Cloudinary listed means yes", async () => {
   await withEnv(cloudinaryEnv, async () => {

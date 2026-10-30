@@ -1,18 +1,51 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { handleCorsOptions, jsonResponse, errorResponse, unauthorizedResponse } from "../_shared/cors.ts";
+import { UPSCALE_UNAVAILABLE_MESSAGE, resolveCloudinaryUsable, resolveUpscaleProvider } from "../_shared/aiImageProviders.ts";
 import {
-  PROVIDER_UNAVAILABLE_CODE,
-  UPSCALE_UNAVAILABLE_MESSAGE,
-  resolveCloudinaryUsable,
-  resolveUpscaleProvider,
-} from "../_shared/aiImageProviders.ts";
-import { runAtlasImageJob } from "../_shared/aiImageJob.ts";
-import { logImageTool, readImageInput, toDataUri, toolFailureResponse } from "../_shared/aiImageIo.ts";
-import { getOpeninaryConfig } from "../_shared/openinary.ts";
-import { checkUserRateLimit } from "../_shared/rate-limiter.ts";
+  chooseUpscaleOutputFormat,
+  imageInputFrom,
+  logImageTool,
+  parseToolRequest,
+  resumeTokenOf,
+  toDataUri,
+} from "../_shared/aiImageIo.ts";
+import {
+  invalidInput,
+  providerUnavailable,
+  readRouteEnv,
+  resumeAtlasRoute,
+  startAtlasRoute,
+  type AtlasRoute,
+} from "../_shared/aiImageAtlasRoute.ts";
 
-/** AtlasCloud jobs one caller may start per hour; each one is billed to the platform. */
-const ATLAS_JOBS_PER_HOUR = 30;
+/** What the finished AtlasCloud job reports; the start request's values come back through the token. */
+const ROUTE: AtlasRoute = {
+  source: 'upscale-image',
+  operation: 'upscale',
+  area: 'upscaled',
+  failureCode: 'UPSCALE_FAILED',
+  messages: {
+    unavailable: UPSCALE_UNAVAILABLE_MESSAGE,
+    busy: 'Upscaling is busy. Please wait a moment and try again.',
+    timeout: 'Upscaling timed out. Please try again.',
+    failed: 'Upscaling failed. Please try again.',
+  },
+  completedBody: (job) => ({
+    success: true,
+    original_url: job.meta.original_url ?? null,
+    upscaled_url: job.resultUrl,
+    prediction_id: job.predictionId,
+    target_resolution: job.meta.target_resolution,
+    scale: job.meta.scale,
+    output_format: job.meta.output_format,
+    platform: 'atlascloud',
+    stored_in: job.storedIn,
+    ...(job.meta.requested_platform ? { requested_platform: job.meta.requested_platform } : {}),
+  }),
+};
+
+/** A longer source URL is not echoed back after a follow-up (the token has to stay small). */
+const MAX_TOKEN_URL_CHARS = 512;
 
 const CLOUDINARY_CLOUD_NAME = Deno.env.get('CLOUDINARY_CLOUD_NAME');
 const CLOUDINARY_API_KEY = Deno.env.get('CLOUDINARY_API_KEY');
@@ -26,6 +59,7 @@ Deno.serve(async (req) => {
   }
 
   try {
+    const startedAt = Date.now();
     const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
     let userId: string;
 
@@ -64,25 +98,33 @@ Deno.serve(async (req) => {
       return unauthorizedResponse('Missing authentication');
     }
 
-    const parsed = await readImageInput(req);
-    if (!parsed.ok) return toolFailureResponse(parsed.status, 'INVALID_INPUT', parsed.message);
-    const { input, fields } = parsed;
-
-    const scale = Math.min(4, Math.max(1, Math.trunc(Number(fields.scale)) || 2)); // default 2x
-
     // Which provider serves this request follows the admin CDN policy, not env presence:
     // a disabled Cloudinary account keeps its credentials.
     const dbAdmin = createClient(SUPABASE_URL, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '');
-    const atlasApiKey = Deno.env.get('ATLASCLOUD_API_KEY') ?? '';
+    const caller = { db: dbAdmin, userId, startedAt };
+
+    const body = await parseToolRequest(req);
+    if (!body.ok) return await invalidInput(ROUTE, caller, body.status, body.message);
+
+    // A follow-up for a job that was still running when the first request had to answer.
+    const resumeToken = resumeTokenOf(body.fields);
+    if (resumeToken) return await resumeAtlasRoute(ROUTE, caller, readRouteEnv(), resumeToken);
+
+    const parsed = await imageInputFrom(body);
+    if (!parsed.ok) return await invalidInput(ROUTE, caller, parsed.status, parsed.message);
+    const { input, fields } = parsed;
+
+    const scale = Math.min(4, Math.max(1, Math.trunc(Number(fields.scale)) || 2)); // default 2x
+    const outputFormat = chooseUpscaleOutputFormat(fields.output_format, input);
+    if (!outputFormat) return await invalidInput(ROUTE, caller, 400, 'output_format must be "png" or "jpeg"');
+
+    const env = readRouteEnv();
     const decision = resolveUpscaleProvider({
       requested: fields.platform,
       cloudinaryUsable: await resolveCloudinaryUsable(dbAdmin),
-      atlasConfigured: atlasApiKey !== '',
+      atlasConfigured: env.atlasApiKey !== '',
     });
-    if (!decision.ok) {
-      logImageTool('error', 'ai_image_provider_unavailable', { operation: 'upscale', user_id: userId, reason: decision.reason });
-      return toolFailureResponse(503, PROVIDER_UNAVAILABLE_CODE, decision.message);
-    }
+    if (!decision.ok) return await providerUnavailable(ROUTE, caller, decision.message, decision.reason);
     if (decision.fellBackFromCloudinary) {
       logImageTool('warn', 'ai_image_provider_fallback', { operation: 'upscale', user_id: userId, from: 'cloudinary', to: 'atlascloud' });
     }
@@ -91,52 +133,28 @@ Deno.serve(async (req) => {
     const originalUrl = input.kind === 'url' ? input.url : 'base64_upload';
 
     if (decision.provider === 'atlascloud') {
-      // Each AtlasCloud job is paid by the platform account, so a caller is capped per hour.
-      const rate = await checkUserRateLimit(dbAdmin, 'upscale-image:atlascloud', userId, ATLAS_JOBS_PER_HOUR, 3600);
-      if (!rate.allowed) {
-        logImageTool('warn', 'ai_image_rate_limited', { operation: 'upscale', user_id: userId });
-        return toolFailureResponse(429, 'RATE_LIMITED', 'Too many image jobs this hour. Please try again later.');
-      }
       // Determine target resolution based on scale
       const targetResolution = scale <= 2 ? '2k' : '4k';
       console.log(`Starting AtlasCloud upscale: ${targetResolution}`);
 
-      const job = await runAtlasImageJob({
-        operation: 'upscale',
-        userId,
+      return await startAtlasRoute(ROUTE, caller, env, {
         input,
-        openinary: getOpeninaryConfig(),
-        atlasApiKey,
         buildBody: (sourceUrl) => ({
           model: 'atlascloud/image-upscaler',
           image: sourceUrl,
           creativity: 2,
-          output_format: 'jpeg',
+          output_format: outputFormat,
           enable_sync_mode: false,
           target_resolution: targetResolution,
           enable_base64_output: false,
         }),
-        area: 'upscaled',
-        messages: {
-          unavailable: UPSCALE_UNAVAILABLE_MESSAGE,
-          busy: 'Upscaling is busy. Please wait a moment and try again.',
-          timeout: 'Upscaling timed out. Please try again.',
-          failed: 'Upscaling failed. Please try again.',
+        meta: {
+          original_url: originalUrl.length <= MAX_TOKEN_URL_CHARS ? originalUrl : null,
+          target_resolution: targetResolution,
+          scale,
+          output_format: outputFormat,
+          requested_platform: decision.fellBackFromCloudinary ? 'cloudinary' : null,
         },
-        failureCode: 'UPSCALE_FAILED',
-      });
-      if (!job.ok) return toolFailureResponse(job.status, job.code, job.message);
-
-      return jsonResponse({
-        success: true,
-        original_url: originalUrl,
-        upscaled_url: job.resultUrl,
-        prediction_id: job.predictionId,
-        target_resolution: targetResolution,
-        scale: scale,
-        platform: 'atlascloud',
-        stored_in: job.storedIn,
-        ...(decision.fellBackFromCloudinary ? { requested_platform: 'cloudinary' } : {}),
       });
     }
 
