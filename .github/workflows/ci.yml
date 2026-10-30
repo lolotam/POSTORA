@@ -209,6 +209,12 @@ jobs:
           echo "deno test ${test_file} with typecheck enabled"
           deno test --allow-read=supabase/functions/_shared --node-modules-dir=none "${test_file}"
 
+      - name: Typecheck and test the Resend webhook signature check
+        run: |
+          set -euo pipefail
+          deno check --node-modules-dir=none supabase/functions/_shared/svixSignature.ts supabase/functions/resend-webhook/refusalLog.ts
+          deno test --node-modules-dir=none supabase/functions/_shared/svixSignature.test.ts supabase/functions/resend-webhook/refusalLog.test.ts
+
       - name: Typecheck and test the owner-report contract
         run: |
           set -euo pipefail
