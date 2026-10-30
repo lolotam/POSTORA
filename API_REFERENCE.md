@@ -307,7 +307,7 @@ Total: **96 functions** (verified against `supabase/functions/` directory).
 | `cloudinary-upload` | user JWT | POST | Sign + upload a file to Cloudinary |
 | `cloudinary-delete` | user JWT | POST | Delete a Cloudinary asset |
 | `cloudinary-rename` | user JWT | POST | Rename a Cloudinary public_id |
-| `cloudinary-email-upload` | service-role | POST | Email-attachment helper used by `send-inbox-email` |
+| `cloudinary-email-upload` | admin JWT | POST | Upload/delete a compose-window email attachment. Stores in Openinary (Cloudinary only when Openinary is not configured); 415 unsupported type, 503 no storage configured, 502 storage rejected |
 | `process-video` | user JWT | POST | Mark video as ready / metadata extraction |
 | `transcode-video` | user JWT | POST | Submit transcode job (external service — Deno has no FFmpeg) |
 | `transcribe-media` | user JWT | POST | 3-tier fallback STT chain |
