@@ -127,6 +127,10 @@ export async function storeEmailAttachment(
   deps: EmailAttachmentStorageDeps = defaultDeps,
 ): Promise<StoredEmailAttachment> {
   const { bytes, filename, contentType, folder, uniqueKey } = input;
+  // The folder carries a caller's email id; a `.` or `..` segment would leave the email tree.
+  if (folder.split("/").some((segment) => segment === "" || segment === "." || segment === "..")) {
+    throw new EmailAttachmentStorageError("provider_failed", "Invalid attachment folder", "The attachment could not be stored");
+  }
   if (!providers.openinary && !providers.cloudinary) {
     throw new EmailAttachmentStorageError(
       "no_provider",
