@@ -1503,7 +1503,7 @@ Deno.serve(async (req) => {
         // cannot be recorded the reel is NOT settled: that would make the failure terminal and
         // strand the story. A 503 leaves the row pending with its carry, the reconciler comes
         // back next minute, and recording is idempotent so the retry is safe.
-        const carried = await recordCarriedStory(supabase, settlePlatformPost, {
+        const carried = await recordCarriedStory(supabase, {
           postId: post_id,
           socialAccountId: row.social_account_id,
           rowData: (row.response_data as Record<string, unknown> | null) ?? null,
@@ -1897,7 +1897,7 @@ Deno.serve(async (req) => {
               result = await postToInstagramBusinessLogin(account, post, mediaUrls, mediaFiles, supabase, post_id, timing);
             } else {
               result = await postToInstagram(account, post, mediaUrls, mediaFiles, timing, (story) =>
-                recordLiveStory(supabase, settlePlatformPost, { postId: post_id, account, story }, stories));
+                recordLiveStory(supabase, { postId: post_id, account, story }, stories));
             }
             break;
           }
