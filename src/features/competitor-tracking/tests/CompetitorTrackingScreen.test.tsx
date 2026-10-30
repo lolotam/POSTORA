@@ -246,6 +246,25 @@ beforeEach(() => {
 
 describe("CompetitorTrackingScreen", () => {
   describe("the states of the tracked list", () => {
+    it.each([
+      ["en", "Collection status", "Waiting for collection", "Up to date"],
+      ["ar", "حالة الجمع", "مستني الجمع", "محدّث"],
+    ])("uses a collection status label instead of a pending value in %s", async (language, label, pending, value) => {
+      await i18next.changeLanguage(language);
+      try {
+        const gateway = createGateway({ list: vi.fn(async () => listEnvelope([makeEntry()])) });
+        renderScreen(gateway);
+
+        expect(await screen.findByRole("columnheader", { name: label })).toBeInTheDocument();
+        expect(screen.queryByRole("columnheader", { name: pending })).toBeNull();
+        const row = screen.getByText("@northwind").closest("tr")!;
+        expect(within(row).getByText(label, { exact: true })).toBeInTheDocument();
+        expect(within(row).getByText(value, { exact: true })).toBeInTheDocument();
+      } finally {
+        await i18next.changeLanguage("en");
+      }
+    });
+
     it("shows a loading state and claims no list before the first read", async () => {
       const gateway = createGateway({
         list: vi.fn(() => new Promise(() => undefined)),

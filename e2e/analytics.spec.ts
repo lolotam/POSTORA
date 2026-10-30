@@ -270,7 +270,7 @@ test.describe("Competitor tracking journeys (mocked browser)", () => {
             ),
         ).toBeVisible();
         await expect(
-            await trackedCell(page, SEEDED_RENDERED.handle, "Waiting for collection"),
+            await trackedCell(page, SEEDED_RENDERED.handle, "Collection status"),
         ).toContainText(SEEDED_RENDERED.status);
 
         // The quota is the owner's real one, not a placeholder.
@@ -361,7 +361,7 @@ test.describe("Competitor tracking journeys (mocked browser)", () => {
             page.getByText("Tracked; the first snapshot is queued.", { exact: true }),
         ).toBeVisible();
 
-        const status = await trackedCell(page, SEEDED_RENDERED.handle, "Waiting for collection");
+        const status = await trackedCell(page, SEEDED_RENDERED.handle, "Collection status");
         await expect(status).toContainText("Queued");
 
         // The force flag is only ever used by the explicit retry gesture.

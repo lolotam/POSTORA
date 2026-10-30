@@ -99,7 +99,23 @@ describe("competitor tracking formatters", () => {
 
       expect(formatted.rateAvailable).toBe(true);
       expect(formatted.observedText).toBe("3");
-      expect(formatted.postsPerWeekText).toBe("3.0/week");
+      expect(formatted.postsPerWeekText).toBe("3.0");
+    });
+
+    it("returns the rate as a number only, including for an Arabic locale", () => {
+      const formatted = formatWeekly(
+        {
+          observed_count: 3,
+          posts_per_week: 3,
+          interval_start: "2026-10-23T04:00:00+00:00",
+          interval_end: "2026-10-29T04:00:00+00:00",
+          coverage: "complete",
+          reason: null,
+        },
+        "ar",
+      );
+
+      expect(formatted.postsPerWeekText).toBe("3.0");
     });
 
     it("never extrapolates a rate from a partial or unknown window", () => {

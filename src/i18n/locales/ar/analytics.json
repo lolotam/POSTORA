@@ -175,8 +175,10 @@
       "smallBaseline": "البوستات السابقة مش كفاية",
       "tooEarly": "لسه بدري"
     },
+    "outlierLabel": "حالة التميّز",
     "partialData": "جمع البيانات متاح بس جزئي.",
     "postsPerWeek": "بوستات مرصودة / أسبوع",
+    "postsPerWeekValue": "<rate>{{value}}</rate> / أسبوع",
     "publishedAt": "اتنشر",
     "quota": "بتتابع {{used}} من {{limit}}",
     "quotaExceeded": "الحد الأقصى عندك {{limit}} منافس نشط.",
@@ -218,6 +220,7 @@
       "unavailable": "مش متاح",
       "unknown": "الحالة مش معروفة"
     },
+    "statusLabel": "حالة الجمع",
     "stillQueued": "لسه في الطابور؛ شوف الحالة",
     "tab": "المنافسين اللي بتتابعهم",
     "tabHint": "تابع منافسي إنستجرام وقارن تاريخهم العام.",

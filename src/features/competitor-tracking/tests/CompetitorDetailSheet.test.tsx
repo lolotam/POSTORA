@@ -222,9 +222,9 @@ describe("CompetitorDetailSheet", () => {
     renderSheet({ media: [makeMedia()] });
 
     const sheet = await screen.findByRole("dialog");
-    // The column is named "Outlier" and the verdict of this post is
-    // "Outlier" too, so both are present.
-    expect(within(sheet).getAllByText("Outlier").length).toBeGreaterThan(0);
+    expect(within(sheet).getByRole("columnheader", { name: "Outlier status" })).toBeInTheDocument();
+    expect(within(sheet).queryByRole("columnheader", { name: "Outlier" })).toBeNull();
+    expect(within(sheet).getByText("Outlier", { exact: true })).toBeInTheDocument();
     expect(within(sheet).getByText("2.5×")).toBeInTheDocument();
   });
 

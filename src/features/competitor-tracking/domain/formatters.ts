@@ -192,6 +192,10 @@ export type FormattedWeekly = {
   observedCount: number;
   observedText: string;
   postsPerWeek: number | null;
+  /**
+   * The formatted rate and nothing else. The unit is a translated word,
+   * so the UI owns it. This formatter must not append one.
+   */
   postsPerWeekText: string;
   coverage: "complete" | "partial" | "unknown";
   reason: string | null;
@@ -221,10 +225,10 @@ export function formatWeekly(
     observedText: formatCount(weekly.observed_count, locale),
     postsPerWeek: weekly.posts_per_week,
     postsPerWeekText: rateAvailable
-      ? `${numberFormatter(locale, {
+      ? numberFormatter(locale, {
           minimumFractionDigits: 1,
           maximumFractionDigits: 1,
-        }).format(weekly.posts_per_week as number)}/week`
+        }).format(weekly.posts_per_week as number)
       : UNAVAILABLE_VALUE,
     coverage: weekly.coverage,
     reason: weekly.reason,

@@ -28,6 +28,8 @@ import {
 import { displayInstagramHandle } from "../domain/handle";
 import { CompetitorSourceBadge } from "./CompetitorSourceBadge";
 import { CompetitorStatus } from "./CompetitorStatus";
+import { LtrValue } from "./LtrValue";
+import { PostsPerWeekValue } from "./PostsPerWeekValue";
 import type { CompetitorListState } from "./useCompetitorTracking";
 
 export type CompetitorListProps = {
@@ -205,7 +207,7 @@ export function CompetitorList({
               <TableHead>{t("competitors.growth30d", "Follower change · 30 days")}</TableHead>
               <TableHead>{t("competitors.postsPerWeek", "Observed posts / week")}</TableHead>
               <TableHead>{t("competitors.sourceLabel", "Source")}</TableHead>
-              <TableHead>{t("competitors.status.pending", "Waiting for collection")}</TableHead>
+              <TableHead>{t("competitors.statusLabel", "Collection status")}</TableHead>
               <TableHead>{t("competitors.actions", "Actions")}</TableHead>
             </TableRow>
           </TableHeader>
@@ -255,9 +257,13 @@ export function CompetitorList({
                     </span>
                     <div className="flex flex-col gap-0.5">
                       <span>
-                        {entry.profile === null
-                          ? UNAVAILABLE_VALUE
-                          : formatCount(entry.profile.followers_count, locale)}
+                        {entry.profile === null ? (
+                          UNAVAILABLE_VALUE
+                        ) : (
+                          <LtrValue>
+                            {formatCount(entry.profile.followers_count, locale)}
+                          </LtrValue>
+                        )}
                       </span>
                       {entry.profile === null ? (
                         <span className="text-xs text-muted-foreground">
@@ -278,7 +284,7 @@ export function CompetitorList({
                       {t("competitors.growth7d", "Follower change · 7 days")}
                     </span>
                     <div className="flex flex-col gap-0.5">
-                      <span>{growth7.text}</span>
+                      <span><LtrValue>{growth7.text}</LtrValue></span>
                       {!growth7.available && growth7.reason !== null && (
                         <span className="text-xs text-muted-foreground">
                           {growthReasonCopy[growth7.reason as keyof typeof growthReasonCopy] ??
@@ -305,7 +311,7 @@ export function CompetitorList({
                       {t("competitors.growth30d", "Follower change · 30 days")}
                     </span>
                     <div className="flex flex-col gap-0.5">
-                      <span>{growth30.text}</span>
+                      <span><LtrValue>{growth30.text}</LtrValue></span>
                       {!growth30.available && growth30.reason !== null && (
                         <span className="text-xs text-muted-foreground">
                           {growthReasonCopy[growth30.reason as keyof typeof growthReasonCopy] ??
@@ -333,7 +339,11 @@ export function CompetitorList({
                     </span>
                     <div className="flex flex-col gap-0.5">
                       <span>
-                        {weekly.rateAvailable ? weekly.postsPerWeekText : UNAVAILABLE_VALUE}
+                        {weekly.rateAvailable ? (
+                          <PostsPerWeekValue value={weekly.postsPerWeekText} />
+                        ) : (
+                          UNAVAILABLE_VALUE
+                        )}
                       </span>
                       <span className="text-xs text-muted-foreground">
                         {weekly.coverage === "complete"
@@ -367,7 +377,7 @@ export function CompetitorList({
 
                   <TableCell className="max-lg:block max-lg:border-0 max-lg:p-3 max-lg:px-3 max-lg:whitespace-normal">
                     <span className="mb-1 block text-xs font-medium text-muted-foreground lg:hidden">
-                      {t("competitors.status.pending", "Waiting for collection")}
+                      {t("competitors.statusLabel", "Collection status")}
                     </span>
                     <CompetitorStatus
                       status={status}

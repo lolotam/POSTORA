@@ -77,7 +77,7 @@ export function CompetitorMediaTable({ media, caption }: CompetitorMediaTablePro
             <TableHead className="text-end">{t("competitors.likes", "Likes")}</TableHead>
             <TableHead className="text-end">{t("competitors.comments", "Comments")}</TableHead>
             <TableHead className="text-end">{t("competitors.views", "Views")}</TableHead>
-            <TableHead>{t("competitors.outlier.outlier", "Outlier")}</TableHead>
+            <TableHead>{t("competitors.outlierLabel", "Outlier status")}</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>

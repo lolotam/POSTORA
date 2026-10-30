@@ -28,6 +28,8 @@ import { displayInstagramHandle } from "../domain/handle";
 import { CompetitorMediaTable } from "./CompetitorMediaTable";
 import { CompetitorSourceBadge } from "./CompetitorSourceBadge";
 import { CompetitorStatus } from "./CompetitorStatus";
+import { LtrValue } from "./LtrValue";
+import { PostsPerWeekValue } from "./PostsPerWeekValue";
 import {
   competitorErrorMessage,
   useCompetitorErrorCopy,
@@ -227,9 +229,13 @@ export function CompetitorDetailSheet({
                       {t("competitors.followers", "Followers")}
                     </dt>
                     <dd className="font-medium text-foreground">
-                      {entry.profile === null
-                        ? UNAVAILABLE_VALUE
-                        : formatCount(entry.profile.followers_count, locale)}
+                      {entry.profile === null ? (
+                        UNAVAILABLE_VALUE
+                      ) : (
+                        <LtrValue>
+                          {formatCount(entry.profile.followers_count, locale)}
+                        </LtrValue>
+                      )}
                     </dd>
                   </div>
                   <div>
@@ -237,9 +243,11 @@ export function CompetitorDetailSheet({
                       {t("competitors.postsPerWeek", "Observed posts / week")}
                     </dt>
                     <dd className="font-medium text-foreground">
-                      {weekly !== null && weekly.rateAvailable
-                        ? weekly.postsPerWeekText
-                        : UNAVAILABLE_VALUE}
+                      {weekly !== null && weekly.rateAvailable ? (
+                        <PostsPerWeekValue value={weekly.postsPerWeekText} />
+                      ) : (
+                        UNAVAILABLE_VALUE
+                      )}
                     </dd>
                   </div>
                 </dl>
@@ -276,7 +284,9 @@ export function CompetitorDetailSheet({
                   return (
                     <div key={label} className="rounded-xl border border-border/70 bg-card p-4">
                       <p className="text-xs text-muted-foreground">{label}</p>
-                      <p className="mt-1 text-sm font-medium text-foreground">{growth.text}</p>
+                      <p className="mt-1 text-sm font-medium text-foreground">
+                        <LtrValue>{growth.text}</LtrValue>
+                      </p>
                       {!growth.available && growth.reason !== null && (
                         <p className="mt-1 text-xs text-muted-foreground">
                           {growthReasonCopy[growth.reason as keyof typeof growthReasonCopy] ??
