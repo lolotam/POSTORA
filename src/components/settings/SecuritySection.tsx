@@ -440,7 +440,7 @@ export function SecuritySection() {
   });
 
   // Supabase removes a verified factor only from an AAL2 session; the hook asks for a code when needed.
-  const handleUnenrollMfa = (factorId: string) => disableMfa.requestDisable(factorId);
+  const handleUnenrollMfa = (factor: MfaFactor) => disableMfa.requestDisable(factor);
 
   const resetMfaState = () => {
     setMfaQrCode(null);
@@ -758,7 +758,7 @@ export function SecuritySection() {
                       variant="ghost"
                       size="sm"
                       className="text-destructive hover:text-destructive hover:bg-destructive/10"
-                      onClick={() => handleUnenrollMfa(factor.id)}
+                      onClick={() => handleUnenrollMfa(factor)}
                       disabled={disableMfa.busyFactorId === factor.id}
                     >
                       {disableMfa.busyFactorId === factor.id ? (
