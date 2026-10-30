@@ -109,6 +109,7 @@ import {
   type PublishTiming,
   type ResumeContext,
 } from "./deferredPublish.ts";
+import { recordPublishedStory } from "./instagramStory.ts";
 import {
   type PlatformResultSummary,
   type PostReader,
@@ -1807,7 +1808,8 @@ Deno.serve(async (req) => {
             if (igAuthType === 'business_login') {
               result = await postToInstagramBusinessLogin(account, post, mediaUrls, mediaFiles, supabase, post_id, timing);
             } else {
-              result = await postToInstagram(account, post, mediaUrls, mediaFiles, timing);
+              result = await postToInstagram(account, post, mediaUrls, mediaFiles, timing, (story) =>
+                recordPublishedStory(supabase, settlePlatformPost, { postId: post_id, account, story }));
             }
             break;
           }
@@ -3608,6 +3610,9 @@ async function postToInstagram(
   mediaUrls: string[],
   mediaFiles: MediaFile[],
   timing: PublishTiming = NO_DEFERRAL,
+  // Writes the story's own row (answering an error, or null) once it is live and the reel is
+  // still to come, so a reel that defers or fails does not lose it. See instagramStory.ts.
+  recordStory?: (story: { id: string; url: string }) => Promise<string | null>,
 ): Promise<PlatformPostResult> {
   const igUserId = account.platform_user_id;
   const accessToken = account.access_token;
@@ -4001,11 +4006,24 @@ async function postToInstagram(
       );
       const mediaData = await mediaResponse.json();
 
-      igAllResults.push({
+      const storyResult = {
         id: publishData.id,
         url: mediaData.permalink || (username ? `https://www.instagram.com/${username}/` : `https://instagram.com`),
         warnings: [],
-      });
+      };
+      igAllResults.push(storyResult);
+
+      // A story-only post returns this result below and the main loop records it. When a
+      // reel or feed post follows, it can defer or fail after the story is already live, so
+      // the story is recorded now, as the Business-login path does.
+      const storyOnly = igPostTypes.length === 1 && igPostTypes[0] === "story";
+      if (!storyOnly && recordStory) {
+        const recordError = await recordStory({ id: storyResult.id, url: storyResult.url });
+        if (recordError) {
+          console.error(`[IG story] published but not recorded: ${recordError}`);
+          warnings.push("The Instagram Story was published but could not be recorded.");
+        }
+      }
     }
   }
 
