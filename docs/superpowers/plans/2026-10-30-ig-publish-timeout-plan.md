@@ -6,9 +6,9 @@ order 1 → 2 → 4, with 3 once agreed.
 | Step | State | Branch / PR |
 |---|---|---|
 | 1. Worker lifetime 150 s | **Done** (prod, verified) | server-only `main/index.ts` |
-| 2. Publish settled from the container | Review | `fix/ig-publish-timeout`, PR #315 |
+| 2. Publish settled from the container | **Done** (merged `1a27bb8a`, deploy verified by SHA256) | PR #315 |
 | 3. Correct the two live records | **Done** (prod, verified) | SQL, one transaction |
-| 4. Retry guard | This plan | `fix/ig-retry-guard` |
+| 4. Retry guard + web retry targets (4a) | In review | `fix/ig-retry-guard` |
 
 The local toolchain, every time, from `supabase/functions/process-post`:
 

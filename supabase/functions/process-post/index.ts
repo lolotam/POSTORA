@@ -87,6 +87,14 @@ import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-
 import type { PlatformMetadata as SharedPlatformMetadata } from "../_shared/platforms/types.ts";
 import { graphId, type GraphResponse } from "./graphResponse.ts";
 import {
+  ALREADY_LIVE_MESSAGE,
+  alreadyLiveCopiesMessage,
+  isRetryRun,
+  type RetryGuardDecision,
+  retryGuardDecision,
+  retryWindowStart,
+} from "./instagramRetryGuard.ts";
+import {
   matchPublishedMedia,
   type MediaSummary,
   publishContainer,
@@ -455,6 +463,9 @@ interface PostData {
   scheduled_at?: string | null;
   metadata?: PlatformMetadata | null;
   source?: string | null;
+  /** As read when this run began, before it claimed the post. */
+  status?: string | null;
+  created_at?: string | null;
 }
 
 /**
@@ -3722,6 +3733,12 @@ async function findPublishedMedia(
   caption: string | null | undefined,
   notBeforeMs: number,
 ): Promise<MediaSummary | null> {
+  const media = await listRecentMedia(mediaListUrl, accessToken);
+  return media ? matchPublishedMedia(media, caption, notBeforeMs) : null;
+}
+
+/** The account's latest media, or null when they could not be read (non-200, timeout, error). */
+async function listRecentMedia(mediaListUrl: string, accessToken: string): Promise<MediaSummary[] | null> {
   try {
     const response = await fetchWithTimeout(
       `${mediaListUrl}?fields=id,caption,timestamp,permalink&limit=${PUBLISHED_SEARCH_LIMIT}&access_token=${accessToken}`,
@@ -3730,10 +3747,32 @@ async function findPublishedMedia(
     );
     if (!response.ok) return null;
     const body = await response.json() as { data?: MediaSummary[] };
-    return matchPublishedMedia(body.data ?? [], caption, notBeforeMs);
+    return body.data ?? [];
   } catch {
     return null;
   }
+}
+
+/**
+ * Step 4's retry guard: on a retry, the post as it already is on the account, or null to publish
+ * as usual (not a retry, no caption, a story-only post, nothing live, or the media unreadable).
+ */
+async function liveOnRetry(
+  post: PostData,
+  timing: PublishTiming,
+  mediaListUrl: string,
+  accessToken: string,
+  storyOnly: boolean,
+): Promise<Exclude<RetryGuardDecision, { kind: "publish" }> | null> {
+  if (storyOnly || !post.caption?.trim() || !isRetryRun(post.status, !!timing.resume)) return null;
+  const media = await listRecentMedia(mediaListUrl, accessToken);
+  if (!media) {
+    console.warn(`[instagram] retry guard could not read media for post ${post.id}; publishing`);
+    return null;
+  }
+  const decision = retryGuardDecision(media, post.caption, retryWindowStart(post));
+  console.log(`[instagram] retry guard: ${decision.kind} for post ${post.id}`);
+  return decision.kind === "publish" ? null : decision;
 }
 
 /**
@@ -4157,6 +4196,22 @@ async function postToInstagram(
   const isReel = (igPostTypes.includes("reel") && mediaType === "VIDEO") || mediaType === "VIDEO";
 
   console.log(`Instagram post: types=${JSON.stringify(igPostTypes)}, mediaType=${mediaType}, isReel=${isReel}, shareToFeed=${shareToFeed}`);
+
+  // A retry of a post already live on the account records it instead of posting it again.
+  const profileUrl = username ? `https://www.instagram.com/${username}/` : `https://instagram.com`;
+  const live = await liveOnRetry(
+    post,
+    timing,
+    `https://graph.facebook.com/v18.0/${igUserId}/media`,
+    accessToken,
+    igPostTypes.every((type) => type === "story"),
+  );
+  if (live?.kind === "already_live") {
+    return { id: live.media.id, url: live.media.permalink ?? profileUrl, warnings: [...warnings, ALREADY_LIVE_MESSAGE] };
+  }
+  if (live?.kind === "already_live_copies") {
+    return { url: profileUrl, warnings: [...warnings, alreadyLiveCopiesMessage(live.count)] };
+  }
 
   // Handle story separately if included in post types
   const igAllResults: Array<{ id: string; url?: string; warnings?: string[] }> = [];
@@ -5032,6 +5087,24 @@ async function postToInstagramBusinessLogin(
       EdgeRuntime.waitUntil(work);
     }
   };
+
+  // A retry of a post already live on the account records it instead of posting it again.
+  const live = await liveOnRetry(
+    post,
+    timing,
+    `https://graph.instagram.com/v22.0/${igUserId}/media`,
+    accessToken,
+    !blPostTypes.includes("feed") && !blPostTypes.includes("reel"),
+  );
+  if (live) {
+    const subtype = mediaType === "VIDEO" && blPostTypes.includes("reel") ? "reel" : "feed";
+    const profileUrl = username ? `https://www.instagram.com/${username}/` : `https://instagram.com`;
+    const media = live.kind === "already_live" ? live.media : null;
+    const note = live.kind === "already_live" ? ALREADY_LIVE_MESSAGE : alreadyLiveCopiesMessage(live.count);
+    const url = media?.permalink ?? profileUrl;
+    await insertIGRow(subtype, "success", media?.id, url, undefined, { warnings: [note] });
+    return { selfWroteRows: true, subResults: [{ subtype, status: "success", id: media?.id, url }], id: media?.id, url, warnings: [note] } as PlatformPostResult;
+  }
 
   const optimizedMediaUrls = await optimizeUrlsForInstagram(mediaUrls);
 

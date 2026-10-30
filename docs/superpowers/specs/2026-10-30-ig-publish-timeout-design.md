@@ -126,6 +126,19 @@ finished once**, it first looks for the post on the account:
    any container is created. It reuses the media-list fetch from step 2 (`findPublishedMedia`
    generalised to return all matches).
 
+### 4a. The web app's "Retry failed" targets only what failed
+
+Found while designing the guard. The web app's **Retry failed** and **bulk retry**
+(`usePostRetry`) deleted the failed rows and then invoked `process-post` with only the post id.
+`process-post` then published to **every** account the post selected, so a post that went out on
+Facebook but failed on Instagram was posted to Facebook again.
+
+A production check on 2026-10-30 found no duplicate success rows in the last 60 days, so this has
+not bitten yet. The n8n and MCP retry already sends the failed accounts (`pickRetryTargets`).
+
+The web app now does the same. `failedRetryTargets` (`src/hooks/history/retryTargets.ts`) sends the
+failed rows' platforms, and their accounts when every failed row names one.
+
 ### Alternatives considered
 
 - **Check the old container's status instead of the media list.** This is precise, but failed

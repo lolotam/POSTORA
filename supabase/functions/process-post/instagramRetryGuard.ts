@@ -1,0 +1,52 @@
+/**
+ * The retry guard: a retried post is not published to Instagram again when it is already live.
+ *
+ * A publish that went unanswered can still go live, and some of those runs end as a failed row
+ * (an image or carousel cannot be deferred to the reconciler). The user's next move is Retry,
+ * which creates a new container and posts the same thing twice. So a retry first looks for the
+ * post on the account. Spec: docs/superpowers/specs/2026-10-30-ig-publish-timeout-design.md,
+ * step 4.
+ */
+
+import { captionMatches, type MediaSummary } from "./instagramPublish.ts";
+
+/** A post's statuses once a run has finished it: only these runs are retries. */
+const FINISHED_STATUSES = new Set(["failed", "completed"]);
+
+/** How far before the post was created (or scheduled for) its media may have been published. */
+export const RETRY_LOOKBACK_MS = 10 * 60 * 1000;
+
+export const ALREADY_LIVE_MESSAGE =
+  "This post was already live on Instagram, so it was recorded instead of being posted again.";
+
+export function alreadyLiveCopiesMessage(count: number): string {
+  return `This post is already live on Instagram ${count} times, so it was not posted again. Check the account for duplicates.`;
+}
+
+export type RetryGuardDecision =
+  | { kind: "publish" }
+  | { kind: "already_live"; media: MediaSummary }
+  | { kind: "already_live_copies"; count: number };
+
+/**
+ * Whether this run retries a post an earlier run finished: its status when the run began is a
+ * finished one. A first run is never one, so an unrelated post with the same caption can never
+ * stop it. A resumed run is not one either: it finishes its own container.
+ */
+export function isRetryRun(entryStatus: string | null | undefined, resume: boolean): boolean {
+  return !resume && FINISHED_STATUSES.has(entryStatus ?? "");
+}
+
+/** The earliest the post can have gone live: when it was created or scheduled for, less the lookback. */
+export function retryWindowStart(post: { created_at?: string | null; scheduled_at?: string | null }): number {
+  const times = [post.created_at, post.scheduled_at].map((value) => Date.parse(value ?? "")).filter(Number.isFinite);
+  return (times.length ? Math.max(...times) : 0) - RETRY_LOOKBACK_MS;
+}
+
+/** What a retry does, from the account's latest media. */
+export function retryGuardDecision(media: MediaSummary[], caption: string | null | undefined, notBeforeMs: number): RetryGuardDecision {
+  const matches = captionMatches(media, caption, notBeforeMs);
+  if (matches.length === 1) return { kind: "already_live", media: matches[0] };
+  if (matches.length > 1) return { kind: "already_live_copies", count: matches.length };
+  return { kind: "publish" };
+}

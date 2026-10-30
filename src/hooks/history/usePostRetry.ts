@@ -8,6 +8,7 @@ import {
   PostWithResults, invalidatePostQueries,
   deleteFailedPlatformPosts, deletePlatformPost, invokeProcessPost,
 } from "./historyUtils";
+import { failedRetryTargets } from "./retryTargets";
 
 export function usePostRetry() {
   const { toast } = useToast();
@@ -70,8 +71,9 @@ export function usePostRetry() {
 
     setRetryingPostId(post.id);
     try {
+      const targets = failedRetryTargets(post.platformResults);
       await deleteFailedPlatformPosts(post.id);
-      await invokeProcessPost(post.id);
+      await invokeProcessPost(post.id, targets.platforms, targets.accountIds);
       toast({ title: "Retry initiated", description: `Retrying ${failedPlatforms.length} failed platform(s).` });
       invalidatePostQueries(queryClient);
     } catch (error) {
@@ -162,7 +164,12 @@ export function usePostRetry() {
     let successCount = 0, errorCount = 0;
     for (let i = 0; i < failedPosts.length; i++) {
       setBulkRetryProgress({ current: i + 1, total: failedPosts.length });
-      try { await deleteFailedPlatformPosts(failedPosts[i].id); await invokeProcessPost(failedPosts[i].id); successCount++; }
+      try {
+        const targets = failedRetryTargets(failedPosts[i].platformResults);
+        await deleteFailedPlatformPosts(failedPosts[i].id);
+        await invokeProcessPost(failedPosts[i].id, targets.platforms, targets.accountIds);
+        successCount++;
+      }
       catch { errorCount++; }
     }
     setBulkRetrying(false);
