@@ -175,6 +175,8 @@ Deno.test("a sliver of a crop is refused instead of upscaled to an absurd or inf
   // 0.01 % of 1920 rounds to 0 pixels wide: the auto-upscale used to divide by zero
   refusal(() => planCrop({ x: 49.995, y: 0, width: 0.01, height: 100 }, FHD), "INVALID_REQUEST");
   refusal(() => cloudinaryCropTransformation({ x: 49.995, y: 0, width: 0.01, height: 100 }, FHD), "INVALID_REQUEST");
+  // without the source size the same sliver is caught in percent
+  refusal(() => cloudinaryCropTransformation({ x: 49.995, y: 0, width: 0.01, height: 100 }, null), "INVALID_REQUEST");
   // 20 px wide on a 4320 px tall source would upscale to 720 x 155520
   refusal(() => planCrop({ x: 49.87, y: 0, width: 0.26, height: 100 }, { width: 7680, height: 4320 }), "INVALID_REQUEST");
   // an untouched 8K full frame keeps its own size

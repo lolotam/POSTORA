@@ -105,6 +105,8 @@ const MAX_DIMENSION = 16384;
 export const MAX_TARGET_DIMENSION = 4096;
 /** A crop box smaller than this many pixels on either side is not a usable video. */
 const MIN_CROP_PIXELS = 16;
+/** Without the source size a box is checked in percent: under 1 % of a side is a sliver at any resolution we accept. */
+const MIN_RELATIVE_CROP_PERCENT = 1;
 
 const TRANSCODE_PRESETS: Record<TranscodePlatform, Dimensions> = {
   tiktok: { width: 720, height: 1280 },
@@ -278,6 +280,9 @@ export function cloudinaryCropTransformation(crop: CropRequest, source: Dimensio
   assertCrop(crop);
   const { targetWidth, targetHeight } = crop;
   if (!source) {
+    if (crop.width < MIN_RELATIVE_CROP_PERCENT || crop.height < MIN_RELATIVE_CROP_PERCENT) {
+      throw invalid(`crop box is too small: each side must cover at least ${MIN_RELATIVE_CROP_PERCENT}% of the video`);
+    }
     const f = (percent: number) => Number(Math.min(1, Math.max(0, percent / 100)).toFixed(4));
     let chain = `c_crop,fl_relative,x_${f(crop.x)},y_${f(crop.y)},w_${f(crop.width)},h_${f(crop.height)}`;
     if (targetWidth && targetHeight) chain += `/c_scale,w_${targetWidth},h_${targetHeight}`;
