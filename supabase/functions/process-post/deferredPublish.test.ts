@@ -4,6 +4,9 @@ import { CHECK_TIMEOUT_MS } from "./instagramPublish.ts";
 import {
   abandonReason,
   claimFollowUps,
+  FOLLOW_UP_REQUEST_MS,
+  followUpTimeoutMs,
+  RECORD_RESERVE_MS,
   bufferAfterFinishedMs,
   ContainerStillProcessing,
   DEFERRAL_GIVE_UP_MS,
@@ -279,16 +282,27 @@ Deno.test("a published reel's follow-ups run once: a first run, or the resumed r
   assertEquals(await claimFollowUps(null), true);
 
   const marks: string[] = [];
-  const fresh = { platformPostId: "row", deferral, markFollowUpsStarted: () => (marks.push("mark"), Promise.resolve(null)) };
+  const fresh = { platformPostId: "row", deferral, markFollowUpsStarted: () => (marks.push("mark"), Promise.resolve({ claimed: true })) };
   assertEquals(await claimFollowUps(fresh), true);
   assertEquals(marks, ["mark"]);
 
   // An earlier run started them and stopped before settling: they are not repeated.
   const started = { platformPostId: "row", deferral: { ...deferral, followups_started_at: "2026-10-30T15:03:30Z" } };
   assertEquals(await claimFollowUps(started), false);
+  // An overlapping run marked the row between our read and our write: the compare-and-set says so.
+  assertEquals(await claimFollowUps({ platformPostId: "row", deferral, markFollowUpsStarted: () => Promise.resolve({ claimed: false }) }), false);
 
-  // A mark that cannot be written cannot promise "once", so they are skipped.
-  assertEquals(await claimFollowUps({ platformPostId: "row", deferral, markFollowUpsStarted: () => Promise.resolve("db down") }), false);
+  // A mark that cannot be written, or that throws, cannot promise "once": skipped, never thrown.
+  assertEquals(await claimFollowUps({ platformPostId: "row", deferral, markFollowUpsStarted: () => Promise.resolve({ error: "db down" }) }), false);
+  assertEquals(await claimFollowUps({ platformPostId: "row", deferral, markFollowUpsStarted: () => Promise.reject(new Error("network")) }), false);
+});
+
+Deno.test("a request after a publish gets what is left before the record reserve, at most 8 s, or none", () => {
+  const start = 1_000_000;
+  const end = start + WORKER_LIFETIME_MS - RECORD_RESERVE_MS;
+  assertEquals(followUpTimeoutMs(start, start), FOLLOW_UP_REQUEST_MS);
+  assertEquals(followUpTimeoutMs(start, end - 3000), 3000);
+  assertEquals(followUpTimeoutMs(start, end - 500), 0);
 });
 
 Deno.test("marking the follow-ups keeps the rest of the row's response data and deferral", () => {

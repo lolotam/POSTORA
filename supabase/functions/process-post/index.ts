@@ -117,6 +117,7 @@ import {
   withFollowUpsStarted,
   workerPublishDeadline,
   NO_DEFERRAL,
+  followUpTimeoutMs,
   ownContainerDeadline,
   refuseOnSpentWorker,
   storyRecoveryExhausted,
@@ -1606,13 +1607,16 @@ Deno.serve(async (req) => {
         platformPostId: row.id,
         deferral,
         unrecordedStory: readUnrecordedStory(row.response_data),
+        // Compare-and-set: only a pending row no run has marked yet, and it says whether it did.
         markFollowUpsStarted: async () => {
-          const { error: markError } = await supabase
+          const { data: marked, error: markError } = await supabase
             .from("platform_posts")
             .update({ response_data: withFollowUpsStarted(row.response_data, new Date()) })
             .eq("id", row.id)
-            .eq("status", "pending");
-          return markError?.message ?? null;
+            .eq("status", "pending")
+            .is("response_data->deferred->>followups_started_at", null)
+            .select("id");
+          return markError ? { error: markError.message } : { claimed: (marked ?? []).length > 0 };
         },
       };
       resumeResponseData = (row.response_data as Record<string, unknown> | null) ?? null;
@@ -4041,11 +4045,19 @@ async function postToInstagram(
     return locationDebug;
   };
 
+  // Every request after a publish is bounded by what is left of the worker, so the live post
+  // is still recorded however slow Graph is. No time left: it throws, and the caller warns.
+  const followUpFetch = (url: string, init: RequestInit = {}): Promise<Response> => {
+    const timeoutMs = followUpTimeoutMs(WORKER_STARTED_AT_MS, Date.now());
+    if (!timeoutMs) return Promise.reject(new Error("no time was left before the worker stopped"));
+    return fetchWithTimeout(url, init, timeoutMs);
+  };
+
   // Helper: disable comments on a published IG media (Page-flow / Graph API)
   const disableIgComments = async (mediaId: string) => {
     if (!disableComments) return;
     try {
-      const res = await fetch(
+      const res = await followUpFetch(
         `https://graph.facebook.com/v18.0/${mediaId}?comment_enabled=false&access_token=${encodeURIComponent(accessToken)}`,
         { method: "POST" }
       );
@@ -4066,7 +4078,7 @@ async function postToInstagram(
     const firstComment = metadata?.instagram_first_comment;
     if (!firstComment) return;
     try {
-      const commentRes = await fetch(
+      const commentRes = await followUpFetch(
         `https://graph.facebook.com/v18.0/${mediaId}/comments`,
         {
           method: "POST",
@@ -4098,7 +4110,7 @@ async function postToInstagram(
       if (await checkIgLocationEligibility()) {
         storyBody.location_id = igLocationId;
       }
-      const createRes = await fetch(
+      const createRes = await followUpFetch(
         `https://graph.facebook.com/v18.0/${igUserId}/media`,
         { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(storyBody) }
       );
@@ -4109,7 +4121,13 @@ async function postToInstagram(
       }
       // On a resumed run timing.deadlineMs is check-once: that suits the deferred reel, not this
       // container, which nothing re-checks. Give it a real bound.
-      await pollContainerStatus(createData.id, accessToken, { deadlineMs: ownContainerDeadline(timing.deadlineMs, timing.startedAtMs ?? Date.now()) });
+      // Cut to the worker's publish deadline too: a mirror never outlasts the reel's record.
+      await pollContainerStatus(createData.id, accessToken, {
+        deadlineMs: Math.min(
+          ownContainerDeadline(timing.deadlineMs, timing.startedAtMs ?? Date.now()),
+          workerPublishDeadline(WORKER_STARTED_AT_MS),
+        ),
+      });
       await publishInstagramMedia(igUserId, createData.id, accessToken);
       console.log("Instagram 'Also share to Story' published successfully");
     } catch (e) {
@@ -4349,17 +4367,20 @@ async function postToInstagram(
       warnings.push("This reel's first comment, comment setting and story share were not run on this attempt, so that they can never run twice.");
     }
 
-    // Get the permalink for the Reel
-    const mediaResponse = await fetch(
-      `https://graph.facebook.com/v18.0/${publishData.id}?fields=permalink,shortcode&access_token=${accessToken}`
-    );
-    const mediaData = await mediaResponse.json();
-
+    // Get the permalink for the Reel (best effort: the reel is live with or without it)
     let postUrl = username ? `https://www.instagram.com/${username}/` : `https://instagram.com`;
-    if (mediaData.permalink) {
-      postUrl = mediaData.permalink;
-    } else if (mediaData.shortcode) {
-      postUrl = `https://www.instagram.com/reel/${mediaData.shortcode}/`;
+    try {
+      const mediaResponse = await followUpFetch(
+        `https://graph.facebook.com/v18.0/${publishData.id}?fields=permalink,shortcode&access_token=${accessToken}`
+      );
+      const mediaData = await mediaResponse.json();
+      if (mediaData.permalink) {
+        postUrl = mediaData.permalink;
+      } else if (mediaData.shortcode) {
+        postUrl = `https://www.instagram.com/reel/${mediaData.shortcode}/`;
+      }
+    } catch (e) {
+      console.warn("Instagram reel permalink could not be read:", e instanceof Error ? e.message : e);
     }
 
     // Mirror to Story if toggle is on (and Story wasn't already in post types)
@@ -5137,7 +5158,8 @@ async function postToInstagramBusinessLogin(
             ...(blDebug ? { location_debug: blDebug } : {}),
           });
           subResults.push({ subtype, status: "success", id: publishData.id, url: fallbackUrl });
-          if (rowId) enrichInBackground(rowId, publishData.id, subtype, fallbackUrl);
+          // A first run has no pending row to come back to, so it enriches whatever the record did.
+          if (rowId || !timing.resume) enrichInBackground(rowId, publishData.id, subtype, fallbackUrl);
         }
       }
     } catch (e) {

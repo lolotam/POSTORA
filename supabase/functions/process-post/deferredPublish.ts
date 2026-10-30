@@ -59,9 +59,14 @@ export interface ResumeContext {
   deferral: Deferral;
   /** A live story the first run could not record; the resumed run records it. */
   unrecordedStory?: StoryRef | null;
-  /** Marks the pending row before the follow-ups run (answers an error, or null). */
-  markFollowUpsStarted?: () => Promise<string | null>;
+  /**
+   * Marks the pending row before the follow-ups run, only if no other run marked it first:
+   * `claimed: false` means another run holds them.
+   */
+  markFollowUpsStarted?: () => Promise<FollowUpMark>;
 }
+
+export type FollowUpMark = { claimed: boolean } | { error: string };
 
 /** The row's response data with its deferral marked: the follow-ups started at `now`. */
 export function withFollowUpsStarted(responseData: unknown, now: Date): Record<string, unknown> {
@@ -78,9 +83,16 @@ export function withFollowUpsStarted(responseData: unknown, now: Date): Record<s
 export async function claimFollowUps(resume: ResumeContext | null | undefined): Promise<boolean> {
   if (!resume) return true;
   if (resume.deferral.followups_started_at) return false;
-  const markError = (await resume.markFollowUpsStarted?.()) ?? null;
-  if (markError) console.error(`[instagram] could not mark the follow-ups, so they are skipped: ${markError}`);
-  return markError === null;
+  if (!resume.markFollowUpsStarted) return true;
+  let outcome: FollowUpMark;
+  try {
+    outcome = await resume.markFollowUpsStarted();
+  } catch (thrown) {
+    // The reel is live: a failed mark must never fail it, only skip what cannot run once.
+    outcome = { error: thrown instanceof Error ? thrown.message : String(thrown) };
+  }
+  if ("error" in outcome) console.error(`[instagram] could not mark the follow-ups, so they are skipped: ${outcome.error}`);
+  return "claimed" in outcome && outcome.claimed;
 }
 
 /**
@@ -167,6 +179,21 @@ export const WORKER_LIFETIME_MS = 150 * 1000;
 export const FOLLOW_UP_RESERVE_MS = 30 * 1000;
 /** Kept after a deferrable wait for the publish (up to 30 s), its 5 s check and the follow-ups. */
 export const PUBLISH_RESERVE_MS = 65 * 1000;
+
+/** Kept at the very end of a worker's life for recording the outcome (the row write, the roll-up). */
+export const RECORD_RESERVE_MS = 5 * 1000;
+/** The longest one best-effort request after a publish may wait. */
+export const FOLLOW_UP_REQUEST_MS = 8 * 1000;
+
+/**
+ * The timeout for one best-effort request after a publish (permalink, first comment, comment
+ * setting, story mirror): what is left before the record reserve, at most FOLLOW_UP_REQUEST_MS.
+ * 0 means there is no time for it, so it is skipped and the live post is still recorded.
+ */
+export function followUpTimeoutMs(workerStartedAtMs: number, nowMs: number): number {
+  const left = workerStartedAtMs + WORKER_LIFETIME_MS - RECORD_RESERVE_MS - nowMs;
+  return left >= 1000 ? Math.min(FOLLOW_UP_REQUEST_MS, left) : 0;
+}
 
 /** When a publish, and the check that settles it, must be over on this worker. */
 export function workerPublishDeadline(workerStartedAtMs: number): number {
