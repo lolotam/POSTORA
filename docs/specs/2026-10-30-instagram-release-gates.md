@@ -151,7 +151,7 @@ These are references to source requirements, not replacement definitions. Parent
 | T8-06 | blocked-on-dependency | G-R/G-U J7; Task 8 competitor assembler actually calls canonical outlier with correct cohorts and period-independent history. |
 | T8-07 | blocked-on-dependency | G-U/G-E; Task 8 queued≠collected, Retry-After, lost enqueue, bounded polling, terminal/auth-change stop and retained history. |
 | T8-08 | blocked-on-dependency | G-S; Task 8 M3: 89d/90d−1µs/90d, all children/jobs, repeated removal and reactivation semantics. |
-| T8-09 | blocked-on-dependency | G-S; Task 8 M3 real two-session cleanup/reactivation/collection races, >500-child backlog, rollback and restart. |
+| T8-09 | blocked-on-dependency | G-S; Task 8 M3 real three-session (two racers plus an observer) cleanup/reactivation/collection races, >500-child backlog, rollback and restart. |
 | T8-10 | blocked-on-dependency | G-S/G-X; Task 8 M4 inactive idempotent schedule, dry-run/no-work/refusal logging and switch-off behavior. |
 | T8-11 | blocked-on-dependency | G-U/G-E; Task 8 English/Arabic/RTL/keyboard/mobile/zoom, identity isolation and non-Instagram card regressions. |
 | T8-12 | blocked-on-dependency | G-E/G-X; Task 8 assembled route + Task 11 lifecycle, future Arabic journey and release evidence. |
@@ -206,13 +206,13 @@ Paths below are relative to `supabase/migrations/`. Apply only missing, reviewed
 | 9 | `20261028110000_meta_page_token_reconciliation.sql` | existing; in inspected main |
 | 10 | `20261029150000_competitor_collection_results.sql` | existing; in inspected main |
 | 11 | `20261029160000_instagram_direct_collection_credential.sql` | existing; in inspected main |
-| 12 / M1 | `20261030100000_competitor_capture_coverage.sql` | existing on branch only, `9d04f976` |
-| 13 / M2 | `20261030110000_competitor_tracking_report.sql` | proposed, Task 8 |
-| 14 / M3 | `20261030120000_competitor_retention.sql` | proposed, Task 8 |
-| 15 / M4 | `20261030130000_competitor_retention_cron.sql` | proposed, Task 8 |
-| 16 / C1 | `20261030140000_instagram_collection_cron.sql` | proposed reservation for Task 4's missing collection schedules; separately assigned prerequisite, not Task 11 implementation authority |
+| 12 / M1 | `20261030100000_competitor_capture_coverage.sql` | existing; on main since #306 (`1e1fbed3`) |
+| 13 / M2 | `20261030110000_competitor_tracking_report.sql` | existing; on main since #306 (`1e1fbed3`) |
+| 14 / M3 | `20261030120000_competitor_retention.sql` | existing; on main since #306 (`1e1fbed3`) |
+| 15 / M4 | `20261030130000_competitor_retention_cron.sql` | existing; on main since #306 (`1e1fbed3`) |
+| 16 / C1 | *unassigned* `_instagram_collection_cron.sql` | proposed migration for Task 4's missing collection schedules; separately assigned prerequisite, not Task 11 implementation authority. No version is reserved: `20261030140000` and `20261030150000` are already taken on main (`sweep_ai_image_staging_cron`, `record_published_story`). |
 
-C1 must not be created until daily enqueue/target eligibility contracts exist and collisions are rechecked. Any additional rollout-control migration must be assigned an exact unused ID by its owning task and added to the frozen manifest before release; an unresolved dependency is a failed manifest gate, not a wildcard deployment instruction. M1–M4 contracts remain owned by Task 8.
+C1 must not be created until daily enqueue/target eligibility contracts exist. Its owning task then picks a version no file in `supabase/migrations/` already uses, and the Task 1 checker fails on any two migrations that share a version prefix. Any additional rollout-control migration must be assigned an exact unused ID by its owning task and added to the frozen manifest before release; an unresolved dependency is a failed manifest gate, not a wildcard deployment instruction. M1–M4 contracts remain owned by Task 8.
 
 ### Function and module set
 
@@ -330,8 +330,8 @@ All boxes start unchecked. Planning, prior merges and prior general authorizatio
 
 ### E — wider rollout and retention
 
-- [ ] E1: Waleed approves the named wider cohort or **all eligible accounts**, with an explicit list/count of exclusions needing reconnect; protected authority readiness must be measured, never assumed. Enable collection eligibility only for that approved set. Global protected cutover, if ever wanted, is a separate migration/cutover decision, not implicit in “all collection”.
-- [ ] E2: Waleed approves the exact daily enqueue and drain schedules/cadences after boot, capacity and off-state tests. Observe a full due-target drain with continuations and >25 owners/>50 competitors where available; synthetic scale tests complement low-volume live evidence. Record missed targets, backoff and last-success/partial truth.
+- [ ] E1: Waleed approves the named wider cohort or **all eligible accounts**, with an explicit list/count of exclusions needing reconnect; protected authority readiness must be measured, never assumed. Enable collection eligibility only for that approved set. The same approval names the wider **competitor-target** set (list or count) separately from the owner accounts; D3's single target stays the only eligible competitor until it does, and competitor eligibility is enabled only for that named set. Global protected cutover, if ever wanted, is a separate migration/cutover decision, not implicit in “all collection”.
+- [ ] E2: Waleed approves the exact daily enqueue and drain schedules/cadences, which collect only the owner accounts and competitor targets E1 approved, after boot, capacity and off-state tests. Observe a full due-target drain with continuations and >25 owners/>50 competitors where available; synthetic scale tests complement low-volume live evidence. Record missed targets, backoff and last-success/partial truth.
 - [ ] E3: Waleed approves retention **dry run** first; report eligible counts and bounded backlog without deleting. After reviewing that evidence, obtain a **separate approval** for `competitor_retention_enabled` and its cron. Verify eligible inactive-only deletion and absence of active/foreign history loss.
 - [ ] E4: Waleed accepts the release report after the agreed observation window. Confirm exact deployed SHA/hashes, migration ledger, API/UI/MCP regression evidence, redacted logs and rollback readiness. Any missing live evidence leaves that gate pending, even when local suites pass.
 
