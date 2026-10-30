@@ -44,6 +44,7 @@ below). So the harness does not replay history. It:
 | `competitor_tracking_report.sql` | the owner-only competitor report reader: the grant surface, the strict request shape, the owner boundary and the identical not-found refusal, the active and removed lists, the quota consistency, the bounded keyset cursor (20/50, limit+1, sub-millisecond ties, concurrent insertion, invalid and cross-filter cursors), the S = 3 days baseline edges, the observation cap, the latest-per-media selection with its bounded cohort baseline, the coverage and job projection without lease or context, and the capped-scan incompleteness; rolls back |
 | `competitor_retention.sql` | the bounded inactive-history cleanup: the 90-day eligibility clock to the microsecond, the removal-marker clock, the ownership boundary, the default-off switch, the dry run, the bounded slice, the child-first deletion protocol, the live-lease skip and the role boundary; rolls back |
 | `competitor_retention_cron.sql` | the inactive hourly schedule: applying the schedule definition twice leaves exactly one inactive job named `competitor-retention` at `20 * * * *`, the command resolves the shared secret at run time and carries no literal credential, and every other job is left exactly as it was; rolls back |
+| `instagram_collection_rollout_controls.sql` | the rollout admission authority (R1): the default-off policy and the strict policy schema, the master switch read first and alone, the private policy row and the service permit RPC against the browser roles, the evaluator's ownership and pin rules, the enqueue refusals and the mixed service batch, the claim passes with an eligible job behind more than 500 excluded rows, the pinned-viewer negatives, the write fences, the provider permit unions and the bounded audit rows; rolls back |
 
 The harness's `SUITES` array is the complete executable inventory; the table
 above highlights selected suites, not the entire list. No existing suite may
@@ -57,13 +58,61 @@ not omitted test suites: `partner_api_race_fixture.sql`,
 `meta_oauth_attempt_lifecycle_race_fixture.sql`,
 `meta_account_refresh_lifecycle_race_fixture.sql`,
 `meta_oauth_identity_alias_race_fixture.sql`,
-`meta_page_token_reconciliation_race_fixture.sql`, and
-`competitor_retention_race_fixture.sql`. Their headers document
+`meta_page_token_reconciliation_race_fixture.sql`,
+`competitor_retention_race_fixture.sql` and
+`instagram_collection_rollout_race_fixture.sql`. Their headers document
 setup, interleavings, expected outcomes and cleanup. A single-session harness
 pass does not prove concurrency. Run the applicable fixtures separately against
 the same isolated candidate and record both sessions' results. Never run them
 against production; the Instagram credential/job fixtures require
 `-v disposable=1` because setup commits synthetic records.
+
+### The rollout controls race fixture
+
+`instagram_collection_rollout_race_fixture.sql` rehearses the six
+concurrency races of the rollout admission: enqueue versus exclusion, claim
+versus exclusion, attachment versus viewer removal, result write versus
+exclusion, reconnect versus permit, and both lock acquisition orders. It
+commits synthetic rows **and** a policy change, so it refuses to run without
+`-v disposable=1`, and its cleanup step removes the synthetic rows and puts
+the default (off) policy back.
+
+Three sessions are needed: the holder (A), the probe (B) and the observer.
+The observer is what proves the wait — it reads `pg_stat_activity` while the
+other session is blocked.
+
+```bash
+# against the disposable container of the rollout validation
+DB_URL='postgres://supabase_admin:postgres@localhost:5432/instagram_rollout_harness'
+
+# 1. prepare (commits the synthetic owner, the accounts and the policy)
+psql "$DB_URL" -v ON_ERROR_STOP=1 -v disposable=1 -v prepare=1 \
+  -f supabase/tests/instagram_collection_rollout_race_fixture.sql
+
+# 2. two interactive sessions against the SAME database
+psql "$DB_URL"   # session A
+psql "$DB_URL"   # session B
+
+# 3. in session A, hold the exclusion open (the transaction stays open)
+psql "$DB_URL" -v ON_ERROR_STOP=1 -v disposable=1 -v exclude=1 -v hold_seconds=20 \
+  -f supabase/tests/instagram_collection_rollout_race_fixture.sql
+
+# 4. while A still holds it, probe from session B
+psql "$DB_URL" -v ON_ERROR_STOP=1 -v disposable=1 -v enqueue=1 \
+  -f supabase/tests/instagram_collection_rollout_race_fixture.sql
+
+# 5. after A commits, assert and clean up
+psql "$DB_URL" -v ON_ERROR_STOP=1 -v disposable=1 -v assert=1 \
+  -f supabase/tests/instagram_collection_rollout_race_fixture.sql
+psql "$DB_URL" -v ON_ERROR_STOP=1 -v disposable=1 -v cleanup=1 \
+  -f supabase/tests/instagram_collection_rollout_race_fixture.sql
+```
+
+The exact statements of every race, the lock waits to observe, the expected
+rows and the assertions are in the fixture's own header. One point the
+header states and the rehearsal shows: the rollout readers take **no** row
+lock on `app_settings`, so a policy writer never waits on an account lock
+and the established `account -> watchlist -> job` order is never inverted.
 
 ### The competitor retention race fixture
 

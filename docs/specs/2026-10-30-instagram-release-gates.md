@@ -210,9 +210,9 @@ Paths below are relative to `supabase/migrations/`. Apply only missing, reviewed
 | 13 / M2 | `20261030110000_competitor_tracking_report.sql` | proposed, Task 8 |
 | 14 / M3 | `20261030120000_competitor_retention.sql` | proposed, Task 8 |
 | 15 / M4 | `20261030130000_competitor_retention_cron.sql` | proposed, Task 8 |
-| 16 / R1 | `20261030133000_instagram_collection_rollout_controls.sql` | proposed, [collection rollout controls](2026-10-30-instagram-collection-rollout-controls.md) |
-| 17 / R2 | `20261030134000_instagram_collection_daily_dispatch.sql` | proposed, collection rollout controls |
-| 18 / C1 | `20261030140000_instagram_collection_cron.sql` | proposed, collection rollout controls; retains the existing reservation |
+| 16 / R1 | `20261030150000_instagram_collection_rollout_controls.sql` | proposed, [collection rollout controls](2026-10-30-instagram-collection-rollout-controls.md) |
+| 17 / R2 | `20261030151000_instagram_collection_daily_dispatch.sql` | proposed, collection rollout controls |
+| 18 / C1 | `20261030152000_instagram_collection_cron.sql` | proposed, collection rollout controls; retains the existing reservation |
 
 R1/R2/C1 contracts and implementation ownership are in the [collection rollout spec](2026-10-30-instagram-collection-rollout-controls.md) and [plan](../plans/2026-10-30-instagram-collection-rollout-controls.md). C1 depends on tested eligibility and daily dispatch; recheck collisions and freeze delivered artifacts before release. Proposed contracts do not pass the manifest gate. M1–M4 remain owned by Task 8.
 

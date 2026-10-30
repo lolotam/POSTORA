@@ -9957,6 +9957,10 @@ export type Database = {
         Args: { p_job_id: string; p_claim_token: string }
         Returns: Json
       }
+      authorize_instagram_collection_provider_call: {
+        Args: { p_job_id: string; p_claim_token: string; p_job_generation: number }
+        Returns: Json
+      }
       run_competitor_retention_batch: {
         Args: {
           p_parent_limit: number

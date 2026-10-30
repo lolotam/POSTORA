@@ -118,9 +118,9 @@ Exact proposed migrations, checked against this worktree's migration filenames a
 
 | Order | ID and filename | Owns |
 |---|---|---|
-| R1 | `20261030133000_instagram_collection_rollout_controls.sql` | Policy default/evaluator, SQL admission and provider/write fences, refusal audit integration. |
-| R2 | `20261030134000_instagram_collection_daily_dispatch.sql` | Durable sweep relation, bounded atomic daily-page RPC and ACLs. |
-| C1 | `20261030140000_instagram_collection_cron.sql` | Four inactive jobs; retains Task 11's existing reservation. |
+| R1 | `20261030150000_instagram_collection_rollout_controls.sql` | Policy default/evaluator, SQL admission and provider/write fences, refusal audit integration. |
+| R2 | `20261030151000_instagram_collection_daily_dispatch.sql` | Durable sweep relation, bounded atomic daily-page RPC and ACLs. |
+| C1 | `20261030152000_instagram_collection_cron.sql` | Four inactive jobs; retains Task 11's existing reservation. |
 
 R1/R2 precede C1 and follow Task 8's reserved M4 `20261030130000`; no existing migration bytes change. Recheck filename and documentation collisions at implementation and against the applied ledger before a separately approved release. M1's v2 writer exists here; M2–M4 remain other-task dependencies, not permission to invent their delivery.
 

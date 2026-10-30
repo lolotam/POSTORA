@@ -28,11 +28,11 @@ Execute **one numbered task at a time**, review its tests and diff, then advance
 
 | Alias | Exact new migration | Dependency |
 |---|---|---|
-| R1 | `supabase/migrations/20261030133000_instagram_collection_rollout_controls.sql` | Existing capability/binding/durable-job/lifecycle/direct-reader migrations and Task 8 M1 v2 writer. |
-| R2 | `supabase/migrations/20261030134000_instagram_collection_daily_dispatch.sql` | R1 admission contract, existing competitor due-date/result schema. |
-| C1 | `supabase/migrations/20261030140000_instagram_collection_cron.sql` | R1/R2 and completed owner/competitor registered dispatch/drain routes. |
+| R1 | `supabase/migrations/20261030150000_instagram_collection_rollout_controls.sql` | Existing capability/binding/durable-job/lifecycle/direct-reader migrations and Task 8 M1 v2 writer. |
+| R2 | `supabase/migrations/20261030151000_instagram_collection_daily_dispatch.sql` | R1 admission contract, existing competitor due-date/result schema. |
+| C1 | `supabase/migrations/20261030152000_instagram_collection_cron.sql` | R1/R2 and completed owner/competitor registered dispatch/drain routes. |
 
-Collision check at baseline: `20261030100000_competitor_capture_coverage.sql` is the only physical 20261030 migration. Task 8 reserves `20261030110000`, `20261030120000`, `20261030130000`; Task 11 already reserves C1 `20261030140000`. Neither R1 nor R2 timestamp/filename occurs in migration filenames or pre-existing spec/plan reservations. C1 is adoption of that reservation, not a second migration. Recheck before creating files and against the live ledger only under future production approval. Never renumber an applied migration; stop if ownership/collision changed.
+Renumbered on 2026-10-30 at implementation start: after this plan was written, `main` gained `20261030140000_sweep_ai_image_staging_cron.sql`, and Task 8's M2–M4 (`20261030110000`, `20261030120000`, `20261030130000`) were applied to production. A new migration must sort after every applied one, so R1 is `20261030150000`, R2 `20261030151000` and C1 `20261030152000`. C1 still adopts Task 11's schedule reservation, under the new number. Recheck against the live ledger only under future production approval. Never renumber an applied migration.
 
 R1/R2/C1 follow M4 numerically. Task 8 M2–M4 remain separately owned: include them if landed in the complete baseline-plus-delta ledger; do not implement or falsely mark them delivered here. Preserve M1 v1/v2 result compatibility and coordinate its shared fence consumers. Apply and verify all missing reviewed prerequisites before deploying dependent runtime; do not depend on main auto-deploy or the reconciler to migrate SQL.
 

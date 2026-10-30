@@ -380,6 +380,15 @@ UPDATE public.app_settings
    SET value = 'false'::jsonb
  WHERE key = 'competitor_retention_enabled';
 
+-- The rollout fixture goes back to the default. The prepare step turned
+-- the collection on and a collection gate left open is not a thing this
+-- fixture may leave behind.
+DELETE FROM public.app_settings
+ WHERE key = 'collection_instagram_insights_enabled';
+UPDATE public.app_settings
+   SET value = '{"version":1,"owners":{"mode":"off","account_ids":[]},"competitors":{"mode":"off","targets":[]}}'::jsonb
+ WHERE key = 'collection_instagram_rollout_policy';
+
 COMMIT;
 \echo '=== competitor_retention race fixture: cleaned synthetic owner, switch back off ==='
 
@@ -476,6 +485,18 @@ VALUES
 UPDATE public.app_settings
    SET value = 'true'::jsonb
  WHERE key = 'competitor_retention_enabled';
+
+-- The rollout fixture. R1 (20261030150000) made the collection admission
+-- a default-off gate, so the collector's fenced writes need an explicit
+-- synthetic policy. The cleanup puts the default back.
+INSERT INTO public.app_settings (key, value, description)
+VALUES
+  ('collection_instagram_insights_enabled', 'true'::jsonb,
+   'Synthetic race-fixture master switch.'),
+  ('collection_instagram_rollout_policy',
+   '{"version":1,"owners":{"mode":"all","account_ids":[]},"competitors":{"mode":"all","targets":[]}}'::jsonb,
+   'Synthetic race-fixture rollout policy: every otherwise eligible target.')
+ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
 
 COMMIT;
 
