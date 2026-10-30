@@ -6,6 +6,7 @@ import {
   storeEmailAttachment,
 } from "../_shared/emailAttachmentStorage.ts";
 import { logToDatabase } from "../_shared/logging.ts";
+import { readResendAttachmentList } from "../_shared/resendAttachmentList.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -55,8 +56,6 @@ type StoredInboundAttachment = {
   publicId: string;
 };
 
-// Fetch inbound attachments from Resend Receiving API and store them in Openinary.
-// `failed` counts attachments that could not be stored, so the caller can report it.
 function logDownloadFailure(supabase: Parameters<typeof logToDatabase>[0], filename: string, status: number | null) {
   return logToDatabase(supabase, {
     level: "error",
@@ -67,6 +66,8 @@ function logDownloadFailure(supabase: Parameters<typeof logToDatabase>[0], filen
   });
 }
 
+// Fetch inbound attachments from Resend Receiving API and store them in Openinary.
+// `failed` counts attachments that could not be stored, so the caller can report it.
 async function fetchAndStoreAttachments(
   emailId: string,
   apiKey: string,
@@ -74,45 +75,21 @@ async function fetchAndStoreAttachments(
 ): Promise<{ stored: StoredInboundAttachment[]; failed: number }> {
   console.log(`Fetching inbound attachments for email_id: ${emailId}`);
 
-  const listResponse = await fetch(
-    `https://api.resend.com/emails/receiving/${emailId}/attachments`,
-    {
-      method: "GET",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-    }
-  );
-
-  if (!listResponse.ok) {
+  const list = await readResendAttachmentList(emailId, apiKey);
+  if (!list.ok) {
     // Not "no attachments": the list itself could not be read, so count it as a failure.
-    console.error(`Failed to fetch attachments list: ${listResponse.status} ${listResponse.statusText}`);
+    console.error(`Failed to read attachments list: ${list.status ?? "no response"} ${list.detail}`);
     await logToDatabase(supabase, {
       level: "error",
       category: "system",
       source: "fetch-email-content",
       message: "Inbound email attachment list could not be read",
-      metadata: { code: "list_failed", status: listResponse.status },
+      metadata: { code: "list_failed", status: list.status, detail: list.detail },
     });
     return { stored: [], failed: 1 };
   }
 
-  const attachmentsJson = await listResponse.json();
-  const attachments = (Array.isArray(attachmentsJson?.data)
-    ? attachmentsJson.data
-    : Array.isArray(attachmentsJson)
-      ? attachmentsJson
-      : []) as Array<{
-    id?: string;
-    filename?: string;
-    content_type?: string;
-    contentType?: string;
-    download_url?: string;
-    url?: string;
-  }>;
-
-  if (attachments.length === 0) {
+  if (list.attachments.length === 0) {
     console.log("No attachments found");
     return { stored: [], failed: 0 };
   }
@@ -120,10 +97,9 @@ async function fetchAndStoreAttachments(
   const storedAttachments: StoredInboundAttachment[] = [];
   let failed = 0;
 
-  for (const [index, attachment] of attachments.entries()) {
+  for (const [index, attachment] of list.attachments.entries()) {
+    const { filename, contentType, downloadUrl } = attachment;
     try {
-      const filename = attachment.filename || "attachment";
-      const downloadUrl = attachment.download_url || attachment.url;
       if (!downloadUrl) {
         failed++;
         await logDownloadFailure(supabase, filename, null);
@@ -144,7 +120,6 @@ async function fetchAndStoreAttachments(
 
       const fileBlob = await fileResponse.blob();
       const fileBuffer = await fileBlob.arrayBuffer();
-      const contentType = attachment.content_type || attachment.contentType || "application/octet-stream";
 
       const result = await storeEmailAttachment({
         bytes: new Uint8Array(fileBuffer),
@@ -166,13 +141,13 @@ async function fetchAndStoreAttachments(
       console.log(`Successfully stored attachment: ${filename}`);
     } catch (attError) {
       failed++;
-      console.error(`Error processing attachment ${attachment.filename}:`, attError);
+      console.error(`Error processing attachment ${filename}:`, attError);
       await logToDatabase(supabase, {
         level: "error",
         category: "system",
         source: "fetch-email-content",
         message: "Inbound email attachment could not be stored",
-        metadata: attachmentFailureLogMetadata(attachment.filename || "attachment", attError),
+        metadata: attachmentFailureLogMetadata(filename, attError),
       });
     }
   }

@@ -6,6 +6,7 @@ import {
   storeEmailAttachment,
 } from "../_shared/emailAttachmentStorage.ts";
 import { logToDatabase } from "../_shared/logging.ts";
+import { readResendAttachmentList } from "../_shared/resendAttachmentList.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -148,121 +149,91 @@ async function fetchAndStoreAttachments(
   apiKey: string,
   supabase: Parameters<typeof logToDatabase>[0]
 ): Promise<StoredInboundAttachment[]> {
-  try {
-    console.log(`Fetching inbound attachments for email_id: ${emailId}`);
+  console.log(`Fetching inbound attachments for email_id: ${emailId}`);
 
-    const listResponse = await fetch(
-      `https://api.resend.com/emails/receiving/${emailId}/attachments`,
-      {
-        method: "GET",
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
-        },
+  const list = await readResendAttachmentList(emailId, apiKey);
+  if (!list.ok) {
+    // The message is still saved, so a lost attachment list has to be findable afterwards.
+    console.error(`Failed to read attachments list: ${list.status ?? "no response"} ${list.detail}`);
+    await logToDatabase(supabase, {
+      level: "error",
+      category: "system",
+      source: "resend-webhook",
+      message: "Inbound email attachment list could not be read",
+      metadata: { code: "list_failed", status: list.status, detail: list.detail },
+    });
+    return [];
+  }
+
+  if (list.attachments.length === 0) {
+    console.log("No attachments found");
+    return [];
+  }
+
+  const storedAttachments: StoredInboundAttachment[] = [];
+
+  for (const [index, attachment] of list.attachments.entries()) {
+    const { filename, contentType, downloadUrl } = attachment;
+    try {
+      console.log(`Processing attachment: ${filename}`);
+
+      if (!downloadUrl) {
+        console.log(`No download_url for attachment: ${filename}`);
+        await logDownloadFailure(supabase, filename, null);
+        continue;
       }
-    );
 
-    if (!listResponse.ok) {
-      console.error(`Failed to fetch attachments list: ${listResponse.status} ${listResponse.statusText}`);
+      let fileResponse = await fetch(downloadUrl);
+
+      if (!fileResponse.ok && (fileResponse.status === 401 || fileResponse.status === 403)) {
+        fileResponse = await fetch(downloadUrl, {
+          headers: { Authorization: `Bearer ${apiKey}` },
+        });
+      }
+
+      if (!fileResponse.ok) {
+        console.error(`Failed to download attachment: ${fileResponse.status}`);
+        await logDownloadFailure(supabase, filename, fileResponse.status);
+        continue;
+      }
+
+      const fileBlob = await fileResponse.blob();
+      const fileBuffer = await fileBlob.arrayBuffer();
+
+      console.log(`Storing attachment: ${filename}`);
+
+      const result = await storeEmailAttachment({
+        bytes: new Uint8Array(fileBuffer),
+        filename,
+        contentType,
+        folder: `admin/email/inbound/${emailId}`,
+        uniqueKey: attachment.id || String(index),
+      });
+
+      storedAttachments.push({
+        id: crypto.randomUUID(),
+        filename,
+        content_type: contentType,
+        size: fileBlob.size,
+        url: result.url,
+        publicId: result.publicId,
+      });
+
+      console.log(`Successfully stored attachment: ${filename}`);
+    } catch (attError) {
+      console.error(`Error processing attachment ${filename}:`, attError);
+      // The message is still saved, so the failure has to be findable afterwards.
       await logToDatabase(supabase, {
         level: "error",
         category: "system",
         source: "resend-webhook",
-        message: "Inbound email attachment list could not be read",
-        metadata: { code: "list_failed", status: listResponse.status },
+        message: "Inbound email attachment could not be stored",
+        metadata: attachmentFailureLogMetadata(filename, attError),
       });
-      return [];
     }
-
-    const attachmentsJson = await listResponse.json();
-    const attachments = (Array.isArray(attachmentsJson?.data)
-      ? attachmentsJson.data
-      : Array.isArray(attachmentsJson)
-        ? attachmentsJson
-        : []) as Array<{
-      id?: string;
-      filename?: string;
-      content_type?: string;
-      contentType?: string;
-      download_url?: string;
-      url?: string;
-    }>;
-
-    if (attachments.length === 0) {
-      console.log("No attachments found");
-      return [];
-    }
-
-    const storedAttachments: StoredInboundAttachment[] = [];
-
-    for (const [index, attachment] of attachments.entries()) {
-      try {
-        const filename = attachment.filename || "attachment";
-        console.log(`Processing attachment: ${filename}`);
-
-        const downloadUrl = attachment.download_url || attachment.url;
-        if (!downloadUrl) {
-          console.log(`No download_url for attachment: ${filename}`);
-          await logDownloadFailure(supabase, filename, null);
-          continue;
-        }
-
-        let fileResponse = await fetch(downloadUrl);
-
-        if (!fileResponse.ok && (fileResponse.status === 401 || fileResponse.status === 403)) {
-          fileResponse = await fetch(downloadUrl, {
-            headers: { Authorization: `Bearer ${apiKey}` },
-          });
-        }
-
-        if (!fileResponse.ok) {
-          console.error(`Failed to download attachment: ${fileResponse.status}`);
-          await logDownloadFailure(supabase, filename, fileResponse.status);
-          continue;
-        }
-
-        const fileBlob = await fileResponse.blob();
-        const fileBuffer = await fileBlob.arrayBuffer();
-        const contentType = attachment.content_type || attachment.contentType || "application/octet-stream";
-
-        console.log(`Storing attachment: ${filename}`);
-
-        const result = await storeEmailAttachment({
-          bytes: new Uint8Array(fileBuffer),
-          filename,
-          contentType,
-          folder: `admin/email/inbound/${emailId}`,
-          uniqueKey: attachment.id || String(index),
-        });
-
-        storedAttachments.push({
-          id: crypto.randomUUID(),
-          filename,
-          content_type: contentType,
-          size: fileBlob.size,
-          url: result.url,
-          publicId: result.publicId,
-        });
-
-        console.log(`Successfully stored attachment: ${filename}`);
-      } catch (attError) {
-        console.error(`Error processing attachment ${attachment.filename}:`, attError);
-        // The message is still saved, so the failure has to be findable afterwards.
-        await logToDatabase(supabase, {
-          level: "error",
-          category: "system",
-          source: "resend-webhook",
-          message: "Inbound email attachment could not be stored",
-          metadata: attachmentFailureLogMetadata(attachment.filename || "attachment", attError),
-        });
-      }
-    }
-
-    return storedAttachments;
-  } catch (error) {
-    console.error("Error fetching attachments:", error);
-    return [];
   }
+
+  return storedAttachments;
 }
 
 serve(async (req) => {
