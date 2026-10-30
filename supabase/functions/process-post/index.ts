@@ -3888,10 +3888,10 @@ async function postToInstagram(
     if (igLocationEligible !== null) return igLocationEligible;
     locationDebug.eligibility_check_started = true;
     try {
-      const res = await fetch(
+      // Bounded like every request that may run after a publish (a resumed reel's story mirror).
+      const data = await followUpGraph(
         `https://graph.facebook.com/v18.0/${igLocationId}?fields=name,location,is_eligible_for_location_tag&access_token=${encodeURIComponent(accessToken)}`
-      );
-      const data = await res.json();
+      ) as { name?: string; is_eligible_for_location_tag?: boolean; location?: { latitude?: number; longitude?: number } };
       const loc = data?.location;
       const eligible = data?.is_eligible_for_location_tag === true && loc && (loc.latitude || loc.longitude);
       if (!eligible) {
@@ -3996,10 +3996,13 @@ async function postToInstagram(
   const finalizeIgLocationDebug = async (publishedMediaId: string | null): Promise<Record<string, unknown> | undefined> => {
     if (!LOCATION_DEBUG_MODE) return undefined;
 
-    if (publishedMediaId) {
+    // Runs after the publish, so it gets only what is left of the worker; none left: not run.
+    const verifyTimeoutMs = Math.min(4000, followUpTimeoutMs(WORKER_STARTED_AT_MS, Date.now()));
+    if (publishedMediaId && verifyTimeoutMs > 0) {
       locationDebug.post_publish_verify_attempted = true;
       const data = await fetchJsonWithTimeout(
         `https://graph.facebook.com/v18.0/${publishedMediaId}?fields=id,caption,permalink,location&access_token=${encodeURIComponent(accessToken)}`,
+        verifyTimeoutMs,
       );
       if (!data) {
         locationDebug.post_publish_verify_result = "verification_failed";
