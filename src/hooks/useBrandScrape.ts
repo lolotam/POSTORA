@@ -1,7 +1,8 @@
 import { useState, useCallback } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
-import type { BrandProfile, BrandPost, BrandPlatform } from "@/types/brand-intelligence";
+import { resolveBrandProfileSource } from "@/types/brand-intelligence";
+import type { BrandProfile, BrandPost, BrandPlatform, BrandProfileSource } from "@/types/brand-intelligence";
 
 type BrandScrapeResponse = {
   profile: BrandProfile;
@@ -121,8 +122,19 @@ export function useBrandScrape() {
   const activeProfile = sessionProfile || data?.profile || null;
   const combinedPosts = sessionPosts || (data?.posts ? [...data.posts, ...allPosts] : allPosts);
 
+  /**
+   * The source of the profile the owner is looking at.
+   *
+   * It is the source the PRODUCER stated, and nothing else. The
+   * answer is "unknown" until the producer publishes one, and it stays
+   * "unknown" for a cached answer - a cache entry does not say where
+   * its numbers came from (T8-01).
+   */
+  const profileSource: BrandProfileSource = resolveBrandProfileSource(activeProfile?.source);
+
   return {
     profile: activeProfile,
+    profileSource,
     posts: combinedPosts,
     totalPosts: sessionPosts ? sessionPosts.length : (data?.totalPosts || 0),
     hasMore: sessionPosts ? false : (data?.hasMore || false),

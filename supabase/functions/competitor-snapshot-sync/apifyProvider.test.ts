@@ -156,6 +156,90 @@ Deno.test("a completed paid capture carries the typed source and the counts", as
   assertEquals(media.published_at, "2026-10-28T12:00:00.000Z");
 });
 
+Deno.test("a completed paid capture carries the coverage it observed", async () => {
+  const { fetchFn } = recorder();
+
+  const provider = new ApifyCompetitorProvider({
+    apiToken: "apify-secret-token",
+    fetchFn,
+  });
+
+  const outcome = await provider.capture({
+    username: "competitor_brand",
+    signal: new AbortController().signal,
+  });
+
+  assertEquals(outcome.status, "completed");
+  if (outcome.status !== "completed") return;
+
+  const coverage = outcome.capture.coverage;
+
+  // The actor returned fewer rows than the limit, so the feed it exposed
+  // was exhausted.
+  assertEquals(coverage.exhausted, true);
+  assertEquals(coverage.truncated, false);
+  assertEquals(coverage.gapReason, null);
+  // The dataset read offers no next-page cursor, and the adapter cannot
+  // tell whether the limit cut the feed: unknown, not false.
+  assertEquals(coverage.cursorPresent, null);
+  // The actor's order is not a tested contract.
+  assertEquals(coverage.orderingVerified, false);
+  assertEquals(coverage.oldestReturnedAt, "2026-10-28T12:00:00.000Z");
+  assert(
+    Date.parse(coverage.captureStartedAt) <= Date.parse(coverage.captureEndedAt),
+    "the capture window does not end before it starts",
+  );
+});
+
+Deno.test("a paid capture at the row limit is capped and says so", async () => {
+  // The actor returns exactly as many rows as the limit allows. The
+  // adapter cannot tell a feed of thirty posts from a longer one, so the
+  // capture is partial - and it says why.
+  const rows = Array.from({ length: MAX_PAID_MEDIA_ROWS }, (_, index) => ({
+    id: `post-${index + 1}`,
+    shortCode: `abc${index + 1}`,
+    type: "Video",
+    timestamp: "2026-10-28T12:00:00Z",
+    followersCount: 500,
+    postsCount: 999,
+  }));
+
+  let starts = 0;
+  const fetchFn = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    if ((init?.method ?? "GET") === "POST") {
+      starts += 1;
+      return new Response(JSON.stringify({ data: { id: "run-1" } }), {
+        status: 201,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    return new Response(JSON.stringify(rows), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+  }) as unknown as typeof fetch;
+
+  const provider = new ApifyCompetitorProvider({
+    apiToken: "apify-secret-token",
+    fetchFn,
+  });
+
+  const outcome = await provider.capture({
+    username: "competitor_brand",
+    signal: new AbortController().signal,
+  });
+
+  assertEquals(outcome.status, "completed");
+  if (outcome.status !== "completed") return;
+
+  // The paid fallback is never re-run, so the start is still sent once.
+  assertEquals(starts, 1);
+  assertEquals(outcome.capture.truncated, true);
+  assertEquals(outcome.capture.coverage.truncated, true);
+  assertEquals(outcome.capture.coverage.exhausted, false);
+  assertEquals(outcome.capture.coverage.gapReason, "media_cap_reached");
+});
+
 Deno.test("a lost run-start response is indeterminate and is never repeated", async () => {
   let starts = 0;
 

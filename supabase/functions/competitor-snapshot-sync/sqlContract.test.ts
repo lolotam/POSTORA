@@ -8,7 +8,7 @@
  *   production, on the first claim of the first job.
  *
  *   This suite runs the PRODUCTION store - the real module, not a copy -
- *   against the PRODUCTION migration file, and compares what the store
+ *   against the PRODUCTION migration files, and compares what the store
  *   sends with what the SQL declares. It closes the gap between the two
  *   halves of the contract that a SQL-only test cannot see: the SQL suite
  *   proves the function behaves, and this suite proves the caller asks for
@@ -30,15 +30,22 @@ import {
 const testFilePath = fileURLToPath(import.meta.url);
 const FUNCTIONS_ROOT = dirname(dirname(testFilePath));
 const REPO_ROOT = dirname(dirname(FUNCTIONS_ROOT));
-const MIGRATION = join(
-  REPO_ROOT,
-  "supabase",
-  "migrations",
+const MIGRATIONS = join(REPO_ROOT, "supabase", "migrations");
+
+/** The writer that carries the coverage evidence. */
+const MIGRATION_V2 = join(
+  MIGRATIONS,
+  "20261030100000_competitor_capture_coverage.sql",
+);
+
+/** The writer that stays callable for deployment compatibility. */
+const MIGRATION_V1 = join(
+  MIGRATIONS,
   "20261029150000_competitor_collection_results.sql",
 );
 
-async function migrationText(): Promise<string> {
-  return await Deno.readTextFile(MIGRATION);
+async function migrationText(path: string): Promise<string> {
+  return await Deno.readTextFile(path);
 }
 
 /**
@@ -91,12 +98,27 @@ const noReads: ServiceReadPort = {
   },
 };
 
+const COVERAGE_PAYLOAD = {
+  capture_started_at: "2026-10-29T02:00:00.000Z",
+  capture_ended_at: "2026-10-29T02:00:05.000Z",
+  oldest_returned_at: null,
+  ordering_verified: false,
+  cursor_present: false,
+  exhausted: true,
+  truncated: false,
+  gap_reason: null,
+};
+
 Deno.test("the store sends exactly the parameters the new SQL declares", async () => {
-  const sql = await migrationText();
+  // The due-target read is declared by the migration that introduced it and
+  // is UNCHANGED; the versioned result write is declared by the new one.
+  const v1 = await migrationText(MIGRATION_V1);
+  const v2 = await migrationText(MIGRATION_V2);
 
   const { calls, rpc } = recorder({
     list_due_competitor_collection_targets: [],
-    persist_competitor_collection_result: {
+    persist_competitor_collection_result_v2: {
+      version: 2,
       job_id: "5c1b0003-0000-4000-8000-000000000003",
       job_generation: 1,
       outcome: "completed",
@@ -106,6 +128,23 @@ Deno.test("the store sends exactly the parameters the new SQL declares", async (
       written: 1,
       media_count: 0,
       captured_at: "2026-10-29T02:00:00+00:00",
+      coverage: {
+        watchlist_id: "c1000000-0000-4000-8000-000000000001",
+        user_id: "a1000000-0000-4000-8000-000000000001",
+        captured_on: "2026-10-29",
+        captured_at: "2026-10-29T02:00:00+00:00",
+        source: "official",
+        job_generation: 1,
+        capture_started_at: "2026-10-29T02:00:00.000Z",
+        capture_ended_at: "2026-10-29T02:00:05.000Z",
+        oldest_returned_at: null,
+        ordering_verified: false,
+        cursor_present: false,
+        exhausted: true,
+        truncated: false,
+        gap_reason: null,
+        inventory_complete: true,
+      },
     },
   });
 
@@ -120,33 +159,40 @@ Deno.test("the store sends exactly the parameters the new SQL declares", async (
     jobId: "5c1b0003-0000-4000-8000-000000000003",
     claimToken: "t",
     jobGeneration: 1,
-    payload: { outcome: "completed", source: "official", profile: { metrics: {} }, media: [] },
+    payload: {
+      outcome: "completed",
+      source: "official",
+      profile: { metrics: {} },
+      media: [],
+      coverage: COVERAGE_PAYLOAD,
+    },
   });
 
   const dueCall = calls.find((call) => call.name === "list_due_competitor_collection_targets");
-  const persistCall = calls.find((call) => call.name === "persist_competitor_collection_result");
+  const persistCall = calls.find((call) => call.name === "persist_competitor_collection_result_v2");
 
   assert(dueCall !== undefined, "the due-target read was called");
-  assert(persistCall !== undefined, "the result write was called");
+  assert(persistCall !== undefined, "the versioned result write was called");
 
   assertEquals(
     Object.keys(dueCall.args).sort(),
-    declaredParameters(sql, "list_due_competitor_collection_targets").sort(),
+    declaredParameters(v1, "list_due_competitor_collection_targets").sort(),
     "the due-target read sends the declared parameters",
   );
 
   assertEquals(
     Object.keys(persistCall.args).sort(),
-    declaredParameters(sql, "persist_competitor_collection_result").sort(),
-    "the result write sends the declared parameters",
+    declaredParameters(v2, "persist_competitor_collection_result_v2").sort(),
+    "the versioned result write sends the declared parameters",
   );
 });
 
 Deno.test("every key the store reads is a key the new SQL returns", async () => {
-  const sql = await migrationText();
+  const sql = await migrationText(MIGRATION_V2);
 
-  // The keys the store parses out of the two receipts.
+  // The keys the store parses out of the versioned receipt.
   const readKeys = [
+    "version",
     "outcome",
     "source",
     "reason_code",
@@ -157,8 +203,21 @@ Deno.test("every key the store reads is a key the new SQL returns", async () => 
     "next_retry_at",
     "job_id",
     "job_generation",
+    "captured_on",
+    "coverage",
+    // The keys of the stored coverage the store reads.
     "user_id",
-    "due_at",
+    "source",
+    "job_generation",
+    "capture_started_at",
+    "capture_ended_at",
+    "oldest_returned_at",
+    "ordering_verified",
+    "cursor_present",
+    "exhausted",
+    "truncated",
+    "gap_reason",
+    "inventory_complete",
   ];
 
   for (const key of readKeys) {
@@ -169,11 +228,52 @@ Deno.test("every key the store reads is a key the new SQL returns", async () => 
   }
 });
 
+Deno.test("the versioned writer accepts the coverage key the store sends", async () => {
+  const sql = await migrationText(MIGRATION_V2);
+
+  // The payload key list of the versioned writer names the coverage, so a
+  // payload that carries one is not refused as an unknown key.
+  assert(
+    sql.includes("'profile', 'media', 'coverage'"),
+    "the versioned writer accepts the coverage payload key",
+  );
+
+  // Every key the coverage payload carries is a key the writer reads.
+  for (const key of Object.keys(COVERAGE_PAYLOAD)) {
+    assert(
+      sql.includes(`'${key}'`),
+      `the versioned writer does not read the coverage key ${key}`,
+    );
+  }
+});
+
+Deno.test("the v1 writer is still declared and still callable", async () => {
+  const v1 = await migrationText(MIGRATION_V1);
+  const v2 = await migrationText(MIGRATION_V2);
+
+  // The v1 writer is untouched: its declaration is still the accepted one.
+  assertEquals(
+    declaredParameters(v1, "persist_competitor_collection_result").sort(),
+    ["p_claim_token", "p_job_generation", "p_job_id", "p_payload"],
+    "the v1 writer keeps its signature",
+  );
+
+  // The versioned writer is a SEPARATE function, not a replacement.
+  assert(
+    v2.includes("CREATE OR REPLACE FUNCTION public.persist_competitor_collection_result_v2("),
+    "the versioned writer is declared in the new migration",
+  );
+  assert(
+    !v2.includes("CREATE OR REPLACE FUNCTION public.persist_competitor_collection_result("),
+    "the new migration does not replace the v1 writer",
+  );
+});
+
 Deno.test("the store refuses a receipt the new SQL could not produce", async () => {
   // A receipt without the outcome is not a receipt. The store has to
   // refuse it rather than report an empty success.
   const { rpc } = recorder({
-    persist_competitor_collection_result: {
+    persist_competitor_collection_result_v2: {
       job_id: "j",
       job_generation: 1,
     },
@@ -187,7 +287,13 @@ Deno.test("the store refuses a receipt the new SQL could not produce", async () 
       jobId: "j",
       claimToken: "t",
       jobGeneration: 1,
-      payload: { outcome: "completed", source: "official", profile: { metrics: {} }, media: [] },
+      payload: {
+        outcome: "completed",
+        source: "official",
+        profile: { metrics: {} },
+        media: [],
+        coverage: COVERAGE_PAYLOAD,
+      },
     });
   } catch {
     threw = true;

@@ -29,6 +29,7 @@ import {
 
 const JOB_ID = "5c1b0003-0000-4000-8000-000000000003";
 const WATCHLIST_ID = "c1000000-0000-4000-8000-000000000001";
+const OWNER_ID = "a1000000-0000-4000-8000-000000000001";
 const INVENTORY = {
   truncated: false,
   partial: false,
@@ -36,6 +37,57 @@ const INVENTORY = {
   oldest_returned_at: null,
   gap_reason: null,
   pages_fetched: 0,
+};
+
+/** The coverage a successful capture carries on the wire. */
+const COVERAGE_PAYLOAD = {
+  capture_started_at: "2026-10-29T02:00:00.000Z",
+  capture_ended_at: "2026-10-29T02:00:05.000Z",
+  oldest_returned_at: null,
+  ordering_verified: false,
+  cursor_present: false,
+  exhausted: true,
+  truncated: false,
+  gap_reason: null,
+};
+
+/** The versioned receipt the database sends back after storing it. */
+const V2_RECEIPT = {
+  version: 2,
+  job_id: JOB_ID,
+  job_generation: 1,
+  outcome: "completed",
+  source: "official",
+  watchlist_id: WATCHLIST_ID,
+  captured_on: "2026-10-29",
+  written: 1,
+  media_count: 0,
+  captured_at: "2026-10-29T02:00:00+00:00",
+  coverage: {
+    watchlist_id: WATCHLIST_ID,
+    user_id: OWNER_ID,
+    captured_on: "2026-10-29",
+    captured_at: "2026-10-29T02:00:00+00:00",
+    source: "official",
+    job_generation: 1,
+    capture_started_at: "2026-10-29T02:00:00.000Z",
+    capture_ended_at: "2026-10-29T02:00:05.000Z",
+    oldest_returned_at: null,
+    ordering_verified: false,
+    cursor_present: false,
+    exhausted: true,
+    truncated: false,
+    gap_reason: null,
+    inventory_complete: true,
+  },
+};
+
+const V2_PAYLOAD = {
+  outcome: "completed" as const,
+  source: "official" as const,
+  profile: { metrics: {} },
+  media: [],
+  coverage: COVERAGE_PAYLOAD,
 };
 
 interface RpcCall {
@@ -185,17 +237,7 @@ Deno.test("the service RPCs are called with the accepted parameter names", async
       login_kind: "page_linked",
       granted_scopes: [],
     },
-    persist_competitor_collection_result: {
-      job_id: JOB_ID,
-      job_generation: 1,
-      outcome: "completed",
-      source: "official",
-      watchlist_id: WATCHLIST_ID,
-      captured_on: "2026-10-29",
-      written: 1,
-      media_count: 0,
-      captured_at: "2026-10-29T02:00:00+00:00",
-    },
+    persist_competitor_collection_result_v2: V2_RECEIPT,
     record_instagram_provider_throttle: {
       bucket_key: "k",
       usage_percent: 10,
@@ -229,7 +271,7 @@ Deno.test("the service RPCs are called with the accepted parameter names", async
     jobId: JOB_ID,
     claimToken: "t",
     jobGeneration: 1,
-    payload: { outcome: "completed", source: "official", profile: { metrics: {} }, media: [] },
+    payload: V2_PAYLOAD,
   });
   await store.recordThrottle({
     bucketKey: "k",
@@ -265,10 +307,15 @@ Deno.test("the service RPCs are called with the accepted parameter names", async
   assertEquals(calls[3]!.args.p_job_generation, 1);
   assertEquals(calls[3]!.args.p_viewer_social_account_id, "a");
 
-  assertEquals(calls[4]!.name, "persist_competitor_collection_result");
+  assertEquals(calls[4]!.name, "persist_competitor_collection_result_v2");
   assertEquals(calls[4]!.args.p_job_id, JOB_ID);
   assertEquals(calls[4]!.args.p_claim_generation, undefined);
   assertEquals(calls[4]!.args.p_job_generation, 1);
+  assertEquals(
+    JSON.stringify((calls[4]!.args.p_payload as { coverage: unknown }).coverage),
+    JSON.stringify(COVERAGE_PAYLOAD),
+    "the coverage travels with the payload",
+  );
 
   // The throttle RPC has a different parameter set from the one the owner
   // worker used. The names are the accepted ones.
@@ -776,13 +823,48 @@ Deno.test("a definitive SQLSTATE needs an own data descriptor first", async () =
 });
 
 Deno.test("a result receipt that disagrees with the request is not success", async () => {
-  const payload = {
-    outcome: "completed" as const,
-    source: "official" as const,
-    profile: { metrics: {} },
-    media: [],
-  };
-  const good = {
+  const variants = [
+    { ...V2_RECEIPT, job_id: WATCHLIST_ID },
+    { ...V2_RECEIPT, job_generation: 2 },
+    { ...V2_RECEIPT, written: 0 },
+    { ...V2_RECEIPT, source: "apify" },
+    { ...V2_RECEIPT, captured_at: null },
+    { ...V2_RECEIPT, outcome: "retry" },
+    { ...V2_RECEIPT, version: 1 },
+    { ...V2_RECEIPT, version: null },
+    null,
+  ];
+  for (const data of variants) {
+    const { reads } = readPort();
+    const store = createCompetitorServiceStore({ rpc: async () => ({ data, error: null }), reads });
+    assertEquals(
+      await storeFailure(() =>
+        store.persistResult({ jobId: JOB_ID, claimToken: "t", jobGeneration: 1, payload: V2_PAYLOAD })
+      ),
+      "read_failed",
+    );
+  }
+
+  const { reads } = readPort();
+  const store = createCompetitorServiceStore({
+    rpc: async () => ({ data: V2_RECEIPT, error: null }),
+    reads,
+  });
+  const receipt = await store.persistResult({
+    jobId: JOB_ID,
+    claimToken: "t",
+    jobGeneration: 1,
+    payload: V2_PAYLOAD,
+  });
+  assertEquals(receipt.written, 1);
+  assertEquals(receipt.coverage?.inventoryComplete, true);
+  assertEquals(receipt.coverage?.orderingVerified, false);
+});
+
+Deno.test("a v1 receipt is never read as a versioned success", async () => {
+  // The v1 receipt has no `version` key at all. It answers a different
+  // question, so it can never be accepted as a v2 write.
+  const v1 = {
     job_id: JOB_ID,
     job_generation: 1,
     outcome: "completed",
@@ -793,30 +875,97 @@ Deno.test("a result receipt that disagrees with the request is not success", asy
     media_count: 0,
     captured_at: "2026-10-29T02:00:00+00:00",
   };
+
+  const { reads } = readPort();
+  const store = createCompetitorServiceStore({ rpc: async () => ({ data: v1, error: null }), reads });
+  assertEquals(
+    await storeFailure(() =>
+      store.persistResult({ jobId: JOB_ID, claimToken: "t", jobGeneration: 1, payload: V2_PAYLOAD })
+    ),
+    "read_failed",
+  );
+});
+
+Deno.test("the coverage instants are compared as instants, not as text", async () => {
+  // The database renders an instant in its own canonical form and the
+  // collector submits it in its own. The same moment written the two ways
+  // is the same moment; one second apart is not.
+  const sameInstant = {
+    ...V2_RECEIPT.coverage,
+    capture_started_at: "2026-10-29T02:00:00+00:00",
+    capture_ended_at: "2026-10-29T02:00:05+00:00",
+  };
+
+  const { reads } = readPort();
+  const store = createCompetitorServiceStore({
+    rpc: async () => ({ data: { ...V2_RECEIPT, coverage: sameInstant }, error: null }),
+    reads,
+  });
+  const receipt = await store.persistResult({
+    jobId: JOB_ID,
+    claimToken: "t",
+    jobGeneration: 1,
+    payload: V2_PAYLOAD,
+  });
+  assertEquals(receipt.coverage?.inventoryComplete, true);
+
+  const oneSecondOff = {
+    ...V2_RECEIPT.coverage,
+    capture_ended_at: "2026-10-29T02:00:06+00:00",
+  };
+  const { reads: otherReads } = readPort();
+  const other = createCompetitorServiceStore({
+    rpc: async () => ({ data: { ...V2_RECEIPT, coverage: oneSecondOff }, error: null }),
+    reads: otherReads,
+  });
+  assertEquals(
+    await storeFailure(() =>
+      other.persistResult({ jobId: JOB_ID, claimToken: "t", jobGeneration: 1, payload: V2_PAYLOAD })
+    ),
+    "read_failed",
+  );
+});
+
+Deno.test("a receipt whose stored coverage disagrees with the request is not success", async () => {
   const variants = [
-    { ...good, job_id: WATCHLIST_ID },
-    { ...good, job_generation: 2 },
-    { ...good, written: 0 },
-    { ...good, source: "apify" },
-    { ...good, captured_at: null },
-    { ...good, outcome: "retry" },
+    // The stored coverage belongs to another entry.
+    { ...V2_RECEIPT.coverage, watchlist_id: "c1000000-0000-4000-8000-000000000099" },
+    // The stored coverage belongs to another day.
+    { ...V2_RECEIPT.coverage, captured_on: "2026-10-28" },
+    // The stored coverage claims another source.
+    { ...V2_RECEIPT.coverage, source: "apify" },
+    // The stored coverage belongs to another revision.
+    { ...V2_RECEIPT.coverage, job_generation: 2 },
+    // The stored coverage reports different instants than the payload.
+    { ...V2_RECEIPT.coverage, capture_started_at: "2026-10-29T01:00:00.000Z" },
+    { ...V2_RECEIPT.coverage, oldest_returned_at: "2026-10-28T12:00:00.000Z" },
+    // The stored coverage flipped a flag.
+    { ...V2_RECEIPT.coverage, exhausted: false },
+    { ...V2_RECEIPT.coverage, truncated: true },
+    { ...V2_RECEIPT.coverage, ordering_verified: true },
+    { ...V2_RECEIPT.coverage, cursor_present: true },
+    // The stored coverage names a gap the payload did not.
+    { ...V2_RECEIPT.coverage, gap_reason: "cursor_loop" },
+    // The derived verdict does not follow the evidence.
+    { ...V2_RECEIPT.coverage, inventory_complete: false },
+    // A coverage that is not an object at all.
+    "not-a-coverage",
     null,
   ];
-  for (const data of variants) {
+
+  for (const coverage of variants) {
     const { reads } = readPort();
-    const store = createCompetitorServiceStore({ rpc: async () => ({ data, error: null }), reads });
+    const store = createCompetitorServiceStore({
+      rpc: async () => ({ data: { ...V2_RECEIPT, coverage }, error: null }),
+      reads,
+    });
     assertEquals(
       await storeFailure(() =>
-        store.persistResult({ jobId: JOB_ID, claimToken: "t", jobGeneration: 1, payload })
+        store.persistResult({ jobId: JOB_ID, claimToken: "t", jobGeneration: 1, payload: V2_PAYLOAD })
       ),
       "read_failed",
     );
   }
-
-  const { reads } = readPort();
-  const store = createCompetitorServiceStore({ rpc: async () => ({ data: good, error: null }), reads });
-  const receipt = await store.persistResult({ jobId: JOB_ID, claimToken: "t", jobGeneration: 1, payload });
-  assertEquals(receipt.written, 1);
 });
 
 Deno.test("a null or partial throttle receipt is not proof the backoff was stored", async () => {

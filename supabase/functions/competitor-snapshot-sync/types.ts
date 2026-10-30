@@ -89,6 +89,77 @@ export interface CompetitorMediaItem {
   readonly view_count: number | null;
 }
 
+/**
+ * Why a capture stopped short of the target's whole feed.
+ *
+ * The set is CLOSED and lower-case snake_case, because the database
+ * validates it against the same list. A free-text reason would eventually
+ * carry provider text, and a provider text is not a reason code.
+ */
+export type CompetitorCoverageGapReason =
+  /** The thirty row media window was reached. */
+  | "media_cap_reached"
+  /** The page budget of one capture was reached. */
+  | "page_cap_reached"
+  /** The provider offered a next page whose cursor cannot be sent. */
+  | "cursor_unusable"
+  /** The provider offered the same cursor twice. */
+  | "cursor_loop"
+  /** The feed returned the same media id twice. */
+  | "duplicate_media"
+  /** The provider usage budget stopped the walk. */
+  | "usage_budget_stop";
+
+/**
+ * What ONE capture actually saw of the target's feed.
+ *
+ * WHY THIS IS EVIDENCE AND NOT A VERDICT
+ *
+ *   A successful capture is not evidence of a complete weekly inventory.
+ *   These fields are the raw facts a provider observed while walking the
+ *   feed, and the report decides what they mean. The database stores them;
+ *   it does not read a conclusion into them.
+ *
+ * WHY ORDERING IS A SEPARATE FLAG
+ *
+ *   `orderingVerified` says the provider's row order is a tested,
+ *   version-compatible contract. It is FALSE until such a contract
+ *   exists. Sorting the array we received does not prove the provider
+ *   orders its feed chronologically, so nothing in this repository may
+ *   claim otherwise.
+ *
+ * WHY exhausted AND truncated ARE SEPARATE
+ *
+ *   `exhausted` is "the walk reached the end of the feed". `truncated` is
+ *   "the media window was capped". A capture can be truncated and not
+ *   exhausted (the cap stopped it) and it can be exhausted and not
+ *   truncated (the feed ended on its own).
+ */
+export interface CompetitorCaptureCoverage {
+  /** When the capture started. */
+  readonly captureStartedAt: string;
+  /** When the capture ended. Never before the start. */
+  readonly captureEndedAt: string;
+  /**
+   * The oldest publication instant the capture actually returned, or null
+   * for a genuinely empty feed. It is never a substitute instant.
+   */
+  readonly oldestReturnedAt: string | null;
+  /** Whether the provider's row order is a verified contract. */
+  readonly orderingVerified: boolean;
+  /**
+   * Whether there was MORE to fetch: the provider offered a next page in
+   * its last response. Null when the provider has no such notion.
+   */
+  readonly cursorPresent: boolean | null;
+  /** Whether the walk reached the end of the feed. */
+  readonly exhausted: boolean;
+  /** Whether the media window was capped. */
+  readonly truncated: boolean;
+  /** Why the walk stopped early, or null when it did not. */
+  readonly gapReason: CompetitorCoverageGapReason | null;
+}
+
 /** One complete capture of a tracked competitor. */
 export interface CompetitorCapture {
   readonly source: CompetitorSource;
@@ -100,6 +171,41 @@ export interface CompetitorCapture {
    * has exactly this many posts".
    */
   readonly truncated: boolean;
+  /**
+   * The evidence this capture produced about the target's feed.
+   *
+   * It travels with the capture because only the provider knows what it
+   * observed. The worker never infers it and the browser never sees it.
+   */
+  readonly coverage: CompetitorCaptureCoverage;
+}
+
+/**
+ * The oldest publication instant among the returned rows.
+ *
+ * It is the MINIMUM and not the last row's instant: a provider's order is
+ * not a verified contract, so the last row is no evidence of the oldest
+ * one. A genuinely empty feed has no oldest instant, and that is null
+ * rather than a substitute.
+ *
+ * Both adapters use it, so it lives here rather than in either of them.
+ */
+export function oldestPublishedAt(
+  media: readonly { readonly published_at: string }[],
+): string | null {
+  let oldest: string | null = null;
+  let oldestInstant = Number.POSITIVE_INFINITY;
+
+  for (const item of media) {
+    const instant = Date.parse(item.published_at);
+    if (Number.isNaN(instant)) continue;
+    if (instant < oldestInstant) {
+      oldestInstant = instant;
+      oldest = item.published_at;
+    }
+  }
+
+  return oldest;
 }
 
 /** The failure kinds a provider adapter may report. */
@@ -260,6 +366,41 @@ export interface PersistResultReceipt {
   readonly written: number;
   readonly mediaCount: number;
   readonly capturedAt: string | null;
+  /**
+   * The coverage the database STORED, or null for a failed attempt.
+   *
+   * It is the read-back of the row, not the submission: a receipt that
+   * disagrees with the stored evidence is not evidence that the write
+   * happened as asked.
+   */
+  readonly coverage: PersistedCompetitorCoverage | null;
+}
+
+/**
+ * The coverage row the database stored.
+ *
+ * It is the table's own columns plus the one derived verdict the report
+ * needs: `inventoryComplete` is "the walk reached the end of the feed and
+ * nothing was capped". The VERIFIED ORDER is deliberately not part of it:
+ * a complete set of posts with an unverified order is still a complete set
+ * of posts.
+ */
+export interface PersistedCompetitorCoverage {
+  readonly watchlistId: string;
+  readonly userId: string;
+  readonly capturedOn: string;
+  readonly capturedAt: string;
+  readonly source: CompetitorSource;
+  readonly jobGeneration: number;
+  readonly captureStartedAt: string;
+  readonly captureEndedAt: string;
+  readonly oldestReturnedAt: string | null;
+  readonly orderingVerified: boolean;
+  readonly cursorPresent: boolean | null;
+  readonly exhausted: boolean;
+  readonly truncated: boolean;
+  readonly gapReason: CompetitorCoverageGapReason | null;
+  readonly inventoryComplete: boolean;
 }
 
 /** The owner-facing enqueue receipt. */
@@ -317,6 +458,24 @@ export interface ThrottleBucketState {
   readonly throttledUntil: string | null;
 }
 
+/**
+ * The coverage evidence as the database expects it.
+ *
+ * It is the WIRE shape: the field names are the ones the SQL function
+ * declares. The camelCase contract above is the provider-neutral one; this
+ * one exists only at the database boundary.
+ */
+export interface CompetitorCoveragePayload {
+  readonly capture_started_at: string;
+  readonly capture_ended_at: string;
+  readonly oldest_returned_at: string | null;
+  readonly ordering_verified: boolean;
+  readonly cursor_present: boolean | null;
+  readonly exhausted: boolean;
+  readonly truncated: boolean;
+  readonly gap_reason: CompetitorCoverageGapReason | null;
+}
+
 /** The payload of one collection attempt, as the database expects it. */
 export interface CompetitorResultPayload {
   readonly outcome: CompetitorOutcome;
@@ -343,6 +502,14 @@ export interface CompetitorResultPayload {
       readonly view_count?: number | null;
     };
   }[];
+  /**
+   * The coverage evidence.
+   *
+   * It is REQUIRED for a successful v2 write and FORBIDDEN on a failure:
+   * a failed attempt observed no inventory, and a coverage row for it would
+   * claim a walk that never happened.
+   */
+  readonly coverage?: CompetitorCoveragePayload;
 }
 
 /** The outcome of one processed job. */
