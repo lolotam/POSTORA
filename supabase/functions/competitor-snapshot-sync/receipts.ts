@@ -17,6 +17,7 @@
  */
 
 import type {
+  CompetitorCoverageGapReason,
   CompetitorOutcome,
   CompetitorReasonCode,
   CompetitorResultPayload,
@@ -24,6 +25,7 @@ import type {
   EnqueueReceipt,
   OwnerStatusProjection,
   PersistResultReceipt,
+  PersistedCompetitorCoverage,
 } from "./types.ts";
 
 const UUID_PATTERN =
@@ -103,6 +105,49 @@ const RESULT_FAILED_KEYS = [
   "next_retry_at",
 ];
 
+// The v2 receipt. The `version` key is what separates it from a v1
+// receipt: a receipt without it, or with another number, is not a v2
+// success and is never read as one.
+const RESULT_V2_COMPLETED_KEYS = [
+  "version",
+  "job_id",
+  "job_generation",
+  "outcome",
+  "source",
+  "watchlist_id",
+  "captured_on",
+  "written",
+  "media_count",
+  "captured_at",
+  "coverage",
+];
+const RESULT_V2_FAILED_KEYS = [
+  "version",
+  "job_id",
+  "job_generation",
+  "outcome",
+  "reason_code",
+  "watchlist_id",
+  "next_retry_at",
+];
+const COVERAGE_KEYS = [
+  "watchlist_id",
+  "user_id",
+  "captured_on",
+  "captured_at",
+  "source",
+  "job_generation",
+  "capture_started_at",
+  "capture_ended_at",
+  "oldest_returned_at",
+  "ordering_verified",
+  "cursor_present",
+  "exhausted",
+  "truncated",
+  "gap_reason",
+  "inventory_complete",
+];
+
 const THROTTLE_GLOBAL_KEYS = ["bucket_key", "usage_percent", "throttled_until", "job_id"];
 const THROTTLE_PARKED_KEYS = [...THROTTLE_GLOBAL_KEYS, "status"];
 
@@ -157,6 +202,32 @@ function isReasonCode(value: unknown): value is string {
 
 function isNonNegativeSafeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function isBoolean(value: unknown): value is boolean {
+  return typeof value === "boolean";
+}
+
+function isNullableBoolean(value: unknown): value is boolean | null {
+  return value === null || isBoolean(value);
+}
+
+/**
+ * Whether two timestamps are the SAME INSTANT.
+ *
+ * The database renders an instant in its own canonical form and the
+ * collector submits it in its own, so the two strings are not always
+ * byte-identical even when they name the same moment. The comparison is
+ * therefore on the instant, not on the text: '2026-10-29T02:00:00+00:00'
+ * and '2026-10-29T02:00:00.000Z' are the same moment, and
+ * '2026-10-29T02:00:01.000Z' is not.
+ */
+function isSameInstant(left: unknown, right: unknown): boolean {
+  if (left === null || right === null) return left === right;
+  if (typeof left !== "string" || typeof right !== "string") return false;
+  const a = Date.parse(left);
+  const b = Date.parse(right);
+  return Number.isFinite(a) && Number.isFinite(b) && a === b;
 }
 
 function isPositiveSafeInteger(value: unknown): value is number {
@@ -334,6 +405,9 @@ export function parseOwnerStatus(
  * payload asked for, and - for a capture - the same source, exactly one
  * profile plus every submitted media row, and a real capture instant. A
  * receipt that disagrees is not evidence the write happened as asked.
+ *
+ * This is the v1 receipt. It stays here because the v1 writer is still
+ * callable; the collector itself writes through the v2 receipt below.
  */
 export function parseResultReceipt(
   value: unknown,
@@ -372,6 +446,7 @@ export function parseResultReceipt(
       written: mediaCount + 1,
       mediaCount,
       capturedAt,
+      coverage: null,
     };
   }
 
@@ -386,6 +461,191 @@ export function parseResultReceipt(
     written: 0,
     mediaCount: 0,
     capturedAt: null,
+    coverage: null,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// The versioned (v2) result receipt
+// ---------------------------------------------------------------------------
+
+/**
+ * Parses the coverage the database stored and binds it to the request.
+ *
+ * The receipt reports the STORED row, and the stored row has to answer for
+ * the request: the same watchlist entry, the same capture day, the same
+ * source, the same generation and the same evidence that was submitted. A
+ * receipt that reports something else is not evidence that the write
+ * happened as asked, so it is refused.
+ */
+function parseCoverage(
+  value: unknown,
+  request: {
+    readonly jobId: string;
+    readonly jobGeneration: number;
+    readonly payload: CompetitorResultPayload;
+    readonly watchlistId: string;
+    readonly capturedOn: string;
+    readonly source: CompetitorSource;
+  },
+): PersistedCompetitorCoverage | null {
+  if (!isPlainRecord(value)) return null;
+  if (!hasExactKeys(value, COVERAGE_KEYS)) return null;
+
+  const read = (key: string) => readOwnData(value, key).value;
+  const submitted = request.payload.coverage;
+  if (!submitted) return null;
+
+  const watchlistId = read("watchlist_id");
+  if (!isUuidText(watchlistId) || !sameUuid(watchlistId, request.watchlistId)) return null;
+  if (!isUuidText(read("user_id"))) return null;
+
+  const capturedOn = read("captured_on");
+  if (!isDate(capturedOn) || capturedOn !== request.capturedOn) return null;
+  if (!isTimestamp(read("captured_at"))) return null;
+
+  const source = read("source");
+  if (source !== request.source) return null;
+  if (read("job_generation") !== request.jobGeneration) return null;
+
+  const captureStartedAt = read("capture_started_at");
+  if (!isTimestamp(captureStartedAt)) return null;
+  if (!isSameInstant(captureStartedAt, submitted.capture_started_at)) return null;
+
+  const captureEndedAt = read("capture_ended_at");
+  if (!isTimestamp(captureEndedAt)) return null;
+  if (!isSameInstant(captureEndedAt, submitted.capture_ended_at)) return null;
+
+  const oldestReturnedAt = read("oldest_returned_at");
+  if (!isNullableTimestamp(oldestReturnedAt)) return null;
+  if (!isSameInstant(oldestReturnedAt, submitted.oldest_returned_at)) return null;
+
+  const orderingVerified = read("ordering_verified");
+  if (!isBoolean(orderingVerified)) return null;
+  if (orderingVerified !== submitted.ordering_verified) return null;
+
+  const cursorPresent = read("cursor_present");
+  if (!isNullableBoolean(cursorPresent)) return null;
+  if (cursorPresent !== submitted.cursor_present) return null;
+
+  const exhausted = read("exhausted");
+  if (!isBoolean(exhausted)) return null;
+  if (exhausted !== submitted.exhausted) return null;
+
+  const truncated = read("truncated");
+  if (!isBoolean(truncated)) return null;
+  if (truncated !== submitted.truncated) return null;
+
+  const gapReason = read("gap_reason");
+  if (gapReason !== null && !isReasonCode(gapReason)) return null;
+  if (gapReason !== submitted.gap_reason) return null;
+
+  // The derived verdict is not a free value: it is exactly "the walk
+  // reached the end of the feed and nothing was capped".
+  const inventoryComplete = read("inventory_complete");
+  if (!isBoolean(inventoryComplete)) return null;
+  if (inventoryComplete !== (exhausted && !truncated && gapReason === null)) return null;
+
+  return {
+    watchlistId: watchlistId.toLowerCase(),
+    userId: (read("user_id") as string).toLowerCase(),
+    capturedOn,
+    capturedAt: read("captured_at") as string,
+    source: source as CompetitorSource,
+    jobGeneration: request.jobGeneration,
+    captureStartedAt,
+    captureEndedAt,
+    oldestReturnedAt,
+    orderingVerified,
+    cursorPresent,
+    exhausted,
+    truncated,
+    gapReason: gapReason as CompetitorCoverageGapReason | null,
+    inventoryComplete,
+  };
+}
+
+/**
+ * Parses the v2 result receipt and binds it to the request.
+ *
+ * The receipt must carry `version = 2`. A v1 receipt has no version key at
+ * all, so it can never be read as a v2 success, and a receipt with another
+ * version is a contract this store does not know.
+ */
+export function parseCoverageResultReceipt(
+  value: unknown,
+  request: {
+    readonly jobId: string;
+    readonly jobGeneration: number;
+    readonly payload: CompetitorResultPayload;
+  },
+): PersistResultReceipt | null {
+  if (!isPlainRecord(value)) return null;
+  const read = (key: string) => readOwnData(value, key).value;
+  const { payload } = request;
+
+  if (read("version") !== 2) return null;
+
+  const outcome = read("outcome");
+  if (outcome !== payload.outcome) return null;
+
+  const jobId = read("job_id");
+  if (!isUuidText(jobId) || !sameUuid(jobId, request.jobId)) return null;
+  if (read("job_generation") !== request.jobGeneration) return null;
+
+  const watchlistId = read("watchlist_id");
+  if (!isUuidText(watchlistId)) return null;
+
+  if (outcome === "completed") {
+    if (!hasExactKeys(value, RESULT_V2_COMPLETED_KEYS)) return null;
+
+    const source = read("source");
+    if (source !== payload.source) return null;
+
+    const mediaCount = payload.media?.length ?? -1;
+    if (read("media_count") !== mediaCount) return null;
+    if (read("written") !== mediaCount + 1) return null;
+
+    const capturedOn = read("captured_on");
+    if (!isDate(capturedOn)) return null;
+
+    const capturedAt = read("captured_at");
+    if (!isTimestamp(capturedAt)) return null;
+
+    const coverage = parseCoverage(read("coverage"), {
+      jobId: request.jobId,
+      jobGeneration: request.jobGeneration,
+      payload,
+      watchlistId,
+      capturedOn,
+      source: source as CompetitorSource,
+    });
+    if (coverage === null) return null;
+
+    return {
+      outcome: "completed",
+      source: source as CompetitorSource,
+      reasonCode: null,
+      written: mediaCount + 1,
+      mediaCount,
+      capturedAt,
+      coverage,
+    };
+  }
+
+  if (!hasExactKeys(value, RESULT_V2_FAILED_KEYS)) return null;
+  const reasonCode = read("reason_code");
+  if (reasonCode !== payload.reason_code) return null;
+  if (!isTimestamp(read("next_retry_at"))) return null;
+
+  return {
+    outcome: outcome as CompetitorOutcome,
+    source: null,
+    reasonCode: reasonCode as CompetitorReasonCode,
+    written: 0,
+    mediaCount: 0,
+    capturedAt: null,
+    coverage: null,
   };
 }
 

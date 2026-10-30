@@ -1763,6 +1763,74 @@ export type Database = {
           },
         ]
       }
+      competitor_capture_coverage: {
+        Row: {
+          capture_ended_at: string
+          capture_started_at: string
+          captured_at: string
+          captured_on: string
+          created_at: string
+          cursor_present: boolean | null
+          exhausted: boolean
+          gap_reason: string | null
+          id: string
+          job_generation: number
+          oldest_returned_at: string | null
+          ordering_verified: boolean
+          source: string
+          truncated: boolean
+          updated_at: string
+          user_id: string
+          watchlist_id: string
+        }
+        Insert: {
+          capture_ended_at: string
+          capture_started_at: string
+          captured_at?: string
+          captured_on: string
+          created_at?: string
+          cursor_present?: boolean | null
+          exhausted: boolean
+          gap_reason?: string | null
+          id?: string
+          job_generation: number
+          oldest_returned_at?: string | null
+          ordering_verified?: boolean
+          source: string
+          truncated: boolean
+          updated_at?: string
+          user_id: string
+          watchlist_id: string
+        }
+        Update: {
+          capture_ended_at?: string
+          capture_started_at?: string
+          captured_at?: string
+          captured_on?: string
+          created_at?: string
+          cursor_present?: boolean | null
+          exhausted?: boolean
+          gap_reason?: string | null
+          id?: string
+          job_generation?: number
+          oldest_returned_at?: string | null
+          ordering_verified?: boolean
+          source?: string
+          truncated?: boolean
+          updated_at?: string
+          user_id?: string
+          watchlist_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "competitor_capture_coverage_owner_fkey"
+            columns: ["watchlist_id", "user_id"]
+            isOneToOne: false
+            referencedRelation: "competitor_watchlist"
+            referencedColumns: ["id", "user_id"]
+          },
+        ]
+      }
       competitor_media_snapshots: {
         Row: {
           caption: string | null
@@ -9846,6 +9914,24 @@ export type Database = {
         }
         Returns: Json
       }
+      persist_competitor_collection_result: {
+        Args: {
+          p_job_id: string
+          p_claim_token: string
+          p_job_generation: number
+          p_payload: Json
+        }
+        Returns: Json
+      }
+      persist_competitor_collection_result_v2: {
+        Args: {
+          p_job_id: string
+          p_claim_token: string
+          p_job_generation: number
+          p_payload: Json
+        }
+        Returns: Json
+      }
       complete_instagram_collection_job: {
         Args: {
           p_job_id: string
@@ -9871,6 +9957,14 @@ export type Database = {
         Args: { p_job_id: string; p_claim_token: string }
         Returns: Json
       }
+      run_competitor_retention_batch: {
+        Args: {
+          p_parent_limit: number
+          p_child_limit: number
+          p_dry_run: boolean
+        }
+        Returns: Json
+      }
       prune_ai_knowledge_entities: {
         Args: { p_user_id: string }
         Returns: undefined
@@ -9881,6 +9975,10 @@ export type Database = {
       }
       read_own_competitor_quota: {
         Args: Record<PropertyKey, never>
+        Returns: Json
+      }
+      read_own_competitor_tracking_report: {
+        Args: { p_request: Json }
         Returns: Json
       }
       reap_exhausted_agent_replies: {

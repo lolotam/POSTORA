@@ -68,6 +68,8 @@
 
 import {
   CompetitorProviderError,
+  oldestPublishedAt,
+  type CompetitorCoverageGapReason,
   type CompetitorMediaItem,
   type CompetitorProfileObservation,
   type CompetitorProvider,
@@ -832,6 +834,10 @@ export class GraphCompetitorProvider implements CompetitorProvider {
       );
     }
 
+    // The start of the capture window. The coverage carries it so the
+    // database can tell a capture window from an instant.
+    const captureStartedAt = new Date().toISOString();
+
     const seenCursors = new Set<string>();
     const seenMediaIds = new Set<string>();
     const media: CompetitorMediaItem[] = [];
@@ -840,6 +846,23 @@ export class GraphCompetitorProvider implements CompetitorProvider {
     let truncated = false;
     let cursor: string | null = null;
     let profile: CompetitorProfileObservation | null = null;
+
+    // The coverage evidence.
+    //
+    // Only this adapter knows what it observed while walking the feed, so
+    // only this adapter may fill these in. The ORDER is deliberately NOT
+    // verified: no tested, version-compatible ordering contract for this
+    // provider exists, and sorting the rows we received would not prove one.
+    let cursorPresent = false;
+    let exhausted = false;
+    let gapReason: CompetitorCoverageGapReason | null = null;
+
+    // The FIRST reason the walk was compromised is the informative one: a
+    // later cap does not explain an earlier duplicate.
+    const noteGap = (reason: CompetitorCoverageGapReason): void => {
+      truncated = true;
+      if (gapReason === null) gapReason = reason;
+    };
 
     for (let page = 0; page < MAX_MEDIA_PAGES; page += 1) {
       const attempt = await this.#attempt(request, handle, cursor);
@@ -852,54 +875,75 @@ export class GraphCompetitorProvider implements CompetitorProvider {
       }
 
       const connection = readMediaConnection(attempt.target, profile);
+      const nextCursor = connection.nextCursor;
+
+      // Whether there is MORE to fetch is a property of the LAST response
+      // the provider gave. It is read before the media loop can stop the
+      // walk, because a capture that hit the row cap still knows whether
+      // the feed continued past it.
+      cursorPresent = nextCursor.present;
+
       for (const entry of connection.rows) {
         if (media.length >= MAX_MEDIA_ROWS) {
-          truncated = true;
+          noteGap("media_cap_reached");
           break;
         }
         const item = parseBusinessDiscoveryMedia(entry);
         if (seenMediaIds.has(item.ig_media_id)) {
           // A repeated media id means the feed window is not clean. The
-          // repeat is skipped and the pagination stops.
-          truncated = true;
+          // repeat is skipped and the capture is marked as compromised.
+          noteGap("duplicate_media");
           break;
         }
         seenMediaIds.add(item.ig_media_id);
         media.push(item);
       }
 
-      if (media.length >= MAX_MEDIA_ROWS) {
-        truncated = true;
-        break;
-      }
-
       if (usagePercent >= USAGE_STOP_PERCENT) {
         // The usage budget is nearly spent. No further request is made for
         // this capture.
-        truncated = true;
+        noteGap("usage_budget_stop");
         break;
       }
 
-      const nextCursor = connection.nextCursor;
-      if (!nextCursor.present) break;
+      if (!nextCursor.present) {
+        // The feed ended. The walk is complete - unless something already
+        // compromised the feed window.
+        exhausted = gapReason === null;
+        break;
+      }
 
       if (!nextCursor.usable || nextCursor.cursor === null) {
         // The provider offered a next page but the cursor cannot be sent
         // safely. The pagination stops and the capture stays visibly
         // partial.
-        truncated = true;
+        noteGap("cursor_unusable");
         break;
       }
 
       if (seenCursors.has(nextCursor.cursor)) {
         // A repeated cursor stops the pagination. It is never requested
         // twice and never guessed around.
-        truncated = true;
+        noteGap("cursor_loop");
+        break;
+      }
+
+      if (media.length >= MAX_MEDIA_ROWS) {
+        // The media window is full and the provider still offers a page:
+        // the feed continues past what this capture could hold.
+        noteGap("media_cap_reached");
         break;
       }
 
       seenCursors.add(nextCursor.cursor);
       cursor = nextCursor.cursor;
+    }
+
+    if (gapReason === null && !exhausted) {
+      // The page budget of one capture was reached while the provider was
+      // still offering pages. The feed was NOT exhausted and the window
+      // this capture saw may be a small part of the target's feed.
+      noteGap("page_cap_reached");
     }
 
     if (profile === null) {
@@ -910,8 +954,27 @@ export class GraphCompetitorProvider implements CompetitorProvider {
       );
     }
 
+    const captureEndedAt = new Date().toISOString();
+
     return {
-      capture: { source: "official", profile, media, truncated },
+      capture: {
+        source: "official",
+        profile,
+        media,
+        truncated,
+        coverage: {
+          captureStartedAt,
+          // The window cannot end before it started, even if the wall clock
+          // moved backwards underneath the capture.
+          captureEndedAt: captureEndedAt < captureStartedAt ? captureStartedAt : captureEndedAt,
+          oldestReturnedAt: oldestPublishedAt(media),
+          orderingVerified: false,
+          cursorPresent,
+          exhausted,
+          truncated,
+          gapReason,
+        },
+      },
       usagePercent,
       throttledUntil,
     };

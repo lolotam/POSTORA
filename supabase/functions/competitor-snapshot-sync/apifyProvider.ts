@@ -43,6 +43,7 @@
 
 import {
   CompetitorProviderError,
+  oldestPublishedAt,
   type CompetitorCapture,
   type CompetitorMediaItem,
   type CompetitorProfileObservation,
@@ -367,6 +368,9 @@ export class ApifyCompetitorProvider implements PaidCaptureProvider {
       return { status: "failed", reason: "provider_error" };
     }
 
+    // The start of the capture window.
+    const captureStartedAt = new Date().toISOString();
+
     const start = await this.#startRun(request, username);
     if (start.kind === "refused") {
       // The provider answered and refused. Nothing was started, so nothing
@@ -387,7 +391,7 @@ export class ApifyCompetitorProvider implements PaidCaptureProvider {
     }
 
     try {
-      const capture = this.#mapCapture(items, username);
+      const capture = this.#mapCapture(items, username, captureStartedAt);
       return { status: "completed", capture };
     } catch {
       return { status: "failed", reason: "provider_error" };
@@ -566,7 +570,11 @@ export class ApifyCompetitorProvider implements PaidCaptureProvider {
     }
   }
 
-  #mapCapture(items: readonly unknown[], username: string): CompetitorCapture {
+  #mapCapture(
+    items: readonly unknown[],
+    username: string,
+    captureStartedAt: string,
+  ): CompetitorCapture {
     const rows = items.slice(0, MAX_PAID_MEDIA_ROWS);
     const media: CompetitorMediaItem[] = [];
     const seen = new Set<string>();
@@ -587,11 +595,37 @@ export class ApifyCompetitorProvider implements PaidCaptureProvider {
       media_count: readCount(first, "postsCount"),
     };
 
+    // The paid actor is asked for at most MAX_PAID_MEDIA_ROWS rows. When it
+    // returns exactly that many, the limit MAY have cut the feed: the
+    // adapter cannot tell a feed of exactly thirty posts from a longer
+    // one, so the capture is partial and says why.
+    //
+    // The previous flag compared against a strict inequality that the
+    // request limit made unreachable, so a capped paid capture used to
+    // report itself as complete. The REQUEST is unchanged: the limit, the
+    // page size and the number of requests are exactly what they were.
+    const capped = items.length >= MAX_PAID_MEDIA_ROWS;
+    const captureEndedAt = new Date().toISOString();
+
     return {
       source: "apify",
       profile,
       media,
-      truncated: items.length > MAX_PAID_MEDIA_ROWS,
+      truncated: capped,
+      coverage: {
+        captureStartedAt,
+        captureEndedAt: captureEndedAt < captureStartedAt ? captureStartedAt : captureEndedAt,
+        oldestReturnedAt: oldestPublishedAt(media),
+        // The actor's row order is not a tested, version-compatible
+        // contract, so the order is UNVERIFIED.
+        orderingVerified: false,
+        // The dataset read offers no next-page cursor, and the adapter
+        // cannot tell whether the limit cut the feed: unknown.
+        cursorPresent: null,
+        exhausted: !capped,
+        truncated: capped,
+        gapReason: capped ? "media_cap_reached" : null,
+      },
     };
   }
 }

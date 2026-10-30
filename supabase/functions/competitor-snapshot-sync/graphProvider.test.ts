@@ -850,3 +850,242 @@ Deno.test("the shared throttle bucket key is a stable 64 character digest", asyn
   assertEquals(first === other, false);
   assertEquals(first.includes(TOKEN), false);
 });
+
+// ---------------------------------------------------------------------------
+// The capture coverage.
+//
+// A successful capture is NOT evidence of a complete weekly inventory, so
+// the adapter reports what it actually saw while walking the feed. These
+// tests pin that evidence, and they pin that reporting it costs NO extra
+// request.
+// ---------------------------------------------------------------------------
+
+/** One media row of the feed. */
+function feedRow(index: number, publishedAt: string): Record<string, unknown> {
+  return {
+    id: `feed_${index}`,
+    media_type: "IMAGE",
+    media_product_type: "FEED",
+    timestamp: publishedAt,
+  };
+}
+
+/** A target whose media connection carries the given rows and cursor. */
+function pagedTarget(
+  rows: unknown[],
+  cursor: string | null,
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  const media: Record<string, unknown> = { data: rows };
+  if (cursor !== null) {
+    media.paging = { cursors: { before: "BEFORE", after: cursor } };
+  }
+
+  return {
+    business_discovery: {
+      id: "1784140001",
+      username: "competitor_brand",
+      name: "Competitor Brand",
+      followers_count: 54200,
+      media_count: 120,
+      media,
+      ...overrides,
+    },
+  };
+}
+
+async function fetchWith(
+  mockFetch: typeof fetch,
+): Promise<Awaited<ReturnType<GraphCompetitorProvider["fetch"]>>> {
+  const provider = new GraphCompetitorProvider({ fetchFn: mockFetch });
+  return await provider.fetch({
+    username: "competitor_brand",
+    viewerIgUserId: VIEWER,
+    token: TOKEN,
+    signal: new AbortController().signal,
+  });
+}
+
+Deno.test("a clean capture reports an exhausted, uncapped and UNVERIFIED feed", async () => {
+  const result = await fetchWith(
+    (async () =>
+      jsonResponse(
+        pagedTarget([feedRow(1, "2026-10-28T12:00:00Z")], null),
+      )) as typeof fetch,
+  );
+
+  const coverage = result.capture.coverage;
+
+  assertEquals(coverage.exhausted, true);
+  assertEquals(coverage.truncated, false);
+  assertEquals(coverage.gapReason, null);
+  assertEquals(coverage.cursorPresent, false);
+  // The provider's order is NOT a verified contract, so the capture never
+  // claims that it is.
+  assertEquals(coverage.orderingVerified, false);
+  assertEquals(coverage.oldestReturnedAt, "2026-10-28T12:00:00.000Z");
+  assert(
+    Date.parse(coverage.captureStartedAt) <= Date.parse(coverage.captureEndedAt),
+    "the capture window does not end before it starts",
+  );
+});
+
+Deno.test("thirty lifetime posts of which three are recent exhaust the feed", async () => {
+  // Twenty-seven old posts and three recent ones, over two pages, and the
+  // provider offers no third page: the feed really ended.
+  const old = Array.from({ length: 27 }, (_, index) =>
+    feedRow(index + 1, "2026-09-01T12:00:00Z"));
+  const recent = Array.from({ length: 3 }, (_, index) =>
+    feedRow(index + 28, "2026-10-28T12:00:00Z"));
+
+  let calls = 0;
+  const result = await fetchWith((async () => {
+    calls += 1;
+    if (calls === 1) {
+      return jsonResponse(pagedTarget(old.slice(0, 25), "AFTER1"));
+    }
+    return jsonResponse(pagedTarget([...old.slice(25), ...recent], null));
+  }) as typeof fetch);
+
+  const coverage = result.capture.coverage;
+
+  assertEquals(calls, 2);
+  assertEquals(result.capture.media.length, 30);
+  // The feed ENDED at thirty posts, so this is not a capped capture: a full
+  // page is not automatically an incomplete inventory.
+  assertEquals(coverage.exhausted, true);
+  assertEquals(coverage.truncated, false);
+  assertEquals(coverage.gapReason, null);
+  assertEquals(coverage.cursorPresent, false);
+  // The oldest instant the capture returned reaches back past the week.
+  assertEquals(coverage.oldestReturnedAt, "2026-09-01T12:00:00.000Z");
+});
+
+Deno.test("thirty recent posts with more to come are capped and name the cap", async () => {
+  const first = Array.from({ length: 25 }, (_, index) =>
+    feedRow(index + 1, "2026-10-28T12:00:00Z"));
+  const second = Array.from({ length: 25 }, (_, index) =>
+    feedRow(index + 26, "2026-10-28T12:00:00Z"));
+
+  let calls = 0;
+  const result = await fetchWith((async () => {
+    calls += 1;
+    if (calls === 1) return jsonResponse(pagedTarget(first, "AFTER1"));
+    return jsonResponse(pagedTarget(second, "AFTER2"));
+  }) as typeof fetch);
+
+  const coverage = result.capture.coverage;
+
+  // The coverage costs no extra request.
+  assertEquals(calls, 2);
+  assertEquals(result.capture.media.length, 30);
+  assertEquals(coverage.exhausted, false);
+  assertEquals(coverage.truncated, true);
+  assertEquals(coverage.gapReason, "media_cap_reached");
+  assertEquals(coverage.cursorPresent, true);
+});
+
+Deno.test("a repeated media id compromises the feed and says so", async () => {
+  const result = await fetchWith((async () =>
+    jsonResponse(
+      pagedTarget([
+        feedRow(1, "2026-10-28T12:00:00Z"),
+        feedRow(1, "2026-10-27T12:00:00Z"),
+      ], null),
+    )) as typeof fetch);
+
+  const coverage = result.capture.coverage;
+
+  assertEquals(result.capture.media.length, 1);
+  assertEquals(coverage.exhausted, false);
+  assertEquals(coverage.truncated, true);
+  assertEquals(coverage.gapReason, "duplicate_media");
+});
+
+Deno.test("a repeated cursor stops the walk and says so", async () => {
+  let calls = 0;
+  const result = await fetchWith((async () => {
+    calls += 1;
+    return jsonResponse(pagedTarget([feedRow(calls, "2026-10-28T12:00:00Z")], "AFTER1"));
+  }) as typeof fetch);
+
+  const coverage = result.capture.coverage;
+
+  assertEquals(calls, 2);
+  assertEquals(coverage.exhausted, false);
+  assertEquals(coverage.truncated, true);
+  assertEquals(coverage.gapReason, "cursor_loop");
+});
+
+Deno.test("a cursor that cannot be sent stops the walk and says so", async () => {
+  let calls = 0;
+  const result = await fetchWith((async () => {
+    calls += 1;
+    return jsonResponse(
+      pagedTarget([feedRow(calls, "2026-10-28T12:00:00Z")], "abc){id}"),
+    );
+  }) as typeof fetch);
+
+  const coverage = result.capture.coverage;
+
+  assertEquals(calls, 1);
+  assertEquals(coverage.exhausted, false);
+  assertEquals(coverage.truncated, true);
+  assertEquals(coverage.gapReason, "cursor_unusable");
+});
+
+Deno.test("the page budget of one capture names the page cap", async () => {
+  let calls = 0;
+  const result = await fetchWith((async () => {
+    calls += 1;
+    return jsonResponse(
+      pagedTarget([feedRow(calls, "2026-10-28T12:00:00Z")], `AFTER${calls}`),
+    );
+  }) as typeof fetch);
+
+  const coverage = result.capture.coverage;
+
+  // The capture walked its page budget and the provider was still offering
+  // pages: the feed was not exhausted.
+  assertEquals(calls, 2);
+  assertEquals(coverage.exhausted, false);
+  assertEquals(coverage.truncated, true);
+  assertEquals(coverage.gapReason, "page_cap_reached");
+});
+
+Deno.test("the usage budget stops the walk and says so", async () => {
+  let calls = 0;
+  const result = await fetchWith((async () => {
+    calls += 1;
+    return jsonResponse(pagedTarget([feedRow(calls, "2026-10-28T12:00:00Z")], "AFTER1"), {
+      headers: {
+        "Content-Type": "application/json",
+        "x-app-usage": JSON.stringify({ call_count: 85 }),
+      },
+    });
+  }) as typeof fetch);
+
+  const coverage = result.capture.coverage;
+
+  assertEquals(calls, 1);
+  assertEquals(coverage.exhausted, false);
+  assertEquals(coverage.truncated, true);
+  assertEquals(coverage.gapReason, "usage_budget_stop");
+});
+
+Deno.test("an empty feed is exhausted and has no oldest instant", async () => {
+  const result = await fetchWith((async () =>
+    jsonResponse(
+      pagedTarget([], null, { media_count: 0, media: undefined }),
+    )) as typeof fetch);
+
+  const coverage = result.capture.coverage;
+
+  assertEquals(result.capture.media.length, 0);
+  assertEquals(coverage.exhausted, true);
+  assertEquals(coverage.truncated, false);
+  assertEquals(coverage.gapReason, null);
+  // A genuinely empty feed has no oldest instant, and that is null rather
+  // than a substitute.
+  assertEquals(coverage.oldestReturnedAt, null);
+});

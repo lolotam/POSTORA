@@ -40,6 +40,10 @@ below). So the harness does not replay history. It:
 | `meta_oauth_identity_alias.sql` | atomic direct Instagram messaging alias validation, conversion, metadata confinement and replay; rolls back |
 | `meta_page_token_reconciliation.sql` | selected operational Page-token reconciliation from a captured unchanged User grant, protected identity agreement and sibling/reauth preservation; rolls back |
 | `competitor_collection_results.sql` | atomic competitor result write, watchlist publication, weekly retry gate, context rules and result fences; rolls back |
+| `competitor_capture_coverage.sql` | the v2 competitor result write: coverage evidence stored atomically with the snapshots, the v2 fences, the malformed-coverage refusals, same-day idempotency, generation supersession, stale-worker refusal, unknown coverage for a legacy v1 capture, bounded completion vs full inventory, and the role boundary; rolls back |
+| `competitor_tracking_report.sql` | the owner-only competitor report reader: the grant surface, the strict request shape, the owner boundary and the identical not-found refusal, the active and removed lists, the quota consistency, the bounded keyset cursor (20/50, limit+1, sub-millisecond ties, concurrent insertion, invalid and cross-filter cursors), the S = 3 days baseline edges, the observation cap, the latest-per-media selection with its bounded cohort baseline, the coverage and job projection without lease or context, and the capped-scan incompleteness; rolls back |
+| `competitor_retention.sql` | the bounded inactive-history cleanup: the 90-day eligibility clock to the microsecond, the removal-marker clock, the ownership boundary, the default-off switch, the dry run, the bounded slice, the child-first deletion protocol, the live-lease skip and the role boundary; rolls back |
+| `competitor_retention_cron.sql` | the inactive hourly schedule: applying the schedule definition twice leaves exactly one inactive job named `competitor-retention` at `20 * * * *`, the command resolves the shared secret at run time and carries no literal credential, and every other job is left exactly as it was; rolls back |
 
 The harness's `SUITES` array is the complete executable inventory; the table
 above highlights selected suites, not the entire list. No existing suite may
@@ -52,13 +56,88 @@ not omitted test suites: `partner_api_race_fixture.sql`,
 `instagram_durable_collection_jobs_race_fixture.sql`,
 `meta_oauth_attempt_lifecycle_race_fixture.sql`,
 `meta_account_refresh_lifecycle_race_fixture.sql`,
-`meta_oauth_identity_alias_race_fixture.sql`, and
-`meta_page_token_reconciliation_race_fixture.sql`. Their headers document
+`meta_oauth_identity_alias_race_fixture.sql`,
+`meta_page_token_reconciliation_race_fixture.sql`, and
+`competitor_retention_race_fixture.sql`. Their headers document
 setup, interleavings, expected outcomes and cleanup. A single-session harness
 pass does not prove concurrency. Run the applicable fixtures separately against
 the same isolated candidate and record both sessions' results. Never run them
 against production; the Instagram credential/job fixtures require
 `-v disposable=1` because setup commits synthetic records.
+
+### The competitor retention race fixture
+
+`competitor_retention_race_fixture.sql` rehearses the five concurrency races
+of the bounded inactive-history cleanup: the reactivation holding the parent
+lock, the cleanup holding the parent lock, the collector's commit against the
+cleanup, two retention runs, and the expired worker after the cleanup. It
+commits synthetic rows and it turns `competitor_retention_enabled` **on**, so
+it refuses to run without `-v disposable=1` and its cleanup step puts the
+switch back to `false`.
+
+Three sessions are needed: two racers and one observer. The observer is what
+proves the wait — it reads `pg_stat_activity` while the other session is
+blocked.
+
+```bash
+# against the disposable container of the Task 8 validation
+DB_URL='postgres://supabase_admin:postgres@localhost:5432/partner_api_harness'
+
+# 1. prepare (commits the synthetic owner and the six tracked competitors)
+psql "$DB_URL" -v ON_ERROR_STOP=1 -v disposable=1 -v prepare=1 \
+  -f supabase/tests/competitor_retention_race_fixture.sql
+
+# 2. three interactive sessions against the SAME database
+psql "$DB_URL"   # session A
+psql "$DB_URL"   # session B
+psql "$DB_URL"   # the observer
+
+# 3. in the observer session, define the probe (the definition is in the
+#    fixture header) and call it while a racer is blocked
+psql "$DB_URL" -c "SELECT * FROM pg_temp.crt_probe();"
+
+# 4. cleanup (removes the synthetic rows and switches retention off again)
+psql "$DB_URL" -v ON_ERROR_STOP=1 -v disposable=1 -v cleanup=1 \
+  -f supabase/tests/competitor_retention_race_fixture.sql
+```
+
+The exact statements of every race, the lock waits to observe, the expected
+rows and the assertions are in the fixture's own header. Note what the
+cleanup's `FOR UPDATE SKIP LOCKED` means for the rehearsal: a **second
+cleanup never waits** (it skips the locked candidate), so races 1 and 4 are
+rehearsed as lock *skips* and races 2 and 3 as lock *waits*. A rehearsal
+that expected a wait where the design produces a skip would be asserting the
+wrong thing.
+
+## The competitor retention cron suite
+
+`competitor_retention_cron.sql` proves the schedule of migration M4
+(`supabase/migrations/20261030130000_competitor_retention_cron.sql`). It
+re-applies **the migration file itself** with `\ir`, twice, inside one
+transaction, and then asserts that the database holds exactly one job named
+`competitor-retention`, that it runs at `20 * * * *`, that it is **inactive**,
+that its command resolves the shared secret through
+`public.get_cron_secret()` instead of carrying a literal credential, and that
+every other job is untouched.
+
+Two things it deliberately does **not** do:
+
+- it never activates the job. The job is installed inactive, and a
+  re-application keeps it inactive: enabling it is a separate, authorized
+  action taken by hand after the migration is verified and the retention
+  function has booted;
+- it never touches the retention switch. `competitor_retention_enabled`
+  stays `false`, so nothing can be deleted even if the job were activated.
+
+The suite rolls back, so the job rows it creates do not survive it. The job
+the migration phase created is committed and stays, inactive, for inspection.
+
+The migration FAILS LOUDLY when `pg_cron`, `pg_net` or
+`public.get_cron_secret()` is missing, rather than reporting a schedule that
+was never installed. A harness database without pg_cron therefore fails at
+the migration step, with the name of the missing prerequisite in the error —
+which is the intended outcome, not a harness defect. The `cron.*` server flags
+in "Running locally" below are what make pg_cron usable at all.
 
 ## Running locally
 

@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Card, CardContent } from "@/components/ui/card";
@@ -7,11 +8,29 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { ExternalLink, BadgeCheck, Camera, AtSign, Facebook, Video, Instagram } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useCountUp } from "@/hooks/useCountUp";
+import { CompetitorSourceBadge } from "@/features/competitor-tracking";
+import type { CompetitorSourceValue } from "@/features/competitor-tracking";
 import type { BrandProfile } from "@/types/brand-intelligence";
 
 interface ProfileCardProps {
   profile: BrandProfile;
   isLoading: boolean;
+  /**
+   * The source of the observation, when the producer recorded one.
+   *
+   * The card STATES this value; it never derives one. A card without
+   * the prop says nothing about the source at all (T8-01).
+   */
+  source?: CompetitorSourceValue;
+  /**
+   * An optional action slot.
+   *
+   * The caller decides what goes in it - the competitor tracking
+   * feature puts its Track control here for Instagram. The slot is
+   * rendered for Instagram only, so the Facebook, Threads and TikTok
+   * cards are exactly what they were before.
+   */
+  actions?: ReactNode;
 }
 
 function StatItem({ label, value, emoji }: { label: string; value: number; emoji: string }) {
@@ -64,7 +83,7 @@ function PlatformLogoButton({
   );
 }
 
-export function ProfileCard({ profile, isLoading }: ProfileCardProps) {
+export function ProfileCard({ profile, isLoading, source, actions }: ProfileCardProps) {
   const { t } = useTranslation("analytics");
   if (isLoading) {
     return (
@@ -99,6 +118,16 @@ export function ProfileCard({ profile, isLoading }: ProfileCardProps) {
 
   const config = platformConfig[profile.platform] || platformConfig.instagram;
   const PlatformIcon = config.icon;
+
+  /**
+   * The competitor tracking feature tracks Instagram handles only.
+   *
+   * The card therefore keeps the source and the action slot for
+   * Instagram and drops them for every other platform, so no caller
+   * can leak an Instagram-only control into a Facebook, Threads or
+   * TikTok card by accident (spec §2).
+   */
+  const isInstagram = profile.platform === "instagram";
 
   return (
     <Card className="overflow-hidden animate-[fadeSlideDown_0.5s_ease-out] relative border-0 bg-muted">
@@ -147,7 +176,8 @@ export function ProfileCard({ profile, isLoading }: ProfileCardProps) {
           <p className="text-sm text-muted-foreground line-clamp-3 mb-3">{profile.bio}</p>
         )}
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          {isInstagram && source !== undefined ? <CompetitorSourceBadge source={source} /> : null}
           {profile.website && (
             <Button variant="outline" size="sm" asChild>
               <a href={profile.website} target="_blank" rel="noopener noreferrer">
@@ -182,6 +212,7 @@ export function ProfileCard({ profile, isLoading }: ProfileCardProps) {
               </a>
             </Button>
           )}
+          {isInstagram ? actions : null}
         </div>
       </CardContent>
     </Card>
