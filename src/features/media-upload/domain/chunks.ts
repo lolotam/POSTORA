@@ -18,9 +18,9 @@ export function contentRangeHeader(range: ByteRange, size: number): string {
   return `bytes ${range.start}-${range.end - 1}/${size}`;
 }
 
-/** Overall progress (0-100) when providers are uploaded one after another. */
-export function combinedProgress(finishedTargets: number, currentFraction: number, totalTargets: number): number {
-  if (totalTargets <= 0) return 0;
-  const fraction = (finishedTargets + Math.min(Math.max(currentFraction, 0), 1)) / totalTargets;
-  return Math.round(fraction * 100);
+/** Overall progress (0-100) while providers upload at the same time: the mean of their fractions. */
+export function combinedProgress(fractions: readonly number[]): number {
+  if (fractions.length === 0) return 0;
+  const sum = fractions.reduce((total, fraction) => total + Math.min(Math.max(fraction, 0), 1), 0);
+  return Math.round((sum / fractions.length) * 100);
 }

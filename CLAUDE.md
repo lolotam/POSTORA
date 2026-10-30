@@ -368,6 +368,7 @@ All edge functions are in `supabase/functions/` and deployed to Supabase.
 | `tiktok-webhook` | TikTok webhook handler |
 | `youtube-poll-comments` | Cron (every 5 min): reads new YouTube comments per channel and hands them to workflows / the agent |
 | `media-direct-upload` | Signs browser-direct uploads over 10 MB up to the admin-selected image/video limits (Admin → Settings → Media upload limits) and records them; see `docs/runbooks/large-media-uploads.md` |
+| `reconcile-deferred-publishes` | Cron (every minute): finishes Instagram/Threads videos Meta was still processing when `process-post` stopped waiting, and settles posts stuck in `processing`; see `docs/runbooks/large-media-uploads.md` |
 
 ---
 

@@ -6,6 +6,7 @@ import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/hooks/useAuth";
+import { DisableMfaDialog, useDisableMfa } from "@/features/mfa";
 import { supabase } from "@/integrations/supabase/client";
 import {
   getAuthenticatedFunctionHeaders,
@@ -74,7 +75,6 @@ export function SecuritySection() {
   const [verifyCode, setVerifyCode] = useState("");
   const [isVerifying, setIsVerifying] = useState(false);
   const [showMfaDialog, setShowMfaDialog] = useState(false);
-  const [isUnenrolling, setIsUnenrolling] = useState<string | null>(null);
   const [secretCopied, setSecretCopied] = useState(false);
   const [uriCopied, setUriCopied] = useState(false);
 
@@ -421,30 +421,26 @@ export function SecuritySection() {
     }
   };
 
-  const handleUnenrollMfa = async (factorId: string) => {
-    setIsUnenrolling(factorId);
-    try {
-      const { error } = await supabase.auth.mfa.unenroll({ factorId });
-
-      if (error) throw error;
-
+  const disableMfa = useDisableMfa({
+    onDisabled: async () => {
       toast({
         title: t("security.mfa.disabled", "2FA disabled"),
         description: t("security.mfa.disabledDesc", "Two-factor authentication has been removed from your account."),
       });
-
       await loadMfaFactors();
-    } catch (error) {
-      console.error("MFA unenroll error:", error);
+    },
+    onError: (message) => {
+      console.error("MFA unenroll error:", message);
       toast({
         title: t("security.mfa.disableFailed", "Failed to disable 2FA"),
-        description: error instanceof Error ? error.message : t("security.errors.generic", "An error occurred"),
+        description: message || t("security.errors.generic", "An error occurred"),
         variant: "destructive",
       });
-    } finally {
-      setIsUnenrolling(null);
-    }
-  };
+    },
+  });
+
+  // Supabase removes a verified factor only from an AAL2 session; the hook asks for a code when needed.
+  const handleUnenrollMfa = (factorId: string) => disableMfa.requestDisable(factorId);
 
   const resetMfaState = () => {
     setMfaQrCode(null);
@@ -763,9 +759,9 @@ export function SecuritySection() {
                       size="sm"
                       className="text-destructive hover:text-destructive hover:bg-destructive/10"
                       onClick={() => handleUnenrollMfa(factor.id)}
-                      disabled={isUnenrolling === factor.id}
+                      disabled={disableMfa.busyFactorId === factor.id}
                     >
-                      {isUnenrolling === factor.id ? (
+                      {disableMfa.busyFactorId === factor.id ? (
                         <Loader2 className="w-4 h-4 animate-spin" />
                       ) : (
                         t("common:remove", "Remove")
@@ -977,6 +973,14 @@ export function SecuritySection() {
         </DialogContent>
       </Dialog>
 
+
+      <DisableMfaDialog
+        open={disableMfa.pendingFactorId !== null}
+        submitting={disableMfa.submitting}
+        codeError={disableMfa.codeError}
+        onSubmit={(code) => { void disableMfa.submitCode(code, t("security.mfa.invalidCode", "Invalid code. Please try again.")); }}
+        onCancel={disableMfa.cancel}
+      />
 
       {/* 2FA Setup Dialog */}
       <Dialog
