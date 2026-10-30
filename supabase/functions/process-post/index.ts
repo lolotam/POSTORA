@@ -104,6 +104,7 @@ import {
   ContainerStillProcessing,
   giveUpMessage,
   NO_DEFERRAL,
+  ownContainerDeadline,
   pollDeadline,
   readDeferral,
   recordStillProcessing,
@@ -4003,7 +4004,9 @@ async function postToInstagram(
         warnings.push(`Also share to Story failed: ${createData.error.message}`);
         return;
       }
-      await pollContainerStatus(createData.id, accessToken, { deadlineMs: timing.deadlineMs });
+      // On a resumed run timing.deadlineMs is check-once: that suits the deferred reel, not this
+      // container, which nothing re-checks. Give it a real bound.
+      await pollContainerStatus(createData.id, accessToken, { deadlineMs: ownContainerDeadline(timing.deadlineMs, Date.now()) });
       await publishInstagramMedia(igUserId, createData.id, accessToken);
       console.log("Instagram 'Also share to Story' published successfully");
     } catch (e) {

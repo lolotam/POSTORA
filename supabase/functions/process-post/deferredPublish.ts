@@ -116,6 +116,17 @@ export function pollDeadline(startedAtMs: number, resumed: boolean): number {
 }
 
 /**
+ * The deadline for a container this run both creates and finishes (the "Also share to Story"
+ * mirror). The run's own deadline is CHECK_ONCE_DEADLINE on a resumed run, which is right for
+ * the deferred reel (Meta is asked again next minute) but would check a container created a
+ * moment ago exactly once and drop it. Nothing re-checks that container later, and a resumed
+ * run has a worker of its own, so it gets a real bound: the same budget a first run has.
+ */
+export function ownContainerDeadline(runDeadlineMs: number, nowMs: number): number {
+  return runDeadlineMs === CHECK_ONCE_DEADLINE ? nowMs + FIRST_RUN_POLL_BUDGET_MS : runDeadlineMs;
+}
+
+/**
  * What one container wait may do. EVERY wait has a deadline (`PublishTiming.deadlineMs`), so
  * no poll can outlast the worker; `deferKind` says whether the container can be finished
  * later. A deferrable one that runs out of time is handed to the reconciler; any other one

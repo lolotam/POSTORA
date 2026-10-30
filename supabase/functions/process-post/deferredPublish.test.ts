@@ -10,6 +10,7 @@ import {
   isPastGiveUp,
   newDeferral,
   nextDeferral,
+  ownContainerDeadline,
   pollDeadline,
   readDeferral,
   recordStillProcessing,
@@ -57,6 +58,15 @@ Deno.test("a resumed run is abandoned past its deadline or once the post has cha
 Deno.test("a resumed run checks once; a first run waits within its budget", () => {
   assertEquals(pollDeadline(1_000, true), 0);
   assertEquals(pollDeadline(1_000, false), 1_000 + FIRST_RUN_POLL_BUDGET_MS);
+});
+
+Deno.test("a container this run creates and finishes gets a real bound even on a resumed run", () => {
+  // The resumed run's own deadline is check-once; the mirror story container has no later check.
+  assertEquals(ownContainerDeadline(pollDeadline(1_000, true), 5_000), 5_000 + FIRST_RUN_POLL_BUDGET_MS);
+  // A first run keeps its deadline, so the mirror never outlasts the worker.
+  const first = pollDeadline(1_000, false);
+  assertEquals(ownContainerDeadline(first, 5_000), first);
+  assertEquals(ownContainerDeadline(Infinity, 5_000), Infinity);
 });
 
 Deno.test("only a well-formed deferral is read off a row", () => {
