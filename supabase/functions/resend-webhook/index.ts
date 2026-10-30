@@ -7,7 +7,10 @@ import {
 } from "../_shared/emailAttachmentStorage.ts";
 import { logToDatabase } from "../_shared/logging.ts";
 import { verifySvixSignature } from "../_shared/svixSignature.ts";
+import { createRefusalLogGate } from "./refusalLog.ts";
 import { downloadResendAttachment, isValidResendEmailId, readResendAttachmentList } from "../_shared/resendAttachmentList.ts";
+
+const refusalLogGate = createRefusalLogGate();
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -206,13 +209,17 @@ serve(async (req) => {
     const verdict = await verifySvixSignature(payload, svixHeaders, webhookSecret);
     if (!verdict.ok) {
       console.error(`[resend-webhook] refused: ${verdict.reason}`);
-      await logToDatabase(supabase, {
-        level: "warn",
-        category: "system",
-        source: "resend-webhook",
-        message: "Webhook refused: the Svix signature did not verify",
-        metadata: { code: "invalid_signature", reason: verdict.reason, svix_id: svixHeaders.svixId },
-      });
+      // Unauthenticated callers can send these, so rows are rate-limited (see refusalLog.ts).
+      const gate = refusalLogGate.admit();
+      if (gate.write) {
+        await logToDatabase(supabase, {
+          level: "warn",
+          category: "system",
+          source: "resend-webhook",
+          message: "Webhook refused: the Svix signature did not verify",
+          metadata: { code: "invalid_signature", reason: verdict.reason, svix_id: svixHeaders.svixId, suppressed_since_last_row: gate.suppressed },
+        });
+      }
       return new Response(
         JSON.stringify({ error: "Invalid signature" }),
         { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
