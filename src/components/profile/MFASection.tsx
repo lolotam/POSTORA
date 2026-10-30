@@ -152,6 +152,9 @@ export function MFASection() {
 
   const verifiedFactors = factors.filter((f) => f.status === "verified");
   const hasVerifiedFactor = verifiedFactors.length > 0;
+  // An enrollment that was started and never finished. It blocks a fresh setup (the name is
+  // taken), so it has to be removable from here.
+  const unverifiedFactors = factors.filter((f) => f.status !== "verified");
 
   return (
     <>
@@ -227,6 +230,42 @@ export function MFASection() {
                 </>
               )}
             </Button>
+          </div>
+        )}
+
+        {!isLoading && unverifiedFactors.length > 0 && (
+          <div className="mt-4 space-y-2" data-testid="unfinished-mfa-setup">
+            <p className="text-sm text-muted-foreground">Unfinished setup</p>
+            {unverifiedFactors.map((factor) => (
+              <div
+                key={factor.id}
+                className="flex items-center justify-between p-3 rounded-lg bg-secondary/50"
+              >
+                <div className="flex items-center gap-3">
+                  <Smartphone className="w-5 h-5 text-muted-foreground" />
+                  <div>
+                    <p className="font-medium">{factor.friendly_name || "Authenticator App"}</p>
+                    <p className="text-xs text-muted-foreground">
+                      Started {new Date(factor.created_at).toLocaleDateString()}, not verified
+                    </p>
+                  </div>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  aria-label="Remove unfinished setup"
+                  onClick={() => handleUnenroll(factor)}
+                  disabled={disableMfa.busyFactorId === factor.id}
+                  className="text-destructive hover:text-destructive"
+                >
+                  {disableMfa.busyFactorId === factor.id ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <X className="w-4 h-4" />
+                  )}
+                </Button>
+              </div>
+            ))}
           </div>
         )}
       </div>
