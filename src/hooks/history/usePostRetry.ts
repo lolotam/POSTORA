@@ -6,7 +6,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   PostWithResults, invalidatePostQueries,
-  deleteFailedPlatformPosts, deletePlatformPost, invokeProcessPost,
+  deleteFailedPlatformPosts, deletePlatformPost, invokeProcessPost, takeFailedRetryRows,
 } from "./historyUtils";
 import { failedRetryTargets } from "./retryTargets";
 
@@ -69,15 +69,16 @@ export function usePostRetry() {
     if (failedPlatforms.length === 0) { toast({ title: "No failed platforms", description: "This post has no failed platforms to retry." }); return; }
     if (hasTikTokFailure(post)) { openRetryDialog(post); return; }
 
-    const targets = failedRetryTargets(post.platformResults);
-    if (targets.accountIds.length === 0) {
+    if (failedRetryTargets(post.platformResults).accountIds.length === 0) {
       toast({ title: "Cannot retry automatically", description: "The failed results name no account. Retry them one at a time from the post's details.", variant: "destructive" });
       return;
     }
 
     setRetryingPostId(post.id);
     try {
-      await deleteFailedPlatformPosts(post.id);
+      // Targets come from the rows actually removed, so a row that failed since the page loaded is retried too.
+      const targets = failedRetryTargets(await takeFailedRetryRows(post.id));
+      if (targets.accountIds.length === 0) throw new Error("This post has no failed platforms left to retry.");
       await invokeProcessPost(post.id, targets.platforms, targets.accountIds);
       toast({ title: "Retry initiated", description: `Retrying ${failedPlatforms.length} failed platform(s).` });
       invalidatePostQueries(queryClient);
@@ -170,9 +171,8 @@ export function usePostRetry() {
     for (let i = 0; i < failedPosts.length; i++) {
       setBulkRetryProgress({ current: i + 1, total: failedPosts.length });
       try {
-        const targets = failedRetryTargets(failedPosts[i].platformResults);
+        const targets = failedRetryTargets(await takeFailedRetryRows(failedPosts[i].id));
         if (targets.accountIds.length === 0) throw new Error("No failed result names an account");
-        await deleteFailedPlatformPosts(failedPosts[i].id);
         await invokeProcessPost(failedPosts[i].id, targets.platforms, targets.accountIds);
         successCount++;
       }
