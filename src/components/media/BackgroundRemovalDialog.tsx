@@ -14,6 +14,8 @@ import { Slider } from "@/components/ui/slider";
 import { supabase } from "@/integrations/supabase/client";
 import { readUploadRefusal } from "@/components/media/uploadErrors";
 import { useToast } from "@/hooks/use-toast";
+import { useCdnConfig } from "@/hooks/useCdnConfig";
+import { isCloudinaryTransformsAvailable, isProviderUnavailable, runBackgroundRemoval } from "@/components/media/image-tools/aiImageTools";
 import {
   Loader2,
   Download,
@@ -67,6 +69,9 @@ export function BackgroundRemovalDialog({
   cloudName,
   onProcessComplete,
 }: BackgroundRemovalDialogProps) {
+  const { data: cdnConfig } = useCdnConfig();
+  // Without Cloudinary the server-side AI remover is the only way; edge quality and resize are Cloudinary transforms.
+  const cloudinaryAvailable = isCloudinaryTransformsAvailable(cdnConfig);
   const [processing, setProcessing] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [processedUrl, setProcessedUrl] = useState<string | null>(null);
@@ -194,6 +199,15 @@ export function BackgroundRemovalDialog({
     setProcessing(true);
 
     try {
+      if (!cloudinaryAvailable) {
+        setProcessedUrl(await runBackgroundRemoval(file.publicUrl));
+        toast({
+          title: t("toast.backgroundRemoved", "Background removed"),
+          description: t("toast.backgroundRemovedDesc", "Use the slider to compare before and after"),
+        });
+        return;
+      }
+
       let publicId: string;
       let targetCloudName: string;
 
@@ -255,6 +269,14 @@ export function BackgroundRemovalDialog({
       }
     } catch (error) {
       console.error("Background removal error:", error);
+      if (isProviderUnavailable(error)) {
+        toast({
+          title: t("toast.aiToolUnavailableTitle", "AI tool unavailable"),
+          description: t("toast.aiToolUnavailable", "This AI tool is temporarily unavailable. Please try again later."),
+          variant: "destructive",
+        });
+        return;
+      }
       toast({
         title: t("toast.processingFailed", "Processing failed"),
         description:
@@ -395,7 +417,7 @@ export function BackgroundRemovalDialog({
 
         <div className="space-y-4">
           {/* Non-Cloudinary file notice */}
-          {!isCloudinaryFile && !tempCloudinaryData && (
+          {cloudinaryAvailable && !isCloudinaryFile && !tempCloudinaryData && (
             <Alert>
               <Upload className="h-4 w-4" />
               <AlertDescription>
@@ -404,8 +426,17 @@ export function BackgroundRemovalDialog({
             </Alert>
           )}
 
-          {/* Settings */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 p-4 bg-muted/50 rounded-lg">
+          {!cloudinaryAvailable && (
+            <Alert>
+              <Upload className="h-4 w-4" />
+              <AlertDescription>
+                {t("bgRemoval.aiOnlyNotice", "The background is removed with AI. Edge quality and resize are not available right now.")}
+              </AlertDescription>
+            </Alert>
+          )}
+
+          {/* Settings: edge quality and resize are Cloudinary transforms */}
+          <div className={cn("grid grid-cols-1 sm:grid-cols-2 gap-4 p-4 bg-muted/50 rounded-lg", !cloudinaryAvailable && "hidden")}>
             <div className="space-y-2">
               <Label className="flex items-center gap-2">
                 <SlidersHorizontal className="w-4 h-4" />
