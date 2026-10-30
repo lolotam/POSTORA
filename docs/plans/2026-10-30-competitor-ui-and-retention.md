@@ -90,7 +90,7 @@ Each task follows RED → minimal implementation → focused GREEN → diff/guar
 - [ ] Include at most 32 daily profile observations per selected entry plus the approved older-baseline candidate if S requires it; select that candidate directly by indexed cutoff rather than widening a whole-history scan. Up to 12 eligible preceding media per displayed item/cohort; share deduplicated candidates where possible. If a necessary scan is capped without proving eligibility, return incompleteness and no affected score.
 - [ ] Run V3; inspect `EXPLAIN (ANALYZE, BUFFERS)` on disposable large synthetic history for list/detail/baseline reads. Pin maximum returned items rather than inventing a universal runtime benchmark.
 
-**Acceptance:** T8-03, data inputs for T8-04/05/06. **Depends on:** M1. Growth staleness policy S must be recorded before freezing the baseline-selection query; no permissive default.
+**Acceptance:** T8-03, data inputs for T8-04/05/06. **Depends on:** M1. Growth staleness policy S = 3 days (spec §11, resolved 2026-10-30).
 
 ### 3. Build authenticated report endpoint and canonical analytics — no additional migration
 

@@ -164,7 +164,7 @@ The frontend runtime schema is versioned against backend fixtures. Unknown envel
 
 Use latest successful profile observation L; for D=7/30, cutoff is `L.captured_at - D days`. Baseline B is latest successful same-source observation at or before cutoff within approved maximum staleness S. Do not use a later snapshot, interpolate, or pick a baseline based on current UI media filters. Return actual interval `(L-B)/86400 seconds`.
 
-With known follower counts and B.followers >0: absolute = L−B and percent = 100×(L−B)/B. Negative changes are valid. With missing/zero baseline, missing value or unapproved staleness policy, return null outputs and explicit reason. An observed source change between endpoints disqualifies the comparison; do not skip over it to find a convenient same-source value. Retained pre-removal observations may be used after reactivation if they meet the same cutoff/source/staleness rules, with the actual interval shown. The current schema does not retain an activity-transition ledger after `removed_at` is cleared: never invent one or claim continuous collection across the interval. Weekly completeness is qualified independently. Exact maximum S is the one unresolved business decision in §11; implementation of the permissive baseline selector is gated on it, not guessed from a daily cron.
+With known follower counts and B.followers >0: absolute = L−B and percent = 100×(L−B)/B. Negative changes are valid. With missing/zero baseline, missing value or unapproved staleness policy, return null outputs and explicit reason. An observed source change between endpoints disqualifies the comparison; do not skip over it to find a convenient same-source value. Retained pre-removal observations may be used after reactivation if they meet the same cutoff/source/staleness rules, with the actual interval shown. The current schema does not retain an activity-transition ledger after `removed_at` is cleared: never invent one or claim continuous collection across the interval. Weekly completeness is qualified independently. S is fixed at 3 days by §11.
 
 ### Weekly inventory
 
@@ -277,6 +277,6 @@ Requirements: inherited `dir`, Radix direction-aware keyboard tabs, logical star
 
 ## 11. Open questions for Waleed
 
-1. What maximum staleness is acceptable for the observation used at/before the 7-day or 30-day follower-growth cutoff? The parent plan requires an explicit bound but supplies no value. This governs whether older observations may represent a named period; no number is assumed here. The rest of the feature can be implemented, but the final growth selector/acceptance needs this decision.
+1. **Resolved 2026-10-30 (default proposed by the orchestrator, accepted by Waleed with the agreed pipeline; changeable before merge):** S = **3 days (259200 seconds)**. The baseline B must satisfy `cutoff - 3 days <= B.captured_at <= cutoff`. If no same-source successful observation lies in that window, return null growth with reason `no_comparable_baseline`.
 
 Quota numbers, admin unlimited, non-destructive downgrades, 90-day retention, deferred Stories/MCP tools/scheduled Apify are already resolved by the task and parent plan (§12–13); they are not re-opened. Missing coverage persistence, source provenance and live readiness are engineering prerequisites, not business questions.
