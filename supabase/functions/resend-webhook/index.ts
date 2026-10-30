@@ -303,13 +303,22 @@ serve(async (req) => {
         }
         if (!isValidResendEmailId(emailId)) {
           // Refused before any Resend call, and recorded: nothing is stored for this event.
-          await logToDatabase(supabase, {
+          // Written directly so a failed write is seen: the refusal is acknowledged only once it is on record.
+          const { error: logError } = await supabase.from("system_logs").insert({
             level: "warn",
             category: "system",
             source: "resend-webhook",
             message: "Inbound email refused: email id is not in Resend's format",
             metadata: { code: "invalid_email_id", svix_id: svixHeaders.svixId, event_type: event.type },
           });
+          if (logError) {
+            console.error("[resend-webhook] could not record the invalid-id refusal:", logError.message);
+            // Not acknowledged: Svix delivers again, and the refusal is recorded once the database answers.
+            return new Response(
+              JSON.stringify({ error: "Could not record the refused event" }),
+              { status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+            );
+          }
           // Acknowledged, not 500: the id can never become valid, so a retried delivery would only be refused again.
           return new Response(
             JSON.stringify({ received: true, ignored: "invalid_email_id" }),
