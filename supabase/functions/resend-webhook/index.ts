@@ -1,5 +1,12 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import {
+  attachmentDownloadFailureLogMetadata,
+  attachmentFailureLogMetadata,
+  storeEmailAttachment,
+} from "../_shared/emailAttachmentStorage.ts";
+import { logToDatabase } from "../_shared/logging.ts";
+import { downloadResendAttachment, isValidResendEmailId, readResendAttachmentList } from "../_shared/resendAttachmentList.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -66,9 +73,10 @@ async function verifyWebhookSignature(
       return false;
     }
 
-    // For development, allow if secret matches and timestamp is valid
-    console.log("Signature verification in progress...");
-    return true; // In production, you might want stricter verification
+    // Still accepted on the timestamp alone (pre-existing behaviour, kept until real Resend
+    // deliveries are confirmed to verify). Logged loudly so the evidence shows up.
+    console.warn("[resend-webhook] SIGNATURE MISMATCH: accepted on timestamp fallback");
+    return true;
   } catch (error) {
     console.error("Error verifying webhook signature:", error);
     return false;
@@ -84,10 +92,12 @@ async function fetchEmailContent(
   html: string | null;
 }> {
   try {
+    // Refused before any request: `.`/`..` would collapse into another Resend API path.
+    if (!isValidResendEmailId(emailId)) throw new Error("Invalid Resend email id");
     console.log(`Fetching inbound email content for email_id: ${emailId}`);
 
     // IMPORTANT: Inbound emails must be fetched from the Receiving API
-    const response = await fetch(`https://api.resend.com/emails/receiving/${emailId}`, {
+    const response = await fetch(`https://api.resend.com/emails/receiving/${encodeURIComponent(emailId)}`, {
       method: "GET",
       headers: {
         Authorization: `Bearer ${apiKey}`,
@@ -117,133 +127,115 @@ async function fetchEmailContent(
   }
 }
 
-// Fetch inbound attachments from Resend Receiving API and upload to Cloudinary
+type StoredInboundAttachment = {
+  id: string;
+  filename: string;
+  content_type: string;
+  size: number;
+  url: string;
+  publicId: string;
+};
+
+function logDownloadFailure(supabase: Parameters<typeof logToDatabase>[0], filename: string, status: number | null) {
+  return logToDatabase(supabase, {
+    level: "error",
+    category: "system",
+    source: "resend-webhook",
+    message: "Inbound email attachment could not be downloaded",
+    metadata: attachmentDownloadFailureLogMetadata(filename, status),
+  });
+}
+
+// Fetch inbound attachments from Resend Receiving API and store them in Openinary.
 async function fetchAndStoreAttachments(
   emailId: string,
-  apiKey: string
-): Promise<
-  Array<{
-    id: string;
-    filename: string;
-    content_type: string;
-    size: number;
-    url: string;
-    publicId: string;
-  }>
-> {
-  try {
-    const { uploadToCloudinaryEmail } = await import("../_shared/cloudinary-email-helper.ts");
+  apiKey: string,
+  supabase: Parameters<typeof logToDatabase>[0]
+): Promise<StoredInboundAttachment[]> {
+  console.log(`Fetching inbound attachments for email_id: ${emailId}`);
 
-    const cloudName = Deno.env.get("CLOUDINARY_CLOUD_NAME")!;
-    const cloudApiKey = Deno.env.get("CLOUDINARY_API_KEY")!;
-    const cloudApiSecret = Deno.env.get("CLOUDINARY_API_SECRET")!;
-
-    console.log(`Fetching inbound attachments for email_id: ${emailId}`);
-
-    const listResponse = await fetch(
-      `https://api.resend.com/emails/receiving/${emailId}/attachments`,
-      {
-        method: "GET",
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
-        },
-      }
-    );
-
-    if (!listResponse.ok) {
-      console.error(`Failed to fetch attachments list: ${listResponse.status} ${listResponse.statusText}`);
-      return [];
-    }
-
-    const attachmentsJson = await listResponse.json();
-    const attachments = (Array.isArray(attachmentsJson?.data)
-      ? attachmentsJson.data
-      : Array.isArray(attachmentsJson)
-        ? attachmentsJson
-        : []) as Array<{
-      id?: string;
-      filename?: string;
-      content_type?: string;
-      contentType?: string;
-      download_url?: string;
-      url?: string;
-    }>;
-
-    if (attachments.length === 0) {
-      console.log("No attachments found");
-      return [];
-    }
-
-    const storedAttachments: Array<{
-      id: string;
-      filename: string;
-      content_type: string;
-      size: number;
-      url: string;
-      publicId: string;
-    }> = [];
-
-    for (const attachment of attachments) {
-      try {
-        const filename = attachment.filename || "attachment";
-        console.log(`Processing attachment: ${filename}`);
-
-        const downloadUrl = attachment.download_url || attachment.url;
-        if (!downloadUrl) {
-          console.log(`No download_url for attachment: ${filename}`);
-          continue;
-        }
-
-        let fileResponse = await fetch(downloadUrl);
-
-        if (!fileResponse.ok && (fileResponse.status === 401 || fileResponse.status === 403)) {
-          fileResponse = await fetch(downloadUrl, {
-            headers: { Authorization: `Bearer ${apiKey}` },
-          });
-        }
-
-        if (!fileResponse.ok) {
-          console.error(`Failed to download attachment: ${fileResponse.status}`);
-          continue;
-        }
-
-        const fileBlob = await fileResponse.blob();
-        const fileBuffer = await fileBlob.arrayBuffer();
-        const contentType = attachment.content_type || attachment.contentType || "application/octet-stream";
-
-        console.log(`Uploading attachment to Cloudinary: ${filename}`);
-
-        const result = await uploadToCloudinaryEmail(
-          new Uint8Array(fileBuffer),
-          filename,
-          contentType,
-          `admin/email/inbound/${emailId}`,
-          cloudName,
-          cloudApiKey,
-          cloudApiSecret
-        );
-
-        storedAttachments.push({
-          id: crypto.randomUUID(),
-          filename,
-          content_type: contentType,
-          size: fileBlob.size,
-          url: result.url,
-          publicId: result.publicId,
-        });
-
-        console.log(`Successfully stored attachment: ${filename}`);
-      } catch (attError) {
-        console.error(`Error processing attachment ${attachment.filename}:`, attError);
-      }
-    }
-
-    return storedAttachments;
-  } catch (error) {
-    console.error("Error fetching attachments:", error);
+  const list = await readResendAttachmentList(emailId, apiKey);
+  if (!list.ok) {
+    // The message is still saved, so a lost attachment list has to be findable afterwards.
+    console.error(`Failed to read attachments list: ${list.status ?? "no response"} ${list.detail}`);
+    await logToDatabase(supabase, {
+      level: "error",
+      category: "system",
+      source: "resend-webhook",
+      message: "Inbound email attachment list could not be read",
+      metadata: { code: "list_failed", status: list.status, detail: list.detail },
+    });
     return [];
   }
+
+  if (list.attachments.length === 0) {
+    console.log("No attachments found");
+    return [];
+  }
+
+  const storedAttachments: StoredInboundAttachment[] = [];
+
+  for (const [index, attachment] of list.attachments.entries()) {
+    const { filename, contentType, downloadUrl } = attachment;
+    try {
+      console.log(`Processing attachment: ${filename}`);
+
+      if (!downloadUrl) {
+        console.log(`No download_url for attachment: ${filename}`);
+        await logDownloadFailure(supabase, filename, null);
+        continue;
+      }
+
+      const fileResponse = await downloadResendAttachment(downloadUrl, apiKey);
+      if (!fileResponse) {
+        console.error(`Refused a non-HTTPS download URL for attachment: ${filename}`);
+        await logDownloadFailure(supabase, filename, null);
+        continue;
+      }
+
+      if (!fileResponse.ok) {
+        console.error(`Failed to download attachment: ${fileResponse.status}`);
+        await logDownloadFailure(supabase, filename, fileResponse.status);
+        continue;
+      }
+
+      const fileBlob = await fileResponse.blob();
+      const fileBuffer = await fileBlob.arrayBuffer();
+
+      console.log(`Storing attachment: ${filename}`);
+
+      const result = await storeEmailAttachment({
+        bytes: new Uint8Array(fileBuffer),
+        filename,
+        contentType,
+        folder: `admin/email/inbound/${emailId}`,
+        uniqueKey: attachment.id || String(index),
+      });
+
+      storedAttachments.push({
+        id: crypto.randomUUID(),
+        filename,
+        content_type: contentType,
+        size: fileBlob.size,
+        url: result.url,
+        publicId: result.publicId,
+      });
+
+      console.log(`Successfully stored attachment: ${filename}`);
+    } catch (attError) {
+      console.error(`Error processing attachment ${filename}:`, attError);
+      // The message is still saved, so the failure has to be findable afterwards.
+      await logToDatabase(supabase, {
+        level: "error",
+        category: "system",
+        source: "resend-webhook",
+        message: "Inbound email attachment could not be stored",
+        metadata: attachmentFailureLogMetadata(filename, attError),
+      });
+    }
+  }
+
+  return storedAttachments;
 }
 
 serve(async (req) => {
@@ -309,6 +301,30 @@ serve(async (req) => {
           console.error("No email_id found in webhook payload");
           throw new Error("Missing email_id in webhook payload");
         }
+        if (!isValidResendEmailId(emailId)) {
+          // Refused before any Resend call, and recorded: nothing is stored for this event.
+          // Written directly so a failed write is seen: the refusal is acknowledged only once it is on record.
+          const { error: logError } = await supabase.from("system_logs").insert({
+            level: "warn",
+            category: "system",
+            source: "resend-webhook",
+            message: "Inbound email refused: email id is not in Resend's format",
+            metadata: { code: "invalid_email_id", svix_id: svixHeaders.svixId, event_type: event.type },
+          });
+          if (logError) {
+            console.error("[resend-webhook] could not record the invalid-id refusal:", logError.message);
+            // Not acknowledged: Svix delivers again, and the refusal is recorded once the database answers.
+            return new Response(
+              JSON.stringify({ error: "Could not record the refused event" }),
+              { status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+            );
+          }
+          // Acknowledged, not 500: the id can never become valid, so a retried delivery would only be refused again.
+          return new Response(
+            JSON.stringify({ received: true, ignored: "invalid_email_id" }),
+            { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
         
         console.log(`Processing inbound email with email_id: ${emailId}`);
         
@@ -355,7 +371,7 @@ serve(async (req) => {
           const webhookAttachments = data.attachments || [];
           if (webhookAttachments.length > 0) {
             console.log(`Email has ${webhookAttachments.length} attachments, fetching...`);
-            storedAttachments = await fetchAndStoreAttachments(emailId, resendApiKey);
+            storedAttachments = await fetchAndStoreAttachments(emailId, resendApiKey, supabase);
           }
         } else {
           console.warn("RESEND_API_KEY not configured, cannot fetch email content");

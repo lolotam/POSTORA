@@ -193,7 +193,7 @@ The frontend is a **React SPA** that talks to a single **self-hosted Supabase** 
 - Media uploads go through `cloudinary-upload` → Cloudinary CDN.
 - `media_files` + `media_folders` tables track assets and metadata.
 - Instagram URLs are optimized with `f_jpg,q_auto` Cloudinary transforms.
-- Video pipeline: `process-video` + `transcode-video` (external transcode — Deno has no FFmpeg).
+- Video pipeline: `process-video` + `transcode-video` (Openinary URL transformations; see `docs/superpowers/specs/2026-10-30-openinary-video-processing-design.md`).
 
 ### Background jobs, cron jobs, queues, webhooks
 - **Cron (pg_cron):** `process-scheduled-posts`, `process-scheduled-emails`, `process-scheduled-flags`, `process-scheduled-blog-posts`, `whatsapp-scheduled-sender`, `refresh-tokens`, `send-token-expiry-notifications`, `send-expiry-reminders`, `send-weekly-analytics`, `sync-user-quotas`, `observability-collector`, `observability-alerts`, `cleanup-media`, `notify-expiring-ai-overrides`, `sync-resend-delivery-status`. All gated by `CRON_SECRET`.

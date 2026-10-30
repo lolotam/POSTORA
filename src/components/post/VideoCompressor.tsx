@@ -15,6 +15,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Minimize2, Loader2, Check, X, HardDrive, Percent, AlertCircle } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
+import { invokeErrorMessage } from "@/lib/functionInvokeError";
 import { useProcessingJobsContext } from "@/contexts/ProcessingJobsContext";
 import { VideoProcessingPresetSelector } from "./VideoProcessingPresetSelector";
 
@@ -127,7 +128,7 @@ export function VideoCompressor({
       setProgress(50);
       updateJob(jobId, { progress: 50 });
 
-      // Call Cloudinary processing edge function
+      // Server-side compression (Openinary)
       const { data, error: invokeError } = await supabase.functions.invoke("process-video", {
         body: {
           media_file_id: mediaFileId,
@@ -137,10 +138,12 @@ export function VideoCompressor({
             quality,
             maxSizeMB,
           },
+          // Lets the server keep the original resolution when the library has not recorded it.
+          source_dimensions: videoMetadata ? { width: videoMetadata.width, height: videoMetadata.height } : undefined,
         },
       });
 
-      if (invokeError) throw invokeError;
+      if (invokeError) throw new Error(await invokeErrorMessage(invokeError, "Compression failed"));
       if (!data.success) throw new Error(data.error || "Compression failed");
 
       setProgress(90);

@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useFeatureFlags } from "@/hooks/useFeatureFlags";
+import { invokeErrorMessage } from "@/lib/functionInvokeError";
 import { TikTokPreCheckDetails } from "./TikTokPreCheckDetails";
 import { formatDistanceToNow } from "date-fns";
 import { useTranslation } from "react-i18next";
@@ -628,7 +629,7 @@ export function TikTokPreCheck({
         }
       );
 
-      if (transcodeError) throw transcodeError;
+      if (transcodeError) throw new Error(await invokeErrorMessage(transcodeError, "Transcoding failed"));
       if (!transcodeResult?.success) {
         throw new Error(transcodeResult?.error || "Transcoding failed");
       }
