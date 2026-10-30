@@ -266,7 +266,8 @@ export async function handleMediaDirectUpload(req: Request): Promise<Response> {
     // No body user id is passed, so a service-role bearer is refused: this path is for browsers only.
     ({ userId } = await authenticateCaller(req, null));
   } catch {
-    return refuse(req, adminDb, null, {
+    // Console only: a log row here would let anyone without a session write to system_logs.
+    return refuse(req, null, null, {
       status: 401,
       reason: "unauthenticated",
       body: { success: false, error: "Authentication failed. Please refresh the page and try again." },
