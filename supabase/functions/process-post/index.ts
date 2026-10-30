@@ -117,6 +117,7 @@ import {
   dropRecordedStory,
   readUnrecordedStory,
   recordedStoryResults,
+  newStoryLedger,
   recordLiveStory,
   recordPublishedStory,
   recordWithOneRetry,
@@ -1838,9 +1839,10 @@ Deno.serve(async (req) => {
 
     for (const account of (accounts || [])) {
       console.log(`Posting to ${account.platform}...`);
-      // Stories this account published and recorded as rows of their own. They are live whatever
-      // the reel after them does, so they count in the roll-up and the notifications (below).
-      const liveStories: StoryRef[] = [];
+      // Stories this account published. They are live whatever the reel after them does and
+      // whether or not their row was written, so they count in the roll-up and the notifications
+      // (below); only the ones whose row was written may be dropped from a pending row's carry.
+      const stories = newStoryLedger();
 
       try {
         let result: PlatformPostResult;
@@ -1859,7 +1861,7 @@ Deno.serve(async (req) => {
               result = await postToInstagramBusinessLogin(account, post, mediaUrls, mediaFiles, supabase, post_id, timing);
             } else {
               result = await postToInstagram(account, post, mediaUrls, mediaFiles, timing, (story) =>
-                recordLiveStory(supabase, settlePlatformPost, { postId: post_id, account, story }, liveStories));
+                recordLiveStory(supabase, settlePlatformPost, { postId: post_id, account, story }, stories));
             }
             break;
           }
@@ -2024,8 +2026,8 @@ Deno.serve(async (req) => {
             account,
             signal: error,
             resume,
-            // A story recorded by this very run must not be carried (and recorded) again.
-            resumeResponseData: dropRecordedStory(resumeResponseData, liveStories),
+            // A story whose row this very run wrote must not be carried (and recorded) again.
+            resumeResponseData: dropRecordedStory(resumeResponseData, stories.recorded),
           });
           if (!recorded.error && !recorded.gaveUp) {
             console.log(`[${account.platform}] container ${error.containerId} still processing; left for the reconciler`);
@@ -2068,9 +2070,9 @@ Deno.serve(async (req) => {
 
         hasFailed = true;
       } finally {
-        // Runs for every outcome, `continue` included: a recorded story is a success.
-        if (liveStories.length > 0) {
-          platformResults.push(...recordedStoryResults(liveStories));
+        // Runs for every outcome, `continue` included: a live story is a success.
+        if (stories.live.length > 0) {
+          platformResults.push(...recordedStoryResults(stories.live));
           hasSuccess = true;
         }
       }

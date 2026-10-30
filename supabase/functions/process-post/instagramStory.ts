@@ -39,7 +39,7 @@ export function readUnrecordedStory(responseData: unknown): StoryRef | null {
 }
 
 /**
- * The pending row's data once its carried story has been recorded: without it, so a further
+ * The pending row's data once its carried story has been recorded (pass `ledger.recorded`): without it, so a further
  * resume does not record the same story twice. Untouched if that story was not recorded.
  */
 export function dropRecordedStory(responseData: Record<string, unknown> | null, recorded: StoryRef[]): Record<string, unknown> | null {
@@ -49,7 +49,7 @@ export function dropRecordedStory(responseData: Record<string, unknown> | null, 
   return rest;
 }
 
-/** What the roll-up and the notifications see for stories this run recorded: live and successful. */
+/** What the roll-up and the notifications see for live stories: successful Instagram results. */
 export function recordedStoryResults(stories: StoryRef[]): { platform: string; status: string; platform_post_url: string }[] {
   return stories.map((story) => ({ platform: "instagram", status: "success", platform_post_url: story.url }));
 }
@@ -133,19 +133,35 @@ export async function recordPublishedStory(
   }
 }
 
+/** The stories one account's run published: all of them live, and the ones whose row was written. */
+export interface StoryLedger {
+  /** Published on Instagram, whether or not their row was written: they count in the roll-up. */
+  live: StoryRef[];
+  /** Live stories whose row is in the database: only these may leave a pending row's carry. */
+  recorded: StoryRef[];
+}
+
+export function newStoryLedger(): StoryLedger {
+  return { live: [], recorded: [] };
+}
+
 /**
- * Records a live story, retrying once, and notes it in `live` when it landed so the run's
- * roll-up counts it: a reel that then fails outright must not leave the post `failed` while a
- * story is live. Returns the error if it still failed after the retry.
+ * Records a live story, retrying once, and notes it in the ledger. The story is live on
+ * Instagram whether or not its row was written, so it always goes in `live` for the roll-up: a
+ * reel that then fails outright after a failed story write must not leave the post `failed`
+ * with a story out there. It goes in `recorded` only when the row landed, because that list
+ * decides which carried stories may be forgotten. Returns the error if the write still failed
+ * after the retry, for the warning and for carrying the story to a later run.
  */
 export async function recordLiveStory(
   supabase: SupabaseClient,
   settle: Settle,
   args: Parameters<typeof recordPublishedStory>[2],
-  live: StoryRef[],
+  ledger: StoryLedger,
   sleep?: (ms: number) => Promise<void>,
 ): Promise<string | null> {
   const error = await recordWithOneRetry(() => recordPublishedStory(supabase, settle, args), sleep);
-  if (!error) live.push(args.story);
+  ledger.live.push(args.story);
+  if (!error) ledger.recorded.push(args.story);
   return error;
 }

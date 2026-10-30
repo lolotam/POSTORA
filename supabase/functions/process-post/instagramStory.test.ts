@@ -3,6 +3,7 @@ import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.89.0
 import {
   dropRecordedStory,
   findRecordedStory,
+  newStoryLedger,
   readUnrecordedStory,
   recordedStoryResults,
   recordLiveStory,
@@ -96,10 +97,10 @@ Deno.test("a retry after a write that actually landed does not duplicate the row
     rows.push({ id: `row-${inserts}` });
     return Promise.resolve({ id: null, error: "connection reset" });
   };
-  const live: { id: string; url: string }[] = [];
-  assertEquals(await recordLiveStory(client, settle, { postId: "p", account: ACCOUNT, story: STORY }, live, noSleep), null);
+  const ledger = newStoryLedger();
+  assertEquals(await recordLiveStory(client, settle, { postId: "p", account: ACCOUNT, story: STORY }, ledger, noSleep), null);
   assertEquals(inserts, 1);
-  assertEquals(live, [STORY]);
+  assertEquals(ledger, { live: [STORY], recorded: [STORY] });
 });
 
 Deno.test("it never settles the reel's pending row: the story row is always new", async () => {
@@ -125,18 +126,23 @@ Deno.test("a recording that fails is tried once more, and only once", async () =
   assertEquals(calls, 1);
 });
 
-Deno.test("a story is counted as live only once its row is written, after a retry if need be", async () => {
-  const live: { id: string; url: string }[] = [];
+Deno.test("a story is live whether or not its row landed, and recorded only when it did", async () => {
+  const flaky = newStoryLedger();
   let settles = 0;
-  const flaky = () => Promise.resolve(++settles === 1 ? { id: null, error: "rpc failed" } : { id: "row-1", error: null });
-  assertEquals(await recordLiveStory(NO_ROWS, flaky, { postId: "p", account: ACCOUNT, story: STORY }, live, noSleep), null);
-  assertEquals(live, [STORY]);
+  const flakySettle = () => Promise.resolve(++settles === 1 ? { id: null, error: "rpc failed" } : { id: "row-1", error: null });
+  assertEquals(await recordLiveStory(NO_ROWS, flakySettle, { postId: "p", account: ACCOUNT, story: STORY }, flaky, noSleep), null);
+  assertEquals(flaky, { live: [STORY], recorded: [STORY] });
   assertEquals(settles, 2);
 
-  const down: { id: string; url: string }[] = [];
+  // The write failed even after the retry: the story is still out there, so the roll-up counts
+  // it, but it is not recorded, so the carry on the pending row must keep it.
+  const down = newStoryLedger();
   const error = await recordLiveStory(NO_ROWS, () => Promise.resolve({ id: null, error: "rpc failed" }), { postId: "p", account: ACCOUNT, story: STORY }, down, noSleep);
   assertEquals(error, "rpc failed");
-  assertEquals(down, []);
+  assertEquals(down, { live: [STORY], recorded: [] });
+  const carried = { [UNRECORDED_STORY_KEY]: STORY };
+  assertEquals(dropRecordedStory(carried, down.recorded), carried);
+  assertEquals(recordedStoryResults(down.live), [{ platform: "instagram", status: "success", platform_post_url: STORY.url }]);
 });
 
 Deno.test("a recorded story counts as a successful Instagram result for the roll-up and the notices", () => {
