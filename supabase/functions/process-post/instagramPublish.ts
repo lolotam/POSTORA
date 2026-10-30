@@ -138,6 +138,8 @@ export interface MediaSummary {
   caption?: string;
   timestamp?: string;
   permalink?: string;
+  /** IMAGE, VIDEO or CAROUSEL_ALBUM. */
+  media_type?: string;
 }
 
 /**
@@ -147,10 +149,15 @@ export interface MediaSummary {
  * comment and the analytics to another post.
  */
 export function matchPublishedMedia(media: MediaSummary[], caption: string | null | undefined, notBeforeMs: number): MediaSummary | null {
-  const wanted = (caption ?? "").trim();
-  if (!wanted) return null;
-  const matches = media.filter((item) => (item.caption ?? "").trim() === wanted && Date.parse(item.timestamp ?? "") >= notBeforeMs);
+  const matches = captionMatches(media, caption, notBeforeMs);
   return matches.length === 1 ? matches[0] : null;
+}
+
+/** The media with the post's caption published since `notBeforeMs`. No caption matches nothing. */
+export function captionMatches(media: MediaSummary[], caption: string | null | undefined, notBeforeMs: number): MediaSummary[] {
+  const wanted = (caption ?? "").trim();
+  if (!wanted) return [];
+  return media.filter((item) => (item.caption ?? "").trim() === wanted && Date.parse(item.timestamp ?? "") >= notBeforeMs);
 }
 
 /**

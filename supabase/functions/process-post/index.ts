@@ -87,6 +87,21 @@ import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-
 import type { PlatformMetadata as SharedPlatformMetadata } from "../_shared/platforms/types.ts";
 import { graphId, type GraphResponse } from "./graphResponse.ts";
 import {
+  ALREADY_LIVE_MESSAGE,
+  alreadyLiveCopiesMessage,
+  candidateMedia,
+  expectedMediaType,
+  parseMediaList,
+  isRetryRun,
+  NOT_A_RETRY,
+  type RecordedRow,
+  recordedOnRetryRows,
+  type RetryGuardDecision,
+  type RetryState,
+  retryGuardDecision,
+  retryWindowStart,
+} from "./instagramRetryGuard.ts";
+import {
   matchPublishedMedia,
   type MediaSummary,
   publishContainer,
@@ -455,6 +470,9 @@ interface PostData {
   scheduled_at?: string | null;
   metadata?: PlatformMetadata | null;
   source?: string | null;
+  /** As read when this run began, before it claimed the post. */
+  status?: string | null;
+  created_at?: string | null;
 }
 
 /**
@@ -1944,11 +1962,30 @@ Deno.serve(async (req) => {
             break;
           case "instagram": {
             const igAuthType = (account as any).ig_auth_type || (account.account_metadata as Record<string, unknown>)?.account_type;
+            const recorded = isRetryRun(post.status, !!resume) ? await recordedOnRetry(supabase, post_id, account.id) : null;
+            const retry: RetryState = recorded
+              ? {
+                storyRecorded: recorded.story,
+                feedRecorded: recorded.feed,
+                recordedMediaIds: (ids) => recordedMediaIdsFor(supabase, post_id, account.id, ids),
+              }
+              : NOT_A_RETRY;
             if (igAuthType === 'business_login') {
-              result = await postToInstagramBusinessLogin(account, post, mediaUrls, mediaFiles, supabase, post_id, timing);
+              result = await postToInstagramBusinessLogin(account, post, mediaUrls, mediaFiles, supabase, post_id, timing, retry);
             } else {
               result = await postToInstagram(account, post, mediaUrls, mediaFiles, timing, (story) =>
-                recordLiveStory(supabase, { postId: post_id, account, story }, stories));
+                recordLiveStory(supabase, { postId: post_id, account, story }, stories), retry, async (error) => {
+                const settled = await settlePlatformPost(supabase, {
+                  platformPostId: null,
+                  postId: post_id,
+                  socialAccountId: account.id,
+                  platform: "instagram",
+                  status: "failed",
+                  errorMessage: error,
+                  responseData: { ig_post_subtype: "story", account_username: account.platform_username },
+                });
+                return settled.error;
+              });
             }
             break;
           }
@@ -3722,18 +3759,88 @@ async function findPublishedMedia(
   caption: string | null | undefined,
   notBeforeMs: number,
 ): Promise<MediaSummary | null> {
+  const media = await listRecentMedia(mediaListUrl, accessToken);
+  return media ? matchPublishedMedia(media, caption, notBeforeMs) : null;
+}
+
+/**
+ * What earlier runs recorded for this account on the post: its story (a story is not in `/media`,
+ * so its own row is the only record) and its feed post or reel. A failed read counts as nothing
+ * recorded, like the media list: the retry behaves as it always did.
+ */
+async function recordedOnRetry(supabase: SupabaseClient, postId: string, socialAccountId: string): Promise<{ story: boolean; feed: boolean }> {
+  const { data, error } = await supabase
+    .from("platform_posts")
+    .select("status, story_subtype:response_data->>ig_post_subtype, story_on_reel:response_data->>story_recorded_on_reel_row, carried_story:response_data->unrecorded_story")
+    .eq("post_id", postId)
+    .eq("social_account_id", socialAccountId)
+    .in("status", ["success", "failed"]);
+  if (error) {
+    console.warn(`[instagram] retry guard could not read the recorded rows for post ${postId}: ${error.message}`);
+    return { story: false, feed: false };
+  }
+  return recordedOnRetryRows((data ?? []) as RecordedRow[]);
+}
+
+/**
+ * Which of these media ids another post's row records for the account, or null when unreadable.
+ * This post's own rows are not counted: its recorded media is handled as `feedRecorded`.
+ */
+async function recordedMediaIdsFor(supabase: SupabaseClient, postId: string, socialAccountId: string, ids: string[]): Promise<Set<string> | null> {
+  const { data, error } = await supabase
+    .from("platform_posts")
+    .select("platform_post_id")
+    .eq("social_account_id", socialAccountId)
+    .neq("post_id", postId)
+    .in("platform_post_id", ids);
+  if (error) return null;
+  return new Set((data ?? []).map((row: { platform_post_id: string | null }) => row.platform_post_id ?? ""));
+}
+
+/** The account's latest media, or null when they could not be read (non-200, timeout, error). */
+async function listRecentMedia(mediaListUrl: string, accessToken: string): Promise<MediaSummary[] | null> {
   try {
     const response = await fetchWithTimeout(
-      `${mediaListUrl}?fields=id,caption,timestamp,permalink&limit=${PUBLISHED_SEARCH_LIMIT}&access_token=${accessToken}`,
+      `${mediaListUrl}?fields=id,caption,timestamp,permalink,media_type&limit=${PUBLISHED_SEARCH_LIMIT}&access_token=${accessToken}`,
       {},
       8000,
     );
     if (!response.ok) return null;
-    const body = await response.json() as { data?: MediaSummary[] };
-    return matchPublishedMedia(body.data ?? [], caption, notBeforeMs);
+    const body = await response.json() as { data?: unknown };
+    // A list Graph answered but malformed counts as unreadable, so the retry publishes as before.
+    return parseMediaList(body.data);
   } catch {
     return null;
   }
+}
+
+/**
+ * Step 4's retry guard: on a retry, the post as it already is on the account, or null to publish
+ * as usual (not a retry, no caption, a story-only post, nothing live, or the media unreadable).
+ */
+async function liveOnRetry(
+  post: PostData,
+  retry: RetryState,
+  mediaListUrl: string,
+  accessToken: string,
+  publish: { storyOnly: boolean; mediaType: string },
+): Promise<Exclude<RetryGuardDecision, { kind: "publish" }> | null> {
+  if (publish.storyOnly || !post.caption?.trim() || !retry.recordedMediaIds) return null;
+  const media = await listRecentMedia(mediaListUrl, accessToken);
+  if (!media) {
+    console.warn(`[instagram] retry guard could not read media for post ${post.id}; publishing`);
+    return null;
+  }
+  const window = { caption: post.caption, notBeforeMs: retryWindowStart(post), mediaType: publish.mediaType };
+  const sameCaption = candidateMedia(media, window, new Set());
+  const recorded = sameCaption.length ? await retry.recordedMediaIds(sameCaption.map((item) => item.id)) : new Set<string>();
+  if (!recorded) {
+    console.warn(`[instagram] retry guard could not read which media are recorded for post ${post.id}; publishing`);
+    return null;
+  }
+  const decision = retryGuardDecision(candidateMedia(media, window, recorded));
+  console.log(`[instagram] retry guard: ${decision.kind} for post ${post.id}`);
+  return decision.kind === "publish" ? null : decision;
 }
 
 /**
@@ -3780,6 +3887,10 @@ async function postToInstagram(
   // Writes the story's own row (answering an error, or null) once it is live and the reel is
   // still to come, so a reel that defers or fails does not lose it. See instagramStory.ts.
   recordStory?: (story: StoryRef) => Promise<string | null>,
+  retry: RetryState = NOT_A_RETRY,
+  // Writes a failed story row for a retry whose feed post or reel is already done (answering an
+  // error, or null).
+  recordStoryFailure?: (error: string) => Promise<string | null>,
 ): Promise<PlatformPostResult> {
   const igUserId = account.platform_user_id;
   const accessToken = account.access_token;
@@ -4109,7 +4220,8 @@ async function postToInstagram(
   };
 
   // Helper: publish first photo/video of a feed/reel post as a Story (mirror toggle)
-  const publishIgStoryFromMedia = async (): Promise<void> => {
+  // Answers the published Story (id and a link), or null when it was not published.
+  const publishIgStoryFromMedia = async (): Promise<StoryRef | null> => {
     try {
       const storyBody: Record<string, unknown> = {
         media_type: "STORIES",
@@ -4127,7 +4239,7 @@ async function postToInstagram(
       );
       if (createData.error) {
         warnings.push(`Also share to Story failed: ${createData.error.message}`);
-        return;
+        return null;
       }
       const storyContainerId = graphId(createData, "Also share to Story");
       // On a resumed run timing.deadlineMs is check-once: that suits the deferred reel, not this
@@ -4139,10 +4251,12 @@ async function postToInstagram(
           workerPublishDeadline(WORKER_STARTED_AT_MS),
         ),
       });
-      await publishInstagramMedia(igUserId, storyContainerId, accessToken);
+      const story = await publishInstagramMedia(igUserId, storyContainerId, accessToken);
       console.log("Instagram 'Also share to Story' published successfully");
+      return { id: story.id, url: username ? `https://www.instagram.com/stories/${username}/` : "https://instagram.com" };
     } catch (e) {
       warnings.push(`Also share to Story failed: ${e instanceof Error ? e.message : "Unknown error"}`);
+      return null;
     }
   };
   let mediaType = "IMAGE";
@@ -4158,14 +4272,23 @@ async function postToInstagram(
 
   console.log(`Instagram post: types=${JSON.stringify(igPostTypes)}, mediaType=${mediaType}, isReel=${isReel}, shareToFeed=${shareToFeed}`);
 
+  // A retry of a post already live on the account records it instead of posting it again.
+  const profileUrl = username ? `https://www.instagram.com/${username}/` : `https://instagram.com`;
+  const live = await liveOnRetry(post, retry, `https://graph.facebook.com/v18.0/${igUserId}/media`, accessToken, {
+    // Nothing to look for when no feed/reel is wanted, or this post's own row already records it.
+    storyOnly: igPostTypes.every((type) => type === "story") || retry.feedRecorded === true,
+    mediaType: expectedMediaType(mediaType, mediaUrls.length),
+  });
+
   // Handle story separately if included in post types
   const igAllResults: Array<{ id: string; url?: string; warnings?: string[] }> = [];
   // A live story whose row could not be written (even after a retry). If the reel then defers it
   // travels on the pending row, so the resumed or abandoned run writes the missing row.
   let unrecordedStory: StoryRef | null = null;
 
-  // A resumed run finishes only the deferred reel: the story was handled the first time.
-  if (!timing.resume && igPostTypes.includes("story") && mediaUrls.length > 0) {
+  // A resumed run finishes only the deferred reel: the story was handled the first time. A retry
+  // posts it again only when no earlier run recorded it.
+  if (!timing.resume && !retry.storyRecorded && igPostTypes.includes("story") && mediaUrls.length > 0) {
     const storyBody: Record<string, unknown> = {
       media_type: "STORIES",
       access_token: accessToken,
@@ -4224,6 +4347,64 @@ async function postToInstagram(
         }
       }
     }
+  }
+
+  // A retry whose feed post or reel is not published again still owes its "Also share to Story"
+  // mirror when no row records it. The mirror is recorded as its own row, so a later retry sees it
+  // and never mirrors it twice.
+  const mirrorStoryOnRetry = async () => {
+    if (!shareToStory || igPostTypes.includes("story") || retry.storyRecorded) return;
+    const mirror = await publishIgStoryFromMedia();
+    const recordError = mirror && recordStory ? await recordStory(mirror) : null;
+    if (mirror && recordError) {
+      console.error(`[IG story] mirror published but not recorded: ${recordError}`);
+      warnings.push("The Instagram Story was published but could not be recorded.");
+      unrecordedStory = mirror;
+    }
+  };
+
+  // The story this retry was for failed again, while its feed post or reel is done: the story
+  // gets its own failed row, so History shows it and can retry it.
+  const storyFailedAgain = igPostTypes.includes("story") && !retry.storyRecorded && igAllResults.length === 0;
+  const storyFailure = () => warnings.join("; ") || "Instagram Story failed";
+
+  // This post's own row already records the feed post or reel: it is done, and that row stays the
+  // record. What this retry owes is the story.
+  if (retry.feedRecorded && !igPostTypes.every((type) => type === "story")) {
+    await mirrorStoryOnRetry();
+    // As in Business Login, the recorded feed post or reel still counts as the account's success.
+    // A failed row that could not be written must not be reported as written.
+    if (storyFailedAgain) {
+      const error = storyFailure();
+      const writeError = recordStoryFailure ? await recordStoryFailure(error) : null;
+      if (writeError) throw new Error(`${error} (and its failed row could not be recorded: ${writeError})`);
+      return {
+        selfWroteRows: true,
+        subResults: [{ subtype: "story", status: "failed", error }, { subtype: "feed", status: "success" }],
+        warnings,
+      } as PlatformPostResult;
+    }
+    // A live story without its own row goes to the main loop, which records and logs it.
+    if (unrecordedStory) return { id: unrecordedStory.id, url: unrecordedStory.url, warnings, ...{ unrecorded_story: unrecordedStory } };
+    return { selfWroteRows: true, subResults: [{ subtype: "feed", status: "success" }], warnings } as PlatformPostResult;
+  }
+
+  // The feed post or reel is already live: recorded, not posted again (the story step above ran).
+  if (live) {
+    // Its publish went unanswered, so the run that published it never mirrored it to the Story.
+    await mirrorStoryOnRetry();
+    if (storyFailedAgain && recordStoryFailure) {
+      // As on the recorded-feed path, a failed row that could not be written fails the account, so
+      // the main loop writes its fallback row and the story stays retryable. The next retry finds
+      // the live feed post or reel again through the guard.
+      const error = storyFailure();
+      const writeError = await recordStoryFailure(error);
+      if (writeError) throw new Error(`${error} (and its failed row could not be recorded: ${writeError})`);
+    }
+    const carried = unrecordedStory ? { unrecorded_story: unrecordedStory } : {};
+    return live.kind === "already_live"
+      ? { id: live.media.id, url: live.media.permalink ?? profileUrl, warnings: [...warnings, ALREADY_LIVE_MESSAGE], ...carried }
+      : { url: profileUrl, warnings: [...warnings, alreadyLiveCopiesMessage(live.count)], ...carried };
   }
 
   // If only story was selected, return the story result
@@ -4670,6 +4851,7 @@ async function postToInstagramBusinessLogin(
   supabase: SupabaseClient,
   postId: string,
   timing: PublishTiming = NO_DEFERRAL,
+  retry: RetryState = NOT_A_RETRY,
 ): Promise<PlatformPostResult> {
   const igUserId = account.platform_user_id;
   const accessToken = account.access_token;
@@ -5033,12 +5215,19 @@ async function postToInstagramBusinessLogin(
     }
   };
 
+  // A retry of a post already live on the account records it instead of posting it again.
+  const live = await liveOnRetry(post, retry, `https://graph.instagram.com/v22.0/${igUserId}/media`, accessToken, {
+    // Nothing to look for when no feed/reel is wanted, or this post's own row already records it.
+    storyOnly: (!blPostTypes.includes("feed") && !blPostTypes.includes("reel")) || retry.feedRecorded === true,
+    mediaType: expectedMediaType(mediaType, mediaUrls.length),
+  });
   const optimizedMediaUrls = await optimizeUrlsForInstagram(mediaUrls);
 
   // ─── 1. STORY ──────────────────────────────────────────────────────────────
   const wantStory = blPostTypes.includes("story") || (shareToStory && mediaUrls.length > 0);
-  // A resumed run finishes only the deferred reel: the story was handled the first time.
-  if (wantStory && !timing.resume) {
+  // A resumed run finishes only the deferred reel: the story was handled the first time. A retry
+  // posts it again only when no earlier run recorded it.
+  if (wantStory && !timing.resume && !retry.storyRecorded) {
     try {
       const storyBody: Record<string, unknown> = {
         media_type: "STORIES",
@@ -5079,7 +5268,21 @@ async function postToInstagramBusinessLogin(
   const wantReel = blPostTypes.includes("reel");
   const wantFeed = blPostTypes.includes("feed");
 
-  if (mediaType === "VIDEO" && (wantReel || wantFeed)) {
+  // The feed post or reel is already live: recorded, not posted again (the story step above ran).
+  // Already recorded on this post's own row, it is done: nothing to publish or write.
+  const feedDone = retry.feedRecorded === true;
+  if (live && !feedDone) {
+    const subtype = mediaType === "VIDEO" && wantReel ? "reel" : "feed";
+    const media = live.kind === "already_live" ? live.media : null;
+    const note = live.kind === "already_live" ? ALREADY_LIVE_MESSAGE : alreadyLiveCopiesMessage(live.count);
+    const url = media?.permalink ?? (username ? `https://www.instagram.com/${username}/` : `https://instagram.com`);
+    const rowId = await insertIGRow(subtype, "success", media?.id, url, undefined, { warnings: [note] });
+    // Not recorded: say so instead of reporting a success no row shows. A retry finds it live again.
+    if (!rowId) throw new Error("This post is already live on Instagram, but it could not be recorded. Retrying is safe.");
+    subResults.push({ subtype, status: "success", id: media?.id, url });
+  }
+
+  if (!live && !feedDone && mediaType === "VIDEO" && (wantReel || wantFeed)) {
     // Meta API: standalone feed videos must be posted as Reels.
     // If user picked "feed" alone, publish as Reel and warn.
     // If user picked both feed+reel, publish ONE Reel with share_to_feed=true (mirrors to feed).
@@ -5183,7 +5386,7 @@ async function postToInstagramBusinessLogin(
   }
 
   // ─── 3. FEED IMAGE / CAROUSEL ──────────────────────────────────────────────
-  if (mediaType === "IMAGE" && wantFeed) {
+  if (!live && !feedDone && mediaType === "IMAGE" && wantFeed) {
     try {
       if (mediaUrls.length === 1) {
         const imageBody: Record<string, unknown> = {
@@ -5293,6 +5496,9 @@ async function postToInstagramBusinessLogin(
   }
 
   // ─── Aggregate ─────────────────────────────────────────────────────────────
+  // The feed post or reel an earlier run recorded still counts as this account's success, whatever
+  // this retry's story did (its row already says so; nothing new is written).
+  if (feedDone) subResults.push({ subtype: "feed", status: "success" });
   if (subResults.length === 0) {
     throw new Error("Instagram: no post type matched (selected: " + JSON.stringify(blPostTypes) + ")");
   }
