@@ -6,7 +6,7 @@ import {
   storeEmailAttachment,
 } from "../_shared/emailAttachmentStorage.ts";
 import { logToDatabase } from "../_shared/logging.ts";
-import { readResendAttachmentList } from "../_shared/resendAttachmentList.ts";
+import { downloadResendAttachment, isValidResendEmailId, readResendAttachmentList } from "../_shared/resendAttachmentList.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -21,9 +21,11 @@ async function fetchEmailContent(
   text: string;
   html: string | null;
 }> {
+  // Refused before any request: `.`/`..` would collapse into another Resend API path.
+  if (!isValidResendEmailId(emailId)) throw new Error("Invalid Resend email id");
   console.log(`Fetching inbound email content for email_id: ${emailId}`);
 
-  const response = await fetch(`https://api.resend.com/emails/receiving/${emailId}`, {
+  const response = await fetch(`https://api.resend.com/emails/receiving/${encodeURIComponent(emailId)}`, {
     method: "GET",
     headers: {
       Authorization: `Bearer ${apiKey}`,
@@ -106,12 +108,13 @@ async function fetchAndStoreAttachments(
         continue;
       }
 
-      let fileResponse = await fetch(downloadUrl);
-      if (!fileResponse.ok && (fileResponse.status === 401 || fileResponse.status === 403)) {
-        fileResponse = await fetch(downloadUrl, {
-          headers: { Authorization: `Bearer ${apiKey}` },
-        });
+      const fileResponse = await downloadResendAttachment(downloadUrl, apiKey);
+      if (!fileResponse) {
+        failed++;
+        await logDownloadFailure(supabase, filename, null);
+        continue;
       }
+
       if (!fileResponse.ok) {
         failed++;
         await logDownloadFailure(supabase, filename, fileResponse.status);
