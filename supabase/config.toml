@@ -65,6 +65,10 @@ verify_jwt = true
 [functions.tiktok-review]
 verify_jwt = true
 
+# Cron calls with the shared secret, not a user JWT (verifyCronAuth in the function).
+[functions.sweep-ai-image-staging]
+verify_jwt = false
+
 # The competitor tracking report verifies the caller's bearer itself: it
 # resolves the owner from the verified identity and refuses a service
 # credential, because the database reader derives the owner from auth.uid().

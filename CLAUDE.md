@@ -369,6 +369,7 @@ All edge functions are in `supabase/functions/` and deployed to Supabase.
 | `youtube-poll-comments` | Cron (every 5 min): reads new YouTube comments per channel and hands them to workflows / the agent |
 | `media-direct-upload` | Signs browser-direct uploads over 10 MB up to the admin-selected image/video limits (Admin → Settings → Media upload limits) and records them; see `docs/runbooks/large-media-uploads.md` |
 | `reconcile-deferred-publishes` | Cron (every minute): finishes Instagram/Threads videos Meta was still processing when `process-post` stopped waiting, and settles posts stuck in `processing`; see `docs/runbooks/large-media-uploads.md` |
+| `sweep-ai-image-staging` | Cron (every 30 min): deletes AI image staging copies (`postora/<user>/ai-tmp/` in Openinary) whose follow-up token expired; spec `docs/superpowers/specs/2026-10-30-ai-image-tools-without-cloudinary-design.md` |
 
 ---
 
