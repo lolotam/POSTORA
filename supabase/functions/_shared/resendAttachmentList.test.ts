@@ -1,5 +1,5 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { normaliseAttachmentEntry, readResendAttachmentList, type ResendAttachmentList } from "./resendAttachmentList.ts";
+import { downloadResendAttachment, isValidResendEmailId, normaliseAttachmentEntry, readResendAttachmentList, type ResendAttachmentList } from "./resendAttachmentList.ts";
 
 const answer = (body: BodyInit | null, status = 200) => () => Promise.resolve(new Response(body, { status }));
 
@@ -27,4 +27,68 @@ Deno.test("an entry with missing or non-string fields gets safe defaults", () =>
     downloadUrl: "https://r/y",
   });
   assertEquals(normaliseAttachmentEntry(null), { id: null, filename: "attachment", contentType: "application/octet-stream", downloadUrl: null });
+});
+
+Deno.test("the Resend key is only ever sent to a Resend host, and only over HTTPS", async () => {
+  const calls: { url: string; auth: string | null }[] = [];
+  const fetcher = (input: string | URL | Request, init?: RequestInit) => {
+    const auth = new Headers(init?.headers).get("Authorization");
+    calls.push({ url: String(input), auth });
+    return Promise.resolve(new Response("x", { status: auth ? 200 : 403 }));
+  };
+
+  const fromResend = await downloadResendAttachment("https://cdn.resend.com/att/1?sig=a", "re_key", fetcher);
+  assertEquals(fromResend?.status, 200);
+  assertEquals(calls.map((c) => c.auth), [null, "Bearer re_key"]);
+
+  calls.length = 0;
+  const elsewhere = await downloadResendAttachment("https://evil.example/resend.com/att", "re_key", fetcher);
+  assertEquals(elsewhere?.status, 403);
+  assertEquals(calls.map((c) => c.auth), [null]);
+
+  calls.length = 0;
+  assertEquals(await downloadResendAttachment("http://cdn.resend.com/att/1", "re_key", fetcher), null);
+  assertEquals(await downloadResendAttachment("not a url", "re_key", fetcher), null);
+  assertEquals(calls, []);
+});
+
+Deno.test("an email id outside Resend's format is refused before any request", async () => {
+  const urls: string[] = [];
+  const fetcher = (input: string | URL | Request) => {
+    urls.push(String(input));
+    return Promise.resolve(new Response(JSON.stringify({ data: [] })));
+  };
+  for (const id of ["..", ".", "x/../../domains", "", "a b"]) {
+    assertEquals(await readResendAttachmentList(id, "k", fetcher), { ok: false, status: null, detail: "invalid email id" });
+  }
+  assertEquals(urls, []);
+  assertEquals(isValidResendEmailId("4ef9a417-02e9-4d39-ad75-9611e0fcc33c"), true);
+  await readResendAttachmentList("4ef9a417-02e9-4d39-ad75-9611e0fcc33c", "k", fetcher);
+  assertEquals(urls, ["https://api.resend.com/emails/receiving/4ef9a417-02e9-4d39-ad75-9611e0fcc33c/attachments"]);
+});
+
+Deno.test("a download follows redirects only while every hop stays on HTTPS", async () => {
+  const hops: string[] = [];
+  const redirectTo = (location: string) => new Response(null, { status: 302, headers: { location } });
+  const chain = (map: Record<string, Response>) => (input: string | URL | Request) => {
+    hops.push(String(input));
+    return Promise.resolve(map[String(input)] ?? new Response("file"));
+  };
+
+  const ok = await downloadResendAttachment("https://cdn.resend.com/a", "k", chain({ "https://cdn.resend.com/a": redirectTo("https://storage.example/b") }));
+  assertEquals([ok?.status, hops], [200, ["https://cdn.resend.com/a", "https://storage.example/b"]]);
+
+  hops.length = 0;
+  const downgraded = await downloadResendAttachment("https://cdn.resend.com/a", "k", chain({ "https://cdn.resend.com/a": redirectTo("http://storage.example/b") }));
+  assertEquals([downgraded, hops], [null, ["https://cdn.resend.com/a"]]);
+
+  hops.length = 0;
+  const loop = await downloadResendAttachment("https://cdn.resend.com/a", "k", () => {
+    hops.push("x");
+    return Promise.resolve(redirectTo("https://cdn.resend.com/a"));
+  });
+  assertEquals([loop, hops.length], [null, 4]);
+
+  const malformed = await downloadResendAttachment("https://cdn.resend.com/a", "k", () => Promise.resolve(redirectTo("https://[")));
+  assertEquals(malformed, null);
 });

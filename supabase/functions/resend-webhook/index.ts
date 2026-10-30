@@ -6,7 +6,7 @@ import {
   storeEmailAttachment,
 } from "../_shared/emailAttachmentStorage.ts";
 import { logToDatabase } from "../_shared/logging.ts";
-import { readResendAttachmentList } from "../_shared/resendAttachmentList.ts";
+import { downloadResendAttachment, isValidResendEmailId, readResendAttachmentList } from "../_shared/resendAttachmentList.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -73,9 +73,10 @@ async function verifyWebhookSignature(
       return false;
     }
 
-    // For development, allow if secret matches and timestamp is valid
-    console.log("Signature verification in progress...");
-    return true; // In production, you might want stricter verification
+    // Still accepted on the timestamp alone (pre-existing behaviour, kept until real Resend
+    // deliveries are confirmed to verify). Logged loudly so the evidence shows up.
+    console.warn("[resend-webhook] SIGNATURE MISMATCH: accepted on timestamp fallback");
+    return true;
   } catch (error) {
     console.error("Error verifying webhook signature:", error);
     return false;
@@ -91,10 +92,12 @@ async function fetchEmailContent(
   html: string | null;
 }> {
   try {
+    // Refused before any request: `.`/`..` would collapse into another Resend API path.
+    if (!isValidResendEmailId(emailId)) throw new Error("Invalid Resend email id");
     console.log(`Fetching inbound email content for email_id: ${emailId}`);
 
     // IMPORTANT: Inbound emails must be fetched from the Receiving API
-    const response = await fetch(`https://api.resend.com/emails/receiving/${emailId}`, {
+    const response = await fetch(`https://api.resend.com/emails/receiving/${encodeURIComponent(emailId)}`, {
       method: "GET",
       headers: {
         Authorization: `Bearer ${apiKey}`,
@@ -183,12 +186,11 @@ async function fetchAndStoreAttachments(
         continue;
       }
 
-      let fileResponse = await fetch(downloadUrl);
-
-      if (!fileResponse.ok && (fileResponse.status === 401 || fileResponse.status === 403)) {
-        fileResponse = await fetch(downloadUrl, {
-          headers: { Authorization: `Bearer ${apiKey}` },
-        });
+      const fileResponse = await downloadResendAttachment(downloadUrl, apiKey);
+      if (!fileResponse) {
+        console.error(`Refused a non-HTTPS download URL for attachment: ${filename}`);
+        await logDownloadFailure(supabase, filename, null);
+        continue;
       }
 
       if (!fileResponse.ok) {
@@ -298,6 +300,30 @@ serve(async (req) => {
         if (!emailId) {
           console.error("No email_id found in webhook payload");
           throw new Error("Missing email_id in webhook payload");
+        }
+        if (!isValidResendEmailId(emailId)) {
+          // Refused before any Resend call, and recorded: nothing is stored for this event.
+          // Written directly so a failed write is seen: the refusal is acknowledged only once it is on record.
+          const { error: logError } = await supabase.from("system_logs").insert({
+            level: "warn",
+            category: "system",
+            source: "resend-webhook",
+            message: "Inbound email refused: email id is not in Resend's format",
+            metadata: { code: "invalid_email_id", svix_id: svixHeaders.svixId, event_type: event.type },
+          });
+          if (logError) {
+            console.error("[resend-webhook] could not record the invalid-id refusal:", logError.message);
+            // Not acknowledged: Svix delivers again, and the refusal is recorded once the database answers.
+            return new Response(
+              JSON.stringify({ error: "Could not record the refused event" }),
+              { status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+            );
+          }
+          // Acknowledged, not 500: the id can never become valid, so a retried delivery would only be refused again.
+          return new Response(
+            JSON.stringify({ received: true, ignored: "invalid_email_id" }),
+            { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
         }
         
         console.log(`Processing inbound email with email_id: ${emailId}`);

@@ -103,10 +103,15 @@ go through `cloudinary-upload`. The response's `Content-Length` decides the path
   is the admin limit for the kind, but no more than **95 MB** while Openinary sits behind
   Cloudflare, which refuses request bodies over 100 MB. Only images and videos can stream,
   Openinary must be enabled, and the transfer must finish within 45 seconds.
+  **A streamed upload is Openinary-only.** Cloudinary is never tried for it, even when it is
+  enabled: it would import the URL itself without the declared-length or admin-cap checks, and
+  the two legs would outlast the 60 s worker. If the stream fails (including a source that
+  sends more or fewer bytes than its `Content-Length`), the whole upload fails with "The file
+  could not be streamed to storage (...)" and a `stream_failed` row in `system_logs`.
 - **Base64** (`media_base64`) stays at 10 MB: a JSON body cannot carry more.
 
 Every refusal writes a `system_logs` row from `cloudinary-upload` with the reason
-(`external_length`, `kind_cap`, `no_stream_provider`, `limits_unavailable`).
+(`external_length`, `kind_cap`, `no_stream_provider`, `limits_unavailable`, `stream_failed`).
 
 ## Slow Instagram and Threads videos
 

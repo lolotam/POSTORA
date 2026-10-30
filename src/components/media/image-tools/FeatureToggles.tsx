@@ -9,6 +9,8 @@ interface FeatureTogglesProps {
   enableUpscale: boolean;
   enableFilters: boolean;
   enableQuality: boolean;
+  /** Resize, filters and quality are Cloudinary delivery transforms; off when Cloudinary is not serving them. */
+  transformsDisabled?: boolean;
   onToggleBgRemoval: (enabled: boolean) => void;
   onToggleResize: (enabled: boolean) => void;
   onToggleUpscale: (enabled: boolean) => void;
@@ -22,6 +24,7 @@ export function FeatureToggles({
   enableUpscale,
   enableFilters,
   enableQuality,
+  transformsDisabled = false,
   onToggleBgRemoval,
   onToggleResize,
   onToggleUpscale,
@@ -51,6 +54,7 @@ export function FeatureToggles({
         <Switch
           checked={enableResize}
           onCheckedChange={onToggleResize}
+          disabled={transformsDisabled}
           className="scale-75"
         />
       </div>
@@ -75,6 +79,7 @@ export function FeatureToggles({
         <Switch
           checked={enableFilters}
           onCheckedChange={onToggleFilters}
+          disabled={transformsDisabled}
           className="scale-75"
         />
       </div>
@@ -87,6 +92,7 @@ export function FeatureToggles({
         <Switch
           checked={enableQuality}
           onCheckedChange={onToggleQuality}
+          disabled={transformsDisabled}
           className="scale-75"
         />
       </div>

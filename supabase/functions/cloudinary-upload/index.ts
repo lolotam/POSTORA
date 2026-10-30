@@ -19,7 +19,7 @@ import { getCdnPolicy, orderWriteProviders } from "./providerPolicy.ts";
 import { getTodayFolder, mediaPublicId, sanitizeEmailForFolder } from "./objectNaming.ts";
 import { commitMediaReplace, parseReplaceMediaFileId, prepareMediaReplace, type ReplaceTargetRow, type ReplaceUploadFacts } from "./replace.ts";
 import { deleteJustUploaded, mediaQuotaPreflight, quotaInsertRefusal } from "./mediaQuota.ts";
-import { prefixedStream, readPrefix, streamedSourceLength, streamIngestCap } from "./urlIngest.ts";
+import { prefixedStream, readPrefix, streamedSourceLength, streamFailureMessage, streamIngestCap, streamProviders } from "./urlIngest.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -546,7 +546,7 @@ export async function handleCloudinaryUpload(req: Request): Promise<Response> {
     }
     if (externalStream) {
       const cap = streamIngestCap(resolved.upload.entry.kind, externalStream.limits);
-      // Only Openinary can take a stream; Cloudinary is handed the URL on top of it.
+      // Only Openinary takes a stream, and a streamed upload uses nothing else (streamProviders).
       const openinaryWrites = orderWriteProviders(await getCdnPolicy(dbAdmin), {
         cloudinary: cloudinaryUsable,
         openinaryConfigured: !!getOpeninaryConfig(),
@@ -664,7 +664,9 @@ export async function handleCloudinaryUpload(req: Request): Promise<Response> {
     const cdnPolicy = await getCdnPolicy(dbAdmin);
     const openinaryConfig = getOpeninaryConfig();
     const orderedUnique = orderWriteProviders(cdnPolicy, { cloudinary: cloudinaryUsable, openinaryConfigured: !!openinaryConfig });
-    const limitedProviders = limitProvidersForKind(resolved.upload.entry.kind, orderedUnique, cdnPolicy.required);
+    const kindProviders = limitProvidersForKind(resolved.upload.entry.kind, orderedUnique, cdnPolicy.required);
+    // A streamed URL goes to Openinary alone (see streamProviders): its failure fails the upload.
+    const limitedProviders = externalStream ? streamProviders(kindProviders) : kindProviders;
     const effectiveProviders = limitedProviders.attempted;
     const requiredProviders = limitedProviders.required;
     if (effectiveProviders.length === 0) {
@@ -770,7 +772,10 @@ export async function handleCloudinaryUpload(req: Request): Promise<Response> {
 
     // Resilient contract: success when at least one provider stored the bytes.
     if (storedIn.length === 0) {
-      return new Response(JSON.stringify({ success: false, partial: false, storedIn, errors, error: errors.join("; ") }), { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      if (externalStream) {
+        await logUploadRefusal(userId, "Streamed upload failed", { reason: "stream_failed", bytes: externalStream.byteCount, errors: errors.map((e) => e.slice(0, 200)) });
+      }
+      return new Response(JSON.stringify({ success: false, partial: false, storedIn, errors, error: externalStream ? streamFailureMessage(errors) : errors.join("; ") }), { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
     const preferOpeninaryRead = cdnPolicy.readPreference === "openinary";

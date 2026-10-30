@@ -22,7 +22,7 @@ import { extensionOfName, mediaTypeForFileName, mediaTypeForMime, originalBasena
 import { deleteFromCloudinary, uploadToCloudinaryEmail } from "./cloudinary-email-helper.ts";
 import type { CloudinaryCredentials } from "./cloudinaryDestroy.ts";
 
-export type EmailAttachmentErrorCode = "no_provider" | "unsupported_type" | "provider_failed";
+export type EmailAttachmentErrorCode = "invalid_request" | "no_provider" | "unsupported_type" | "provider_failed";
 
 /** `message` is for logs; `publicMessage` is safe to return to a browser. */
 export class EmailAttachmentStorageError extends Error {
@@ -39,6 +39,7 @@ export class EmailAttachmentStorageError extends Error {
 
 /** The HTTP status each failure maps to at the compose endpoint. */
 export const EMAIL_ATTACHMENT_ERROR_STATUS: Record<EmailAttachmentErrorCode, number> = {
+  invalid_request: 400,
   unsupported_type: 415,
   no_provider: 503,
   provider_failed: 502,
@@ -129,7 +130,7 @@ export async function storeEmailAttachment(
   const { bytes, filename, contentType, folder, uniqueKey } = input;
   // The folder carries a caller's email id; a `.` or `..` segment would leave the email tree.
   if (folder.split("/").some((segment) => segment === "" || segment === "." || segment === "..")) {
-    throw new EmailAttachmentStorageError("provider_failed", "Invalid attachment folder", "The attachment could not be stored");
+    throw new EmailAttachmentStorageError("invalid_request", "Invalid attachment folder", "Invalid email id for the attachment folder");
   }
   if (!providers.openinary && !providers.cloudinary) {
     throw new EmailAttachmentStorageError(

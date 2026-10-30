@@ -106,6 +106,79 @@ BEGIN
     'G3 the service role can sweep';
 END $$;
 
+-- R1-R7: the pending row is written only for an account of the post's owner
+-- (migration 20261030090000), checked in SQL rather than by the caller.
+DO $$
+DECLARE
+  u_a uuid := 'd1d1d1d1-1111-4111-8111-d1d1d1d1d1d1';
+  u_b uuid := 'd4d4d4d4-4444-4444-8444-d4d4d4d4d4d4';
+  acct_ig uuid := 'd2d2d2d2-2222-4222-8222-d2d2d2d2d2d2';
+  acct_b uuid := 'd5d5d5d5-5555-4555-8555-d5d5d5d5d5d5';
+  post_r uuid := 'e0000000-0000-4000-8000-0000000000d1';
+  v_id uuid;
+  v_refused boolean;
+BEGIN
+  INSERT INTO auth.users (id, email) VALUES (u_b, 'deferred-publishes-b@example.invalid');
+  INSERT INTO public.social_accounts (id, user_id, platform, platform_user_id, platform_username, access_token, is_active)
+  VALUES (acct_b, u_b, 'instagram', 'dp-b-ig', 'dp_b_ig', 'tok-b', true);
+  INSERT INTO public.posts (id, user_id, platforms, status, processing_started_at)
+  VALUES (post_r, u_a, ARRAY['instagram'], 'processing', now());
+
+  -- R1: the same tenant works; the platform is the account's, not the caller's.
+  v_id := public.record_deferred_platform_post(post_r, acct_ig, jsonb_build_object('deferred', jsonb_build_object('container_id', 'cr1')));
+  ASSERT v_id IS NOT NULL, 'R1 the function returns the new row id';
+  ASSERT (SELECT status = 'pending' AND platform = 'instagram' AND post_id = post_r AND social_account_id = acct_ig
+                 AND response_data #>> '{deferred,container_id}' = 'cr1'
+            FROM public.platform_posts WHERE id = v_id),
+    'R2 a pending row carrying the deferral is written for the post owner''s account';
+
+  -- R3: another tenant's account is refused, and nothing is written for it.
+  v_refused := false;
+  BEGIN
+    PERFORM public.record_deferred_platform_post(post_r, acct_b, '{}'::jsonb);
+  EXCEPTION WHEN foreign_key_violation THEN
+    v_refused := true;
+  END;
+  ASSERT v_refused, 'R3 a cross-tenant pairing raises foreign_key_violation';
+  ASSERT NOT EXISTS (SELECT 1 FROM public.platform_posts WHERE social_account_id = acct_b),
+    'R4 the refused pairing wrote no row';
+
+  -- R5: a post or account that does not exist is refused the same way.
+  v_refused := false;
+  BEGIN
+    PERFORM public.record_deferred_platform_post('e0000000-0000-4000-8000-00000000dead', acct_ig, '{}'::jsonb);
+  EXCEPTION WHEN foreign_key_violation THEN
+    v_refused := true;
+  END;
+  ASSERT v_refused, 'R5 an unknown post is refused';
+  v_refused := false;
+  BEGIN
+    PERFORM public.record_deferred_platform_post(post_r, 'd5d5d5d5-5555-4555-8555-00000000dead', '{}'::jsonb);
+  EXCEPTION WHEN foreign_key_violation THEN
+    v_refused := true;
+  END;
+  ASSERT v_refused, 'R6 an unknown account is refused';
+
+  -- R7: a missing payload is stored as an empty object, not NULL.
+  v_id := public.record_deferred_platform_post(post_r, acct_ig, NULL);
+  ASSERT (SELECT response_data = '{}'::jsonb FROM public.platform_posts WHERE id = v_id),
+    'R7 a NULL payload becomes an empty object';
+END $$;
+
+-- G4-G7: only the service role may call it, and it runs with a pinned search_path.
+DO $$
+BEGIN
+  ASSERT NOT has_function_privilege('authenticated', 'public.record_deferred_platform_post(uuid, uuid, jsonb)', 'EXECUTE'),
+    'G4 authenticated cannot record a deferred row';
+  ASSERT NOT has_function_privilege('anon', 'public.record_deferred_platform_post(uuid, uuid, jsonb)', 'EXECUTE'),
+    'G5 anon cannot record a deferred row';
+  ASSERT has_function_privilege('service_role', 'public.record_deferred_platform_post(uuid, uuid, jsonb)', 'EXECUTE'),
+    'G6 the service role can record a deferred row';
+  ASSERT (SELECT prosecdef AND 'search_path=public' = ANY (proconfig)
+            FROM pg_proc WHERE oid = 'public.record_deferred_platform_post(uuid, uuid, jsonb)'::regprocedure),
+    'G7 the function is SECURITY DEFINER with search_path pinned';
+END $$;
+
 ROLLBACK;
 
 \echo '=== deferred_publishes: ALL CHECKS PASSED ==='

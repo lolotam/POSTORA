@@ -193,7 +193,7 @@ The frontend is a **React SPA** that talks to a single **self-hosted Supabase** 
 - Media uploads go through `cloudinary-upload` → Cloudinary CDN.
 - `media_files` + `media_folders` tables track assets and metadata.
 - Instagram URLs are optimized with `f_jpg,q_auto` Cloudinary transforms.
-- Video pipeline: `process-video` + `transcode-video` (external transcode — Deno has no FFmpeg).
+- Video pipeline: `process-video` + `transcode-video` (Openinary URL transformations; see `docs/superpowers/specs/2026-10-30-openinary-video-processing-design.md`).
 
 ### Background jobs, cron jobs, queues, webhooks
 - **Cron (pg_cron):** `process-scheduled-posts`, `process-scheduled-emails`, `process-scheduled-flags`, `process-scheduled-blog-posts`, `whatsapp-scheduled-sender`, `refresh-tokens`, `send-token-expiry-notifications`, `send-expiry-reminders`, `send-weekly-analytics`, `sync-user-quotas`, `observability-collector`, `observability-alerts`, `cleanup-media`, `notify-expiring-ai-overrides`, `sync-resend-delivery-status`. All gated by `CRON_SECRET`.
@@ -515,7 +515,7 @@ All variables below are documented **by name and purpose only**. Real values liv
 | Variable | Purpose |
 | --- | --- |
 | `CLOUDINARY_CLOUD_NAME` / `CLOUDINARY_API_KEY` / `CLOUDINARY_API_SECRET` | Cloudinary media |
-| `ATLASCLOUD_API_KEY` | AtlasCloud 4K upscale |
+| `ATLASCLOUD_API_KEY` | AtlasCloud AI image tools (upscale, background removal) |
 | `ACRCLOUD_HOST` / `ACRCLOUD_ACCESS_KEY` / `ACRCLOUD_ACCESS_SECRET` | Music copyright detection |
 | `DEEPGRAM_API_KEY` | Speech-to-text |
 | `OPENAI_API_KEY` / `OPENROUTER_API_KEY` / `ANTHROPIC_API_KEY` / `PERPLEXITY_API_KEY` / `XAI_API_KEY` / `ZAI_API_KEY` / `MINIMAX_API_KEY` / `MINIMAX_GROUP_ID` / `ELEVENLABS_API_KEY` / `LOVABLE_API_KEY` | AI providers |
@@ -656,8 +656,8 @@ The `Dockerfile` is a multi-stage build:
 | **Bluesky** | Text posts (ATProto) | `BLUESKY_REDIRECT_URI` | `bluesky-oauth` | DPoP-bound tokens |
 | **Reddit** | Basic posting | `REDDIT_*` | `reddit-oauth` | — |
 | **WhatsApp Cloud API** | Broadcast, messaging, profile | `WHATSAPP_*` | `whatsapp-*` functions | Webhook verify token |
-| **Cloudinary** | Media upload/transform/delete | `CLOUDINARY_*` | `cloudinary-*`, `upscale-image` | Signed uploads |
-| **AtlasCloud** | 4K image upscale | `ATLASCLOUD_API_KEY` | `upscale-image-atlas` | — |
+| **Cloudinary** | Media upload/transform/delete; upscale and background removal only while the admin CDN policy still writes to it | `CLOUDINARY_*` | `cloudinary-*`, `upscale-image`, `remove-background` | Signed uploads |
+| **AtlasCloud** | AI image tools: 2K/4K upscale and background removal (`ATLASCLOUD_BG_REMOVAL_MODEL`, default `midjourney/v8.2/remove-background`); results kept in Openinary | `ATLASCLOUD_API_KEY` | `upscale-image`, `upscale-image-atlas`, `remove-background` | — |
 | **ACRCloud** | Music copyright detection | `ACRCLOUD_*` | `check-music-copyright` | — |
 | **Google AI Studio / Gemini** | Default AI model (`gemini-2.5-flash`) | `GOOGLE_AI_STUDIO_KEY`, `GEMINI_API_KEY` | `generate-*`, `suggest-best-times` | — |
 | **OpenRouter** | Multi-model AI gateway | `OPENROUTER_API_KEY` | `openrouter-models`, `fetch-openrouter-models` | — |

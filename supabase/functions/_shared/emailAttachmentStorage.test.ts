@@ -119,7 +119,8 @@ Deno.test("a Cloudinary fallback error is reported as a provider failure", async
 Deno.test("a folder with a dot segment is refused before any upload", async () => {
   const { calls, deps } = fakeProviders();
   for (const folder of ["admin/email/inbound/../../media/x", "admin/email/inbound/./x", "admin//email"]) {
-    await assertRejects(() => storeEmailAttachment({ ...input, folder }, { openinary: OPENINARY, cloudinary: null }, deps), EmailAttachmentStorageError);
+    const error = await assertRejects(() => storeEmailAttachment({ ...input, folder }, { openinary: OPENINARY, cloudinary: null }, deps), EmailAttachmentStorageError);
+    assertEquals(error.code, "invalid_request");
   }
   assertEquals(calls.openinaryUploads, []);
 });

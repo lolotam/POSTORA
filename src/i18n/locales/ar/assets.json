@@ -44,6 +44,7 @@
     "upscaleRestore": "تكبير + ترميم"
   },
   "bgRemoval": {
+    "aiOnlyNotice": "الخلفية بتتشال بالذكاء الاصطناعي. جودة الحواف وتغيير الحجم مش متاحين دلوقتي.",
     "comparePosition": "موضع المقارنة",
     "edgeQuality": "جودة الحواف",
     "fineEdges": "حواف دقيقة",
@@ -205,6 +206,7 @@
     "searchUsers": "دوّر على المستخدمين بالاسم أو الإيميل..."
   },
   "imageTools": {
+    "aiOnlyNotice": "إزالة الخلفية والتكبير بس هما المتاحين دلوقتي. تغيير الحجم والفلاتر والجودة مقفولين.",
     "artistic": {
       "al_dente": "Al Dente",
       "athena": "Athena",
@@ -412,6 +414,8 @@
     "updated": "اتحدّث {{date}}"
   },
   "toast": {
+    "aiToolUnavailable": "الأداة دي مش متاحة دلوقتي. جرّب تاني بعد شوية.",
+    "aiToolUnavailableTitle": "أداة الذكاء الاصطناعي مش متاحة",
     "atlasComplete": "تكبير 4K خلص!",
     "atlasCompleteDesc": "صورتك اتكبّرت بذكاء AtlasCloud الاصطناعي",
     "atlasStarting": "بدء تكبير AtlasCloud 4K",
@@ -466,6 +470,8 @@
     "movedDesc": "اتنقل {{count}} ملف إلى \"{{name}}\"",
     "movedOneDesc": "اتنقل {{count}} ملف إلى \"{{name}}\"",
     "movedTo": "اتنقل {{count}} ملف إلى {{destination}}",
+    "needsCloudinary": "تغيير الحجم والفلاتر والجودة مش متاحين دلوقتي. اقفلهم عشان تستخدم إزالة الخلفية والتكبير.",
+    "needsCloudinaryTitle": "مش متاح دلوقتي",
     "noFeatures": "مفيش ميزات مختارة",
     "noFeaturesDesc": "فعّل تحويل واحد على الأقل",
     "noFeaturesConfigDesc": "فعّل وضبط تحويل واحد على الأقل",

@@ -1,5 +1,5 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { prefixedStream, readPrefix, streamedSourceLength, STREAM_INGEST_MAX_BYTES, streamIngestCap } from "./urlIngest.ts";
+import { prefixedStream, readPrefix, streamedSourceLength, STREAM_INGEST_MAX_BYTES, streamFailureMessage, streamIngestCap, streamProviders } from "./urlIngest.ts";
 
 const MB = 1024 * 1024;
 
@@ -42,4 +42,22 @@ Deno.test("a body shorter than the prefix is read whole", async () => {
   const prefix = await readPrefix(reader, 4096);
   assertEquals([...prefix], [9, 8]);
   assertEquals(await collect(prefixedStream(prefix, reader)), [9, 8]);
+});
+
+Deno.test("a streamed upload uses Openinary alone, so a failed stream is never retried through Cloudinary", () => {
+  assertEquals(streamProviders({ attempted: ["cloudinary", "openinary"], required: ["cloudinary", "openinary"] }), {
+    attempted: ["openinary"],
+    required: ["openinary"],
+  });
+  assertEquals(streamProviders({ attempted: ["openinary", "cloudinary"], required: [] }), { attempted: ["openinary"], required: [] });
+  // Cloudinary alone leaves nothing to stream to: the caller answers 503 rather than importing the URL.
+  assertEquals(streamProviders({ attempted: ["cloudinary"], required: ["cloudinary"] }), { attempted: [], required: [] });
+});
+
+Deno.test("the failure message says the stream failed and why", () => {
+  assertEquals(
+    streamFailureMessage(["openinary: Source sent 5 of the 20 bytes it declared"]),
+    "The file could not be streamed to storage (openinary: Source sent 5 of the 20 bytes it declared)",
+  );
+  assertEquals(streamFailureMessage([]), "The file could not be streamed to storage (unknown error)");
 });

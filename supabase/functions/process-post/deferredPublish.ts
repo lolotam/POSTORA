@@ -13,6 +13,8 @@
  */
 
 import { z } from "npm:zod@3.23.8";
+import { CHECK_ONCE_DEADLINE } from "../_shared/metaContainerStatus.ts";
+import { type StoryRef, UNRECORDED_STORY_KEY } from "./instagramStory.ts";
 
 export type DeferredKind = "ig_reel" | "ig_business_reel" | "threads";
 
@@ -37,6 +39,12 @@ export type Deferral = z.infer<typeof DeferralSchema>;
 
 /** Thrown by a handler whose container is still processing when its time is up. */
 export class ContainerStillProcessing extends Error {
+  /**
+   * A story that is live but whose row could not be written. It travels on the pending row so
+   * the resumed (or abandoned) run can write it, instead of the story being lost with the throw.
+   */
+  unrecordedStory: StoryRef | null = null;
+
   constructor(readonly kind: DeferredKind, readonly containerId: string) {
     super(`Meta is still processing container ${containerId}`);
     this.name = "ContainerStillProcessing";
@@ -47,6 +55,8 @@ export class ContainerStillProcessing extends Error {
 export interface ResumeContext {
   platformPostId: string;
   deferral: Deferral;
+  /** A live story the first run could not record; the resumed run records it. */
+  unrecordedStory?: StoryRef | null;
 }
 
 /**
@@ -56,6 +66,8 @@ export interface ResumeContext {
 export interface PublishTiming {
   resume: ResumeContext | null;
   deadlineMs: number;
+  /** When this request began; bounds a container the run creates itself (see ownContainerDeadline). */
+  startedAtMs?: number;
 }
 
 export const NO_DEFERRAL: PublishTiming = { resume: null, deadlineMs: Number.POSITIVE_INFINITY };
@@ -102,7 +114,62 @@ export function abandonReason(deferral: Deferral, postStatus: string | null, now
  * is asked again next minute); a first run waits while the worker has time.
  */
 export function pollDeadline(startedAtMs: number, resumed: boolean): number {
-  return resumed ? 0 : startedAtMs + FIRST_RUN_POLL_BUDGET_MS;
+  return resumed ? CHECK_ONCE_DEADLINE : startedAtMs + FIRST_RUN_POLL_BUDGET_MS;
+}
+
+/**
+ * The deadline for a container this run both creates and finishes (the "Also share to Story"
+ * mirror). The run's own deadline is CHECK_ONCE_DEADLINE on a resumed run, which is right for
+ * the deferred reel (Meta is asked again next minute) but would check a container created a
+ * moment ago exactly once and drop it. Nothing re-checks that container later, so it gets the
+ * deadline a first run would have: the poll budget counted from when THIS request began, not
+ * from now, so the wait plus the publish after it still fit inside the worker.
+ */
+export function ownContainerDeadline(runDeadlineMs: number, requestStartedAtMs: number): number {
+  return runDeadlineMs === CHECK_ONCE_DEADLINE ? requestStartedAtMs + FIRST_RUN_POLL_BUDGET_MS : runDeadlineMs;
+}
+
+/** How long past `give_up_at` an abandon may keep retrying a story it could not record. */
+export const STORY_RECOVERY_GRACE_MS = 10 * 60 * 1000;
+
+/**
+ * Whether an abandon that keeps failing to record its carried story must give up on that too.
+ * Until then it answers 503 and the reconciler retries; after it the reel is settled anyway, so
+ * a story write that never succeeds cannot hold the post in `processing` forever.
+ */
+export function storyRecoveryExhausted(deferral: Deferral, now: Date): boolean {
+  return now.getTime() >= Date.parse(deferral.give_up_at) + STORY_RECOVERY_GRACE_MS;
+}
+
+/**
+ * What one container wait may do. EVERY wait has a deadline (`PublishTiming.deadlineMs`), so
+ * no poll can outlast the worker; `deferKind` says whether the container can be finished
+ * later. A deferrable one that runs out of time is handed to the reconciler; any other one
+ * ends in a plain "safe to retry" error.
+ */
+export interface ContainerWait {
+  deadlineMs: number;
+  deferKind?: DeferredKind;
+}
+
+/** What a wait throws when time or attempts ran out with the container still processing. */
+export function unfinishedError(wait: ContainerWait, containerId: string, platform: "Instagram" | "Threads"): Error {
+  // An infinite deadline (NO_DEFERRAL) has nobody to finish the container later.
+  if (wait.deferKind && Number.isFinite(wait.deadlineMs)) return new ContainerStillProcessing(wait.deferKind, containerId);
+  return new Error(`${platform} did not finish processing the media in time. Safe to retry.`);
+}
+
+const FINISHED_BUFFER_MS = 3000;
+
+/**
+ * Instagram's backend needs a moment after FINISHED before media_publish works. The pause
+ * counts against the deadline like any other time: it is cut to what is left, and is nothing
+ * once the deadline has passed (publishing retries cover a container that is not quite ready).
+ * A resumed run has a worker of its own, so it keeps the whole pause.
+ */
+export function bufferAfterFinishedMs(deadlineMs: number, nowMs: number): number {
+  if (deadlineMs === CHECK_ONCE_DEADLINE || !Number.isFinite(deadlineMs)) return FINISHED_BUFFER_MS;
+  return Math.max(0, Math.min(FINISHED_BUFFER_MS, deadlineMs - nowMs));
 }
 
 /** Reads the deferral off a pending row, or null if the row carries none. */
@@ -115,8 +182,12 @@ type WriteResult = PromiseLike<{ error: { message: string } | null }>;
 
 /** The two platform_posts writes recordStillProcessing makes, and nothing more. */
 interface PlatformPostsWriter {
+  /** record_deferred_platform_post: inserts the pending row only for an account of the post's owner. */
+  rpc(
+    fn: "record_deferred_platform_post",
+    args: { p_post_id: string; p_social_account_id: string; p_response_data: Record<string, unknown> },
+  ): WriteResult;
   from(table: "platform_posts"): {
-    insert(values: Record<string, unknown>): WriteResult;
     update(values: Record<string, unknown>): { eq(column: string, value: string): { eq(column: string, value: string): WriteResult } };
   };
 }
@@ -149,15 +220,17 @@ export async function recordStillProcessing(
 ): Promise<{ gaveUp: boolean; error: string | null }> {
   const db = supabase as PlatformPostsWriter;
   if (!args.resume) {
-    const { error } = await db.from("platform_posts").insert({
-      post_id: args.postId,
-      social_account_id: args.account.id,
-      platform: args.account.platform,
-      status: "pending",
-      response_data: {
+    // Through SQL, not a bare insert: the function refuses an account that does not belong
+    // to the post's owner, so the pairing never depends on this caller having checked it.
+    // The platform is taken from the account row there.
+    const { error } = await db.rpc("record_deferred_platform_post", {
+      p_post_id: args.postId,
+      p_social_account_id: args.account.id,
+      p_response_data: {
         deferred: newDeferral(args.signal.kind, args.signal.containerId, now),
         account_username: args.account.platform_username,
         account_metadata: args.account.account_metadata,
+        ...(args.signal.unrecordedStory ? { [UNRECORDED_STORY_KEY]: args.signal.unrecordedStory } : {}),
       },
     });
     return { gaveUp: false, error: error?.message ?? null };

@@ -96,19 +96,44 @@ import { composioClientFromEnv } from "../_shared/composioClient.ts";
 import { publishYouTubeViaComposio } from "./youtubeComposio.ts";
 import { prepareTikTokReviewPublish, recordReviewPublishId, requiredReviewSubmissionId } from "./tiktokReview.ts";
 import { firstPublicPostId } from "../_shared/tiktokPublishOutcome.ts";
-import { classifyContainerStatus, CONTAINER_STATUS_FIELDS, containerFailureMessage, pollContainer } from "../_shared/metaContainerStatus.ts";
+import { CHECK_ONCE_DEADLINE, CONTAINER_STATUS_FIELDS, containerFailureMessage, pollContainer } from "../_shared/metaContainerStatus.ts";
 import {
   abandonReason,
+  bufferAfterFinishedMs,
+  type ContainerWait,
   ContainerStillProcessing,
   giveUpMessage,
   NO_DEFERRAL,
+  ownContainerDeadline,
+  storyRecoveryExhausted,
   pollDeadline,
   readDeferral,
   recordStillProcessing,
-  type DeferredKind,
   type PublishTiming,
   type ResumeContext,
+  unfinishedError,
 } from "./deferredPublish.ts";
+import { claimFinalNotification } from "./finalNotification.ts";
+import {
+  dropRecordedStory,
+  readUnrecordedStory,
+  recordCarriedStory,
+  newStoryLedger,
+  recordedStoryResults,
+  recordLiveStory,
+  storyOnReelRowData,
+  type StoryRef,
+} from "./instagramStory.ts";
+import {
+  buildWebhookResults,
+  type PlatformResultSummary,
+  type PostReader,
+  readPostOutcome,
+  unreadableOutcomeLog,
+  storyRecordedOnReelRowLog,
+  unrecordedStoryLog,
+  writeLogRow,
+} from "./postSettlement.ts";
 import { z } from "npm:zod@3.23.8";
 
 const ProcessPostSchema = z.object({
@@ -209,6 +234,8 @@ async function settlePlatformPost(supabase: any, args: {
       platform_post_id: args.providerPostId ?? undefined,
       platform_post_url: args.providerPostUrl ?? undefined,
       error_message: args.errorMessage ?? undefined,
+      // As the RPC does: data given replaces the row's, none keeps it.
+      response_data: args.responseData ?? undefined,
       posted_at: args.status === "success" ? new Date().toISOString() : undefined,
     }).eq("id", args.platformPostId);
     return { id: args.platformPostId, error: updateError?.message ?? null };
@@ -467,16 +494,6 @@ interface PlatformPostResult {
   topic_tag_debug?: Record<string, unknown>;
   /** Optional structured payload merged into platform_posts.response_data (e.g. LinkedIn destination fan-out) */
   response_data?: Record<string, unknown>;
-}
-
-/**
- * Aggregated result for response
- */
-interface PlatformResultSummary {
-  platform: string;
-  status: string;
-  platform_post_url?: string;
-  error_message?: string;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1233,6 +1250,121 @@ async function sendFailureEmailNotification(
   }
 }
 
+/**
+ * Step 6: tell the user and their webhooks that the post is final (non-blocking). Used by the
+ * run that finishes the post, whether that is the first run, a resumed run, or one that gave a
+ * deferred account up: whoever makes the post terminal reports all of it.
+ */
+function sendFinalNotifications(
+  supabase: SupabaseClient,
+  post: PostData,
+  finalStatus: string,
+  platformResults: PlatformResultSummary[],
+  hasFailed: boolean,
+): void {
+  const webhookEvent = finalStatus === "completed" ? "post.completed" : "post.failed";
+  const webhookData = {
+    post_id: post.id,
+    caption: post.caption,
+    platforms: post.platforms,
+    status: finalStatus,
+    // The legacy per-platform map, plus platform_results_list with one entry per row.
+    ...buildWebhookResults(platformResults),
+  };
+
+  // Extract per-request webhook configuration from post metadata
+  const perRequestWebhook = post.metadata?.webhook_url ? {
+    url: post.metadata.webhook_url as string,
+    secret: post.metadata.webhook_secret as string | undefined
+  } : undefined;
+
+  // Use EdgeRuntime.waitUntil for non-blocking webhook delivery
+  if (typeof EdgeRuntime !== "undefined" && EdgeRuntime.waitUntil) {
+    EdgeRuntime.waitUntil(sendWebhookNotifications(supabase, post.user_id, webhookEvent, webhookData, perRequestWebhook));
+
+    // Also send individual post.published events for each successful platform
+    for (const result of platformResults) {
+      if (result.status === "success" && result.platform_post_url) {
+        EdgeRuntime.waitUntil(sendWebhookNotifications(supabase, post.user_id, "post.published", {
+          post_id: post.id,
+          platform: result.platform,
+          post_url: result.platform_post_url,
+          caption: post.caption
+        }, perRequestWebhook));
+      }
+    }
+    // Send email notification for failed posts (non-blocking)
+    if (hasFailed) {
+      EdgeRuntime.waitUntil(sendFailureEmailNotification(supabase, post.user_id, post.caption || "", platformResults));
+    }
+  } else {
+    // Fallback: send synchronously but don't block response
+    sendWebhookNotifications(supabase, post.user_id, webhookEvent, webhookData, perRequestWebhook).catch(console.error);
+
+    // Send email notification for failed posts
+    if (hasFailed) {
+      sendFailureEmailNotification(supabase, post.user_id, post.caption || "", platformResults).catch(console.error);
+    }
+  }
+}
+
+/**
+ * Announce a final post once. Every path that makes a post final (the first run, a resumed run,
+ * a given-up account) goes through here: the claim is atomic, so two runs that settle the last
+ * rows at the same moment cannot both send. Returns whether this run sent.
+ */
+async function announceFinalPost(
+  supabase: SupabaseClient,
+  post: PostData,
+  finalStatus: string,
+  platformResults: PlatformResultSummary[],
+  hasFailed: boolean,
+): Promise<boolean> {
+  const claim = await claimFinalNotification(supabase, post.id);
+  if (claim.error) {
+    // The claim could not be made. A notice sent twice is better than one never sent.
+    console.error(`[process-post] final-notification claim failed, sending anyway: ${claim.error}`);
+  } else if (!claim.claimed) {
+    console.log(`[process-post] post ${post.id} was already announced; not sending again`);
+    return false;
+  }
+  sendFinalNotifications(supabase, post, finalStatus, platformResults, hasFailed);
+  return true;
+}
+
+/** The reads readPostOutcome needs, against the service-role client. */
+function postReaderFor(supabase: SupabaseClient): PostReader {
+  return {
+    postStatus: (postId) => supabase.from("posts").select("status").eq("id", postId).maybeSingle(),
+    platformRows: (postId) =>
+      supabase.from("platform_posts").select("platform, status, platform_post_url, error_message, story_on_reel:response_data->story_recorded_on_reel_row").eq("post_id", postId).order("created_at"),
+  };
+}
+
+/**
+ * After a resumed run settled a deferred account (or gave it up): where the post stands, and,
+ * when this settle made it final, its notifications. A post that cannot be read is logged as an
+ * error, never treated as unfinished, so a lost notification leaves a trace.
+ */
+async function finishDeferredPost(
+  supabase: SupabaseClient,
+  post: PostData,
+  platformPostId: string,
+  thisRun: { results: PlatformResultSummary[]; hasSuccess: boolean; hasFailed: boolean },
+): Promise<{ finalStatus: string; notified: boolean }> {
+  const outcome = await readPostOutcome(postReaderFor(supabase), post.id, thisRun);
+  if (outcome.kind === "in_progress") return { finalStatus: "processing", notified: false };
+  if (outcome.kind === "unknown") {
+    console.error(`[process-post] ${outcome.error}`);
+    const logError = await writeLogRow(supabase, unreadableOutcomeLog(post.user_id, post.id, platformPostId, outcome.error));
+    if (logError) console.error("[process-post] could not log the unreadable post either:", logError);
+    return { finalStatus: "processing", notified: false };
+  }
+  if (outcome.degraded) console.warn(`[process-post] notifying with a partial read: ${outcome.degraded}`);
+  const notified = await announceFinalPost(supabase, post, outcome.status, outcome.results, outcome.hasFailed);
+  return { finalStatus: outcome.status, notified };
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // SECTION 4: MAIN REQUEST HANDLER
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1366,24 +1498,82 @@ Deno.serve(async (req) => {
       // a post someone has since changed, is settled now rather than checked forever.
       const abandon = abandonReason(deferral, post.status, new Date());
       if (abandon) {
-        const settled = await settlePlatformPost(supabase, {
-          platformPostId: row.id,
+        // A live story the first run could not record is recorded before the reel is given up,
+        // so the post rolls up with it and it is not lost with the abandoned row. If it still
+        // cannot be recorded the reel is NOT settled: that would make the failure terminal and
+        // strand the story. A 503 leaves the row pending with its carry, the reconciler comes
+        // back next minute, and recording is idempotent so the retry is safe.
+        const carried = await recordCarriedStory(supabase, settlePlatformPost, {
           postId: post_id,
           socialAccountId: row.social_account_id,
-          platform: row.platform,
-          status: "failed",
-          errorMessage: abandon,
+          rowData: (row.response_data as Record<string, unknown> | null) ?? null,
         });
+        // Past the grace window a story that still cannot get a row of its own is recorded on the
+        // reel's row instead: that row settles as the account's live story (with the reel's
+        // give-up in its error), so the post rolls up from rows that show the story, and a write
+        // that never succeeds cannot keep the post in `processing` forever.
+        const storyOnReelRow = carried.error !== null && storyRecoveryExhausted(deferral, new Date())
+          ? readUnrecordedStory(row.response_data)
+          : null;
+        if (carried.error) {
+          console.error(`[IG story] could not be recorded while giving up the reel: ${carried.error}`);
+          if (!storyOnReelRow) {
+            const logError = await writeLogRow(supabase, unrecordedStoryLog(post.user_id, post_id, row.id, carried.error));
+            if (logError) console.error("[process-post] could not log the refusal either:", logError);
+            return createErrorResponse(`Could not record the live Instagram story, so the reel was not given up: ${carried.error}`, 503);
+          }
+        }
+        const settled = await settlePlatformPost(supabase, storyOnReelRow
+          ? {
+            platformPostId: row.id,
+            postId: post_id,
+            socialAccountId: row.social_account_id,
+            platform: row.platform,
+            status: "success",
+            providerPostId: storyOnReelRow.id,
+            providerPostUrl: storyOnReelRow.url,
+            errorMessage: `${abandon} The Instagram Story from this post is live and is recorded on this row.`,
+            responseData: storyOnReelRowData(row.response_data),
+          }
+          : {
+            platformPostId: row.id,
+            postId: post_id,
+            socialAccountId: row.social_account_id,
+            platform: row.platform,
+            status: "failed",
+            errorMessage: abandon,
+          });
         if (settled.error) return createErrorResponse(`Could not settle the deferred row: ${settled.error}`, 503);
-        return createJsonResponse({ success: true, status: "failed", reason: abandon });
+        if (storyOnReelRow && carried.error) {
+          // Logged only once the reel's row really holds the story.
+          const logError = await writeLogRow(supabase, storyRecordedOnReelRowLog(post.user_id, post_id, row.id, carried.error));
+          if (logError) console.error("[process-post] could not log the story recorded on the reel's row:", logError);
+        }
+        // This settle may have been the one that made the post final, and this run returns
+        // before Step 6, so it reports the post here. A post that was not processing was
+        // already final (or changed by someone) before this, and was announced then.
+        const finished = post.status === "processing"
+          ? await finishDeferredPost(supabase, post, row.id, {
+            // The degraded fallback must report a live story too, whichever row now holds it.
+            results: storyOnReelRow
+              ? [
+                { platform: row.platform, status: "success", platform_post_url: storyOnReelRow.url },
+                { platform: row.platform, status: "failed", error_message: abandon },
+              ]
+              : [{ platform: row.platform, status: "failed", error_message: abandon }, ...recordedStoryResults(carried.recorded)],
+            hasSuccess: storyOnReelRow !== null || carried.recorded.length > 0,
+            hasFailed: true,
+          })
+          : { finalStatus: post.status as string, notified: false };
+        return createJsonResponse({ success: true, status: "failed", reason: abandon, post_status: finished.finalStatus, notified: finished.notified });
       }
-      resume = { platformPostId: row.id, deferral };
+      resume = { platformPostId: row.id, deferral, unrecordedStory: readUnrecordedStory(row.response_data) };
       resumeResponseData = (row.response_data as Record<string, unknown> | null) ?? null;
       overrideAccountIds = [row.social_account_id];
       overridePlatforms = [row.platform];
       console.log("Resuming deferred publish", { post_id, platform_post_id: row.id, kind: deferral.kind, attempts: deferral.attempts });
     }
-    const timing: PublishTiming = { resume, deadlineMs: pollDeadline(requestStartedAt, !!resume) };
+    const timing: PublishTiming = { resume, deadlineMs: pollDeadline(requestStartedAt, !!resume), startedAtMs: requestStartedAt };
 
     // The transition to `processing` is a CLAIM: when the scheduler says
     // which scheduled_at it selected, a row that no longer carries it -- the
@@ -1685,6 +1875,10 @@ Deno.serve(async (req) => {
 
     for (const account of (accounts || [])) {
       console.log(`Posting to ${account.platform}...`);
+      // Stories this account published. They are live whatever the reel after them does and
+      // whether or not their row was written, so they count in the roll-up and the notifications
+      // (below); only the ones whose row was written may be dropped from a pending row's carry.
+      const stories = newStoryLedger();
 
       try {
         let result: PlatformPostResult;
@@ -1702,7 +1896,8 @@ Deno.serve(async (req) => {
             if (igAuthType === 'business_login') {
               result = await postToInstagramBusinessLogin(account, post, mediaUrls, mediaFiles, supabase, post_id, timing);
             } else {
-              result = await postToInstagram(account, post, mediaUrls, mediaFiles, timing);
+              result = await postToInstagram(account, post, mediaUrls, mediaFiles, timing, (story) =>
+                recordLiveStory(supabase, settlePlatformPost, { postId: post_id, account, story }, stories));
             }
             break;
           }
@@ -1867,7 +2062,8 @@ Deno.serve(async (req) => {
             account,
             signal: error,
             resume,
-            resumeResponseData,
+            // A story whose row this very run wrote must not be carried (and recorded) again.
+            resumeResponseData: dropRecordedStory(resumeResponseData, stories.recorded),
           });
           if (!recorded.error && !recorded.gaveUp) {
             console.log(`[${account.platform}] container ${error.containerId} still processing; left for the reconciler`);
@@ -1909,6 +2105,12 @@ Deno.serve(async (req) => {
         });
 
         hasFailed = true;
+      } finally {
+        // Runs for every outcome, `continue` included: a live story is a success.
+        if (stories.live.length > 0) {
+          platformResults.push(...recordedStoryResults(stories.live));
+          hasSuccess = true;
+        }
       }
     }
 
@@ -1920,14 +2122,12 @@ Deno.serve(async (req) => {
     let notify = true;
 
     if (resume) {
-      // The settle RPC rolled the post up when this row became terminal.
-      const { data: current } = await supabase.from("posts").select("status").eq("id", post_id).maybeSingle();
-      if (current?.status === "completed" || current?.status === "failed") {
-        finalStatus = current.status;
-      } else {
-        finalStatus = "processing";
-        notify = false;
-      }
+      // The settle RPC rolled the post up when this row became terminal. finishDeferredPost
+      // reads where the post stands (retrying once; an unreadable post is logged, not taken
+      // for unfinished) and, if it is final, notifies for all of its accounts, not only this one.
+      const finished = await finishDeferredPost(supabase, post, resume.platformPostId, { results: platformResults, hasSuccess, hasFailed });
+      finalStatus = finished.finalStatus;
+      notify = false;
     } else if (hasDeferred) {
       // Stays `processing` until the deferred rows settle; the RPC rolls it up then.
       finalStatus = "processing";
@@ -1955,55 +2155,7 @@ Deno.serve(async (req) => {
     // Step 6: Send webhook notifications (non-blocking)
     // ─────────────────────────────────────────────────────────────────────
     if (notify) {
-      const webhookEvent = finalStatus === "completed" ? "post.completed" : "post.failed";
-      const webhookData = {
-        post_id: post_id,
-        caption: post.caption,
-        platforms: post.platforms,
-        status: finalStatus,
-        platform_results: platformResults.reduce((acc, r) => {
-          acc[r.platform] = {
-            status: r.status,
-            post_url: r.platform_post_url || null
-          };
-          return acc;
-        }, {} as Record<string, { status: string; post_url: string | null }>)
-      };
-
-      // Extract per-request webhook configuration from post metadata
-      const perRequestWebhook = post.metadata?.webhook_url ? {
-        url: post.metadata.webhook_url as string,
-        secret: post.metadata.webhook_secret as string | undefined
-      } : undefined;
-
-      // Use EdgeRuntime.waitUntil for non-blocking webhook delivery
-      if (typeof EdgeRuntime !== "undefined" && EdgeRuntime.waitUntil) {
-        EdgeRuntime.waitUntil(sendWebhookNotifications(supabase, post.user_id, webhookEvent, webhookData, perRequestWebhook));
-
-        // Also send individual post.published events for each successful platform
-        for (const result of platformResults) {
-          if (result.status === "success" && result.platform_post_url) {
-            EdgeRuntime.waitUntil(sendWebhookNotifications(supabase, post.user_id, "post.published", {
-              post_id: post_id,
-              platform: result.platform,
-              post_url: result.platform_post_url,
-              caption: post.caption
-            }, perRequestWebhook));
-          }
-        }
-        // Send email notification for failed posts (non-blocking)
-        if (hasFailed) {
-          EdgeRuntime.waitUntil(sendFailureEmailNotification(supabase, post.user_id, post.caption || "", platformResults));
-        }
-      } else {
-        // Fallback: send synchronously but don't block response
-        sendWebhookNotifications(supabase, post.user_id, webhookEvent, webhookData, perRequestWebhook).catch(console.error);
-
-        // Send email notification for failed posts
-        if (hasFailed) {
-          sendFailureEmailNotification(supabase, post.user_id, post.caption || "", platformResults).catch(console.error);
-        }
-      }
+      await announceFinalPost(supabase, post, finalStatus, platformResults, hasFailed);
     }
 
     // ─────────────────────────────────────────────────────────────────────
@@ -3431,53 +3583,61 @@ async function optimizeUrlsForInstagram(urls: string[]): Promise<string[]> {
 }
 
 /**
+ * Waits for an Instagram container (either login) until it can be published. The wait is
+ * `pollContainer`'s, so the deadline bounds the requests as well as the sleeps, for every
+ * container, deferrable or not; a Meta API error fails with Meta's reason and a server error
+ * is retried. When time runs out `unfinishedError` decides: a deferrable container
+ * (`wait.deferKind`) is left for the reconciler, any other fails with "Safe to retry".
+ */
+async function waitForInstagramContainer(
+  statusUrl: string,
+  containerId: string,
+  maxAttempts: number,
+  delayMs: number,
+  wait: ContainerWait,
+): Promise<string> {
+  const container = await pollContainer("instagram", statusUrl, {
+    maxAttempts,
+    intervalMs: delayMs,
+    checkFirst: true,
+    deadlineMs: wait.deadlineMs,
+  });
+  switch (container.state) {
+    case "published":
+      return "PUBLISHED";
+    case "finished": {
+      // A buffer after FINISHED lets Instagram's backend settle; it counts against the deadline.
+      const bufferMs = bufferAfterFinishedMs(wait.deadlineMs, Date.now());
+      if (bufferMs > 0) {
+        console.log(`Container ${containerId} finished, waiting ${bufferMs}ms before publish...`);
+        await new Promise((resolve) => setTimeout(resolve, bufferMs));
+      }
+      return "FINISHED";
+    }
+    case "failed":
+      throw new Error(containerFailureMessage("instagram", container.reason));
+    default:
+      throw unfinishedError(wait, containerId, "Instagram");
+  }
+}
+
+/**
  * Poll Instagram container status until ready
  */
-async function pollContainerStatus(
+function pollContainerStatus(
   containerId: string,
   accessToken: string,
+  wait: ContainerWait,
   maxAttempts = 60, // Increased from 30 to 60 (2 min total for large video reels)
   delayMs = 2000,
-  // Set where the container can be finished later: past the deadline the wait stops
-  // with ContainerStillProcessing instead of running the worker out of time.
-  deferral?: { kind: DeferredKind; deadlineMs: number },
 ): Promise<string> {
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    const response = await fetchWithTimeout(
-      `https://graph.facebook.com/v18.0/${containerId}?fields=${CONTAINER_STATUS_FIELDS.instagram}&access_token=${accessToken}`,
-      {},
-      15000,
-    );
-    const data = await response.json();
-
-    console.log(`Container ${containerId} status check ${attempt + 1}:`, data.status_code, data.status ?? "");
-
-    if (data.error) {
-      throw new Error(`Container status error: ${data.error.message}`);
-    }
-
-    const container = classifyContainerStatus("instagram", data);
-    if (container.state === "published") return "PUBLISHED";
-    if (container.state === "finished") {
-      // Add a buffer delay after FINISHED to ensure Instagram's backend is truly ready
-      console.log(`Container ${containerId} finished, waiting 3s before publish...`);
-      await new Promise((resolve) => setTimeout(resolve, 3000));
-      return data.status_code;
-    }
-
-    if (container.state === "failed") {
-      throw new Error(containerFailureMessage("instagram", container.reason));
-    }
-
-    if (deferral && Date.now() + delayMs > deferral.deadlineMs) {
-      throw new ContainerStillProcessing(deferral.kind, containerId);
-    }
-
-    // Still IN_PROGRESS, wait and retry
-    await new Promise((resolve) => setTimeout(resolve, delayMs));
-  }
-
-  throw new Error("Container processing timed out after polling");
+  return waitForInstagramContainer(
+    `https://graph.facebook.com/v18.0/${containerId}?fields=${CONTAINER_STATUS_FIELDS.instagram}&access_token=${accessToken}`,
+    containerId,
+    maxAttempts,
+    delayMs,
+    wait,
+  );
 }
 
 /**
@@ -3548,6 +3708,9 @@ async function postToInstagram(
   mediaUrls: string[],
   mediaFiles: MediaFile[],
   timing: PublishTiming = NO_DEFERRAL,
+  // Writes the story's own row (answering an error, or null) once it is live and the reel is
+  // still to come, so a reel that defers or fails does not lose it. See instagramStory.ts.
+  recordStory?: (story: StoryRef) => Promise<string | null>,
 ): Promise<PlatformPostResult> {
   const igUserId = account.platform_user_id;
   const accessToken = account.access_token;
@@ -3879,7 +4042,9 @@ async function postToInstagram(
         warnings.push(`Also share to Story failed: ${createData.error.message}`);
         return;
       }
-      await pollContainerStatus(createData.id, accessToken);
+      // On a resumed run timing.deadlineMs is check-once: that suits the deferred reel, not this
+      // container, which nothing re-checks. Give it a real bound.
+      await pollContainerStatus(createData.id, accessToken, { deadlineMs: ownContainerDeadline(timing.deadlineMs, timing.startedAtMs ?? Date.now()) });
       await publishInstagramMedia(igUserId, createData.id, accessToken);
       console.log("Instagram 'Also share to Story' published successfully");
     } catch (e) {
@@ -3901,6 +4066,9 @@ async function postToInstagram(
 
   // Handle story separately if included in post types
   const igAllResults: Array<{ id: string; url?: string; warnings?: string[] }> = [];
+  // A live story whose row could not be written (even after a retry). If the reel then defers it
+  // travels on the pending row, so the resumed or abandoned run writes the missing row.
+  let unrecordedStory: StoryRef | null = null;
 
   // A resumed run finishes only the deferred reel: the story was handled the first time.
   if (!timing.resume && igPostTypes.includes("story") && mediaUrls.length > 0) {
@@ -3931,7 +4099,7 @@ async function postToInstagram(
       warnings.push(`Instagram Story failed: ${createData.error.message}`);
     } else {
       // Poll for container readiness (especially for video stories)
-      await pollContainerStatus(createData.id, accessToken);
+      await pollContainerStatus(createData.id, accessToken, { deadlineMs: timing.deadlineMs });
 
       // Publish the story
       const publishData = await publishInstagramMedia(igUserId, createData.id, accessToken);
@@ -3941,11 +4109,26 @@ async function postToInstagram(
       );
       const mediaData = await mediaResponse.json();
 
-      igAllResults.push({
+      const storyResult = {
         id: publishData.id,
         url: mediaData.permalink || (username ? `https://www.instagram.com/${username}/` : `https://instagram.com`),
         warnings: [],
-      });
+      };
+      igAllResults.push(storyResult);
+
+      // A story-only post returns this result below and the main loop records it. When a
+      // reel or feed post follows, it can defer or fail after the story is already live, so
+      // the story is recorded now, as the Business-login path does.
+      const storyOnly = igPostTypes.length === 1 && igPostTypes[0] === "story";
+      if (!storyOnly && recordStory) {
+        const story: StoryRef = { id: storyResult.id, url: storyResult.url };
+        const recordError = await recordStory(story);
+        if (recordError) {
+          console.error(`[IG story] published but not recorded: ${recordError}`);
+          warnings.push("The Instagram Story was published but could not be recorded.");
+          unrecordedStory = story;
+        }
+      }
     }
   }
 
@@ -4005,6 +4188,17 @@ async function postToInstagram(
     let reelContainerId: string;
     if (timing.resume) {
       reelContainerId = timing.resume.deferral.container_id;
+      // The first run published a story it could not record: record it now (the story itself
+      // is never published again).
+      const carried = timing.resume.unrecordedStory;
+      if (carried && recordStory) {
+        const recordError = await recordStory(carried);
+        if (recordError) {
+          console.error(`[IG story] still not recorded on resume: ${recordError}`);
+          warnings.push("The Instagram Story was published but could not be recorded.");
+          unrecordedStory = carried;
+        }
+      }
     } else {
       console.log("Instagram REELS request:", JSON.stringify(reelsBody).slice(0, 500));
 
@@ -4036,7 +4230,14 @@ async function postToInstagram(
     }
 
     // Poll for container status before publishing (Required for videos)
-    const reelStatus = await pollContainerStatus(reelContainerId, accessToken, 60, 2000, { kind: "ig_reel", deadlineMs: timing.deadlineMs });
+    let reelStatus: string;
+    try {
+      reelStatus = await pollContainerStatus(reelContainerId, accessToken, { deferKind: "ig_reel", deadlineMs: timing.deadlineMs }, 60, 2000);
+    } catch (waitError) {
+      // The pending row carries a story that could not be recorded, or it would be lost here.
+      if (waitError instanceof ContainerStillProcessing && unrecordedStory) waitError.unrecordedStory = unrecordedStory;
+      throw waitError;
+    }
     if (reelStatus === "PUBLISHED") {
       // Only a resumed run sees this: an earlier run published but died before recording it.
       // No id: the container id is not the media id, and analytics would read it as one.
@@ -4129,7 +4330,7 @@ async function postToInstagram(
     if (createData.error) throw new Error(createData.error.message);
 
     // Poll for container status before publishing
-    await pollContainerStatus(createData.id, accessToken);
+    await pollContainerStatus(createData.id, accessToken, { deadlineMs: timing.deadlineMs });
 
     // Publish the media with retry logic
     const publishData = await publishInstagramMedia(igUserId, createData.id, accessToken);
@@ -4194,7 +4395,7 @@ async function postToInstagram(
       if (data.error) throw new Error(data.error.message);
 
       // Poll each item container
-      await pollContainerStatus(data.id, accessToken);
+      await pollContainerStatus(data.id, accessToken, { deadlineMs: timing.deadlineMs });
       containerIds.push(data.id);
     }
 
@@ -4239,7 +4440,7 @@ async function postToInstagram(
     if (carouselData.error) throw new Error(carouselData.error.message);
 
     // Poll carousel container
-    await pollContainerStatus(carouselData.id, accessToken);
+    await pollContainerStatus(carouselData.id, accessToken, { deadlineMs: timing.deadlineMs });
 
     // Publish carousel with retry logic
     const publishData = await publishInstagramMedia(igUserId, carouselData.id, accessToken);
@@ -4277,47 +4478,20 @@ async function postToInstagram(
  * Poll Instagram Business Login container status
  * Uses graph.instagram.com instead of graph.facebook.com
  */
-async function pollBusinessLoginContainerStatus(
+function pollBusinessLoginContainerStatus(
   containerId: string,
   accessToken: string,
+  wait: ContainerWait,
   maxAttempts = 30,
   delayMs = 2000,
-  deferral?: { kind: DeferredKind; deadlineMs: number },
 ): Promise<string> {
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    const response = await fetchWithTimeout(
-      `https://graph.instagram.com/v22.0/${containerId}?fields=${CONTAINER_STATUS_FIELDS.instagram}&access_token=${accessToken}`,
-      {},
-      15000,
-    );
-    const data = await response.json();
-
-    console.log(`BL Container ${containerId} status check ${attempt + 1}:`, data.status_code, data.status ?? "");
-
-    if (data.error) {
-      throw new Error(`Container status error: ${data.error.message}`);
-    }
-
-    const container = classifyContainerStatus("instagram", data);
-    if (container.state === "published") return "PUBLISHED";
-    if (container.state === "finished") {
-      console.log(`BL Container ${containerId} finished, waiting 3s before publish...`);
-      await new Promise((resolve) => setTimeout(resolve, 3000));
-      return data.status_code;
-    }
-
-    if (container.state === "failed") {
-      throw new Error(containerFailureMessage("instagram", container.reason));
-    }
-
-    if (deferral && Date.now() + delayMs > deferral.deadlineMs) {
-      throw new ContainerStillProcessing(deferral.kind, containerId);
-    }
-
-    await new Promise((resolve) => setTimeout(resolve, delayMs));
-  }
-
-  throw new Error("Container processing timed out after polling");
+  return waitForInstagramContainer(
+    `https://graph.instagram.com/v22.0/${containerId}?fields=${CONTAINER_STATUS_FIELDS.instagram}&access_token=${accessToken}`,
+    containerId,
+    maxAttempts,
+    delayMs,
+    wait,
+  );
 }
 
 /**
@@ -4786,7 +4960,7 @@ async function postToInstagramBusinessLogin(
         await insertIGRow("story", "failed", undefined, undefined, msg);
         subResults.push({ subtype: "story", status: "failed", error: msg });
       } else {
-        await pollBusinessLoginContainerStatus(createData.id, accessToken);
+        await pollBusinessLoginContainerStatus(createData.id, accessToken, { deadlineMs: timing.deadlineMs });
         const publishData = await publishBusinessLoginMedia(igUserId, createData.id, accessToken);
         const fallbackUrl = username ? `https://www.instagram.com/${username}/` : `https://instagram.com`;
         const rowId = await insertIGRow("story", "success", publishData.id, fallbackUrl);
@@ -4857,10 +5031,10 @@ async function postToInstagramBusinessLogin(
         await insertIGRow(subtype, "failed", undefined, undefined, msg);
         subResults.push({ subtype, status: "failed", error: msg });
       } else {
-        const reelStatus = await pollBusinessLoginContainerStatus(createData.id, accessToken, 30, 2000, {
-          kind: "ig_business_reel",
+        const reelStatus = await pollBusinessLoginContainerStatus(createData.id, accessToken, {
+          deferKind: "ig_business_reel",
           deadlineMs: timing.deadlineMs,
-        });
+        }, 30, 2000);
         const fallbackUrl = username ? `https://www.instagram.com/${username}/` : `https://instagram.com`;
         const subtype = wantReel ? "reel" : "feed";
         if (reelStatus === "PUBLISHED") {
@@ -4926,7 +5100,7 @@ async function postToInstagramBusinessLogin(
           await insertIGRow("feed", "failed", undefined, undefined, msg);
           subResults.push({ subtype: "feed", status: "failed", error: msg });
         } else {
-          await pollBusinessLoginContainerStatus(createData.id, accessToken);
+          await pollBusinessLoginContainerStatus(createData.id, accessToken, { deadlineMs: timing.deadlineMs });
           const publishData = await publishBusinessLoginMedia(igUserId, createData.id, accessToken);
           const fallbackUrl = username ? `https://www.instagram.com/${username}/` : `https://instagram.com`;
           const blDebug = await finalizeBLLocationDebug(publishData.id);
@@ -4950,7 +5124,7 @@ async function postToInstagramBusinessLogin(
           );
           const data = await response.json();
           if (data.error) throw new Error(data.error.message);
-          await pollBusinessLoginContainerStatus(data.id, accessToken);
+          await pollBusinessLoginContainerStatus(data.id, accessToken, { deadlineMs: timing.deadlineMs });
           containerIds.push(data.id);
         }
 
@@ -4983,7 +5157,7 @@ async function postToInstagramBusinessLogin(
 
         if (carouselData.error) throw new Error(carouselData.error.message);
 
-        await pollBusinessLoginContainerStatus(carouselData.id, accessToken);
+        await pollBusinessLoginContainerStatus(carouselData.id, accessToken, { deadlineMs: timing.deadlineMs });
         const publishData = await publishBusinessLoginMedia(igUserId, carouselData.id, accessToken);
         const fallbackUrl = `https://instagram.com`;
         const blDebug = await finalizeBLLocationDebug(publishData.id);
@@ -6198,20 +6372,18 @@ async function postToThreads(
   const pollInterval = 2000; // 2 seconds
   // Only a single video can be finished later; a resumed run checks once, now.
   const deferrable = containerParams.media_type === "VIDEO";
-  const container = timing.resume
-    ? await pollContainer("threads", statusEndpoint, { maxAttempts: 1, intervalMs: 0 })
-    : await pollContainer("threads", statusEndpoint, {
-      maxAttempts: deferrable
-        ? Math.max(1, Math.min(15, Math.floor((timing.deadlineMs - Date.now()) / pollInterval)))
-        : 15,
-      intervalMs: pollInterval,
-    });
+  // The deadline bounds the requests as well as the sleeps, for every container.
+  const container = await pollContainer("threads", statusEndpoint, {
+    maxAttempts: 15,
+    intervalMs: pollInterval,
+    // Every container waits on the deadline, a video's or not; only a video can be finished later.
+    deadlineMs: timing.resume ? CHECK_ONCE_DEADLINE : timing.deadlineMs,
+  });
 
   // Meta's ERROR ends the wait, and a container that never finished is never published blindly.
   if (container.state === "failed") throw new Error(containerFailureMessage("threads", container.reason));
   if (container.state === "waiting") {
-    if (deferrable && Number.isFinite(timing.deadlineMs)) throw new ContainerStillProcessing("threads", containerId);
-    throw new Error("Threads did not finish processing the media in time. Safe to retry.");
+    throw unfinishedError({ deadlineMs: timing.deadlineMs, deferKind: deferrable ? "threads" : undefined }, containerId, "Threads");
   }
   if (container.state === "published") {
     // Only a resumed run sees this: an earlier run published but died before recording it.

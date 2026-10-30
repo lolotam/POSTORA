@@ -126,7 +126,8 @@ export function SecuritySection() {
     try {
       const { data, error } = await supabase.auth.mfa.listFactors();
       if (error) throw error;
-      setMfaFactors(data?.totp || []);
+      // `totp` lists verified factors only; `all` also holds an unfinished enrollment.
+      setMfaFactors((data?.all ?? []).filter((factor) => factor.factor_type === "totp"));
     } catch (error) {
       console.error("Failed to load MFA factors:", error);
     } finally {
@@ -325,9 +326,10 @@ export function SecuritySection() {
       // Clean up any unverified factors left over from a previous attempt so
       // we can start a fresh enrollment. Verified factors are preserved so the
       // user can register additional devices.
-      if (existingFactors?.totp) {
-        for (const factor of existingFactors.totp) {
-          if (factor.status !== "verified") {
+      // `totp` lists verified factors only, so the leftovers are read from `all`.
+      if (existingFactors?.all) {
+        for (const factor of existingFactors.all) {
+          if (factor.factor_type === "totp" && factor.status !== "verified") {
             const { error: unenrollError } = await supabase.auth.mfa.unenroll({ factorId: factor.id });
             if (unenrollError) {
               console.warn("Could not unenroll existing factor:", unenrollError.message);
@@ -440,7 +442,7 @@ export function SecuritySection() {
   });
 
   // Supabase removes a verified factor only from an AAL2 session; the hook asks for a code when needed.
-  const handleUnenrollMfa = (factorId: string) => disableMfa.requestDisable(factorId);
+  const handleUnenrollMfa = (factor: MfaFactor) => disableMfa.requestDisable(factor);
 
   const resetMfaState = () => {
     setMfaQrCode(null);
@@ -758,7 +760,7 @@ export function SecuritySection() {
                       variant="ghost"
                       size="sm"
                       className="text-destructive hover:text-destructive hover:bg-destructive/10"
-                      onClick={() => handleUnenrollMfa(factor.id)}
+                      onClick={() => handleUnenrollMfa(factor)}
                       disabled={disableMfa.busyFactorId === factor.id}
                     >
                       {disableMfa.busyFactorId === factor.id ? (

@@ -30,6 +30,25 @@ export function streamIngestCap(kind: MediaKind, limits: UploadLimits): number |
   return cap === null ? null : Math.min(cap, STREAM_INGEST_MAX_BYTES);
 }
 
+/**
+ * The providers a streamed upload may use: Openinary only. Only Openinary counts the bytes
+ * against the declared length, and Cloudinary would import the URL itself with none of the
+ * declared-length or admin-cap checks; the two legs in sequence (45 s and 60 s) would also
+ * outlast the worker. So a stream that fails fails the upload, instead of being retried
+ * through Cloudinary.
+ */
+export function streamProviders(providers: { attempted: string[]; required: string[] }): { attempted: string[]; required: string[] } {
+  return {
+    attempted: providers.attempted.filter((provider) => provider === "openinary"),
+    required: providers.required.filter((provider) => provider === "openinary"),
+  };
+}
+
+/** What the caller is told when a streamed upload did not reach storage. */
+export function streamFailureMessage(errors: string[]): string {
+  return `The file could not be streamed to storage (${errors.join("; ") || "unknown error"})`;
+}
+
 /** Reads at least `bytes` from the start of the stream (less only if it ends first). */
 export async function readPrefix(reader: ReadableStreamDefaultReader<Uint8Array>, bytes = SNIFF_BYTES): Promise<Uint8Array> {
   const chunks: Uint8Array[] = [];
