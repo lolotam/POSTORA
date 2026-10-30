@@ -103,7 +103,7 @@ async function readVideoBytes(
   url: string,
   signal: AbortSignal,
   fetchImpl: typeof fetch,
-): Promise<Uint8Array> {
+): Promise<Uint8Array<ArrayBuffer>> {
   const response = await fetchImpl(url, { signal });
   if (!response.ok) throw new Error("youtube_media_download_failed");
   const declaredSize = Number(response.headers.get("content-length"));

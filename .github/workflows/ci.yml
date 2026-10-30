@@ -222,6 +222,12 @@ jobs:
           deno check --node-modules-dir=none "${fn}/_shared/aiImageToken.ts" "${fn}/_shared/aiImageJob.ts" "${fn}/_shared/aiImageAtlasRoute.ts" "${fn}/_shared/aiImageIo.ts" "${fn}/_shared/atlasCloudImage.ts" "${fn}/_shared/openinary.ts" "${fn}/sweep-ai-image-staging/run.ts"
           deno test --allow-env --node-modules-dir=none "${fn}/_shared/aiImageToken.test.ts" "${fn}/_shared/aiImageJob.test.ts" "${fn}/_shared/aiImageAtlasRoute.test.ts" "${fn}/_shared/aiImageIo.test.ts" "${fn}/_shared/atlasCloudImage.test.ts" "${fn}/_shared/openinary.test.ts" "${fn}/sweep-ai-image-staging/run.test.ts"
 
+      - name: Typecheck and test process-post
+        run: |
+          set -euo pipefail
+          deno check --node-modules-dir=none supabase/functions/process-post/index.ts
+          deno test --allow-env --node-modules-dir=none supabase/functions/process-post/ supabase/functions/_shared/composioFiles.test.ts
+
       - name: Typecheck and test the owner-report contract
         run: |
           set -euo pipefail
