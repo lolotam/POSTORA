@@ -308,9 +308,13 @@ serve(async (req) => {
             category: "system",
             source: "resend-webhook",
             message: "Inbound email refused: email id is not in Resend's format",
-            metadata: { code: "invalid_email_id" },
+            metadata: { code: "invalid_email_id", svix_id: svixHeaders.svixId, event_type: event.type },
           });
-          throw new Error("Invalid email_id in webhook payload");
+          // Acknowledged, not 500: the id can never become valid, so a retried delivery would only be refused again.
+          return new Response(
+            JSON.stringify({ received: true, ignored: "invalid_email_id" }),
+            { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
         }
         
         console.log(`Processing inbound email with email_id: ${emailId}`);
