@@ -21,6 +21,7 @@ import { Badge } from "@/components/ui/badge";
 import { Crop, RotateCcw, ZoomIn, Check, X, Loader2, AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { supabase } from "@/integrations/supabase/client";
+import { invokeErrorMessage } from "@/lib/functionInvokeError";
 import { useProcessingJobsContext } from "@/contexts/ProcessingJobsContext";
 import { VideoProcessingPresetSelector } from "./VideoProcessingPresetSelector";
 
@@ -369,7 +370,7 @@ export function MediaCropper({
     setIsProcessing(true);
 
     try {
-      // For videos, use server-side Cloudinary processing
+      // For videos, use server-side processing (Openinary)
       if (mediaType === "video" && mediaFileId) {
         updateJob(jobId, { progress: 20 });
         
@@ -383,7 +384,7 @@ export function MediaCropper({
         let targetWidth: number | undefined = targetRes?.width;
         let targetHeight: number | undefined = targetRes?.height;
 
-        // Call Cloudinary processing edge function for video cropping with upscaling
+        // Server-side video crop; the target resolution upscales a smaller crop
         const { data, error: invokeError } = await supabase.functions.invoke("process-video", {
           body: {
             media_file_id: mediaFileId,
@@ -397,10 +398,14 @@ export function MediaCropper({
               targetWidth,
               targetHeight,
             },
+            // The crop box is a percentage of the frame, so the server needs the frame size.
+            source_dimensions: mediaDimensions.width && mediaDimensions.height
+              ? { width: mediaDimensions.width, height: mediaDimensions.height }
+              : undefined,
           },
         });
 
-        if (invokeError) throw invokeError;
+        if (invokeError) throw new Error(await invokeErrorMessage(invokeError, "Crop failed"));
         if (!data.success) throw new Error(data.error || "Crop failed");
 
         updateJob(jobId, { progress: 80 });
