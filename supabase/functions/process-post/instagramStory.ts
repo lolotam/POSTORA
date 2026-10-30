@@ -10,6 +10,8 @@
  * Review follow-up F9: docs/superpowers/specs/2026-10-30-hardening-review-followups-design.md.
  */
 
+import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.89.0";
+
 type Settle = (supabase: unknown, args: {
   platformPostId: string | null;
   postId: string;
@@ -65,17 +67,51 @@ export async function recordWithOneRetry(
   return await record();
 }
 
-/** Records the live story. Returns the error text on failure, for the caller to warn with. */
+/** Whether a platform_posts row for this story already exists, or why that could not be told. */
+export type FindRecordedStory = (
+  supabase: SupabaseClient,
+  args: { postId: string; socialAccountId: string; storyId: string },
+) => Promise<{ recorded: boolean; error: string | null }>;
+
+/**
+ * Looks for the story's row by post, account and the story's own media id. A failed read is an
+ * error, never "not recorded": answering "none found" would write a second row for a story that
+ * may already have one.
+ */
+export const findRecordedStory: FindRecordedStory = async (supabase, args) => {
+  const { data, error } = await supabase
+    .from("platform_posts")
+    .select("id")
+    .eq("post_id", args.postId)
+    .eq("social_account_id", args.socialAccountId)
+    .eq("platform_post_id", args.storyId)
+    .limit(1);
+  if (error) return { recorded: false, error: error.message ?? String(error) };
+  return { recorded: (data ?? []).length > 0, error: null };
+};
+
+/**
+ * Records the live story. Returns the error text on failure, for the caller to warn with.
+ *
+ * Idempotent: a retry, or a resumed or abandoned run carrying the same story, finds the row the
+ * earlier attempt wrote and treats the story as recorded instead of inserting it again. Only the
+ * reel's own pending row is ever updated, so the story's row is always an insert, and this check
+ * is what keeps it to one.
+ */
 export async function recordPublishedStory(
-  supabase: unknown,
+  supabase: SupabaseClient,
   settle: Settle,
   args: {
     postId: string;
     account: { id: string; platform_username?: string | null; account_metadata?: unknown };
     story: { id: string; url: string };
   },
+  find: FindRecordedStory = findRecordedStory,
 ): Promise<string | null> {
   try {
+    const existing = await find(supabase, { postId: args.postId, socialAccountId: args.account.id, storyId: args.story.id });
+    if (existing.error) return `could not check whether the story is already recorded: ${existing.error}`;
+    if (existing.recorded) return null;
     const settled = await settle(supabase, {
       // A new row: only the reel ever resumes, and it settles its own pending row.
       platformPostId: null,
@@ -103,7 +139,7 @@ export async function recordPublishedStory(
  * story is live. Returns the error if it still failed after the retry.
  */
 export async function recordLiveStory(
-  supabase: unknown,
+  supabase: SupabaseClient,
   settle: Settle,
   args: Parameters<typeof recordPublishedStory>[2],
   live: StoryRef[],

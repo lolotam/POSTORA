@@ -1,6 +1,8 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.89.0";
 import {
   dropRecordedStory,
+  findRecordedStory,
   readUnrecordedStory,
   recordedStoryResults,
   recordLiveStory,
@@ -9,12 +11,33 @@ import {
   UNRECORDED_STORY_KEY,
 } from "./instagramStory.ts";
 
+/** A platform_posts table that answers the story lookup with `rows`, or fails it. */
+function clientWithRows(rows: { id: string }[], failure?: string) {
+  const filters: Record<string, unknown> = {};
+  const query = {
+    eq: (column: string, value: unknown) => {
+      filters[column] = value;
+      return query;
+    },
+    limit: () => Promise.resolve(failure ? { data: null, error: { message: failure } } : { data: rows, error: null }),
+  };
+  const client = {
+    from: (table: string) => {
+      filters.table = table;
+      return { select: () => query };
+    },
+  } as unknown as SupabaseClient;
+  return { client, filters };
+}
+const noSleep = () => Promise.resolve();
+const NO_ROWS = clientWithRows([]).client;
+
 const ACCOUNT = { id: "acct-1", platform_username: "shop", account_metadata: { account_type: "facebook_linked" } };
 const STORY = { id: "story-9", url: "https://www.instagram.com/stories/shop/9/" };
 
 Deno.test("the published story is recorded as its own successful row, tagged as a story", async () => {
   const calls: unknown[] = [];
-  const error = await recordPublishedStory({}, (_db, args) => {
+  const error = await recordPublishedStory(NO_ROWS, (_db, args) => {
     calls.push(args);
     return Promise.resolve({ id: "row-1", error: null });
   }, { postId: "post-1", account: ACCOUNT, story: STORY });
@@ -36,16 +59,57 @@ Deno.test("the published story is recorded as its own successful row, tagged as 
   }]);
 });
 
+Deno.test("a story already recorded is not inserted again, whoever asks", async () => {
+  const { client, filters } = clientWithRows([{ id: "row-1" }]);
+  let settles = 0;
+  const error = await recordPublishedStory(client, () => {
+    settles++;
+    return Promise.resolve({ id: "row-2", error: null });
+  }, { postId: "post-1", account: ACCOUNT, story: STORY });
+  assertEquals(error, null);
+  assertEquals(settles, 0);
+  // Looked up by this post, this account and the story's own media id.
+  assertEquals(filters, { table: "platform_posts", post_id: "post-1", social_account_id: "acct-1", platform_post_id: "story-9" });
+});
+
+Deno.test("a lookup that fails is an error, not 'none found': nothing is inserted", async () => {
+  let settles = 0;
+  const error = await recordPublishedStory(clientWithRows([], "statement timeout").client, () => {
+    settles++;
+    return Promise.resolve({ id: "row-2", error: null });
+  }, { postId: "post-1", account: ACCOUNT, story: STORY });
+  assertEquals(error, "could not check whether the story is already recorded: statement timeout");
+  assertEquals(settles, 0);
+  assertEquals(await findRecordedStory(clientWithRows([], "boom").client, { postId: "p", socialAccountId: "a", storyId: "s" }), { recorded: false, error: "boom" });
+  assertEquals(await findRecordedStory(clientWithRows([]).client, { postId: "p", socialAccountId: "a", storyId: "s" }), { recorded: false, error: null });
+});
+
+Deno.test("a retry after a write that actually landed does not duplicate the row", async () => {
+  // First settle times out on the client side but the row is written; the retry finds it.
+  const rows: { id: string }[] = [];
+  const client = {
+    from: () => ({ select: () => ({ eq: () => ({ eq: () => ({ eq: () => ({ limit: () => Promise.resolve({ data: [...rows], error: null }) }) }) }) }) }),
+  } as unknown as SupabaseClient;
+  let inserts = 0;
+  const settle = () => {
+    inserts++;
+    rows.push({ id: `row-${inserts}` });
+    return Promise.resolve({ id: null, error: "connection reset" });
+  };
+  const live: { id: string; url: string }[] = [];
+  assertEquals(await recordLiveStory(client, settle, { postId: "p", account: ACCOUNT, story: STORY }, live, noSleep), null);
+  assertEquals(inserts, 1);
+  assertEquals(live, [STORY]);
+});
+
 Deno.test("it never settles the reel's pending row: the story row is always new", async () => {
   let platformPostId: string | null | undefined = "unset";
-  await recordPublishedStory({}, (_db, args) => {
+  await recordPublishedStory(NO_ROWS, (_db, args) => {
     platformPostId = args.platformPostId;
     return Promise.resolve({ id: "row-1", error: null });
   }, { postId: "post-1", account: ACCOUNT, story: STORY });
   assertEquals(platformPostId, null);
 });
-
-const noSleep = () => Promise.resolve();
 
 Deno.test("a recording that fails is tried once more, and only once", async () => {
   let calls = 0;
@@ -65,12 +129,12 @@ Deno.test("a story is counted as live only once its row is written, after a retr
   const live: { id: string; url: string }[] = [];
   let settles = 0;
   const flaky = () => Promise.resolve(++settles === 1 ? { id: null, error: "rpc failed" } : { id: "row-1", error: null });
-  assertEquals(await recordLiveStory({}, flaky, { postId: "p", account: ACCOUNT, story: STORY }, live, noSleep), null);
+  assertEquals(await recordLiveStory(NO_ROWS, flaky, { postId: "p", account: ACCOUNT, story: STORY }, live, noSleep), null);
   assertEquals(live, [STORY]);
   assertEquals(settles, 2);
 
   const down: { id: string; url: string }[] = [];
-  const error = await recordLiveStory({}, () => Promise.resolve({ id: null, error: "rpc failed" }), { postId: "p", account: ACCOUNT, story: STORY }, down, noSleep);
+  const error = await recordLiveStory(NO_ROWS, () => Promise.resolve({ id: null, error: "rpc failed" }), { postId: "p", account: ACCOUNT, story: STORY }, down, noSleep);
   assertEquals(error, "rpc failed");
   assertEquals(down, []);
 });
@@ -99,11 +163,11 @@ Deno.test("once the carried story is recorded it leaves the pending row's data, 
 
 Deno.test("a settle error or a throw is returned, not thrown: the story is live either way", async () => {
   assertEquals(
-    await recordPublishedStory({}, () => Promise.resolve({ id: null, error: "rpc failed" }), { postId: "p", account: ACCOUNT, story: STORY }),
+    await recordPublishedStory(NO_ROWS, () => Promise.resolve({ id: null, error: "rpc failed" }), { postId: "p", account: ACCOUNT, story: STORY }),
     "rpc failed",
   );
   assertEquals(
-    await recordPublishedStory({}, () => Promise.reject(new Error("connection reset")), { postId: "p", account: ACCOUNT, story: STORY }),
+    await recordPublishedStory(NO_ROWS, () => Promise.reject(new Error("connection reset")), { postId: "p", account: ACCOUNT, story: STORY }),
     "connection reset",
   );
 });
