@@ -52,10 +52,15 @@ export function usePostRetry() {
   };
 
   const handleRetrySinglePlatform = async (postId: string, platformPostId: string, platform: string, accountId?: string | null) => {
+    // Without an account, process-post would publish to every selected account on the platform.
+    if (!accountId) {
+      toast({ title: "Cannot retry this result", description: "It names no account. Create the post again for the account you want.", variant: "destructive" });
+      return;
+    }
     setRetryingPostId(postId);
     try {
       await deletePlatformPost(platformPostId);
-      await invokeProcessPost(postId, [platform], accountId ? [accountId] : undefined);
+      await invokeProcessPost(postId, [platform], [accountId]);
       toast({ title: "Retry initiated", description: `Retrying ${platform}...` });
       invalidatePostQueries(queryClient);
     } catch (error) {
@@ -70,7 +75,7 @@ export function usePostRetry() {
     if (hasTikTokFailure(post)) { openRetryDialog(post); return; }
 
     if (failedRetryTargets(post.platformResults).accountIds.length === 0) {
-      toast({ title: "Cannot retry automatically", description: "The failed results name no account. Retry them one at a time from the post's details.", variant: "destructive" });
+      toast({ title: "Cannot retry automatically", description: "The failed results name no account, so they cannot be retried without posting to every account again.", variant: "destructive" });
       return;
     }
 

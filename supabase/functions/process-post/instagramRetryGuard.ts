@@ -27,6 +27,8 @@ export function alreadyLiveCopiesMessage(count: number): string {
 export interface RetryState {
   /** The story already has its own success row: a retry does not post it again. */
   storyRecorded: boolean;
+  /** This post's feed post or reel already has a success row for the account: it is done. */
+  feedRecorded?: boolean;
   /**
    * Which of these media ids a row already records for the account (another post's media), or
    * null when that could not be read.
@@ -36,9 +38,27 @@ export interface RetryState {
 
 export const NOT_A_RETRY: RetryState = { storyRecorded: false };
 
-/** The `media_type` Graph lists for what this post publishes as its feed post or reel. */
+/**
+ * The `media_type` Graph lists for what this post publishes as its feed post or reel. Only images
+ * become a carousel: a video post publishes its first file as a single reel.
+ */
 export function expectedMediaType(mediaType: "IMAGE" | "VIDEO" | string, mediaCount: number): string {
-  return mediaCount > 1 ? "CAROUSEL_ALBUM" : mediaType;
+  return mediaType === "IMAGE" && mediaCount > 1 ? "CAROUSEL_ALBUM" : mediaType;
+}
+
+/**
+ * The account's media as Graph listed them, or null when any entry is malformed: an entry that is
+ * not an object with a string id and media type cannot be trusted to stop a publish.
+ */
+export function parseMediaList(data: unknown): MediaSummary[] | null {
+  if (data === undefined) return [];
+  if (!Array.isArray(data)) return null;
+  const wellFormed = data.every((item) =>
+    item !== null && typeof item === "object" &&
+    typeof (item as MediaSummary).id === "string" && (item as MediaSummary).id !== "" &&
+    typeof (item as MediaSummary).media_type === "string"
+  );
+  return wellFormed ? data as MediaSummary[] : null;
 }
 
 export type RetryGuardDecision =
@@ -72,7 +92,7 @@ export function candidateMedia(
   recordedIds: Set<string>,
 ): MediaSummary[] {
   return captionMatches(media, post.caption, post.notBeforeMs)
-    .filter((item) => !item.media_type || item.media_type === post.mediaType)
+    .filter((item) => item.media_type === post.mediaType)
     .filter((item) => !recordedIds.has(item.id));
 }
 

@@ -3,6 +3,7 @@ import {
   candidateMedia,
   expectedMediaType,
   isRetryRun,
+  parseMediaList,
   RETRY_LOOKBACK_MS,
   retryGuardDecision,
   retryWindowStart,
@@ -53,7 +54,22 @@ Deno.test("the window opens before the later of creation and schedule", () => {
   assertEquals(retryWindowStart({ created_at: created, scheduled_at: null }), Date.parse(created) - RETRY_LOOKBACK_MS);
 });
 
-Deno.test("several media publish as a carousel; one is its own type", () => {
+Deno.test("only several images publish as a carousel; a video post is one reel", () => {
   assertEquals(expectedMediaType("IMAGE", 3), "CAROUSEL_ALBUM");
+  assertEquals(expectedMediaType("IMAGE", 1), "IMAGE");
   assertEquals(expectedMediaType("VIDEO", 1), "VIDEO");
+  assertEquals(expectedMediaType("VIDEO", 3), "VIDEO");
+});
+
+Deno.test("a media list with any malformed entry is unreadable, so the retry publishes as before", () => {
+  assertEquals(parseMediaList(undefined), []);
+  assertEquals(parseMediaList([live]), [live]);
+  assertEquals(parseMediaList({ items: [] }), null);
+  assertEquals(parseMediaList([null]), null);
+  assertEquals(parseMediaList([{ id: "m1", caption: "x" }]), null);
+});
+
+Deno.test("an entry without a media type never stops a publish", () => {
+  const { media_type: _type, ...untyped } = live;
+  assertEquals(retryGuardDecision(candidateMedia([untyped], post, none)), { kind: "publish" });
 });
