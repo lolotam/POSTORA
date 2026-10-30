@@ -127,21 +127,28 @@ export async function storeEmailAttachment(
   deps: EmailAttachmentStorageDeps = defaultDeps,
 ): Promise<StoredEmailAttachment> {
   const { bytes, filename, contentType, folder, uniqueKey } = input;
+  if (!providers.openinary && !providers.cloudinary) {
+    throw new EmailAttachmentStorageError(
+      "no_provider",
+      "No attachment storage configured (set OPENINARY_SERVER_URL and OPENINARY_API_KEY)",
+      "Attachment storage is not configured",
+    );
+  }
+
+  // Checked before either provider: inbound mail is untrusted whichever store takes it.
+  const type = resolveAttachmentType(filename, contentType);
+  if (!type) {
+    const ext = extensionOfName(filename);
+    throw new EmailAttachmentStorageError(
+      "unsupported_type",
+      `Attachment type not storable (extension ${ext ? `.${ext}` : "none"}, content-type ${contentType || "unknown"})`,
+      ext ? `Files of type .${ext} cannot be attached` : "This file type cannot be attached",
+    );
+  }
+  const objectName = attachmentObjectName(uniqueKey, filename);
 
   if (providers.openinary) {
-    const type = resolveAttachmentType(filename, contentType);
-    if (!type) {
-      const ext = extensionOfName(filename);
-      throw new EmailAttachmentStorageError(
-        "unsupported_type",
-        `Attachment type not storable on Openinary (extension ${ext ? `.${ext}` : "none"}, content-type ${contentType || "unknown"})`,
-        ext ? `Files of type .${ext} cannot be attached` : "This file type cannot be attached",
-      );
-    }
-    const { folder: targetFolder, baseName } = openinaryTarget(
-      `${folder}/${attachmentObjectName(uniqueKey, filename)}`,
-      providers.openinary.folderPrefix,
-    );
+    const { folder: targetFolder, baseName } = openinaryTarget(`${folder}/${objectName}`, providers.openinary.folderPrefix);
     const result = await deps.uploadBytesToOpeninary(
       providers.openinary,
       bytes,
@@ -161,33 +168,27 @@ export async function storeEmailAttachment(
     return { url: result.url, publicId: result.path, filename, size: bytes.byteLength, contentType };
   }
 
-  if (providers.cloudinary) {
-    // Legacy fallback for a deployment that never configured Openinary.
-    try {
-      const stored = await deps.uploadToCloudinaryEmail(
-        bytes,
-        filename,
-        contentType,
-        folder,
-        providers.cloudinary.cloudName,
-        providers.cloudinary.apiKey,
-        providers.cloudinary.apiSecret,
-      );
-      return stored;
-    } catch (error) {
-      throw new EmailAttachmentStorageError(
-        "provider_failed",
-        error instanceof Error ? error.message : String(error),
-        "The attachment could not be stored",
-      );
-    }
+  // Legacy fallback for a deployment that never configured Openinary. The helper derives
+  // the public id from the name it is given, so it gets the unique object name.
+  const cloudinary = providers.cloudinary as CloudinaryCredentials;
+  try {
+    const stored = await deps.uploadToCloudinaryEmail(
+      bytes,
+      `${objectName}.${type.ext}`,
+      type.mime,
+      folder,
+      cloudinary.cloudName,
+      cloudinary.apiKey,
+      cloudinary.apiSecret,
+    );
+    return { ...stored, filename };
+  } catch (error) {
+    throw new EmailAttachmentStorageError(
+      "provider_failed",
+      error instanceof Error ? error.message : String(error),
+      "The attachment could not be stored",
+    );
   }
-
-  throw new EmailAttachmentStorageError(
-    "no_provider",
-    "No attachment storage configured (set OPENINARY_SERVER_URL and OPENINARY_API_KEY)",
-    "Attachment storage is not configured",
-  );
 }
 
 /** Compose-window uploads live here; only these may be deleted through the API. */
@@ -221,7 +222,13 @@ export function parseDeletablePublicId(publicId: unknown, folderPrefix: string |
   } else {
     return null;
   }
-  return rest.split("/").length >= 2 ? { provider, path: publicId } : null;
+  // Exactly `<date>/<file>`. An Openinary file always carries its extension, so a path
+  // without one could name a folder there; Cloudinary public ids have none and its
+  // destroy endpoint removes single assets only.
+  const parts = rest.split("/");
+  if (parts.length !== 2) return null;
+  if (provider === "openinary" && !extensionOfName(parts[1])) return null;
+  return { provider, path: publicId };
 }
 
 export async function deleteEmailAttachment(
@@ -251,14 +258,25 @@ export async function deleteEmailAttachment(
   }
 }
 
+/** A provider message with any quoted object path removed: a path carries the file name. */
+function redactPaths(message: string): string {
+  return message.replace(/"[^"]*"/g, '"<path>"');
+}
+
 /**
  * What a failed attachment writes to `system_logs`: the failure code, the extension and
- * the provider's own message. Never the file name (it can carry a customer's name) or bytes.
+ * the provider's message with paths redacted. Never the file name (it can carry a
+ * customer's name) or bytes.
  */
 export function attachmentFailureLogMetadata(filename: string, error: unknown): Record<string, unknown> {
   return {
     code: error instanceof EmailAttachmentStorageError ? error.code : "unexpected",
     extension: extensionOfName(filename) || null,
-    detail: error instanceof Error ? error.message : String(error),
+    detail: redactPaths(error instanceof Error ? error.message : String(error)),
   };
+}
+
+/** The `system_logs` metadata for an attachment that could not be downloaded from Resend. */
+export function attachmentDownloadFailureLogMetadata(filename: string, status: number | null): Record<string, unknown> {
+  return { code: "download_failed", extension: extensionOfName(filename) || null, status };
 }

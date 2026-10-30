@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import {
+  attachmentDownloadFailureLogMetadata,
   attachmentFailureLogMetadata,
   storeEmailAttachment,
 } from "../_shared/emailAttachmentStorage.ts";
@@ -56,6 +57,16 @@ type StoredInboundAttachment = {
 
 // Fetch inbound attachments from Resend Receiving API and store them in Openinary.
 // `failed` counts attachments that could not be stored, so the caller can report it.
+function logDownloadFailure(supabase: Parameters<typeof logToDatabase>[0], filename: string, status: number | null) {
+  return logToDatabase(supabase, {
+    level: "error",
+    category: "system",
+    source: "fetch-email-content",
+    message: "Inbound email attachment could not be downloaded",
+    metadata: attachmentDownloadFailureLogMetadata(filename, status),
+  });
+}
+
 async function fetchAndStoreAttachments(
   emailId: string,
   apiKey: string,
@@ -75,8 +86,16 @@ async function fetchAndStoreAttachments(
   );
 
   if (!listResponse.ok) {
+    // Not "no attachments": the list itself could not be read, so count it as a failure.
     console.error(`Failed to fetch attachments list: ${listResponse.status} ${listResponse.statusText}`);
-    return { stored: [], failed: 0 };
+    await logToDatabase(supabase, {
+      level: "error",
+      category: "system",
+      source: "fetch-email-content",
+      message: "Inbound email attachment list could not be read",
+      metadata: { code: "list_failed", status: listResponse.status },
+    });
+    return { stored: [], failed: 1 };
   }
 
   const attachmentsJson = await listResponse.json();
@@ -107,6 +126,7 @@ async function fetchAndStoreAttachments(
       const downloadUrl = attachment.download_url || attachment.url;
       if (!downloadUrl) {
         failed++;
+        await logDownloadFailure(supabase, filename, null);
         continue;
       }
 
@@ -118,6 +138,7 @@ async function fetchAndStoreAttachments(
       }
       if (!fileResponse.ok) {
         failed++;
+        await logDownloadFailure(supabase, filename, fileResponse.status);
         continue;
       }
 
@@ -296,8 +317,11 @@ serve(async (req) => {
     if (storedAttachments.length > 0) {
       // Merge with existing attachments that might have URLs
       const existingAttachments = Array.isArray(message.attachments) ? message.attachments : [];
-      const existingWithUrls = existingAttachments.filter((a: any) => a.url);
-      updateData.attachments = [...existingWithUrls, ...storedAttachments];
+      const existingWithUrls = existingAttachments.filter((a: { url?: string }) => a.url);
+      // A re-fetch stores to the same path (stable Resend attachment id), so an
+      // attachment already on the message is not added a second time.
+      const known = new Set(existingWithUrls.map((a: { publicId?: string }) => a.publicId).filter(Boolean));
+      updateData.attachments = [...existingWithUrls, ...storedAttachments.filter((a) => !known.has(a.publicId))];
     }
 
     if (Object.keys(updateData).length > 0) {

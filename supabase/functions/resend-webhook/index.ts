@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import {
+  attachmentDownloadFailureLogMetadata,
   attachmentFailureLogMetadata,
   storeEmailAttachment,
 } from "../_shared/emailAttachmentStorage.ts";
@@ -131,6 +132,16 @@ type StoredInboundAttachment = {
   publicId: string;
 };
 
+function logDownloadFailure(supabase: Parameters<typeof logToDatabase>[0], filename: string, status: number | null) {
+  return logToDatabase(supabase, {
+    level: "error",
+    category: "system",
+    source: "resend-webhook",
+    message: "Inbound email attachment could not be downloaded",
+    metadata: attachmentDownloadFailureLogMetadata(filename, status),
+  });
+}
+
 // Fetch inbound attachments from Resend Receiving API and store them in Openinary.
 async function fetchAndStoreAttachments(
   emailId: string,
@@ -153,6 +164,13 @@ async function fetchAndStoreAttachments(
 
     if (!listResponse.ok) {
       console.error(`Failed to fetch attachments list: ${listResponse.status} ${listResponse.statusText}`);
+      await logToDatabase(supabase, {
+        level: "error",
+        category: "system",
+        source: "resend-webhook",
+        message: "Inbound email attachment list could not be read",
+        metadata: { code: "list_failed", status: listResponse.status },
+      });
       return [];
     }
 
@@ -185,6 +203,7 @@ async function fetchAndStoreAttachments(
         const downloadUrl = attachment.download_url || attachment.url;
         if (!downloadUrl) {
           console.log(`No download_url for attachment: ${filename}`);
+          await logDownloadFailure(supabase, filename, null);
           continue;
         }
 
@@ -198,6 +217,7 @@ async function fetchAndStoreAttachments(
 
         if (!fileResponse.ok) {
           console.error(`Failed to download attachment: ${fileResponse.status}`);
+          await logDownloadFailure(supabase, filename, fileResponse.status);
           continue;
         }
 

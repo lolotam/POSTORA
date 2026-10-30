@@ -1,5 +1,6 @@
 import { assert, assertEquals, assertRejects } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
+  attachmentDownloadFailureLogMetadata,
   attachmentFailureLogMetadata,
   attachmentObjectName,
   deleteEmailAttachment,
@@ -84,6 +85,27 @@ Deno.test("Cloudinary is the fallback only when Openinary is not configured", as
   assertEquals(calls.openinaryUploads, []);
 });
 
+Deno.test("the Cloudinary fallback refuses the same types and gets a unique object name", async () => {
+  const names: string[] = [];
+  const { deps } = fakeProviders({
+    uploadToCloudinaryEmail: (_bytes, name) => {
+      names.push(name);
+      return Promise.resolve({ url: "https://res.cloudinary.com/x", publicId: name, filename: name, size: 1, contentType: "application/pdf" });
+    },
+  });
+  await assertRejects(
+    () => storeEmailAttachment({ ...input, filename: "page.html", contentType: "text/html" }, { openinary: null, cloudinary: CLOUDINARY }, deps),
+    EmailAttachmentStorageError,
+  );
+  assertEquals(names, []);
+
+  const first = await storeEmailAttachment({ ...input, uniqueKey: "a" }, { openinary: null, cloudinary: CLOUDINARY }, deps);
+  await storeEmailAttachment({ ...input, uniqueKey: "b" }, { openinary: null, cloudinary: CLOUDINARY }, deps);
+  assertEquals(names.length, 2);
+  assert(names[0] !== names[1]);
+  assertEquals(first.filename, input.filename);
+});
+
 Deno.test("a Cloudinary fallback error is reported as a provider failure", async () => {
   const { deps } = fakeProviders({ uploadToCloudinaryEmail: () => Promise.reject(new Error("Cloudinary upload failed: 401")) });
   const error = await assertRejects(
@@ -163,6 +185,8 @@ Deno.test("delete accepts one outbound file per provider and nothing else", () =
     "postora.cloud/admin/email/inbound/em_1/att-1-x.pdf", // the original of a forwarded attachment
     "postora.cloud/media/user/post.jpg", // someone else's library file
     "postora.cloud/admin/email/outbound//x.pdf",
+    "postora.cloud/admin/email/outbound/2026-10-30/nested-folder", // no extension: could be a folder
+    "postora.cloud/admin/email/outbound/2026-10-30/sub/x.pdf", // deeper than <date>/<file>
     "https://cdn.example/t/postora.cloud/admin/email/outbound/2026-10-30/x.pdf",
     "",
     42,
@@ -205,4 +229,20 @@ Deno.test("the failure log carries the code and extension but never the file nam
   assertEquals(metadata, { code: "provider_failed", extension: "pdf", detail: "boom" });
   assert(!JSON.stringify(metadata).includes("Ahmed"));
   assertEquals(attachmentFailureLogMetadata("x", new Error("net")).code, "unexpected");
+});
+
+Deno.test("a provider message naming the object path is redacted before it is logged", () => {
+  const collision = new EmailAttachmentStorageError(
+    "provider_failed",
+    'Openinary stored "postora.cloud/admin/email/inbound/em_1/0-Ahmed_Salary_Slip (1).pdf" instead of requested "postora.cloud/admin/email/inbound/em_1/0-Ahmed_Salary_Slip.pdf" (collision rename)',
+    "public",
+  );
+  const metadata = attachmentFailureLogMetadata("Ahmed Salary Slip.pdf", collision);
+  assert(!JSON.stringify(metadata).includes("Ahmed"));
+  assert(String(metadata.detail).includes("collision rename"));
+});
+
+Deno.test("a failed download is logged with its status and extension only", () => {
+  assertEquals(attachmentDownloadFailureLogMetadata("Ahmed.pdf", 404), { code: "download_failed", extension: "pdf", status: 404 });
+  assertEquals(attachmentDownloadFailureLogMetadata("Ahmed", null), { code: "download_failed", extension: null, status: null });
 });
