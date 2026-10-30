@@ -51,11 +51,15 @@ BEGIN
     format('S3 a repeat answers the existing row (got %s)', v_again);
   ASSERT (SELECT count(*) FROM public.platform_posts WHERE post_id = post_1 AND platform_post_id = 'story-1') = 1,
     'S4 the story still has exactly one row';
+  v_again := public.record_published_story(post_1, acct_ig, 'story-array', 'https://ig/sa', '["not", "an", "object"]'::jsonb);
+  ASSERT (SELECT response_data = '{"ig_post_subtype": "story"}'::jsonb
+            FROM public.platform_posts WHERE id = (v_again ->> 'platform_post_id')::uuid),
+    'S6 metadata that is not an object is dropped, so the tag (and the index) still apply';
   ASSERT (SELECT status = 'completed' FROM public.posts WHERE id = post_1),
     'S5 the post rolls up from the story row, through the settle function';
 END $$;
 
--- I1-I2: the unique index holds the line for tagged story rows only.
+-- I1-I3: the unique index holds the line for every row showing the story, and only those.
 DO $$
 DECLARE
   post_1 uuid := 'a7000000-0000-4000-8000-000000000001';
@@ -70,10 +74,19 @@ BEGIN
   END;
   ASSERT v_refused, 'I1 a second story row for the same post, account and story id is refused';
 
+  v_refused := false;
+  BEGIN
+    INSERT INTO public.platform_posts (post_id, social_account_id, platform, platform_post_id, status, response_data)
+    VALUES (post_1, acct_ig, 'instagram', 'story-1', 'success', '{"story_recorded_on_reel_row": true}'::jsonb);
+  EXCEPTION WHEN unique_violation THEN
+    v_refused := true;
+  END;
+  ASSERT v_refused, 'I2 a reel row settled as a story that already has its row is refused too';
+
   INSERT INTO public.platform_posts (post_id, social_account_id, platform, platform_post_id, status, response_data)
-  VALUES (post_1, acct_ig, 'instagram', 'story-1', 'success', '{"story_recorded_on_reel_row": true}'::jsonb);
+  VALUES (post_1, acct_ig, 'instagram', 'story-1', 'success', '{"ig_post_subtype": "reel"}'::jsonb);
   ASSERT (SELECT count(*) FROM public.platform_posts WHERE post_id = post_1 AND platform_post_id = 'story-1') = 2,
-    'I2 rows not tagged as a story are outside the index';
+    'I3 rows that do not show a story are outside the index';
 END $$;
 
 -- R1-R2: a reel row already settled as the story counts as recorded.

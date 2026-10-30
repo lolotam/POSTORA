@@ -74,7 +74,7 @@ export async function recordPublishedStory(
   },
 ): Promise<string | null> {
   try {
-    const { error } = await supabase.rpc("record_published_story", {
+    const { data, error } = await supabase.rpc("record_published_story", {
       p_post_id: args.postId,
       p_social_account_id: args.account.id,
       p_story_id: args.story.id,
@@ -84,7 +84,9 @@ export async function recordPublishedStory(
         account_metadata: args.account.account_metadata,
       },
     });
-    return error ? (error.message ?? String(error)) : null;
+    if (error) return error.message ?? String(error);
+    // Success means a row now shows the story; an answer without one must not let the carry go.
+    return (data as { platform_post_id?: string | null } | null)?.platform_post_id ? null : "record_published_story answered no row";
   } catch (error) {
     return error instanceof Error ? error.message : String(error);
   }

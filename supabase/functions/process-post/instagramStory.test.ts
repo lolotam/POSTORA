@@ -57,6 +57,11 @@ Deno.test("a story the database already has is a success, not an error", async (
   assertEquals(await recordPublishedStory(client, { postId: "post-1", account: ACCOUNT, story: STORY }), null);
 });
 
+Deno.test("an answer without a row is an error, so a carried story is not dropped", async () => {
+  const { client } = rpcClient({ data: { platform_post_id: null, recorded: false }, error: null });
+  assertEquals(await recordPublishedStory(client, { postId: "p", account: ACCOUNT, story: STORY }), "record_published_story answered no row");
+});
+
 Deno.test("an rpc error or a throw is returned, not thrown: the story is live either way", async () => {
   assertEquals(await recordPublishedStory(rpcClient(failed("rpc failed")).client, { postId: "p", account: ACCOUNT, story: STORY }), "rpc failed");
   assertEquals(
