@@ -215,6 +215,13 @@ jobs:
           deno check --node-modules-dir=none supabase/functions/_shared/svixSignature.ts supabase/functions/resend-webhook/refusalLog.ts
           deno test --node-modules-dir=none supabase/functions/_shared/svixSignature.test.ts supabase/functions/resend-webhook/refusalLog.test.ts
 
+      - name: Typecheck and test the AI image jobs and the staging sweep
+        run: |
+          set -euo pipefail
+          fn="supabase/functions"
+          deno check --node-modules-dir=none "${fn}/_shared/aiImageToken.ts" "${fn}/_shared/aiImageJob.ts" "${fn}/_shared/aiImageAtlasRoute.ts" "${fn}/_shared/aiImageIo.ts" "${fn}/_shared/atlasCloudImage.ts" "${fn}/_shared/openinary.ts" "${fn}/sweep-ai-image-staging/run.ts"
+          deno test --allow-env --node-modules-dir=none "${fn}/_shared/aiImageToken.test.ts" "${fn}/_shared/aiImageJob.test.ts" "${fn}/_shared/aiImageAtlasRoute.test.ts" "${fn}/_shared/aiImageIo.test.ts" "${fn}/_shared/atlasCloudImage.test.ts" "${fn}/_shared/openinary.test.ts" "${fn}/sweep-ai-image-staging/run.test.ts"
+
       - name: Typecheck and test the owner-report contract
         run: |
           set -euo pipefail

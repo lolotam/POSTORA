@@ -14,7 +14,7 @@ import type { OpeninaryConfig } from "./openinary.ts";
 const config: OpeninaryConfig = { serverUrl: "https://o.example", apiKey: "test-key", folderPrefix: "postora.cloud" };
 
 /** PNG signature + IHDR header: enough for type sniffing and size reading. */
-function png(width: number, height: number): Uint8Array {
+function png(width: number, height: number) {
   const bytes = new Uint8Array(33);
   bytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52]);
   const view = new DataView(bytes.buffer);
