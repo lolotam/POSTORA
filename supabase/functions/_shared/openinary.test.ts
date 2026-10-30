@@ -41,3 +41,21 @@ Deno.test("a missing folder lists as empty, but a failed listing throws instead 
   await withListing(404, {}, async () => assertEquals(await listOpeninaryEntries(CONFIG, "p"), { folders: [], files: [] }));
   await withListing(502, {}, async () => { await assertRejects(() => listOpeninaryEntries(CONFIG, "p"), Error, "502"); });
 });
+
+Deno.test("the listing timeout also covers a body that never finishes", async () => {
+  const original = globalThis.fetch;
+  globalThis.fetch = (_input, init) => {
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode('{"files":['));
+        init?.signal?.addEventListener("abort", () => controller.error(new DOMException("aborted", "AbortError")));
+      },
+    });
+    return Promise.resolve(new Response(body, { status: 200 }));
+  };
+  try {
+    await assertRejects(() => listOpeninaryEntries(CONFIG, "p", 20));
+  } finally {
+    globalThis.fetch = original;
+  }
+});

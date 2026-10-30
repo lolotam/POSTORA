@@ -65,10 +65,19 @@ async function request(url: string, init: RequestInit = {}, timeout = 30_000): P
 
 /** A folder's direct children. A missing folder lists as empty; any other failure throws, never reads as empty. */
 export async function listOpeninaryEntries(config: OpeninaryConfig, folder: string, timeoutMs = 30_000): Promise<{ folders: OpeninaryFolder[]; files: OpeninaryFile[] }> {
-  const response = await request(`${config.serverUrl}/api/storage?path=${encodeURIComponent(folder)}`, { headers: { Authorization: `Bearer ${config.apiKey}` } }, timeoutMs);
-  if (response.status === 404) return { folders: [], files: [] };
-  if (!response.ok) throw new Error(`Openinary listing failed: ${response.status}`);
-  const data = await response.json();
+  // The timeout covers reading the body too: a server that sends headers and then stalls must not
+  // hold the caller past it.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let data: { folders?: unknown; files?: unknown } | null;
+  try {
+    const response = await fetch(`${config.serverUrl}/api/storage?path=${encodeURIComponent(folder)}`, { headers: { Authorization: `Bearer ${config.apiKey}` }, signal: controller.signal });
+    if (response.status === 404) return { folders: [], files: [] };
+    if (!response.ok) throw new Error(`Openinary listing failed: ${response.status}`);
+    data = await response.json();
+  } finally {
+    clearTimeout(timer);
+  }
   return {
     folders: Array.isArray(data?.folders)
       ? data.folders.filter((f: OpeninaryFolder) => typeof f?.name === "string" && typeof f?.path === "string").map((f: OpeninaryFolder) => ({ name: f.name, path: f.path }))
