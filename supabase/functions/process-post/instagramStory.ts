@@ -12,17 +12,6 @@
 
 import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.89.0";
 
-type Settle = (supabase: unknown, args: {
-  platformPostId: string | null;
-  postId: string;
-  socialAccountId: string | null;
-  platform: string | null;
-  status: "success" | "failed";
-  providerPostId?: string | null;
-  providerPostUrl?: string | null;
-  responseData?: Record<string, unknown> | null;
-}) => Promise<{ id: string | null; error: string | null }>;
-
 /** A published story: its media id and link. */
 export interface StoryRef {
   id: string;
@@ -67,67 +56,35 @@ export async function recordWithOneRetry(
   return await record();
 }
 
-/** Whether a platform_posts row for this story already exists, or why that could not be told. */
-export type FindRecordedStory = (
-  supabase: SupabaseClient,
-  args: { postId: string; socialAccountId: string; storyId: string },
-) => Promise<{ recorded: boolean; error: string | null }>;
-
-/**
- * Looks for the story's row by post, account and the story's own media id. A failed read is an
- * error, never "not recorded": answering "none found" would write a second row for a story that
- * may already have one.
- */
-export const findRecordedStory: FindRecordedStory = async (supabase, args) => {
-  const { data, error } = await supabase
-    .from("platform_posts")
-    .select("id")
-    .eq("post_id", args.postId)
-    .eq("social_account_id", args.socialAccountId)
-    .eq("platform_post_id", args.storyId)
-    .limit(1);
-  if (error) return { recorded: false, error: error.message ?? String(error) };
-  return { recorded: (data ?? []).length > 0, error: null };
-};
-
 /**
  * Records the live story. Returns the error text on failure, for the caller to warn with.
  *
- * Idempotent: a retry, or a resumed or abandoned run carrying the same story, finds the row the
- * earlier attempt wrote and treats the story as recorded instead of inserting it again. Only the
- * reel's own pending row is ever updated, so the story's row is always an insert, and this check
- * is what keeps it to one.
+ * Idempotent and atomic: record_published_story looks for the story's row and inserts it in one
+ * database call, under a unique index on (post, account, story media id). A retry, or a resumed
+ * or abandoned run carrying the same story, gets the existing row back instead of a second one,
+ * even when two of them race. Only the reel's own pending row is ever updated, so the story's
+ * row is always an insert.
  */
 export async function recordPublishedStory(
   supabase: SupabaseClient,
-  settle: Settle,
   args: {
     postId: string;
     account: { id: string; platform_username?: string | null; account_metadata?: unknown };
-    story: { id: string; url: string };
+    story: StoryRef;
   },
-  find: FindRecordedStory = findRecordedStory,
 ): Promise<string | null> {
   try {
-    const existing = await find(supabase, { postId: args.postId, socialAccountId: args.account.id, storyId: args.story.id });
-    if (existing.error) return `could not check whether the story is already recorded: ${existing.error}`;
-    if (existing.recorded) return null;
-    const settled = await settle(supabase, {
-      // A new row: only the reel ever resumes, and it settles its own pending row.
-      platformPostId: null,
-      postId: args.postId,
-      socialAccountId: args.account.id,
-      platform: "instagram",
-      status: "success",
-      providerPostId: args.story.id,
-      providerPostUrl: args.story.url,
-      responseData: {
-        ig_post_subtype: "story",
+    const { error } = await supabase.rpc("record_published_story", {
+      p_post_id: args.postId,
+      p_social_account_id: args.account.id,
+      p_story_id: args.story.id,
+      p_story_url: args.story.url,
+      p_response_data: {
         account_username: args.account.platform_username,
         account_metadata: args.account.account_metadata,
       },
     });
-    return settled.error;
+    return error ? (error.message ?? String(error)) : null;
   } catch (error) {
     return error instanceof Error ? error.message : String(error);
   }
@@ -155,12 +112,11 @@ export function newStoryLedger(): StoryLedger {
  */
 export async function recordLiveStory(
   supabase: SupabaseClient,
-  settle: Settle,
-  args: Parameters<typeof recordPublishedStory>[2],
+  args: Parameters<typeof recordPublishedStory>[1],
   ledger: StoryLedger,
   sleep?: (ms: number) => Promise<void>,
 ): Promise<string | null> {
-  const error = await recordWithOneRetry(() => recordPublishedStory(supabase, settle, args), sleep);
+  const error = await recordWithOneRetry(() => recordPublishedStory(supabase, args), sleep);
   ledger.live.push(args.story);
   if (!error) ledger.recorded.push(args.story);
   return error;
@@ -174,7 +130,6 @@ export async function recordLiveStory(
  */
 export async function recordCarriedStory(
   supabase: SupabaseClient,
-  settle: Settle,
   args: {
     postId: string;
     socialAccountId: string;
@@ -185,7 +140,7 @@ export async function recordCarriedStory(
   const story = readUnrecordedStory(args.rowData);
   if (!story) return { recorded: [], error: null };
   const error = await recordWithOneRetry(() =>
-    recordPublishedStory(supabase, settle, {
+    recordPublishedStory(supabase, {
       postId: args.postId,
       account: {
         id: args.socialAccountId,
