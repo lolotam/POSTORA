@@ -18,6 +18,7 @@
  */
 
 import { PROVIDER_UNAVAILABLE_CODE } from "./aiImageProviders.ts";
+import { runInBackground } from "./background.ts";
 import {
   ATLAS_REQUEST_TIMEOUT_MS,
   checkAtlasJob,
@@ -248,7 +249,9 @@ async function stageWithin(
   const work = stageInput(openinary, spec.userId, input);
   const staged = await within<Awaited<typeof work> | null>(work, ms, null);
   if (staged === null) {
-    void work.then((late) => (late.ok ? discardStaged(openinary, late.path, STAGED_CLEANUP_MAX_MS) : undefined)).catch(() => undefined);
+    // Registered with the runtime so the cleanup outlives this request's response.
+    await runInBackground("ai-image late staging cleanup", () =>
+      work.then((late) => (late.ok ? discardStaged(openinary, late.path, STAGED_CLEANUP_MAX_MS) : undefined)));
   }
   return staged;
 }

@@ -219,3 +219,18 @@ Deno.test("poll: transient errors are retried within the deadline", async () => 
   const result = await pollAtlasJob({ ...base, predictionId: "p", fetchFn, deadline: clock.now() + 30_000, now: clock.now, sleep: clock.sleep });
   assertEquals(result.ok && result.state, "done");
 });
+
+/** Headers arrive at once; the body never finishes until the request is aborted. */
+function stalledBody(status = 200): Response {
+  return new Response(new ReadableStream<Uint8Array>({ start() {} }), { status, headers: { "content-type": "application/json" } });
+}
+
+Deno.test("submit and check: the timeout covers a body that stalls after its headers", async () => {
+  const stalled = fakeAtlas(() => stalledBody(), [() => stalledBody()]);
+  const started = Date.now();
+  const submit = await submitAtlasJob({ ...base, body: { model: "m" }, fetchFn: stalled.fetchFn, requestTimeoutMs: 50 });
+  assertEquals(submit.ok ? "ok" : submit.kind, "timeout");
+  const check = await checkAtlasJob({ ...base, predictionId: "pred-1", fetchFn: stalled.fetchFn, requestTimeoutMs: 50 });
+  assertEquals(check, { ok: true, state: "pending" });
+  assertEquals(Date.now() - started < 2_000, true);
+});

@@ -9,7 +9,6 @@
  * relay provider text to the caller (`detail` is for the log only).
  */
 
-import { fetchWithTimeout } from "./request-timeout.ts";
 
 const ATLAS_MODEL_API = "https://api.atlascloud.ai/api/v1/model";
 /** Longest one provider request may take; callers budget their deadlines around it. */
@@ -61,7 +60,7 @@ const BALANCE_WORDS = /insufficient[_ ]balance|balance|credit/i;
 const FAILED_STATES = new Set(["failed", "error", "canceled", "cancelled"]);
 const DONE_STATES = new Set(["completed", "succeeded"]);
 
-/** The abort `fetchWithTimeout` raises, or a platform timeout/abort error. */
+/** The abort `fetchBody` raises, or a platform timeout/abort error. */
 function isTimeout(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
   return error.name === "AbortError" || error.name === "TimeoutError" || /timed out|aborted/i.test(error.message);
@@ -96,10 +95,48 @@ function httpsOutputUrl(value: unknown): string | null {
   }
 }
 
-export async function submitAtlasJob(opts: CallOptions & { body: Record<string, unknown> }): Promise<AtlasSubmitResult> {
-  let submit: Response;
+interface BodyAnswer {
+  ok: boolean;
+  status: number;
+  text: string;
+}
+
+/**
+ * One request whose timeout covers reading the body as well as the headers: a provider that
+ * answers its headers and then stalls must not carry the request past the caller's budget.
+ */
+async function fetchBody(url: string, init: RequestInit, timeoutMs: number, fetcher: typeof fetch): Promise<BodyAnswer> {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      reject(new Error("Request timed out"));
+    }, timeoutMs);
+  });
+  const answer = (async () => {
+    const response = await fetcher(url, { ...init, signal: controller.signal });
+    return { ok: response.ok, status: response.status, text: await response.text() };
+  })();
   try {
-    submit = await fetchWithTimeout(
+    return await Promise.race([answer, expired]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
+function parseJson(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+export async function submitAtlasJob(opts: CallOptions & { body: Record<string, unknown> }): Promise<AtlasSubmitResult> {
+  let submit: BodyAnswer;
+  try {
+    submit = await fetchBody(
       `${ATLAS_MODEL_API}/generateImage`,
       { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${opts.apiKey}` }, body: JSON.stringify(opts.body) },
       opts.requestTimeoutMs ?? ATLAS_REQUEST_TIMEOUT_MS,
@@ -110,11 +147,10 @@ export async function submitAtlasJob(opts: CallOptions & { body: Record<string, 
   }
 
   if (!submit.ok) {
-    const text = await submit.text().catch(() => "");
-    return terminalHttpFailure(submit.status, text) ?? failure("failed", `HTTP ${submit.status}: ${text.slice(0, 300)}`);
+    return terminalHttpFailure(submit.status, submit.text) ?? failure("failed", `HTTP ${submit.status}: ${submit.text.slice(0, 300)}`);
   }
 
-  const submitted = await submit.json().catch(() => null) as
+  const submitted = parseJson(submit.text) as
     | { code?: unknown; message?: unknown; data?: { id?: unknown } }
     | null;
   const predictionId = submitted?.data?.id;
@@ -133,9 +169,9 @@ export async function submitAtlasJob(opts: CallOptions & { body: Record<string, 
  * `bad_response`; an unfamiliar status string is still pending.
  */
 export async function checkAtlasJob(opts: CallOptions & { predictionId: string }): Promise<AtlasCheckResult> {
-  let poll: Response;
+  let poll: BodyAnswer;
   try {
-    poll = await fetchWithTimeout(
+    poll = await fetchBody(
       `${ATLAS_MODEL_API}/prediction/${encodeURIComponent(opts.predictionId)}`,
       { headers: { Authorization: `Bearer ${opts.apiKey}` } },
       opts.requestTimeoutMs ?? ATLAS_REQUEST_TIMEOUT_MS,
@@ -146,10 +182,10 @@ export async function checkAtlasJob(opts: CallOptions & { predictionId: string }
   }
   if (!poll.ok) {
     if (poll.status === 429) return { ok: true, state: "pending" };
-    return terminalHttpFailure(poll.status, await poll.text().catch(() => "")) ?? { ok: true, state: "pending" };
+    return terminalHttpFailure(poll.status, poll.text) ?? { ok: true, state: "pending" };
   }
 
-  const result = await poll.json().catch(() => null) as { data?: { status?: unknown; outputs?: unknown; error?: unknown } } | null;
+  const result = parseJson(poll.text) as { data?: { status?: unknown; outputs?: unknown; error?: unknown } } | null;
   const data = result?.data;
   if (!data || typeof data !== "object" || typeof data.status !== "string") {
     return failure("bad_response", `prediction ${opts.predictionId}: answer without a status`);
