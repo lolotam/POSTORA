@@ -210,9 +210,11 @@ Paths below are relative to `supabase/migrations/`. Apply only missing, reviewed
 | 13 / M2 | `20261030110000_competitor_tracking_report.sql` | proposed, Task 8 |
 | 14 / M3 | `20261030120000_competitor_retention.sql` | proposed, Task 8 |
 | 15 / M4 | `20261030130000_competitor_retention_cron.sql` | proposed, Task 8 |
-| 16 / C1 | `20261030140000_instagram_collection_cron.sql` | proposed reservation for Task 4's missing collection schedules; separately assigned prerequisite, not Task 11 implementation authority |
+| 16 / R1 | `20261030133000_instagram_collection_rollout_controls.sql` | proposed, [collection rollout controls](2026-10-30-instagram-collection-rollout-controls.md) |
+| 17 / R2 | `20261030134000_instagram_collection_daily_dispatch.sql` | proposed, collection rollout controls |
+| 18 / C1 | `20261030140000_instagram_collection_cron.sql` | proposed, collection rollout controls; retains the existing reservation |
 
-C1 must not be created until daily enqueue/target eligibility contracts exist and collisions are rechecked. Any additional rollout-control migration must be assigned an exact unused ID by its owning task and added to the frozen manifest before release; an unresolved dependency is a failed manifest gate, not a wildcard deployment instruction. M1–M4 contracts remain owned by Task 8.
+R1/R2/C1 contracts and implementation ownership are in the [collection rollout spec](2026-10-30-instagram-collection-rollout-controls.md) and [plan](../plans/2026-10-30-instagram-collection-rollout-controls.md). C1 depends on tested eligibility and daily dispatch; recheck collisions and freeze delivered artifacts before release. Proposed contracts do not pass the manifest gate. M1–M4 remain owned by Task 8.
 
 ### Function and module set
 
@@ -294,15 +296,17 @@ Frontend release includes existing owner routes/feature and Task 8's proposed co
 
 | Proposed job name | UTC schedule | Dispatch contract | Required default |
 |---|---|---|---|
-| `instagram-insights-enqueue-daily` | `30 0 * * *` | Owner due-target enqueue; **missing HTTP dispatcher**, Task 4 must freeze it; SQL durable work alone is not dispatch proof | absent now; C1 must install inactive |
-| `instagram-insights-drain` | `*/2 * * * *` recommended | Existing owner `{action:"drain"}`; reviewed account eligibility prerequisite required | absent now; C1 inactive |
-| `competitor-snapshot-enqueue-daily` | `0 1 * * *` | Existing competitor `{mode:"enqueue-daily"}` with bounded due-page continuation | absent now; C1 inactive |
+| `instagram-insights-enqueue-daily` | `30 0 * * *` | Proposed `{action:"enqueue-daily"}` and durable continuation, [rollout spec §4](2026-10-30-instagram-collection-rollout-controls.md#4-owner-daily-enqueue-http-dispatcher-and-durable-continuation) | absent now; C1 must install inactive |
+| `instagram-insights-drain` | `*/2 * * * *` recommended | Existing owner `{action:"drain"}` plus proposed SQL eligibility and pending-sweep resumption | absent now; C1 inactive |
+| `competitor-snapshot-enqueue-daily` | `0 1 * * *` | Proposed `{mode:"enqueue-daily",dispatch:"durable"}`; existing cursor branch preserved by rollout contract | absent now; C1 inactive |
 | `competitor-snapshot-drain` | `*/2 * * * *` recommended | Existing competitor `{mode:"all"}` | absent now; C1 inactive |
 | `competitor-retention` | `20 * * * *` | Task 8 proposed retention handler, runtime cron-secret lookup | M4 proposed; inactive |
 
 The two-minute drain interval is a recommendation awaiting readiness/capacity evidence, not an approved existing schedule. Daily due-target enqueue must finish all bounded pages without starving later targets; cron idempotence is not drain completeness. No Stories or scheduled Apify jobs. Tests run each definition twice and assert exactly one inactive job, correct auth-secret lookup, failure when required cron infrastructure is absent, and no change to unrelated schedules.
 
 Existing controls are `collection_instagram_insights_enabled` (absent/false means off), `credential_facebook_user_mode` (global mode), and `credential_facebook_user_protected_pilot_user_ids` (OAuth pilot user UUID list). Competitor collection currently shares the collection setting; do not invent an independent existing competitor switch. Task 8 proposes `competitor_retention_enabled=false`, checked in SQL as well as Edge. Missing/unreadable/malformed settings must follow the actual accepted fail-closed contract, with logs.
+
+The [rollout spec §2–3](2026-10-30-instagram-collection-rollout-controls.md#2-server-owned-eligibility) proposes `collection_instagram_rollout_policy`: independent owner and competitor populations, pinned pilot viewer, SQL enqueue/claim/request/write checks and per-account credential selection under global legacy mode. Its [plan](../plans/2026-10-30-instagram-collection-rollout-controls.md) owns implementation; these controls remain proposed until tested and deployed.
 
 Rollback stops new enqueue/drain/retention schedules and sets collection/retention off, hides the new UI entry points by the reviewed release mechanism, and retains additive schema/history. Pause rollout, preserve redacted evidence and inspect in-flight leases/fences before resuming. Removing a pilot UUID prevents future pilot authorization; **it does not downgrade already protected accounts**. Do not erase protected rows, restore browser-visible tokens, flip global credential mode as a collection rollback, reset the server checkout, drop history, or assume reverting to pre-cutover code is compatible. Pin a tested protected-compatible last-good runtime. The frontend hide mechanism must be explicit in the final runbook; no new feature flag is assumed to exist.
 
@@ -324,7 +328,7 @@ All boxes start unchecked. Planning, prior merges and prior general authorizatio
 
 ### D — collect for one account, then one competitor
 
-- [ ] D1: **Blocked today.** Waleed approves a reviewed server-enforced one-account collection eligibility mechanism and compatible per-account credential selection only after that prerequisite is implemented/tested separately. The OAuth user allow-list is not a collection account allow-list; disabling cron does not prevent user enqueue, and a global drain can claim other pending jobs. Do not bypass this by setting the global credential mode to protected.
+- [ ] D1: **Blocked pending implementation and evidence.** The [collection rollout spec](2026-10-30-instagram-collection-rollout-controls.md) and [plan](../plans/2026-10-30-instagram-collection-rollout-controls.md) own server-enforced one-account eligibility, per-account credential selection, durable daily dispatch and C1. Waleed approves this prerequisite only after RC-01–RC-16 evidence and deployment readiness. The OAuth user list is not collection admission; cron inactivity does not isolate pending jobs. Do not bypass this by setting global credential mode to protected.
 - [ ] D2: With D1 deployed and other targets demonstrably excluded, Waleed approves collection for exactly one named owner account, all broad schedules still off. Verify configured Meta version/host, dates/units/product classification, nulls, lag repair, bounded continuation, persisted success/partial/error and report/UI parity. Record other-account zero-provider-call evidence. Repeat the other login type only under a new approval after the first succeeds.
 - [ ] D3: Waleed approves one named competitor target/viewer after owner-flow evidence. Verify official provenance, nullable views, durable coverage, target-vs-viewer errors, no scheduled Apify and correct report/queue behavior. Unknown ordering remains unknown; do not manufacture complete-week evidence.
 
@@ -348,7 +352,7 @@ Run `clean-code-guard` on production changes, `test-guard` on tests and `docs-gu
 These questions are recorded for later decisions, not requests to perform production actions now. Recommended defaults do not constitute approval.
 
 1. **Pilot people/accounts and first login type?** Default: Waleed-designated synthetic-purpose account, one pilot user and one direct-login account first, then one Page-linked account under a separate C1/D2 approval; no UUID inferred from email or copied into public docs.
-2. **Collection pilot prerequisite?** Default: separately assign server-enforced per-account eligibility and protected-authority selection to the collection owner; keep D blocked until real SQL/handler tests prove exclusion. Never use the OAuth allow-list or global protected toggle as a substitute.
+2. **Collection pilot prerequisite?** Default: implement the assigned [rollout controls spec](2026-10-30-instagram-collection-rollout-controls.md) and [plan](../plans/2026-10-30-instagram-collection-rollout-controls.md), resolving their recorded defaults; keep D blocked until real SQL/handler tests prove exclusion. Never use the OAuth allow-list or global protected toggle as a substitute.
 3. **Drain cadence and observation window?** Default: propose two-minute bounded drains only after capacity evidence, and at least 72 hours containing three Kuwait daily cycles to observe lag reconciliation before all-account acceptance. Daily times and Task 8 retention cadence stay with their owning contracts.
 4. **Metric/retry discrepancies (D8/A6/I3)?** Default: require a documented, evidence-backed Task 6 decision and red/green tests; retain unavailable/unknown honestly and keep affected release gates blocked rather than silently weakening the source contract. Live Meta probes require separate approval.
 5. **Permission to publish the Gate C canary?** Default: no publication until Waleed approves exact account/content and any subsequent cleanup. Prepare the candidate post as a reviewable fixture first.
